@@ -47,6 +47,7 @@ from ..contracts.live_display_contracts import (
 from . import live_display_service, project_service, statistics_service, timeline_service
 from .activity_display_model_service import build_activity_display_model
 from .activity_live_clock import AGGREGATE_LIVE, CURRENT_LIVE
+from .activity_continuity_service import is_normal_project_status
 from .activity_row_overlay import (
     ROW_KIND_ACTIVITY_DETAIL_ROW,
     ROW_KIND_PROJECT_SESSION_ROW,
@@ -311,6 +312,9 @@ def _materialize_display_only_recent_row(
             "project_description": str(span.get("project_description") or ""),
             "activity_ids": [int(span.get("activity_id") or 0)],
             "first_activity_id": int(span.get("activity_id") or 0),
+            "row_kind": "project_session",
+            "status_code": "normal",
+            "display_status": "进行中",
             "status": "进行中",
         }
     )
@@ -333,9 +337,12 @@ def _materialize_display_only_timeline_session(
             "session_id": f"borrowed:{anchor_id}" if anchor_id > 0 else "borrowed:pending",
             "activity_ids": [anchor_id] if anchor_id > 0 else [],
             "first_activity_id": anchor_id or None,
+            "row_kind": "project_session",
             "raw_duration": format_duration(0),
             "adjusted_duration_seconds": None,
             "has_duration_override": False,
+            "status_code": "normal",
+            "display_status": "进行中",
             "status": "进行中",
             "event_count": 1,
             "session_note": "",
@@ -363,6 +370,9 @@ def _materialize_display_only_detail_row(
                 current_activity.get("resource_subtype"),
             ),
             "resource_name": str(span.get("resource_name") or "未知"),
+            "row_kind": "activity_detail",
+            "status_code": str(current_activity.get("status") or "normal"),
+            "display_status": str(current_activity.get("display_status") or ""),
             "status": str(current_activity.get("status") or "normal"),
         }
     )
@@ -533,16 +543,22 @@ def _session_to_overview_row(session: dict[str, Any]) -> dict[str, Any]:
         "project_name": str(session.get("project_name") or "未归类"),
         "project_description": str(session.get("project_description") or ""),
         "project_id": int(session.get("project_id") or 0),
+        "row_kind": "project_session",
         "is_uncategorized": is_uncategorized,
         "is_classified": not is_uncategorized,
         "start_time": str(session.get("start_time") or ""),
         "end_time": str(session.get("end_time") or ""),
         "duration": format_duration(base_seconds),
         "duration_seconds": base_seconds,
+        "duration_seconds_at_sample": base_seconds,
+        "display_base_seconds": base_seconds,
+        "live_base_seconds": base_seconds,
         "is_in_progress": is_in_progress,
-        "is_live_projected": is_in_progress,
+        "is_live_projected": False,
         "is_virtual": False,
         "is_virtual_live": False,
+        "contributes_to_totals": bool(session.get("contributes_to_totals", True)),
+        "live_delta_eligible": False,
         "live_display_key": "",
         "live_state": "",
         "stable_live_key": "",
@@ -556,9 +572,19 @@ def _session_to_overview_row(session: dict[str, Any]) -> dict[str, Any]:
         "open_activity_id": int(session.get("open_activity_id") or 0),
         "closed_duration_seconds": int(session.get("closed_duration_seconds") or 0),
         "source": "db",
-        "edit_disabled": False,
-        "disable_reason": "",
-        "status": str(session.get("status_summary") or session.get("status") or ""),
+        "editable": bool(session.get("editable", not is_in_progress)),
+        "exportable": bool(session.get("exportable", not is_in_progress)),
+        "edit_disabled": bool(is_in_progress),
+        "disable_reason": "进行中记录暂不支持编辑" if is_in_progress else "",
+        "status_code": str(session.get("status_code") or session.get("status") or "normal"),
+        "display_status": str(
+            session.get("display_status")
+            or session.get("status_label")
+            or session.get("status_summary")
+            or ""
+        ),
+        "status": str(session.get("status") or "normal"),
+        "status_summary": str(session.get("status_summary") or ""),
     }
 
 
@@ -618,6 +644,7 @@ def get_timeline_view_model(report_date: str | None = None) -> dict[str, Any]:
         raw_total_seconds += raw_seconds
         row = {
             "session_id": str(session.get("session_id") or ""),
+            "row_kind": "project_session",
             "project_name": str(session.get("project_name") or "未归类"),
             "project_description": str(session.get("project_description") or ""),
             "project_id": int(session.get("project_id") or 0),
@@ -627,9 +654,20 @@ def get_timeline_view_model(report_date: str | None = None) -> dict[str, Any]:
             "duration_seconds": display_seconds,
             "raw_duration": format_duration(raw_seconds),
             "raw_duration_seconds": raw_seconds,
+            "duration_seconds_at_sample": display_seconds,
+            "display_base_seconds": display_seconds,
+            "live_base_seconds": display_seconds,
             "adjusted_duration_seconds": adjusted,
             "has_duration_override": has_override,
-            "status": str(session.get("status_summary") or session.get("status") or ""),
+            "status": str(session.get("status") or "normal"),
+            "status_code": str(session.get("status_code") or session.get("status") or "normal"),
+            "display_status": str(
+                session.get("display_status")
+                or session.get("status_label")
+                or session.get("status_summary")
+                or ""
+            ),
+            "status_summary": str(session.get("status_summary") or ""),
             "event_count": int(session.get("event_count") or 0),
             "is_uncategorized": bool(session.get("is_uncategorized")),
             "is_classified": not bool(session.get("is_uncategorized")),
@@ -637,6 +675,8 @@ def get_timeline_view_model(report_date: str | None = None) -> dict[str, Any]:
             "is_live_projected": False,
             "is_virtual": False,
             "is_virtual_live": False,
+            "contributes_to_totals": bool(session.get("contributes_to_totals", True)),
+            "live_delta_eligible": False,
             "live_display_key": "",
             "live_state": "",
             "stable_live_key": "",
@@ -649,8 +689,10 @@ def get_timeline_view_model(report_date: str | None = None) -> dict[str, Any]:
             "open_activity_id": int(session.get("open_activity_id") or 0),
             "closed_duration_seconds": int(session.get("closed_duration_seconds") or 0),
             "session_note": str(session.get("session_note") or ""),
-            "edit_disabled": False,
-            "disable_reason": "",
+            "editable": bool(session.get("editable", not is_session_in_progress)),
+            "exportable": bool(session.get("exportable", not is_session_in_progress)),
+            "edit_disabled": bool(is_session_in_progress),
+            "disable_reason": "进行中记录暂不支持编辑" if is_session_in_progress else "",
             "source": "db",
             "display_project": None,
             "candidate_project": None,
@@ -775,9 +817,13 @@ def get_session_details_view_model(
             "activity_display_model": model,
         }
 
-    rows = timeline_service.get_session_activity_details(
-        ids, report_date=date, ensure_context=True
-    )
+    rows = [
+        row
+        for row in timeline_service.get_session_activity_details(
+            ids, report_date=date, ensure_context=True
+        )
+        if is_normal_project_status(str(row.get("status") or ""))
+    ]
     activities: list[dict[str, Any]] = []
     for row in rows:
         start_time = str(row.get("start_time") or "")
@@ -786,6 +832,7 @@ def get_session_details_view_model(
         is_in_progress = bool(row.get("is_in_progress"))
         detail_row = {
             "activity_id": int(row.get("id") or 0),
+            "row_kind": "activity_detail",
             "start_time": start_time,
             "end_time": end_time,
             "duration": format_duration(row_seconds),
@@ -798,10 +845,14 @@ def get_session_details_view_model(
             "project_name": str(row.get("project_name") or "未归类"),
             "project_description": str(row.get("project_description") or ""),
             "status": str(row.get("status") or ""),
+            "status_code": str(row.get("status") or "normal"),
+            "display_status": str(row.get("display_status") or row.get("status_summary") or ""),
             "is_in_progress": is_in_progress,
-            "is_live_projected": is_in_progress,
+            "is_live_projected": False,
             "is_virtual": False,
             "is_virtual_live": False,
+            "contributes_to_totals": True,
+            "live_delta_eligible": False,
             "live_display_key": "",
             "live_state": "",
             "stable_live_key": "",
@@ -810,8 +861,10 @@ def get_session_details_view_model(
             "carry_seconds": 0,
             "display_span_id": "",
             "source": "db",
-            "edit_disabled": False,
-            "disable_reason": "",
+            "editable": not is_in_progress,
+            "exportable": not is_in_progress,
+            "edit_disabled": bool(is_in_progress),
+            "disable_reason": "进行中记录暂不支持编辑" if is_in_progress else "",
         }
         activities.append(detail_row)
     # Apply the unified live-span overlay to matching detail rows only.

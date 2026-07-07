@@ -233,28 +233,28 @@ def test_heartbeat_does_not_auto_call_load_project_rules():
 
 def test_low_frequency_reconciliation_exists():
     """a low-frequency reconciliation must exist so a stalled
-    revision signal cannot freeze the UI forever. It must refresh status +
-    Overview + current Timeline, but NOT Rules / Settings / Statistics.
+    revision signal cannot freeze the UI forever. It must delegate through
+    ``refreshCurrentPageData`` so refresh_state is accepted before the
+    current page payload is rendered.
 
-    Overview refresh uses the unified ``refreshOverview`` call which
-    pulls Overview KPIs + current activity + recent activities +
-    live_clock from a single backend ViewModel sample."""
+    The delegated path refreshes status plus the current page and owns the
+    Timeline editing guard."""
     source = read_js("init.js")
     assert "function fullReconcileCollectionViews" in source, (
         "init.js must define fullReconcileCollectionViews for low-frequency "
         "collection reconciliation"
     )
     body = func_body(source, "fullReconcileCollectionViews")
-    # Must refresh status (the collector / sidebar / current-activity view).
-    assert "refreshStatus" in body, (
-        "fullReconcileCollectionViews must refresh collector status"
+    assert "refreshCurrentPageData" in body, (
+        "fullReconcileCollectionViews must reuse refreshCurrentPageData"
     )
-    # Must refresh Overview + recent via the unified ``refreshOverview``
-    # entry. The legacy ``refreshOverviewBundle`` / separate
-    # ``refreshRecent`` paths no longer exist.
-    assert "refreshOverview" in body, (
-        "fullReconcileCollectionViews must refresh Overview + recent via "
-        "refreshOverview (the unified ViewModel entry)"
+    assert "refreshStatus" not in body, (
+        "fullReconcileCollectionViews must not bypass refresh_state by "
+        "calling refreshStatus directly"
+    )
+    assert "refreshOverview" not in body, (
+        "fullReconcileCollectionViews must not bypass refresh_state by "
+        "calling refreshOverview directly"
     )
     assert "refreshOverviewBundle" not in body, (
         "fullReconcileCollectionViews must not reference the removed "
@@ -272,9 +272,11 @@ def test_low_frequency_reconciliation_skips_timeline_when_editing():
     is in progress so the user's input focus is preserved."""
     source = read_js("init.js")
     body = func_body(source, "fullReconcileCollectionViews")
-    assert "_timelineEditingActive" in body, (
-        "fullReconcileCollectionViews must guard Timeline re-render with "
-        "App._timelineEditingActive() so input focus is never lost"
+    refresh_body = func_body(source, "refreshCurrentPageData")
+    assert "refreshCurrentPageData" in body
+    assert "_timelineEditingActive" in refresh_body, (
+        "fullReconcileCollectionViews must delegate to the current-page "
+        "refresh path that guards Timeline re-render with App._timelineEditingActive()"
     )
 
 
@@ -1362,6 +1364,65 @@ def test_renderers_diagnose_live_rows_missing_span_id():
         )
 
 
+def test_frontend_status_display_uses_display_contract_helper():
+    core = _strip_js_comments(read_js("core.js"))
+    overview_body = func_body(_strip_js_comments(read_js("overview.js")), "showRecent")
+    correction_body = func_body(
+        _strip_js_comments(read_js("timeline_correction.js")),
+        "renderCorrectionShell",
+    )
+
+    helper_body = func_body(core, "displayStatusText")
+    assert "display_status" in helper_body
+    assert "status_label" in helper_body
+    assert "status_summary" in helper_body
+    for raw, label in (
+        ("idle", "空闲"),
+        ("paused", "已暂停"),
+        ("excluded", "已排除"),
+        ("error", "异常"),
+    ):
+        assert raw in helper_body
+        assert label in helper_body
+
+    assert "App.displayStatusText(item)" in overview_body
+    assert "item.status ||" not in overview_body
+    assert "App.displayStatusText(session)" in correction_body
+    assert "session.status" not in correction_body
+
+
+def test_status_only_recent_rows_never_register_live_targets():
+    overview_body = func_body(_strip_js_comments(read_js("overview.js")), "showRecent")
+
+    assert 'item.row_kind === "status_only"' in overview_body
+    assert "var canTick = !isStatusOnly" in overview_body
+    assert "item.live_delta_eligible === true" in overview_body
+    assert "!!item.display_span_id" in overview_body
+    assert 'if (canTick) cls += " live-projected"' in overview_body
+    assert "var spanId = canTick ?" in overview_body
+    assert 'data-live-duration-target="1"' in overview_body
+    assert 'recent_live_row_missing_span_id' in overview_body
+
+
+def test_current_activity_live_target_requires_current_live_contract():
+    current_body = func_body(_strip_js_comments(read_js("core.js")), "renderCurrentActivityElement")
+
+    assert "var canTickCurrent = current.current_duration_live === true" in current_body
+    assert "&& !!current.display_span_id" in current_body
+    assert "&& !!current.current_activity_display_span_id" in current_body
+    assert "canTickCurrent ? ' data-live-duration-target=\"1\"'" in current_body
+    assert "canTickCurrent ? ' data-duration-semantic=\"current-live\"'" in current_body
+
+
+def test_full_reconcile_reuses_current_page_refresh_state_path():
+    body = func_body(_strip_js_comments(read_js("init.js")), "fullReconcileCollectionViews")
+
+    assert "refreshCurrentPageData(null" in body
+    assert "refreshOverview(" not in body
+    assert "refreshTimeline(" not in body
+    assert "finally" in body
+
+
 # ---------------------------------------------------------------------------
 # Accepted runtime sample contract (Section 33.9)
 # ---------------------------------------------------------------------------
@@ -1703,11 +1764,13 @@ def test_full_reconcile_does_not_unconditionally_call_refresh_overview():
     """
     src = _strip_js_comments(read_js("init.js"))
     body = func_body(src, "fullReconcileCollectionViews")
-    # refreshOverview must be gated on the current page.
-    assert 'currentPage === "overview"' in body, (
-        "fullReconcileCollectionViews must gate refreshOverview on "
-        'App.currentPage === "overview" so a hidden Overview refresh '
-        "does not overwrite the accepted runtime"
+    assert "refreshCurrentPageData" in body
+    assert "refreshOverview(" not in body
+    assert "refreshTimeline(" not in body
+    refresh_body = func_body(src, "refreshCurrentPageData")
+    assert 'currentPage === "overview"' in refresh_body, (
+        "refreshCurrentPageData must gate refreshOverview on the current page "
+        "so a hidden Overview refresh does not overwrite the accepted runtime"
     )
 
 

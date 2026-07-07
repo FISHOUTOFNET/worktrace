@@ -55,6 +55,12 @@ if _WEBVIEW_HERE not in sys.path:
 from static_helpers import read_js, func_body  # type: ignore
 
 _REPORT_DATE = "2026-06-18"
+_STATUS_LABELS = {
+    "idle": "空闲",
+    "paused": "已暂停",
+    "excluded": "已排除",
+    "error": "异常",
+}
 
 
 def _normal(title: str) -> ActiveWindow:
@@ -167,6 +173,36 @@ def test_fresh_start_under_30s_not_editable_not_exportable(temp_db, monkeypatch,
     assert load_workbook(xlsx_path)["Activity Logs"].max_row == 1, (
         "current-only pending activity must NOT appear in export"
     )
+
+
+def _set_status_snapshot(status: str, at_time: str = "09:00:00") -> None:
+    settings_service.set_setting(
+        "current_activity_snapshot",
+        json.dumps(
+            {
+                "status": status,
+                "app_name": "WorkTrace",
+                "process_name": "worktrace.exe",
+                "window_title": status,
+                "activity_display_name": status,
+                "start_time": f"{_REPORT_DATE} {at_time}",
+                "elapsed_seconds": 120,
+                "extra_seconds": 0,
+                "persisted_activity_id": None,
+                "is_persisted": False,
+            },
+            ensure_ascii=False,
+        ),
+    )
+
+
+def _assert_no_live_row_without_span(rows: list[dict]) -> None:
+    offenders = [
+        row
+        for row in rows
+        if row.get("is_live_projected") is True and not str(row.get("display_span_id") or "")
+    ]
+    assert offenders == []
     assert statistics_service.get_summary(_REPORT_DATE, _REPORT_DATE)["total_duration"] == 0
 
 
@@ -338,7 +374,13 @@ def test_pause_boundary_current_and_recent_both_express_paused_status(
         "Current and Recent status expression must be consistent"
     )
     assert status_only[0].get("status") == "paused"
+    assert status_only[0].get("status_code") == "paused"
+    assert status_only[0].get("display_status") == "已暂停"
+    assert status_only[0].get("status_label") == "已暂停"
     assert status_only[0].get("contributes_to_totals") is False
+    assert status_only[0].get("is_live_projected") is False
+    assert status_only[0].get("display_span_id") == ""
+    assert status_only[0].get("live_delta_eligible") is False
     assert status_only[0].get("editable") is False
     assert status_only[0].get("exportable") is False
 
@@ -389,8 +431,69 @@ def test_idle_excluded_error_boundary_materializes_status_only_row_excluded_from
         assert row.get("exportable") is False
         assert row.get("row_kind") == "status_only"
         assert row.get("status") == state
+        assert row.get("status_code") == state
+        assert row.get("display_status") == _STATUS_LABELS[state]
+        assert row.get("status_label") == _STATUS_LABELS[state]
+        assert row.get("is_live_projected") is False
+        assert row.get("display_span_id") == ""
+        assert row.get("live_delta_eligible") is False
 
     assert int(overview["today_total_seconds"]) == 60
+
+
+@pytest.mark.parametrize("status", ["idle", "paused", "excluded", "error"])
+def test_status_only_snapshot_has_display_contract_and_no_kpi(
+    temp_db, monkeypatch, status
+):
+    _patch_today(monkeypatch)
+    _set_status_snapshot(status)
+
+    bridge = WebViewBridge()
+    overview = bridge.get_overview()
+    timeline = bridge.get_timeline(_REPORT_DATE)
+    recent_rows = overview.get("activities") or []
+    status_rows = [row for row in recent_rows if row.get("row_kind") == "status_only"]
+    _assert_no_live_row_without_span(recent_rows)
+    _assert_no_live_row_without_span(timeline.get("sessions") or [])
+
+    assert len(status_rows) == 1
+    row = status_rows[0]
+    assert row.get("status") == status
+    assert row.get("status_code") == status
+    assert row.get("display_status") == _STATUS_LABELS[status]
+    assert row.get("status_label") == _STATUS_LABELS[status]
+    assert row.get("contributes_to_totals") is False
+    assert row.get("is_live_projected") is False
+    assert row.get("display_span_id") == ""
+    assert row.get("live_delta_eligible") is False
+    assert row.get("project_duration_live") is False
+    assert row.get("current_duration_live") is False
+    assert row.get("editable") is False
+    assert row.get("exportable") is False
+
+    assert int(overview["today_total_seconds"]) == 0
+    assert int(overview["classified_seconds"]) == 0
+    assert int(overview["uncategorized_seconds"]) == 0
+    assert timeline.get("sessions") == []
+    assert int(timeline.get("today_total_seconds") or 0) == 0
+
+
+def test_system_status_activity_ids_do_not_enter_project_details(temp_db, monkeypatch):
+    _patch_today(monkeypatch)
+    idle_id = activity_service.create_activity(
+        "空闲",
+        "idle",
+        "用户空闲",
+        start_time=f"{_REPORT_DATE} 09:00:00",
+        status="idle",
+    )
+    activity_service.close_activity(idle_id, f"{_REPORT_DATE} 09:05:00")
+
+    bridge = WebViewBridge()
+    details = bridge.get_timeline_session_details([idle_id], _REPORT_DATE)
+
+    assert details["ok"] is True
+    assert details["activities"] == []
 
 
 def test_idle_30s_does_not_merge_into_normal_short(temp_db):

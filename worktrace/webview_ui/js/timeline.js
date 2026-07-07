@@ -78,9 +78,10 @@
         var sessionContinuityKeys = [];
         for (var i = 0; i < sessions.length; i++) {
             var s = sessions[i];
+            var sessionCanTick = s.live_delta_eligible === true && !!s.display_span_id;
             // Live projection convergence: virtual live sessions are display-only; backend marks
             // ``edit_disabled=True`` so the edit panel stays disabled.
-            if ((s.is_in_progress === true || s.is_live_projected === true)
+            if (s.is_live_projected === true
                 && !s.display_span_id
                 && typeof App.recordLiveClockContractViolation === "function") {
                 App.recordLiveClockContractViolation("", "timeline", "session_live_row_missing_span_id");
@@ -91,7 +92,7 @@
             var cls = "timeline-item";
             if (s.is_uncategorized) cls += " uncategorized";
             if (s.is_in_progress) cls += " in-progress";
-            if (s.is_live_projected === true) cls += " live-projected";
+            if (sessionCanTick) cls += " live-projected";
             if (s.is_virtual_live === true) cls += " virtual-live";
             if (s.session_id === App.selectedSessionId) cls += " selected";
             // Stable live key data attribute so the ticker / selection continuity locates the session DOM across
@@ -100,10 +101,10 @@
             // Active-span anchored DOM attributes: the row stores a static
             // base plus active elapsed offset; the ticker supplies the one
             // Timeline page active elapsed sample.
-            var sessSpanId = s.display_span_id || "";
+            var sessSpanId = sessionCanTick ? (s.display_span_id || "") : "";
             var rawSessionDurationSemantic = s.duration_semantic;
             var sessionDurationSemantic = String(rawSessionDurationSemantic || "").replace(/_/g, "-");
-            if (sessSpanId && sessionDurationSemantic !== "aggregate-live") {
+            if (sessionCanTick && sessSpanId && sessionDurationSemantic !== "aggregate-live") {
                 if (typeof App.recordLiveClockContractViolation === "function") {
                     App.recordLiveClockContractViolation(
                         sessSpanId,
@@ -354,8 +355,9 @@
         var detailContinuityKeys = [];
         for (var i = 0; i < activities.length; i++) {
             var a = activities[i];
+            var detailCanTick = a.live_delta_eligible === true && !!a.display_span_id;
             // Simplified read-only detail row; advanced correction is via the "高级纠错" button → correction shell.
-            if ((a.is_in_progress === true || a.is_live_projected === true)
+            if (a.is_live_projected === true
                 && !a.display_span_id
                 && typeof App.recordLiveClockContractViolation === "function") {
                 App.recordLiveClockContractViolation("", "timeline", "detail_live_row_missing_span_id");
@@ -365,6 +367,7 @@
             var aDurSec = parseInt(a.duration_seconds, 10);
             var cls = "detail-item";
             if (a.is_in_progress) cls += " in-progress";
+            if (detailCanTick) cls += " live-projected";
             if (a.is_virtual === true) cls += " virtual-live";
             var aid = a.activity_id || 0;
             // Stable live key data attribute so the detail ticker locates the row across pending / persisted
@@ -372,7 +375,7 @@
             var detailStableKey = a.stable_live_key_hash || "";
             // Active-span anchored DOM attributes: detail rows keep their
             // own offset but do not replace the Timeline page active clock.
-            var detailSpanId = a.display_span_id || "";
+            var detailSpanId = detailCanTick ? (a.display_span_id || "") : "";
             var detailContinuityKey = detailSpanId ? App.liveContinuityKey(a, "detail") : "";
             var detailDurationSemantic = String(a.duration_semantic || "current_live").replace(/_/g, "-");
             var detailDisplayBase = parseInt(a.display_base_seconds, 10);

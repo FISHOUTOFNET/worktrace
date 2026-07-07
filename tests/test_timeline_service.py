@@ -1,4 +1,6 @@
-from worktrace.constants import UNCATEGORIZED_PROJECT
+import pytest
+
+from worktrace.constants import STATUS_ERROR, STATUS_EXCLUDED, STATUS_IDLE, STATUS_PAUSED, UNCATEGORIZED_PROJECT
 from worktrace.db import get_connection
 from worktrace.services import activity_service, project_service, session_boundary_service, settings_service, timeline_service
 
@@ -95,10 +97,19 @@ def test_idle_and_uncategorized_split_at_midnight(temp_db):
     previous_day = timeline_service.get_project_sessions_by_date("2026-06-18")
     next_day = timeline_service.get_project_sessions_by_date("2026-06-19")
 
-    assert previous_day[0]["status"] == "idle"
-    assert previous_day[0]["duration_seconds"] == 10 * 60
-    assert [session["duration_seconds"] for session in next_day] == [20 * 60, 10 * 60]
-    assert [session["project_name"] for session in next_day] == [UNCATEGORIZED_PROJECT, UNCATEGORIZED_PROJECT]
+    assert previous_day == []
+    assert [session["duration_seconds"] for session in next_day] == [20 * 60]
+    assert [session["project_name"] for session in next_day] == [UNCATEGORIZED_PROJECT]
+
+
+@pytest.mark.parametrize("status", [STATUS_IDLE, STATUS_PAUSED, STATUS_EXCLUDED, STATUS_ERROR])
+def test_system_status_rows_do_not_become_project_sessions(temp_db, status):
+    _activity("系统状态", status, status, "09:00:00", status=status)
+    activity_service.close_all_open_rows("2026-06-18 09:10:00")
+
+    sessions = timeline_service.get_project_sessions_by_date("2026-06-18")
+
+    assert sessions == []
 
 
 def test_timeline_db_only_contract_open_row_ignores_current_snapshot(temp_db):
@@ -220,20 +231,18 @@ def test_short_other_project_between_same_project_anchors_reports_inside_anchor_
 def test_short_idle_between_same_project_anchors_breaks_anchor_session(temp_db):
     project_a = project_service.create_project("A")
     _activity("Word", "winword.exe", "A1.docx", "09:00:00", project_a)
-    idle_activity = _activity("空闲", "idle", "用户空闲", "09:05:00", status="idle")
+    _activity("空闲", "idle", "用户空闲", "09:05:00", status="idle")
     _activity("Word", "winword.exe", "A2.docx", "09:08:00", project_a)
     activity_service.close_all_open_rows("2026-06-18 09:12:00")
 
     sessions = timeline_service.get_project_sessions_by_date("2026-06-18")
-    idle_session = next(session for session in sessions if idle_activity in session["activity_ids"])
-    idle_detail = timeline_service.get_session_activity_details(idle_session["activity_ids"])[0]
 
-    assert len(sessions) == 3
-    assert idle_session["project_name"] == UNCATEGORIZED_PROJECT
-    assert idle_session["status"] == "idle"
-    assert idle_session["duration_seconds"] == 180
-    assert idle_detail["status"] == "idle"
-    assert idle_detail["project_name"] == UNCATEGORIZED_PROJECT
+    assert len(sessions) == 2
+    assert [session["project_name"] for session in sessions] == ["A", "A"]
+    assert [session["duration_seconds"] for session in sessions] == [240, 300]
+    assert all(session["status_code"] == "normal" for session in sessions)
+    assert all(session["row_kind"] == "project_session" for session in sessions)
+    assert all(session["contributes_to_totals"] is True for session in sessions)
 
 
 def test_five_minute_other_project_between_anchors_does_not_merge(temp_db):

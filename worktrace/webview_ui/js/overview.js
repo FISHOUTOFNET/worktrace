@@ -97,8 +97,13 @@
         var activeElapsedNowValue = App.computeActiveElapsedNow(activeClock, nowMs);
         for (var i = 0; i < recentResult.activities.length; i++) {
             var item = recentResult.activities[i];
+            var isStatusOnly = item.row_kind === "status_only";
             var inProgress = item.is_in_progress === true || (!item.end_time && item.is_in_progress !== false);
-            if ((item.is_in_progress === true || item.is_live_projected === true)
+            var canTick = !isStatusOnly
+                && item.live_delta_eligible === true
+                && !!item.display_span_id;
+            if (!isStatusOnly
+                && item.is_live_projected === true
                 && !item.display_span_id
                 && typeof App.recordLiveClockContractViolation === "function") {
                 App.recordLiveClockContractViolation("", "overview", "recent_live_row_missing_span_id");
@@ -107,14 +112,14 @@
             var durSec = parseInt(item.duration_seconds, 10);
             var cls = "recent-item";
             if (inProgress) cls += " in-progress";
-            if (item.is_live_projected === true) cls += " live-projected";
+            if (canTick) cls += " live-projected";
             if (item.is_virtual === true) cls += " virtual-live";
             // Active-span anchored DOM attributes: ticker reads each row's
             // own base + active elapsed offset, not a row-owned clock.
-            var spanId = item.display_span_id || "";
+            var spanId = canTick ? (item.display_span_id || "") : "";
             var rawDurationSemantic = item.duration_semantic;
             var durationSemantic = String(rawDurationSemantic || "").replace(/_/g, "-");
-            if (spanId && durationSemantic !== "aggregate-live") {
+            if (canTick && spanId && durationSemantic !== "aggregate-live") {
                 if (typeof App.recordLiveClockContractViolation === "function") {
                     App.recordLiveClockContractViolation(
                         spanId,
@@ -139,6 +144,7 @@
             var durText = (!isNaN(durSec) && durSec >= 0)
                 ? App.formatDuration(initialSec)
                 : (item.duration || "00:00:00");
+            var statusText = App.displayStatusText(item);
             html += '<div class="' + cls + '" data-recent-index="' + i + '"'
                 + (spanId ? ' data-display-span-id="' + App.escapeHtml(spanId) + '"' : '')
                 + ' data-duration-seconds="' + (isNaN(durSec) ? 0 : durSec) + '"'
@@ -146,7 +152,7 @@
                 + '<div>'
                 + '<div class="recent-item-project">' + App.escapeHtml(App.formatProjectLabel(item.project_name, item.project_description)) + '</div>'
                 + '<div class="recent-item-time">' + App.escapeHtml(timeRange) + '</div>'
-                + '<div class="recent-item-status">' + App.escapeHtml(item.status || "") + '</div>'
+                + '<div class="recent-item-status">' + App.escapeHtml(statusText) + '</div>'
                 + '</div>'
                 + '<div class="recent-item-duration"'
                 + (spanId ? ' data-live-duration-target="1"' : '')

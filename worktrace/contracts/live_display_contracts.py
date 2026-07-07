@@ -18,7 +18,7 @@ LiveState = Literal[
     "suppressed",
 ]
 CollectorSnapshotState = Literal["paused", "idle", "excluded", "error", "virtual"]
-DurationSemantic = Literal["current_live", "aggregate_live", "static_closed"]
+DurationSemantic = Literal["current_live", "aggregate_live", "static_closed", "static_status"]
 DisplaySessionKind = Literal[
     "none",
     "current_only_pending",
@@ -330,4 +330,3 @@ class CollectorDecisionTraceContract(TypedDict, total=False):
     snapshot_action: str
     project_ownership_action: str
     extra: dict[str, Any]
-

@@ -92,6 +92,8 @@ def build_status_display_item(
     return {
         "row_kind": "status_only",
         "status": status,
+        "status_code": status,
+        "status_label": display_status,
         "display_status": display_status,
         "project_name": display_status,
         "project_description": "",
@@ -99,6 +101,7 @@ def build_status_display_item(
         "end_time": "",
         "duration": "00:00:00",
         "duration_seconds": 0,
+        "duration_semantic": "static_status",
         "duration_seconds_at_sample": 0,
         "display_base_seconds": 0,
         "aggregate_display_base_seconds": 0,

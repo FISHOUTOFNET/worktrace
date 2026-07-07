@@ -444,6 +444,24 @@
     }
     App.formatProjectLabel = formatProjectLabel;
 
+    function displayStatusText(item) {
+        item = item || {};
+        var raw = String(item.status_code || item.status || "");
+        var mapped = {
+            idle: "空闲",
+            paused: "已暂停",
+            excluded: "已排除",
+            error: "异常",
+            normal: "正常"
+        };
+        return item.display_status
+            || item.status_label
+            || item.status_summary
+            || mapped[raw]
+            || "";
+    }
+    App.displayStatusText = displayStatusText;
+
     // ===== Active Span Anchored Projection =====
     //
     // The only dynamic project-duration time source is the page-scoped active
@@ -878,6 +896,9 @@
         }
         var display = current.display || "";
         var seconds = parseInt(current.elapsed_seconds, 10) || 0;
+        var canTickCurrent = current.current_duration_live === true
+            && !!current.display_span_id
+            && !!current.current_activity_display_span_id;
         var continuity = currentActivityContinuityKey(current, null, prefix);
         var previousContinuity = el.getAttribute("data-current-continuity-key") || "";
         if (previousContinuity && previousContinuity !== continuity) {
@@ -896,16 +917,16 @@
                 + App.escapeHtml(parts[1] || "")
                 + "\uff5c"
                 + '<span class="current-activity-duration"'
-                + ' data-live-duration-target="1"'
-                + ' data-duration-semantic="current-live"'
-                + ' data-display-base-seconds="0"'
-                + ' data-live-base-seconds="0"'
-                + ' data-live-role="' + App.escapeHtml(prefix || "current") + '-current"'
-                + ' data-live-continuity-key="' + App.escapeHtml(continuity) + '"'
-                + (current.current_activity_display_span_id ? ' data-current-activity-display-span-id="' + App.escapeHtml(current.current_activity_display_span_id) + '"' : '')
-                + (current.current_resource_identity_hash ? ' data-current-resource-identity-hash="' + App.escapeHtml(current.current_resource_identity_hash) + '"' : '')
-                + (current.display_span_id ? ' data-display-span-id="' + App.escapeHtml(current.display_span_id) + '"' : '')
-                + (current.stable_live_key_hash ? ' data-stable-live-key-hash="' + App.escapeHtml(current.stable_live_key_hash) + '"' : '')
+                + (canTickCurrent ? ' data-live-duration-target="1"' : '')
+                + (canTickCurrent ? ' data-duration-semantic="current-live"' : '')
+                + (canTickCurrent ? ' data-display-base-seconds="0"' : '')
+                + (canTickCurrent ? ' data-live-base-seconds="0"' : '')
+                + (canTickCurrent ? ' data-live-role="' + App.escapeHtml(prefix || "current") + '-current"' : '')
+                + (canTickCurrent ? ' data-live-continuity-key="' + App.escapeHtml(continuity) + '"' : '')
+                + (canTickCurrent && current.current_activity_display_span_id ? ' data-current-activity-display-span-id="' + App.escapeHtml(current.current_activity_display_span_id) + '"' : '')
+                + (canTickCurrent && current.current_resource_identity_hash ? ' data-current-resource-identity-hash="' + App.escapeHtml(current.current_resource_identity_hash) + '"' : '')
+                + (canTickCurrent && current.display_span_id ? ' data-display-span-id="' + App.escapeHtml(current.display_span_id) + '"' : '')
+                + (canTickCurrent && current.stable_live_key_hash ? ' data-stable-live-key-hash="' + App.escapeHtml(current.stable_live_key_hash) + '"' : '')
                 + ' data-duration-seconds="' + String(seconds) + '"'
                 + '>' + App.escapeHtml(App.formatDuration(seconds)) + '</span>';
             for (var i = 3; i < parts.length; i++) {
@@ -914,7 +935,8 @@
             el.innerHTML = html;
             App._monotonicRenderState[continuity] = { lastSeconds: seconds };
         } else {
-            el.textContent = "\u5f53\u524d\u6d3b\u52a8\uff1a" + display;
+            var statusText = App.displayStatusText(current);
+            el.textContent = "\u5f53\u524d\u6d3b\u52a8\uff1a" + (display || statusText);
         }
     }
     App.renderCurrentActivityElement = renderCurrentActivityElement;

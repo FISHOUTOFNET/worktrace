@@ -149,7 +149,7 @@
             projectLabel += " (" + App.safeText(session.project_description, "") + ")";
         }
         var timeRange = App.safeText(App.formatTimeRange(session.start_time, session.end_time, session.is_in_progress), "");
-        var statusTxt = App.safeText(session.status, "");
+        var statusTxt = App.safeText(App.displayStatusText(session), "");
         var inProgressTxt = session.is_in_progress ? "进行中" : "已结束";
         if (subEl) {
             subEl.textContent = dateTxt + " ｜ " + timeRange + " ｜ " + projectLabel;

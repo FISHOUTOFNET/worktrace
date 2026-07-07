@@ -105,14 +105,14 @@ def apply_live_span_to_row(
     row["is_in_progress"] = True
     row["is_virtual_live"] = state == "borrowed_anchor_pending"
     row["edit_disabled"] = True
+    row["editable"] = False
+    row["exportable"] = False
     row["disable_reason"] = LIVE_EDIT_DISABLE_REASON
 
     if state == "borrowed_anchor_pending":
         row["source"] = "borrowed_anchor_pending"
         row["display_only"] = True
         row["is_display_only"] = True
-        row["editable"] = False
-        row["exportable"] = False
         row["live_anchor_activity_id"] = int(
             span.get("live_anchor_activity_id") or anchor_id
         )
@@ -235,4 +235,3 @@ def _copy_span_classification(row: dict[str, Any], span: DisplaySpanContract) ->
         else (not bool(span_uncategorized))
     )
     return True
-

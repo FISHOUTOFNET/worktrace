@@ -173,16 +173,10 @@
     function fullReconcileCollectionViews(reason) {
         if (App.reconcileInFlight) return Promise.resolve();
         App.reconcileInFlight = true;
-        var promises = [refreshStatus()];
-        if (App.currentPage === "overview") {
-            promises.push(refreshOverview());
-        } else if (App.currentPage === "timeline" && App.timelineLoaded
-            && !App._timelineEditingActive()) {
-            promises.push(refreshTimeline());
-        }
-        return Promise.allSettled(promises).then(function () {
-            App.reconcileInFlight = false;
+        return refreshCurrentPageData(null, { reason: reason || "reconcile" }).then(function () {
             App.lastReconcileAtEpochMs = Date.now();
+        }).finally(function () {
+            App.reconcileInFlight = false;
         });
     }
     App.fullReconcileCollectionViews = fullReconcileCollectionViews;

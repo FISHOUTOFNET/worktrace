@@ -52,6 +52,11 @@ def _build_sessions_from_rows(rows: list[dict], uncategorized_id: int, boundary_
     sessions: list[dict] = []
     current: list[dict] = []
     for row in rows:
+        if not _is_project_session_row(row):
+            if current:
+                sessions.append(_build_session(current, uncategorized_id))
+                current = []
+            continue
         if not current:
             current = [row]
             continue
@@ -63,6 +68,10 @@ def _build_sessions_from_rows(rows: list[dict], uncategorized_id: int, boundary_
     if current:
         sessions.append(_build_session(current, uncategorized_id))
     return sessions
+
+
+def _is_project_session_row(row: dict) -> bool:
+    return is_normal_project_status(str(row.get("status") or ""))
 
 
 def get_report_activity_rows(
@@ -336,6 +345,7 @@ def _build_session(rows: list[dict], uncategorized_id: int) -> dict:
     is_in_progress = bool(last.get("is_in_progress"))
     open_activity_id = int(last.get("id") or 0) if is_in_progress else 0
     return {
+        "row_kind": "project_session",
         "session_id": session_id,
         "project_id": project_id,
         "project_name": project_name,
@@ -352,7 +362,13 @@ def _build_session(rows: list[dict], uncategorized_id: int) -> dict:
         "sort_time": last.get("start_time") or first.get("start_time"),
         "event_count": len(rows),
         "status": first.get("status") if len({row.get("status") for row in rows}) == 1 else "mixed",
+        "status_code": STATUS_NORMAL,
+        "display_status": status_summary,
         "status_summary": status_summary,
+        "contributes_to_totals": True,
+        "live_delta_eligible": False,
+        "editable": not is_in_progress,
+        "exportable": not is_in_progress,
         "is_uncategorized": project_id == int(uncategorized_id),
         "is_suggested_project": bool(first.get("report_is_suggested_project", first.get("is_suggested_project"))),
         "is_in_progress": is_in_progress,
