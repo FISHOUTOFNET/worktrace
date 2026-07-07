@@ -20,6 +20,7 @@ from ..platforms.base import ActiveWindow
 from ..resources.resource_builders import make_system_resource
 from ..resources.types import DetectedResource
 from .activity_edit_policy import is_project_editable_activity, require_project_editable_activity
+from .project_attribution_policy import official_project_fields
 from .project_service import get_or_create_uncategorized_project
 from .resource_service import attach_resource, create_or_update_activity_resource
 
@@ -394,9 +395,17 @@ def _activity_select_sql(where: str) -> str:
     return f"""
         SELECT
             a.*,
-            p.name AS project_name
+            p.name AS project_name,
+            apa.source AS assignment_source,
+            apa.is_manual AS assignment_is_manual,
+            apa.suggested_project_name,
+            COALESCE(apa.project_id, a.project_id) AS effective_project_id,
+            pe.name AS effective_project_name,
+            pe.description AS effective_project_description
         FROM activity_log a
         LEFT JOIN project p ON p.id = a.project_id
+        LEFT JOIN activity_project_assignment apa ON apa.activity_id = a.id
+        LEFT JOIN project pe ON pe.id = COALESCE(apa.project_id, a.project_id)
         WHERE {where}
         ORDER BY a.start_time DESC, a.id DESC
     """
@@ -492,21 +501,39 @@ def get_activity_structure_marker_by_date(date: str) -> dict:
     }
 
 
+def _attach_attribution_fields(row: dict, uncategorized_id: int) -> dict:
+    """Attach official project attribution fields to a row via the policy.
+
+    Merges ``is_official_project`` / ``display_project_name`` /
+    ``display_project_id`` etc. so that ``format_activity_project_cell``
+    and other attribution-aware consumers work on plain activity rows.
+    """
+    row.update(official_project_fields(row, uncategorized_id))
+    return row
+
+
 def get_activities_by_range(start_date: str, end_date: str) -> list[dict]:
     start = f"{start_date} 00:00:00"
     end = f"{end_date} 23:59:59"
+    uncategorized_id = get_or_create_uncategorized_project()
     with get_connection() as conn:
         rows = conn.execute(
             _activity_select_sql("a.is_deleted = 0 AND a.start_time BETWEEN ? AND ?"),
             (start, end),
         ).fetchall()
-    return [attach_resource(row) for row in dict_rows(rows)]
+    return [
+        _attach_attribution_fields(attach_resource(row), uncategorized_id)
+        for row in dict_rows(rows)
+    ]
 
 
 def get_activity(activity_id: int) -> dict | None:
     with get_connection() as conn:
         row = conn.execute(_activity_select_sql("a.id = ?"), (activity_id,)).fetchone()
-    return attach_resource(dict(row)) if row else None
+    if not row:
+        return None
+    uncategorized_id = get_or_create_uncategorized_project()
+    return _attach_attribution_fields(attach_resource(dict(row)), uncategorized_id)
 
 
 def activity_display_name(activity: dict) -> str:
@@ -1365,12 +1392,23 @@ def list_restorable_activities_for_date(date: str) -> list[dict]:
 
     start = f"{date} 00:00:00"
     end = f"{date} 23:59:59"
+    uncategorized_id = get_or_create_uncategorized_project()
     with get_connection() as conn:
         rows = conn.execute(
             """
-            SELECT a.*, p.name AS project_name
+            SELECT
+                a.*,
+                p.name AS project_name,
+                apa.source AS assignment_source,
+                apa.is_manual AS assignment_is_manual,
+                apa.suggested_project_name,
+                COALESCE(apa.project_id, a.project_id) AS effective_project_id,
+                pe.name AS effective_project_name,
+                pe.description AS effective_project_description
             FROM activity_log a
             LEFT JOIN project p ON p.id = a.project_id
+            LEFT JOIN activity_project_assignment apa ON apa.activity_id = a.id
+            LEFT JOIN project pe ON pe.id = COALESCE(apa.project_id, a.project_id)
             WHERE (a.is_hidden = 1 OR a.is_deleted = 1)
               AND a.end_time IS NOT NULL
               AND a.start_time BETWEEN ? AND ?
@@ -1382,6 +1420,7 @@ def list_restorable_activities_for_date(date: str) -> list[dict]:
     result: list[dict] = []
     for row in dict_rows(rows):
         attached = attach_resource(row)
+        _attach_attribution_fields(attached, uncategorized_id)
         is_hidden = int(attached.get("is_hidden") or 0)
         is_deleted = int(attached.get("is_deleted") or 0)
         if is_hidden and is_deleted:

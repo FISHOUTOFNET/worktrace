@@ -36,9 +36,6 @@ from worktrace.platforms.base import ActiveWindow
 from worktrace.services import folder_rule_service, project_service, settings_service
 
 
-# Helpers
-
-
 def _snapshot() -> dict:
     raw = settings_service.get_setting("current_activity_snapshot", "") or ""
     if not raw:
@@ -97,7 +94,6 @@ def test_resource_switch_under_30s_shows_new_resource_but_inherited_display_proj
         at_time="2026-06-18 09:00:36",
     )
     snap = _snapshot()
-    # Resource identity immediate: new resource is reflected right away.
     assert snap["activity_display_name"] == "b.py"
     assert snap["resource_display_name"] == "b.py"
     # Project ownership delayed: display stays as last confirmed (ProjectA),
@@ -126,7 +122,6 @@ def test_candidate_confirmed_after_30_seconds_when_different(temp_db):
         _normal("a.py", path="D:\\ProjectA\\a.py"),
         at_time="2026-06-18 09:00:35",
     )
-    # Switch to ProjectB at 09:00:36.
     machine.transition_to(
         "recording",
         _normal("b.py", path="D:\\ProjectB\\b.py"),
@@ -176,7 +171,6 @@ def test_candidate_same_as_last_confirmed_no_pending(temp_db):
         at_time="2026-06-18 09:00:36",
     )
     snap = _snapshot()
-    # Resource identity immediate: new resource is reflected.
     assert snap["activity_display_name"] == "a2.py"
     # No pending window because candidate == last confirmed.
     assert snap["display_project"]["name"] == "ProjectA"
@@ -184,14 +178,11 @@ def test_candidate_same_as_last_confirmed_no_pending(temp_db):
     assert snap["project_transition"]["pending"] is False
 
 
-# Uncategorized candidate
-
-
 def test_uncategorized_candidate_under_30s_inherits_last_confirmed(temp_db):
     """when the new resource's candidate is uncategorized,
-    the display project continues to show the last confirmed project
-    during the 30-second pending window (avoids long-term polluting the
-    previous project)."""
+    the display project continues to show the last confirmed project.
+    No pending transition is created (transitions only happen between
+    official candidates)."""
     project_a, _ = _setup_two_projects(temp_db)
     machine = CollectorStateMachine()
     machine.transition_to(
@@ -216,13 +207,14 @@ def test_uncategorized_candidate_under_30s_inherits_last_confirmed(temp_db):
     assert snap["display_project"]["name"] == "ProjectA"
     assert snap["candidate_project"]["is_uncategorized"] is True
     assert snap["candidate_project"]["name"] == "未归类"
-    assert snap["project_transition"]["pending"] is True
+    assert snap["project_transition"]["pending"] is False
 
 
-def test_uncategorized_candidate_confirmed_after_30_seconds(temp_db):
+def test_uncategorized_candidate_stays_inherited_after_30_seconds(temp_db):
     """>=30s after the switch to an uncategorized
-    candidate, the display project switches to uncategorized (avoids
-    long-term polluting the previous project)."""
+    candidate, the display project continues to show the last confirmed
+    project. Non-official candidates are NEVER confirmed via
+    advance_ownership — the display does not switch to uncategorized."""
     _setup_two_projects(temp_db)
     machine = CollectorStateMachine()
     machine.transition_to(
@@ -241,15 +233,13 @@ def test_uncategorized_candidate_confirmed_after_30_seconds(temp_db):
         at_time="2026-06-18 09:00:36",
     )
     assert _snapshot()["display_project"]["name"] == "ProjectA"
-    # 30 seconds into the pending window — uncategorized confirmed.
     machine.transition_to(
         "recording",
         _normal("tmp", path="D:\\Unmapped\\tmp"),
         at_time="2026-06-18 09:01:06",
     )
     snap = _snapshot()
-    assert snap["display_project"]["name"] == "未归类"
-    assert snap["display_project"]["is_uncategorized"] is True
+    assert snap["display_project"]["name"] == "ProjectA"
     assert snap["project_transition"]["pending"] is False
 
 
@@ -284,10 +274,8 @@ def test_clipboard_force_persist_under_30s_persists_db_row_but_display_still_pen
     persisted_id = machine.recorder.ensure_persisted_for_clipboard("2026-06-18 09:00:40")
     assert persisted_id is not None and persisted_id > 0
     snap = _snapshot()
-    # DB row exists (persisted_open)...
     assert snap["is_persisted"] is True
     assert snap["persisted_activity_id"] == persisted_id
-    # ...but display project is STILL the inherited project (pending).
     assert snap["display_project"]["name"] == "ProjectA"
     assert snap["candidate_project"]["name"] == "ProjectB"
     assert snap["project_transition"]["pending"] is True

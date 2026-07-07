@@ -43,13 +43,22 @@ def format_status_label(status_code: str | None) -> str:
 
 
 def format_activity_project_cell(row: dict) -> str:
+    """Format the formal ``项目`` cell for a CSV / export row.
+
+    Only official project attribution (``is_official_project is True``)
+    surfaces the project name. Candidate / derived / uncategorized
+    sources all resolve to ``UNCATEGORIZED_PROJECT``. Never falls back
+    to raw ``project_name`` (which may carry an internal effective
+    project id from context inference).
+    """
     if str(row.get("status") or "").strip() != STATUS_NORMAL:
         return "—"
+    if not row.get("is_official_project"):
+        return UNCATEGORIZED_PROJECT
     return (
         str(
             row.get("report_project_name")
             or row.get("display_project_name")
-            or row.get("project_name")
             or UNCATEGORIZED_PROJECT
         ).strip()
         or UNCATEGORIZED_PROJECT

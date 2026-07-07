@@ -22,7 +22,7 @@ from .activity_continuity_service import (
     is_hard_boundary_status,
 )
 from .anchor_predicates import (
-    DIRECT_ASSIGNMENT_SOURCES,
+    CONTEXT_DIRECT_ANCHOR_SOURCES,
     is_direct_assignment_anchor,
     is_file_context_anchor,
     row_project_id as _row_project_id_helper,
@@ -77,7 +77,7 @@ def recompute_context_assignments_for_date(date: str) -> None:
             continue
         if row.get("assignment_source") == "midnight_anchor":
             continue
-        if row.get("assignment_source") in DIRECT_ASSIGNMENT_SOURCES | {"clipboard_transition_context"}:
+        if row.get("assignment_source") in CONTEXT_DIRECT_ANCHOR_SOURCES | {"clipboard_transition_context"}:
             continue
         if _is_file_context_anchor(row):
             continue
@@ -312,7 +312,7 @@ def _can_apply_clipboard_context(row: dict) -> bool:
         return False
     if int(row.get("manual_override") or 0) or int(row.get("assignment_is_manual") or 0):
         return False
-    return row.get("assignment_source") not in DIRECT_ASSIGNMENT_SOURCES
+    return row.get("assignment_source") not in CONTEXT_DIRECT_ANCHOR_SOURCES
 
 
 def _set_clipboard_context_assignment(row: dict, project_id: int) -> None:
@@ -342,7 +342,7 @@ def _recompute_short_gap_anchor_rows(rows: list[dict], uncategorized_id: int) ->
         if not _is_file_context_anchor(row):
             continue
         source = row.get("assignment_source")
-        if source in DIRECT_ASSIGNMENT_SOURCES or source == "clipboard_transition_context":
+        if source in CONTEXT_DIRECT_ANCHOR_SOURCES or source == "clipboard_transition_context":
             continue
         if int(row.get("manual_override") or 0) or int(row.get("assignment_is_manual") or 0):
             continue

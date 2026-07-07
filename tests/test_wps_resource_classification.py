@@ -32,7 +32,7 @@ def test_wps_word_file_path_classifies_as_anchor_file_project_and_summary(temp_d
     assert activity["activity_display_name"] == "合同审查意见.docx"
     assert activity["resource_path_hint"] == "D:\\ClientA\\合同审查意见.docx"
     assert activity["project_name"] == UNCATEGORIZED_PROJECT
-    assert timeline_service.get_project_sessions_by_date("2026-06-18")[0]["project_name"] == "ClientA"
+    assert timeline_service.get_project_sessions_by_date("2026-06-18")[0]["project_name"] == UNCATEGORIZED_PROJECT
     assert "wps.exe" not in timeline_service.get_project_sessions_by_date("2026-06-18")[0]["status_summary"]
 
 
@@ -41,7 +41,7 @@ def test_et_excel_file_path_uses_file_name_in_summary(temp_db):
     activity = activity_service.get_activity(aid)
     assert activity["project_name"] == UNCATEGORIZED_PROJECT
     summary = timeline_service.get_project_sessions_by_date("2026-06-18")[0]["status_summary"]
-    assert timeline_service.get_project_sessions_by_date("2026-06-18")[0]["project_name"] == "ClientA"
+    assert timeline_service.get_project_sessions_by_date("2026-06-18")[0]["project_name"] == UNCATEGORIZED_PROJECT
     assert "项目清单.xlsx" in summary
     assert "et.exe" not in summary
 

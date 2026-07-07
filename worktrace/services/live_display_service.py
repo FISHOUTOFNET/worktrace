@@ -49,6 +49,7 @@ from .live_time_service import (
     snapshot_seconds_for_date_range,
     snapshot_start_time,
 )
+from .project_attribution_policy import is_official_project_source
 from .settings_service import get_setting
 
 
@@ -185,8 +186,52 @@ def _snapshot_display_project_dict(
     return None
 
 
+def _official_project_name_for_persisted_row(activity_id: int) -> str:
+    """Return the official project name for a persisted open DB row, or ``""``.
+
+    Checks the assignment source via ``project_attribution_policy``. Only
+    official sources (``manual`` / ``keyword_rule`` / ``folder_rule``)
+    surface the project name; suggested / context-derived / uncategorized
+    return ``""`` so the caller falls back to ``UNCATEGORIZED_PROJECT``.
+    """
+    try:
+        from .project_inference_service import get_assignment_for_activity
+
+        assignment = get_assignment_for_activity(activity_id)
+    except Exception:
+        return ""
+    if not assignment:
+        return ""
+    source = str(assignment.get("source") or "").strip()
+    if not is_official_project_source(source):
+        return ""
+    project_id = assignment.get("project_id")
+    if project_id is None:
+        return ""
+    from ..db import get_connection
+
+    try:
+        with get_connection() as conn:
+            row = conn.execute(
+                "SELECT name FROM project WHERE id = ?", (int(project_id),)
+            ).fetchone()
+    except Exception:
+        return ""
+    name = str(row["name"]).strip() if row else ""
+    return name if name and name != UNCATEGORIZED_PROJECT else ""
+
+
 def _display_project_name(snapshot: ActivitySnapshotContract | None) -> str:
-    """Return the unified display project name for a snapshot."""
+    """Return the unified display project name for a snapshot.
+
+    The display project is sourced from the structured
+    ``display_project`` block (written by the project-ownership state
+    machine, which only places official labels there). When no
+    structured block exists (e.g. legacy snapshot format), the persisted
+    DB row is checked via ``project_attribution_policy`` — only official
+    sources surface a project name; suggested / context-derived /
+    uncategorized all resolve to ``UNCATEGORIZED_PROJECT``.
+    """
     if not snapshot:
         return UNCATEGORIZED_PROJECT
     dp = _snapshot_display_project_dict(snapshot)
@@ -196,23 +241,17 @@ def _display_project_name(snapshot: ActivitySnapshotContract | None) -> str:
             return name
     persisted_id = snapshot_persisted_id(snapshot)
     if persisted_id:
-        try:
-            row = activity_service.get_activity(int(persisted_id))
-        except Exception:
-            row = None
-        if row:
-            db_name = str(row.get("project_name") or "").strip()
-            if db_name and db_name != UNCATEGORIZED_PROJECT:
-                return db_name
-            try:
-                from .project_inference_service import get_assignment_for_activity
-
-                assignment = get_assignment_for_activity(int(persisted_id))
-            except Exception:
-                assignment = {}
-            suggested = str(assignment.get("suggested_project_name") or "").strip()
-            if suggested:
-                return suggested
+        official = _official_project_name_for_persisted_row(int(persisted_id))
+        if official:
+            return official
+        # Persisted row has a non-official assignment source (suggested /
+        # context-derived / uncategorized). Return uncategorized — do NOT
+        # fall back to ``inferred_project_name`` which may carry the
+        # suggested project name and leak it into the formal display.
+        return UNCATEGORIZED_PROJECT
+    # Virtual (unpersisted) snapshot: the ownership state machine has
+    # already set the display_project block (handled above), so this
+    # fallback is only reached for legacy/incomplete snapshots.
     name = str(snapshot.get("inferred_project_name") or "").strip()
     return name if name else UNCATEGORIZED_PROJECT
 
@@ -221,20 +260,16 @@ def _display_project_description(snapshot: ActivitySnapshotContract | None) -> s
     """Return the display project description for a snapshot.
 
     Reads the structured ``display_project.description`` block when
-    present. Otherwise resolves the display project name (which falls
-    back to ``inferred_project_name`` when no structured block exists)
-    and looks up the concrete project's description by name. Returns
-    ``""`` for uncategorized / suggested-project candidates (no concrete
-    project row).
+    present. Otherwise resolves the display project name (via the
+    policy-aware ``_display_project_name``) and looks up the concrete
+    project's description by name when the project is official. Returns
+    ``""`` for uncategorized / suggested / context-derived projects.
     """
     if not snapshot:
         return ""
     dp = _snapshot_display_project_dict(snapshot)
     if dp:
         return str(dp.get("description") or "")
-    # No structured display_project block — resolve the display name and look
-    # up the concrete project's description by name, mirroring
-    # _display_project_name so description stays consistent with the name.
     dp_name = _display_project_name(snapshot)
     if dp_name and dp_name != UNCATEGORIZED_PROJECT:
         from . import project_service
@@ -542,19 +577,24 @@ def _snapshot_display_project_fields(
             "to_project_id": None,
         }
     dp_id = display_project_dict.get("id")
-    # DB fallback only when the snapshot has NO structured display_project block
-    # (e.g. persisted_open with only inferred_project_name). When display_project
-    # explicitly declares id=None + is_uncategorized=True (candidate pending),
-    # honor it: do NOT pull project_id from the DB row (candidate must not override).
+    # DB fallback only when snapshot has no structured display_project block.
+    # Assignment source is policy-checked: only official sources surface a project_id.
     if dp_id is None and snapshot_dp is None:
         persisted_id = snapshot_persisted_id(snapshot) if snapshot else None
         if persisted_id:
-            try:
-                row = activity_service.get_activity(int(persisted_id))
-            except Exception:
-                row = None
-            if row:
-                dp_id = row.get("project_id")
+            official = _official_project_name_for_persisted_row(int(persisted_id))
+            if official:
+                # Re-fetch the id alongside the name to keep them consistent.
+                try:
+                    from .project_inference_service import get_assignment_for_activity
+
+                    assignment = get_assignment_for_activity(int(persisted_id))
+                    if assignment and is_official_project_source(
+                        str(assignment.get("source") or "")
+                    ):
+                        dp_id = assignment.get("project_id")
+                except Exception:
+                    dp_id = None
     return {
         "project_id": int(dp_id) if dp_id is not None else 0,
         "project_name": project_name,

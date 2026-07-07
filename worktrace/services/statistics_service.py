@@ -150,10 +150,13 @@ def get_statistics_export_summary(date_from: str, date_to: str) -> dict:
     # ``end_time``, so this flag is reliable regardless of the projected
     # ``end_time`` value.
     closed_rows = [row for row in rows if not row.get("is_in_progress")]
-    project_rows = [
+    # Only official project rows (manual/keyword_rule/folder_rule) contribute to
+    # project_duration and by_project. Non-official rows stay in by_app/by_status/total.
+    official_project_rows = [
         row
         for row in closed_rows
         if is_normal_project_status(str(row.get("status") or ""))
+        and bool(row.get("is_official_project"))
     ]
     all_rows = closed_rows
 
@@ -178,7 +181,7 @@ def get_statistics_export_summary(date_from: str, date_to: str) -> dict:
         _accumulate_summary_group(by_app, app_name, app_name, duration, activity_id)
         _accumulate_summary_group(by_status, status_code or "unknown", status_label, duration, activity_id)
 
-    for row in project_rows:
+    for row in official_project_rows:
         duration = int(row.get("report_duration_seconds") or row.get("duration_seconds") or 0)
         project_duration += duration
         activity_id = int(row.get("id") or 0)

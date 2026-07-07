@@ -18,6 +18,14 @@ Source semantics (see ``activity_project_assignment.source``):
 - ``clipboard_transition_context`` — clipboard transition;
 - ``suggested_project_name`` — low-confidence candidate;
 - ``uncategorized`` — no project.
+
+NOTE: ``CONTEXT_DIRECT_ANCHOR_SOURCES`` is a CONTEXT-INFERENCE concept,
+NOT a UI official-project judgment. The single source of truth for
+official project attribution is
+``project_attribution_policy.OFFICIAL_PROJECT_SOURCES``. The two sets
+diverge intentionally: ``midnight_anchor`` is a context-direct anchor
+(internal continuity) but is NOT an official project source (not
+user-confirmed).
 """
 
 from __future__ import annotations
@@ -26,12 +34,13 @@ import ntpath
 
 from ..constants import ANCHOR_FILE_EXTENSIONS, STATUS_NORMAL
 
-DIRECT_ASSIGNMENT_SOURCES = frozenset(
+# Context-inference direct assignment anchors (NOT UI official-project judgment).
+# ``midnight_anchor`` is included for internal continuity but is NOT user-confirmed.
+CONTEXT_DIRECT_ANCHOR_SOURCES = frozenset(
     {"manual", "folder_rule", "keyword_rule", "midnight_anchor"}
 )
 
-# Sources that represent already-derived context and must NOT chain onward
-# as direct assignment anchors (avoids low-confidence propagation).
+# Already-derived context sources that must NOT chain as direct anchors.
 _CONTEXT_DERIVED_SOURCES = frozenset(
     {
         "anchor_context",
@@ -110,7 +119,7 @@ def is_direct_assignment_anchor(row: dict, uncategorized_id: int) -> bool:
 
     Conditions:
       - ``status == STATUS_NORMAL``;
-      - ``assignment_source`` is one of ``DIRECT_ASSIGNMENT_SOURCES``;
+      - ``assignment_source`` is one of ``CONTEXT_DIRECT_ANCHOR_SOURCES``;
       - the row's project is a concrete project (not uncategorized).
 
     ``anchor_context`` / ``same_project_context`` /
@@ -121,10 +130,8 @@ def is_direct_assignment_anchor(row: dict, uncategorized_id: int) -> bool:
     if row.get("status") != STATUS_NORMAL:
         return False
     source = row.get("assignment_source")
-    if source not in DIRECT_ASSIGNMENT_SOURCES:
+    if source not in CONTEXT_DIRECT_ANCHOR_SOURCES:
         return False
-    # Defensive: context-derived sources must never be treated as direct
-    # assignment anchors, even if a future source string overlaps.
     if source in _CONTEXT_DERIVED_SOURCES:
         return False
     if not is_concrete_project(row, uncategorized_id):

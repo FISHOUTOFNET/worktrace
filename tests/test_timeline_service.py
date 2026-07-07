@@ -196,10 +196,10 @@ def test_timeline_db_only_contract_closed_row_unaffected_by_snapshot(temp_db):
 def test_auxiliary_between_same_project_anchors_merges_into_session(temp_db):
     project = project_service.create_project("A")
     _activity("Word", "winword.exe", "A1.docx", "09:00:00", project)
-    _activity("Edge", "msedge.exe", "Search 1", "09:10:00")
-    _activity("Chrome", "chrome.exe", "Search 2", "09:15:00")
-    _activity("Word", "winword.exe", "A2.docx", "09:20:00", project)
-    activity_service.close_all_open_rows("2026-06-18 09:30:00")
+    _activity("Edge", "msedge.exe", "Search 1", "09:01:00")
+    _activity("Chrome", "chrome.exe", "Search 2", "09:01:30")
+    _activity("Word", "winword.exe", "A2.docx", "09:02:00", project)
+    activity_service.close_all_open_rows("2026-06-18 09:05:00")
 
     sessions = timeline_service.get_project_sessions_by_date("2026-06-18")
     details = timeline_service.get_session_activity_details(sessions[0]["activity_ids"])
@@ -322,9 +322,18 @@ def test_auto_suggested_project_name_displays_without_creating_project(temp_db):
     activity = activity_service.get_activity(aid)
     sessions = timeline_service.get_project_sessions_by_date("2026-06-18")
 
+    # The activity-level project is uncategorized (no concrete project).
     assert activity["project_name"] == UNCATEGORIZED_PROJECT
-    assert sessions[0]["project_name"] == "ClientA"
+    # Attribution contract: suggested_project_name is a CANDIDATE, not an
+    # official project. The formal session project_name MUST be uncategorized.
+    assert sessions[0]["project_name"] == UNCATEGORIZED_PROJECT
     assert sessions[0]["is_uncategorized"] is True
+    assert sessions[0]["is_official_project"] is False
+    # The suggested name is retained as candidate_project_name metadata.
+    rows = timeline_service.get_report_activity_rows("2026-06-18", "2026-06-18")
+    suggested_row = next(r for r in rows if int(r["id"]) == aid)
+    assert suggested_row["candidate_project_name"] == "ClientA"
+    # No project row is auto-created for the suggested name.
     assert "ClientA" not in [project["name"] for project in project_service.list_selectable_projects()]
     with get_connection() as conn:
         assert conn.execute("SELECT id FROM project WHERE name = 'ClientA'").fetchone() is None
@@ -448,11 +457,12 @@ def test_midnight_anchor_classifies_following_auxiliary_without_file_default(tem
     activity_service.close_activity(chat, "2026-06-19 00:00:45")
 
     sessions = timeline_service.get_project_sessions_by_date("2026-06-19")
-    details = timeline_service.get_session_activity_details(sessions[0]["activity_ids"], report_date="2026-06-19")
 
+    # Attribution contract: midnight_anchor is a derived internal source,
+    # NOT official. The formal session project must be uncategorized.
     assert len(sessions) == 1
-    assert sessions[0]["project_name"] == "A"
-    assert {row["project_name"] for row in details} == {"A"}
+    assert sessions[0]["project_name"] == UNCATEGORIZED_PROJECT
+    assert sessions[0]["is_official_project"] is False
 
 
 def test_project_session_note_attaches_to_session_by_first_activity(temp_db):
@@ -641,7 +651,8 @@ def test_is_project_anchor_delegates_to_shared_file_context_predicate():
     }
     assert timeline_service._is_project_anchor(uncategorized_file_row) is False
 
-    # midnight_anchor with concrete project → True
+    # midnight_anchor is NOT a project anchor — it is a derived internal
+    # source used for cross-midnight continuity only.
     midnight_row = {
         "status": "normal",
         "assignment_source": "midnight_anchor",
@@ -650,7 +661,7 @@ def test_is_project_anchor_delegates_to_shared_file_context_predicate():
         "resource_kind": "",
         "resource_display_name": "",
     }
-    assert timeline_service._is_project_anchor(midnight_row) is True
+    assert timeline_service._is_project_anchor(midnight_row) is False
 
 
 def test_get_session_anchor_folders_excludes_browser_and_includes_file_anchors(temp_db):

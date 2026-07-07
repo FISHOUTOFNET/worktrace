@@ -6,6 +6,7 @@ import tempfile
 import pytest
 
 from worktrace.constants import STATUS_ERROR, STATUS_EXCLUDED, STATUS_IDLE, STATUS_PAUSED
+from worktrace.db import get_connection, now_str
 from worktrace.exports.excel_exporter import export_excel_file
 from worktrace.services import activity_service
 
@@ -26,8 +27,26 @@ def _insert_closed_activity(
         start_time=start,
         file_path_hint=file_path_hint,
         project_id=project_id,
+        manual_override=project_id is not None,
     )
     activity_service.close_activity(aid, end, duration_seconds=duration)
+    if project_id is not None:
+        ts = now_str()
+        with get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO activity_project_assignment(
+                    activity_id, project_id, confidence, source, is_manual, created_at, updated_at
+                )
+                VALUES (?, ?, 100, 'manual', 1, ?, ?)
+                ON CONFLICT(activity_id) DO UPDATE SET
+                    project_id = excluded.project_id,
+                    source = excluded.source,
+                    is_manual = excluded.is_manual,
+                    updated_at = excluded.updated_at
+                """,
+                (aid, project_id, ts, ts),
+            )
     return aid
 
 

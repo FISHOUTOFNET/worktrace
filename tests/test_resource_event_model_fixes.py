@@ -10,6 +10,7 @@ from worktrace.constants import (
     EXCLUDED_PROCESS_NAME,
     EXCLUDED_WINDOW_TITLE,
     STATUS_EXCLUDED,
+    UNCATEGORIZED_PROJECT,
 )
 from worktrace.db import get_connection
 from worktrace.platforms.base import ActiveWindow
@@ -381,7 +382,7 @@ class TestCurrentSnapshotUsesResourceDisplayName:
         assert snap["resource_subtype"] == "ide_workspace"
         assert snap["resource_display_name"] == "MyProject"
         assert snap["activity_display_name"] == "MyProject"
-        assert snap["inferred_project_name"] == "MyProject"
+        assert snap["inferred_project_name"] == UNCATEGORIZED_PROJECT
 
 
 # 6. update_activity_file_path_hint syncs activity_resource

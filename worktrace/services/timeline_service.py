@@ -24,6 +24,7 @@ from .activity_continuity_service import (
 from .activity_service import update_project_editable_activities_project
 from .anchor_predicates import is_file_context_anchor
 from .context_service import recompute_context_assignments_for_date
+from .project_attribution_policy import is_official_project_source, official_project_fields, resolve_project_attribution
 from .project_service import get_or_create_uncategorized_project
 from .resource_service import attach_resource
 from .settings_service import get_int_setting
@@ -104,10 +105,15 @@ def get_session_activity_details(
     for row in rows:
         item = dict(row)
         item["duration_seconds"] = _display_duration(row)
-        item["project_id"] = row.get("effective_project_id")
+        # Project fields must reflect the official display project, not
+        # the internal effective project. Candidate / derived / uncategorized
+        # sources all resolve to uncategorized in the formal fields.
+        item["project_id"] = row.get("display_project_id")
         item["project_name"] = row.get("display_project_name") or UNCATEGORIZED_PROJECT
         item["project_description"] = row.get("display_project_description") or ""
-        item["official_project_name"] = row.get("effective_project_name") or UNCATEGORIZED_PROJECT
+        item["official_project_name"] = row.get("display_project_name") or UNCATEGORIZED_PROJECT
+        item["is_official_project"] = bool(row.get("is_official_project"))
+        item["candidate_project_name"] = row.get("candidate_project_name") or ""
         item["activity_display_name"] = row.get("activity_display_name") or row.get("app_name") or "未知活动"
         # Ensure is_in_progress is set for both paths: the report path
         # already sets it from the pre-projection end_time, while the direct
@@ -326,9 +332,10 @@ def _can_merge(previous: dict, current: dict, boundary_times: list[str] | None =
 def _build_session(rows: list[dict], uncategorized_id: int) -> dict:
     first = rows[0]
     last = rows[-1]
-    project_id = int(first.get("report_project_id") or first.get("effective_project_id") or uncategorized_id)
-    project_name = first.get("report_project_name") or first.get("display_project_name") or UNCATEGORIZED_PROJECT
-    project_description = first.get("report_project_description") or first.get("display_project_description") or ""
+    project_id = int(first.get("report_project_id") or uncategorized_id)
+    project_name = first.get("report_project_name") or UNCATEGORIZED_PROJECT
+    project_description = first.get("report_project_description") or ""
+    is_official = bool(first.get("is_official_project"))
     duration = sum(_display_duration(row) for row in rows)
     closed_duration_seconds = sum(
         _display_duration(row) for row in rows if not bool(row.get("is_in_progress"))
@@ -366,8 +373,9 @@ def _build_session(rows: list[dict], uncategorized_id: int) -> dict:
         "live_delta_eligible": False,
         "editable": not is_in_progress,
         "exportable": not is_in_progress,
-        "is_uncategorized": project_id == int(uncategorized_id),
-        "is_suggested_project": bool(first.get("report_is_suggested_project", first.get("is_suggested_project"))),
+        "is_uncategorized": not is_official,
+        "is_official_project": is_official,
+        "is_suggested_project": False,
         "is_in_progress": is_in_progress,
     }
 
@@ -447,20 +455,36 @@ def _split_calendar_report_rows(row: dict) -> list[dict]:
 
 
 def _attach_original_report_project(row: dict) -> None:
-    row["report_project_id"] = row.get("effective_project_id")
+    """Copy the official display project to the report project fields.
+
+    Non-official rows (candidate / derived / uncategorized) copy the
+    uncategorized display so the report project never leaks a suggested
+    or context-derived project name.
+    """
+    row["report_project_id"] = row.get("display_project_id")
     row["report_project_name"] = row.get("display_project_name") or UNCATEGORIZED_PROJECT
     row["report_project_description"] = row.get("display_project_description") or ""
     row["report_project_key"] = row.get("display_project_key") or ""
-    row["report_is_suggested_project"] = bool(row.get("is_suggested_project"))
+    row["report_is_suggested_project"] = False
     row["report_context_merged"] = False
 
 
 def _attach_merged_report_project(row: dict, anchor: dict) -> None:
-    row["report_project_id"] = anchor.get("effective_project_id")
+    """Merge a short-interrupt row onto an anchor's official report project.
+
+    Only the anchor's OFFICIAL report project is merged — a non-official
+    anchor (candidate / derived / uncategorized) never propagates a
+    project name onto interrupt rows.
+    """
+    if not anchor.get("is_official_project"):
+        # Non-official anchor: do not merge a project name. Keep the
+        # row's own (uncategorized) report project.
+        return
+    row["report_project_id"] = anchor.get("display_project_id")
     row["report_project_name"] = anchor.get("display_project_name") or UNCATEGORIZED_PROJECT
     row["report_project_description"] = anchor.get("display_project_description") or ""
     row["report_project_key"] = anchor.get("display_project_key") or ""
-    row["report_is_suggested_project"] = bool(anchor.get("is_suggested_project"))
+    row["report_is_suggested_project"] = False
     row["report_context_merged"] = True
 
 
@@ -504,24 +528,20 @@ def _find_short_context_merge(
 def _is_project_anchor(row: dict) -> bool:
     """A row that can act as a session anchor for timeline / report merge.
 
-    Reuses the shared file-context-anchor predicate so the timeline layer
-    does not duplicate the file-extension / browser / email rules. Project
-    anchors additionally require the display project to be a concrete
-    (non-uncategorized) project. The ``midnight_anchor`` source keeps its
-    existing allow-when-concrete-project behavior.
-
-    Direct assignment anchors are NOT promoted to project anchors here:
-    they participate in context carry (``context_service``) but the
-    timeline session concept only treats file-context anchors (and
-    midnight anchors) as session boundaries.
+    Reuses the shared file-context-anchor predicate. Project anchors
+    additionally require an OFFICIAL project attribution —
+    context-derived / suggested / uncategorized rows are NOT project
+    anchors even when they carry a concrete internal project id.
     """
     if not is_normal_project_status(str(row.get("status") or "")):
         return False
     if row.get("assignment_source") == "midnight_anchor":
-        return (row.get("display_project_name") or UNCATEGORIZED_PROJECT) != UNCATEGORIZED_PROJECT
+        return False
     if not is_file_context_anchor(row):
         return False
-    return (row.get("display_project_name") or UNCATEGORIZED_PROJECT) != UNCATEGORIZED_PROJECT
+    if "is_official_project" in row:
+        return bool(row.get("is_official_project"))
+    return is_official_project_source(str(row.get("assignment_source") or ""))
 
 
 def _is_same_report_project_normal(row: dict, anchor_key: str) -> bool:
@@ -602,18 +622,29 @@ def _ensure_context_for_report_range(start_date: str, end_date: str) -> None:
 
 
 def _attach_display_project(row: dict, uncategorized_id: int) -> None:
-    project_id = int(row.get("effective_project_id") or uncategorized_id)
-    suggested = str(row.get("suggested_project_name") or "").strip()
-    if project_id == int(uncategorized_id) and suggested:
-        row["display_project_name"] = suggested
-        row["display_project_description"] = ""
-        row["display_project_key"] = f"suggested:{suggested.casefold()}"
-        row["is_suggested_project"] = True
-        return
-    row["display_project_name"] = row.get("effective_project_name") or UNCATEGORIZED_PROJECT
-    row["display_project_description"] = row.get("effective_project_description") or ""
-    row["display_project_key"] = f"project:{project_id}"
+    """Attach display-safe project fields to a row using the attribution policy.
+
+    Only official sources (``manual`` / ``keyword_rule`` / ``folder_rule``)
+    surface the real project name as ``display_project_name``. Candidate
+    (``suggested_project_name``), derived (``anchor_context`` /
+    ``same_project_context`` / ``clipboard_transition_context`` /
+    ``midnight_anchor``) and uncategorized sources all resolve to
+    ``UNCATEGORIZED_PROJECT`` in the formal display project column.
+
+    Internal effective project id/name are preserved on the row for
+    context-inference and anchor algorithms, but never exposed as the
+    official project.
+    """
+    fields = official_project_fields(row, uncategorized_id)
+    row["display_project_id"] = fields["display_project_id"]
+    row["display_project_name"] = fields["display_project_name"]
+    row["display_project_description"] = fields["display_project_description"]
+    row["display_project_key"] = fields["display_project_key"]
+    row["project_attribution_kind"] = fields["project_attribution_kind"]
+    row["is_official_project"] = fields["is_official_project"]
     row["is_suggested_project"] = False
+    row["candidate_project_name"] = fields["candidate_project_name"]
+    row["derived_project_name"] = fields["derived_project_name"]
 
 
 def _anchor_preview_item(row: dict, current_project_name: str | None) -> dict:

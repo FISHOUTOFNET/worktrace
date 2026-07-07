@@ -44,6 +44,7 @@ def _enabled_keyword_rules(conn=None) -> list[dict]:
                 JOIN project p ON p.id = pr.project_id
                 WHERE pr.enabled = 1
                   AND pr.rule_type = 'keyword'
+                  AND pr.created_by = 'user'
                   AND p.enabled = 1
                   AND p.is_archived = 0
                   AND p.name <> ?
@@ -59,6 +60,7 @@ def _enabled_keyword_rules(conn=None) -> list[dict]:
             JOIN project p ON p.id = pr.project_id
             WHERE pr.enabled = 1
               AND pr.rule_type = 'keyword'
+              AND pr.created_by = 'user'
               AND p.enabled = 1
               AND p.is_archived = 0
               AND p.name <> ?

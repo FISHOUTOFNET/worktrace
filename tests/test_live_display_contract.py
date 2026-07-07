@@ -382,20 +382,19 @@ def _create_real_open_activity(
 
 
 def test_persisted_open_display_project_does_not_revert(bridge):
-    """(defensive fallback path): when a real
-    persisted open DB row is uncategorized AND has no
-    ``suggested_project_name``, ``_display_project_name`` falls back to
-    the snapshot's ``inferred_project_name`` so the display does not
-    revert to ``未归类`` during the window between ``create_activity``
-    and a successful open-row sync.
+    """Attribution contract: when a real persisted open DB row has an
+    uncategorized assignment (``source = "uncategorized"``), the formal
+    display project MUST be ``UNCATEGORIZED_PROJECT`` — even when the
+    snapshot carries an ``inferred_project_name``.
 
-    This is the DEFENSIVE fallback only. The primary path — where the
-    open-row sync assigns a concrete DB project that the display reads
-    directly — is covered by
+    System inference (``inferred_project_name``) is NOT a user-confirmed
+    source and must NOT surface as the formal project name. The display
+    resolves to uncategorized until the user confirms the project or a
+    folder / keyword rule matches.
+
+    The primary path — where the open-row sync assigns a concrete DB
+    project via a folder rule — is covered by
     ``test_persisted_open_display_project_does_not_revert_with_real_uncategorized_row``.
-    ``_display_project_name`` does NOT unconditionally prefer the
-    snapshot's inferred name; it only falls back to it when the DB row
-    is uncategorized and has no suggested name.
     """
     aid, start_time = _create_real_open_activity(elapsed_seconds=60)
     # The row is uncategorized (create_activity default) with no
@@ -416,8 +415,9 @@ def test_persisted_open_display_project_does_not_revert(bridge):
             settings_service.get_setting("current_activity_snapshot") or "null"
         )
     )
-    assert summary["project_name"] == "DefensiveFallbackProject"
-    assert not summary["is_uncategorized"]
+    # The formal project must be uncategorized, NOT the inferred name.
+    assert summary["project_name"] == UNCATEGORIZED_PROJECT
+    assert summary["is_uncategorized"] is True
 
 
 
@@ -691,9 +691,13 @@ def test_open_project_sync_supports_suggested_project_name_without_creating_proj
     the resource is an anchor file with a parent folder), the helper
     writes ``source = "suggested_project_name"`` with the suggested
     name while ``project_id`` stays uncategorized. No new project is
-    created. Timeline / Recent / Detail display the suggested name via
-    ``_attach_display_project`` (which honors ``suggested_project_name``
-    when ``project_id == uncategorized_id``).
+    created.
+
+    Attribution contract: ``suggested_project_name`` is a CANDIDATE,
+    not an official project. The formal project_name in Current /
+    Timeline / Recent / Detail MUST be ``UNCATEGORIZED_PROJECT``. The
+    suggested name is retained as ``candidate_project_name`` metadata
+    for future UI weak-hint use.
     """
     # Use a path with NO matching folder rule and NO keyword rule.
     # The anchor file's parent folder name becomes the suggested project.
@@ -717,8 +721,8 @@ def test_open_project_sync_supports_suggested_project_name_without_creating_proj
     # No new project was auto-created.
     assert project_service.get_project_by_name("SuggestedProject") is None
 
-    # Display: _display_project_name reads the suggested name from the
-    # assignment (step 2 of the resolution order).
+    # Display: _display_project_name must NOT surface the suggested name
+    # as the formal project. It must resolve to UNCATEGORIZED_PROJECT.
     _set_snapshot(
         _normal_snapshot(
             elapsed_seconds=120,
@@ -733,11 +737,11 @@ def test_open_project_sync_supports_suggested_project_name_without_creating_proj
             settings_service.get_setting("current_activity_snapshot") or "null"
         )
     )
-    assert summary["project_name"] == "SuggestedProject"
-    assert summary["is_uncategorized"] is False
+    assert summary["project_name"] == UNCATEGORIZED_PROJECT
+    assert summary["is_uncategorized"] is True
 
-    # Timeline / Recent / Detail also display the suggested name via
-    # _attach_display_project.
+    # Timeline / Recent / Detail also display uncategorized (not the
+    # suggested name) via _attach_display_project.
     today = timeline_service.get_default_report_date()
     timeline = bridge.get_timeline(today)
     persisted_sessions = [
@@ -745,7 +749,7 @@ def test_open_project_sync_supports_suggested_project_name_without_creating_proj
         if aid in (s.get("activity_ids") or [])
     ]
     assert persisted_sessions
-    assert persisted_sessions[0]["project_name"] == "SuggestedProject"
+    assert persisted_sessions[0]["project_name"] == UNCATEGORIZED_PROJECT
 
     recent = bridge.get_recent_activities()
     persisted_items = [
@@ -753,10 +757,10 @@ def test_open_project_sync_supports_suggested_project_name_without_creating_proj
         if int(item.get("activity_id") or 0) == aid
     ]
     assert persisted_items
-    assert persisted_items[0]["project_name"] == "SuggestedProject"
+    assert persisted_items[0]["project_name"] == UNCATEGORIZED_PROJECT
 
     details = bridge.get_timeline_session_details([aid], today)
-    assert details["activities"][0]["project_name"] == "SuggestedProject"
+    assert details["activities"][0]["project_name"] == UNCATEGORIZED_PROJECT
 
 
 
