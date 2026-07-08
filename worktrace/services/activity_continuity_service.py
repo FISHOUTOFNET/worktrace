@@ -5,6 +5,7 @@ from typing import Any
 
 from ..constants import (
     DEFAULT_UNRECORDED_GAP_BOUNDARY_SECONDS,
+    REPORT_CONTEXT_SHORT_MERGE_SECONDS,
     STATUS_ERROR,
     STATUS_EXCLUDED,
     STATUS_IDLE,
@@ -25,6 +26,10 @@ def is_system_status(status: str) -> bool:
 
 def is_normal_project_status(status: str) -> bool:
     return str(status or "") == NORMAL_PROJECT_STATUS
+
+
+def is_report_short_context_duration(seconds: int) -> bool:
+    return 0 <= int(seconds or 0) <= REPORT_CONTEXT_SHORT_MERGE_SECONDS
 
 
 def is_hard_boundary_status(status: str) -> bool:

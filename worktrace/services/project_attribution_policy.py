@@ -4,8 +4,7 @@
 Separates internal effective attribution (system inference, context
 inheritance, suggested candidates) from official visible attribution
 (user-confirmed project facts). Official sources are the ONLY sources
-that may appear in the formal project column, project statistics,
-project details, and the exported ``项目`` field.
+that may appear as direct user/rule attribution.
 
 Official: ``manual`` / ``keyword_rule`` / ``folder_rule``.
 Candidate: ``suggested_project_name``.
@@ -13,21 +12,34 @@ Derived internal: ``anchor_context`` / ``same_project_context`` /
 ``clipboard_transition_context`` / ``midnight_anchor``.
 Non-project: ``uncategorized``.
 
+Report-visible attribution is a separate reporting/history contract.
+Context-derived sources can be visible in reports when they carry a
+concrete normal project, but they are never official direct attribution.
+
 This is the ONLY module that maps source strings to UI attribution
 semantics. Timeline / Statistics / Export / Live Display MUST defer to
-``official_project_fields`` / ``candidate_project_fields``.
+``official_project_fields`` / ``report_project_fields`` /
+``candidate_project_fields``.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from ..constants import UNCATEGORIZED_PROJECT
+from ..constants import STATUS_NORMAL, UNCATEGORIZED_PROJECT
 
 # --- Source classification ---
 
 OFFICIAL_PROJECT_SOURCES = frozenset({"manual", "keyword_rule", "folder_rule"})
 CANDIDATE_PROJECT_SOURCES = frozenset({"suggested_project_name"})
+REPORT_VISIBLE_CONTEXT_PROJECT_SOURCES = frozenset(
+    {
+        "same_project_context",
+        "anchor_context",
+        "clipboard_transition_context",
+        "midnight_anchor",
+    }
+)
 DERIVED_INTERNAL_PROJECT_SOURCES = frozenset(
     {
         "anchor_context",
@@ -68,6 +80,14 @@ def is_derived_internal_project_source(source: str | None) -> bool:
     if not source:
         return False
     return str(source).strip() in DERIVED_INTERNAL_PROJECT_SOURCES
+
+
+def is_report_visible_project_source(source: str | None) -> bool:
+    """Return True when ``source`` can surface in report/history project fields."""
+    if not source:
+        return False
+    cleaned = str(source).strip()
+    return cleaned in OFFICIAL_PROJECT_SOURCES or cleaned in REPORT_VISIBLE_CONTEXT_PROJECT_SOURCES
 
 
 def resolve_project_attribution(row: dict, uncategorized_id: int) -> dict:
@@ -169,6 +189,54 @@ def official_project_fields(row: dict, uncategorized_id: int) -> dict:
     }
 
 
+_REPORT_ATTRIBUTION_KIND_BY_SOURCE = {
+    "manual": "official_direct",
+    "keyword_rule": "official_direct",
+    "folder_rule": "official_direct",
+    "same_project_context": "report_context_same_project",
+    "anchor_context": "report_context_short_gap",
+    "clipboard_transition_context": "report_context_clipboard",
+    "midnight_anchor": "report_context_continuation",
+    "suggested_project_name": "candidate",
+}
+
+
+def report_project_fields(row: dict, uncategorized_id: int) -> dict:
+    """Return report-visible project fields without changing official semantics."""
+    attribution = resolve_project_attribution(row, uncategorized_id)
+    source = attribution["source"]
+    kind = _REPORT_ATTRIBUTION_KIND_BY_SOURCE.get(source, "none")
+    effective_project_id = int(attribution["effective_project_id"] or uncategorized_id)
+    effective_project_name = str(attribution["effective_project_name"] or "").strip()
+    is_report_project = (
+        str(row.get("status") or "").strip() == STATUS_NORMAL
+        and is_report_visible_project_source(source)
+        and effective_project_id > 0
+        and effective_project_id != int(uncategorized_id)
+        and bool(effective_project_name)
+    )
+    if is_report_project:
+        report_id = effective_project_id
+        report_name = effective_project_name
+        report_desc = attribution["effective_project_description"]
+        report_key = f"project:{report_id}"
+    else:
+        report_id = int(uncategorized_id)
+        report_name = UNCATEGORIZED_PROJECT
+        report_desc = ""
+        report_key = f"uncategorized:{uncategorized_id}"
+    return {
+        "report_project_id": report_id,
+        "report_project_name": report_name,
+        "report_project_description": report_desc,
+        "report_project_key": report_key,
+        "report_attribution_kind": kind,
+        "is_report_project": is_report_project,
+        "is_report_classified": is_report_project,
+        "is_report_uncategorized": not is_report_project,
+    }
+
+
 def candidate_project_fields(row: dict, uncategorized_id: int) -> dict:
     """Return the candidate project label fields for a row.
 
@@ -211,10 +279,13 @@ __all__ = [
     "DERIVED_INTERNAL_PROJECT_SOURCES",
     "NON_PROJECT_SOURCES",
     "OFFICIAL_PROJECT_SOURCES",
+    "REPORT_VISIBLE_CONTEXT_PROJECT_SOURCES",
     "candidate_project_fields",
     "is_candidate_project_source",
     "is_derived_internal_project_source",
     "is_official_project_source",
+    "is_report_visible_project_source",
     "official_project_fields",
+    "report_project_fields",
     "resolve_project_attribution",
 ]

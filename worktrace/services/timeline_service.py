@@ -6,7 +6,6 @@ from datetime import date as date_type, datetime, time as datetime_time, timedel
 from ..constants import (
     DEFAULT_CONTEXT_CARRY_MINUTES,
     DEFAULT_UNRECORDED_GAP_BOUNDARY_SECONDS,
-    REPORT_CONTEXT_SHORT_MERGE_SECONDS,
     STATUS_NORMAL,
     TIME_FORMAT,
     UNCATEGORIZED_PROJECT,
@@ -20,11 +19,12 @@ from .activity_continuity_service import (
     has_hard_boundary_between,
     is_hard_boundary_status,
     is_normal_project_status,
+    is_report_short_context_duration,
 )
 from .activity_service import update_project_editable_activities_project
 from .anchor_predicates import is_file_context_anchor
 from .context_service import recompute_context_assignments_for_date
-from .project_attribution_policy import is_official_project_source, official_project_fields, resolve_project_attribution
+from .project_attribution_policy import official_project_fields, report_project_fields
 from .project_service import get_or_create_uncategorized_project
 from .resource_service import attach_resource
 from .settings_service import get_int_setting
@@ -105,14 +105,13 @@ def get_session_activity_details(
     for row in rows:
         item = dict(row)
         item["duration_seconds"] = _display_duration(row)
-        # Project fields must reflect the official display project, not
-        # the internal effective project. Candidate / derived / uncategorized
-        # sources all resolve to uncategorized in the formal fields.
-        item["project_id"] = row.get("display_project_id")
-        item["project_name"] = row.get("display_project_name") or UNCATEGORIZED_PROJECT
-        item["project_description"] = row.get("display_project_description") or ""
+        item["project_id"] = row.get("report_project_id")
+        item["project_name"] = row.get("report_project_name") or UNCATEGORIZED_PROJECT
+        item["project_description"] = row.get("report_project_description") or ""
         item["official_project_name"] = row.get("display_project_name") or UNCATEGORIZED_PROJECT
         item["is_official_project"] = bool(row.get("is_official_project"))
+        item["is_report_project"] = bool(row.get("is_report_project"))
+        item["report_attribution_kind"] = row.get("report_attribution_kind") or "none"
         item["candidate_project_name"] = row.get("candidate_project_name") or ""
         item["activity_display_name"] = row.get("activity_display_name") or row.get("app_name") or "未知活动"
         # Ensure is_in_progress is set for both paths: the report path
@@ -313,10 +312,12 @@ def _load_session_rows(
             """,
             activity_ids,
         ).fetchall()
-    return _with_display_projects(
+    uncategorized_id = get_or_create_uncategorized_project()
+    loaded_rows = _with_display_projects(
         [attach_resource(row) for row in dict_rows(rows)],
-        get_or_create_uncategorized_project(),
+        uncategorized_id,
     )
+    return _with_reporting_projects(loaded_rows, _boundary_times_for_rows(loaded_rows))
 
 
 def _can_merge(previous: dict, current: dict, boundary_times: list[str] | None = None) -> bool:
@@ -335,6 +336,9 @@ def _build_session(rows: list[dict], uncategorized_id: int) -> dict:
     project_id = int(first.get("report_project_id") or uncategorized_id)
     project_name = first.get("report_project_name") or UNCATEGORIZED_PROJECT
     project_description = first.get("report_project_description") or ""
+    is_report_project = bool(first.get("is_report_project"))
+    is_report_classified = bool(first.get("is_report_classified"))
+    is_report_uncategorized = bool(first.get("is_report_uncategorized"))
     is_official = bool(first.get("is_official_project"))
     duration = sum(_display_duration(row) for row in rows)
     closed_duration_seconds = sum(
@@ -373,8 +377,13 @@ def _build_session(rows: list[dict], uncategorized_id: int) -> dict:
         "live_delta_eligible": False,
         "editable": not is_in_progress,
         "exportable": not is_in_progress,
-        "is_uncategorized": not is_official,
+        "is_uncategorized": not is_report_project,
+        "is_classified": is_report_project,
+        "is_report_project": is_report_project,
+        "is_report_classified": is_report_classified,
+        "is_report_uncategorized": is_report_uncategorized,
         "is_official_project": is_official,
+        "report_attribution_kind": first.get("report_attribution_kind") or "none",
         "is_suggested_project": False,
         "is_in_progress": is_in_progress,
     }
@@ -455,16 +464,7 @@ def _split_calendar_report_rows(row: dict) -> list[dict]:
 
 
 def _attach_original_report_project(row: dict) -> None:
-    """Copy the official display project to the report project fields.
-
-    Non-official rows (candidate / derived / uncategorized) copy the
-    uncategorized display so the report project never leaks a suggested
-    or context-derived project name.
-    """
-    row["report_project_id"] = row.get("display_project_id")
-    row["report_project_name"] = row.get("display_project_name") or UNCATEGORIZED_PROJECT
-    row["report_project_description"] = row.get("display_project_description") or ""
-    row["report_project_key"] = row.get("display_project_key") or ""
+    """Keep report/history attribution separate from official display fields."""
     row["report_is_suggested_project"] = False
     row["report_context_merged"] = False
 
@@ -480,12 +480,16 @@ def _attach_merged_report_project(row: dict, anchor: dict) -> None:
         # Non-official anchor: do not merge a project name. Keep the
         # row's own (uncategorized) report project.
         return
-    row["report_project_id"] = anchor.get("display_project_id")
-    row["report_project_name"] = anchor.get("display_project_name") or UNCATEGORIZED_PROJECT
-    row["report_project_description"] = anchor.get("display_project_description") or ""
-    row["report_project_key"] = anchor.get("display_project_key") or ""
+    row["report_project_id"] = anchor.get("report_project_id")
+    row["report_project_name"] = anchor.get("report_project_name") or UNCATEGORIZED_PROJECT
+    row["report_project_description"] = anchor.get("report_project_description") or ""
+    row["report_project_key"] = anchor.get("report_project_key") or ""
     row["report_is_suggested_project"] = False
     row["report_context_merged"] = True
+    row["report_attribution_kind"] = "report_context_short_gap"
+    row["is_report_project"] = True
+    row["is_report_classified"] = True
+    row["is_report_uncategorized"] = False
 
 
 def _find_short_context_merge(
@@ -495,7 +499,7 @@ def _find_short_context_merge(
     boundary_times: list[str] | None = None,
 ) -> list[int] | None:
     anchor = rows[anchor_index]
-    anchor_key = str(anchor.get("display_project_key") or "")
+    anchor_key = str(anchor.get("report_project_key") or "")
     interrupt_indices: list[int] = []
     after_interrupt_block = False
     for pos in range(anchor_index + 1, len(rows)):
@@ -504,10 +508,10 @@ def _find_short_context_merge(
             return None
         if is_hard_boundary_status(str(row.get("status") or "")):
             return None
-        if _is_project_anchor(row) and str(row.get("display_project_key") or "") == anchor_key:
+        if _is_project_anchor(row) and str(row.get("report_project_key") or "") == anchor_key:
             if (
                 interrupt_indices
-                and _seconds_for_rows(rows, interrupt_indices) < REPORT_CONTEXT_SHORT_MERGE_SECONDS
+                and is_report_short_context_duration(_seconds_for_rows(rows, interrupt_indices))
                 and _minutes_between(_anchor_context_time(anchor), row["start_time"]) <= carry_minutes
             ):
                 return interrupt_indices
@@ -528,28 +532,26 @@ def _find_short_context_merge(
 def _is_project_anchor(row: dict) -> bool:
     """A row that can act as a session anchor for timeline / report merge.
 
-    Reuses the shared file-context-anchor predicate. Project anchors
-    additionally require an OFFICIAL project attribution —
-    context-derived / suggested / uncategorized rows are NOT project
-    anchors even when they carry a concrete internal project id.
+    Only official direct project rows anchor report-level short-interrupt
+    merges; context-derived rows must not chain.
     """
     if not is_normal_project_status(str(row.get("status") or "")):
         return False
     if row.get("assignment_source") == "midnight_anchor":
         return False
-    if not is_file_context_anchor(row):
-        return False
-    if "is_official_project" in row:
-        return bool(row.get("is_official_project"))
-    return is_official_project_source(str(row.get("assignment_source") or ""))
+    return bool(row.get("is_official_project"))
 
 
 def _is_same_report_project_normal(row: dict, anchor_key: str) -> bool:
-    return is_normal_project_status(str(row.get("status") or "")) and str(row.get("display_project_key") or "") == anchor_key
+    return is_normal_project_status(str(row.get("status") or "")) and str(row.get("report_project_key") or "") == anchor_key
 
 
 def _is_short_merge_interrupt(row: dict, anchor_key: str) -> bool:
-    return is_normal_project_status(str(row.get("status") or "")) and str(row.get("display_project_key") or "") != anchor_key
+    return (
+        is_normal_project_status(str(row.get("status") or ""))
+        and not bool(row.get("is_report_project"))
+        and str(row.get("report_project_key") or "") != anchor_key
+    )
 
 
 def _seconds_for_rows(rows: list[dict], indexes: list[int]) -> int:
@@ -635,16 +637,11 @@ def _attach_display_project(row: dict, uncategorized_id: int) -> None:
     context-inference and anchor algorithms, but never exposed as the
     official project.
     """
-    fields = official_project_fields(row, uncategorized_id)
-    row["display_project_id"] = fields["display_project_id"]
-    row["display_project_name"] = fields["display_project_name"]
-    row["display_project_description"] = fields["display_project_description"]
-    row["display_project_key"] = fields["display_project_key"]
-    row["project_attribution_kind"] = fields["project_attribution_kind"]
-    row["is_official_project"] = fields["is_official_project"]
+    official = official_project_fields(row, uncategorized_id)
+    report = report_project_fields(row, uncategorized_id)
+    row.update(official)
+    row.update(report)
     row["is_suggested_project"] = False
-    row["candidate_project_name"] = fields["candidate_project_name"]
-    row["derived_project_name"] = fields["derived_project_name"]
 
 
 def _anchor_preview_item(row: dict, current_project_name: str | None) -> dict:

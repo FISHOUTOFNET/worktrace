@@ -120,6 +120,7 @@ SELECT
     ar.window_title AS resource_window_title,
     ar.uri_host AS resource_uri_host,
     apa.project_id AS assignment_project_id,
+    apa.source AS assignment_source,
     apa.is_manual AS assignment_is_manual,
     curr.name AS current_project_name
 FROM activity_log a
@@ -170,6 +171,7 @@ def _classify_activities(activities: list[dict], rule: dict, rule_type: str, con
     (read-only) and backfill (re-validated inside the write transaction).
     """
     target_project_id = int(rule.get("project_id") or 0)
+    expected_source = "folder_rule" if rule_type == "folder" else "keyword_rule"
     counts = {
         "matched_count": 0,
         "eligible_count": 0,
@@ -210,7 +212,11 @@ def _classify_activities(activities: list[dict], rule: dict, rule_type: str, con
             else activity.get("activity_project_id")
             or 0
         )
-        if effective_project_id == target_project_id:
+        already_target = (
+            effective_project_id == target_project_id
+            and str(activity.get("assignment_source") or "") == expected_source
+        )
+        if already_target:
             counts["already_target_count"] += 1
             continue
         counts["would_update_count"] += 1

@@ -1,21 +1,18 @@
 """Service-level project attribution display contract tests.
 
-These tests verify that the official project attribution policy is
-consistently applied across Timeline / Statistics / Export / Details /
-Live Display. The policy module (``project_attribution_policy``) is the
-single source of truth — these tests guard against regressions where a
-suggested / context-derived / midnight-anchor project leaks into the
-formal project column, project statistics, or CSV export.
+These tests verify that official display attribution and report-visible
+attribution stay separated across Timeline / Statistics / Export /
+Details / Live Display. The policy module
+(``project_attribution_policy``) is the single source of truth.
 
 Contract summary:
 - Official sources (manual / keyword_rule / folder_rule) surface the
-  real project name in all formal project fields.
-- Candidate / derived / uncategorized sources resolve to
-  ``UNCATEGORIZED_PROJECT`` in formal fields. Internal effective
-  project id/name are preserved for algorithms but never displayed.
+  real project name in official display fields.
+- Concrete context sources are report-visible, but not official.
+- Candidate / uncategorized sources resolve to ``UNCATEGORIZED_PROJECT``.
 - ``_is_project_anchor`` requires ``is_official_project is True``.
-- Statistics ``by_project`` / ``project_duration_seconds`` only count
-  official projects.
+- Statistics ``by_project`` / ``project_duration_seconds`` count
+  report-visible projects.
 - CSV ``项目`` cell never falls back to raw ``project_name``.
 - ``advance_ownership`` never confirms a non-official candidate.
 """
@@ -296,31 +293,78 @@ def test_suggested_project_name_does_not_confirm_after_threshold(temp_db):
     "source",
     ["anchor_context", "same_project_context", "clipboard_transition_context", "midnight_anchor"],
 )
-def test_derived_internal_sources_display_as_uncategorized(temp_db, source):
-    """anchor_context / same_project_context / clipboard_transition_context /
-    midnight_anchor → formal project = uncategorized."""
+def test_context_sources_are_report_visible_but_not_official(temp_db, source):
+    """Context sources stay unofficial while surfacing in report fields."""
     pid = project_service.create_project("InternalProject")
     aid = _create_activity(start="09:00:00", end="09:10:00")
     _set_assignment_source(aid, source, project_id=pid, confidence=60)
 
     sessions = timeline_service.get_project_sessions_by_date(TODAY)
-    assert sessions[0]["project_name"] == UNCATEGORIZED_PROJECT
+    assert sessions[0]["project_name"] == "InternalProject"
     assert sessions[0]["is_official_project"] is False
+    assert sessions[0]["is_report_project"] is True
 
     # Internal effective project id is preserved
     rows = timeline_service.get_report_activity_rows(TODAY, TODAY)
     assert rows[0]["effective_project_id"] == pid
     assert rows[0]["display_project_name"] == UNCATEGORIZED_PROJECT
+    assert rows[0]["report_project_name"] == "InternalProject"
+    assert rows[0]["is_official_project"] is False
+    assert rows[0]["is_report_project"] is True
 
-    # Not in statistics by_project
     summary = statistics_service.get_statistics_export_summary(TODAY, TODAY)
     by_project_names = [g["display_name"] for g in summary["by_project"]]
-    assert "InternalProject" not in by_project_names
-    assert summary["project_duration_seconds"] == 0
+    assert "InternalProject" in by_project_names
+    assert summary["project_duration_seconds"] == 600
 
-    # CSV cell = uncategorized
     csv_rows = export_service.build_statistics_csv_rows(TODAY, TODAY)
-    assert csv_rows[0]["project"] == UNCATEGORIZED_PROJECT
+    assert csv_rows[0]["project"] == "InternalProject"
+
+
+def test_context_assignment_reports_across_timeline_details_stats_csv_excel(temp_db, tmp_path):
+    project_id = project_service.create_project("ProjectA")
+    first_a = _create_activity(app="Word", title="A1.docx", start="09:00:00", end="09:10:00")
+    middle_b = _create_activity(app="Edge", title="Reference", start="09:10:00", end="09:11:00")
+    second_a = _create_activity(app="Word", title="A2.docx", start="09:11:00", end="09:20:00")
+    _set_assignment_source(first_a, "keyword_rule", project_id=project_id)
+    _set_assignment_source(middle_b, "same_project_context", project_id=project_id)
+    _set_assignment_source(second_a, "keyword_rule", project_id=project_id)
+
+    rows = timeline_service.get_report_activity_rows(TODAY, TODAY)
+    b_row = next(row for row in rows if int(row["id"]) == middle_b)
+    assert b_row["display_project_name"] == UNCATEGORIZED_PROJECT
+    assert b_row["report_project_name"] == "ProjectA"
+    assert b_row["is_official_project"] is False
+    assert b_row["is_report_project"] is True
+
+    sessions = timeline_service.get_project_sessions_by_date(TODAY)
+    assert len(sessions) == 1
+    assert sessions[0]["project_name"] == "ProjectA"
+    assert sessions[0]["is_report_project"] is True
+
+    details = timeline_service.get_session_activity_details([middle_b], TODAY)
+    assert details[0]["project_name"] == "ProjectA"
+    assert details[0]["official_project_name"] == UNCATEGORIZED_PROJECT
+    assert details[0]["is_official_project"] is False
+    assert details[0]["is_report_project"] is True
+
+    summary = statistics_service.get_statistics_export_summary(TODAY, TODAY)
+    assert summary["project_duration_seconds"] == 20 * 60
+    assert [group["display_name"] for group in summary["by_project"]] == ["ProjectA"]
+
+    csv_rows = export_service.build_statistics_csv_rows(TODAY, TODAY)
+    assert next(row for row in csv_rows if row["start_time"].endswith("09:10:00"))["project"] == "ProjectA"
+
+    from openpyxl import load_workbook
+
+    xlsx_path = export_service.export_excel(TODAY, TODAY, str(tmp_path / "report.xlsx"))
+    ws = load_workbook(xlsx_path)["Activity Logs"]
+    headers = [cell.value for cell in ws[1]]
+    project_col = headers.index("项目") + 1
+    start_col = headers.index("开始时间") + 1
+    excel_rows = list(ws.iter_rows(min_row=2, values_only=True))
+    b_excel = next(row for row in excel_rows if str(row[start_col - 1]).endswith("09:10:00"))
+    assert b_excel[project_col - 1] == "ProjectA"
 
 
 @pytest.mark.parametrize(
@@ -362,6 +406,7 @@ def test_format_activity_project_cell_official_shows_name():
         "status": STATUS_NORMAL,
         "report_project_name": "OfficialProject",
         "is_official_project": True,
+        "is_report_project": True,
     }
     assert format_activity_project_cell(row) == "OfficialProject"
 
@@ -398,9 +443,10 @@ def test_excluded_in_history_stats_export_but_no_project_column(temp_db):
     assert all(name == UNCATEGORIZED_PROJECT or name != "—" for name in by_project_names)
 
 
-def test_classified_duration_only_counts_official(temp_db):
-    """classified_duration = official project duration only."""
+def test_classified_duration_counts_report_visible_projects(temp_db):
+    """classified_duration = report-visible project duration."""
     official_pid = project_service.create_project("OfficialA")
+    context_pid = project_service.create_project("ContextA")
     # Official activity (manual)
     _create_activity(
         app="Word",
@@ -422,14 +468,21 @@ def test_classified_duration_only_counts_official(temp_db):
         project_id=_uncategorized_id(),
         suggested_name="SuggestedB",
     )
+    aid3 = _create_activity(
+        app="Edge",
+        title="Context",
+        start="09:20:00",
+        end="09:30:00",
+    )
+    _set_assignment_source(aid3, "same_project_context", project_id=context_pid)
 
     summary = statistics_service.get_summary(TODAY, TODAY)
-    # classified = 600 (official only)
-    assert summary["classified_duration"] == 600
+    # classified = 1200 (official + report-visible context)
+    assert summary["classified_duration"] == 1200
     # uncategorized = 600 (the suggested activity)
     assert summary["uncategorized_duration"] == 600
-    # total = 1200
-    assert summary["total_duration"] == 1200
+    # total = 1800
+    assert summary["total_duration"] == 1800
 
 
 def test_details_project_fields_do_not_show_candidate(temp_db):
@@ -450,16 +503,17 @@ def test_details_project_fields_do_not_show_candidate(temp_db):
     assert details[0].get("candidate_project_name") == "CandidateClient"
 
 
-def test_details_project_fields_do_not_show_derived(temp_db):
-    """get_session_activity_details must not show derived project as formal."""
+def test_details_project_fields_show_report_visible_context(temp_db):
     pid = project_service.create_project("DerivedInternal")
     aid = _create_activity(start="09:00:00", end="09:10:00")
     _set_assignment_source(aid, "anchor_context", project_id=pid)
 
     details = timeline_service.get_session_activity_details([aid], TODAY)
-    assert details[0]["project_name"] == UNCATEGORIZED_PROJECT
+    assert details[0]["project_name"] == "DerivedInternal"
     assert details[0]["official_project_name"] == UNCATEGORIZED_PROJECT
     assert details[0]["is_official_project"] is False
+    assert details[0]["is_report_project"] is True
+    assert details[0]["report_attribution_kind"] == "report_context_short_gap"
 
 
 def test_non_official_candidate_with_prior_confirmed_carries_display(temp_db):

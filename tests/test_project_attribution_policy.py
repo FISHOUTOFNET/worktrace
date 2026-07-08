@@ -12,17 +12,20 @@ from __future__ import annotations
 
 import pytest
 
-from worktrace.constants import UNCATEGORIZED_PROJECT
+from worktrace.constants import STATUS_IDLE, STATUS_NORMAL, UNCATEGORIZED_PROJECT
 from worktrace.services.project_attribution_policy import (
     CANDIDATE_PROJECT_SOURCES,
     DERIVED_INTERNAL_PROJECT_SOURCES,
     NON_PROJECT_SOURCES,
     OFFICIAL_PROJECT_SOURCES,
+    REPORT_VISIBLE_CONTEXT_PROJECT_SOURCES,
     candidate_project_fields,
     is_candidate_project_source,
     is_derived_internal_project_source,
     is_official_project_source,
+    is_report_visible_project_source,
     official_project_fields,
+    report_project_fields,
     resolve_project_attribution,
 )
 
@@ -45,6 +48,17 @@ def test_derived_internal_sources_include_all_context_types():
         {
             "anchor_context",
             "same_project_context",
+            "clipboard_transition_context",
+            "midnight_anchor",
+        }
+    )
+
+
+def test_report_visible_context_sources_include_concrete_context_types():
+    assert REPORT_VISIBLE_CONTEXT_PROJECT_SOURCES == frozenset(
+        {
+            "same_project_context",
+            "anchor_context",
             "clipboard_transition_context",
             "midnight_anchor",
         }
@@ -136,11 +150,39 @@ def test_is_derived_internal_project_source_false_for_non_derived(source):
     assert is_derived_internal_project_source(source) is False
 
 
+# --- is_report_visible_project_source ---
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "manual",
+        "keyword_rule",
+        "folder_rule",
+        "same_project_context",
+        "anchor_context",
+        "clipboard_transition_context",
+        "midnight_anchor",
+    ],
+)
+def test_is_report_visible_project_source_true_for_report_visible(source):
+    assert is_report_visible_project_source(source) is True
+
+
+@pytest.mark.parametrize(
+    "source",
+    ["suggested_project_name", "uncategorized", "unknown", "", None],
+)
+def test_is_report_visible_project_source_false_for_non_report_visible(source):
+    assert is_report_visible_project_source(source) is False
+
+
 # --- resolve_project_attribution ---
 
 
-def _row(source, project_id=1, project_name="ProjectA", description="desc", suggested=""):
+def _row(source, project_id=1, project_name="ProjectA", description="desc", suggested="", status=STATUS_NORMAL):
     return {
+        "status": status,
         "assignment_source": source,
         "effective_project_id": project_id,
         "effective_project_name": project_name,
@@ -288,6 +330,59 @@ def test_official_project_fields_for_uncategorized_source():
     assert fields["is_official_project"] is False
     assert fields["is_classified"] is False
     assert fields["is_uncategorized"] is True
+
+
+# --- report_project_fields ---
+
+
+@pytest.mark.parametrize(
+    ("source", "kind"),
+    [
+        ("manual", "official_direct"),
+        ("keyword_rule", "official_direct"),
+        ("folder_rule", "official_direct"),
+        ("same_project_context", "report_context_same_project"),
+        ("anchor_context", "report_context_short_gap"),
+        ("clipboard_transition_context", "report_context_clipboard"),
+        ("midnight_anchor", "report_context_continuation"),
+    ],
+)
+def test_report_project_fields_for_visible_sources(source, kind):
+    row = _row(source, project_id=10, project_name="ReportProject", description="Desc")
+    fields = report_project_fields(row, UNCATEGORIZED_ID)
+    assert fields["report_project_id"] == 10
+    assert fields["report_project_name"] == "ReportProject"
+    assert fields["report_project_description"] == "Desc"
+    assert fields["report_project_key"] == "project:10"
+    assert fields["report_attribution_kind"] == kind
+    assert fields["is_report_project"] is True
+    assert fields["is_report_classified"] is True
+    assert fields["is_report_uncategorized"] is False
+
+
+def test_report_project_fields_candidate_is_metadata_only():
+    row = _row("suggested_project_name", project_id=UNCATEGORIZED_ID, suggested="Suggested")
+    fields = report_project_fields(row, UNCATEGORIZED_ID)
+    assert fields["report_project_name"] == UNCATEGORIZED_PROJECT
+    assert fields["report_attribution_kind"] == "candidate"
+    assert fields["is_report_project"] is False
+
+
+@pytest.mark.parametrize("source", ["uncategorized", "", "unknown", None])
+def test_report_project_fields_uncategorized_empty_unknown_not_visible(source):
+    row = _row(source, project_id=10, project_name="RawProject")
+    fields = report_project_fields(row, UNCATEGORIZED_ID)
+    assert fields["report_project_name"] == UNCATEGORIZED_PROJECT
+    assert fields["report_attribution_kind"] == "none"
+    assert fields["is_report_project"] is False
+
+
+def test_report_project_fields_requires_normal_status():
+    row = _row("manual", project_id=10, project_name="Project", status=STATUS_IDLE)
+    fields = report_project_fields(row, UNCATEGORIZED_ID)
+    assert fields["report_project_name"] == UNCATEGORIZED_PROJECT
+    assert fields["report_attribution_kind"] == "official_direct"
+    assert fields["is_report_project"] is False
 
 
 # --- candidate_project_fields ---

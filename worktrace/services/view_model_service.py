@@ -551,15 +551,22 @@ def _session_to_overview_row(session: dict[str, Any]) -> dict[str, Any]:
     """
     base_seconds = int(session.get("duration_seconds") or 0)
     is_in_progress = bool(session.get("is_in_progress"))
-    is_uncategorized = bool(session.get("is_uncategorized"))
+    is_report_project = bool(session.get("is_report_project", session.get("is_classified")))
+    is_report_classified = bool(session.get("is_report_classified", is_report_project))
+    is_report_uncategorized = bool(session.get("is_report_uncategorized", not is_report_project))
     first_activity_id = int(session.get("first_activity_id") or 0) or None
     return {
         "project_name": str(session.get("project_name") or "未归类"),
         "project_description": str(session.get("project_description") or ""),
         "project_id": int(session.get("project_id") or 0),
         "row_kind": "project_session",
-        "is_uncategorized": is_uncategorized,
-        "is_classified": not is_uncategorized,
+        "is_uncategorized": is_report_uncategorized,
+        "is_classified": is_report_classified,
+        "is_report_project": is_report_project,
+        "is_report_classified": is_report_classified,
+        "is_report_uncategorized": is_report_uncategorized,
+        "report_attribution_kind": str(session.get("report_attribution_kind") or "none"),
+        "is_official_project": bool(session.get("is_official_project")),
         "start_time": str(session.get("start_time") or ""),
         "end_time": str(session.get("end_time") or ""),
         "duration": format_duration(base_seconds),
@@ -648,6 +655,9 @@ def get_timeline_view_model(report_date: str | None = None) -> dict[str, Any]:
 
     for session in sessions_raw:
         is_session_in_progress = bool(session.get("is_in_progress"))
+        is_report_project = bool(session.get("is_report_project", session.get("is_classified")))
+        is_report_classified = bool(session.get("is_report_classified", is_report_project))
+        is_report_uncategorized = bool(session.get("is_report_uncategorized", not is_report_project))
         start_time = str(session.get("start_time") or "")
         raw_seconds = int(session.get("raw_duration_seconds") or session.get("duration_seconds") or 0)
         adjusted = session.get("adjusted_duration_seconds")
@@ -683,8 +693,13 @@ def get_timeline_view_model(report_date: str | None = None) -> dict[str, Any]:
             ),
             "status_summary": str(session.get("status_summary") or ""),
             "event_count": int(session.get("event_count") or 0),
-            "is_uncategorized": bool(session.get("is_uncategorized")),
-            "is_classified": not bool(session.get("is_uncategorized")),
+            "is_uncategorized": is_report_uncategorized,
+            "is_classified": is_report_classified,
+            "is_report_project": is_report_project,
+            "is_report_classified": is_report_classified,
+            "is_report_uncategorized": is_report_uncategorized,
+            "report_attribution_kind": str(session.get("report_attribution_kind") or "none"),
+            "is_official_project": bool(session.get("is_official_project")),
             "is_in_progress": is_session_in_progress,
             "is_live_projected": False,
             "is_virtual": False,

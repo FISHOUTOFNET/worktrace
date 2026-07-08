@@ -5,7 +5,6 @@ from datetime import datetime
 from ..constants import (
     CLIPBOARD_TRANSITION_SECONDS,
     DEFAULT_CONTEXT_CARRY_MINUTES,
-    REPORT_CONTEXT_SHORT_MERGE_SECONDS,
     STATUS_ERROR,
     STATUS_EXCLUDED,
     STATUS_IDLE,
@@ -20,6 +19,7 @@ from .activity_continuity_service import (
     can_carry_context_between,
     has_hard_boundary_between,
     is_hard_boundary_status,
+    is_report_short_context_duration,
 )
 from .anchor_predicates import (
     CONTEXT_DIRECT_ANCHOR_SOURCES,
@@ -389,9 +389,9 @@ def _short_gap_bridge_target(
     # No session boundary between prev anchor and next anchor.
     if _has_session_boundary_in_range(rows, prev_idx, next_idx):
         return None
-    # Total duration of middle activities must be under the threshold.
+    # Total duration of middle activities uses the report short-gap contract.
     middle_duration = _total_middle_duration_seconds(rows, prev_idx, next_idx)
-    if middle_duration > REPORT_CONTEXT_SHORT_MERGE_SECONDS:
+    if not is_report_short_context_duration(middle_duration):
         return None
     return prev_project
 

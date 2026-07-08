@@ -209,7 +209,7 @@ def test_auxiliary_between_same_project_anchors_merges_into_session(temp_db):
     assert {"Search 1", "Search 2"} <= {row["window_title"] for row in details}
 
 
-def test_short_other_project_between_same_project_anchors_reports_inside_anchor_session(temp_db):
+def test_short_other_project_between_same_project_anchors_does_not_merge(temp_db):
     project_a = project_service.create_project("A")
     project_b = project_service.create_project("B")
     _activity("Word", "winword.exe", "A1.docx", "09:00:00", project_a)
@@ -218,13 +218,8 @@ def test_short_other_project_between_same_project_anchors_reports_inside_anchor_
     activity_service.close_all_open_rows("2026-06-18 09:15:00")
 
     sessions = timeline_service.get_project_sessions_by_date("2026-06-18")
-    details = timeline_service.get_session_activity_details(sessions[0]["activity_ids"])
 
-    assert len(sessions) == 1
-    assert sessions[0]["project_name"] == "A"
-    assert sessions[0]["duration_seconds"] == 900
-    assert sessions[0]["event_count"] == 3
-    assert [row["project_name"] for row in details] == ["A", "B", "A"]
+    assert [session["project_name"] for session in sessions] == ["A", "B", "A"]
     assert activity_service.get_activity(b_activity)["project_id"] == project_b
 
 
@@ -458,11 +453,11 @@ def test_midnight_anchor_classifies_following_auxiliary_without_file_default(tem
 
     sessions = timeline_service.get_project_sessions_by_date("2026-06-19")
 
-    # Attribution contract: midnight_anchor is a derived internal source,
-    # NOT official. The formal session project must be uncategorized.
+    # Attribution contract: midnight_anchor is report-visible but NOT official.
     assert len(sessions) == 1
-    assert sessions[0]["project_name"] == UNCATEGORIZED_PROJECT
+    assert sessions[0]["project_name"] == "A"
     assert sessions[0]["is_official_project"] is False
+    assert sessions[0]["is_report_project"] is True
 
 
 def test_project_session_note_attaches_to_session_by_first_activity(temp_db):
@@ -603,48 +598,46 @@ def test_empty_note_and_null_duration_deletes_row(temp_db):
 
 
 
-def test_is_project_anchor_delegates_to_shared_file_context_predicate():
-    """``_is_project_anchor`` reuses ``is_file_context_anchor`` so that browser
-    tabs / email are excluded and file anchors (docx/pdf/xlsx) are included,
-    while also requiring a concrete display project."""
-    # File anchor assigned to a concrete project → True
+def test_is_project_anchor_uses_official_direct_project_not_file_context():
+    """Only official direct rows anchor report-level short-interrupt merges."""
     file_row = {
         "status": "normal",
         "assignment_source": "manual",
         "display_project_name": "A",
+        "is_official_project": True,
         "resource_is_anchor": True,
         "resource_kind": "file",
         "resource_display_name": "report.docx",
     }
     assert timeline_service._is_project_anchor(file_row) is True
 
-    # Browser tab → False (is_file_context_anchor returns False)
     browser_row = {
         "status": "normal",
-        "assignment_source": "uncategorized",
-        "display_project_name": UNCATEGORIZED_PROJECT,
+        "assignment_source": "keyword_rule",
+        "display_project_name": "A",
+        "is_official_project": True,
         "resource_is_anchor": True,
         "resource_kind": "browser_tab",
         "resource_display_name": "Search",
     }
-    assert timeline_service._is_project_anchor(browser_row) is False
+    assert timeline_service._is_project_anchor(browser_row) is True
 
-    # Email → False
-    email_row = {
+    context_row = {
         "status": "normal",
-        "assignment_source": "uncategorized",
+        "assignment_source": "same_project_context",
         "display_project_name": UNCATEGORIZED_PROJECT,
+        "is_official_project": False,
         "resource_is_anchor": True,
-        "resource_kind": "email",
-        "resource_display_name": "Inbox",
+        "resource_kind": "browser_tab",
+        "resource_display_name": "Search",
     }
-    assert timeline_service._is_project_anchor(email_row) is False
+    assert timeline_service._is_project_anchor(context_row) is False
 
-    # File anchor but uncategorized project → False
     uncategorized_file_row = {
         "status": "normal",
         "assignment_source": "uncategorized",
         "display_project_name": UNCATEGORIZED_PROJECT,
+        "is_official_project": False,
         "resource_is_anchor": True,
         "resource_kind": "file",
         "resource_display_name": "loose.docx",
@@ -657,11 +650,50 @@ def test_is_project_anchor_delegates_to_shared_file_context_predicate():
         "status": "normal",
         "assignment_source": "midnight_anchor",
         "display_project_name": "A",
+        "is_official_project": False,
         "resource_is_anchor": False,
         "resource_kind": "",
         "resource_display_name": "",
     }
     assert timeline_service._is_project_anchor(midnight_row) is False
+
+
+def test_short_context_merge_threshold_is_inclusive(temp_db):
+    rows = [
+        {
+            "status": "normal",
+            "assignment_source": "keyword_rule",
+            "is_official_project": True,
+            "report_project_key": "project:1",
+            "start_time": "2026-06-18 09:00:00",
+            "end_time": "2026-06-18 09:01:00",
+            "duration_seconds": 60,
+        },
+        {
+            "status": "normal",
+            "assignment_source": "uncategorized",
+            "is_official_project": False,
+            "report_project_key": "uncategorized:999",
+            "start_time": "2026-06-18 09:01:00",
+            "end_time": "2026-06-18 09:06:00",
+            "duration_seconds": 300,
+        },
+        {
+            "status": "normal",
+            "assignment_source": "keyword_rule",
+            "is_official_project": True,
+            "report_project_key": "project:1",
+            "start_time": "2026-06-18 09:06:00",
+            "end_time": "2026-06-18 09:07:00",
+            "duration_seconds": 60,
+        },
+    ]
+    assert timeline_service._find_short_context_merge(rows, 0, 10, []) == [1]
+
+    rows[1]["end_time"] = "2026-06-18 09:06:01"
+    rows[1]["duration_seconds"] = 301
+    rows[2]["start_time"] = "2026-06-18 09:06:01"
+    assert timeline_service._find_short_context_merge(rows, 0, 10, []) is None
 
 
 def test_get_session_anchor_folders_excludes_browser_and_includes_file_anchors(temp_db):

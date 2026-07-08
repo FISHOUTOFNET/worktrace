@@ -44,9 +44,8 @@ def test_summary_ensures_context_once_and_reuses_it_for_project_stats(temp_db, m
     assert session_calls == [("2026-06-18", "2026-06-19", False, False)]
 
 
-def test_project_stats_use_short_context_merge_without_changing_raw_project(temp_db):
+def test_project_stats_count_context_assigned_short_gap(temp_db):
     project_a = project_service.create_project("A")
-    project_b = project_service.create_project("B")
     a1 = activity_service.create_activity(
         "Word", "word.exe", "A1.docx", project_id=project_a, start_time="2026-06-18 09:00:00"
     )
@@ -55,7 +54,7 @@ def test_project_stats_use_short_context_merge_without_changing_raw_project(temp
     # cutover); close the previous open activity before creating the next.
     activity_service.close_all_open_rows("2026-06-18 09:05:00")
     b = activity_service.create_activity(
-        "Word", "word.exe", "B1.docx", project_id=project_b, start_time="2026-06-18 09:05:00"
+        "Word", "word.exe", "Unassigned.docx", start_time="2026-06-18 09:05:00"
     )
     activity_service.finalize_created_activity(b)
     activity_service.close_all_open_rows("2026-06-18 09:09:00")
@@ -68,7 +67,7 @@ def test_project_stats_use_short_context_merge_without_changing_raw_project(temp
     stats = statistics_service.get_project_stats("2026-06-18", "2026-06-18")
 
     assert stats == [{"project": "A", "total_duration": 900, "record_count": 1}]
-    assert activity_service.get_activity(b)["project_id"] == project_b
+    assert activity_service.get_activity(b)["project_id"] == project_a
 
 
 def test_statistics_split_cross_midnight_projects_by_calendar_day(temp_db):

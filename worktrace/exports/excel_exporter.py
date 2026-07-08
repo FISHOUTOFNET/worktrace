@@ -11,7 +11,7 @@ from ..formatters import (
     format_resource_type,
     format_status_label,
 )
-from ..services import activity_service, statistics_service
+from ..services import statistics_service, timeline_service
 
 
 def _validate_date_range(start_date: str, end_date: str) -> None:
@@ -66,18 +66,23 @@ def export_excel_file(start_date: str, end_date: str, path: str) -> str:
             "备注",
         ]
     )
-    for row in reversed(activity_service.get_activities_by_range(start_date, end_date)):
-        if row["is_deleted"] or row["is_hidden"]:
-            continue
+    rows = timeline_service.get_report_activity_rows(
+        start_date,
+        end_date,
+        include_hidden=False,
+        ensure_context=True,
+    )
+    for row in rows:
         is_project_activity = row.get("status") == STATUS_NORMAL
         path_hint = "" if not is_project_activity else (row.get("resource_path_hint") or row.get("file_path_hint") or "")
         uri_host = "" if not is_project_activity else (row.get("resource_uri_host") or "")
+        duration_seconds = int(row.get("report_duration_seconds") or row.get("duration_seconds") or 0)
         logs.append(
             [
-                row["start_time"][:10],
+                row.get("report_date") or str(row.get("start_time") or "")[:10],
                 row["start_time"],
                 row["end_time"] or "",
-                format_duration(row["duration_seconds"] or 0),
+                format_duration(duration_seconds),
                 format_status_label(row.get("status")),
                 format_resource_type(row.get("resource_kind"), row.get("resource_subtype")),
                 format_activity_display_name(row),

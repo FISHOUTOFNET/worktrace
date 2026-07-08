@@ -388,6 +388,20 @@ def test_short_gap_exceeding_threshold_does_not_bridge(temp_db):
     assert row["project_name"] == UNCATEGORIZED_PROJECT
 
 
+def test_short_gap_equal_threshold_bridges(temp_db):
+    """A middle duration equal to the report short-gap threshold bridges."""
+    project = project_service.create_project("A")
+    _closed_activity("Word", "winword.exe", "A_file_1.docx", "09:00:00", "09:01:00", project)
+    middle = _closed_activity("Word", "winword.exe", "Loose_file.docx", "09:01:00", "09:06:00")
+    _closed_activity("Adobe", "acrobat.exe", "A_file_2.pdf", "09:06:00", "09:10:00", project)
+
+    recompute_context_assignments_for_date("2026-06-18")
+
+    row = activity_service.get_activity(middle)
+    assert row["project_id"] == project
+    assert _assignment_source(middle) == "anchor_context"
+
+
 def test_short_gap_different_project_anchors_do_not_bridge(temp_db):
     """When the two surrounding anchors belong to different projects, the
     middle anchor is NOT bridged."""

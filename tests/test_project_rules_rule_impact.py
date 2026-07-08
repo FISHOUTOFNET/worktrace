@@ -255,6 +255,11 @@ def test_preview_folder_rule_counts_skips_correctly(temp_db):
     # Eligible + matched + already_target
     already_aid = _create_closed_activity(file_path_hint="D:\\CaseA\\Already.docx")
     assign_activity_project(already_aid, project, manual=False)
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE activity_project_assignment SET source = 'folder_rule' WHERE activity_id = ?",
+            (already_aid,),
+        )
 
     # Manual override -> skipped
     manual_aid = _create_closed_activity(file_path_hint="D:\\CaseA\\Manual.docx")
@@ -603,9 +608,34 @@ def test_backfill_does_not_modify_already_target_activity(temp_db):
     rule_id = folder_rule_service.create_or_update_folder_rule("D:\\CaseA", project)
     aid = _create_closed_activity(file_path_hint="D:\\CaseA\\Doc.docx")
     assign_activity_project(aid, project, manual=False)
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE activity_project_assignment SET source = 'folder_rule' WHERE activity_id = ?",
+            (aid,),
+        )
     result = rule_impact_service.backfill_rule_impact("folder", rule_id)
     assert result["updated_count"] == 0
     assert result["already_target_count"] == 1
+
+
+@pytest.mark.parametrize("source", ["same_project_context", "anchor_context"])
+def test_backfill_upgrades_context_source_when_project_id_already_matches(temp_db, source):
+    project = project_service.create_project("P")
+    rule_id = folder_rule_service.create_or_update_folder_rule("D:\\CaseA", project)
+    aid = _create_closed_activity(file_path_hint="D:\\CaseA\\Doc.docx")
+    assign_activity_project(aid, project, manual=False)
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE activity_project_assignment SET source = ? WHERE activity_id = ?",
+            (source, aid),
+        )
+    result = rule_impact_service.backfill_rule_impact("folder", rule_id)
+    assert result["updated_count"] == 1
+    assert result["already_target_count"] == 0
+    assignment = _assignment_row(aid)
+    assert assignment["project_id"] == project
+    assert assignment["source"] == "folder_rule"
+    assert int(assignment["is_manual"]) == 0
 
 
 # Backfill: too_many_matches
