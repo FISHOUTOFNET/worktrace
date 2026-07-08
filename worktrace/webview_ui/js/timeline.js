@@ -249,7 +249,9 @@
             App.noteRejectedPagePayload(data, "timeline", date);
             return false;
         }
-        return true;
+        return App.acceptLiveRuntimePayload(data, "timeline", date, {
+            source: "details_model"
+        });
     }
     App.acceptTimelineDetailsPayload = acceptTimelineDetailsPayload;
 

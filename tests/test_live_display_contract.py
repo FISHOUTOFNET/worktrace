@@ -1686,7 +1686,12 @@ def test_virtual_pending_current_vs_aggregate_semantics_are_explicit(bridge):
         assert row["source"] == "borrowed_anchor_pending"
         assert row["display_only"] is True
     assert details["activities"]
-    assert all(row.get("live_state") != "borrowed_anchor_pending" for row in details["activities"])
+    assert [int(row["duration_seconds"]) for row in details["activities"]] == [20, 5]
+    pending_detail = details["activities"][1]
+    assert pending_detail["source"] == "borrowed_anchor_pending"
+    assert pending_detail["display_only"] is True
+    assert pending_detail["editable"] is False
+    assert pending_detail["exportable"] is False
     assert int(overview["today_total_seconds"]) == 25
 
 
@@ -2556,11 +2561,18 @@ def test_refresh_state_returns_split_revisions_and_compat_revision(bridge):
     state = bridge.get_refresh_state()
 
     assert state["ok"] is True
+    assert state["live_clock_revision"]
     assert state["live_state_revision"]
+    assert state["display_projection_revision"]
     assert state["page_structure_revision"]
     assert state["refresh_revision"]
+    assert state["live_state_revision"] == state["live_clock_revision"]
     assert state["refresh_revision"] == (
-        state["live_state_revision"] + ":" + state["page_structure_revision"]
+        state["live_clock_revision"]
+        + ":"
+        + state["display_projection_revision"]
+        + ":"
+        + state["page_structure_revision"]
     )
 
 

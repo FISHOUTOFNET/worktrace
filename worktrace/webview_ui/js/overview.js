@@ -15,20 +15,13 @@
         document.getElementById("kpi-date").textContent = overview.date || "--";
         document.getElementById("kpi-projects").textContent = String(overview.project_count || 0);
         var current = overview.current_activity || {};
-        var currentIsUncategorized = true;
-        if (current.is_classified === true) {
-            currentIsUncategorized = false;
-        } else if (current.is_uncategorized === true) {
-            currentIsUncategorized = true;
-        } else {
-            currentIsUncategorized = null;
-        }
         var totalEl = document.getElementById("kpi-total");
-        var totalBase = App.kpiBaseSeconds(overview, "today_total_seconds");
-        var totalSeconds = projectClock
+        var totalTarget = kpiLiveTarget(overview, "today_total_seconds");
+        var totalBase = totalTarget.base_seconds;
+        var totalSeconds = (totalTarget.enabled && projectClock)
             ? App.projectFromDisplayBase(totalBase, activeElapsedNowValue)
-            : (parseInt(overview.today_total_seconds, 10) || totalBase);
-        if (projectClock) {
+            : (parseInt(overview.today_total_seconds, 10) || 0);
+        if (totalTarget.enabled && projectClock) {
             App.setLiveProjectionAnchor(totalEl, totalBase, "overview-total", "overview-total");
         } else {
             App.clearLiveProjectionAnchor(totalEl);
@@ -37,14 +30,15 @@
             totalEl,
             totalSeconds,
             "overview-total",
-            { allowDecrease: false }
+            { allowDecrease: !(totalTarget.enabled && projectClock) }
         );
-        var classifiedSeconds = App.kpiBaseSeconds(overview, "classified_seconds");
-        if (currentIsUncategorized === false && projectClock) {
-            classifiedSeconds = App.projectFromDisplayBase(classifiedSeconds, activeElapsedNowValue);
+        var classifiedTarget = kpiLiveTarget(overview, "classified_seconds");
+        var classifiedSeconds = parseInt(overview.classified_seconds, 10) || 0;
+        if (classifiedTarget.enabled && projectClock) {
+            classifiedSeconds = App.projectFromDisplayBase(classifiedTarget.base_seconds, activeElapsedNowValue);
             App.setLiveProjectionAnchor(
                 document.getElementById("kpi-classified"),
-                App.kpiBaseSeconds(overview, "classified_seconds"),
+                classifiedTarget.base_seconds,
                 "overview-classified",
                 "overview-classified"
             );
@@ -55,14 +49,15 @@
             document.getElementById("kpi-classified"),
             classifiedSeconds,
             "overview-classified",
-            { allowDecrease: false }
+            { allowDecrease: !(classifiedTarget.enabled && projectClock) }
         );
-        var uncategorizedSeconds = App.kpiBaseSeconds(overview, "uncategorized_seconds");
-        if (currentIsUncategorized === true && projectClock) {
-            uncategorizedSeconds = App.projectFromDisplayBase(uncategorizedSeconds, activeElapsedNowValue);
+        var uncategorizedTarget = kpiLiveTarget(overview, "uncategorized_seconds");
+        var uncategorizedSeconds = parseInt(overview.uncategorized_seconds, 10) || 0;
+        if (uncategorizedTarget.enabled && projectClock) {
+            uncategorizedSeconds = App.projectFromDisplayBase(uncategorizedTarget.base_seconds, activeElapsedNowValue);
             App.setLiveProjectionAnchor(
                 document.getElementById("kpi-uncategorized"),
-                App.kpiBaseSeconds(overview, "uncategorized_seconds"),
+                uncategorizedTarget.base_seconds,
                 "overview-uncategorized",
                 "overview-uncategorized"
             );
@@ -73,7 +68,7 @@
             document.getElementById("kpi-uncategorized"),
             uncategorizedSeconds,
             "overview-uncategorized",
-            { allowDecrease: false }
+            { allowDecrease: !(uncategorizedTarget.enabled && projectClock) }
         );
         App.renderCurrentActivityElement(
             document.getElementById("current-activity"),
@@ -82,6 +77,19 @@
         );
     }
     App.showOverview = showOverview;
+
+    function kpiLiveTarget(overview, field) {
+        overview = overview || {};
+        var targets = overview.kpi_live_targets || {};
+        var target = targets[field] || {};
+        var legacyBase = App.kpiBaseSeconds(overview, field);
+        return {
+            enabled: target.enabled === true,
+            base_seconds: target.base_seconds !== undefined && target.base_seconds !== null
+                ? (parseInt(target.base_seconds, 10) || 0)
+                : legacyBase
+        };
+    }
 
     function showRecent(recentResult) {
         // Structural cache only — never a live-seconds source.

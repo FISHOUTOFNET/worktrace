@@ -24,7 +24,6 @@ payloads only — raw ``window_title``, ``file_path_hint``, ``note``,
 from __future__ import annotations
 
 import hashlib
-import json
 from datetime import datetime
 from typing import Any
 
@@ -50,6 +49,7 @@ from .live_time_service import (
     snapshot_start_time,
 )
 from .project_attribution_policy import is_official_project_source
+from .activity_display_projection import build_revision_parts
 from .settings_service import get_setting
 
 
@@ -648,7 +648,6 @@ def compute_refresh_revision(
     """Compute split live/page revisions for the heartbeat path."""
     if report_date is None:
         report_date = today
-    # Current snapshot structural identity (display-safe).
     current_activity_key = _live_display_key(snapshot)
     current_status = _snapshot_status(snapshot)
     is_persisted = bool(snapshot and snapshot.get("is_persisted"))
@@ -657,32 +656,7 @@ def compute_refresh_revision(
     if snapshot:
         inferred_project = str(snapshot.get("inferred_project_name") or "")
     model = display_model or {}
-    current_activity = model.get("current_activity") or {}
-    live_clock = model.get("live_clock") or {}
-    live_state = str(live_clock.get("live_state") or "")
     display_structural_signature = str(model.get("display_structural_signature") or "")
-    live_revision_input = {
-        "current_activity_key": current_activity_key,
-        "current_status": current_status,
-        "is_persisted": bool(is_persisted),
-        "persisted_id": int(persisted_id or 0),
-        "live_state": live_state,
-        "collector_status": collector_status,
-        "user_paused": bool(user_paused),
-        "today": today,
-        "report_date": report_date or "",
-        "stable_live_key_hash": str(live_clock.get("stable_live_key_hash") or ""),
-        "display_span_id": str(live_clock.get("display_span_id") or ""),
-        "display_structural_signature": display_structural_signature,
-        "display_project": _project_revision_identity(current_activity.get("display_project")),
-        "candidate_project": _project_revision_identity(current_activity.get("candidate_project")),
-        "project_transition": _project_transition_revision_identity(
-            current_activity.get("project_transition")
-        ),
-    }
-    live_state_revision = hashlib.sha1(
-        json.dumps(live_revision_input, sort_keys=True, ensure_ascii=True).encode("utf-8")
-    ).hexdigest()
     marker: dict[str, Any] = {
         "row_count": 0,
         "visible_row_count": 0,
@@ -700,10 +674,16 @@ def compute_refresh_revision(
         marker = activity_service.get_activity_structure_marker_by_date(report_date)
     except Exception:
         pass
-    page_structure_revision = hashlib.sha1(
-        json.dumps(marker, sort_keys=True, ensure_ascii=True).encode("utf-8")
-    ).hexdigest()
-    revision = live_state_revision + ":" + page_structure_revision
+    revision_parts = build_revision_parts(
+        model,
+        marker,
+        snapshot_status=current_status,
+        collector_status=collector_status,
+        user_paused=user_paused,
+        today=today,
+        report_date=report_date or "",
+    )
+    revision = revision_parts["refresh_revision"]
     debug_inputs = {
         "current_activity_key": current_activity_key,
         "current_status": current_status,
@@ -714,9 +694,12 @@ def compute_refresh_revision(
         "user_paused": user_paused,
         "today": today,
         "display_structural_signature": display_structural_signature,
-        "structural_signature": page_structure_revision,
-        "live_state_revision": live_state_revision,
-        "page_structure_revision": page_structure_revision,
+        "structural_signature": revision_parts["page_structure_revision"],
+        "live_clock_revision": revision_parts["live_clock_revision"],
+        "live_state_revision": revision_parts["live_clock_revision"],
+        "display_projection_revision": revision_parts["display_projection_revision"],
+        "page_structure_revision": revision_parts["page_structure_revision"],
+        "refresh_revision": revision,
         "activity_structure_marker": marker,
         "row_count": int(marker.get("row_count") or 0),
         "latest_id": int(marker.get("max_id") or 0),
@@ -725,27 +708,6 @@ def compute_refresh_revision(
         "latest_kind": "",
     }
     return revision, debug_inputs
-
-
-def _project_revision_identity(project: Any) -> dict[str, Any]:
-    if not isinstance(project, dict):
-        return {}
-    return {
-        "id": project.get("id"),
-        "name": str(project.get("name") or ""),
-        "is_uncategorized": bool(project.get("is_uncategorized")),
-        "is_classified": bool(project.get("is_classified")),
-    }
-
-
-def _project_transition_revision_identity(transition: Any) -> dict[str, Any]:
-    if not isinstance(transition, dict):
-        return {}
-    return {
-        "pending": bool(transition.get("pending")),
-        "from_project_id": transition.get("from_project_id"),
-        "to_project_id": transition.get("to_project_id"),
-    }
 
 
 __all__ = [

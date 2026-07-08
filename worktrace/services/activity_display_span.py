@@ -233,6 +233,7 @@ def build_display_span(
         project_description = project_fields["project_description"]
         project_id = project_fields["project_id"]
         display_project = project_fields["display_project"]
+        candidate_project = project_fields["candidate_project"]
         is_uncategorized = bool(project_fields["is_uncategorized"])
         is_classified = bool(project_fields["is_classified"])
     elif display_live_state == "borrowed_anchor_pending" and anchor:
@@ -249,6 +250,7 @@ def build_display_span(
         project_description = str(anchor_project["project_description"] or "")
         project_id = int(anchor_project["project_id"] or 0)
         display_project = anchor_project["display_project"]
+        candidate_project = anchor_project["candidate_project"]
         is_uncategorized = bool(anchor_project["is_uncategorized"])
         is_classified = bool(anchor_project["is_classified"])
     else:
@@ -260,6 +262,7 @@ def build_display_span(
         project_description = project_fields["project_description"]
         project_id = project_fields["project_id"]
         display_project = project_fields["display_project"]
+        candidate_project = project_fields["candidate_project"]
         is_uncategorized = bool(project_fields["is_uncategorized"])
         is_classified = bool(project_fields["is_classified"])
 
@@ -309,7 +312,7 @@ def build_display_span(
         "edit_disabled": True,
         "disable_reason": LIVE_EDIT_DISABLE_REASON,
         "display_project": display_project,
-        "candidate_project": project_fields["candidate_project"],
+        "candidate_project": candidate_project,
         "project_transition": project_fields["project_transition"],
         "project_transition_pending": bool(project_fields["project_transition_pending"]),
         "live_anchor_activity_id": int(anchor_id),

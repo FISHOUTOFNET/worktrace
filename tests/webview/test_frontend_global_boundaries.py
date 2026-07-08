@@ -720,10 +720,8 @@ def test_overview_seeds_classified_and_uncategorized_kpi_targets() -> None:
     )
 
 
-def test_overview_uses_is_classified_is_uncategorized_flags_for_kpi_targets() -> None:
-    """Overview must use ``is_classified`` / ``is_uncategorized`` flags
-    from ``current_activity`` to decide which KPI target gets current elapsed.
-    Only one of the two may be live-targeted."""
+def test_overview_uses_backend_kpi_live_targets() -> None:
+    """Overview KPI live buckets are owned by the backend ViewModel."""
     source = read_js("overview.js")
     pos = source.find("function showOverview")
     assert pos != -1, "overview.js must define function showOverview"
@@ -731,11 +729,8 @@ def test_overview_uses_is_classified_is_uncategorized_flags_for_kpi_targets() ->
     if end_func == -1:
         end_func = source.find("\n    App.applyLocalTicker", pos + 1)
     body = source[pos:end_func] if end_func != -1 else source[pos:]
-    assert "is_classified" in body, (
-        "showOverview must check current.is_classified to decide "
-        "whether to live-target kpi-classified"
-    )
-    assert "is_uncategorized" in body, (
-        "showOverview must check current.is_uncategorized to decide "
-        "whether to live-target kpi-uncategorized"
-    )
+    assert "kpi_live_targets" in source
+    assert "currentIsUncategorized" not in source
+    assert "current.is_classified" not in body
+    assert "current.is_uncategorized" not in body
+    assert "target.enabled" in source

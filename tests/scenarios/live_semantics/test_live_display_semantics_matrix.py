@@ -70,14 +70,39 @@ def test_anchor_then_b_under_30s_projects_only_to_legal_anchor(live):
     rows = live.rows()
     assert len(rows) == 1, "B<30s must not create a second DB row"
     anchor_id = int(rows[0]["id"])
-    pages = live.pages()
+    pages = live.pages(details_ids=[anchor_id])
     recent = pages["overview"]["activities"][0]
+    timeline_row = pages["timeline"]["sessions"][0]
+    details_rows = pages["details"]["activities"]
     assert _clock(pages["overview"])["live_state"] == "borrowed_anchor_pending"
     assert pages["overview"]["current_activity"]["resource_name"] == "B"
+    assert pages["overview"]["current_activity"]["elapsed_seconds"] == 10
+    assert pages["overview"]["current_activity"]["display_base_seconds"] == 0
     assert recent["activity_id"] == anchor_id
     assert recent["source"] == "borrowed_anchor_pending"
     assert recent["display_only"] is True
     assert recent["duration_seconds"] == 130
+    assert timeline_row["duration_seconds"] == 130
+    assert [row["duration_seconds"] for row in details_rows] == [120, 10]
+    assert sum(row["duration_seconds"] for row in details_rows) == timeline_row[
+        "duration_seconds"
+    ]
+    pending_detail = details_rows[1]
+    assert pending_detail["display_only"] is True
+    assert pending_detail["editable"] is False
+    assert pending_detail["exportable"] is False
+    assert pages["overview"]["today_total_seconds"] == sum(
+        row["duration_seconds"]
+        for row in pages["overview"]["activities"]
+        if row.get("contributes_to_totals") is not False
+    )
+    assert pages["overview"]["today_total_seconds"] == (
+        pages["overview"]["classified_seconds"]
+        + pages["overview"]["uncategorized_seconds"]
+    )
+    _same_live_identity(
+        pages["overview"], pages["recent"], pages["timeline"], pages["details"], pages["refresh"]
+    )
     assert live.rows()[0]["duration_seconds"] == 120
 
 

@@ -352,7 +352,7 @@ def test_virtual_pending_with_anchor_live_state_and_span():
     assert span["anchor_activity_id"] == anchor_id
     assert span["is_visible_in_recent"] is True
     assert span["is_visible_in_timeline"] is True
-    assert span["is_visible_in_details"] is False
+    assert span["is_visible_in_details"] is True
     assert span["aggregate_display_base_seconds"] == 300
     assert span["aggregate_duration_seconds_at_sample"] == 312
     assert span["is_virtual"] is True

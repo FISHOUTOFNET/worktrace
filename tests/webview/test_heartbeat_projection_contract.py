@@ -1520,8 +1520,8 @@ def test_run_revision_check_accepts_refresh_state_without_row_clock_commit():
     )
 
 
-def test_page_model_runtime_acceptance_is_full_payload_only():
-    """Full page payloads may accept runtime; renderers and Details may not."""
+def test_page_model_runtime_acceptance_is_full_payload_plus_details_runtime():
+    """Full page payloads and Timeline Details accept backend runtime before render."""
     core = _strip_js_comments(read_js("core.js"))
     page_body = func_body(core, "acceptPagePayloadRuntime")
     assert "acceptLiveRuntimePayload" in page_body
@@ -1534,9 +1534,8 @@ def test_page_model_runtime_acceptance_is_full_payload_only():
     assert "commitPageActiveSpanClock" not in details_body, (
         "renderSessionDetails partial payload must not replace the accepted live runtime"
     )
-    assert "acceptPagePayloadRuntime" not in details_accept_body, (
-        "Details partial payloads must reuse the Timeline runtime, not write a new runtime"
-    )
+    assert "acceptLiveRuntimePayload" in details_accept_body
+    assert 'source: "details_model"' in details_accept_body
 
 
 def test_run_revision_check_does_not_register_current_clock_on_revision_change():
@@ -1831,6 +1830,29 @@ def test_refresh_timeline_accepts_page_payload_runtime_before_render():
     show_pos = init_body.find("App.showTimeline(data)", accept_pos)
     assert accept_pos != -1 and show_pos != -1 and accept_pos < show_pos
     assert "acceptPagePayloadRuntime" not in details_body
+    assert "acceptLiveRuntimePayload" in details_body
+
+
+def test_details_payload_accepts_runtime_before_render():
+    timeline = _strip_js_comments(read_js("timeline.js"))
+    load_body = func_body(timeline, "loadSessionDetails")
+    accept_body = func_body(timeline, "acceptTimelineDetailsPayload")
+    render_pos = load_body.find("renderSessionDetails(data)")
+    accept_pos = load_body.find("acceptTimelineDetailsPayload(data, date)")
+    assert "isPagePayloadCompatibleWithRuntime" in accept_body
+    assert "acceptLiveRuntimePayload" in accept_body
+    assert 'source: "details_model"' in accept_body
+    assert accept_pos != -1 and render_pos != -1 and accept_pos < render_pos
+
+
+def test_overview_kpi_live_targets_are_backend_owned_static_contract():
+    overview = _strip_js_comments(read_js("overview.js"))
+    show_body = func_body(overview, "showOverview")
+    assert "kpi_live_targets" in overview
+    assert "currentIsUncategorized" not in overview
+    assert "current.is_classified" not in show_body
+    assert "current.is_uncategorized" not in show_body
+    assert "target.enabled" in overview
 
 
 def test_hidden_or_stale_page_payload_cannot_overwrite_runtime():

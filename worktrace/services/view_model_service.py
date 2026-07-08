@@ -46,6 +46,7 @@ from ..contracts.live_display_contracts import (
 )
 from . import live_display_service, project_service, statistics_service, timeline_service
 from .activity_display_model_service import build_activity_display_model
+from .activity_display_projection import build_kpi_live_targets
 from .activity_live_clock import AGGREGATE_LIVE, CURRENT_LIVE
 from .activity_continuity_service import is_normal_project_status
 from .activity_row_overlay import (
@@ -190,7 +191,11 @@ def _revision_fields_for_model(
     )
     return {
         "refresh_revision": refresh_revision,
+        "live_clock_revision": str(debug_inputs.get("live_clock_revision") or ""),
         "live_state_revision": str(debug_inputs.get("live_state_revision") or ""),
+        "display_projection_revision": str(
+            debug_inputs.get("display_projection_revision") or ""
+        ),
         "page_structure_revision": str(debug_inputs.get("page_structure_revision") or ""),
     }
 
@@ -362,6 +367,13 @@ def _materialize_display_only_detail_row(
         row_kind=ROW_KIND_ACTIVITY_DETAIL_ROW,
         live_contract_reason=live_contract_reason,
     )
+    if str(span.get("live_state") or "") == "borrowed_anchor_pending":
+        row["activity_id"] = 0
+        row["source"] = "borrowed_anchor_pending"
+        row["live_contract_fallback"] = False
+        row["live_contract_reason"] = ""
+        row["is_virtual"] = True
+        row["is_virtual_live"] = True
     row.update(
         {
             "app_name": str(current_activity.get("app_name") or ""),
@@ -478,6 +490,7 @@ def get_overview_view_model(today: str | None = None) -> dict[str, Any]:
         classified_base_seconds = max(0, classified_seconds - active_elapsed)
     if live_projects and live_row_is_uncategorized:
         uncategorized_base_seconds = max(0, uncategorized_seconds - active_elapsed)
+    kpi_live_targets = build_kpi_live_targets(total_rows, live_clock)
 
     items = recent_rows[:_RECENT_LIMIT]
 
@@ -515,6 +528,7 @@ def get_overview_view_model(today: str | None = None) -> dict[str, Any]:
             "classified_seconds": classified_base_seconds,
             "uncategorized_seconds": uncategorized_base_seconds,
         },
+        "kpi_live_targets": kpi_live_targets,
     }
 
 
@@ -782,6 +796,7 @@ def get_session_details_view_model(
     )
 
     details_live_span = _get_visible_live_span(model, "details")
+    request_matches_live = False
     if details_live_span:
         live_activity_id = int(details_live_span.get("activity_id") or 0)
         live_anchor_id = int(details_live_span.get("anchor_activity_id") or 0)
@@ -872,6 +887,14 @@ def get_session_details_view_model(
     if (
         details_live_span
         and request_matches_live
+        and str(details_live_span.get("live_state") or "") == "borrowed_anchor_pending"
+    ):
+        activities.append(
+            _materialize_display_only_detail_row(details_live_span, current_activity)
+        )
+    elif (
+        details_live_span
+        and request_matches_live
         and not _rows_have_live_span(activities, details_live_span)
     ):
         activities.insert(
@@ -951,7 +974,11 @@ def get_refresh_state_view_model(report_date: str | None = None) -> RefreshState
     persisted_activity_id = int(debug_inputs.get("persisted_id") or 0)
     inferred_project_name = str(debug_inputs.get("inferred_project") or "")
     latest_activity_id = int(debug_inputs.get("latest_id") or 0)
+    live_clock_revision = str(debug_inputs.get("live_clock_revision") or "")
     live_state_revision = str(debug_inputs.get("live_state_revision") or "")
+    display_projection_revision = str(
+        debug_inputs.get("display_projection_revision") or ""
+    )
     page_structure_revision = str(debug_inputs.get("page_structure_revision") or "")
 
     if paused or collector_status == "paused":
@@ -973,7 +1000,9 @@ def get_refresh_state_view_model(report_date: str | None = None) -> RefreshState
         "is_persisted": is_persisted,
         "persisted_activity_id": persisted_activity_id,
         "inferred_project_name": inferred_project_name,
+        "live_clock_revision": live_clock_revision,
         "live_state_revision": live_state_revision,
+        "display_projection_revision": display_projection_revision,
         "page_structure_revision": page_structure_revision,
         "refresh_revision": refresh_revision,
         "today": today,

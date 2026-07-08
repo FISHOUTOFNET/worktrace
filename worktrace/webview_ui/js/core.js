@@ -657,7 +657,9 @@
                 || ""
             ),
             refreshRevision: String(payload.refresh_revision || ""),
-            liveStateRevision: String(payload.live_state_revision || ""),
+            liveClockRevision: String(payload.live_clock_revision || payload.live_state_revision || ""),
+            liveStateRevision: String(payload.live_state_revision || payload.live_clock_revision || ""),
+            displayProjectionRevision: String(payload.display_projection_revision || ""),
             pageStructureRevision: String(payload.page_structure_revision || ""),
             sampleId: String(payload.sample_id || ""),
             currentActivityDisplaySpanId: String(current.current_activity_display_span_id || ""),
@@ -690,6 +692,12 @@
         var previousKey = runtimeVisualContinuityKey(previous);
         var incomingClock = identity.liveClock;
         var previousClock = previous && previous.liveClock;
+        if (options.source === "details_model"
+            && incomingClock
+            && previousClock
+            && !sameLiveContinuity(previousClock, incomingClock)) {
+            return false;
+        }
         if (incomingClock && previousClock && sameLiveContinuity(previousClock, incomingClock)) {
             incomingClock = rebaseIncomingClockWithoutRollback(
                 previousClock,
@@ -704,7 +712,9 @@
             displaySpanId: identity.displaySpanId,
             stableLiveKeyHash: identity.stableLiveKeyHash,
             refreshRevision: identity.refreshRevision,
+            liveClockRevision: identity.liveClockRevision,
             liveStateRevision: identity.liveStateRevision,
+            displayProjectionRevision: identity.displayProjectionRevision,
             pageStructureRevision: identity.pageStructureRevision,
             sampleId: identity.sampleId,
             currentActivityDisplaySpanId: identity.currentActivityDisplaySpanId,
@@ -750,7 +760,9 @@
             displaySpanId: "",
             stableLiveKeyHash: "",
             refreshRevision: "",
+            liveClockRevision: "",
             liveStateRevision: "",
+            displayProjectionRevision: "",
             pageStructureRevision: "",
             sampleId: "",
             currentActivityDisplaySpanId: "",

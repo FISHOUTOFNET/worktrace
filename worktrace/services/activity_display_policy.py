@@ -13,9 +13,9 @@ from ..formatters import format_status_label
 from . import (
     activity_continuity_service,
     activity_service,
-    project_service,
     session_boundary_service,
 )
+from .activity_display_projection import resolve_official_anchor_project
 from .live_display_service import classify_live_state
 from .live_time_service import snapshot_extra_seconds
 
@@ -123,49 +123,7 @@ def build_status_display_item(
 
 
 def anchor_project_fields(anchor: dict[str, Any] | None) -> dict[str, Any]:
-    if not anchor:
-        return {
-            "project_id": 0,
-            "project_name": UNCATEGORIZED_PROJECT,
-            "project_description": "",
-            "display_project": {
-                "id": None,
-                "name": UNCATEGORIZED_PROJECT,
-                "description": "",
-                "source": "uncategorized",
-                "is_uncategorized": True,
-                "is_suggested_project": False,
-            },
-            "is_uncategorized": True,
-            "is_classified": False,
-        }
-    project_id = int(anchor.get("project_id") or 0)
-    project_name = UNCATEGORIZED_PROJECT
-    project_description = ""
-    if project_id > 0:
-        try:
-            project = project_service.get_project(project_id)
-        except Exception:
-            project = None
-        if project:
-            project_name = str(project.get("name") or UNCATEGORIZED_PROJECT)
-            project_description = str(project.get("description") or "")
-    is_uncategorized = project_id <= 0 or project_name == UNCATEGORIZED_PROJECT
-    return {
-        "project_id": project_id,
-        "project_name": project_name,
-        "project_description": project_description,
-        "display_project": {
-            "id": project_id if project_id > 0 else None,
-            "name": project_name,
-            "description": project_description,
-            "source": "anchor",
-            "is_uncategorized": bool(is_uncategorized),
-            "is_suggested_project": False,
-        },
-        "is_uncategorized": bool(is_uncategorized),
-        "is_classified": not bool(is_uncategorized),
-    }
+    return resolve_official_anchor_project(anchor)
 
 
 def resolve_borrowed_display_anchor(
@@ -276,7 +234,7 @@ def build_display_session_policy(
                 current_duration_live=live_started_at > 0,
                 materialize_recent=True,
                 materialize_timeline=True,
-                materialize_details=False,
+                materialize_details=True,
                 status_only_reason="",
                 base_policy_reason="borrowed_anchor_pending",
                 borrowed_anchor_activity_id=int(anchor.get("id") or 0),

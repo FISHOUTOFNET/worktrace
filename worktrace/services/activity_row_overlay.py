@@ -59,6 +59,10 @@ def apply_live_span_to_row(
 
     live_clock = span.get("live_clock") or {}
     state = str(span.get("live_state") or "")
+    if row_kind == ROW_KIND_ACTIVITY_DETAIL_ROW and state == "borrowed_anchor_pending":
+        row["duration_semantic"] = STATIC_CLOSED
+        row["live_delta_eligible"] = False
+        return row
     row.update(_live_clock_fields(live_clock))
     current_live_seconds = int(
         live_clock.get("current_live_seconds_at_sample")
@@ -113,6 +117,9 @@ def apply_live_span_to_row(
         row["source"] = "borrowed_anchor_pending"
         row["display_only"] = True
         row["is_display_only"] = True
+        row["project_id"] = int(span.get("project_id") or 0)
+        row["project_name"] = str(span.get("project_name") or UNCATEGORIZED_PROJECT)
+        row["project_description"] = str(span.get("project_description") or "")
         row["live_anchor_activity_id"] = int(
             span.get("live_anchor_activity_id") or anchor_id
         )

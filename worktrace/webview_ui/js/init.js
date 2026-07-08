@@ -451,11 +451,14 @@
             var prevRevision = previousState && previousState.refresh_revision;
             var newRevision = state.refresh_revision;
             var isFirstCheck = prevRevision === null || prevRevision === undefined;
-            var prevLiveRevision = previousState && (previousState.live_state_revision || previousState.refresh_revision);
-            var newLiveRevision = state.live_state_revision || state.refresh_revision;
+            var prevLiveRevision = previousState && (previousState.live_clock_revision || previousState.live_state_revision || previousState.refresh_revision);
+            var newLiveRevision = state.live_clock_revision || state.live_state_revision || state.refresh_revision;
+            var prevDisplayProjectionRevision = previousState && (previousState.display_projection_revision || previousState.refresh_revision);
+            var newDisplayProjectionRevision = state.display_projection_revision || state.refresh_revision;
             var prevPageRevision = previousState && (previousState.page_structure_revision || previousState.refresh_revision);
             var newPageRevision = state.page_structure_revision || state.refresh_revision;
             var liveStateChanged = isFirstCheck || prevLiveRevision !== newLiveRevision;
+            var displayProjectionChanged = isFirstCheck || prevDisplayProjectionRevision !== newDisplayProjectionRevision;
             var pageStructureChanged = isFirstCheck || prevPageRevision !== newPageRevision;
             var accepted = App.acceptRefreshStateRuntime(state);
             if (!accepted) return;
@@ -463,7 +466,7 @@
             refreshStatusFromRefreshState(state);
             var triggeredHeavyRefresh = false;
             // the refresh_state payload (no get_status call). When revision
-            if (liveStateChanged || pageStructureChanged || App.liveClockContractRefreshRequested) {
+            if (liveStateChanged || displayProjectionChanged || pageStructureChanged || App.liveClockContractRefreshRequested) {
                 triggeredHeavyRefresh = true;
                 App.liveClockContractRefreshRequested = false;
                 refreshCurrentPageData(state);
