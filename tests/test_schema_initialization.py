@@ -1,5 +1,8 @@
 from worktrace import db
 from worktrace.constants import EXCLUDED_PROJECT, UNCATEGORIZED_PROJECT
+import pytest
+
+pytestmark = [pytest.mark.db, pytest.mark.contract]
 
 
 def test_new_database_has_current_schema_and_defaults(temp_db):

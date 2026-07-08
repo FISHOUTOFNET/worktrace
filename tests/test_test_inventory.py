@@ -138,3 +138,61 @@ def test_check_detects_webview_conftest(inventory, tmp_path, capsys):
     assert inventory.main(["--repo-root", str(root), "--check"]) == 1
     out = capsys.readouterr().out
     assert "tests/webview/conftest.py must not exist" in out
+
+
+def test_check_detects_db_signal_without_db_marker(inventory, tmp_path, capsys):
+    root = tmp_path / "repo"
+    tests = root / "tests"
+    tests.mkdir(parents=True)
+    _write_required_pytest_ini(root, inventory)
+    (root / "test_policy.json").write_text(
+        json.dumps(
+            {
+                "risk_signals": {
+                    "db": {
+                        "patterns": ["temp_db"],
+                        "required_any_markers": ["db"],
+                    }
+                },
+                "risk_marker_overrides": [],
+                "budgets": {
+                    "max_lines_per_test_file": 100,
+                    "max_test_functions_per_test_file": 10,
+                    "overrides": [],
+                },
+                "owners": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tests / "test_dbish.py").write_text(
+        "def test_uses_db(temp_db):\n    assert temp_db\n",
+        encoding="utf-8",
+    )
+
+    assert inventory.main(["--repo-root", str(root), "--check"]) == 1
+    out = capsys.readouterr().out
+    assert "risk signal `db` requires one of markers db" in out
+
+
+def test_check_detects_budget_without_reason_override(inventory, tmp_path, capsys):
+    root = _make_repo(tmp_path, inventory)
+    (root / "test_policy.json").write_text(
+        json.dumps(
+            {
+                "risk_signals": {},
+                "risk_marker_overrides": [],
+                "budgets": {
+                    "max_lines_per_test_file": 4,
+                    "max_test_functions_per_test_file": 10,
+                    "overrides": [],
+                },
+                "owners": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert inventory.main(["--repo-root", str(root), "--check"]) == 1
+    out = capsys.readouterr().out
+    assert "test file exceeds budget" in out

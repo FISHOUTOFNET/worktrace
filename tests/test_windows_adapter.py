@@ -26,6 +26,8 @@ from worktrace.platforms.windows_adapter import (
     _uninitialize_com,
 )
 
+pytestmark = [pytest.mark.integration, pytest.mark.serial]
+
 
 def test_office_com_path_is_discarded_when_title_is_unrelated():
     assert not _is_valid_com_path("D:\\CaseA\\Spec.docx", "Budget.xlsx - Excel")
@@ -122,6 +124,8 @@ def test_foreground_active_window_does_not_call_full_path_resolver_synchronously
 
 
 def test_foreground_active_window_fast_path_does_not_block_on_slow_resolver(monkeypatch):
+    blocker = threading.Event()
+
     class FakeWin32Gui:
         @staticmethod
         def GetForegroundWindow():
@@ -152,7 +156,7 @@ def test_foreground_active_window_fast_path_does_not_block_on_slow_resolver(monk
         Process = FakeProcess
 
     def slow_resolver(*_args, **_kwargs):
-        time.sleep(1.0)
+        blocker.wait(1.0)
         return "C:\\Repo\\WorkTrace\\main.py"
 
     monkeypatch.setitem(sys.modules, "win32gui", FakeWin32Gui)
@@ -325,10 +329,10 @@ def test_run_with_timeout_returns_result():
 
 
 def test_run_with_timeout_raises_timeout_error():
-    import time
+    blocker = threading.Event()
 
     try:
-        _run_with_timeout(time.sleep, 0.05, 10)
+        _run_with_timeout(blocker.wait, 0.05, 10)
         assert False, "should have raised TimeoutError"
     except TimeoutError:
         pass

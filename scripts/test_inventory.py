@@ -21,6 +21,7 @@ from typing import Iterable
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
+TEST_POLICY_PATH = REPO_ROOT / "test_policy.json"
 __test__ = False
 
 REQUIRED_MARKERS: dict[str, str] = {
@@ -90,9 +91,12 @@ class InventoryFunction:
 class FileInventory:
     path: str
     test_count: int = 0
+    line_count: int = 0
     file_markers: set[str] = field(default_factory=set)
     tests: list[InventoryFunction] = field(default_factory=list)
     features: set[str] = field(default_factory=set)
+    risk_signals: set[str] = field(default_factory=set)
+    owners: set[str] = field(default_factory=set)
     parse_error: str | None = None
 
 
@@ -110,6 +114,56 @@ def discover_test_files(tests_dir: Path) -> list[Path]:
     if not tests_dir.exists() or not tests_dir.is_dir():
         raise FileNotFoundError(f"tests directory not found: {tests_dir}")
     return sorted(p for p in tests_dir.rglob("test_*.py") if p.is_file())
+
+
+def load_test_policy(repo_root: Path = REPO_ROOT) -> dict:
+    policy_path = repo_root / "test_policy.json"
+    if not policy_path.exists():
+        return {
+            "risk_signals": {},
+            "risk_marker_overrides": [],
+            "budgets": {
+                "max_lines_per_test_file": 1200,
+                "max_test_functions_per_test_file": 120,
+                "overrides": [],
+            },
+            "owners": [],
+        }
+    return json.loads(policy_path.read_text(encoding="utf-8"))
+
+
+def _path_matches(path: str, pattern: str) -> bool:
+    clean_path = path.replace("\\", "/")
+    clean_pattern = pattern.replace("\\", "/")
+    return clean_path == clean_pattern or clean_path.startswith(clean_pattern)
+
+
+def _has_override(policy: dict, path: str, *, signal: str | None = None) -> bool:
+    for override in policy.get("risk_marker_overrides", []):
+        override_signal = override.get("signal")
+        if signal is not None and override_signal != signal:
+            continue
+        if not str(override.get("reason", "")).strip():
+            continue
+        if _path_matches(path, str(override.get("path", ""))):
+            return True
+    return False
+
+
+def _budget_override_reason(policy: dict, path: str) -> str | None:
+    for override in policy.get("budgets", {}).get("overrides", []):
+        if _path_matches(path, str(override.get("path", ""))):
+            reason = str(override.get("reason", "")).strip()
+            return reason or None
+    return None
+
+
+def _owners_for_path(policy: dict, path: str) -> set[str]:
+    owners: set[str] = set()
+    for owner in policy.get("owners", []):
+        if any(_path_matches(path, str(pattern)) for pattern in owner.get("paths", [])):
+            owners.add(str(owner.get("name", "")).strip())
+    return {owner for owner in owners if owner}
 
 
 def _mark_name(node: ast.AST) -> str | None:
@@ -198,10 +252,26 @@ def _scan_features(source: str) -> set[str]:
     return found
 
 
-def parse_test_file(path: Path, repo_root: Path) -> FileInventory:
+def _scan_risk_signals(source: str, policy: dict) -> set[str]:
+    found: set[str] = set()
+    for signal, config in policy.get("risk_signals", {}).items():
+        patterns = tuple(config.get("patterns", ()))
+        if any(pattern in source for pattern in patterns):
+            found.add(signal)
+    return found
+
+
+def parse_test_file(path: Path, repo_root: Path, policy: dict | None = None) -> FileInventory:
     rel = repo_relative(path, repo_root)
     source = path.read_text(encoding="utf-8")
-    info = FileInventory(path=rel, features=_scan_features(source))
+    policy = policy or load_test_policy(repo_root)
+    info = FileInventory(
+        path=rel,
+        line_count=len(source.splitlines()),
+        features=_scan_features(source),
+        risk_signals=_scan_risk_signals(source, policy),
+        owners=_owners_for_path(policy, rel),
+    )
     try:
         tree = ast.parse(source, filename=rel)
     except SyntaxError as exc:
@@ -237,7 +307,8 @@ def registered_markers(pytest_config: Path) -> dict[str, str]:
 def build_inventory(repo_root: Path = REPO_ROOT, tests_dir: Path | None = None) -> dict:
     repo_root = repo_root.resolve()
     tests_dir = tests_dir or repo_root / "tests"
-    files = [parse_test_file(path, repo_root) for path in discover_test_files(tests_dir)]
+    policy = load_test_policy(repo_root)
+    files = [parse_test_file(path, repo_root, policy) for path in discover_test_files(tests_dir)]
     marker_names = sorted(REQUIRED_MARKERS)
     marker_stats = {
         name: {
@@ -257,6 +328,48 @@ def build_inventory(repo_root: Path = REPO_ROOT, tests_dir: Path | None = None) 
         feature: [f.path for f in files if feature in f.features]
         for feature in FEATURE_PATTERNS
     }
+    risk_signal_files = {
+        signal: [f.path for f in files if signal in f.risk_signals]
+        for signal in policy.get("risk_signals", {})
+    }
+    budget_config = policy.get("budgets", {})
+    max_lines = int(budget_config.get("max_lines_per_test_file", 1200))
+    max_tests = int(budget_config.get("max_test_functions_per_test_file", 120))
+    over_budget = []
+    for f in files:
+        if f.line_count <= max_lines and f.test_count <= max_tests:
+            continue
+        over_budget.append(
+            {
+                "path": f.path,
+                "lines": f.line_count,
+                "tests": f.test_count,
+                "max_lines": max_lines,
+                "max_tests": max_tests,
+                "override_reason": _budget_override_reason(policy, f.path),
+            }
+        )
+    missing_owner = [f.path for f in files if not f.owners]
+    real_sleep_files = risk_signal_files.get("sleep", [])
+    marker_mismatches = []
+    for f in files:
+        for signal in sorted(f.risk_signals):
+            required = set(
+                policy.get("risk_signals", {})
+                .get(signal, {})
+                .get("required_any_markers", [])
+            )
+            if not required or f.file_markers & required:
+                continue
+            marker_mismatches.append(
+                {
+                    "path": f.path,
+                    "signal": signal,
+                    "required_any_markers": sorted(required),
+                    "markers": sorted(f.file_markers),
+                    "override": _has_override(policy, f.path, signal=signal),
+                }
+            )
     manual_review = [
         f.path
         for f in files
@@ -289,6 +402,36 @@ def build_inventory(repo_root: Path = REPO_ROOT, tests_dir: Path | None = None) 
                 "files": paths,
             }
             for feature, paths in feature_files.items()
+        },
+        "risk_signals": {
+            signal: {
+                "count": len(paths),
+                "files": paths,
+            }
+            for signal, paths in risk_signal_files.items()
+        },
+        "budgets": {
+            "max_lines_per_test_file": max_lines,
+            "max_test_functions_per_test_file": max_tests,
+            "over_budget": over_budget,
+        },
+        "owner_contracts": {
+            "missing_count": len(missing_owner),
+            "missing_files": missing_owner,
+            "owners": {
+                owner.get("name"): [
+                    f.path for f in files if str(owner.get("name")) in f.owners
+                ]
+                for owner in policy.get("owners", [])
+            },
+        },
+        "real_sleep_files": {
+            "count": len(real_sleep_files),
+            "files": real_sleep_files,
+        },
+        "marker_mismatches": {
+            "count": len(marker_mismatches),
+            "files": marker_mismatches,
         },
         "manual_review": {
             "count": len(manual_review),
@@ -383,8 +526,34 @@ def run_checks(repo_root: Path = REPO_ROOT, tests_dir: Path | None = None) -> Ch
             "marker coverage is intentionally incremental in this phase."
         )
 
+    policy = load_test_policy(repo_root)
+    for rel in inventory["real_sleep_files"]["files"]:
+        if not _has_override(policy, rel, signal="sleep"):
+            result.errors.append(f"{rel}: explicit sleep risk signal is forbidden")
+
+    for mismatch in inventory["marker_mismatches"]["files"]:
+        if mismatch["override"]:
+            continue
+        result.errors.append(
+            "{path}: risk signal `{signal}` requires one of markers {markers}".format(
+                path=mismatch["path"],
+                signal=mismatch["signal"],
+                markers=", ".join(mismatch["required_any_markers"]),
+            )
+        )
+
+    for budget in inventory["budgets"]["over_budget"]:
+        if budget["override_reason"]:
+            continue
+        result.errors.append(
+            "{path}: test file exceeds budget ({lines} lines/{tests} tests; "
+            "limits {max_lines} lines/{max_tests} tests) and needs a reason override".format(
+                **budget
+            )
+        )
+
     for stale in _runner_stale_targets(repo_root):
-        result.warnings.append(f"stale affected-runner target mapping: {stale}")
+        result.errors.append(f"stale affected-runner target mapping: {stale}")
 
     return result
 
@@ -410,6 +579,38 @@ def render_text(inventory: dict) -> str:
     )
     for name, data in inventory["features"].items():
         lines.append(f"  {name}: {data['count']} files")
+    lines.extend(["", "Slow-test risk signals:"])
+    for name, data in inventory["risk_signals"].items():
+        lines.append(f"  {name}: {data['count']} files")
+    lines.extend(
+        [
+            "",
+            "Over-budget files:",
+        ]
+    )
+    if inventory["budgets"]["over_budget"]:
+        for item in inventory["budgets"]["over_budget"]:
+            suffix = "with override" if item["override_reason"] else "no override"
+            lines.append(
+                f"  - {item['path']}: {item['lines']} lines, "
+                f"{item['tests']} tests ({suffix})"
+            )
+    else:
+        lines.append("  None")
+    lines.extend(
+        [
+            "",
+            f"Missing owner/contract files: {inventory['owner_contracts']['missing_count']}",
+            f"Real sleep risk files: {inventory['real_sleep_files']['count']}",
+            f"Marker/risk mismatches: {inventory['marker_mismatches']['count']}",
+        ]
+    )
+    for mismatch in inventory["marker_mismatches"]["files"]:
+        status = "override" if mismatch["override"] else "missing marker"
+        lines.append(
+            f"  - {mismatch['path']}: {mismatch['signal']} -> "
+            f"{'/'.join(mismatch['required_any_markers'])} ({status})"
+        )
     lines.extend(
         [
             "",
@@ -448,6 +649,37 @@ def render_markdown(inventory: dict) -> str:
     )
     for name, data in inventory["features"].items():
         lines.append(f"| `{name}` | {data['count']} |")
+    lines.extend(
+        [
+            "",
+            "## Slow-Test Risk Signals",
+            "",
+            "| Signal | Files |",
+            "| --- | ---: |",
+        ]
+    )
+    for name, data in inventory["risk_signals"].items():
+        lines.append(f"| `{name}` | {data['count']} |")
+    lines.extend(["", "## Over-Budget Files", ""])
+    if inventory["budgets"]["over_budget"]:
+        for item in inventory["budgets"]["over_budget"]:
+            status = "override" if item["override_reason"] else "no override"
+            lines.append(
+                f"- `{item['path']}`: {item['lines']} lines, "
+                f"{item['tests']} tests ({status})"
+            )
+    else:
+        lines.append("- None")
+    lines.extend(["", "## Marker / Risk Mismatches", ""])
+    if inventory["marker_mismatches"]["files"]:
+        for item in inventory["marker_mismatches"]["files"]:
+            status = "override" if item["override"] else "missing marker"
+            lines.append(
+                f"- `{item['path']}`: `{item['signal']}` requires "
+                f"`{'` or `'.join(item['required_any_markers'])}` ({status})"
+            )
+    else:
+        lines.append("- None")
     lines.extend(["", "## Manual Review Candidates", ""])
     if inventory["manual_review"]["files"]:
         lines.extend(f"- `{rel}`" for rel in inventory["manual_review"]["files"])

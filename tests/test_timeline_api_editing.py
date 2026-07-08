@@ -19,6 +19,8 @@ from worktrace.api import timeline_api
 from worktrace.db import get_connection
 from worktrace.services import activity_service, project_service
 
+pytestmark = [pytest.mark.db, pytest.mark.integration, pytest.mark.contract]
+
 
 def _activity(app, process, title, start, project_id=None, status="normal"):
     aid = activity_service.create_activity(

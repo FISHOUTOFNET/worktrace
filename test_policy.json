@@ -1,0 +1,316 @@
+{
+  "version": 1,
+  "suites": {
+    "fast": {
+      "command": "python -m pytest -m \"unit and not slow\"",
+      "description": "Marker-covered fast feedback: pure unit tests that are not marked slow. Marker coverage is incremental, so this is not the complete fast universe yet."
+    },
+    "affected": {
+      "command": "python scripts/run_affected_tests.py",
+      "description": "Default day-to-day suite. Selects concrete pytest targets from changed files and never silently runs full pytest."
+    },
+    "contract": {
+      "command": "python -m pytest -m contract",
+      "description": "Contract, boundary, ViewModel, API payload, and static frontend checks."
+    },
+    "full": {
+      "command": "python -m pytest",
+      "description": "Complete regression suite for cross-cutting changes, release validation, pre-push confidence, and marker gaps."
+    },
+    "governance": {
+      "command": "python scripts/run_affected_tests.py --governance",
+      "description": "Inventory, comment hygiene, and focused governance tests."
+    }
+  },
+  "budgets": {
+    "max_lines_per_test_file": 1200,
+    "max_test_functions_per_test_file": 120,
+    "override_requires_reason": true,
+    "overrides": [
+      {
+        "path": "tests/test_live_display_contract.py",
+        "reason": "Owner contract matrix for live display semantics across current, recent, timeline, details, and KPI projection."
+      },
+      {
+        "path": "tests/test_run_affected_tests.py",
+        "reason": "Governance owner for affected-test runner mapping rules and no-full-suite fallback behavior."
+      },
+      {
+        "path": "tests/test_settings_privacy_status.py",
+        "reason": "Settings/privacy/backup owner matrix covering privacy gate, backup status, and display-safe bridge payloads."
+      },
+      {
+        "path": "tests/test_ui_backend_boundary.py",
+        "reason": "Architecture contract owner for WebView/backend import and boundary checks."
+      },
+      {
+        "path": "tests/test_webview_project_rules_bridge.py",
+        "reason": "Project Rules bridge owner matrix covering validation, privacy-safe errors, batch operations, and attribution boundaries."
+      },
+      {
+        "path": "tests/webview/test_heartbeat_projection_contract.py",
+        "reason": "Live display frontend contract matrix for heartbeat, local ticker, and projection compatibility."
+      },
+      {
+        "path": "tests/webview/test_settings_static_contract.py",
+        "reason": "Settings/privacy WebView static owner matrix covering privacy gate and backup UI contracts."
+      },
+      {
+        "path": "tests/webview/test_statistics_static_contract.py",
+        "reason": "Statistics/export WebView static owner matrix covering CSV/export labels and privacy-safe display contracts."
+      },
+      {
+        "path": "tests/webview/test_timeline_correction_shell_contract.py",
+        "reason": "Timeline correction shell static owner matrix covering edit UI contracts and regression boundaries."
+      },
+      {
+        "path": "tests/webview/test_timeline_static_contract.py",
+        "reason": "Timeline WebView static owner matrix covering display labels, live display, privacy, and editing contracts."
+      }
+    ]
+  },
+  "risk_signals": {
+    "sleep": {
+      "patterns": [
+        "time.sleep",
+        "sleep("
+      ],
+      "description": "Real wall-clock waits. Prefer fake clock, injected poll wait, or deterministic time source."
+    },
+    "db": {
+      "patterns": [
+        "temp_db",
+        "get_connection",
+        "sqlite"
+      ],
+      "required_any_markers": [
+        "db"
+      ],
+      "description": "SQLite or temp database usage."
+    },
+    "collector_runtime": {
+      "patterns": [
+        "threading",
+        "Thread(",
+        "run_collector",
+        "CollectorControl",
+        "AppRuntime",
+        "worktrace.runtime"
+      ],
+      "required_any_markers": [
+        "collector_runtime",
+        "integration"
+      ],
+      "description": "Collector/runtime/thread lifecycle usage."
+    },
+    "subprocess": {
+      "patterns": [
+        "subprocess.run"
+      ],
+      "required_any_markers": [
+        "integration",
+        "packaging",
+        "slow"
+      ],
+      "description": "Subprocess execution in tests."
+    },
+    "file_io": {
+      "patterns": [
+        "read_text",
+        "write_text",
+        "open("
+      ],
+      "description": "Real file IO signal; prefer model-level tests when possible."
+    },
+    "packaging": {
+      "patterns": [
+        "PyInstaller",
+        "pyinstaller",
+        "WorkTrace.spec"
+      ],
+      "description": "Packaging/release validation signal. Do not add PyInstaller or installer builds to the affected runner."
+    }
+  },
+  "risk_marker_overrides": [
+    {
+      "path": "tests/test_comment_hygiene.py",
+      "signal": "subprocess",
+      "reason": "Governance self-test invokes the comment hygiene CLI as a focused subprocess contract."
+    },
+    {
+      "path": "tests/test_api_write_contract.py",
+      "signal": "collector_runtime",
+      "reason": "API write-contract tests contain static forbidden-import strings; they do not start runtime threads."
+    },
+    {
+      "path": "tests/test_test_inventory.py",
+      "signal": "db",
+      "reason": "The sample temp repository text includes db marker strings; the test does not use WorkTrace SQLite."
+    },
+    {
+      "path": "tests/test_ui_backend_boundary.py",
+      "signal": "collector_runtime",
+      "reason": "Backend-boundary tests scan runtime import strings statically; they do not start collector or runtime threads."
+    },
+    {
+      "path": "tests/test_ui_backend_boundary.py",
+      "signal": "db",
+      "reason": "Backend-boundary tests scan db import strings statically; they do not open WorkTrace SQLite."
+    },
+    {
+      "path": "tests/test_webview_packaging.py",
+      "signal": "collector_runtime",
+      "reason": "Packaging contract reads runtime entry references statically; it does not start runtime threads."
+    },
+    {
+      "path": "tests/webview/",
+      "signal": "collector_runtime",
+      "reason": "WebView static contract tests read frontend/runtime source strings but do not start collector or runtime threads."
+    }
+  ],
+  "marker_requirements": [
+    {
+      "condition": "Uses temp_db, get_connection, or sqlite.",
+      "markers": [
+        "db"
+      ]
+    },
+    {
+      "condition": "Uses collector, runtime, or threading.",
+      "markers": [
+        "collector_runtime",
+        "integration"
+      ],
+      "any": true
+    },
+    {
+      "condition": "Uses subprocess.",
+      "markers": [
+        "integration",
+        "packaging",
+        "slow"
+      ],
+      "any": true
+    },
+    {
+      "condition": "Reads WebView static source.",
+      "markers": [
+        "webview_static",
+        "contract"
+      ]
+    },
+    {
+      "condition": "Covers live display semantics.",
+      "markers": [
+        "live_display",
+        "contract"
+      ]
+    },
+    {
+      "condition": "Pure script or pure function selection logic.",
+      "markers": [
+        "unit",
+        "parallel_safe"
+      ]
+    }
+  ],
+  "owners": [
+    {
+      "name": "live display / current-recent-timeline-kpi",
+      "paths": [
+        "tests/test_live_display_",
+        "tests/test_live_product_semantics.py",
+        "tests/test_display_model_anti_regression.py",
+        "tests/test_bridge_refresh_state_and_projection.py",
+        "tests/scenarios/live_semantics/",
+        "tests/webview/test_heartbeat_projection_contract.py",
+        "tests/webview/test_frontend_pure_render_contract.py"
+      ]
+    },
+    {
+      "name": "collector lifecycle / 30s short activity",
+      "paths": [
+        "tests/test_collector.py",
+        "tests/test_short_activity_buffer.py",
+        "tests/test_activity_lifecycle_",
+        "tests/test_state_machine.py",
+        "tests/test_recovery_service.py",
+        "tests/scenarios/live_semantics/test_collector_stream_trace.py"
+      ]
+    },
+    {
+      "name": "timeline editing",
+      "paths": [
+        "tests/test_timeline_",
+        "tests/test_webview_bridge_time_edit.py",
+        "tests/test_webview_bridge_split.py",
+        "tests/test_webview_bridge_merge.py",
+        "tests/test_webview_bridge_visibility.py",
+        "tests/test_webview_bridge_restore.py",
+        "tests/webview/test_timeline_"
+      ]
+    },
+    {
+      "name": "project rules",
+      "paths": [
+        "tests/test_project_rules_",
+        "tests/test_rule_service.py",
+        "tests/test_folder_rule_service.py",
+        "tests/test_project_inference_",
+        "tests/test_project_ownership_pending.py",
+        "tests/test_webview_project_rules_bridge.py",
+        "tests/webview/test_project_rules_static_contract.py"
+      ]
+    },
+    {
+      "name": "statistics / export",
+      "paths": [
+        "tests/test_statistics_",
+        "tests/test_export_",
+        "tests/test_webview_bridge_statistics.py",
+        "tests/webview/test_statistics_static_contract.py"
+      ]
+    },
+    {
+      "name": "security / privacy / backup",
+      "paths": [
+        "tests/test_security_",
+        "tests/test_secure_backup_service.py",
+        "tests/test_privacy_",
+        "tests/test_settings_",
+        "tests/test_clipboard_service.py",
+        "tests/webview/test_settings_static_contract.py"
+      ]
+    },
+    {
+      "name": "WebView static / frontend pure render",
+      "paths": [
+        "tests/webview/",
+        "tests/test_webview_",
+        "tests/test_ui_backend_boundary.py",
+        "tests/test_contract_boundary_static.py"
+      ]
+    },
+    {
+      "name": "DB / migration",
+      "paths": [
+        "tests/test_db_migration.py",
+        "tests/test_schema_initialization.py",
+        "tests/test_activity_service.py",
+        "tests/test_activity_resource_service.py",
+        "tests/test_context_service.py",
+        "tests/test_wps_resource_classification.py"
+      ]
+    },
+    {
+      "name": "affected-test runner / inventory governance",
+      "paths": [
+        "tests/test_run_affected_tests.py",
+        "tests/test_test_inventory.py",
+        "tests/test_comment_hygiene.py",
+        "tests/test_code_comment_hygiene.py",
+        "tests/webview/test_static_test_hygiene.py"
+      ]
+    }
+  ]
+}

@@ -34,6 +34,9 @@ import json
 from worktrace.collector.state_machine import CollectorStateMachine
 from worktrace.platforms.base import ActiveWindow
 from worktrace.services import folder_rule_service, project_service, settings_service
+import pytest
+
+pytestmark = [pytest.mark.db, pytest.mark.live_display, pytest.mark.contract]
 
 
 def _snapshot() -> dict:

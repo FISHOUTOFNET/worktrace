@@ -34,6 +34,26 @@ SMOKE_FALLBACK_TARGETS: list[str] = [
 ]
 
 COMMENT_HYGIENE_TARGET = "tests/test_comment_hygiene.py"
+FAST_SUITE_COMMAND: list[str] = [
+    "python",
+    "-m",
+    "pytest",
+    "-m",
+    "unit and not slow",
+]
+GOVERNANCE_COMMANDS: list[list[str]] = [
+    ["python", "scripts/test_inventory.py", "--check"],
+    ["python", "scripts/comment_hygiene.py", "--check"],
+    [
+        "python",
+        "-m",
+        "pytest",
+        "tests/test_run_affected_tests.py",
+        "tests/test_test_inventory.py",
+        "tests/test_comment_hygiene.py",
+        "tests/test_code_comment_hygiene.py",
+    ],
+]
 
 # Broad-but-finite suite used when tests/conftest.py itself changes.
 CONFTEST_BROAD_SUITE: list[str] = [
@@ -919,6 +939,28 @@ def _print_selection(sel: Selection, final_command: str | None) -> None:
         print()
 
 
+def _print_command_list(title: str, commands: list[list[str]], warnings: list[str] | None = None) -> None:
+    print(title)
+    if warnings:
+        print("Warnings:")
+        for warning in warnings:
+            print(f"  - {warning}")
+        print()
+    print("Commands:")
+    for command in commands:
+        print(f"  - {_format_argv(command)}")
+    print()
+
+
+def _run_commands(commands: list[list[str]]) -> int:
+    for command in commands:
+        print(f"Running: {_format_argv(command)}")
+        rc = subprocess.run(command, cwd=str(REPO_ROOT)).returncode
+        if rc != 0:
+            return rc
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     raw = list(sys.argv[1:] if argv is None else argv)
     own, extra = _split_passthrough(raw)
@@ -945,6 +987,19 @@ def main(argv: list[str] | None = None) -> int:
         help="Run the full `python -m pytest` suite (explicit fallback).",
     )
     parser.add_argument(
+        "--fast",
+        action="store_true",
+        help=(
+            "Run marker-covered fast feedback: "
+            "`python -m pytest -m \"unit and not slow\"`."
+        ),
+    )
+    parser.add_argument(
+        "--governance",
+        action="store_true",
+        help="Run lightweight test/comment/runner governance checks.",
+    )
+    parser.add_argument(
         "--files",
         nargs="+",
         default=None,
@@ -964,6 +1019,29 @@ def main(argv: list[str] | None = None) -> int:
         help="Only consider staged changes (git diff --cached).",
     )
     opts = parser.parse_args(own)
+
+    if sum(bool(flag) for flag in (opts.all, opts.fast, opts.governance)) > 1:
+        parser.error("--all, --fast, and --governance are mutually exclusive")
+
+    if opts.fast:
+        command = list(FAST_SUITE_COMMAND) + extra
+        warnings = [
+            "Fast suite is marker-covered fast feedback only; marker coverage "
+            "is incremental and does not replace affected or full pytest.",
+        ]
+        _print_command_list("Fast suite", [command], warnings)
+        if opts.list or opts.print_only:
+            return 0
+        return _run_commands([command])
+
+    if opts.governance:
+        commands = [list(command) for command in GOVERNANCE_COMMANDS]
+        if extra:
+            commands[-1] = commands[-1] + extra
+        _print_command_list("Governance suite", commands)
+        if opts.list or opts.print_only:
+            return 0
+        return _run_commands(commands)
 
     # --all: explicit full-suite fallback.
     if opts.all:

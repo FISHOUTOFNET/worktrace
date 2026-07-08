@@ -4,6 +4,8 @@ from worktrace.constants import STATUS_ERROR, STATUS_EXCLUDED, STATUS_IDLE, STAT
 from worktrace.db import get_connection
 from worktrace.services import activity_service, project_service, session_boundary_service, settings_service, timeline_service
 
+pytestmark = [pytest.mark.db]
+
 
 def _activity(app, process, title, start, project_id=None, status="normal"):
     # create_activity no longer auto-closes old rows (lifecycle hard

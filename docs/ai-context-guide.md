@@ -161,8 +161,22 @@ change.
 - **Inventory / governance**: run `python scripts/test_inventory.py` for a
   local marker and test-structure summary, and
   `python scripts/test_inventory.py --check` for the lightweight governance
-  gate. The check warns about unmarked tests but does not fail on them in
-  this phase.
+  gate. The check warns about unmarked tests but hard-fails unregistered
+  markers, stale affected-runner targets, explicit sleep, budget overruns
+  without reason overrides, and obvious risk/marker mismatches configured in
+  [`test_policy.json`](../test_policy.json). Use
+  `python scripts/run_affected_tests.py --governance` for the focused
+  inventory + comment hygiene + runner/inventory self-test gate.
+- **Fast marker-covered feedback**: use
+  `python scripts/run_affected_tests.py --fast` for
+  `python -m pytest -m "unit and not slow"`. This is intentionally described
+  as marker-covered feedback because marker coverage is incremental; it does
+  not replace affected tests or full pytest.
+- **Test policy**: suite definitions, file budgets, risk signals, marker
+  requirements, owner/contract paths, and reasoned overrides live in
+  [`test_policy.json`](../test_policy.json). Keep new tests inside an owner
+  area and avoid exceeding file budgets unless the owner contract genuinely
+  needs a documented matrix.
 - **Marker-focused local feedback** can use commands such as
   `pytest -m "webview_static and contract"`,
   `pytest -m "live_display and contract"`,

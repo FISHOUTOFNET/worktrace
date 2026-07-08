@@ -36,6 +36,8 @@ from worktrace.api.timeline_api import TimelineVisibilityError
 from worktrace.db import get_connection
 from worktrace.services import activity_service
 
+pytestmark = [pytest.mark.db, pytest.mark.integration, pytest.mark.contract]
+
 
 
 

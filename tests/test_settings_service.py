@@ -1,5 +1,8 @@
 from worktrace.services import settings_service
 from worktrace import db
+import pytest
+
+pytestmark = [pytest.mark.db]
 
 
 def test_settings_read_write(temp_db):

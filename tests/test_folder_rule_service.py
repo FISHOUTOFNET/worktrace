@@ -7,6 +7,9 @@ from worktrace.services import (
     rule_service,
 )
 from worktrace.services.project_inference_service import assign_project_for_activity
+import pytest
+
+pytestmark = [pytest.mark.db]
 
 
 def _activity_with_path(path: str, title: str = "Spec.docx - Word") -> int:

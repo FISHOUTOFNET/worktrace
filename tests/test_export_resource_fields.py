@@ -10,6 +10,8 @@ from worktrace.db import get_connection, now_str
 from worktrace.exports.excel_exporter import export_excel_file
 from worktrace.services import activity_service
 
+pytestmark = [pytest.mark.db]
+
 
 def _insert_closed_activity(
     app_name: str, process_name: str, window_title: str,

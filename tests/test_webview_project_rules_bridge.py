@@ -10,6 +10,8 @@ from worktrace.webview_ui import bridge as bridge_module
 from worktrace.webview_ui import bridge_rules as bridge_rules_module
 from worktrace.webview_ui.bridge import WebViewBridge
 
+pytestmark = [pytest.mark.db, pytest.mark.integration, pytest.mark.contract]
+
 
 def test_get_project_rules_success_payload(monkeypatch):
     monkeypatch.setattr(

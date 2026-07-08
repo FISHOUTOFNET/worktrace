@@ -4,6 +4,9 @@ from worktrace.db import get_connection, now_str
 from worktrace.platforms.base import ActiveWindow
 from worktrace.services import activity_service, clipboard_service, context_service, project_service
 from worktrace.services.context_service import recompute_context_assignments_for_date
+import pytest
+
+pytestmark = [pytest.mark.db, pytest.mark.integration]
 
 
 def _activity(app, process, title, start, project_id=None, status="normal"):

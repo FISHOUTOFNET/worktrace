@@ -22,6 +22,8 @@ from worktrace.api import timeline_api
 from worktrace.api.timeline_api import TimelineTimeEditError
 from worktrace.services import activity_service
 
+pytestmark = [pytest.mark.db, pytest.mark.integration, pytest.mark.contract]
+
 
 def _activity(app, process, title, start, project_id=None, status="normal"):
     aid = activity_service.create_activity(

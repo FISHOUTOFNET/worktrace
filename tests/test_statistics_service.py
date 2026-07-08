@@ -3,6 +3,9 @@ import json
 from datetime import date
 
 from worktrace.services import activity_service, project_service, session_boundary_service, settings_service, statistics_service
+import pytest
+
+pytestmark = [pytest.mark.db]
 
 
 def test_statistics_aggregation(temp_db):

@@ -13,6 +13,8 @@ from worktrace.db import get_connection
 from worktrace.services import activity_service, session_note_service
 from worktrace.services.activity_edit_policy import require_project_editable_activity
 
+pytestmark = [pytest.mark.db, pytest.mark.contract]
+
 
 DAY = "2026-06-25"
 

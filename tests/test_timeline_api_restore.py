@@ -37,6 +37,8 @@ from worktrace.db import get_connection
 from worktrace.formatters import format_activity_project_cell
 from worktrace.services import activity_service, project_service
 
+pytestmark = [pytest.mark.db, pytest.mark.integration, pytest.mark.contract]
+
 
 
 
@@ -693,17 +695,13 @@ def test_get_restorable_activities_sorted_by_start_time_then_id(temp_db):
     assert activities[1]["activity_id"] == a2
 
 
-def test_restore_activity_updated_at_refreshed(temp_db):
+def test_restore_activity_updated_at_refreshed(temp_db, monkeypatch):
     """restore must refresh ``updated_at``."""
     aid = _seed_closed_activity()
     timeline_api.hide_timeline_activity(aid)
     before = activity_service.get_activity(aid)
     before_updated = before["updated_at"]
-    # SQLite timestamps have 1-second resolution; sleep to ensure the
-    # new updated_at differs.
-    import time
-
-    time.sleep(1.1)
+    monkeypatch.setattr(activity_service, "now_str", lambda: "2026-06-25 11:30:00")
     timeline_api.restore_timeline_activity(aid)
     after = activity_service.get_activity(aid)
     assert after["updated_at"] != before_updated

@@ -8,6 +8,9 @@ from worktrace.services.settings_service import (
     get_setting,
     set_setting,
 )
+import pytest
+
+pytestmark = [pytest.mark.db, pytest.mark.integration]
 
 
 def test_excel_export_file_creation(temp_db, tmp_path):

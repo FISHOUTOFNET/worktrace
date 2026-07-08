@@ -31,6 +31,8 @@ from worktrace.api.timeline_api import TimelineBatchNoteError
 from worktrace.services import activity_service, project_service, settings_service
 from worktrace.webview_ui.bridge import WebViewBridge
 
+pytestmark = [pytest.mark.db, pytest.mark.integration, pytest.mark.contract]
+
 
 @pytest.fixture()
 def bridge(temp_db):

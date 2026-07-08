@@ -35,6 +35,8 @@ from worktrace.services import (
     rule_service,
 )
 
+pytestmark = [pytest.mark.db, pytest.mark.integration, pytest.mark.contract]
+
 
 
 

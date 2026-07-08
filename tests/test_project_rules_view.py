@@ -17,6 +17,8 @@ from worktrace.constants import EXCLUDED_PROJECT, UNCATEGORIZED_PROJECT
 from worktrace.db import get_connection
 from worktrace.services import activity_service, folder_rule_service, project_service, rule_service
 
+pytestmark = [pytest.mark.db]
+
 
 def test_project_bindings_readonly_returns_grouped_user_and_excluded_projects(temp_db):
     user_project = project_service.create_project("Client")

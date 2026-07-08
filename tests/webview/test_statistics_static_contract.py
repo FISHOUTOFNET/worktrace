@@ -15,7 +15,7 @@ import sys
 
 import pytest
 
-pytestmark = [pytest.mark.contract, pytest.mark.webview_static]
+pytestmark = [pytest.mark.contract, pytest.mark.webview_static, pytest.mark.db]
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:

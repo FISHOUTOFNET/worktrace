@@ -159,6 +159,13 @@ python scripts/run_affected_tests.py --list
 # Print the final pytest command without executing it
 python scripts/run_affected_tests.py --print-only
 
+# Marker-covered fast feedback (incremental marker coverage; not a full
+# fast universe yet)
+python scripts/run_affected_tests.py --fast
+
+# Test/comment/runner governance gate
+python scripts/run_affected_tests.py --governance
+
 # Explicit full-suite fallback
 python scripts/run_affected_tests.py --all
 
@@ -184,6 +191,15 @@ static-contract suite) plus the `import worktrace.webview_main` import smoke —
 it never silently runs the full suite. PyInstaller and the per-user installer
 are **not** part of the affected runner; they remain manual release-validation
 steps.
+
+Test governance lives in [`docs/testing/test-governance.md`](docs/testing/test-governance.md)
+and `test_policy.json`. `--fast` is `python -m pytest -m "unit and not slow"`
+over the currently marked unit surface. `--governance` runs inventory,
+comment hygiene, and focused runner/inventory tests without becoming another
+full suite. `python scripts/test_inventory.py --check` hard-fails explicit
+sleep, stale affected-runner targets, unregistered markers, budget overruns
+without reason overrides, and obvious risk/marker mismatches; unmarked tests
+remain warnings while marker coverage is incremental.
 
 ### Targeted and Full Test Commands
 

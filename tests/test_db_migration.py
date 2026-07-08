@@ -3,6 +3,9 @@ from __future__ import annotations
 
 from worktrace import db
 from worktrace.constants import EXCLUDED_PROJECT, UNCATEGORIZED_PROJECT
+import pytest
+
+pytestmark = [pytest.mark.db, pytest.mark.contract]
 
 
 # Tables that must exist after initialize_database on an empty database.

@@ -23,6 +23,8 @@ from worktrace.services import (
 )
 from worktrace.webview_ui.bridge import WebViewBridge
 
+pytestmark = [pytest.mark.db, pytest.mark.integration, pytest.mark.contract]
+
 
 SENSITIVE_TOKENS = (
     "window_title",

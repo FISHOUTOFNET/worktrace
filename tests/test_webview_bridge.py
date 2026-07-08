@@ -27,6 +27,8 @@ from worktrace.services import activity_service, project_service, settings_servi
 from worktrace.webview_ui.bridge import WebViewBridge
 from worktrace.webview_ui.bridge_common import _safe_resource_display_name
 
+pytestmark = [pytest.mark.db, pytest.mark.integration, pytest.mark.contract]
+
 
 @pytest.fixture()
 def bridge(temp_db):

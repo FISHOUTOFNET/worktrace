@@ -23,6 +23,7 @@ pytestmark = [
     pytest.mark.integration,
     pytest.mark.security_privacy,
     pytest.mark.serial,
+    pytest.mark.db,
 ]
 
 from worktrace.runtime.app_runtime import AppRuntime

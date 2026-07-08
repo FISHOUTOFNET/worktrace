@@ -56,6 +56,8 @@ from worktrace.services.project_inference_service import (
     sync_persisted_open_activity_project,
 )
 
+pytestmark = [pytest.mark.db, pytest.mark.collector_runtime, pytest.mark.integration]
+
 
 # Fixtures
 

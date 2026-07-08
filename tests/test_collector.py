@@ -6,6 +6,7 @@ import pytest
 
 pytestmark = [pytest.mark.collector_runtime, pytest.mark.integration, pytest.mark.db, pytest.mark.serial]
 
+from worktrace.collector import collector as collector_mod
 from worktrace.collector.collector import (
     CollectorControl,
     _midnight_crossed_between,
@@ -18,7 +19,15 @@ from worktrace.platforms.fake_adapter import FakeAdapter
 from worktrace.services import activity_service, settings_service
 
 
-def test_collector_loop_with_fake_adapter(temp_db):
+def _stop_after_poll(monkeypatch, stop_event):
+    def fake_poll_wait(_stop_event, _control, next_poll_deadline):
+        stop_event.set()
+        return next_poll_deadline + 1.0
+
+    monkeypatch.setattr(collector_mod, "_sleep_until_next_poll", fake_poll_wait)
+
+
+def test_collector_loop_with_fake_adapter(temp_db, monkeypatch):
     settings_service.set_setting("first_run_notice_accepted", "true")
     settings_service.set_setting("poll_interval_seconds", "1")
     settings_service.set_setting("idle_threshold_seconds", "60")
@@ -27,10 +36,9 @@ def test_collector_loop_with_fake_adapter(temp_db):
         idle_values=[0, 0],
     )
     stop_event = threading.Event()
+    _stop_after_poll(monkeypatch, stop_event)
     thread = threading.Thread(target=run_collector, args=(adapter, stop_event), daemon=True)
     thread.start()
-    time.sleep(1.3)
-    stop_event.set()
     thread.join(timeout=3)
     rows = activity_service.get_activities_by_date(time.strftime("%Y-%m-%d"))
     assert rows == []
@@ -155,7 +163,7 @@ def test_collector_observation_time_is_after_active_window_fast_path():
     assert "at_time=observation_time" in source
 
 
-def test_collector_pause_does_not_poll_active_window(temp_db):
+def test_collector_pause_does_not_poll_active_window(temp_db, monkeypatch):
     class RaisingAdapter:
         calls = 0
 
@@ -172,10 +180,9 @@ def test_collector_pause_does_not_poll_active_window(temp_db):
     settings_service.set_setting("current_activity_snapshot", '{"status":"normal"}')
     adapter = RaisingAdapter()
     stop_event = threading.Event()
+    _stop_after_poll(monkeypatch, stop_event)
     thread = threading.Thread(target=run_collector, args=(adapter, stop_event), daemon=True)
     thread.start()
-    time.sleep(1.2)
-    stop_event.set()
     thread.join(timeout=3)
 
     assert adapter.calls == 0
@@ -257,7 +264,7 @@ def test_collector_paused_branches_pause_before_status(monkeypatch):
     assert calls[1] == "set:collector_status:paused"
 
 
-def test_collector_skips_active_window_when_import_guard_active(temp_db):
+def test_collector_skips_active_window_when_import_guard_active(temp_db, monkeypatch):
     class RaisingAdapter:
         calls = 0
 
@@ -275,17 +282,16 @@ def test_collector_skips_active_window_when_import_guard_active(temp_db):
     settings_service.set_setting("current_activity_snapshot", '{"status":"normal"}')
     adapter = RaisingAdapter()
     stop_event = threading.Event()
+    _stop_after_poll(monkeypatch, stop_event)
     thread = threading.Thread(target=run_collector, args=(adapter, stop_event), daemon=True)
     thread.start()
-    time.sleep(1.2)
-    stop_event.set()
     thread.join(timeout=3)
 
     assert adapter.calls == 0
     assert activity_service.get_activities_by_date(time.strftime("%Y-%m-%d")) == []
 
 
-def test_no_new_activity_during_import_guard(temp_db):
+def test_no_new_activity_during_import_guard(temp_db, monkeypatch):
     settings_service.set_setting("first_run_notice_accepted", "true")
     settings_service.set_setting("user_paused", "false")
     settings_service.set_setting("secure_import_in_progress", "true")
@@ -297,17 +303,16 @@ def test_no_new_activity_during_import_guard(temp_db):
         idle_values=[0],
     )
     stop_event = threading.Event()
+    _stop_after_poll(monkeypatch, stop_event)
     thread = threading.Thread(target=run_collector, args=(adapter, stop_event), daemon=True)
     thread.start()
-    time.sleep(1.3)
-    stop_event.set()
     thread.join(timeout=3)
 
     rows = activity_service.get_activities_by_date(time.strftime("%Y-%m-%d"))
     assert rows == [], f"no activity should be recorded during import guard, got {rows}"
 
 
-def test_no_real_title_path_stored_during_import_guard(temp_db):
+def test_no_real_title_path_stored_during_import_guard(temp_db, monkeypatch):
     from worktrace.db import get_connection
 
     settings_service.set_setting("first_run_notice_accepted", "true")
@@ -323,10 +328,9 @@ def test_no_real_title_path_stored_during_import_guard(temp_db):
         idle_values=[0],
     )
     stop_event = threading.Event()
+    _stop_after_poll(monkeypatch, stop_event)
     thread = threading.Thread(target=run_collector, args=(adapter, stop_event), daemon=True)
     thread.start()
-    time.sleep(1.3)
-    stop_event.set()
     thread.join(timeout=3)
 
     with get_connection() as conn:

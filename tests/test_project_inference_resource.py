@@ -7,6 +7,9 @@ from worktrace.services.project_inference_service import (
     assign_project_for_activity,
     candidate_project_name_for_resource,
 )
+import pytest
+
+pytestmark = [pytest.mark.db]
 
 
 class TestLocalFileFolderRule:

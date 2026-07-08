@@ -1,5 +1,8 @@
 from tests.support.db_helpers import assign_activity_project, set_activity_note
 from worktrace.services import activity_service, project_service
+import pytest
+
+pytestmark = [pytest.mark.db]
 
 
 def test_create_close_and_manual_updates(temp_db):

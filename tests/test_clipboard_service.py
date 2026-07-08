@@ -1,6 +1,9 @@
 from worktrace.db import get_connection
 from worktrace.platforms.base import ActiveWindow
 from worktrace.services import activity_service, clipboard_service, project_service, rule_service
+import pytest
+
+pytestmark = [pytest.mark.db, pytest.mark.security_privacy]
 
 
 def test_clipboard_capture_defaults_to_disabled(temp_db):

@@ -11,6 +11,9 @@ from worktrace.services import (
     project_service,
 )
 from worktrace.services.project_inference_service import assign_project_for_activity
+import pytest
+
+pytestmark = [pytest.mark.db, pytest.mark.integration]
 
 
 def _ready_index(rule_id: int, valid_from: str = "2026-06-18 00:00:00") -> None:

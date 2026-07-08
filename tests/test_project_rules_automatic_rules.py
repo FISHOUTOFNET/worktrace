@@ -22,6 +22,8 @@ from worktrace.services import (
 )
 from worktrace.webview_ui.bridge_rules import ProjectRulesBridgeMixin
 
+pytestmark = [pytest.mark.db, pytest.mark.integration, pytest.mark.contract]
+
 
 def _create_closed_activity(
     app_name: str = "Word",

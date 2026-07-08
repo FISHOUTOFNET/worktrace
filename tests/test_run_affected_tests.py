@@ -1423,3 +1423,21 @@ def test_unknown_worktrace_source_warns_without_full_suite_or_marker_shard(runne
     assert "tests/test_ui_backend_boundary.py" in sel.pytest_targets
     assert sel.marker_exprs == []
     assert any("Unknown worktrace/ source changed" in w for w in sel.warnings)
+
+
+def test_fast_suite_command_is_marker_covered_feedback(runner, capsys):
+    assert runner.main(["--fast", "--print-only"]) == 0
+    out = capsys.readouterr().out
+    assert "python -m pytest -m 'unit and not slow'" in out
+    assert "marker-covered fast feedback only" in out
+
+
+def test_governance_suite_stays_focused(runner, capsys):
+    assert runner.main(["--governance", "--print-only"]) == 0
+    out = capsys.readouterr().out
+    assert "python scripts/test_inventory.py --check" in out
+    assert "python scripts/comment_hygiene.py --check" in out
+    assert "tests/test_run_affected_tests.py" in out
+    assert "tests/test_test_inventory.py" in out
+    assert "python -m pytest" in out
+    assert "python -m pytest'" not in out

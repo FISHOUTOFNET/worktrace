@@ -28,6 +28,8 @@ from unittest.mock import patch
 
 import pytest
 
+pytestmark = [pytest.mark.db, pytest.mark.integration, pytest.mark.contract]
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 

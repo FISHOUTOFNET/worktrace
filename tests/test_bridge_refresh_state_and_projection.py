@@ -317,9 +317,14 @@ def test_refresh_revision_changes_on_persisted_activity_id(bridge):
 
 def test_refresh_revision_ignores_inferred_project_name_without_display_project(bridge):
     """Raw inferred project metadata is not a formal display-project input."""
-    _set_snapshot(_normal_snapshot(inferred_project_name="ProjectA"))
+    fixed_start = (datetime.now() - timedelta(seconds=120)).strftime(TIME_FORMAT)
+    _set_snapshot(
+        _normal_snapshot(inferred_project_name="ProjectA", start_time=fixed_start)
+    )
     r1 = bridge.get_refresh_state()
-    _set_snapshot(_normal_snapshot(inferred_project_name="ProjectB"))
+    _set_snapshot(
+        _normal_snapshot(inferred_project_name="ProjectB", start_time=fixed_start)
+    )
     r2 = bridge.get_refresh_state()
     assert r1["refresh_revision"] == r2["refresh_revision"], (
         "refresh_revision must not change on raw inferred_project_name alone"

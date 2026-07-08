@@ -27,6 +27,8 @@ from worktrace.services.resource_service import (
     get_resource_for_activity,
 )
 
+pytestmark = [pytest.mark.db, pytest.mark.collector_runtime, pytest.mark.integration]
+
 
 def _enable_excluded_project_with_keyword(keyword: str) -> int:
     """Enable the 排除规则 project and add a keyword rule. Returns the project id."""

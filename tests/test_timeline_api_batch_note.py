@@ -31,6 +31,8 @@ from worktrace.api.timeline_api import TimelineBatchNoteError
 from worktrace.db import get_connection
 from worktrace.services import activity_service, project_service
 
+pytestmark = [pytest.mark.db, pytest.mark.integration, pytest.mark.contract]
+
 
 
 

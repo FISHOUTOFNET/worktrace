@@ -1,6 +1,9 @@
 from tests.support.db_helpers import assign_activity_project
 from worktrace.services import activity_service, project_service, rule_service
 from worktrace.db import get_connection
+import pytest
+
+pytestmark = [pytest.mark.db]
 
 
 def test_rule_auto_classification(temp_db):

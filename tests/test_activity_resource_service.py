@@ -11,6 +11,8 @@ from worktrace.services.resource_service import (
     get_resource_for_activity,
 )
 
+pytestmark = [pytest.mark.db]
+
 
 # 1. create_activity writes activity_resource synchronously
 

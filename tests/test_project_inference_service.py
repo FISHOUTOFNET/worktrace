@@ -1,6 +1,9 @@
 from tests.support.db_helpers import assign_activity_project
 from worktrace.services import activity_service, folder_rule_service, project_inference_service, project_service, rule_service
 from worktrace.services.project_inference_service import assign_project_for_activity
+import pytest
+
+pytestmark = [pytest.mark.db]
 
 
 def test_folder_rule_classifies_anchor_file_activity(temp_db):
