@@ -513,6 +513,64 @@ def test_frontend_js_has_request_token_guard_for_timeline_loads():
     assert "token !== App.timelineRequestToken" in source
 
 
+def test_timeline_date_switch_uses_report_loader_not_live_runtime_scope():
+    """Timeline date switching must change only report scope. It must not
+    clear/re-scope the accepted live runtime or call refreshCurrentPageData
+    before loading the report."""
+    source = read_resource("js/timeline.js")
+    init_source = read_resource("js/init.js")
+    for fn_name in ("goPrevDay", "goNextDay", "goToday"):
+        body = func_body(source, fn_name)
+        assert "loadTimelineReport" in body
+        assert "setLiveRuntimeScope" not in body
+        assert "refreshCurrentPageData" not in body
+    change_pos = init_source.find('dateInput.addEventListener("change"')
+    assert change_pos != -1
+    change_body = init_source[change_pos:init_source.find("});", change_pos) + 3]
+    assert "loadTimelineReport" in change_body
+    assert "setLiveRuntimeScope" not in change_body
+    assert "refreshCurrentPageData" not in change_body
+
+
+def test_timeline_report_loader_owns_loading_and_releases_on_all_paths():
+    """Explicit Timeline report requests must own the loading indicator and
+    release it for success, stale, and rejected responses without allowing an
+    older request to close a newer owner's loading state."""
+    source = read_resource("js/timeline.js")
+    body = func_body(source, "timelineReportRequest")
+    release_body = func_body(source, "releaseTimelineLoadingOwner")
+    assert "timelineLoadingOwner" in body
+    assert "releaseTimelineLoadingOwner(loadingOwner)" in body
+    assert "token !== App.timelineRequestToken" in body
+    assert "showLoading" in body
+    assert "App.timelineLoadingOwner === owner" in release_body
+    assert "App.setTimelineLoading(false)" in release_body
+
+
+def test_timeline_refresh_entrypoints_share_report_loader():
+    """load, silent refresh, and after-edit refresh must share one Timeline
+    request helper so token/loading behavior cannot diverge."""
+    source = read_resource("js/timeline.js")
+    for fn_name in ("loadTimeline", "refreshTimeline", "refreshTimelineAfterEdit"):
+        body = func_body(source, fn_name)
+        assert "loadTimelineReport" in body
+        assert "++App.timelineRequestToken" not in body
+
+
+def test_details_runtime_mismatch_skips_overlay_not_static_render():
+    """Details payloads belong to report scope. If their live overlay is not
+    compatible with the accepted runtime, the frontend must still render the
+    static details after recording the mismatch."""
+    source = read_resource("js/timeline.js")
+    accept_body = func_body(source, "acceptTimelineDetailsPayload")
+    load_body = func_body(source, "loadSessionDetails")
+    assert "isPagePayloadCompatibleWithRuntime" in accept_body
+    assert "noteRejectedPagePayload" in accept_body
+    assert "return true" in accept_body
+    assert "if (!acceptTimelineDetailsPayload(data, date)) return;" in load_body
+    assert "renderSessionDetails(data)" in load_body
+
+
 
 def test_frontend_js_has_request_token_guard_for_session_details():
     """frontend JS must use a request token for session detail loads

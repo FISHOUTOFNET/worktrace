@@ -47,6 +47,7 @@
     App.timelineDate = null;
     App.timelineLoaded = false;
     App.timelineLoading = false;
+    App.timelineLoadingOwner = null;
     App.selectedSessionId = null;
     // Stable live key for the selected session. Selection continuity: stable_live_key_hash stays the same
     // when session_id changes across the virtual / persisted_open transitions.
@@ -672,7 +673,6 @@
         if (!runtime) return "";
         return [
             runtime.page || "",
-            runtime.reportDate || "",
             runtime.displaySpanId || "",
             runtime.stableLiveKeyHash || "",
             runtime.currentActivityDisplaySpanId || "",
@@ -753,33 +753,28 @@
     App.acceptPagePayloadRuntime = acceptPagePayloadRuntime;
 
     function setLiveRuntimeScope(page, reportDate) {
+        var existing = App.liveRuntime || {};
         App.liveRuntime = {
             page: String(page || App.currentPage || "overview"),
             reportDate: runtimeReportDateForPage(page || App.currentPage || "overview", reportDate),
-            liveClock: null,
-            displaySpanId: "",
-            stableLiveKeyHash: "",
-            refreshRevision: "",
-            liveClockRevision: "",
-            liveStateRevision: "",
-            displayProjectionRevision: "",
-            pageStructureRevision: "",
-            sampleId: "",
-            currentActivityDisplaySpanId: "",
-            currentResourceIdentityHash: ""
+            liveClock: existing.liveClock || null,
+            displaySpanId: existing.displaySpanId || "",
+            stableLiveKeyHash: existing.stableLiveKeyHash || "",
+            refreshRevision: existing.refreshRevision || "",
+            liveClockRevision: existing.liveClockRevision || "",
+            liveStateRevision: existing.liveStateRevision || "",
+            displayProjectionRevision: existing.displayProjectionRevision || "",
+            pageStructureRevision: existing.pageStructureRevision || "",
+            sampleId: existing.sampleId || "",
+            currentActivityDisplaySpanId: existing.currentActivityDisplaySpanId || "",
+            currentResourceIdentityHash: existing.currentResourceIdentityHash || ""
         };
-        App.liveDisplayModel = null;
-        App._monotonicRenderState = {};
     }
     App.setLiveRuntimeScope = setLiveRuntimeScope;
 
     function getActiveLiveClock() {
         var runtime = App.liveRuntime || null;
         if (!runtime || runtime.page !== (App.currentPage || "overview")) return null;
-        if (runtime.page === "timeline") {
-            var currentDate = runtimeReportDateForPage("timeline");
-            if (runtime.reportDate && currentDate && runtime.reportDate !== currentDate) return null;
-        }
         return runtime.liveClock || null;
     }
     App.getActiveLiveClock = getActiveLiveClock;

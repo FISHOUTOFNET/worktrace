@@ -683,19 +683,25 @@ def get_timeline_view_model(report_date: str | None = None) -> dict[str, Any]:
     scoped_report_date = report_date or timeline_service.get_default_report_date()
     today = timeline_service.get_default_report_date()
     snapshot = _get_current_activity_snapshot()
-    model = build_activity_display_model(
+    report_model = build_activity_display_model(
         report_date=scoped_report_date,
         today=today,
         snapshot=snapshot,
     )
-    live_clock = model.get("live_clock") or {}
-    current_activity = model.get("current_activity") or {}
-    identity_fields = _live_identity_fields(model)
+    live_model = (
+        report_model
+        if scoped_report_date == today
+        else build_activity_display_model(report_date=today, today=today, snapshot=snapshot)
+    )
+    report_live_clock = report_model.get("live_clock") or {}
+    live_clock = live_model.get("live_clock") or {}
+    current_activity = live_model.get("current_activity") or {}
+    identity_fields = _live_identity_fields(live_model)
     revision_fields = _revision_fields_for_model(
         snapshot,
-        model,
+        live_model,
         today=today,
-        report_date=scoped_report_date,
+        report_date=today,
     )
 
     sessions_raw = timeline_service.get_project_sessions_by_date(
@@ -781,8 +787,8 @@ def get_timeline_view_model(report_date: str | None = None) -> dict[str, Any]:
             "project_transition_pending": False,
         }
         sessions.append(row)
-    _apply_live_span_to_rows(sessions, model, row_kind=ROW_KIND_PROJECT_SESSION_ROW)
-    timeline_live_span = _get_visible_live_span(model, "timeline")
+    _apply_live_span_to_rows(sessions, report_model, row_kind=ROW_KIND_PROJECT_SESSION_ROW)
+    timeline_live_span = _get_visible_live_span(report_model, "timeline")
     if timeline_live_span and not _rows_have_live_span(sessions, timeline_live_span):
         sessions.insert(
             0,
@@ -799,10 +805,10 @@ def get_timeline_view_model(report_date: str | None = None) -> dict[str, Any]:
             row["disable_reason"] = row.get("disable_reason") or "进行中记录暂不支持编辑"
 
     display_total_seconds = sum(int(r.get("duration_seconds") or 0) for r in sessions)
-    active_elapsed = _current_elapsed_at_sample(live_clock)
+    active_elapsed = _current_elapsed_at_sample(report_live_clock)
     today_total_base_seconds = (
         max(0, display_total_seconds - active_elapsed)
-        if _clock_projects_live_duration(live_clock)
+        if _clock_projects_live_duration(report_live_clock)
         else display_total_seconds
     )
 
@@ -819,7 +825,8 @@ def get_timeline_view_model(report_date: str | None = None) -> dict[str, Any]:
         "live_clock": live_clock,
         **identity_fields,
         **revision_fields,
-        "activity_display_model": model,
+        "activity_display_model": live_model,
+        "report_activity_display_model": report_model,
         "sessions": sessions,
         "today_total_seconds": display_total_seconds,
         "today_total_base_seconds": today_total_base_seconds,
@@ -849,20 +856,25 @@ def get_session_details_view_model(
     date = report_date or timeline_service.get_default_report_date()
     today = timeline_service.get_default_report_date()
     snapshot = _get_current_activity_snapshot()
-    model = build_activity_display_model(
+    report_model = build_activity_display_model(
         report_date=date, today=today, snapshot=snapshot
     )
-    live_clock = model.get("live_clock") or {}
-    current_activity = model.get("current_activity") or {}
-    identity_fields = _live_identity_fields(model)
+    live_model = (
+        report_model
+        if date == today
+        else build_activity_display_model(report_date=today, today=today, snapshot=snapshot)
+    )
+    live_clock = live_model.get("live_clock") or {}
+    current_activity = live_model.get("current_activity") or {}
+    identity_fields = _live_identity_fields(live_model)
     revision_fields = _revision_fields_for_model(
         snapshot,
-        model,
+        live_model,
         today=today,
-        report_date=date,
+        report_date=today,
     )
 
-    details_live_span = _get_visible_live_span(model, "details")
+    details_live_span = _get_visible_live_span(report_model, "details")
     request_matches_live = False
     if details_live_span:
         live_activity_id = int(details_live_span.get("activity_id") or 0)
@@ -884,7 +896,8 @@ def get_session_details_view_model(
                 "live_clock": live_clock,
                 **identity_fields,
                 **revision_fields,
-                "activity_display_model": model,
+                "activity_display_model": live_model,
+                "report_activity_display_model": report_model,
             }
 
     if not ids:
@@ -896,7 +909,8 @@ def get_session_details_view_model(
             "live_clock": live_clock,
             **identity_fields,
             **revision_fields,
-            "activity_display_model": model,
+            "activity_display_model": live_model,
+            "report_activity_display_model": report_model,
         }
 
     rows = [
@@ -949,7 +963,7 @@ def get_session_details_view_model(
         }
         activities.append(detail_row)
     # Apply the unified live-span overlay to matching detail rows only.
-    _apply_live_span_to_rows(activities, model, row_kind=ROW_KIND_ACTIVITY_DETAIL_ROW)
+    _apply_live_span_to_rows(activities, report_model, row_kind=ROW_KIND_ACTIVITY_DETAIL_ROW)
     if (
         details_live_span
         and request_matches_live
@@ -984,7 +998,8 @@ def get_session_details_view_model(
         "live_clock": live_clock,
         **identity_fields,
         **revision_fields,
-        "activity_display_model": model,
+        "activity_display_model": live_model,
+        "report_activity_display_model": report_model,
     }
 
 
@@ -1012,7 +1027,8 @@ def get_refresh_state_view_model(report_date: str | None = None) -> RefreshState
     user_paused = _is_user_paused()
     paused = bool(user_paused) or collector_status == "paused"
     today = timeline_service.get_default_report_date()
-    scoped_report_date = report_date or today
+    requested_report_date = report_date or today
+    scoped_report_date = today
 
     # Pass the already-read snapshot into the display model so it does
     # NOT re-read the setting. ``refresh_revision`` and ``live_clock``
@@ -1073,6 +1089,7 @@ def get_refresh_state_view_model(report_date: str | None = None) -> RefreshState
         "refresh_revision": refresh_revision,
         "today": today,
         "report_date": scoped_report_date,
+        "requested_report_date": requested_report_date,
         "latest_activity_id": latest_activity_id,
         # Unified live clock (single source of truth for the frontend).
         "live_clock": live_clock,

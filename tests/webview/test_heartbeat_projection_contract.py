@@ -980,13 +980,17 @@ def test_date_switch_invalidates_pending_detail_request():
     goToday), ``detailsRequestToken`` must be incremented so a stale
     response from the previous date does not backfill."""
     source = read_js("timeline.js")
+    reset_body = func_body(source, "resetTimelineReportSelection")
+    assert "detailsRequestToken" in reset_body, (
+        "resetTimelineReportSelection must invalidate detailsRequestToken"
+    )
+    assert "lastSessionDetailsViewModel" in reset_body, (
+        "resetTimelineReportSelection must clear lastSessionDetailsViewModel"
+    )
     for fn_name in ("goPrevDay", "goNextDay", "goToday"):
         body = func_body(source, fn_name)
-        assert "detailsRequestToken" in body, (
-            fn_name + " must increment detailsRequestToken on date switch"
-        )
-        assert "lastSessionDetailsViewModel" in body, (
-            fn_name + " must clear lastSessionDetailsViewModel on date switch"
+        assert "loadTimelineReport" in body and "resetSelection: true" in body, (
+            fn_name + " must route date switches through loadTimelineReport(resetSelection)"
         )
 
 
@@ -1076,18 +1080,17 @@ def test_reconciliation_skips_when_page_refresh_inflight():
     )
 
 
-def test_revision_check_passes_report_date():
-    """``runRevisionCheck`` must pass the current
-    Timeline date to ``get_refresh_state`` so the revision is scoped to
-    the viewed date."""
+def test_revision_check_uses_live_scope_not_timeline_report_date():
+    """``runRevisionCheck`` must fetch live scope only. Timeline report
+    dates are loaded by the Timeline report request path, not by
+    ``get_refresh_state``."""
     source = read_js("init.js")
     body = func_body(source, "runRevisionCheck")
-    assert "reportDate" in body, (
-        "runRevisionCheck must compute reportDate from the current Timeline date"
-    )
     assert "get_refresh_state" in body, (
         "runRevisionCheck must call get_refresh_state"
     )
+    assert "App.timelineDate" not in body
+    assert 'get_refresh_state",' not in body
 
 
 
@@ -1199,8 +1202,8 @@ def test_live_runtime_acceptance_has_refresh_state_and_page_model_sources():
 
 
 def test_get_active_live_clock_reads_accepted_runtime_only():
-    """``getActiveLiveClock`` must read only the accepted runtime and verify
-    it still belongs to the visible page/date."""
+    """``getActiveLiveClock`` must read only the accepted runtime and must
+    not suppress live ticking for historical Timeline report dates."""
     src = _strip_js_comments(read_js("core.js"))
     body = func_body(src, "getActiveLiveClock")
     assert "App.liveRuntime" in body
@@ -1211,6 +1214,8 @@ def test_get_active_live_clock_reads_accepted_runtime_only():
     assert "Object.keys" not in body, (
         "getActiveLiveClock must not iterate registry keys"
     )
+    assert "runtimeReportDateForPage" not in body
+    assert "App.timelineDate" not in body
 
 
 def test_ticker_reads_dom_continuity_key_for_monotonic_guard():
@@ -1470,7 +1475,6 @@ def test_runtime_visual_continuity_key_excludes_structural_revisions():
     body = func_body(src, "runtimeVisualContinuityKey")
     for required in (
         "page",
-        "reportDate",
         "displaySpanId",
         "stableLiveKeyHash",
         "currentActivityDisplaySpanId",
@@ -1481,6 +1485,7 @@ def test_runtime_visual_continuity_key_excludes_structural_revisions():
         "liveStateRevision",
         "refreshRevision",
         "pageStructureRevision",
+        "reportDate",
         "is_persisted",
         "persisted_id",
     ):
@@ -1833,13 +1838,13 @@ def test_refresh_overview_accepts_page_payload_runtime_before_render():
 
 
 def test_refresh_timeline_accepts_page_payload_runtime_before_render():
-    init_body = func_body(_strip_js_comments(read_js("init.js")), "refreshTimeline")
     timeline = _strip_js_comments(read_js("timeline.js"))
     accept_body = func_body(timeline, "acceptTimelinePayload")
+    load_body = func_body(timeline, "timelineReportRequest")
     details_body = func_body(timeline, "acceptTimelineDetailsPayload")
     assert 'acceptPagePayloadRuntime(data, "timeline", date)' in accept_body
-    accept_pos = init_body.find('acceptPagePayloadRuntime(data, "timeline", date)')
-    show_pos = init_body.find("App.showTimeline(data)", accept_pos)
+    accept_pos = load_body.find("acceptTimelinePayload(data, date)")
+    show_pos = load_body.find("showTimeline(data)", accept_pos)
     assert accept_pos != -1 and show_pos != -1 and accept_pos < show_pos
     assert "acceptPagePayloadRuntime" not in details_body
     assert "acceptLiveRuntimePayload" in details_body
@@ -1854,6 +1859,7 @@ def test_details_payload_accepts_runtime_before_render():
     assert "isPagePayloadCompatibleWithRuntime" in accept_body
     assert "acceptLiveRuntimePayload" in accept_body
     assert 'source: "details_model"' in accept_body
+    assert "return true" in accept_body
     assert accept_pos != -1 and render_pos != -1 and accept_pos < render_pos
 
 
@@ -1880,29 +1886,28 @@ def test_hidden_or_stale_page_payload_cannot_overwrite_runtime():
     assert "currentActivityDisplaySpanId" in gate_body
     assert "currentResourceIdentityHash" in gate_body
     init_body = func_body(_strip_js_comments(read_js("init.js")), "refreshOverview")
-    timeline_body = func_body(_strip_js_comments(read_js("timeline.js")), "refreshTimeline")
+    timeline_body = func_body(_strip_js_comments(read_js("timeline.js")), "timelineReportRequest")
     assert "token !== App.overviewRequestToken" in init_body
     assert "token !== App.timelineRequestToken" in timeline_body
 
 
-def test_run_revision_check_registers_with_current_page_scope():
-    """Section 五: ``runRevisionCheck`` in ``init.js`` MUST register the
-    refresh_state live clock with the CURRENT page scope
-    (``page: App.currentPage``) so the refresh_state clock does not
-    overwrite a different page's active clock."""
+def test_run_revision_check_accepts_live_scope_runtime():
+    """Section 五: ``runRevisionCheck`` accepts the live-scope refresh_state
+    payload without passing Timeline report dates."""
     src = _strip_js_comments(read_js("init.js"))
     body = func_body(src, "runRevisionCheck")
-    assert "App.currentPage" in body, (
-        "runRevisionCheck must register with page: App.currentPage"
-    )
+    assert "acceptRefreshStateRuntime(state)" in body
+    assert "App.timelineDate" not in body
 
 
 def test_page_switch_clears_runtime_scope_immediately():
-    """Section 五: page switches clear tickable runtime immediately."""
+    """Section 五: page switches may update scope metadata but must not
+    clear the accepted live clock."""
     src = _strip_js_comments(read_js("core.js"))
     switch_body = func_body(_strip_js_comments(read_js("init.js")), "switchPage")
     body = func_body(src, "setLiveRuntimeScope")
-    assert "liveClock: null" in body
+    assert "existing.liveClock" in body
+    assert "App._monotonicRenderState = {}" not in body
     assert "App.setLiveRuntimeScope" in switch_body
 
 

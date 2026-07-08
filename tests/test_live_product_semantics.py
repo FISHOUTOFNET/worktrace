@@ -787,10 +787,9 @@ def test_frontend_current_live_target_base_zero_aggregate_uses_static_base():
     assert "data-display-base-seconds" in timeline_src
 
 
-def test_historical_date_no_tickable_live_clock_on_any_view(temp_db, monkeypatch):
-    """On a historical (non-today) page, NO view may register a tickable
-    live clock. The current open activity's live seconds MUST NOT
-    pollute the historical Timeline / Details / Recent / KPI."""
+def test_historical_date_report_rows_static_but_current_activity_live(temp_db, monkeypatch):
+    """On a historical (non-today) Timeline page, report rows/totals stay
+    static while the current-activity header still receives live scope."""
     _patch_today(monkeypatch, date="2026-06-18")
 
     machine = CollectorStateMachine()
@@ -803,10 +802,15 @@ def test_historical_date_no_tickable_live_clock_on_any_view(temp_db, monkeypatch
     overview_historical = bridge.get_overview()
 
     timeline_clock = (timeline.get("live_clock") or {})
-    assert timeline_clock.get("is_live") is False
-    assert timeline_clock.get("is_project_duration_live") is False
-    assert str(timeline_clock.get("live_state") or "") == "none"
-    assert timeline_clock.get("display_span_id") == ""
+    assert timeline_clock.get("is_live") is True
+    assert timeline_clock.get("is_project_duration_live") is True
+    assert str(timeline_clock.get("live_state") or "") == "persisted_open"
+    assert timeline.get("current_activity", {}).get("current_duration_live") is True
+    report_clock = (
+        timeline.get("report_activity_display_model", {}).get("live_clock", {})
+    )
+    assert report_clock.get("is_live") is False
+    assert str(report_clock.get("live_state") or "") == "none"
 
     for session in timeline.get("sessions") or []:
         assert session.get("live_state") != "persisted_open"

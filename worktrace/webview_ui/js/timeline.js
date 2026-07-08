@@ -245,13 +245,20 @@
     App.acceptTimelinePayload = acceptTimelinePayload;
 
     function acceptTimelineDetailsPayload(data, date) {
-        if (!App.isPagePayloadCompatibleWithRuntime(data, "timeline", date)) {
+        var expectedDate = App.runtimeReportDateForPage("timeline", date);
+        var payloadDate = App.payloadReportDate(data, "timeline", date);
+        if (expectedDate && payloadDate && expectedDate !== payloadDate) {
             App.noteRejectedPagePayload(data, "timeline", date);
             return false;
         }
-        return App.acceptLiveRuntimePayload(data, "timeline", date, {
-            source: "details_model"
-        });
+        if (App.isPagePayloadCompatibleWithRuntime(data, "timeline", date)) {
+            App.acceptLiveRuntimePayload(data, "timeline", date, {
+                source: "details_model"
+            });
+        } else {
+            App.noteRejectedPagePayload(data, "timeline", date);
+        }
+        return true;
     }
     App.acceptTimelineDetailsPayload = acceptTimelineDetailsPayload;
 
@@ -1650,23 +1657,10 @@
     App.saveSessionSplit = saveSessionSplit;
 
     function refreshTimelineAfterEdit() {
-        var dateEl = document.getElementById("timeline-date-input");
-        var date = App.timelineDate || (dateEl ? dateEl.value : null);
-        if (date === "--" || date === "") date = null;
-        var token = ++App.timelineRequestToken;
-        App.callBridge("get_timeline", date).then(function (result) {
-            if (token !== App.timelineRequestToken) return;
-            var data = App.handleResult(result, function (msg) {
-                App.showTimelineError(msg || "刷新失败");
-            });
-            if (!data) return;
-            if (!acceptTimelinePayload(data, date)) return;
-            showTimeline(data);
-            App.clearTimelineError();
-        }).catch(function () {
-            if (token !== App.timelineRequestToken) return;
-            // Use the stable "刷新失败" fallback.
-            App.showTimelineError("刷新失败");
+        return App.loadTimelineReport(currentTimelineReportDate(), {
+            showLoading: false,
+            resetSelection: false,
+            errorMessage: "刷新失败"
         });
     }
     App.refreshTimelineAfterEdit = refreshTimelineAfterEdit;
@@ -1823,117 +1817,123 @@
     App.saveSessionTime = saveSessionTime;
 
 
-    function loadTimeline(date) {
-        App.setTimelineLoading(true);
-        App.clearTimelineError();
+    function normalizeTimelineReportDate(date) {
+        if (date === "--" || date === "") return null;
+        return date || null;
+    }
+    App.normalizeTimelineReportDate = normalizeTimelineReportDate;
+
+    function currentTimelineReportDate() {
+        var dateEl = document.getElementById("timeline-date-input");
+        return normalizeTimelineReportDate(App.timelineDate || (dateEl ? dateEl.value : null));
+    }
+    App.currentTimelineReportDate = currentTimelineReportDate;
+
+    function resetTimelineReportSelection() {
+        App.selectedSessionId = null;
+        App.selectedSessionLiveKey = null;
+        ++App.detailsRequestToken;
+        App.lastSessionDetailsViewModel = null;
+        var detailsHeader = document.getElementById("timeline-details-header");
+        var detailsList = document.getElementById("timeline-details-list");
+        if (detailsHeader) detailsHeader.textContent = "选择左侧时段查看详情";
+        if (detailsList) detailsList.innerHTML = "";
+        clearEditPanel();
+        App.resetCorrectionShellState();
+    }
+    App.resetTimelineReportSelection = resetTimelineReportSelection;
+
+    function releaseTimelineLoadingOwner(owner) {
+        if (owner && App.timelineLoadingOwner === owner) {
+            App.timelineLoadingOwner = null;
+            App.setTimelineLoading(false);
+        }
+    }
+    App.releaseTimelineLoadingOwner = releaseTimelineLoadingOwner;
+
+    function timelineReportRequest(date, options) {
+        options = options || {};
+        date = normalizeTimelineReportDate(date);
+        var showLoading = options.showLoading !== false;
+        var resetSelection = options.resetSelection === true;
+        var errorMessage = options.errorMessage || (showLoading ? "加载时间线失败" : "刷新失败");
+        App.timelineDate = date;
+        if (resetSelection) {
+            resetTimelineReportSelection();
+        }
+        var loadingOwner = "";
+        if (showLoading) {
+            loadingOwner = "timeline-report-" + String(App.timelineRequestToken + 1);
+            App.timelineLoadingOwner = loadingOwner;
+            App.setTimelineLoading(true);
+            App.clearTimelineError();
+        }
         var token = ++App.timelineRequestToken;
-        App.callBridge("get_timeline", date).then(function (result) {
+        return App.callBridge("get_timeline", date).then(function (result) {
             if (token !== App.timelineRequestToken) return;  // stale response
             var data = App.handleResult(result, function (msg) {
-                App.showTimelineError(msg || "加载时间线失败");
+                App.showTimelineError(msg || errorMessage);
             });
-            App.setTimelineLoading(false);
             if (!data) return;
             if (!acceptTimelinePayload(data, date)) return;
             App.timelineLoaded = true;
             showTimeline(data);
+            App.clearTimelineError();
         }).catch(function () {
             if (token !== App.timelineRequestToken) return;  // stale response
-            App.setTimelineLoading(false);
             // Never surface raw exception text; use the stable fallback so
             // internal details do not leak into the UI.
-            App.showTimelineError("加载时间线失败");
+            App.showTimelineError(errorMessage);
+        }).then(function () {
+            releaseTimelineLoadingOwner(loadingOwner);
+        }, function (err) {
+            releaseTimelineLoadingOwner(loadingOwner);
+            throw err;
         });
     }
+
+    function loadTimeline(date) {
+        return App.loadTimelineReport(date, { showLoading: true, resetSelection: false });
+    }
     App.loadTimeline = loadTimeline;
+    App.loadTimelineReport = timelineReportRequest;
 
     function refreshTimeline() {
         // Silent refresh: do not show loading spinner, just reload data.
         // On error, keep showing the previous data so the user is not left
         // looking at an empty list; only the error banner is shown.
-        var dateEl = document.getElementById("timeline-date-input");
-        var date = App.timelineDate || (dateEl ? dateEl.value : null);
-        if (date === "--" || date === "") date = null;
-        var token = ++App.timelineRequestToken;
-        App.callBridge("get_timeline", date).then(function (result) {
-            if (token !== App.timelineRequestToken) return;  // stale response
-            var data = App.handleResult(result, function (msg) {
-                App.showTimelineError(msg || "刷新失败");
-            });
-            if (!data) return;
-            if (!acceptTimelinePayload(data, date)) return;
-            showTimeline(data);
-            App.clearTimelineError();
-        }).catch(function () {
-            if (token !== App.timelineRequestToken) return;  // stale response
-            // Only show error banner; keep lastTimelineData on screen.
-            // Use the stable "刷新失败" fallback.
-            App.showTimelineError("刷新失败");
+        return App.loadTimelineReport(currentTimelineReportDate(), {
+            showLoading: false,
+            resetSelection: false,
+            errorMessage: "刷新失败"
         });
     }
     App.refreshTimeline = refreshTimeline;
 
     function reloadTimelineAfterRuntimeRefresh(date) {
-        if (typeof App.setLiveRuntimeScope === "function") {
-            App.setLiveRuntimeScope("timeline", date);
-        }
-        if (typeof App.refreshCurrentPageData === "function") {
-            App.refreshCurrentPageData().then(function () {
-                if (App.liveRuntime && App.liveRuntime.page === "timeline") {
-                    loadTimeline(date);
-                }
-            });
-        } else {
-            loadTimeline(date);
-        }
+        return App.loadTimelineReport(date, { showLoading: true, resetSelection: true });
     }
 
 
     function goPrevDay() {
         var dateEl = document.getElementById("timeline-date-input");
         var current = App.timelineDate || (dateEl ? dateEl.value : null);
-        App.timelineDate = App.shiftDate(current, -1);
-        App.selectedSessionId = null;
-        App.selectedSessionLiveKey = null;
-        // Invalidate pending detail requests and clear the detail cache on
-        // date switch so a stale response from the previous date does not
-        // backfill the new date's detail panel.
-        ++App.detailsRequestToken;
-        App.lastSessionDetailsViewModel = null;
-        // Close the correction shell on date switch so the shell context
-        // does not carry over to a different day.
         App.resetCorrectionShellState();
-        reloadTimelineAfterRuntimeRefresh(App.timelineDate);
+        App.loadTimelineReport(App.shiftDate(current, -1), { showLoading: true, resetSelection: true });
     }
     App.goPrevDay = goPrevDay;
 
     function goNextDay() {
         var dateEl = document.getElementById("timeline-date-input");
         var current = App.timelineDate || (dateEl ? dateEl.value : null);
-        App.timelineDate = App.shiftDate(current, 1);
-        App.selectedSessionId = null;
-        App.selectedSessionLiveKey = null;
-        // Invalidate pending detail requests and clear the detail cache on
-        // date switch.
-        ++App.detailsRequestToken;
-        App.lastSessionDetailsViewModel = null;
-        // Close the correction shell on date switch.
         App.resetCorrectionShellState();
-        reloadTimelineAfterRuntimeRefresh(App.timelineDate);
+        App.loadTimelineReport(App.shiftDate(current, 1), { showLoading: true, resetSelection: true });
     }
     App.goNextDay = goNextDay;
 
     function goToday() {
-        App.timelineDate = null;
-        App.selectedSessionId = null;
-        App.selectedSessionLiveKey = null;
-        // Invalidate pending detail requests and clear the detail cache on
-        // date switch.
-        ++App.detailsRequestToken;
-        App.lastSessionDetailsViewModel = null;
-        // Close the correction shell on date switch.
         App.resetCorrectionShellState();
-        reloadTimelineAfterRuntimeRefresh(null);
+        App.loadTimelineReport(null, { showLoading: true, resetSelection: true });
     }
     App.goToday = goToday;
 

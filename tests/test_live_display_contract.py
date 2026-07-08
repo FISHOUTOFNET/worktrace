@@ -6,7 +6,8 @@ live display clock, refresh cycle, and open-row classification:
 1. ``stable_live_key`` / ``stable_live_key_hash`` are consistent across
    Overview / Recent / Timeline / Detail for the same current snapshot.
 2. ``stable_live_key`` survives the virtual → persisted_open transition.
-3. ``get_refresh_state`` supports date-scoped revision via ``report_date``.
+3. ``get_refresh_state`` accepts legacy ``report_date`` arguments but always
+   returns current live-scope runtime.
 4. ``get_refresh_state`` returns unified live clock fields
    (``live_started_at_epoch_ms``, ``carry_seconds``, ``stable_live_key``).
 5. Persisted open display project does not revert to unclassified.
@@ -366,9 +367,8 @@ def test_refresh_state_inactive_current_activity_carries_nonlive_contract(bridge
 
 def test_get_refresh_state_accepts_report_date(bridge):
     """``get_refresh_state`` must accept an optional
-    ``report_date`` parameter so the revision is scoped to the viewed
-    date. A structural change on a past date must be detectable even when
-    today's revision is unchanged."""
+    ``report_date`` parameter for caller compatibility, but refresh_state is
+    a live-scope API and must report today's live runtime."""
     # Call without report_date (default: today)
     state_default = bridge.get_refresh_state()
     assert state_default["ok"] is True
@@ -378,16 +378,18 @@ def test_get_refresh_state_accepts_report_date(bridge):
     state_scoped = bridge.get_refresh_state("2026-01-01")
     assert state_scoped["ok"] is True
     assert "refresh_revision" in state_scoped
-    assert state_scoped["report_date"] == "2026-01-01"
+    assert state_scoped["report_date"] == state_scoped["today"]
+    assert state_scoped["requested_report_date"] == "2026-01-01"
 
 
 def test_get_refresh_state_bridge_method_accepts_report_date(bridge):
     """the bridge method signature must accept
-    ``report_date`` and pass it through to the API."""
+    ``report_date`` without changing live-scope semantics."""
     # The bridge method must accept the parameter without error.
     result = bridge.get_refresh_state(report_date="2026-06-15")
     assert result["ok"] is True
-    assert result["report_date"] == "2026-06-15"
+    assert result["report_date"] == result["today"]
+    assert result["requested_report_date"] == "2026-06-15"
 
 
 
@@ -2656,25 +2658,10 @@ def test_live_state_revision_changes_for_live_state_transitions(bridge):
 # =============================================================================
 
 
-def test_historical_date_persisted_open_suppresses_live_clock(bridge):
-    """Section 三: when ``report_date != today`` and the current snapshot
-    is ``persisted_open``, the page-scoped ``live_clock`` MUST be fully
-    suppressed so the frontend ticker cannot register an active
-    project-duration live clock on a historical Timeline page.
-
-    Assertions:
-
-    * ``display_spans == []``
-    * root ``live_clock.live_state == "none"``
-    * root ``live_clock.is_live is False``
-    * root ``live_clock.is_project_duration_live is False``
-    * root ``display_span_id == ""``
-    * root ``live_clock.live_started_at_epoch_ms == 0``
-    * root ``live_clock.carry_seconds == 0``
-    * Timeline ``total_seconds`` equals the historical DB rows' display
-      total — the open row's live sample seconds MUST NOT pollute the
-      historical total.
-    """
+def test_historical_date_persisted_open_separates_report_and_live_scope(bridge):
+    """Historical Timeline reports must keep sessions/totals static while
+    the root payload still carries the current live-scope clock for the
+    current-activity header."""
     from worktrace.services.activity_display_model_service import (
         build_activity_display_model,
     )
@@ -2705,17 +2692,15 @@ def test_historical_date_persisted_open_suppresses_live_clock(bridge):
     timeline = get_timeline_view_model(historical_day)
     assert timeline["ok"] is True
     live_clock = timeline["live_clock"]
-    assert live_clock["live_state"] == "none", (
-        "historical date MUST collapse live_state to 'none' even when the "
-        "snapshot is persisted_open"
-    )
-    assert live_clock["is_live"] is False
-    assert live_clock["is_project_duration_live"] is False
-    assert live_clock["display_span_id"] == ""
-    assert int(live_clock["live_started_at_epoch_ms"]) == 0
-    assert int(live_clock["carry_seconds"]) == 0
+    assert live_clock["live_state"] == "persisted_open"
+    assert live_clock["is_live"] is True
+    assert timeline["current_activity"]["current_duration_live"] is True
+    report_model = timeline["report_activity_display_model"]
+    assert report_model["live_clock"]["live_state"] == "none"
+    assert report_model["live_clock"]["is_live"] is False
+    assert report_model["display_spans"] == []
 
-    # 4. The display_spans list must be empty.
+    # 4. The report-scoped display_spans list must be empty.
     model = build_activity_display_model(
         report_date=historical_day,
         today=datetime.now().strftime("%Y-%m-%d"),
@@ -2742,12 +2727,9 @@ def test_historical_date_persisted_open_suppresses_live_clock(bridge):
         assert session.get("live_state") != "absorbed_pending"
 
 
-def test_historical_date_absorbed_pending_suppresses_live_clock(bridge):
-    """Section 三: when ``report_date != today`` and the current snapshot
-    would have been ``absorbed_pending`` on today, the historical date
-    MUST suppress the live clock entirely. The current open row's pending
-    seconds MUST NOT pollute the historical Timeline total via the
-    absorbed_pending projection.
+def test_historical_date_absorbed_pending_separates_report_and_live_scope(bridge):
+    """Historical Timeline reports must suppress report-row live overlays
+    without suppressing the root current-activity live clock.
 
     Strategy: create an anchor (closed normal activity) on a historical
     date, then a fresh absorbed_pending snapshot today (no boundary
@@ -2790,12 +2772,13 @@ def test_historical_date_absorbed_pending_suppresses_live_clock(bridge):
     timeline = get_timeline_view_model(historical_day)
     assert timeline["ok"] is True
     live_clock = timeline["live_clock"]
-    assert live_clock["live_state"] == "none"
-    assert live_clock["is_live"] is False
-    assert live_clock["is_project_duration_live"] is False
-    assert live_clock["display_span_id"] == ""
-    assert int(live_clock["live_started_at_epoch_ms"]) == 0
-    assert int(live_clock["carry_seconds"]) == 0
+    assert live_clock["live_state"] == "current_only_pending"
+    assert live_clock["is_live"] is True
+    assert timeline["current_activity"]["current_duration_live"] is True
+    report_model = timeline["report_activity_display_model"]
+    assert report_model["live_clock"]["live_state"] == "none"
+    assert report_model["live_clock"]["is_live"] is False
+    assert report_model["display_spans"] == []
 
     # 4. The display model for the historical date MUST NOT contain a
     #    display span (even though it would absorb on today).

@@ -81,32 +81,10 @@
     App.refreshOverview = refreshOverview;
 
     function refreshTimeline() {
-        return new Promise(function (resolve, reject) {
-            var dateEl = document.getElementById("timeline-date-input");
-            var date = App.timelineDate || (dateEl ? dateEl.value : null);
-            if (date === "--" || date === "") date = null;
-            var token = ++App.timelineRequestToken;
-            App.callBridge("get_timeline", date).then(function (result) {
-                if (token !== App.timelineRequestToken) { resolve(); return; }  // stale
-                var data = App.handleResult(result, function (msg) {
-                    App.showTimelineError(msg || "刷新失败");
-                    throw new Error(msg);
-                });
-                if (data) {
-                    if (!App.acceptPagePayloadRuntime(data, "timeline", date)) {
-                        resolve();
-                        return;
-                    }
-                    App.showTimeline(data);
-                    App.clearTimelineError();
-                }
-                resolve();
-            }).catch(function () {
-                if (token !== App.timelineRequestToken) { resolve(); return; }  // stale
-                App.showTimelineError("刷新失败");
-                reject(new Error("timeline refresh failed"));
-            });
-        });
+        if (typeof App.refreshTimeline === "function") {
+            return App.refreshTimeline();
+        }
+        return Promise.resolve();
     }
 
     function refreshCurrentPageData(state, options) {
@@ -114,12 +92,9 @@
             return Promise.resolve();
         }
         App.activePageRefreshInFlight = true;
-        var reportDate = (App.currentPage === "timeline" && App.timelineLoaded && App.timelineDate)
-            ? App.timelineDate
-            : null;
         var statePromise = state && state.ok
             ? Promise.resolve(state)
-            : App.callBridge("get_refresh_state", reportDate).then(function (result) {
+            : App.callBridge("get_refresh_state").then(function (result) {
                 return App.handleResult(result, function () { return null; });
             });
         return statePromise.then(function (acceptedState) {
@@ -214,11 +189,7 @@
         }
 
         if (pageId === "timeline" && !App.timelineLoaded && !App.timelineLoading) {
-            refreshCurrentPageData().then(function () {
-                if (App.liveRuntime && App.liveRuntime.page === "timeline") {
-                    App.loadTimeline(App.timelineDate);
-                }
-            });
+            App.loadTimelineReport(App.timelineDate, { showLoading: true });
         }
         // No write / file / dialog action is triggered.
         if (pageId === "statistics" && !App.statisticsLoaded && !App.statisticsLoading) {
@@ -263,19 +234,7 @@
         var dateInput = document.getElementById("timeline-date-input");
         if (dateInput) {
             dateInput.addEventListener("change", function (e) {
-                App.timelineDate = e.target.value || null;
-                App.selectedSessionId = null;
-                App.detailsRequestToken++;
-                App.lastSessionDetailsViewModel = null;
-                App.resetCorrectionShellState();
-                if (typeof App.setLiveRuntimeScope === "function") {
-                    App.setLiveRuntimeScope("timeline", App.timelineDate);
-                }
-                refreshCurrentPageData().then(function () {
-                    if (App.liveRuntime && App.liveRuntime.page === "timeline") {
-                        App.loadTimeline(App.timelineDate);
-                    }
-                });
+                App.loadTimelineReport(e.target.value || null, { resetSelection: true, showLoading: true });
             });
         }
         document.getElementById("edit-save-btn").addEventListener("click", App.saveEdit);
@@ -451,10 +410,7 @@
     function runRevisionCheck() {
         if (App.refreshCheckInFlight) return;
         App.refreshCheckInFlight = true;
-        var reportDate = (App.currentPage === "timeline" && App.timelineLoaded && App.timelineDate)
-            ? App.timelineDate
-            : null;
-        App.callBridge("get_refresh_state", reportDate).then(function (result) {
+        App.callBridge("get_refresh_state").then(function (result) {
             var state = App.handleResult(result, function () {
                 return null;
             });

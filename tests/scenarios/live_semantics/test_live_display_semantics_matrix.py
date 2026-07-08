@@ -178,8 +178,11 @@ def test_historical_report_date_is_not_polluted_by_current_live_clock(live):
     live.record("Today", "09:00:30")
 
     historical = live.pages(date="2026-06-17")
-    assert _clock(historical["timeline"])["live_state"] == "none"
-    assert _clock(historical["timeline"])["is_live"] is False
+    assert _clock(historical["timeline"])["live_state"] == "persisted_open"
+    assert _clock(historical["timeline"])["is_live"] is True
+    report_clock = historical["timeline"]["report_activity_display_model"]["live_clock"]
+    assert report_clock["live_state"] == "none"
+    assert report_clock["is_live"] is False
     assert historical["timeline"]["total_seconds"] == 0
     assert historical["details"]["activities"] == []
 
