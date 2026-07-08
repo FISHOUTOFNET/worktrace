@@ -73,10 +73,16 @@ def build_current_activity_display(
             "display_span_id": "",
             "live_clock": live_clock,
             "current_activity_display_span_id": "",
+            "current_resource_identity_hash": "",
+            "current_duration_live": False,
+            "is_live": False,
+            "project_duration_live": False,
             "display_base_seconds": 0,
+            "live_base_seconds": 0,
             "duration_semantic": CURRENT_LIVE,
             "current_live_seconds_at_sample": 0,
             "current_live_base_seconds": 0,
+            "duration_seconds_at_sample": 0,
             "aggregate_duration_seconds_at_sample": 0,
             "aggregate_display_base_seconds": 0,
             "display_session_kind": "none",
@@ -88,6 +94,11 @@ def build_current_activity_display(
     display = dict(summary)
     display["live_clock"] = live_clock
     display["display_span_id"] = live_clock.get("display_span_id") or ""
+    display["stable_live_key_hash"] = (
+        live_clock.get("stable_live_key_hash")
+        or display.get("stable_live_key_hash")
+        or ""
+    )
     identity_hash = current_resource_identity_hash(snapshot)
     display["current_activity_display_span_id"] = (
         "current:" + identity_hash
@@ -97,14 +108,24 @@ def build_current_activity_display(
     display["live_started_at_epoch_ms"] = int(
         live_clock.get("live_started_at_epoch_ms") or 0
     )
-    display["carry_seconds"] = 0
+    display["carry_seconds"] = int(live_clock.get("carry_seconds") or 0)
+    display["current_duration_live"] = bool(live_clock.get("current_duration_live"))
+    display["is_live"] = bool(live_clock.get("is_live"))
+    display["project_duration_live"] = bool(
+        live_clock.get("project_duration_live", live_clock.get("is_project_duration_live"))
+    )
     display["display_base_seconds"] = 0
+    display["live_base_seconds"] = 0
     display["duration_semantic"] = CURRENT_LIVE
     current_elapsed = int(snapshot_elapsed_seconds(snapshot))
     display["resource_elapsed_seconds"] = current_elapsed
     display["elapsed_seconds"] = current_elapsed
     display["duration_seconds_at_sample"] = display["elapsed_seconds"]
-    display["current_live_seconds_at_sample"] = current_elapsed
+    display["current_live_seconds_at_sample"] = int(
+        live_clock.get("current_live_seconds_at_sample")
+        or live_clock.get("current_elapsed_at_sample")
+        or current_elapsed
+    )
     display["current_live_base_seconds"] = 0
     display["aggregate_duration_seconds_at_sample"] = int(
         live_clock.get("aggregate_duration_seconds_at_sample")

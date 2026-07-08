@@ -111,8 +111,18 @@ def get_session_activity_details(
         item["official_project_name"] = row.get("display_project_name") or UNCATEGORIZED_PROJECT
         item["is_official_project"] = bool(row.get("is_official_project"))
         item["is_report_project"] = bool(row.get("is_report_project"))
+        item["is_report_classified"] = bool(
+            row.get("is_report_classified", row.get("is_report_project"))
+        )
+        item["is_report_uncategorized"] = bool(
+            row.get("is_report_uncategorized", not row.get("is_report_project"))
+        )
         item["report_attribution_kind"] = row.get("report_attribution_kind") or "none"
         item["candidate_project_name"] = row.get("candidate_project_name") or ""
+        item["display_project"] = row.get("display_project")
+        item["candidate_project"] = row.get("candidate_project")
+        item["project_transition"] = row.get("project_transition")
+        item["project_transition_pending"] = bool(row.get("project_transition_pending"))
         item["activity_display_name"] = row.get("activity_display_name") or row.get("app_name") or "未知活动"
         # Ensure is_in_progress is set for both paths: the report path
         # already sets it from the pre-projection end_time, while the direct

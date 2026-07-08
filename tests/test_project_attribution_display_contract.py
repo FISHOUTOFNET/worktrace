@@ -42,6 +42,7 @@ from worktrace.services import (
     settings_service,
     statistics_service,
     timeline_service,
+    view_model_service,
 )
 from worktrace.services.project_inference_service import (
     assign_project_for_activity,
@@ -572,6 +573,27 @@ def test_details_project_fields_show_report_visible_context(temp_db):
     assert details[0]["is_official_project"] is False
     assert details[0]["is_report_project"] is True
     assert details[0]["report_attribution_kind"] == "report_context_short_gap"
+
+
+def test_details_view_model_row_carries_report_attribution_flags(temp_db):
+    pid = project_service.create_project("DerivedInternal")
+    aid = _create_activity(start="09:00:00", end="09:10:00")
+    _set_assignment_source(aid, "anchor_context", project_id=pid)
+
+    model = view_model_service.get_session_details_view_model([aid], TODAY)
+    detail = model["activities"][0]
+
+    assert detail["project_id"] == pid
+    assert detail["project_name"] == "DerivedInternal"
+    assert detail["project_description"] == ""
+    assert detail["display_project"]["name"] == "DerivedInternal"
+    assert detail["is_report_project"] is True
+    assert detail["is_report_classified"] is True
+    assert detail["is_report_uncategorized"] is False
+    assert detail["is_official_project"] is False
+    assert detail["is_classified"] is True
+    assert detail["is_uncategorized"] is False
+    assert detail["report_attribution_kind"] == "report_context_short_gap"
 
 
 def test_non_official_candidate_with_prior_confirmed_carries_display(temp_db):

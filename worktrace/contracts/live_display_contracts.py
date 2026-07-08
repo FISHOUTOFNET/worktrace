@@ -199,6 +199,9 @@ class CurrentActivityContract(TypedDict, total=False):
     live_state: str
     is_in_progress: bool
     is_virtual_live: bool
+    is_live: bool
+    current_duration_live: bool
+    project_duration_live: bool
     stable_live_key_hash: str
     live_started_at_epoch_ms: int
     carry_seconds: int
@@ -211,6 +214,15 @@ class CurrentActivityContract(TypedDict, total=False):
     display_span_id: str
     current_activity_display_span_id: str
     current_resource_identity_hash: str
+    live_clock: LiveClockContract
+    duration_semantic: DurationSemantic | str
+    display_base_seconds: int
+    live_base_seconds: int
+    current_live_seconds_at_sample: int
+    current_live_base_seconds: int
+    duration_seconds_at_sample: int
+    aggregate_duration_seconds_at_sample: int
+    aggregate_display_base_seconds: int
     display_project: DisplayProjectContract | None
     candidate_project: DisplayProjectContract | None
     project_transition: ProjectTransitionContract

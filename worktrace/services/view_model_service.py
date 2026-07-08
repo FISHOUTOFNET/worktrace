@@ -33,6 +33,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from ..constants import UNCATEGORIZED_PROJECT
 from ..formatters import format_duration, format_resource_type, format_safe_display_name
 from ..contracts.live_display_contracts import (
     ActivityDetailRowContract,
@@ -389,6 +390,57 @@ def _materialize_display_only_detail_row(
         }
     )
     return row
+
+
+def _detail_report_project_dict(row: dict[str, Any]) -> dict[str, Any]:
+    project_name = str(row.get("project_name") or UNCATEGORIZED_PROJECT)
+    is_report_project = bool(row.get("is_report_project"))
+    return {
+        "id": int(row.get("project_id") or 0) or None,
+        "name": project_name,
+        "description": str(row.get("project_description") or ""),
+        "source": str(row.get("report_attribution_kind") or "none"),
+        "is_uncategorized": not is_report_project,
+        "is_suggested_project": False,
+    }
+
+
+def _detail_candidate_project_dict(row: dict[str, Any]) -> dict[str, Any]:
+    candidate_name = str(row.get("candidate_project_name") or "")
+    if candidate_name:
+        return {
+            "id": None,
+            "name": candidate_name,
+            "description": "",
+            "source": str(row.get("assignment_source") or "candidate"),
+            "is_uncategorized": False,
+            "is_suggested_project": True,
+        }
+    return _detail_report_project_dict(row)
+
+
+def _detail_report_attribution_fields(row: dict[str, Any]) -> dict[str, Any]:
+    is_report_project = bool(row.get("is_report_project"))
+    is_report_classified = bool(row.get("is_report_classified", is_report_project))
+    is_report_uncategorized = bool(row.get("is_report_uncategorized", not is_report_project))
+    return {
+        "project_id": int(row.get("project_id") or 0),
+        "project_name": str(row.get("project_name") or UNCATEGORIZED_PROJECT),
+        "project_description": str(row.get("project_description") or ""),
+        "display_project": row.get("display_project") or _detail_report_project_dict(row),
+        "candidate_project": row.get("candidate_project") or _detail_candidate_project_dict(row),
+        "project_transition": row.get("project_transition"),
+        "project_transition_pending": bool(row.get("project_transition_pending")),
+        "is_uncategorized": bool(row.get("is_report_uncategorized", not is_report_project)),
+        "is_classified": bool(row.get("is_report_classified", is_report_project)),
+        "is_report_project": is_report_project,
+        "is_report_classified": is_report_classified,
+        "is_report_uncategorized": is_report_uncategorized,
+        "report_attribution_kind": str(row.get("report_attribution_kind") or "none"),
+        "is_official_project": bool(row.get("is_official_project")),
+        "assignment_source": str(row.get("assignment_source") or ""),
+        "project_attribution_kind": str(row.get("project_attribution_kind") or ""),
+    }
 
 
 # Overview ViewModel
@@ -872,8 +924,7 @@ def get_session_details_view_model(
                 row.get("resource_kind"), row.get("resource_subtype")
             ),
             "resource_name": format_safe_display_name(row),
-            "project_name": str(row.get("project_name") or "未归类"),
-            "project_description": str(row.get("project_description") or ""),
+            **_detail_report_attribution_fields(row),
             "status": str(row.get("status") or ""),
             "status_code": str(row.get("status") or "normal"),
             "display_status": str(row.get("display_status") or row.get("status_summary") or ""),

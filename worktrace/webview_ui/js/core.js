@@ -897,12 +897,21 @@
             el.textContent = "\u5f53\u524d\u6d3b\u52a8\uff1a\u65e0";
             return;
         }
+        var clock = current.live_clock || App.getActiveLiveClock();
+        var displaySpanId = String(current.display_span_id || (clock && clock.display_span_id) || "");
+        var currentActivityDisplaySpanId = String(current.current_activity_display_span_id || "");
+        var currentResourceIdentityHash = String(current.current_resource_identity_hash || "");
+        var stableLiveKeyHash = String(current.stable_live_key_hash || (clock && clock.stable_live_key_hash) || "");
         var display = current.display || "";
-        var seconds = parseInt(current.elapsed_seconds, 10) || 0;
         var canTickCurrent = current.current_duration_live === true
-            && !!current.display_span_id
-            && !!current.current_activity_display_span_id;
-        var continuity = currentActivityContinuityKey(current, null, prefix);
+            && !!clock
+            && !!displaySpanId
+            && !!currentActivityDisplaySpanId
+            && !!currentResourceIdentityHash;
+        var seconds = canTickCurrent
+            ? App.computeActiveElapsedNow(clock, Date.now())
+            : (parseInt(current.elapsed_seconds, 10) || 0);
+        var continuity = currentActivityContinuityKey(current, clock, prefix);
         var previousContinuity = el.getAttribute("data-current-continuity-key") || "";
         if (previousContinuity && previousContinuity !== continuity) {
             App.resetMonotonicRenderState(previousContinuity);
@@ -926,10 +935,10 @@
                 + (canTickCurrent ? ' data-live-base-seconds="0"' : '')
                 + (canTickCurrent ? ' data-live-role="' + App.escapeHtml(prefix || "current") + '-current"' : '')
                 + (canTickCurrent ? ' data-live-continuity-key="' + App.escapeHtml(continuity) + '"' : '')
-                + (canTickCurrent && current.current_activity_display_span_id ? ' data-current-activity-display-span-id="' + App.escapeHtml(current.current_activity_display_span_id) + '"' : '')
-                + (canTickCurrent && current.current_resource_identity_hash ? ' data-current-resource-identity-hash="' + App.escapeHtml(current.current_resource_identity_hash) + '"' : '')
-                + (canTickCurrent && current.display_span_id ? ' data-display-span-id="' + App.escapeHtml(current.display_span_id) + '"' : '')
-                + (canTickCurrent && current.stable_live_key_hash ? ' data-stable-live-key-hash="' + App.escapeHtml(current.stable_live_key_hash) + '"' : '')
+                + (canTickCurrent ? ' data-current-activity-display-span-id="' + App.escapeHtml(currentActivityDisplaySpanId) + '"' : '')
+                + (canTickCurrent ? ' data-current-resource-identity-hash="' + App.escapeHtml(currentResourceIdentityHash) + '"' : '')
+                + (canTickCurrent ? ' data-display-span-id="' + App.escapeHtml(displaySpanId) + '"' : '')
+                + (canTickCurrent && stableLiveKeyHash ? ' data-stable-live-key-hash="' + App.escapeHtml(stableLiveKeyHash) + '"' : '')
                 + ' data-duration-seconds="' + String(seconds) + '"'
                 + '>' + App.escapeHtml(App.formatDuration(seconds)) + '</span>';
             for (var i = 3; i < parts.length; i++) {

@@ -1404,10 +1404,14 @@ def test_current_activity_live_target_requires_current_live_contract():
     current_body = func_body(_strip_js_comments(read_js("core.js")), "renderCurrentActivityElement")
 
     assert "var canTickCurrent = current.current_duration_live === true" in current_body
-    assert "&& !!current.display_span_id" in current_body
-    assert "&& !!current.current_activity_display_span_id" in current_body
+    assert "&& !!displaySpanId" in current_body
+    assert "&& !!currentActivityDisplaySpanId" in current_body
+    assert "&& !!currentResourceIdentityHash" in current_body
+    assert "App.computeActiveElapsedNow(clock, Date.now())" in current_body
     assert "canTickCurrent ? ' data-live-duration-target=\"1\"'" in current_body
     assert "canTickCurrent ? ' data-duration-semantic=\"current-live\"'" in current_body
+    assert "data-display-base-seconds=\"0\"" in current_body
+    assert "data-live-base-seconds=\"0\"" in current_body
 
 
 def test_full_reconcile_reuses_current_page_refresh_state_path():
@@ -1575,6 +1579,7 @@ def test_run_revision_check_does_not_register_current_clock_on_revision_change()
 def test_run_revision_check_updates_current_cache_when_revision_unchanged():
     src = _strip_js_comments(read_js("init.js"))
     body = func_body(src, "runRevisionCheck")
+    fast_body = func_body(src, "refreshCurrentActivityFromState")
 
     accept_index = body.find("acceptRefreshStateRuntime(state")
     fast_index = body.find("refreshCurrentActivityFromState(state", accept_index)
@@ -1583,20 +1588,27 @@ def test_run_revision_check_updates_current_cache_when_revision_unchanged():
     assert heavy_index == -1 or fast_index < heavy_index, (
         "current fast path must not depend on heavy refresh"
     )
+    assert "updateCurrentActivityCacheFromRefreshState(state)" in fast_body
+    assert "if (options.forceRender !== true) return" in fast_body
+    assert "forceRender: renderCurrentActivity" in body
+    assert "currentActivityIdentityChanged" in body
 
 
 def test_refresh_current_activity_from_state_supports_overview_and_timeline():
     src = _strip_js_comments(read_js("init.js"))
     body = func_body(src, "refreshCurrentActivityFromState")
+    cache_body = func_body(src, "updateCurrentActivityCacheFromRefreshState")
 
     assert 'App.currentPage === "overview"' in body
     assert 'document.getElementById("current-activity")' in body
-    assert "App.lastOverviewSnapshot.current_activity" in body
+    assert "App.lastOverviewSnapshot.current_activity" in cache_body
     assert 'App.currentPage === "timeline"' in body
     assert 'document.getElementById("timeline-current")' in body
-    assert "App.lastTimelineData.current_activity" in body
+    assert "App.lastTimelineData.current_activity" in cache_body
+    assert "updateCurrentActivityCacheFromRefreshState(state)" in body
     assert "commitPageActiveSpanClock" not in body
     assert "App.applyLocalTicker()" not in body
+    assert "options.forceRender" in body
     assert "_timelineEditingActive" not in body, (
         "Timeline editing may protect list/detail inputs, not the current header"
     )

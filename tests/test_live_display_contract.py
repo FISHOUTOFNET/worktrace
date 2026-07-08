@@ -323,6 +323,45 @@ def test_get_refresh_state_returns_unified_live_clock_fields(bridge):
     assert int(state["live_started_at_epoch_ms"]) > 0
 
 
+def test_refresh_state_current_activity_carries_live_projection_contract(bridge):
+    _set_snapshot(_normal_snapshot(elapsed_seconds=12))
+    state = bridge.get_refresh_state()
+    current = state["current_activity"]
+
+    assert current["current_duration_live"] is True
+    assert current["is_live"] is True
+    assert current["project_duration_live"] is False
+    assert current["display_span_id"]
+    assert current["current_activity_display_span_id"]
+    assert current["current_resource_identity_hash"]
+    assert current["stable_live_key_hash"] == state["live_clock"]["stable_live_key_hash"]
+    assert current["live_clock"] == state["live_clock"]
+    assert current["duration_semantic"] == "current_live"
+    assert current["display_base_seconds"] == 0
+    assert current["current_live_base_seconds"] == 0
+    assert current["current_live_seconds_at_sample"] == 12
+    assert current["duration_seconds_at_sample"] == 12
+    assert current["live_started_at_epoch_ms"] == state["live_clock"]["live_started_at_epoch_ms"]
+
+
+def test_refresh_state_inactive_current_activity_carries_nonlive_contract(bridge):
+    _set_snapshot(None)
+    state = bridge.get_refresh_state()
+    current = state["current_activity"]
+
+    assert current["active"] is False
+    assert current["current_duration_live"] is False
+    assert current["is_live"] is False
+    assert current["project_duration_live"] is False
+    assert current["display_span_id"] == ""
+    assert current["current_activity_display_span_id"] == ""
+    assert current["current_resource_identity_hash"] == ""
+    assert current["duration_semantic"] == "current_live"
+    assert current["display_base_seconds"] == 0
+    assert current["current_live_base_seconds"] == 0
+    assert current["duration_seconds_at_sample"] == 0
+
+
 
 
 def test_get_refresh_state_accepts_report_date(bridge):

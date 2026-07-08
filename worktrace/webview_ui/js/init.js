@@ -400,20 +400,32 @@
         }
     }
 
+    function currentActivityRenderIdentity(state) {
+        var current = (state && state.current_activity) || {};
+        return [
+            current.active === true ? "active" : "inactive",
+            current.current_duration_live === true ? "live" : "static",
+            String(current.live_state || ""),
+            String(current.display_span_id || ""),
+            String(current.current_activity_display_span_id || ""),
+            String(current.current_resource_identity_hash || ""),
+            String(current.stable_live_key_hash || "")
+        ].join("|");
+    }
+
     function refreshCurrentActivityFromState(state, options) {
         if (!state || !state.current_activity) return;
         if (!App.liveRuntime || App.liveRuntime.refreshRevision !== String(state.refresh_revision || "")) return;
+        options = options || {};
+        updateCurrentActivityCacheFromRefreshState(state);
+        if (options.forceRender !== true) return;
         if (App.currentPage === "overview") {
-            if (!App.lastOverviewSnapshot) App.lastOverviewSnapshot = {};
-            App.lastOverviewSnapshot.current_activity = state.current_activity || {};
             App.renderCurrentActivityElement(
                 document.getElementById("current-activity"),
                 state.current_activity || {},
                 "overview"
             );
         } else if (App.currentPage === "timeline") {
-            if (!App.lastTimelineData) App.lastTimelineData = {};
-            App.lastTimelineData.current_activity = state.current_activity || {};
             App.renderCurrentActivityElement(
                 document.getElementById("timeline-current"),
                 state.current_activity || {},
@@ -451,6 +463,7 @@
             var prevRevision = previousState && previousState.refresh_revision;
             var newRevision = state.refresh_revision;
             var isFirstCheck = prevRevision === null || prevRevision === undefined;
+            var revisionChanged = isFirstCheck || prevRevision !== newRevision;
             var prevLiveRevision = previousState && (previousState.live_clock_revision || previousState.live_state_revision || previousState.refresh_revision);
             var newLiveRevision = state.live_clock_revision || state.live_state_revision || state.refresh_revision;
             var prevDisplayProjectionRevision = previousState && (previousState.display_projection_revision || previousState.refresh_revision);
@@ -460,9 +473,16 @@
             var liveStateChanged = isFirstCheck || prevLiveRevision !== newLiveRevision;
             var displayProjectionChanged = isFirstCheck || prevDisplayProjectionRevision !== newDisplayProjectionRevision;
             var pageStructureChanged = isFirstCheck || prevPageRevision !== newPageRevision;
+            var currentActivityIdentityChanged = currentActivityRenderIdentity(previousState) !== currentActivityRenderIdentity(state);
+            var renderCurrentActivity = revisionChanged
+                || liveStateChanged
+                || displayProjectionChanged
+                || pageStructureChanged
+                || currentActivityIdentityChanged
+                || App.liveClockContractRefreshRequested;
             var accepted = App.acceptRefreshStateRuntime(state);
             if (!accepted) return;
-            refreshCurrentActivityFromState(state);
+            refreshCurrentActivityFromState(state, { forceRender: renderCurrentActivity });
             refreshStatusFromRefreshState(state);
             var triggeredHeavyRefresh = false;
             // the refresh_state payload (no get_status call). When revision

@@ -851,15 +851,15 @@ def test_get_timeline_pending_persisted_open_preserves_report_project(bridge):
     assert persisted_session["stable_live_key_hash"]
 
 
-def test_get_timeline_persisted_open_detail_row_shows_inherited_display_project(bridge):
-    """Section 二.2 / 六.2: the persisted_open detail row must overlay
-    display_project fields. During the 30-second pending window the
-    detail row's ``project_name`` is the inherited display_project, NOT
-    the DB candidate assignment.
+def test_get_timeline_persisted_open_detail_row_preserves_report_project(bridge):
+    """A persisted_open real detail row keeps report-visible attribution.
+
+    The live span may write duration / identity / edit-disabled fields, but
+    it must not replace the DB row's report-visible project with the
+    snapshot's official-only display project.
     """
     from worktrace.services import activity_service, project_service
 
-    project_a_id = project_service.create_project("ProjectA")
     project_b_id = project_service.create_project("ProjectB")
     aid, start_time = _create_real_open_activity(elapsed_seconds=60)
     assign_activity_project(aid, project_b_id)
@@ -871,12 +871,17 @@ def test_get_timeline_persisted_open_detail_row_shows_inherited_display_project(
     assert details["ok"] is True
     assert len(details["activities"]) >= 1
     detail_row = details["activities"][0]
-    # The detail row's project_name must be the inherited display_project.
-    assert detail_row["project_name"] == "ProjectA"
-    assert detail_row["project_description"] == "ProjectA description"
-    assert detail_row["display_project"]["name"] == "ProjectA"
-    assert detail_row["candidate_project"]["name"] == "ProjectB"
-    # The detail row carries stable live key fields and is edit-disabled.
+    assert detail_row["project_name"] == "ProjectB"
+    assert detail_row["display_project"]["name"] == "ProjectB"
+    assert detail_row["is_report_project"] is True
+    assert detail_row["is_report_classified"] is True
+    assert detail_row["is_report_uncategorized"] is False
+    assert detail_row["is_classified"] is True
+    assert detail_row["is_uncategorized"] is False
+    assert detail_row["report_attribution_kind"] == "official_direct"
+    assert detail_row["is_official_project"] is True
+    assert detail_row["duration_semantic"] == "current_live"
+    assert detail_row["display_base_seconds"] == 0
     assert detail_row["stable_live_key_hash"]
     assert detail_row["live_state"] == "persisted_open"
     assert detail_row["edit_disabled"] is True
