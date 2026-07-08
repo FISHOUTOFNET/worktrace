@@ -182,6 +182,25 @@ class TimelineBridgeMixin:
             logger.exception("webview bridge get_timeline_session_details failed")
             return dict(_GENERIC_ERROR)
 
+    def get_timeline_project_activity_summary(
+        self,
+        project_id: int,
+        report_date: str | None = None,
+    ) -> dict[str, Any]:
+        """Return project-scoped activity duration summaries for Timeline."""
+        try:
+            if isinstance(project_id, bool):
+                return {"ok": False, "error": "请选择有效的项目"}
+            pid = int(project_id)
+            if pid <= 0:
+                return {"ok": False, "error": "请选择有效的项目"}
+            return view_model_api.get_project_activity_summary_view_model(pid, report_date)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "请选择有效的项目"}
+        except Exception:
+            logger.exception("webview bridge get_timeline_project_activity_summary failed")
+            return dict(_GENERIC_ERROR)
+
 
     def list_projects_for_timeline(self) -> dict[str, Any]:
         """Return the list of projects selectable for Timeline reclassification.

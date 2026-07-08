@@ -203,7 +203,7 @@
                 var skipDetailReload = (typeof App._timelineEditingActive === "function"
                     && App._timelineEditingActive());
                 if (!skipDetailReload) {
-                    loadSessionDetails(found.activity_ids, data.date);
+                    loadSessionDetails(found.project_id, data.date);
                 }
                 // Only re-populate the edit panel if the user is not mid-edit AND the session is not edit-disabled.
                 if (!found.edit_disabled
@@ -290,7 +290,7 @@
         }
         var found = newSelected;
         if (found) {
-            loadSessionDetails(found.activity_ids, App.timelineDate);
+            loadSessionDetails(found.project_id, App.timelineDate);
             // Virtual live sessions are display-only; a manual click must NOT open the edit panel. Clear it instead.
             if (found.edit_disabled === true || found.is_virtual === true) {
                 clearEditPanel();
@@ -302,20 +302,20 @@
     }
     App.selectTimelineSession = selectTimelineSession;
 
-    function loadSessionDetails(activityIds, date) {
+    function loadSessionDetails(projectId, date) {
         var detailsHeader = document.getElementById("timeline-details-header");
         var detailsList = document.getElementById("timeline-details-list");
-        // Only show "loading" when the panel is empty; keep existing details visible during refresh.
+        // Only show loading when the panel is empty; keep existing summaries visible during refresh.
         if (!detailsList.innerHTML.trim()) {
-            detailsHeader.textContent = "加载详情…";
+            detailsHeader.textContent = "加载项目活动耗时…";
             detailsList.innerHTML = "";
         }
 
         var token = ++App.detailsRequestToken;
-        App.callBridge("get_timeline_session_details", activityIds, date).then(function (result) {
+        App.callBridge("get_timeline_project_activity_summary", projectId, date).then(function (result) {
             if (token !== App.detailsRequestToken) return;  // stale response
             var data = App.handleResult(result, function (msg) {
-                detailsHeader.textContent = "加载详情失败";
+                detailsHeader.textContent = "加载项目活动耗时失败";
                 detailsList.innerHTML = '<div class="timeline-empty">' + App.escapeHtml(msg) + '</div>';
             });
             if (!data) return;
@@ -323,8 +323,8 @@
             renderSessionDetails(data);
         }).catch(function () {
             if (token !== App.detailsRequestToken) return;  // stale response
-            detailsHeader.textContent = "加载详情失败";
-            detailsList.innerHTML = '<div class="timeline-empty">无法加载详情，请稍后重试。</div>';
+            detailsHeader.textContent = "加载项目活动耗时失败";
+            detailsList.innerHTML = '<div class="timeline-empty">无法加载项目活动耗时，请稍后重试。</div>';
         });
     }
     App.loadSessionDetails = loadSessionDetails;
@@ -353,85 +353,73 @@
         App.lastSessionDetailsViewModel = data;
         var detailsHeader = document.getElementById("timeline-details-header");
         var detailsList = document.getElementById("timeline-details-list");
-        var activities = data.activities || [];
-        if (activities.length === 0) {
-            detailsHeader.textContent = "该时段暂无活动详情";
-            detailsList.innerHTML = '<div class="timeline-empty">暂无详情</div>';
+        var rows = data.summary_rows || [];
+        if (rows.length === 0) {
+            detailsHeader.textContent = "项目活动耗时";
+            detailsList.innerHTML = '<div class="timeline-empty">该项目暂无活动耗时</div>';
             return;
         }
-        detailsHeader.textContent = "活动详情（" + activities.length + " 条）";
+        detailsHeader.textContent = "项目活动耗时";
         var html = "";
-        var detailContinuityKeys = [];
-        for (var i = 0; i < activities.length; i++) {
-            var a = activities[i];
-            var detailCanTick = a.live_delta_eligible === true && !!a.display_span_id;
-            // Simplified read-only detail row; advanced correction is via the "高级纠错" button → correction shell.
-            if (a.is_live_projected === true
-                && !a.display_span_id
+        var summaryContinuityKeys = [];
+        for (var i = 0; i < rows.length; i++) {
+            var row = rows[i];
+            var summaryCanTick = row.live_delta_eligible === true && !!row.display_span_id;
+            if (row.is_live_projected === true
+                && !row.display_span_id
                 && typeof App.recordLiveClockContractViolation === "function") {
-                App.recordLiveClockContractViolation("", "timeline", "detail_live_row_missing_span_id");
+                App.recordLiveClockContractViolation("", "timeline", "summary_live_row_missing_span_id");
             }
-            var startTimeOnly = App.formatStartTimeOnly(a.start_time);
-            var displayName = a.resource_name || a.app_name || "未知";
-            var aDurSec = parseInt(a.duration_seconds, 10);
-            var cls = "detail-item";
-            if (a.is_in_progress) cls += " in-progress";
-            if (detailCanTick) cls += " live-projected";
-            if (a.is_virtual === true) cls += " virtual-live";
-            var aid = a.activity_id || 0;
-            // Stable live key data attribute so the detail ticker locates the row across pending / persisted
-            // transitions (stable_live_key_hash stays the same when activity_id changes; ticker falls back to activity_id).
-            var detailStableKey = a.stable_live_key_hash || "";
-            // Active-span anchored DOM attributes: detail rows keep their
-            // own offset but do not replace the Timeline page active clock.
-            var detailSpanId = detailCanTick ? (a.display_span_id || "") : "";
-            var detailContinuityKey = detailSpanId ? App.liveContinuityKey(a, "detail") : "";
-            var detailDurationSemantic = String(a.duration_semantic || "current_live").replace(/_/g, "-");
-            var detailDisplayBase = parseInt(a.display_base_seconds, 10);
-            if (isNaN(detailDisplayBase)) detailDisplayBase = (!isNaN(aDurSec) && aDurSec >= 0) ? aDurSec : 0;
-            var initialSec = (!isNaN(aDurSec) && aDurSec >= 0) ? aDurSec : 0;
-            if (detailSpanId && projectClock) {
-                initialSec = App.projectFromDisplayBase(detailDisplayBase, activeElapsedNowValue);
+            var displayName = row.activity_name || "未知";
+            var durationSeconds = parseInt(row.duration_seconds, 10);
+            var cls = "summary-item";
+            if (row.is_in_progress) cls += " in-progress";
+            if (summaryCanTick) cls += " live-projected";
+            if (row.is_virtual === true) cls += " virtual-live";
+            var summaryStableKey = row.stable_live_key_hash || "";
+            var summarySpanId = summaryCanTick ? (row.display_span_id || "") : "";
+            var summaryContinuityKey = summarySpanId ? App.liveContinuityKey(row, "project-summary") : "";
+            var summaryDurationSemantic = String(row.duration_semantic || "aggregate_live").replace(/_/g, "-");
+            var summaryDisplayBase = parseInt(row.display_base_seconds, 10);
+            if (isNaN(summaryDisplayBase)) summaryDisplayBase = (!isNaN(durationSeconds) && durationSeconds >= 0) ? durationSeconds : 0;
+            var initialSec = (!isNaN(durationSeconds) && durationSeconds >= 0) ? durationSeconds : 0;
+            if (summarySpanId && projectClock) {
+                initialSec = App.projectFromDisplayBase(summaryDisplayBase, activeElapsedNowValue);
             }
-            var detailPrev = detailContinuityKey ? App._monotonicRenderState[detailContinuityKey] : null;
-            if (detailPrev && typeof detailPrev.lastSeconds === "number" && initialSec < detailPrev.lastSeconds) {
-                initialSec = detailPrev.lastSeconds;
+            var summaryPrev = summaryContinuityKey ? App._monotonicRenderState[summaryContinuityKey] : null;
+            if (summaryPrev && typeof summaryPrev.lastSeconds === "number" && initialSec < summaryPrev.lastSeconds) {
+                initialSec = summaryPrev.lastSeconds;
             }
-            var aDurText = (!isNaN(aDurSec) && aDurSec >= 0)
+            var durationText = (!isNaN(durationSeconds) && durationSeconds >= 0)
                 ? App.formatDuration(initialSec)
-                : (a.duration || "00:00:00");
-            html += '<div class="' + cls + '" data-activity-id="' + App.escapeHtml(String(aid)) + '"'
-                + (detailStableKey ? ' data-stable-live-key-hash="' + App.escapeHtml(detailStableKey) + '"' : '')
-                + (detailSpanId ? ' data-display-span-id="' + App.escapeHtml(detailSpanId) + '"' : '')
-                + ' data-detail-index="' + i + '"'
+                : (row.duration || "00:00:00");
+            var projectLabel = App.formatProjectLabel(row.display_project_name, row.display_project_description);
+            html += '<div class="' + cls + '" data-summary-id="' + App.escapeHtml(String(row.summary_id || "")) + '"'
+                + (summaryStableKey ? ' data-stable-live-key-hash="' + App.escapeHtml(summaryStableKey) + '"' : '')
+                + (summarySpanId ? ' data-display-span-id="' + App.escapeHtml(summarySpanId) + '"' : '')
+                + ' data-summary-index="' + i + '"'
                 + '>'
-                + '<div class="detail-item-time">' + App.escapeHtml(startTimeOnly) + '</div>'
-                + '<div class="detail-item-name" title="' + App.escapeHtml(displayName) + '">' + App.escapeHtml(displayName) + '</div>'
-                + '<div class="detail-item-project" title="' + App.escapeHtml(App.formatProjectLabel(a.project_name, a.project_description)) + '">' + App.escapeHtml(App.formatProjectLabel(a.project_name, a.project_description)) + '</div>'
-                + '<div class="detail-item-duration"'
-                + (detailSpanId ? ' data-live-duration-target="1"' : '')
-                + (detailSpanId ? ' data-duration-semantic="' + App.escapeHtml(detailDurationSemantic) + '"' : '')
-                + (detailSpanId ? ' data-display-span-id="' + App.escapeHtml(detailSpanId) + '"' : '')
-                + (detailStableKey ? ' data-stable-live-key-hash="' + App.escapeHtml(detailStableKey) + '"' : '')
-                + (detailSpanId ? ' data-display-base-seconds="' + detailDisplayBase + '"' : '')
-                + (detailSpanId ? ' data-live-base-seconds="' + detailDisplayBase + '"' : '')
-                + (detailSpanId ? ' data-live-role="timeline-detail"' : '')
-                + (detailContinuityKey ? ' data-live-continuity-key="' + App.escapeHtml(detailContinuityKey) + '"' : '')
-                + ' data-duration-seconds="' + initialSec + '">' + App.escapeHtml(aDurText) + '</div>'
+                + '<div class="summary-item-name" title="' + App.escapeHtml(displayName) + '">' + App.escapeHtml(displayName) + '</div>'
+                + '<div class="summary-item-duration"'
+                + (summarySpanId ? ' data-live-duration-target="1"' : '')
+                + (summarySpanId ? ' data-duration-semantic="' + App.escapeHtml(summaryDurationSemantic) + '"' : '')
+                + (summarySpanId ? ' data-display-span-id="' + App.escapeHtml(summarySpanId) + '"' : '')
+                + (summaryStableKey ? ' data-stable-live-key-hash="' + App.escapeHtml(summaryStableKey) + '"' : '')
+                + (summarySpanId ? ' data-display-base-seconds="' + summaryDisplayBase + '"' : '')
+                + (summarySpanId ? ' data-live-base-seconds="' + summaryDisplayBase + '"' : '')
+                + (summarySpanId ? ' data-live-role="timeline-detail"' : '')
+                + (summaryContinuityKey ? ' data-live-continuity-key="' + App.escapeHtml(summaryContinuityKey) + '"' : '')
+                + ' data-duration-seconds="' + initialSec + '">' + App.escapeHtml(durationText) + '</div>'
+                + '<div class="summary-item-project" title="' + App.escapeHtml(projectLabel) + '">' + App.escapeHtml(projectLabel) + '</div>'
                 + '</div>';
-            // Collect this row's continuity key so the monotonic state can
-            // be seeded after the innerHTML swap.
-            detailContinuityKeys.push({ index: i, sec: initialSec, key: detailContinuityKey });
+            summaryContinuityKeys.push({ index: i, sec: initialSec, key: summaryContinuityKey });
         }
         detailsList.innerHTML = html;
-        // Detail rows use App.liveContinuityKey() so virtual-to-persisted keys stay stable.
-        // The key is the SAME string written to ``data-live-continuity-key``
-        // so the render seed and the ticker share one monotonic guard.
-        for (var di = 0; di < detailContinuityKeys.length; di++) {
-            var dk = detailContinuityKeys[di];
-            var detailKey = dk.key || "";
-            if (!detailKey) continue;
-            App._monotonicRenderState[detailKey] = { lastSeconds: dk.sec };
+        for (var si = 0; si < summaryContinuityKeys.length; si++) {
+            var skey = summaryContinuityKeys[si];
+            var summaryKey = skey.key || "";
+            if (!summaryKey) continue;
+            App._monotonicRenderState[summaryKey] = { lastSeconds: skey.sec };
         }
     }
     App.renderSessionDetails = renderSessionDetails;

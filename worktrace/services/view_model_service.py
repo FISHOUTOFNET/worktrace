@@ -41,17 +41,25 @@ from ..contracts.live_display_contracts import (
     CurrentActivityContract,
     DisplaySpanContract,
     LiveClockContract,
+    ProjectActivitySummaryRowContract,
     RecentActivityRowContract,
     RefreshStateContract,
     TimelineSessionRowContract,
 )
-from . import live_display_service, project_service, statistics_service, timeline_service
+from . import (
+    live_display_service,
+    project_activity_summary_service,
+    project_service,
+    statistics_service,
+    timeline_service,
+)
 from .activity_display_model_service import build_activity_display_model
 from .activity_display_projection import build_kpi_live_targets
 from .activity_live_clock import AGGREGATE_LIVE, CURRENT_LIVE
 from .activity_continuity_service import is_normal_project_status
 from .activity_row_overlay import (
     ROW_KIND_ACTIVITY_DETAIL_ROW,
+    ROW_KIND_PROJECT_ACTIVITY_SUMMARY_ROW,
     ROW_KIND_PROJECT_SESSION_ROW,
     ROW_KIND_RECENT_PROJECT_SESSION_ROW,
     apply_live_span_to_row,
@@ -106,6 +114,8 @@ def _apply_live_span_to_rows(
     elif row_kind == ROW_KIND_PROJECT_SESSION_ROW:
         surface = "timeline"
     elif row_kind == ROW_KIND_ACTIVITY_DETAIL_ROW:
+        surface = "details"
+    elif row_kind == ROW_KIND_PROJECT_ACTIVITY_SUMMARY_ROW:
         surface = "details"
     else:
         surface = ""
@@ -219,7 +229,11 @@ def _display_only_common_fields(
     live_clock = span.get("live_clock") or {}
     if row_kind == ROW_KIND_ACTIVITY_DETAIL_ROW:
         semantic = CURRENT_LIVE
-    elif row_kind in (ROW_KIND_PROJECT_SESSION_ROW, ROW_KIND_RECENT_PROJECT_SESSION_ROW):
+    elif row_kind in (
+        ROW_KIND_PROJECT_SESSION_ROW,
+        ROW_KIND_RECENT_PROJECT_SESSION_ROW,
+        ROW_KIND_PROJECT_ACTIVITY_SUMMARY_ROW,
+    ):
         semantic = AGGREGATE_LIVE
     else:
         raise ValueError(f"unsupported display-only row_kind: {row_kind!r}")
@@ -387,6 +401,58 @@ def _materialize_display_only_detail_row(
             "status_code": str(current_activity.get("status") or "normal"),
             "display_status": str(current_activity.get("display_status") or ""),
             "status": str(current_activity.get("status") or "normal"),
+        }
+    )
+    return row
+
+
+def _materialize_display_only_project_activity_summary_row(
+    span: DisplaySpanContract,
+    current_activity: CurrentActivityContract,
+    *,
+    report_date: str,
+    accounted_project_id: int,
+) -> ProjectActivitySummaryRowContract:
+    row = _display_only_common_fields(
+        span,
+        row_kind=ROW_KIND_PROJECT_ACTIVITY_SUMMARY_ROW,
+    )
+    display_project = current_activity.get("display_project")
+    if not isinstance(display_project, dict):
+        display_project = span.get("display_project") if isinstance(span.get("display_project"), dict) else {}
+    display_name = (
+        str(current_activity.get("resource_name") or "").strip()
+        or str(span.get("resource_name") or "").strip()
+        or str(current_activity.get("app_name") or "").strip()
+        or "未知"
+    )
+    summary_id = "live:" + str(row.get("stable_live_key_hash") or row.get("display_span_id") or "pending")
+    accounted_project_name = str(span.get("project_name") or UNCATEGORIZED_PROJECT)
+    accounted_project_description = str(span.get("project_description") or "")
+    row.update(
+        {
+            "row_kind": "project_activity_summary",
+            "summary_id": summary_id,
+            "activity_identity_key": str(
+                current_activity.get("resource_identity_key")
+                or current_activity.get("current_resource_identity_hash")
+                or summary_id
+            ),
+            "activity_name": display_name,
+            "accounted_project_id": int(accounted_project_id),
+            "accounted_project_name": accounted_project_name,
+            "accounted_project_description": accounted_project_description,
+            "project_id": int(accounted_project_id),
+            "project_name": accounted_project_name,
+            "project_description": accounted_project_description,
+            "display_project_id": int(display_project.get("id") or 0),
+            "display_project_name": str(display_project.get("name") or UNCATEGORIZED_PROJECT),
+            "display_project_description": str(display_project.get("description") or ""),
+            "activity_ids": [],
+            "first_activity_id": None,
+            "open_activity_id": 0,
+            "closed_duration_seconds": 0,
+            "report_date": report_date,
         }
     )
     return row
@@ -1003,6 +1069,82 @@ def get_session_details_view_model(
     }
 
 
+def get_project_activity_summary_view_model(
+    accounted_project_id: int,
+    report_date: str | None = None,
+) -> dict[str, Any]:
+    """Build the Timeline right-panel project activity summary ViewModel."""
+    project_id = int(accounted_project_id)
+    date = report_date or timeline_service.get_default_report_date()
+    today = timeline_service.get_default_report_date()
+    snapshot = _get_current_activity_snapshot()
+    report_model = build_activity_display_model(
+        report_date=date, today=today, snapshot=snapshot
+    )
+    live_model = (
+        report_model
+        if date == today
+        else build_activity_display_model(report_date=today, today=today, snapshot=snapshot)
+    )
+    live_clock = live_model.get("live_clock") or {}
+    current_activity = live_model.get("current_activity") or {}
+    identity_fields = _live_identity_fields(live_model)
+    revision_fields = _revision_fields_for_model(
+        snapshot,
+        live_model,
+        today=today,
+        report_date=today,
+    )
+
+    rows: list[dict[str, Any]] = project_activity_summary_service.get_project_activity_summary(
+        date,
+        project_id,
+        include_hidden=False,
+        ensure_context=True,
+    )
+    _apply_live_span_to_rows(
+        rows,
+        report_model,
+        row_kind=ROW_KIND_PROJECT_ACTIVITY_SUMMARY_ROW,
+    )
+
+    summary_live_span = _get_visible_live_span(report_model, "details")
+    if (
+        summary_live_span
+        and int(summary_live_span.get("anchor_activity_id") or 0) <= 0
+        and int(summary_live_span.get("project_id") or 0) == project_id
+        and not _rows_have_live_span(rows, summary_live_span)
+    ):
+        rows.append(
+            _materialize_display_only_project_activity_summary_row(
+                summary_live_span,
+                current_activity,
+                report_date=date,
+                accounted_project_id=project_id,
+            )
+        )
+
+    for row in rows:
+        if row.get("is_in_progress") and not row.get("edit_disabled"):
+            row["edit_disabled"] = True
+            row["disable_reason"] = row.get("disable_reason") or "进行中记录暂不支持编辑"
+        row["duration"] = format_duration(int(row.get("duration_seconds") or 0))
+    rows.sort(key=lambda item: (-int(item.get("duration_seconds") or 0), str(item.get("activity_name") or "")))
+
+    return {
+        "ok": True,
+        "date": date,
+        "accounted_project_id": project_id,
+        "summary_rows": rows,
+        "current_activity": current_activity,
+        "live_clock": live_clock,
+        **identity_fields,
+        **revision_fields,
+        "activity_display_model": live_model,
+        "report_activity_display_model": report_model,
+    }
+
+
 # Refresh State ViewModel
 
 
@@ -1113,6 +1255,7 @@ def get_refresh_state_view_model(report_date: str | None = None) -> RefreshState
 __all__ = [
     "get_overview_view_model",
     "get_refresh_state_view_model",
+    "get_project_activity_summary_view_model",
     "get_session_details_view_model",
     "get_timeline_view_model",
 ]

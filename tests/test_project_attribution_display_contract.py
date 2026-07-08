@@ -318,7 +318,7 @@ def test_suggested_candidate_short_interrupt_not_report_merged(temp_db, tmp_path
     from openpyxl import load_workbook
 
     xlsx_path = export_service.export_excel(TODAY, TODAY, str(tmp_path / "report.xlsx"))
-    ws = load_workbook(xlsx_path)["Activity Logs"]
+    ws = load_workbook(xlsx_path)["Sessions"]
     headers = [cell.value for cell in ws[1]]
     project_col = headers.index("项目") + 1
     start_col = headers.index("开始时间") + 1
@@ -412,18 +412,21 @@ def test_context_assignment_reports_across_timeline_details_stats_csv_excel(temp
     assert [group["display_name"] for group in summary["by_project"]] == ["ProjectA"]
 
     csv_rows = export_service.build_statistics_csv_rows(TODAY, TODAY)
-    assert next(row for row in csv_rows if row["start_time"].endswith("09:10:00"))["project"] == "ProjectA"
+    assert len(csv_rows) == 1
+    assert csv_rows[0]["start_time"].endswith("09:00:00")
+    assert csv_rows[0]["project"] == "ProjectA"
 
     from openpyxl import load_workbook
 
     xlsx_path = export_service.export_excel(TODAY, TODAY, str(tmp_path / "report.xlsx"))
-    ws = load_workbook(xlsx_path)["Activity Logs"]
+    ws = load_workbook(xlsx_path)["Sessions"]
     headers = [cell.value for cell in ws[1]]
     project_col = headers.index("项目") + 1
     start_col = headers.index("开始时间") + 1
     excel_rows = list(ws.iter_rows(min_row=2, values_only=True))
-    b_excel = next(row for row in excel_rows if str(row[start_col - 1]).endswith("09:10:00"))
-    assert b_excel[project_col - 1] == "ProjectA"
+    assert len(excel_rows) == 1
+    assert str(excel_rows[0][start_col - 1]).endswith("09:00:00")
+    assert excel_rows[0][project_col - 1] == "ProjectA"
 
 
 @pytest.mark.parametrize(
@@ -480,9 +483,7 @@ def test_format_activity_project_cell_non_normal_returns_dash():
 def test_non_normal_status_does_not_display_project(temp_db, status):
     aid = _create_activity(start="09:00:00", end="09:10:00", status=status)
     csv_rows = export_service.build_statistics_csv_rows(TODAY, TODAY)
-    matching = [r for r in csv_rows if r["start_time"].endswith("09:00:00")]
-    assert matching
-    assert matching[0]["project"] == "—"
+    assert csv_rows == []
 
 
 def test_excluded_in_history_stats_export_but_no_project_column(temp_db):
@@ -490,9 +491,7 @@ def test_excluded_in_history_stats_export_but_no_project_column(temp_db):
 
     # In export
     csv_rows = export_service.build_statistics_csv_rows(TODAY, TODAY)
-    matching = [r for r in csv_rows if r["start_time"].endswith("09:00:00")]
-    assert matching
-    assert matching[0]["project"] == "—"
+    assert csv_rows == []
 
     # In statistics total_duration
     summary = statistics_service.get_statistics_export_summary(TODAY, TODAY)

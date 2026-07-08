@@ -36,7 +36,7 @@ def test_single_auto_activity_29_seconds_has_snapshot_but_no_history_stats_or_ex
     assert statistics_service.get_summary("2026-06-18", "2026-06-18")["total_duration"] == 0
 
     xlsx_path = export_service.export_excel("2026-06-18", "2026-06-18", str(tmp_path / "out.xlsx"))
-    assert load_workbook(xlsx_path)["Activity Logs"].max_row == 1
+    assert load_workbook(xlsx_path)["Sessions"].max_row == 1
 
 
 def test_29_and_30_second_threshold_updates_snapshot_ui_and_revision_same_tick(temp_db):

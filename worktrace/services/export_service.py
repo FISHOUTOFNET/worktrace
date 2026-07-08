@@ -11,16 +11,12 @@ from ..exports.excel_exporter import export_excel_file
 from ..formatters import (
     format_activity_project_cell,
     format_duration,
-    format_resource_type,
-    format_safe_display_name,
     format_status_label,
 )
 from . import statistics_service, timeline_service
 from .runtime_activity_state_service import clear_runtime_activity_state
 
 logger = logging.getLogger(__name__)
-
-_UNKNOWN_APP_LABEL = "未知应用"
 
 # Ordered CSV columns as (dict_key, csv_header). The writer emits Chinese
 # headers for Excel readability. Columns are display-safe: raw window_title
@@ -33,10 +29,10 @@ _CSV_COLUMNS = [
     ("duration", "时长"),
     ("duration_seconds", "时长秒数"),
     ("project", "项目"),
-    ("app", "应用"),
-    ("resource_type", "资源类型"),
-    ("resource_name", "资源名称"),
     ("status", "状态"),
+    ("note", "备注"),
+    ("adjusted_duration", "修正时长"),
+    ("is_adjusted", "是否已修正"),
 ]
 
 # Characters that mark a CSV formula injection attempt. A leading single
@@ -63,40 +59,48 @@ def _escape_csv_cell(value) -> str:
 def build_statistics_csv_rows(date_from: str, date_to: str) -> list[dict]:
     """Build display-safe CSV row dicts for the statistics CSV export."""
     statistics_service.validate_statistics_date_range(date_from, date_to)
-    rows = timeline_service.get_report_activity_rows(
+    sessions = timeline_service.get_project_sessions_by_range(
         date_from,
         date_to,
         include_hidden=False,
         ensure_context=True,
     )
     csv_rows: list[dict] = []
-    for row in rows:
-        if row.get("is_in_progress"):
+    for session in sessions:
+        if session.get("is_in_progress"):
             continue
         duration_seconds = int(
-            row.get("report_duration_seconds")
-            or row.get("duration_seconds")
+            session.get("display_duration_seconds")
+            or session.get("duration_seconds")
             or 0
         )
-        app_name = str(row.get("app_name") or "").strip() or _UNKNOWN_APP_LABEL
+        adjusted_seconds = session.get("adjusted_duration_seconds")
+        has_adjusted = bool(session.get("has_duration_override"))
         csv_rows.append(
             {
-                "date": str(row.get("report_date") or ""),
-                "start_time": str(row.get("start_time") or ""),
-                "end_time": str(row.get("end_time") or ""),
+                "date": str(session.get("report_date") or ""),
+                "start_time": str(session.get("start_time") or ""),
+                "end_time": str(session.get("end_time") or ""),
                 "duration": format_duration(duration_seconds),
                 "duration_seconds": duration_seconds,
-                "project": format_activity_project_cell(row),
-                "app": app_name,
-                "resource_type": format_resource_type(
-                    row.get("resource_kind"),
-                    row.get("resource_subtype"),
-                ),
-                "resource_name": format_safe_display_name(row),
-                "status": format_status_label(row.get("status")),
+                "project": _format_session_project_cell(session),
+                "status": format_status_label(session.get("status_code") or session.get("status")),
+                "note": str(session.get("session_note") or ""),
+                "adjusted_duration": format_duration(adjusted_seconds) if has_adjusted else "",
+                "is_adjusted": "是" if has_adjusted else "否",
             }
         )
     return csv_rows
+
+
+def _format_session_project_cell(session: dict) -> str:
+    return format_activity_project_cell(
+        {
+            "status": session.get("status_code") or session.get("status") or "normal",
+            "is_report_project": session.get("is_report_project"),
+            "report_project_name": session.get("project_name"),
+        }
+    )
 
 
 def write_statistics_csv(date_from: str, date_to: str, output_path) -> dict:

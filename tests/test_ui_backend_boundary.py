@@ -1149,6 +1149,7 @@ EXPECTED_WEBVIEW_BRIDGE_PUBLIC_METHODS = {
     # Timeline
     "get_timeline",
     "get_timeline_session_details",
+    "get_timeline_project_activity_summary",
     "list_projects_for_timeline",
     "update_timeline_project",
     "update_timeline_note",

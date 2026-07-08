@@ -248,6 +248,18 @@ def reclassify_timeline_session_project(
     timeline_service.update_session_project(ids, pid)
 
 
+def reclassify_project_activity_summary(
+    activity_ids: list[int],
+    project_id: int,
+) -> None:
+    """Validate and apply a project change to one summary row's activities."""
+    ids = _validate_activity_ids(activity_ids)
+    pid = _validate_project_id(project_id)
+    for aid in ids:
+        _ensure_project_editable_for_value_error(activity_service.get_activity(aid))
+    timeline_service.reclassify_project_activity_summary(ids, pid)
+
+
 def update_timeline_session_note(
     report_date: str,
     first_activity_id: int,
@@ -1286,6 +1298,7 @@ __all__ = [
     "list_selectable_projects",
     "merge_timeline_activities",
     "preview_session_project_update",
+    "reclassify_project_activity_summary",
     "reclassify_timeline_session_project",
     "restore_timeline_activity",
     "soft_delete_activity",

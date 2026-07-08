@@ -491,6 +491,47 @@ body {
     padding: 16px;
 }
 
+/* --- Timeline project activity summary ------------------------------- */
+
+.summary-item {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto minmax(120px, 180px);
+    gap: 8px 12px;
+    padding: 8px 10px;
+    border-radius: 6px;
+    background: #f8fafc;
+    align-items: center;
+}
+
+.summary-item-name {
+    font-size: 13px;
+    color: #1e293b;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.summary-item-duration {
+    font-size: 13px;
+    color: #334155;
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+}
+
+.summary-item-project {
+    font-size: 12px;
+    color: #64748b;
+    text-align: right;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.summary-item.in-progress {
+    border-color: #93c5fd;
+    background: #eff6ff;
+}
+
 /* --- Timeline detail items ------------------------------------------- */
 
 .detail-item {
@@ -565,6 +606,15 @@ body {
 @media (max-width: 900px) {
     .timeline-layout {
         flex-direction: column;
+    }
+
+    .summary-item {
+        grid-template-columns: minmax(0, 1fr) auto;
+    }
+
+    .summary-item-project {
+        grid-column: 1 / -1;
+        text-align: left;
     }
 }
 

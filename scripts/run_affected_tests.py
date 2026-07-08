@@ -105,6 +105,7 @@ RULES: list[dict] = [
         # Refresh State / live display / bridge boundary tests.
         "triggers": [
             "worktrace/services/view_model_service.py",
+            "worktrace/services/project_activity_summary_service.py",
             "worktrace/api/view_model_api.py",
             "worktrace/contracts/",
             "worktrace/services/activity_display_model_service.py",
@@ -117,6 +118,7 @@ RULES: list[dict] = [
         ],
         "tests": [
             "tests/test_overview_bundle_and_export_contract.py",
+            "tests/test_project_activity_summary_contract.py",
             "tests/test_app_runtime_privacy_gate.py",
             "tests/test_short_activity_buffer.py",
             "tests/test_bridge_refresh_state_and_projection.py",
@@ -327,6 +329,7 @@ RULES: list[dict] = [
         "triggers": [
             "worktrace/api/timeline_api.py",
             "worktrace/services/timeline_service.py",
+            "worktrace/services/project_activity_summary_service.py",
             "worktrace/services/session_boundary_service.py",
             "worktrace/webview_ui/bridge_timeline.py",
             "worktrace/webview_ui/js/timeline.js",
@@ -334,6 +337,7 @@ RULES: list[dict] = [
         ],
         "tests": [
             "tests/test_timeline_service.py",
+            "tests/test_project_activity_summary_contract.py",
             "tests/test_timeline_api_editing.py",
             "tests/test_webview_bridge.py",
             "tests/test_webview_bridge_time_edit.py",
@@ -358,6 +362,7 @@ RULES: list[dict] = [
             "worktrace/api/export_api.py",
             "worktrace/services/statistics_service.py",
             "worktrace/services/export_service.py",
+            "worktrace/exports/excel_exporter.py",
             "worktrace/webview_ui/bridge_statistics.py",
             "worktrace/webview_ui/bridge_dialogs.py",
             "worktrace/webview_ui/js/statistics.js",
@@ -365,6 +370,8 @@ RULES: list[dict] = [
         "tests": [
             "tests/test_statistics_service.py",
             "tests/test_export_service.py",
+            "tests/test_export_resource_fields.py",
+            "tests/test_project_activity_summary_contract.py",
             "tests/test_webview_bridge_statistics.py",
             "tests/test_statistics_csv_export.py",
             "tests/webview/test_statistics_static_contract.py",

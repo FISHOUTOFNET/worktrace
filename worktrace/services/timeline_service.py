@@ -176,6 +176,10 @@ def update_session_project(session_activity_ids: list[int], project_id: int) -> 
     update_project_editable_activities_project(session_activity_ids, project_id)
 
 
+def reclassify_project_activity_summary(activity_ids: list[int], project_id: int) -> None:
+    update_project_editable_activities_project(activity_ids, project_id)
+
+
 def update_session_note(report_date: str, first_activity_id: int, note: str) -> None:
     session_note_service.set_session_note(report_date, first_activity_id, note)
 

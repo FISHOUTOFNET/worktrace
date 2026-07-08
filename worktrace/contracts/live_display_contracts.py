@@ -293,6 +293,29 @@ class ActivityDetailRowContract(TypedDict, total=False):
     exportable: bool
 
 
+class ProjectActivitySummaryRowContract(TypedDict, total=False):
+    row_kind: Literal["project_activity_summary"]
+    summary_id: str
+    activity_identity_key: str
+    activity_name: str
+    duration_seconds: int
+    duration: str
+    accounted_project_id: int
+    accounted_project_name: str
+    display_project_id: int
+    display_project_name: str
+    display_project_description: str
+    activity_ids: list[int]
+    is_in_progress: bool
+    live_delta_eligible: bool
+    duration_semantic: DurationSemantic | str
+    display_span_id: str
+    stable_live_key_hash: str
+    display_base_seconds: int
+    edit_disabled: bool
+    disable_reason: str
+
+
 class RefreshStateContract(TypedDict, total=False):
     ok: bool
     collector_status: str

@@ -131,10 +131,10 @@ def test_build_csv_rows_returns_display_safe_dicts(temp_db):
         "duration",
         "duration_seconds",
         "project",
-        "app",
-        "resource_type",
-        "resource_name",
         "status",
+        "note",
+        "adjusted_duration",
+        "is_adjusted",
     }
     assert set(row.keys()) == expected_keys
     assert row["date"] == "2026-06-25"
@@ -142,15 +142,11 @@ def test_build_csv_rows_returns_display_safe_dicts(temp_db):
     assert row["duration_seconds"] == 1800
     assert row["duration"] == "00:30:00"
     assert row["project"] == "Client"
-    assert row["app"] == "Word"
-    # resource_name uses the display-safe chain; never the raw window_title
-    # or file_path_hint. ``A1.docx`` is the resource kind/subtype label, not
-    # the file_path_hint value.
-    assert row["resource_name"] != ""
-    assert "secret" not in row["resource_name"].lower()
-    assert "top secret" not in row["resource_name"].lower()
-    # No sensitive raw columns leak through the row dict.
-    _assert_no_sensitive_keys(row, "csv row")
+    assert row["note"] == ""
+    assert row["adjusted_duration"] == ""
+    assert row["is_adjusted"] == "否"
+    for forbidden_key in ("window_title", "file_path_hint", "full_path", "clipboard", "traceback", "sql"):
+        assert forbidden_key not in row
 
 
 def test_build_csv_rows_excludes_in_progress(temp_db):
@@ -206,16 +202,10 @@ def test_build_csv_rows_all_statuses_exported(temp_db):
             status=status,
         )
     rows = export_service.build_statistics_csv_rows("2026-06-25", "2026-06-25")
-    assert len(rows) == 5
+    assert len(rows) == 1
     by_start = {row["start_time"][-8:]: row for row in rows}
     assert by_start["09:00:00"]["status"] == "正常"
     assert by_start["09:00:00"]["project"] == "Client"
-    assert by_start["09:30:00"]["status"] == "空闲"
-    assert by_start["10:00:00"]["status"] == "已暂停"
-    assert by_start["10:30:00"]["status"] == "已排除"
-    assert by_start["11:00:00"]["status"] == "异常"
-    for start in ("09:30:00", "10:00:00", "10:30:00", "11:00:00"):
-        assert by_start[start]["project"] == "—"
 
 
 def test_build_csv_rows_multi_day_range(temp_db):
@@ -287,7 +277,7 @@ def test_write_csv_success_creates_utf8_bom_file(temp_db, tmp_path):
     headers, rows = _read_csv(out)
     assert headers == [
         "日期", "开始时间", "结束时间", "时长", "时长秒数",
-        "项目", "应用", "资源类型", "资源名称", "状态",
+        "项目", "状态", "备注", "修正时长", "是否已修正",
     ]
     assert len(rows) == 1
     # Total duration matches.
@@ -449,10 +439,11 @@ def test_write_csv_no_raw_sensitive_fields_in_output(temp_db, tmp_path):
 def test_write_csv_escapes_formula_injection(temp_db, tmp_path):
     """Cells starting with ``=`` / ``+`` / ``-`` / ``@`` / tab get a
     single-quote prefix so spreadsheet apps treat them as text."""
-    # Seed an activity whose resource ``display_name`` starts with each
-    # dangerous prefix. We set it directly via SQL (the column surfaces in
-    # the safe display chain as ``resource_display_name``) to isolate the
-    # CSV escape behavior from the resource detection layer.
+    # Seed session notes that start with each dangerous prefix. Resource
+    # detail columns are no longer exported, but all session/result cells
+    # still pass through formula-injection escaping.
+    from worktrace.api import timeline_api
+
     prefixes = ["=", "+", "-", "@"]
     starts = ["09:00:00", "09:30:00", "10:00:00", "10:30:00"]
     ends = ["09:30:00", "10:00:00", "10:30:00", "11:00:00"]
@@ -463,30 +454,27 @@ def test_write_csv_escapes_formula_injection(temp_db, tmp_path):
             note="top secret note",
             file_path_hint="C:\\secret\\r.txt",
         )
-        # Inject a dangerous-prefix display name through the resource row.
-        with get_connection() as conn:
-            conn.execute(
-                "UPDATE activity_resource SET display_name = ? "
-                "WHERE activity_id = ?",
-                (prefix + "SUM(A1:A2)", aid),
-            )
         activity_service.finalize_created_activity(aid)
         activity_service.close_activity(aid, f"2026-06-25 {end}")
+        timeline_api.update_timeline_session_note(
+            "2026-06-25",
+            aid,
+            prefix + "SUM(A1:A2)",
+        )
     out = tmp_path / "report.csv"
     export_service.write_statistics_csv("2026-06-25", "2026-06-25", out)
     headers, rows = _read_csv(out)
-    assert len(rows) == 4
-    # Each resource_name cell must start with the escaped single-quote prefix.
-    resource_name_col = headers.index("资源名称")
-    for row in rows:
-        cell = row[resource_name_col]
-        assert cell.startswith("'"), (
-            f"formula-injection cell must be escaped with leading quote: {cell!r}"
-        )
-        # The original dangerous prefix must still be present after the quote.
-        assert cell[1:2] in ("=", "+", "-", "@"), (
-            f"escaped cell must retain dangerous prefix: {cell!r}"
-        )
+    assert len(rows) == 1
+    # Session/result fields are escaped; resource detail columns are not exported.
+    assert "资源名称" not in headers
+    note_col = headers.index("备注")
+    cell = rows[0][note_col]
+    assert cell.startswith("'"), (
+        f"formula-injection cell must be escaped with leading quote: {cell!r}"
+    )
+    assert cell[1:2] in ("=", "+", "-", "@"), (
+        f"escaped cell must retain dangerous prefix: {cell!r}"
+    )
 
 
 

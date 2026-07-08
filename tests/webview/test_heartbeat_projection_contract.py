@@ -413,15 +413,15 @@ def test_timeline_js_stores_last_session_details_view_model_as_structural_cache(
 
 
 def test_timeline_detail_row_renders_data_attributes():
-    """each detail row must render ``data-activity-id``,
-    ``data-detail-index``, and ``data-duration-seconds`` attributes so
+    """each summary row must render ``data-summary-id``,
+    ``data-summary-index``, and ``data-duration-seconds`` attributes so
     the ticker can locate rows precisely without relying on array index."""
     source = read_js("timeline.js")
-    assert 'data-activity-id' in source, (
-        "timeline.js must render data-activity-id on detail rows"
+    assert 'data-summary-id' in source, (
+        "timeline.js must render data-summary-id on summary rows"
     )
-    assert 'data-detail-index' in source, (
-        "timeline.js must render data-detail-index on detail rows"
+    assert 'data-summary-index' in source, (
+        "timeline.js must render data-summary-index on summary rows"
     )
     assert 'data-duration-seconds' in source, (
         "timeline.js must render data-duration-seconds on detail rows"
@@ -1362,7 +1362,7 @@ def test_renderers_diagnose_live_rows_missing_span_id():
 
     assert "recent_live_row_missing_span_id" in overview_body
     assert "session_live_row_missing_span_id" in timeline_body
-    assert "detail_live_row_missing_span_id" in details_body
+    assert "summary_live_row_missing_span_id" in details_body
     for body in (overview_body, timeline_body, details_body):
         assert "recordLiveClockContractViolation" in body, (
             "live row renderers must diagnose missing display_span_id"

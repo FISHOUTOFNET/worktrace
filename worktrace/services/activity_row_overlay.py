@@ -10,6 +10,7 @@ from .activity_live_clock import AGGREGATE_LIVE, CURRENT_LIVE, STATIC_CLOSED
 
 ROW_KIND_CURRENT_ACTIVITY_HEADER = "current_activity_header"
 ROW_KIND_ACTIVITY_DETAIL_ROW = "activity_detail_row"
+ROW_KIND_PROJECT_ACTIVITY_SUMMARY_ROW = "project_activity_summary_row"
 ROW_KIND_PROJECT_SESSION_ROW = "project_session_row"
 ROW_KIND_RECENT_PROJECT_SESSION_ROW = "recent_project_session_row"
 ROW_KIND_KPI_TOTAL = "kpi_total"
@@ -22,12 +23,14 @@ _CURRENT_LIVE_ROW_KINDS = {
 _AGGREGATE_LIVE_ROW_KINDS = {
     ROW_KIND_PROJECT_SESSION_ROW,
     ROW_KIND_RECENT_PROJECT_SESSION_ROW,
+    ROW_KIND_PROJECT_ACTIVITY_SUMMARY_ROW,
     ROW_KIND_KPI_TOTAL,
 }
 _REPORT_ROW_KINDS = {
     ROW_KIND_PROJECT_SESSION_ROW,
     ROW_KIND_RECENT_PROJECT_SESSION_ROW,
     ROW_KIND_ACTIVITY_DETAIL_ROW,
+    ROW_KIND_PROJECT_ACTIVITY_SUMMARY_ROW,
 }
 
 
@@ -49,6 +52,8 @@ def apply_live_span_to_row(
     if row_kind == ROW_KIND_PROJECT_SESSION_ROW and not span.get("is_visible_in_timeline"):
         return row
     if row_kind == ROW_KIND_ACTIVITY_DETAIL_ROW and not span.get("is_visible_in_details"):
+        return row
+    if row_kind == ROW_KIND_PROJECT_ACTIVITY_SUMMARY_ROW and not span.get("is_visible_in_details"):
         return row
     anchor_id = int(span.get("anchor_activity_id") or 0)
     if anchor_id <= 0:

@@ -128,10 +128,9 @@ def test_frontend_js_has_timeline_load_function():
 
 
 def test_frontend_js_has_timeline_session_details_load():
-    """frontend JS must load session details via
-    get_timeline_session_details bridge method."""
+    """frontend JS must load project activity summaries for the right panel."""
     source = read_all_js()
-    assert "get_timeline_session_details" in source
+    assert "get_timeline_project_activity_summary" in source
     assert "loadSessionDetails" in source
 
 
@@ -2142,10 +2141,9 @@ def test_frontend_js_no_per_activity_visibility_buttons_in_rendered_detail_rows(
         "renderSessionDetails must no longer render detail-delete-btn; "
         "per-activity delete has moved to the correction shell"
     )
-    # data-activity-id is still rendered on each row for identification.
-    assert "data-activity-id" in body, (
-        "renderSessionDetails must still render data-activity-id on each "
-        "detail row for identification / ticker purposes"
+    assert "data-summary-id" in body, (
+        "renderSessionDetails must render data-summary-id on each summary "
+        "row for identification / ticker purposes"
     )
 
 
@@ -2652,7 +2650,7 @@ def test_frontend_js_stable_fallback_vocabulary_present():
     in frontend JS: 加载时间线失败 / 刷新失败 / 加载详情失败 / 保存失败 /
     操作失败 / 恢复失败."""
     source = read_all_js()
-    for fallback in ("加载时间线失败", "刷新失败", "加载详情失败",
+    for fallback in ("加载时间线失败", "刷新失败", "加载项目活动耗时失败",
                      "保存失败", "操作失败", "恢复失败"):
         assert fallback in source, (
             "frontend JS must contain stable fallback: " + fallback
@@ -2715,8 +2713,8 @@ def test_frontend_js_detail_no_selection_text_stable():
 def test_frontend_js_detail_error_fallback_stable():
     """detail panel error fallback must be stable."""
     source = read_all_js()
-    assert "加载详情失败" in source, (
-        "detail panel must use stable '加载详情失败' error fallback"
+    assert "加载项目活动耗时失败" in source, (
+        "detail panel must use stable project summary error fallback"
     )
 
 
@@ -2987,7 +2985,8 @@ def test_bridge_no_unexpected_methods_for_contract():
     known_methods = (
         "get_status", "toggle_pause", "get_overview",
         "get_recent_activities", "get_timeline",
-        "get_timeline_session_details", "list_projects_for_timeline",
+        "get_timeline_session_details", "get_timeline_project_activity_summary",
+        "list_projects_for_timeline",
         "update_timeline_project", "update_timeline_note",
         "update_timeline_note_and_duration",
         "update_timeline_activity_time", "update_timeline_session_time",

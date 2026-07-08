@@ -22,21 +22,19 @@ def test_excel_export_file_creation(temp_db, tmp_path):
     assert Path(path).exists()
     wb = load_workbook(path)
     assert "Summary" in wb.sheetnames
-    assert "Activity Logs" in wb.sheetnames
-    headers = [cell.value for cell in wb["Activity Logs"][1]]
+    assert "Sessions" in wb.sheetnames
+    assert "Activity Logs" not in wb.sheetnames
+    headers = [cell.value for cell in wb["Sessions"][1]]
     assert headers == [
         "日期",
         "开始时间",
         "结束时间",
         "时长",
-        "状态",
-        "资源类型",
-        "资源名称",
-        "应用",
         "项目",
-        "路径",
-        "域名",
+        "状态",
         "备注",
+        "修正时长",
+        "是否已修正",
     ]
 
 
@@ -52,10 +50,10 @@ def test_exports_prefer_activity_file_name_for_wps_activity(temp_db, tmp_path):
     activity_service.close_activity(aid, "2026-06-18 09:30:00")
 
     xlsx_path = export_service.export_excel("2026-06-18", "2026-06-18", str(tmp_path / "out.xlsx"))
-    ws = load_workbook(xlsx_path)["Activity Logs"]
+    ws = load_workbook(xlsx_path)["Sessions"]
     headers = [cell.value for cell in ws[1]]
-    name_col = headers.index("资源名称") + 1
-    assert ws.cell(row=2, column=name_col).value == "合同审查意见.docx"
+    assert "资源名称" not in headers
+    assert "路径" not in headers
 
 
 def test_export_all_and_clear_requires_confirmation(temp_db, tmp_path):

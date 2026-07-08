@@ -242,6 +242,7 @@
       "name": "timeline editing",
       "paths": [
         "tests/test_timeline_",
+        "tests/test_project_activity_summary_contract.py",
         "tests/test_webview_bridge_time_edit.py",
         "tests/test_webview_bridge_split.py",
         "tests/test_webview_bridge_merge.py",
@@ -267,6 +268,7 @@
       "paths": [
         "tests/test_statistics_",
         "tests/test_export_",
+        "tests/test_project_activity_summary_contract.py",
         "tests/test_webview_bridge_statistics.py",
         "tests/webview/test_statistics_static_contract.py"
       ]

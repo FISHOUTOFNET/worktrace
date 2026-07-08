@@ -33,13 +33,12 @@ from static_helpers import (
 
 
 def test_frontend_js_detail_rows_are_read_only():
-    """renderSessionDetails must keep detail rows read-only."""
+    """renderSessionDetails must keep project summary rows read-only."""
     source = read_all_js()
     body = func_body(source, "renderSessionDetails")
-    assert "detail-item-time" in body
-    assert "detail-item-name" in body
-    assert "detail-item-project" in body
-    assert "detail-item-duration" in body
+    assert "summary-item-name" in body
+    assert "summary-item-project" in body
+    assert "summary-item-duration" in body
     for forbidden in (
         "detail-action-edit-group",
         "detail-action-merge-group",

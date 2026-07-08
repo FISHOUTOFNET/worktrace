@@ -3,12 +3,9 @@ from __future__ import annotations
 from datetime import date
 from pathlib import Path
 
-from ..constants import STATUS_NORMAL
 from ..formatters import (
-    format_activity_display_name,
     format_activity_project_cell,
     format_duration,
-    format_resource_type,
     format_status_label,
 )
 from ..services import statistics_service, timeline_service
@@ -49,49 +46,58 @@ def export_excel_file(start_date: str, end_date: str, path: str) -> str:
             ]
         )
 
-    logs = wb.create_sheet("Activity Logs")
-    logs.append(
+    sessions_sheet = wb.create_sheet("Sessions")
+    sessions_sheet.append(
         [
             "日期",
             "开始时间",
             "结束时间",
             "时长",
-            "状态",
-            "资源类型",
-            "资源名称",
-            "应用",
             "项目",
-            "路径",
-            "域名",
+            "状态",
             "备注",
+            "修正时长",
+            "是否已修正",
         ]
     )
-    rows = timeline_service.get_report_activity_rows(
+    sessions = timeline_service.get_project_sessions_by_range(
         start_date,
         end_date,
         include_hidden=False,
         ensure_context=True,
     )
-    for row in rows:
-        is_project_activity = row.get("status") == STATUS_NORMAL
-        path_hint = "" if not is_project_activity else (row.get("resource_path_hint") or row.get("file_path_hint") or "")
-        uri_host = "" if not is_project_activity else (row.get("resource_uri_host") or "")
-        duration_seconds = int(row.get("report_duration_seconds") or row.get("duration_seconds") or 0)
-        logs.append(
+    for session in sessions:
+        if session.get("is_in_progress"):
+            continue
+        duration_seconds = int(
+            session.get("display_duration_seconds")
+            or session.get("duration_seconds")
+            or 0
+        )
+        adjusted_seconds = session.get("adjusted_duration_seconds")
+        has_adjusted = bool(session.get("has_duration_override"))
+        sessions_sheet.append(
             [
-                row.get("report_date") or str(row.get("start_time") or "")[:10],
-                row["start_time"],
-                row["end_time"] or "",
+                session.get("report_date") or str(session.get("start_time") or "")[:10],
+                session.get("start_time") or "",
+                session.get("end_time") or "",
                 format_duration(duration_seconds),
-                format_status_label(row.get("status")),
-                format_resource_type(row.get("resource_kind"), row.get("resource_subtype")),
-                format_activity_display_name(row),
-                row["app_name"],
-                format_activity_project_cell(row),
-                path_hint,
-                uri_host,
-                row.get("note") or "",
+                _format_session_project_cell(session),
+                format_status_label(session.get("status_code") or session.get("status")),
+                session.get("session_note") or "",
+                format_duration(adjusted_seconds) if has_adjusted else "",
+                "是" if has_adjusted else "否",
             ]
         )
     wb.save(out)
     return str(out)
+
+
+def _format_session_project_cell(session: dict) -> str:
+    return format_activity_project_cell(
+        {
+            "status": session.get("status_code") or session.get("status") or "normal",
+            "is_report_project": session.get("is_report_project"),
+            "report_project_name": session.get("project_name"),
+        }
+    )

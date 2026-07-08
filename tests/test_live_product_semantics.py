@@ -170,7 +170,7 @@ def test_fresh_start_under_30s_not_editable_not_exportable(temp_db, monkeypatch,
     xlsx_path = export_service.export_excel(
         _REPORT_DATE, _REPORT_DATE, str(tmp_path / "out.xlsx")
     )
-    assert load_workbook(xlsx_path)["Activity Logs"].max_row == 1, (
+    assert load_workbook(xlsx_path)["Sessions"].max_row == 1, (
         "current-only pending activity must NOT appear in export"
     )
 
