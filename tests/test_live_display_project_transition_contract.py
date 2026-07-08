@@ -39,6 +39,7 @@ from worktrace.services.activity_display_model_service import build_activity_dis
 from worktrace.services.activity_display_policy import classify_display_live_state
 from worktrace.services.activity_row_overlay import (
     ROW_KIND_ACTIVITY_DETAIL_ROW,
+    ROW_KIND_PROJECT_SESSION_ROW,
     ROW_KIND_RECENT_PROJECT_SESSION_ROW,
     apply_live_span_to_row,
 )
@@ -453,6 +454,90 @@ def test_persisted_open_current_elapsed_and_project_projection_no_double_count()
     assert int(overlaid["duration_seconds"]) == 312
     assert int(overlaid["raw_duration_seconds"]) == 312
     assert int(overlaid["display_base_seconds"]) == 300
+
+
+def test_persisted_open_overlay_preserves_existing_report_attribution():
+    row = {
+        "row_kind": "project_session",
+        "project_id": 123,
+        "project_name": "ProjectA",
+        "project_description": "",
+        "is_report_project": True,
+        "is_report_classified": True,
+        "is_report_uncategorized": False,
+        "is_classified": True,
+        "is_uncategorized": False,
+        "report_attribution_kind": "report_context_same_project",
+        "activity_ids": [10],
+        "open_activity_id": 10,
+        "closed_duration_seconds": 60,
+        "duration_seconds": 60,
+    }
+    uncategorized_project = {
+        "id": None,
+        "name": UNCATEGORIZED_PROJECT,
+        "description": "",
+        "source": "uncategorized",
+        "is_uncategorized": True,
+        "is_suggested_project": False,
+    }
+    span = {
+        "live_state": "persisted_open",
+        "anchor_activity_id": 10,
+        "activity_id": 10,
+        "project_id": 0,
+        "project_name": UNCATEGORIZED_PROJECT,
+        "project_description": "",
+        "display_project": uncategorized_project,
+        "candidate_project": uncategorized_project,
+        "is_visible_in_recent": True,
+        "is_visible_in_timeline": True,
+        "is_visible_in_details": True,
+        "start_time": "2026-06-18 09:00:00",
+        "live_anchor_activity_id": 10,
+        "live_anchor_base_seconds": 60,
+        "live_clock": {
+            "display_span_id": "span-10",
+            "stable_live_key": "activity:10",
+            "stable_live_key_hash": "hash-10",
+            "live_state": "persisted_open",
+            "current_live_seconds_at_sample": 30,
+            "current_elapsed_at_sample": 30,
+            "aggregate_display_base_seconds": 60,
+            "display_base_seconds": 0,
+            "duration_seconds_at_sample": 90,
+            "aggregate_duration_seconds_at_sample": 90,
+            "is_live": True,
+            "is_project_duration_live": True,
+            "project_duration_live": True,
+        },
+    }
+
+    overlaid = apply_live_span_to_row(row, span, row_kind=ROW_KIND_PROJECT_SESSION_ROW)
+
+    assert overlaid["project_name"] == "ProjectA"
+    assert overlaid["project_id"] == 123
+    assert overlaid["is_report_project"] is True
+    assert overlaid["is_report_classified"] is True
+    assert overlaid["is_report_uncategorized"] is False
+    assert overlaid["report_attribution_kind"] == "report_context_same_project"
+    assert overlaid["is_classified"] is True
+    assert overlaid["is_uncategorized"] is False
+    assert overlaid["duration_seconds"] == 90
+    assert overlaid["duration"] == "00:01:30"
+    assert overlaid["duration_semantic"] == "aggregate_live"
+    assert overlaid["duration_seconds_at_sample"] == 90
+    assert overlaid["display_base_seconds"] == 60
+    assert overlaid["live_base_seconds"] == 60
+    assert overlaid["current_live_seconds_at_sample"] == 30
+    assert overlaid["aggregate_duration_seconds_at_sample"] == 90
+    assert overlaid["is_live_projected"] is True
+    assert overlaid["is_in_progress"] is True
+    assert overlaid["editable"] is False
+    assert overlaid["exportable"] is False
+    assert overlaid["edit_disabled"] is True
+    assert overlaid["display_span_id"] == "span-10"
+    assert overlaid["stable_live_key_hash"] == "hash-10"
 
 
 def test_virtual_pending_to_persisted_open_same_resource_current_clock_continuity():

@@ -24,6 +24,11 @@ _AGGREGATE_LIVE_ROW_KINDS = {
     ROW_KIND_RECENT_PROJECT_SESSION_ROW,
     ROW_KIND_KPI_TOTAL,
 }
+_REPORT_ROW_KINDS = {
+    ROW_KIND_PROJECT_SESSION_ROW,
+    ROW_KIND_RECENT_PROJECT_SESSION_ROW,
+    ROW_KIND_ACTIVITY_DETAIL_ROW,
+}
 
 
 def apply_live_span_to_row(
@@ -132,21 +137,23 @@ def apply_live_span_to_row(
         row["project_transition_pending"] = bool(span.get("project_transition_pending"))
         _copy_span_classification(row, span)
     elif state == "persisted_open":
-        row["project_id"] = int(span.get("project_id") or 0)
-        row["project_name"] = str(span.get("project_name") or UNCATEGORIZED_PROJECT)
-        row["project_description"] = str(span.get("project_description") or "")
-        row["display_project"] = span.get("display_project")
-        row["candidate_project"] = span.get("candidate_project")
-        row["project_transition"] = span.get("project_transition")
-        row["project_transition_pending"] = bool(span.get("project_transition_pending"))
-        if not _copy_span_classification(row, span):
-            project_name_str = str(row.get("project_name") or "")
-            if project_name_str == UNCATEGORIZED_PROJECT:
-                row["is_uncategorized"] = True
-                row["is_classified"] = False
-            else:
-                row["is_uncategorized"] = not bool(row.get("project_id"))
-                row["is_classified"] = bool(row.get("project_id"))
+        preserve_report_attribution = _should_preserve_report_attribution(row, row_kind)
+        if not preserve_report_attribution:
+            row["project_id"] = int(span.get("project_id") or 0)
+            row["project_name"] = str(span.get("project_name") or UNCATEGORIZED_PROJECT)
+            row["project_description"] = str(span.get("project_description") or "")
+            row["display_project"] = span.get("display_project")
+            row["candidate_project"] = span.get("candidate_project")
+            row["project_transition"] = span.get("project_transition")
+            row["project_transition_pending"] = bool(span.get("project_transition_pending"))
+            if not _copy_span_classification(row, span):
+                project_name_str = str(row.get("project_name") or "")
+                if project_name_str == UNCATEGORIZED_PROJECT:
+                    row["is_uncategorized"] = True
+                    row["is_classified"] = False
+                else:
+                    row["is_uncategorized"] = not bool(row.get("project_id"))
+                    row["is_classified"] = bool(row.get("project_id"))
         row["source"] = "db"
         if row_kind in _CURRENT_LIVE_ROW_KINDS:
             row["start_time"] = str(span.get("start_time") or row.get("start_time") or "")
@@ -189,6 +196,17 @@ def _live_clock_fields(live_clock: LiveClockContract) -> dict[str, Any]:
         "status_only_reason": str(live_clock.get("status_only_reason") or ""),
         "base_policy_reason": str(live_clock.get("base_policy_reason") or ""),
     }
+
+
+def _should_preserve_report_attribution(row: dict[str, Any], row_kind: str) -> bool:
+    if row_kind not in _REPORT_ROW_KINDS:
+        return False
+    return (
+        "is_report_project" in row
+        or "is_report_classified" in row
+        or "is_report_uncategorized" in row
+        or "report_attribution_kind" in row
+    )
 
 
 def _static_base_for_live_row(

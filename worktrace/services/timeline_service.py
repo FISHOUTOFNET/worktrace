@@ -547,10 +547,19 @@ def _is_same_report_project_normal(row: dict, anchor_key: str) -> bool:
 
 
 def _is_short_merge_interrupt(row: dict, anchor_key: str) -> bool:
+    if _is_candidate_project_row(row):
+        return False
     return (
         is_normal_project_status(str(row.get("status") or ""))
         and not bool(row.get("is_report_project"))
         and str(row.get("report_project_key") or "") != anchor_key
+    )
+
+
+def _is_candidate_project_row(row: dict) -> bool:
+    return (
+        str(row.get("assignment_source") or "").strip() == "suggested_project_name"
+        or str(row.get("project_attribution_kind") or "").strip() == "candidate"
     )
 
 

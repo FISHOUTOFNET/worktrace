@@ -412,6 +412,13 @@ def _activity_select_sql(where: str) -> str:
 
 
 def get_activities_by_date(date: str) -> list[dict]:
+    """Return CRUD / official-display-only activity rows for one date.
+
+    Do not use this helper for Timeline / Statistics / Export /
+    report-visible project projection. Reporting surfaces must use
+    ``timeline_service.get_report_activity_rows`` or
+    ``timeline_service.get_project_sessions_by_range``.
+    """
     return get_activities_by_range(date, date)
 
 
@@ -507,12 +514,23 @@ def _attach_attribution_fields(row: dict, uncategorized_id: int) -> dict:
     Merges ``is_official_project`` / ``display_project_name`` /
     ``display_project_id`` etc. so that ``format_activity_project_cell``
     and other attribution-aware consumers work on plain activity rows.
+    This CRUD helper is official-display-only; report/statistics/export
+    projections must stay on ``timeline_service`` report rows instead of
+    adding ``report_project_fields`` here.
     """
     row.update(official_project_fields(row, uncategorized_id))
     return row
 
 
 def get_activities_by_range(start_date: str, end_date: str) -> list[dict]:
+    """Return CRUD / official-display-only activity rows for a date range.
+
+    This intentionally attaches ``official_project_fields`` only. It must
+    not be used for Timeline / Statistics / Export / report-visible project
+    projection; those surfaces must use
+    ``timeline_service.get_report_activity_rows`` or
+    ``timeline_service.get_project_sessions_by_range``.
+    """
     start = f"{start_date} 00:00:00"
     end = f"{end_date} 23:59:59"
     uncategorized_id = get_or_create_uncategorized_project()
@@ -528,6 +546,12 @@ def get_activities_by_range(start_date: str, end_date: str) -> list[dict]:
 
 
 def get_activity(activity_id: int) -> dict | None:
+    """Return one CRUD / official-display-only activity row.
+
+    Do not use this for Timeline / Statistics / Export report-visible
+    projection. Reporting surfaces must use ``timeline_service`` report
+    row/session helpers.
+    """
     with get_connection() as conn:
         row = conn.execute(_activity_select_sql("a.id = ?"), (activity_id,)).fetchone()
     if not row:

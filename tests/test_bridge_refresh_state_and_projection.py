@@ -315,15 +315,14 @@ def test_refresh_revision_changes_on_persisted_activity_id(bridge):
     )
 
 
-def test_refresh_revision_changes_on_inferred_project_name(bridge):
-    """``refresh_revision`` must change when
-    ``inferred_project_name`` changes (the activity was reclassified)."""
+def test_refresh_revision_ignores_inferred_project_name_without_display_project(bridge):
+    """Raw inferred project metadata is not a formal display-project input."""
     _set_snapshot(_normal_snapshot(inferred_project_name="ProjectA"))
     r1 = bridge.get_refresh_state()
     _set_snapshot(_normal_snapshot(inferred_project_name="ProjectB"))
     r2 = bridge.get_refresh_state()
-    assert r1["refresh_revision"] != r2["refresh_revision"], (
-        "refresh_revision must change on inferred_project_name change"
+    assert r1["refresh_revision"] == r2["refresh_revision"], (
+        "refresh_revision must not change on raw inferred_project_name alone"
     )
 
 
@@ -804,24 +803,23 @@ def _create_real_open_activity(
     return aid, start_time
 
 
-def test_get_timeline_pending_persisted_open_shows_inherited_display_project(bridge):
-    """Section 二.1 / 六.2: during the 30-second pending window, even
-    when the DB row has been assigned to the candidate project, the
-    Timeline session must display the INHERITED display_project, NOT the
-    DB candidate project. ``candidate_project`` is exposed as a separate
-    field but must NOT override ``project_name``.
+def test_get_timeline_pending_persisted_open_preserves_report_project(bridge):
+    """Persisted-open overlay must not replace an existing report row's project.
+
+    Current activity may use the snapshot's official-only display project,
+    but Timeline rows already carry report attribution and only receive
+    live duration / identity fields from the overlay.
     """
     from worktrace.services import activity_service, project_service
-    from worktrace.constants import UNCATEGORIZED_PROJECT
 
     # Create two real projects so the DB row can be assigned to the
     # candidate (ProjectB) while the snapshot's display_project is the
     # inherited (ProjectA).
-    project_a_id = project_service.create_project("ProjectA")
+    project_service.create_project("ProjectA")
     project_b_id = project_service.create_project("ProjectB")
     aid, start_time = _create_real_open_activity(elapsed_seconds=60)
-    # Assign the DB row to ProjectB (the candidate). The live overlay
-    # MUST override this with ProjectA (the inherited display project).
+    # Assign the DB/report row to ProjectB. The live overlay must preserve
+    # this report-visible attribution.
     assign_activity_project(aid, project_b_id)
     assert activity_service.get_activity(aid)["project_name"] == "ProjectB"
 
@@ -839,14 +837,12 @@ def test_get_timeline_pending_persisted_open_shows_inherited_display_project(bri
     assert persisted_session is not None, (
         "persisted_open DB session must NOT be filtered out for today's view"
     )
-    # The session's project_name must be the inherited display_project
-    # (ProjectA), NOT the DB candidate assignment (ProjectB).
-    assert persisted_session["project_name"] == "ProjectA"
-    assert persisted_session["project_description"] == "ProjectA description"
-    assert persisted_session["display_project"]["name"] == "ProjectA"
-    # candidate_project is exposed as a separate field but does NOT
-    # override project_name.
-    assert persisted_session["candidate_project"]["name"] == "ProjectB"
+    assert persisted_session["project_name"] == "ProjectB"
+    assert persisted_session["is_report_project"] is True
+    assert persisted_session["is_classified"] is True
+    assert persisted_session["is_uncategorized"] is False
+    assert persisted_session["display_project"] is None
+    assert persisted_session["candidate_project"] is None
     # The session is marked as live projected and edit-disabled.
     assert persisted_session["live_state"] == "persisted_open"
     assert persisted_session["is_in_progress"] is True

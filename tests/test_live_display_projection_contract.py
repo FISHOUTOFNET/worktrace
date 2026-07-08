@@ -14,7 +14,10 @@ from worktrace.services import (
     timeline_service,
 )
 from worktrace.services.activity_display_model_service import build_activity_display_model
-from worktrace.services.live_display_service import compute_refresh_revision
+from worktrace.services.live_display_service import (
+    build_current_activity_summary,
+    compute_refresh_revision,
+)
 from worktrace.webview_ui.bridge import WebViewBridge
 
 pytestmark = [pytest.mark.contract, pytest.mark.db, pytest.mark.live_display]
@@ -148,6 +151,35 @@ def test_borrowed_anchor_uses_official_attribution_policy(bridge):
         assert row["display_project"]["name"] == UNCATEGORIZED_PROJECT
         assert row["candidate_project"]["name"] == ""
     assert stats["uncategorized_duration"] == 120
+
+
+def test_virtual_snapshot_without_display_project_does_not_leak_inferred_project():
+    snapshot = {
+        "app_name": "Code",
+        "process_name": "code.exe",
+        "activity_display_name": "main.py",
+        "resource_display_name": "main.py",
+        "resource_identity_key": "app:code",
+        "status": STATUS_NORMAL,
+        "start_time": f"{TODAY} 09:00:00",
+        "elapsed_seconds": 10,
+        "is_persisted": False,
+        "persisted_activity_id": None,
+        "inferred_project_name": "LeakedRawProject",
+    }
+
+    summary = build_current_activity_summary(snapshot, report_date=TODAY, today=TODAY)
+    model = build_activity_display_model(TODAY, TODAY, snapshot=snapshot)
+    current = model["current_activity"]
+
+    assert summary["project_name"] == UNCATEGORIZED_PROJECT
+    assert current["project_name"] == UNCATEGORIZED_PROJECT
+    assert current["display_project"]["name"] == UNCATEGORIZED_PROJECT
+    assert current["is_classified"] is False
+    assert current["is_uncategorized"] is True
+    assert "LeakedRawProject" not in current["display"]
+    assert "LeakedRawProject" not in str(current["display_project"])
+    assert "LeakedRawProject" not in str(model.get("display_spans") or [])
 
 
 def test_attribution_only_change_does_not_reset_live_clock_revision(bridge):

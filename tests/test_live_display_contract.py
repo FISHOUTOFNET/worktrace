@@ -2324,8 +2324,9 @@ def test_virtual_pending_current_activity_uses_current_project_for_kpi(bridge):
     )
     activity_service.close_activity(anchor_aid, anchor_end.strftime(TIME_FORMAT), 60)
 
-    # 3. Set a <30s pending snapshot whose inferred project is DIFFERENT
-    #    ("PendingProject"). Same session (no boundary).
+    # 3. Set a <30s pending snapshot whose raw inferred project is
+    #    DIFFERENT ("PendingProject"). Same session (no boundary). Without
+    #    structured display_project, it must not become a formal project.
     pending_start = anchor_end + timedelta(seconds=5)
     _set_snapshot(
         _normal_snapshot(
@@ -2342,7 +2343,7 @@ def test_virtual_pending_current_activity_uses_current_project_for_kpi(bridge):
 
     current = overview["current_activity"]
     assert current["live_state"] == "borrowed_anchor_pending"
-    assert current["project_name"] == "PendingProject"
+    assert current["project_name"] == UNCATEGORIZED_PROJECT
 
     recent_row = recent["activities"][0]
     assert int(recent_row["activity_id"]) == anchor_aid
@@ -2355,7 +2356,7 @@ def test_virtual_pending_current_activity_uses_current_project_for_kpi(bridge):
     assert overview["kpi_live_base"]["classified_seconds"] == 60
     assert overview["kpi_live_base"]["uncategorized_seconds"] == 0
 
-    assert "PendingProject" in current["display"]
+    assert "PendingProject" not in current["display"]
     assert activity_service.get_activity(anchor_aid)["duration_seconds"] == 60
 
 

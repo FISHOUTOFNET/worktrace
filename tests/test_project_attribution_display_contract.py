@@ -268,6 +268,64 @@ def test_suggested_project_name_displays_as_uncategorized(temp_db):
     assert csv_rows[0]["project"] == UNCATEGORIZED_PROJECT
 
 
+def test_suggested_candidate_short_interrupt_not_report_merged(temp_db, tmp_path):
+    """suggested_project_name stays candidate metadata across short merge."""
+    project_id = project_service.create_project("ProjectA")
+    first_a = _create_activity(app="Word", title="A1.docx", start="09:00:00", end="09:10:00")
+    candidate_b = _create_activity(app="Edge", title="Suggested", start="09:10:00", end="09:11:00")
+    second_a = _create_activity(app="Word", title="A2.docx", start="09:11:00", end="09:20:00")
+    _set_assignment_source(first_a, "keyword_rule", project_id=project_id)
+    _set_assignment_source(
+        candidate_b,
+        "suggested_project_name",
+        project_id=_uncategorized_id(),
+        suggested_name="SuggestedClient",
+        confidence=50,
+    )
+    _set_assignment_source(second_a, "keyword_rule", project_id=project_id)
+
+    rows = timeline_service.get_report_activity_rows(TODAY, TODAY)
+    b_row = next(row for row in rows if int(row["id"]) == candidate_b)
+    assert b_row["candidate_project_name"] == "SuggestedClient"
+    assert b_row["is_report_project"] is False
+    assert b_row["report_project_name"] == UNCATEGORIZED_PROJECT
+    assert b_row["report_attribution_kind"] == "candidate"
+    assert b_row["report_context_merged"] is False
+
+    sessions = timeline_service.get_project_sessions_by_date(TODAY)
+    assert len(sessions) == 3
+    b_session = next(row for row in sessions if row["start_time"].endswith("09:10:00"))
+    assert b_session["project_name"] == UNCATEGORIZED_PROJECT
+    assert b_session["duration_seconds"] == 60
+    assert b_session["is_report_project"] is False
+    assert b_session["report_attribution_kind"] == "candidate"
+    project_a_seconds = sum(
+        int(row["duration_seconds"])
+        for row in sessions
+        if row["project_name"] == "ProjectA"
+    )
+    assert project_a_seconds == 19 * 60
+
+    summary = statistics_service.get_statistics_export_summary(TODAY, TODAY)
+    assert summary["project_duration_seconds"] == 19 * 60
+    assert [group["display_name"] for group in summary["by_project"]] == ["ProjectA"]
+
+    csv_rows = export_service.build_statistics_csv_rows(TODAY, TODAY)
+    b_csv = next(row for row in csv_rows if row["start_time"].endswith("09:10:00"))
+    assert b_csv["project"] == UNCATEGORIZED_PROJECT
+
+    from openpyxl import load_workbook
+
+    xlsx_path = export_service.export_excel(TODAY, TODAY, str(tmp_path / "report.xlsx"))
+    ws = load_workbook(xlsx_path)["Activity Logs"]
+    headers = [cell.value for cell in ws[1]]
+    project_col = headers.index("项目") + 1
+    start_col = headers.index("开始时间") + 1
+    excel_rows = list(ws.iter_rows(min_row=2, values_only=True))
+    b_excel = next(row for row in excel_rows if str(row[start_col - 1]).endswith("09:10:00"))
+    assert b_excel[project_col - 1] == UNCATEGORIZED_PROJECT
+
+
 def test_suggested_project_name_does_not_confirm_after_threshold(temp_db):
     """advance_ownership must NOT confirm a suggested candidate."""
     candidate = ProjectLabel(

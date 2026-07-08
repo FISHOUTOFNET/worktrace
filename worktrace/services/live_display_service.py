@@ -176,7 +176,8 @@ def _snapshot_display_project_dict(
 
     Reads the structured ``display_project`` block written by the
     project-ownership state machine. Returns ``None`` when the snapshot
-    has no structured block (callers fall back to ``_display_project_name``).
+    has no structured block; callers then resolve through the
+    official-only ``_display_project_name`` policy.
     """
     if not snapshot:
         return None
@@ -226,11 +227,12 @@ def _display_project_name(snapshot: ActivitySnapshotContract | None) -> str:
 
     The display project is sourced from the structured
     ``display_project`` block (written by the project-ownership state
-    machine, which only places official labels there). When no
-    structured block exists (e.g. legacy snapshot format), the persisted
-    DB row is checked via ``project_attribution_policy`` — only official
-    sources surface a project name; suggested / context-derived /
-    uncategorized all resolve to ``UNCATEGORIZED_PROJECT``.
+    machine, which only places official labels there). When a persisted
+    snapshot has no structured block, the DB row is checked via
+    ``project_attribution_policy`` — only official sources surface a
+    project name; suggested / context-derived / uncategorized all resolve
+    to ``UNCATEGORIZED_PROJECT``. Virtual snapshots without a structured
+    block also stay uncategorized.
     """
     if not snapshot:
         return UNCATEGORIZED_PROJECT
@@ -249,11 +251,11 @@ def _display_project_name(snapshot: ActivitySnapshotContract | None) -> str:
         # fall back to ``inferred_project_name`` which may carry the
         # suggested project name and leak it into the formal display.
         return UNCATEGORIZED_PROJECT
-    # Virtual (unpersisted) snapshot: the ownership state machine has
-    # already set the display_project block (handled above), so this
-    # fallback is only reached for legacy/incomplete snapshots.
-    name = str(snapshot.get("inferred_project_name") or "").strip()
-    return name if name else UNCATEGORIZED_PROJECT
+    # Virtual (unpersisted) snapshot: the ownership state machine must
+    # provide a structured display_project block for a formal project.
+    # Incomplete snapshots stay uncategorized instead of leaking raw
+    # inferred/candidate metadata into official display fields.
+    return UNCATEGORIZED_PROJECT
 
 
 def _display_project_description(snapshot: ActivitySnapshotContract | None) -> str:
