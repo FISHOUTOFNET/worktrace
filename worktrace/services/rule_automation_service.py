@@ -28,12 +28,11 @@ def apply_automatic_rules_to_activity(activity_id: int) -> dict[str, Any]:
     entry point). The automatic path applies narrow skip guards for hidden /
     deleted / in-progress activities before delegating to
     ``assign_project_for_activity``; the inference itself reuses the
-    single folder / keyword matching code paths, skips
-    ``manual_override = 1`` / ``is_manual = 1`` / non-normal activities,
-    never sets ``manual_override = 1``, writes ``auto_classified = 1`` for
-    rule-driven assignments, and upserts the assignment with
-    ``is_manual = 0`` and the rule source + confidence (85 folder /
-    80 keyword).
+    single folder / keyword matching code paths, skips projection-level
+    manual assignments and non-normal activities, and upserts the
+    assignment projection with the rule source + confidence (85 folder /
+    80 keyword). It never writes project or classification state back into
+    ``activity_log``.
 
     Returns the assignment row dict (the same shape
     ``assign_project_for_activity`` returns). Raises ``ValueError`` if the
@@ -60,7 +59,6 @@ def automatic_rules_status() -> dict[str, Any]:
             "keyword_rule": KEYWORD_RULE_CONFIDENCE,
         },
         "skips": [
-            "manual_override",
             "is_manual",
             "hidden",
             "deleted",
@@ -73,9 +71,8 @@ def automatic_rules_status() -> dict[str, Any]:
             "excluded_project",
         ],
         "writes": {
-            "auto_classified": True,
-            "manual_override": False,
-            "is_manual": False,
+            "activity_project_assignment": True,
+            "activity_log": False,
         },
     }
 

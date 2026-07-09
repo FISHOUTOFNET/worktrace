@@ -131,7 +131,20 @@ def _activity_row(aid: int) -> dict:
         row = conn.execute(
             "SELECT * FROM activity_log WHERE id = ?", (aid,)
         ).fetchone()
-    return dict(row) if row else {}
+        assignment = conn.execute(
+            "SELECT project_id, source, is_manual FROM activity_project_assignment WHERE activity_id = ?",
+            (aid,),
+        ).fetchone()
+    if not row:
+        return {}
+    result = dict(row)
+    if assignment:
+        result["project_id"] = assignment["project_id"]
+        result["manual_override"] = int(assignment["is_manual"] or 0)
+        result["auto_classified"] = 1 if assignment["source"] in {"folder_rule", "keyword_rule"} else 0
+    else:
+        result["project_id"] = result.get("project_id") or 0
+    return result
 
 
 def _assignment_row(aid: int) -> dict:
@@ -664,22 +677,20 @@ def test_backfill_too_many_matches_writes_nothing(temp_db):
     assert int(count["c"]) == 0
 
 
-# Backfill: transaction rollback on rowcount guard
+# Backfill: transaction rollback on assignment manual guard
 
 
-def test_backfill_rolls_back_on_rowcount_guard(temp_db, monkeypatch):
+def test_backfill_rolls_back_on_assignment_manual_guard(temp_db, monkeypatch):
     project = project_service.create_project("P")
     rule_id = folder_rule_service.create_or_update_folder_rule("D:\\CaseA", project)
     aid = _create_closed_activity(file_path_hint="D:\\CaseA\\Doc.docx")
 
-    # Simulate manual_override flipping to 1 between read and write by
-    # setting it to 1 right before backfill runs the UPDATE. The
-    # rowcount guard (WHERE manual_override = 0) should produce rowcount=0
-    # -> operation_failed -> rollback.
+    # Simulate assignment is_manual flipping to 1 between read and write. The
+    # UPSERT guard should produce rowcount=0 -> operation_failed -> rollback.
     real_backfill = rule_impact_service.backfill_rule_impact
 
     def _sabotage(*args, **kwargs):
-        # Flip manual_override after classification but before the write.
+        # Flip assignment is_manual after classification but before the write.
         # We patch _classify_activities to flip it right before returning.
         original_classify = rule_impact_service._classify_activities
 
@@ -687,8 +698,17 @@ def test_backfill_rolls_back_on_rowcount_guard(temp_db, monkeypatch):
             result = original_classify(activities, rule, rule_type, conn)
             for activity in result.get("would_update", []):
                 conn.execute(
-                    "UPDATE activity_log SET manual_override = 1 WHERE id = ?",
-                    (int(activity.get("id") or 0),),
+                    """
+                    INSERT INTO activity_project_assignment(
+                        activity_id, project_id, confidence, source, is_manual,
+                        suggested_project_name, created_at, updated_at
+                    )
+                    VALUES (?, NULL, 0, 'manual', 1, NULL, ?, ?)
+                    ON CONFLICT(activity_id) DO UPDATE SET
+                        is_manual = 1,
+                        updated_at = excluded.updated_at
+                    """,
+                    (int(activity.get("id") or 0), now_str(), now_str()),
                 )
             return result
 
@@ -699,10 +719,6 @@ def test_backfill_rolls_back_on_rowcount_guard(temp_db, monkeypatch):
     with pytest.raises(rule_impact_service.RuleImpactError) as exc_info:
         rule_impact_service.backfill_rule_impact("folder", rule_id)
     assert exc_info.value.code == "operation_failed"
-    # The transaction rolled back; the activity's manual_override is still 0
-    # (the conn-level sabotage happened inside the transaction that rolled back).
-    # However, since we used a separate conn for the flip inside the same
-    # transaction, the rollback should undo it.
     activity = _activity_row(aid)
     assert int(activity["manual_override"]) == 0
     assert int(activity["auto_classified"]) == 0

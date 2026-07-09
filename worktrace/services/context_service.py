@@ -81,7 +81,7 @@ def recompute_context_assignments_for_date(date: str) -> None:
             continue
         if _is_file_context_anchor(row):
             continue
-        if int(row["manual_override"] or 0) or int(row["assignment_is_manual"] or 0):
+        if int(row["assignment_is_manual"] or 0):
             continue
         # Only overwrite low-confidence / derived sources. Do not overwrite
         # activities that already belong to another concrete project via a
@@ -137,9 +137,7 @@ def _context_fingerprint(start: str, end: str, carry_minutes: int) -> tuple:
                 COALESCE(a.process_name, '') || ':' ||
                 COALESCE(a.window_title, '') || ':' ||
                 COALESCE(a.file_path_hint, '') || ':' ||
-                COALESCE(a.status, '') || ':' ||
-                COALESCE(a.project_id, '') || ':' ||
-                COALESCE(a.manual_override, 0) AS sig
+                COALESCE(a.status, '') AS sig
             FROM activity_log a
             WHERE a.is_deleted = 0
               AND a.start_time BETWEEN ? AND ?
@@ -226,7 +224,7 @@ def _recompute_anchor_rows(rows: list[dict]) -> bool:
         if row["status"] == STATUS_NORMAL and row.get("assignment_source") == "midnight_anchor":
             continue
         if _is_file_context_anchor(row):
-            if int(row.get("manual_override") or 0) or int(row.get("assignment_is_manual") or 0):
+            if int(row.get("assignment_is_manual") or 0):
                 continue
             assignment = assign_project_for_activity(int(row["id"]))
             if _assignment_changed(row, assignment):
@@ -310,7 +308,7 @@ def _seconds_between(start: str, end: str) -> int | None:
 def _can_apply_clipboard_context(row: dict) -> bool:
     if row.get("status") != STATUS_NORMAL:
         return False
-    if int(row.get("manual_override") or 0) or int(row.get("assignment_is_manual") or 0):
+    if int(row.get("assignment_is_manual") or 0):
         return False
     return row.get("assignment_source") not in CONTEXT_DIRECT_ANCHOR_SOURCES
 
@@ -344,7 +342,7 @@ def _recompute_short_gap_anchor_rows(rows: list[dict], uncategorized_id: int) ->
         source = row.get("assignment_source")
         if source in CONTEXT_DIRECT_ANCHOR_SOURCES or source == "clipboard_transition_context":
             continue
-        if int(row.get("manual_override") or 0) or int(row.get("assignment_is_manual") or 0):
+        if int(row.get("assignment_is_manual") or 0):
             continue
         # Only bridge rows that are currently uncategorized.
         if _row_project_id(row) != uncategorized_id:
@@ -671,10 +669,6 @@ def _sync_assignment_and_activity(
             """,
             (activity_id,),
         ).fetchone()
-        activity = conn.execute(
-            "SELECT project_id, auto_classified FROM activity_log WHERE id = ?",
-            (activity_id,),
-        ).fetchone()
         assignment_changed = not assignment or not (
             assignment["project_id"] == project_id
             and assignment["source"] == source
@@ -682,11 +676,7 @@ def _sync_assignment_and_activity(
             and int(assignment["is_manual"]) == int(is_manual)
             and not (assignment["suggested_project_name"] or "")
         )
-        activity_changed = bool(activity) and not (
-            activity["project_id"] == project_id
-            and int(activity["auto_classified"] or 0) == int(auto_classified)
-        )
-        if not assignment_changed and not activity_changed:
+        if not assignment_changed:
             return
         if assignment_changed:
             conn.execute(
@@ -704,15 +694,6 @@ def _sync_assignment_and_activity(
                     updated_at = excluded.updated_at
                 """,
                 (activity_id, project_id, confidence, source, int(is_manual), ts, ts),
-            )
-        if activity_changed:
-            conn.execute(
-                """
-                UPDATE activity_log
-                SET project_id = ?, auto_classified = ?, updated_at = ?
-                WHERE id = ?
-                """,
-                (project_id, int(auto_classified), ts, activity_id),
             )
 
 

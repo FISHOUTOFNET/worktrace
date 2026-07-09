@@ -151,11 +151,12 @@ def list_file_text_mappings(start_time: str, end_time: str) -> list[dict]:
                 a.window_title,
                 a.start_time,
                 a.end_time,
-                a.project_id,
+                apa.project_id,
                 p.name AS project_name
             FROM activity_clipboard_event ace
             JOIN activity_log a ON a.id = ace.activity_id
-            LEFT JOIN project p ON p.id = a.project_id
+            LEFT JOIN activity_project_assignment apa ON apa.activity_id = a.id
+            LEFT JOIN project p ON p.id = apa.project_id
             WHERE ace.copied_at BETWEEN ? AND ?
               AND a.is_deleted = 0
             ORDER BY ace.copied_at ASC, ace.id ASC

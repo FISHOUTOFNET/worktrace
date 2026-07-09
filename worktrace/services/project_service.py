@@ -197,14 +197,14 @@ def list_project_bindings(include_system_special: bool = True) -> list[dict]:
             conn.execute(
                 """
                 SELECT
-                    COALESCE(apa.project_id, al.project_id) AS project_id,
+                    apa.project_id AS project_id,
                     MAX(COALESCE(al.end_time, al.start_time)) AS last_used_at
                 FROM activity_log al
                 LEFT JOIN activity_project_assignment apa
                     ON apa.activity_id = al.id
                 WHERE al.is_deleted = 0
-                  AND COALESCE(apa.project_id, al.project_id) IS NOT NULL
-                GROUP BY COALESCE(apa.project_id, al.project_id)
+                  AND apa.project_id IS NOT NULL
+                GROUP BY apa.project_id
                 """
             ).fetchall()
         )

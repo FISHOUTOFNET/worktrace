@@ -109,7 +109,20 @@ def _activity_row(aid: int) -> dict:
         row = conn.execute(
             "SELECT * FROM activity_log WHERE id = ?", (aid,)
         ).fetchone()
-    return dict(row) if row else {}
+        assignment = conn.execute(
+            "SELECT project_id, source, is_manual FROM activity_project_assignment WHERE activity_id = ?",
+            (aid,),
+        ).fetchone()
+    if not row:
+        return {}
+    result = dict(row)
+    if assignment:
+        result["project_id"] = assignment["project_id"]
+        result["manual_override"] = int(assignment["is_manual"] or 0)
+        result["auto_classified"] = 1 if assignment["source"] in {"folder_rule", "keyword_rule"} else 0
+    else:
+        result["project_id"] = result.get("project_id") or 0
+    return result
 
 
 def _assignment_row(aid: int) -> dict:

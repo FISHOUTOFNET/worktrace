@@ -32,7 +32,13 @@ def table_count(table_name: str) -> int:
 
 
 def activity_row(activity_id: int) -> dict | None:
-    return fetch_one("SELECT * FROM activity_log WHERE id = ?", (activity_id,))
+    row = fetch_one("SELECT * FROM activity_log WHERE id = ?", (activity_id,))
+    assignment = assignment_row(activity_id)
+    if row and assignment:
+        row["project_id"] = assignment.get("project_id")
+        row["manual_override"] = int(assignment.get("is_manual") or 0)
+        row["auto_classified"] = 1 if assignment.get("source") in {"keyword_rule", "folder_rule"} else 0
+    return row
 
 
 def assignment_row(activity_id: int) -> dict | None:
@@ -56,16 +62,6 @@ def assign_activity_project(activity_id: int, project_id: int, *, manual: bool =
     source = "manual" if manual else "anchor_context"
     confidence = 100 if manual else 60
     with get_connection() as conn:
-        conn.execute(
-            """
-            UPDATE activity_log
-            SET project_id = ?,
-                manual_override = CASE WHEN ? = 1 THEN 1 ELSE manual_override END,
-                updated_at = ?
-            WHERE id = ?
-            """,
-            (project_id, int(manual), ts, activity_id),
-        )
         conn.execute(
             """
             INSERT INTO activity_project_assignment(

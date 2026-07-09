@@ -57,10 +57,9 @@ _ANCHOR_EXT_SET = frozenset(ext.casefold() for ext in ANCHOR_FILE_EXTENSIONS)
 def row_project_id(row: dict) -> int:
     """Return the effective project id for a row.
 
-    Priority: ``assignment_project_id`` -> ``effective_project_id`` ->
-    ``project_id`` -> 0.
+    Priority: ``assignment_project_id`` -> ``effective_project_id`` -> 0.
     """
-    for key in ("assignment_project_id", "effective_project_id", "project_id"):
+    for key in ("assignment_project_id", "effective_project_id"):
         value = row.get(key)
         if value is not None and value != "":
             try:

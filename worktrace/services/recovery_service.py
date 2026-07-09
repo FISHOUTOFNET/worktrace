@@ -16,7 +16,15 @@ def recover_unclosed_records() -> None:
     fallback_now = now_str()
     recovered_boundary_at: str | None = None
     with get_connection() as conn:
-        rows = conn.execute("SELECT * FROM activity_log WHERE end_time IS NULL ORDER BY id").fetchall()
+        rows = conn.execute(
+            """
+            SELECT a.*, apa.project_id AS assignment_project_id
+            FROM activity_log a
+            LEFT JOIN activity_project_assignment apa ON apa.activity_id = a.id
+            WHERE a.end_time IS NULL
+            ORDER BY a.id
+            """
+        ).fetchall()
     for row in rows:
         end_time = heartbeat or fallback_now
         status = row["status"] if heartbeat else STATUS_ERROR
@@ -61,7 +69,12 @@ def _recover_cross_midnight_row(row, end_dt: datetime) -> str:
     start_dt = datetime.strptime(row["start_time"], TIME_FORMAT)
     first_midnight = datetime.combine(start_dt.date() + timedelta(days=1), datetime_time.min)
     first_midnight_text = first_midnight.strftime(TIME_FORMAT)
-    original_project_id = row["project_id"] if project_service.is_concrete_project_id(row["project_id"]) else None
+    projected_project_id = row["assignment_project_id"]
+    original_project_id = (
+        projected_project_id
+        if project_service.is_concrete_project_id(projected_project_id)
+        else None
+    )
     original_id = int(row["id"])
     # Close the first half at first_midnight via the lifecycle facade so the
     # close-finalize helper converges project inference / automatic rules.
@@ -152,9 +165,9 @@ def mark_record_error(activity_id: int, reason: str) -> None:
         conn.execute(
             """
             UPDATE activity_log
-            SET status = ?, note = COALESCE(note || CHAR(10), '') || ?, updated_at = ?
+            SET status = ?, updated_at = ?
             WHERE id = ?
             """,
-            (STATUS_ERROR, f"系统标记异常：{reason}", now_str(), activity_id),
+            (STATUS_ERROR, now_str(), activity_id),
         )
     logging.warning("marked activity id=%s error reason=%s", activity_id, reason)

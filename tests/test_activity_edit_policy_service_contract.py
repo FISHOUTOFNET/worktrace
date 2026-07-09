@@ -10,7 +10,7 @@ from worktrace.constants import (
     STATUS_PAUSED,
 )
 from worktrace.db import get_connection
-from worktrace.services import activity_service, session_note_service
+from worktrace.services import activity_service, timeline_service
 from worktrace.services.activity_edit_policy import require_project_editable_activity
 
 pytestmark = [pytest.mark.db, pytest.mark.contract]
@@ -42,8 +42,10 @@ def _session_note_row(activity_id: int) -> dict | None:
         row = conn.execute(
             """
             SELECT note, adjusted_duration_seconds
-            FROM project_session_note
-            WHERE report_date = ? AND first_activity_id = ?
+            FROM project_session_override
+            WHERE report_date = ?
+              AND anchor_activity_id = ?
+              AND match_state = 'active'
             """,
             (DAY, activity_id),
         ).fetchone()
@@ -134,7 +136,7 @@ def test_require_project_editable_activity_rejects_invalid_ids(temp_db, bad_id):
 def test_set_session_note_allows_normal_closed(temp_db):
     aid = _activity()
 
-    session_note_service.set_session_note(DAY, aid, "hello")
+    timeline_service.update_session_note(DAY, aid, "hello")
 
     assert _session_note_row(aid)["note"] == "hello"
 
@@ -142,7 +144,7 @@ def test_set_session_note_allows_normal_closed(temp_db):
 def test_set_session_user_fields_allows_normal_closed_duration_override(temp_db):
     aid = _activity()
 
-    session_note_service.set_session_user_fields(DAY, aid, "hello", 60)
+    timeline_service.update_session_note_and_duration(DAY, aid, "hello", 60)
 
     row = _session_note_row(aid)
     assert row["note"] == "hello"
@@ -162,7 +164,7 @@ def test_set_session_note_rejects_non_editable_and_leaves_no_dirty_row(temp_db, 
     mutate(aid)
 
     with pytest.raises(ValueError) as exc:
-        session_note_service.set_session_note(DAY, aid, "blocked")
+        timeline_service.update_session_note(DAY, aid, "blocked")
 
     assert str(exc.value) == code
     assert _session_note_row(aid) is None
@@ -173,7 +175,7 @@ def test_set_session_user_fields_rejects_system_rows_without_dirty_data(temp_db,
     aid = _activity(status=status)
 
     with pytest.raises(ValueError) as exc:
-        session_note_service.set_session_user_fields(DAY, aid, "blocked", 30)
+        timeline_service.update_session_note_and_duration(DAY, aid, "blocked", 30)
 
     assert str(exc.value) == "activity_not_project_activity"
     assert _session_note_row(aid) is None
@@ -181,14 +183,14 @@ def test_set_session_user_fields_rejects_system_rows_without_dirty_data(temp_db,
 
 def test_set_session_user_fields_clear_still_requires_editability(temp_db):
     aid = _activity()
-    session_note_service.set_session_user_fields(DAY, aid, "keep", 30)
-    session_note_service.set_session_user_fields(DAY, aid, "", None)
+    timeline_service.update_session_note_and_duration(DAY, aid, "keep", 30)
+    timeline_service.update_session_note_and_duration(DAY, aid, "", None)
     assert _session_note_row(aid) is None
 
     hidden = _activity()
     _mark_hidden(hidden)
     with pytest.raises(ValueError) as exc:
-        session_note_service.set_session_user_fields(DAY, hidden, "", None)
+        timeline_service.update_session_note_and_duration(DAY, hidden, "", None)
 
     assert str(exc.value) == "activity_hidden"
     assert _session_note_row(hidden) is None

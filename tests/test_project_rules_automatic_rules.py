@@ -105,7 +105,20 @@ def _activity_row(aid: int) -> dict:
         row = conn.execute(
             "SELECT * FROM activity_log WHERE id = ?", (aid,)
         ).fetchone()
-    return dict(row) if row else {}
+        assignment = conn.execute(
+            "SELECT project_id, source, is_manual FROM activity_project_assignment WHERE activity_id = ?",
+            (aid,),
+        ).fetchone()
+    if not row:
+        return {}
+    result = dict(row)
+    if assignment:
+        result["project_id"] = assignment["project_id"]
+        result["manual_override"] = int(assignment["is_manual"] or 0)
+        result["auto_classified"] = 1 if assignment["source"] in {"folder_rule", "keyword_rule"} else 0
+    else:
+        result["project_id"] = result.get("project_id") or 0
+    return result
 
 
 def _assignment_row(aid: int) -> dict:
@@ -523,7 +536,6 @@ def test_automatic_rules_status_payload_fields(temp_db):
     assert status["priority"] == "folder_before_keyword"
     assert status["confidence"]["folder_rule"] == 85
     assert status["confidence"]["keyword_rule"] == 80
-    assert "manual_override" in status["skips"]
     assert "is_manual" in status["skips"]
     assert "hidden" in status["skips"]
     assert "deleted" in status["skips"]
@@ -534,9 +546,8 @@ def test_automatic_rules_status_payload_fields(temp_db):
     assert "disabled_project" in status["skips"]
     assert "archived_project" in status["skips"]
     assert "excluded_project" in status["skips"]
-    assert status["writes"]["auto_classified"] is True
-    assert status["writes"]["manual_override"] is False
-    assert status["writes"]["is_manual"] is False
+    assert status["writes"]["activity_project_assignment"] is True
+    assert status["writes"]["activity_log"] is False
 
 
 def test_automatic_rules_status_payload_json_serializable(temp_db):

@@ -66,7 +66,8 @@ EXPORT_TABLES: tuple[str, ...] = (
     "folder_rule_index_state",
     "activity_project_assignment",
     "activity_clipboard_event",
-    "project_session_note",
+    "project_session_override",
+    "project_session_override_member",
     "activity_resource",
 )
 
@@ -94,9 +95,10 @@ SECURE_IMPORT_GUARD_KEY = "secure_import_in_progress"
 # Delete order (children first) to respect foreign keys.
 _DELETE_ORDER: tuple[str, ...] = (
     "activity_resource",
+    "project_session_override_member",
+    "project_session_override",
     "activity_clipboard_event",
     "activity_project_assignment",
-    "project_session_note",
     "folder_rule_file_index",
     "folder_rule_index_state",
     "project_rule",

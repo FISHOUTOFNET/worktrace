@@ -93,15 +93,15 @@ def _set_assignment_source(activity_id, source, project_id=None, suggested_name=
 
     This bypasses the inference pipeline so we can test each source
     type independently against the policy contract. Sets
-    ``manual_override=1`` on the activity so context recompute does not
-    overwrite the assignment, and syncs ``activity_log.project_id`` to
-    match the assignment.
+    Sets ``is_manual=1`` on the assignment so context recompute does not
+    overwrite this explicit fixture projection. It does not mutate raw
+    ``activity_log`` project fields.
     """
     ts = now_str()
     with get_connection() as conn:
         if project_id is None:
             project_id = _get_uncategorized_id(conn)
-        is_manual = 1 if source == "manual" else 0
+        is_manual = 1
         conn.execute(
             """
             INSERT INTO activity_project_assignment(
@@ -118,10 +118,6 @@ def _set_assignment_source(activity_id, source, project_id=None, suggested_name=
                 updated_at = excluded.updated_at
             """,
             (activity_id, project_id, confidence, source, is_manual, suggested_name, ts, ts),
-        )
-        conn.execute(
-            "UPDATE activity_log SET project_id = ?, manual_override = 1, updated_at = ? WHERE id = ?",
-            (project_id, ts, activity_id),
         )
 
 

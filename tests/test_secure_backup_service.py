@@ -102,13 +102,42 @@ def _seed_test_data() -> None:
             (activity_id, "2026-06-25 10:00:30", TEST_WINDOW_TITLE, TEST_FILE_PATH, TEST_COPIED_TEXT, ts, ts),
         )
 
-        # A project session note.
+        # A project session override.
+        cur = conn.execute(
+            """
+            INSERT INTO project_session_override(
+                report_date, activity_member_hash, anchor_activity_id,
+                original_start_time, original_end_time, original_raw_duration_seconds,
+                project_id, adjusted_duration_seconds, note, match_state, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, 60, ?, 60, ?, 'active', ?, ?)
+            """,
+            (
+                "2026-06-25",
+                "a" * 40,
+                activity_id,
+                "2026-06-25 10:00:00",
+                "2026-06-25 10:01:00",
+                project_id,
+                TEST_NOTE,
+                ts,
+                ts,
+            ),
+        )
         conn.execute(
             """
-            INSERT INTO project_session_note(report_date, first_activity_id, note, created_at, updated_at)
+            INSERT INTO project_session_override_member(
+                override_id, activity_id, report_date, slice_start_time, slice_end_time
+            )
             VALUES (?, ?, ?, ?, ?)
             """,
-            ("2026-06-25", activity_id, TEST_NOTE, ts, ts),
+            (
+                int(cur.lastrowid),
+                activity_id,
+                "2026-06-25",
+                "2026-06-25 10:00:00",
+                "2026-06-25 10:01:00",
+            ),
         )
 
         # A folder rule.
@@ -191,7 +220,8 @@ def _row_counts() -> dict[str, int]:
         "project_rule",
         "activity_project_assignment",
         "activity_clipboard_event",
-        "project_session_note",
+        "project_session_override",
+        "project_session_override_member",
         "activity_resource",
     ]
     counts: dict[str, int] = {}
@@ -221,7 +251,8 @@ def test_export_payload_contains_required_tables(temp_db, tmp_path):
         "project_rule",
         "activity_project_assignment",
         "activity_clipboard_event",
-        "project_session_note",
+        "project_session_override",
+        "project_session_override_member",
         "activity_resource",
     ]:
         assert required in tables, f"missing table {required} in payload"
@@ -477,7 +508,8 @@ def test_replace_import_restores_all_tables(temp_db, tmp_path):
         "project_rule",
         "activity_project_assignment",
         "activity_clipboard_event",
-        "project_session_note",
+        "project_session_override",
+        "project_session_override_member",
         "activity_resource",
     ]:
         assert counts_after[table] == counts_before[table], f"row count mismatch for {table}"
@@ -520,7 +552,7 @@ def test_replace_import_restores_distinctive_data(temp_db, tmp_path):
         assert clipboard["copied_text"] == TEST_COPIED_TEXT
 
         note = conn.execute(
-            "SELECT note FROM project_session_note WHERE first_activity_id = ?",
+            "SELECT note FROM project_session_override WHERE anchor_activity_id = ?",
             (activity["id"],),
         ).fetchone()
         assert note is not None

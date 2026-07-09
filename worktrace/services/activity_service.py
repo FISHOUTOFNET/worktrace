@@ -13,6 +13,7 @@ from ..constants import (
     STATUS_NORMAL,
     STATUS_PAUSED,
     TIME_FORMAT,
+    UNCATEGORIZED_PROJECT,
 )
 from ..db import dict_rows, get_connection, now_str
 from ..formatters import format_activity_project_cell, format_status_label
@@ -80,10 +81,10 @@ def insert_activity_row(
                 file_path_hint,
                 status,
                 source,
-                int(auto_classified),
-                int(manual_assignment),
-                project,
-                note,
+                0,
+                0,
+                None,
+                None,
                 ts,
                 ts,
             ),
@@ -386,9 +387,14 @@ def get_latest_closed_auto_normal_activity(after_time: str | None = None) -> dic
 def get_open_activity() -> dict | None:
     with get_connection() as conn:
         row = conn.execute(
-            "SELECT * FROM activity_log WHERE end_time IS NULL ORDER BY id DESC LIMIT 1"
+            _activity_select_sql("a.end_time IS NULL").replace(
+                "ORDER BY a.start_time DESC, a.id DESC",
+                "ORDER BY a.id DESC LIMIT 1",
+            )
         ).fetchone()
-    return dict(row) if row else None
+    if not row:
+        return None
+    return _attach_attribution_fields(dict(row), get_or_create_uncategorized_project())
 
 
 def _activity_select_sql(where: str) -> str:
@@ -399,13 +405,13 @@ def _activity_select_sql(where: str) -> str:
             apa.source AS assignment_source,
             apa.is_manual AS assignment_is_manual,
             apa.suggested_project_name,
-            COALESCE(apa.project_id, a.project_id) AS effective_project_id,
+            apa.project_id AS effective_project_id,
             pe.name AS effective_project_name,
             pe.description AS effective_project_description
         FROM activity_log a
         LEFT JOIN project p ON p.id = a.project_id
         LEFT JOIN activity_project_assignment apa ON apa.activity_id = a.id
-        LEFT JOIN project pe ON pe.id = COALESCE(apa.project_id, a.project_id)
+        LEFT JOIN project pe ON pe.id = apa.project_id
         WHERE {where}
         ORDER BY a.start_time DESC, a.id DESC
     """
@@ -461,16 +467,31 @@ def get_activity_structure_marker_by_date(date: str) -> dict:
                     CASE WHEN end_time IS NULL THEN '1' ELSE '0' END || '|' ||
                     COALESCE(end_time, '') || '|' ||
                     COALESCE(status, '') || '|' ||
-                    COALESCE(project_id, 0) || '|' ||
+                    COALESCE(assignment_project_id, 0) || '|' ||
+                    COALESCE(assignment_source, '') || '|' ||
+                    COALESCE(assignment_is_manual, 0) || '|' ||
+                    COALESCE(assignment_updated_at, '') || '|' ||
                     COALESCE(source, '') || '|' ||
                     COALESCE(is_deleted, 0) || '|' ||
-                    COALESCE(is_hidden, 0) || '|' ||
-                    COALESCE(manual_override, 0) || '|' ||
-                    COALESCE(auto_classified, 0) || '|' ||
-                    LENGTH(COALESCE(note, '')) AS sig
-                FROM activity_log
-                WHERE start_time BETWEEN ? AND ?
-                ORDER BY id
+                    COALESCE(is_hidden, 0) AS sig
+                FROM (
+                    SELECT
+                        a.id,
+                        a.start_time,
+                        a.end_time,
+                        a.status,
+                        a.source,
+                        a.is_deleted,
+                        a.is_hidden,
+                        apa.project_id AS assignment_project_id,
+                        apa.source AS assignment_source,
+                        apa.is_manual AS assignment_is_manual,
+                        apa.updated_at AS assignment_updated_at
+                    FROM activity_log a
+                    LEFT JOIN activity_project_assignment apa ON apa.activity_id = a.id
+                    WHERE a.start_time BETWEEN ? AND ?
+                    ORDER BY a.id
+                )
             )
             """,
             (start, end),
@@ -518,6 +539,18 @@ def _attach_attribution_fields(row: dict, uncategorized_id: int) -> dict:
     projections must stay on ``timeline_service`` report rows instead of
     adding ``report_project_fields`` here.
     """
+    row["raw_project_id_deprecated"] = row.get("project_id")
+    if row.get("effective_project_id") is not None:
+        row["project_id"] = int(row.get("effective_project_id") or 0)
+        row["project_name"] = row.get("effective_project_name") or UNCATEGORIZED_PROJECT
+        row["project_description"] = row.get("effective_project_description") or ""
+    else:
+        row["project_id"] = uncategorized_id
+        row["project_name"] = UNCATEGORIZED_PROJECT
+        row["project_description"] = ""
+    source = str(row.get("assignment_source") or "")
+    row["manual_override"] = int(row.get("assignment_is_manual") or 0)
+    row["auto_classified"] = 1 if source in {"keyword_rule", "folder_rule"} else 0
     row.update(official_project_fields(row, uncategorized_id))
     return row
 
@@ -695,64 +728,12 @@ def _sync_activity_resource_after_path_update(conn, activity_id: int, file_path_
 
 
 def update_project_editable_activities_project(activity_ids: list[int], project_id: int) -> None:
-    if not activity_ids:
-        return
-    ts = now_str()
-    placeholders = ",".join("?" for _ in activity_ids)
-    with get_connection() as conn:
-        for aid in activity_ids:
-            require_project_editable_activity(aid, conn=conn)
-
-        cur = conn.execute(
-            f"""
-            UPDATE activity_log
-            SET project_id = ?,
-                manual_override = 1,
-                updated_at = ?
-            WHERE id IN ({placeholders})
-              AND is_deleted = 0
-              AND is_hidden = 0
-              AND end_time IS NOT NULL
-              AND status = ?
-            """,
-            [project_id, ts, *activity_ids, STATUS_NORMAL],
-        )
-        if cur.rowcount != len(activity_ids):
-            raise ValueError("project_update_failed")
-
-        for activity_id in activity_ids:
-            conn.execute(
-                """
-                INSERT INTO activity_project_assignment(
-                    activity_id, project_id, confidence, source, is_manual, suggested_project_name, created_at, updated_at
-                )
-                VALUES (?, ?, 100, 'manual', 1, NULL, ?, ?)
-                ON CONFLICT(activity_id) DO UPDATE SET
-                    project_id = excluded.project_id,
-                    confidence = excluded.confidence,
-                    source = excluded.source,
-                    is_manual = excluded.is_manual,
-                    suggested_project_name = excluded.suggested_project_name,
-                    updated_at = excluded.updated_at
-                """,
-                (activity_id, project_id, ts, ts),
-            )
+    raise ValueError("activity_level_project_edit_removed")
 
 
 def apply_midnight_anchor_assignment(activity_id: int, project_id: int) -> None:
     ts = now_str()
     with get_connection() as conn:
-        conn.execute(
-            """
-            UPDATE activity_log
-            SET project_id = ?,
-                auto_classified = 1,
-                manual_override = 0,
-                updated_at = ?
-            WHERE id = ?
-            """,
-            (project_id, ts, activity_id),
-        )
         conn.execute(
             """
             INSERT INTO activity_project_assignment(
@@ -778,20 +759,4 @@ def finalize_created_activity(activity_id: int) -> None:
 
 
 def update_project_editable_activity_note(activity_id: int, note: str) -> None:
-    with get_connection() as conn:
-        require_project_editable_activity(activity_id, conn=conn)
-        cur = conn.execute(
-            """
-            UPDATE activity_log
-            SET note = ?,
-                updated_at = ?
-            WHERE id = ?
-              AND is_deleted = 0
-              AND is_hidden = 0
-              AND end_time IS NOT NULL
-              AND status = ?
-            """,
-            (note, now_str(), activity_id, STATUS_NORMAL),
-        )
-        if cur.rowcount != 1:
-            raise ValueError("activity_note_update_failed")
+    raise ValueError("activity_level_note_edit_removed")

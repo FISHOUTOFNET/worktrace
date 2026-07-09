@@ -178,7 +178,7 @@ def preview_folder_rule_conflicts(folder_path: str, project_id: int) -> dict:
             """
             SELECT
                 a.*,
-                COALESCE(apa.project_id, a.project_id) AS effective_project_id,
+                apa.project_id AS effective_project_id,
                 COALESCE(apa.is_manual, 0) AS is_manual,
                 ar.path_hint AS resource_path_hint,
                 ar.is_anchor AS resource_is_anchor
@@ -210,8 +210,7 @@ def preview_folder_rule_conflicts(folder_path: str, project_id: int) -> dict:
         "manual_activity_count": sum(
             1
             for row in matching_activities
-            if int(row.get("manual_override") or 0)
-            or int(row.get("is_manual") or 0)
+            if int(row.get("is_manual") or 0)
         ),
     }
 

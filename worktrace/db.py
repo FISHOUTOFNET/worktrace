@@ -138,7 +138,6 @@ def ensure_schema_migrations(conn: sqlite3.Connection) -> None:
     exists before running ``ALTER TABLE``.
     """
     ensure_project_language_column(conn)
-    ensure_project_session_note_adjusted_duration_column(conn)
 
 
 def ensure_project_language_column(conn: sqlite3.Connection) -> None:
@@ -154,27 +153,14 @@ def ensure_project_language_column(conn: sqlite3.Connection) -> None:
         )
 
 
-def ensure_project_session_note_adjusted_duration_column(conn: sqlite3.Connection) -> None:
-    """Add ``adjusted_duration_seconds`` to ``project_session_note`` if missing.
-
-    Idempotent: checks ``PRAGMA table_info(project_session_note)`` before
-    running ``ALTER TABLE``. Safe to call on any database.
-    databases.
-    """
-    columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(project_session_note)").fetchall()}
-    if "adjusted_duration_seconds" not in columns:
-        conn.execute(
-            "ALTER TABLE project_session_note ADD COLUMN adjusted_duration_seconds INTEGER"
-        )
-
-
 def drop_all_tables(conn: sqlite3.Connection) -> None:
     conn.executescript(
         """
         DROP TABLE IF EXISTS activity_resource;
         DROP TABLE IF EXISTS folder_rule_file_index;
         DROP TABLE IF EXISTS folder_rule_index_state;
-        DROP TABLE IF EXISTS project_session_note;
+        DROP TABLE IF EXISTS project_session_override_member;
+        DROP TABLE IF EXISTS project_session_override;
         DROP TABLE IF EXISTS activity_clipboard_event;
         DROP TABLE IF EXISTS activity_project_assignment;
         DROP TABLE IF EXISTS activity_log;

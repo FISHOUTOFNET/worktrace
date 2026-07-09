@@ -54,11 +54,28 @@ def _seed_closed_status_activity(status="idle", project_id=None):
 def _session_note_count(first_activity_id: int) -> int:
     with get_connection() as conn:
         row = conn.execute(
-            "SELECT COUNT(*) AS c FROM project_session_note WHERE first_activity_id = ?",
+            "SELECT COUNT(*) AS c FROM project_session_override WHERE anchor_activity_id = ?",
             (first_activity_id,),
         ).fetchone()
     return int(row["c"] or 0)
 
+
+def _session_for(activity_id: int) -> dict:
+    sessions = timeline_api.get_project_sessions_by_date(
+        "2026-06-25", include_hidden=False, ensure_context=True
+    )
+    for session in sessions:
+        if activity_id in (session.get("activity_ids") or []):
+            return session
+    raise AssertionError("session not found")
+
+
+def _session_user_fields(first_activity_id: int) -> dict:
+    session = _session_for(first_activity_id)
+    return {
+        "note": session.get("session_note") or "",
+        "adjusted_duration_seconds": session.get("adjusted_duration_seconds"),
+    }
 
 
 
@@ -66,10 +83,7 @@ def test_reclassify_success(temp_db):
     project = project_service.create_project("TestProject")
     ids = _seed_session()
     timeline_api.reclassify_timeline_session_project(ids, project)
-    # Verify the activities were reclassified
-    for aid in ids:
-        activity = activity_service.get_activity(aid)
-        assert int(activity["project_id"]) == project
+    assert int(_session_for(ids[0])["project_id"]) == project
 
 
 def test_reclassify_empty_activity_ids(temp_db):
@@ -104,9 +118,7 @@ def test_reclassify_to_uncategorized(temp_db):
     ids = _seed_session()
     uncat_id = project_service.get_or_create_uncategorized_project()
     timeline_api.reclassify_timeline_session_project(ids, uncat_id)
-    for aid in ids:
-        activity = activity_service.get_activity(aid)
-        assert int(activity["project_id"]) == uncat_id
+    assert int(_session_for(ids[0])["project_id"]) == uncat_id
 
 
 def test_reclassify_dedupes_activity_ids(temp_db):
@@ -114,9 +126,7 @@ def test_reclassify_dedupes_activity_ids(temp_db):
     project = project_service.create_project("Dup")
     ids = _seed_session()
     timeline_api.reclassify_timeline_session_project([ids[0], ids[0], ids[1]], project)
-    for aid in ids:
-        activity = activity_service.get_activity(aid)
-        assert int(activity["project_id"]) == project
+    assert int(_session_for(ids[0])["project_id"]) == project
 
 
 def test_reclassify_multi_activity_session_consistent(temp_db):
@@ -124,11 +134,7 @@ def test_reclassify_multi_activity_session_consistent(temp_db):
     project = project_service.create_project("Group")
     ids = _seed_session()
     timeline_api.reclassify_timeline_session_project(ids, project)
-    project_ids = set()
-    for aid in ids:
-        activity = activity_service.get_activity(aid)
-        project_ids.add(int(activity["project_id"]))
-    assert project_ids == {project}
+    assert int(_session_for(ids[0])["project_id"]) == project
 
 
 def test_reclassify_system_status_activity_rejected_without_partial_write(temp_db):
@@ -139,8 +145,7 @@ def test_reclassify_system_status_activity_rejected_without_partial_write(temp_d
     with pytest.raises(ValueError, match="not_project_activity"):
         timeline_api.reclassify_timeline_session_project([aid], target_project)
 
-    activity = activity_service.get_activity(aid)
-    assert int(activity["project_id"]) == original_project
+    assert _session_note_count(aid) == 0
 
 
 def test_reclassify_then_reread_timeline_reflects_change(temp_db):
@@ -272,8 +277,7 @@ def test_update_note_and_duration_success(temp_db):
     timeline_api.update_timeline_session_note_and_duration(
         "2026-06-25", ids[0], "test note", 3600
     )
-    from worktrace.services import session_note_service
-    fields = session_note_service.get_session_user_fields("2026-06-25", ids[0])
+    fields = _session_user_fields(ids[0])
     assert fields["note"] == "test note"
     assert fields["adjusted_duration_seconds"] == 3600
 
@@ -299,8 +303,7 @@ def test_update_note_and_duration_null_duration_clears_override(temp_db):
     timeline_api.update_timeline_session_note_and_duration(
         "2026-06-25", ids[0], "test", None
     )
-    from worktrace.services import session_note_service
-    fields = session_note_service.get_session_user_fields("2026-06-25", ids[0])
+    fields = _session_user_fields(ids[0])
     assert fields["adjusted_duration_seconds"] is None
 
 
@@ -310,8 +313,7 @@ def test_update_note_and_duration_zero_accepted(temp_db):
     timeline_api.update_timeline_session_note_and_duration(
         "2026-06-25", ids[0], "note", 0
     )
-    from worktrace.services import session_note_service
-    fields = session_note_service.get_session_user_fields("2026-06-25", ids[0])
+    fields = _session_user_fields(ids[0])
     assert fields["adjusted_duration_seconds"] == 0
 
 
@@ -373,8 +375,7 @@ def test_update_note_and_duration_empty_note_with_duration(temp_db):
     timeline_api.update_timeline_session_note_and_duration(
         "2026-06-25", ids[0], "", 3600
     )
-    from worktrace.services import session_note_service
-    fields = session_note_service.get_session_user_fields("2026-06-25", ids[0])
+    fields = _session_user_fields(ids[0])
     assert fields["note"] == ""
     assert fields["adjusted_duration_seconds"] == 3600
 
@@ -389,8 +390,7 @@ def test_update_note_only_preserves_existing_duration(temp_db):
     )
     # Update only the note via the note-only API
     timeline_api.update_timeline_session_note("2026-06-25", ids[0], "second note")
-    from worktrace.services import session_note_service
-    fields = session_note_service.get_session_user_fields("2026-06-25", ids[0])
+    fields = _session_user_fields(ids[0])
     assert fields["note"] == "second note"
     assert fields["adjusted_duration_seconds"] == 3600
 

@@ -109,8 +109,7 @@ _ACTIVITY_SQL = """
 SELECT
     a.id, a.start_time, a.end_time, a.duration_seconds,
     a.window_title, a.file_path_hint, a.status, a.is_deleted, a.is_hidden,
-    a.manual_override, a.project_id AS activity_project_id,
-    a.auto_classified, a.app_name, a.process_name,
+    a.app_name, a.process_name,
     ar.path_hint AS resource_path_hint,
     ar.is_anchor AS resource_is_anchor,
     ar.display_name AS resource_display_name,
@@ -126,7 +125,7 @@ SELECT
 FROM activity_log a
 LEFT JOIN activity_resource ar ON ar.activity_id = a.id
 LEFT JOIN activity_project_assignment apa ON apa.activity_id = a.id
-LEFT JOIN project curr ON curr.id = COALESCE(apa.project_id, a.project_id)
+LEFT JOIN project curr ON curr.id = apa.project_id
 ORDER BY a.id
 """
 
@@ -197,9 +196,7 @@ def _classify_activities(activities: list[dict], rule: dict, rule_type: str, con
         if str(activity.get("status") or "") != STATUS_NORMAL:
             counts["non_normal_skipped_count"] += 1
             continue
-        if int(activity.get("manual_override") or 0) or int(
-            activity.get("assignment_is_manual") or 0
-        ):
+        if int(activity.get("assignment_is_manual") or 0):
             counts["manual_skipped_count"] += 1
             continue
         counts["eligible_count"] += 1
@@ -207,10 +204,7 @@ def _classify_activities(activities: list[dict], rule: dict, rule_type: str, con
             continue
         counts["matched_count"] += 1
         effective_project_id = int(
-            activity.get("assignment_project_id")
-            if activity.get("assignment_project_id") is not None
-            else activity.get("activity_project_id")
-            or 0
+            activity.get("assignment_project_id") or 0
         )
         already_target = (
             effective_project_id == target_project_id
@@ -363,18 +357,7 @@ def backfill_rule_impact(
         ts = now_str()
         for activity in would_update:
             activity_id = int(activity.get("id") or 0)
-            # ``manual_override = 0`` guard: even though the eligibility
-            # filter already excluded manual activities, this UPDATE refuses
-            # to touch a row whose manual_override flipped to 1 between the
-            # read and the write (rowcount 0 -> rollback).
-            cur = conn.execute(
-                "UPDATE activity_log SET project_id = ?, auto_classified = 1, "
-                "updated_at = ? WHERE id = ? AND manual_override = 0",
-                (project_id, ts, activity_id),
-            )
-            if cur.rowcount != 1:
-                raise RuleImpactError(ERR_OPERATION_FAILED)
-            conn.execute(
+            cursor = conn.execute(
                 """
                 INSERT INTO activity_project_assignment(
                     activity_id, project_id, confidence, source, is_manual,
@@ -388,9 +371,12 @@ def backfill_rule_impact(
                     is_manual = 0,
                     suggested_project_name = NULL,
                     updated_at = excluded.updated_at
+                WHERE activity_project_assignment.is_manual = 0
                 """,
                 (activity_id, project_id, confidence, source, ts, ts),
             )
+            if cursor.rowcount != 1:
+                raise RuleImpactError(ERR_OPERATION_FAILED)
         # Context manager commits on clean exit; any raise above rolls back.
         return {
             "rule": _rule_summary(rule, rule_type, project_available=True),

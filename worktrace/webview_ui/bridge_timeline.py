@@ -155,7 +155,9 @@ class TimelineBridgeMixin:
     def update_timeline_project(
         self,
         activity_ids: list[int],
-        project_id: int,
+        activity_member_hash,
+        project_id: int | None = None,
+        report_date: str | None = None,
     ) -> dict[str, Any]:
         """Reclassify a Timeline session's activities to a project.
 
@@ -173,6 +175,9 @@ class TimelineBridgeMixin:
             ids = _coerce_activity_ids(activity_ids)
             if ids is None:
                 return {"ok": False, "error": "请选择有效的活动"}
+            if project_id is None:
+                project_id = activity_member_hash
+                activity_member_hash = ""
             # ``bool`` is a subclass of ``int``; reject it so ``True`` is
             # not coerced to project id ``1``.
             if isinstance(project_id, bool):
@@ -181,7 +186,14 @@ class TimelineBridgeMixin:
                 pid = int(project_id)
             except (TypeError, ValueError):
                 return {"ok": False, "error": "请选择有效的项目"}
-            timeline_api.reclassify_timeline_session_project(ids, pid)
+            if isinstance(activity_member_hash, str) and activity_member_hash:
+                if not isinstance(report_date, str) or not _DATE_SHAPE_RE.match(report_date):
+                    return {"ok": False, "error": "日期无效"}
+                timeline_api.reclassify_timeline_session_project(
+                    report_date, ids, activity_member_hash, pid
+                )
+            else:
+                timeline_api.reclassify_timeline_session_project(ids, pid)
             return {"ok": True}
         except ValueError as exc:
             if str(exc) == "not_project_activity":
@@ -197,15 +209,15 @@ class TimelineBridgeMixin:
     def update_timeline_note(
         self,
         activity_ids: list[int],
-        note: str,
-        report_date: str,
+        activity_member_hash,
+        note: str | None = None,
+        report_date: str | None = None,
     ) -> dict[str, Any]:
         """Write the session note for a Timeline session.
 
-        ``activity_ids`` is the session's activity id list; the first id is
-        used as the session-note key (``first_activity_id``). ``note`` is the
-        new note text. ``report_date`` is the ``YYYY-MM-DD`` date being
-        viewed. The note is stored in ``project_session_note``. Legitimate
+        ``activity_ids`` and ``activity_member_hash`` identify the exact
+        current report session. ``note`` is the new note text.
+        ``report_date`` is the ``YYYY-MM-DD`` date being viewed. Legitimate
         newlines inside the note are preserved; whitespace-only notes
         delete the row.
 
@@ -216,6 +228,10 @@ class TimelineBridgeMixin:
             ids = _coerce_activity_ids(activity_ids)
             if ids is None:
                 return {"ok": False, "error": "请选择有效的活动"}
+            if report_date is None:
+                report_date = note
+                note = activity_member_hash
+                activity_member_hash = ""
             if not isinstance(note, str):
                 return {"ok": False, "error": "备注内容无效"}
             if len(note) > timeline_api.TIMELINE_NOTE_MAX_LENGTH:
@@ -225,10 +241,12 @@ class TimelineBridgeMixin:
             # Lightweight shape check; the API does the full validation.
             if not _DATE_SHAPE_RE.match(report_date):
                 return {"ok": False, "error": "日期无效"}
-            first_activity_id = ids[0]
-            timeline_api.update_timeline_session_note(
-                report_date, first_activity_id, note
-            )
+            if isinstance(activity_member_hash, str) and activity_member_hash:
+                timeline_api.update_timeline_session_note(
+                    report_date, ids, activity_member_hash, note
+                )
+            else:
+                timeline_api.update_timeline_session_note(report_date, ids[0], note)
             return {"ok": True}
         except ValueError as exc:
             if str(exc) == "not_project_activity":
@@ -241,9 +259,10 @@ class TimelineBridgeMixin:
     def update_timeline_note_and_duration(
         self,
         activity_ids: list[int],
-        note: str,
-        adjusted_duration_seconds: int | None,
-        report_date: str,
+        activity_member_hash,
+        note=None,
+        adjusted_duration_seconds: int | None = None,
+        report_date: str | None = None,
     ) -> dict[str, Any]:
         """Write note + user-adjusted duration for a Timeline session.
 
@@ -254,10 +273,9 @@ class TimelineBridgeMixin:
         raw collected duration). ``report_date`` is the ``YYYY-MM-DD`` date
         being viewed.
 
-        The adjusted duration is stored in
-        ``project_session_note.adjusted_duration_seconds`` and NEVER
+        The adjusted duration is stored on the session override and NEVER
         modifies ``activity_log``. Clearing the duration input (passing
-        ``None``) removes the override.
+        ``None``) removes the duration override.
 
         Returns ``{"ok": true}`` on success or
         ``{"ok": false, "error": "<chinese message>"}`` on failure.
@@ -266,6 +284,11 @@ class TimelineBridgeMixin:
             ids = _coerce_activity_ids(activity_ids)
             if ids is None:
                 return {"ok": False, "error": "请选择有效的活动"}
+            if report_date is None:
+                report_date = adjusted_duration_seconds
+                adjusted_duration_seconds = note
+                note = activity_member_hash
+                activity_member_hash = ""
             if not isinstance(note, str):
                 return {"ok": False, "error": "备注内容无效"}
             if len(note) > timeline_api.TIMELINE_NOTE_MAX_LENGTH:
@@ -289,10 +312,14 @@ class TimelineBridgeMixin:
                     return {"ok": False, "error": "时长无效"}
                 if duration_value > timeline_api.TIMELINE_ADJUSTED_DURATION_MAX_SECONDS:
                     return {"ok": False, "error": "时长无效"}
-            first_activity_id = ids[0]
-            timeline_api.update_timeline_session_note_and_duration(
-                report_date, first_activity_id, note, duration_value
-            )
+            if isinstance(activity_member_hash, str) and activity_member_hash:
+                timeline_api.update_timeline_session_note_and_duration(
+                    report_date, ids, activity_member_hash, note, duration_value
+                )
+            else:
+                timeline_api.update_timeline_session_note_and_duration(
+                    report_date, ids[0], note, duration_value
+                )
             return {"ok": True}
         except ValueError as exc:
             if str(exc) == "not_project_activity":
@@ -300,4 +327,65 @@ class TimelineBridgeMixin:
             return {"ok": False, "error": "操作失败"}
         except Exception:
             logger.exception("webview bridge update_timeline_note_and_duration failed")
+            return dict(_GENERIC_ERROR)
+
+    def save_timeline_session_override(
+        self,
+        activity_ids: list[int],
+        activity_member_hash: str,
+        project_id: int | None,
+        adjusted_duration_seconds: int | None,
+        note: str,
+        report_date: str,
+    ) -> dict[str, Any]:
+        """Save project, note, and display duration as one session override."""
+        try:
+            ids = _coerce_activity_ids(activity_ids)
+            if ids is None:
+                return {"ok": False, "error": "请选择有效的活动"}
+            if not isinstance(activity_member_hash, str) or not activity_member_hash:
+                return {"ok": False, "error": "请选择有效的活动"}
+            if not isinstance(report_date, str) or not _DATE_SHAPE_RE.match(report_date):
+                return {"ok": False, "error": "日期无效"}
+            if not isinstance(note, str):
+                return {"ok": False, "error": "备注内容无效"}
+            if len(note) > timeline_api.TIMELINE_NOTE_MAX_LENGTH:
+                return {"ok": False, "error": "备注过长"}
+            pid: int | None = None
+            if project_id is not None:
+                if isinstance(project_id, bool):
+                    return {"ok": False, "error": "请选择有效的项目"}
+                try:
+                    pid = int(project_id)
+                except (TypeError, ValueError):
+                    return {"ok": False, "error": "请选择有效的项目"}
+            duration_value: int | None = None
+            if adjusted_duration_seconds is not None:
+                if isinstance(adjusted_duration_seconds, bool):
+                    return {"ok": False, "error": "时长无效"}
+                try:
+                    duration_value = int(adjusted_duration_seconds)
+                except (TypeError, ValueError):
+                    return {"ok": False, "error": "时长无效"}
+                if duration_value < 0:
+                    return {"ok": False, "error": "时长无效"}
+                if duration_value > timeline_api.TIMELINE_ADJUSTED_DURATION_MAX_SECONDS:
+                    return {"ok": False, "error": "时长无效"}
+            timeline_api.save_timeline_session_override(
+                report_date,
+                ids,
+                activity_member_hash,
+                pid,
+                duration_value,
+                note,
+            )
+            return {"ok": True}
+        except ValueError as exc:
+            if str(exc) == "not_project_activity":
+                return {"ok": False, "error": "系统状态记录不支持项目编辑"}
+            if str(exc) == "session_identity_conflict":
+                return {"ok": False, "error": "该编辑因项目规则更新发生重排，请重新确认。"}
+            return {"ok": False, "error": "操作失败"}
+        except Exception:
+            logger.exception("webview bridge save_timeline_session_override failed")
             return dict(_GENERIC_ERROR)

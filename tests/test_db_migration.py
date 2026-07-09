@@ -20,7 +20,8 @@ EXPECTED_TABLES = {
     "project_rule",
     "activity_project_assignment",
     "activity_clipboard_event",
-    "project_session_note",
+    "project_session_override",
+    "project_session_override_member",
     "activity_resource",
 }
 
@@ -57,37 +58,6 @@ def _get_tables(conn) -> set[str]:
     }
 
 
-def _drop_adjusted_duration_column(conn) -> None:
-    """Remove ``adjusted_duration_seconds`` from ``project_session_note``.
-
-    Uses the rename-and-recreate pattern so the migration test works on
-    SQLite versions that do not support ``ALTER TABLE ... DROP COLUMN``
-    (pre 3.35.0). The schema for ``project_session_note`` matches the
-    pre-migration shape (no ``adjusted_duration_seconds`` column).
-    """
-    conn.execute("ALTER TABLE project_session_note RENAME TO project_session_note_old")
-    conn.execute(
-        """
-        CREATE TABLE project_session_note(
-            report_date TEXT NOT NULL,
-            first_activity_id INTEGER NOT NULL,
-            note TEXT NOT NULL DEFAULT '',
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            PRIMARY KEY (report_date, first_activity_id)
-        )
-        """
-    )
-    conn.execute(
-        """
-        INSERT INTO project_session_note(report_date, first_activity_id, note, created_at, updated_at)
-        SELECT report_date, first_activity_id, note, created_at, updated_at
-        FROM project_session_note_old
-        """
-    )
-    conn.execute("DROP TABLE project_session_note_old")
-
-
 def _drop_project_language_column(conn) -> None:
     """Remove ``language`` from ``project`` to simulate a pre-language DB."""
     conn.execute("ALTER TABLE project RENAME TO project_old")
@@ -115,41 +85,6 @@ def _drop_project_language_column(conn) -> None:
         """
     )
     conn.execute("DROP TABLE project_old")
-
-
-def test_old_database_without_adjusted_duration_gets_migrated(tmp_path):
-    """An old database missing adjusted_duration_seconds gets the column added."""
-    from worktrace.db import initialize_database, get_connection, ensure_schema_migrations
-    db_path = str(tmp_path / "test.db")
-    # Create a new-style database, then strip the column to simulate an
-    # old database that predates the migration.
-    initialize_database(db_path)
-    conn = get_connection()
-    try:
-        _drop_adjusted_duration_column(conn)
-        conn.commit()
-    finally:
-        conn.close()
-    # Verify column is gone
-    conn = get_connection()
-    try:
-        columns = _get_columns(conn, "project_session_note")
-        assert "adjusted_duration_seconds" not in columns
-    finally:
-        conn.close()
-    # Run migration
-    conn = get_connection()
-    try:
-        ensure_schema_migrations(conn)
-    finally:
-        conn.close()
-    # Verify column is back
-    conn = get_connection()
-    try:
-        columns = _get_columns(conn, "project_session_note")
-        assert "adjusted_duration_seconds" in columns
-    finally:
-        conn.close()
 
 
 def test_old_database_without_project_language_gets_migrated(tmp_path):
@@ -265,7 +200,8 @@ def test_reset_database_clears_business_data_and_rebuilds_defaults(temp_db):
         assert conn.execute("SELECT COUNT(*) AS c FROM activity_log").fetchone()["c"] == 0
         assert conn.execute("SELECT COUNT(*) AS c FROM activity_project_assignment").fetchone()["c"] == 0
         assert conn.execute("SELECT COUNT(*) AS c FROM activity_clipboard_event").fetchone()["c"] == 0
-        assert conn.execute("SELECT COUNT(*) AS c FROM project_session_note").fetchone()["c"] == 0
+        assert conn.execute("SELECT COUNT(*) AS c FROM project_session_override").fetchone()["c"] == 0
+        assert conn.execute("SELECT COUNT(*) AS c FROM project_session_override_member").fetchone()["c"] == 0
         assert conn.execute("SELECT COUNT(*) AS c FROM folder_project_rule").fetchone()["c"] == 0
         assert conn.execute("SELECT COUNT(*) AS c FROM folder_rule_index_state").fetchone()["c"] == 0
         assert conn.execute("SELECT COUNT(*) AS c FROM folder_rule_file_index").fetchone()["c"] == 0

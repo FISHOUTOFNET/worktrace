@@ -92,7 +92,13 @@ def apply_rules_to_activity(activity_id: int) -> None:
 def apply_rules_to_unclassified() -> None:
     with get_connection() as conn:
         rows = conn.execute(
-            "SELECT id FROM activity_log WHERE manual_override = 0 AND is_deleted = 0"
+            """
+            SELECT a.id
+            FROM activity_log a
+            LEFT JOIN activity_project_assignment apa ON apa.activity_id = a.id
+            WHERE a.is_deleted = 0
+              AND COALESCE(apa.is_manual, 0) = 0
+            """
         ).fetchall()
     for row in rows:
         apply_rules_to_activity(int(row["id"]))

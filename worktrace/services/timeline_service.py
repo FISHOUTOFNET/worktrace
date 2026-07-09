@@ -14,14 +14,14 @@ from ..db import dict_rows, get_connection
 from ..formatters import format_status_label
 from ..path_utils import split_file_path
 from ..resources.title_parsing import extract_anchor_file_name
-from . import folder_rule_service, session_boundary_service, session_note_service
+from . import folder_rule_service, report_session_projection_service, session_boundary_service, session_override_service
 from .activity_continuity_service import (
     has_hard_boundary_between,
     is_hard_boundary_status,
     is_normal_project_status,
     is_report_short_context_duration,
 )
-from .activity_service import update_project_editable_activities_project
+from .activity_edit_policy import require_project_editable_activity
 from .anchor_predicates import is_file_context_anchor
 from .context_service import recompute_context_assignments_for_date
 from .project_attribution_policy import official_project_fields, report_project_fields
@@ -39,11 +39,12 @@ def get_project_sessions_by_range(
     include_hidden: bool = True,
     ensure_context: bool = True,
 ) -> list[dict]:
-    uncategorized_id = get_or_create_uncategorized_project()
-    rows = get_report_activity_rows(start_date, end_date, include_hidden=include_hidden, ensure_context=ensure_context)
-    sessions = _build_sessions_from_rows(rows, uncategorized_id, _boundary_times_for_rows(rows))
-    session_note_service.attach_session_user_fields(sessions)
-    return sorted(sessions, key=_session_sort_key, reverse=True)
+    return report_session_projection_service.get_report_sessions_by_range(
+        start_date,
+        end_date,
+        include_hidden=include_hidden,
+        ensure_context=ensure_context,
+    )
 
 
 def _build_sessions_from_rows(rows: list[dict], uncategorized_id: int, boundary_times: list[str] | None = None) -> list[dict]:
@@ -172,26 +173,103 @@ def get_session_anchor_folders(activity_ids: list[int]) -> list[str]:
     return folders
 
 
-def update_session_project(session_activity_ids: list[int], project_id: int) -> None:
-    update_project_editable_activities_project(session_activity_ids, project_id)
+def update_session_override(
+    report_date: str,
+    activity_ids: list[int],
+    activity_member_hash: str,
+    *,
+    project_id: int | None,
+    adjusted_duration_seconds: int | None,
+    note: str,
+) -> int | None:
+    _require_editable_session_activity_ids(activity_ids)
+    session = report_session_projection_service.resolve_current_session(
+        report_date,
+        activity_ids,
+        activity_member_hash,
+        include_hidden=True,
+        ensure_context=True,
+    )
+    return session_override_service.upsert_session_override(
+        session,
+        project_id=project_id,
+        adjusted_duration_seconds=adjusted_duration_seconds,
+        note=note,
+    )
+
+
+def update_session_project(*args) -> int | None:
+    if len(args) == 2:
+        session_activity_ids, project_id = args
+        _require_editable_session_activity_ids(session_activity_ids)
+        session = _resolve_legacy_session_by_activity_ids([int(aid) for aid in session_activity_ids])
+        return session_override_service.upsert_session_override(
+            session,
+            project_id=int(project_id),
+            adjusted_duration_seconds=session.get("adjusted_duration_seconds"),
+            note=str(session.get("session_note") or ""),
+        )
+    if len(args) != 4:
+        raise TypeError("update_session_project expects 2 or 4 arguments")
+    report_date, session_activity_ids, activity_member_hash, project_id = args
+    _require_editable_session_activity_ids(session_activity_ids)
+    session = report_session_projection_service.resolve_current_session(
+        str(report_date),
+        session_activity_ids,
+        str(activity_member_hash),
+        include_hidden=True,
+        ensure_context=True,
+    )
+    return session_override_service.upsert_session_override(
+        session,
+        project_id=project_id,
+        adjusted_duration_seconds=session.get("adjusted_duration_seconds"),
+        note=str(session.get("session_note") or ""),
+    )
 
 
 def reclassify_project_activity_summary(activity_ids: list[int], project_id: int) -> None:
-    update_project_editable_activities_project(activity_ids, project_id)
+    update_activity_group_project(activity_ids, project_id)
 
 
-def update_session_note(report_date: str, first_activity_id: int, note: str) -> None:
-    session_note_service.set_session_note(report_date, first_activity_id, note)
+def update_session_note(report_date: str, first_activity_id: int, note: str) -> int | None:
+    require_project_editable_activity(int(first_activity_id))
+    session = _resolve_legacy_session_by_first_activity(report_date, first_activity_id)
+    return session_override_service.upsert_session_override(
+        session,
+        project_id=session.get("project_id") if session.get("has_project_override") else None,
+        adjusted_duration_seconds=session.get("adjusted_duration_seconds"),
+        note=note,
+    )
 
 
-def update_session_note_and_duration(
-    report_date: str,
-    first_activity_id: int,
-    note: str,
-    adjusted_duration_seconds: int | None,
-) -> None:
-    session_note_service.set_session_user_fields(
-        report_date, first_activity_id, note, adjusted_duration_seconds
+def update_session_note_and_duration(report_date: str, *args) -> int | None:
+    if len(args) == 3 and isinstance(args[0], int):
+        first_activity_id, note, adjusted_duration_seconds = args
+        require_project_editable_activity(int(first_activity_id))
+        session = _resolve_legacy_session_by_first_activity(report_date, int(first_activity_id))
+        return session_override_service.upsert_session_override(
+            session,
+            project_id=session.get("project_id") if session.get("has_project_override") else None,
+            adjusted_duration_seconds=adjusted_duration_seconds,
+            note=str(note or ""),
+        )
+    if len(args) != 4:
+        raise TypeError("update_session_note_and_duration expects 4 or 5 arguments")
+    activity_ids, activity_member_hash, note, adjusted_duration_seconds = args
+    _require_editable_session_activity_ids(activity_ids)
+    session = report_session_projection_service.resolve_current_session(
+        report_date,
+        activity_ids,
+        activity_member_hash,
+        include_hidden=True,
+        ensure_context=True,
+    )
+    return session_override_service.upsert_session_override(
+        session,
+        project_id=session.get("project_id") if session.get("has_project_override") else None,
+        adjusted_duration_seconds=adjusted_duration_seconds,
+        note=note,
     )
 
 
@@ -199,10 +277,14 @@ def update_activity_group_project(
     activity_ids: list[int],
     project_id: int,
 ) -> None:
-    ids = [int(activity_id) for activity_id in activity_ids]
-    if not ids:
-        return
-    update_project_editable_activities_project(ids, project_id)
+    _require_editable_session_activity_ids(activity_ids)
+    session = _resolve_legacy_session_by_activity_ids([int(activity_id) for activity_id in activity_ids])
+    session_override_service.upsert_session_override(
+        session,
+        project_id=int(project_id),
+        adjusted_duration_seconds=session.get("adjusted_duration_seconds"),
+        note=str(session.get("session_note") or ""),
+    )
 
 
 def preview_session_project_update(session_activity_ids: list[int], project_id: int) -> dict:
@@ -255,6 +337,41 @@ def preview_session_project_update(session_activity_ids: list[int], project_id: 
     }
 
 
+def _require_editable_session_activity_ids(activity_ids) -> None:
+    for activity_id in activity_ids or []:
+        require_project_editable_activity(int(activity_id))
+
+
+def _resolve_legacy_session_by_activity_ids(activity_ids: list[int]) -> dict:
+    if not activity_ids:
+        raise ValueError("invalid_session_identity")
+    ids = {int(aid) for aid in activity_ids}
+    placeholders = ",".join("?" for _ in ids)
+    with get_connection() as conn:
+        row = conn.execute(
+            f"""
+            SELECT MIN(substr(start_time, 1, 10)) AS report_date
+            FROM activity_log
+            WHERE id IN ({placeholders})
+            """,
+            sorted(ids),
+        ).fetchone()
+    report_date = str(row["report_date"] or "") if row else ""
+    if not report_date:
+        raise ValueError("invalid_session_identity")
+    for session in get_project_sessions_by_date(report_date, include_hidden=True, ensure_context=True):
+        if {int(aid) for aid in session.get("activity_ids") or []} == ids:
+            return session
+    raise ValueError("session_identity_conflict")
+
+
+def _resolve_legacy_session_by_first_activity(report_date: str, first_activity_id: int) -> dict:
+    for session in get_project_sessions_by_date(report_date, include_hidden=True, ensure_context=True):
+        if int(session.get("first_activity_id") or 0) == int(first_activity_id):
+            return session
+    raise ValueError("session_identity_conflict")
+
+
 def _load_activity_rows_for_report_range(start_date: str, end_date: str, include_hidden: bool) -> list[dict]:
     load_start_day = date_type.fromisoformat(start_date) - timedelta(days=1)
     load_start = f"{load_start_day.isoformat()} 00:00:00"
@@ -269,12 +386,12 @@ def _load_activity_rows_for_report_range(start_date: str, end_date: str, include
                 apa.suggested_project_name,
                 apa.source AS assignment_source,
                 apa.is_manual AS assignment_is_manual,
-                COALESCE(apa.project_id, a.project_id) AS effective_project_id,
+                apa.project_id AS effective_project_id,
                 p.name AS effective_project_name,
                 p.description AS effective_project_description
             FROM activity_log a
             LEFT JOIN activity_project_assignment apa ON apa.activity_id = a.id
-            LEFT JOIN project p ON p.id = COALESCE(apa.project_id, a.project_id)
+            LEFT JOIN project p ON p.id = apa.project_id
             WHERE a.is_deleted = 0
               AND (a.start_time >= ? OR a.end_time IS NULL OR a.end_time >= ?)
               AND (a.end_time IS NULL OR a.start_time <= ?)
@@ -315,12 +432,12 @@ def _load_session_rows(
                 apa.suggested_project_name,
                 apa.source AS assignment_source,
                 apa.is_manual AS assignment_is_manual,
-                COALESCE(apa.project_id, a.project_id) AS effective_project_id,
+                apa.project_id AS effective_project_id,
                 p.name AS effective_project_name,
                 p.description AS effective_project_description
             FROM activity_log a
             LEFT JOIN activity_project_assignment apa ON apa.activity_id = a.id
-            LEFT JOIN project p ON p.id = COALESCE(apa.project_id, a.project_id)
+            LEFT JOIN project p ON p.id = apa.project_id
             WHERE a.id IN ({placeholders})
             ORDER BY a.start_time {order_direction}, a.id {order_direction}
             """,
@@ -359,6 +476,7 @@ def _build_session(rows: list[dict], uncategorized_id: int) -> dict:
         _display_duration(row) for row in rows if not bool(row.get("is_in_progress"))
     )
     activity_ids = [int(row["id"]) for row in rows]
+    member_slices = session_override_service.member_slices_for_rows(rows)
     status_summary = _status_summary(rows)
     session_id = f"{first['id']}-{last['id']}"
     # A session is in-progress if its last row is still open. The flag is
@@ -379,6 +497,12 @@ def _build_session(rows: list[dict], uncategorized_id: int) -> dict:
         "closed_duration_seconds": int(closed_duration_seconds),
         "open_activity_id": open_activity_id,
         "activity_ids": activity_ids,
+        "member_slices": member_slices,
+        "activity_member_hash": session_override_service.activity_member_hash(
+            str(first.get("report_date") or ""),
+            member_slices,
+        ),
+        "anchor_activity_id": int(activity_ids[0]) if activity_ids else 0,
         "first_activity_id": int(activity_ids[0]) if activity_ids else None,
         "session_note": "",
         "sort_time": last.get("start_time") or first.get("start_time"),

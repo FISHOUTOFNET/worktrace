@@ -84,35 +84,22 @@ def assign_project_for_activity(activity_id: int) -> dict:
             "SELECT * FROM activity_project_assignment WHERE activity_id = ?",
             (activity_id,),
         ).fetchone()
-        if int(activity["manual_override"] or 0) or (existing and int(existing["is_manual"] or 0)):
-            project_id = activity["project_id"] if activity["project_id"] is not None else existing["project_id"]
-            if project_id is None:
-                project_id = _get_uncategorized_project_id(conn)
-            _upsert_assignment(conn, activity_id, project_id, "manual", 100, True, None)
-            _sync_activity_project(conn, activity_id, project_id, auto_classified=False)
+        if existing and int(existing["is_manual"] or 0):
+            project_id = existing["project_id"] if existing["project_id"] is not None else _get_uncategorized_project_id(conn)
             return _assignment_dict(conn, activity_id)
 
         if existing and existing["source"] == "midnight_anchor":
-            project_id = existing["project_id"] if existing["project_id"] is not None else _get_uncategorized_project_id(conn)
-            _sync_activity_project(conn, activity_id, project_id, auto_classified=True)
             return _assignment_dict(conn, activity_id)
 
         if activity["status"] != STATUS_NORMAL:
             project_id = _get_uncategorized_project_id(conn)
             _upsert_assignment(conn, activity_id, project_id, "uncategorized", 0, False, None)
-            _sync_activity_project(conn, activity_id, project_id, auto_classified=False)
             return _assignment_dict(conn, activity_id)
 
         resource = _resource_for_activity(conn, activity_id, activity_dict)
         project_id, source, confidence, suggested_name = _infer_project_resource_first(conn, activity_dict, resource)
 
         _upsert_assignment(conn, activity_id, project_id, source, confidence, False, suggested_name)
-        _sync_activity_project(
-            conn,
-            activity_id,
-            project_id,
-            auto_classified=source in {"keyword_rule", "folder_rule"},
-        )
         return _assignment_dict(conn, activity_id)
 
 
@@ -173,7 +160,7 @@ def sync_persisted_open_activity_project(activity_id: int) -> dict:
 
     Conditions (all must hold; otherwise the helper is a no-op): the
     activity exists, ``end_time IS NULL``, ``status == STATUS_NORMAL``,
-    ``is_deleted = 0``, ``is_hidden = 0``, ``manual_override = 0``, the
+    ``is_deleted = 0``, ``is_hidden = 0``, the
     assignment is not manual, and the current assignment source is still
     effectively uncategorized.
 
@@ -187,7 +174,7 @@ def sync_persisted_open_activity_project(activity_id: int) -> dict:
     with get_connection() as conn:
         activity = conn.execute(
             """
-            SELECT is_hidden, is_deleted, end_time, status, manual_override
+            SELECT is_hidden, is_deleted, end_time, status
             FROM activity_log
             WHERE id = ?
             """,
@@ -200,8 +187,6 @@ def sync_persisted_open_activity_project(activity_id: int) -> dict:
         if activity["end_time"] is not None:
             return _assignment_dict(conn, activity_id)
         if activity["status"] != STATUS_NORMAL:
-            return _assignment_dict(conn, activity_id)
-        if int(activity["manual_override"] or 0):
             return _assignment_dict(conn, activity_id)
         existing = conn.execute(
             "SELECT source, is_manual FROM activity_project_assignment WHERE activity_id = ?",
@@ -518,20 +503,7 @@ def _upsert_assignment(
 
 
 def _sync_activity_project(conn, activity_id: int, project_id: int, auto_classified: bool) -> None:
-    row = conn.execute(
-        "SELECT project_id, auto_classified FROM activity_log WHERE id = ?",
-        (activity_id,),
-    ).fetchone()
-    if row and row["project_id"] == project_id and int(row["auto_classified"] or 0) == int(auto_classified):
-        return
-    conn.execute(
-        """
-        UPDATE activity_log
-        SET project_id = ?, auto_classified = ?, updated_at = ?
-        WHERE id = ?
-        """,
-        (project_id, int(auto_classified), now_str(), activity_id),
-    )
+    return
 
 
 def _assignment_dict(conn, activity_id: int) -> dict:

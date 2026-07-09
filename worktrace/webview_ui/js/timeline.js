@@ -666,6 +666,11 @@
             showEditStatus("无法保存：缺少活动信息", true);
             return;
         }
+        var activityMemberHash = App.editingSession.activity_member_hash || "";
+        if (!activityMemberHash) {
+            showEditStatus("无法保存：活动时段已变化，请刷新后重试", true);
+            return;
+        }
         var select = document.getElementById("edit-project-select");
         var noteEl = document.getElementById("edit-note-text");
         if (!select || !noteEl) return;
@@ -721,7 +726,7 @@
         var dateEl = document.getElementById("timeline-date-input");
         var reportDate = App.timelineDate || (dateEl ? dateEl.value : null);
         if (reportDate === "--" || reportDate === "") reportDate = null;
-        if (noteOrDurationChanged && !reportDate) {
+        if (!reportDate) {
             showEditStatus("无法保存：日期无效", true);
             return;
         }
@@ -729,42 +734,22 @@
         setEditSaving(true);
         showEditStatus("", false);
 
-        var promises = [];
-        if (projectChanged) {
-            promises.push(App.callBridge("update_timeline_project", activityIds, projectId).then(function (result) {
-                if (!result || result.ok === false) {
-                    throw new Error(result && result.error ? result.error : "保存项目失败");
-                }
-            }));
-        }
-        if (noteOrDurationChanged) {
-            // The note and the duration override are saved together so they stay consistent.
-            promises.push(App.callBridge(
-                "update_timeline_note_and_duration",
-                activityIds, note, adjustedDurationSeconds, reportDate
-            ).then(function (result) {
-                if (!result || result.ok === false) {
-                    throw new Error(result && result.error ? result.error : "保存备注/时长失败");
-                }
-            }));
-        }
-
-        Promise.allSettled(promises).then(function (results) {
-            var hasError = false;
-            var errorMsg = "";
-            for (var i = 0; i < results.length; i++) {
-                if (results[i].status === "rejected") {
-                    hasError = true;
-                    // Never read .message from a rejected promise — could be a raw pywebview exception.
-                    // Use the stable "保存失败" fallback so internal details never leak into the UI.
-                    errorMsg = "保存失败";
-                    break;
-                }
-            }
-            if (hasError) {
+        var overrideProjectId = (projectChanged || App.editingSession.has_project_override === true)
+            ? projectId
+            : null;
+        App.callBridge(
+            "save_timeline_session_override",
+            activityIds,
+            activityMemberHash,
+            overrideProjectId,
+            adjustedDurationSeconds,
+            note,
+            reportDate
+        ).then(function (result) {
+            if (!result || result.ok === false) {
                 // Keep original data in the form; do not clear.
                 setEditSaving(false);
-                showEditStatus(errorMsg, true);
+                showEditStatus(result && result.error ? result.error : "保存失败", true);
                 return;
             }
             // Update the editingSession baseline to the saved values so isEditDirty() returns false and Cancel
@@ -772,6 +757,7 @@
             if (App.editingSession) {
                 if (projectChanged) {
                     App.editingSession.project_id = projectId;
+                    App.editingSession.has_project_override = true;
                 }
                 if (noteOrDurationChanged) {
                     App.editingSession.session_note = note;
@@ -790,6 +776,9 @@
             // Reset saving state before refreshing; a refresh failure is a separate concern.
             setEditSaving(false);
             refreshTimelineAfterEdit();
+        }).catch(function () {
+            setEditSaving(false);
+            showEditStatus("保存失败", true);
         });
     }
     App.saveEdit = saveEdit;

@@ -30,6 +30,12 @@ def get_summary(start_date: str, end_date: str, ensure_context: bool = True) -> 
     """
     if ensure_context:
         _ensure_context_range(start_date, end_date)
+    sessions = timeline_service.get_project_sessions_by_range(
+        start_date,
+        end_date,
+        include_hidden=False,
+        ensure_context=False,
+    )
     rows = timeline_service.get_report_activity_rows(
         start_date,
         end_date,
@@ -57,17 +63,14 @@ def get_summary(start_date: str, end_date: str, ensure_context: bool = True) -> 
         for row in rows
         if row.get("status") == STATUS_EXCLUDED
     )
-    project_stats = get_project_stats(start_date, end_date, ensure_context=False)
-    uncategorized = sum(
-        int(row["total_duration"])
-        for row in project_stats
-        if row["project"] == UNCATEGORIZED_PROJECT
-    )
-    classified = sum(
-        int(row["total_duration"])
-        for row in project_stats
-        if row["project"] != UNCATEGORIZED_PROJECT
-    )
+    uncategorized = 0
+    classified = 0
+    for session in sessions:
+        seconds = int(session.get("display_duration_seconds") or session.get("duration_seconds") or 0)
+        if str(session.get("project_name") or UNCATEGORIZED_PROJECT) == UNCATEGORIZED_PROJECT:
+            uncategorized += seconds
+        else:
+            classified += seconds
     return {
         "total_duration": total,
         "effective_duration": effective,
@@ -145,20 +148,24 @@ def get_statistics_export_summary(date_from: str, date_to: str) -> dict:
         include_hidden=False,
         ensure_context=True,
     )
+    sessions = timeline_service.get_project_sessions_by_range(
+        date_from,
+        date_to,
+        include_hidden=False,
+        ensure_context=False,
+    )
     # Only closed activities have a finalized duration. ``is_in_progress`` is
     # set by the timeline service before it projects an open activity's
     # ``end_time``, so this flag is reliable regardless of the projected
     # ``end_time`` value.
     closed_rows = [row for row in rows if not row.get("is_in_progress")]
-    report_project_rows = [
-        row
-        for row in closed_rows
-        if is_normal_project_status(str(row.get("status") or ""))
-        and bool(row.get("is_report_project"))
-    ]
+    closed_sessions = [session for session in sessions if not session.get("is_in_progress")]
     all_rows = closed_rows
 
-    total_duration = 0
+    total_duration = sum(
+        int(row.get("report_duration_seconds") or row.get("duration_seconds") or 0)
+        for row in all_rows
+    )
     project_duration = 0
     all_activity_ids: set[int] = set()
     by_project: dict[str, dict] = {}
@@ -167,7 +174,6 @@ def get_statistics_export_summary(date_from: str, date_to: str) -> dict:
 
     for row in all_rows:
         duration = int(row.get("report_duration_seconds") or row.get("duration_seconds") or 0)
-        total_duration += duration
         activity_id = int(row.get("id") or 0)
         if activity_id:
             all_activity_ids.add(activity_id)
@@ -179,11 +185,18 @@ def get_statistics_export_summary(date_from: str, date_to: str) -> dict:
         _accumulate_summary_group(by_app, app_name, app_name, duration, activity_id)
         _accumulate_summary_group(by_status, status_code or "unknown", status_label, duration, activity_id)
 
-    for row in report_project_rows:
-        duration = int(row.get("report_duration_seconds") or row.get("duration_seconds") or 0)
+    for session in closed_sessions:
+        duration = int(session.get("display_duration_seconds") or session.get("duration_seconds") or 0)
+        if not is_normal_project_status(str(session.get("status") or "")):
+            continue
+        activity_ids = [int(aid) for aid in session.get("activity_ids") or []]
+        activity_id = activity_ids[0] if activity_ids else 0
+        if activity_id:
+            all_activity_ids.add(activity_id)
+        project_name = str(session.get("project_name") or UNCATEGORIZED_PROJECT).strip() or UNCATEGORIZED_PROJECT
+        if project_name == UNCATEGORIZED_PROJECT:
+            continue
         project_duration += duration
-        activity_id = int(row.get("id") or 0)
-        project_name = str(row.get("report_project_name") or UNCATEGORIZED_PROJECT).strip() or UNCATEGORIZED_PROJECT
         _accumulate_summary_group(by_project, project_name, project_name, duration, activity_id)
 
     activity_count = len(all_activity_ids)

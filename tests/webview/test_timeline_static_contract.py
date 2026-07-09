@@ -182,12 +182,11 @@ def test_frontend_js_has_edit_panel_functions():
     assert "showEditStatus" in source
 
 def test_frontend_js_calls_editing_bridge_methods():
-    """frontend JS must call the bridge methods for project
-    reclassification, note editing, and project list loading."""
+    """frontend JS must call the bridge methods for project loading and
+    unified session override saving."""
     source = read_all_js()
     assert "list_projects_for_timeline" in source
-    assert "update_timeline_project" in source
-    assert "update_timeline_note" in source
+    assert "save_timeline_session_override" in source
 
 def test_frontend_js_has_saving_state():
     """frontend JS must track a saving state to prevent double-submit
@@ -204,7 +203,7 @@ def test_frontend_js_edit_save_failure_preserves_data():
     source = read_all_js()
     # On error, setEditSaving(false) is called and showEditStatus shows error
     assert "setEditSaving(false)" in source
-    assert "showEditStatus(errorMsg, true)" in source
+    assert 'showEditStatus(result && result.error ? result.error : "保存失败", true)' in source
 
 def test_frontend_js_edit_save_success_refreshes_timeline():
     """on save success, frontend JS must refresh the Timeline so the
@@ -829,17 +828,16 @@ def test_frontend_js_no_string_err_leak():
         )
 
 def test_frontend_js_save_edit_catch_uses_stable_fallback():
-    """the saveEdit Promise.allSettled rejection handler must
-    use the stable '保存失败' fallback instead of reading .reason.message."""
+    """the saveEdit rejection handler must use the stable '保存失败'
+    fallback instead of reading raw exception messages."""
     source = read_all_js()
     # Bound the scan to the real saveEdit function body so adjacent
     # functions / modules cannot leak into the block we assert on.
     body = func_body(source, "saveEdit")
-    # Find the Promise.allSettled block inside saveEdit.
-    allsettled_pos = body.find("Promise.allSettled(promises).then")
-    assert allsettled_pos != -1, "saveEdit must use Promise.allSettled"
-    block = body[allsettled_pos:]
-    assert "保存失败" in block, (
+    catch_pos = body.find(".catch(function ()")
+    assert catch_pos != -1, "saveEdit must handle bridge rejection"
+    block = body[catch_pos:]
+    assert 'showEditStatus("保存失败", true)' in block, (
         "saveEdit rejection handler must use '保存失败' stable fallback"
     )
 
@@ -1073,7 +1071,8 @@ def test_no_new_db_schema_for_contract():
         "CREATE TABLE IF NOT EXISTS activity_log",
         "CREATE TABLE IF NOT EXISTS activity_project_assignment",
         "CREATE TABLE IF NOT EXISTS activity_resource",
-        "CREATE TABLE IF NOT EXISTS project_session_note",
+        "CREATE TABLE IF NOT EXISTS project_session_override",
+        "CREATE TABLE IF NOT EXISTS project_session_override_member",
     ):
         assert table in schema_src, (
             "schema.sql must still define table: " + table
@@ -1154,12 +1153,11 @@ def test_frontend_js_has_format_start_time_only():
     )
 
 def test_frontend_js_has_update_note_and_duration_bridge_call():
-    """frontend JS must call the ``update_timeline_note_and_duration`` bridge
-    method so the note and adjusted duration are saved together in a
-    single write."""
+    """frontend JS must call the unified session override bridge so project,
+    note, and adjusted duration are saved together in a single write."""
     source = read_all_js()
-    assert "update_timeline_note_and_duration" in source, (
-        "frontend JS must call update_timeline_note_and_duration bridge method"
+    assert "save_timeline_session_override" in source, (
+        "frontend JS must call save_timeline_session_override bridge method"
     )
 
 def test_frontend_js_dirty_state_includes_duration():
@@ -1313,8 +1311,7 @@ def test_index_html_timeline_p0_edit_panel_only():
 
 def test_save_edit_still_uses_p0_bridge_methods():
     body = func_body(read_all_js(), "saveEdit")
-    assert '"update_timeline_project"' in body
-    assert '"update_timeline_note_and_duration"' in body
+    assert '"save_timeline_session_override"' in body
     assert '"update_timeline_activity_time"' not in body
     assert '"split_timeline_activity"' not in body
 

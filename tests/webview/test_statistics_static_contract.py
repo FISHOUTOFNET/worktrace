@@ -617,7 +617,8 @@ def test_no_new_db_schema_for_contract():
         "CREATE TABLE IF NOT EXISTS activity_log",
         "CREATE TABLE IF NOT EXISTS activity_project_assignment",
         "CREATE TABLE IF NOT EXISTS activity_resource",
-        "CREATE TABLE IF NOT EXISTS project_session_note",
+        "CREATE TABLE IF NOT EXISTS project_session_override",
+        "CREATE TABLE IF NOT EXISTS project_session_override_member",
     ):
         assert table in schema_src, (
             "schema.sql must still define table: " + table

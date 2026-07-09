@@ -20,6 +20,7 @@ from worktrace.services import (
     project_service,
     settings_service,
     statistics_service,
+    timeline_service,
 )
 from worktrace.webview_ui.bridge import WebViewBridge
 
@@ -402,7 +403,7 @@ def test_write_csv_no_resource_or_assignment_mutation(temp_db, tmp_path):
             "SELECT COUNT(*) FROM activity_project_assignment",
         ).fetchone()[0]
         before_note = conn.execute(
-            "SELECT COUNT(*) FROM project_session_note",
+            "SELECT COUNT(*) FROM project_session_override",
         ).fetchone()[0]
     out = tmp_path / "report.csv"
     export_service.write_statistics_csv("2026-06-25", "2026-06-25", out)
@@ -414,7 +415,7 @@ def test_write_csv_no_resource_or_assignment_mutation(temp_db, tmp_path):
             "SELECT COUNT(*) FROM activity_project_assignment",
         ).fetchone()[0]
         after_note = conn.execute(
-            "SELECT COUNT(*) FROM project_session_note",
+            "SELECT COUNT(*) FROM project_session_override",
         ).fetchone()[0]
     assert after_res == before_res
     assert after_asg == before_asg
@@ -447,34 +448,43 @@ def test_write_csv_escapes_formula_injection(temp_db, tmp_path):
     prefixes = ["=", "+", "-", "@"]
     starts = ["09:00:00", "09:30:00", "10:00:00", "10:30:00"]
     ends = ["09:30:00", "10:00:00", "10:30:00", "11:00:00"]
-    for prefix, start, end in zip(prefixes, starts, ends):
+    for idx, (prefix, start, end) in enumerate(zip(prefixes, starts, ends), start=1):
+        project_id = project_service.create_project(f"CSV Formula {idx}")
         aid = activity_service.create_activity(
             "App", "app.exe", "r.txt",
             start_time=f"2026-06-25 {start}",
+            project_id=project_id,
             note="top secret note",
             file_path_hint="C:\\secret\\r.txt",
         )
         activity_service.finalize_created_activity(aid)
         activity_service.close_activity(aid, f"2026-06-25 {end}")
-        timeline_api.update_timeline_session_note(
+        session = next(
+            item for item in timeline_service.get_project_sessions_by_date("2026-06-25")
+            if aid in item["activity_ids"]
+        )
+        timeline_api.save_timeline_session_override(
             "2026-06-25",
-            aid,
+            session["activity_ids"],
+            session["activity_member_hash"],
+            None,
+            None,
             prefix + "SUM(A1:A2)",
         )
     out = tmp_path / "report.csv"
     export_service.write_statistics_csv("2026-06-25", "2026-06-25", out)
     headers, rows = _read_csv(out)
-    assert len(rows) == 1
+    assert len(rows) == 4
     # Session/result fields are escaped; resource detail columns are not exported.
     assert "资源名称" not in headers
     note_col = headers.index("备注")
-    cell = rows[0][note_col]
-    assert cell.startswith("'"), (
-        f"formula-injection cell must be escaped with leading quote: {cell!r}"
-    )
-    assert cell[1:2] in ("=", "+", "-", "@"), (
-        f"escaped cell must retain dangerous prefix: {cell!r}"
-    )
+    for cell in [row[note_col] for row in rows]:
+        assert cell.startswith("'"), (
+            f"formula-injection cell must be escaped with leading quote: {cell!r}"
+        )
+        assert cell[1:2] in ("=", "+", "-", "@"), (
+            f"escaped cell must retain dangerous prefix: {cell!r}"
+        )
 
 
 

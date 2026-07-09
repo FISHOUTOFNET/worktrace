@@ -274,17 +274,7 @@ def backfill_project_rules_batch(rules: Any) -> dict[str, Any]:
                 if activity_id in updated_activity_ids:
                     rule_collision += 1
                     continue
-                # ``manual_override = 0`` rowcount guard: refuses to touch
-                # a row whose manual_override flipped to 1 between the read
-                # and the write (rowcount 0 -> operation_failed -> rollback).
-                cur = conn.execute(
-                    "UPDATE activity_log SET project_id = ?, auto_classified = 1, "
-                    "updated_at = ? WHERE id = ? AND manual_override = 0",
-                    (project_id, ts, activity_id),
-                )
-                if cur.rowcount != 1:
-                    raise RuleBatchError(ERR_OPERATION_FAILED)
-                conn.execute(
+                cursor = conn.execute(
                     """
                     INSERT INTO activity_project_assignment(
                         activity_id, project_id, confidence, source, is_manual,
@@ -298,9 +288,12 @@ def backfill_project_rules_batch(rules: Any) -> dict[str, Any]:
                         is_manual = 0,
                         suggested_project_name = NULL,
                         updated_at = excluded.updated_at
+                    WHERE activity_project_assignment.is_manual = 0
                     """,
                     (activity_id, project_id, confidence, source, ts, ts),
                 )
+                if cursor.rowcount != 1:
+                    continue
                 updated_activity_ids.add(activity_id)
                 rule_updated += 1
             counts = classified

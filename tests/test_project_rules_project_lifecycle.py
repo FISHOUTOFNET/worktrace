@@ -57,7 +57,7 @@ def _counts() -> dict[str, int]:
                 "SELECT COUNT(*) AS c FROM activity_project_assignment"
             ).fetchone()["c"],
             "session_note": conn.execute(
-                "SELECT COUNT(*) AS c FROM project_session_note"
+                "SELECT COUNT(*) AS c FROM project_session_override"
             ).fetchone()["c"],
         }
 

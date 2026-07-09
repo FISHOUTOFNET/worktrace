@@ -29,6 +29,10 @@ CREATE TABLE IF NOT EXISTS activity_log (
     ),
     is_deleted INTEGER NOT NULL DEFAULT 0,
     is_hidden INTEGER NOT NULL DEFAULT 0,
+    -- Deprecated: raw activity facts no longer own project, note,
+    -- classification, or manual/session-edit semantics. These fields remain
+    -- temporarily for legacy cleanup only; production report/session/rule
+    -- paths must use projection and override tables instead.
     auto_classified INTEGER NOT NULL DEFAULT 0,
     manual_override INTEGER NOT NULL DEFAULT 0,
     project_id INTEGER,
@@ -135,6 +139,37 @@ CREATE TABLE IF NOT EXISTS activity_project_assignment (
     FOREIGN KEY (project_id) REFERENCES project(id)
 );
 
+CREATE TABLE IF NOT EXISTS project_session_override (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    report_date TEXT NOT NULL,
+    activity_member_hash TEXT NOT NULL,
+    anchor_activity_id INTEGER NOT NULL,
+    original_start_time TEXT NOT NULL,
+    original_end_time TEXT NOT NULL,
+    original_raw_duration_seconds INTEGER NOT NULL,
+    project_id INTEGER,
+    adjusted_duration_seconds INTEGER,
+    note TEXT NOT NULL DEFAULT '',
+    match_state TEXT NOT NULL DEFAULT 'active' CHECK (
+        match_state IN ('active', 'conflict', 'orphaned', 'superseded')
+    ),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (anchor_activity_id) REFERENCES activity_log(id),
+    FOREIGN KEY (project_id) REFERENCES project(id)
+);
+
+CREATE TABLE IF NOT EXISTS project_session_override_member (
+    override_id INTEGER NOT NULL,
+    activity_id INTEGER NOT NULL,
+    report_date TEXT NOT NULL,
+    slice_start_time TEXT NOT NULL,
+    slice_end_time TEXT NOT NULL,
+    PRIMARY KEY (override_id, activity_id, report_date, slice_start_time, slice_end_time),
+    FOREIGN KEY (override_id) REFERENCES project_session_override(id) ON DELETE CASCADE,
+    FOREIGN KEY (activity_id) REFERENCES activity_log(id)
+);
+
 CREATE TABLE IF NOT EXISTS activity_clipboard_event (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     activity_id INTEGER NOT NULL,
@@ -150,18 +185,6 @@ CREATE TABLE IF NOT EXISTS activity_clipboard_event (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     FOREIGN KEY (activity_id) REFERENCES activity_log(id)
-);
-
-CREATE TABLE IF NOT EXISTS project_session_note (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    report_date TEXT NOT NULL,
-    first_activity_id INTEGER NOT NULL,
-    note TEXT NOT NULL,
-    adjusted_duration_seconds INTEGER,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    FOREIGN KEY (first_activity_id) REFERENCES activity_log(id),
-    UNIQUE(report_date, first_activity_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_activity_time
@@ -199,6 +222,12 @@ ON activity_project_assignment(project_id);
 
 CREATE INDEX IF NOT EXISTS idx_assignment_source_manual
 ON activity_project_assignment(source, is_manual);
+
+CREATE INDEX IF NOT EXISTS idx_project_session_override_hash
+ON project_session_override(report_date, activity_member_hash, match_state);
+
+CREATE INDEX IF NOT EXISTS idx_project_session_override_member_activity
+ON project_session_override_member(activity_id, report_date);
 
 CREATE INDEX IF NOT EXISTS idx_project_rule_pattern
 ON project_rule(pattern);
@@ -261,6 +290,3 @@ ON activity_resource(path_key);
 
 CREATE INDEX IF NOT EXISTS idx_activity_resource_host
 ON activity_resource(uri_host);
-
-CREATE INDEX IF NOT EXISTS idx_project_session_note_key
-ON project_session_note(report_date, first_activity_id);

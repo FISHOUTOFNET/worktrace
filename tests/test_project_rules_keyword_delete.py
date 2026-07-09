@@ -44,7 +44,7 @@ def _counts() -> dict[str, int]:
                 "SELECT COUNT(*) AS c FROM activity_project_assignment"
             ).fetchone()["c"],
             "session_note": conn.execute(
-                "SELECT COUNT(*) AS c FROM project_session_note"
+                "SELECT COUNT(*) AS c FROM project_session_override"
             ).fetchone()["c"],
         }
 
@@ -283,14 +283,19 @@ def test_delete_keyword_rule_does_not_change_activity_log_rows(temp_db):
     assert result["ok"] is True
     after = _counts()
     assert after["activity"] == before["activity"]
-    # The existing activity row is not reclassified by rule deletion. The
-    # activity's project_id stays as the originally assigned project.
+    # Rule deletion does not mutate the raw activity row. Project state lives
+    # in the assignment projection instead.
     with get_connection() as conn:
-        row = conn.execute(
+        raw_row = conn.execute(
             "SELECT project_id FROM activity_log WHERE id = ?",
             (activity_id,),
         ).fetchone()
-    assert row["project_id"] == project
+        assignment = conn.execute(
+            "SELECT project_id FROM activity_project_assignment WHERE activity_id = ?",
+            (activity_id,),
+        ).fetchone()
+    assert raw_row["project_id"] is None
+    assert assignment["project_id"] == project
 
 
 def test_delete_keyword_rule_does_not_change_activity_project_assignment_rows(temp_db):
@@ -321,7 +326,7 @@ def test_delete_keyword_rule_does_not_change_activity_project_assignment_rows(te
     assert after["assignment"] == before["assignment"]
 
 
-def test_delete_keyword_rule_does_not_change_project_session_note_rows(temp_db):
+def test_delete_keyword_rule_does_not_change_project_session_override_rows(temp_db):
     project = project_service.create_project("Client")
     rule_id = rule_service.create_rule("Spec", project)
     activity_id = activity_service.create_activity(
@@ -334,10 +339,14 @@ def test_delete_keyword_rule_does_not_change_project_session_note_rows(temp_db):
     with get_connection() as conn:
         conn.execute(
             """
-            INSERT INTO project_session_note(report_date, first_activity_id, note, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO project_session_override(
+                report_date, activity_member_hash, anchor_activity_id,
+                original_start_time, original_end_time, original_raw_duration_seconds,
+                note, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?)
             """,
-            ("2026-06-18", activity_id, "keep", now_str(), now_str()),
+            ("2026-06-18", "c" * 40, activity_id, "2026-06-18 09:00:00", "2026-06-18 09:00:00", "keep", now_str(), now_str()),
         )
     before = _counts()
 

@@ -18,7 +18,7 @@ from unittest.mock import patch
 
 import pytest
 
-from worktrace.services import activity_service, project_service, settings_service
+from worktrace.services import activity_service, project_service, settings_service, timeline_service
 from worktrace.webview_ui.bridge import WebViewBridge
 
 pytestmark = [pytest.mark.db, pytest.mark.integration, pytest.mark.contract]
@@ -83,6 +83,13 @@ def _seed_closed_status_activity(status="idle", project_id=None):
     return aid
 
 
+def _session_fields(report_date: str, activity_id: int) -> dict:
+    for session in timeline_service.get_project_sessions_by_date(report_date):
+        if int(activity_id) in {int(aid) for aid in session.get("activity_ids") or []}:
+            return session
+    raise AssertionError(f"session containing activity {activity_id} was not found")
+
+
 
 
 def test_list_projects_for_timeline_returns_json_serializable(bridge):
@@ -128,10 +135,7 @@ def test_update_timeline_project_success(bridge):
     ids = _seed_session()
     result = bridge.update_timeline_project(ids, project)
     assert result["ok"] is True
-    # Verify the write happened
-    for aid in ids:
-        activity = activity_service.get_activity(aid)
-        assert int(activity["project_id"]) == project
+    assert int(_session_fields("2026-06-25", ids[0])["project_id"]) == project
 
 
 def test_update_timeline_project_system_status_returns_contract_message(bridge):
@@ -222,10 +226,7 @@ def test_update_timeline_note_success(bridge):
     ids = _seed_session()
     result = bridge.update_timeline_note(ids, "bridge note", "2026-06-25")
     assert result["ok"] is True
-    # Verify the note was written
-    from worktrace.services import session_note_service
-    note = session_note_service.get_session_note("2026-06-25", ids[0])
-    assert note == "bridge note"
+    assert _session_fields("2026-06-25", ids[0])["session_note"] == "bridge note"
 
 
 def test_update_timeline_note_system_status_returns_contract_message(bridge):
@@ -246,9 +247,7 @@ def test_update_timeline_note_preserves_newlines(bridge):
     ids = _seed_session()
     result = bridge.update_timeline_note(ids, "line1\nline2", "2026-06-25")
     assert result["ok"] is True
-    from worktrace.services import session_note_service
-    note = session_note_service.get_session_note("2026-06-25", ids[0])
-    assert note == "line1\nline2"
+    assert _session_fields("2026-06-25", ids[0])["session_note"] == "line1\nline2"
 
 
 def test_update_timeline_note_invalid_activity_ids(bridge):
@@ -439,15 +438,13 @@ def test_update_timeline_note_does_not_return_old_note(bridge):
 
 def test_update_timeline_note_and_duration_success(bridge):
     """Writing both note and adjusted duration must succeed and persist."""
-    from worktrace.services import session_note_service
-
     ids = _seed_session()
     result = bridge.update_timeline_note_and_duration(
         ids, "joint note", 3600, "2026-06-25"
     )
     assert result["ok"] is True
-    fields = session_note_service.get_session_user_fields("2026-06-25", ids[0])
-    assert fields["note"] == "joint note"
+    fields = _session_fields("2026-06-25", ids[0])
+    assert fields["session_note"] == "joint note"
     assert fields["adjusted_duration_seconds"] == 3600
 
 
@@ -463,31 +460,27 @@ def test_update_timeline_note_and_duration_system_status_returns_contract_messag
 
 def test_update_timeline_note_and_duration_null_clears_override(bridge):
     """Passing ``None`` for the duration clears an existing override."""
-    from worktrace.services import session_note_service
-
     ids = _seed_session()
     # Set an override first.
     bridge.update_timeline_note_and_duration(ids, "with override", 3600, "2026-06-25")
-    fields = session_note_service.get_session_user_fields("2026-06-25", ids[0])
+    fields = _session_fields("2026-06-25", ids[0])
     assert fields["adjusted_duration_seconds"] == 3600
     # Clear it with None (note preserved).
     result = bridge.update_timeline_note_and_duration(ids, "with override", None, "2026-06-25")
     assert result["ok"] is True
-    fields = session_note_service.get_session_user_fields("2026-06-25", ids[0])
+    fields = _session_fields("2026-06-25", ids[0])
     assert fields["adjusted_duration_seconds"] is None
-    assert fields["note"] == "with override"
+    assert fields["session_note"] == "with override"
 
 
 def test_update_timeline_note_and_duration_zero_accepted(bridge):
     """``0`` is a valid explicit override to zero display/declared duration."""
-    from worktrace.services import session_note_service
-
     ids = _seed_session()
     result = bridge.update_timeline_note_and_duration(
         ids, "note", 0, "2026-06-25"
     )
     assert result["ok"] is True
-    fields = session_note_service.get_session_user_fields("2026-06-25", ids[0])
+    fields = _session_fields("2026-06-25", ids[0])
     assert fields["adjusted_duration_seconds"] == 0
 
 
