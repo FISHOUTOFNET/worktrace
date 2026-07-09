@@ -1799,7 +1799,12 @@ def test_timeline_js_uses_runtime_gate_not_runtime_write():
     src = _strip_js_comments(read_js("timeline.js"))
     assert "commitPageActiveSpanClock" not in src
     assert "acceptTimelinePayload" in src
-    assert 'acceptPagePayloadRuntime(data, "timeline", date)' in src
+    body = func_body(src, "acceptTimelinePayload")
+    assert 'String(App.currentPage || "overview") !== "timeline"' in body
+    assert 'App.runtimeReportDateForPage("timeline", date)' in body
+    assert "App.isPagePayloadCompatibleWithRuntime" in body
+    assert "App.noteRejectedPagePayload" in body
+    assert "return true" in body
 
 
 def test_init_refresh_overview_gates_with_runtime():
@@ -1842,7 +1847,10 @@ def test_refresh_timeline_accepts_page_payload_runtime_before_render():
     accept_body = func_body(timeline, "acceptTimelinePayload")
     load_body = func_body(timeline, "timelineReportRequest")
     details_body = func_body(timeline, "acceptTimelineDetailsPayload")
-    assert 'acceptPagePayloadRuntime(data, "timeline", date)' in accept_body
+    assert "acceptPagePayloadRuntime" not in accept_body
+    assert 'App.runtimeReportDateForPage("timeline", date)' in accept_body
+    assert "App.acceptLiveRuntimePayload" in accept_body
+    assert "return true" in accept_body
     accept_pos = load_body.find("acceptTimelinePayload(data, date)")
     show_pos = load_body.find("showTimeline(data)", accept_pos)
     assert accept_pos != -1 and show_pos != -1 and accept_pos < show_pos

@@ -1,4 +1,4 @@
-// WorkTrace WebView frontend — timeline module: session list, detail list, edit panel, inline editors,
+// WorkTrace WebView frontend — timeline module: session list, summary panel, edit panel, inline editors,
 // session-level correction sections, date navigation.
 
 (function () {
@@ -63,6 +63,7 @@
             // backfill the cleared panel and the ticker does not project against a stale payload.
             ++App.detailsRequestToken;
             App.lastSessionDetailsViewModel = null;
+            App.lastSessionActivitySummaryViewModel = null;
             document.getElementById("timeline-details-header").textContent = "选择左侧时段查看详情";
             document.getElementById("timeline-details-list").innerHTML = "";
             App.selectedSessionId = null;
@@ -203,7 +204,7 @@
                 var skipDetailReload = (typeof App._timelineEditingActive === "function"
                     && App._timelineEditingActive());
                 if (!skipDetailReload) {
-                    loadSessionDetails(found.project_id, data.date);
+                    loadSessionActivitySummary(found.activity_ids, data.date);
                 }
                 // Only re-populate the edit panel if the user is not mid-edit AND the session is not edit-disabled.
                 if (!found.edit_disabled
@@ -219,7 +220,7 @@
                     && !App.isAnyCorrectionWriteSaving()) {
                     App.renderCorrectionShell(
                         found,
-                        App.getCurrentDetailActivities(),
+                        App.getCurrentCorrectionActivities(),
                         App.correctionShellMode,
                         App.correctionShellActivityId
                     );
@@ -229,6 +230,7 @@
                 // the detail cache so a stale response does not backfill the cleared panel.
                 ++App.detailsRequestToken;
                 App.lastSessionDetailsViewModel = null;
+                App.lastSessionActivitySummaryViewModel = null;
                 App.selectedSessionId = null;
                 App.selectedSessionLiveKey = null;
                 document.getElementById("timeline-details-header").textContent = "选择左侧时段查看详情";
@@ -240,7 +242,25 @@
     App.showTimeline = showTimeline;
 
     function acceptTimelinePayload(data, date) {
-        return App.acceptPagePayloadRuntime(data, "timeline", date);
+        if (!data || !data.ok) return false;
+        if (String(App.currentPage || "overview") !== "timeline") {
+            App.noteRejectedPagePayload(data, "timeline", date);
+            return false;
+        }
+        var expectedDate = App.runtimeReportDateForPage("timeline", date);
+        var payloadDate = App.payloadReportDate(data, "timeline", date);
+        if (expectedDate && payloadDate && expectedDate !== payloadDate) {
+            App.noteRejectedPagePayload(data, "timeline", date);
+            return false;
+        }
+        if (App.isPagePayloadCompatibleWithRuntime(data, "timeline", date)) {
+            App.acceptLiveRuntimePayload(data, "timeline", date, {
+                source: "page_model"
+            });
+        } else {
+            App.noteRejectedPagePayload(data, "timeline", date);
+        }
+        return true;
     }
     App.acceptTimelinePayload = acceptTimelinePayload;
 
@@ -290,7 +310,7 @@
         }
         var found = newSelected;
         if (found) {
-            loadSessionDetails(found.project_id, App.timelineDate);
+            loadSessionActivitySummary(found.activity_ids, App.timelineDate);
             // Virtual live sessions are display-only; a manual click must NOT open the edit panel. Clear it instead.
             if (found.edit_disabled === true || found.is_virtual === true) {
                 clearEditPanel();
@@ -302,7 +322,12 @@
     }
     App.selectTimelineSession = selectTimelineSession;
 
-    function loadSessionDetails(projectId, date) {
+    function loadSessionActivitySummary(activityIds, date) {
+        return loadSessionDetails(activityIds, date);
+    }
+    App.loadSessionActivitySummary = loadSessionActivitySummary;
+
+    function loadSessionDetails(activityIds, date) {
         var detailsHeader = document.getElementById("timeline-details-header");
         var detailsList = document.getElementById("timeline-details-list");
         // Only show loading when the panel is empty; keep existing summaries visible during refresh.
@@ -312,7 +337,7 @@
         }
 
         var token = ++App.detailsRequestToken;
-        App.callBridge("get_timeline_project_activity_summary", projectId, date).then(function (result) {
+        App.callBridge("get_timeline_session_activity_summary", activityIds || [], date).then(function (result) {
             if (token !== App.detailsRequestToken) return;  // stale response
             var data = App.handleResult(result, function (msg) {
                 detailsHeader.textContent = "加载项目活动耗时失败";
@@ -351,12 +376,13 @@
         // edit-guard checks. Live seconds come from DOM anchors plus the
         // accepted live runtime; this cache MUST NOT be read as a live-seconds source.
         App.lastSessionDetailsViewModel = data;
+        App.lastSessionActivitySummaryViewModel = data;
         var detailsHeader = document.getElementById("timeline-details-header");
         var detailsList = document.getElementById("timeline-details-list");
         var rows = data.summary_rows || [];
         if (rows.length === 0) {
             detailsHeader.textContent = "项目活动耗时";
-            detailsList.innerHTML = '<div class="timeline-empty">该项目暂无活动耗时</div>';
+            detailsList.innerHTML = '<div class="timeline-empty">该时段暂无活动耗时</div>';
             return;
         }
         detailsHeader.textContent = "项目活动耗时";
@@ -393,13 +419,12 @@
             var durationText = (!isNaN(durationSeconds) && durationSeconds >= 0)
                 ? App.formatDuration(initialSec)
                 : (row.duration || "00:00:00");
-            var projectLabel = App.formatProjectLabel(row.display_project_name, row.display_project_description);
+            var projectLabel = row.display_project_name || "未归类";
             html += '<div class="' + cls + '" data-summary-id="' + App.escapeHtml(String(row.summary_id || "")) + '"'
                 + (summaryStableKey ? ' data-stable-live-key-hash="' + App.escapeHtml(summaryStableKey) + '"' : '')
                 + (summarySpanId ? ' data-display-span-id="' + App.escapeHtml(summarySpanId) + '"' : '')
                 + ' data-summary-index="' + i + '"'
                 + '>'
-                + '<div class="summary-item-name" title="' + App.escapeHtml(displayName) + '">' + App.escapeHtml(displayName) + '</div>'
                 + '<div class="summary-item-duration"'
                 + (summarySpanId ? ' data-live-duration-target="1"' : '')
                 + (summarySpanId ? ' data-duration-semantic="' + App.escapeHtml(summaryDurationSemantic) + '"' : '')
@@ -410,6 +435,7 @@
                 + (summarySpanId ? ' data-live-role="timeline-detail"' : '')
                 + (summaryContinuityKey ? ' data-live-continuity-key="' + App.escapeHtml(summaryContinuityKey) + '"' : '')
                 + ' data-duration-seconds="' + initialSec + '">' + App.escapeHtml(durationText) + '</div>'
+                + '<div class="summary-item-name" title="' + App.escapeHtml(displayName) + '">' + App.escapeHtml(displayName) + '</div>'
                 + '<div class="summary-item-project" title="' + App.escapeHtml(projectLabel) + '">' + App.escapeHtml(projectLabel) + '</div>'
                 + '</div>';
             summaryContinuityKeys.push({ index: i, sec: initialSec, key: summaryContinuityKey });
@@ -423,6 +449,11 @@
         }
     }
     App.renderSessionDetails = renderSessionDetails;
+
+    function renderSessionActivitySummary(data) {
+        return renderSessionDetails(data);
+    }
+    App.renderSessionActivitySummary = renderSessionActivitySummary;
 
 
     function openActivityTimeEditor(activityId, startVal, endVal, btn) {
@@ -804,7 +835,7 @@
                 );
                 return;
             }
-            // Merge succeeded; refresh so the detail list reflects the soft-deleted next activity.
+            // Merge succeeded; refresh so session activity data reflects the soft-deleted next activity.
             setMergeSaving(btn, false);
             setMergeStatus(btn, "已合并", false);
             refreshTimelineAfterEdit();
@@ -1165,8 +1196,8 @@
         }
         // When switching to a different session, reset the per-activity
         // inline editor state so a stale editingActivityId from the
-        // previous session does not leak into the new one. The detail list
-        // DOM will be rebuilt by renderSessionDetails.
+        // previous session does not leak into the new one. The summary panel
+        // DOM will be rebuilt by renderSessionActivitySummary.
         if (App.editingSession && App.editingSession.session_id !== session.session_id) {
             App.editingActivityId = null;
             App.activityTimeSaving = false;
@@ -1822,6 +1853,7 @@
         App.selectedSessionLiveKey = null;
         ++App.detailsRequestToken;
         App.lastSessionDetailsViewModel = null;
+        App.lastSessionActivitySummaryViewModel = null;
         var detailsHeader = document.getElementById("timeline-details-header");
         var detailsList = document.getElementById("timeline-details-list");
         if (detailsHeader) detailsHeader.textContent = "选择左侧时段查看详情";

@@ -8,41 +8,31 @@ from ..formatters import format_duration, format_safe_display_name
 from . import timeline_service
 
 
-def get_project_activity_summary(
+def build_activity_summary_rows(
+    rows: list[dict],
     report_date: str,
-    accounted_project_id: int,
-    include_hidden: bool = False,
-    ensure_context: bool = True,
+    scope_key: str,
 ) -> list[dict]:
-    """Return activity-duration summaries for one report date and project.
-
-    ``accounted_project_id`` is the final report-visible project used for
-    filtering. ``display_project_*`` stays the official direct attribution
-    supplied by ``timeline_service.get_report_activity_rows``.
-    """
-    project_id = int(accounted_project_id)
-    rows = timeline_service.get_report_activity_rows(
-        report_date,
-        report_date,
-        include_hidden=include_hidden,
-        ensure_context=ensure_context,
-    )
+    """Aggregate already-scoped report rows into activity summary rows."""
     groups: dict[str, dict[str, Any]] = {}
     for row in rows:
-        if int(row.get("report_project_id") or 0) != project_id:
-            continue
         key = _activity_group_key(row)
+        accounted_project_id = int(
+            row.get("report_project_id")
+            or row.get("project_id")
+            or 0
+        )
         seconds = int(row.get("report_duration_seconds") or row.get("duration_seconds") or 0)
         if key not in groups:
-            groups[key] = _new_group(report_date, project_id, key, row)
+            groups[key] = _new_group(report_date, scope_key, accounted_project_id, key, row)
         group = groups[key]
         group["duration_seconds"] = int(group["duration_seconds"]) + seconds
         if not bool(row.get("is_in_progress")):
             group["closed_duration_seconds"] = int(group["closed_duration_seconds"]) + seconds
         else:
             group["is_in_progress"] = True
-            group["open_activity_id"] = int(row.get("id") or 0)
-        activity_id = int(row.get("id") or 0)
+            group["open_activity_id"] = int(row.get("id") or row.get("activity_id") or 0)
+        activity_id = int(row.get("id") or row.get("activity_id") or 0)
         if activity_id > 0 and activity_id not in group["activity_ids"]:
             group["activity_ids"].append(activity_id)
 
@@ -51,14 +41,41 @@ def get_project_activity_summary(
     return summaries
 
 
-def _new_group(report_date: str, accounted_project_id: int, key: str, row: dict) -> dict[str, Any]:
+def get_session_activity_summary(
+    activity_ids: list[int],
+    report_date: str,
+    include_hidden: bool = False,
+    ensure_context: bool = True,
+) -> list[dict]:
+    """Return Timeline right-panel summaries scoped by activity ids and date."""
+    ids = [int(aid) for aid in (activity_ids or [])]
+    if not ids:
+        return []
+    rows = timeline_service.get_session_activity_details(
+        ids,
+        report_date=report_date,
+        ensure_context=ensure_context,
+    )
+    if not include_hidden:
+        rows = [row for row in rows if not bool(row.get("is_hidden"))]
+    scope_key = "session:" + ",".join(str(aid) for aid in ids)
+    return build_activity_summary_rows(rows, report_date, scope_key)
+
+
+def _new_group(
+    report_date: str,
+    scope_key: str,
+    accounted_project_id: int,
+    key: str,
+    row: dict,
+) -> dict[str, Any]:
     display_project_name = str(row.get("display_project_name") or UNCATEGORIZED_PROJECT)
     display_project_description = str(row.get("display_project_description") or "")
     accounted_project_name = str(row.get("report_project_name") or UNCATEGORIZED_PROJECT)
     accounted_project_description = str(row.get("report_project_description") or "")
     return {
         "row_kind": "project_activity_summary",
-        "summary_id": _summary_id(report_date, accounted_project_id, key),
+        "summary_id": _summary_id(report_date, scope_key, key),
         "activity_identity_key": key,
         "activity_name": _activity_display_name(row),
         "duration_seconds": 0,
@@ -139,9 +156,9 @@ def _activity_display_name(row: dict) -> str:
     return "未知"
 
 
-def _summary_id(report_date: str, accounted_project_id: int, key: str) -> str:
-    raw = f"{report_date}|{int(accounted_project_id)}|{key}"
+def _summary_id(report_date: str, scope_key: str, key: str) -> str:
+    raw = f"{report_date}|{scope_key}|{key}"
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()
 
 
-__all__ = ["get_project_activity_summary"]
+__all__ = ["build_activity_summary_rows", "get_session_activity_summary"]

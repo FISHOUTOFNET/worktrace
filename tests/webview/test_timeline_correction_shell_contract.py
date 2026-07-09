@@ -691,17 +691,18 @@ def test_frontend_js_correction_shell_no_sensitive_fields():
 
 
 
-def test_frontend_js_get_current_detail_activities_no_sensitive_fields():
-    """getCurrentDetailActivities must only read display-safe
-    DOM fields, never raw sensitive fields."""
+def test_frontend_js_get_current_correction_activities_uses_view_model_data():
+    """Correction activities must come from the session summary VM, not DOM."""
     source = read_all_js()
-    fn_start = source.find("function getCurrentDetailActivities")
-    fn_end = source.find("\n    function ", fn_start + 1)
-    fn_body = source[fn_start:fn_end]
+    fn_body = func_body(source, "getCurrentCorrectionActivities")
+    assert "App.lastSessionActivitySummaryViewModel" in fn_body
+    assert "correction_activities" in fn_body
+    assert "querySelector" not in fn_body
+    assert ".detail-item" not in fn_body
     for forbidden in ("window_title", "file_path", "full_path", "clipboard",
                       "session_note"):
         assert forbidden not in fn_body, (
-            "getCurrentDetailActivities must not read " + forbidden
+            "getCurrentCorrectionActivities must not read " + forbidden
         )
 
 
@@ -915,25 +916,13 @@ def test_frontend_js_highlight_detail_row_no_bridge_writes():
 
 
 
-def test_frontend_js_highlight_detail_row_safe_single_timer():
-    """the transient highlight must use a single tracked
-    timer — clearTimeout before setTimeout — so repeated clicks never
-    accumulate timers."""
+def test_frontend_js_highlight_detail_row_has_no_dom_highlight_timer():
+    """The summary panel has no detail rows, so locate must not schedule DOM highlights."""
     source = read_all_js()
     body = func_body(source, "highlightDetailRow")
-    assert "clearTimeout" in body, (
-        "highlightDetailRow must clear the prior timer before scheduling"
-    )
-    assert "setTimeout" in body, (
-        "highlightDetailRow must schedule a transient highlight timer"
-    )
-    assert "correctionShellHighlightTimer" in body, (
-        "highlightDetailRow must track the timer in the shared variable"
-    )
-    # Only one setTimeout call may be present so timers cannot accumulate.
-    assert body.count("setTimeout") == 1, (
-        "highlightDetailRow must schedule exactly one timer per click"
-    )
+    assert "clearTimeout" not in body
+    assert "setTimeout" not in body
+    assert "correctionShellHighlightTimer" not in body
 
 
 
@@ -946,7 +935,7 @@ def test_frontend_js_highlight_detail_row_stale_target_message():
     assert "setCorrectionShellStatus" in body, (
         "highlightDetailRow must report a safe status on stale target"
     )
-    assert "已不在当前详情" in body or "未找到对应活动" in body, (
+    assert "已不在当前选中时段" in body or "未找到对应活动" in body, (
         "highlightDetailRow must use a safe stale-target message"
     )
     # No window alert / confirm / throw on the stale path.
@@ -957,14 +946,13 @@ def test_frontend_js_highlight_detail_row_stale_target_message():
 
 
 
-def test_frontend_js_highlight_detail_row_uses_detail_item_selector():
-    """click-to-locate must only look up the existing
-    .detail-item[data-activity-id=...] row inside #timeline-details-list."""
+def test_frontend_js_highlight_detail_row_does_not_depend_on_summary_dom():
+    """click-to-locate must validate against correction activity data."""
     source = read_all_js()
     body = func_body(source, "highlightDetailRow")
-    assert '#timeline-details-list .detail-item[data-activity-id="' in body, (
-        "highlightDetailRow must query the existing detail-item row"
-    )
+    assert "getCurrentCorrectionActivities" in body
+    assert ".detail-item" not in body
+    assert "querySelector" not in body
 
 
 

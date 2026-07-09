@@ -182,25 +182,53 @@ class TimelineBridgeMixin:
             logger.exception("webview bridge get_timeline_session_details failed")
             return dict(_GENERIC_ERROR)
 
-    def get_timeline_project_activity_summary(
+    def get_timeline_session_activity_summary(
         self,
-        project_id: int,
+        activity_ids: list[int],
         report_date: str | None = None,
     ) -> dict[str, Any]:
-        """Return project-scoped activity duration summaries for Timeline."""
+        """Return session-scoped activity duration summaries for Timeline."""
         try:
-            if isinstance(project_id, bool):
-                return {"ok": False, "error": "请选择有效的项目"}
-            pid = int(project_id)
-            if pid <= 0:
-                return {"ok": False, "error": "请选择有效的项目"}
-            return view_model_api.get_project_activity_summary_view_model(pid, report_date)
+            ids_result = self._coerce_session_summary_activity_ids(activity_ids)
+            if ids_result is None:
+                return {"ok": False, "error": "请选择有效的活动时段"}
+            ids = ids_result
+            if report_date is not None and (
+                not isinstance(report_date, str) or not _DATE_SHAPE_RE.match(report_date)
+            ):
+                return {"ok": False, "error": "日期无效"}
+            if not ids:
+                return {
+                    "ok": True,
+                    "date": report_date,
+                    "activity_ids": [],
+                    "summary_rows": [],
+                    "correction_activities": [],
+                }
+            return view_model_api.get_session_activity_summary_view_model(ids, report_date)
         except (TypeError, ValueError):
-            return {"ok": False, "error": "请选择有效的项目"}
+            return {"ok": False, "error": "请选择有效的活动时段"}
         except Exception:
-            logger.exception("webview bridge get_timeline_project_activity_summary failed")
+            logger.exception("webview bridge get_timeline_session_activity_summary failed")
             return dict(_GENERIC_ERROR)
 
+    @staticmethod
+    def _coerce_session_summary_activity_ids(activity_ids: Any) -> list[int] | None:
+        if not isinstance(activity_ids, (list, tuple)):
+            return None
+        ids: list[int] = []
+        seen: set[int] = set()
+        for raw in activity_ids:
+            if isinstance(raw, bool) or not isinstance(raw, int):
+                return None
+            value = raw
+            if value <= 0:
+                return None
+            if value in seen:
+                continue
+            seen.add(value)
+            ids.append(value)
+        return ids
 
     def list_projects_for_timeline(self) -> dict[str, Any]:
         """Return the list of projects selectable for Timeline reclassification.

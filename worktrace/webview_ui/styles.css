@@ -495,7 +495,7 @@ body {
 
 .summary-item {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto minmax(120px, 180px);
+    grid-template-columns: auto minmax(0, 1fr) minmax(100px, 160px);
     gap: 8px 12px;
     padding: 8px 10px;
     border-radius: 6px;
@@ -521,7 +521,7 @@ body {
 .summary-item-project {
     font-size: 12px;
     color: #64748b;
-    text-align: right;
+    text-align: left;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -609,7 +609,7 @@ body {
     }
 
     .summary-item {
-        grid-template-columns: minmax(0, 1fr) auto;
+        grid-template-columns: auto minmax(0, 1fr);
     }
 
     .summary-item-project {

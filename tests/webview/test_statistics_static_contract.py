@@ -558,7 +558,7 @@ def test_bridge_no_unexpected_methods_for_contract():
     known_methods = (
         "get_status", "toggle_pause", "get_overview",
         "get_recent_activities", "get_timeline",
-        "get_timeline_session_details", "get_timeline_project_activity_summary",
+        "get_timeline_session_details", "get_timeline_session_activity_summary",
         "list_projects_for_timeline",
         "update_timeline_project", "update_timeline_note",
         "update_timeline_activity_time", "update_timeline_session_time",

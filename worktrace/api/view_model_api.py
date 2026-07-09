@@ -33,8 +33,8 @@ from ..services.live_display_service import (
 )
 from ..services.view_model_service import (
     get_overview_view_model,
-    get_project_activity_summary_view_model,
     get_refresh_state_view_model,
+    get_session_activity_summary_view_model,
     get_session_details_view_model,
     get_timeline_view_model,
 )
@@ -44,8 +44,8 @@ __all__ = [
     "build_current_activity_summary",
     "compute_refresh_revision",
     "get_overview_view_model",
-    "get_project_activity_summary_view_model",
     "get_refresh_state_view_model",
+    "get_session_activity_summary_view_model",
     "get_session_details_view_model",
     "get_timeline_view_model",
 ]

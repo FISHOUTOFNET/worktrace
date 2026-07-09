@@ -128,9 +128,10 @@ def test_frontend_js_has_timeline_load_function():
 
 
 def test_frontend_js_has_timeline_session_details_load():
-    """frontend JS must load project activity summaries for the right panel."""
+    """frontend JS must load session activity summaries for the right panel."""
     source = read_all_js()
-    assert "get_timeline_project_activity_summary" in source
+    assert "get_timeline_project_activity_summary" not in source
+    assert "get_timeline_session_activity_summary" in source
     assert "loadSessionDetails" in source
 
 
@@ -568,6 +569,48 @@ def test_details_runtime_mismatch_skips_overlay_not_static_render():
     assert "return true" in accept_body
     assert "if (!acceptTimelineDetailsPayload(data, date)) return;" in load_body
     assert "renderSessionDetails(data)" in load_body
+
+
+def test_timeline_right_panel_uses_session_summary_bridge_contract():
+    source = read_resource("js/timeline.js")
+
+    assert "get_timeline_project_activity_summary" not in source
+    assert "get_timeline_session_activity_summary" in source
+
+
+def test_timeline_selection_loads_summary_by_activity_ids():
+    source = read_resource("js/timeline.js")
+    select_body = func_body(source, "selectTimelineSession")
+    show_body = func_body(source, "showTimeline")
+
+    assert "loadSessionActivitySummary(found.activity_ids, App.timelineDate)" in select_body
+    assert "loadSessionActivitySummary(found.activity_ids, data.date)" in show_body
+    assert "loadSessionActivitySummary(found.project_id" not in source
+    assert "loadSessionDetails(found.project_id" not in source
+
+
+def test_timeline_summary_columns_are_duration_name_project():
+    source = read_resource("js/timeline.js")
+    body = func_body(source, "renderSessionDetails")
+
+    duration_pos = body.find("summary-item-duration")
+    name_pos = body.find("summary-item-name")
+    project_pos = body.find("summary-item-project")
+
+    assert duration_pos != -1
+    assert name_pos != -1
+    assert project_pos != -1
+    assert duration_pos < name_pos < project_pos
+
+
+def test_timeline_summary_project_column_uses_plain_project_name():
+    source = read_resource("js/timeline.js")
+    body = func_body(source, "renderSessionDetails")
+
+    assert 'row.display_project_name || "未归类"' in body
+    assert "formatProjectLabel(row.display_project_name, row.display_project_description)" not in body
+    assert "该项目暂无活动耗时" not in source
+    assert "该时段暂无活动耗时" in source
 
 
 
@@ -2985,7 +3028,7 @@ def test_bridge_no_unexpected_methods_for_contract():
     known_methods = (
         "get_status", "toggle_pause", "get_overview",
         "get_recent_activities", "get_timeline",
-        "get_timeline_session_details", "get_timeline_project_activity_summary",
+        "get_timeline_session_details", "get_timeline_session_activity_summary",
         "list_projects_for_timeline",
         "update_timeline_project", "update_timeline_note",
         "update_timeline_note_and_duration",

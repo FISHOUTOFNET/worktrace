@@ -20,6 +20,7 @@
     // display bases from the DOM and the one accepted live runtime.
     App.lastRecentData = null;
     App.lastSessionDetailsViewModel = null;
+    App.lastSessionActivitySummaryViewModel = null;
     App.lastTimelineData = null;
 
     // Canonical accepted live runtime. ``get_refresh_state`` is the only writer;

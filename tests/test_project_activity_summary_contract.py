@@ -17,12 +17,12 @@ def _row(
     *,
     identity: str,
     seconds: int,
-    report_project_id: int,
-    report_project_name: str,
-    display_project_id: int = 0,
-    display_project_name: str = UNCATEGORIZED_PROJECT,
+    report_project_id: int = 10,
+    report_project_name: str = "ProjectA",
+    display_project_id: int = 10,
+    display_project_name: str = "ProjectA",
+    display_project_description: str = "",
     title: str = "Same title",
-    candidate: str = "",
     in_progress: bool = False,
 ) -> dict:
     return {
@@ -36,11 +36,13 @@ def _row(
         "duration_seconds": seconds,
         "report_project_id": report_project_id,
         "report_project_name": report_project_name,
-        "report_project_description": "",
+        "report_project_description": "Report description",
+        "project_id": report_project_id,
+        "project_name": report_project_name,
+        "project_description": "Report description",
         "display_project_id": display_project_id,
         "display_project_name": display_project_name,
-        "display_project_description": "",
-        "candidate_project_name": candidate,
+        "display_project_description": display_project_description,
         "status": "normal",
         "is_in_progress": in_progress,
         "is_report_project": report_project_id != 1,
@@ -51,234 +53,193 @@ def _row(
     }
 
 
-def test_summary_groups_same_identity_within_accounted_project(monkeypatch):
-    rows = [
-        _row(1, identity="file:a", seconds=60, report_project_id=10, report_project_name="ProjectA", title="A"),
-        _row(2, identity="file:a", seconds=120, report_project_id=10, report_project_name="ProjectA", title="A"),
-        _row(3, identity="file:b", seconds=90, report_project_id=10, report_project_name="ProjectA", title="A"),
-        _row(4, identity="file:a", seconds=300, report_project_id=20, report_project_name="ProjectB", title="A"),
+def _closed_model(report_date: str = "2026-07-09") -> dict:
+    return {
+        "ok": True,
+        "date": report_date,
+        "sample_id": "sample",
+        "current_activity": {},
+        "live_clock": {},
+        "display_spans": [],
+    }
+
+
+def test_session_activity_summary_is_scoped_by_activity_ids(monkeypatch):
+    first_session_rows = [
+        _row(1, identity="file:first", seconds=60, title="First session"),
     ]
-    monkeypatch.setattr(timeline_service, "get_report_activity_rows", lambda *args, **kwargs: rows)
-
-    summary = project_activity_summary_service.get_project_activity_summary("2026-07-09", 10)
-
-    assert [item["activity_identity_key"] for item in summary] == ["file:a", "file:b"]
-    assert summary[0]["duration_seconds"] == 180
-    assert summary[0]["activity_ids"] == [1, 2]
-    assert summary[1]["duration_seconds"] == 90
-
-
-def test_summary_sorting_is_duration_desc(monkeypatch):
-    rows = [
-        _row(1, identity="small", seconds=10, report_project_id=10, report_project_name="ProjectA"),
-        _row(2, identity="large", seconds=30, report_project_id=10, report_project_name="ProjectA"),
-        _row(3, identity="middle", seconds=20, report_project_id=10, report_project_name="ProjectA"),
+    second_session_rows = [
+        _row(2, identity="file:second", seconds=300, title="Second session"),
     ]
-    monkeypatch.setattr(timeline_service, "get_report_activity_rows", lambda *args, **kwargs: rows)
 
-    summary = project_activity_summary_service.get_project_activity_summary("2026-07-09", 10)
+    def fake_details(activity_ids, report_date=None, ensure_context=True):
+        assert report_date == "2026-07-09"
+        if activity_ids == [1]:
+            return first_session_rows
+        if activity_ids == [2]:
+            return second_session_rows
+        return first_session_rows + second_session_rows
 
-    assert [item["activity_identity_key"] for item in summary] == ["large", "middle", "small"]
+    monkeypatch.setattr(timeline_service, "get_session_activity_details", fake_details)
 
+    summary = project_activity_summary_service.get_session_activity_summary([1], "2026-07-09")
 
-def test_display_project_column_uses_official_policy_not_accounted_project(monkeypatch):
-    rows = [
-        _row(
-            1,
-            identity="short",
-            seconds=45,
-            report_project_id=10,
-            report_project_name="ProjectA",
-            display_project_id=20,
-            display_project_name="ProjectB",
-            title="Short absorbed activity",
-        ),
-        _row(
-            2,
-            identity="candidate",
-            seconds=30,
-            report_project_id=10,
-            report_project_name="ProjectA",
-            display_project_id=0,
-            display_project_name=UNCATEGORIZED_PROJECT,
-            candidate="SuggestedProject",
-            title="Candidate activity",
-        ),
-    ]
-    monkeypatch.setattr(timeline_service, "get_report_activity_rows", lambda *args, **kwargs: rows)
-
-    summary = project_activity_summary_service.get_project_activity_summary("2026-07-09", 10)
-
-    by_name = {item["activity_name"]: item for item in summary}
-    assert by_name["Short absorbed activity"]["accounted_project_name"] == "ProjectA"
-    assert by_name["Short absorbed activity"]["display_project_name"] == "ProjectB"
-    assert by_name["Candidate activity"]["display_project_name"] == UNCATEGORIZED_PROJECT
+    assert [item["activity_identity_key"] for item in summary] == ["file:first"]
+    assert summary[0]["activity_ids"] == [1]
+    assert summary[0]["duration_seconds"] == 60
 
 
-def test_uncategorized_project_has_summary(monkeypatch):
-    rows = [
-        _row(1, identity="uncat", seconds=60, report_project_id=1, report_project_name=UNCATEGORIZED_PROJECT),
-        _row(2, identity="other", seconds=60, report_project_id=10, report_project_name="ProjectA"),
-    ]
-    monkeypatch.setattr(timeline_service, "get_report_activity_rows", lambda *args, **kwargs: rows)
+def test_same_project_different_sessions_have_different_summaries(monkeypatch):
+    def fake_details(activity_ids, report_date=None, ensure_context=True):
+        if activity_ids == [11]:
+            return [_row(11, identity="file:morning", seconds=120, title="Morning")]
+        if activity_ids == [22]:
+            return [_row(22, identity="file:afternoon", seconds=480, title="Afternoon")]
+        return []
 
-    summary = project_activity_summary_service.get_project_activity_summary("2026-07-09", 1)
+    monkeypatch.setattr(timeline_service, "get_session_activity_details", fake_details)
 
-    assert len(summary) == 1
-    assert summary[0]["accounted_project_name"] == UNCATEGORIZED_PROJECT
+    first = project_activity_summary_service.get_session_activity_summary([11], "2026-07-09")
+    second = project_activity_summary_service.get_session_activity_summary([22], "2026-07-09")
+
+    assert first != second
+    assert first[0]["activity_name"] == "Morning"
+    assert second[0]["activity_name"] == "Afternoon"
+    assert first[0]["duration_seconds"] == 120
+    assert second[0]["duration_seconds"] == 480
 
 
-def test_view_model_applies_today_live_span_once(monkeypatch):
+def test_session_activity_summary_preserves_report_projection(monkeypatch):
     rows = [
         _row(
             7,
-            identity="live",
-            seconds=20,
+            identity="short-context",
+            seconds=45,
             report_project_id=10,
-            report_project_name="ProjectA",
-            in_progress=True,
+            report_project_name="ReportProject",
+            display_project_id=20,
+            display_project_name="OfficialProject",
+            display_project_description="Official description",
+            title="Short absorbed activity",
         )
     ]
-    monkeypatch.setattr(project_activity_summary_service, "get_project_activity_summary", lambda *args, **kwargs: [
-        {
-            "row_kind": "project_activity_summary",
-            "summary_id": "live",
-            "activity_identity_key": "live",
-            "activity_name": "Live",
-            "duration_seconds": 20,
-            "duration": "00:00:20",
-            "accounted_project_id": 10,
-            "accounted_project_name": "ProjectA",
-            "project_id": 10,
-            "project_name": "ProjectA",
-            "project_description": "",
-            "display_project_id": 10,
-            "display_project_name": "ProjectA",
-            "display_project_description": "",
-            "activity_ids": [7],
-            "open_activity_id": 7,
-            "closed_duration_seconds": 0,
-            "is_in_progress": True,
-            "live_delta_eligible": False,
-            "duration_semantic": "static_closed",
-            "display_span_id": "",
-            "stable_live_key_hash": "",
-            "display_base_seconds": 20,
-        }
-    ])
+    monkeypatch.setattr(timeline_service, "get_session_activity_details", lambda *args, **kwargs: rows)
+
+    summary = project_activity_summary_service.get_session_activity_summary([7], "2026-07-09")
+
+    assert summary[0]["accounted_project_name"] == "ReportProject"
+    assert summary[0]["project_name"] == "ReportProject"
+    assert summary[0]["display_project_name"] == "OfficialProject"
+    assert summary[0]["display_project_description"] == "Official description"
+    assert summary[0]["is_report_project"] is True
+    assert summary[0]["is_official_project"] is True
+
+
+def test_session_activity_summary_live_overlay_requires_selected_activity_match(monkeypatch):
     monkeypatch.setattr(timeline_service, "get_default_report_date", lambda: "2026-07-09")
+    monkeypatch.setattr(
+        project_activity_summary_service,
+        "get_session_activity_summary",
+        lambda *args, **kwargs: [
+            {
+                "row_kind": "project_activity_summary",
+                "summary_id": "selected",
+                "activity_identity_key": "selected",
+                "activity_name": "Selected",
+                "duration_seconds": 20,
+                "duration": "00:00:20",
+                "accounted_project_id": 10,
+                "accounted_project_name": "ProjectA",
+                "project_id": 10,
+                "project_name": "ProjectA",
+                "project_description": "",
+                "display_project_id": 10,
+                "display_project_name": "ProjectA",
+                "display_project_description": "",
+                "activity_ids": [7],
+                "open_activity_id": 0,
+                "closed_duration_seconds": 20,
+                "is_in_progress": False,
+                "live_delta_eligible": False,
+                "duration_semantic": "static_closed",
+                "display_span_id": "",
+                "stable_live_key_hash": "",
+                "display_base_seconds": 20,
+            }
+        ],
+    )
+    monkeypatch.setattr(timeline_service, "get_session_activity_details", lambda *args, **kwargs: [])
 
     def fake_model(report_date=None, today=None, snapshot=None):
-        return {
-            "ok": True,
-            "date": report_date,
-            "sample_id": "sample",
-            "current_activity": {},
-            "live_clock": {
+        model = _closed_model(report_date or "2026-07-09")
+        model["current_activity"] = {"app_name": "LiveApp", "resource_name": "Other live"}
+        model["live_clock"] = {
+            "display_span_id": "span",
+            "stable_live_key_hash": "hash",
+            "is_live": True,
+            "project_duration_live": True,
+            "is_project_duration_live": True,
+            "current_live_seconds_at_sample": 40,
+            "aggregate_display_base_seconds": 5,
+            "display_base_seconds": 5,
+            "aggregate_duration_seconds_at_sample": 45,
+        }
+        model["display_spans"] = [
+            {
                 "display_span_id": "span",
-                "stable_live_key_hash": "hash",
-                "is_live": True,
-                "project_duration_live": True,
-                "is_project_duration_live": True,
-                "current_live_seconds_at_sample": 40,
-                "current_elapsed_at_sample": 40,
-                "aggregate_display_base_seconds": 5,
-                "display_base_seconds": 5,
-                "aggregate_duration_seconds_at_sample": 45,
-            },
-            "display_spans": [
-                {
-                    "display_span_id": "span",
-                    "anchor_activity_id": 7,
-                    "activity_id": 7,
-                    "live_state": "persisted_open",
-                    "is_visible_in_details": True,
-                    "live_clock": {
-                        "display_span_id": "span",
-                        "stable_live_key_hash": "hash",
-                        "is_live": True,
-                        "project_duration_live": True,
-                        "is_project_duration_live": True,
-                        "current_live_seconds_at_sample": 40,
-                        "current_elapsed_at_sample": 40,
-                        "aggregate_display_base_seconds": 5,
-                        "display_base_seconds": 5,
-                        "aggregate_duration_seconds_at_sample": 45,
-                    },
-                }
-            ],
-        }
+                "anchor_activity_id": 999,
+                "activity_id": 999,
+                "is_visible_in_details": True,
+                "live_state": "persisted_open",
+                "live_clock": model["live_clock"],
+            }
+        ]
+        return model
 
     monkeypatch.setattr(view_model_service, "build_activity_display_model", fake_model)
 
-    result = view_model_service.get_project_activity_summary_view_model(10, "2026-07-09")
-
-    row = result["summary_rows"][0]
-    assert row["duration_seconds"] == 45
-    assert row["duration_semantic"] == "aggregate_live"
-    assert row["live_delta_eligible"] is True
-
-
-def test_historical_view_model_not_polluted_by_today_live_runtime(monkeypatch):
-    monkeypatch.setattr(project_activity_summary_service, "get_project_activity_summary", lambda *args, **kwargs: [
-        {
-            "row_kind": "project_activity_summary",
-            "summary_id": "history",
-            "activity_identity_key": "history",
-            "activity_name": "History",
-            "duration_seconds": 20,
-            "duration": "00:00:20",
-            "accounted_project_id": 10,
-            "accounted_project_name": "ProjectA",
-            "project_id": 10,
-            "project_name": "ProjectA",
-            "project_description": "",
-            "display_project_id": 10,
-            "display_project_name": "ProjectA",
-            "display_project_description": "",
-            "activity_ids": [7],
-            "open_activity_id": 7,
-            "closed_duration_seconds": 0,
-            "is_in_progress": True,
-            "live_delta_eligible": False,
-            "duration_semantic": "static_closed",
-            "display_span_id": "",
-            "stable_live_key_hash": "",
-            "display_base_seconds": 20,
-        }
-    ])
-    monkeypatch.setattr(timeline_service, "get_default_report_date", lambda: "2026-07-09")
-
-    def fake_model(report_date=None, today=None, snapshot=None):
-        if report_date == "2026-07-08":
-            return {"ok": True, "date": report_date, "live_clock": {}, "current_activity": {}, "display_spans": []}
-        return {
-            "ok": True,
-            "date": report_date,
-            "sample_id": "today",
-            "current_activity": {},
-            "live_clock": {"display_span_id": "today-span", "stable_live_key_hash": "today"},
-            "display_spans": [
-                {
-                    "display_span_id": "today-span",
-                    "anchor_activity_id": 7,
-                    "activity_id": 7,
-                    "is_visible_in_details": True,
-                    "live_clock": {
-                        "display_span_id": "today-span",
-                        "stable_live_key_hash": "today",
-                        "current_live_seconds_at_sample": 999,
-                        "project_duration_live": True,
-                    },
-                }
-            ],
-        }
-
-    monkeypatch.setattr(view_model_service, "build_activity_display_model", fake_model)
-
-    result = view_model_service.get_project_activity_summary_view_model(10, "2026-07-08")
+    result = view_model_service.get_session_activity_summary_view_model([7], "2026-07-09")
 
     row = result["summary_rows"][0]
     assert row["duration_seconds"] == 20
     assert row["live_delta_eligible"] is False
     assert row["display_span_id"] == ""
+    assert len(result["summary_rows"]) == 1
+
+
+def test_view_model_summary_rows_are_scoped_to_activity_ids(monkeypatch):
+    monkeypatch.setattr(timeline_service, "get_default_report_date", lambda: "2026-07-09")
+    monkeypatch.setattr(view_model_service, "build_activity_display_model", lambda *args, **kwargs: _closed_model())
+
+    def fake_details(activity_ids, report_date=None, ensure_context=True):
+        if activity_ids == [1]:
+            return [_row(1, identity="only-selected", seconds=30, title="Selected")]
+        return [_row(2, identity="other-session", seconds=300, title="Other")]
+
+    monkeypatch.setattr(timeline_service, "get_session_activity_details", fake_details)
+
+    result = view_model_service.get_session_activity_summary_view_model([1], "2026-07-09")
+
+    assert result["activity_ids"] == [1]
+    assert [row["activity_name"] for row in result["summary_rows"]] == ["Selected"]
+    assert [row["activity_id"] for row in result["correction_activities"]] == [1]
+
+
+def test_uncategorized_session_activity_has_summary(monkeypatch):
+    rows = [
+        _row(
+            1,
+            identity="uncat",
+            seconds=60,
+            report_project_id=1,
+            report_project_name=UNCATEGORIZED_PROJECT,
+            display_project_id=0,
+            display_project_name=UNCATEGORIZED_PROJECT,
+        )
+    ]
+    monkeypatch.setattr(timeline_service, "get_session_activity_details", lambda *args, **kwargs: rows)
+
+    summary = project_activity_summary_service.get_session_activity_summary([1], "2026-07-09")
+
+    assert len(summary) == 1
+    assert summary[0]["accounted_project_name"] == UNCATEGORIZED_PROJECT

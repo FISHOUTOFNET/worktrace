@@ -17,32 +17,29 @@
     }
     App.getSelectedSession = getSelectedSession;
 
-    function getCurrentDetailActivities() {
-        var list = document.getElementById("timeline-details-list");
-        if (!list) return [];
-        var rows = list.querySelectorAll(".detail-item");
+    function getCurrentCorrectionActivities() {
+        var model = App.lastSessionActivitySummaryViewModel || {};
+        var rows = model.correction_activities || [];
         var out = [];
         for (var i = 0; i < rows.length; i++) {
             var row = rows[i];
-            var aid = row.getAttribute("data-activity-id") || "";
-            var timeEl = row.querySelector(".detail-item-time");
-            var nameEl = row.querySelector(".detail-item-name");
-            var typeEl = row.querySelector(".detail-item-type");
-            var appEl = row.querySelector(".detail-item-app");
-            var projEl = row.querySelector(".detail-item-project");
-            var durEl = row.querySelector(".detail-item-duration");
             out.push({
-                activity_id: aid,
-                time_range: timeEl ? timeEl.textContent : "",
-                resource_name: nameEl ? nameEl.textContent : "",
-                resource_type: typeEl ? typeEl.textContent : "",
-                app_name: appEl ? appEl.textContent : "",
-                project_name: projEl ? projEl.textContent : "",
-                duration: durEl ? durEl.textContent : "",
-                is_in_progress: row.classList.contains("in-progress")
+                activity_id: row.activity_id,
+                time_range: row.time_range || "",
+                resource_name: row.resource_name || "",
+                resource_type: row.resource_type || "",
+                app_name: row.app_name || "",
+                project_name: row.project_name || "",
+                duration: row.duration || "",
+                is_in_progress: row.is_in_progress === true
             });
         }
         return out;
+    }
+    App.getCurrentCorrectionActivities = getCurrentCorrectionActivities;
+
+    function getCurrentDetailActivities() {
+        return getCurrentCorrectionActivities();
     }
     App.getCurrentDetailActivities = getCurrentDetailActivities;
 
@@ -250,7 +247,7 @@
             var guidance = '<div class="correction-shell-actions-title">纠错操作</div>'
                 + '<div class="correction-shell-actions-hint">'
                 + '会话级操作（项目与备注 / 时间修正 / 拆分 / 可见性）请在上方“编辑当前时段”面板中执行；'
-                + '单条活动操作（编辑时间 / 拆分 / 与下一条合并 / 隐藏 / 删除）请在左侧活动详情列表中对应行执行。'
+                + '高级纠错基于当前选中时段内的活动。'
                 + ' <span class="danger-note">隐藏与删除为软操作，不会物理删除数据。</span>'
                 + '</div>';
             actionsEl.innerHTML = guidance;
@@ -267,33 +264,19 @@
     // the existing per-activity action buttons. No write is performed and
     function highlightDetailRow(activityId) {
         if (!activityId) return;
-        var row = document.querySelector(
-            '#timeline-details-list .detail-item[data-activity-id="' + activityId + '"]'
-        );
-        if (!row) {
-            setCorrectionShellStatus("该活动已不在当前详情中，可能已刷新，请重试。", true);
+        var activities = getCurrentCorrectionActivities();
+        var found = false;
+        for (var i = 0; i < activities.length; i++) {
+            if (String(activities[i].activity_id) === String(activityId)) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            setCorrectionShellStatus("该活动已不在当前选中时段中，可能已刷新，请重试。", true);
             return;
         }
-        var all = document.querySelectorAll("#timeline-details-list .detail-item");
-        for (var i = 0; i < all.length; i++) {
-            all[i].classList.remove("shell-target");
-            all[i].classList.remove("detail-item-highlight");
-        }
-        row.classList.add("shell-target");
-        // Brief transient highlight for immediate feedback. A single tracked
-        row.classList.add("detail-item-highlight");
-        if (App.correctionShellHighlightTimer !== null) {
-            clearTimeout(App.correctionShellHighlightTimer);
-            App.correctionShellHighlightTimer = null;
-        }
-        App.correctionShellHighlightTimer = setTimeout(function () {
-            row.classList.remove("detail-item-highlight");
-            App.correctionShellHighlightTimer = null;
-        }, 1800);
-        if (row.scrollIntoView) {
-            row.scrollIntoView({ behavior: "smooth", block: "center" });
-        }
-        setCorrectionShellStatus("", false);
+        setCorrectionShellStatus("已定位到当前选中时段内的活动。", false);
     }
     App.highlightDetailRow = highlightDetailRow;
 
@@ -309,7 +292,7 @@
         }
         var effectiveMode = mode === "activity" ? "activity" : "session";
         if (effectiveMode === "activity") {
-            var activities = getCurrentDetailActivities();
+            var activities = getCurrentCorrectionActivities();
             var found = false;
             for (var i = 0; i < activities.length; i++) {
                 if (String(activities[i].activity_id) === String(activityId)) {
@@ -334,7 +317,7 @@
 
         renderCorrectionShell(
             session,
-            getCurrentDetailActivities(),
+            getCurrentCorrectionActivities(),
             effectiveMode,
             App.correctionShellActivityId
         );

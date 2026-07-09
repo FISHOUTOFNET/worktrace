@@ -429,6 +429,7 @@ def _materialize_display_only_project_activity_summary_row(
     summary_id = "live:" + str(row.get("stable_live_key_hash") or row.get("display_span_id") or "pending")
     accounted_project_name = str(span.get("project_name") or UNCATEGORIZED_PROJECT)
     accounted_project_description = str(span.get("project_description") or "")
+    activity_id = int(span.get("anchor_activity_id") or span.get("activity_id") or 0)
     row.update(
         {
             "row_kind": "project_activity_summary",
@@ -448,9 +449,9 @@ def _materialize_display_only_project_activity_summary_row(
             "display_project_id": int(display_project.get("id") or 0),
             "display_project_name": str(display_project.get("name") or UNCATEGORIZED_PROJECT),
             "display_project_description": str(display_project.get("description") or ""),
-            "activity_ids": [],
-            "first_activity_id": None,
-            "open_activity_id": 0,
+            "activity_ids": [activity_id] if activity_id > 0 else [],
+            "first_activity_id": activity_id or None,
+            "open_activity_id": activity_id,
             "closed_duration_seconds": 0,
             "report_date": report_date,
         }
@@ -506,6 +507,29 @@ def _detail_report_attribution_fields(row: dict[str, Any]) -> dict[str, Any]:
         "is_official_project": bool(row.get("is_official_project")),
         "assignment_source": str(row.get("assignment_source") or ""),
         "project_attribution_kind": str(row.get("project_attribution_kind") or ""),
+    }
+
+
+def _correction_activity_row(row: dict[str, Any]) -> dict[str, Any]:
+    row_seconds = int(row.get("duration_seconds") or 0)
+    start_time = str(row.get("start_time") or "")
+    end_time = str(row.get("end_time") or "")
+    time_range = start_time[11:16] if len(start_time) >= 16 else start_time
+    if end_time:
+        time_range += " - " + (end_time[11:16] if len(end_time) >= 16 else end_time)
+    else:
+        time_range += " - 进行中"
+    return {
+        "activity_id": int(row.get("id") or row.get("activity_id") or 0),
+        "time_range": time_range,
+        "resource_name": format_safe_display_name(row),
+        "resource_type": format_resource_type(
+            row.get("resource_kind"), row.get("resource_subtype")
+        ),
+        "app_name": str(row.get("app_name") or ""),
+        "project_name": str(row.get("project_name") or UNCATEGORIZED_PROJECT),
+        "duration": format_duration(row_seconds),
+        "is_in_progress": bool(row.get("is_in_progress")),
     }
 
 
@@ -1069,12 +1093,12 @@ def get_session_details_view_model(
     }
 
 
-def get_project_activity_summary_view_model(
-    accounted_project_id: int,
+def get_session_activity_summary_view_model(
+    activity_ids: list[int],
     report_date: str | None = None,
 ) -> dict[str, Any]:
-    """Build the Timeline right-panel project activity summary ViewModel."""
-    project_id = int(accounted_project_id)
+    """Build the Timeline right-panel summary scoped by session activities."""
+    ids = [int(aid) for aid in (activity_ids or [])]
     date = report_date or timeline_service.get_default_report_date()
     today = timeline_service.get_default_report_date()
     snapshot = _get_current_activity_snapshot()
@@ -1096,12 +1120,20 @@ def get_project_activity_summary_view_model(
         report_date=today,
     )
 
-    rows: list[dict[str, Any]] = project_activity_summary_service.get_project_activity_summary(
+    rows: list[dict[str, Any]] = project_activity_summary_service.get_session_activity_summary(
+        ids,
         date,
-        project_id,
         include_hidden=False,
         ensure_context=True,
     )
+    detail_rows = [
+        row
+        for row in timeline_service.get_session_activity_details(
+            ids, report_date=date, ensure_context=True
+        )
+        if is_normal_project_status(str(row.get("status") or ""))
+    ] if ids else []
+    correction_activities = [_correction_activity_row(row) for row in detail_rows]
     _apply_live_span_to_rows(
         rows,
         report_model,
@@ -1109,18 +1141,26 @@ def get_project_activity_summary_view_model(
     )
 
     summary_live_span = _get_visible_live_span(report_model, "details")
+    request_matches_live = False
+    if summary_live_span:
+        live_activity_id = int(summary_live_span.get("activity_id") or 0)
+        live_anchor_id = int(summary_live_span.get("anchor_activity_id") or 0)
+        request_matches_live = (
+            (live_activity_id > 0 and live_activity_id in ids)
+            or (live_anchor_id > 0 and live_anchor_id in ids)
+        )
     if (
         summary_live_span
-        and int(summary_live_span.get("anchor_activity_id") or 0) <= 0
-        and int(summary_live_span.get("project_id") or 0) == project_id
+        and request_matches_live
         and not _rows_have_live_span(rows, summary_live_span)
     ):
+        accounted_project_id = int(summary_live_span.get("project_id") or 0)
         rows.append(
             _materialize_display_only_project_activity_summary_row(
                 summary_live_span,
                 current_activity,
                 report_date=date,
-                accounted_project_id=project_id,
+                accounted_project_id=accounted_project_id,
             )
         )
 
@@ -1134,8 +1174,9 @@ def get_project_activity_summary_view_model(
     return {
         "ok": True,
         "date": date,
-        "accounted_project_id": project_id,
+        "activity_ids": ids,
         "summary_rows": rows,
+        "correction_activities": correction_activities,
         "current_activity": current_activity,
         "live_clock": live_clock,
         **identity_fields,
@@ -1255,7 +1296,7 @@ def get_refresh_state_view_model(report_date: str | None = None) -> RefreshState
 __all__ = [
     "get_overview_view_model",
     "get_refresh_state_view_model",
-    "get_project_activity_summary_view_model",
+    "get_session_activity_summary_view_model",
     "get_session_details_view_model",
     "get_timeline_view_model",
 ]

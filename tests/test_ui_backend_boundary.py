@@ -1149,7 +1149,7 @@ EXPECTED_WEBVIEW_BRIDGE_PUBLIC_METHODS = {
     # Timeline
     "get_timeline",
     "get_timeline_session_details",
-    "get_timeline_project_activity_summary",
+    "get_timeline_session_activity_summary",
     "list_projects_for_timeline",
     "update_timeline_project",
     "update_timeline_note",
@@ -1224,8 +1224,77 @@ def test_webview_bridge_exposes_expected_fixed_public_api_surface() -> None:
         "EXPECTED_WEBVIEW_BRIDGE_PUBLIC_METHODS explicitly. Missing: "
         + ", ".join(sorted(missing))
     )
+def test_timeline_session_activity_summary_bridge_accepts_valid_ids(monkeypatch):
+    from worktrace.webview_ui.bridge import WebViewBridge
+    from worktrace.webview_ui import bridge_timeline
+
+    seen: dict[str, object] = {}
+
+    def fake_vm(activity_ids, report_date):
+        seen["activity_ids"] = activity_ids
+        seen["report_date"] = report_date
+        return {"ok": True, "summary_rows": [{"activity_name": "A"}]}
+
+    monkeypatch.setattr(
+        bridge_timeline.view_model_api,
+        "get_session_activity_summary_view_model",
+        fake_vm,
+    )
+
+    result = WebViewBridge().get_timeline_session_activity_summary([3, 3, 5], "2026-07-09")
+
+    assert result["ok"] is True
+    assert seen == {"activity_ids": [3, 5], "report_date": "2026-07-09"}
 
 
+@pytest.mark.parametrize(
+    "bad_ids",
+    [
+        True,
+        1,
+        "1",
+        {"id": 1},
+        [True],
+        [-1],
+        [0],
+        ["1"],
+        [1.5],
+    ],
+)
+def test_timeline_session_activity_summary_bridge_rejects_invalid_ids(bad_ids):
+    from worktrace.webview_ui.bridge import WebViewBridge
+
+    result = WebViewBridge().get_timeline_session_activity_summary(bad_ids, "2026-07-09")
+
+    assert result == {"ok": False, "error": "请选择有效的活动时段"}
+
+
+def test_timeline_session_activity_summary_bridge_empty_ids_returns_empty_payload():
+    from worktrace.webview_ui.bridge import WebViewBridge
+
+    result = WebViewBridge().get_timeline_session_activity_summary([], "2026-07-09")
+
+    assert result["ok"] is True
+    assert result["summary_rows"] == []
+    assert result["correction_activities"] == []
+
+
+def test_timeline_session_activity_summary_bridge_hides_internal_exceptions(monkeypatch):
+    from worktrace.webview_ui.bridge import WebViewBridge
+    from worktrace.webview_ui import bridge_timeline
+
+    def boom(activity_ids, report_date):
+        raise RuntimeError("sql traceback secret")
+
+    monkeypatch.setattr(
+        bridge_timeline.view_model_api,
+        "get_session_activity_summary_view_model",
+        boom,
+    )
+
+    result = WebViewBridge().get_timeline_session_activity_summary([1], "2026-07-09")
+
+    assert result == {"ok": False, "error": "操作失败"}
 
 
 def test_bridge_module_does_not_expose_api_facade_symbols() -> None:
