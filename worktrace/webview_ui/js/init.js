@@ -243,38 +243,6 @@
         if (noteEl) {
             noteEl.addEventListener("input", App.updateNoteCount);
         }
-        var sessionTimeSaveBtn = document.getElementById("edit-time-save-btn");
-        if (sessionTimeSaveBtn) {
-            sessionTimeSaveBtn.addEventListener("click", App.saveSessionTime);
-        }
-        var sessionSplitSaveBtn = document.getElementById("edit-split-save-btn");
-        if (sessionSplitSaveBtn) {
-            sessionSplitSaveBtn.addEventListener("click", App.saveSessionSplit);
-        }
-        var sessionHideBtn = document.getElementById("edit-visibility-hide-btn");
-        if (sessionHideBtn) {
-            sessionHideBtn.addEventListener("click", App.saveSessionHide);
-        }
-        var sessionDeleteBtn = document.getElementById("edit-visibility-delete-btn");
-        if (sessionDeleteBtn) {
-            sessionDeleteBtn.addEventListener("click", App.saveSessionDelete);
-        }
-        // action buttons; no new write path is wired here.
-        var shellOpenBtn = document.getElementById("open-correction-shell-btn");
-        if (shellOpenBtn) {
-            shellOpenBtn.addEventListener("click", function () {
-                App.openCorrectionShell("session", null);
-            });
-        }
-        var shellCloseBtn = document.getElementById("correction-shell-close-btn");
-        if (shellCloseBtn) {
-            shellCloseBtn.addEventListener("click", App.closeCorrectionShell);
-        }
-        // The save button calls the bridge's
-        App.bindBatchProjectControls();
-        // Batch note overwrite controls inside the correction shell. The
-        App.bindBatchNoteControls();
-        App.bindRestoreControls();
         // read-only bridge call; the quick-range buttons only update the
         var statsLoadBtn = document.getElementById("statistics-load-btn");
         if (statsLoadBtn) {

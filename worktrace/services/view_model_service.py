@@ -510,28 +510,6 @@ def _detail_report_attribution_fields(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _correction_activity_row(row: dict[str, Any]) -> dict[str, Any]:
-    row_seconds = int(row.get("duration_seconds") or 0)
-    start_time = str(row.get("start_time") or "")
-    end_time = str(row.get("end_time") or "")
-    time_range = start_time[11:16] if len(start_time) >= 16 else start_time
-    if end_time:
-        time_range += " - " + (end_time[11:16] if len(end_time) >= 16 else end_time)
-    else:
-        time_range += " - 进行中"
-    return {
-        "activity_id": int(row.get("id") or row.get("activity_id") or 0),
-        "time_range": time_range,
-        "resource_name": format_safe_display_name(row),
-        "resource_type": format_resource_type(
-            row.get("resource_kind"), row.get("resource_subtype")
-        ),
-        "app_name": str(row.get("app_name") or ""),
-        "project_name": str(row.get("project_name") or UNCATEGORIZED_PROJECT),
-        "duration": format_duration(row_seconds),
-        "is_in_progress": bool(row.get("is_in_progress")),
-    }
-
 
 # Overview ViewModel
 
@@ -1126,14 +1104,6 @@ def get_session_activity_summary_view_model(
         include_hidden=False,
         ensure_context=True,
     )
-    detail_rows = [
-        row
-        for row in timeline_service.get_session_activity_details(
-            ids, report_date=date, ensure_context=True
-        )
-        if is_normal_project_status(str(row.get("status") or ""))
-    ] if ids else []
-    correction_activities = [_correction_activity_row(row) for row in detail_rows]
     _apply_live_span_to_rows(
         rows,
         report_model,
@@ -1176,7 +1146,6 @@ def get_session_activity_summary_view_model(
         "date": date,
         "activity_ids": ids,
         "summary_rows": rows,
-        "correction_activities": correction_activities,
         "current_activity": current_activity,
         "live_clock": live_clock,
         **identity_fields,

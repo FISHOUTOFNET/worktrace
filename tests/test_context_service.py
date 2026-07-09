@@ -480,7 +480,8 @@ def test_short_gap_hidden_middle_prevents_bridging(temp_db):
     _closed_activity("Word", "winword.exe", "A_file_1.docx", "09:00:00", "09:01:00", project)
     middle = _closed_activity("Word", "winword.exe", "Loose_file.docx", "09:01:00", "09:05:00")
     # Hide the middle activity after closing.
-    activity_service.hide_activity(middle)
+    with get_connection() as conn:
+        conn.execute("UPDATE activity_log SET is_hidden = 1 WHERE id = ?", (middle,))
     _closed_activity("Adobe", "acrobat.exe", "A_file_2.pdf", "09:06:00", "09:08:00", project)
 
     recompute_context_assignments_for_date("2026-06-18")

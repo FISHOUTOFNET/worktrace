@@ -58,6 +58,16 @@ def _mark_open(activity_id: int) -> None:
         )
 
 
+def _mark_hidden(activity_id: int) -> None:
+    with get_connection() as conn:
+        conn.execute("UPDATE activity_log SET is_hidden = 1 WHERE id = ?", (activity_id,))
+
+
+def _mark_deleted(activity_id: int) -> None:
+    with get_connection() as conn:
+        conn.execute("UPDATE activity_log SET is_deleted = 1 WHERE id = ?", (activity_id,))
+
+
 def test_require_project_editable_activity_allows_normal_closed(temp_db):
     aid = _activity()
 
@@ -95,7 +105,7 @@ def test_require_project_editable_activity_rejects_system_statuses(temp_db, stat
 
 def test_require_project_editable_activity_rejects_hidden(temp_db):
     aid = _activity()
-    activity_service.hide_activity(aid)
+    _mark_hidden(aid)
 
     with pytest.raises(ValueError) as exc:
         require_project_editable_activity(aid)
@@ -105,7 +115,7 @@ def test_require_project_editable_activity_rejects_hidden(temp_db):
 
 def test_require_project_editable_activity_rejects_deleted(temp_db):
     aid = _activity()
-    activity_service.soft_delete_activity(aid)
+    _mark_deleted(aid)
 
     with pytest.raises(ValueError) as exc:
         require_project_editable_activity(aid)
@@ -143,8 +153,8 @@ def test_set_session_user_fields_allows_normal_closed_duration_override(temp_db)
     ("mutate", "code"),
     [
         (_mark_open, "activity_in_progress"),
-        (lambda aid: activity_service.hide_activity(aid), "activity_hidden"),
-        (lambda aid: activity_service.soft_delete_activity(aid), "activity_deleted"),
+        (_mark_hidden, "activity_hidden"),
+        (_mark_deleted, "activity_deleted"),
     ],
 )
 def test_set_session_note_rejects_non_editable_and_leaves_no_dirty_row(temp_db, mutate, code):
@@ -176,7 +186,7 @@ def test_set_session_user_fields_clear_still_requires_editability(temp_db):
     assert _session_note_row(aid) is None
 
     hidden = _activity()
-    activity_service.hide_activity(hidden)
+    _mark_hidden(hidden)
     with pytest.raises(ValueError) as exc:
         session_note_service.set_session_user_fields(DAY, hidden, "", None)
 

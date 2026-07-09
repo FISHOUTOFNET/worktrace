@@ -66,33 +66,6 @@
     App.editingSession = null;
     App.editSaving = false;
 
-    App.timeSaving = false;
-    App.editingActivityId = null;
-    App.activityTimeSaving = false;
-
-    App.sessionSplitSaving = false;
-    App.editingSplitActivityId = null;
-    App.activitySplitSaving = false;
-
-    App.mergeSaving = false;
-    App.mergingActivityId = null;
-
-    App.hideSaving = false;
-    App.hidingActivityId = null;
-    App.deleteSaving = false;
-    App.deletingActivityId = null;
-
-    App.correctionShellOpen = false;
-    App.correctionShellSessionId = null;
-    App.correctionShellActivityId = null;
-    App.correctionShellMode = null;
-    App.correctionShellHighlightTimer = null;
-    App.selectedBatchActivityIds = {};
-    App.batchProjectSaving = false;
-    App.batchProjectTargetId = null;
-    App.batchNoteSaving = false;
-    App.restoreSaving = false;
-    App.restoreSavingActivityId = null;
 
     App.statisticsLoaded = false;
     App.statisticsLoading = false;
@@ -277,12 +250,6 @@
         App.showEditStatus(message, type === "error");
     }
     App.setEditStatus = setEditStatus;
-
-    function setCorrectionStatus(message, type) {
-        App.setCorrectionShellStatus(message, type === "error");
-    }
-    App.setCorrectionStatus = setCorrectionStatus;
-
 
     function handleResult(result, onError) {
         if (result && result.ok === false) {
@@ -1111,86 +1078,14 @@
     }
     App.applyLocalTicker = applyLocalTicker;
 
-    // Timeline editing guard: the ticker, revision-change refresh, low-frequency reconciliation, and
-    // page-switch refresh all respect this so user input is never overwritten. Checks saving flags +
-    // correctionShellOpen, open-but-unsaved editors, and dirty session edits (editingSession + isEditDirty).
+    // Timeline editing guard: refresh paths respect this so user input is never overwritten.
     function timelineEditingActive() {
-        if (
-            App.editSaving ||
-            App.timeSaving ||
-            App.activityTimeSaving ||
-            App.sessionSplitSaving ||
-            App.activitySplitSaving ||
-            App.mergeSaving ||
-            App.hideSaving ||
-            App.deleteSaving ||
-            App.batchProjectSaving ||
-            App.batchNoteSaving ||
-            App.restoreSaving ||
-            App.correctionShellOpen
-        ) {
-            return true;
-        }
-        // Inline time / split editors are open (even without unsaved
-        // changes) — protect them so a ticker / refresh does not disturb
-        // the editor DOM.
-        if (App.editingActivityId !== null) return true;
-        if (App.editingSplitActivityId !== null) return true;
-        // Dirty session edit (project / note / session-level time changed
-        // but not yet saved).
+        if (App.editSaving) return true;
         if (App.editingSession && typeof App.isEditDirty === "function" && App.isEditDirty()) {
             return true;
         }
         return false;
     }
     App._timelineEditingActive = timelineEditingActive;
-
-    // Backend stores time as "YYYY-MM-DD HH:MM:SS". <input type="datetime-local">
-    // uses "YYYY-MM-DDTHH:MM:SS" (T separator). These helpers convert between
-    // the two fixed formats without relying on Date parsing.
-    function backendToDatetimeLocal(value) {
-        if (!value || typeof value !== "string") return "";
-        return value.replace(" ", "T");
-    }
-    App.backendToDatetimeLocal = backendToDatetimeLocal;
-
-    function datetimeLocalToBackend(value) {
-        if (!value || typeof value !== "string") return "";
-        return value.replace("T", " ");
-    }
-    App.datetimeLocalToBackend = datetimeLocalToBackend;
-
-    function midpointTime(startVal, endVal) {
-        if (!startVal || !endVal) return "";
-        var s = parseBackendTimeParts(startVal);
-        var e = parseBackendTimeParts(endVal);
-        if (!s || !e) return "";
-        var midMs = (s.ts + e.ts) / 2;
-        var d = new Date(midMs);
-        return formatUtcParts(d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate(),
-            d.getUTCHours(), d.getUTCMinutes(), d.getUTCSeconds());
-    }
-    App.midpointTime = midpointTime;
-
-    function parseBackendTimeParts(value) {
-        var m = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})$/.exec(value || "");
-        if (!m) return null;
-        var ts = Date.UTC(
-            parseInt(m[1], 10),
-            parseInt(m[2], 10) - 1,
-            parseInt(m[3], 10),
-            parseInt(m[4], 10),
-            parseInt(m[5], 10),
-            parseInt(m[6], 10)
-        );
-        return { ts: ts };
-    }
-    App.parseBackendTimeParts = parseBackendTimeParts;
-
-    function formatUtcParts(y, mo, d, h, mi, s) {
-        function pad(n) { return n < 10 ? "0" + n : String(n); }
-        return y + "-" + pad(mo) + "-" + pad(d) + " " + pad(h) + ":" + pad(mi) + ":" + pad(s);
-    }
-    App.formatUtcParts = formatUtcParts;
 
 })();

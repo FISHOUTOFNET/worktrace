@@ -354,8 +354,7 @@ def test_frontend_module_each_js_file_is_iife():
 
 def test_frontend_module_index_html_loads_js_files_in_correct_order():
     """index.html must load the six js/ modules in the exact
-    dependency order (core → overview → timeline → timeline_correction →
-    statistics → init). A wrong order would cause ReferenceError at load
+    dependency order parsed from index.html. A wrong order would cause ReferenceError at load
     time because a module might call App.foo() before core.js defines it."""
     source = read_resource("index.html")
     positions = []
@@ -457,11 +456,9 @@ def test_frontend_module_all_functions_still_defined():
         "callBridge", "showError", "clearError", "showTimelineError",
         "clearTimelineError", "setTimelineLoading", "statusClassFor",
         "applyStatusType", "setTimelineStatus", "setDetailStatus",
-        "setEditStatus", "setCorrectionStatus", "handleResult", "showStatus",
+        "setEditStatus", "handleResult", "showStatus",
         "safeText", "escapeHtml", "formatTimeRange", "shiftDate",
-        "localTodayStr", "formatDuration", "backendToDatetimeLocal",
-        "datetimeLocalToBackend", "midpointTime", "parseBackendTimeParts",
-        "formatUtcParts",
+        "localTodayStr", "formatDuration",
         # overview.js
         "showOverview", "showRecent",
         # timeline.js — main flow + editing
@@ -470,18 +467,7 @@ def test_frontend_module_all_functions_still_defined():
         "goPrevDay", "goNextDay", "goToday", "loadProjects",
         "populateEditPanel", "clearEditPanel", "isEditDirty", "saveEdit",
         "cancelEdit", "updateNoteCount", "showEditStatus", "setEditSaving",
-        "saveActivityTime", "saveActivitySplit", "saveActivityMerge",
-        "saveActivityHide", "saveActivityDelete",
-        "saveSessionTime", "saveSessionSplit", "saveSessionHide",
-        "saveSessionDelete", "refreshTimelineAfterEdit",
-        # timeline_correction.js — correction shell + batch + restore
-        "getSelectedSession", "getCurrentDetailActivities",
-        "isAnyCorrectionWriteSaving", "renderCorrectionShell",
-        "openCorrectionShell", "closeCorrectionShell",
-        "saveBatchProject", "saveBatchNote", "saveActivityRestore",
-        "resetCorrectionShellState", "highlightDetailRow",
-        "resetBatchProjectState", "resetBatchNoteState", "resetRestoreState",
-        "bindBatchProjectControls", "bindBatchNoteControls", "bindRestoreControls",
+        "refreshTimelineAfterEdit",
         # statistics.js
         "loadStatisticsExportSummary", "showStatistics", "renderStatsTable",
         "validateStatisticsDateRange", "applyStatisticsQuickRange",
@@ -539,16 +525,6 @@ def test_frontend_module_state_variables_only_accessed_via_app_namespace():
         "selectedSessionId", "timelineRequestToken", "detailsRequestToken",
         "projectsCache", "projectsLoading", "currentSessions",
         "editingSession", "editSaving",
-        "timeSaving", "editingActivityId", "activityTimeSaving",
-        "sessionSplitSaving", "editingSplitActivityId", "activitySplitSaving",
-        "mergeSaving", "mergingActivityId",
-        "hideSaving", "hidingActivityId", "deleteSaving", "deletingActivityId",
-        "correctionShellOpen", "correctionShellSessionId",
-        "correctionShellActivityId", "correctionShellMode",
-        "correctionShellHighlightTimer",
-        "selectedBatchActivityIds", "batchProjectSaving",
-        "batchProjectTargetId", "batchNoteSaving",
-        "restoreSaving", "restoreSavingActivityId",
         "statisticsLoaded", "statisticsLoading",
         "statisticsRequestToken", "statisticsExportSaving",
         "lastTimelineData",

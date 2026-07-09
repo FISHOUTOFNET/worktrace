@@ -41,10 +41,6 @@ _RECENT_LIMIT: int = 20
 # when the date string is obviously malformed.
 _DATE_SHAPE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
-# Lightweight ``YYYY-MM-DD HH:MM:SS`` shape check at the bridge layer. The
-# API layer performs the full ``datetime.strptime`` validation; this guard
-# gives the user a clearer "时间无效" message for obviously malformed input.
-_DATETIME_SHAPE_RE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
 
 
 def _coerce_activity_ids(activity_ids: list[int]) -> list[int] | None:
@@ -75,39 +71,6 @@ def _coerce_activity_ids(activity_ids: list[int]) -> list[int] | None:
         ids.append(value)
     return ids if ids else None
 
-
-def _validate_datetime_inputs(start_time: str, end_time: str) -> str | None:
-    """Bridge-level guard for ``start_time`` / ``end_time`` inputs.
-
-    Returns ``None`` if both values pass the lightweight shape check, or a
-    Chinese error message string otherwise. The API layer performs the full
-    ``datetime.strptime`` validation and the ``start < end`` ordering check;
-    this guard just gives the user a clearer ``"时间无效"`` message for
-    obviously malformed input (non-strings, empty, wrong shape).
-    """
-    if not isinstance(start_time, str) or not isinstance(end_time, str):
-        return "时间无效"
-    if not start_time or not end_time:
-        return "时间无效"
-    if not _DATETIME_SHAPE_RE.match(start_time) or not _DATETIME_SHAPE_RE.match(end_time):
-        return "时间无效"
-    return None
-
-
-def _validate_split_time_input(split_time: str) -> str | None:
-    """Bridge-level guard for the ``split_time`` input.
-
-    Returns ``None`` if the value passes the lightweight shape check, or a
-    Chinese error message string otherwise. The API layer performs the full
-    ``datetime.strptime`` validation and the strict range check; this guard
-    just gives the user a clearer ``"拆分时间无效"`` message for obviously
-    malformed input (non-string, empty, wrong shape).
-    """
-    if not isinstance(split_time, str) or not split_time:
-        return "拆分时间无效"
-    if not _DATETIME_SHAPE_RE.match(split_time):
-        return "拆分时间无效"
-    return None
 
 
 def _safe_resource_display_name(row: dict[str, Any]) -> str:
@@ -219,7 +182,6 @@ def _statistics_summary_payload(summary: dict[str, Any]) -> dict[str, Any]:
 
 
 __all__ = [
-    "_DATETIME_SHAPE_RE",
     "_DATE_SHAPE_RE",
     "_GENERIC_ERROR",
     "_RECENT_LIMIT",
@@ -227,6 +189,4 @@ __all__ = [
     "_safe_resource_display_name",
     "_snapshot_summary",
     "_statistics_summary_payload",
-    "_validate_datetime_inputs",
-    "_validate_split_time_input",
 ]

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from worktrace.constants import SOURCE_AUTO, STATUS_NORMAL
+from worktrace.db import get_connection
 from worktrace.resources.types import DetectedResource
 from worktrace.services import activity_service
 
@@ -66,7 +67,8 @@ def create_finalized_activity(**kwargs) -> int:
 
 def create_soft_deleted_activity(**kwargs) -> int:
     activity_id = create_closed_activity(**kwargs)
-    activity_service.soft_delete_activity(activity_id)
+    with get_connection() as conn:
+        conn.execute("UPDATE activity_log SET is_deleted = 1 WHERE id = ?", (activity_id,))
     return activity_id
 
 

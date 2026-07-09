@@ -403,7 +403,7 @@ def test_styles_css_timeline_and_correction_shell_not_removed():
     (regression lock)."""
     source = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
     assert ".timeline-date-nav" in source
-    assert ".correction-shell" in source
+    assert ".correction-shell" not in source
 
 
 
@@ -520,7 +520,7 @@ def test_frontend_js_correction_shell_no_external_links():
 
 
 
-def test_frontend_js_correction_shell_no_raw_sensitive_fields():
+def test_frontend_js_no_raw_sensitive_fields():
     """frontend JS must not render raw window_title / file_path_hint /
     full_path / clipboard fields (regression lock).
 
@@ -549,18 +549,9 @@ def test_frontend_js_correction_shell_no_raw_sensitive_fields():
 
 
 
-def test_bridge_no_unexpected_methods_for_contract():
-    """no new bridge methods beyond the known 21-method set
-    (regression lock — same known method set)."""
-    # scan all bridge mixin files.
-    # bridge.py into the mixins).
+def test_bridge_no_advanced_timeline_methods_for_contract():
     bridge_src = read_bridge_sources_combined()
-    known_methods = (
-        "get_status", "toggle_pause", "get_overview",
-        "get_recent_activities", "get_timeline",
-        "get_timeline_session_details", "get_timeline_session_activity_summary",
-        "list_projects_for_timeline",
-        "update_timeline_project", "update_timeline_note",
+    for method in (
         "update_timeline_activity_time", "update_timeline_session_time",
         "split_timeline_activity", "split_timeline_session",
         "merge_timeline_activities", "hide_timeline_activity",
@@ -569,12 +560,8 @@ def test_bridge_no_unexpected_methods_for_contract():
         "batch_update_timeline_activities_project",
         "batch_update_timeline_activities_note",
         "get_timeline_restorable_activities", "restore_timeline_activity",
-    )
-    for method in known_methods:
-        assert method in bridge_src, (
-            "bridge must still expose " + method
-        )
-
+    ):
+        assert method not in bridge_src
 
 
 def test_bridge_imports_only_allowed_modules():
@@ -594,39 +581,29 @@ def test_bridge_imports_only_allowed_modules():
 
 
 
-def test_api_has_expected_timeline_methods():
-    """The timeline API must expose the expected method set and error classes."""
-    api_src = (REPO_ROOT / "worktrace" / "api" / "timeline_api.py").read_text(
-        encoding="utf-8"
-    )
+def test_api_has_p0_timeline_methods_only():
+    api_src = (REPO_ROOT / "worktrace" / "api" / "timeline_api.py").read_text(encoding="utf-8")
     for symbol in (
-        "class TimelineTimeEditError",
-        "class TimelineSplitError",
-        "class TimelineMergeError",
-        "class TimelineVisibilityError",
-        "class TimelineBatchProjectError",
-        "class TimelineBatchNoteError",
-        "class TimelineRestoreActivityError",
         "def reclassify_timeline_session_project",
         "def update_timeline_session_note",
-        "def update_timeline_activity_time",
-        "def update_timeline_session_time",
-        "def split_timeline_activity",
-        "def split_timeline_session",
-        "def merge_timeline_activities",
-        "def hide_timeline_activity",
-        "def soft_delete_timeline_activity",
-        "def hide_timeline_session",
+        "def update_timeline_session_note_and_duration",
+    ):
+        assert symbol in api_src
+    for symbol in (
+        "class TimelineTimeEditError", "class TimelineSplitError",
+        "class TimelineMergeError", "class TimelineVisibilityError",
+        "class TimelineBatchProjectError", "class TimelineBatchNoteError",
+        "class TimelineRestoreActivityError",
+        "def update_timeline_activity_time", "def update_timeline_session_time",
+        "def split_timeline_activity", "def split_timeline_session",
+        "def merge_timeline_activities", "def hide_timeline_activity",
+        "def soft_delete_timeline_activity", "def hide_timeline_session",
         "def soft_delete_timeline_session",
         "def batch_update_timeline_activities_project",
         "def batch_update_timeline_activities_note",
-        "def restore_timeline_activity",
-        "def get_timeline_restorable_activities",
+        "def restore_timeline_activity", "def get_timeline_restorable_activities",
     ):
-        assert symbol in api_src, (
-            "timeline_api must still define " + symbol
-        )
-
+        assert symbol not in api_src
 
 
 def test_no_new_db_schema_for_contract():

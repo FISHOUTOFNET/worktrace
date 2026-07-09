@@ -786,7 +786,6 @@ def test_settings_js_reset_frontend_after_local_data_replacement() -> None:
         "App.projectsCache = null",
         "App.currentSessions = []",
         "App.selectedSessionId = null",
-        "App.selectedBatchActivityIds = {}",
     ):
         assert token in body, (
             "resetFrontendAfterLocalDataReplacement must clear: " + token

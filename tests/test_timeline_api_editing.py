@@ -450,7 +450,8 @@ def test_reclassify_deleted_activity_rejected(temp_db):
     skipped."""
     project = project_service.create_project("P")
     ids = _seed_session()
-    activity_service.soft_delete_activity(ids[0])
+    with get_connection() as conn:
+        conn.execute("UPDATE activity_log SET is_deleted = 1 WHERE id = ?", (ids[0],))
     with pytest.raises(ValueError):
         timeline_api.reclassify_timeline_session_project(ids, project)
 
@@ -467,7 +468,8 @@ def test_update_note_first_activity_id_bool_rejected(temp_db):
 def test_update_note_first_activity_id_deleted_rejected(temp_db):
     """A soft-deleted activity must fail validation for note writing."""
     ids = _seed_session()
-    activity_service.soft_delete_activity(ids[0])
+    with get_connection() as conn:
+        conn.execute("UPDATE activity_log SET is_deleted = 1 WHERE id = ?", (ids[0],))
     with pytest.raises(ValueError):
         timeline_api.update_timeline_session_note("2026-06-25", ids[0], "note")
 

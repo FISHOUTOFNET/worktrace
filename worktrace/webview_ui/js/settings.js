@@ -405,12 +405,6 @@
         // Clear per-session / per-activity selection state so a stale id
         App.selectedSessionId = null;
         App.editingSession = null;
-        App.editingActivityId = null;
-        App.editingSplitActivityId = null;
-        App.mergingActivityId = null;
-        App.hidingActivityId = null;
-        App.deletingActivityId = null;
-        App.selectedBatchActivityIds = {};
         // Clear cached payloads so the next page visit re-fetches.
         App.lastTimelineData = null;
         App.lastProjectRulesData = null;

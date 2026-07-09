@@ -41,6 +41,7 @@ from worktrace.constants import (
     TIME_FORMAT,
     UNCATEGORIZED_PROJECT,
 )
+from worktrace.db import get_connection
 from worktrace.services import activity_service, folder_rule_service, project_service, settings_service
 from worktrace.services.activity_row_overlay import (
     ROW_KIND_ACTIVITY_DETAIL_ROW,
@@ -882,8 +883,17 @@ def test_time_edit_changes_revision(bridge):
     activity_service.close_activity(aid, f"{today} 09:30:00")
     r1 = bridge.get_refresh_state()["refresh_revision"]
 
-    # Edit the time — a structural change.
-    activity_service.update_activity_time(aid, f"{today} 09:05:00", f"{today} 09:30:00")
+    # Edit the stored time directly; the product no longer exposes a Timeline
+    # time-correction write path, but refresh revisions still track DB changes.
+    with get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE activity_log
+            SET start_time = ?, duration_seconds = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (f"{today} 09:05:00", 1500, aid),
+        )
     r2 = bridge.get_refresh_state()["refresh_revision"]
     assert r1 != r2
 

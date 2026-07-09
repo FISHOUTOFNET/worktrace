@@ -250,7 +250,8 @@ def test_service_summary_excludes_hidden_activities(temp_db):
         app="Word", resource="A1.docx", start="09:00:00", end="09:30:00",
         day="2026-06-25", project_id=pid,
     )
-    activity_service.hide_activity(aid)
+    with get_connection() as conn:
+        conn.execute("UPDATE activity_log SET is_hidden = 1 WHERE id = ?", (aid,))
     summary = statistics_service.get_statistics_export_summary("2026-06-25", "2026-06-25")
     assert summary["activity_count"] == 0
     assert summary["total_duration_seconds"] == 0
@@ -263,7 +264,8 @@ def test_service_summary_excludes_deleted_activities(temp_db):
         app="Word", resource="A1.docx", start="09:00:00", end="09:30:00",
         day="2026-06-25", project_id=pid,
     )
-    activity_service.soft_delete_activity(aid)
+    with get_connection() as conn:
+        conn.execute("UPDATE activity_log SET is_deleted = 1 WHERE id = ?", (aid,))
     summary = statistics_service.get_statistics_export_summary("2026-06-25", "2026-06-25")
     assert summary["activity_count"] == 0
     assert summary["total_duration_seconds"] == 0

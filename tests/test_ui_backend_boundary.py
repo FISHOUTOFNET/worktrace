@@ -1153,19 +1153,6 @@ EXPECTED_WEBVIEW_BRIDGE_PUBLIC_METHODS = {
     "list_projects_for_timeline",
     "update_timeline_project",
     "update_timeline_note",
-    "update_timeline_activity_time",
-    "update_timeline_session_time",
-    "split_timeline_activity",
-    "split_timeline_session",
-    "merge_timeline_activities",
-    "hide_timeline_activity",
-    "soft_delete_timeline_activity",
-    "hide_timeline_session",
-    "soft_delete_timeline_session",
-    "batch_update_timeline_activities_project",
-    "batch_update_timeline_activities_note",
-    "get_timeline_restorable_activities",
-    "restore_timeline_activity",
     # Statistics / export
     "get_statistics_export_summary",
     "export_statistics_csv",
@@ -1276,7 +1263,7 @@ def test_timeline_session_activity_summary_bridge_empty_ids_returns_empty_payloa
 
     assert result["ok"] is True
     assert result["summary_rows"] == []
-    assert result["correction_activities"] == []
+    assert "correction_activities" not in result
 
 
 def test_timeline_session_activity_summary_bridge_hides_internal_exceptions(monkeypatch):

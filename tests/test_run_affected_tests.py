@@ -74,10 +74,6 @@ def test_bridge_py_selects_bridge_tests_and_boundary(runner):
     sel = runner.select_targets(["worktrace/webview_ui/bridge.py"])
     assert "tests/test_webview_bridge.py" in sel.pytest_targets
     assert "tests/test_webview_project_rules_bridge.py" in sel.pytest_targets
-    assert "tests/test_webview_bridge_merge.py" in sel.pytest_targets
-    assert "tests/test_webview_bridge_batch_project.py" in sel.pytest_targets
-    assert "tests/test_webview_bridge_batch_note.py" in sel.pytest_targets
-    assert "tests/test_webview_bridge_restore.py" in sel.pytest_targets
     assert "tests/test_ui_backend_boundary.py" in sel.pytest_targets
     # bridge.py is also a K1 trigger (Settings / Privacy WebView),
     # so K1 contributes the import smoke command and the Settings tests /
@@ -106,13 +102,6 @@ def test_bridge_mixin_file_selects_bridge_tests_and_boundary(runner, bridge_file
     for expected in [
         "tests/test_webview_bridge.py",
         "tests/test_webview_project_rules_bridge.py",
-        "tests/test_webview_bridge_time_edit.py",
-        "tests/test_webview_bridge_split.py",
-        "tests/test_webview_bridge_merge.py",
-        "tests/test_webview_bridge_visibility.py",
-        "tests/test_webview_bridge_batch_project.py",
-        "tests/test_webview_bridge_batch_note.py",
-        "tests/test_webview_bridge_restore.py",
         "tests/test_webview_bridge_statistics.py",
         "tests/test_statistics_csv_export.py",
         "tests/test_settings_privacy_status.py",
@@ -167,10 +156,6 @@ def test_bridge_timeline_py_selects_timeline_specialized_tests(runner):
     contract tests, not just the broad bridge suite."""
     sel = runner.select_targets(["worktrace/webview_ui/bridge_timeline.py"])
     for expected in (
-        "tests/test_webview_bridge_time_edit.py",
-        "tests/test_webview_bridge_split.py",
-        "tests/test_webview_bridge_visibility.py",
-        "tests/webview/test_timeline_correction_shell_contract.py",
         "tests/test_timeline_service.py",
         "tests/test_timeline_api_editing.py",
         "tests/webview/test_timeline_static_contract.py",

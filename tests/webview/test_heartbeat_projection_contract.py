@@ -268,8 +268,8 @@ def test_low_frequency_reconciliation_exists():
 
 def test_low_frequency_reconciliation_skips_timeline_when_editing():
     """the low-frequency reconciliation must NOT re-render
-    the Timeline when an editor / split editor / correction shell write
-    is in progress so the user's input focus is preserved."""
+    the Timeline when the P0 edit panel has unsaved input
+    or is saving so the user's input focus is preserved."""
     source = read_js("init.js")
     body = func_body(source, "fullReconcileCollectionViews")
     refresh_body = func_body(source, "refreshCurrentPageData")
@@ -761,42 +761,24 @@ def test_page_switch_refresh_does_not_use_boolean_pending_replay():
     assert "acceptRefreshStateRuntime" in body
 
 
-def test_timeline_editing_guard_covers_open_editors():
-    """issue 12: ``_timelineEditingActive`` must cover not just
-    saving states but also editors that are OPEN BUT NOT YET SAVED
-    (``editingActivityId`` / ``editingSplitActivityId``) and dirty session
-    edits (``editingSession`` + ``isEditDirty()``)."""
+def test_timeline_editing_guard_covers_p0_edit_panel():
+    """``_timelineEditingActive`` covers the P0 edit panel saving state
+    and dirty session edits (``editingSession`` + ``isEditDirty()``)."""
     source = read_js("core.js")
     body = func_body(source, "timelineEditingActive")
-    # Must check open editor IDs (not just saving flags).
-    assert "editingActivityId" in body, (
-        "timelineEditingActive must check editingActivityId (open editor)"
-    )
-    assert "editingSplitActivityId" in body, (
-        "timelineEditingActive must check editingSplitActivityId (open split)"
-    )
-    assert "editingSession" in body, (
-        "timelineEditingActive must check editingSession + isEditDirty()"
-    )
-    assert "isEditDirty" in body, (
-        "timelineEditingActive must call isEditDirty() for unsaved edits"
-    )
+    assert "editSaving" in body
+    assert "editingSession" in body
+    assert "isEditDirty" in body
+    for forbidden in ("editingActivityId", "editingSplitActivityId", "activityTimeSaving"):
+        assert forbidden not in body
 
 
 def test_render_session_details_skips_rerender_when_editing():
-    """issue 17: ``renderSessionDetails`` must NOT re-render the
-    detail list (which would overwrite user input) when an inline editor /
-    split editor is open and dirty or a save is in progress."""
+    """``renderSessionDetails`` must not overwrite the P0 edit panel while
+    a Timeline edit is active."""
     source = read_js("timeline.js")
     body = func_body(source, "renderSessionDetails")
-    assert "editingActivityId" in body or "editingSplitActivityId" in body, (
-        "renderSessionDetails must check open editor IDs before re-rendering"
-    )
-    assert "isEditDirty" in body or "activityTimeSaving" in body, (
-        "renderSessionDetails must check isEditDirty / saving state before "
-        "re-rendering so user input is not overwritten"
-    )
-
+    assert "_timelineEditingActive" in body
 
 
 
@@ -937,26 +919,15 @@ def test_recent_has_request_token():
 
 
 def test_render_session_details_cache_after_guard():
-    """``renderSessionDetails`` must set
-    ``App.lastSessionDetailsViewModel`` AFTER the dirty-editor / saving
-    guard, not before. When the DOM render is skipped, the cache must
-    also be skipped so they stay atomic."""
+    """``renderSessionDetails`` must set the structural cache only after
+    the Timeline editing guard has allowed a render."""
     source = read_js("timeline.js")
     body = func_body(source, "renderSessionDetails")
-    # The guard (isEditDirty / activityTimeSaving) must appear BEFORE the
-    # cache assignment in the function body.
-    guard_pos = body.find("isEditDirty")
+    guard_pos = body.find("_timelineEditingActive")
     cache_pos = body.find("App.lastSessionDetailsViewModel = data")
-    assert guard_pos != -1, (
-        "renderSessionDetails must check isEditDirty before caching"
-    )
-    assert cache_pos != -1, (
-        "renderSessionDetails must set App.lastSessionDetailsViewModel"
-    )
-    assert guard_pos < cache_pos, (
-        "renderSessionDetails must set the cache AFTER the dirty-editor guard "
-        "so cache/DOM stay atomic"
-    )
+    assert guard_pos != -1
+    assert cache_pos != -1
+    assert guard_pos < cache_pos
 
 
 def test_clear_sessions_invalidates_pending_detail_request():
@@ -1372,11 +1343,6 @@ def test_renderers_diagnose_live_rows_missing_span_id():
 def test_frontend_status_display_uses_display_contract_helper():
     core = _strip_js_comments(read_js("core.js"))
     overview_body = func_body(_strip_js_comments(read_js("overview.js")), "showRecent")
-    correction_body = func_body(
-        _strip_js_comments(read_js("timeline_correction.js")),
-        "renderCorrectionShell",
-    )
-
     helper_body = func_body(core, "displayStatusText")
     assert "display_status" in helper_body
     assert "status_label" in helper_body
@@ -1388,8 +1354,6 @@ def test_frontend_status_display_uses_display_contract_helper():
 
     assert "App.displayStatusText(item)" in overview_body
     assert "item.status ||" not in overview_body
-    assert "App.displayStatusText(session)" in correction_body
-    assert "session.status" not in correction_body
 
 
 def test_status_only_recent_rows_never_register_live_targets():

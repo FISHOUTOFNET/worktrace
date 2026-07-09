@@ -107,9 +107,6 @@
                         </div>
                         <div id="timeline-edit-panel" class="timeline-edit-panel" hidden>
                             <div class="edit-panel-title">编辑当前时段</div>
-                            <div class="edit-panel-header-actions">
-                                <button id="open-correction-shell-btn" class="edit-btn edit-shell-open-btn" type="button">高级纠错</button>
-                            </div>
                             <div class="edit-section-label">项目</div>
                             <div class="edit-field">
                                 <label for="edit-project-select" class="edit-label">项目</label>
@@ -136,135 +133,6 @@
                                 <button id="edit-cancel-btn" class="edit-btn edit-cancel-btn" type="button" disabled>取消</button>
                             </div>
                             <div id="edit-status" class="edit-status" hidden></div>
-                            <div class="edit-field edit-time-section" id="edit-time-section" hidden>
-                                <div class="edit-section-label">时间修正</div>
-                                <div id="edit-time-single" hidden>
-                                    <div class="edit-time-row">
-                                        <label for="edit-start-time" class="edit-time-label">开始</label>
-                                        <input type="datetime-local" id="edit-start-time" class="edit-time-input" step="1" disabled>
-                                    </div>
-                                    <div class="edit-time-row">
-                                        <label for="edit-end-time" class="edit-time-label">结束</label>
-                                        <input type="datetime-local" id="edit-end-time" class="edit-time-input" step="1" disabled>
-                                    </div>
-                                    <div class="edit-time-actions">
-                                        <button id="edit-time-save-btn" class="edit-btn edit-time-save-btn" type="button" disabled>保存时间</button>
-                                    </div>
-                                </div>
-                                <div id="edit-time-multi" class="edit-time-hint" hidden>
-                                    多活动时段请在活动详情中修改单条活动时间。
-                                </div>
-                                <div id="edit-time-status" class="edit-status" hidden></div>
-                            </div>
-                            <div class="edit-field edit-split-section" id="edit-split-section" hidden>
-                                <div class="edit-section-label">拆分</div>
-                                <div id="edit-split-single" hidden>
-                                    <div class="edit-time-row">
-                                        <label for="edit-split-time" class="edit-time-label">拆分点</label>
-                                        <input type="datetime-local" id="edit-split-time" class="edit-time-input" step="1" disabled>
-                                    </div>
-                                    <div class="edit-time-actions">
-                                        <button id="edit-split-save-btn" class="edit-btn edit-split-save-btn" type="button" disabled>拆分</button>
-                                    </div>
-                                </div>
-                                <div id="edit-split-multi" class="edit-time-hint" hidden>
-                                    多活动时段请在活动详情中拆分单条活动。
-                                </div>
-                                <div id="edit-split-status" class="edit-status" hidden></div>
-                            </div>
-                            <div class="edit-field edit-visibility-section" id="edit-visibility-section" hidden>
-                                <div class="edit-section-label">可见性</div>
-                                <div id="edit-visibility-single" hidden>
-                                    <div class="edit-time-actions">
-                                        <button id="edit-visibility-hide-btn" class="edit-btn edit-visibility-hide-btn" type="button" disabled>隐藏此 session</button>
-                                        <button id="edit-visibility-delete-btn" class="edit-btn edit-visibility-delete-btn" type="button" disabled>删除此 session</button>
-                                    </div>
-                                    <div class="edit-time-hint">
-                                        隐藏后将从默认 Timeline 隐藏；删除为软删除，不会物理删除数据。
-                                    </div>
-                                </div>
-                                <div id="edit-visibility-multi" class="edit-time-hint" hidden>
-                                    多活动时段请在活动详情中逐条隐藏或删除。
-                                </div>
-                                <div id="edit-visibility-status" class="edit-status" hidden></div>
-                            </div>
-                        </div>
-                        <div id="timeline-correction-shell" class="correction-shell" hidden>
-                            <div class="correction-shell-header">
-                                <div class="correction-shell-title-group">
-                                    <div class="correction-shell-title">纠错面板</div>
-                                    <div id="correction-shell-subtitle" class="correction-shell-subtitle">选择一个时段后打开</div>
-                                </div>
-                                <button id="correction-shell-close-btn" class="edit-btn correction-shell-close-btn" type="button">返回时间详情</button>
-                            </div>
-                            <div id="correction-shell-status" class="edit-status correction-shell-status" hidden></div>
-                            <div id="correction-shell-context-card" class="correction-shell-card correction-shell-context-card">
-                                <div class="correction-shell-card-header">当前时段</div>
-                                <div id="correction-shell-context" class="correction-shell-context"></div>
-                            </div>
-                            <div id="correction-shell-activity-card" class="correction-shell-card correction-shell-activity-card">
-                                <div class="correction-shell-card-header">活动明细</div>
-                                <div id="correction-shell-activities" class="correction-shell-activities"></div>
-                            </div>
-                            <div id="correction-shell-single-action-card" class="correction-shell-card correction-shell-single-action-card">
-                                <div class="correction-shell-card-header">单条记录操作</div>
-                                <div id="correction-shell-actions" class="correction-shell-actions"></div>
-                            </div>
-                            <div id="correction-shell-batch-action-card" class="correction-shell-card correction-shell-batch-action-card">
-                                <div class="correction-shell-card-header">批量操作</div>
-                                <div class="edit-time-hint correction-shell-card-hint">
-                                    当前仅支持批量项目重分类和批量备注覆盖。
-                                </div>
-                                <div class="correction-shell-batch-section" id="correction-shell-batch-project-section">
-                                    <div class="edit-section-label">批量项目重分类</div>
-                                    <div class="edit-time-hint correction-shell-batch-hint">
-                                        批量操作仅支持设置项目。时间、拆分、合并、隐藏或删除请在单条活动详情中处理。
-                                    </div>
-                                    <div class="correction-shell-batch-summary">
-                                        <span id="correction-shell-batch-count" class="correction-shell-batch-count">已选择 0 条</span>
-                                        <button id="correction-shell-batch-select-all-btn" class="edit-btn correction-shell-batch-toggle-btn" type="button">全选当前可修改活动</button>
-                                        <button id="correction-shell-batch-clear-btn" class="edit-btn correction-shell-batch-toggle-btn" type="button">清空选择</button>
-                                    </div>
-                                    <div class="edit-field">
-                                        <label for="correction-shell-batch-project-select" class="edit-label">目标项目</label>
-                                        <select id="correction-shell-batch-project-select" class="edit-select" disabled>
-                                            <option value="">请选择项目</option>
-                                        </select>
-                                    </div>
-                                    <div class="edit-time-actions">
-                                        <button id="correction-shell-batch-save-btn" class="edit-btn correction-shell-batch-save-btn" type="button" disabled>批量设置项目</button>
-                                    </div>
-                                    <div id="correction-shell-batch-status" class="edit-status" hidden></div>
-                                </div>
-                                <div class="correction-shell-batch-section" id="correction-shell-batch-note-section">
-                                    <div class="edit-section-label">批量备注覆盖</div>
-                                    <div class="edit-time-hint correction-shell-batch-hint">
-                                        将所选活动的备注统一覆盖为同一内容。如需逐条编辑，请在活动详情中处理。
-                                    </div>
-                                    <div class="edit-field">
-                                        <label for="correction-shell-batch-note-text" class="edit-label">备注内容</label>
-                                        <textarea id="correction-shell-batch-note-text" class="edit-note correction-shell-batch-note-text" rows="3" placeholder="输入要覆盖到所选活动的备注（留空将清空所选活动备注）" disabled></textarea>
-                                        <div class="edit-note-meta">
-                                            <span id="correction-shell-batch-note-count" class="edit-note-count">0 / 2000</span>
-                                        </div>
-                                    </div>
-                                    <div class="edit-time-actions">
-                                        <button id="correction-shell-batch-note-save-btn" class="edit-btn correction-shell-batch-save-btn" type="button" disabled>批量覆盖备注</button>
-                                    </div>
-                                    <div id="correction-shell-batch-note-status" class="edit-status" hidden></div>
-                                </div>
-                            </div>
-                            <div id="correction-shell-restore-card" class="correction-shell-card correction-shell-restore-card">
-                                <div class="correction-shell-card-header">可恢复记录</div>
-                                <div class="correction-shell-restore-section" id="correction-shell-restore-section">
-                                    <div class="edit-time-hint correction-shell-restore-hint">
-                                        每次恢复一条隐藏或软删除记录。如需批量处理，请逐条恢复。
-                                    </div>
-                                    <div id="correction-shell-restore-list" class="correction-shell-restore-list"></div>
-                                    <div id="correction-shell-restore-status" class="edit-status" hidden></div>
-                                </div>
-                            </div>
-                        </div>
                     </div>
                 </div>
             </section>
@@ -543,7 +411,6 @@
     <script src="js/core.js"></script>
     <script src="js/overview.js"></script>
     <script src="js/timeline.js"></script>
-    <script src="js/timeline_correction.js"></script>
     <script src="js/statistics.js"></script>
     <script src="js/settings.js"></script>
     <script src="js/rules.js"></script>

@@ -60,10 +60,6 @@
         "reason": "Statistics/export WebView static owner matrix covering CSV/export labels and privacy-safe display contracts."
       },
       {
-        "path": "tests/webview/test_timeline_correction_shell_contract.py",
-        "reason": "Timeline correction shell static owner matrix covering edit UI contracts and regression boundaries."
-      },
-      {
         "path": "tests/webview/test_timeline_static_contract.py",
         "reason": "Timeline WebView static owner matrix covering display labels, live display, privacy, and editing contracts."
       }

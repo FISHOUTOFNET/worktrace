@@ -166,8 +166,8 @@ def test_build_csv_rows_excludes_in_progress(temp_db):
 def test_build_csv_rows_excludes_hidden(temp_db):
     """Hidden activities are excluded (include_hidden=False)."""
     aid = _seed_closed_activity(day="2026-06-25")
-    from worktrace.api import timeline_api
-    timeline_api.hide_timeline_activity(aid)
+    with get_connection() as conn:
+        conn.execute("UPDATE activity_log SET is_hidden = 1 WHERE id = ?", (aid,))
     rows = export_service.build_statistics_csv_rows("2026-06-25", "2026-06-25")
     assert rows == []
 
@@ -175,8 +175,8 @@ def test_build_csv_rows_excludes_hidden(temp_db):
 def test_build_csv_rows_excludes_deleted(temp_db):
     """Soft-deleted activities are excluded."""
     aid = _seed_closed_activity(day="2026-06-25")
-    from worktrace.api import timeline_api
-    timeline_api.soft_delete_timeline_activity(aid)
+    with get_connection() as conn:
+        conn.execute("UPDATE activity_log SET is_deleted = 1 WHERE id = ?", (aid,))
     rows = export_service.build_statistics_csv_rows("2026-06-25", "2026-06-25")
     assert rows == []
 

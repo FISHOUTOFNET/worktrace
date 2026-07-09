@@ -222,7 +222,7 @@ def test_view_model_summary_rows_are_scoped_to_activity_ids(monkeypatch):
 
     assert result["activity_ids"] == [1]
     assert [row["activity_name"] for row in result["summary_rows"]] == ["Selected"]
-    assert [row["activity_id"] for row in result["correction_activities"]] == [1]
+    assert "correction_activities" not in result
 
 
 def test_uncategorized_session_activity_has_summary(monkeypatch):
