@@ -1151,8 +1151,7 @@ EXPECTED_WEBVIEW_BRIDGE_PUBLIC_METHODS = {
     "get_timeline_session_details",
     "get_timeline_session_activity_summary",
     "list_projects_for_timeline",
-    "update_timeline_project",
-    "update_timeline_note",
+    "save_timeline_session_override",
     # Statistics / export
     "get_statistics_export_summary",
     "export_statistics_csv",

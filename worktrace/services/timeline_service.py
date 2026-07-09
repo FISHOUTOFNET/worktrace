@@ -198,65 +198,13 @@ def update_session_override(
     )
 
 
-def update_session_project(*args) -> int | None:
-    if len(args) == 2:
-        session_activity_ids, project_id = args
-        _require_editable_session_activity_ids(session_activity_ids)
-        session = _resolve_legacy_session_by_activity_ids([int(aid) for aid in session_activity_ids])
-        return session_override_service.upsert_session_override(
-            session,
-            project_id=int(project_id),
-            adjusted_duration_seconds=session.get("adjusted_duration_seconds"),
-            note=str(session.get("session_note") or ""),
-        )
-    if len(args) != 4:
-        raise TypeError("update_session_project expects 2 or 4 arguments")
-    report_date, session_activity_ids, activity_member_hash, project_id = args
-    _require_editable_session_activity_ids(session_activity_ids)
-    session = report_session_projection_service.resolve_current_session(
-        str(report_date),
-        session_activity_ids,
-        str(activity_member_hash),
-        include_hidden=True,
-        ensure_context=True,
-    )
-    return session_override_service.upsert_session_override(
-        session,
-        project_id=project_id,
-        adjusted_duration_seconds=session.get("adjusted_duration_seconds"),
-        note=str(session.get("session_note") or ""),
-    )
-
-
-def reclassify_project_activity_summary(activity_ids: list[int], project_id: int) -> None:
-    update_activity_group_project(activity_ids, project_id)
-
-
-def update_session_note(report_date: str, first_activity_id: int, note: str) -> int | None:
-    require_project_editable_activity(int(first_activity_id))
-    session = _resolve_legacy_session_by_first_activity(report_date, first_activity_id)
-    return session_override_service.upsert_session_override(
-        session,
-        project_id=session.get("project_id") if session.get("has_project_override") else None,
-        adjusted_duration_seconds=session.get("adjusted_duration_seconds"),
-        note=note,
-    )
-
-
-def update_session_note_and_duration(report_date: str, *args) -> int | None:
-    if len(args) == 3 and isinstance(args[0], int):
-        first_activity_id, note, adjusted_duration_seconds = args
-        require_project_editable_activity(int(first_activity_id))
-        session = _resolve_legacy_session_by_first_activity(report_date, int(first_activity_id))
-        return session_override_service.upsert_session_override(
-            session,
-            project_id=session.get("project_id") if session.get("has_project_override") else None,
-            adjusted_duration_seconds=adjusted_duration_seconds,
-            note=str(note or ""),
-        )
-    if len(args) != 4:
-        raise TypeError("update_session_note_and_duration expects 4 or 5 arguments")
-    activity_ids, activity_member_hash, note, adjusted_duration_seconds = args
+def update_session_note_and_duration(
+    report_date: str,
+    activity_ids: list[int],
+    activity_member_hash: str,
+    note: str,
+    adjusted_duration_seconds: int | None,
+) -> int | None:
     _require_editable_session_activity_ids(activity_ids)
     session = report_session_projection_service.resolve_current_session(
         report_date,
@@ -270,20 +218,6 @@ def update_session_note_and_duration(report_date: str, *args) -> int | None:
         project_id=session.get("project_id") if session.get("has_project_override") else None,
         adjusted_duration_seconds=adjusted_duration_seconds,
         note=note,
-    )
-
-
-def update_activity_group_project(
-    activity_ids: list[int],
-    project_id: int,
-) -> None:
-    _require_editable_session_activity_ids(activity_ids)
-    session = _resolve_legacy_session_by_activity_ids([int(activity_id) for activity_id in activity_ids])
-    session_override_service.upsert_session_override(
-        session,
-        project_id=int(project_id),
-        adjusted_duration_seconds=session.get("adjusted_duration_seconds"),
-        note=str(session.get("session_note") or ""),
     )
 
 
@@ -340,36 +274,6 @@ def preview_session_project_update(session_activity_ids: list[int], project_id: 
 def _require_editable_session_activity_ids(activity_ids) -> None:
     for activity_id in activity_ids or []:
         require_project_editable_activity(int(activity_id))
-
-
-def _resolve_legacy_session_by_activity_ids(activity_ids: list[int]) -> dict:
-    if not activity_ids:
-        raise ValueError("invalid_session_identity")
-    ids = {int(aid) for aid in activity_ids}
-    placeholders = ",".join("?" for _ in ids)
-    with get_connection() as conn:
-        row = conn.execute(
-            f"""
-            SELECT MIN(substr(start_time, 1, 10)) AS report_date
-            FROM activity_log
-            WHERE id IN ({placeholders})
-            """,
-            sorted(ids),
-        ).fetchone()
-    report_date = str(row["report_date"] or "") if row else ""
-    if not report_date:
-        raise ValueError("invalid_session_identity")
-    for session in get_project_sessions_by_date(report_date, include_hidden=True, ensure_context=True):
-        if {int(aid) for aid in session.get("activity_ids") or []} == ids:
-            return session
-    raise ValueError("session_identity_conflict")
-
-
-def _resolve_legacy_session_by_first_activity(report_date: str, first_activity_id: int) -> dict:
-    for session in get_project_sessions_by_date(report_date, include_hidden=True, ensure_context=True):
-        if int(session.get("first_activity_id") or 0) == int(first_activity_id):
-            return session
-    raise ValueError("session_identity_conflict")
 
 
 def _load_activity_rows_for_report_range(start_date: str, end_date: str, include_hidden: bool) -> list[dict]:

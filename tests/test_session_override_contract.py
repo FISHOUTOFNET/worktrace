@@ -231,7 +231,34 @@ def test_forbidden_raw_activity_writes_and_advanced_corrections_static_contract(
         "restore_timeline_activity",
         "update_timeline_activity_time",
         "update_timeline_session_time",
+        # Legacy session identity write paths — must never be reintroduced.
+        "_resolve_legacy_session_by_activity_ids",
+        "_resolve_legacy_session_by_first_activity",
+        "_validate_first_activity_id",
+        "update_activity_group_project",
+        "reclassify_project_activity_summary",
+        "reclassify_timeline_session_project(ids,",
+        "reclassify_timeline_session_project(activity_ids,",
+        "update_timeline_session_note(report_date, ids[0]",
+        "update_timeline_session_note_and_duration(report_date, ids[0]",
+        "timeline_api.update_timeline_session_note(report_date, ids[0]",
+        "timeline_api.update_timeline_session_note_and_duration(report_date, ids[0]",
     ]
     for token in forbidden:
-        assert token not in production
+        assert token not in production, (
+            f"forbidden legacy session-identity token present in production: {token}"
+        )
+    # Bridge legacy argument reshuffling — scoped to bridge_timeline.py only,
+    # since ``if report_date is None:`` is a legitimate guard in other services
+    # (e.g. live_display_service). The spec forbids it only as bridge editing
+    # argument reshuffling.
+    bridge_timeline = Path("worktrace/webview_ui/bridge_timeline.py").read_text(encoding="utf-8")
+    bridge_forbidden = [
+        "if project_id is None: project_id = activity_member_hash",
+        "if report_date is None:",
+    ]
+    for token in bridge_forbidden:
+        assert token not in bridge_timeline, (
+            f"forbidden bridge argument reshuffling in bridge_timeline.py: {token}"
+        )
     assert not Path("worktrace/webview_ui/js/timeline_correction.js").exists()

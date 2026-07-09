@@ -584,7 +584,7 @@ def test_bridge_imports_only_allowed_modules():
 def test_api_has_p0_timeline_methods_only():
     api_src = (REPO_ROOT / "worktrace" / "api" / "timeline_api.py").read_text(encoding="utf-8")
     for symbol in (
-        "def reclassify_timeline_session_project",
+        "def save_timeline_session_override",
         "def update_timeline_session_note",
         "def update_timeline_session_note_and_duration",
     ):
@@ -602,6 +602,10 @@ def test_api_has_p0_timeline_methods_only():
         "def batch_update_timeline_activities_project",
         "def batch_update_timeline_activities_note",
         "def restore_timeline_activity", "def get_timeline_restorable_activities",
+        "def reclassify_timeline_session_project",
+        "def reclassify_project_activity_summary",
+        "def update_activity_group_project",
+        "def _validate_first_activity_id",
     ):
         assert symbol not in api_src
 

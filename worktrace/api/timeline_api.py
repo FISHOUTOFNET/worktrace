@@ -68,14 +68,6 @@ def get_session_anchor_folders(activity_ids: list[int]) -> list[str]:
     return timeline_service.get_session_anchor_folders(activity_ids)
 
 
-def update_session_project(session_activity_ids: list[int], project_id: int) -> None:
-    raise ValueError("session_identity_required")
-
-
-def update_activity_group_project(activity_ids: list[int], project_id: int) -> None:
-    timeline_service.update_activity_group_project(activity_ids, project_id)
-
-
 def preview_session_project_update(
     session_activity_ids: list[int],
     project_id: int,
@@ -93,34 +85,6 @@ TIMELINE_NOTE_MAX_LENGTH = 2000
 # 86400 seconds; allowing up to that keeps the override sane without
 # rejecting long but legitimate sessions.
 TIMELINE_ADJUSTED_DURATION_MAX_SECONDS = 24 * 60 * 60
-
-
-def reclassify_timeline_session_project(*args) -> None:
-    """Validate and save a Timeline session project override."""
-    if len(args) == 2:
-        activity_ids, project_id = args
-        ids = _validate_activity_ids(activity_ids)
-        pid = _validate_project_id(project_id)
-        for aid in ids:
-            _ensure_project_editable_for_value_error(activity_service.get_activity(aid))
-        session = timeline_service._resolve_legacy_session_by_activity_ids(ids)
-        timeline_service.update_session_project(
-            session["report_date"],
-            ids,
-            session["activity_member_hash"],
-            pid,
-        )
-        return
-    if len(args) != 4:
-        raise TypeError("reclassify_timeline_session_project expects 2 or 4 arguments")
-    report_date, activity_ids, activity_member_hash, project_id = args
-    date = _validate_report_date(report_date)
-    ids = _validate_activity_ids(activity_ids)
-    member_hash = _validate_activity_member_hash(activity_member_hash)
-    pid = _validate_project_id(project_id)
-    for aid in ids:
-        _ensure_project_editable_for_value_error(activity_service.get_activity(aid))
-    timeline_service.update_session_project(date, ids, member_hash, pid)
 
 
 def save_timeline_session_override(
@@ -150,32 +114,14 @@ def save_timeline_session_override(
     )
 
 
-def reclassify_project_activity_summary(
-    activity_ids: list[int],
-    project_id: int,
-) -> None:
-    """Validate and apply a project change to one summary row's activities."""
-    ids = _validate_activity_ids(activity_ids)
-    pid = _validate_project_id(project_id)
-    for aid in ids:
-        _ensure_project_editable_for_value_error(activity_service.get_activity(aid))
-    timeline_service.reclassify_project_activity_summary(ids, pid)
-
-
 def update_timeline_session_note(
     report_date: str,
-    activity_ids,
-    activity_member_hash,
-    note: str | None = None,
+    activity_ids: list[int],
+    activity_member_hash: str,
+    note: str,
 ) -> None:
     """Validate and write a session note override for the Timeline page."""
     date = _validate_report_date(report_date)
-    if isinstance(activity_ids, int):
-        first_id = _validate_first_activity_id(activity_ids)
-        text = _validate_note(activity_member_hash)
-        _ensure_project_editable_for_value_error(activity_service.get_activity(first_id))
-        timeline_service.update_session_note(date, first_id, text)
-        return
     ids = _validate_activity_ids(activity_ids)
     member_hash = _validate_activity_member_hash(activity_member_hash)
     text = _validate_note(str(note or ""))
@@ -195,20 +141,13 @@ def update_timeline_session_note(
 
 def update_timeline_session_note_and_duration(
     report_date: str,
-    activity_ids,
-    activity_member_hash,
-    note,
+    activity_ids: list[int],
+    activity_member_hash: str,
+    note: str,
     adjusted_duration_seconds: int | None = None,
 ) -> None:
     """Validate and write note + user-adjusted duration for a Timeline session."""
     date = _validate_report_date(report_date)
-    if isinstance(activity_ids, int):
-        first_id = _validate_first_activity_id(activity_ids)
-        text = _validate_note(activity_member_hash)
-        duration = _validate_adjusted_duration(note)
-        _ensure_project_editable_for_value_error(activity_service.get_activity(first_id))
-        timeline_service.update_session_note_and_duration(date, first_id, text, duration)
-        return
     ids = _validate_activity_ids(activity_ids)
     member_hash = _validate_activity_member_hash(activity_member_hash)
     text = _validate_note(note)
@@ -299,23 +238,6 @@ def _validate_report_date(report_date: str) -> str:
     except ValueError:
         raise ValueError("report_date must be a YYYY-MM-DD string")
     return report_date
-
-
-def _validate_first_activity_id(first_activity_id: int) -> int:
-    if isinstance(first_activity_id, bool):
-        raise ValueError("first_activity_id must be an integer")
-    try:
-        first_id = int(first_activity_id)
-    except (TypeError, ValueError):
-        raise ValueError("first_activity_id must be an integer")
-    if first_id <= 0:
-        raise ValueError("first_activity_id must be a positive integer")
-    activity = activity_service.get_activity(first_id)
-    if not activity:
-        raise ValueError("first_activity_id does not exist")
-    if int(activity.get("is_deleted") or 0):
-        raise ValueError("first_activity_id does not exist")
-    return first_id
 
 
 def _find_session_by_identity(sessions: list[dict[str, Any]], ids: list[int], member_hash: str) -> dict[str, Any]:
@@ -430,11 +352,7 @@ __all__ = [
     "get_snapshot_seconds_for_date_range",
     "list_selectable_projects",
     "preview_session_project_update",
-    "reclassify_project_activity_summary",
-    "reclassify_timeline_session_project",
     "save_timeline_session_override",
-    "update_activity_group_project",
-    "update_session_project",
     "update_timeline_session_note",
     "update_timeline_session_note_and_duration",
 ]

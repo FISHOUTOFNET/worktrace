@@ -269,30 +269,6 @@ def test_short_other_project_does_not_merge_when_anchor_gap_exceeds_context_wind
     assert [session["project_name"] for session in sessions] == ["A", "B", "A"]
 
 
-def test_activity_group_correction_updates_selected_activities(temp_db):
-    project_a = project_service.create_project("A")
-    project_b = project_service.create_project("B")
-    _activity("Word", "winword.exe", "Contract.docx", "09:00:00", project_a)
-    _activity("Word", "winword.exe", "Contract.docx", "09:10:00", project_a)
-    activity_service.close_all_open_rows("2026-06-18 09:20:00")
-
-    session = timeline_service.get_project_sessions_by_date("2026-06-18")[0]
-    timeline_service.update_activity_group_project(session["activity_ids"], project_b)
-
-    updated = timeline_service.get_project_sessions_by_date("2026-06-18")[0]
-    assert updated["project_id"] == project_b
-    assert updated["has_project_override"] is True
-
-def test_auxiliary_activity_can_be_corrected_for_current_record(temp_db):
-    project = project_service.create_project("A")
-    activity = _activity("Edge", "msedge.exe", "Search", "09:00:00")
-    activity_service.close_all_open_rows("2026-06-18 09:10:00")
-    session = timeline_service.get_project_sessions_by_date("2026-06-18")[0]
-    assert session["project_name"] == UNCATEGORIZED_PROJECT
-    timeline_service.update_activity_group_project([activity], project)
-    assert timeline_service.get_project_sessions_by_date("2026-06-18")[0]["project_id"] == project
-
-
 def test_activity_details_keep_same_app_activity_names(temp_db):
     _activity("Edge", "msedge.exe", "Search", "09:00:00")
     _activity("Edge", "msedge.exe", "Docs", "09:10:00")
@@ -358,7 +334,15 @@ def test_session_level_project_update_warns_about_unassigned_anchor_files(temp_d
     activity_service.close_activity(second, "2026-06-18 09:10:00")
 
     preview = timeline_service.preview_session_project_update([first, second], target_project)
-    timeline_service.update_session_project([first, second], target_project)
+    session = timeline_service.get_project_sessions_by_date("2026-06-18")[0]
+    timeline_service.update_session_override(
+        "2026-06-18",
+        session["activity_ids"],
+        session["activity_member_hash"],
+        project_id=target_project,
+        adjusted_duration_seconds=None,
+        note="",
+    )
 
     assert "file_project_conflicts" not in preview
     assert len(preview["unassigned_anchor_files"]) == 2
@@ -469,7 +453,13 @@ def test_project_session_override_attaches_to_exact_session(temp_db):
     activity_service.close_all_open_rows("2026-06-18 09:20:00")
     sessions = timeline_service.get_project_sessions_by_date("2026-06-18")
 
-    timeline_service.update_session_note("2026-06-18", first, "follow up with client")
+    timeline_service.update_session_note_and_duration(
+        "2026-06-18",
+        sessions[0]["activity_ids"],
+        sessions[0]["activity_member_hash"],
+        "follow up with client",
+        None,
+    )
     sessions = timeline_service.get_project_sessions_by_date("2026-06-18")
 
     assert sessions[0]["first_activity_id"] == first
@@ -478,11 +468,16 @@ def test_project_session_override_attaches_to_exact_session(temp_db):
 
 def test_project_session_override_can_be_cleared(temp_db):
     project = project_service.create_project("Client")
-    first = _activity_at("Word", "winword.exe", "Spec.docx", "2026-06-18 09:00:00", project)
+    _activity_at("Word", "winword.exe", "Spec.docx", "2026-06-18 09:00:00", project)
     activity_service.close_all_open_rows("2026-06-18 09:20:00")
+    session = timeline_service.get_project_sessions_by_date("2026-06-18")[0]
 
-    timeline_service.update_session_note("2026-06-18", first, "temporary")
-    timeline_service.update_session_note("2026-06-18", first, "")
+    timeline_service.update_session_note_and_duration(
+        "2026-06-18", session["activity_ids"], session["activity_member_hash"], "temporary", None
+    )
+    timeline_service.update_session_note_and_duration(
+        "2026-06-18", session["activity_ids"], session["activity_member_hash"], "", None
+    )
 
     assert timeline_service.get_project_sessions_by_date("2026-06-18")[0]["session_note"] == ""
 
@@ -507,10 +502,13 @@ def test_session_has_display_and_raw_duration_fields(temp_db):
 def test_display_duration_uses_override_when_set(temp_db):
     """When adjusted_duration_seconds is set, display_duration_seconds uses it."""
     project = project_service.create_project("Client")
-    first = _activity_at("Word", "winword.exe", "Spec.docx", "2026-06-18 09:00:00", project)
+    _activity_at("Word", "winword.exe", "Spec.docx", "2026-06-18 09:00:00", project)
     activity_service.close_all_open_rows("2026-06-18 09:02:00")  # 120 seconds raw
+    session = timeline_service.get_project_sessions_by_date("2026-06-18")[0]
 
-    timeline_service.update_session_note_and_duration("2026-06-18", first, "", 60)
+    timeline_service.update_session_note_and_duration(
+        "2026-06-18", session["activity_ids"], session["activity_member_hash"], "", 60
+    )
     sessions = timeline_service.get_project_sessions_by_date("2026-06-18")
 
     session = sessions[0]
@@ -538,10 +536,13 @@ def test_display_duration_uses_zero_override(temp_db):
     """``adjusted_duration_seconds = 0`` is a valid override and must not
     fall back to the raw duration."""
     project = project_service.create_project("Client")
-    first = _activity_at("Word", "winword.exe", "Spec.docx", "2026-06-18 09:00:00", project)
+    _activity_at("Word", "winword.exe", "Spec.docx", "2026-06-18 09:00:00", project)
     activity_service.close_all_open_rows("2026-06-18 09:02:00")  # 120 seconds raw
+    session = timeline_service.get_project_sessions_by_date("2026-06-18")[0]
 
-    timeline_service.update_session_note_and_duration("2026-06-18", first, "", 0)
+    timeline_service.update_session_note_and_duration(
+        "2026-06-18", session["activity_ids"], session["activity_member_hash"], "", 0
+    )
     sessions = timeline_service.get_project_sessions_by_date("2026-06-18")
 
     session = sessions[0]
@@ -554,10 +555,13 @@ def test_display_duration_uses_zero_override(temp_db):
 def test_update_session_note_and_duration_writes_both(temp_db):
     """update_session_note_and_duration writes both note and duration."""
     project = project_service.create_project("Client")
-    first = _activity_at("Word", "winword.exe", "Spec.docx", "2026-06-18 09:00:00", project)
+    _activity_at("Word", "winword.exe", "Spec.docx", "2026-06-18 09:00:00", project)
     activity_service.close_all_open_rows("2026-06-18 09:02:00")
+    session = timeline_service.get_project_sessions_by_date("2026-06-18")[0]
 
-    timeline_service.update_session_note_and_duration("2026-06-18", first, "test", 60)
+    timeline_service.update_session_note_and_duration(
+        "2026-06-18", session["activity_ids"], session["activity_member_hash"], "test", 60
+    )
     fields = timeline_service.get_project_sessions_by_date("2026-06-18")[0]
 
     assert fields["session_note"] == "test"
@@ -567,13 +571,18 @@ def test_update_session_note_and_duration_writes_both(temp_db):
 def test_empty_note_preserves_duration_override(temp_db):
     """Setting empty note does not delete row when duration override exists."""
     project = project_service.create_project("Client")
-    first = _activity_at("Word", "winword.exe", "Spec.docx", "2026-06-18 09:00:00", project)
+    _activity_at("Word", "winword.exe", "Spec.docx", "2026-06-18 09:00:00", project)
     activity_service.close_all_open_rows("2026-06-18 09:02:00")
+    session = timeline_service.get_project_sessions_by_date("2026-06-18")[0]
 
     # Set both note and duration
-    timeline_service.update_session_note_and_duration("2026-06-18", first, "test", 60)
+    timeline_service.update_session_note_and_duration(
+        "2026-06-18", session["activity_ids"], session["activity_member_hash"], "test", 60
+    )
     # Set note to empty - should preserve adjusted=60
-    timeline_service.update_session_note_and_duration("2026-06-18", first, "", 60)
+    timeline_service.update_session_note_and_duration(
+        "2026-06-18", session["activity_ids"], session["activity_member_hash"], "", 60
+    )
     fields = timeline_service.get_project_sessions_by_date("2026-06-18")[0]
 
     assert fields["session_note"] == ""
@@ -583,13 +592,18 @@ def test_empty_note_preserves_duration_override(temp_db):
 def test_empty_note_and_null_duration_deletes_row(temp_db):
     """Setting empty note and None duration deletes the row."""
     project = project_service.create_project("Client")
-    first = _activity_at("Word", "winword.exe", "Spec.docx", "2026-06-18 09:00:00", project)
+    _activity_at("Word", "winword.exe", "Spec.docx", "2026-06-18 09:00:00", project)
     activity_service.close_all_open_rows("2026-06-18 09:02:00")
+    session = timeline_service.get_project_sessions_by_date("2026-06-18")[0]
 
     # Set both note and duration
-    timeline_service.update_session_note_and_duration("2026-06-18", first, "test", 60)
+    timeline_service.update_session_note_and_duration(
+        "2026-06-18", session["activity_ids"], session["activity_member_hash"], "test", 60
+    )
     # Set note to empty and duration to None - should delete row
-    timeline_service.update_session_note_and_duration("2026-06-18", first, "", None)
+    timeline_service.update_session_note_and_duration(
+        "2026-06-18", session["activity_ids"], session["activity_member_hash"], "", None
+    )
     fields = timeline_service.get_project_sessions_by_date("2026-06-18")[0]
 
     assert fields["session_note"] == ""
