@@ -2048,7 +2048,7 @@ def test_system_current_activity_live_clock_contract_and_display_safe(bridge, st
         assert forbidden not in serialized
 
 
-def test_idle_blocks_display_absorbed_pending(bridge):
+def test_short_idle_allows_display_absorbed_pending(bridge):
     from worktrace.constants import SOURCE_AUTO, SOURCE_SYSTEM
     from worktrace.services.activity_display_model_service import build_activity_display_model
 
@@ -2083,9 +2083,8 @@ def test_idle_blocks_display_absorbed_pending(bridge):
 
     model = build_activity_display_model(report_date=today, today=today)
 
-    assert model["current_activity"]["live_state"] == "current_only_pending"
-    assert "is_absorbed_pending" not in model["current_activity"]
-    assert model["display_spans"] == []
+    assert model["current_activity"]["live_state"] == "borrowed_anchor_pending"
+    assert model["display_spans"] != []
 
 
 def test_new_activity_first_frame_uses_unified_live_clock(bridge):

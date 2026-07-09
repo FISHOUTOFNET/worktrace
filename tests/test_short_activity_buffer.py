@@ -477,7 +477,7 @@ def test_pause_under_30_with_anchor_merges_before_boundary(temp_db):
         "2026-06-18 09:02:20",
         "2026-06-18 09:02:20",
     )
-    assert boundaries and boundaries[-1]["reason"] == "paused"
+    assert boundaries and boundaries[-1]["reason"] == "user_pause"
 
 
 def test_pause_under_30_without_anchor_drops_no_pending(temp_db, monkeypatch):
@@ -518,7 +518,7 @@ def test_stop_shutdown_time_jump_under_30_share_same_finalizer(temp_db):
 
 
 @pytest.mark.parametrize("state", ["idle", "excluded", "error"])
-def test_normal_to_idle_excluded_error_under_30_finalize_before_boundary(temp_db, state):
+def test_normal_to_idle_excluded_error_under_30_finalize_without_hard_boundary(temp_db, state):
     machine = CollectorStateMachine()
     machine.transition_to("recording", _normal("A"), at_time="2026-06-18 09:00:00")
     machine.transition_to("recording", _normal("A"), at_time="2026-06-18 09:01:00")
@@ -534,7 +534,7 @@ def test_normal_to_idle_excluded_error_under_30_finalize_before_boundary(temp_db
         "2026-06-18 09:02:20",
         "2026-06-18 09:02:20",
     )
-    assert boundaries and boundaries[-1]["reason"] == state
+    assert boundaries == []
 
 
 def test_stopped_boundary_clears_stale_pending_runtime_state(temp_db):

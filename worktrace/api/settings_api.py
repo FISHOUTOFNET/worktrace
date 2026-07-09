@@ -97,6 +97,18 @@ def get_collector_status() -> str:
     return get_setting("collector_status", "stopped") or "stopped"
 
 
+def get_collector_health_state() -> str:
+    return get_setting("collector_health_state", "stopped") or "stopped"
+
+
+def get_collector_last_successful_observation_at() -> str:
+    return get_setting("collector_last_successful_observation_at", "") or ""
+
+
+def get_collector_consecutive_failures() -> int:
+    return get_int_setting("collector_consecutive_failures", 0)
+
+
 def set_collector_status(value: str) -> None:
     set_setting("collector_status", value)
 
@@ -418,6 +430,9 @@ __all__ = [
     "first_run_notice_accepted",
     "get_bool_setting_value",
     "get_collector_status",
+    "get_collector_health_state",
+    "get_collector_last_successful_observation_at",
+    "get_collector_consecutive_failures",
     "get_current_activity_snapshot",
     "get_export_path",
     "get_first_run_notice_for_webview",

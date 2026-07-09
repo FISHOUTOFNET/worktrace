@@ -46,7 +46,7 @@ def record_runtime_boundary(
     clear_pending: bool = True,
 ) -> None:
     """Record a hard runtime boundary and clear transient display carry."""
-    session_boundary_service.record_boundary(reason=reason)
+    session_boundary_service.record_hard_boundary(reason=reason)
     clear_runtime_activity_state(
         reason,
         clear_snapshot=clear_snapshot,

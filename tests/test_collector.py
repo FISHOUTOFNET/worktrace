@@ -222,7 +222,6 @@ def test_collector_control_pause_finalizes_before_exposing_paused(monkeypatch):
         "get_bool_setting",
         lambda key, default=False: True if key == "first_run_notice_accepted" else False,
     )
-    monkeypatch.setattr(collector_mod.recovery_service, "recover_unclosed_records", lambda: None)
     monkeypatch.setattr(collector_mod.clipboard_service, "prune_old_events", lambda: None)
     monkeypatch.setattr(collector_mod, "update_heartbeat", lambda status: calls.append("heartbeat:" + status))
     monkeypatch.setattr(collector_mod, "now_str", lambda: "2026-07-05 10:00:00")

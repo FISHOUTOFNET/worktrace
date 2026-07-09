@@ -126,6 +126,54 @@ def test_collector_loop_stays_free_of_session_policy_and_display_projection():
     assert offenders == []
 
 
+def test_collector_loop_never_turns_transient_failures_into_activity_error():
+    source = _source("worktrace/collector/collector.py")
+    assert 'transition_to("error"' not in source
+    assert "collector_status\", \"error\"" not in source
+
+
+def test_collector_loop_does_not_turn_stall_gaps_into_time_jump_boundaries():
+    source = _source("worktrace/collector/collector.py")
+    assert "detect_time_jump" not in source
+    assert "reset_for_time_jump" not in source
+
+
+def test_production_code_uses_hard_boundary_policy_for_session_boundaries():
+    offenders: list[str] = []
+    allowed = {"worktrace/services/session_boundary_service.py"}
+    for py_file in _py_sources(REPO_ROOT / "worktrace"):
+        rel = py_file.relative_to(REPO_ROOT).as_posix()
+        if rel in allowed:
+            continue
+        source = py_file.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if isinstance(func, ast.Attribute) and func.attr == "record_boundary":
+                offenders.append(rel)
+            elif isinstance(func, ast.Name) and func.id == "record_boundary":
+                offenders.append(rel)
+    assert offenders == []
+
+
+def test_collector_health_logging_is_sanitized():
+    source = _source("worktrace/collector/collector_health.py")
+    forbidden = (
+        "exc_info=True",
+        "format_exc",
+        "traceback",
+        "window_title",
+        "file_path",
+        "clipboard",
+        "sql",
+        "note",
+    )
+    offenders = [token for token in forbidden if token in source.lower()]
+    assert offenders == []
+
+
 def test_open_row_lifecycle_commands_stay_behind_lifecycle_facade():
     forbidden_low_level = (
         "insert_activity_row",

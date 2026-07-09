@@ -108,10 +108,29 @@ inject an in-memory recorder. Decision traces are not written to the DB, are
 not exposed to WebView, do not contain raw window titles, paths, clipboard
 text, SQL, or tracebacks, and never participate in collector decisions.
 
-Hard boundaries include pause, stop, shutdown, time jump, midnight, idle,
-excluded, error, privacy, secure import, and first-run-gate boundaries. These
-boundaries prevent stale project ownership or pending seconds from crossing
-session semantics.
+Collector continuity has three separate fact streams:
+
+- `activity_log` records user-time facts. `normal`, `excluded`, `idle`,
+  `paused`, and reserved recovery `error` rows are activity facts.
+- Collector health is not an activity status. Transient collector failures
+  update settings-backed collector health only; they must not create
+  `activity_log` rows, `STATUS_ERROR` rows, `session_boundary` rows, pending
+  short resets, snapshot clears, open-activity closes, or project attribution
+  changes.
+- Activity status is not a session boundary. Hard boundaries are written only
+  through `session_boundary_service.record_hard_boundary()` with a whitelisted
+  reason from `session_boundary_policy`.
+
+Hard boundary reasons are intentionally narrow: user pause, pause fallback,
+user stop, shutdown, restart, recovered startup data, sleep/resume, midnight,
+secure import, clear-all, and fatal collector stop. `excluded` is an anonymous
+activity fact, not collector health and not a natural hard boundary. `idle` is
+user state, not collector stall; short idle can carry context and long idle is
+policy-controlled. `STATUS_ERROR` is reserved for historical or recovery
+activity errors, not collector health. Same-resource collector stall recovery
+is continuity-preserving. Startup failure must not be reported as success. UI
+read failures must return error payloads without mutating collector, runtime,
+activity, pending, snapshot, boundary, or health state.
 
 ## Activity Display Model Boundary
 

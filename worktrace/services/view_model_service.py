@@ -65,7 +65,7 @@ from .activity_row_overlay import (
     apply_live_span_to_row,
 )
 from .live_display_service import compute_refresh_revision
-from .settings_service import get_bool_setting, get_setting
+from .settings_service import get_bool_setting, get_int_setting, get_setting
 
 # Maximum number of recent activities in the Overview VM.
 _RECENT_LIMIT = 20
@@ -87,6 +87,10 @@ def _get_current_activity_snapshot() -> ActivitySnapshotContract | None:
 
 def _get_collector_status() -> str:
     return get_setting("collector_status", "stopped") or "stopped"
+
+
+def _get_collector_health_state() -> str:
+    return get_setting("collector_health_state", "stopped") or "stopped"
 
 
 def _is_user_paused() -> bool:
@@ -1195,6 +1199,11 @@ def get_refresh_state_view_model(report_date: str | None = None) -> RefreshState
     """
     snapshot = _get_current_activity_snapshot()
     collector_status = _get_collector_status()
+    collector_health_state = _get_collector_health_state()
+    collector_last_successful_observation_at = (
+        get_setting("collector_last_successful_observation_at", "") or ""
+    )
+    collector_consecutive_failures = get_int_setting("collector_consecutive_failures", 0)
     user_paused = _is_user_paused()
     paused = bool(user_paused) or collector_status == "paused"
     today = timeline_service.get_default_report_date()
@@ -1237,7 +1246,12 @@ def get_refresh_state_view_model(report_date: str | None = None) -> RefreshState
     if paused or collector_status == "paused":
         status_display = "已暂停"
     elif collector_status == "running":
-        status_display = "记录中"
+        if collector_health_state == "degraded":
+            status_display = "记录中，刚才采集短暂异常"
+        elif collector_health_state == "failing":
+            status_display = "采集可能中断，请重试"
+        else:
+            status_display = "记录中"
     elif collector_status == "error":
         status_display = "状态异常"
     else:
@@ -1246,6 +1260,9 @@ def get_refresh_state_view_model(report_date: str | None = None) -> RefreshState
     return {
         "ok": True,
         "collector_status": collector_status,
+        "collector_health_state": collector_health_state,
+        "collector_last_successful_observation_at": collector_last_successful_observation_at,
+        "collector_consecutive_failures": collector_consecutive_failures,
         "paused": paused,
         "status_display": status_display,
         "current_activity_key": current_activity_key,

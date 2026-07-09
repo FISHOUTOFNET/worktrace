@@ -14,6 +14,10 @@ from ..constants import (
     TIME_FORMAT,
 )
 from ..db import get_connection
+from .activity_status_policy import (
+    does_status_require_boundary,
+    is_project_attributable_status,
+)
 from .settings_service import get_int_setting
 
 NORMAL_PROJECT_STATUS = STATUS_NORMAL
@@ -25,7 +29,7 @@ def is_system_status(status: str) -> bool:
 
 
 def is_normal_project_status(status: str) -> bool:
-    return str(status or "") == NORMAL_PROJECT_STATUS
+    return is_project_attributable_status(str(status or ""))
 
 
 def is_report_short_context_duration(seconds: int) -> bool:
@@ -33,7 +37,7 @@ def is_report_short_context_duration(seconds: int) -> bool:
 
 
 def is_hard_boundary_status(status: str) -> bool:
-    return is_system_status(status)
+    return does_status_require_boundary(str(status or ""), 0)
 
 
 def has_hard_boundary_between(start_time: str, end_time: str) -> bool:
@@ -47,7 +51,7 @@ def has_hard_boundary_between(start_time: str, end_time: str) -> bool:
     end = str(end_time or "")
     if not start or not end or start > end:
         return False
-    if _has_unrecorded_gap(start, end):
+    if is_true_unrecorded_gap_boundary(start, end):
         return True
     try:
         with get_connection() as conn:
@@ -62,15 +66,14 @@ def has_hard_boundary_between(start_time: str, end_time: str) -> bool:
             ).fetchone()
             if boundary is not None:
                 return True
-            system = conn.execute(
+            rows = conn.execute(
                 """
-                SELECT 1
+                SELECT status, start_time, end_time
                 FROM activity_log
                 WHERE is_deleted = 0
                   AND status IN (?, ?, ?, ?)
                   AND start_time <= ?
                   AND COALESCE(end_time, ?) >= ?
-                LIMIT 1
                 """,
                 (
                     STATUS_IDLE,
@@ -81,8 +84,12 @@ def has_hard_boundary_between(start_time: str, end_time: str) -> bool:
                     end,
                     start,
                 ),
-            ).fetchone()
-            return system is not None
+            ).fetchall()
+            for row in rows:
+                duration = _row_overlap_seconds(dict(row), start, end)
+                if does_status_require_boundary(str(row["status"] or ""), duration):
+                    return True
+            return False
     except Exception:
         return False
 
@@ -170,6 +177,35 @@ def _has_unrecorded_gap(start_time: str, end_time: str) -> bool:
     return gap_seconds > threshold
 
 
+def is_true_unrecorded_gap_boundary(start_time: str, end_time: str) -> bool:
+    return _has_unrecorded_gap(start_time, end_time) and not is_soft_collector_gap(start_time, end_time)
+
+
+def is_soft_collector_gap(start_time: str, end_time: str) -> bool:
+    return is_same_resource_stall_recovery_gap(start_time, end_time)
+
+
+def is_same_resource_stall_recovery_gap(start_time: str, end_time: str) -> bool:
+    if not start_time or not end_time:
+        return False
+    return False
+
+
+def _row_overlap_seconds(row: dict[str, Any], start_time: str, end_time: str) -> int:
+    try:
+        start = max(
+            datetime.strptime(str(row.get("start_time") or start_time), TIME_FORMAT),
+            datetime.strptime(start_time, TIME_FORMAT),
+        )
+        end = min(
+            datetime.strptime(str(row.get("end_time") or end_time), TIME_FORMAT),
+            datetime.strptime(end_time, TIME_FORMAT),
+        )
+    except (TypeError, ValueError):
+        return 0
+    return max(0, int((end - start).total_seconds()))
+
+
 __all__ = [
     "NORMAL_PROJECT_STATUS",
     "SYSTEM_STATUSES",
@@ -177,6 +213,9 @@ __all__ = [
     "can_carry_context_between",
     "can_merge_finished_short_activity",
     "has_hard_boundary_between",
+    "is_same_resource_stall_recovery_gap",
+    "is_soft_collector_gap",
+    "is_true_unrecorded_gap_boundary",
     "is_hard_boundary_status",
     "is_normal_project_status",
     "is_system_status",

@@ -47,12 +47,18 @@ class OverviewBridgeMixin:
         """Return the current collector status and pause state."""
         try:
             raw_status = settings_api.get_collector_status()
+            health_state = settings_api.get_collector_health_state()
             user_paused = settings_api.is_user_paused()
             paused = user_paused or raw_status == "paused"
             if paused or raw_status == "paused":
                 display = "已暂停"
             elif raw_status == "running":
-                display = "记录中"
+                if health_state == "degraded":
+                    display = "记录中，刚才采集短暂异常"
+                elif health_state == "failing":
+                    display = "采集可能中断，请重试"
+                else:
+                    display = "记录中"
             elif raw_status == "error":
                 display = "状态异常"
             else:
@@ -60,6 +66,9 @@ class OverviewBridgeMixin:
             return {
                 "ok": True,
                 "status": raw_status,
+                "collector_health_state": health_state,
+                "collector_last_successful_observation_at": settings_api.get_collector_last_successful_observation_at(),
+                "collector_consecutive_failures": settings_api.get_collector_consecutive_failures(),
                 "paused": paused,
                 "display": display,
             }

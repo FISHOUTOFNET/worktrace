@@ -131,22 +131,21 @@ def test_different_project_anchors_leave_auxiliary_uncategorized(temp_db):
     assert activity_service.get_activity(browser)["project_name"] == UNCATEGORIZED_PROJECT
 
 
-def test_interrupt_and_carry_window_stop_context(temp_db):
+def test_short_idle_can_carry_context_but_carry_window_still_limits_context(temp_db):
     project = project_service.create_project("A")
-    _activity("Word", "winword.exe", "A_file.docx", "09:00:00", project)
-    interrupted = _activity("空闲", "idle", "用户空闲", "09:05:00", status="idle")
-    browser = _activity("Edge", "msedge.exe", "Search", "09:10:00")
-    late = _activity("Edge", "msedge.exe", "Later Search", "09:40:00")
-    activity_service.close_all_open_rows("2026-06-18 09:45:00")
+    _closed_activity("Word", "winword.exe", "A_file.docx", "09:00:00", "09:05:00", project)
+    interrupted = _closed_activity("空闲", "idle", "用户空闲", "09:05:00", "09:06:00", status="idle")
+    browser = _closed_activity("Edge", "msedge.exe", "Search", "09:10:00", "09:12:00")
+    late = _closed_activity("Edge", "msedge.exe", "Later Search", "09:40:00", "09:45:00")
 
     recompute_context_assignments_for_date("2026-06-18")
 
     assert activity_service.get_activity(interrupted)["project_name"] == UNCATEGORIZED_PROJECT
-    assert activity_service.get_activity(browser)["project_name"] == UNCATEGORIZED_PROJECT
+    assert activity_service.get_activity(browser)["project_name"] == "A"
     assert activity_service.get_activity(late)["project_name"] == UNCATEGORIZED_PROJECT
 
 
-def test_excluded_error_and_paused_stop_context_scan(temp_db):
+def test_short_excluded_error_can_carry_context_but_paused_stops_context_scan(temp_db):
     project = project_service.create_project("A")
     _activity("Word", "winword.exe", "A_file.docx", "09:00:00", project)
     _activity("已排除", "excluded", "已排除窗口", "09:05:00", status="excluded")
@@ -159,8 +158,8 @@ def test_excluded_error_and_paused_stop_context_scan(temp_db):
 
     recompute_context_assignments_for_date("2026-06-18")
 
-    assert activity_service.get_activity(browser)["project_name"] == UNCATEGORIZED_PROJECT
-    assert activity_service.get_activity(browser_after_error)["project_name"] == UNCATEGORIZED_PROJECT
+    assert activity_service.get_activity(browser)["project_name"] == "A"
+    assert activity_service.get_activity(browser_after_error)["project_name"] == "A"
     assert activity_service.get_activity(browser_after_pause)["project_name"] == UNCATEGORIZED_PROJECT
 
 

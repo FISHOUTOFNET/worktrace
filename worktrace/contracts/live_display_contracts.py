@@ -319,6 +319,9 @@ class ProjectActivitySummaryRowContract(TypedDict, total=False):
 class RefreshStateContract(TypedDict, total=False):
     ok: bool
     collector_status: str
+    collector_health_state: str
+    collector_last_successful_observation_at: str
+    collector_consecutive_failures: int
     paused: bool
     status_display: str
     current_activity_key: str

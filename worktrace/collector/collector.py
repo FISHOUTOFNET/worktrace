@@ -9,9 +9,10 @@ from typing import Any, Callable
 from ..constants import DEFAULT_IDLE_THRESHOLD_SECONDS, TIME_FORMAT
 from ..db import now_str
 from ..platforms.base import PlatformAdapter
-from ..services import clipboard_service, privacy_service, recovery_service
+from ..services import clipboard_service, privacy_service
 from ..services.secure_backup_service import is_secure_import_in_progress
 from ..services.settings_service import get_bool_setting, get_int_setting, get_setting, set_setting
+from . import collector_health
 from .heartbeat import update_heartbeat
 from .state_machine import CollectorStateMachine
 
@@ -70,28 +71,31 @@ def run_collector(
     last_loop_time: str | None = None
     heartbeat_counter = 0
     prune_counter = 0
+    fatal_stop = False
     logging.info("collector start")
-    set_setting("collector_status", "running")
+    collector_health.record_collector_started(now_str())
     _normalize_poll_interval_setting()
     clipboard_service.prune_old_events()
     next_poll_deadline = time.monotonic() + POLL_CADENCE_SECONDS
 
     while not stop_event.is_set():
+        phase = "loop"
         try:
             now = now_str()
+            phase = "gate_check"
             idle_threshold_seconds = get_int_setting("idle_threshold_seconds", DEFAULT_IDLE_THRESHOLD_SECONDS)
-            if last_loop_time and recovery_service.detect_time_jump(last_loop_time, now, idle_threshold_seconds):
-                machine.reset_for_time_jump(last_loop_time)
-            elif last_loop_time:
+            if last_loop_time:
                 midnight = _midnight_crossed_between(last_loop_time, now)
                 if midnight is not None:
                     machine.split_at_midnight(midnight)
 
+            phase = "heartbeat"
             heartbeat_counter += 1
             if heartbeat_counter == 1 or heartbeat_counter >= 4:
                 update_heartbeat("running")
                 heartbeat_counter = 0
 
+            phase = "gate_check"
             if control is not None and control.take_pause_request():
                 _pause_machine_then_expose(machine, now, set_user_paused=True)
                 control.complete_pause({"ok": True, "pause_pending": False})
@@ -125,42 +129,55 @@ def run_collector(
                 last_loop_time = now
                 continue
 
+            phase = "active_window"
             active_window = adapter.get_active_window()
             observation_time = now_str()
+            phase = "clipboard"
             clipboard_events = _clipboard_events(adapter) if clipboard_service.is_capture_enabled() else []
+            phase = "idle"
             idle_seconds = adapter.get_idle_seconds()
             idle_threshold = max(1, idle_threshold_seconds)
 
+            phase = "transition"
             if idle_seconds >= idle_threshold:
                 machine.transition_to("idle", at_time=observation_time)
-            elif privacy_service.is_excluded(active_window):
-                machine.transition_to("excluded", at_time=observation_time)
             else:
-                machine.transition_to("recording", active_window, at_time=observation_time)
-                for event in clipboard_events:
-                    machine.record_clipboard_event(event, at_time=observation_time)
+                phase = "privacy"
+                excluded = privacy_service.is_excluded(active_window)
+                phase = "transition"
+                if excluded:
+                    machine.transition_to("excluded", at_time=observation_time)
+                else:
+                    machine.transition_to("recording", active_window, at_time=observation_time)
+                    for event in clipboard_events:
+                        machine.record_clipboard_event(event, at_time=observation_time)
+            phase = "prune"
             prune_counter += 1
             if prune_counter >= 20:
                 clipboard_service.prune_old_events()
                 prune_counter = 0
+            collector_health.record_successful_observation(observation_time)
             last_loop_time = observation_time
             next_poll_deadline = _sleep_until_next_poll(
                 stop_event, control, next_poll_deadline
             )
-        except Exception:
-            logging.exception("collector unexpected exception")
-            set_setting("collector_status", "error")
-            try:
-                machine.transition_to("error", at_time=now_str())
-            except Exception:
-                logging.exception("failed to persist collector error state")
+        except Exception as exc:
+            if not collector_health.is_transient_failure(exc):
+                collector_health.record_fatal_failure(phase, exc, now_str())
+                fatal_stop = True
+                break
+            collector_health.record_transient_failure(phase, exc, now_str())
             next_poll_deadline = _sleep_until_next_poll(
                 stop_event, control, next_poll_deadline
             )
 
-    machine.transition_to("stopped", at_time=now_str())
-    set_setting("collector_status", "stopped")
-    set_setting("last_shutdown_at", now_str())
+    try:
+        if fatal_stop:
+            machine.stop(at_time=now_str(), reason="fatal_collector_stop")
+        else:
+            machine.transition_to("stopped", at_time=now_str())
+    finally:
+        collector_health.record_collector_stopped(now_str())
     logging.info("collector stop")
 
 
@@ -225,8 +242,9 @@ def _clipboard_events(adapter: PlatformAdapter):
         return adapter.get_clipboard_events()
     except AttributeError:
         return []
-    except Exception:
-        logging.debug("clipboard event polling failed", exc_info=True)
+    except Exception as exc:
+        collector_health.record_transient_failure("clipboard", exc, now_str())
+        logging.debug("clipboard event polling failed kind=%s", type(exc).__name__)
         return []
 
 

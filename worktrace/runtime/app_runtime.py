@@ -17,6 +17,7 @@ import threading
 from typing import TYPE_CHECKING
 
 from .. import db
+from ..collector import collector_health
 from ..collector.collector import CollectorControl, run_collector
 from ..collector.single_instance import acquire_single_instance, release_single_instance
 from ..services import activity_lifecycle_service, folder_index_service, recovery_service
@@ -123,17 +124,33 @@ class AppRuntime:
         self._index_thread = thread
         return True
 
-    def start_collector(self) -> None:
+    def start_collector(self) -> dict[str, object]:
         """Start the collector thread once. Safe to call multiple times."""
-        if not self.owns_collector or self._collector_thread is not None:
-            return
-        self._collector_thread = threading.Thread(
-            target=run_collector,
-            args=(_choose_adapter(), self.stop_event, self.collector_control),
-            name="WorkTraceCollector",
-            daemon=True,
-        )
-        self._collector_thread.start()
+        if self._shutdown or self.stop_event.is_set():
+            return {"ok": False, "error": "runtime_stopping"}
+        if not self.owns_collector:
+            return {"ok": False, "error": "collector_not_owned"}
+        if self._collector_thread is not None and self._collector_thread.is_alive():
+            return {"ok": True, "started": False, "already_running": True}
+        if self._collector_thread is not None and not self._collector_thread.is_alive():
+            collector_health.record_health_code("thread_dead_replaced")
+            self._collector_thread = None
+            self.collector_control = CollectorControl()
+        try:
+            self._collector_thread = threading.Thread(
+                target=run_collector,
+                args=(_choose_adapter(), self.stop_event, self.collector_control),
+                name="WorkTraceCollector",
+                daemon=True,
+            )
+            self._collector_thread.start()
+        except Exception:
+            logging.exception("collector thread start failed")
+            self._collector_thread = None
+            return {"ok": False, "error": "collector_start_failed"}
+        set_setting("collector_status", "running")
+        set_setting("collector_health_state", "healthy")
+        return {"ok": True, "started": True, "already_running": False}
 
     def pause_collection_now(self, timeout_seconds: float = 5.0) -> dict[str, object]:
         """Ask the collector to finalize the current activity before pausing."""

@@ -365,10 +365,9 @@ def test_start_collection_after_privacy_gate_returns_ok_on_success(monkeypatch):
     assert result["ok"] is True
 
 
-def test_start_collection_after_privacy_gate_swallows_start_failures(monkeypatch):
-    """When start_background_workers or start_collector raises, the gate
-    must log and continue (returns ``ok=True``) so the WebView can still
-    start; the user can retry via the sidebar toggle."""
+def test_start_collection_after_privacy_gate_returns_failure_when_collector_start_fails(monkeypatch):
+    """Background worker start failure is a warning, but collector start
+    failure must return ``ok=False`` so the UI cannot report success."""
     from worktrace.api import app_api
 
     fake_runtime = type(
@@ -386,7 +385,7 @@ def test_start_collection_after_privacy_gate_swallows_start_failures(monkeypatch
 
     result = app_api.start_collection_after_privacy_gate()
 
-    assert result["ok"] is True
+    assert result == {"ok": False, "error": "collector_start_failed"}
 
 
 def test_startup_recovery_runtime_cleanup_is_single_owner(temp_db, tmp_path, monkeypatch):

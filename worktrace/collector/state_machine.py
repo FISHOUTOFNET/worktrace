@@ -13,7 +13,7 @@ from ..constants import (
 from ..db import now_str
 from ..platforms.base import ActiveWindow, ClipboardTextEvent
 from ..services import activity_lifecycle_service, clipboard_service, privacy_service, session_boundary_service
-from ..services.activity_continuity_service import is_hard_boundary_status
+from ..services.activity_status_policy import does_status_require_boundary
 from .activity_session_recorder import ActivitySessionRecorder
 from .resource_identity_resolver import (
     DEFAULT_RESOURCE_IDENTITY_RESOLVER,
@@ -45,10 +45,7 @@ class CollectorStateMachine:
     ) -> None:
         transition_time = at_time or now_str()
         if state == "stopped":
-            self._stop_recording_at_boundary(transition_time, "stopped")
-            activity_lifecycle_service.close_all_open_activities(transition_time)
-            self.state = "stopped"
-            self.active_signature = None
+            self.stop(transition_time)
             return
         if state == "paused":
             self.pause(transition_time)
@@ -79,18 +76,20 @@ class CollectorStateMachine:
         previous_status = ""
         if self.recorder.current_payload is not None:
             previous_status = str(self.recorder.current_payload.get("status") or "")
+        boundary_required = does_status_require_boundary(status, 0)
+        boundary_reason = _boundary_reason_for_status(status)
         end_reason = (
-            _end_reason_for_boundary(_boundary_reason_for_status(status))
-            if is_hard_boundary_status(status)
+            _end_reason_for_boundary(boundary_reason)
+            if boundary_required
             else ActivityEndReason.RESOURCE_SWITCH
         )
         self.recorder.observe(payload, signature, transition_time, end_reason=end_reason)
-        if is_hard_boundary_status(status):
+        if boundary_required:
             self.recorder.clear_short_buffers()
             if previous_status != status:
-                session_boundary_service.record_boundary(
+                session_boundary_service.record_hard_boundary(
                     transition_time,
-                    _boundary_reason_for_status(status),
+                    boundary_reason,
                 )
         self.state = state
         self.active_signature = signature
@@ -120,18 +119,18 @@ class CollectorStateMachine:
 
     def reset_for_time_jump(self, at_time: str | None = None) -> None:
         transition_time = at_time or now_str()
-        self._stop_recording_at_boundary(transition_time, "time_jump")
+        self._stop_recording_at_boundary(transition_time, "sleep_resume")
         activity_lifecycle_service.close_all_open_activities(transition_time)
         self.state = "stopped"
         self.active_signature = None
 
     def split_at_midnight(self, at_time: str) -> None:
         if self.recorder.split_at_midnight(at_time):
-            session_boundary_service.record_boundary(at_time, "midnight")
+            session_boundary_service.record_hard_boundary(at_time, "midnight")
             self.active_signature = self.recorder.current_signature
         else:
             self.recorder.clear_short_buffers()
-            session_boundary_service.record_boundary(at_time, "midnight")
+            session_boundary_service.record_hard_boundary(at_time, "midnight")
 
     def pause(self, at_time: str | None = None) -> None:
         transition_time = at_time or now_str()
@@ -149,10 +148,17 @@ class CollectorStateMachine:
             self.active_signature = signature
         self.state = "paused"
 
+    def stop(self, at_time: str | None = None, reason: str = "user_stop") -> None:
+        transition_time = at_time or now_str()
+        self._stop_recording_at_boundary(transition_time, reason)
+        activity_lifecycle_service.close_all_open_activities(transition_time)
+        self.state = "stopped"
+        self.active_signature = None
+
     def _stop_recording_at_boundary(self, at_time: str, reason: str) -> None:
         self.recorder.stop(at_time, reason=_end_reason_for_boundary(reason))
         self.recorder.clear_short_buffers()
-        session_boundary_service.record_boundary(at_time, reason)
+        session_boundary_service.record_hard_boundary(at_time, reason)
 
     def _current_activity_id_for_clipboard_event(self, event: ClipboardTextEvent, copied_at: str) -> int | None:
         current = self.recorder.current_payload
@@ -173,13 +179,15 @@ class CollectorStateMachine:
 
 
 def _end_reason_for_boundary(reason: str) -> ActivityEndReason:
-    if reason == "paused":
+    if reason in {"paused", "user_pause"}:
         return ActivityEndReason.PAUSE_BOUNDARY
-    if reason == "stopped":
+    if reason in {"stopped", "user_stop"}:
+        return ActivityEndReason.STOP_BOUNDARY
+    if reason == "fatal_collector_stop":
         return ActivityEndReason.STOP_BOUNDARY
     if reason == "shutdown":
         return ActivityEndReason.SHUTDOWN_BOUNDARY
-    if reason == "time_jump":
+    if reason in {"time_jump", "sleep_resume"}:
         return ActivityEndReason.TIME_JUMP_BOUNDARY
     if reason == "midnight":
         return ActivityEndReason.MIDNIGHT_BOUNDARY
@@ -206,5 +214,5 @@ def _boundary_reason_for_status(status: str) -> str:
     if status == STATUS_ERROR:
         return "error"
     if status == STATUS_PAUSED:
-        return "paused"
+        return "user_pause"
     return status or "unknown"

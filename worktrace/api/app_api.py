@@ -57,13 +57,17 @@ def start_collection_after_privacy_gate() -> dict[str, Any]:
             "workers start failed after gate passed"
         )
     try:
-        if _runtime is not None:
-            _runtime.start_collector()
+        if _runtime is None:
+            return {"ok": False, "error": "collector_start_failed"}
+        collector_result = _runtime.start_collector()
     except Exception:
         logging.exception(
             "app_api.start_collection_after_privacy_gate: collector "
             "start failed after gate passed"
         )
+        return {"ok": False, "error": "collector_start_failed"}
+    if isinstance(collector_result, dict) and not collector_result.get("ok"):
+        return dict(collector_result)
     return {"ok": True}
 
 
@@ -79,19 +83,19 @@ def pause_collection_now() -> dict[str, Any]:
         if _runtime is not None:
             return dict(_runtime.pause_collection_now())
         settings_api.set_user_paused(True)
-        record_runtime_boundary("pause_api_fallback")
+        record_runtime_boundary("pause_fallback")
         return {"ok": False, "pause_pending": True}
     except Exception:
         logging.exception("app_api.pause_collection_now failed")
         try:
             settings_api.set_user_paused(True)
-            record_runtime_boundary("pause_api_exception_fallback")
+            record_runtime_boundary("pause_fallback")
         except Exception:
             logging.exception("app_api.pause_collection_now fallback failed")
         return {"ok": False, "pause_pending": True}
 
 
-def start_collector() -> None:
+def start_collector() -> dict[str, object]:
     """Start the collector thread if it has not been started yet.
 
     Runtime-internal helper. UI callers MUST go through
@@ -99,7 +103,8 @@ def start_collector() -> None:
     enforced in exactly one place.
     """
     if _runtime is not None:
-        _runtime.start_collector()
+        return dict(_runtime.start_collector())
+    return {"ok": False, "error": "collector_start_failed"}
 
 
 def start_background_workers() -> bool:

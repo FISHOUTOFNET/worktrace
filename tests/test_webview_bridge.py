@@ -56,7 +56,11 @@ def test_get_status_is_json_serializable(bridge):
     json.dumps(result)
 
 
-def test_toggle_pause_returns_dict(bridge):
+def test_toggle_pause_returns_dict(bridge, monkeypatch):
+    monkeypatch.setattr(
+        "worktrace.webview_ui.bridge_overview.app_api.start_collection_after_privacy_gate",
+        lambda: {"ok": True},
+    )
     result = bridge.toggle_pause()
     assert isinstance(result, dict)
     assert result["ok"] is True
@@ -215,7 +219,11 @@ def test_toggle_pause_sets_paused_when_running(bridge):
     assert settings_service.get_bool_setting("user_paused") is True
 
 
-def test_toggle_pause_resumes_when_paused(bridge):
+def test_toggle_pause_resumes_when_paused(bridge, monkeypatch):
+    monkeypatch.setattr(
+        "worktrace.webview_ui.bridge_overview.app_api.start_collection_after_privacy_gate",
+        lambda: {"ok": True},
+    )
     settings_service.set_setting("collector_status", "paused")
     settings_service.set_setting("user_paused", "true")
     result = bridge.toggle_pause()

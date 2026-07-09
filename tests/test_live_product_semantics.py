@@ -307,24 +307,13 @@ def test_formal_anchor_then_short_activities_merge_when_no_boundary(temp_db):
     assert settings_service.get_setting("pending_short_seconds") == "0"
 
 
-@pytest.mark.parametrize(
-    "boundary_state,boundary_label",
-    [
-        ("paused", "paused"),
-        ("idle", "idle"),
-        ("excluded", "excluded"),
-        ("error", "error"),
-    ],
-)
-def test_short_activity_does_not_merge_across_hard_boundary(
-    temp_db, boundary_state, boundary_label
-):
-    """A ``<30s`` short activity ending AFTER a hard boundary (pause /
-    idle / excluded / error) MUST NOT merge into a pre-boundary anchor."""
+def test_short_activity_does_not_merge_across_pause_hard_boundary(temp_db):
+    """A ``<30s`` short activity ending AFTER pause MUST NOT merge into a
+    pre-boundary anchor."""
     machine = CollectorStateMachine()
     machine.transition_to("recording", _normal("A"), at_time=f"{_REPORT_DATE} 09:00:00")
     machine.transition_to("recording", _normal("A"), at_time=f"{_REPORT_DATE} 09:01:00")
-    machine.transition_to(boundary_state, at_time=f"{_REPORT_DATE} 09:02:00")
+    machine.transition_to("paused", at_time=f"{_REPORT_DATE} 09:02:00")
 
     machine.transition_to("recording", _normal("B"), at_time=f"{_REPORT_DATE} 09:03:00")
     machine.transition_to("recording", _normal("C"), at_time=f"{_REPORT_DATE} 09:03:20")
@@ -339,7 +328,32 @@ def test_short_activity_does_not_merge_across_hard_boundary(
     boundaries = session_boundary_service.list_boundaries(
         f"{_REPORT_DATE} 09:02:00", f"{_REPORT_DATE} 09:02:00"
     )
-    assert boundaries and boundaries[-1]["reason"] == boundary_label
+    assert boundaries and boundaries[-1]["reason"] == "user_pause"
+
+
+@pytest.mark.parametrize("soft_state", ["idle", "excluded", "error"])
+def test_short_activity_can_merge_across_soft_activity_status(temp_db, soft_state):
+    """Short idle/excluded/recovery-error intervals are activity facts, not
+    natural hard boundaries."""
+    machine = CollectorStateMachine()
+    machine.transition_to("recording", _normal("A"), at_time=f"{_REPORT_DATE} 09:00:00")
+    machine.transition_to("recording", _normal("A"), at_time=f"{_REPORT_DATE} 09:01:00")
+    machine.transition_to(soft_state, at_time=f"{_REPORT_DATE} 09:02:00")
+
+    machine.transition_to("recording", _normal("B"), at_time=f"{_REPORT_DATE} 09:03:00")
+    machine.transition_to("recording", _normal("C"), at_time=f"{_REPORT_DATE} 09:03:20")
+
+    rows = _rows()
+    a_rows = [r for r in rows if r["window_title"] == "A"]
+    assert len(a_rows) == 1
+    assert int(a_rows[0]["duration_seconds"]) == 140
+    b_rows = [r for r in rows if r["window_title"] == "B"]
+    assert b_rows == []
+    assert int(settings_service.get_setting("pending_short_seconds") or 0) == 0
+    boundaries = session_boundary_service.list_boundaries(
+        f"{_REPORT_DATE} 09:02:00", f"{_REPORT_DATE} 09:02:00"
+    )
+    assert boundaries == []
 
 
 def test_pause_boundary_current_and_recent_both_express_paused_status(

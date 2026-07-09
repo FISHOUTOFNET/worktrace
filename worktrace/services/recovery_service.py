@@ -60,7 +60,7 @@ def recover_unclosed_records() -> None:
         recovered_boundary_at = end_time
         logging.info("recovered unclosed record id=%s status=%s", row["id"], status)
     if recovered_boundary_at:
-        session_boundary_service.record_boundary(recovered_boundary_at, "recovered")
+        session_boundary_service.record_hard_boundary(recovered_boundary_at, "recovered")
     record_restart_boundary_if_needed()
     clear_runtime_activity_state("recovery_startup_boundary")
 
@@ -107,7 +107,7 @@ def _recover_cross_midnight_row(row, end_dt: datetime) -> str:
             payload=payload,
             project_id=original_project_id,
         )
-        session_boundary_service.record_boundary(current_start.strftime(TIME_FORMAT), "midnight")
+        session_boundary_service.record_hard_boundary(current_start.strftime(TIME_FORMAT), "midnight")
         last_activity_id = activity_id
         current_start = current_end
     return end_dt.strftime(TIME_FORMAT) if last_activity_id is not None else first_midnight_text
@@ -119,7 +119,7 @@ def record_restart_boundary_if_needed() -> None:
         return
     if session_boundary_service.has_boundary_between(candidate, candidate):
         return
-    session_boundary_service.record_boundary(candidate, "restart")
+    session_boundary_service.record_hard_boundary(candidate, "restart")
 
 
 def _latest_known_shutdown_boundary() -> str | None:
