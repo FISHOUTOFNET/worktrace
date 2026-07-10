@@ -391,8 +391,8 @@ def test_timeline_selection_loads_summary_by_activity_ids():
     select_body = func_body(source, "selectTimelineSession")
     show_body = func_body(source, "showTimeline")
 
-    assert "loadSessionActivitySummary(found.activity_ids, App.timelineDate)" in select_body
-    assert "loadSessionActivitySummary(found.activity_ids, data.date)" in show_body
+    assert "loadSessionActivitySummary(found.summary_activity_ids || found.activity_ids, App.timelineDate)" in select_body
+    assert "loadSessionActivitySummary(found.summary_activity_ids || found.activity_ids, data.date)" in show_body
     assert "loadSessionActivitySummary(found.project_id" not in source
     assert "loadSessionDetails(found.project_id" not in source
 

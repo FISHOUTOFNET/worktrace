@@ -141,6 +141,7 @@ class DisplaySpanContract(TypedDict, total=False):
     live_state: LiveState
     start_time: str
     end_time: str
+    resource_identity_hash: str
     duration_semantic: DurationSemantic | str
     duration: str
     duration_seconds: int
@@ -266,6 +267,9 @@ class TimelineSessionRowContract(RecentActivityRowContract, total=False):
     status: str
     event_count: int
     session_note: str
+    # Read-only scope for Timeline's right summary panel.  This is distinct
+    # from activity_ids, which remains the stable edit/override identity.
+    summary_activity_ids: list[int]
 
 
 class ActivityDetailRowContract(TypedDict, total=False):

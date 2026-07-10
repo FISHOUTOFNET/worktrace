@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from typing import Any
 
@@ -309,6 +310,9 @@ def build_display_span(
         "project_name": project_name,
         "project_description": project_description,
         "resource_name": _display_resource_name(snapshot) if snapshot else "",
+        # The raw resource identity is privacy-sensitive.  Overlay only needs
+        # equality, so expose a deterministic digest rather than the key.
+        "resource_identity_hash": _resource_identity_hash(snapshot),
         "is_current": True,
         "is_live": bool(live_clock.get("is_live")),
         "project_duration_live": bool(
@@ -351,3 +355,20 @@ def _signature_project_dict(value: Any) -> dict[str, Any] | None:
         "name": str(value.get("name") or ""),
         "source": str(value.get("source") or ""),
     }
+
+
+def _resource_identity_hash(snapshot: ActivitySnapshotContract | None) -> str:
+    if not snapshot:
+        return ""
+    for field in (
+        "resource_identity_key",
+        "activity_identity_key",
+        "resource_display_name",
+        "activity_display_name",
+        "app_name",
+        "process_name",
+    ):
+        value = str(snapshot.get(field) or "").strip().lower()
+        if value:
+            return hashlib.sha1(value.encode("utf-8")).hexdigest()[:16]
+    return ""

@@ -4,7 +4,7 @@ import logging
 from datetime import datetime
 
 from ..db import now_str
-from ..services.settings_service import get_int_setting, set_setting
+from ..services.settings_service import get_int_setting, get_setting, set_setting
 
 HEALTH_HEALTHY = "healthy"
 HEALTH_DEGRADED = "degraded"
@@ -23,6 +23,15 @@ def record_collector_started(at_time: str | None = None) -> None:
 
 def record_successful_observation(at_time: str | None = None) -> None:
     at = at_time or now_str()
+    # Preserve runtime-only recovery evidence after clearing current health.
+    previous_state = get_setting("collector_health_state", HEALTH_STOPPED)
+    previous_failures = get_int_setting("collector_consecutive_failures", 0)
+    if previous_state in (HEALTH_DEGRADED, HEALTH_FAILING) or previous_failures > 0:
+        set_setting("collector_last_recovery_at", at)
+        set_setting(
+            "collector_last_recovery_failure_at",
+            get_setting("collector_last_failure_at", "") or "",
+        )
     set_setting("collector_health_state", HEALTH_HEALTHY)
     set_setting("collector_last_successful_observation_at", at)
     set_setting("collector_consecutive_failures", "0")

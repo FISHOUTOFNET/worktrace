@@ -56,3 +56,35 @@ def test_unrecorded_gap_policy_keeps_long_unknown_gaps_as_boundaries(temp_db):
         "2026-06-18 09:00:00",
         "2026-06-18 09:01:00",
     )
+
+
+def test_same_resource_stall_recovery_is_soft_but_explicit_boundaries_are_not(monkeypatch):
+    previous = {"status": STATUS_NORMAL, "resource_identity_key": "file:report"}
+    recovered = {"status": STATUS_NORMAL, "resource_identity_key": "file:report"}
+    monkeypatch.setattr(activity_continuity_service, "_last_normal_activity_before", lambda _at: previous)
+    monkeypatch.setattr(activity_continuity_service, "_current_snapshot", lambda: recovered)
+    monkeypatch.setattr(activity_continuity_service, "_has_explicit_boundary_between", lambda *_: False)
+    monkeypatch.setattr(activity_continuity_service, "_has_boundary_status_between", lambda *_: False)
+    monkeypatch.setattr(
+        activity_continuity_service,
+        "get_setting",
+        lambda key, default="": "degraded" if key == "collector_health_state" else default,
+    )
+
+    assert activity_continuity_service.is_same_resource_stall_recovery_gap(
+        "2026-06-18 09:00:00", "2026-06-18 09:05:00"
+    )
+    assert activity_continuity_service.is_soft_collector_gap(
+        "2026-06-18 09:00:00", "2026-06-18 09:05:00"
+    )
+
+    recovered["resource_identity_key"] = "file:other"
+    assert not activity_continuity_service.is_same_resource_stall_recovery_gap(
+        "2026-06-18 09:00:00", "2026-06-18 09:05:00"
+    )
+
+    recovered["resource_identity_key"] = "file:report"
+    monkeypatch.setattr(activity_continuity_service, "_has_explicit_boundary_between", lambda *_: True)
+    assert not activity_continuity_service.is_same_resource_stall_recovery_gap(
+        "2026-06-18 09:00:00", "2026-06-18 09:05:00"
+    )

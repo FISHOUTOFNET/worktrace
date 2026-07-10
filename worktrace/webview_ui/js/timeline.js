@@ -203,7 +203,7 @@
                 var skipDetailReload = (typeof App._timelineEditingActive === "function"
                     && App._timelineEditingActive());
                 if (!skipDetailReload) {
-                    loadSessionActivitySummary(found.activity_ids, data.date);
+                    loadSessionActivitySummary(found.summary_activity_ids || found.activity_ids, data.date);
                 }
                 // Only re-populate the edit panel if the user is not mid-edit AND the session is not edit-disabled.
                 if (!found.edit_disabled
@@ -294,7 +294,7 @@
         }
         var found = newSelected;
         if (found) {
-            loadSessionActivitySummary(found.activity_ids, App.timelineDate);
+            loadSessionActivitySummary(found.summary_activity_ids || found.activity_ids, App.timelineDate);
             // Virtual live sessions are display-only; a manual click must NOT open the edit panel. Clear it instead.
             if (found.edit_disabled === true || found.is_virtual === true) {
                 clearEditPanel();

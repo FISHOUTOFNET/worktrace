@@ -389,6 +389,82 @@ def test_borrowed_anchor_pending_projects_onto_anchor_display_only():
     assert int(activity_service.get_activity(anchor_id)["duration_seconds"]) == raw_duration
 
 
+def test_borrowed_pending_uses_matched_session_base_not_latest_anchor_base():
+    """A+B session must not display the B-only base while C is pending."""
+    row = {
+        "activity_ids": [1, 2],
+        "first_activity_id": 1,
+        "duration_seconds": 130,
+        "display_duration_seconds": 130,
+        "raw_duration_seconds": 130,
+        "closed_duration_seconds": 130,
+    }
+    span = {
+        "live_state": "borrowed_anchor_pending",
+        "anchor_activity_id": 2,
+        "activity_id": 2,
+        "project_id": 1,
+        "project_name": "ProjectA",
+        "project_description": "",
+        "is_visible_in_recent": True,
+        "is_visible_in_timeline": True,
+        "is_visible_in_details": True,
+        "live_clock": {
+            "display_span_id": "span-abc",
+            "stable_live_key_hash": "hash-abc",
+            "live_state": "borrowed_anchor_pending",
+            "current_live_seconds_at_sample": 12,
+            "current_elapsed_at_sample": 12,
+            "aggregate_display_base_seconds": 70,
+            "display_base_seconds": 70,
+            "project_duration_live": True,
+            "is_project_duration_live": True,
+        },
+    }
+
+    overlaid = apply_live_span_to_row(row, span, row_kind=ROW_KIND_PROJECT_SESSION_ROW)
+
+    assert overlaid["duration_seconds"] == 142
+    assert overlaid["display_base_seconds"] == 130
+    assert overlaid["aggregate_display_base_seconds"] == 130
+    assert overlaid["live_delta_eligible"] is True
+    assert overlaid["is_live_projected"] is True
+    assert overlaid["display_only"] is True
+    assert overlaid["editable"] is False
+    assert overlaid["exportable"] is False
+
+
+def test_persisted_open_session_uses_closed_session_base_even_without_open_id():
+    row = {
+        "activity_ids": [1, 2, 3],
+        "duration_seconds": 130,
+        "closed_duration_seconds": 130,
+        "open_activity_id": 0,
+    }
+    span = {
+        "live_state": "persisted_open",
+        "anchor_activity_id": 3,
+        "activity_id": 3,
+        "is_visible_in_recent": True,
+        "is_visible_in_timeline": True,
+        "is_visible_in_details": True,
+        "live_clock": {
+            "display_span_id": "span-abc",
+            "live_state": "persisted_open",
+            "current_live_seconds_at_sample": 30,
+            "current_elapsed_at_sample": 30,
+            "display_base_seconds": 0,
+            "project_duration_live": True,
+            "is_project_duration_live": True,
+        },
+    }
+
+    overlaid = apply_live_span_to_row(row, span, row_kind=ROW_KIND_PROJECT_SESSION_ROW)
+
+    assert overlaid["duration_seconds"] == 160
+    assert overlaid["display_base_seconds"] == 130
+
+
 def test_current_activity_uses_resource_elapsed_project_rows_stay_static_for_virtual():
     anchor_id, _ = _create_closed_anchor_activity(
         elapsed_seconds=300, project_name="ProjectA"

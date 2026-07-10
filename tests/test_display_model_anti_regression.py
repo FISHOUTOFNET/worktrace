@@ -393,11 +393,7 @@ def test_persisted_open_overlay_does_not_reverse_engineer_base_from_db_duration(
     source = (
         REPO_ROOT / "worktrace" / "services" / "activity_row_overlay.py"
     ).read_text(encoding="utf-8")
-    match = re.search(
-        r"if state == \"persisted_open\":(?P<body>.*?)(?=\n    else:)",
-        source,
-        re.S,
-    )
+    match = re.search(r"def _aggregate_base_for_live_row\((?P<body>.*?)\n\ndef ", source, re.S)
     assert match is not None
     branch = match.group("body")
     assert "row_raw" not in branch

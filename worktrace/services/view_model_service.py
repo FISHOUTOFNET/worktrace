@@ -161,6 +161,33 @@ def _rows_have_live_span(rows: list[dict[str, Any]], span: DisplaySpanContract) 
     return any(str(row.get("display_span_id") or "") == span_id for row in rows)
 
 
+def _set_summary_activity_ids(rows: list[dict[str, Any]]) -> None:
+    """Attach read-only Timeline summary scope without changing session IDs."""
+    for row in rows:
+        ids = _unique_positive_ids(row.get("activity_ids") or [])
+        if row.get("is_live_projected"):
+            anchor_id = int(
+                row.get("live_anchor_activity_id")
+                or row.get("anchor_activity_id")
+                or 0
+            )
+            if anchor_id > 0:
+                ids = _unique_positive_ids([*ids, anchor_id])
+        row["summary_activity_ids"] = ids
+
+
+def _unique_positive_ids(values: list[Any]) -> list[int]:
+    result: list[int] = []
+    for value in values:
+        try:
+            item = int(value)
+        except (TypeError, ValueError):
+            continue
+        if item > 0 and item not in result:
+            result.append(item)
+    return result
+
+
 def _live_contract_reason(span: DisplaySpanContract, rows: list[dict[str, Any]]) -> str:
     if int(span.get("anchor_activity_id") or 0) <= 0:
         return ""
@@ -372,6 +399,7 @@ def _materialize_display_only_timeline_session(
             "session_note": "",
         }
     )
+    _set_summary_activity_ids([row])
     return row
 
 
@@ -453,13 +481,34 @@ def _materialize_display_only_project_activity_summary_row(
             "display_project_id": int(display_project.get("id") or 0),
             "display_project_name": str(display_project.get("name") or UNCATEGORIZED_PROJECT),
             "display_project_description": str(display_project.get("description") or ""),
-            "activity_ids": [activity_id] if activity_id > 0 else [],
+            # Pending C has no DB identity.  It is selection-visible through
+            # the borrowed anchor scope, but never editable/exportable.
+            "activity_ids": [] if str(span.get("live_state") or "") == "borrowed_anchor_pending" else ([activity_id] if activity_id > 0 else []),
             "first_activity_id": activity_id or None,
             "open_activity_id": activity_id,
             "closed_duration_seconds": 0,
             "report_date": report_date,
         }
     )
+    if str(span.get("live_state") or "") == "borrowed_anchor_pending":
+        current_seconds = int(
+            (span.get("live_clock") or {}).get("current_live_seconds_at_sample")
+            or (span.get("live_clock") or {}).get("current_elapsed_at_sample")
+            or 0
+        )
+        row.update(
+            {
+                "source": "borrowed_anchor_pending",
+                "duration_seconds": current_seconds,
+                "duration": format_duration(current_seconds),
+                "duration_seconds_at_sample": current_seconds,
+                "aggregate_duration_seconds_at_sample": current_seconds,
+                "aggregate_display_base_seconds": 0,
+                "display_base_seconds": 0,
+                "live_base_seconds": 0,
+                "open_activity_id": 0,
+            }
+        )
     return row
 
 
@@ -888,6 +937,7 @@ def get_timeline_view_model(report_date: str | None = None) -> dict[str, Any]:
                 live_contract_reason=_live_contract_reason(timeline_live_span, sessions),
             ),
         )
+    _set_summary_activity_ids(sessions)
     # In-progress sessions that received no live overlay still need
     # edit_disabled.
     for row in sessions:

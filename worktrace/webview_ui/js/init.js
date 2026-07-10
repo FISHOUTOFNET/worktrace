@@ -53,6 +53,7 @@
             overview.display_span_id = bundle.display_span_id || overview.display_span_id;
             overview.sample_id = bundle.sample_id || overview.sample_id;
             overview.kpi_live_base = bundle.kpi_live_base || overview.kpi_live_base;
+            overview.kpi_live_targets = bundle.kpi_live_targets || overview.kpi_live_targets;
             if (overview.today_total_seconds === undefined) {
                 overview.today_total_seconds = bundle.today_total_seconds || 0;
             }

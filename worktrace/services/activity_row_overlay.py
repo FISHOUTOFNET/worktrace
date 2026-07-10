@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from typing import Any
 
 from ..constants import UNCATEGORIZED_PROJECT
@@ -60,10 +61,20 @@ def apply_live_span_to_row(
         return row
     row_id = int(row.get("activity_id") or row.get("id") or 0)
     first_activity_id = int(row.get("first_activity_id") or 0)
+    open_activity_id = int(row.get("open_activity_id") or 0)
     activity_ids = row.get("activity_ids")
-    matches = row_id == anchor_id or first_activity_id == anchor_id
+    matches = (
+        row_id == anchor_id
+        or first_activity_id == anchor_id
+        or open_activity_id == anchor_id
+    )
     if not matches and isinstance(activity_ids, list):
         matches = anchor_id in {int(aid) for aid in activity_ids if aid}
+    # A borrowed current resource is not the historical anchor.  Summary
+    # aggregation is resource-based, so overlay only a same-resource DB row;
+    # otherwise the ViewModel materializes a display-only current-resource row.
+    if row_kind == ROW_KIND_PROJECT_ACTIVITY_SUMMARY_ROW and str(span.get("live_state") or "") == "borrowed_anchor_pending":
+        matches = _row_matches_span_resource(row, span)
     if not matches:
         return row
 
@@ -79,19 +90,13 @@ def apply_live_span_to_row(
         or live_clock.get("current_elapsed_at_sample")
         or 0
     )
-    aggregate_base = int(
-        live_clock.get("aggregate_display_base_seconds")
-        or live_clock.get("display_base_seconds")
-        or 0
-    )
+    # Aggregate rows own their final display base.  The span/clock base is
+    # only a fallback (it is necessarily anchor-centric for borrowed pending).
+    aggregate_base = _aggregate_base_for_live_row(row, span, live_clock, state, row_kind)
     if "raw_duration_seconds" not in row:
         row["raw_duration_seconds"] = int(row.get("duration_seconds") or 0)
 
-    if state == "persisted_open":
-        aggregate_base = _static_base_for_live_row(row, span, live_clock, state)
-        aggregate_duration = aggregate_base + current_live_seconds
-    else:
-        aggregate_duration = aggregate_base + current_live_seconds
+    aggregate_duration = aggregate_base + current_live_seconds
 
     row["current_live_seconds_at_sample"] = int(current_live_seconds)
     row["current_live_base_seconds"] = 0
@@ -220,9 +225,6 @@ def _static_base_for_live_row(
     live_clock: LiveClockContract,
     state: str,
 ) -> int:
-    if state != "persisted_open":
-        return int(live_clock.get("display_base_seconds") or 0)
-
     anchor_id = int(span.get("anchor_activity_id") or 0)
     snapshot_extra_base = int(
         live_clock.get("display_base_seconds")
@@ -238,9 +240,41 @@ def _static_base_for_live_row(
     if open_activity_id == anchor_id and "closed_duration_seconds" in row:
         return int(row.get("closed_duration_seconds") or 0) + snapshot_extra_base
     if isinstance(activity_ids, list) and anchor_id in {int(aid) for aid in activity_ids if aid}:
+        # A session can omit open_activity_id after report projection.  Its
+        # closed base is still authoritative and avoids undercounting A+B+C.
+        if "closed_duration_seconds" in row:
+            return int(row.get("closed_duration_seconds") or 0) + snapshot_extra_base
         row["live_contract_reason"] = "missing_closed_static_base"
-        return snapshot_extra_base
     return snapshot_extra_base
+
+
+def _aggregate_base_for_live_row(
+    row: dict[str, Any],
+    span: DisplaySpanContract,
+    live_clock: LiveClockContract,
+    state: str,
+    row_kind: str,
+) -> int:
+    """Resolve aggregate base at the concrete row, never at the anchor."""
+    fallback = int(
+        live_clock.get("aggregate_display_base_seconds")
+        or live_clock.get("display_base_seconds")
+        or span.get("aggregate_display_base_seconds")
+        or span.get("display_base_seconds")
+        or 0
+    )
+    if row_kind not in _AGGREGATE_LIVE_ROW_KINDS:
+        return fallback
+    if state == "borrowed_anchor_pending":
+        # The anchor may be B while the selected report row is A+B.  Preserve
+        # the ViewModel's display duration (including an override) as base.
+        for field in ("display_duration_seconds", "duration_seconds", "raw_duration_seconds"):
+            if field in row and row.get(field) is not None:
+                return int(row.get(field) or 0)
+        return fallback
+    if state == "persisted_open":
+        return _static_base_for_live_row(row, span, live_clock, state)
+    return fallback
 
 
 def _duration_semantic_for_row_kind(row_kind: str) -> str:
@@ -265,3 +299,24 @@ def _copy_span_classification(row: dict[str, Any], span: DisplaySpanContract) ->
         else (not bool(span_uncategorized))
     )
     return True
+
+
+def _row_matches_span_resource(row: dict[str, Any], span: DisplaySpanContract) -> bool:
+    current_identity_hash = str(span.get("resource_identity_hash") or "").strip()
+    if not current_identity_hash:
+        return False
+    for field in ("activity_identity_key", "resource_identity_key"):
+        value = str(row.get(field) or "").strip().lower()
+        if value:
+            return _identity_hash(value) == current_identity_hash
+    # Display/app fallbacks intentionally require both sides to be present;
+    # unknown identities must not make B absorb C.
+    for field in ("resource_display_name", "activity_display_name", "activity_name", "app_name", "process_name"):
+        value = str(row.get(field) or "").strip().lower()
+        if value:
+            return _identity_hash(value) == current_identity_hash
+    return False
+
+
+def _identity_hash(value: str) -> str:
+    return hashlib.sha1(value.strip().lower().encode("utf-8")).hexdigest()[:16]
