@@ -87,6 +87,7 @@ def test_collector_has_no_short_activity_absorption_owner_or_mutation_path():
     )
     offenders: list[str] = []
     for py_file in _py_sources(COLLECTOR_DIR):
+        rel = py_file.relative_to(REPO_ROOT).as_posix()
         source = py_file.read_text(encoding="utf-8")
         for symbol in policy_symbols:
             if symbol in source:

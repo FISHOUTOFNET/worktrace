@@ -542,9 +542,10 @@ def _detail_report_attribution_fields(row: dict[str, Any]) -> dict[str, Any]:
 def get_overview_view_model(today: str | None = None) -> dict[str, Any]:
     """Build the Overview page ViewModel from a single display model.
 
-    Recent rows come from DB sessions plus optional display-only borrowed
-    anchor rows from the Activity Display Model. Unanchored pending snapshots
-    are Current-only and never materialize Recent rows.
+    Live projection comes only from the Activity Display Model. Normal live
+    activity materializes only its own persisted open row; it never borrows a
+    closed anchor or creates a pending virtual row. Contract fallbacks remain
+    display-only and do not represent short-activity absorption.
 
     KPI totals (``today_total_seconds`` / ``classified_seconds`` /
     ``uncategorized_seconds``) are computed from the same overlay +
@@ -771,9 +772,10 @@ def _session_to_overview_row(session: dict[str, Any]) -> dict[str, Any]:
 def get_timeline_view_model(report_date: str | None = None) -> dict[str, Any]:
     """Build the Timeline page ViewModel from a single display model.
 
-    Timeline sessions come from DB rows plus optional display-only borrowed
-    anchor sessions from the Activity Display Model. Unanchored pending
-    snapshots are Current-only and never materialize Timeline sessions.
+    Timeline sessions come from DB rows plus Activity Display Model projection.
+    Normal live activity materializes only its own persisted open row; there
+    are no borrowed-anchor or pending virtual sessions. Contract fallbacks do
+    not represent short-activity absorption.
 
     ``raw_total_seconds`` is the sum of raw DB durations (unaffected by
     the display-only live overlay or adjusted overrides). ``total_seconds``
@@ -956,9 +958,9 @@ def get_session_details_view_model(
 ) -> dict[str, Any]:
     """Build the Timeline Details ViewModel from a single display model.
 
-    Details list only real DB activity rows. Borrowed pending affects session
-    aggregates only; it never inserts the current pending resource as a detail
-    row.
+    Details list only real DB activity rows plus Activity Display Model
+    projection for a persisted open row. No borrowed pending resource or
+    virtual normal-live detail row is inserted.
 
     Single-sample contract: ``current_activity_snapshot`` is read EXACTLY
     ONCE here and the resulting ``snapshot`` is passed to

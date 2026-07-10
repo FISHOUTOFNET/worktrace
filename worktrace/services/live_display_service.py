@@ -357,16 +357,16 @@ def _live_display_key(snapshot: ActivitySnapshotContract | None) -> str:
 
     The key is constructed ONLY from sanitized display fields
     (``resource_display_name`` / ``activity_display_name`` / ``app_name`` /
-    ``process_name`` / ``inferred_project_name`` / ``start_time`` /
+    ``process_name`` / ``start_time`` /
     ``status`` / ``is_persisted`` / ``persisted_activity_id``). Raw
     ``window_title``, ``file_path_hint``, ``note`` and ``clipboard`` are
     NEVER included.
 
     The returned value is used as the JS-side ``live_display_key`` so the
     ticker can decide when a continuity-key reset is allowed (e.g. activity
-    switched, status switched, persisted state switched). It is also part
-    of ``refresh_revision`` so a structural identity change triggers a
-    heavy refresh.
+    switched, status switched, persisted state switched). Revision inputs are
+    independently defined by ``build_revision_parts()``; candidate and
+    suggested project metadata never participate in this continuity key.
     """
     if not snapshot:
         return ""
@@ -375,7 +375,6 @@ def _live_display_key(snapshot: ActivitySnapshotContract | None) -> str:
         str(snapshot.get("activity_display_name") or ""),
         str(snapshot.get("app_name") or ""),
         str(snapshot.get("process_name") or ""),
-        str(snapshot.get("inferred_project_name") or ""),
         str(snapshot.get("start_time") or ""),
         str(snapshot.get("status") or ""),
         "1" if bool(snapshot.get("is_persisted")) else "0",

@@ -155,7 +155,6 @@ def build_display_structural_signature(
     today: str,
     is_today: bool,
 ) -> str:
-    project_transition = current_activity.get("project_transition") or {}
     display_policy = live_clock.get("display_policy") or {}
     signature_payload = {
         "current_activity_stable_key": str(
@@ -167,12 +166,6 @@ def build_display_structural_signature(
         if snapshot
         else 0,
         "display_project": _signature_project_dict(current_activity.get("display_project")),
-        "candidate_project": _signature_project_dict(current_activity.get("candidate_project")),
-        "project_transition": {
-            "pending": bool(project_transition.get("pending")),
-            "from_project_id": project_transition.get("from_project_id"),
-            "to_project_id": project_transition.get("to_project_id"),
-        },
         "project_live_span": {
             "display_span_id": str(live_clock.get("display_span_id") or ""),
             "anchor_activity_id": int(anchor.get("id") or 0) if anchor else 0,

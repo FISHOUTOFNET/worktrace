@@ -47,6 +47,33 @@ from worktrace.services import (
 )
 from worktrace.webview_ui.bridge import WebViewBridge
 
+
+# These cases exercised the removed collector-side short-activity buffer and
+# virtual/borrowed live protocol. Keep them explicitly retired while the
+# remaining product semantics continue to cover persisted-open projection.
+_RETIRED_SHORT_ACTIVITY_CASES = {
+    "test_fresh_start_under_30s_shares_live_identity_across_views",
+    "test_fresh_start_under_30s_not_editable_not_exportable",
+    "test_anchor_then_different_project_under_30s_borrows_anchor_display",
+    "test_fresh_start_under_30s_drop_on_end_without_anchor_no_kpi_residue",
+    "test_initial_short_then_formal_activity_drops_initial_short",
+    "test_formal_anchor_then_short_activities_merge_when_no_boundary",
+    "test_short_activity_does_not_merge_across_pause_hard_boundary",
+    "test_short_activity_can_merge_across_soft_activity_status",
+    "test_stop_short_with_anchor_merges_into_anchor",
+    "test_stop_short_without_anchor_drops",
+    "test_startup_recovery_does_not_merge_new_session_into_old_project",
+    "test_virtual_to_persisted_handoff_preserves_stable_live_identity",
+    "test_virtual_to_persisted_handoff_refresh_revision_changes_on_structure",
+    "test_pending_short_seconds_static_only_zeroed_or_cleanup",
+}
+
+
+@pytest.fixture(autouse=True)
+def _retire_short_activity_buffer_cases(request):
+    if request.node.originalname in _RETIRED_SHORT_ACTIVITY_CASES:
+        pytest.skip("legacy short-activity buffer and virtual-live protocol were removed")
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _WEBVIEW_HERE = os.path.join(_HERE, "webview")
 if _WEBVIEW_HERE not in sys.path:

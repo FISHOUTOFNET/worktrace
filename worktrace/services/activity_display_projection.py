@@ -118,12 +118,6 @@ def build_revision_parts(
         "current_display_project": _project_revision_identity(
             current_activity.get("display_project")
         ),
-        "current_candidate_project": _project_revision_identity(
-            current_activity.get("candidate_project")
-        ),
-        "project_transition": _project_transition_revision_identity(
-            current_activity.get("project_transition")
-        ),
     }
     page_structure_revision = _hash(marker)
     live_clock_revision = _hash(live_clock_input)
@@ -210,14 +204,3 @@ def _project_revision_identity(project: Any) -> dict[str, Any]:
         "is_uncategorized": bool(project.get("is_uncategorized")),
         "is_suggested_project": bool(project.get("is_suggested_project")),
     }
-
-
-def _project_transition_revision_identity(transition: Any) -> dict[str, Any]:
-    if not isinstance(transition, dict):
-        return {}
-    return {
-        "pending": bool(transition.get("pending")),
-        "from_project_id": transition.get("from_project_id"),
-        "to_project_id": transition.get("to_project_id"),
-    }
-
