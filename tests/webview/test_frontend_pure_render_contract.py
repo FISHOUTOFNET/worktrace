@@ -23,6 +23,64 @@ def test_frontend_has_no_second_live_clock_registry():
     assert not offenders, "frontend must not grow page-specific live clocks: " + repr(offenders)
 
 
+def test_frontend_live_identity_excludes_candidate_metadata_and_retired_states():
+    """Continuity is backend-owned persisted-row identity, not inference metadata."""
+    source = read_all_js()
+    for forbidden in (
+        "candidate_project",
+        "current_candidate_project",
+        "suggested_project_name",
+        "inferred_project_name",
+        "project_transition",
+        "current_only_pending",
+        "borrowed_anchor_pending",
+        "virtual_pending",
+        "absorbed_pending",
+        "current_only_zero",
+        "borrowed_anchor_static",
+        "is_virtual_live",
+        "is_virtual",
+        "virtual-live",
+    ):
+        assert forbidden not in source, (
+            "frontend identity/rendering must not consume retired live semantics: "
+            + forbidden
+        )
+
+    for function_name in (
+        "runtimeIdentityFromPayload",
+        "runtimeVisualContinuityKey",
+        "liveContinuityKey",
+        "currentActivityContinuityKey",
+    ):
+        body = func_body(read_js("core.js"), function_name)
+        for forbidden in (
+            "candidate_project",
+            "current_candidate_project",
+            "suggested_project_name",
+            "inferred_project_name",
+            "project_transition",
+        ):
+            assert forbidden not in body, (
+                function_name + " must not use candidate metadata as identity: " + forbidden
+            )
+
+
+def test_frontend_uses_only_single_live_delta_clock_fields():
+    source = read_all_js()
+    for forbidden in (
+        "baseline_epoch_ms",
+        "snapshot_baseline_epoch_ms",
+        "snapshot_at_epoch_ms",
+        "liveClockByPage",
+        "liveClockBySpanId",
+        "activeSpanClockByPage",
+    ):
+        assert forbidden not in source, (
+            "frontend must not restore a second live clock: " + forbidden
+        )
+
+
 def test_apply_local_ticker_never_reads_structural_caches_or_bridge():
     body = func_body(read_js("core.js"), "applyLocalTicker")
     forbidden = (
@@ -89,4 +147,3 @@ def test_live_duration_targets_use_backend_display_base_and_accepted_runtime():
     assert "computeActiveElapsedNow(clock" in ticker
     assert "renderLiveDurationTarget(target, displayBaseSeconds, activeElapsedNowValue)" in ticker
     assert "data-live-base-seconds" in source
-

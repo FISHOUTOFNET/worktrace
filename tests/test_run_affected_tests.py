@@ -740,7 +740,7 @@ def test_cli_files_option_selects_targets_without_git_diff(runner, capsys):
     out = capsys.readouterr().out
     assert "worktrace/services/activity_display_model_service.py" in out
     assert "worktrace/webview_ui/js/core.js" in out
-    assert "tests/test_live_display_project_transition_contract.py" in out
+    assert "tests/test_live_display_projection_contract.py" in out
     assert "tests/webview/test_heartbeat_projection_contract.py" in out
 
 
@@ -1013,9 +1013,9 @@ def test_runtime_activity_state_service_selects_runtime_boundary_suites(runner):
     ])
     for expected in (
         "tests/test_app_runtime_privacy_gate.py",
-        "tests/test_short_activity_buffer.py",
+        "tests/test_collector_raw_activity_contract.py",
         "tests/test_bridge_refresh_state_and_projection.py",
-        "tests/test_live_display_project_transition_contract.py",
+        "tests/test_live_display_projection_contract.py",
         "tests/test_display_model_anti_regression.py",
         "tests/webview/test_heartbeat_projection_contract.py",
         "tests/webview/test_frontend_global_boundaries.py",
@@ -1232,10 +1232,10 @@ def test_live_display_service_py_selects_run_affected_and_timeline_static(runner
 _LIVE_DISPLAY_OWNER_TARGETS = [
     "tests/test_overview_bundle_and_export_contract.py",
     "tests/test_app_runtime_privacy_gate.py",
-    "tests/test_short_activity_buffer.py",
+    "tests/test_collector_raw_activity_contract.py",
     "tests/test_bridge_refresh_state_and_projection.py",
     "tests/test_live_display_contract.py",
-    "tests/test_live_display_project_transition_contract.py",
+    "tests/test_live_display_projection_contract.py",
     "tests/test_display_model_anti_regression.py",
     "tests/scenarios/live_semantics/",
     "tests/test_run_affected_tests.py",
@@ -1279,7 +1279,7 @@ def test_live_semantics_support_helpers_select_scenario_matrix(runner, changed):
     assert "tests/test_display_model_anti_regression.py" in sel.pytest_targets
     if changed.endswith("collector_stream.py"):
         assert "tests/test_collector.py" in sel.pytest_targets
-        assert "tests/test_short_activity_buffer.py" in sel.pytest_targets
+        assert "tests/test_collector_raw_activity_contract.py" in sel.pytest_targets
 
 
 def test_frontend_pure_render_guard_runs_with_webview_static_suite(runner):

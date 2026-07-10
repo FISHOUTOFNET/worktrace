@@ -9,10 +9,8 @@ transition) is decided by
 1. Calls :func:`build_activity_display_model` once per request.
 2. Projects page payloads from that model.
 3. Builds ordinary DB list payloads (sessions, activity details).
-4. Applies ``apply_live_span_to_row`` to matching DB rows when the display
-   model marks that surface materializable.
-5. Materializes a persisted display fallback only when the corresponding
-   projection row is absent.
+4. Applies ``apply_live_span_to_row`` to the matching persisted DB row when
+   the display model marks that surface materializable.
 
 Boundary:
 
@@ -36,15 +34,11 @@ from typing import Any
 from ..constants import UNCATEGORIZED_PROJECT
 from ..formatters import format_duration, format_resource_type, format_safe_display_name
 from ..contracts.live_display_contracts import (
-    ActivityDetailRowContract,
     ActivitySnapshotContract,
     CurrentActivityContract,
     DisplaySpanContract,
     LiveClockContract,
-    ProjectActivitySummaryRowContract,
-    RecentActivityRowContract,
     RefreshStateContract,
-    TimelineSessionRowContract,
 )
 from . import (
     live_display_service,
@@ -55,7 +49,6 @@ from . import (
 )
 from .activity_display_model_service import build_activity_display_model
 from .activity_display_projection import build_kpi_live_targets
-from .activity_live_clock import AGGREGATE_LIVE, CURRENT_LIVE
 from .activity_continuity_service import is_normal_project_status
 from .activity_row_overlay import (
     ROW_KIND_ACTIVITY_DETAIL_ROW,
@@ -107,8 +100,7 @@ def _apply_live_span_to_rows(
 
     Mutates rows in place. Rows that do not match the live span's anchor
     activity id are left untouched. This is the ONLY path through which a
-    live overlay enters Recent / Timeline / Details. Display-only rows are
-    materialized from the same span when no DB row can be projected.
+    live overlay enters Recent / Timeline / Details.
     """
     span = _first_display_span(model)
     if not span:
@@ -129,36 +121,9 @@ def _apply_live_span_to_rows(
         apply_live_span_to_row(row, span, row_kind=row_kind)
 
 
-def _get_visible_live_span(
-    model: dict[str, Any],
-    surface: str,
-) -> DisplaySpanContract | None:
-    span = _first_display_span(model)
-    if not span:
-        return None
-    live_clock = span.get("live_clock") or model.get("live_clock") or {}
-    if not (
-        live_clock.get("project_duration_live") is True
-        or live_clock.get("is_project_duration_live") is True
-    ):
-        return None
-    if not str(live_clock.get("display_span_id") or span.get("display_span_id") or ""):
-        return None
-    if not span.get("is_visible_in_" + surface):
-        return None
-    return span
-
-
 def _first_display_span(model: dict[str, Any]) -> DisplaySpanContract | None:
     spans = model.get("display_spans") or []
     return spans[0] if spans else None
-
-
-def _rows_have_live_span(rows: list[dict[str, Any]], span: DisplaySpanContract) -> bool:
-    span_id = str(span.get("display_span_id") or "")
-    if not span_id:
-        return False
-    return any(str(row.get("display_span_id") or "") == span_id for row in rows)
 
 
 def _set_summary_activity_ids(rows: list[dict[str, Any]]) -> None:
@@ -186,14 +151,6 @@ def _unique_positive_ids(values: list[Any]) -> list[int]:
         if item > 0 and item not in result:
             result.append(item)
     return result
-
-
-def _live_contract_reason(span: DisplaySpanContract, rows: list[dict[str, Any]]) -> str:
-    if int(span.get("anchor_activity_id") or 0) <= 0:
-        return ""
-    if not rows:
-        return "db_row_missing"
-    return "live_overlay_mismatch"
 
 
 def _current_elapsed_at_sample(live_clock: LiveClockContract) -> int:
@@ -249,239 +206,6 @@ def _live_identity_fields(model: dict[str, Any]) -> dict[str, Any]:
         "stable_live_key_hash": str(live_clock.get("stable_live_key_hash") or ""),
         "sample_id": str(model.get("sample_id") or ""),
     }
-
-
-def _display_only_common_fields(
-    span: DisplaySpanContract,
-    *,
-    row_kind: str,
-    live_contract_reason: str = "",
-) -> dict[str, Any]:
-    live_clock = span.get("live_clock") or {}
-    if row_kind == ROW_KIND_ACTIVITY_DETAIL_ROW:
-        semantic = CURRENT_LIVE
-    elif row_kind in (
-        ROW_KIND_PROJECT_SESSION_ROW,
-        ROW_KIND_RECENT_PROJECT_SESSION_ROW,
-        ROW_KIND_PROJECT_ACTIVITY_SUMMARY_ROW,
-    ):
-        semantic = AGGREGATE_LIVE
-    else:
-        raise ValueError(f"unsupported display-only row_kind: {row_kind!r}")
-    current_live_seconds = int(
-        span.get("current_live_seconds_at_sample")
-        or live_clock.get("current_live_seconds_at_sample")
-        or live_clock.get("current_elapsed_at_sample")
-        or span.get("duration_seconds")
-        or 0
-    )
-    aggregate_duration_seconds = int(
-        span.get("aggregate_duration_seconds_at_sample")
-        or live_clock.get("aggregate_duration_seconds_at_sample")
-        or live_clock.get("duration_seconds_at_sample")
-        or current_live_seconds
-    )
-    aggregate_base_seconds = int(
-        span.get("aggregate_display_base_seconds")
-        or live_clock.get("aggregate_display_base_seconds")
-        or live_clock.get("display_base_seconds")
-        or 0
-    )
-    if semantic == CURRENT_LIVE:
-        duration_seconds = current_live_seconds
-        display_base_seconds = 0
-        duration_seconds_at_sample = current_live_seconds
-    else:
-        duration_seconds = aggregate_duration_seconds
-        display_base_seconds = aggregate_base_seconds
-        duration_seconds_at_sample = aggregate_duration_seconds
-    is_contract_fallback = bool(live_contract_reason)
-    return {
-        "activity_id": int(span.get("activity_id") or 0),
-        "start_time": str(span.get("start_time") or ""),
-        "end_time": "",
-        "duration": format_duration(duration_seconds),
-        "duration_seconds": duration_seconds,
-        "raw_duration_seconds": 0,
-        "duration_semantic": semantic,
-        "current_live_seconds_at_sample": current_live_seconds,
-        "current_live_base_seconds": 0,
-        "aggregate_duration_seconds_at_sample": aggregate_duration_seconds,
-        "aggregate_display_base_seconds": aggregate_base_seconds,
-        "display_base_seconds": display_base_seconds,
-        "live_base_seconds": display_base_seconds,
-        "live_delta_eligible": True,
-        "is_in_progress": True,
-        "is_live_projected": True,
-        "is_virtual": False,
-        "is_virtual_live": False,
-        "is_display_only": True,
-        "display_only": True,
-        "editable": False,
-        "exportable": False,
-        "source": "live_contract_fallback" if is_contract_fallback else str(span.get("source") or "db"),
-        "edit_disabled": True,
-        "disable_reason": str(span.get("disable_reason") or ""),
-        "live_contract_fallback": is_contract_fallback,
-        "live_contract_reason": live_contract_reason,
-        "display_span_id": str(span.get("display_span_id") or ""),
-        "stable_live_key": str(live_clock.get("stable_live_key") or ""),
-        "stable_live_key_hash": str(live_clock.get("stable_live_key_hash") or ""),
-        "live_state": str(live_clock.get("live_state") or ""),
-        "live_started_at_epoch_ms": int(live_clock.get("live_started_at_epoch_ms") or 0),
-        "carry_seconds": int(live_clock.get("carry_seconds") or 0),
-        "duration_seconds_at_sample": duration_seconds_at_sample,
-        "is_live": bool(live_clock.get("is_live")),
-        "is_project_duration_live": bool(live_clock.get("is_project_duration_live")),
-        "project_duration_live": bool(live_clock.get("project_duration_live", live_clock.get("is_project_duration_live"))),
-        "current_duration_live": bool(live_clock.get("current_duration_live")),
-        "project_id": int(span.get("project_id") or 0),
-        "project_name": str(span.get("project_name") or "未归类"),
-        "project_description": str(span.get("project_description") or ""),
-        "display_project": span.get("display_project"),
-        "candidate_project": span.get("candidate_project"),
-        "project_transition": span.get("project_transition"),
-        "project_transition_pending": bool(span.get("project_transition_pending")),
-        "is_uncategorized": bool(span.get("is_uncategorized")),
-        "is_classified": bool(span.get("is_classified")),
-    }
-
-
-def _materialize_display_only_recent_row(
-    span: DisplaySpanContract,
-    *,
-    live_contract_reason: str = "",
-) -> RecentActivityRowContract:
-    row = _display_only_common_fields(
-        span,
-        row_kind=ROW_KIND_RECENT_PROJECT_SESSION_ROW,
-        live_contract_reason=live_contract_reason,
-    )
-    row.update(
-        {
-            "project_name": str(span.get("project_name") or "未归类"),
-            "project_description": str(span.get("project_description") or ""),
-            "activity_ids": [int(span.get("activity_id") or 0)],
-            "first_activity_id": int(span.get("activity_id") or 0),
-            "row_kind": "project_session",
-            "status_code": "normal",
-            "display_status": "进行中",
-            "status": "进行中",
-        }
-    )
-    return row
-
-
-def _materialize_display_only_timeline_session(
-    span: DisplaySpanContract,
-    *,
-    live_contract_reason: str = "",
-) -> TimelineSessionRowContract:
-    row = _display_only_common_fields(
-        span,
-        row_kind=ROW_KIND_PROJECT_SESSION_ROW,
-        live_contract_reason=live_contract_reason,
-    )
-    anchor_id = int(span.get("anchor_activity_id") or span.get("activity_id") or 0)
-    row.update(
-        {
-            "session_id": f"live:{anchor_id}" if anchor_id > 0 else "live:open",
-            "activity_ids": [anchor_id] if anchor_id > 0 else [],
-            "first_activity_id": anchor_id or None,
-            "row_kind": "project_session",
-            "raw_duration": format_duration(0),
-            "adjusted_duration_seconds": None,
-            "has_duration_override": False,
-            "status_code": "normal",
-            "display_status": "进行中",
-            "status": "进行中",
-            "event_count": 1,
-            "session_note": "",
-        }
-    )
-    _set_summary_activity_ids([row])
-    return row
-
-
-def _materialize_display_only_detail_row(
-    span: DisplaySpanContract,
-    current_activity: CurrentActivityContract,
-    *,
-    live_contract_reason: str = "",
-) -> ActivityDetailRowContract:
-    row = _display_only_common_fields(
-        span,
-        row_kind=ROW_KIND_ACTIVITY_DETAIL_ROW,
-        live_contract_reason=live_contract_reason,
-    )
-    row.update(
-        {
-            "app_name": str(current_activity.get("app_name") or ""),
-            "resource_type": format_resource_type(
-                current_activity.get("resource_kind"),
-                current_activity.get("resource_subtype"),
-            ),
-            "resource_name": str(span.get("resource_name") or "未知"),
-            "row_kind": "activity_detail",
-            "status_code": str(current_activity.get("status") or "normal"),
-            "display_status": str(current_activity.get("display_status") or ""),
-            "status": str(current_activity.get("status") or "normal"),
-        }
-    )
-    return row
-
-
-def _materialize_display_only_project_activity_summary_row(
-    span: DisplaySpanContract,
-    current_activity: CurrentActivityContract,
-    *,
-    report_date: str,
-    accounted_project_id: int,
-) -> ProjectActivitySummaryRowContract:
-    row = _display_only_common_fields(
-        span,
-        row_kind=ROW_KIND_PROJECT_ACTIVITY_SUMMARY_ROW,
-    )
-    display_project = current_activity.get("display_project")
-    if not isinstance(display_project, dict):
-        display_project = span.get("display_project") if isinstance(span.get("display_project"), dict) else {}
-    display_name = (
-        str(current_activity.get("resource_name") or "").strip()
-        or str(span.get("resource_name") or "").strip()
-        or str(current_activity.get("app_name") or "").strip()
-        or "未知"
-    )
-    summary_id = "live:" + str(row.get("stable_live_key_hash") or row.get("display_span_id") or "pending")
-    accounted_project_name = str(span.get("project_name") or UNCATEGORIZED_PROJECT)
-    accounted_project_description = str(span.get("project_description") or "")
-    activity_id = int(span.get("anchor_activity_id") or span.get("activity_id") or 0)
-    row.update(
-        {
-            "row_kind": "project_activity_summary",
-            "summary_id": summary_id,
-            "activity_identity_key": str(
-                current_activity.get("resource_identity_key")
-                or current_activity.get("current_resource_identity_hash")
-                or summary_id
-            ),
-            "activity_name": display_name,
-            "accounted_project_id": int(accounted_project_id),
-            "accounted_project_name": accounted_project_name,
-            "accounted_project_description": accounted_project_description,
-            "project_id": int(accounted_project_id),
-            "project_name": accounted_project_name,
-            "project_description": accounted_project_description,
-            "display_project_id": int(display_project.get("id") or 0),
-            "display_project_name": str(display_project.get("name") or UNCATEGORIZED_PROJECT),
-            "display_project_description": str(display_project.get("description") or ""),
-            "activity_ids": [activity_id] if activity_id > 0 else [],
-            "first_activity_id": activity_id or None,
-            "open_activity_id": activity_id,
-            "closed_duration_seconds": 0,
-            "report_date": report_date,
-        }
-    )
-    return row
 
 
 def _detail_report_project_dict(row: dict[str, Any]) -> dict[str, Any]:
@@ -584,15 +308,6 @@ def get_overview_view_model(today: str | None = None) -> dict[str, Any]:
         model,
         row_kind=ROW_KIND_RECENT_PROJECT_SESSION_ROW,
     )
-    recent_live_span = _get_visible_live_span(model, "recent")
-    if recent_live_span and not _rows_have_live_span(recent_rows, recent_live_span):
-        recent_rows.insert(
-            0,
-            _materialize_display_only_recent_row(
-                recent_live_span,
-                live_contract_reason=_live_contract_reason(recent_live_span, recent_rows),
-            ),
-        )
     status_display_item = model.get("status_display_item")
     if isinstance(status_display_item, dict):
         recent_rows.insert(0, dict(status_display_item))
@@ -902,15 +617,6 @@ def get_timeline_view_model(report_date: str | None = None) -> dict[str, Any]:
         }
         sessions.append(row)
     _apply_live_span_to_rows(sessions, report_model, row_kind=ROW_KIND_PROJECT_SESSION_ROW)
-    timeline_live_span = _get_visible_live_span(report_model, "timeline")
-    if timeline_live_span and not _rows_have_live_span(sessions, timeline_live_span):
-        sessions.insert(
-            0,
-            _materialize_display_only_timeline_session(
-                timeline_live_span,
-                live_contract_reason=_live_contract_reason(timeline_live_span, sessions),
-            ),
-        )
     _set_summary_activity_ids(sessions)
     # In-progress sessions that received no live overlay still need
     # edit_disabled.
@@ -989,32 +695,6 @@ def get_session_details_view_model(
         report_date=today,
     )
 
-    details_live_span = _get_visible_live_span(report_model, "details")
-    request_matches_live = False
-    if details_live_span:
-        live_activity_id = int(details_live_span.get("activity_id") or 0)
-        live_anchor_id = int(details_live_span.get("anchor_activity_id") or 0)
-        request_matches_live = (
-            not ids
-            or (live_anchor_id <= 0 and 0 in ids)
-            or (live_activity_id > 0 and live_activity_id in ids)
-            or (live_anchor_id > 0 and live_anchor_id in ids)
-        )
-        if request_matches_live and live_anchor_id <= 0:
-            return {
-                "ok": True,
-                "date": date,
-                "activities": [
-                    _materialize_display_only_detail_row(details_live_span, current_activity)
-                ],
-                "current_activity": current_activity,
-                "live_clock": live_clock,
-                **identity_fields,
-                **revision_fields,
-                "activity_display_model": live_model,
-                "report_activity_display_model": report_model,
-            }
-
     if not ids:
         return {
             "ok": True,
@@ -1079,19 +759,6 @@ def get_session_details_view_model(
         activities.append(detail_row)
     # Apply the unified live-span overlay to matching detail rows only.
     _apply_live_span_to_rows(activities, report_model, row_kind=ROW_KIND_ACTIVITY_DETAIL_ROW)
-    if (
-        details_live_span
-        and request_matches_live
-        and not _rows_have_live_span(activities, details_live_span)
-    ):
-        activities.insert(
-            0,
-            _materialize_display_only_detail_row(
-                details_live_span,
-                current_activity,
-                live_contract_reason=_live_contract_reason(details_live_span, activities),
-            ),
-        )
     for detail_row in activities:
         if detail_row.get("is_in_progress") and not detail_row.get("edit_disabled"):
             detail_row["edit_disabled"] = True
@@ -1148,30 +815,6 @@ def get_session_activity_summary_view_model(
         report_model,
         row_kind=ROW_KIND_PROJECT_ACTIVITY_SUMMARY_ROW,
     )
-
-    summary_live_span = _get_visible_live_span(report_model, "details")
-    request_matches_live = False
-    if summary_live_span:
-        live_activity_id = int(summary_live_span.get("activity_id") or 0)
-        live_anchor_id = int(summary_live_span.get("anchor_activity_id") or 0)
-        request_matches_live = (
-            (live_activity_id > 0 and live_activity_id in ids)
-            or (live_anchor_id > 0 and live_anchor_id in ids)
-        )
-    if (
-        summary_live_span
-        and request_matches_live
-        and not _rows_have_live_span(rows, summary_live_span)
-    ):
-        accounted_project_id = int(summary_live_span.get("project_id") or 0)
-        rows.append(
-            _materialize_display_only_project_activity_summary_row(
-                summary_live_span,
-                current_activity,
-                report_date=date,
-                accounted_project_id=accounted_project_id,
-            )
-        )
 
     for row in rows:
         if row.get("is_in_progress") and not row.get("edit_disabled"):
@@ -1250,7 +893,6 @@ def get_refresh_state_view_model(report_date: str | None = None) -> RefreshState
     current_activity_status = str(debug_inputs.get("current_status") or "")
     is_persisted = bool(debug_inputs.get("is_persisted"))
     persisted_activity_id = int(debug_inputs.get("persisted_id") or 0)
-    inferred_project_name = str(debug_inputs.get("inferred_project") or "")
     latest_activity_id = int(debug_inputs.get("latest_id") or 0)
     live_clock_revision = str(debug_inputs.get("live_clock_revision") or "")
     live_state_revision = str(debug_inputs.get("live_state_revision") or "")
@@ -1285,7 +927,6 @@ def get_refresh_state_view_model(report_date: str | None = None) -> RefreshState
         "current_activity_status": current_activity_status,
         "is_persisted": is_persisted,
         "persisted_activity_id": persisted_activity_id,
-        "inferred_project_name": inferred_project_name,
         "live_clock_revision": live_clock_revision,
         "live_state_revision": live_state_revision,
         "display_projection_revision": display_projection_revision,

@@ -20,10 +20,6 @@ class CollectorDecisionTrace:
     elapsed_seconds: int = 0
     persisted_activity_id_before: int | None = None
     persisted_activity_id_after: int | None = None
-    short_activity_action: str = ""
-    short_activity_reason: str = ""
-    absorbed_seconds: int = 0
-    target_activity_id: int | None = None
     snapshot_action: str = ""
     project_ownership_action: str = ""
     extra: dict[str, Any] | None = None
@@ -60,4 +56,3 @@ def signature_hash(signature: ActivitySignature | None) -> str:
 
 
 NULL_DECISION_TRACE_RECORDER = NullDecisionTraceRecorder()
-

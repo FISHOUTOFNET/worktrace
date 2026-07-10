@@ -83,12 +83,12 @@ RULES: list[dict] = [
             "tests/webview/test_frontend_global_boundaries.py",
             "tests/webview/test_frontend_pure_render_contract.py",
             "tests/test_app_runtime_privacy_gate.py",
-            "tests/test_short_activity_buffer.py",
+            "tests/test_collector_raw_activity_contract.py",
             "tests/test_webview_bridge.py",
             "tests/test_ui_backend_boundary.py",
             "tests/test_bridge_refresh_state_and_projection.py",
             "tests/test_live_display_contract.py",
-            "tests/test_live_display_project_transition_contract.py",
+            "tests/test_live_display_projection_contract.py",
             "tests/test_display_model_anti_regression.py",
             "tests/test_live_product_semantics.py",
             "tests/test_run_affected_tests.py",
@@ -120,10 +120,10 @@ RULES: list[dict] = [
             "tests/test_overview_bundle_and_export_contract.py",
             "tests/test_project_activity_summary_contract.py",
             "tests/test_app_runtime_privacy_gate.py",
-            "tests/test_short_activity_buffer.py",
+            "tests/test_collector_raw_activity_contract.py",
             "tests/test_bridge_refresh_state_and_projection.py",
             "tests/test_live_display_contract.py",
-            "tests/test_live_display_project_transition_contract.py",
+            "tests/test_live_display_projection_contract.py",
             "tests/test_display_model_anti_regression.py",
             "tests/test_live_product_semantics.py",
             "tests/scenarios/live_semantics/",
@@ -431,10 +431,10 @@ RULES: list[dict] = [
             "tests/test_local_file_detector.py",
             "tests/test_startup_imports.py",
             "tests/test_app_runtime_privacy_gate.py",
-            "tests/test_short_activity_buffer.py",
+            "tests/test_collector_raw_activity_contract.py",
             "tests/test_project_ownership_pending.py",
             "tests/test_bridge_refresh_state_and_projection.py",
-            "tests/test_live_display_project_transition_contract.py",
+            "tests/test_live_display_projection_contract.py",
             "tests/test_display_model_anti_regression.py",
             "tests/test_live_product_semantics.py",
             "tests/scenarios/live_semantics/",
@@ -572,7 +572,7 @@ RULES: list[dict] = [
             "tests/test_overview_bundle_and_export_contract.py",
             "tests/test_bridge_refresh_state_and_projection.py",
             "tests/test_live_display_contract.py",
-            "tests/test_live_display_project_transition_contract.py",
+            "tests/test_live_display_projection_contract.py",
             "tests/test_display_model_anti_regression.py",
             "tests/test_live_product_semantics.py",
             "tests/scenarios/live_semantics/",
@@ -758,7 +758,7 @@ def select_targets(changed_files: Iterable[str]) -> Selection:
             add_target("tests/test_display_model_anti_regression.py")
             if c.endswith("collector_stream.py"):
                 add_target("tests/test_collector.py")
-                add_target("tests/test_short_activity_buffer.py")
+                add_target("tests/test_collector_raw_activity_contract.py")
         elif c == COMMENT_HYGIENE_TARGET:
             add_target(c)
             add_target("tests/test_run_affected_tests.py")

@@ -55,7 +55,7 @@ def persisted_open_snapshot(activity_id: int, **kwargs) -> dict:
     )
 
 
-def virtual_pending_snapshot(**kwargs) -> dict:
+def unpersisted_normal_snapshot(**kwargs) -> dict:
     return current_activity_snapshot(is_persisted=False, **kwargs)
 
 

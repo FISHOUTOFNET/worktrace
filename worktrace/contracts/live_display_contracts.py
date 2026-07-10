@@ -27,17 +27,6 @@ DisplayBasePolicy = Literal[
     "suppressed",
     "persisted_extra",
 ]
-# Deprecated collector-era trace vocabulary. Retained only so legacy recovery
-# traces can deserialize; normal collector/display code must not use it.
-ShortActivityAction = Literal[
-    "merge_to_anchor",
-    "drop",
-    "close_persisted",
-    "resume_anchor",
-    "none",
-]
-
-
 class DisplayProjectContract(TypedDict, total=False):
     id: int | None
     name: str
@@ -57,6 +46,14 @@ class ProjectTransitionContract(TypedDict, total=False):
 
 
 class ActivitySnapshotContract(TypedDict, total=False):
+    """Collector snapshot payload.
+
+    ``candidate_project``, ``project_transition`` and
+    ``inferred_project_name`` are compatibility/candidate metadata only.
+    Display projection, revisions, structural signatures, and frontend
+    continuity identities must use the official ``display_project`` instead.
+    """
+
     app_name: str
     process_name: str
     window_title: str
@@ -93,11 +90,6 @@ class DisplaySessionPolicyContract(TypedDict, total=False):
     materialize_details: bool
     status_only_reason: str
     base_policy_reason: str
-    borrowed_anchor_activity_id: int
-    borrowed_anchor_base_seconds: int
-    borrowed_anchor_project_id: int
-    borrowed_anchor_project_name: str
-    borrowed_anchor_project_description: str
 
 
 class LiveClockContract(TypedDict, total=False):
@@ -166,9 +158,6 @@ class DisplaySpanContract(TypedDict, total=False):
     is_visible_in_recent: bool
     is_visible_in_timeline: bool
     is_visible_in_details: bool
-    is_absorbed: bool
-    is_display_only: bool
-    display_only: bool
     editable: bool
     exportable: bool
     edit_disabled: bool
@@ -248,7 +237,6 @@ class RecentActivityRowContract(TypedDict, total=False):
     source: str
     is_in_progress: bool
     is_live_projected: bool
-    is_display_only: bool
     contributes_to_totals: bool
     is_uncategorized: bool
     is_classified: bool
@@ -288,7 +276,6 @@ class ActivityDetailRowContract(TypedDict, total=False):
     source: str
     is_in_progress: bool
     is_live_projected: bool
-    is_display_only: bool
     editable: bool
     exportable: bool
 
@@ -361,10 +348,6 @@ class CollectorDecisionTraceContract(TypedDict, total=False):
     elapsed_seconds: int
     persisted_activity_id_before: int | None
     persisted_activity_id_after: int | None
-    short_activity_action: ShortActivityAction | str
-    short_activity_reason: str
-    absorbed_seconds: int
-    target_activity_id: int | None
     snapshot_action: str
     project_ownership_action: str
     extra: dict[str, Any]

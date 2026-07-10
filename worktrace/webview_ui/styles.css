@@ -541,10 +541,7 @@ body {
         "time    name    duration"
         ".       meta    project"
         "actions actions actions"
-        "editor  editor  editor"
-        "split   split   split"
-        "merge   merge   merge"
-        "vis     vis     vis";
+        "editor  editor  editor";
     gap: 2px 10px;
     padding: 8px 10px;
     border-radius: 6px;
@@ -668,10 +665,7 @@ body {
             "meta"
             "project"
             "actions"
-            "editor"
-            "split"
-            "merge"
-            "vis";
+            "editor";
     }
     .detail-item-project {
         text-align: left;
@@ -927,123 +921,6 @@ body {
     background: #f8fafc;
     color: #94a3b8;
     border: 1px solid #f1f5f9;
-}
-
-
-.edit-time-row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin-bottom: 8px;
-}
-
-.edit-time-label {
-    flex: 0 0 40px;
-    font-size: 12px;
-    color: #64748b;
-}
-
-.edit-time-input {
-    flex: 1 1 auto;
-    min-width: 0;
-    padding: 6px 8px;
-    font-size: 13px;
-    border: 1px solid #cbd5e1;
-    border-radius: 6px;
-    background: #ffffff;
-    color: #1e293b;
-    font-family: inherit;
-    font-variant-numeric: tabular-nums;
-}
-
-.edit-time-input:disabled {
-    background: #f1f5f9;
-    cursor: not-allowed;
-}
-
-.edit-time-input:focus {
-    outline: none;
-    border-color: #818cf8;
-    box-shadow: 0 0 0 2px #e0e7ff;
-}
-
-.edit-time-actions {
-    display: flex;
-    gap: 8px;
-    margin-top: 4px;
-}
-
-.edit-time-hint {
-    font-size: 12px;
-    color: #64748b;
-    line-height: 1.5;
-    padding: 6px 8px;
-    background: #f1f5f9;
-    border-radius: 4px;
-}
-
-/* Per-activity inline time editor inside the detail list. */
-.detail-item-actions {
-    /* Own grid row via grid-area so it never overlaps with
-       .detail-item-meta / .detail-item-project. */
-    grid-area: actions;
-    margin-top: 4px;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px;
-    align-items: center;
-}
-
-/* Action group wrappers. The three groups (edit / merge /
-   danger) are visually separated so the user can tell destructive actions
-   apart from edits at a glance. Each group is an inline-flex sub-row so
-   its buttons stay together when the action row wraps on narrow viewports. */
-.detail-action-edit-group,
-.detail-action-merge-group,
-.detail-action-danger-group {
-    display: inline-flex;
-    flex-wrap: wrap;
-    gap: 4px;
-    align-items: center;
-}
-
-.detail-action-merge-group {
-    /* A thin left border separates the merge group from the edit group so
-       the user can see the merge action is a distinct operation, not just
-       another edit button. */
-    padding-left: 6px;
-    border-left: 1px solid #e2e8f0;
-}
-
-.detail-action-danger-group {
-    /* The danger group is visually separated from the merge group so hide
-       and delete read as destructive actions. The red-tinted left border
-       matches the delete button accent. */
-    padding-left: 6px;
-    border-left: 1px solid #fca5a5;
-}
-
-@media (max-width: 900px) {
-    .edit-time-row {
-        flex-wrap: wrap;
-    }
-    /* Action buttons wrap on narrow viewports so the
-       merge button remains reachable alongside the edit/split buttons. The
-       group wrappers also wrap so each group's buttons stay together while
-       the groups themselves can flow to the next line. */
-    .detail-item-actions {
-        flex-wrap: wrap;
-        gap: 4px;
-    }
-    .detail-action-edit-group,
-    .detail-action-merge-group,
-    .detail-action-danger-group {
-        flex-wrap: wrap;
-    }
-    }.timeline-details.shell-open .timeline-edit-panel,
-.timeline-details.shell-open .timeline-details-header,
-.timeline-details.shell-open #timeline-details-list {
-    opacity: 0.55;
 }
 
 /* --- Statistics / Export page (read-only) ------------------ */

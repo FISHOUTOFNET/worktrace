@@ -1,4 +1,4 @@
-"""Collector raw-fact contract for short activity segments.
+"""Collector raw-activity contract.
 
 Short segments are no longer buffered, merged, dropped, or borrowed by the
 collector. Any noise reduction is a read-only report projection concern.
@@ -106,14 +106,13 @@ def test_no_pending_short_runtime_state_written(temp_db, monkeypatch):
     assert all(key not in {"pending_short_seconds", "pending_short_carry_provenance"} for key, _ in writes)
 
 
-def test_live_display_has_no_virtual_pending_state(temp_db):
+def test_live_display_uses_the_persisted_open_state(temp_db):
     machine = CollectorStateMachine()
     machine.transition_to("recording", _normal("A"), at_time=f"{DATE} 09:00:00")
 
     overview = WebViewBridge().get_overview()
     assert overview["live_clock"]["live_state"] == "persisted_open"
     assert overview["current_activity"]["live_state"] == "persisted_open"
-    assert not overview["current_activity"].get("is_virtual_live")
 
 
 def test_report_projection_can_group_without_mutating_raw(temp_db):

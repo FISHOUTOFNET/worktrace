@@ -23,7 +23,7 @@ Locks the display-level project ownership fields:
   project is NOT inherited into a new session.
 
 These tests do NOT assert on the short-activity blind merge policy —
-that is locked separately in ``test_short_activity_buffer.py`` and is
+that is locked separately in ``test_collector_raw_activity_contract.py`` and is
 intentionally project-blind.
 """
 

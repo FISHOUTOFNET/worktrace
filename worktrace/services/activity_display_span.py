@@ -234,7 +234,6 @@ def build_display_span(
         source = "db"
         is_virtual = False
         is_persisted = True
-        is_absorbed = False
         project_name = project_fields["project_name"]
         project_description = project_fields["project_description"]
         project_id = project_fields["project_id"]
@@ -246,7 +245,6 @@ def build_display_span(
         source = "none"
         is_virtual = False
         is_persisted = False
-        is_absorbed = False
         project_name = project_fields["project_name"]
         project_description = project_fields["project_description"]
         project_id = project_fields["project_id"]
@@ -296,9 +294,6 @@ def build_display_span(
         "is_visible_in_recent": bool(policy.get("materialize_recent")),
         "is_visible_in_timeline": bool(policy.get("materialize_timeline")),
         "is_visible_in_details": bool(policy.get("materialize_details")),
-        "is_absorbed": bool(is_absorbed),
-        "is_display_only": False,
-        "display_only": False,
         "editable": False,
         "exportable": False,
         "edit_disabled": True,

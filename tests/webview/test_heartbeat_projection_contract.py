@@ -346,9 +346,8 @@ def test_recent_item_renders_data_index_and_progress_flags():
     carry display identity plus active elapsed offset attributes so the
     ticker can project them from the single accepted runtime.
 
-    The ``virtual-live`` CSS class is only styling; live ticking is keyed
-    by ``data-display-span-id`` for DB-overlay rows and display-only
-    ``virtual_pending`` rows alike."""
+    Live ticking is keyed by ``data-display-span-id`` on backend-owned
+    persisted-open rows."""
     source = read_js("overview.js")
     assert 'data-recent-index' in source, (
         "overview.js must render data-recent-index on each recent item"
@@ -878,7 +877,7 @@ def test_frontend_js_does_not_contain_removed_live_clock_fields():
 def test_ticker_uses_stable_live_key_hash_for_continuity():
     """``liveContinuityKey`` must use
     ``stable_live_key_hash`` as the continuity anchor so the same activity
-    survives the virtual → persisted_open transition without a false reset."""
+    survives a persisted-open structural refresh without a false reset."""
     source = read_js("core.js")
     assert "function liveContinuityKey" in source, (
         "core.js must define function liveContinuityKey"
@@ -965,18 +964,16 @@ def test_date_switch_invalidates_pending_detail_request():
         )
 
 
-def test_virtual_session_click_does_not_open_edit_panel():
-    """``selectTimelineSession`` must NOT call
-    ``populateEditPanel`` for virtual sessions (``edit_disabled`` /
-    ``is_virtual``). Instead, it must call ``clearEditPanel``."""
+def test_noneditable_session_click_does_not_open_edit_panel():
+    """``selectTimelineSession`` clears the edit panel for a non-editable row."""
     source = read_js("timeline.js")
     body = func_body(source, "selectTimelineSession")
-    assert "edit_disabled" in body or "is_virtual" in body, (
-        "selectTimelineSession must check edit_disabled / is_virtual before "
-        "opening the edit panel"
+    assert "edit_disabled" in body, (
+        "selectTimelineSession must check edit_disabled before opening the "
+        "edit panel"
     )
     assert "clearEditPanel" in body, (
-        "selectTimelineSession must call clearEditPanel for virtual sessions"
+        "selectTimelineSession must call clearEditPanel for non-editable sessions"
     )
 
 
@@ -1081,8 +1078,7 @@ def test_show_recent_seeds_via_live_continuity_key():
     """Architecture contract: ``showRecent`` must seed the monotonic
     render state via ``App.liveContinuityKey(item, "recent")``. The array
     index (``"recent-" + i``) MUST NOT be used as the seeding key because
-    it changes across the virtual → persisted_open transition while
-    ``stable_live_key_hash`` stays the same."""
+    it changes when a persisted-open projection is rebuilt."""
     src = _strip_js_comments(read_js("overview.js"))
     body = func_body(src, "showRecent")
     assert "liveContinuityKey" in body, (
@@ -1133,8 +1129,8 @@ def test_render_session_details_seeds_via_live_continuity_key():
 def test_live_continuity_key_is_single_source_of_truth():
     """Architecture contract: ``liveContinuityKey`` in core.js must be the
     ONLY place that constructs a live-row continuity key. The function
-    must use ``stable_live_key_hash`` as the primary anchor so the
-    continuity survives the virtual → persisted_open transition."""
+    must use ``stable_live_key_hash`` as the primary anchor so continuity
+    survives a persisted-open projection refresh."""
     src = _strip_js_comments(read_js("core.js"))
     assert "function liveContinuityKey" in src, (
         "core.js must define function liveContinuityKey"

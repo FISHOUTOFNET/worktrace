@@ -93,10 +93,10 @@
             if (s.is_uncategorized) cls += " uncategorized";
             if (s.is_in_progress) cls += " in-progress";
             if (sessionCanTick) cls += " live-projected";
-            if (s.is_virtual_live === true) cls += " virtual-live";
             if (s.session_id === App.selectedSessionId) cls += " selected";
             // Stable live key data attribute so the ticker / selection continuity locates the session DOM across
-            // pending / persisted transitions (stable_live_key_hash stays the same when session_id changes).
+            // backend-owned persisted-open refreshes without relying on a
+            // display-only activity identity.
             var stableKeyHash = s.stable_live_key_hash || "";
             // Active-span anchored DOM attributes: the row stores a static
             // base plus active elapsed offset; the ticker supplies the one
@@ -154,7 +154,8 @@
                 + '</div>'
                 + '</div>';
             // Continuity key MUST use App.liveContinuityKey() so the ticker can locate the seeded state; a
-            // "session-" + session_id key would break pending / persisted transitions.
+            // ``stable_live_key_hash`` keeps the backend-owned live row
+            // continuous when the surrounding session projection is rebuilt.
             if (sessContinuityKey) {
                 sessionContinuityKeys.push({ key: sessContinuityKey, sec: initialSec });
             }
@@ -273,7 +274,7 @@
     function selectTimelineSession(sessionId, sessions) {
         App.selectedSessionId = sessionId;
         // Update selected class without full re-render. Match by session_id AND stable_live_key_hash so
-        // pending / persisted transitions keep the visual selection.
+        // Persisted-open projection refreshes keep the visual selection.
         var items = document.querySelectorAll("#timeline-sessions-list .timeline-item");
         var newSelected = null;
         for (var j0 = 0; j0 < sessions.length; j0++) {
@@ -296,7 +297,7 @@
         if (found) {
             loadSessionActivitySummary(found.summary_activity_ids || found.activity_ids, App.timelineDate);
             // Open live sessions are non-editable; a manual click must clear the edit panel.
-            if (found.edit_disabled === true || found.is_virtual === true) {
+            if (found.edit_disabled === true) {
                 clearEditPanel();
             } else {
                 // A manual click always repopulates the edit panel, even if a prior auto-refresh skipped it.
@@ -378,7 +379,6 @@
             var cls = "summary-item";
             if (row.is_in_progress) cls += " in-progress";
             if (summaryCanTick) cls += " live-projected";
-            if (row.is_virtual === true) cls += " virtual-live";
             var summaryStableKey = row.stable_live_key_hash || "";
             var summarySpanId = summaryCanTick ? (row.display_span_id || "") : "";
             var summaryContinuityKey = summarySpanId ? App.liveContinuityKey(row, "project-summary") : "";

@@ -73,11 +73,21 @@ class SnapshotPublisher:
         else:
             display_label = ownership.display_project
             candidate_label = ownership.candidate_project or uncategorized_label()
-            transition_dict = ownership.project_transition.to_dict()
+            # Snapshots retain the transition shape only for old readers.
+            # A pending confirmation window is no longer a runtime contract.
+            transition_dict = {
+                **ownership.project_transition.to_dict(),
+                "pending": False,
+                "started_at": "",
+                "elapsed_seconds": 0,
+                "threshold_seconds": 0,
+                "from_project_id": None,
+                "to_project_id": None,
+            }
 
         display_project_dict = display_label.to_dict()
         candidate_project_dict = candidate_label.to_dict()
-        project_transition_pending = bool(transition_dict.get("pending"))
+        project_transition_pending = False
         inferred_project_name = display_label.name or UNCATEGORIZED_PROJECT
 
         snapshot: ActivitySnapshotContract = {

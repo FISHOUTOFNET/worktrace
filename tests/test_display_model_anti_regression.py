@@ -22,7 +22,7 @@ Covered invariants:
 6. Page ViewModels consume Activity Display Model spans: borrowed anchor
    spans overlay/materialize aggregate rows; unanchored pending does not
    materialize Recent / Timeline / Details rows.
-7. (Covered in ``test_live_display_project_transition_contract.py``:
+7. (Covered in ``test_live_display_projection_contract.py``:
    ``build_activity_display_model()`` visibility flags for the 3 states;
    borrowed-anchor projection never writes DB.)
 """

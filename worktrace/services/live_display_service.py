@@ -300,9 +300,8 @@ def _stable_live_key(snapshot: ActivitySnapshotContract | None) -> str:
     """Build a STABLE live identity for the current activity.
 
     Unlike ``_live_display_key``, this key does NOT include
-    ``is_persisted`` / ``persisted_activity_id`` / ``inferred_project_name``
-    so refreshes preserve one stable continuity anchor for the persisted open
-    activity.
+    persisted-row bookkeeping so refreshes preserve one stable continuity
+    anchor for the persisted open activity.
 
     The key is constructed ONLY from sanitized display fields
     (``resource_display_name`` / ``activity_display_name`` / ``app_name`` /
@@ -642,9 +641,6 @@ def compute_refresh_revision(
     current_status = _snapshot_status(snapshot)
     is_persisted = bool(snapshot and snapshot.get("is_persisted"))
     persisted_id = int(snapshot_persisted_id(snapshot) or 0) if snapshot else 0
-    inferred_project = ""
-    if snapshot:
-        inferred_project = str(snapshot.get("inferred_project_name") or "")
     model = display_model or {}
     display_structural_signature = str(model.get("display_structural_signature") or "")
     marker: dict[str, Any] = {
@@ -679,7 +675,6 @@ def compute_refresh_revision(
         "current_status": current_status,
         "is_persisted": is_persisted,
         "persisted_id": persisted_id,
-        "inferred_project": inferred_project,
         "collector_status": collector_status,
         "user_paused": user_paused,
         "today": today,

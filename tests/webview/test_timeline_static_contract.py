@@ -1184,39 +1184,23 @@ def test_frontend_js_dirty_state_includes_duration():
         "overrides so auto-refresh does not wipe them"
     )
 
-def test_timeline_js_does_not_skip_is_virtual_sessions():
-    """Section 三.1 / 六.3: ``timeline.js`` must NOT skip sessions whose
-    ``is_virtual === true``. The old ``if (s.is_virtual === true)
-    continue;`` line has been removed so virtual live sessions render,
-    can be clicked, and can be selected.
-
-    The comment in the source explicitly notes the skip was removed. We
-    assert the skip line is gone AND a comment references the removal.
-    """
+def test_timeline_js_has_no_virtual_live_render_branch():
+    """Timeline renders only backend-owned rows, never virtual live rows."""
     source = read_all_js()
-    # The old skip line must NOT be present.
-    assert "if (s.is_virtual === true) continue" not in source, (
-        "timeline.js must NOT skip is_virtual sessions — the old skip "
-        "line has been removed so virtual live sessions render"
-    )
-    # The removal is documented via a comment that mentions the old
-    # behavior, so future regressions are caught.
-    assert "is_virtual" in source, (
-        "timeline.js must reference is_virtual (e.g. for the virtual-live "
-        "CSS class) — the field is still consumed, just not skipped"
-    )
+    for forbidden in ("is_virtual_live", "is_virtual", "virtual-live"):
+        assert forbidden not in source, (
+            "frontend must not render a virtual live row: " + forbidden
+        )
 
 def test_timeline_js_session_dom_has_stable_live_key_attribute():
     """Section 三.2 / 六.3: Timeline session DOM elements must carry the
     ``data-stable-live-key-hash`` attribute so the ticker and selection
-    continuity can locate the live session across the virtual →
-    persisted_open transition (where ``session_id`` / ``activity_id``
-    change but ``stable_live_key_hash`` stays the same)."""
+    continuity can locate the backend-owned persisted-open row across
+    structural refreshes."""
     source = read_all_js()
     assert 'data-stable-live-key-hash' in source, (
         "timeline.js must emit data-stable-live-key-hash on session DOM "
-        "elements so the ticker / selection can survive the virtual → "
-        "persisted_open transition"
+        "elements so the ticker / selection retain persisted-open continuity"
     )
     # The attribute is populated from the session's stable_live_key_hash.
     assert "stable_live_key_hash" in source, (
@@ -1227,17 +1211,14 @@ def test_timeline_js_session_dom_has_stable_live_key_attribute():
 def test_timeline_js_selection_continuity_uses_stable_live_key_hash():
     """Section 三.4 / 六.3: Timeline selection continuity must use
     ``selectedSessionLiveKey`` (stable_live_key_hash) as the PRIMARY
-    anchor. When refresh causes ``session_id`` to change from the
-    virtual id to the real DB id, the selection must transfer to the
-    new session as long as ``stable_live_key_hash`` matches. Only when
-    no stable key matches does the selection fall back to ``session_id``
-    or clear."""
+    anchor. A rebuilt persisted-open projection keeps selection when the
+    ``stable_live_key_hash`` matches; otherwise it falls back to
+    ``session_id`` or clears."""
     source = read_all_js()
     # The selectedSessionLiveKey field must be declared on App.
     assert "App.selectedSessionLiveKey" in source, (
         "timeline.js / core.js must declare App.selectedSessionLiveKey "
-        "for selection continuity across the virtual → persisted_open "
-        "transition"
+        "for selection continuity across persisted-open refreshes"
     )
     # The selection-recovery loop must match by stable_live_key_hash
     # FIRST (before falling back to session_id).
@@ -1250,15 +1231,13 @@ def test_core_js_ticker_uses_stable_live_key_first():
     """Section 三.5 / 六.3: the detail ticker in ``core.js`` must look up
     the DOM by ``data-stable-live-key-hash`` FIRST, falling back to
     ``data-activity-id`` only when no stable key is available. This is
-    required because virtual → persisted_open changes the activity_id
-    (from 0 to the real DB id) but the stable_live_key_hash stays the
-    same."""
+    required so a persisted-open row retains its backend-owned identity
+    across a structural refresh."""
     source = read_all_js()
     # The ticker must query by data-stable-live-key-hash.
     assert 'data-stable-live-key-hash' in source, (
         "core.js ticker must query DOM by data-stable-live-key-hash so "
-        "the detail duration keeps incrementing across the virtual → "
-        "persisted_open transition"
+        "the detail duration keeps incrementing across persisted-open refreshes"
     )
     # App.liveContinuityKey must be the single continuity key
     # construction entry point.
@@ -1268,13 +1247,12 @@ def test_core_js_ticker_uses_stable_live_key_first():
         "seeding / DOM lookup"
     )
 
-def test_timeline_js_does_not_show_loading_placeholder_for_live_activity():
-    """The backend must provide display-only live sessions, so Timeline
-    must not hide an empty list behind a current-activity loading text."""
+def test_timeline_js_does_not_invent_a_live_loading_placeholder():
+    """Timeline consumes backend rows and does not invent a normal live row."""
     source = read_all_js()
     assert "正在加载当前活动" not in source, (
-        "timeline.js must render backend-provided display-only sessions "
-        "instead of showing a current-activity loading placeholder"
+        "timeline.js must consume backend-provided rows instead of showing "
+        "a current-activity loading placeholder"
     )
 
 def test_index_html_timeline_p0_edit_panel_only():
@@ -1364,9 +1342,18 @@ def test_styles_css_has_no_advanced_timeline_selectors():
         ".detail-time-save-btn",
         ".detail-time-cancel-btn",
         ".detail-time-status",
+        ".edit-time-row",
+        ".edit-time-input",
+        ".edit-time-actions",
+        ".detail-action-edit-group",
+        ".detail-action-merge-group",
+        ".detail-action-danger-group",
         ".correction-shell",
+        ".timeline-details.shell-open",
         ".detail-item.shell-target",
         ".detail-item.detail-item-highlight",
+        '"split   split   split"',
+        '"merge   merge   merge"',
     ):
         assert forbidden not in source
 

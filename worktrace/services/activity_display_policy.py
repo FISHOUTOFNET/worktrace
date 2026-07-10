@@ -27,11 +27,6 @@ class DisplaySessionPolicy:
     materialize_details: bool
     status_only_reason: str
     base_policy_reason: str
-    borrowed_anchor_activity_id: int = 0
-    borrowed_anchor_base_seconds: int = 0
-    borrowed_anchor_project_id: int = 0
-    borrowed_anchor_project_name: str = ""
-    borrowed_anchor_project_description: str = ""
 
     def to_dict(self) -> DisplaySessionPolicyContract:
         return asdict(self)

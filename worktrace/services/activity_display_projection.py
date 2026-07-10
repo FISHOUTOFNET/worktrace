@@ -112,9 +112,22 @@ def build_revision_parts(
         "today": today,
         "report_date": report_date,
     }
+    # Live elapsed/base counters are ticker data, not structure. Including
+    # them here would force a bridge refresh for every snapshot sample.
+    display_policy = live_clock.get("display_policy") or {}
     display_projection_input = {
         "display_structural_signature": str(model.get("display_structural_signature") or ""),
-        "display_policy": model.get("display_policy") or {},
+        "display_policy": {
+            "display_session_kind": str(display_policy.get("display_session_kind") or ""),
+            "base_policy": str(display_policy.get("base_policy") or ""),
+            "project_duration_live": bool(display_policy.get("project_duration_live")),
+            "current_duration_live": bool(display_policy.get("current_duration_live")),
+            "materialize_recent": bool(display_policy.get("materialize_recent")),
+            "materialize_timeline": bool(display_policy.get("materialize_timeline")),
+            "materialize_details": bool(display_policy.get("materialize_details")),
+            "status_only_reason": str(display_policy.get("status_only_reason") or ""),
+            "base_policy_reason": str(display_policy.get("base_policy_reason") or ""),
+        },
         "current_display_project": _project_revision_identity(
             current_activity.get("display_project")
         ),

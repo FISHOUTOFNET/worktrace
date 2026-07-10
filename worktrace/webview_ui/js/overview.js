@@ -121,7 +121,6 @@
             var cls = "recent-item";
             if (inProgress) cls += " in-progress";
             if (canTick) cls += " live-projected";
-            if (item.is_virtual === true) cls += " virtual-live";
             // Active-span anchored DOM attributes: ticker reads each row's
             // own base + active elapsed offset, not a row-owned clock.
             var spanId = canTick ? (item.display_span_id || "") : "";
