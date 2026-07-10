@@ -31,14 +31,15 @@ def test_state_transitions_persist_when_segment_reaches_threshold(temp_db):
         ActiveWindow("Word", "word.exe", "Doc"),
         at_time="2026-06-18 09:00:00",
     )
-    assert activity_service.get_open_activity() is None
+    open_activity = activity_service.get_open_activity()
+    assert open_activity is not None
+    assert open_activity["app_name"] == "Word"
 
     machine.transition_to("idle", at_time="2026-06-18 09:10:00")
     rows = activity_service.get_activities_by_date("2026-06-18")
     normal = [row for row in rows if row["status"] == "normal"]
     assert len(normal) == 1
     assert normal[0]["duration_seconds"] == 600
-    assert activity_service.get_open_activity() is None
 
 
 def test_excluded_transition_anonymizes_snapshot_title(temp_db):
@@ -54,10 +55,12 @@ def test_excluded_transition_anonymizes_snapshot_title(temp_db):
     assert snap["window_title"] == EXCLUDED_WINDOW_TITLE
     assert "真实" not in snap["window_title"]
     assert snap["file_path_hint"] is None
-    assert activity_service.get_open_activity() is None
+    open_activity = activity_service.get_open_activity()
+    assert open_activity is not None
+    assert open_activity["status"] == "excluded"
 
 
-def test_pause_resume_short_segments_do_not_create_history(temp_db):
+def test_pause_resume_short_segments_are_persisted(temp_db):
     machine = CollectorStateMachine()
     machine.transition_to(
         "recording",
@@ -70,7 +73,10 @@ def test_pause_resume_short_segments_do_not_create_history(temp_db):
         ActiveWindow("Excel", "excel.exe", "Sheet"),
         at_time="2026-06-18 09:00:45",
     )
-    assert activity_service.get_activities_by_date("2026-06-18") == []
+    rows = activity_service.get_activities_by_date("2026-06-18")
+    normal = [r for r in rows if r["status"] == "normal"]
+    assert any(r["app_name"] == "Word" for r in normal)
+    assert any(r["app_name"] == "Excel" for r in normal)
     assert _snapshot()["window_title"] == "Sheet"
 
 
@@ -101,7 +107,7 @@ def test_current_activity_snapshot_uses_folder_rule_project_before_persistence(t
     )
 
     snap = _snapshot()
-    assert snap["is_persisted"] is False
+    assert snap["is_persisted"] is True
     assert snap["inferred_project_name"] == "21IP0300"
 
 
@@ -168,7 +174,9 @@ def test_state_machine_splits_when_both_paths_differ(temp_db):
         at_time="2026-06-18 09:01:10",
     )
     assert activity_service.get_activity(first_id)["end_time"] == "2026-06-18 09:01:10"
-    assert activity_service.get_open_activity() is None
+    open_activity = activity_service.get_open_activity()
+    assert open_activity is not None
+    assert open_activity["file_path_hint"] == "D:\\CaseB\\Spec.docx"
     assert _snapshot()["file_path_hint"] == "D:\\CaseB\\Spec.docx"
 
 

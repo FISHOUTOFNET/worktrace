@@ -41,7 +41,11 @@ def test_collector_loop_with_fake_adapter(temp_db, monkeypatch):
     thread.start()
     thread.join(timeout=3)
     rows = activity_service.get_activities_by_date(time.strftime("%Y-%m-%d"))
-    assert rows == []
+    assert len(rows) == 1
+    assert rows[0]["app_name"] == "Word"
+    assert rows[0]["process_name"] == "word.exe"
+    assert rows[0]["window_title"] == "Doc"
+    assert rows[0]["status"] == "normal"
     assert settings_service.get_setting("collector_status") == "stopped"
     assert settings_service.get_setting("current_activity_snapshot", "") == ""
 
@@ -186,7 +190,9 @@ def test_collector_pause_does_not_poll_active_window(temp_db, monkeypatch):
     thread.join(timeout=3)
 
     assert adapter.calls == 0
-    assert activity_service.get_activities_by_date(time.strftime("%Y-%m-%d")) == []
+    rows = activity_service.get_activities_by_date(time.strftime("%Y-%m-%d"))
+    non_system_rows = [r for r in rows if r["resource_kind"] != "system"]
+    assert non_system_rows == [], f"no real app activity expected while paused, got {non_system_rows}"
     assert settings_service.get_setting("current_activity_snapshot", "") == ""
 
 
@@ -287,7 +293,9 @@ def test_collector_skips_active_window_when_import_guard_active(temp_db, monkeyp
     thread.join(timeout=3)
 
     assert adapter.calls == 0
-    assert activity_service.get_activities_by_date(time.strftime("%Y-%m-%d")) == []
+    rows = activity_service.get_activities_by_date(time.strftime("%Y-%m-%d"))
+    non_system_rows = [r for r in rows if r["resource_kind"] != "system"]
+    assert non_system_rows == [], f"no real app activity expected during import guard, got {non_system_rows}"
 
 
 def test_no_new_activity_during_import_guard(temp_db, monkeypatch):
@@ -308,7 +316,8 @@ def test_no_new_activity_during_import_guard(temp_db, monkeypatch):
     thread.join(timeout=3)
 
     rows = activity_service.get_activities_by_date(time.strftime("%Y-%m-%d"))
-    assert rows == [], f"no activity should be recorded during import guard, got {rows}"
+    non_system_rows = [r for r in rows if r["resource_kind"] != "system"]
+    assert non_system_rows == [], f"no real app activity should be recorded during import guard, got {non_system_rows}"
 
 
 def test_no_real_title_path_stored_during_import_guard(temp_db, monkeypatch):

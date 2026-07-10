@@ -60,11 +60,9 @@ def _setup_two_projects(temp_db):
     return project_a, project_b
 
 
-def test_resource_switch_under_30s_shows_new_resource_but_inherited_display_project(temp_db):
-    """Section 一.1 / 一.2: <30s after a resource switch the snapshot's
-    resource fields reflect the NEW resource, but ``display_project`` is
-    still the last confirmed project and ``project_transition.pending``
-    is ``True``."""
+def test_resource_switch_shows_new_resource_and_candidate_display_project(temp_db):
+    """Resource identity is immediate and an official candidate becomes
+    the display project immediately — no 30-second pending window."""
     project_a, project_b = _setup_two_projects(temp_db)
     machine = CollectorStateMachine()
     # First resource: ProjectA folder. First activity has no prior
@@ -90,7 +88,7 @@ def test_resource_switch_under_30s_shows_new_resource_but_inherited_display_proj
     assert snap["project_transition"]["pending"] is False
 
     # Switch to ProjectB resource. Resource identity is immediate;
-    # project ownership enters the 30-second pending window.
+    # official candidate becomes display project immediately.
     machine.transition_to(
         "recording",
         _normal("b.py", path="D:\\ProjectB\\b.py"),
@@ -99,20 +97,17 @@ def test_resource_switch_under_30s_shows_new_resource_but_inherited_display_proj
     snap = _snapshot()
     assert snap["activity_display_name"] == "b.py"
     assert snap["resource_display_name"] == "b.py"
-    # Project ownership delayed: display stays as last confirmed (ProjectA),
-    # candidate is the new project (ProjectB), pending is True.
-    assert snap["display_project"]["name"] == "ProjectA"
+    # Official candidate applies immediately — no pending window.
+    assert snap["display_project"]["name"] == "ProjectB"
     assert snap["candidate_project"]["name"] == "ProjectB"
-    assert snap["project_transition"]["pending"] is True
-    assert snap["project_transition"]["from_project_id"] == project_a
-    assert snap["project_transition"]["to_project_id"] == project_b
-    assert snap["project_transition_pending"] is True
+    assert snap["project_transition"]["pending"] is False
+    assert snap["project_transition_pending"] is False
 
 
-def test_candidate_confirmed_after_30_seconds_when_different(temp_db):
-    """>=30s after the switch, when the candidate differs
-    from the last confirmed project, the candidate is confirmed and
-    becomes the display project (``pending = False``)."""
+def test_candidate_displayed_immediately_when_different(temp_db):
+    """Official candidate is displayed immediately — no 30-second
+    confirmation window. The display project matches the candidate
+    from the first observation onward."""
     _setup_two_projects(temp_db)
     machine = CollectorStateMachine()
     machine.transition_to(
@@ -130,15 +125,12 @@ def test_candidate_confirmed_after_30_seconds_when_different(temp_db):
         _normal("b.py", path="D:\\ProjectB\\b.py"),
         at_time="2026-06-18 09:00:36",
     )
-    assert _snapshot()["project_transition"]["pending"] is True
-    # 29 seconds into the pending window — still pending.
-    machine.transition_to(
-        "recording",
-        _normal("b.py", path="D:\\ProjectB\\b.py"),
-        at_time="2026-06-18 09:01:05",
-    )
-    assert _snapshot()["project_transition"]["pending"] is True
-    # 30 seconds into the pending window — candidate confirmed.
+    # Candidate applies immediately — no pending window.
+    snap = _snapshot()
+    assert snap["display_project"]["name"] == "ProjectB"
+    assert snap["candidate_project"]["name"] == "ProjectB"
+    assert snap["project_transition"]["pending"] is False
+    # Still ProjectB after further observation.
     machine.transition_to(
         "recording",
         _normal("b.py", path="D:\\ProjectB\\b.py"),
@@ -181,11 +173,10 @@ def test_candidate_same_as_last_confirmed_no_pending(temp_db):
     assert snap["project_transition"]["pending"] is False
 
 
-def test_uncategorized_candidate_under_30s_inherits_last_confirmed(temp_db):
-    """when the new resource's candidate is uncategorized,
-    the display project continues to show the last confirmed project.
-    No pending transition is created (transitions only happen between
-    official candidates)."""
+def test_uncategorized_candidate_shows_uncategorized_not_inherited(temp_db):
+    """When the new resource's candidate is uncategorized, the display
+    project is uncategorized — it does NOT inherit the last confirmed
+    project. No pending transition is created."""
     project_a, _ = _setup_two_projects(temp_db)
     machine = CollectorStateMachine()
     machine.transition_to(
@@ -206,18 +197,18 @@ def test_uncategorized_candidate_under_30s_inherits_last_confirmed(temp_db):
     )
     snap = _snapshot()
     assert snap["activity_display_name"] == "tmp"
-    # Display stays as last confirmed; candidate is uncategorized.
-    assert snap["display_project"]["name"] == "ProjectA"
+    # Display is uncategorized (not inherited from last confirmed).
+    assert snap["display_project"]["name"] == "未归类"
+    assert snap["display_project"]["is_uncategorized"] is True
     assert snap["candidate_project"]["is_uncategorized"] is True
     assert snap["candidate_project"]["name"] == "未归类"
     assert snap["project_transition"]["pending"] is False
 
 
-def test_uncategorized_candidate_stays_inherited_after_30_seconds(temp_db):
-    """>=30s after the switch to an uncategorized
-    candidate, the display project continues to show the last confirmed
-    project. Non-official candidates are NEVER confirmed via
-    advance_ownership — the display does not switch to uncategorized."""
+def test_uncategorized_candidate_remains_uncategorized_after_threshold(temp_db):
+    """The display project stays uncategorized for a non-official
+    candidate — it does NOT switch to the last confirmed project after
+    any threshold."""
     _setup_two_projects(temp_db)
     machine = CollectorStateMachine()
     machine.transition_to(
@@ -235,22 +226,21 @@ def test_uncategorized_candidate_stays_inherited_after_30_seconds(temp_db):
         _normal("tmp", path="D:\\Unmapped\\tmp"),
         at_time="2026-06-18 09:00:36",
     )
-    assert _snapshot()["display_project"]["name"] == "ProjectA"
+    assert _snapshot()["display_project"]["name"] == "未归类"
     machine.transition_to(
         "recording",
         _normal("tmp", path="D:\\Unmapped\\tmp"),
         at_time="2026-06-18 09:01:06",
     )
     snap = _snapshot()
-    assert snap["display_project"]["name"] == "ProjectA"
+    assert snap["display_project"]["name"] == "未归类"
     assert snap["project_transition"]["pending"] is False
 
 
-def test_clipboard_force_persist_under_30s_persists_db_row_but_display_still_pending(temp_db):
-    """Section 一.3 / 四.5: clipboard force-persist can create a real
-    open DB row BEFORE the 30-second ownership threshold, but the live
-    display still follows ``display_project`` (inherited) until the
-    pending window elapses. The two concerns are orthogonal."""
+def test_clipboard_force_persist_creates_db_row_display_follows_candidate(temp_db):
+    """Clipboard force-persist creates a real open DB row. The display
+    project follows the candidate immediately — no pending window
+    separates DB persistence from project ownership."""
     project_a, project_b = _setup_two_projects(temp_db)
     machine = CollectorStateMachine()
     machine.transition_to(
@@ -263,29 +253,26 @@ def test_clipboard_force_persist_under_30s_persists_db_row_but_display_still_pen
         _normal("a.py", path="D:\\ProjectA\\a.py"),
         at_time="2026-06-18 09:00:35",
     )
-    # Switch to ProjectB at 09:00:36 — pending window starts.
+    # Switch to ProjectB — candidate applies immediately.
     machine.transition_to(
         "recording",
         _normal("b.py", path="D:\\ProjectB\\b.py"),
         at_time="2026-06-18 09:00:36",
     )
-    assert _snapshot()["project_transition"]["pending"] is True
+    assert _snapshot()["project_transition"]["pending"] is False
 
-    # Clipboard force-persist at 09:00:40 (4 seconds into pending).
-    # This creates a real open DB row while the ownership pending is
-    # still active.
+    # Clipboard force-persist creates a real open DB row.
     persisted_id = machine.recorder.ensure_persisted_for_clipboard("2026-06-18 09:00:40")
     assert persisted_id is not None and persisted_id > 0
     snap = _snapshot()
     assert snap["is_persisted"] is True
     assert snap["persisted_activity_id"] == persisted_id
-    assert snap["display_project"]["name"] == "ProjectA"
+    assert snap["display_project"]["name"] == "ProjectB"
     assert snap["candidate_project"]["name"] == "ProjectB"
-    assert snap["project_transition"]["pending"] is True
-    assert snap["project_transition_pending"] is True
+    assert snap["project_transition"]["pending"] is False
+    assert snap["project_transition_pending"] is False
 
-    # After 30 seconds, the candidate is confirmed — even though the
-    # activity was persisted early via clipboard force-persist.
+    # After further observation, display remains ProjectB.
     machine.transition_to(
         "recording",
         _normal("b.py", path="D:\\ProjectB\\b.py"),
@@ -408,24 +395,21 @@ def test_midnight_split_does_not_inherit_previous_project(temp_db):
         _normal("a.py", path="D:\\ProjectA\\a.py"),
         at_time="2026-06-18 23:55:00",
     )
-    # Switch to ProjectB at 23:58 — enters pending (display=ProjectA
-    # inherited, candidate=ProjectB).
+    # Switch to ProjectB at 23:58 — candidate applies immediately.
     machine.transition_to(
         "recording",
         _normal("b.py", path="D:\\ProjectB\\b.py"),
         at_time="2026-06-18 23:58:00",
     )
     snap = _snapshot()
-    assert snap["display_project"]["name"] == "ProjectA"
+    assert snap["display_project"]["name"] == "ProjectB"
     assert snap["candidate_project"]["name"] == "ProjectB"
-    assert snap["project_transition"]["pending"] is True
+    assert snap["project_transition"]["pending"] is False
 
-    # Midnight split — session boundary clears the pending state.
+    # Midnight split — session boundary clears ownership; ProjectB
+    # resource continues as confirmed display project.
     machine.split_at_midnight("2026-06-19 00:00:00")
     snap = _snapshot()
-    # The same ProjectB resource continues, but ownership is re-confirmed.
-    # The previous day's inherited display project (ProjectA) does NOT
-    # leak into the new day — display is now ProjectB (confirmed).
     assert snap["display_project"]["name"] == "ProjectB"
     assert snap["project_transition"]["pending"] is False
 
@@ -520,8 +504,8 @@ def test_inferred_project_name_mirrors_display_project(temp_db):
         at_time="2026-06-18 09:00:36",
     )
     snap = _snapshot()
-    # Pending: inferred_project_name mirrors display (ProjectA), NOT
-    # candidate (ProjectB).
-    assert snap["project_transition"]["pending"] is True
-    assert snap["inferred_project_name"] == "ProjectA"
+    # Official candidate applies immediately — no pending window.
+    # inferred_project_name mirrors display (ProjectB).
+    assert snap["project_transition"]["pending"] is False
+    assert snap["inferred_project_name"] == "ProjectB"
     assert snap["inferred_project_name"] == snap["display_project"]["name"]

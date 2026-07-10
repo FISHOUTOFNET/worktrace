@@ -1448,7 +1448,7 @@ def test_no_production_pending_short_carry_duration_readers() -> None:
         assert "pending_short_seconds" not in source
         assert "validate_pending_short_carry" not in source
 
-    ensure_source = inspect.getsource(ActivitySessionRecorder._ensure_persisted_if_ready)
+    ensure_source = inspect.getsource(ActivitySessionRecorder._ensure_persisted)
     assert "_get_pending_short_seconds" not in ensure_source
     assert "validate_pending_short_carry" not in ensure_source
     assert "current_extra_seconds +=" not in ensure_source
