@@ -119,11 +119,10 @@ browser storage, or network requests. Bridge imports `worktrace.api` only
 - **`activity_display_model_service`** is the sole owner of live display
   semantics. Its focused sibling modules own policy, live clock, display
   span, and row overlay internals; together they decide live eligibility,
-  `live_state`, display span identity, live clock fields, `<30s`
-  borrowed-anchor/current-only display policy, `persisted_open` overlay,
-  and the surface visibility flags consumed by page ViewModels. They never
-  write the DB; finished short-activity merge/drop remains
-  collector/lifecycle-owned persistence.
+  `live_state`, display span identity, live clock fields, `persisted_open`
+  overlay, and the surface visibility flags consumed by page ViewModels. They
+  never write the DB; report projection may aggregate short raw rows without
+  altering their stored facts.
 - **`view_model_service`** is the sole constructor of Overview / Timeline /
   Details / Refresh State page ViewModels from a single snapshot sample. It
   owns page projection/materialization only: DB list payloads, display-only
@@ -132,9 +131,9 @@ browser storage, or network requests. Bridge imports `worktrace.api` only
   semantics independently.
 - **`activity_lifecycle_service`** is the sole open-row command facade
   (collector / recovery / clipboard / midnight / shutdown); post-close
-  inference is centralised in `finalize_closed_activity_ids`. The 30-second
-  persistence threshold and the clipboard force-persist `STATUS_NORMAL`
-  restriction are enforced INSIDE the facade; callers cannot bypass them.
+  inference is centralised in `finalize_closed_activity_ids`. Normal activity
+  open rows are persisted immediately; clipboard uses the same lifecycle path
+  and retains its `STATUS_NORMAL` restriction.
 - **`live_display_service`** provides low-level display-safe helper functions
   used by the Activity Display Model and refresh/current-summary paths:
   stable live identity helpers, current-activity summary helpers,

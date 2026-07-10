@@ -12,7 +12,7 @@ Boundary rules (enforced by ``tests/test_ui_backend_boundary.py``):
 - Methods do not log window titles, file paths, notes, or copied text.
 - Page display ViewModels (Overview / Recent / Refresh State) are retrieved
   solely through ``worktrace.api.view_model_api``. This mixin never
-  constructs live display / virtual live / persisted_open / project
+  constructs live display / persisted_open / project
   transition / duration override / stable live key / live clock fields.
   Activity Display Model semantics are owned by
   ``worktrace.services.activity_display_model_service`` and enter bridge

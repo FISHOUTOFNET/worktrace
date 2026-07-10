@@ -12,9 +12,8 @@ machine (see architecture.md §"Write side"):
   the unified ``finalize_closed_activity_ids`` helper, then inserts the
   new open row.
 - Manual assignments / ``manual_override`` are never overridden.
-- Clipboard force-persist bypasses the 30-second threshold but is
-  restricted to ``STATUS_NORMAL``; it does not pollute the normal
-  threshold.
+- Clipboard binding is status-restricted to ``STATUS_NORMAL``; normal
+  collector activities have already been persisted immediately.
 - Midnight split / midnight-anchor persistence preserves the anchor
   project assignment.
 - Recovery cross-midnight no longer retains a second unconverged
@@ -47,7 +46,7 @@ from worktrace.services.activity_lifecycle_service import (
     finalize_closed_activity_ids,
     force_persist_open_activity_for_clipboard,
     persist_midnight_anchor,
-    persist_open_activity_if_ready,
+    persist_open_activity,
     recover_cross_midnight_segment,
     start_activity,
 )
@@ -189,16 +188,11 @@ def test_lifecycle_close_activity_triggers_inference(temp_db_setup):
     assert assignment["source"] == "folder_rule"
 
 
-# lifecycle.persist_open_activity_if_ready
+# lifecycle.persist_open_activity
 
 
-def test_persist_open_activity_if_ready_syncs_open_row_project(temp_db_setup):
-    """``persist_open_activity_if_ready`` must create + finalize + sync
-    the open-row project so the virtual → persisted_open transition does
-    not revert a concrete inferred project to ``uncategorized``.
-
-    The threshold is enforced INSIDE the facade; this test exercises the
-    persist path with elapsed >= 30 so the row is actually created."""
+def test_persist_open_activity_syncs_open_row_project(temp_db_setup):
+    """Immediate persistence creates + finalizes + syncs the open row."""
     pid = project_service.create_project("ProjC")
     folder_rule_service.create_or_update_folder_rule("D:\\ProjC", pid)
 
@@ -209,11 +203,10 @@ def test_persist_open_activity_if_ready_syncs_open_row_project(temp_db_setup):
         "file_path_hint": "D:\\ProjC\\spec.docx",
         "status": STATUS_NORMAL,
     }
-    aid = persist_open_activity_if_ready(
+    aid = persist_open_activity(
         start_time="2026-07-01 09:00:00",
         source=SOURCE_AUTO,
         payload=payload,
-        elapsed_seconds=60,
     )
     assert aid is not None
 
@@ -227,8 +220,8 @@ def test_persist_open_activity_if_ready_syncs_open_row_project(temp_db_setup):
 
 def test_force_persist_open_activity_for_clipboard_creates_open_row(temp_db_setup):
     """``force_persist_open_activity_for_clipboard`` must create an open
-    row bypassing the 30-second threshold, but only when status is
-    ``STATUS_NORMAL`` (the facade enforces this internally)."""
+    row when status is ``STATUS_NORMAL`` (the facade enforces this
+    internally)."""
     payload = {
         "app_name": "Word",
         "process_name": "winword.exe",
@@ -413,90 +406,20 @@ def test_finalize_closed_activity_ids_inference_failure_does_not_block(temp_db_s
     assert call_count[0] == 2  # Both rows were attempted
 
 
-# 30-second threshold enforced by the lifecycle facade
-
-
-def test_persist_open_activity_if_ready_enforces_threshold_when_elapsed_too_small(temp_db_setup):
-    """The lifecycle facade enforces ``HISTORY_PERSIST_THRESHOLD_SECONDS``
-    internally. When ``elapsed_seconds < 30`` and ``force=False``, the
-    facade MUST NOT persist (returns ``None``; no DB row created)."""
-    from worktrace.constants import HISTORY_PERSIST_THRESHOLD_SECONDS
-
+def test_persist_open_activity_persists_without_elapsed_gate(temp_db_setup):
+    """The facade records a new raw activity at its start, with no gate."""
     payload = {
         "app_name": "Word",
         "process_name": "winword.exe",
         "window_title": "Doc",
         "status": STATUS_NORMAL,
     }
-    result = persist_open_activity_if_ready(
+    activity_id = persist_open_activity(
         start_time="2026-07-01 09:00:00",
         source=SOURCE_AUTO,
         payload=payload,
-        elapsed_seconds=10,
     )
-    assert result is None
-    # The threshold constant is unchanged.
-    assert HISTORY_PERSIST_THRESHOLD_SECONDS == 30
-
-
-def test_persist_open_activity_if_ready_persists_at_or_above_threshold(temp_db_setup):
-    """When ``elapsed_seconds >= 30`` and ``force=False``, the facade
-    persists the open row and returns the new activity_id."""
-    payload = {
-        "app_name": "Word",
-        "process_name": "winword.exe",
-        "window_title": "Doc",
-        "status": STATUS_NORMAL,
-    }
-    aid = persist_open_activity_if_ready(
-        start_time="2026-07-01 09:00:00",
-        source=SOURCE_AUTO,
-        payload=payload,
-        elapsed_seconds=30,
-    )
-    assert aid is not None
-    row = activity_service.get_activity(aid)
+    row = activity_service.get_activity(activity_id)
     assert row is not None
+    assert row["start_time"] == "2026-07-01 09:00:00"
     assert row["end_time"] is None
-
-
-def test_persist_open_activity_if_ready_force_bypasses_threshold(temp_db_setup):
-    """``force=True`` bypasses the 30-second threshold. This path is
-    reserved for the clipboard force-persist facade, which itself
-    re-checks ``STATUS_NORMAL``."""
-    payload = {
-        "app_name": "Word",
-        "process_name": "winword.exe",
-        "window_title": "Doc",
-        "status": STATUS_NORMAL,
-    }
-    aid = persist_open_activity_if_ready(
-        start_time="2026-07-01 09:00:00",
-        source=SOURCE_AUTO,
-        payload=payload,
-        elapsed_seconds=0,
-        force=True,
-    )
-    assert aid is not None
-    assert activity_service.get_activity(aid) is not None
-
-
-def test_caller_cannot_bypass_threshold_via_public_api(temp_db_setup):
-    """A caller that omits ``force`` cannot bypass the 30-second gate:
-    even with a long-lived snapshot, an elapsed < 30 must return
-    ``None``. The threshold is owned by the facade, not the caller."""
-    payload = {
-        "app_name": "Word",
-        "process_name": "winword.exe",
-        "window_title": "Doc",
-        "status": STATUS_NORMAL,
-    }
-    # Caller tries to bypass by passing a far-future start_time but a
-    # small elapsed_seconds. The facade's threshold check still applies.
-    result = persist_open_activity_if_ready(
-        start_time="2026-07-01 09:00:00",
-        source=SOURCE_AUTO,
-        payload=payload,
-        elapsed_seconds=5,
-    )
-    assert result is None

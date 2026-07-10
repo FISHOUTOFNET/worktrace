@@ -66,10 +66,10 @@ recovery. It does not start the folder-index worker or collector directly.
 recovery, clipboard force-persist, midnight split, shutdown, and close-all
 paths must route open-row lifecycle changes through this facade.
 
-The 30-second persistence threshold is enforced inside
-`activity_lifecycle_service.persist_open_activity_if_ready()`. Callers must
-pass elapsed seconds but must not independently decide persistence eligibility
-as the final authority.
+Raw activity is persisted immediately. The lifecycle facade creates the open
+row as soon as a resource signature is observed, then closes that same row at
+the next boundary. Callers do not decide whether an observed activity is
+"long enough" to become history.
 
 Clipboard force-persist goes through
 `activity_lifecycle_service.force_persist_open_activity_for_clipboard()` and is
@@ -86,21 +86,18 @@ pause/import/privacy/idle control. `ResourceIdentityResolver` owns
 ActiveWindow-to-resource identity, signatures, path supplement, same-resource
 checks, and privacy-safe identity. `CollectorStateMachine` owns transition and
 hard-boundary decisions only. `ActivitySessionRecorder` coordinates current
-session state, lifecycle commands, short finalization, project ownership, and
+session state, lifecycle commands, project ownership, and
 snapshot publication.
 
-`ShortActivityFinalizer` is the sole `<30s` normal activity merge/drop/resume
-policy owner. `SnapshotPublisher` is the sole
+`SnapshotPublisher` is the sole
 `current_activity_snapshot` construction/publication owner; runtime cleanup
 remains the transient-state clearing owner.
 
-Short-activity persistence is collector/lifecycle-owned:
-
-- A normal activity shorter than 30 seconds is not persisted as its own DB row.
-- If it ends with a legal closed normal anchor and no hard boundary blocks
-  absorption, its seconds may merge into that anchor.
-- If no legal anchor exists, it is dropped.
-- Display-only borrowed-anchor projection must never write the DB.
+The collector is a fact collector, not a noise filter. Every normal activity,
+including a five-second first activity, gets its own raw `activity_log` row.
+There is no collector merge, drop, borrowed anchor, or reopen-anchor path.
+Report projection and view models may aggregate or suppress short raw rows for
+human-facing reports, but they never mutate the raw rows.
 
 `worktrace.collector.decision_trace` provides privacy-safe diagnostic
 records for collector decisions. The default recorder is no-op; tests may
@@ -137,8 +134,8 @@ activity, pending, snapshot, boundary, or health state.
 `activity_display_model_service` remains the sole orchestration entry point
 for live display semantics. Its internals are split by responsibility:
 
-- `activity_display_policy` decides display policy, status-only handling,
-  borrowed-anchor eligibility, and surface materialization flags.
+- `activity_display_policy` decides display policy, status-only handling, and
+  surface materialization flags.
 - `activity_live_clock` builds the single backend live clock consumed by the
   frontend runtime.
 - `activity_display_span` builds current activity display fields, display
@@ -148,12 +145,10 @@ for live display semantics. Its internals are split by responsibility:
 Together, the Activity Display Model modules decide:
 
 - live eligibility;
-- `live_state` (`current_only_pending`, `borrowed_anchor_pending`,
-  `persisted_open`, `status_only`, `suppressed`);
+- `live_state` (`persisted_open`, `status_only`, `suppressed`);
 - display span identity;
 - live clock fields;
 - display base policy;
-- borrowed-anchor/current-only `<30s` display policy;
 - `persisted_open` overlay semantics;
 - surface visibility for Recent, Timeline, Details, and KPI projection.
 

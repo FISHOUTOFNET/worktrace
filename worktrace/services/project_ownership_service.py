@@ -2,15 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
-from datetime import datetime
+from dataclasses import dataclass, field
 from typing import Any
 
-from ..constants import (
-    PROJECT_OWNERSHIP_CONFIRM_SECONDS,
-    TIME_FORMAT,
-    UNCATEGORIZED_PROJECT,
-)
+from ..constants import UNCATEGORIZED_PROJECT
 from .project_attribution_policy import is_official_project_source
 
 
@@ -23,7 +18,7 @@ class ProjectLabel:
 
     ``id`` is ``None`` for suggested-project names and uncategorized
     candidates (no concrete project row). ``source`` is one of:
-    ``inherited`` / ``confirmed`` / ``manual`` / ``folder_rule`` /
+    ``manual`` / ``folder_rule`` /
     ``keyword_rule`` / ``suggested_project_name`` / ``uncategorized``.
     """
 
@@ -62,17 +57,15 @@ class ProjectLabel:
 class ProjectTransition:
     """Project ownership transition state.
 
-    ``threshold_seconds`` gates the project-ownership confirmation window
-    (``PROJECT_OWNERSHIP_CONFIRM_SECONDS``), NOT the history-persistence
-    threshold (``HISTORY_PERSIST_THRESHOLD_SECONDS``). Both are 30 seconds
-    today but are semantically independent — see
-    ``worktrace.constants`` for details.
+    The shape remains in snapshots for compatibility, but project display has
+    no confirmation window: an official candidate applies immediately and a
+    non-official candidate is not a formal display project.
     """
 
     pending: bool = False
     started_at: str = ""
     elapsed_seconds: int = 0
-    threshold_seconds: int = PROJECT_OWNERSHIP_CONFIRM_SECONDS
+    threshold_seconds: int = 0
     from_project_id: int | None = None
     to_project_id: int | None = None
 
@@ -199,30 +192,18 @@ def _is_official_label(label: ProjectLabel | None) -> bool:
     return is_official_project_source(label.source)
 
 
-def _parse_time(value: str) -> datetime:
-    return datetime.strptime(value, TIME_FORMAT)
-
-
-def _seconds_between(start_time: str, end_time: str) -> int:
-    try:
-        return max(0, int((_parse_time(end_time) - _parse_time(start_time)).total_seconds()))
-    except (ValueError, TypeError):
-        return 0
-
-
 def begin_ownership_for_new_resource(
     state: ProjectOwnershipState | None,
     candidate: ProjectLabel,
     at_time: str,
-    threshold_seconds: int = PROJECT_OWNERSHIP_CONFIRM_SECONDS,
+    threshold_seconds: int = 0,
 ) -> ProjectOwnershipState:
     """Begin ownership for a brand-new resource signature.
 
     Called by ``ActivitySessionRecorder`` when the resource signature
-    changes (immediate resource switch). The candidate is computed from
-    the new resource; the display project inherits the last confirmed
-    project when the candidate differs (entering a 30-second pending
-    window), or matches the candidate immediately when they are equal.
+    changes (immediate resource switch). The candidate is computed from the
+    new resource and an official candidate becomes the display project
+    immediately.
 
     Attribution contract: only official project labels
     (``manual`` / ``keyword_rule`` / ``folder_rule``) may become
@@ -230,60 +211,24 @@ def begin_ownership_for_new_resource(
     candidates (suggested / context-derived / uncategorized) are stored
     in ``candidate_project`` only and never confirmed.
     """
-    last_confirmed = state.last_confirmed_project if state else None
-    no_transition = ProjectTransition(
-        pending=False,
-        threshold_seconds=threshold_seconds,
-    )
+    # ``threshold_seconds`` is an ignored compatibility parameter. A project
+    # change must never hold or inherit a formal label while it waits.
+    no_transition = ProjectTransition(pending=False, threshold_seconds=0)
     candidate_is_official = _is_official_label(candidate)
-    if last_confirmed is None:
-        if candidate_is_official:
-            return ProjectOwnershipState(
-                display_project=candidate,
-                candidate_project=candidate,
-                project_transition=no_transition,
-                last_confirmed_project=candidate,
-            )
-        # Non-official candidate with no prior confirmed project:
-        # display stays uncategorized, candidate is retained, last_confirmed
-        # is NOT updated, and no pending transition is created.
-        return ProjectOwnershipState(
-            display_project=uncategorized_label(),
-            candidate_project=candidate,
-            project_transition=no_transition,
-            last_confirmed_project=None,
-        )
-    if candidate_is_official and labels_equal(candidate, last_confirmed):
-        return ProjectOwnershipState(
-            display_project=last_confirmed,
-            candidate_project=candidate,
-            project_transition=no_transition,
-            last_confirmed_project=last_confirmed,
-        )
     if candidate_is_official:
-        transition = ProjectTransition(
-            pending=True,
-            started_at=at_time,
-            elapsed_seconds=0,
-            threshold_seconds=threshold_seconds,
-            from_project_id=last_confirmed.id,
-            to_project_id=candidate.id,
-        )
         return ProjectOwnershipState(
-            display_project=last_confirmed,
+            display_project=candidate,
             candidate_project=candidate,
-            project_transition=transition,
-            last_confirmed_project=last_confirmed,
+            project_transition=no_transition,
+            last_confirmed_project=candidate,
         )
-    # Non-official candidate with a prior confirmed project: carry the last
-    # confirmed project as the display project, retain the candidate, but
-    # do NOT create a pending transition (transitions only happen between
-    # official candidates) and do NOT update last_confirmed.
+    # Suggested/context/uncategorized labels remain candidates only. Never
+    # inherit a prior official project into this resource's formal display.
     return ProjectOwnershipState(
-        display_project=last_confirmed,
+        display_project=uncategorized_label(),
         candidate_project=candidate,
         project_transition=no_transition,
-        last_confirmed_project=last_confirmed,
+        last_confirmed_project=state.last_confirmed_project if state else None,
     )
 
 
@@ -291,51 +236,17 @@ def advance_ownership(
     state: ProjectOwnershipState | None,
     at_time: str,
 ) -> ProjectOwnershipState | None:
-    """Advance the pending timer on an unchanged resource signature.
+    """Return ownership unchanged with a non-pending transition.
 
-    Called by ``ActivitySessionRecorder`` on every observe where the
-    signature has NOT changed. When the pending window has elapsed
-    (``>= threshold_seconds``) AND the candidate is an official project
-    label, the candidate is confirmed and becomes the new display
-    project. Otherwise the elapsed counter is updated and the display
-    project stays as the inherited last-confirmed project.
-
-    Attribution contract: non-official candidates are NEVER confirmed
-    via ``advance_ownership``. If the pending candidate is not official,
-    the transition is cleared (pending=False) and the display reverts to
-    uncategorized, but ``last_confirmed_project`` is NOT updated.
-
-    Returns ``state`` unchanged when there is no pending transition
-    (including when ``state`` is ``None``).
+    Kept as the recorder-facing facade, but no elapsed-time confirmation or
+    inherited display project is permitted in production.
     """
     if state is None:
         return None
-    transition = state.project_transition
-    if transition is None or not transition.pending:
-        return state
-    elapsed = _seconds_between(transition.started_at, at_time)
-    if elapsed >= transition.threshold_seconds:
-        candidate = state.candidate_project or uncategorized_label()
-        if _is_official_label(candidate):
-            return ProjectOwnershipState(
-                display_project=candidate,
-                candidate_project=candidate,
-                project_transition=replace(transition, pending=False, elapsed_seconds=elapsed),
-                last_confirmed_project=candidate,
-            )
-        # Non-official candidate elapsed past the confirmation window:
-        # do NOT confirm it. Clear the pending transition and revert the
-        # display to uncategorized. last_confirmed_project is unchanged.
-        return ProjectOwnershipState(
-            display_project=uncategorized_label(),
-            candidate_project=candidate,
-            project_transition=replace(transition, pending=False, elapsed_seconds=elapsed),
-            last_confirmed_project=state.last_confirmed_project,
-        )
     return ProjectOwnershipState(
         display_project=state.display_project,
         candidate_project=state.candidate_project,
-        project_transition=replace(transition, elapsed_seconds=elapsed),
+        project_transition=ProjectTransition(),
         last_confirmed_project=state.last_confirmed_project,
     )
 

@@ -3,11 +3,12 @@ APP_VERSION = "0.1.0"
 
 TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 
-HISTORY_PERSIST_THRESHOLD_SECONDS = 30
-# Project ownership confirmation window. Must stay a separate constant from
-# HISTORY_PERSIST_THRESHOLD_SECONDS (DB persist gate) even though both are 30s
-# today, so the two concerns can evolve independently.
-PROJECT_OWNERSHIP_CONFIRM_SECONDS = 30
+# Deprecated compatibility shape only. Raw collector activity has no
+# persistence threshold and production code must not read this value.
+HISTORY_PERSIST_THRESHOLD_SECONDS = 0
+# Deprecated compatibility constant. Project display no longer waits or
+# inherits an earlier project while a candidate is confirmed.
+PROJECT_OWNERSHIP_CONFIRM_SECONDS = 0
 DEFAULT_IDLE_THRESHOLD_SECONDS = 5 * 60
 DEFAULT_CONTEXT_CARRY_MINUTES = 15
 REPORT_CONTEXT_SHORT_MERGE_SECONDS = 5 * 60

@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from ..constants import HISTORY_PERSIST_THRESHOLD_SECONDS, STATUS_NORMAL
+from ..constants import STATUS_NORMAL
 from . import activity_service, session_boundary_service
 
 
@@ -67,10 +67,9 @@ def start_activity(
 
     Returns the new activity_id.
 
-    Use this for the collector's first observation of a brand-new activity
-    signature that should be persisted immediately (rare — most collector
-    activities go through :func:`persist_open_activity_if_ready` after the
-    30-second threshold).
+    Use this for callers that need to close any stale open rows before a
+    new activity begins. The collector normally owns that sequencing and
+    persists every new activity immediately through :func:`persist_open_activity`.
     """
     closed_ids = activity_service.close_all_open_rows(start_time)
     if closed_ids:
@@ -82,31 +81,19 @@ def start_activity(
     )
 
 
-def persist_open_activity_if_ready(
+def persist_open_activity(
     *,
     start_time: str,
     source: str,
     payload: dict[str, Any],
-    elapsed_seconds: int,
-    force: bool = False,
-) -> int | None:
-    """Persist a virtual activity as a new open DB row.
+) -> int:
+    """Persist an observed activity immediately as an open DB row.
 
-    The 30-second threshold (``HISTORY_PERSIST_THRESHOLD_SECONDS``) is
-    enforced INSIDE this facade. Callers MUST pass the actual
-    ``elapsed_seconds``; the facade no longer trusts callers to gate the
-    threshold.
-
-    ``force=True`` bypasses the threshold and is only legal for the
-    clipboard force-persist path (which itself re-checks ``STATUS_NORMAL``).
-    Ordinary callers must pass ``force=False`` and rely on the facade's
-    threshold check.
-
-    Returns the new ``activity_id`` on persist, or ``None`` when the
-    threshold gate rejects the persist (no-op).
+    Raw activity is a fact layer: a collector observation must not wait for
+    an elapsed-time threshold or a display-quality decision before it is
+    recorded. This facade is the normal open-row creation path; the caller
+    later closes the same row through :func:`close_activity`.
     """
-    if not force and int(elapsed_seconds) < HISTORY_PERSIST_THRESHOLD_SECONDS:
-        return None
     return _persist_open_activity_unchecked(
         start_time=start_time, source=source, payload=payload
     )
@@ -118,21 +105,15 @@ def force_persist_open_activity_for_clipboard(
     source: str,
     payload: dict[str, Any],
 ) -> int | None:
-    """Force-persist a normal activity for clipboard capture.
+    """Ensure a normal activity is persisted for clipboard binding.
 
-    Bypasses the 30-second threshold. The facade enforces
-    ``STATUS_NORMAL`` internally: callers cannot bypass this by passing
-    an idle / paused / excluded / error status. A non-normal payload is
-    rejected with ``None`` (no-op) and never reaches the DB.
-
-    Returns the new ``activity_id`` on persist, or ``None`` when the
-    status gate rejects the persist (no-op).
+    Normal collector activities are already persisted from their first
+    observation, so this is retained only as a status-checked compatibility
+    facade. It is not a special threshold-bypass persistence channel.
     """
     if payload.get("status") != STATUS_NORMAL:
         return None
-    return _persist_open_activity_unchecked(
-        start_time=start_time, source=source, payload=payload
-    )
+    return persist_open_activity(start_time=start_time, source=source, payload=payload)
 
 
 def _persist_open_activity_unchecked(
@@ -141,12 +122,12 @@ def _persist_open_activity_unchecked(
     source: str,
     payload: dict[str, Any],
 ) -> int:
-    """Low-level persist helper with NO threshold / status gate.
+    """Low-level persist helper with no display or status policy.
 
     Internal only — every public persistence path goes through
-    :func:`persist_open_activity_if_ready` or
-    :func:`force_persist_open_activity_for_clipboard`, which enforce the
-    threshold / status invariants. Returns the new ``activity_id``.
+    :func:`persist_open_activity` or
+    :func:`force_persist_open_activity_for_clipboard`. Returns the new
+    ``activity_id``.
     """
     activity_id = activity_service.insert_activity_row(
         start_time=start_time,
@@ -315,7 +296,7 @@ def _sync_open_row_project_safely(activity_id: int, *, status: str | None) -> No
 __all__ = [
     "finalize_closed_activity_ids",
     "start_activity",
-    "persist_open_activity_if_ready",
+    "persist_open_activity",
     "force_persist_open_activity_for_clipboard",
     "close_activity",
     "close_all_open_activities",

@@ -16,7 +16,6 @@ from .activity_display_policy import (
     build_display_session_policy,
     build_status_display_item,
     classify_display_live_state,
-    resolve_borrowed_display_anchor,
 )
 from .activity_display_span import (
     build_current_activity_display,
@@ -54,12 +53,11 @@ def build_activity_display_model(
     is_today = report_date == today
 
     base_state = classify_live_state(snapshot)
+    # Normal live display is exclusively backed by its own persisted open
+    # activity. It never borrows or reopens a previously closed anchor.
     anchor: dict[str, Any] | None = None
     if not is_today:
         display_live_state = "none"
-    elif base_state == "virtual":
-        anchor = resolve_borrowed_display_anchor(snapshot, report_date, today)
-        display_live_state = "borrowed_anchor_pending" if anchor else "current_only_pending"
     else:
         display_live_state = classify_display_live_state(snapshot, report_date, today)
 

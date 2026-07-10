@@ -591,10 +591,8 @@ def test_details_view_model_row_carries_report_attribution_flags(temp_db):
     assert detail["report_attribution_kind"] == "report_context_short_gap"
 
 
-def test_non_official_candidate_with_prior_confirmed_carries_display(temp_db):
-    """When a prior official project exists, a non-official candidate
-    carries the last confirmed project as display, does NOT create a
-    pending transition, and does NOT update last_confirmed."""
+def test_non_official_candidate_with_prior_confirmed_stays_uncategorized(temp_db):
+    """A non-official candidate never inherits a formal display project."""
     confirmed = ProjectLabel(
         name="ConfirmedProject",
         id=10,
@@ -612,8 +610,7 @@ def test_non_official_candidate_with_prior_confirmed_carries_display(temp_db):
         last_confirmed_project=confirmed,
     )
     state = begin_ownership_for_new_resource(prior_state, candidate, "2026-07-01 09:00:00")
-    # Display carries the last confirmed
-    assert state.display_project.name == "ConfirmedProject"
+    assert state.display_project.is_uncategorized is True
     # Candidate is retained
     assert state.candidate_project.name == "SuggestedNew"
     # No pending transition (only official candidates create transitions)
@@ -622,9 +619,8 @@ def test_non_official_candidate_with_prior_confirmed_carries_display(temp_db):
     assert state.last_confirmed_project.name == "ConfirmedProject"
 
 
-def test_official_candidate_creates_pending_transition(temp_db):
-    """An official candidate that differs from last confirmed creates
-    a pending transition."""
+def test_official_candidate_applies_immediately_without_transition(temp_db):
+    """An official candidate becomes the formal display project immediately."""
     confirmed = ProjectLabel(name="ProjectA", id=10, source="manual")
     candidate = ProjectLabel(name="ProjectB", id=20, source="folder_rule")
     prior_state = ProjectOwnershipState(
@@ -633,11 +629,11 @@ def test_official_candidate_creates_pending_transition(temp_db):
         last_confirmed_project=confirmed,
     )
     state = begin_ownership_for_new_resource(prior_state, candidate, "2026-07-01 09:00:00")
-    assert state.project_transition.pending is True
-    assert state.display_project.name == "ProjectA"
+    assert state.project_transition.pending is False
+    assert state.project_transition.threshold_seconds == 0
+    assert state.display_project.name == "ProjectB"
     assert state.candidate_project.name == "ProjectB"
 
-    # After 30s, the official candidate is confirmed
     state = advance_ownership(state, "2026-07-01 09:00:35")
     assert state.display_project.name == "ProjectB"
     assert state.last_confirmed_project.name == "ProjectB"

@@ -11,28 +11,24 @@ from typing import Any, Literal, TypedDict
 
 LiveState = Literal[
     "none",
-    "current_only_pending",
-    "borrowed_anchor_pending",
     "persisted_open",
     "status_only",
     "suppressed",
 ]
-CollectorSnapshotState = Literal["paused", "idle", "excluded", "error", "virtual"]
+CollectorSnapshotState = Literal["paused", "idle", "excluded", "error"]
 DurationSemantic = Literal["current_live", "aggregate_live", "static_closed", "static_status"]
 DisplaySessionKind = Literal[
     "none",
-    "current_only_pending",
-    "borrowed_anchor_pending",
     "persisted_open",
     "status_only",
     "suppressed",
 ]
 DisplayBasePolicy = Literal[
     "suppressed",
-    "current_only_zero",
-    "borrowed_anchor_static",
     "persisted_extra",
 ]
+# Deprecated collector-era trace vocabulary. Retained only so legacy recovery
+# traces can deserialize; normal collector/display code must not use it.
 ShortActivityAction = Literal[
     "merge_to_anchor",
     "drop",

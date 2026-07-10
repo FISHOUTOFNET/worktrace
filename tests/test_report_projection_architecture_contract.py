@@ -54,3 +54,25 @@ def test_report_projection_modules_do_not_use_activity_service_official_only_que
                     violations.append(f"{relative_path}:{node.lineno} calls {func.id}")
 
     assert violations == []
+
+
+def test_report_projection_modules_do_not_mutate_raw_activity_rows():
+    mutation_helpers = {
+        "increment_activity_duration",
+        "set_activity_duration",
+        "reopen_activity",
+        "close_activity_row",
+        "insert_activity_row",
+        "delete_activity",
+    }
+    violations: list[str] = []
+    for relative_path in REPORT_PROJECTION_MODULES + [
+        "worktrace/services/report_session_projection_service.py",
+    ]:
+        source = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
+        tree = ast.parse(source, filename=relative_path)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                if node.func.attr in mutation_helpers:
+                    violations.append(f"{relative_path}:{node.lineno} calls {node.func.attr}")
+    assert violations == []

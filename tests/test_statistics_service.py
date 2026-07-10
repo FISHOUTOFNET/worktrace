@@ -230,46 +230,26 @@ def test_statistics_export_excludes_in_progress_live_rows(temp_db):
 
 
 
-def test_project_ownership_confirm_seconds_is_separate_constant_from_history_persist():
-    """Section 五 / 六.5: ``PROJECT_OWNERSHIP_CONFIRM_SECONDS`` and
-    ``HISTORY_PERSIST_THRESHOLD_SECONDS`` must be TWO distinct constants
-    (even though both are 30 today). They must be independently
-    importable so the two concerns can evolve independently.
-    """
+def test_legacy_confirmation_constants_are_disabled():
+    """Collector persistence and formal-project display have no timer gate."""
     from worktrace.constants import (
         HISTORY_PERSIST_THRESHOLD_SECONDS,
         PROJECT_OWNERSHIP_CONFIRM_SECONDS,
     )
 
-    # Both must be defined and equal to 30 today.
-    assert HISTORY_PERSIST_THRESHOLD_SECONDS == 30
-    assert PROJECT_OWNERSHIP_CONFIRM_SECONDS == 30
-    # They must be distinct names (not aliased to the same object in a
-    # way that would break if one is renamed). This is a structural
-    # check: the two names must resolve to integer literals, not to
-    # each other.
-    import worktrace.constants as constants_mod
-    assert "HISTORY_PERSIST_THRESHOLD_SECONDS" in dir(constants_mod)
-    assert "PROJECT_OWNERSHIP_CONFIRM_SECONDS" in dir(constants_mod)
+    assert HISTORY_PERSIST_THRESHOLD_SECONDS == 0
+    assert PROJECT_OWNERSHIP_CONFIRM_SECONDS == 0
 
 
-def test_project_ownership_service_uses_confirm_seconds_not_history_persist():
-    """Section 五.3 / 六.5: ``project_ownership_service`` must use
-    ``PROJECT_OWNERSHIP_CONFIRM_SECONDS`` (NOT
-    ``HISTORY_PERSIST_THRESHOLD_SECONDS``) for the pending ownership
-    threshold. The history persistence threshold is a separate concern.
-    """
+def test_project_ownership_service_has_no_confirm_window():
+    """Snapshots retain a zero-valued compatibility transition shape."""
     from worktrace.services.project_ownership_service import (
         ProjectTransition,
         begin_ownership_for_new_resource,
     )
-    from worktrace.constants import PROJECT_OWNERSHIP_CONFIRM_SECONDS
-
-    # ProjectTransition.threshold_seconds defaults to
-    # PROJECT_OWNERSHIP_CONFIRM_SECONDS.
     transition = ProjectTransition(
-        pending=True,
+        pending=False,
         started_at="",
         elapsed_seconds=0,
     )
-    assert transition.threshold_seconds == PROJECT_OWNERSHIP_CONFIRM_SECONDS
+    assert transition.threshold_seconds == 0

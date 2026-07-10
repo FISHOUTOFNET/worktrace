@@ -70,20 +70,11 @@ def apply_live_span_to_row(
     )
     if not matches and isinstance(activity_ids, list):
         matches = anchor_id in {int(aid) for aid in activity_ids if aid}
-    # A borrowed current resource is not the historical anchor.  Summary
-    # aggregation is resource-based, so overlay only a same-resource DB row;
-    # otherwise the ViewModel materializes a display-only current-resource row.
-    if row_kind == ROW_KIND_PROJECT_ACTIVITY_SUMMARY_ROW and str(span.get("live_state") or "") == "borrowed_anchor_pending":
-        matches = _row_matches_span_resource(row, span)
     if not matches:
         return row
 
     live_clock = span.get("live_clock") or {}
     state = str(span.get("live_state") or "")
-    if row_kind == ROW_KIND_ACTIVITY_DETAIL_ROW and state == "borrowed_anchor_pending":
-        row["duration_semantic"] = STATIC_CLOSED
-        row["live_delta_eligible"] = False
-        return row
     row.update(_live_clock_fields(live_clock))
     current_live_seconds = int(
         live_clock.get("current_live_seconds_at_sample")
@@ -91,7 +82,7 @@ def apply_live_span_to_row(
         or 0
     )
     # Aggregate rows own their final display base.  The span/clock base is
-    # only a fallback (it is necessarily anchor-centric for borrowed pending).
+    # only a fallback.
     aggregate_base = _aggregate_base_for_live_row(row, span, live_clock, state, row_kind)
     if "raw_duration_seconds" not in row:
         row["raw_duration_seconds"] = int(row.get("duration_seconds") or 0)
@@ -122,31 +113,13 @@ def apply_live_span_to_row(
     row["live_delta_eligible"] = True
     row["is_live_projected"] = True
     row["is_in_progress"] = True
-    row["is_virtual_live"] = state == "borrowed_anchor_pending"
+    row["is_virtual_live"] = False
     row["edit_disabled"] = True
     row["editable"] = False
     row["exportable"] = False
     row["disable_reason"] = LIVE_EDIT_DISABLE_REASON
 
-    if state == "borrowed_anchor_pending":
-        row["source"] = "borrowed_anchor_pending"
-        row["display_only"] = True
-        row["is_display_only"] = True
-        row["project_id"] = int(span.get("project_id") or 0)
-        row["project_name"] = str(span.get("project_name") or UNCATEGORIZED_PROJECT)
-        row["project_description"] = str(span.get("project_description") or "")
-        row["live_anchor_activity_id"] = int(
-            span.get("live_anchor_activity_id") or anchor_id
-        )
-        row["live_anchor_base_seconds"] = int(
-            span.get("live_anchor_base_seconds") or aggregate_base
-        )
-        row["display_project"] = span.get("display_project")
-        row["candidate_project"] = span.get("candidate_project")
-        row["project_transition"] = span.get("project_transition")
-        row["project_transition_pending"] = bool(span.get("project_transition_pending"))
-        _copy_span_classification(row, span)
-    elif state == "persisted_open":
+    if state == "persisted_open":
         preserve_report_attribution = _should_preserve_report_attribution(row, row_kind)
         if not preserve_report_attribution:
             row["project_id"] = int(span.get("project_id") or 0)
@@ -264,13 +237,6 @@ def _aggregate_base_for_live_row(
         or 0
     )
     if row_kind not in _AGGREGATE_LIVE_ROW_KINDS:
-        return fallback
-    if state == "borrowed_anchor_pending":
-        # The anchor may be B while the selected report row is A+B.  Preserve
-        # the ViewModel's display duration (including an override) as base.
-        for field in ("display_duration_seconds", "duration_seconds", "raw_duration_seconds"):
-            if field in row and row.get(field) is not None:
-                return int(row.get(field) or 0)
         return fallback
     if state == "persisted_open":
         return _static_base_for_live_row(row, span, live_clock, state)

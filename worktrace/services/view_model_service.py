@@ -2,8 +2,8 @@
 
 Assembles the page-level ViewModel for Overview / Recent / Timeline /
 Details / Refresh-State. Owns NO live-display semantics: every live
-semantic (live clock, display span identity, ``<30s`` pending absorption,
-persisted_open overlay, project transition) is decided by
+semantic (live clock, display span identity, persisted-open overlay, project
+transition) is decided by
 :mod:`worktrace.services.activity_display_model_service`. This module only:
 
 1. Calls :func:`build_activity_display_model` once per request.
@@ -11,8 +11,8 @@ persisted_open overlay, project transition) is decided by
 3. Builds ordinary DB list payloads (sessions, activity details).
 4. Applies ``apply_live_span_to_row`` to matching DB rows when the display
    model marks that surface materializable.
-5. Materializes only borrowed-anchor aggregate fallbacks for Recent /
-   Timeline. Current-only pending never appears outside Current Activity.
+5. Materializes a persisted display fallback only when the corresponding
+   projection row is absent.
 
 Boundary:
 
@@ -313,13 +313,13 @@ def _display_only_common_fields(
         "live_delta_eligible": True,
         "is_in_progress": True,
         "is_live_projected": True,
-        "is_virtual": not is_contract_fallback,
-        "is_virtual_live": not is_contract_fallback,
+        "is_virtual": False,
+        "is_virtual_live": False,
         "is_display_only": True,
         "display_only": True,
         "editable": False,
         "exportable": False,
-        "source": "live_contract_fallback" if is_contract_fallback else str(span.get("source") or "snapshot"),
+        "source": "live_contract_fallback" if is_contract_fallback else str(span.get("source") or "db"),
         "edit_disabled": True,
         "disable_reason": str(span.get("disable_reason") or ""),
         "live_contract_fallback": is_contract_fallback,
@@ -385,7 +385,7 @@ def _materialize_display_only_timeline_session(
     anchor_id = int(span.get("anchor_activity_id") or span.get("activity_id") or 0)
     row.update(
         {
-            "session_id": f"borrowed:{anchor_id}" if anchor_id > 0 else "borrowed:pending",
+            "session_id": f"live:{anchor_id}" if anchor_id > 0 else "live:open",
             "activity_ids": [anchor_id] if anchor_id > 0 else [],
             "first_activity_id": anchor_id or None,
             "row_kind": "project_session",
@@ -414,13 +414,6 @@ def _materialize_display_only_detail_row(
         row_kind=ROW_KIND_ACTIVITY_DETAIL_ROW,
         live_contract_reason=live_contract_reason,
     )
-    if str(span.get("live_state") or "") == "borrowed_anchor_pending":
-        row["activity_id"] = 0
-        row["source"] = "borrowed_anchor_pending"
-        row["live_contract_fallback"] = False
-        row["live_contract_reason"] = ""
-        row["is_virtual"] = True
-        row["is_virtual_live"] = True
     row.update(
         {
             "app_name": str(current_activity.get("app_name") or ""),
@@ -481,34 +474,13 @@ def _materialize_display_only_project_activity_summary_row(
             "display_project_id": int(display_project.get("id") or 0),
             "display_project_name": str(display_project.get("name") or UNCATEGORIZED_PROJECT),
             "display_project_description": str(display_project.get("description") or ""),
-            # Pending C has no DB identity.  It is selection-visible through
-            # the borrowed anchor scope, but never editable/exportable.
-            "activity_ids": [] if str(span.get("live_state") or "") == "borrowed_anchor_pending" else ([activity_id] if activity_id > 0 else []),
+            "activity_ids": [activity_id] if activity_id > 0 else [],
             "first_activity_id": activity_id or None,
             "open_activity_id": activity_id,
             "closed_duration_seconds": 0,
             "report_date": report_date,
         }
     )
-    if str(span.get("live_state") or "") == "borrowed_anchor_pending":
-        current_seconds = int(
-            (span.get("live_clock") or {}).get("current_live_seconds_at_sample")
-            or (span.get("live_clock") or {}).get("current_elapsed_at_sample")
-            or 0
-        )
-        row.update(
-            {
-                "source": "borrowed_anchor_pending",
-                "duration_seconds": current_seconds,
-                "duration": format_duration(current_seconds),
-                "duration_seconds_at_sample": current_seconds,
-                "aggregate_duration_seconds_at_sample": current_seconds,
-                "aggregate_display_base_seconds": 0,
-                "display_base_seconds": 0,
-                "live_base_seconds": 0,
-                "open_activity_id": 0,
-            }
-        )
     return row
 
 
@@ -1106,14 +1078,6 @@ def get_session_details_view_model(
     # Apply the unified live-span overlay to matching detail rows only.
     _apply_live_span_to_rows(activities, report_model, row_kind=ROW_KIND_ACTIVITY_DETAIL_ROW)
     if (
-        details_live_span
-        and request_matches_live
-        and str(details_live_span.get("live_state") or "") == "borrowed_anchor_pending"
-    ):
-        activities.append(
-            _materialize_display_only_detail_row(details_live_span, current_activity)
-        )
-    elif (
         details_live_span
         and request_matches_live
         and not _rows_have_live_span(activities, details_live_span)

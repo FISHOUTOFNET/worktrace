@@ -4,7 +4,6 @@ import hashlib
 import json
 from typing import Any
 
-from ..constants import UNCATEGORIZED_PROJECT
 from ..contracts.live_display_contracts import (
     ActivitySnapshotContract,
     CurrentActivityContract,
@@ -12,7 +11,6 @@ from ..contracts.live_display_contracts import (
     LiveClockContract,
 )
 from ..formatters import format_duration
-from .activity_display_policy import anchor_project_fields
 from .activity_live_clock import CURRENT_LIVE, current_resource_identity_hash
 from .live_display_service import (
     _display_resource_name,
@@ -21,7 +19,7 @@ from .live_display_service import (
 )
 from .live_time_service import snapshot_elapsed_seconds, snapshot_persisted_id
 
-LIVE_EDIT_DISABLE_REASON = "当前活动尚未进入历史，暂不能编辑"
+LIVE_EDIT_DISABLE_REASON = "当前活动正在进行，暂不能编辑"
 
 
 def build_current_activity_display(
@@ -66,7 +64,7 @@ def build_current_activity_display(
                 "pending": False,
                 "started_at": "",
                 "elapsed_seconds": 0,
-                "threshold_seconds": 30,
+                "threshold_seconds": 0,
                 "from_project_id": None,
                 "to_project_id": None,
             },
@@ -141,10 +139,7 @@ def build_current_activity_display(
     display["base_policy"] = str(live_clock.get("base_policy") or "")
     display["status_only_reason"] = str(live_clock.get("status_only_reason") or "")
     display["base_policy_reason"] = str(live_clock.get("base_policy_reason") or "")
-    display["is_virtual_live"] = display_live_state in (
-        "borrowed_anchor_pending",
-        "current_only_pending",
-    )
+    display["is_virtual_live"] = False
     display["is_in_progress"] = display_live_state == "persisted_open"
     display["source"] = source_for_state(display_live_state)
     return display
@@ -181,10 +176,8 @@ def build_display_structural_signature(
         "project_live_span": {
             "display_span_id": str(live_clock.get("display_span_id") or ""),
             "anchor_activity_id": int(anchor.get("id") or 0) if anchor else 0,
-            "anchor_project_id": int(display_policy.get("borrowed_anchor_project_id") or 0),
-            "anchor_project_name": str(
-                display_policy.get("borrowed_anchor_project_name") or ""
-            ),
+            "anchor_project_id": 0,
+            "anchor_project_name": "",
             "materialize_recent": bool(display_policy.get("materialize_recent")),
             "materialize_timeline": bool(display_policy.get("materialize_timeline")),
             "materialize_details": bool(display_policy.get("materialize_details")),
@@ -208,8 +201,6 @@ def build_display_structural_signature(
 def source_for_state(state: str) -> str:
     if state == "persisted_open":
         return "db"
-    if state in ("borrowed_anchor_pending", "current_only_pending"):
-        return "snapshot"
     return "none"
 
 
@@ -258,26 +249,9 @@ def build_display_span(
         candidate_project = project_fields["candidate_project"]
         is_uncategorized = bool(project_fields["is_uncategorized"])
         is_classified = bool(project_fields["is_classified"])
-    elif display_live_state == "borrowed_anchor_pending" and anchor:
-        anchor_id = int(anchor.get("id") or 0)
-        activity_id = anchor_id
-        start_time = str(anchor.get("start_time") or start_time)
-        source = "borrowed_anchor_pending"
-        is_virtual = True
-        is_persisted = False
-        is_absorbed = True
-        live_anchor_base_seconds = int(anchor.get("duration_seconds") or 0)
-        anchor_project = anchor_project_fields(anchor)
-        project_name = str(anchor_project["project_name"] or UNCATEGORIZED_PROJECT)
-        project_description = str(anchor_project["project_description"] or "")
-        project_id = int(anchor_project["project_id"] or 0)
-        display_project = anchor_project["display_project"]
-        candidate_project = anchor_project["candidate_project"]
-        is_uncategorized = bool(anchor_project["is_uncategorized"])
-        is_classified = bool(anchor_project["is_classified"])
     else:
-        source = "snapshot"
-        is_virtual = True
+        source = "none"
+        is_virtual = False
         is_persisted = False
         is_absorbed = False
         project_name = project_fields["project_name"]
@@ -330,8 +304,8 @@ def build_display_span(
         "is_visible_in_timeline": bool(policy.get("materialize_timeline")),
         "is_visible_in_details": bool(policy.get("materialize_details")),
         "is_absorbed": bool(is_absorbed),
-        "is_display_only": display_live_state == "borrowed_anchor_pending",
-        "display_only": display_live_state == "borrowed_anchor_pending",
+        "is_display_only": False,
+        "display_only": False,
         "editable": False,
         "exportable": False,
         "edit_disabled": True,

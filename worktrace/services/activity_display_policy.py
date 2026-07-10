@@ -3,19 +3,13 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any
 
-from ..constants import STATUS_NORMAL, UNCATEGORIZED_PROJECT
+from ..constants import STATUS_NORMAL
 from ..contracts.live_display_contracts import (
     ActivitySnapshotContract,
     CurrentActivityContract,
     DisplaySessionPolicyContract,
 )
 from ..formatters import format_status_label
-from . import (
-    activity_continuity_service,
-    activity_service,
-    session_boundary_service,
-)
-from .activity_display_projection import resolve_official_anchor_project
 from .live_display_service import classify_live_state
 from .live_time_service import snapshot_extra_seconds
 
@@ -51,11 +45,7 @@ def classify_display_live_state(
     base = classify_live_state(snapshot)
     if base in ("paused", "idle", "excluded", "error"):
         return "status_only" if report_date and today and report_date == today else "none"
-    if base != "virtual":
-        return base
-    if not report_date or not today or report_date != today:
-        return "none"
-    return "current_only_pending"
+    return base
 
 
 def status_only_reason_for_state(display_live_state: str) -> str:
@@ -120,30 +110,6 @@ def build_status_display_item(
         "disable_reason": "系统状态行不可编辑",
         "source": "status_only",
     }
-
-
-def anchor_project_fields(anchor: dict[str, Any] | None) -> dict[str, Any]:
-    return resolve_official_anchor_project(anchor)
-
-
-def resolve_borrowed_display_anchor(
-    snapshot: ActivitySnapshotContract | None,
-    report_date: str | None,
-    today: str | None,
-) -> dict[str, Any] | None:
-    if not snapshot or not report_date or not today or report_date != today:
-        return None
-    if classify_live_state(snapshot) != "virtual":
-        return None
-    if str(snapshot.get("status") or "") != STATUS_NORMAL:
-        return None
-    latest_boundary = session_boundary_service.latest_boundary_time() or None
-    anchor = activity_service.get_latest_closed_auto_normal_activity(
-        after_time=latest_boundary
-    )
-    if not activity_continuity_service.can_absorb_short_pending(anchor, snapshot):
-        return None
-    return anchor
 
 
 def build_display_session_policy(
@@ -219,44 +185,6 @@ def build_display_session_policy(
             materialize_details=True,
             status_only_reason="",
             base_policy_reason="persisted_open_extra",
-        )
-
-    if display_live_state in ("borrowed_anchor_pending", "current_only_pending"):
-        if anchor:
-            anchor_base = int(anchor.get("duration_seconds") or 0)
-            anchor_project = anchor_project_fields(anchor)
-            return DisplaySessionPolicy(
-                display_session_kind="borrowed_anchor_pending",
-                base_policy="borrowed_anchor_static",
-                aggregate_base_seconds=anchor_base,
-                current_base_seconds=0,
-                project_duration_live=True,
-                current_duration_live=live_started_at > 0,
-                materialize_recent=True,
-                materialize_timeline=True,
-                materialize_details=True,
-                status_only_reason="",
-                base_policy_reason="borrowed_anchor_pending",
-                borrowed_anchor_activity_id=int(anchor.get("id") or 0),
-                borrowed_anchor_base_seconds=anchor_base,
-                borrowed_anchor_project_id=int(anchor_project["project_id"] or 0),
-                borrowed_anchor_project_name=str(anchor_project["project_name"] or ""),
-                borrowed_anchor_project_description=str(
-                    anchor_project["project_description"] or ""
-                ),
-            )
-        return DisplaySessionPolicy(
-            display_session_kind="current_only_pending",
-            base_policy="current_only_zero",
-            aggregate_base_seconds=0,
-            current_base_seconds=0,
-            project_duration_live=False,
-            current_duration_live=live_started_at > 0,
-            materialize_recent=False,
-            materialize_timeline=False,
-            materialize_details=False,
-            status_only_reason="",
-            base_policy_reason="unanchored_pending_current_only",
         )
 
     return DisplaySessionPolicy(

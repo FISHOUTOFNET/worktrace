@@ -35,7 +35,6 @@ class SnapshotPublisher:
         at_time: str,
         project_ownership_state: ProjectOwnershipState | None,
         persisted_activity_id: int | None,
-        current_extra_seconds: int,
     ) -> None:
         if payload is None or start_time is None:
             self.clear()
@@ -97,7 +96,9 @@ class SnapshotPublisher:
             "status": status,
             "start_time": start_time,
             "elapsed_seconds": elapsed,
-            "extra_seconds": current_extra_seconds,
+            # Raw rows are never extended by absorbed short activity. Keep
+            # the contract field for readers that have not yet dropped it.
+            "extra_seconds": 0,
             "persisted_activity_id": persisted_activity_id,
             "is_persisted": persisted_activity_id is not None,
             "display_project": display_project_dict,

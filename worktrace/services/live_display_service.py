@@ -2,8 +2,8 @@
 
 This module is NOT the page live-display model owner. The owner is
 :mod:`worktrace.services.activity_display_model_service`, which solely
-decides live-eligibility, ``live_state``
-(``current_only_pending`` / ``borrowed_anchor_pending`` / ``persisted_open``),
+decides live-eligibility and ``live_state`` (``persisted_open`` for normal
+activity),
 display span identity, and visibility of live rows.
 
 This module retains ONLY the low-level pure helpers used by
@@ -14,9 +14,8 @@ current-activity summary (``build_current_activity_summary``),
 refresh-revision computation (``compute_refresh_revision``), classification,
 and the persisted-open live-seconds helper.
 
-Display projection is purely a UI overlay. It NEVER writes the DB,
-NEVER changes the 30-second collector persistence threshold, and NEVER
-persists a <30s activity early. Returns display-safe JSON-serializable
+Display projection is purely a UI overlay. It NEVER writes the DB or changes
+collector lifecycle. Returns display-safe JSON-serializable
 payloads only — raw ``window_title``, ``file_path_hint``, ``note``,
 ``clipboard`` and any traceback / SQL are NEVER surfaced.
 """
@@ -76,16 +75,14 @@ def classify_live_state(snapshot: ActivitySnapshotContract | None) -> str:
     Returns one of:
 
     - ``"none"``         — no snapshot / unsupported status.
-    - ``"virtual"``      — normal, not persisted, no persisted_activity_id;
-                            eligible for virtual live display.
     - ``"persisted_open"`` — normal, persisted with a real open DB row.
     - ``"paused"``       — status == paused.
     - ``"idle"``         — status == idle.
     - ``"excluded"``     — status == excluded.
     - ``"error"``        — status == error.
 
-    Only ``"virtual"`` and ``"persisted_open"`` are eligible to increment
-    the normal project live duration. ``"paused"`` / ``"idle"`` /
+    Only ``"persisted_open"`` is eligible to increment the normal project
+    live duration. ``"paused"`` / ``"idle"`` /
     ``"excluded"`` / ``"error"`` may still render a status line but MUST
     NOT contribute to normal project live duration.
     """
@@ -104,7 +101,9 @@ def classify_live_state(snapshot: ActivitySnapshotContract | None) -> str:
         return "none"
     if bool(snapshot.get("is_persisted")) or snapshot_persisted_id(snapshot):
         return "persisted_open"
-    return "virtual"
+    # A normal snapshot without its required persisted row is invalid.
+    # Fail closed rather than creating a display-only activity.
+    return "none"
 
 
 def is_live_eligible_for_normal(
@@ -123,13 +122,13 @@ def is_live_eligible_for_normal(
       error);
     - report_date == today (historical dates are not projected).
 
-    Persisted-open rows are ALSO eligible: they need the same continuous
-    live increment, just sourced from the real DB row instead of a
-    virtual row. The caller distinguishes the two via ``classify_live_state``.
+    Normal snapshots are eligible only when backed by a persisted open row.
     """
     if not snapshot:
         return False
     if _snapshot_status(snapshot) != STATUS_NORMAL:
+        return False
+    if classify_live_state(snapshot) != "persisted_open":
         return False
     if not report_date or not today:
         return False
@@ -187,6 +186,23 @@ def _snapshot_display_project_dict(
     return None
 
 
+def _project_transition_for_display(snapshot: ActivitySnapshotContract | None) -> dict[str, Any]:
+    """Return the compatibility-shaped, permanently non-pending transition.
+
+    Old runtime snapshots may contain a pending confirmation window. It is
+    deliberately ignored at the display boundary so stale state cannot
+    resurrect project inheritance.
+    """
+    return {
+        "pending": False,
+        "started_at": "",
+        "elapsed_seconds": 0,
+        "threshold_seconds": 0,
+        "from_project_id": None,
+        "to_project_id": None,
+    }
+
+
 def _official_project_name_for_persisted_row(activity_id: int) -> str:
     """Return the official project name for a persisted open DB row, or ``""``.
 
@@ -231,13 +247,13 @@ def _display_project_name(snapshot: ActivitySnapshotContract | None) -> str:
     snapshot has no structured block, the DB row is checked via
     ``project_attribution_policy`` — only official sources surface a
     project name; suggested / context-derived / uncategorized all resolve
-    to ``UNCATEGORIZED_PROJECT``. Virtual snapshots without a structured
-    block also stay uncategorized.
+    to ``UNCATEGORIZED_PROJECT``. Snapshots without a structured block also
+    stay uncategorized.
     """
     if not snapshot:
         return UNCATEGORIZED_PROJECT
     dp = _snapshot_display_project_dict(snapshot)
-    if dp:
+    if dp and is_official_project_source(str(dp.get("source") or "")):
         name = str(dp.get("name") or "").strip()
         if name:
             return name
@@ -251,8 +267,6 @@ def _display_project_name(snapshot: ActivitySnapshotContract | None) -> str:
         # fall back to ``inferred_project_name`` which may carry the
         # suggested project name and leak it into the formal display.
         return UNCATEGORIZED_PROJECT
-    # Virtual (unpersisted) snapshot: the ownership state machine must
-    # provide a structured display_project block for a formal project.
     # Incomplete snapshots stay uncategorized instead of leaking raw
     # inferred/candidate metadata into official display fields.
     return UNCATEGORIZED_PROJECT
@@ -270,7 +284,7 @@ def _display_project_description(snapshot: ActivitySnapshotContract | None) -> s
     if not snapshot:
         return ""
     dp = _snapshot_display_project_dict(snapshot)
-    if dp:
+    if dp and is_official_project_source(str(dp.get("source") or "")):
         return str(dp.get("description") or "")
     dp_name = _display_project_name(snapshot)
     if dp_name and dp_name != UNCATEGORIZED_PROJECT:
@@ -287,10 +301,8 @@ def _stable_live_key(snapshot: ActivitySnapshotContract | None) -> str:
 
     Unlike ``_live_display_key``, this key does NOT include
     ``is_persisted`` / ``persisted_activity_id`` / ``inferred_project_name``
-    so it remains the same when the activity transitions from virtual
-    (unpersisted) to persisted_open. The frontend ticker uses this key as
-    the continuity anchor so the duration display does not reset when the
-    30-second persistence threshold is crossed.
+    so refreshes preserve one stable continuity anchor for the persisted open
+    activity.
 
     The key is constructed ONLY from sanitized display fields
     (``resource_display_name`` / ``activity_display_name`` / ``app_name`` /
@@ -421,7 +433,7 @@ def build_current_activity_summary(
                 "pending": False,
                 "started_at": "",
                 "elapsed_seconds": 0,
-                "threshold_seconds": 30,
+                "threshold_seconds": 0,
                 "from_project_id": None,
                 "to_project_id": None,
             },
@@ -442,12 +454,9 @@ def build_current_activity_summary(
     is_paused = status == STATUS_PAUSED
     is_persisted = bool(snapshot.get("is_persisted"))
     persisted_id = snapshot_persisted_id(snapshot) or 0
-    # is_in_progress is True only when the snapshot represents a real
-    # persisted open DB row. Virtual (unpersisted) rows carry
-    # ``is_virtual_live = True`` instead so the frontend can distinguish
-    # the two rendering paths.
+    # Normal activity must always represent a real persisted open DB row.
     is_in_progress = live_state == "persisted_open"
-    is_virtual_live = live_state == "virtual"
+    is_virtual_live = False
     is_uncategorized = (
         not project_name or project_name == UNCATEGORIZED_PROJECT
     )
@@ -466,17 +475,8 @@ def build_current_activity_summary(
     candidate_project_dict = snapshot.get("candidate_project") if snapshot else None
     if not isinstance(candidate_project_dict, dict) or not candidate_project_dict:
         candidate_project_dict = display_project_dict
-    project_transition_dict = snapshot.get("project_transition") if snapshot else None
-    if not isinstance(project_transition_dict, dict):
-        project_transition_dict = {
-            "pending": False,
-            "started_at": "",
-            "elapsed_seconds": 0,
-            "threshold_seconds": 30,
-            "from_project_id": None,
-            "to_project_id": None,
-        }
-    project_transition_pending = bool(project_transition_dict.get("pending"))
+    project_transition_dict = _project_transition_for_display(snapshot)
+    project_transition_pending = False
     # Unified live clock: the frontend computes display_seconds =
     # carry_seconds + floor((Date.now() - live_started_at_epoch_ms) / 1000)
     # so the current activity doesn't jump across refreshes. start_time is
@@ -484,7 +484,7 @@ def build_current_activity_summary(
     live_started_at_epoch_ms = _start_time_epoch_ms(snapshot)
     from ..formatters import format_duration
 
-    state_label = "已进入历史" if is_persisted else "暂不入历史"
+    state_label = "进行中" if is_persisted else "活动状态异常"
     if status == STATUS_IDLE:
         resource_name = "空闲中"
         state_label = "空闲"
@@ -522,7 +522,7 @@ def build_current_activity_summary(
         "start_time": start_time,
         "end_time": None,
         "activity_id": int(persisted_id or 0) or None,
-        "source": "db" if is_in_progress else ("snapshot" if is_virtual_live else "none"),
+        "source": "db" if is_in_progress else "none",
         "is_uncategorized": bool(is_uncategorized),
         "is_classified": not bool(is_uncategorized),
         # Project ownership fields (display-safe).
@@ -541,10 +541,8 @@ def _snapshot_display_project_fields(
 
     Centralizes project-field extraction so the unified Activity Display
     Model can apply the SAME source of truth for project attribution
-    across the live span overlay and the current-activity summary. During
-    the 30s pending transition the fields come from the snapshot's
-    ``display_project`` block (the inherited last-confirmed project), NOT
-    from the DB row's candidate assignment.
+    across the live span overlay and the current-activity summary. The
+    snapshot display project is honored only when it has an official source.
 
     Returns a dict with: ``project_id``, ``project_name``,
     ``project_description``, ``display_project``, ``candidate_project``,
@@ -568,16 +566,7 @@ def _snapshot_display_project_fields(
     candidate_project_dict = snapshot.get("candidate_project") if snapshot else None
     if not isinstance(candidate_project_dict, dict) or not candidate_project_dict:
         candidate_project_dict = display_project_dict
-    project_transition_dict = snapshot.get("project_transition") if snapshot else None
-    if not isinstance(project_transition_dict, dict):
-        project_transition_dict = {
-            "pending": False,
-            "started_at": "",
-            "elapsed_seconds": 0,
-            "threshold_seconds": 30,
-            "from_project_id": None,
-            "to_project_id": None,
-        }
+    project_transition_dict = _project_transition_for_display(snapshot)
     dp_id = display_project_dict.get("id")
     # DB fallback only when snapshot has no structured display_project block.
     # Assignment source is policy-checked: only official sources surface a project_id.
@@ -604,7 +593,7 @@ def _snapshot_display_project_fields(
         "display_project": display_project_dict,
         "candidate_project": candidate_project_dict,
         "project_transition": project_transition_dict,
-        "project_transition_pending": bool(project_transition_dict.get("pending")),
+        "project_transition_pending": False,
         "is_uncategorized": bool(is_uncategorized),
         "is_classified": not bool(is_uncategorized),
         "status": _snapshot_status(snapshot),

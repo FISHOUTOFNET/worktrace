@@ -79,7 +79,7 @@
         for (var i = 0; i < sessions.length; i++) {
             var s = sessions[i];
             var sessionCanTick = s.live_delta_eligible === true && !!s.display_span_id;
-            // Live projection convergence: virtual live sessions are display-only; backend marks
+            // Live projection rows are non-editable while their activity is open; backend marks
             // ``edit_disabled=True`` so the edit panel stays disabled.
             if (s.is_live_projected === true
                 && !s.display_span_id
@@ -210,7 +210,7 @@
                     && (!App.editingSession || App.editingSession.session_id !== found.session_id || !isEditDirty())) {
                     populateEditPanel(found);
                 } else if (found.edit_disabled) {
-                    // Virtual / persisted_open live session: clear the edit panel since it cannot be edited.
+            // Persisted-open live session: clear the edit panel since it cannot be edited.
                     clearEditPanel();
                 }
             } else {
@@ -295,7 +295,7 @@
         var found = newSelected;
         if (found) {
             loadSessionActivitySummary(found.summary_activity_ids || found.activity_ids, App.timelineDate);
-            // Virtual live sessions are display-only; a manual click must NOT open the edit panel. Clear it instead.
+            // Open live sessions are non-editable; a manual click must clear the edit panel.
             if (found.edit_disabled === true || found.is_virtual === true) {
                 clearEditPanel();
             } else {

@@ -75,20 +75,18 @@ def test_activity_session_recorder_does_not_build_or_write_snapshot_json():
     assert "set_setting" not in source
 
 
-def test_short_activity_finalizer_is_short_merge_drop_resume_owner():
-    owner = "worktrace/collector/short_activity_finalizer.py"
+def test_collector_has_no_short_activity_absorption_owner_or_mutation_path():
     policy_symbols = (
-        "can_merge_finished_short_activity",
-        "can_absorb_short_pending",
-        "get_latest_closed_auto_normal_activity",
+        "ShortActivityFinalizer",
+        "FinishedActivityCandidate",
+        "merge_to_anchor",
+        "resume_anchor",
+        "resume_absorbed_anchor",
         "increment_activity_duration",
         "reopen_activity",
     )
     offenders: list[str] = []
     for py_file in _py_sources(COLLECTOR_DIR):
-        rel = py_file.relative_to(REPO_ROOT).as_posix()
-        if rel == owner:
-            continue
         source = py_file.read_text(encoding="utf-8")
         for symbol in policy_symbols:
             if symbol in source:
@@ -189,7 +187,7 @@ def test_open_row_lifecycle_commands_stay_behind_lifecycle_facade():
     assert offenders == []
     lifecycle = _source("worktrace/services/activity_lifecycle_service.py")
     for public_command in (
-        "persist_open_activity_if_ready",
+        "persist_open_activity",
         "force_persist_open_activity_for_clipboard",
         "close_activity",
         "close_all_open_activities",
@@ -235,29 +233,60 @@ def test_report_services_do_not_read_current_activity_snapshot():
     assert offenders == []
 
 
-def test_history_persist_and_project_ownership_thresholds_are_not_mixed():
+def test_collector_has_no_persistence_threshold_or_project_confirmation_window():
     lifecycle = _source("worktrace/services/activity_lifecycle_service.py")
     ownership = _source("worktrace/services/project_ownership_service.py")
-    assert "HISTORY_PERSIST_THRESHOLD_SECONDS" in lifecycle
-    assert "PROJECT_OWNERSHIP_CONFIRM_SECONDS" not in lifecycle
-    assert "PROJECT_OWNERSHIP_CONFIRM_SECONDS" in ownership
-    assert "HISTORY_PERSIST_THRESHOLD_SECONDS" not in {
-        node.id
-        for node in ast.walk(ast.parse(ownership))
-        if isinstance(node, ast.Name)
-    }
+    assert "HISTORY_PERSIST_THRESHOLD_SECONDS" not in lifecycle
+    assert "PROJECT_OWNERSHIP_CONFIRM_SECONDS" not in ownership
+    assert "pending=True" not in ownership
 
 
-def test_display_only_borrowed_anchor_projection_has_no_db_mutation_helpers():
+def test_live_display_has_no_virtual_or_borrowed_anchor_production_states():
+    modules = (
+        "worktrace/services/live_display_service.py",
+        "worktrace/services/activity_display_model_service.py",
+        "worktrace/services/activity_display_policy.py",
+        "worktrace/services/activity_display_span.py",
+        "worktrace/services/activity_row_overlay.py",
+        "worktrace/services/view_model_service.py",
+    )
+    forbidden_states = ("borrowed_anchor_pending", "current_only_pending", "current_only_zero", "borrowed_anchor_static")
+    offenders = [
+        f"{path}: {token}"
+        for path in modules
+        for token in forbidden_states
+        if token in _source(path)
+    ]
+    assert offenders == []
+
+
+def test_display_model_has_no_raw_db_mutation_or_borrowed_anchor_lookup():
     source = _source("worktrace/services/activity_display_model_service.py")
     forbidden = (
         "increment_activity_duration",
         "set_activity_duration",
         "reopen_activity",
         "close_activity",
-        "persist_open_activity_if_ready",
+        "persist_open_activity",
+        "resolve_borrowed_display_anchor",
     )
     offenders = [token for token in forbidden if token in source]
+    assert offenders == []
+
+
+def test_pending_short_settings_are_limited_to_compatibility_cleanup():
+    allowed = {
+        "worktrace/db.py",
+        "worktrace/services/runtime_activity_state_service.py",
+        "worktrace/services/secure_backup_service.py",
+    }
+    keys = ("pending_short_seconds", "pending_short_carry_provenance")
+    offenders = [
+        py_file.relative_to(REPO_ROOT).as_posix()
+        for py_file in _py_sources(REPO_ROOT / "worktrace")
+        if py_file.relative_to(REPO_ROOT).as_posix() not in allowed
+        and any(key in py_file.read_text(encoding="utf-8") for key in keys)
+    ]
     assert offenders == []
 
 
