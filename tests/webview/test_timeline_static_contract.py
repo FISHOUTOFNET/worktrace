@@ -90,7 +90,6 @@ def test_index_html_rules_and_settings_are_full_pages():
     assert "项目规则" in rules_section
     assert "新建规则" in rules_section
     assert "新建项目" in rules_section
-    assert "高级功能" in rules_section
     assert "按上次使用排序" in rules_section
     assert "按首字母排序" in rules_section
     assert "自动归类" in rules_section

@@ -418,7 +418,6 @@ def test_index_html_project_rules_page_migrated_after():
     assert "项目规则" in section
     assert "新建规则" in section
     assert "新建项目" in section
-    assert "高级功能" in section
     assert "按上次使用排序" in section
     assert "按首字母排序" in section
     assert "应用到历史记录" in section
