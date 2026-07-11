@@ -28,7 +28,7 @@ def get_default_report_date() -> str:
 
 def get_project_sessions_by_date(
     date: str,
-    include_hidden: bool = True,
+    include_hidden: bool = False,
     ensure_context: bool = True,
 ) -> list[dict[str, Any]]:
     return timeline_service.get_project_sessions_by_date(
@@ -41,7 +41,7 @@ def get_project_sessions_by_date(
 def get_project_sessions_by_range(
     start_date: str,
     end_date: str,
-    include_hidden: bool = True,
+    include_hidden: bool = False,
     ensure_context: bool = True,
 ) -> list[dict[str, Any]]:
     return timeline_service.get_project_sessions_by_range(
@@ -127,7 +127,7 @@ def update_timeline_session_note(
     text = _validate_note(str(note or ""))
     for aid in ids:
         _ensure_project_editable_for_value_error(activity_service.get_activity(aid))
-    session = timeline_service.get_project_sessions_by_date(date, include_hidden=True, ensure_context=True)
+    session = timeline_service.get_project_sessions_by_date(date, include_hidden=False, ensure_context=True)
     current = _find_session_by_identity(session, ids, member_hash)
     timeline_service.update_session_override(
         date,

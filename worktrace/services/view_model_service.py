@@ -598,6 +598,7 @@ def get_timeline_view_model(report_date: str | None = None) -> dict[str, Any]:
             "activity_ids": list(session.get("activity_ids") or []),
             "activity_member_hash": str(session.get("activity_member_hash") or ""),
             "projection_instance_key": str(session.get("projection_instance_key") or ""),
+            "session_detail_revision": str(session.get("session_detail_revision") or ""),
             "projection_kind": str(session.get("projection_kind") or "base"),
             "operation_id": session.get("operation_id"),
             "operation_group_key": session.get("operation_group_key"),
@@ -790,12 +791,11 @@ def get_session_details_view_model(
 
 
 def get_session_activity_summary_view_model(
-    activity_ids: list[int] | None = None,
+    *,
     report_date: str | None = None,
-    projection_instance_key: str | None = None,
+    projection_instance_key: str,
 ) -> dict[str, Any]:
     """Build the Timeline right-panel summary scoped by session activities."""
-    ids = [int(aid) for aid in (activity_ids or [])]
     date = report_date or timeline_service.get_default_report_date()
     today = timeline_service.get_default_report_date()
     snapshot = _get_current_activity_snapshot()
@@ -817,14 +817,9 @@ def get_session_activity_summary_view_model(
         report_date=today,
     )
 
-    if projection_instance_key:
-        rows = project_activity_summary_service.get_projection_session_activity_summary(
-            projection_instance_key, date, ensure_context=True
-        )
-    else:
-        rows = project_activity_summary_service.get_session_activity_summary(
-            ids, date, include_hidden=False, ensure_context=True
-        )
+    rows = project_activity_summary_service.get_projection_session_activity_summary(
+        projection_instance_key, date, ensure_context=False
+    )
     _apply_live_span_to_rows(
         rows,
         report_model,
@@ -841,8 +836,7 @@ def get_session_activity_summary_view_model(
     return {
         "ok": True,
         "date": date,
-        "activity_ids": ids,
-        "projection_instance_key": projection_instance_key or "",
+        "projection_instance_key": projection_instance_key,
         "summary_rows": rows,
         "current_activity": current_activity,
         "live_clock": live_clock,

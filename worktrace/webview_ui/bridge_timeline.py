@@ -83,7 +83,7 @@ class TimelineBridgeMixin:
 
     def get_timeline_session_activity_summary(
         self,
-        projection_instance_key: str | list[int],
+        projection_instance_key: str,
         report_date: str | None = None,
     ) -> dict[str, Any]:
         """Return session-scoped activity duration summaries for Timeline."""
@@ -91,51 +91,21 @@ class TimelineBridgeMixin:
             if report_date is not None and (
                 not isinstance(report_date, str) or not _DATE_SHAPE_RE.match(report_date)
             ):
-                return {"ok": False, "error": "日期无效"}
-            if isinstance(projection_instance_key, str):
-                if not projection_instance_key.strip():
-                    return {"ok": False, "error": "请选择有效的活动时段"}
-                return view_model_api.get_session_activity_summary_view_model(
-                    report_date=report_date,
-                    projection_instance_key=projection_instance_key.strip(),
-                )
-            # Compatibility fallback for callers not yet carrying projection
-            # identity. New Timeline actions always take the string path.
-            ids_result = self._coerce_session_summary_activity_ids(projection_instance_key)
-            if ids_result is None:
-                return {"ok": False, "error": "请选择有效的活动时段"}
-            ids = ids_result
-            if not ids:
-                return {
-                    "ok": True,
-                    "date": report_date,
-                    "activity_ids": [],
-                    "summary_rows": [],
-                }
-            return view_model_api.get_session_activity_summary_view_model(ids, report_date)
-        except (TypeError, ValueError):
-            return {"ok": False, "error": "请选择有效的活动时段"}
+                return {"ok": False, "error": "invalid_input", "message": "日期无效"}
+            if not isinstance(projection_instance_key, str) or not projection_instance_key.strip():
+                return {"ok": False, "error": "invalid_input", "message": "请选择有效的活动时段"}
+            return view_model_api.get_session_activity_summary_view_model(
+                report_date=report_date,
+                projection_instance_key=projection_instance_key.strip(),
+            )
+        except ValueError as exc:
+            code = str(exc)
+            if code == "stale_selection":
+                return {"ok": False, "error": "stale_selection", "message": "活动时段已更新，正在刷新"}
+            return {"ok": False, "error": "invalid_input", "message": "请选择有效的活动时段"}
         except Exception:
             logger.exception("webview bridge get_timeline_session_activity_summary failed")
-            return dict(_GENERIC_ERROR)
-
-    @staticmethod
-    def _coerce_session_summary_activity_ids(activity_ids: Any) -> list[int] | None:
-        if not isinstance(activity_ids, (list, tuple)):
-            return None
-        ids: list[int] = []
-        seen: set[int] = set()
-        for raw in activity_ids:
-            if isinstance(raw, bool) or not isinstance(raw, int):
-                return None
-            value = raw
-            if value <= 0:
-                return None
-            if value in seen:
-                continue
-            seen.add(value)
-            ids.append(value)
-        return ids
+            return {"ok": False, "error": "operation_failed", "message": "加载项目活动耗时失败"}
 
     def list_projects_for_timeline(self) -> dict[str, Any]:
         """Return the list of projects selectable for Timeline reclassification.

@@ -139,7 +139,7 @@ def test_session_activity_summary_live_overlay_requires_selected_activity_match(
     monkeypatch.setattr(timeline_service, "get_default_report_date", lambda: "2026-07-09")
     monkeypatch.setattr(
         project_activity_summary_service,
-        "get_session_activity_summary",
+        "get_projection_session_activity_summary",
         lambda *args, **kwargs: [
             {
                 "row_kind": "project_activity_summary",
@@ -198,31 +198,15 @@ def test_session_activity_summary_live_overlay_requires_selected_activity_match(
 
     monkeypatch.setattr(view_model_service, "build_activity_display_model", fake_model)
 
-    result = view_model_service.get_session_activity_summary_view_model([7], "2026-07-09")
+    result = view_model_service.get_session_activity_summary_view_model(
+        report_date="2026-07-09", projection_instance_key="base:selected"
+    )
 
     row = result["summary_rows"][0]
     assert row["duration_seconds"] == 20
     assert row["live_delta_eligible"] is False
     assert row["display_span_id"] == ""
     assert len(result["summary_rows"]) == 1
-
-
-def test_view_model_summary_rows_are_scoped_to_activity_ids(monkeypatch):
-    monkeypatch.setattr(timeline_service, "get_default_report_date", lambda: "2026-07-09")
-    monkeypatch.setattr(view_model_service, "build_activity_display_model", lambda *args, **kwargs: _closed_model())
-
-    def fake_details(activity_ids, report_date=None, ensure_context=True):
-        if activity_ids == [1]:
-            return [_row(1, identity="only-selected", seconds=30, title="Selected")]
-        return [_row(2, identity="other-session", seconds=300, title="Other")]
-
-    monkeypatch.setattr(timeline_service, "get_session_activity_details", fake_details)
-
-    result = view_model_service.get_session_activity_summary_view_model([1], "2026-07-09")
-
-    assert result["activity_ids"] == [1]
-    assert [row["activity_name"] for row in result["summary_rows"]] == ["Selected"]
-    assert "correction_activities" not in result
 
 
 def test_uncategorized_session_activity_has_summary(monkeypatch):

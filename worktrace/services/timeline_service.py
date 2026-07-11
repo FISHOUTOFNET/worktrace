@@ -29,14 +29,14 @@ from .project_service import get_or_create_uncategorized_project
 from .resource_service import attach_resource
 from .settings_service import get_int_setting
 
-def get_project_sessions_by_date(date: str, include_hidden: bool = True, ensure_context: bool = True) -> list[dict]:
+def get_project_sessions_by_date(date: str, include_hidden: bool = False, ensure_context: bool = True) -> list[dict]:
     return get_project_sessions_by_range(date, date, include_hidden=include_hidden, ensure_context=ensure_context)
 
 
 def get_project_sessions_by_range(
     start_date: str,
     end_date: str,
-    include_hidden: bool = True,
+    include_hidden: bool = False,
     ensure_context: bool = True,
 ) -> list[dict]:
     return report_session_projection_service.get_report_sessions_by_range(
@@ -76,14 +76,15 @@ def _is_project_session_row(row: dict) -> bool:
 def get_report_activity_rows(
     start_date: str,
     end_date: str,
-    include_hidden: bool = True,
+    include_hidden: bool = False,
     ensure_context: bool = True,
+    conn=None,
 ) -> list[dict]:
     if ensure_context:
         _ensure_context_for_report_range(start_date, end_date)
-    uncategorized_id = get_or_create_uncategorized_project()
-    rows = _load_activity_rows_for_report_range(start_date, end_date, include_hidden)
-    boundary_times = _boundary_times_for_rows(rows)
+    uncategorized_id = get_or_create_uncategorized_project(conn=conn) if conn is not None else get_or_create_uncategorized_project()
+    rows = _load_activity_rows_for_report_range(start_date, end_date, include_hidden, conn=conn)
+    boundary_times = _boundary_times_for_rows(rows, conn=conn)
     rows = _with_reporting_projects(_with_display_projects(rows, uncategorized_id), boundary_times)
     return [
         row
@@ -276,13 +277,30 @@ def _require_editable_session_activity_ids(activity_ids) -> None:
         require_project_editable_activity(int(activity_id))
 
 
-def _load_activity_rows_for_report_range(start_date: str, end_date: str, include_hidden: bool) -> list[dict]:
+def _load_activity_rows_for_report_range(start_date: str, end_date: str, include_hidden: bool, *, conn=None) -> list[dict]:
     load_start_day = date_type.fromisoformat(start_date) - timedelta(days=1)
     load_start = f"{load_start_day.isoformat()} 00:00:00"
     # Project report dates can carry into the day after the requested range.
     load_end_day = date_type.fromisoformat(end_date) + timedelta(days=2)
     load_end = f"{load_end_day.isoformat()} 00:00:00"
-    with get_connection() as conn:
+    if conn is None:
+        with get_connection() as read_conn:
+            rows = read_conn.execute(
+                """
+                SELECT
+                    a.*, apa.suggested_project_name, apa.source AS assignment_source,
+                    apa.is_manual AS assignment_is_manual, apa.project_id AS effective_project_id,
+                    p.name AS effective_project_name, p.description AS effective_project_description,
+                    COALESCE(p.is_archived, 0) AS effective_project_is_archived,
+                    COALESCE(p.is_deleted, 0) AS effective_project_is_deleted
+                FROM activity_log a LEFT JOIN activity_project_assignment apa ON apa.activity_id = a.id
+                LEFT JOIN project p ON p.id = apa.project_id
+                WHERE a.is_deleted = 0 AND (a.start_time >= ? OR a.end_time IS NULL OR a.end_time >= ?)
+                  AND (a.end_time IS NULL OR a.start_time <= ?) AND (? = 1 OR a.is_hidden = 0)
+                ORDER BY a.start_time ASC, a.id ASC
+                """, (load_start, load_start, load_end, int(include_hidden))
+            ).fetchall()
+    else:
         rows = conn.execute(
             """
             SELECT
@@ -306,7 +324,7 @@ def _load_activity_rows_for_report_range(start_date: str, end_date: str, include
             """,
             (load_start, load_start, load_end, int(include_hidden)),
         ).fetchall()
-    return [attach_resource(row) for row in dict_rows(rows)]
+    return [attach_resource(row, conn=conn) for row in dict_rows(rows)]
 
 
 def _load_session_rows(
@@ -641,7 +659,7 @@ def _has_session_boundary_between(previous: dict, current: dict, boundary_times:
     return has_hard_boundary_between(str(boundary_start), str(boundary_end))
 
 
-def _boundary_times_for_rows(rows: list[dict]) -> list[str]:
+def _boundary_times_for_rows(rows: list[dict], *, conn=None) -> list[str]:
     ranges = [
         str(value)
         for row in rows
@@ -650,7 +668,7 @@ def _boundary_times_for_rows(rows: list[dict]) -> list[str]:
     ]
     if not ranges:
         return []
-    boundaries = session_boundary_service.list_boundaries(min(ranges), max(ranges))
+    boundaries = session_boundary_service.list_boundaries(min(ranges), max(ranges), conn=conn)
     return [str(row["occurred_at"]) for row in boundaries if row.get("occurred_at")]
 
 

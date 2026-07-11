@@ -4,6 +4,7 @@ import hashlib
 from typing import Any
 
 from ..db import get_connection, now_str
+from . import project_lifecycle_policy
 
 ACTIVE = "active"
 CONFLICT = "conflict"
@@ -31,39 +32,59 @@ def member_slices_for_rows(rows: list[dict]) -> list[dict[str, Any]]:
     return members
 
 
+def member_identity_key(member: dict[str, Any], *, report_date: str = "") -> tuple[str, int, str]:
+    """Stable logical report-slice identity.
+
+    Slice end is deliberately excluded: an open activity's elapsed duration is
+    content, not report-session structure.
+    """
+    return (
+        str(member.get("report_date") or report_date or "")[:10],
+        int(member.get("activity_id") or member.get("id") or 0),
+        str(member.get("slice_start_time") or member.get("start_time") or ""),
+    )
+
+
 def activity_member_hash(report_date: str, members: list[dict[str, Any]]) -> str:
     parts = []
     for member in sorted(
         members,
-        key=lambda item: (
-            str(item.get("report_date") or ""),
-            int(item.get("activity_id") or 0),
-            str(item.get("slice_start_time") or ""),
-            str(item.get("slice_end_time") or ""),
-        ),
+        key=lambda item: member_identity_key(item, report_date=report_date),
     ):
         parts.append(
             "|".join(
                 (
-                    str(report_date),
-                    str(int(member.get("activity_id") or 0)),
-                    str(member.get("slice_start_time") or ""),
-                    str(member.get("slice_end_time") or ""),
+                    str(member_identity_key(member, report_date=report_date)[0]),
+                    str(member_identity_key(member, report_date=report_date)[1]),
+                    str(member_identity_key(member, report_date=report_date)[2]),
                 )
             )
         )
     return hashlib.sha1("\n".join(parts).encode("utf-8")).hexdigest()
 
 
-def attach_overrides(sessions: list[dict]) -> list[dict]:
+def attach_overrides(sessions: list[dict], *, conn=None) -> list[dict]:
     if not sessions:
         return sessions
-    _refresh_match_states(sessions)
     dates = sorted({str(session.get("report_date") or "") for session in sessions if session.get("report_date")})
     if not dates:
         return sessions
     placeholders = ",".join("?" for _ in dates)
-    with get_connection() as conn:
+    if conn is None:
+        with get_connection() as read_conn:
+            rows = read_conn.execute(
+                f"""
+                SELECT o.*, p.name AS project_name, p.description AS project_description,
+                       COALESCE(p.is_deleted, 0) AS project_is_deleted,
+                       COALESCE(p.is_archived, 0) AS project_is_archived
+                FROM project_session_override o
+                LEFT JOIN project p ON p.id = o.project_id
+                WHERE o.match_state = ?
+                  AND o.report_date IN ({placeholders})
+                """,
+                [ACTIVE, *dates],
+            ).fetchall()
+    else:
         rows = conn.execute(
             f"""
             SELECT o.*, p.name AS project_name, p.description AS project_description,
@@ -112,6 +133,10 @@ def upsert_session_override(
     if not report_date or not member_hash or not members or anchor_activity_id <= 0:
         raise ValueError("invalid_session_identity")
     with get_connection() as conn:
+        if project_id is not None:
+            project_row = conn.execute("SELECT * FROM project WHERE id = ?", (int(project_id),)).fetchone()
+            if not project_lifecycle_policy.project_selectable_for_editing(dict(project_row) if project_row else None):
+                raise ValueError("project_not_selectable")
         existing = conn.execute(
             """
             SELECT id
@@ -241,7 +266,8 @@ def _apply_override(session: dict, override: dict) -> None:
     session["session_note"] = str(override.get("note") or "")
 
 
-def _refresh_match_states(sessions: list[dict]) -> None:
+def reconcile_match_states(sessions: list[dict], *, conn=None) -> None:
+    """Explicit maintenance command; ordinary report reads must stay pure."""
     dates = sorted({str(session.get("report_date") or "") for session in sessions if session.get("report_date")})
     if not dates:
         return
@@ -249,14 +275,16 @@ def _refresh_match_states(sessions: list[dict]) -> None:
         (str(session.get("report_date") or ""), str(session.get("activity_member_hash") or ""))
         for session in sessions
     }
-    member_to_hash: dict[tuple[str, int, str, str], str] = {}
+    member_to_hash: dict[tuple[str, int, str], str] = {}
     for session in sessions:
         session_hash = str(session.get("activity_member_hash") or "")
         for member in session.get("member_slices") or []:
             member_to_hash[_member_key(member)] = session_hash
     placeholders = ",".join("?" for _ in dates)
-    with get_connection() as conn:
-        overrides = conn.execute(
+    if conn is None:
+        with get_connection() as own_conn:
+            return reconcile_match_states(sessions, conn=own_conn)
+    overrides = conn.execute(
             f"""
             SELECT *
             FROM project_session_override
@@ -264,8 +292,8 @@ def _refresh_match_states(sessions: list[dict]) -> None:
               AND report_date IN ({placeholders})
             """,
             [ACTIVE, *dates],
-        ).fetchall()
-        for override in overrides:
+    ).fetchall()
+    for override in overrides:
             key = (str(override["report_date"]), str(override["activity_member_hash"]))
             if key in current_hashes:
                 continue
@@ -305,13 +333,11 @@ def _supersede_overlapping_overrides(conn, members: list[dict[str, Any]], existi
             WHERE activity_id = ?
               AND report_date = ?
               AND slice_start_time = ?
-              AND slice_end_time = ?
             """,
             (
                 int(member["activity_id"]),
                 str(member["report_date"]),
                 str(member["slice_start_time"]),
-                str(member["slice_end_time"]),
             ),
         ).fetchall()
         for row in rows:
@@ -333,10 +359,5 @@ def _supersede_overlapping_overrides(conn, members: list[dict[str, Any]], existi
     )
 
 
-def _member_key(member: dict[str, Any]) -> tuple[str, int, str, str]:
-    return (
-        str(member.get("report_date") or ""),
-        int(member.get("activity_id") or 0),
-        str(member.get("slice_start_time") or ""),
-        str(member.get("slice_end_time") or ""),
-    )
+def _member_key(member: dict[str, Any]) -> tuple[str, int, str]:
+    return member_identity_key(member)

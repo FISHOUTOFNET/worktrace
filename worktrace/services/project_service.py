@@ -312,19 +312,33 @@ def _invalidate_project_lifecycle_caches() -> None:
     invalidate_context_recompute_cache()
 
 
-def get_or_create_uncategorized_project() -> int:
+def get_or_create_uncategorized_project(*, conn=None) -> int:
     cache_key = str(get_db_path().resolve())
     cached = _UNCATEGORIZED_PROJECT_IDS.get(cache_key)
     if cached is not None:
         return cached
     ts = now_str()
-    with get_connection() as conn:
+    if conn is not None:
         row = conn.execute("SELECT id FROM project WHERE name = ?", (UNCATEGORIZED_PROJECT,)).fetchone()
         if row:
             project_id = int(row["id"])
             _UNCATEGORIZED_PROJECT_IDS[cache_key] = project_id
             return project_id
         cur = conn.execute(
+            """INSERT INTO project(name, description, language, is_archived, enabled, created_by, created_at, updated_at)
+               VALUES (?, '', '中文', 0, 1, 'system', ?, ?)""",
+            (UNCATEGORIZED_PROJECT, ts, ts),
+        )
+        project_id = int(cur.lastrowid)
+        _UNCATEGORIZED_PROJECT_IDS[cache_key] = project_id
+        return project_id
+    with get_connection() as read_conn:
+        row = read_conn.execute("SELECT id FROM project WHERE name = ?", (UNCATEGORIZED_PROJECT,)).fetchone()
+        if row:
+            project_id = int(row["id"])
+            _UNCATEGORIZED_PROJECT_IDS[cache_key] = project_id
+            return project_id
+        cur = read_conn.execute(
             """
             INSERT INTO project(name, description, language, is_archived, enabled, created_by, created_at, updated_at)
             VALUES (?, '', '中文', 0, 1, 'system', ?, ?)

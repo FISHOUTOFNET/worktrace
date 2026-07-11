@@ -95,15 +95,17 @@ def hide_session_activity(report_date: str, projection_instance_key: str, summar
     )
 
 
-def load_operations(report_date: str) -> list[dict]:
-    with get_connection() as conn:
-        rows = conn.execute(
+def load_operations(report_date: str, *, conn=None) -> list[dict]:
+    if conn is None:
+        with get_connection() as read_conn:
+            return load_operations(report_date, conn=read_conn)
+    rows = conn.execute(
             """SELECT * FROM report_session_operation
                WHERE report_date = ? AND match_state = ? ORDER BY id ASC""",
             (report_date, ACTIVE),
-        ).fetchall()
-        operations = [dict(row) for row in rows]
-        for operation in operations:
+    ).fetchall()
+    operations = [dict(row) for row in rows]
+    for operation in operations:
             member_rows = conn.execute(
                 """SELECT role, activity_id, report_date, slice_start_time, slice_end_time, display_order
                    FROM report_session_operation_member WHERE operation_id = ?
@@ -141,7 +143,7 @@ def persist_engine_match_states(operations: list[dict]) -> None:
 def _sessions(report_date: str) -> list[dict]:
     from .report_session_projection_service import get_report_sessions_for_operations
 
-    return get_report_sessions_for_operations(report_date, report_date, include_hidden=True, ensure_context=True)
+    return get_report_sessions_for_operations(report_date, report_date, include_hidden=False, ensure_context=True)
 
 
 def _resolve(report_date: str, projection_instance_key: str) -> dict:

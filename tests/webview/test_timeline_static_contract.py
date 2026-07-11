@@ -374,9 +374,9 @@ def test_details_runtime_mismatch_skips_overlay_not_static_render():
     accept_body = func_body(source, "acceptTimelineDetailsPayload")
     load_body = func_body(source, "loadSessionDetails")
     assert "isPagePayloadCompatibleWithRuntime" in accept_body
-    assert "noteRejectedPagePayload" in accept_body
+    assert "timelineDetailsRuntimeMismatch" in accept_body
     assert "return true" in accept_body
-    assert "if (!acceptTimelineDetailsPayload(data, date)) return;" in load_body
+    assert "if (!acceptTimelineDetailsPayload(data, date)) return null;" in load_body
     assert "renderSessionDetails(data)" in load_body
 
 def test_timeline_right_panel_uses_session_summary_bridge_contract():
@@ -390,7 +390,7 @@ def test_timeline_selection_loads_summary_by_projection_instance_key():
     select_body = func_body(source, "selectTimelineSession")
     show_body = func_body(source, "showTimeline")
 
-    assert "loadSessionActivitySummary(found.projection_instance_key, App.timelineDate)" in select_body
+    assert "loadSessionActivitySummary(found.projection_instance_key, App.timelineDate, found.session_detail_revision || \"\")" in select_body
     assert "loadSessionActivitySummary(found.projection_instance_key, data.date)" in show_body
     assert "data-projection-instance-key" in show_body
     assert "loadSessionActivitySummary(found.project_id" not in source

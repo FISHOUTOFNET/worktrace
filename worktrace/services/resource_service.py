@@ -88,16 +88,21 @@ def create_or_update_activity_resource(
             _upsert(c)
 
 
-def get_resource_for_activity(activity_id: int) -> dict | None:
-    with get_connection() as conn:
+def get_resource_for_activity(activity_id: int, *, conn: sqlite3.Connection | None = None) -> dict | None:
+    if conn is not None:
         row = conn.execute(
+            "SELECT * FROM activity_resource WHERE activity_id = ?", (activity_id,)
+        ).fetchone()
+        return dict(row) if row else None
+    with get_connection() as read_conn:
+        row = read_conn.execute(
             "SELECT * FROM activity_resource WHERE activity_id = ?",
             (activity_id,),
         ).fetchone()
     return dict(row) if row else None
 
 
-def attach_resource(row: dict) -> dict:
+def attach_resource(row: dict, *, conn: sqlite3.Connection | None = None) -> dict:
     """Attach resource-first display fields to *row*.
 
     Uses ``activity_resource`` as the source of truth.  When no persisted
@@ -108,7 +113,7 @@ def attach_resource(row: dict) -> dict:
     activity_id = item.get("id")
     if activity_id is None:
         return item
-    resource = get_resource_for_activity(int(activity_id))
+    resource = get_resource_for_activity(int(activity_id), conn=conn)
     if resource is None:
         # No persisted resource — derive a temporary one for display.
         from ..platforms.base import ActiveWindow

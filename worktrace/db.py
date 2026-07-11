@@ -51,14 +51,24 @@ def get_db_path() -> Path:
 def get_connection() -> sqlite3.Connection:
     conn = sqlite3.connect(get_db_path(), timeout=5, check_same_thread=False)
     conn.row_factory = sqlite3.Row
-    apply_pragmas(conn)
+    apply_connection_pragmas(conn)
     return conn
 
 
-def apply_pragmas(conn: sqlite3.Connection) -> None:
-    conn.execute("PRAGMA journal_mode = WAL;")
+def apply_connection_pragmas(conn: sqlite3.Connection) -> None:
+    """Apply settings which are local to this connection.
+
+    WAL is a database property.  Setting it while opening every short-lived
+    reader can contend with the collector, so it is established only at
+    database lifecycle boundaries below.
+    """
     conn.execute("PRAGMA busy_timeout = 5000;")
     conn.execute("PRAGMA foreign_keys = ON;")
+
+
+def ensure_wal(conn: sqlite3.Connection) -> None:
+    """Establish the database-wide WAL contract at an explicit lifecycle edge."""
+    conn.execute("PRAGMA journal_mode = WAL;")
 
 
 def dict_rows(rows: Iterable[sqlite3.Row]) -> list[dict]:
@@ -68,6 +78,7 @@ def dict_rows(rows: Iterable[sqlite3.Row]) -> list[dict]:
 def initialize_database(path: str | Path | None = None) -> None:
     configure_database(path)
     with get_connection() as conn:
+        ensure_wal(conn)
         apply_current_schema(conn)
     logging.info("database initialized")
 
@@ -139,6 +150,7 @@ def seed_defaults(conn: sqlite3.Connection) -> None:
 
 def reset_database() -> None:
     with get_connection() as conn:
+        ensure_wal(conn)
         drop_all_tables(conn)
         apply_current_schema(conn)
 

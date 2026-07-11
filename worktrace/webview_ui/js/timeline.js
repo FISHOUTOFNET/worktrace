@@ -68,6 +68,7 @@
             App.selectedSessionId = null;
             App.selectedSessionLiveKey = null;
             App.selectedProjectionInstanceKey = null;
+            App.selectedSessionDetailRevision = null;
             clearEditPanel();
             return;
         }
@@ -210,9 +211,11 @@
                 App.selectedSessionId = found.session_id;
                 App.selectedSessionLiveKey = found.stable_live_key_hash || null;
                 App.selectedProjectionInstanceKey = found.projection_instance_key || null;
+                var detailChanged = App.selectedSessionDetailRevision !== (found.session_detail_revision || "");
+                App.selectedSessionDetailRevision = found.session_detail_revision || "";
                 var skipDetailReload = (typeof App._timelineEditingActive === "function"
                     && App._timelineEditingActive());
-                if (!skipDetailReload) {
+                if (!skipDetailReload && detailChanged) {
                     loadSessionActivitySummary(found.projection_instance_key, data.date);
                 }
                 // Only re-populate the edit panel if the user is not mid-edit AND the session is not edit-disabled.
@@ -233,6 +236,7 @@
                 App.selectedSessionId = null;
                 App.selectedSessionLiveKey = null;
                 App.selectedProjectionInstanceKey = null;
+                App.selectedSessionDetailRevision = null;
                 document.getElementById("timeline-details-header").textContent = "选择左侧时段查看详情";
                 document.getElementById("timeline-details-list").innerHTML = "";
                 clearEditPanel();
@@ -268,7 +272,7 @@
         var expectedDate = App.runtimeReportDateForPage("timeline", date);
         var payloadDate = App.payloadReportDate(data, "timeline", date);
         if (expectedDate && payloadDate && expectedDate !== payloadDate) {
-            App.noteRejectedPagePayload(data, "timeline", date);
+            App.timelineDetailsRuntimeMismatch = "date_mismatch";
             return false;
         }
         if (App.isPagePayloadCompatibleWithRuntime(data, "timeline", date)) {
@@ -276,7 +280,9 @@
                 source: "details_model"
             });
         } else {
-            App.noteRejectedPagePayload(data, "timeline", date);
+            // Detail payloads may still provide static summaries. Do not
+            // turn a live-overlay mismatch into a whole-page refresh loop.
+            App.timelineDetailsRuntimeMismatch = "runtime_mismatch";
         }
         return true;
     }
@@ -308,7 +314,8 @@
         }
         var found = newSelected;
         if (found) {
-            loadSessionActivitySummary(found.projection_instance_key, App.timelineDate);
+            App.selectedSessionDetailRevision = found.session_detail_revision || "";
+            loadSessionActivitySummary(found.projection_instance_key, App.timelineDate, found.session_detail_revision || "");
             // Open live sessions are non-editable; a manual click must clear the edit panel.
             if (found.edit_disabled === true) {
                 clearEditPanel();
@@ -321,35 +328,58 @@
     }
     App.selectTimelineSession = selectTimelineSession;
 
-    function loadSessionActivitySummary(projectionInstanceKey, date) {
-        return loadSessionDetails(projectionInstanceKey, date);
+    function loadSessionActivitySummary(projectionInstanceKey, date, detailRevision) {
+        return loadSessionDetails(projectionInstanceKey, date, detailRevision);
     }
     App.loadSessionActivitySummary = loadSessionActivitySummary;
 
-    function loadSessionDetails(projectionInstanceKey, date) {
+    function loadSessionDetails(projectionInstanceKey, date, detailRevision, retriedStale) {
         var detailsHeader = document.getElementById("timeline-details-header");
         var detailsList = document.getElementById("timeline-details-list");
+        var revision = String(detailRevision || App.selectedSessionDetailRevision || "");
+        var requestKey = String(date || "") + "|" + String(projectionInstanceKey || "") + "|" + revision;
+        if (App.detailsInFlight[requestKey]) return App.detailsInFlight[requestKey];
         // Only show loading when the panel is empty; keep existing summaries visible during refresh.
         if (!detailsList.innerHTML.trim()) {
             detailsHeader.textContent = "加载项目活动耗时…";
             detailsList.innerHTML = "";
+        } else {
+            detailsHeader.textContent = "正在刷新项目活动耗时…";
         }
 
         var token = ++App.detailsRequestToken;
-        App.callBridge("get_timeline_session_activity_summary", projectionInstanceKey || "", date).then(function (result) {
-            if (token !== App.detailsRequestToken) return;  // stale response
+        var request = App.callBridge("get_timeline_session_activity_summary", projectionInstanceKey || "", date).then(function (result) {
+            if (token !== App.detailsRequestToken || App.selectedProjectionInstanceKey !== projectionInstanceKey || App.timelineDate !== date) return null;
+            if (result && result.ok === false && result.error === "stale_selection" && !retriedStale) {
+                // A projection key is structural. Refresh once, retain the last
+                // rendered details, then resolve the refreshed selection.
+                return App.loadTimelineReport(date, { showLoading: false, resetSelection: false }).then(function () {
+                    if (App.selectedProjectionInstanceKey && App.selectedProjectionInstanceKey === projectionInstanceKey) {
+                        delete App.detailsInFlight[requestKey];
+                        return loadSessionDetails(projectionInstanceKey, date, App.selectedSessionDetailRevision, true);
+                    }
+                    detailsHeader.textContent = "活动时段已更新";
+                    return null;
+                });
+            }
             var data = App.handleResult(result, function (msg) {
                 detailsHeader.textContent = "加载项目活动耗时失败";
                 detailsList.innerHTML = '<div class="timeline-empty">' + App.escapeHtml(msg) + '</div>';
             });
-            if (!data) return;
-            if (!acceptTimelineDetailsPayload(data, date)) return;
+            if (!data) return null;
+            if (!acceptTimelineDetailsPayload(data, date)) return null;
             renderSessionDetails(data);
+            return data;
         }).catch(function () {
-            if (token !== App.detailsRequestToken) return;  // stale response
+            if (token !== App.detailsRequestToken || App.selectedProjectionInstanceKey !== projectionInstanceKey) return null;
             detailsHeader.textContent = "加载项目活动耗时失败";
             detailsList.innerHTML = '<div class="timeline-empty">无法加载项目活动耗时，请稍后重试。</div>';
+            return null;
+        }).finally(function () {
+            delete App.detailsInFlight[requestKey];
         });
+        App.detailsInFlight[requestKey] = request;
+        return request;
     }
     App.loadSessionDetails = loadSessionDetails;
 

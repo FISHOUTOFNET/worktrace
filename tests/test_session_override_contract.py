@@ -162,7 +162,9 @@ def test_rule_reorder_conflict_does_not_apply_old_override(temp_db):
     assert {row["duration_seconds"] for row in sessions} == {1200}
     with get_connection() as conn:
         states = [row["match_state"] for row in conn.execute("SELECT match_state FROM project_session_override").fetchall()]
-    assert states == ["conflict"]
+    # Projection getters are read-only; unresolved state is computed in
+    # memory and never persisted as a side effect of viewing a report.
+    assert states == ["active"]
     stats = statistics_service.get_project_stats("2026-06-25", "2026-06-25", ensure_context=False)
     assert {row["project"] for row in stats} == {"First Rule", "Second Rule"}
     assert all(row["total_duration"] == 1200 for row in stats)

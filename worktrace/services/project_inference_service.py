@@ -360,6 +360,7 @@ def _infer_project_resource_first(
         rule = folder_index_service.find_matching_folder_rule_for_file_name(
             display_name,
             str(activity.get("start_time") or "") or None,
+            conn=conn,
         )
         if rule and exclude_rule != ("folder", int(rule["id"])):
             return ProjectAssignmentDecision(int(rule["project_id"]), "folder_rule", 85, source_rule_type="folder", source_rule_id=int(rule["id"]))

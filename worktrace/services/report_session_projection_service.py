@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import hashlib
+import json
+
+from ..db import get_connection
 from ..constants import UNCATEGORIZED_PROJECT
 from . import report_session_operation_engine, session_override_service
 from . import project_lifecycle_policy
@@ -9,7 +13,7 @@ from .project_service import get_or_create_uncategorized_project
 def get_report_sessions_by_date(
     date: str,
     *,
-    include_hidden: bool = True,
+    include_hidden: bool = False,
     ensure_context: bool = True,
 ) -> list[dict]:
     return get_report_sessions_by_range(
@@ -20,11 +24,23 @@ def get_report_sessions_by_date(
     )
 
 
+def get_visible_report_sessions_by_date(date: str, *, ensure_context: bool = True) -> list[dict]:
+    """The sole UI/report projection scope: hidden raw activity is excluded."""
+    return get_report_sessions_by_date(date, include_hidden=False, ensure_context=ensure_context)
+
+
+def get_visible_report_sessions_for_operations_by_date(date: str, *, ensure_context: bool = True) -> list[dict]:
+    """Visible canonical sessions for resolvers and contribution consumers."""
+    return get_report_sessions_for_operations(
+        date, date, include_hidden=False, ensure_context=ensure_context
+    )
+
+
 def get_report_sessions_by_range(
     start_date: str,
     end_date: str,
     *,
-    include_hidden: bool = True,
+    include_hidden: bool = False,
     ensure_context: bool = True,
 ) -> list[dict]:
     sessions = get_report_sessions_for_operations(
@@ -52,41 +68,37 @@ def get_report_sessions_for_operations(
     from . import timeline_service
     from . import report_session_operation_service
 
-    uncategorized_id = get_or_create_uncategorized_project()
-    rows = timeline_service.get_report_activity_rows(
-        start_date,
-        end_date,
-        include_hidden=include_hidden,
-        ensure_context=ensure_context,
-    )
-    sessions = timeline_service._build_sessions_from_rows(
-        rows,
-        uncategorized_id,
-        timeline_service._boundary_times_for_rows(rows),
-    )
-    for session in sessions:
-        _attach_session_identity(session)
-        _attach_raw_final_defaults(session, uncategorized_id)
-    session_override_service.attach_overrides(sessions)
-    for session in sessions:
-        _finalize_session(session, uncategorized_id)
-        _attach_projection_defaults(session)
-    sessions = [
-        session
-        for session in sessions
-        if project_lifecycle_policy.final_session_is_reportable(session)
-    ]
-    _attach_contributions(sessions, rows)
-    projected: list[dict] = []
-    by_date: dict[str, list[dict]] = {}
-    for session in sessions:
-        by_date.setdefault(str(session.get("report_date") or ""), []).append(session)
-    for report_date, date_sessions in by_date.items():
-        ordered = sorted(date_sessions, key=timeline_service._session_sort_key, reverse=True)
-        operations = report_session_operation_service.load_operations(report_date)
-        applied = report_session_operation_engine.apply_operations(ordered, operations)
-        report_session_operation_service.persist_engine_match_states(operations)
-        projected.extend(applied)
+    if ensure_context:
+        # Context writes complete before the bounded report read snapshot.
+        timeline_service._ensure_context_for_report_range(start_date, end_date)
+    with get_connection() as conn:
+        conn.execute("BEGIN")
+        uncategorized_id = get_or_create_uncategorized_project(conn=conn)
+        rows = timeline_service.get_report_activity_rows(
+            start_date, end_date, include_hidden=include_hidden, ensure_context=False, conn=conn
+        )
+        sessions = timeline_service._build_sessions_from_rows(
+            rows, uncategorized_id, timeline_service._boundary_times_for_rows(rows, conn=conn)
+        )
+        for session in sessions:
+            _attach_session_identity(session)
+            _attach_raw_final_defaults(session, uncategorized_id)
+        session_override_service.attach_overrides(sessions, conn=conn)
+        for session in sessions:
+            _finalize_session(session, uncategorized_id)
+            _attach_projection_defaults(session)
+        sessions = [session for session in sessions if project_lifecycle_policy.final_session_is_reportable(session)]
+        _attach_contributions(sessions, rows)
+        projected: list[dict] = []
+        by_date: dict[str, list[dict]] = {}
+        for session in sessions:
+            by_date.setdefault(str(session.get("report_date") or ""), []).append(session)
+        for report_date, date_sessions in by_date.items():
+            ordered = sorted(date_sessions, key=timeline_service._session_sort_key, reverse=True)
+            operations = report_session_operation_service.load_operations(report_date, conn=conn)
+            projected.extend(report_session_operation_engine.apply_operations(ordered, operations))
+    for session in projected:
+        _attach_detail_revision(session)
     return sorted(projected, key=timeline_service._session_sort_key, reverse=True)
 
 
@@ -125,7 +137,7 @@ def resolve_current_session(
     activity_ids: list[int],
     activity_member_hash: str,
     *,
-    include_hidden: bool = True,
+    include_hidden: bool = False,
     ensure_context: bool = True,
 ) -> dict:
     ids = {int(aid) for aid in activity_ids}
@@ -224,17 +236,33 @@ def _display_safe_contribution(row: dict) -> dict:
     }
 
 
-def _member_key(member: dict) -> tuple[str, int, str, str]:
-    return (
-        str(member.get("report_date") or ""),
-        int(member.get("activity_id") or member.get("id") or 0),
-        str(member.get("slice_start_time") or member.get("start_time") or ""),
-        str(member.get("slice_end_time") or member.get("end_time") or ""),
-    )
+def _member_key(member: dict) -> tuple[str, int, str]:
+    return session_override_service.member_identity_key(member)
 
 
 def _member_key_from_row(row: dict) -> tuple[str, int, str, str]:
     return _member_key(row)
+
+
+def _attach_detail_revision(session: dict) -> None:
+    """Revision of detail structure, intentionally excluding live elapsed seconds."""
+    payload = {
+        "kind": session.get("projection_kind"),
+        "key": session.get("projection_instance_key"),
+        "members": [_member_key(member) for member in session.get("member_slices") or []],
+        "project": session.get("project_id"),
+        "override": session.get("override_id"),
+        "adjusted": session.get("adjusted_duration_seconds"),
+        "note": session.get("session_note"),
+        "open": bool(session.get("is_in_progress")),
+        "contributions": [
+            (_member_key(row), row.get("activity_identity_key"), row.get("report_project_id"), row.get("activity_display_name"))
+            for row in session.get("_projection_contributions") or []
+        ],
+    }
+    session["session_detail_revision"] = hashlib.sha1(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")
+    ).hexdigest()
 
 
 def _public_session(session: dict) -> dict:

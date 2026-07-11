@@ -40,16 +40,23 @@ def delete_rule(rule_type: str, rule_id: int, apply_to_history: bool) -> dict:
         if _load_rule_for_delete(conn, rule_type, rule_id) is None:
             raise rule_impact_service.RuleImpactError(rule_impact_service.ERR_NOT_FOUND)
         if apply_to_history:
-            history_result = _remove_rule_from_history_in_transaction(conn, rule_type, rule_id)
+            affected_rows = _load_assignments_for_rule(conn, rule_type, rule_id)
         _delete_rule_in_transaction(conn, rule_type, rule_id)
+        if apply_to_history:
+            # The rule is absent in this transaction snapshot, so direct and
+            # context re-inference cannot accidentally select it again.
+            history_result = _reassign_deleted_rule_history(conn, affected_rows)
     _invalidate_rule_delete_caches(history_result["affected_date_values"])
     return _public_history_result(history_result)
 
 
 def _remove_rule_from_history_in_transaction(conn, rule_type: str, rule_id: int) -> dict:
-    affected_dates: set[str] = set()
-    updated_count = 0
-    rows = conn.execute(
+    rows = _load_assignments_for_rule(conn, rule_type, rule_id)
+    return _reassign_deleted_rule_history(conn, rows, exclude_rule=(rule_type, rule_id))
+
+
+def _load_assignments_for_rule(conn, rule_type: str, rule_id: int) -> list:
+    return conn.execute(
         """
         SELECT a.*
         FROM activity_project_assignment apa
@@ -61,13 +68,16 @@ def _remove_rule_from_history_in_transaction(conn, rule_type: str, rule_id: int)
         """,
         (rule_type, rule_id),
     ).fetchall()
+
+
+def _reassign_deleted_rule_history(conn, rows: list, exclude_rule=None) -> dict:
+    affected_dates: set[str] = set()
+    updated_count = 0
     for row in rows:
         activity = dict(row)
         activity_id = int(activity["id"])
         resource = _resource_for_activity(conn, activity_id, activity)
-        decision = _infer_project_resource_first(
-            conn, activity, resource, exclude_rule=(rule_type, rule_id)
-        )
+        decision = _infer_project_resource_first(conn, activity, resource, exclude_rule=exclude_rule)
         _upsert_assignment(
             conn,
             activity_id,
@@ -109,8 +119,9 @@ def _load_rule_for_delete(conn, rule_type: str, rule_id: int) -> dict | None:
 
 def _delete_rule_in_transaction(conn, rule_type: str, rule_id: int) -> None:
     if rule_type == "folder":
-        conn.execute("DELETE FROM folder_rule_file_index WHERE folder_rule_id = ?", (rule_id,))
-        conn.execute("DELETE FROM folder_rule_index_state WHERE folder_rule_id = ?", (rule_id,))
+        from .folder_index_service import delete_index_for_rule
+
+        delete_index_for_rule(rule_id, conn=conn)
         cur = conn.execute("DELETE FROM folder_project_rule WHERE id = ?", (rule_id,))
     else:
         cur = conn.execute(

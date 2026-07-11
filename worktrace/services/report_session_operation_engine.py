@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from copy import deepcopy
 
+from .session_override_service import member_identity_key
+
 
 ACTIVE = "active"
 CONFLICT = "conflict"
@@ -176,8 +178,8 @@ def _mergeable_neighbour(session: dict) -> bool:
     return str(session.get("row_kind") or "project_session") == "project_session" and not bool(session.get("is_in_progress")) and str(session.get("projection_kind") or "base") != "copy"
 
 
-def _member_key(member: dict) -> tuple[str, int, str, str]:
-    return (str(member.get("report_date") or ""), int(member.get("activity_id") or member.get("id") or 0), str(member.get("slice_start_time") or member.get("start_time") or ""), str(member.get("slice_end_time") or member.get("end_time") or ""))
+def _member_key(member: dict) -> tuple[str, int, str]:
+    return member_identity_key(member)
 
 
 def _sorted_members(members: list[dict]) -> list[dict]:

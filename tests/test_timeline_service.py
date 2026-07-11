@@ -373,9 +373,9 @@ def test_project_sessions_batch_load_session_boundaries(temp_db, monkeypatch):
     calls = []
     original = session_boundary_service.list_boundaries
 
-    def counted_list_boundaries(start_time: str, end_time: str):
+    def counted_list_boundaries(start_time: str, end_time: str, *, conn=None):
         calls.append((start_time, end_time))
-        return original(start_time, end_time)
+        return original(start_time, end_time, conn=conn)
 
     monkeypatch.setattr(session_boundary_service, "list_boundaries", counted_list_boundaries)
     monkeypatch.setattr(

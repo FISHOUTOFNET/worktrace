@@ -53,10 +53,12 @@
     // Stable live key for the selected session. Selection continuity: stable_live_key_hash stays the same
     // when the backend refreshes a persisted-open session identity.
     App.selectedSessionLiveKey = null;
+    App.selectedSessionDetailRevision = null;
 
     // races a manual refresh.
     App.timelineRequestToken = 0;
     App.detailsRequestToken = 0;
+    App.detailsInFlight = {};
     App.overviewRequestToken = 0;
     App.recentRequestToken = 0;
 

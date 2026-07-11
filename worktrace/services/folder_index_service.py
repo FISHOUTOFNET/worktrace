@@ -48,10 +48,13 @@ def request_rebuild_for_rule(rule_id: int) -> None:
         )
 
 
-def delete_index_for_rule(rule_id: int) -> None:
-    with get_connection() as conn:
+def delete_index_for_rule(rule_id: int, *, conn=None) -> None:
+    if conn is not None:
         conn.execute("DELETE FROM folder_rule_file_index WHERE folder_rule_id = ?", (int(rule_id),))
         conn.execute("DELETE FROM folder_rule_index_state WHERE folder_rule_id = ?", (int(rule_id),))
+        return
+    with get_connection() as conn:
+        delete_index_for_rule(rule_id, conn=conn)
 
 
 def request_refresh_for_enabled_rules(include_excluded: bool = False) -> None:
@@ -183,6 +186,7 @@ def lookup_indexed_paths_for_file_name(
     *,
     include_excluded: bool = False,
     request_refresh_on_miss: bool = True,
+    conn=None,
 ) -> list[dict]:
     normalized = _normalize_index_file_name(file_name)
     if not normalized:
@@ -196,7 +200,19 @@ def lookup_indexed_paths_for_file_name(
     if activity_start_time:
         params.append(activity_start_time)
 
-    with get_connection() as conn:
+    if conn is None:
+        with get_connection() as read_conn:
+            rows = dict_rows(read_conn.execute(
+                f"""
+                SELECT idx.folder_rule_id, idx.file_name, idx.file_path, idx.normalized_path_key,
+                       state.valid_from, fpr.folder_path, fpr.recursive, fpr.project_id, p.name AS project_name
+                FROM folder_rule_file_index idx JOIN folder_rule_index_state state ON state.folder_rule_id = idx.folder_rule_id
+                JOIN folder_project_rule fpr ON fpr.id = idx.folder_rule_id JOIN project p ON p.id = fpr.project_id
+                WHERE idx.normalized_file_name = ? AND state.status = ? AND state.valid_from IS NOT NULL
+                  AND fpr.enabled = 1 AND p.enabled = 1 AND COALESCE(p.is_archived, 0) = 0 AND COALESCE(p.is_deleted, 0) = 0
+                  {project_clause} {time_clause} ORDER BY length(fpr.normalized_folder_key) DESC, idx.id ASC
+                """, [*params[:1], INDEX_STATUS_READY, *params[1:]]).fetchall())
+    else:
         rows = dict_rows(
             conn.execute(
                 f"""
@@ -239,10 +255,11 @@ def lookup_indexed_paths_for_file_name(
             continue
         results.setdefault(key, row)
 
-    for rule_id in stale_rule_ids:
-        mark_index_stale(rule_id, "indexed file path no longer exists")
+    if conn is None:
+        for rule_id in stale_rule_ids:
+            mark_index_stale(rule_id, "indexed file path no longer exists")
 
-    if not results and not stale_rule_ids and request_refresh_on_miss:
+    if conn is None and not results and not stale_rule_ids and request_refresh_on_miss:
         request_refresh_for_enabled_rules(include_excluded=include_excluded)
     return list(results.values())
 
@@ -266,11 +283,13 @@ def resolve_unique_path_from_title(
     return str(candidates[0]["file_path"])
 
 
-def find_matching_folder_rule_for_file_name(file_name: str | None, activity_start_time: str | None = None) -> dict | None:
+def find_matching_folder_rule_for_file_name(file_name: str | None, activity_start_time: str | None = None, *, conn=None) -> dict | None:
     candidates = lookup_indexed_paths_for_file_name(
         file_name,
         activity_start_time,
         include_excluded=False,
+        request_refresh_on_miss=conn is None,
+        conn=conn,
     )
     if not candidates:
         return None
@@ -279,7 +298,7 @@ def find_matching_folder_rule_for_file_name(file_name: str | None, activity_star
 
     matched_rules: dict[int, dict] = {}
     for candidate in candidates:
-        rule = folder_rule_service.find_matching_folder_rule(str(candidate.get("file_path") or ""))
+        rule = folder_rule_service.find_matching_folder_rule(str(candidate.get("file_path") or ""), conn=conn)
         if rule:
             matched_rules[int(rule["project_id"])] = rule
     if len(matched_rules) != 1:

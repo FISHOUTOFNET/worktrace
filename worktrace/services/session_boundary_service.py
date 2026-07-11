@@ -40,9 +40,15 @@ def latest_boundary_time() -> str | None:
     return str(row["occurred_at"]) if row else None
 
 
-def list_boundaries(start_time: str, end_time: str) -> list[dict]:
-    with get_connection() as conn:
+def list_boundaries(start_time: str, end_time: str, *, conn=None) -> list[dict]:
+    if conn is not None:
         rows = conn.execute(
+            """SELECT * FROM session_boundary WHERE occurred_at >= ? AND occurred_at <= ? ORDER BY occurred_at ASC, id ASC""",
+            (start_time, end_time),
+        ).fetchall()
+        return dict_rows(rows)
+    with get_connection() as read_conn:
+        rows = read_conn.execute(
             """
             SELECT *
             FROM session_boundary

@@ -84,6 +84,10 @@ def _recompute_context_assignments_for_date_in_transaction(
         rows = _load_rows(start, end, conn=conn)
 
     for index, row in enumerate(rows):
+        # Keep deleted-project history as an audit fact. It cannot anchor or
+        # re-enter formal reporting, but recompute must not rewrite it.
+        if _row_project_deleted(row) and _row_project_id(row) != uncategorized_id:
+            continue
         if row["status"] != STATUS_NORMAL:
             continue
         if row.get("assignment_source") == "midnight_anchor":
@@ -240,6 +244,8 @@ def _ensure_assignments(conn, rows: list[dict]) -> bool:
 def _recompute_anchor_rows(conn, rows: list[dict]) -> bool:
     changed = False
     for row in rows:
+        if _row_project_deleted(row):
+            continue
         if row["status"] == STATUS_NORMAL and row.get("assignment_source") == "midnight_anchor":
             continue
         if _is_file_context_anchor(row):
