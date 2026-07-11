@@ -25,6 +25,7 @@ from worktrace.services import (
     folder_rule_service,
     privacy_service,
     project_service,
+    rule_history_application_service,
     rule_service,
 )
 
@@ -563,7 +564,7 @@ def test_delete_folder_rule_service_exception_collapses_to_operation_failed(temp
     def _boom(*args, **kwargs):
         raise RuntimeError("boom: sensitive SQL DELETE FROM ...")
 
-    monkeypatch.setattr(folder_rule_service, "delete_folder_rule", _boom)
+    monkeypatch.setattr(rule_history_application_service, "delete_rule", _boom)
 
     result = rule_api.delete_project_folder_rule(rule_id)
 
@@ -948,16 +949,14 @@ def test_update_folder_rule_invokes_cache_invalidation_hooks(temp_db, monkeypatc
 
 def test_delete_folder_rule_invokes_cache_invalidation_and_index_delete_hooks(temp_db, monkeypatch):
     # Regression lock: the delete path must call ``invalidate_folder_rule_cache``,
-    # ``clear_exclude_rules_cache``, and ``delete_index_for_rule`` (NOT
-    # ``request_rebuild_for_rule``) so the folder rule cache, exclude cache, and
-    # folder index all reflect the deleted rule.
+    # ``clear_exclude_rules_cache`` after the transaction commits, while the
+    # folder index rows are deleted inside the same DB transaction.
     project = project_service.create_project("Client")
     created = rule_api.create_project_folder_rule(project, r"D:\Work", True)
     rule_id = created["rule"]["id"]
     calls: dict[str, list] = {
         "invalidate_folder_rule_cache": [],
         "clear_exclude_rules_cache": [],
-        "delete_index_for_rule": [],
         "request_rebuild_for_rule": [],
     }
 
@@ -967,23 +966,23 @@ def test_delete_folder_rule_invokes_cache_invalidation_and_index_delete_hooks(te
     def _spy_clear_exclude():
         calls["clear_exclude_rules_cache"].append(True)
 
-    def _spy_delete_index(rule_id):
-        calls["delete_index_for_rule"].append(int(rule_id))
-
     def _spy_rebuild(rule_id):
         calls["request_rebuild_for_rule"].append(int(rule_id))
 
     monkeypatch.setattr(folder_rule_service, "invalidate_folder_rule_cache", _spy_invalidate)
     monkeypatch.setattr(privacy_service, "clear_exclude_rules_cache", _spy_clear_exclude)
-    monkeypatch.setattr(folder_index_service, "delete_index_for_rule", _spy_delete_index)
     monkeypatch.setattr(folder_index_service, "request_rebuild_for_rule", _spy_rebuild)
 
     rule_api.delete_project_folder_rule(rule_id)
 
     assert calls["invalidate_folder_rule_cache"] == [True]
     assert calls["clear_exclude_rules_cache"] == [True]
-    assert calls["delete_index_for_rule"] == [rule_id]
-    # The delete path must NOT call request_rebuild_for_rule.
+    with get_connection() as conn:
+        index_rows = conn.execute(
+            "SELECT COUNT(*) FROM folder_rule_index_state WHERE folder_rule_id = ?",
+            (rule_id,),
+        ).fetchone()[0]
+    assert index_rows == 0
     assert calls["request_rebuild_for_rule"] == []
 
 

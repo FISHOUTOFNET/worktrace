@@ -31,8 +31,7 @@ from ._write_contract import (
     valid_nonempty_str,
     valid_str,
 )
-from ..constants import EXCLUDED_PROJECT, UNCATEGORIZED_PROJECT
-from ..services import project_service
+from ..services import project_lifecycle_policy, project_service
 
 
 def list_project_bindings() -> list[dict[str, Any]]:
@@ -99,11 +98,7 @@ def _is_system_or_special_project(project: dict[str, Any]) -> bool:
     caller; it only returns a boolean for the API facade's display-safe
     rejection logic.
     """
-    if project.get("created_by") == "system":
-        return True
-    if project.get("name") in {UNCATEGORIZED_PROJECT, EXCLUDED_PROJECT}:
-        return True
-    return False
+    return project_lifecycle_policy.project_is_system_or_special(project)
 
 
 def _project_lifecycle_payload(project_id: int) -> dict[str, Any]:
@@ -285,10 +280,12 @@ def delete_project_for_rules(project_id: Any) -> dict[str, Any]:
             return fail_payload(ERROR_NOT_FOUND)
         if _is_system_or_special_project(project):
             return fail_payload(ERROR_SYSTEM_PROJECT)
-        project_service.archive_project(project_id)
-        from ..services import context_service
-        context_service.invalidate_context_recompute_cache()
-        return ok_payload(project={"id": int(project_id), "deleted": True, "archived": True})
+        project_service.soft_delete_project(project_id)
+        payload = _project_lifecycle_payload(project_id)
+        if not payload:
+            return fail_payload(ERROR_OPERATION_FAILED)
+        payload["deleted"] = True
+        return ok_payload(project=payload)
     except Exception:
         return fail_payload(ERROR_OPERATION_FAILED)
 

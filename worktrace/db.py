@@ -20,6 +20,10 @@ def read_schema_sql() -> str:
     return resources.files(__package__).joinpath("schema.sql").read_text(encoding="utf-8")
 
 
+def read_schema_indexes_sql() -> str:
+    return resources.files(__package__).joinpath("schema_indexes.sql").read_text(encoding="utf-8")
+
+
 _db_path: Path | None = None
 
 
@@ -64,10 +68,15 @@ def dict_rows(rows: Iterable[sqlite3.Row]) -> list[dict]:
 def initialize_database(path: str | Path | None = None) -> None:
     configure_database(path)
     with get_connection() as conn:
-        conn.executescript(read_schema_sql())
-        ensure_schema_migrations(conn)
-        seed_defaults(conn)
+        apply_current_schema(conn)
     logging.info("database initialized")
+
+
+def apply_current_schema(conn: sqlite3.Connection) -> None:
+    """Create tables, run idempotent migrations/post-indexes, then seed."""
+    conn.executescript(read_schema_sql())
+    ensure_schema_migrations(conn)
+    seed_defaults(conn)
 
 
 def seed_defaults(conn: sqlite3.Connection) -> None:
@@ -131,9 +140,7 @@ def seed_defaults(conn: sqlite3.Connection) -> None:
 def reset_database() -> None:
     with get_connection() as conn:
         drop_all_tables(conn)
-        conn.executescript(read_schema_sql())
-        ensure_schema_migrations(conn)
-        seed_defaults(conn)
+        apply_current_schema(conn)
 
 
 def ensure_schema_migrations(conn: sqlite3.Connection) -> None:
@@ -146,8 +153,14 @@ def ensure_schema_migrations(conn: sqlite3.Connection) -> None:
     exists before running ``ALTER TABLE``.
     """
     ensure_project_language_column(conn)
+    ensure_project_deleted_column(conn)
     ensure_assignment_rule_origin_columns(conn)
     ensure_report_session_operation_tables(conn)
+    ensure_current_indexes(conn)
+
+
+def ensure_current_indexes(conn: sqlite3.Connection) -> None:
+    conn.executescript(read_schema_indexes_sql())
 
 
 def ensure_project_language_column(conn: sqlite3.Connection) -> None:
@@ -161,6 +174,13 @@ def ensure_project_language_column(conn: sqlite3.Connection) -> None:
         conn.execute(
             "ALTER TABLE project ADD COLUMN language TEXT NOT NULL DEFAULT '中文'"
         )
+
+
+def ensure_project_deleted_column(conn: sqlite3.Connection) -> None:
+    """Add soft-delete lifecycle state to existing projects."""
+    columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(project)").fetchall()}
+    if "is_deleted" not in columns:
+        conn.execute("ALTER TABLE project ADD COLUMN is_deleted INTEGER NOT NULL DEFAULT 0")
 
 
 def ensure_assignment_rule_origin_columns(conn: sqlite3.Connection) -> None:
@@ -181,10 +201,6 @@ def ensure_assignment_rule_origin_columns(conn: sqlite3.Connection) -> None:
         conn.execute(
             "ALTER TABLE activity_project_assignment ADD COLUMN source_rule_id INTEGER NULL"
         )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_assignment_source_rule "
-        "ON activity_project_assignment(source_rule_type, source_rule_id, is_manual)"
-    )
 
 
 def ensure_report_session_operation_tables(conn: sqlite3.Connection) -> None:
@@ -216,16 +232,6 @@ def ensure_report_session_operation_tables(conn: sqlite3.Connection) -> None:
             FOREIGN KEY(operation_id) REFERENCES report_session_operation(id) ON DELETE CASCADE,
             FOREIGN KEY(activity_id) REFERENCES activity_log(id)
         );
-        CREATE INDEX IF NOT EXISTS idx_report_session_operation_date_state
-        ON report_session_operation(report_date, match_state);
-        CREATE INDEX IF NOT EXISTS idx_report_session_operation_instance
-        ON report_session_operation(report_date, base_instance_key, match_state);
-        CREATE INDEX IF NOT EXISTS idx_report_session_operation_group
-        ON report_session_operation(operation_group_key, match_state);
-        CREATE INDEX IF NOT EXISTS idx_report_session_operation_member_activity
-        ON report_session_operation_member(activity_id, report_date);
-        CREATE INDEX IF NOT EXISTS idx_report_session_operation_member_role
-        ON report_session_operation_member(operation_id, role);
         """
     )
 

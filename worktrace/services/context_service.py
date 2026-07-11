@@ -11,6 +11,7 @@ from ..constants import (
     STATUS_NORMAL,
     STATUS_PAUSED,
     TIME_FORMAT,
+    UNCATEGORIZED_PROJECT,
 )
 from ..db import dict_rows, get_connection, get_db_path, now_str
 from . import clipboard_service, session_boundary_service
@@ -27,7 +28,7 @@ from .anchor_predicates import (
     is_file_context_anchor,
     row_project_id as _row_project_id_helper,
 )
-from .project_inference_service import assign_project_for_activity
+from .project_inference_service import _assign_project_for_activity_in_transaction
 from .resource_service import attach_resource
 from .settings_service import get_int_setting
 
@@ -53,24 +54,34 @@ _CONTEXT_RECOMPUTE_CACHE: dict[str, tuple] = {}
 
 
 def recompute_context_assignments_for_date(date: str) -> None:
+    with get_connection() as conn:
+        _recompute_context_assignments_for_date_in_transaction(conn, date, use_cache=True)
+
+
+def _recompute_context_assignments_for_date_in_transaction(
+    conn,
+    date: str,
+    *,
+    use_cache: bool = False,
+) -> None:
     start = f"{date} 00:00:00"
     end = f"{date} 23:59:59"
     carry_minutes = max(0, get_int_setting("context_carry_minutes", DEFAULT_CONTEXT_CARRY_MINUTES))
     cache_key = _context_cache_key(date)
-    fingerprint = _context_fingerprint(start, end, carry_minutes)
-    if _CONTEXT_RECOMPUTE_CACHE.get(cache_key) == fingerprint:
+    fingerprint = _context_fingerprint(start, end, carry_minutes, conn=conn)
+    if use_cache and _CONTEXT_RECOMPUTE_CACHE.get(cache_key) == fingerprint:
         return
-    uncategorized_id = _get_uncategorized_project_id()
+    uncategorized_id = _get_uncategorized_project_id(conn)
 
-    rows = _load_rows(start, end)
-    if _ensure_assignments(rows):
-        rows = _load_rows(start, end)
-    if _recompute_anchor_rows(rows):
-        rows = _load_rows(start, end)
-    if _recompute_clipboard_transition_rows(rows, uncategorized_id):
-        rows = _load_rows(start, end)
-    if _recompute_short_gap_anchor_rows(rows, uncategorized_id):
-        rows = _load_rows(start, end)
+    rows = _load_rows(start, end, conn=conn)
+    if _ensure_assignments(conn, rows):
+        rows = _load_rows(start, end, conn=conn)
+    if _recompute_anchor_rows(conn, rows):
+        rows = _load_rows(start, end, conn=conn)
+    if _recompute_clipboard_transition_rows(conn, rows, uncategorized_id):
+        rows = _load_rows(start, end, conn=conn)
+    if _recompute_short_gap_anchor_rows(conn, rows, uncategorized_id):
+        rows = _load_rows(start, end, conn=conn)
 
     for index, row in enumerate(rows):
         if row["status"] != STATUS_NORMAL:
@@ -83,9 +94,6 @@ def recompute_context_assignments_for_date(date: str) -> None:
             continue
         if int(row["assignment_is_manual"] or 0):
             continue
-        # Only overwrite low-confidence / derived sources. Do not overwrite
-        # activities that already belong to another concrete project via a
-        # higher-confidence path.
         source = row.get("assignment_source")
         if source is not None and source not in _OVERWRITABLE_SOURCES:
             continue
@@ -103,6 +111,7 @@ def recompute_context_assignments_for_date(date: str) -> None:
             source = target_source
             confidence = 60
         _sync_assignment_and_activity(
+            conn,
             int(row["id"]),
             int(target_project_id),
             source,
@@ -110,7 +119,10 @@ def recompute_context_assignments_for_date(date: str) -> None:
             is_manual=False,
             auto_classified=False,
         )
-    _CONTEXT_RECOMPUTE_CACHE[cache_key] = _context_fingerprint(start, end, carry_minutes)
+    if use_cache:
+        _CONTEXT_RECOMPUTE_CACHE[cache_key] = _context_fingerprint(
+            start, end, carry_minutes, conn=conn
+        )
 
 
 def invalidate_context_recompute_cache(date: str | None = None) -> None:
@@ -124,49 +136,51 @@ def _context_cache_key(date: str) -> str:
     return f"{get_db_path().resolve()}:{date}"
 
 
-def _context_fingerprint(start: str, end: str, carry_minutes: int) -> tuple:
-    with get_connection() as conn:
-        activity_sig = _ordered_concat(
-            conn,
-            """
-            SELECT
-                a.id || ':' ||
-                COALESCE(a.start_time, '') || ':' ||
-                COALESCE(a.end_time, '') || ':' ||
-                COALESCE(a.app_name, '') || ':' ||
-                COALESCE(a.process_name, '') || ':' ||
-                COALESCE(a.window_title, '') || ':' ||
-                COALESCE(a.file_path_hint, '') || ':' ||
-                COALESCE(a.status, '') AS sig
-            FROM activity_log a
-            WHERE a.is_deleted = 0
-              AND a.start_time BETWEEN ? AND ?
-            ORDER BY a.start_time ASC, a.id ASC
-            """,
-            (start, end),
-        )
-        assignment_sig = _ordered_concat(
-            conn,
-            """
-            SELECT
-                apa.activity_id || ':' ||
-                COALESCE(apa.project_id, '') || ':' ||
-                COALESCE(apa.source, '') || ':' ||
-                COALESCE(apa.is_manual, 0) || ':' ||
-                COALESCE(apa.suggested_project_name, '') AS sig
-            FROM activity_project_assignment apa
-            JOIN activity_log a ON a.id = apa.activity_id
-            WHERE a.is_deleted = 0
-              AND a.start_time BETWEEN ? AND ?
-            ORDER BY apa.activity_id ASC
-            """,
-            (start, end),
-        )
-        project_sig = _table_update_signature(conn, "project")
-        folder_rule_sig = _table_update_signature(conn, "folder_project_rule")
-        folder_index_sig = _table_update_signature(conn, "folder_rule_index_state")
-        keyword_rule_sig = _table_update_signature(conn, "project_rule")
-        clipboard_sig = _table_update_signature(conn, "activity_clipboard_event")
+def _context_fingerprint(start: str, end: str, carry_minutes: int, conn=None) -> tuple:
+    if conn is None:
+        with get_connection() as read_conn:
+            return _context_fingerprint(start, end, carry_minutes, conn=read_conn)
+    activity_sig = _ordered_concat(
+        conn,
+        """
+        SELECT
+            a.id || ':' ||
+            COALESCE(a.start_time, '') || ':' ||
+            COALESCE(a.end_time, '') || ':' ||
+            COALESCE(a.app_name, '') || ':' ||
+            COALESCE(a.process_name, '') || ':' ||
+            COALESCE(a.window_title, '') || ':' ||
+            COALESCE(a.file_path_hint, '') || ':' ||
+            COALESCE(a.status, '') AS sig
+        FROM activity_log a
+        WHERE a.is_deleted = 0
+          AND a.start_time BETWEEN ? AND ?
+        ORDER BY a.start_time ASC, a.id ASC
+        """,
+        (start, end),
+    )
+    assignment_sig = _ordered_concat(
+        conn,
+        """
+        SELECT
+            apa.activity_id || ':' ||
+            COALESCE(apa.project_id, '') || ':' ||
+            COALESCE(apa.source, '') || ':' ||
+            COALESCE(apa.is_manual, 0) || ':' ||
+            COALESCE(apa.suggested_project_name, '') AS sig
+        FROM activity_project_assignment apa
+        JOIN activity_log a ON a.id = apa.activity_id
+        WHERE a.is_deleted = 0
+          AND a.start_time BETWEEN ? AND ?
+        ORDER BY apa.activity_id ASC
+        """,
+        (start, end),
+    )
+    project_sig = _table_update_signature(conn, "project")
+    folder_rule_sig = _table_update_signature(conn, "folder_project_rule")
+    folder_index_sig = _table_update_signature(conn, "folder_rule_index_state")
+    keyword_rule_sig = _table_update_signature(conn, "project_rule")
+    clipboard_sig = _table_update_signature(conn, "activity_clipboard_event")
     return (
         carry_minutes,
         activity_sig,
@@ -189,36 +203,41 @@ def _table_update_signature(conn, table_name: str) -> tuple[int, str]:
     return (int(row["count"] or 0), str(row["updated_at"] or "")) if row else (0, "")
 
 
-def _load_rows(start: str, end: str) -> list[dict]:
-    with get_connection() as conn:
-        rows = conn.execute(
-            """
-            SELECT
-                a.*,
-                apa.project_id AS assignment_project_id,
-                apa.source AS assignment_source,
-                apa.is_manual AS assignment_is_manual
-            FROM activity_log a
-            LEFT JOIN activity_project_assignment apa ON apa.activity_id = a.id
-            WHERE a.is_deleted = 0
-              AND a.start_time BETWEEN ? AND ?
-            ORDER BY a.start_time ASC, a.id ASC
-            """,
-            (start, end),
-        ).fetchall()
+def _load_rows(start: str, end: str, conn=None) -> list[dict]:
+    if conn is None:
+        with get_connection() as read_conn:
+            return _load_rows(start, end, conn=read_conn)
+    rows = conn.execute(
+        """
+        SELECT
+            a.*,
+            apa.project_id AS assignment_project_id,
+            apa.source AS assignment_source,
+            apa.is_manual AS assignment_is_manual,
+            COALESCE(p.is_deleted, 0) AS assignment_project_is_deleted,
+            COALESCE(p.is_archived, 0) AS assignment_project_is_archived
+        FROM activity_log a
+        LEFT JOIN activity_project_assignment apa ON apa.activity_id = a.id
+        LEFT JOIN project p ON p.id = apa.project_id
+        WHERE a.is_deleted = 0
+          AND a.start_time BETWEEN ? AND ?
+        ORDER BY a.start_time ASC, a.id ASC
+        """,
+        (start, end),
+    ).fetchall()
     return [attach_resource(row) for row in dict_rows(rows)]
 
 
-def _ensure_assignments(rows: list[dict]) -> bool:
+def _ensure_assignments(conn, rows: list[dict]) -> bool:
     changed = False
     for row in rows:
         if row["assignment_project_id"] is None:
-            assign_project_for_activity(int(row["id"]))
+            _assign_project_for_activity_in_transaction(conn, int(row["id"]))
             changed = True
     return changed
 
 
-def _recompute_anchor_rows(rows: list[dict]) -> bool:
+def _recompute_anchor_rows(conn, rows: list[dict]) -> bool:
     changed = False
     for row in rows:
         if row["status"] == STATUS_NORMAL and row.get("assignment_source") == "midnight_anchor":
@@ -226,7 +245,7 @@ def _recompute_anchor_rows(rows: list[dict]) -> bool:
         if _is_file_context_anchor(row):
             if int(row.get("assignment_is_manual") or 0):
                 continue
-            assignment = assign_project_for_activity(int(row["id"]))
+            assignment = _assign_project_for_activity_in_transaction(conn, int(row["id"]))
             if _assignment_changed(row, assignment):
                 changed = True
     return changed
@@ -242,11 +261,10 @@ def _assignment_changed(row: dict, assignment: dict) -> bool:
     )
 
 
-def _recompute_clipboard_transition_rows(rows: list[dict], uncategorized_id: int) -> bool:
+def _recompute_clipboard_transition_rows(conn, rows: list[dict], uncategorized_id: int) -> bool:
     if len(rows) < 2:
         return False
-    with get_connection() as conn:
-        copy_times = clipboard_service.clipboard_times_for_activity_ids(conn, [int(row["id"]) for row in rows])
+    copy_times = clipboard_service.clipboard_times_for_activity_ids(conn, [int(row["id"]) for row in rows])
     changed = False
     for index in range(len(rows) - 1):
         previous = rows[index]
@@ -262,11 +280,11 @@ def _recompute_clipboard_transition_rows(rows: list[dict], uncategorized_id: int
         previous_concrete = previous_project != uncategorized_id
         current_concrete = current_project != uncategorized_id
         if previous_concrete and _can_apply_clipboard_context(current):
-            _set_clipboard_context_assignment(current, previous_project)
+            _set_clipboard_context_assignment(conn, current, previous_project)
             changed = True
             continue
         if current_concrete and _can_apply_clipboard_context(previous):
-            _set_clipboard_context_assignment(previous, current_project)
+            _set_clipboard_context_assignment(conn, previous, current_project)
             changed = True
     return changed
 
@@ -313,8 +331,9 @@ def _can_apply_clipboard_context(row: dict) -> bool:
     return row.get("assignment_source") not in CONTEXT_DIRECT_ANCHOR_SOURCES
 
 
-def _set_clipboard_context_assignment(row: dict, project_id: int) -> None:
+def _set_clipboard_context_assignment(conn, row: dict, project_id: int) -> None:
     _sync_assignment_and_activity(
+        conn,
         int(row["id"]),
         int(project_id),
         "clipboard_transition_context",
@@ -331,7 +350,7 @@ def _set_clipboard_context_assignment(row: dict, project_id: int) -> None:
 # File-context-anchor short-gap carry
 
 
-def _recompute_short_gap_anchor_rows(rows: list[dict], uncategorized_id: int) -> bool:
+def _recompute_short_gap_anchor_rows(conn, rows: list[dict], uncategorized_id: int) -> bool:
     """Bridge short uncategorized file-context anchors between same-project"""
     changed = False
     for index, row in enumerate(rows):
@@ -350,7 +369,7 @@ def _recompute_short_gap_anchor_rows(rows: list[dict], uncategorized_id: int) ->
         target = _short_gap_bridge_target(rows, index, uncategorized_id)
         if target is None:
             continue
-        _set_short_gap_context_assignment(row, target)
+        _set_short_gap_context_assignment(conn, row, target)
         changed = True
     return changed
 
@@ -417,8 +436,9 @@ def _total_middle_duration_seconds(rows: list[dict], start_idx: int, end_idx: in
     return total
 
 
-def _set_short_gap_context_assignment(row: dict, project_id: int) -> None:
+def _set_short_gap_context_assignment(conn, row: dict, project_id: int) -> None:
     _sync_assignment_and_activity(
+        conn,
         int(row["id"]),
         int(project_id),
         "anchor_context",
@@ -457,6 +477,8 @@ def _is_effective_context_anchor(row: dict, uncategorized_id: int) -> bool:
     chain onward as direct anchors.
     """
     if row.get("status") != STATUS_NORMAL:
+        return False
+    if _row_project_deleted(row) and _row_project_id(row) != uncategorized_id:
         return False
     if is_file_context_anchor(row):
         return True
@@ -641,6 +663,10 @@ def _row_project_id(row: dict) -> int:
     return _row_project_id_helper(row)
 
 
+def _row_project_deleted(row: dict) -> bool:
+    return bool(int(row.get("assignment_project_is_deleted") or 0))
+
+
 def _anchor_context_time(row: dict) -> str:
     return row.get("end_time") or row.get("start_time")
 
@@ -652,6 +678,7 @@ def _minutes_between(start: str, end: str) -> float:
 
 
 def _sync_assignment_and_activity(
+    conn,
     activity_id: int,
     project_id: int,
     source: str,
@@ -660,50 +687,55 @@ def _sync_assignment_and_activity(
     auto_classified: bool,
 ) -> None:
     ts = now_str()
-    with get_connection() as conn:
-        assignment = conn.execute(
-            """
-            SELECT project_id, source, confidence, is_manual, suggested_project_name,
-                   source_rule_type, source_rule_id
-            FROM activity_project_assignment
-            WHERE activity_id = ?
-            """,
-            (activity_id,),
-        ).fetchone()
-        assignment_changed = not assignment or not (
-            assignment["project_id"] == project_id
-            and assignment["source"] == source
-            and int(assignment["confidence"]) == confidence
-            and int(assignment["is_manual"]) == int(is_manual)
-            and not (assignment["suggested_project_name"] or "")
-            and assignment["source_rule_type"] is None
-            and assignment["source_rule_id"] is None
+    assignment = conn.execute(
+        """
+        SELECT project_id, source, confidence, is_manual, suggested_project_name,
+               source_rule_type, source_rule_id
+        FROM activity_project_assignment
+        WHERE activity_id = ?
+        """,
+        (activity_id,),
+    ).fetchone()
+    assignment_changed = not assignment or not (
+        assignment["project_id"] == project_id
+        and assignment["source"] == source
+        and int(assignment["confidence"]) == confidence
+        and int(assignment["is_manual"]) == int(is_manual)
+        and not (assignment["suggested_project_name"] or "")
+        and assignment["source_rule_type"] is None
+        and assignment["source_rule_id"] is None
+    )
+    if not assignment_changed:
+        return
+    conn.execute(
+        """
+        INSERT INTO activity_project_assignment(
+            activity_id, project_id, confidence, source, is_manual, suggested_project_name,
+            source_rule_type, source_rule_id, created_at, updated_at
         )
-        if not assignment_changed:
-            return
-        if assignment_changed:
-            conn.execute(
-                """
-                INSERT INTO activity_project_assignment(
-                    activity_id, project_id, confidence, source, is_manual, suggested_project_name,
-                    source_rule_type, source_rule_id, created_at, updated_at
-                )
-                VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?)
-                ON CONFLICT(activity_id) DO UPDATE SET
-                    project_id = excluded.project_id,
-                    confidence = excluded.confidence,
-                    source = excluded.source,
-                    is_manual = excluded.is_manual,
-                    suggested_project_name = NULL,
-                    source_rule_type = NULL,
-                    source_rule_id = NULL,
-                    updated_at = excluded.updated_at
-                """,
-                (activity_id, project_id, confidence, source, int(is_manual), ts, ts),
-            )
+        VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?)
+        ON CONFLICT(activity_id) DO UPDATE SET
+            project_id = excluded.project_id,
+            confidence = excluded.confidence,
+            source = excluded.source,
+            is_manual = excluded.is_manual,
+            suggested_project_name = NULL,
+            source_rule_type = NULL,
+            source_rule_id = NULL,
+            updated_at = excluded.updated_at
+        """,
+        (activity_id, project_id, confidence, source, int(is_manual), ts, ts),
+    )
 
 
-def _get_uncategorized_project_id() -> int:
+def _get_uncategorized_project_id(conn=None) -> int:
+    if conn is not None:
+        row = conn.execute("SELECT id FROM project WHERE name = ?", (UNCATEGORIZED_PROJECT,)).fetchone()
+        if row:
+            return int(row["id"])
+        from .project_inference_service import _get_uncategorized_project_id as _create
+
+        return _create(conn)
     from .project_service import get_or_create_uncategorized_project
 
     return get_or_create_uncategorized_project()

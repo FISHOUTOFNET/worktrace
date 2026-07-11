@@ -27,6 +27,7 @@ from worktrace.services import (
     project_inference_service,
     privacy_service,
     project_service,
+    rule_history_application_service,
     rule_service,
 )
 
@@ -214,12 +215,12 @@ def test_service_exception_collapses_to_operation_failed(temp_db, monkeypatch):
     project = project_service.create_project("Client")
     rule_id = rule_service.create_rule("Spec", project)
 
-    def boom(rule_id_arg):
+    def boom(*args, **kwargs):
         raise RuntimeError(
             "boom SELECT * FROM activity_log traceback window_title clipboard note C:\\Secret"
         )
 
-    monkeypatch.setattr(rule_service, "delete_rule", boom)
+    monkeypatch.setattr(rule_history_application_service, "delete_rule", boom)
     result = rule_api.delete_project_keyword_rule(rule_id)
     assert result == {"ok": False, "error": "operation_failed"}
     lowered = repr(result).lower()
@@ -399,10 +400,8 @@ def test_delete_keyword_rule_does_not_call_folder_delete(temp_db, monkeypatch):
 
 
 def test_delete_keyword_rule_invalidates_keyword_rule_cache(temp_db, monkeypatch):
-    # Regression lock: ``rule_service.delete_rule`` calls
-    # ``invalidate_keyword_rule_cache`` so deleted keyword rules stop
-    # matching immediately for project inference. The API facade must not
-    # bypass that cache invalidation.
+    # Regression lock: the service-level delete orchestrator invalidates the
+    # keyword-rule cache after the transaction commits.
     project = project_service.create_project("Client")
     rule_id = rule_service.create_rule("Spec", project)
     project_inference_service.invalidate_keyword_rule_cache()
@@ -414,12 +413,8 @@ def test_delete_keyword_rule_invalidates_keyword_rule_cache(temp_db, monkeypatch
         calls["count"] += 1
         original()
 
-    monkeypatch.setattr(rule_service, "invalidate_keyword_rule_cache", spy)
-    # Also patch the re-exported name inside project_inference_service so the
-    # ``from .project_inference_service import invalidate_keyword_rule_cache``
-    # reference inside ``rule_service.delete_rule`` resolves to the spy.
     monkeypatch.setattr(
-        "worktrace.services.rule_service.invalidate_keyword_rule_cache", spy
+        "worktrace.services.project_inference_service.invalidate_keyword_rule_cache", spy
     )
 
     result = rule_api.delete_project_keyword_rule(rule_id)

@@ -292,7 +292,9 @@ def _load_activity_rows_for_report_range(start_date: str, end_date: str, include
                 apa.is_manual AS assignment_is_manual,
                 apa.project_id AS effective_project_id,
                 p.name AS effective_project_name,
-                p.description AS effective_project_description
+                p.description AS effective_project_description,
+                COALESCE(p.is_archived, 0) AS effective_project_is_archived,
+                COALESCE(p.is_deleted, 0) AS effective_project_is_deleted
             FROM activity_log a
             LEFT JOIN activity_project_assignment apa ON apa.activity_id = a.id
             LEFT JOIN project p ON p.id = apa.project_id
@@ -338,7 +340,9 @@ def _load_session_rows(
                 apa.is_manual AS assignment_is_manual,
                 apa.project_id AS effective_project_id,
                 p.name AS effective_project_name,
-                p.description AS effective_project_description
+                p.description AS effective_project_description,
+                COALESCE(p.is_archived, 0) AS effective_project_is_archived,
+                COALESCE(p.is_deleted, 0) AS effective_project_is_deleted
             FROM activity_log a
             LEFT JOIN activity_project_assignment apa ON apa.activity_id = a.id
             LEFT JOIN project p ON p.id = apa.project_id
@@ -371,6 +375,8 @@ def _build_session(rows: list[dict], uncategorized_id: int) -> dict:
     project_id = int(first.get("report_project_id") or uncategorized_id)
     project_name = first.get("report_project_name") or UNCATEGORIZED_PROJECT
     project_description = first.get("report_project_description") or ""
+    project_is_deleted = bool(first.get("report_project_is_deleted"))
+    project_is_archived = bool(first.get("report_project_is_archived"))
     is_report_project = bool(first.get("is_report_project"))
     is_report_classified = bool(first.get("is_report_classified"))
     is_report_uncategorized = bool(first.get("is_report_uncategorized"))
@@ -394,6 +400,8 @@ def _build_session(rows: list[dict], uncategorized_id: int) -> dict:
         "project_id": project_id,
         "project_name": project_name,
         "project_description": project_description,
+        "project_is_deleted": project_is_deleted,
+        "project_is_archived": project_is_archived,
         "start_time": first.get("start_time"),
         "end_time": last.get("end_time"),
         "report_date": first.get("report_date"),
@@ -526,6 +534,8 @@ def _attach_merged_report_project(row: dict, anchor: dict) -> None:
     row["report_project_name"] = anchor.get("report_project_name") or UNCATEGORIZED_PROJECT
     row["report_project_description"] = anchor.get("report_project_description") or ""
     row["report_project_key"] = anchor.get("report_project_key") or ""
+    row["report_project_is_deleted"] = bool(anchor.get("report_project_is_deleted"))
+    row["report_project_is_archived"] = bool(anchor.get("report_project_is_archived"))
     row["report_is_suggested_project"] = False
     row["report_context_merged"] = True
     row["report_attribution_kind"] = "report_context_short_gap"

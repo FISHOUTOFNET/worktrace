@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from ..constants import EXCLUDED_PROJECT, UNCATEGORIZED_PROJECT
 from ..db import dict_rows, get_connection, get_db_path, now_str
+from . import project_lifecycle_policy
 
 _UNCATEGORIZED_PROJECT_IDS: dict[str, int] = {}
 _EXCLUDED_PROJECT_IDS: dict[str, int] = {}
@@ -135,11 +136,16 @@ def list_user_projects() -> list[dict]:
             """
             SELECT *
             FROM project
-            WHERE is_archived = 0 AND created_by = 'user'
             ORDER BY name COLLATE NOCASE
             """
         ).fetchall()
-    return dict_rows(rows)
+    return [
+        row
+        for row in dict_rows(rows)
+        if not project_lifecycle_policy.project_is_deleted(row)
+        and not project_lifecycle_policy.project_is_archived(row)
+        and row.get("created_by") == "user"
+    ]
 
 
 def list_selectable_projects() -> list[dict]:
@@ -148,15 +154,15 @@ def list_selectable_projects() -> list[dict]:
             """
             SELECT *
             FROM project
-            WHERE is_archived = 0
-              AND enabled = 1
-              AND (created_by = 'user' OR name = ?)
-              AND name <> ?
             ORDER BY CASE WHEN name = ? THEN 0 ELSE 1 END, name COLLATE NOCASE
             """,
-            (UNCATEGORIZED_PROJECT, EXCLUDED_PROJECT, UNCATEGORIZED_PROJECT),
+            (UNCATEGORIZED_PROJECT,),
         ).fetchall()
-    return dict_rows(rows)
+    return [
+        row
+        for row in dict_rows(rows)
+        if project_lifecycle_policy.project_selectable_for_editing(row)
+    ]
 
 
 def list_rule_target_projects() -> list[dict]:
@@ -165,15 +171,14 @@ def list_rule_target_projects() -> list[dict]:
             """
             SELECT *
             FROM project
-            WHERE is_archived = 0
-              AND enabled = 1
-              AND created_by = 'user'
-              AND name <> ?
             ORDER BY name COLLATE NOCASE
             """,
-            (EXCLUDED_PROJECT,),
         ).fetchall()
-    return dict_rows(rows)
+    return [
+        row
+        for row in dict_rows(rows)
+        if project_lifecycle_policy.project_available_for_rules(row)
+    ]
 
 
 def list_project_bindings(include_system_special: bool = True) -> list[dict]:
@@ -182,16 +187,17 @@ def list_project_bindings(include_system_special: bool = True) -> list[dict]:
             """
             SELECT *
             FROM project
-            WHERE is_archived = 0
-              AND (
-                    created_by = 'user'
-                    OR (? = 1 AND name = ?)
-              )
             ORDER BY CASE WHEN name = ? THEN 0 ELSE 1 END, name COLLATE NOCASE
             """,
-            (int(include_system_special), EXCLUDED_PROJECT, EXCLUDED_PROJECT),
+            (EXCLUDED_PROJECT,),
         ).fetchall()
-    projects = dict_rows(rows)
+    projects = [
+        row
+        for row in dict_rows(rows)
+        if project_lifecycle_policy.project_visible_in_rules_page(
+            row, include_system_special=include_system_special
+        )
+    ]
     with get_connection() as conn:
         last_used_rows = dict_rows(
             conn.execute(
@@ -262,36 +268,48 @@ def archive_project(project_id: int) -> None:
             "UPDATE project SET is_archived = 1, updated_at = ? WHERE id = ?",
             (now_str(), project_id),
         )
-    # Archiving removes the project from rule target / selectable / active
-    # lists, so the folder rule, keyword rule, and privacy exclude caches
-    # must be invalidated to avoid stale state. Mirrors set_project_enabled.
-    from .folder_rule_service import invalidate_folder_rule_cache
-    from .privacy_service import clear_exclude_rules_cache
-    from .project_inference_service import invalidate_keyword_rule_cache
-
-    invalidate_folder_rule_cache()
-    invalidate_keyword_rule_cache()
-    clear_exclude_rules_cache()
+    _invalidate_project_lifecycle_caches()
 
 
 def delete_project(project_id: int) -> None:
-    project = get_project(project_id)
-    if not project:
-        raise ValueError("project not found")
-    if project.get("created_by") == "system" or project.get("name") == UNCATEGORIZED_PROJECT:
-        raise ValueError("system project cannot be deleted")
+    soft_delete_project(project_id)
+
+
+def soft_delete_project(project_id: int) -> None:
+    """Tombstone a project without deleting facts, assignments, rules, or overrides."""
     with get_connection() as conn:
-        conn.execute("DELETE FROM folder_project_rule WHERE project_id = ?", (project_id,))
-        conn.execute("DELETE FROM project_rule WHERE project_id = ?", (project_id,))
-        conn.execute("DELETE FROM project WHERE id = ?", (project_id,))
+        row = conn.execute("SELECT * FROM project WHERE id = ?", (project_id,)).fetchone()
+        project = dict(row) if row else None
+        if not project:
+            raise ValueError("project not found")
+        if project_lifecycle_policy.project_is_system_or_special(project):
+            raise ValueError("system project cannot be deleted")
+        cur = conn.execute(
+            """
+            UPDATE project
+            SET is_deleted = 1,
+                is_archived = 1,
+                enabled = 0,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (now_str(), project_id),
+        )
+        if cur.rowcount != 1:
+            raise ValueError("project not found")
+    _invalidate_project_lifecycle_caches()
+
+
+def _invalidate_project_lifecycle_caches() -> None:
+    from .context_service import invalidate_context_recompute_cache
     from .folder_rule_service import invalidate_folder_rule_cache
+    from .privacy_service import clear_exclude_rules_cache
     from .project_inference_service import invalidate_keyword_rule_cache
 
     invalidate_folder_rule_cache()
     invalidate_keyword_rule_cache()
-    from .privacy_service import clear_exclude_rules_cache
-
     clear_exclude_rules_cache()
+    invalidate_context_recompute_cache()
 
 
 def get_or_create_uncategorized_project() -> int:

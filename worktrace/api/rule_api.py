@@ -33,7 +33,7 @@ from ._write_contract import (
     valid_int,
     valid_nonempty_str,
 )
-from ..services import folder_rule_service, project_service, rule_service
+from ..services import folder_rule_service, project_service, rule_impact_service, rule_service
 
 _APPLY_TO_HISTORY_UNSET = object()
 
@@ -138,26 +138,19 @@ def delete_project_keyword_rule(rule_id: Any, apply_to_history: Any = _APPLY_TO_
     if apply_to_history is not _APPLY_TO_HISTORY_UNSET and not valid_bool(apply_to_history):
         return fail_payload(ERROR_INVALID_INPUT)
     try:
-        # Reuse the existing existence helper: it only returns True when the
-        # id resolves to a row in ``project_rule`` (keyword table). A folder
-        # rule id resolves to ``folder_project_rule`` and therefore returns
-        # False, so the keyword delete path can never delete a folder rule.
-        if not _rule_exists("keyword", rule_id):
-            return fail_payload(ERROR_NOT_FOUND)
         explicit_history_choice = apply_to_history is not _APPLY_TO_HISTORY_UNSET
         apply_to_history = False if not explicit_history_choice else apply_to_history
-        history_result = {"updated_count": 0}
-        if apply_to_history:
-            from ..services import rule_history_application_service
-            history_result = rule_history_application_service.remove_rule_from_history("keyword", rule_id)
-        rule_service.delete_rule(rule_id)
-        from ..services import context_service
-        context_service.invalidate_context_recompute_cache()
+        from ..services import rule_history_application_service
+        history_result = rule_history_application_service.delete_rule(
+            "keyword", rule_id, apply_to_history
+        )
         rule = {"kind": "keyword", "id": int(rule_id), "deleted": True}
         if explicit_history_choice:
             rule.update({"history_updated": bool(apply_to_history), "updated_count": int(history_result.get("updated_count") or 0)})
         return ok_payload(rule=rule)
     except ProjectRuleWriteError as exc:
+        return fail_payload(exc.code)
+    except rule_impact_service.RuleImpactError as exc:
         return fail_payload(exc.code)
     except Exception:
         return fail_payload(ERROR_OPERATION_FAILED)
@@ -324,26 +317,19 @@ def delete_project_folder_rule(rule_id: Any, apply_to_history: Any = _APPLY_TO_H
     if apply_to_history is not _APPLY_TO_HISTORY_UNSET and not valid_bool(apply_to_history):
         return fail_payload(ERROR_INVALID_INPUT)
     try:
-        # ``_folder_rule_row`` only resolves ids in ``folder_project_rule``;
-        # a keyword rule id resolves to ``None`` and therefore returns
-        # ``not_found``, so the folder delete path can never delete a
-        # keyword rule.
-        if _folder_rule_row(rule_id) is None:
-            return fail_payload(ERROR_NOT_FOUND)
         explicit_history_choice = apply_to_history is not _APPLY_TO_HISTORY_UNSET
         apply_to_history = False if not explicit_history_choice else apply_to_history
-        history_result = {"updated_count": 0}
-        if apply_to_history:
-            from ..services import rule_history_application_service
-            history_result = rule_history_application_service.remove_rule_from_history("folder", rule_id)
-        folder_rule_service.delete_folder_rule(rule_id)
-        from ..services import context_service
-        context_service.invalidate_context_recompute_cache()
+        from ..services import rule_history_application_service
+        history_result = rule_history_application_service.delete_rule(
+            "folder", rule_id, apply_to_history
+        )
         rule = {"kind": "folder", "id": int(rule_id), "deleted": True}
         if explicit_history_choice:
             rule.update({"history_updated": bool(apply_to_history), "updated_count": int(history_result.get("updated_count") or 0)})
         return ok_payload(rule=rule)
     except ProjectRuleWriteError as exc:
+        return fail_payload(exc.code)
+    except rule_impact_service.RuleImpactError as exc:
         return fail_payload(exc.code)
     except Exception:
         return fail_payload(ERROR_OPERATION_FAILED)

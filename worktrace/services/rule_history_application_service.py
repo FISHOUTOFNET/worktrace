@@ -1,10 +1,4 @@
-"""Transactional history application and removal for one project rule.
-
-This is the only write service used by the Project Rules UI for applying a
-new rule to history or undoing the historical assignments made by a deleted
-rule.  The activity log remains immutable; only assignment/projection rows
-are changed.
-"""
+"""Transactional history application, removal, and deletion for one rule."""
 
 from __future__ import annotations
 
@@ -18,74 +12,143 @@ from .project_inference_service import (
 
 
 def apply_rule_to_history(rule_type: str, rule_id: int) -> dict:
-    """Apply one enabled rule to eligible closed non-manual history.
-
-    ``rule_impact_service`` owns the matching/eligibility and cap checks; its
-    backfill write now records this exact rule's origin columns.
-    """
     return rule_impact_service.backfill_rule_impact(rule_type, rule_id)
 
 
 def remove_rule_from_history(rule_type: str, rule_id: int) -> dict:
-    """Remove only assignments produced by this exact rule, then re-infer.
-
-    The row is re-inferred while the rule is explicitly excluded, so another
-    matching rule can immediately take over.  Context is invalidated and
-    recomputed per affected date after the direct assignments have committed.
-    """
     if rule_type not in {"folder", "keyword"} or type(rule_id) is not int or rule_id <= 0:
         raise rule_impact_service.RuleImpactError(rule_impact_service.ERR_NOT_FOUND)
+    with get_connection() as conn:
+        result = _remove_rule_from_history_in_transaction(conn, rule_type, rule_id)
+    _invalidate_rule_delete_caches(result["affected_date_values"])
+    return _public_history_result(result)
 
+
+def delete_rule(rule_type: str, rule_id: int, apply_to_history: bool) -> dict:
+    """Delete a folder/keyword rule and optional history impact in one DB transaction."""
+    if rule_type not in {"folder", "keyword"} or type(rule_id) is not int or rule_id <= 0:
+        raise rule_impact_service.RuleImpactError(rule_impact_service.ERR_NOT_FOUND)
+    if type(apply_to_history) is not bool:
+        raise rule_impact_service.RuleImpactError(rule_impact_service.ERR_OPERATION_FAILED)
+    history_result = {
+        "updated_count": 0,
+        "matched_count": 0,
+        "skipped_count": 0,
+        "affected_date_values": [],
+    }
+    with get_connection() as conn:
+        if _load_rule_for_delete(conn, rule_type, rule_id) is None:
+            raise rule_impact_service.RuleImpactError(rule_impact_service.ERR_NOT_FOUND)
+        if apply_to_history:
+            history_result = _remove_rule_from_history_in_transaction(conn, rule_type, rule_id)
+        _delete_rule_in_transaction(conn, rule_type, rule_id)
+    _invalidate_rule_delete_caches(history_result["affected_date_values"])
+    return _public_history_result(history_result)
+
+
+def _remove_rule_from_history_in_transaction(conn, rule_type: str, rule_id: int) -> dict:
     affected_dates: set[str] = set()
     updated_count = 0
-    with get_connection() as conn:
-        rows = conn.execute(
-            """
-            SELECT a.*
-            FROM activity_project_assignment apa
-            JOIN activity_log a ON a.id = apa.activity_id
-            WHERE apa.is_manual = 0
-              AND apa.source_rule_type = ?
-              AND apa.source_rule_id = ?
-            ORDER BY a.id
-            """,
-            (rule_type, rule_id),
-        ).fetchall()
-        for row in rows:
-            activity = dict(row)
-            activity_id = int(activity["id"])
-            resource = _resource_for_activity(conn, activity_id, activity)
-            decision = _infer_project_resource_first(
-                conn, activity, resource, exclude_rule=(rule_type, rule_id)
-            )
-            _upsert_assignment(
-                conn,
-                activity_id,
-                decision.project_id,
-                decision.source,
-                decision.confidence,
-                False,
-                decision.suggested_project_name,
-                decision.source_rule_type,
-                decision.source_rule_id,
-            )
-            date = str(activity.get("start_time") or "")[:10]
-            if date:
-                affected_dates.add(date)
-            updated_count += 1
-
-    # The direct assignment change can alter context anchors.  These helpers
-    # write only derived assignment rows and never activity_log facts.
-    for date in sorted(affected_dates):
-        context_service.invalidate_context_recompute_cache(date)
-        context_service.recompute_context_assignments_for_date(date)
-
+    rows = conn.execute(
+        """
+        SELECT a.*
+        FROM activity_project_assignment apa
+        JOIN activity_log a ON a.id = apa.activity_id
+        WHERE apa.is_manual = 0
+          AND apa.source_rule_type = ?
+          AND apa.source_rule_id = ?
+        ORDER BY a.id
+        """,
+        (rule_type, rule_id),
+    ).fetchall()
+    for row in rows:
+        activity = dict(row)
+        activity_id = int(activity["id"])
+        resource = _resource_for_activity(conn, activity_id, activity)
+        decision = _infer_project_resource_first(
+            conn, activity, resource, exclude_rule=(rule_type, rule_id)
+        )
+        _upsert_assignment(
+            conn,
+            activity_id,
+            decision.project_id,
+            decision.source,
+            decision.confidence,
+            False,
+            decision.suggested_project_name,
+            decision.source_rule_type,
+            decision.source_rule_id,
+        )
+        affected_dates.update(_context_dates_for_activity(activity))
+        updated_count += 1
+    for affected_date in sorted(affected_dates):
+        context_service._recompute_context_assignments_for_date_in_transaction(
+            conn, affected_date, use_cache=False
+        )
     return {
         "updated_count": updated_count,
         "matched_count": updated_count,
         "skipped_count": 0,
+        "affected_date_values": sorted(affected_dates),
+    }
+
+
+def _load_rule_for_delete(conn, rule_type: str, rule_id: int) -> dict | None:
+    if rule_type == "folder":
+        row = conn.execute(
+            "SELECT * FROM folder_project_rule WHERE id = ?",
+            (rule_id,),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT * FROM project_rule WHERE id = ? AND rule_type = 'keyword'",
+            (rule_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def _delete_rule_in_transaction(conn, rule_type: str, rule_id: int) -> None:
+    if rule_type == "folder":
+        conn.execute("DELETE FROM folder_rule_file_index WHERE folder_rule_id = ?", (rule_id,))
+        conn.execute("DELETE FROM folder_rule_index_state WHERE folder_rule_id = ?", (rule_id,))
+        cur = conn.execute("DELETE FROM folder_project_rule WHERE id = ?", (rule_id,))
+    else:
+        cur = conn.execute(
+            "DELETE FROM project_rule WHERE id = ? AND rule_type = 'keyword'",
+            (rule_id,),
+        )
+    if cur.rowcount != 1:
+        raise rule_impact_service.RuleImpactError(rule_impact_service.ERR_NOT_FOUND)
+
+
+def _context_dates_for_activity(activity: dict) -> set[str]:
+    values = {
+        str(activity.get("start_time") or "")[:10],
+        str(activity.get("end_time") or "")[:10],
+    }
+    return {value for value in values if value}
+
+
+def _invalidate_rule_delete_caches(affected_dates: list[str]) -> None:
+    from .folder_rule_service import invalidate_folder_rule_cache
+    from .privacy_service import clear_exclude_rules_cache
+    from .project_inference_service import invalidate_keyword_rule_cache
+
+    invalidate_folder_rule_cache()
+    invalidate_keyword_rule_cache()
+    clear_exclude_rules_cache()
+    for affected_date in affected_dates:
+        context_service.invalidate_context_recompute_cache(affected_date)
+
+
+def _public_history_result(result: dict) -> dict:
+    affected_dates = list(result.get("affected_date_values") or [])
+    return {
+        "updated_count": int(result.get("updated_count") or 0),
+        "matched_count": int(result.get("matched_count") or 0),
+        "skipped_count": int(result.get("skipped_count") or 0),
         "affected_dates": len(affected_dates),
     }
 
 
-__all__ = ["apply_rule_to_history", "remove_rule_from_history"]
+__all__ = ["apply_rule_to_history", "delete_rule", "remove_rule_from_history"]

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 
-from ..constants import EXCLUDED_PROJECT, RULE_CACHE_TTL_SECONDS
+from ..constants import RULE_CACHE_TTL_SECONDS
 from ..db import dict_rows, get_connection, get_db_path, now_str
 from ..path_utils import (
     is_path_under_folder,
@@ -19,27 +19,41 @@ def invalidate_folder_rule_cache() -> None:
     _FOLDER_RULE_CACHE.pop(str(get_db_path().resolve()), None)
 
 
-def _enabled_folder_rules() -> list[dict]:
+def _enabled_folder_rules(conn=None) -> list[dict]:
     cache_key = str(get_db_path().resolve())
     now = time.monotonic()
-    cached = _FOLDER_RULE_CACHE.get(cache_key)
+    cached = _FOLDER_RULE_CACHE.get(cache_key) if conn is None else None
     if cached is not None and cached[0] >= now:
         return [dict(row) for row in cached[1]]
-    with get_connection() as conn:
-        rows = conn.execute(
-            """
-                SELECT fpr.*, p.name AS project_name
-                FROM folder_project_rule fpr
-                LEFT JOIN project p ON p.id = fpr.project_id
-                WHERE fpr.enabled = 1
-                  AND COALESCE(p.enabled, 1) = 1
-                  AND COALESCE(p.is_archived, 0) = 0
-                  AND COALESCE(p.name, '') <> ?
-            """,
-            (EXCLUDED_PROJECT,),
-        ).fetchall()
-    rules = dict_rows(rows)
-    _FOLDER_RULE_CACHE[cache_key] = (now + _FOLDER_RULE_CACHE_TTL_SECONDS, rules)
+    sql = """
+        SELECT fpr.*, p.name AS project_name, p.enabled AS project_enabled,
+               p.is_archived AS project_is_archived,
+               p.is_deleted AS project_is_deleted
+        FROM folder_project_rule fpr
+        LEFT JOIN project p ON p.id = fpr.project_id
+        WHERE fpr.enabled = 1
+        """
+    if conn is None:
+        with get_connection() as read_conn:
+            rows = read_conn.execute(sql).fetchall()
+    else:
+        rows = conn.execute(sql).fetchall()
+    from . import project_lifecycle_policy
+
+    rules = [
+        row
+        for row in dict_rows(rows)
+        if project_lifecycle_policy.project_available_for_inference(
+            {
+                "name": row.get("project_name"),
+                "enabled": row.get("project_enabled"),
+                "is_archived": row.get("project_is_archived"),
+                "is_deleted": row.get("project_is_deleted"),
+            }
+        )
+    ]
+    if conn is None:
+        _FOLDER_RULE_CACHE[cache_key] = (now + _FOLDER_RULE_CACHE_TTL_SECONDS, rules)
     return [dict(row) for row in rules]
 
 
@@ -161,12 +175,12 @@ def list_folder_rules() -> list[dict]:
     return dict_rows(rows)
 
 
-def find_matching_folder_rule(path_or_parent_dir: str, *, exclude_rule_id: int | None = None) -> dict | None:
+def find_matching_folder_rule(path_or_parent_dir: str, *, exclude_rule_id: int | None = None, conn=None) -> dict | None:
     target = (path_or_parent_dir or "").strip()
     if not target:
         return None
     matches = [
-        row for row in _enabled_folder_rules()
+        row for row in _enabled_folder_rules(conn)
         if _target_matches_rule(target, row)
         and int(row.get("id") or 0) != int(exclude_rule_id or 0)
     ]

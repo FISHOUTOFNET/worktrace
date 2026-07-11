@@ -108,6 +108,8 @@ def resolve_project_attribution(row: dict, uncategorized_id: int) -> dict:
     effective_project_description = str(
         row.get("effective_project_description") or ""
     ).strip()
+    effective_project_is_deleted = bool(int(row.get("effective_project_is_deleted") or 0))
+    effective_project_is_archived = bool(int(row.get("effective_project_is_archived") or 0))
     suggested = str(row.get("suggested_project_name") or "").strip()
 
     if is_official_project_source(source):
@@ -125,6 +127,7 @@ def resolve_project_attribution(row: dict, uncategorized_id: int) -> dict:
         and effective_project_id != uncategorized_id
         and effective_project_id > 0
         and bool(effective_project_name)
+        and not effective_project_is_deleted
     )
 
     if concrete:
@@ -145,6 +148,7 @@ def resolve_project_attribution(row: dict, uncategorized_id: int) -> dict:
             kind == "derived"
             and effective_project_name
             and effective_project_id != uncategorized_id
+            and not effective_project_is_deleted
         )
         else ""
     )
@@ -161,6 +165,8 @@ def resolve_project_attribution(row: dict, uncategorized_id: int) -> dict:
         "effective_project_id": effective_project_id,
         "effective_project_name": effective_project_name,
         "effective_project_description": effective_project_description,
+        "effective_project_is_deleted": effective_project_is_deleted,
+        "effective_project_is_archived": effective_project_is_archived,
         "source": source,
     }
 
@@ -208,6 +214,7 @@ def report_project_fields(row: dict, uncategorized_id: int) -> dict:
     kind = _REPORT_ATTRIBUTION_KIND_BY_SOURCE.get(source, "none")
     effective_project_id = int(attribution["effective_project_id"] or uncategorized_id)
     effective_project_name = str(attribution["effective_project_name"] or "").strip()
+    effective_project_is_deleted = bool(attribution["effective_project_is_deleted"])
     is_report_project = (
         str(row.get("status") or "").strip() == STATUS_NORMAL
         and is_report_visible_project_source(source)
@@ -215,7 +222,12 @@ def report_project_fields(row: dict, uncategorized_id: int) -> dict:
         and effective_project_id != int(uncategorized_id)
         and bool(effective_project_name)
     )
-    if is_report_project:
+    if is_report_project and effective_project_is_deleted:
+        report_id = effective_project_id
+        report_name = ""
+        report_desc = ""
+        report_key = f"deleted_project:{report_id}"
+    elif is_report_project:
         report_id = effective_project_id
         report_name = effective_project_name
         report_desc = attribution["effective_project_description"]
@@ -230,6 +242,8 @@ def report_project_fields(row: dict, uncategorized_id: int) -> dict:
         "report_project_name": report_name,
         "report_project_description": report_desc,
         "report_project_key": report_key,
+        "report_project_is_deleted": effective_project_is_deleted and is_report_project,
+        "report_project_is_archived": bool(attribution["effective_project_is_archived"]),
         "report_attribution_kind": kind,
         "is_report_project": is_report_project,
         "is_report_classified": is_report_project,

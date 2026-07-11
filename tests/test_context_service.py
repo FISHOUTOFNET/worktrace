@@ -191,9 +191,9 @@ def test_recompute_context_skips_when_date_fingerprint_is_unchanged(temp_db, mon
     calls = []
     original = context_service._load_rows
 
-    def counted_load_rows(start: str, end: str):
+    def counted_load_rows(start: str, end: str, conn=None):
         calls.append((start, end))
-        return original(start, end)
+        return original(start, end, conn=conn)
 
     monkeypatch.setattr(context_service, "_load_rows", counted_load_rows)
 
@@ -215,9 +215,9 @@ def test_recompute_context_runs_again_when_date_fingerprint_changes(temp_db, mon
     calls = []
     original = context_service._load_rows
 
-    def counted_load_rows(start: str, end: str):
+    def counted_load_rows(start: str, end: str, conn=None):
         calls.append((start, end))
-        return original(start, end)
+        return original(start, end, conn=conn)
 
     monkeypatch.setattr(context_service, "_load_rows", counted_load_rows)
 

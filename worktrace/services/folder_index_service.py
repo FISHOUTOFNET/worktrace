@@ -76,6 +76,8 @@ def request_refresh_for_enabled_rules(include_excluded: bool = False) -> None:
                 JOIN project p ON p.id = fpr.project_id
                 WHERE fpr.enabled = 1
                   AND p.enabled = 1
+                  AND COALESCE(p.is_archived, 0) = 0
+                  AND COALESCE(p.is_deleted, 0) = 0
                   {project_clause}
                 """,
                 params,
@@ -217,6 +219,8 @@ def lookup_indexed_paths_for_file_name(
                   AND state.valid_from IS NOT NULL
                   AND fpr.enabled = 1
                   AND p.enabled = 1
+                  AND COALESCE(p.is_archived, 0) = 0
+                  AND COALESCE(p.is_deleted, 0) = 0
                   {project_clause}
                   {time_clause}
                 ORDER BY length(fpr.normalized_folder_key) DESC, idx.id ASC

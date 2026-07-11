@@ -5,10 +5,11 @@ import re
 import time
 from dataclasses import dataclass
 
-from ..constants import EXCLUDED_PROJECT, RULE_CACHE_TTL_SECONDS, STATUS_NORMAL, UNCATEGORIZED_PROJECT
+from ..constants import RULE_CACHE_TTL_SECONDS, STATUS_NORMAL, UNCATEGORIZED_PROJECT
 from ..db import get_connection, get_db_path, now_str
 from ..path_utils import has_auto_project_extension, looks_like_local_file_path
 from . import clipboard_service, folder_index_service, folder_rule_service
+from . import project_lifecycle_policy
 
 GENERIC_FILE_PROJECT_NAMES = {
     "desktop",
@@ -45,79 +46,83 @@ def invalidate_keyword_rule_cache() -> None:
 def _enabled_keyword_rules(conn=None) -> list[dict]:
     cache_key = str(get_db_path().resolve())
     now = time.monotonic()
-    cached = _KEYWORD_RULE_CACHE.get(cache_key)
+    cached = _KEYWORD_RULE_CACHE.get(cache_key) if conn is None else None
     if cached is not None and cached[0] >= now:
         return [dict(row) for row in cached[1]]
+    sql = """
+        SELECT pr.id, pr.project_id, pr.pattern,
+               p.name AS project_name, p.enabled AS project_enabled,
+               p.is_archived AS project_is_archived,
+               p.is_deleted AS project_is_deleted
+        FROM project_rule pr
+        JOIN project p ON p.id = pr.project_id
+        WHERE pr.enabled = 1
+          AND pr.rule_type = 'keyword'
+          AND pr.created_by = 'user'
+        ORDER BY pr.created_at, pr.id
+        """
     if conn is None:
         with get_connection() as read_conn:
-            rows = read_conn.execute(
-                """
-                SELECT pr.id, pr.project_id, pr.pattern
-                FROM project_rule pr
-                JOIN project p ON p.id = pr.project_id
-                WHERE pr.enabled = 1
-                  AND pr.rule_type = 'keyword'
-                  AND pr.created_by = 'user'
-                  AND p.enabled = 1
-                  AND p.is_archived = 0
-                  AND p.name <> ?
-                ORDER BY pr.created_at, pr.id
-                """,
-                (EXCLUDED_PROJECT,),
-            ).fetchall()
+            rows = read_conn.execute(sql).fetchall()
     else:
-        rows = conn.execute(
-            """
-            SELECT pr.id, pr.project_id, pr.pattern
-            FROM project_rule pr
-            JOIN project p ON p.id = pr.project_id
-            WHERE pr.enabled = 1
-              AND pr.rule_type = 'keyword'
-              AND pr.created_by = 'user'
-              AND p.enabled = 1
-              AND p.is_archived = 0
-              AND p.name <> ?
-            ORDER BY pr.created_at, pr.id
-            """,
-            (EXCLUDED_PROJECT,),
-        ).fetchall()
-    rules = [{"id": int(row["id"]), "project_id": int(row["project_id"]), "pattern": (row["pattern"] or "").strip().casefold()} for row in rows]
-    _KEYWORD_RULE_CACHE[cache_key] = (now + _KEYWORD_RULE_CACHE_TTL_SECONDS, rules)
+        rows = conn.execute(sql).fetchall()
+    rules = [
+        {"id": int(row["id"]), "project_id": int(row["project_id"]), "pattern": (row["pattern"] or "").strip().casefold()}
+        for row in rows
+        if project_lifecycle_policy.project_available_for_inference(
+            {
+                "name": row["project_name"],
+                "enabled": row["project_enabled"],
+                "is_archived": row["project_is_archived"],
+                "is_deleted": row["project_is_deleted"],
+            }
+        )
+    ]
+    if conn is None:
+        _KEYWORD_RULE_CACHE[cache_key] = (now + _KEYWORD_RULE_CACHE_TTL_SECONDS, rules)
     return [dict(row) for row in rules]
 
 
 def assign_project_for_activity(activity_id: int) -> dict:
     with get_connection() as conn:
-        activity = conn.execute("SELECT * FROM activity_log WHERE id = ?", (activity_id,)).fetchone()
-        if not activity:
-            raise ValueError(f"activity not found: {activity_id}")
-        activity_dict = dict(activity)
+        return _assign_project_for_activity_in_transaction(conn, activity_id)
 
-        existing = conn.execute(
-            "SELECT * FROM activity_project_assignment WHERE activity_id = ?",
-            (activity_id,),
-        ).fetchone()
-        if existing and int(existing["is_manual"] or 0):
-            project_id = existing["project_id"] if existing["project_id"] is not None else _get_uncategorized_project_id(conn)
-            return _assignment_dict(conn, activity_id)
 
-        if existing and existing["source"] == "midnight_anchor":
-            return _assignment_dict(conn, activity_id)
+def _assign_project_for_activity_in_transaction(
+    conn,
+    activity_id: int,
+    *,
+    exclude_rule: tuple[str, int] | None = None,
+) -> dict:
+    activity = conn.execute("SELECT * FROM activity_log WHERE id = ?", (activity_id,)).fetchone()
+    if not activity:
+        raise ValueError(f"activity not found: {activity_id}")
+    activity_dict = dict(activity)
 
-        if activity["status"] != STATUS_NORMAL:
-            project_id = _get_uncategorized_project_id(conn)
-            _upsert_assignment(conn, activity_id, project_id, "uncategorized", 0, False, None)
-            return _assignment_dict(conn, activity_id)
-
-        resource = _resource_for_activity(conn, activity_id, activity_dict)
-        decision = _infer_project_resource_first(conn, activity_dict, resource)
-
-        _upsert_assignment(
-            conn, activity_id, decision.project_id, decision.source,
-            decision.confidence, False, decision.suggested_project_name,
-            decision.source_rule_type, decision.source_rule_id,
-        )
+    existing = conn.execute(
+        "SELECT * FROM activity_project_assignment WHERE activity_id = ?",
+        (activity_id,),
+    ).fetchone()
+    if existing and int(existing["is_manual"] or 0):
         return _assignment_dict(conn, activity_id)
+
+    if existing and existing["source"] == "midnight_anchor":
+        return _assignment_dict(conn, activity_id)
+
+    if activity["status"] != STATUS_NORMAL:
+        project_id = _get_uncategorized_project_id(conn)
+        _upsert_assignment(conn, activity_id, project_id, "uncategorized", 0, False, None)
+        return _assignment_dict(conn, activity_id)
+
+    resource = _resource_for_activity(conn, activity_id, activity_dict)
+    decision = _infer_project_resource_first(conn, activity_dict, resource, exclude_rule=exclude_rule)
+
+    _upsert_assignment(
+        conn, activity_id, decision.project_id, decision.source,
+        decision.confidence, False, decision.suggested_project_name,
+        decision.source_rule_type, decision.source_rule_id,
+    )
+    return _assignment_dict(conn, activity_id)
 
 
 def backfill_missing_assignments() -> None:
@@ -340,13 +345,13 @@ def _infer_project_resource_first(
     # 3. folder/file rule for local path
     if path_hint:
         excluded_folder_id = exclude_rule[1] if exclude_rule and exclude_rule[0] == "folder" else None
-        rule = folder_rule_service.find_matching_folder_rule(path_hint, exclude_rule_id=excluded_folder_id)
+        rule = folder_rule_service.find_matching_folder_rule(path_hint, exclude_rule_id=excluded_folder_id, conn=conn)
         if rule:
             return ProjectAssignmentDecision(int(rule["project_id"]), "folder_rule", 85, source_rule_type="folder", source_rule_id=int(rule["id"]))
         # Also try parent directory
         parent_dir = ntpath.dirname(path_hint.rstrip("\\/"))
         if parent_dir:
-            rule = folder_rule_service.find_matching_folder_rule(parent_dir, exclude_rule_id=excluded_folder_id)
+            rule = folder_rule_service.find_matching_folder_rule(parent_dir, exclude_rule_id=excluded_folder_id, conn=conn)
             if rule:
                 return ProjectAssignmentDecision(int(rule["project_id"]), "folder_rule", 85, source_rule_type="folder", source_rule_id=int(rule["id"]))
 

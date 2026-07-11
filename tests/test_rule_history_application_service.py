@@ -6,7 +6,14 @@ from datetime import datetime
 
 from worktrace.api import rule_api
 from worktrace.db import get_connection, now_str
-from worktrace.services import activity_service, project_inference_service, project_service, rule_service
+from worktrace.services import (
+    activity_service,
+    folder_rule_service,
+    project_inference_service,
+    project_service,
+    rule_history_application_service,
+    rule_service,
+)
 
 
 def _closed_activity(title: str = "Spec document") -> int:
@@ -76,3 +83,91 @@ def test_delete_rule_rejects_non_bool_history_flag(temp_db):
     rule_id = rule_service.create_rule("Spec", project)
     for invalid in (None, 1, "true", [], {}):
         assert rule_api.delete_project_keyword_rule(rule_id, invalid) == {"ok": False, "error": "invalid_input"}
+
+
+def test_delete_keyword_rule_rolls_back_when_context_recompute_fails(temp_db, monkeypatch):
+    first_project = project_service.create_project("First")
+    second_project = project_service.create_project("Second")
+    first_rule = rule_service.create_rule("Spec", first_project)
+    second_rule = rule_service.create_rule("Spec", second_project)
+    activity_id = _closed_activity()
+    project_inference_service.assign_project_for_activity(activity_id)
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("context boom")
+
+    from worktrace.services import context_service
+
+    monkeypatch.setattr(context_service, "_recompute_context_assignments_for_date_in_transaction", boom)
+
+    result = rule_api.delete_project_keyword_rule(first_rule, True)
+
+    assert result == {"ok": False, "error": "operation_failed"}
+    with get_connection() as conn:
+        assignment = conn.execute(
+            "SELECT project_id, source_rule_id FROM activity_project_assignment WHERE activity_id = ?",
+            (activity_id,),
+        ).fetchone()
+        rule = conn.execute("SELECT id FROM project_rule WHERE id = ?", (first_rule,)).fetchone()
+    assert dict(assignment) == {"project_id": first_project, "source_rule_id": first_rule}
+    assert rule is not None
+    assert second_rule != first_rule
+
+
+def test_delete_keyword_rule_rolls_back_when_rule_delete_fails_after_context(temp_db, monkeypatch):
+    first_project = project_service.create_project("First")
+    second_project = project_service.create_project("Second")
+    first_rule = rule_service.create_rule("Spec", first_project)
+    rule_service.create_rule("Spec", second_project)
+    activity_id = _closed_activity()
+    project_inference_service.assign_project_for_activity(activity_id)
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("delete boom")
+
+    monkeypatch.setattr(rule_history_application_service, "_delete_rule_in_transaction", boom)
+
+    result = rule_api.delete_project_keyword_rule(first_rule, True)
+
+    assert result == {"ok": False, "error": "operation_failed"}
+    with get_connection() as conn:
+        assignment = conn.execute(
+            "SELECT project_id, source_rule_id FROM activity_project_assignment WHERE activity_id = ?",
+            (activity_id,),
+        ).fetchone()
+        rule = conn.execute("SELECT id FROM project_rule WHERE id = ?", (first_rule,)).fetchone()
+    assert dict(assignment) == {"project_id": first_project, "source_rule_id": first_rule}
+    assert rule is not None
+
+
+def test_delete_folder_rule_rolls_back_index_and_rule_when_index_delete_stage_fails(temp_db, monkeypatch):
+    project = project_service.create_project("Folder Project")
+    rule_id = folder_rule_service.create_or_update_folder_rule(r"D:\Client", project)
+
+    with get_connection() as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM folder_rule_index_state WHERE folder_rule_id = ?",
+            (rule_id,),
+        ).fetchone()[0] == 1
+
+    def boom_after_index_delete(conn, rule_type, failed_rule_id):
+        conn.execute("DELETE FROM folder_rule_index_state WHERE folder_rule_id = ?", (failed_rule_id,))
+        raise RuntimeError("index delete boom")
+
+    monkeypatch.setattr(
+        rule_history_application_service,
+        "_delete_rule_in_transaction",
+        boom_after_index_delete,
+    )
+
+    result = rule_api.delete_project_folder_rule(rule_id, True)
+
+    assert result == {"ok": False, "error": "operation_failed"}
+    with get_connection() as conn:
+        rule = conn.execute("SELECT id FROM folder_project_rule WHERE id = ?", (rule_id,)).fetchone()
+        index_state = conn.execute(
+            "SELECT folder_rule_id FROM folder_rule_index_state WHERE folder_rule_id = ?",
+            (rule_id,),
+        ).fetchone()
+    assert rule is not None
+    assert index_state is not None

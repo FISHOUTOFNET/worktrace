@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from ..constants import UNCATEGORIZED_PROJECT
 from . import report_session_operation_engine, session_override_service
+from . import project_lifecycle_policy
 from .project_service import get_or_create_uncategorized_project
 
 
@@ -70,6 +71,11 @@ def get_report_sessions_for_operations(
     for session in sessions:
         _finalize_session(session, uncategorized_id)
         _attach_projection_defaults(session)
+    sessions = [
+        session
+        for session in sessions
+        if project_lifecycle_policy.final_session_is_reportable(session)
+    ]
     _attach_contributions(sessions, rows)
     projected: list[dict] = []
     by_date: dict[str, list[dict]] = {}
@@ -250,6 +256,8 @@ def _attach_raw_final_defaults(session: dict, uncategorized_id: int) -> None:
     session["override_match_state"] = None
     session["has_project_override"] = False
     session["has_duration_override"] = False
+    session["project_is_deleted"] = bool(session.get("project_is_deleted"))
+    session["project_is_archived"] = bool(session.get("project_is_archived"))
     session["session_note"] = ""
 
 
@@ -271,6 +279,8 @@ def _finalize_session(session: dict, uncategorized_id: int) -> None:
     session["project_id"] = project_id
     session["project_name"] = str(session.get("project_name") or UNCATEGORIZED_PROJECT)
     session["project_description"] = str(session.get("project_description") or "")
+    session["project_is_deleted"] = bool(session.get("project_is_deleted"))
+    session["project_is_archived"] = bool(session.get("project_is_archived"))
     is_uncat = project_id == int(uncategorized_id)
     if bool(session.get("has_project_override")):
         is_report_project = not is_uncat

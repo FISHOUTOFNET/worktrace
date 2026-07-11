@@ -61,17 +61,21 @@ def _table_counts():
         }
 
 
-def test_delete_project_deletes_project_and_clears_associated_rules(temp_db):
+def test_delete_project_soft_deletes_project_and_keeps_associated_rules(temp_db):
     project_id = project_service.create_project("Client")
     folder_rule_service.create_or_update_folder_rule("D:\\Client", project_id)
     rule_service.create_rule("Spec", project_id)
 
     project_service.delete_project(project_id)
 
-    assert project_service.get_project(project_id) is None
+    project = project_service.get_project(project_id)
+    assert project is not None
+    assert project["is_deleted"] == 1
+    assert project["is_archived"] == 1
+    assert project["enabled"] == 0
     assert "Client" not in [project["name"] for project in project_service.list_user_projects()]
-    assert folder_rule_service.list_folder_rules() == []
-    assert rule_service.list_rules() == []
+    assert len(folder_rule_service.list_folder_rules()) == 1
+    assert len(rule_service.list_rules()) == 1
 
 
 def test_project_can_be_edited_and_disabled(temp_db):

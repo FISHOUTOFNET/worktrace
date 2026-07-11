@@ -115,6 +115,13 @@ _PROJECT_LIFECYCLE_ARCHIVE_MESSAGES = {
     "operation_failed": "归档项目失败",
 }
 
+_PROJECT_LIFECYCLE_DELETE_MESSAGES = {
+    "invalid_input": "操作无效",
+    "not_found": "项目不存在",
+    "system_project": "系统项目不能删除",
+    "operation_failed": "删除项目失败",
+}
+
 # Maps impact-preview codes. not_found covers both "id missing" and "id belongs to the other
 # rule table" — both report 规则不存在 so the user never learns which table the id belonged to.
 _PROJECT_RULE_IMPACT_PREVIEW_MESSAGES = {
@@ -1108,7 +1115,7 @@ class ProjectRulesBridgeMixin:
             code = str(result.get("error") or "operation_failed")
             return {
                 "ok": False,
-                "error": _PROJECT_LIFECYCLE_ARCHIVE_MESSAGES.get(code, "删除项目失败"),
+                "error": _PROJECT_LIFECYCLE_DELETE_MESSAGES.get(code, "删除项目失败"),
             }
         except Exception:
             logger.exception("webview bridge delete_project_for_rules failed")

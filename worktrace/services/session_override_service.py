@@ -66,7 +66,9 @@ def attach_overrides(sessions: list[dict]) -> list[dict]:
     with get_connection() as conn:
         rows = conn.execute(
             f"""
-            SELECT o.*, p.name AS project_name, p.description AS project_description
+            SELECT o.*, p.name AS project_name, p.description AS project_description,
+                   COALESCE(p.is_deleted, 0) AS project_is_deleted,
+                   COALESCE(p.is_archived, 0) AS project_is_archived
             FROM project_session_override o
             LEFT JOIN project p ON p.id = o.project_id
             WHERE o.match_state = ?
@@ -217,6 +219,8 @@ def _apply_override(session: dict, override: dict) -> None:
         session["project_id"] = int(override["project_id"])
         session["project_name"] = str(override.get("project_name") or "")
         session["project_description"] = str(override.get("project_description") or "")
+        session["project_is_deleted"] = bool(int(override.get("project_is_deleted") or 0))
+        session["project_is_archived"] = bool(int(override.get("project_is_archived") or 0))
         session["has_project_override"] = True
         session["is_report_project"] = True
         session["is_report_classified"] = True

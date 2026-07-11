@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..constants import EXCLUDED_PROJECT, STATUS_NORMAL
+from ..constants import STATUS_NORMAL
 from ..db import get_connection, now_str
 from ..formatters import format_safe_display_name
 from . import clipboard_service, folder_rule_service
+from . import project_lifecycle_policy
 from .project_inference_service import keyword_pattern_matches
 
 MAX_RULE_BACKFILL_ACTIVITIES = 100
@@ -42,7 +43,8 @@ def _resolve_folder_rule(conn, rule_id: int) -> dict | None:
         """
         SELECT fpr.id, fpr.folder_path, fpr.project_id, fpr.recursive, fpr.enabled,
                p.name AS project_name, p.enabled AS project_enabled,
-               p.is_archived AS project_archived
+               p.is_archived AS project_archived,
+               p.is_deleted AS project_deleted
         FROM folder_project_rule fpr
         LEFT JOIN project p ON p.id = fpr.project_id
         WHERE fpr.id = ?
@@ -59,7 +61,8 @@ def _resolve_keyword_rule(conn, rule_id: int) -> dict | None:
         """
         SELECT pr.id, pr.pattern, pr.project_id, pr.enabled,
                p.name AS project_name, p.enabled AS project_enabled,
-               p.is_archived AS project_archived
+               p.is_archived AS project_archived,
+               p.is_deleted AS project_deleted
         FROM project_rule pr
         LEFT JOIN project p ON p.id = pr.project_id
         WHERE pr.id = ? AND pr.rule_type = 'keyword'
@@ -72,17 +75,14 @@ def _resolve_keyword_rule(conn, rule_id: int) -> dict | None:
 def _project_available(rule: dict) -> bool:
     """A target project is available for backfill when it exists, is enabled,
     not archived, and is not the special ``排除规则`` project."""
-    name = rule.get("project_name")
-    if name is None:
-        # project row missing (broken FK) -> not available
-        return False
-    if str(name) == EXCLUDED_PROJECT:
-        return False
-    if not int(rule.get("project_enabled") or 0):
-        return False
-    if int(rule.get("project_archived") or 0):
-        return False
-    return True
+    return project_lifecycle_policy.project_available_for_inference(
+        {
+            "name": rule.get("project_name"),
+            "enabled": rule.get("project_enabled"),
+            "is_archived": rule.get("project_archived"),
+            "is_deleted": rule.get("project_deleted"),
+        }
+    )
 
 
 def _rule_target(rule: dict, rule_type: str) -> str:
