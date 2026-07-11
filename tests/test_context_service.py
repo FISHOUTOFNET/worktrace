@@ -517,8 +517,8 @@ def _set_direct_assignment_source(activity_id: int, source: str, project_id: int
 
     This simulates a keyword/folder rule match without actually creating rules.
     The activity must NOT be a file-context anchor (use Edge/browser activities).
-    ``manual_override`` is cleared so the main loop does not skip it as a manual
-    record, and ``auto_classified`` is set to match rule-assigned semantics.
+    ``is_manual`` is cleared so the main loop treats it like a direct rule
+    assignment, not a user override.
     """
     ts = now_str()
     with get_connection() as conn:
@@ -530,14 +530,6 @@ def _set_direct_assignment_source(activity_id: int, source: str, project_id: int
             WHERE activity_id = ?
             """,
             (source, project_id, ts, activity_id),
-        )
-        conn.execute(
-            """
-            UPDATE activity_log
-            SET project_id = ?, manual_override = 0, auto_classified = 1, updated_at = ?
-            WHERE id = ?
-            """,
-            (project_id, ts, activity_id),
         )
 
 

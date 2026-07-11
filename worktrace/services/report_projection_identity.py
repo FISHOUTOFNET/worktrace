@@ -34,8 +34,8 @@ def copy_projection_key(operation_id: int) -> str:
     return f"copy:{int(operation_id)}"
 
 
-def merge_projection_key(operation_group_key: str) -> str:
-    return f"merge:{str(operation_group_key)}"
+def merge_projection_key(operation_id: int) -> str:
+    return f"merge:{int(operation_id)}"
 
 
 def stable_json_hash(payload: Any) -> str:
@@ -66,7 +66,6 @@ def projection_revision(session: dict[str, Any], *, applied_commands: list[dict[
     payload = {
         "projection_instance_key": str(session.get("projection_instance_key") or ""),
         "projection_kind": str(session.get("projection_kind") or ""),
-        "operation_group_key": str(session.get("operation_group_key") or ""),
         "members": [member_identity_key(member) for member in session.get("member_slices") or []],
         "commands": [
             {
@@ -89,14 +88,6 @@ def projection_revision(session: dict[str, Any], *, applied_commands: list[dict[
             "has_override": bool(session.get("has_duration_override")),
         },
         "note": str(session.get("session_note") or ""),
-        "capabilities": {
-            "hide": bool(session.get("can_hide")),
-            "copy": bool(session.get("can_copy")),
-            "hide_activity": bool(session.get("can_hide_activity")),
-            "merge_previous": bool(session.get("can_merge_previous")),
-            "merge_next": bool(session.get("can_merge_next")),
-            "split": bool(session.get("can_split")),
-        },
         "contributions": sorted(contributions, key=lambda item: item["member"]),
     }
     return stable_json_hash(payload)

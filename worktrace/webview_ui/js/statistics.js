@@ -72,6 +72,7 @@
             setStatisticsLoading(false);
             if (!data) return;  // keep prior rendered data on error
             App.statisticsLoaded = true;
+            App.statisticsSnapshotRevision = (data.summary && data.summary.snapshot_revision) || "";
             showStatistics(data.summary);
             clearStatisticsError();
         }).catch(function () {
@@ -158,6 +159,7 @@
         if (rangeEl) rangeEl.textContent = App.escapeHtml(App.safeText(dateFrom, "") + " 至 " + App.safeText(dateTo, ""));
         if (countEl) countEl.textContent = String(preview.included_activity_count || 0);
         if (durationEl) durationEl.textContent = preview.included_duration || "00:00:00";
+        App.statisticsSnapshotRevision = preview.snapshot_revision || App.statisticsSnapshotRevision || "";
         if (formatsEl) {
             var formats = preview.available_formats || [];
             formatsEl.textContent = formats.length ? App.escapeHtml(formats.join("、")) : "--";
@@ -240,6 +242,11 @@
             setStatisticsExportStatus("请选择有效日期", "error");
             return;
         }
+        var snapshotRevision = App.statisticsSnapshotRevision || "";
+        if (!snapshotRevision) {
+            setStatisticsExportStatus("请先加载统计数据", "error");
+            return;
+        }
         // Reuse the same client-side pre-check as the statistics load so
         // the user gets an immediate clear message without a bridge
         // round-trip. The bridge / service still perform canonical validation.
@@ -250,7 +257,7 @@
         }
         setStatisticsExportSaving(true);
         setStatisticsExportStatus("正在导出…", "info");
-        App.callBridge("export_statistics_csv", dateFrom, dateTo).then(function (result) {
+        App.callBridge("export_statistics_csv", dateFrom, dateTo, snapshotRevision).then(function (result) {
             setStatisticsExportSaving(false);
             if (!result) {
                 setStatisticsExportStatus("导出失败", "error");

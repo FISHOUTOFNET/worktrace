@@ -51,8 +51,8 @@ from .runtime_activity_state_service import clear_runtime_activity_state
 
 
 PAYLOAD_FORMAT = "worktrace-local-data"
-PAYLOAD_VERSION = 1
-SCHEMA_VERSION = "1"
+PAYLOAD_VERSION = 2
+SCHEMA_VERSION = "2"
 BACKUP_FILE_SUFFIX = ".wtbackup"
 
 # Tables exported and imported, in dependency-safe insert order (parents first).
@@ -68,6 +68,7 @@ EXPORT_TABLES: tuple[str, ...] = (
     "activity_clipboard_event",
     "report_session_operation",
     "report_session_operation_member",
+    "report_session_operation_dependency",
     "activity_resource",
 )
 
@@ -95,6 +96,7 @@ SECURE_IMPORT_GUARD_KEY = "secure_import_in_progress"
 # Delete order (children first) to respect foreign keys.
 _DELETE_ORDER: tuple[str, ...] = (
     "activity_resource",
+    "report_session_operation_dependency",
     "report_session_operation_member",
     "report_session_operation",
     "activity_clipboard_event",
@@ -355,15 +357,14 @@ def _parse_and_validate_payload(payload: bytes) -> dict[str, Any]:
         raise BackupCorruptedError("backup file is invalid or corrupted")
     if data.get("format") != PAYLOAD_FORMAT:
         raise BackupCorruptedError("backup file is invalid or corrupted")
-    if data.get("version") != PAYLOAD_VERSION:
+    if data.get("version") != PAYLOAD_VERSION or str(data.get("schema_version") or "") != SCHEMA_VERSION:
         raise BackupVersionNotSupportedError("backup version is not supported")
     tables = data.get("tables")
     if not isinstance(tables, dict):
         raise BackupCorruptedError("backup file is invalid or corrupted")
 
-    required = {"project", "activity_log", "settings"}
-    missing = required - set(tables.keys())
-    if missing:
+    expected_tables = set(EXPORT_TABLES)
+    if set(tables.keys()) != expected_tables:
         raise BackupCorruptedError("backup file is invalid or corrupted")
 
     for name, rows in tables.items():
@@ -394,6 +395,10 @@ def _replace_import(data: dict[str, Any]) -> dict[str, int]:
                 rows = [r for r in rows if r.get("key") not in NON_MIGRATABLE_SETTINGS]
             count = _insert_rows(conn, table, rows)
             imported[table] = count
+
+        if conn.execute("PRAGMA foreign_key_check").fetchone():
+            raise BackupCorruptedError("backup file is invalid or corrupted")
+        _validate_operation_graph(conn)
 
         # Re-seed defaults so system projects and runtime-state settings exist.
         seed_defaults(conn)
@@ -426,12 +431,10 @@ def _delete_all_rows(conn: sqlite3.Connection) -> None:
 def _insert_rows(conn: sqlite3.Connection, table: str, rows: list[dict[str, Any]]) -> int:
     if not rows:
         return 0
-    # Use the current schema's columns so a backup from a slightly different
-    # schema version does not break import. Extra backup columns are ignored;
-    # missing columns fall back to schema defaults.
     schema_columns = _table_columns(conn, table)
     if not schema_columns:
         return 0
+    expected = set(schema_columns)
 
     col_clause = ", ".join(f'"{c}"' for c in schema_columns)
     placeholders = ", ".join("?" for _ in schema_columns)
@@ -439,10 +442,38 @@ def _insert_rows(conn: sqlite3.Connection, table: str, rows: list[dict[str, Any]
 
     inserted = 0
     for row in rows:
+        if set(row.keys()) != expected:
+            raise BackupCorruptedError("backup file is invalid or corrupted")
         values = [row.get(col) for col in schema_columns]
         conn.execute(sql, values)
         inserted += 1
     return inserted
+
+
+def _validate_operation_graph(conn: sqlite3.Connection) -> None:
+    duplicate = conn.execute(
+        """
+        SELECT request_id
+        FROM report_session_operation
+        GROUP BY request_id
+        HAVING COUNT(*) > 1
+        LIMIT 1
+        """
+    ).fetchone()
+    if duplicate:
+        raise BackupCorruptedError("backup file is invalid or corrupted")
+    invalid_dependency = conn.execute(
+        """
+        SELECT 1
+        FROM report_session_operation_dependency d
+        LEFT JOIN report_session_operation p ON p.id = d.parent_operation_id
+        LEFT JOIN report_session_operation c ON c.id = d.child_operation_id
+        WHERE p.id IS NULL OR c.id IS NULL
+        LIMIT 1
+        """
+    ).fetchone()
+    if invalid_dependency:
+        raise BackupCorruptedError("backup file is invalid or corrupted")
 
 
 def _table_columns(conn: sqlite3.Connection, table: str) -> list[str]:

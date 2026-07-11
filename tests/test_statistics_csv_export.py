@@ -183,7 +183,7 @@ def test_build_csv_rows_excludes_deleted(temp_db):
 
 
 def test_build_csv_rows_all_statuses_exported(temp_db):
-    """normal / idle / paused / excluded / error are all included."""
+    """Status policy exports normal plus standalone excluded only."""
     pid = project_service.create_project("Client")
     statuses = ("normal", "idle", "paused", "excluded", "error")
     starts = [
@@ -203,10 +203,11 @@ def test_build_csv_rows_all_statuses_exported(temp_db):
             status=status,
         )
     rows = export_service.build_statistics_csv_rows("2026-06-25", "2026-06-25")
-    assert len(rows) == 1
+    assert len(rows) == 2
     by_start = {row["start_time"][-8:]: row for row in rows}
     assert by_start["09:00:00"]["status"] == "正常"
     assert by_start["09:00:00"]["project"] == "Client"
+    assert by_start["10:30:00"]["status"] == "已排除"
 
 
 def test_build_csv_rows_multi_day_range(temp_db):
@@ -335,7 +336,7 @@ def test_write_csv_propagates_permission_error(temp_db, tmp_path):
     real_open = open
 
     def fake_open(path, mode, *args, **kwargs):
-        if str(path) == str(out):
+        if str(path) in {str(out), str(out) + ".tmp"}:
             raise PermissionError("denied")
         return real_open(path, mode, *args, **kwargs)
 
@@ -353,7 +354,7 @@ def test_write_csv_propagates_oserror(temp_db, tmp_path):
     real_open = open
 
     def fake_open(path, mode, *args, **kwargs):
-        if str(path) == str(out):
+        if str(path) in {str(out), str(out) + ".tmp"}:
             raise OSError("busy")
         return real_open(path, mode, *args, **kwargs)
 
@@ -463,10 +464,11 @@ def test_write_csv_escapes_formula_injection(temp_db, tmp_path):
             item for item in timeline_service.get_project_sessions_by_date("2026-06-25")
             if aid in item["activity_ids"]
         )
-        timeline_api.save_timeline_session_override(
+        timeline_api.save_timeline_session_edit(
             "2026-06-25",
-            session["activity_ids"],
-            session["activity_member_hash"],
+            session["projection_instance_key"],
+            session["projection_revision"],
+            f"req-formula-{idx}",
             None,
             None,
             prefix + "SUM(A1:A2)",

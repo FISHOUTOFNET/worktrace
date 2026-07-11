@@ -24,7 +24,7 @@ def test_rule_auto_classification(temp_db):
     rule_service.apply_rules_to_activity(aid)
     row = activity_service.get_activity(aid)
     assert row["project_id"] == pid
-    assert row["auto_classified"] == 1
+    assert row["assignment_source"] == "keyword_rule"
 
 
 def test_manual_override_prevents_rule_overwrite(temp_db):
@@ -38,7 +38,7 @@ def test_manual_override_prevents_rule_overwrite(temp_db):
     rule_service.apply_rules_to_activity(aid)
     row = activity_service.get_activity(aid)
     assert row["project_id"] == manual_project
-    assert row["manual_override"] == 1
+    assert row["assignment_is_manual"] == 1
 
 
 def test_keyword_rule_can_be_disabled_and_deleted(temp_db):

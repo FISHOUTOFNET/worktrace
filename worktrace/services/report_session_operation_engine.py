@@ -46,10 +46,12 @@ def apply_operations(base_sessions: list[dict], operations: list[dict]) -> list[
             int(item.get("replay_order") or item.get("id") or 0),
             int(item.get("id") or 0),
         ),
-    ):
+        ):
         if str(operation.get("match_state") or ACTIVE) != ACTIVE:
             continue
         operation_type = str(operation.get("operation_type") or "")
+        if operation_type == "split_session":
+            continue
         source = resolve_projection_instance(sessions, str(operation.get("base_instance_key") or ""))
         target = resolve_projection_instance(sessions, str(operation.get("target_instance_key") or ""))
         if operation_type == "edit_session":
@@ -89,7 +91,6 @@ def apply_operations(base_sessions: list[dict], operations: list[dict]) -> list[
                     "projection_instance_key": copy_projection_key(operation_id),
                     "projection_kind": "copy",
                     "operation_id": operation_id,
-                    "operation_group_key": None,
                     "can_merge_previous": False,
                     "can_merge_next": False,
                 }
@@ -108,7 +109,6 @@ def apply_operations(base_sessions: list[dict], operations: list[dict]) -> list[
     _refresh_capabilities(sessions)
     for session in sessions:
         session["projection_revision"] = projection_revision(session)
-        session["session_detail_revision"] = session["projection_revision"]
     return sessions
 
 
@@ -219,27 +219,28 @@ def finalize_projected_session(session: dict) -> dict:
     session["editable"] = bool(session.get("editable", True)) and not bool(session.get("is_in_progress"))
     session["exportable"] = bool(session.get("exportable", True)) and not bool(session.get("is_in_progress"))
     session["projection_revision"] = projection_revision(session)
-    session["session_detail_revision"] = session["projection_revision"]
     return session
 
 
 def _merge_sessions(source: dict, target: dict, operation: dict) -> dict:
     merged = deepcopy(target)
     operation_id = int(operation.get("id") or 0)
-    group = str(operation.get("operation_group_key") or f"operation:{operation_id}")
     members = _sorted_members([*(source.get("member_slices") or []), *(target.get("member_slices") or [])])
     origins = _ordered_unique([*(source.get("origin_activity_member_hashes") or []), *(target.get("origin_activity_member_hashes") or [])])
+    contributions = []
+    for row in build_projected_activity_contributions([source, target]):
+        item = dict(row)
+        item["_basis_duration_seconds"] = int(item.get("duration_seconds") or 0)
+        contributions.append(item)
     merged.update(
         {
-            "projection_instance_key": f"merge:{group}",
-            "projection_instance_key": merge_projection_key(group),
+            "projection_instance_key": merge_projection_key(operation_id),
             "projection_kind": "merge",
             "operation_id": operation_id,
-            "operation_group_key": group,
             "member_slices": members,
             "activity_ids": _ordered_unique([*(source.get("activity_ids") or []), *(target.get("activity_ids") or [])]),
             "origin_activity_member_hashes": origins,
-            "_projection_contributions": [*(source.get("_projection_contributions") or []), *(target.get("_projection_contributions") or [])],
+            "_projection_contributions": contributions,
             "has_duration_override": False,
             "adjusted_duration_seconds": None,
             "_applied_commands": [*(source.get("_applied_commands") or []), *(target.get("_applied_commands") or [])],
@@ -249,7 +250,7 @@ def _merge_sessions(source: dict, target: dict, operation: dict) -> dict:
 
 
 def _hide_activity_members(session: dict, operation: dict) -> None:
-    hidden = {_member_key(member) for member in operation.get("members", {}).get("hidden_activity", [])}
+    hidden = {_member_key(member) for member in operation.get("members", {}).get("affected", [])}
     if not hidden:
         operation["_engine_match_state"] = CONFLICT
         return
@@ -285,7 +286,6 @@ def _refresh_capabilities(sessions: list[dict]) -> None:
         session["can_merge_previous"] = normal and kind != "copy" and index > 0 and _mergeable_neighbour(sessions[index - 1])
         session["can_merge_next"] = normal and kind != "copy" and index + 1 < len(sessions) and _mergeable_neighbour(sessions[index + 1])
         session["projection_revision"] = projection_revision(session)
-        session["session_detail_revision"] = session["projection_revision"]
 
 
 def _mergeable_neighbour(session: dict) -> bool:
@@ -314,7 +314,7 @@ def _ordered_unique(values: list) -> list:
 
 def _apply_edit_session(session: dict, operation: dict) -> None:
     payload = operation.get("payload") or {}
-    if int(payload.get("payload_version") or 1) != 1:
+    if int(payload.get("payload_version") or 1) not in {1, 2}:
         operation["_engine_match_state"] = CONFLICT
         return
     project = payload.get("project") if isinstance(payload.get("project"), dict) else None

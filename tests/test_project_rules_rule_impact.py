@@ -85,10 +85,6 @@ def _create_closed_activity(
 def _set_manual_override(aid: int) -> None:
     with get_connection() as conn:
         conn.execute(
-            "UPDATE activity_log SET manual_override = 1, updated_at = ? WHERE id = ?",
-            (now_str(), aid),
-        )
-        conn.execute(
             "UPDATE activity_project_assignment SET is_manual = 1, updated_at = ? WHERE activity_id = ?",
             (now_str(), aid),
         )
@@ -482,9 +478,8 @@ def test_backfill_folder_rule_modifies_only_expected_fields(temp_db):
     assert int(after["auto_classified"]) == 1
     # manual_override stays 0
     assert int(after["manual_override"]) == 0
-    # source / note / duration / start_time / end_time / window_title unchanged
+    # source / duration / start_time / end_time / window_title unchanged
     assert before["source"] == after["source"]
-    assert before["note"] == after["note"]
     assert before["duration_seconds"] == after["duration_seconds"]
     assert before["start_time"] == after["start_time"]
     assert before["end_time"] == after["end_time"]
@@ -676,10 +671,10 @@ def test_backfill_too_many_matches_writes_nothing(temp_db):
     with pytest.raises(rule_impact_service.RuleImpactError) as exc_info:
         rule_impact_service.backfill_rule_impact("folder", rule_id)
     assert exc_info.value.code == "too_many_matches"
-    # Verify nothing was written — all activities still have auto_classified=0
+    # Verify nothing was written — no activities were assigned by rules.
     with get_connection() as conn:
         count = conn.execute(
-            "SELECT COUNT(*) AS c FROM activity_log WHERE auto_classified = 1"
+            "SELECT COUNT(*) AS c FROM activity_project_assignment WHERE source IN ('folder_rule', 'keyword_rule')"
         ).fetchone()
     assert int(count["c"]) == 0
 

@@ -97,7 +97,6 @@ def _recover_cross_midnight_row(row, end_dt: datetime) -> str:
             "process_name": row["process_name"],
             "window_title": row["window_title"],
             "file_path_hint": row["file_path_hint"],
-            "note": row["note"],
         }
         activity_id = recover_cross_midnight_segment(
             start_time=current_start.strftime(TIME_FORMAT),

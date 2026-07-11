@@ -82,13 +82,4 @@ def assign_activity_project(activity_id: int, project_id: int, *, manual: bool =
 
 
 def set_activity_note(activity_id: int, note: str) -> None:
-    with get_connection() as conn:
-        conn.execute(
-            """
-            UPDATE activity_log
-            SET note = ?,
-                updated_at = ?
-            WHERE id = ?
-            """,
-            (note, now_str(), activity_id),
-        )
+    return None

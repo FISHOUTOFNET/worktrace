@@ -1,7 +1,7 @@
 """Timeline, activity, and live-time facade for the UI.
 
 Wraps ``timeline_service``, the activity-editing helpers from
-``activity_service``, the project-selection helper from ``project_service``,
+the project-selection helper from ``project_service``,
 and the pure live-time helpers from ``live_time_service``.
 """
 
@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..services import activity_service, project_service, report_session_operation_service, timeline_service
+from ..services import project_service, report_session_operation_service, timeline_service
 from ..services.activity_edit_policy import project_editability_code
 from ..services.live_time_service import (
     snapshot_elapsed_seconds,
@@ -87,37 +87,11 @@ TIMELINE_NOTE_MAX_LENGTH = 2000
 TIMELINE_ADJUSTED_DURATION_MAX_SECONDS = 24 * 60 * 60
 
 
-def save_timeline_session_override(
-    report_date: str,
-    activity_ids: list[int],
-    activity_member_hash: str,
-    project_id: int | None,
-    adjusted_duration_seconds: int | None,
-    note: str,
-) -> None:
-    """Validate and save project, display-duration, and note as one override."""
-    date = _validate_report_date(report_date)
-    ids = _validate_activity_ids(activity_ids)
-    member_hash = _validate_activity_member_hash(activity_member_hash)
-    pid = _validate_optional_project_id(project_id)
-    duration = _validate_adjusted_duration(adjusted_duration_seconds)
-    text = _validate_note(note)
-    for aid in ids:
-        _ensure_project_editable_for_value_error(activity_service.get_activity(aid))
-    timeline_service.update_session_override(
-        date,
-        ids,
-        member_hash,
-        project_id=pid,
-        adjusted_duration_seconds=duration,
-        note=text,
-    )
-
-
 def save_timeline_session_edit(
     report_date: str,
     projection_instance_key: str,
     expected_projection_revision: str,
+    request_id: str,
     project_id: int | None,
     adjusted_duration_seconds: int | None,
     note: str,
@@ -132,6 +106,7 @@ def save_timeline_session_edit(
         date,
         key,
         revision,
+        _validate_request_id(request_id),
         project_id=pid,
         adjusted_duration_seconds=duration,
         note=text,
@@ -139,53 +114,10 @@ def save_timeline_session_edit(
     return _operation_result(date, key)
 
 
-def update_timeline_session_note(
-    report_date: str,
-    activity_ids: list[int],
-    activity_member_hash: str,
-    note: str,
-) -> None:
-    """Validate and write a session note override for the Timeline page."""
-    date = _validate_report_date(report_date)
-    ids = _validate_activity_ids(activity_ids)
-    member_hash = _validate_activity_member_hash(activity_member_hash)
-    text = _validate_note(str(note or ""))
-    for aid in ids:
-        _ensure_project_editable_for_value_error(activity_service.get_activity(aid))
-    session = timeline_service.get_project_sessions_by_date(date, include_hidden=False, ensure_context=True)
-    current = _find_session_by_identity(session, ids, member_hash)
-    timeline_service.update_session_override(
-        date,
-        ids,
-        member_hash,
-        project_id=current.get("project_id") if current.get("has_project_override") else None,
-        adjusted_duration_seconds=current.get("adjusted_duration_seconds"),
-        note=text,
-    )
-
-
-def update_timeline_session_note_and_duration(
-    report_date: str,
-    activity_ids: list[int],
-    activity_member_hash: str,
-    note: str,
-    adjusted_duration_seconds: int | None = None,
-) -> None:
-    """Validate and write note + user-adjusted duration for a Timeline session."""
-    date = _validate_report_date(report_date)
-    ids = _validate_activity_ids(activity_ids)
-    member_hash = _validate_activity_member_hash(activity_member_hash)
-    text = _validate_note(note)
-    duration = _validate_adjusted_duration(adjusted_duration_seconds)
-    for aid in ids:
-        _ensure_project_editable_for_value_error(activity_service.get_activity(aid))
-    timeline_service.update_session_note_and_duration(date, ids, member_hash, text, duration)
-
-
-def hide_timeline_session(report_date: str, projection_instance_key: str, expected_projection_revision: str | None = None) -> dict[str, Any]:
+def hide_timeline_session(report_date: str, projection_instance_key: str, expected_projection_revision: str, request_id: str) -> dict[str, Any]:
     date = _validate_report_date(report_date)
     key = _validate_projection_instance_key(projection_instance_key)
-    report_session_operation_service.hide_session(date, key, _validate_optional_projection_revision(expected_projection_revision))
+    report_session_operation_service.hide_session(date, key, _validate_projection_revision(expected_projection_revision), _validate_request_id(request_id))
     return _operation_result(date, None)
 
 
@@ -193,89 +125,61 @@ def merge_timeline_session(
     report_date: str,
     projection_instance_key: str,
     direction: str,
-    expected_projection_revision: str | None = None,
-    target_projection_instance_key: str | None = None,
-    target_expected_projection_revision: str | None = None,
+    expected_projection_revision: str,
+    request_id: str,
+    target_projection_instance_key: str,
+    target_expected_projection_revision: str,
 ) -> dict[str, Any]:
     if direction not in {"previous", "next"}:
         raise ValueError("invalid_direction")
     date = _validate_report_date(report_date)
     key = _validate_projection_instance_key(projection_instance_key)
-    target_key = _validate_projection_instance_key(target_projection_instance_key) if target_projection_instance_key else None
-    report_session_operation_service.merge_session(
+    target_key = _validate_projection_instance_key(target_projection_instance_key)
+    operation_id = report_session_operation_service.merge_session(
         date,
         key,
         direction,
-        expected_projection_revision=_validate_optional_projection_revision(expected_projection_revision),
+        _validate_request_id(request_id),
+        expected_projection_revision=_validate_projection_revision(expected_projection_revision),
         target_projection_instance_key=target_key,
-        target_expected_projection_revision=_validate_optional_projection_revision(target_expected_projection_revision),
+        target_expected_projection_revision=_validate_projection_revision(target_expected_projection_revision),
     )
-    return _operation_result(date, target_key)
+    return _operation_result(date, f"merge:{operation_id}")
 
 
-def split_timeline_session(report_date: str, projection_instance_key: str, expected_projection_revision: str | None = None) -> dict[str, Any]:
+def split_timeline_session(report_date: str, projection_instance_key: str, expected_projection_revision: str, request_id: str) -> dict[str, Any]:
     date = _validate_report_date(report_date)
     key = _validate_projection_instance_key(projection_instance_key)
-    report_session_operation_service.split_session(date, key, _validate_optional_projection_revision(expected_projection_revision))
+    report_session_operation_service.split_session(date, key, _validate_projection_revision(expected_projection_revision), _validate_request_id(request_id))
     return _operation_result(date, None)
 
 
-def copy_timeline_session(report_date: str, projection_instance_key: str, expected_projection_revision: str | None = None) -> dict[str, Any]:
+def copy_timeline_session(report_date: str, projection_instance_key: str, expected_projection_revision: str, request_id: str) -> dict[str, Any]:
     date = _validate_report_date(report_date)
     key = _validate_projection_instance_key(projection_instance_key)
-    report_session_operation_service.copy_session(date, key, _validate_optional_projection_revision(expected_projection_revision))
-    return _operation_result(date, None)
+    operation_id = report_session_operation_service.copy_session(date, key, _validate_projection_revision(expected_projection_revision), _validate_request_id(request_id))
+    return _operation_result(date, f"copy:{operation_id}")
 
 
 def hide_timeline_session_activity(
     report_date: str,
     projection_instance_key: str,
     summary_id: str,
-    expected_projection_revision: str | None = None,
+    expected_projection_revision: str,
+    request_id: str,
 ) -> dict[str, Any]:
     if not isinstance(summary_id, str) or not summary_id.strip():
         raise ValueError("invalid_session_identity")
     date = _validate_report_date(report_date)
     key = _validate_projection_instance_key(projection_instance_key)
     report_session_operation_service.hide_session_activity(
-        date, key, summary_id.strip(), _validate_optional_projection_revision(expected_projection_revision)
+        date,
+        key,
+        summary_id.strip(),
+        _validate_projection_revision(expected_projection_revision),
+        _validate_request_id(request_id),
     )
     return _operation_result(date, key)
-
-
-def _validate_activity_ids(activity_ids: list[int]) -> list[int]:
-    # ``bool`` is a subclass of ``int``; reject it so ``True``/``False`` are
-    # not silently coerced to ``1``/``0``.
-    if isinstance(activity_ids, bool):
-        raise ValueError("activity_ids must be a non-empty list")
-    if not isinstance(activity_ids, list) or not activity_ids:
-        raise ValueError("activity_ids must be a non-empty list")
-    ids: list[int] = []
-    seen: set[int] = set()
-    for raw in activity_ids:
-        if isinstance(raw, bool):
-            raise ValueError("activity_ids must contain integers only")
-        try:
-            value = int(raw)
-        except (TypeError, ValueError):
-            raise ValueError("activity_ids must contain integers only")
-        if value <= 0:
-            raise ValueError("activity_ids must contain positive integers")
-        if value in seen:
-            continue
-        seen.add(value)
-        ids.append(value)
-    if not ids:
-        raise ValueError("activity_ids must be a non-empty list")
-    # Verify every id references an existing, non-deleted activity before
-    # any write happens. A missing id fails the whole call (no partial write).
-    for aid in ids:
-        activity = activity_service.get_activity(aid)
-        if not activity:
-            raise ValueError("activity_id does not exist")
-        if int(activity.get("is_deleted") or 0):
-            raise ValueError("activity_id does not exist")
-    return ids
 
 
 def _validate_project_id(project_id: int) -> int:
@@ -299,19 +203,6 @@ def _validate_optional_project_id(project_id: int | None) -> int | None:
     if project_id is None:
         return None
     return _validate_project_id(project_id)
-
-
-def _validate_activity_member_hash(activity_member_hash: str) -> str:
-    if not isinstance(activity_member_hash, str):
-        raise ValueError("activity_member_hash must be a string")
-    value = activity_member_hash.strip()
-    if len(value) != 40:
-        raise ValueError("activity_member_hash must be a sha1 hex string")
-    try:
-        int(value, 16)
-    except ValueError:
-        raise ValueError("activity_member_hash must be a sha1 hex string")
-    return value
 
 
 def _validate_report_date(report_date: str) -> str:
@@ -348,6 +239,18 @@ def _validate_optional_projection_revision(value: str | None) -> str | None:
     return _validate_projection_revision(value)
 
 
+def _validate_request_id(value: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError("invalid_request_id")
+    text = value.strip()
+    if not text or len(text) > 120:
+        raise ValueError("invalid_request_id")
+    allowed = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_:."
+    if any(ch not in allowed for ch in text):
+        raise ValueError("invalid_request_id")
+    return text
+
+
 def _operation_result(report_date: str, projection_instance_key: str | None) -> dict[str, Any]:
     hint = None
     if projection_instance_key:
@@ -362,19 +265,9 @@ def _operation_result(report_date: str, projection_instance_key: str | None) -> 
         if session:
             hint = {
                 "projection_instance_key": str(session.get("projection_instance_key") or ""),
-                "projection_revision": str(session.get("projection_revision") or session.get("session_detail_revision") or ""),
+                "projection_revision": str(session.get("projection_revision") or ""),
             }
     return {"ok": True, "report_date": report_date, "selection_hint": hint}
-
-
-def _find_session_by_identity(sessions: list[dict[str, Any]], ids: list[int], member_hash: str) -> dict[str, Any]:
-    id_set = {int(aid) for aid in ids}
-    for session in sessions:
-        if str(session.get("activity_member_hash") or "") != member_hash:
-            continue
-        if {int(aid) for aid in session.get("activity_ids") or []} == id_set:
-            return session
-    raise ValueError("session_identity_conflict")
 
 
 def _validate_note(note: str) -> str:
@@ -484,8 +377,5 @@ __all__ = [
     "copy_timeline_session",
     "merge_timeline_session",
     "save_timeline_session_edit",
-    "save_timeline_session_override",
     "split_timeline_session",
-    "update_timeline_session_note",
-    "update_timeline_session_note_and_duration",
 ]

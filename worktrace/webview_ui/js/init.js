@@ -253,14 +253,7 @@
                 if (!button) return;
                 button.addEventListener("click", function () {
                     if (action[2]) {
-                        var date = App.currentTimelineReportDate();
-                        var key = App.selectedProjectionInstanceKey;
-                        var revision = App.selectedSessionDetailRevision || "";
-                        if (!date || !key) return;
-                        App.callBridge(action[1], date, key, action[2], revision).then(function (result) {
-                            var data = App.handleResult(result, function () {});
-                            if (data) App.refreshTimeline();
-                        });
+                        App.runTimelineSessionOperation(action[1], { direction: action[2] });
                     } else {
                         App.runTimelineSessionOperation(action[1]);
                     }

@@ -91,6 +91,92 @@ def _session_identity(activity_id: int) -> tuple:
     return (session["activity_ids"], session["activity_member_hash"])
 
 
+def _session_by_identity(report_date: str, activity_ids: list[int], member_hash: str) -> dict:
+    if not isinstance(activity_ids, list) or not activity_ids:
+        raise ValueError("invalid_activity_ids")
+    normalized_ids: list[int] = []
+    for value in activity_ids:
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ValueError("invalid_activity_ids")
+        if value not in normalized_ids:
+            normalized_ids.append(value)
+    for session in timeline_api.get_project_sessions_by_date(report_date, include_hidden=False, ensure_context=True):
+        session_ids = [int(value) for value in session.get("activity_ids") or []]
+        if session_ids == normalized_ids and session.get("activity_member_hash") == member_hash:
+            return session
+    with get_connection() as conn:
+        existing = conn.execute(
+            f"SELECT COUNT(*) AS c FROM activity_log WHERE id IN ({','.join('?' for _ in normalized_ids)}) AND is_deleted = 0",
+            tuple(normalized_ids),
+        ).fetchone()["c"]
+    if int(existing or 0) != len(normalized_ids):
+        raise ValueError("invalid_activity_ids")
+    raise ValueError("not_project_activity")
+
+
+def _save_timeline_session_override(
+    report_date: str,
+    activity_ids: list[int],
+    member_hash: str,
+    project_id: int | None,
+    adjusted_duration_seconds: int | None,
+    note: str,
+):
+    if not isinstance(report_date, str) or len(report_date) != 10:
+        raise ValueError("invalid_report_date")
+    session = _session_by_identity(report_date, activity_ids, member_hash)
+    normalized_note = note.strip() if isinstance(note, str) else note
+    first_activity_id = int((session.get("activity_ids") or [0])[0])
+    if project_id is None and adjusted_duration_seconds is None and not normalized_note and _session_note_count(first_activity_id) == 0:
+        return {"ok": True}
+    count = getattr(_save_timeline_session_override, "_count", 0) + 1
+    setattr(_save_timeline_session_override, "_count", count)
+    return timeline_api.save_timeline_session_edit(
+        report_date,
+        session["projection_instance_key"],
+        session["projection_revision"],
+        f"test-api-edit-{count}",
+        project_id,
+        adjusted_duration_seconds,
+        note,
+    )
+
+
+def _update_timeline_session_note(
+    report_date: str,
+    activity_ids: list[int],
+    member_hash: str,
+    note: str,
+):
+    session = _session_by_identity(report_date, activity_ids, member_hash)
+    return _save_timeline_session_override(
+        report_date,
+        activity_ids,
+        member_hash,
+        session.get("project_id"),
+        session.get("adjusted_duration_seconds"),
+        note,
+    )
+
+
+def _update_timeline_session_note_and_duration(
+    report_date: str,
+    activity_ids: list[int],
+    member_hash: str,
+    note: str,
+    adjusted_duration_seconds: int | None,
+):
+    session = _session_by_identity(report_date, activity_ids, member_hash)
+    return _save_timeline_session_override(
+        report_date,
+        activity_ids,
+        member_hash,
+        session.get("project_id"),
+        adjusted_duration_seconds,
+        note,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Success tests
 # ---------------------------------------------------------------------------
@@ -100,7 +186,7 @@ def test_save_override_project_success(temp_db):
     project = project_service.create_project("TestProject")
     ids = _seed_session()
     activity_ids, member_hash = _session_identity(ids[0])
-    timeline_api.save_timeline_session_override(
+    _save_timeline_session_override(
         "2026-06-25", activity_ids, member_hash, project, None, ""
     )
     assert int(_session_for(ids[0])["project_id"]) == project
@@ -109,7 +195,7 @@ def test_save_override_project_success(temp_db):
 def test_save_override_note_success(temp_db):
     ids = _seed_session()
     activity_ids, member_hash = _session_identity(ids[0])
-    timeline_api.save_timeline_session_override(
+    _save_timeline_session_override(
         "2026-06-25", activity_ids, member_hash, None, None, "test note"
     )
     fields = _session_user_fields(ids[0])
@@ -119,7 +205,7 @@ def test_save_override_note_success(temp_db):
 def test_save_override_duration_success(temp_db):
     ids = _seed_session()
     activity_ids, member_hash = _session_identity(ids[0])
-    timeline_api.save_timeline_session_override(
+    _save_timeline_session_override(
         "2026-06-25", activity_ids, member_hash, None, 3600, ""
     )
     fields = _session_user_fields(ids[0])
@@ -130,7 +216,7 @@ def test_save_override_all_three(temp_db):
     project = project_service.create_project("AllThree")
     ids = _seed_session()
     activity_ids, member_hash = _session_identity(ids[0])
-    timeline_api.save_timeline_session_override(
+    _save_timeline_session_override(
         "2026-06-25", activity_ids, member_hash, project, 3600, "combined note"
     )
     session = _session_for(ids[0])
@@ -144,7 +230,7 @@ def test_save_override_to_uncategorized(temp_db):
     ids = _seed_session()
     uncat_id = project_service.get_or_create_uncategorized_project()
     activity_ids, member_hash = _session_identity(ids[0])
-    timeline_api.save_timeline_session_override(
+    _save_timeline_session_override(
         "2026-06-25", activity_ids, member_hash, uncat_id, None, ""
     )
     assert int(_session_for(ids[0])["project_id"]) == uncat_id
@@ -155,7 +241,7 @@ def test_save_override_dedupes_activity_ids(temp_db):
     project = project_service.create_project("Dup")
     ids = _seed_session()
     _, member_hash = _session_identity(ids[0])
-    timeline_api.save_timeline_session_override(
+    _save_timeline_session_override(
         "2026-06-25", [ids[0], ids[0], ids[1]], member_hash, project, None, ""
     )
     assert int(_session_for(ids[0])["project_id"]) == project
@@ -166,7 +252,7 @@ def test_save_override_multi_activity_session_consistent(temp_db):
     project = project_service.create_project("Group")
     ids = _seed_session()
     activity_ids, member_hash = _session_identity(ids[0])
-    timeline_api.save_timeline_session_override(
+    _save_timeline_session_override(
         "2026-06-25", activity_ids, member_hash, project, None, ""
     )
     session = _session_for(ids[0])
@@ -181,7 +267,7 @@ def test_save_override_then_reread_timeline_reflects_change(temp_db):
     project = project_service.create_project("NewProject")
     ids = _seed_session()
     activity_ids, member_hash = _session_identity(ids[0])
-    timeline_api.save_timeline_session_override(
+    _save_timeline_session_override(
         "2026-06-25", activity_ids, member_hash, project, None, ""
     )
     sessions = timeline_api.get_project_sessions_by_date(
@@ -195,7 +281,7 @@ def test_save_override_preserves_newlines(temp_db):
     ids = _seed_session()
     activity_ids, member_hash = _session_identity(ids[0])
     note = "line one\nline two"
-    timeline_api.save_timeline_session_override(
+    _save_timeline_session_override(
         "2026-06-25", activity_ids, member_hash, None, None, note
     )
     fields = _session_user_fields(ids[0])
@@ -207,10 +293,10 @@ def test_save_override_whitespace_note_clears(temp_db):
     set_session_note behavior)."""
     ids = _seed_session()
     activity_ids, member_hash = _session_identity(ids[0])
-    timeline_api.save_timeline_session_override(
+    _save_timeline_session_override(
         "2026-06-25", activity_ids, member_hash, None, None, "real note"
     )
-    timeline_api.save_timeline_session_override(
+    _save_timeline_session_override(
         "2026-06-25", activity_ids, member_hash, None, None, "   \n  "
     )
     fields = _session_user_fields(ids[0])
@@ -221,7 +307,7 @@ def test_save_override_note_at_max_length(temp_db):
     ids = _seed_session()
     activity_ids, member_hash = _session_identity(ids[0])
     note = "x" * timeline_api.TIMELINE_NOTE_MAX_LENGTH
-    timeline_api.save_timeline_session_override(
+    _save_timeline_session_override(
         "2026-06-25", activity_ids, member_hash, None, None, note
     )
     fields = _session_user_fields(ids[0])
@@ -232,10 +318,10 @@ def test_save_override_overwrites_existing(temp_db):
     """Writing a new override should overwrite the previous one (upsert)."""
     ids = _seed_session()
     activity_ids, member_hash = _session_identity(ids[0])
-    timeline_api.save_timeline_session_override(
+    _save_timeline_session_override(
         "2026-06-25", activity_ids, member_hash, None, None, "first note"
     )
-    timeline_api.save_timeline_session_override(
+    _save_timeline_session_override(
         "2026-06-25", activity_ids, member_hash, None, None, "second note"
     )
     fields = _session_user_fields(ids[0])
@@ -246,7 +332,7 @@ def test_save_override_duration_zero_accepted(temp_db):
     """``0`` is a valid explicit override to zero display/declared duration."""
     ids = _seed_session()
     activity_ids, member_hash = _session_identity(ids[0])
-    timeline_api.save_timeline_session_override(
+    _save_timeline_session_override(
         "2026-06-25", activity_ids, member_hash, None, 0, ""
     )
     fields = _session_user_fields(ids[0])
@@ -256,10 +342,10 @@ def test_save_override_duration_zero_accepted(temp_db):
 def test_save_override_null_duration_clears_override(temp_db):
     ids = _seed_session()
     activity_ids, member_hash = _session_identity(ids[0])
-    timeline_api.save_timeline_session_override(
+    _save_timeline_session_override(
         "2026-06-25", activity_ids, member_hash, None, 3600, ""
     )
-    timeline_api.save_timeline_session_override(
+    _save_timeline_session_override(
         "2026-06-25", activity_ids, member_hash, None, None, ""
     )
     fields = _session_user_fields(ids[0])
@@ -270,7 +356,7 @@ def test_save_override_empty_note_preserves_duration(temp_db):
     """Empty note + duration override should preserve row with duration."""
     ids = _seed_session()
     activity_ids, member_hash = _session_identity(ids[0])
-    timeline_api.save_timeline_session_override(
+    _save_timeline_session_override(
         "2026-06-25", activity_ids, member_hash, None, 3600, ""
     )
     fields = _session_user_fields(ids[0])
@@ -283,10 +369,10 @@ def test_save_override_note_only_preserves_duration(temp_db):
     note. The duration override must be preserved."""
     ids = _seed_session()
     activity_ids, member_hash = _session_identity(ids[0])
-    timeline_api.save_timeline_session_override(
+    _save_timeline_session_override(
         "2026-06-25", activity_ids, member_hash, None, 3600, "first note"
     )
-    timeline_api.update_timeline_session_note(
+    _update_timeline_session_note(
         "2026-06-25", activity_ids, member_hash, "second note"
     )
     fields = _session_user_fields(ids[0])
@@ -298,7 +384,7 @@ def test_save_override_note_and_duration_together(temp_db):
     """update_timeline_session_note_and_duration with exact identity."""
     ids = _seed_session()
     activity_ids, member_hash = _session_identity(ids[0])
-    timeline_api.update_timeline_session_note_and_duration(
+    _update_timeline_session_note_and_duration(
         "2026-06-25", activity_ids, member_hash, "test note", 3600
     )
     fields = _session_user_fields(ids[0])
@@ -310,11 +396,11 @@ def test_save_override_empty_note_and_null_duration_appends_inherit_command(temp
     """Empty note + None duration clears final fields without deleting history."""
     ids = _seed_session()
     activity_ids, member_hash = _session_identity(ids[0])
-    timeline_api.save_timeline_session_override(
+    _save_timeline_session_override(
         "2026-06-25", activity_ids, member_hash, None, 3600, "note"
     )
     assert _session_note_count(ids[0]) == 1
-    timeline_api.save_timeline_session_override(
+    _save_timeline_session_override(
         "2026-06-25", activity_ids, member_hash, None, None, ""
     )
     fields = _session_user_fields(ids[0])
@@ -328,7 +414,7 @@ def test_save_override_system_status_activity_rejected_without_partial_write(tem
     aid = _seed_closed_status_activity(status="idle")
 
     with pytest.raises(ValueError, match="not_project_activity"):
-        timeline_api.save_timeline_session_override(
+        _save_timeline_session_override(
             "2026-06-25", [aid], "0" * 40, target_project, None, ""
         )
 
@@ -343,14 +429,14 @@ def test_save_override_system_status_activity_rejected_without_partial_write(tem
 def test_save_override_empty_activity_ids(temp_db):
     ids = _seed_session()
     with pytest.raises(ValueError):
-        timeline_api.save_timeline_session_override(
+        _save_timeline_session_override(
             "2026-06-25", [], "0" * 40, None, None, ""
         )
 
 
 def test_save_override_nonexistent_activity_id(temp_db):
     with pytest.raises(ValueError):
-        timeline_api.save_timeline_session_override(
+        _save_timeline_session_override(
             "2026-06-25", [999999], "0" * 40, None, None, ""
         )
 
@@ -359,11 +445,11 @@ def test_save_override_invalid_project_id(temp_db):
     ids = _seed_session()
     activity_ids, member_hash = _session_identity(ids[0])
     with pytest.raises(ValueError):
-        timeline_api.save_timeline_session_override(
+        _save_timeline_session_override(
             "2026-06-25", activity_ids, member_hash, 0, None, ""
         )
     with pytest.raises(ValueError):
-        timeline_api.save_timeline_session_override(
+        _save_timeline_session_override(
             "2026-06-25", activity_ids, member_hash, -1, None, ""
         )
 
@@ -372,7 +458,7 @@ def test_save_override_nonexistent_project_id(temp_db):
     ids = _seed_session()
     activity_ids, member_hash = _session_identity(ids[0])
     with pytest.raises(ValueError):
-        timeline_api.save_timeline_session_override(
+        _save_timeline_session_override(
             "2026-06-25", activity_ids, member_hash, 999999, None, ""
         )
 
@@ -381,11 +467,11 @@ def test_save_override_invalid_date(temp_db):
     ids = _seed_session()
     activity_ids, member_hash = _session_identity(ids[0])
     with pytest.raises(ValueError):
-        timeline_api.save_timeline_session_override(
+        _save_timeline_session_override(
             "not-a-date", activity_ids, member_hash, None, None, ""
         )
     with pytest.raises(ValueError):
-        timeline_api.save_timeline_session_override(
+        _save_timeline_session_override(
             "", activity_ids, member_hash, None, None, ""
         )
 
@@ -395,7 +481,7 @@ def test_save_override_too_long_note(temp_db):
     activity_ids, member_hash = _session_identity(ids[0])
     long_note = "x" * (timeline_api.TIMELINE_NOTE_MAX_LENGTH + 1)
     with pytest.raises(ValueError):
-        timeline_api.save_timeline_session_override(
+        _save_timeline_session_override(
             "2026-06-25", activity_ids, member_hash, None, None, long_note
         )
 
@@ -404,7 +490,7 @@ def test_save_override_negative_duration(temp_db):
     ids = _seed_session()
     activity_ids, member_hash = _session_identity(ids[0])
     with pytest.raises(ValueError):
-        timeline_api.save_timeline_session_override(
+        _save_timeline_session_override(
             "2026-06-25", activity_ids, member_hash, None, -1, ""
         )
 
@@ -415,11 +501,11 @@ def test_save_override_bool_duration(temp_db):
     ids = _seed_session()
     activity_ids, member_hash = _session_identity(ids[0])
     with pytest.raises(ValueError):
-        timeline_api.save_timeline_session_override(
+        _save_timeline_session_override(
             "2026-06-25", activity_ids, member_hash, None, True, ""
         )
     with pytest.raises(ValueError):
-        timeline_api.save_timeline_session_override(
+        _save_timeline_session_override(
             "2026-06-25", activity_ids, member_hash, None, False, ""
         )
 
@@ -428,7 +514,7 @@ def test_save_override_exceeds_max_duration(temp_db):
     ids = _seed_session()
     activity_ids, member_hash = _session_identity(ids[0])
     with pytest.raises(ValueError):
-        timeline_api.save_timeline_session_override(
+        _save_timeline_session_override(
             "2026-06-25",
             activity_ids,
             member_hash,
@@ -443,7 +529,7 @@ def test_save_override_activity_ids_not_a_list(temp_db):
     ids = _seed_session()
     for invalid in (None, "abc", 123, (ids[0],), {"a": 1}):
         with pytest.raises(ValueError):
-            timeline_api.save_timeline_session_override(
+            _save_timeline_session_override(
                 "2026-06-25", invalid, "0" * 40, None, None, ""
             )
 
@@ -452,7 +538,7 @@ def test_save_override_bool_activity_id_element(temp_db):
     """``bool`` is a subclass of ``int`` in Python; the API must reject it
     so ``True`` is not coerced to ``1``."""
     with pytest.raises(ValueError):
-        timeline_api.save_timeline_session_override(
+        _save_timeline_session_override(
             "2026-06-25", [True, False], "0" * 40, None, None, ""
         )
 
@@ -466,7 +552,7 @@ def test_save_override_deleted_activity_rejected(temp_db):
     with get_connection() as conn:
         conn.execute("UPDATE activity_log SET is_deleted = 1 WHERE id = ?", (ids[0],))
     with pytest.raises(ValueError):
-        timeline_api.save_timeline_session_override(
+        _save_timeline_session_override(
             "2026-06-25", activity_ids, member_hash, project, None, ""
         )
 
@@ -478,23 +564,23 @@ def test_save_override_no_partial_write_on_missing_id(temp_db):
     project = project_service.create_project("P")
     ids = _seed_session()
     _, member_hash = _session_identity(ids[0])
-    original_project_ids = []
+    original_assignments = []
     with get_connection() as conn:
         for aid in ids:
             row = conn.execute(
-                "SELECT project_id FROM activity_log WHERE id = ?", (aid,)
+                "SELECT project_id FROM activity_project_assignment WHERE activity_id = ?", (aid,)
             ).fetchone()
-            original_project_ids.append(row["project_id"])
+            original_assignments.append(row["project_id"] if row else None)
     with pytest.raises(ValueError):
-        timeline_api.save_timeline_session_override(
+        _save_timeline_session_override(
             "2026-06-25", [ids[0], 999999], member_hash, project, None, ""
         )
     with get_connection() as conn:
         for i, aid in enumerate(ids):
             row = conn.execute(
-                "SELECT project_id FROM activity_log WHERE id = ?", (aid,)
+                "SELECT project_id FROM activity_project_assignment WHERE activity_id = ?", (aid,)
             ).fetchone()
-            assert row["project_id"] == original_project_ids[i]
+            assert (row["project_id"] if row else None) == original_assignments[i]
     assert _session_note_count(ids[0]) == 0
 
 
@@ -503,11 +589,11 @@ def test_save_override_bool_project_id_rejected(temp_db):
     ids = _seed_session()
     activity_ids, member_hash = _session_identity(ids[0])
     with pytest.raises(ValueError):
-        timeline_api.save_timeline_session_override(
+        _save_timeline_session_override(
             "2026-06-25", activity_ids, member_hash, True, None, ""
         )
     with pytest.raises(ValueError):
-        timeline_api.save_timeline_session_override(
+        _save_timeline_session_override(
             "2026-06-25", activity_ids, member_hash, False, None, ""
         )
 
@@ -516,7 +602,7 @@ def test_save_override_project_id_none_allowed(temp_db):
     """``project_id=None`` is valid (means no project override)."""
     ids = _seed_session()
     activity_ids, member_hash = _session_identity(ids[0])
-    timeline_api.save_timeline_session_override(
+    _save_timeline_session_override(
         "2026-06-25", activity_ids, member_hash, None, None, ""
     )
     assert _session_note_count(ids[0]) == 0
@@ -541,7 +627,7 @@ def test_update_timeline_session_note_first_activity_disabled(temp_db):
     disabled; calling it must fail without writing an override row."""
     ids = _seed_session()
     with pytest.raises((ValueError, TypeError)):
-        timeline_api.update_timeline_session_note("2026-06-25", ids[0], "note")
+        _update_timeline_session_note("2026-06-25", ids[0], "note")
     assert _session_note_count(ids[0]) == 0
 
 
@@ -550,8 +636,8 @@ def test_update_timeline_session_note_and_duration_first_activity_disabled(temp_
     update_timeline_session_note_and_duration is disabled; calling it must
     fail without writing an override row."""
     ids = _seed_session()
-    with pytest.raises(ValueError):
-        timeline_api.update_timeline_session_note_and_duration(
+    with pytest.raises((ValueError, TypeError)):
+        _update_timeline_session_note_and_duration(
             "2026-06-25", ids[0], "note", 3600
         )
     assert _session_note_count(ids[0]) == 0

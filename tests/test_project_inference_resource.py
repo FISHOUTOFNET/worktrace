@@ -120,7 +120,7 @@ class TestManualOverrideNotOverwritten:
         assign_project_for_activity(aid)
         row = activity_service.get_activity(aid)
         assert row["project_id"] == manual_project
-        assert row["manual_override"] == 1
+        assert row["assignment_is_manual"] == 1
 
 
 class TestOldActivityFallback:
@@ -137,12 +137,11 @@ class TestOldActivityFallback:
                 INSERT INTO activity_log(
                     start_time, end_time, duration_seconds, app_name, process_name,
                     window_title, file_path_hint, status, source, is_deleted, is_hidden,
-                    auto_classified, manual_override, project_id, note,
                     created_at, updated_at
                 )
                 VALUES ('2026-06-18 09:00:00', '2026-06-18 09:30:00', 1800,
                         'Word', 'winword.exe', '合同.docx - Word', 'D:\\ClientA\\合同.docx',
-                        'normal', 'auto', 0, 0, 0, 0, 1, NULL,
+                        'normal', 'auto', 0, 0,
                         '2026-06-18 09:00:00', '2026-06-18 09:00:00')
                 """
             )

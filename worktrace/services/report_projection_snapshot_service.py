@@ -29,12 +29,14 @@ def build_visible_snapshot(
     ensure_context: bool = True,
     conn=None,
 ) -> ReportProjectionSnapshot:
-    if ensure_context:
+    if ensure_context and conn is None:
         timeline_service._ensure_context_for_report_range(start_date, end_date)
     if conn is None:
         with get_connection() as own_conn:
             own_conn.execute("BEGIN")
             return build_visible_snapshot(start_date, end_date, ensure_context=False, conn=own_conn)
+    if ensure_context:
+        timeline_service._ensure_context_for_report_range_in_transaction(conn, start_date, end_date)
 
     uncategorized_id = get_or_create_uncategorized_project(conn=conn)
     rows = timeline_service.get_report_activity_rows(
@@ -94,6 +96,27 @@ def build_visible_snapshot(
                     "duration": session.get("duration_seconds"),
                 }
                 for session in final_sessions
+            ],
+            "contributions": [
+                {
+                    "key": row.get("projection_instance_key"),
+                    "activity_id": row.get("activity_id"),
+                    "report_date": row.get("report_date"),
+                    "slice_start_time": row.get("slice_start_time"),
+                    "duration": row.get("duration_seconds"),
+                    "status": row.get("status"),
+                    "project_id": row.get("project_id"),
+                }
+                for row in final_contributions
+            ],
+            "status_rows": [
+                {
+                    "activity_id": row.get("activity_id") or row.get("id"),
+                    "status": row.get("status"),
+                    "duration": row.get("duration_seconds"),
+                    "start_time": row.get("start_time"),
+                }
+                for row in status_rows
             ],
             "commands": [(command.get("id"), command.get("replay_order"), command.get("match_state")) for command in commands],
         }

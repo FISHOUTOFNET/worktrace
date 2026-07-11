@@ -189,14 +189,16 @@ def test_toggle_does_not_create_or_delete_projects_rules_or_activity_rows(temp_d
         conn.execute(
             """
             INSERT INTO report_session_operation(
-                report_date, operation_type, base_instance_key, replay_order,
+                request_id, report_date, operation_type, base_instance_key, base_expected_revision, replay_order,
                 match_state, payload_json, created_at, updated_at
             )
-            VALUES (?, 'edit_session', ?, 1, 'active', ?, ?, ?)
+            VALUES (?, ?, 'edit_session', ?, ?, 1, 'active', ?, ?, ?)
             """,
             (
+                "test-enable-disable-d",
                 "2026-06-18",
                 "base:" + "d" * 40,
+                "revision-d",
                 '{"payload_version":1,"note":{"mode":"set","value":"keep"}}',
                 now_str(),
                 now_str(),
@@ -459,14 +461,16 @@ def test_toggle_does_not_change_history_activity_assignment_or_session_note_rows
         conn.execute(
             """
             INSERT INTO report_session_operation(
-                report_date, operation_type, base_instance_key, replay_order,
+                request_id, report_date, operation_type, base_instance_key, base_expected_revision, replay_order,
                 match_state, payload_json, created_at, updated_at
             )
-            VALUES (?, 'edit_session', ?, 1, 'active', ?, ?, ?)
+            VALUES (?, ?, 'edit_session', ?, ?, 1, 'active', ?, ?, ?)
             """,
             (
+                "test-enable-disable-e",
                 "2026-06-18",
                 "base:" + "e" * 40,
+                "revision-e",
                 '{"payload_version":1,"note":{"mode":"set","value":"keep"}}',
                 now_str(),
                 now_str(),

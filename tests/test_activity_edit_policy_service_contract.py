@@ -12,7 +12,7 @@ from worktrace.constants import (
     STATUS_PAUSED,
 )
 from worktrace.db import get_connection
-from worktrace.services import activity_service, timeline_service
+from worktrace.services import activity_service, report_session_operation_service, timeline_service
 from worktrace.services.activity_edit_policy import require_project_editable_activity
 
 pytestmark = [pytest.mark.db, pytest.mark.contract]
@@ -62,6 +62,39 @@ def _session_note_row(activity_id: int) -> dict | None:
         "note": (payload.get("note") or {}).get("value", ""),
         "adjusted_duration_seconds": (payload.get("duration") or {}).get("value"),
     }
+
+
+def _update_session_note_and_duration(
+    day: str,
+    activity_ids: list[int],
+    member_hash: str,
+    note: str,
+    adjusted_duration_seconds: int | None,
+) -> None:
+    for activity_id in activity_ids:
+        require_project_editable_activity(activity_id)
+    session = next(
+        (
+            item
+            for item in timeline_service.get_project_sessions_by_date(day)
+            if [int(aid) for aid in item.get("activity_ids") or []] == [int(aid) for aid in activity_ids]
+            and item.get("activity_member_hash") == member_hash
+        ),
+        None,
+    )
+    if not session:
+        raise ValueError("session_identity_conflict")
+    count = getattr(_update_session_note_and_duration, "_count", 0) + 1
+    setattr(_update_session_note_and_duration, "_count", count)
+    report_session_operation_service.edit_session(
+        day,
+        session["projection_instance_key"],
+        session["projection_revision"],
+        f"test-edit-policy-{count}",
+        project_id=session.get("project_id"),
+        adjusted_duration_seconds=adjusted_duration_seconds,
+        note=note,
+    )
 
 
 def _mark_open(activity_id: int) -> None:
@@ -149,7 +182,7 @@ def test_set_session_note_allows_normal_closed(temp_db):
     aid = _activity()
     session = timeline_service.get_project_sessions_by_date(DAY)[0]
 
-    timeline_service.update_session_note_and_duration(
+    _update_session_note_and_duration(
         DAY, session["activity_ids"], session["activity_member_hash"], "hello", None
     )
 
@@ -160,7 +193,7 @@ def test_set_session_user_fields_allows_normal_closed_duration_override(temp_db)
     aid = _activity()
     session = timeline_service.get_project_sessions_by_date(DAY)[0]
 
-    timeline_service.update_session_note_and_duration(
+    _update_session_note_and_duration(
         DAY, session["activity_ids"], session["activity_member_hash"], "hello", 60
     )
 
@@ -182,7 +215,7 @@ def test_set_session_note_rejects_non_editable_and_leaves_no_dirty_row(temp_db, 
     mutate(aid)
 
     with pytest.raises(ValueError) as exc:
-        timeline_service.update_session_note_and_duration(
+        _update_session_note_and_duration(
             DAY, [aid], "a" * 40, "blocked", None
         )
 
@@ -195,7 +228,7 @@ def test_set_session_user_fields_rejects_system_rows_without_dirty_data(temp_db,
     aid = _activity(status=status)
 
     with pytest.raises(ValueError) as exc:
-        timeline_service.update_session_note_and_duration(
+        _update_session_note_and_duration(
             DAY, [aid], "a" * 40, "blocked", 30
         )
 
@@ -206,10 +239,10 @@ def test_set_session_user_fields_rejects_system_rows_without_dirty_data(temp_db,
 def test_set_session_user_fields_clear_still_requires_editability(temp_db):
     aid = _activity()
     session = timeline_service.get_project_sessions_by_date(DAY)[0]
-    timeline_service.update_session_note_and_duration(
+    _update_session_note_and_duration(
         DAY, session["activity_ids"], session["activity_member_hash"], "keep", 30
     )
-    timeline_service.update_session_note_and_duration(
+    _update_session_note_and_duration(
         DAY, session["activity_ids"], session["activity_member_hash"], "", None
     )
     cleared = _session_note_row(aid)
@@ -218,7 +251,7 @@ def test_set_session_user_fields_clear_still_requires_editability(temp_db):
     hidden = _activity()
     _mark_hidden(hidden)
     with pytest.raises(ValueError) as exc:
-        timeline_service.update_session_note_and_duration(
+        _update_session_note_and_duration(
             DAY, [hidden], "a" * 40, "", None
         )
 

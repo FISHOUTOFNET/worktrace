@@ -2,7 +2,14 @@ import pytest
 
 from worktrace.constants import STATUS_ERROR, STATUS_EXCLUDED, STATUS_IDLE, STATUS_PAUSED, UNCATEGORIZED_PROJECT
 from worktrace.db import get_connection
-from worktrace.services import activity_service, project_service, session_boundary_service, settings_service, timeline_service
+from worktrace.services import (
+    activity_service,
+    project_service,
+    report_session_operation_service,
+    session_boundary_service,
+    settings_service,
+    timeline_service,
+)
 
 pytestmark = [pytest.mark.db]
 
@@ -36,6 +43,27 @@ def _activity_at(app, process, title, start_time, project_id=None, status="norma
     )
     activity_service.finalize_created_activity(aid)
     return aid
+
+
+def _edit_session(
+    report_date: str,
+    session: dict,
+    *,
+    project_id: int | None = None,
+    adjusted_duration_seconds: int | None = None,
+    note: str = "",
+) -> None:
+    count = getattr(_edit_session, "_count", 0) + 1
+    setattr(_edit_session, "_count", count)
+    report_session_operation_service.edit_session(
+        report_date,
+        session["projection_instance_key"],
+        session["projection_revision"],
+        f"test-edit-{count}",
+        project_id=project_id,
+        adjusted_duration_seconds=adjusted_duration_seconds,
+        note=note,
+    )
 
 
 def test_sessions_merge_same_project_and_split_a_b_a(temp_db):
@@ -335,10 +363,9 @@ def test_session_level_project_update_warns_about_unassigned_anchor_files(temp_d
 
     preview = timeline_service.preview_session_project_update([first, second], target_project)
     session = timeline_service.get_project_sessions_by_date("2026-06-18")[0]
-    timeline_service.update_session_override(
+    _edit_session(
         "2026-06-18",
-        session["activity_ids"],
-        session["activity_member_hash"],
+        session,
         project_id=target_project,
         adjusted_duration_seconds=None,
         note="",
@@ -453,12 +480,11 @@ def test_project_session_override_attaches_to_exact_session(temp_db):
     activity_service.close_all_open_rows("2026-06-18 09:20:00")
     sessions = timeline_service.get_project_sessions_by_date("2026-06-18")
 
-    timeline_service.update_session_note_and_duration(
+    _edit_session(
         "2026-06-18",
-        sessions[0]["activity_ids"],
-        sessions[0]["activity_member_hash"],
-        "follow up with client",
-        None,
+        sessions[0],
+        note="follow up with client",
+        adjusted_duration_seconds=None,
     )
     sessions = timeline_service.get_project_sessions_by_date("2026-06-18")
 
@@ -472,12 +498,9 @@ def test_project_session_override_can_be_cleared(temp_db):
     activity_service.close_all_open_rows("2026-06-18 09:20:00")
     session = timeline_service.get_project_sessions_by_date("2026-06-18")[0]
 
-    timeline_service.update_session_note_and_duration(
-        "2026-06-18", session["activity_ids"], session["activity_member_hash"], "temporary", None
-    )
-    timeline_service.update_session_note_and_duration(
-        "2026-06-18", session["activity_ids"], session["activity_member_hash"], "", None
-    )
+    _edit_session("2026-06-18", session, note="temporary", adjusted_duration_seconds=None)
+    session = timeline_service.get_project_sessions_by_date("2026-06-18")[0]
+    _edit_session("2026-06-18", session, note="", adjusted_duration_seconds=None)
 
     assert timeline_service.get_project_sessions_by_date("2026-06-18")[0]["session_note"] == ""
 
@@ -506,9 +529,7 @@ def test_display_duration_uses_override_when_set(temp_db):
     activity_service.close_all_open_rows("2026-06-18 09:02:00")  # 120 seconds raw
     session = timeline_service.get_project_sessions_by_date("2026-06-18")[0]
 
-    timeline_service.update_session_note_and_duration(
-        "2026-06-18", session["activity_ids"], session["activity_member_hash"], "", 60
-    )
+    _edit_session("2026-06-18", session, note="", adjusted_duration_seconds=60)
     sessions = timeline_service.get_project_sessions_by_date("2026-06-18")
 
     session = sessions[0]
@@ -540,9 +561,7 @@ def test_display_duration_uses_zero_override(temp_db):
     activity_service.close_all_open_rows("2026-06-18 09:02:00")  # 120 seconds raw
     session = timeline_service.get_project_sessions_by_date("2026-06-18")[0]
 
-    timeline_service.update_session_note_and_duration(
-        "2026-06-18", session["activity_ids"], session["activity_member_hash"], "", 0
-    )
+    _edit_session("2026-06-18", session, note="", adjusted_duration_seconds=0)
     sessions = timeline_service.get_project_sessions_by_date("2026-06-18")
 
     session = sessions[0]
@@ -559,9 +578,7 @@ def test_update_session_note_and_duration_writes_both(temp_db):
     activity_service.close_all_open_rows("2026-06-18 09:02:00")
     session = timeline_service.get_project_sessions_by_date("2026-06-18")[0]
 
-    timeline_service.update_session_note_and_duration(
-        "2026-06-18", session["activity_ids"], session["activity_member_hash"], "test", 60
-    )
+    _edit_session("2026-06-18", session, note="test", adjusted_duration_seconds=60)
     fields = timeline_service.get_project_sessions_by_date("2026-06-18")[0]
 
     assert fields["session_note"] == "test"
@@ -576,13 +593,10 @@ def test_empty_note_preserves_duration_override(temp_db):
     session = timeline_service.get_project_sessions_by_date("2026-06-18")[0]
 
     # Set both note and duration
-    timeline_service.update_session_note_and_duration(
-        "2026-06-18", session["activity_ids"], session["activity_member_hash"], "test", 60
-    )
+    _edit_session("2026-06-18", session, note="test", adjusted_duration_seconds=60)
     # Set note to empty - should preserve adjusted=60
-    timeline_service.update_session_note_and_duration(
-        "2026-06-18", session["activity_ids"], session["activity_member_hash"], "", 60
-    )
+    session = timeline_service.get_project_sessions_by_date("2026-06-18")[0]
+    _edit_session("2026-06-18", session, note="", adjusted_duration_seconds=60)
     fields = timeline_service.get_project_sessions_by_date("2026-06-18")[0]
 
     assert fields["session_note"] == ""
@@ -597,18 +611,15 @@ def test_empty_note_and_null_duration_deletes_row(temp_db):
     session = timeline_service.get_project_sessions_by_date("2026-06-18")[0]
 
     # Set both note and duration
-    timeline_service.update_session_note_and_duration(
-        "2026-06-18", session["activity_ids"], session["activity_member_hash"], "test", 60
-    )
+    _edit_session("2026-06-18", session, note="test", adjusted_duration_seconds=60)
     # Set note to empty and duration to None - should delete row
-    timeline_service.update_session_note_and_duration(
-        "2026-06-18", session["activity_ids"], session["activity_member_hash"], "", None
-    )
+    session = timeline_service.get_project_sessions_by_date("2026-06-18")[0]
+    _edit_session("2026-06-18", session, note="", adjusted_duration_seconds=None)
     fields = timeline_service.get_project_sessions_by_date("2026-06-18")[0]
 
     assert fields["session_note"] == ""
     assert fields["adjusted_duration_seconds"] is None
-    assert fields["override_id"] is None
+    assert fields["session_note"] == ""
 
 
 

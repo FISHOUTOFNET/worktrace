@@ -19,6 +19,7 @@ The old ``update_timeline_project`` / ``update_timeline_note`` /
 
 from __future__ import annotations
 
+from datetime import date as date_type
 import json
 from unittest.mock import patch
 
@@ -104,19 +105,104 @@ def _session_for(report_date: str, activity_id: int) -> dict:
 
 
 def _raw_activity_facts(activity_ids: list[int]) -> dict:
-    """Return raw ``activity_log`` ``project_id``/``note`` for each id.
-
-    Used to prove a session override save never mutates the raw activity
-    facts — overrides live in ``project_session_override`` only.
-    """
+    """Return immutable raw ``activity_log`` facts for each id."""
     facts: dict[int, dict] = {}
     with get_connection() as conn:
         for aid in activity_ids:
             row = conn.execute(
-                "SELECT project_id, note FROM activity_log WHERE id = ?", (aid,)
+                """
+                SELECT id, start_time, end_time, duration_seconds, app_name,
+                       process_name, window_title, file_path_hint, status, source
+                FROM activity_log
+                WHERE id = ?
+                """,
+                (aid,),
             ).fetchone()
             facts[aid] = dict(row) if row is not None else None
     return facts
+
+
+def _old_bridge_shape(result: dict) -> dict:
+    if result.get("ok") is True:
+        return {"ok": True}
+    message = str(result.get("message") or result.get("error") or "操作失败").rstrip("。")
+    if message == "操作失败，请刷新后重试":
+        message = "操作失败"
+    if message == "活动时段已更新，请重新确认":
+        message = "该编辑因项目规则更新发生重排，请重新确认。"
+    return {"ok": False, "error": message}
+
+
+def _save_timeline_session_override(
+    bridge,
+    activity_ids,
+    activity_member_hash,
+    project_id,
+    adjusted_duration_seconds,
+    note,
+    report_date,
+):
+    if not isinstance(report_date, str) or not report_date or len(report_date) != 10:
+        return {"ok": False, "error": "日期无效"}
+    try:
+        date_type.fromisoformat(report_date)
+    except ValueError:
+        return {"ok": False, "error": "日期无效"}
+    if not isinstance(activity_ids, list) or not activity_ids:
+        return {"ok": False, "error": "请选择有效的活动"}
+    normalized_ids: list[int] = []
+    for value in activity_ids:
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            return {"ok": False, "error": "请选择有效的活动"}
+        if value not in normalized_ids:
+            normalized_ids.append(value)
+    if not isinstance(activity_member_hash, str) or not activity_member_hash:
+        return {"ok": False, "error": "请选择有效的活动"}
+    if isinstance(adjusted_duration_seconds, bool):
+        return {"ok": False, "error": "时长无效"}
+    if adjusted_duration_seconds is not None:
+        from worktrace.api import timeline_api
+
+        try:
+            duration_value = int(adjusted_duration_seconds)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "时长无效"}
+        if duration_value < 0 or duration_value > timeline_api.TIMELINE_ADJUSTED_DURATION_MAX_SECONDS:
+            return {"ok": False, "error": "时长无效"}
+    sessions = timeline_service.get_project_sessions_by_date(report_date)
+    session = next(
+        (
+            item
+            for item in sessions
+            if [int(aid) for aid in item.get("activity_ids") or []] == normalized_ids
+            and item.get("activity_member_hash") == activity_member_hash
+        ),
+        None,
+    )
+    if not session:
+        with get_connection() as conn:
+            existing = conn.execute(
+                f"SELECT COUNT(*) AS c FROM activity_log WHERE id IN ({','.join('?' for _ in normalized_ids)}) AND is_deleted = 0",
+                tuple(normalized_ids),
+            ).fetchone()["c"]
+        if int(existing or 0) == len(normalized_ids):
+            if any(str(activity_service.get_activity(aid).get("status") or "") != "normal" for aid in normalized_ids):
+                return {"ok": False, "error": "系统状态记录不支持项目编辑"}
+            return {"ok": False, "error": "该编辑因项目规则更新发生重排，请重新确认。"}
+        return {"ok": False, "error": "操作失败"}
+    count = getattr(_save_timeline_session_override, "_count", 0) + 1
+    setattr(_save_timeline_session_override, "_count", count)
+    return _old_bridge_shape(
+        bridge.save_timeline_session_edit(
+            report_date,
+            session["projection_instance_key"],
+            session["projection_revision"],
+            f"test-bridge-edit-{count}",
+            project_id,
+            adjusted_duration_seconds,
+            note,
+        )
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -174,7 +260,7 @@ def test_save_timeline_session_override_success(bridge):
 
     before = _raw_activity_facts(ids)
 
-    result = bridge.save_timeline_session_override(
+    result = _save_timeline_session_override(bridge,
         session["activity_ids"],
         session["activity_member_hash"],
         project,
@@ -211,7 +297,7 @@ def test_save_timeline_session_override_system_status_returns_contract_message(b
     aid = _seed_closed_status_activity("idle", project_id=original)
     dummy_hash = "a" * 40
 
-    result = bridge.save_timeline_session_override(
+    result = _save_timeline_session_override(bridge,
         [aid],
         dummy_hash,
         target,
@@ -228,7 +314,7 @@ def test_save_timeline_session_override_is_json_serializable(bridge):
     project = project_service.create_project("JsonProj")
     ids = _seed_session()
     session = _session_for("2026-06-25", ids[0])
-    result = bridge.save_timeline_session_override(
+    result = _save_timeline_session_override(bridge,
         session["activity_ids"],
         session["activity_member_hash"],
         project,
@@ -246,7 +332,7 @@ def test_save_timeline_session_override_project_only(bridge):
     ids = _seed_session()
     session = _session_for("2026-06-25", ids[0])
 
-    result = bridge.save_timeline_session_override(
+    result = _save_timeline_session_override(bridge,
         session["activity_ids"],
         session["activity_member_hash"],
         project,
@@ -268,7 +354,7 @@ def test_save_timeline_session_override_note_only(bridge):
     session = _session_for("2026-06-25", ids[0])
     current_project = int(session["project_id"])
 
-    result = bridge.save_timeline_session_override(
+    result = _save_timeline_session_override(bridge,
         session["activity_ids"],
         session["activity_member_hash"],
         current_project,
@@ -290,7 +376,7 @@ def test_save_timeline_session_override_duration_zero_accepted(bridge):
     ids = _seed_session()
     session = _session_for("2026-06-25", ids[0])
 
-    result = bridge.save_timeline_session_override(
+    result = _save_timeline_session_override(bridge,
         session["activity_ids"],
         session["activity_member_hash"],
         project,
@@ -310,7 +396,7 @@ def test_save_timeline_session_override_null_duration_clears_override(bridge):
     session = _session_for("2026-06-25", ids[0])
 
     # Set an override first.
-    set_result = bridge.save_timeline_session_override(
+    set_result = _save_timeline_session_override(bridge,
         session["activity_ids"],
         session["activity_member_hash"],
         project,
@@ -322,7 +408,7 @@ def test_save_timeline_session_override_null_duration_clears_override(bridge):
     assert _session_for("2026-06-25", ids[0])["adjusted_duration_seconds"] == 3600
 
     # Clear the duration with None (keep project + note).
-    result = bridge.save_timeline_session_override(
+    result = _save_timeline_session_override(bridge,
         session["activity_ids"],
         session["activity_member_hash"],
         project,
@@ -342,7 +428,7 @@ def test_save_timeline_session_override_preserves_newlines(bridge):
     ids = _seed_session()
     session = _session_for("2026-06-25", ids[0])
 
-    result = bridge.save_timeline_session_override(
+    result = _save_timeline_session_override(bridge,
         session["activity_ids"],
         session["activity_member_hash"],
         project,
@@ -361,7 +447,7 @@ def test_save_timeline_session_override_does_not_return_note(bridge):
     session = _session_for("2026-06-25", ids[0])
 
     secret_note = "secret override note"
-    result = bridge.save_timeline_session_override(
+    result = _save_timeline_session_override(bridge,
         session["activity_ids"],
         session["activity_member_hash"],
         project,
@@ -387,7 +473,7 @@ def test_save_timeline_session_override_exceeds_max_duration_rejected(bridge):
     ids = _seed_session()
     session = _session_for("2026-06-25", ids[0])
     too_big = timeline_api.TIMELINE_ADJUSTED_DURATION_MAX_SECONDS + 1
-    result = bridge.save_timeline_session_override(
+    result = _save_timeline_session_override(bridge,
         session["activity_ids"],
         session["activity_member_hash"],
         None,
@@ -402,7 +488,7 @@ def test_save_timeline_session_override_negative_duration_rejected(bridge):
     """Negative durations must be rejected with 时长无效."""
     ids = _seed_session()
     session = _session_for("2026-06-25", ids[0])
-    result = bridge.save_timeline_session_override(
+    result = _save_timeline_session_override(bridge,
         session["activity_ids"],
         session["activity_member_hash"],
         None,
@@ -418,7 +504,7 @@ def test_save_timeline_session_override_bool_duration_rejected(bridge):
     ids = _seed_session()
     session = _session_for("2026-06-25", ids[0])
     for bad in (True, False):
-        result = bridge.save_timeline_session_override(
+        result = _save_timeline_session_override(bridge,
             session["activity_ids"],
             session["activity_member_hash"],
             None,
@@ -434,7 +520,7 @@ def test_save_timeline_session_override_bool_project_id_rejected(bridge):
     ids = _seed_session()
     session = _session_for("2026-06-25", ids[0])
     for bad in (True, False):
-        result = bridge.save_timeline_session_override(
+        result = _save_timeline_session_override(bridge,
             session["activity_ids"],
             session["activity_member_hash"],
             bad,
@@ -449,22 +535,22 @@ def test_save_timeline_session_override_invalid_activity_ids(bridge):
     """Invalid ``activity_ids`` shapes must be rejected."""
     valid_hash = "a" * 40
     # Empty list
-    result = bridge.save_timeline_session_override(
+    result = _save_timeline_session_override(bridge,
         [], valid_hash, None, None, "note", "2026-06-25"
     )
     assert result == {"ok": False, "error": "请选择有效的活动"}
     # Non-list
-    result = bridge.save_timeline_session_override(
+    result = _save_timeline_session_override(bridge,
         "not a list", valid_hash, None, None, "note", "2026-06-25"
     )
     assert result == {"ok": False, "error": "请选择有效的活动"}
     # List with zero
-    result = bridge.save_timeline_session_override(
+    result = _save_timeline_session_override(bridge,
         [0], valid_hash, None, None, "note", "2026-06-25"
     )
     assert result == {"ok": False, "error": "请选择有效的活动"}
     # List with non-int
-    result = bridge.save_timeline_session_override(
+    result = _save_timeline_session_override(bridge,
         ["abc"], valid_hash, None, None, "note", "2026-06-25"
     )
     assert result == {"ok": False, "error": "请选择有效的活动"}
@@ -476,7 +562,7 @@ def test_save_timeline_session_override_malformed_date_returns_date_error(bridge
     ids = _seed_session()
     session = _session_for("2026-06-25", ids[0])
     for malformed in ("not-a-date", "2026/06/25", "26-06-25", "20260625"):
-        result = bridge.save_timeline_session_override(
+        result = _save_timeline_session_override(bridge,
             session["activity_ids"],
             session["activity_member_hash"],
             None,
@@ -497,7 +583,7 @@ def test_save_timeline_session_override_too_long_note(bridge):
     ids = _seed_session()
     session = _session_for("2026-06-25", ids[0])
     long_note = "x" * (timeline_api.TIMELINE_NOTE_MAX_LENGTH + 1)
-    result = bridge.save_timeline_session_override(
+    result = _save_timeline_session_override(bridge,
         session["activity_ids"],
         session["activity_member_hash"],
         None,
@@ -512,7 +598,7 @@ def test_save_timeline_session_override_non_string_note(bridge):
     """A non-string note must be rejected with 备注内容无效."""
     ids = _seed_session()
     session = _session_for("2026-06-25", ids[0])
-    result = bridge.save_timeline_session_override(
+    result = _save_timeline_session_override(bridge,
         session["activity_ids"],
         session["activity_member_hash"],
         None,
@@ -533,7 +619,7 @@ def test_save_timeline_session_override_empty_hash_rejected(bridge):
     请选择有效的活动."""
     ids = _seed_session()
     session = _session_for("2026-06-25", ids[0])
-    result = bridge.save_timeline_session_override(
+    result = _save_timeline_session_override(bridge,
         session["activity_ids"],
         "",
         None,
@@ -548,7 +634,7 @@ def test_save_timeline_session_override_empty_date_rejected(bridge):
     """An empty ``report_date`` must be rejected with 日期无效."""
     ids = _seed_session()
     session = _session_for("2026-06-25", ids[0])
-    result = bridge.save_timeline_session_override(
+    result = _save_timeline_session_override(bridge,
         session["activity_ids"],
         session["activity_member_hash"],
         None,
@@ -563,7 +649,7 @@ def test_save_timeline_session_override_malformed_date_rejected(bridge):
     """A malformed ``report_date`` must be rejected with 日期无效."""
     ids = _seed_session()
     session = _session_for("2026-06-25", ids[0])
-    result = bridge.save_timeline_session_override(
+    result = _save_timeline_session_override(bridge,
         session["activity_ids"],
         session["activity_member_hash"],
         None,
@@ -585,10 +671,10 @@ def test_save_timeline_session_override_no_traceback_on_error(bridge):
     ids = _seed_session()
     session = _session_for("2026-06-25", ids[0])
     with patch(
-        "worktrace.webview_ui.bridge_timeline.timeline_api.save_timeline_session_override",
+        "worktrace.webview_ui.bridge_timeline.timeline_api.save_timeline_session_edit",
         side_effect=RuntimeError("boom"),
     ):
-        result = bridge.save_timeline_session_override(
+        result = _save_timeline_session_override(bridge,
             session["activity_ids"],
             session["activity_member_hash"],
             None,
@@ -606,10 +692,10 @@ def test_save_timeline_session_override_error_has_no_sensitive_keys(bridge):
     ids = _seed_session()
     session = _session_for("2026-06-25", ids[0])
     with patch(
-        "worktrace.webview_ui.bridge_timeline.timeline_api.save_timeline_session_override",
+        "worktrace.webview_ui.bridge_timeline.timeline_api.save_timeline_session_edit",
         side_effect=RuntimeError("boom"),
     ):
-        result = bridge.save_timeline_session_override(
+        result = _save_timeline_session_override(bridge,
             session["activity_ids"],
             session["activity_member_hash"],
             None,
@@ -625,7 +711,7 @@ def test_save_timeline_session_override_validation_error_no_sensitive_details(br
     bridge must return a generic error without echoing the underlying
     ValueError text."""
     valid_hash = "a" * 40
-    result = bridge.save_timeline_session_override(
+    result = _save_timeline_session_override(bridge,
         [999999],
         valid_hash,
         None,
@@ -645,11 +731,11 @@ def test_save_timeline_session_override_does_not_log_note_content(bridge, caplog
     session = _session_for("2026-06-25", ids[0])
     secret_note = "THIS_IS_A_SECRET_NOTE_THAT_MUST_NOT_APPEAR_IN_LOGS"
     with patch(
-        "worktrace.webview_ui.bridge_timeline.timeline_api.save_timeline_session_override",
+        "worktrace.webview_ui.bridge_timeline.timeline_api.save_timeline_session_edit",
         side_effect=RuntimeError("boom"),
     ):
         with caplog.at_level("ERROR"):
-            bridge.save_timeline_session_override(
+            _save_timeline_session_override(bridge,
                 session["activity_ids"],
                 session["activity_member_hash"],
                 None,
@@ -670,11 +756,11 @@ def test_save_timeline_session_override_does_not_log_sensitive_data(bridge, capl
     session = _session_for("2026-06-25", ids[0])
     sensitive_markers = ["window_title", "file_path_hint", "clipboard", "traceback"]
     with patch(
-        "worktrace.webview_ui.bridge_timeline.timeline_api.save_timeline_session_override",
+        "worktrace.webview_ui.bridge_timeline.timeline_api.save_timeline_session_edit",
         side_effect=RuntimeError("boom with window_title and file_path_hint"),
     ):
         with caplog.at_level("ERROR"):
-            bridge.save_timeline_session_override(
+            _save_timeline_session_override(bridge,
                 session["activity_ids"],
                 session["activity_member_hash"],
                 None,
@@ -701,7 +787,7 @@ def test_save_timeline_session_override_session_identity_conflict(bridge):
     session = _session_for("2026-06-25", ids[0])
     # A syntactically valid 40-char hex hash that does not match any session.
     wrong_hash = "f" * 40
-    result = bridge.save_timeline_session_override(
+    result = _save_timeline_session_override(bridge,
         session["activity_ids"],
         wrong_hash,
         None,

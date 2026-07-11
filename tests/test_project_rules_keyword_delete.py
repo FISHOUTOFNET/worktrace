@@ -287,15 +287,10 @@ def test_delete_keyword_rule_does_not_change_activity_log_rows(temp_db):
     # Rule deletion does not mutate the raw activity row. Project state lives
     # in the assignment projection instead.
     with get_connection() as conn:
-        raw_row = conn.execute(
-            "SELECT project_id FROM activity_log WHERE id = ?",
-            (activity_id,),
-        ).fetchone()
         assignment = conn.execute(
             "SELECT project_id FROM activity_project_assignment WHERE activity_id = ?",
             (activity_id,),
         ).fetchone()
-    assert raw_row["project_id"] is None
     assert assignment["project_id"] == project
 
 
@@ -341,12 +336,12 @@ def test_delete_keyword_rule_does_not_change_report_session_operation_rows(temp_
         conn.execute(
             """
             INSERT INTO report_session_operation(
-                report_date, operation_type, base_instance_key, replay_order,
+                request_id, report_date, operation_type, base_instance_key, base_expected_revision, replay_order,
                 match_state, payload_json, created_at, updated_at
             )
-            VALUES (?, 'edit_session', ?, 1, 'active', ?, ?, ?)
+            VALUES (?, ?, 'edit_session', ?, ?, 1, 'active', ?, ?, ?)
             """,
-            ("2026-06-18", "base:" + "c" * 40, '{"payload_version":1,"note":{"mode":"set","value":"keep"}}', now_str(), now_str()),
+            ("test-keyword-delete-c", "2026-06-18", "base:" + "c" * 40, "revision-c", '{"payload_version":1,"note":{"mode":"set","value":"keep"}}', now_str(), now_str()),
         )
     before = _counts()
 

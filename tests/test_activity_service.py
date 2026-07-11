@@ -1,4 +1,4 @@
-from tests.support.db_helpers import assign_activity_project, set_activity_note
+from tests.support.db_helpers import assign_activity_project
 from worktrace.services import activity_service, project_service
 import pytest
 
@@ -12,12 +12,10 @@ def test_create_close_and_manual_updates(temp_db):
     )
     activity_service.close_activity(activity_id, "2026-06-18 09:30:00")
     assign_activity_project(activity_id, pid)
-    set_activity_note(activity_id, "done")
     row = activity_service.get_activity(activity_id)
     assert row["duration_seconds"] == 1800
     assert row["project_id"] == pid
-    assert row["manual_override"] == 1
-    assert row["note"] == "done"
+    assert row["assignment_is_manual"] == 1
 
 
 def test_create_activity_does_not_close_existing_open_record(temp_db):

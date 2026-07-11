@@ -136,7 +136,6 @@ def _attach_projection_defaults(session: dict) -> None:
             "projection_instance_key": base_projection_key(str(session.get("report_date") or ""), session.get("member_slices") or []),
             "projection_kind": "base",
             "operation_id": None,
-            "operation_group_key": None,
             "origin_activity_member_hashes": [member_hash] if member_hash else [],
             "operation_match_state": "active",
             "can_hide": bool(session.get("editable")),
@@ -207,7 +206,6 @@ def _member_key_from_row(row: dict) -> tuple[str, int, str, str]:
 def _attach_detail_revision(session: dict) -> None:
     """Revision of detail structure, intentionally excluding live elapsed seconds."""
     session["projection_revision"] = projection_revision(session)
-    session["session_detail_revision"] = session["projection_revision"]
 
 
 def _public_session(session: dict) -> dict:

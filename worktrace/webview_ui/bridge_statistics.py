@@ -52,6 +52,7 @@ _STATISTICS_EXPORT_ERROR_MESSAGES = {
     "invalid_path": "请选择有效保存位置",
     "permission_denied": "无法写入文件，请检查权限或文件是否被占用",
     "file_busy": "无法写入文件，请检查权限或文件是否被占用",
+    "stale_statistics_snapshot": "统计数据已更新，请重新加载后导出",
     "write_failed": "无法写入文件，请检查权限或文件是否被占用",
     "operation_failed": "导出失败",
 }
@@ -101,7 +102,7 @@ class StatisticsBridgeMixin:
             return {"ok": False, "error": "加载统计失败", "summary": None}
 
 
-    def export_statistics_csv(self, date_from, date_to) -> dict[str, Any]:
+    def export_statistics_csv(self, date_from, date_to, expected_snapshot_revision=None) -> dict[str, Any]:
         """Export a display-safe CSV for the statistics date range."""
         try:
             # isinstance(..., str) rejects None/bool/int/etc. so True/False never reach the API.
@@ -109,12 +110,19 @@ class StatisticsBridgeMixin:
                 return {"ok": False, "error": "请选择有效日期", "cancelled": False}
             if not _DATE_SHAPE_RE.match(date_from) or not _DATE_SHAPE_RE.match(date_to):
                 return {"ok": False, "error": "请选择有效日期", "cancelled": False}
+            if expected_snapshot_revision is not None and (
+                not isinstance(expected_snapshot_revision, str) or not expected_snapshot_revision.strip()
+            ):
+                return {"ok": False, "error": "统计数据已更新，请重新加载后导出", "cancelled": False}
             output_path = self._choose_csv_save_path()
             if output_path is None:
                 # User cancelled the native save dialog (clean cancel, not an exception).
                 return {"ok": False, "cancelled": True, "error": "已取消导出"}
             result = export_api.export_statistics_csv(
-                date_from, date_to, output_path
+                date_from,
+                date_to,
+                output_path,
+                expected_snapshot_revision.strip() if isinstance(expected_snapshot_revision, str) else None,
             )
             return {
                 "ok": True,

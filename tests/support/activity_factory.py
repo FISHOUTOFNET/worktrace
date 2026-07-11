@@ -28,7 +28,6 @@ def create_open_activity(
         source=source,
         project_id=project_id,
         file_path_hint=file_path_hint,
-        note=note,
         resource=resource,
     )
 

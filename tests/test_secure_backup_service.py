@@ -66,15 +66,24 @@ def _seed_test_data() -> None:
             """
             INSERT INTO activity_log(
                 start_time, end_time, duration_seconds, app_name, process_name,
-                window_title, file_path_hint, status, source, project_id, note, created_at, updated_at
+                window_title, file_path_hint, status, source, created_at, updated_at
             )
-            VALUES (?, ?, 60, 'TestApp', 'test.exe', ?, ?, 'normal', 'auto', ?, ?, ?, ?)
+            VALUES (?, ?, 60, 'TestApp', 'test.exe', ?, ?, 'normal', 'auto', ?, ?)
             """,
-            ("2026-06-25 10:00:00", "2026-06-25 10:01:00", TEST_WINDOW_TITLE, TEST_FILE_PATH, project_id, TEST_NOTE, ts, ts),
+            ("2026-06-25 10:00:00", "2026-06-25 10:01:00", TEST_WINDOW_TITLE, TEST_FILE_PATH, ts, ts),
         )
         activity_id = conn.execute(
             "SELECT id FROM activity_log WHERE window_title = ?", (TEST_WINDOW_TITLE,)
         ).fetchone()["id"]
+        conn.execute(
+            """
+            INSERT INTO activity_project_assignment(
+                activity_id, project_id, confidence, source, is_manual, created_at, updated_at
+            )
+            VALUES (?, ?, 100, 'manual', 1, ?, ?)
+            """,
+            (activity_id, project_id, ts, ts),
+        )
 
         # An activity resource.
         conn.execute(
@@ -106,17 +115,19 @@ def _seed_test_data() -> None:
         cur = conn.execute(
             """
             INSERT INTO report_session_operation(
-                report_date, operation_type, base_instance_key, target_instance_key,
-                direction, operation_group_key, replay_order, match_state, payload_json, created_at, updated_at
+                request_id, report_date, operation_type, base_instance_key, base_expected_revision,
+                target_instance_key, target_expected_revision, direction, replay_order, match_state,
+                payload_json, created_at, updated_at
             )
-            VALUES (?, 'edit_session', ?, NULL, NULL, NULL, 1, 'active', ?, ?, ?)
+            VALUES ('backup-seed-edit', ?, 'edit_session', ?, ?, NULL, NULL, NULL, 1, 'active', ?, ?, ?)
             """,
             (
                 "2026-06-25",
                 "base:" + "a" * 40,
+                "b" * 40,
                 json.dumps(
                     {
-                        "payload_version": 1,
+                        "payload_version": 2,
                         "project": {"mode": "set", "project_id": project_id},
                         "duration": {"mode": "set", "value": 60},
                         "note": {"mode": "set", "value": TEST_NOTE},
@@ -130,16 +141,15 @@ def _seed_test_data() -> None:
         conn.execute(
             """
             INSERT INTO report_session_operation_member(
-                operation_id, role, activity_id, report_date, slice_start_time, slice_end_time
+                operation_id, role, activity_id, report_date, slice_start_time
             )
-            VALUES (?, 'edit_target', ?, ?, ?, ?)
+            VALUES (?, 'source', ?, ?, ?)
             """,
             (
                 int(cur.lastrowid),
                 activity_id,
                 "2026-06-25",
                 "2026-06-25 10:00:00",
-                "2026-06-25 10:01:00",
             ),
         )
 
@@ -190,17 +200,6 @@ def _seed_test_data() -> None:
             (project_id, ts, ts),
         )
 
-        # An activity project assignment.
-        conn.execute(
-            """
-            INSERT INTO activity_project_assignment(
-                activity_id, project_id, confidence, source, is_manual, created_at, updated_at
-            )
-            VALUES (?, ?, 100, 'manual', 1, ?, ?)
-            """,
-            (activity_id, project_id, ts, ts),
-        )
-
         # A session boundary.
         conn.execute(
             """
@@ -242,7 +241,7 @@ def test_export_payload_contains_required_tables(temp_db, tmp_path):
     data = json.loads(payload.decode("utf-8"))
 
     assert data["format"] == "worktrace-local-data"
-    assert data["version"] == 1
+    assert data["version"] == 2
     tables = data["tables"]
     for required in [
         "project",
@@ -535,12 +534,13 @@ def test_replace_import_restores_distinctive_data(temp_db, tmp_path):
         assert project is not None
 
         activity = conn.execute(
-            "SELECT id, window_title, file_path_hint, note FROM activity_log WHERE window_title = ?",
+            "SELECT id, window_title, file_path_hint FROM activity_log WHERE window_title = ?",
             (TEST_WINDOW_TITLE,),
         ).fetchone()
         assert activity is not None
         assert activity["file_path_hint"] == TEST_FILE_PATH
-        assert activity["note"] == TEST_NOTE
+        operation = conn.execute("SELECT payload_json FROM report_session_operation WHERE request_id = 'backup-seed-edit'").fetchone()
+        assert TEST_NOTE in operation["payload_json"]
 
         resource = conn.execute(
             "SELECT id FROM activity_resource WHERE activity_id = ?", (activity["id"],)
@@ -638,7 +638,7 @@ def test_api_parse_manifest_does_not_require_passphrase(temp_db, tmp_path):
 
     info = backup_api.parse_encrypted_backup_manifest(str(out))
 
-    assert info.version == 1
+    assert info.version == 2
     assert info.payload_format == "wtenc1"
 
 

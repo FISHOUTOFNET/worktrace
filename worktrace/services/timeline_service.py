@@ -175,64 +175,6 @@ def get_session_anchor_folders(activity_ids: list[int]) -> list[str]:
     return folders
 
 
-def update_session_override(
-    report_date: str,
-    activity_ids: list[int],
-    activity_member_hash: str,
-    *,
-    project_id: int | None,
-    adjusted_duration_seconds: int | None,
-    note: str,
-) -> int | None:
-    from . import report_session_operation_service
-
-    _require_editable_session_activity_ids(activity_ids)
-    session = report_session_projection_service.resolve_current_session(
-        report_date,
-        activity_ids,
-        activity_member_hash,
-        include_hidden=False,
-        ensure_context=True,
-    )
-    return report_session_operation_service.edit_session(
-        report_date,
-        str(session.get("projection_instance_key") or ""),
-        str(session.get("projection_revision") or session.get("session_detail_revision") or ""),
-        session,
-        project_id=project_id,
-        adjusted_duration_seconds=adjusted_duration_seconds,
-        note=note,
-    )
-
-
-def update_session_note_and_duration(
-    report_date: str,
-    activity_ids: list[int],
-    activity_member_hash: str,
-    note: str,
-    adjusted_duration_seconds: int | None,
-) -> int | None:
-    from . import report_session_operation_service
-
-    _require_editable_session_activity_ids(activity_ids)
-    session = report_session_projection_service.resolve_current_session(
-        report_date,
-        activity_ids,
-        activity_member_hash,
-        include_hidden=False,
-        ensure_context=True,
-    )
-    return report_session_operation_service.edit_session(
-        report_date,
-        str(session.get("projection_instance_key") or ""),
-        str(session.get("projection_revision") or session.get("session_detail_revision") or ""),
-        session,
-        project_id=session.get("project_id") if session.get("has_project_override") else None,
-        adjusted_duration_seconds=adjusted_duration_seconds,
-        note=note,
-    )
-
-
 def preview_session_project_update(session_activity_ids: list[int], project_id: int) -> dict:
     if not session_activity_ids:
         return {
@@ -710,6 +652,16 @@ def _ensure_context_for_report_range(start_date: str, end_date: str) -> None:
     final = date_type.fromisoformat(end_date)
     while current <= final:
         recompute_context_assignments_for_date(current.isoformat())
+        current += timedelta(days=1)
+
+
+def _ensure_context_for_report_range_in_transaction(conn, start_date: str, end_date: str) -> None:
+    from .context_service import _recompute_context_assignments_for_date_in_transaction
+
+    current = date_type.fromisoformat(start_date) - timedelta(days=1)
+    final = date_type.fromisoformat(end_date)
+    while current <= final:
+        _recompute_context_assignments_for_date_in_transaction(conn, current.isoformat(), use_cache=True)
         current += timedelta(days=1)
 
 

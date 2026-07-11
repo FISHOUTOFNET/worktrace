@@ -214,11 +214,11 @@ def test_midnight_split_restarts_with_persistent_temporary_anchor(temp_db):
             "SELECT occurred_at, reason FROM session_boundary ORDER BY occurred_at"
         ).fetchall()
 
-    assert old_row["end_time"] == "2026-06-19 00:00:00"
-    assert new_row["start_time"] == "2026-06-19 00:00:00"
-    assert new_row["duration_seconds"] == 5
-    assert new_row["project_id"] == project_id
-    assert new_row["manual_override"] == 0
+        assert old_row["end_time"] == "2026-06-19 00:00:00"
+        assert new_row["start_time"] == "2026-06-19 00:00:00"
+        assert new_row["duration_seconds"] == 5
+        assert new_row["project_id"] == project_id
+        assert new_row["assignment_is_manual"] == 0
     assert assignment["source"] == "midnight_anchor"
     assert assignment["is_manual"] == 0
     assert [(row["occurred_at"], row["reason"]) for row in boundaries] == [

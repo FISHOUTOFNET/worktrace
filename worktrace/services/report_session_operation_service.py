@@ -1,147 +1,102 @@
-"""Persistence and command boundary for Timeline report-session operations."""
+"""SQLite write unit of work for report-session operations."""
 
 from __future__ import annotations
 
 import json
-import uuid
+import sqlite3
+from typing import Any
 
 from ..db import get_connection, now_str
-from . import report_session_operation_engine as engine
 from . import project_lifecycle_policy
+from . import report_session_operation_engine as engine
+from .report_projection_identity import member_identity_key, stable_json_hash
 
 ACTIVE = "active"
 SUPERSEDED = "superseded"
+PAYLOAD_VERSION = 2
 
 
 def edit_session(
     report_date: str,
     projection_instance_key: str,
-    expected_projection_revision: str | None,
-    current_session: dict | None = None,
+    expected_projection_revision: str,
+    request_id: str,
     *,
     project_id: int | None,
     adjusted_duration_seconds: int | None,
     note: str,
 ) -> int | None:
-    session = current_session or _resolve(report_date, projection_instance_key, expected_projection_revision)
-    if expected_projection_revision:
-        _require_revision(session, expected_projection_revision)
-    _require(session, "editable", "not_project_activity")
-    payload = _edit_payload(session, project_id=project_id, adjusted_duration_seconds=adjusted_duration_seconds, note=note)
-    if not any(key in payload for key in ("project", "duration", "note")):
-        return None
-    return _insert_operation(
+    return _run_uow(
         report_date,
+        request_id,
         "edit_session",
-        session,
-        roles={"edit_target": _members(session)},
-        payload=payload,
+        projection_instance_key,
+        expected_projection_revision,
+        payload_input={"project_id": project_id, "adjusted_duration_seconds": adjusted_duration_seconds, "note": note},
     )
 
 
-def hide_session(report_date: str, projection_instance_key: str, expected_projection_revision: str | None = None) -> None:
-    session = _resolve(report_date, projection_instance_key, expected_projection_revision)
-    _require(session, "can_hide", "not_project_activity")
-    _insert_operation(report_date, "hide_session", session, roles={"origin": _members(session)})
+def hide_session(report_date: str, projection_instance_key: str, expected_projection_revision: str, request_id: str) -> int:
+    result = _run_uow(report_date, request_id, "hide_session", projection_instance_key, expected_projection_revision)
+    assert result is not None
+    return result
 
 
 def merge_session(
     report_date: str,
     projection_instance_key: str,
     direction: str,
+    request_id: str,
     *,
-    expected_projection_revision: str | None = None,
-    target_projection_instance_key: str | None = None,
-    target_expected_projection_revision: str | None = None,
-) -> None:
+    expected_projection_revision: str,
+    target_projection_instance_key: str,
+    target_expected_projection_revision: str,
+) -> int:
     if direction not in {"previous", "next"}:
         raise ValueError("invalid_direction")
-    sessions = _sessions(report_date)
-    session = engine.resolve_projection_instance(sessions, projection_instance_key)
-    if not session:
-        raise ValueError("session_identity_conflict")
-    _require_revision(session, expected_projection_revision)
-    _require(session, f"can_merge_{direction}", "not_mergeable")
-    index = sessions.index(session)
-    target = (
-        engine.resolve_projection_instance(sessions, target_projection_instance_key)
-        if target_projection_instance_key
-        else sessions[index - 1 if direction == "previous" else index + 1]
-    )
-    if not target:
-        raise ValueError("session_identity_conflict")
-    _require_revision(target, target_expected_projection_revision)
-    if str(target.get("projection_kind") or "base") == "copy" or str(session.get("projection_kind") or "base") == "copy":
-        raise ValueError("copy_session_not_mergeable")
-    group = str(target.get("operation_group_key") or session.get("operation_group_key") or uuid.uuid4().hex)
-    _insert_operation(
+    result = _run_uow(
         report_date,
+        request_id,
         "merge_sessions",
-        session,
-        target=target,
+        projection_instance_key,
+        expected_projection_revision,
+        target_projection_instance_key=target_projection_instance_key,
+        target_expected_projection_revision=target_expected_projection_revision,
         direction=direction,
-        operation_group_key=group,
-        roles={"source": _members(session), "target": _members(target), "origin": _members(session) + _members(target)},
     )
+    assert result is not None
+    return result
 
 
-def split_session(report_date: str, projection_instance_key: str, expected_projection_revision: str | None = None) -> None:
-    session = _resolve(report_date, projection_instance_key, expected_projection_revision)
-    _require(session, "can_split", "not_merge_session")
-    group = str(session.get("operation_group_key") or "")
-    if not group:
-        raise ValueError("session_identity_conflict")
-    with get_connection() as conn:
-        conn.execute("BEGIN IMMEDIATE")
-        ts = now_str()
-        conn.execute(
-            """
-            UPDATE report_session_operation
-            SET match_state = ?, updated_at = ?
-            WHERE report_date = ? AND match_state = ?
-              AND (operation_group_key = ? OR base_instance_key = ? OR target_instance_key = ?)
-            """,
-            (SUPERSEDED, ts, report_date, ACTIVE, group, f"merge:{group}", f"merge:{group}"),
-        )
+def split_session(report_date: str, projection_instance_key: str, expected_projection_revision: str, request_id: str) -> int:
+    result = _run_uow(report_date, request_id, "split_session", projection_instance_key, expected_projection_revision)
+    assert result is not None
+    return result
 
 
-def copy_session(report_date: str, projection_instance_key: str, expected_projection_revision: str | None = None) -> None:
-    session = _resolve(report_date, projection_instance_key, expected_projection_revision)
-    _require(session, "can_copy", "not_project_activity")
-    _insert_operation(report_date, "copy_session", session, roles={"copy_origin": _members(session)})
+def copy_session(report_date: str, projection_instance_key: str, expected_projection_revision: str, request_id: str) -> int:
+    result = _run_uow(report_date, request_id, "copy_session", projection_instance_key, expected_projection_revision)
+    assert result is not None
+    return result
 
 
 def hide_session_activity(
     report_date: str,
     projection_instance_key: str,
     summary_id: str,
-    expected_projection_revision: str | None = None,
-) -> None:
-    session = _resolve(report_date, projection_instance_key, expected_projection_revision)
-    _require(session, "can_hide_activity", "not_project_activity")
-    from . import project_activity_summary_service
-
-    summaries = project_activity_summary_service.build_activity_summary_rows(
-        list(session.get("_projection_contributions") or []), report_date, projection_instance_key
-    )
-    summary = next((item for item in summaries if str(item.get("summary_id")) == str(summary_id)), None)
-    if not summary:
-        raise ValueError("session_identity_conflict")
-    identity = str(summary.get("activity_identity_key") or "")
-    members = [
-        _member_from_row(row)
-        for row in session.get("_projection_contributions") or []
-        if project_activity_summary_service._activity_group_key(row) == identity
-    ]
-    if not members:
-        raise ValueError("session_identity_conflict")
-    _insert_operation(
+    expected_projection_revision: str,
+    request_id: str,
+) -> int:
+    result = _run_uow(
         report_date,
+        request_id,
         "hide_activity",
-        session,
-        roles={"hidden_activity": members},
-        payload={"activity_identity_key": identity},
+        projection_instance_key,
+        expected_projection_revision,
+        payload_input={"summary_id": summary_id},
     )
+    assert result is not None
+    return result
 
 
 def load_operations(report_date: str, *, conn=None) -> list[dict]:
@@ -149,47 +104,15 @@ def load_operations(report_date: str, *, conn=None) -> list[dict]:
         with get_connection() as read_conn:
             return load_operations(report_date, conn=read_conn)
     rows = conn.execute(
-            """SELECT * FROM report_session_operation
-               WHERE report_date = ? AND match_state = ? ORDER BY replay_order ASC, id ASC""",
-            (report_date, ACTIVE),
+        """SELECT * FROM report_session_operation
+           WHERE report_date = ? AND match_state = ?
+           ORDER BY replay_order ASC, id ASC""",
+        (report_date, ACTIVE),
     ).fetchall()
-    operations = [dict(row) for row in rows]
+    operations = [_inflate_operation(conn, dict(row)) for row in rows]
     for operation in operations:
-            member_rows = conn.execute(
-                """SELECT role, activity_id, report_date, slice_start_time, slice_end_time, display_order
-                   FROM report_session_operation_member WHERE operation_id = ?
-                   ORDER BY role, display_order, activity_id""",
-                (int(operation["id"]),),
-            ).fetchall()
-            roles: dict[str, list[dict]] = {}
-            for member in member_rows:
-                item = dict(member)
-                roles.setdefault(str(item.pop("role")), []).append(item)
-            operation["members"] = roles
-            try:
-                operation["payload"] = json.loads(str(operation.get("payload_json") or "{}"))
-            except json.JSONDecodeError:
-                operation["payload"] = {}
-            if operation.get("operation_type") == "edit_session":
-                _refresh_edit_payload_project_lifecycle(operation["payload"], conn)
+        _refresh_edit_payload_project_lifecycle(operation["payload"], conn)
     return operations
-
-
-def _refresh_edit_payload_project_lifecycle(payload: dict, conn) -> None:
-    project = payload.get("project") if isinstance(payload.get("project"), dict) else None
-    if not project or str(project.get("mode") or "") != "set":
-        return
-    project_id = int(project.get("project_id") or 0)
-    if project_id <= 0:
-        return
-    row = conn.execute("SELECT name, description, is_deleted, is_archived FROM project WHERE id = ?", (project_id,)).fetchone()
-    if not row:
-        project["project_is_deleted"] = True
-        return
-    project["project_name"] = str(row["name"] or "")
-    project["project_description"] = str(row["description"] or "")
-    project["project_is_deleted"] = bool(row["is_deleted"])
-    project["project_is_archived"] = bool(row["is_archived"])
 
 
 def persist_engine_match_states(operations: list[dict]) -> None:
@@ -208,73 +131,466 @@ def persist_engine_match_states(operations: list[dict]) -> None:
         )
 
 
-def _sessions(report_date: str) -> list[dict]:
-    from .report_session_projection_service import get_report_sessions_for_operations
+def _run_uow(
+    report_date: str,
+    request_id: str,
+    operation_type: str,
+    base_instance_key: str,
+    base_expected_revision: str,
+    *,
+    target_projection_instance_key: str | None = None,
+    target_expected_projection_revision: str | None = None,
+    direction: str | None = None,
+    payload_input: dict[str, Any] | None = None,
+) -> int | None:
+    if not request_id:
+        raise ValueError("invalid_request_id")
+    input_signature = stable_json_hash(
+        {
+            "report_date": report_date,
+            "operation_type": operation_type,
+            "base_instance_key": base_instance_key,
+            "base_expected_revision": base_expected_revision,
+            "target_instance_key": target_projection_instance_key,
+            "target_expected_revision": target_expected_projection_revision,
+            "direction": direction,
+            "payload_input": payload_input or {},
+        }
+    )
+    with get_connection() as conn:
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            existing = _find_request(conn, request_id)
+            if existing:
+                if str(existing.get("payload", {}).get("request_input_signature") or "") != input_signature:
+                    raise ValueError("request_id_conflict")
+                conn.commit()
+                return int(existing["id"])
+            from .report_projection_snapshot_service import build_visible_snapshot
 
-    return get_report_sessions_for_operations(report_date, report_date, include_hidden=False, ensure_context=True)
+            snapshot = build_visible_snapshot(report_date, report_date, ensure_context=True, conn=conn)
+            sessions = list(snapshot.final_sessions)
+            source = engine.resolve_projection_instance(sessions, base_instance_key)
+            if not source:
+                raise ValueError("session_identity_conflict")
+            _require_revision(source, base_expected_revision, "revision_conflict")
+            target = None
+            if operation_type == "merge_sessions":
+                if not target_projection_instance_key or not target_expected_projection_revision:
+                    raise ValueError("session_identity_conflict")
+                target = engine.resolve_projection_instance(sessions, target_projection_instance_key)
+                if not target:
+                    raise ValueError("session_identity_conflict")
+                _require_revision(target, target_expected_projection_revision, "target_revision_conflict")
+                _require_adjacent(sessions, source, target, direction)
+            _require_capability(operation_type, source, direction)
+            payload, roles, reverts_operation_id = _build_payload_and_roles(
+                conn,
+                operation_type,
+                source,
+                target,
+                payload_input or {},
+            )
+            signature = _request_signature(
+                report_date,
+                operation_type,
+                base_instance_key,
+                base_expected_revision,
+                target_projection_instance_key,
+                target_expected_projection_revision,
+                direction,
+                payload,
+                roles,
+            )
+            if operation_type == "edit_session" and not _payload_changes_session(source, payload):
+                return None
+            replay_order = _next_replay_order(conn, report_date)
+            operation_id = _insert_operation(
+                conn,
+                request_id,
+                report_date,
+                operation_type,
+                base_instance_key,
+                base_expected_revision,
+                target_projection_instance_key,
+                target_expected_projection_revision,
+                direction,
+                replay_order,
+                payload,
+                signature,
+                input_signature,
+                reverts_operation_id=reverts_operation_id,
+            )
+            _insert_members(conn, operation_id, roles)
+            _insert_dependencies(conn, operation_id, [base_instance_key, target_projection_instance_key])
+            if operation_type == "split_session":
+                _supersede_split_descendants(conn, operation_id, reverts_operation_id)
+            candidate = _candidate_operations(conn, report_date)
+            before_keys = {str(item.get("projection_instance_key") or "") for item in sessions}
+            after = engine.apply_operations(_base_sessions_for_date(snapshot, report_date), candidate)
+            if not _operation_effective(operation_id, operation_type, before_keys, after, candidate):
+                raise ValueError("operation_no_effect")
+            conn.commit()
+            return operation_id
+        except Exception:
+            conn.rollback()
+            raise
 
 
-def _resolve(report_date: str, projection_instance_key: str, expected_projection_revision: str | None = None) -> dict:
-    if not isinstance(report_date, str) or not report_date or not isinstance(projection_instance_key, str) or not projection_instance_key:
-        raise ValueError("invalid_session_identity")
-    session = engine.resolve_projection_instance(_sessions(report_date), projection_instance_key)
-    if not session:
-        raise ValueError("session_identity_conflict")
-    _require_revision(session, expected_projection_revision)
-    return session
+def _base_sessions_for_date(snapshot, report_date: str) -> list[dict]:
+    return [dict(item) for item in snapshot.base_sessions if str(item.get("report_date") or "") == report_date]
 
 
-def _require_revision(session: dict, expected_projection_revision: str | None) -> None:
-    if not expected_projection_revision:
-        return
-    current = str(session.get("projection_revision") or session.get("session_detail_revision") or "")
-    if current != str(expected_projection_revision):
-        raise ValueError("revision_conflict")
+def _candidate_operations(conn, report_date: str) -> list[dict]:
+    rows = conn.execute(
+        """SELECT * FROM report_session_operation
+           WHERE report_date = ? AND match_state = ?
+           ORDER BY replay_order ASC, id ASC""",
+        (report_date, ACTIVE),
+    ).fetchall()
+    return [_inflate_operation(conn, dict(row)) for row in rows]
 
 
-def _require(session: dict, field: str, error: str) -> None:
-    if not bool(session.get(field)):
-        if bool(session.get("is_in_progress")):
-            raise ValueError("in_progress")
-        raise ValueError(error)
+def _operation_effective(operation_id: int, operation_type: str, before_keys: set[str], after: list[dict], operations: list[dict]) -> bool:
+    operation = next((item for item in operations if int(item.get("id") or 0) == operation_id), None)
+    if not operation or operation.get("_engine_match_state"):
+        return False
+    after_keys = {str(item.get("projection_instance_key") or "") for item in after}
+    if operation_type == "copy_session":
+        return f"copy:{operation_id}" in after_keys
+    if operation_type == "merge_sessions":
+        return f"merge:{operation_id}" in after_keys
+    if operation_type == "hide_session":
+        return after_keys != before_keys
+    if operation_type == "hide_activity":
+        return True
+    if operation_type == "split_session":
+        return True
+    return any(
+        any(int(command.get("id") or 0) == operation_id for command in session.get("_applied_commands") or [])
+        for session in after
+    )
 
 
 def _insert_operation(
+    conn,
+    request_id: str,
     report_date: str,
     operation_type: str,
-    session: dict,
+    base_instance_key: str,
+    base_expected_revision: str,
+    target_instance_key: str | None,
+    target_expected_revision: str | None,
+    direction: str | None,
+    replay_order: int,
+    payload: dict,
+    signature: str,
+    input_signature: str,
     *,
-    target: dict | None = None,
-    direction: str | None = None,
-    operation_group_key: str | None = None,
-    roles: dict[str, list[dict]],
-    payload: dict | None = None,
+    reverts_operation_id: int | None = None,
 ) -> int:
     ts = now_str()
-    with get_connection() as conn:
-        conn.execute("BEGIN IMMEDIATE")
-        replay_order = _next_replay_order(conn, report_date)
-        cur = conn.execute(
-            """INSERT INTO report_session_operation(
-                report_date, operation_type, base_instance_key, target_instance_key,
-                direction, operation_group_key, replay_order, match_state, payload_json, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                report_date, operation_type, str(session.get("projection_instance_key") or ""),
-                str(target.get("projection_instance_key") or "") if target else None,
-                direction, operation_group_key, replay_order, ACTIVE, json.dumps(payload or {}, ensure_ascii=False, sort_keys=True), ts, ts,
-            ),
+    payload_to_store = dict(payload)
+    payload_to_store["request_signature"] = signature
+    payload_to_store["request_input_signature"] = input_signature
+    cur = conn.execute(
+        """INSERT INTO report_session_operation(
+            request_id, report_date, operation_type, base_instance_key, base_expected_revision,
+            target_instance_key, target_expected_revision, direction, replay_order, match_state,
+            reverts_operation_id, payload_json, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            request_id,
+            report_date,
+            operation_type,
+            base_instance_key,
+            base_expected_revision,
+            target_instance_key,
+            target_expected_revision,
+            direction,
+            replay_order,
+            ACTIVE,
+            reverts_operation_id,
+            json.dumps(payload_to_store, ensure_ascii=False, sort_keys=True),
+            ts,
+            ts,
+        ),
+    )
+    return int(cur.lastrowid)
+
+
+def _insert_members(conn, operation_id: int, roles: dict[str, list[dict]]) -> None:
+    for role, members in roles.items():
+        for order, member in enumerate(members):
+            conn.execute(
+                """INSERT INTO report_session_operation_member(
+                    operation_id, role, activity_id, report_date, slice_start_time, display_order
+                ) VALUES (?, ?, ?, ?, ?, ?)""",
+                (
+                    operation_id,
+                    role,
+                    int(member["activity_id"]),
+                    str(member["report_date"]),
+                    str(member["slice_start_time"]),
+                    order,
+                ),
+            )
+
+
+def _insert_dependencies(conn, operation_id: int, keys: list[str | None]) -> None:
+    for key in keys:
+        parent = _operation_id_from_projection_key(key)
+        if parent is None:
+            continue
+        conn.execute(
+            """INSERT OR IGNORE INTO report_session_operation_dependency(parent_operation_id, child_operation_id)
+               VALUES (?, ?)""",
+            (parent, operation_id),
         )
-        operation_id = int(cur.lastrowid)
-        for role, members in roles.items():
-            for order, member in enumerate(members):
-                conn.execute(
-                    """INSERT OR IGNORE INTO report_session_operation_member(
-                        operation_id, role, activity_id, report_date, slice_start_time, slice_end_time, display_order
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                    (operation_id, role, int(member["activity_id"]), str(member["report_date"]), str(member["slice_start_time"]), str(member["slice_end_time"]), order),
-                )
-    return operation_id
+
+
+def _supersede_split_descendants(conn, split_operation_id: int, reverted_operation_id: int | None) -> None:
+    if not reverted_operation_id:
+        raise ValueError("session_identity_conflict")
+    rows = conn.execute(
+        """
+        WITH RECURSIVE descendants(id) AS (
+            SELECT ?
+            UNION
+            SELECT d.child_operation_id
+            FROM report_session_operation_dependency d
+            JOIN descendants x ON x.id = d.parent_operation_id
+        )
+        SELECT id FROM descendants
+        """,
+        (reverted_operation_id,),
+    ).fetchall()
+    ids = [int(row["id"]) for row in rows if int(row["id"]) != split_operation_id]
+    if not ids:
+        return
+    placeholders = ",".join("?" for _ in ids)
+    conn.execute(
+        f"""UPDATE report_session_operation
+            SET match_state = ?, superseded_by_operation_id = ?, updated_at = ?
+            WHERE match_state = ? AND id IN ({placeholders})""",
+        (SUPERSEDED, split_operation_id, now_str(), ACTIVE, *ids),
+    )
+
+
+def _build_payload_and_roles(conn, operation_type: str, source: dict, target: dict | None, payload_input: dict) -> tuple[dict, dict[str, list[dict]], int | None]:
+    if operation_type == "edit_session":
+        payload = _edit_payload(conn, source, payload_input)
+        return payload, {"source": _members(source)}, None
+    if operation_type == "hide_session":
+        return {"payload_version": PAYLOAD_VERSION}, {"source": _members(source)}, None
+    if operation_type == "copy_session":
+        return {"payload_version": PAYLOAD_VERSION}, {"source": _members(source)}, None
+    if operation_type == "merge_sessions":
+        if target is None:
+            raise ValueError("session_identity_conflict")
+        return {"payload_version": PAYLOAD_VERSION}, {"source": _members(source), "target": _members(target)}, None
+    if operation_type == "hide_activity":
+        members = _affected_members_for_summary(source, str(payload_input.get("summary_id") or ""))
+        if not members:
+            raise ValueError("session_identity_conflict")
+        return {"payload_version": PAYLOAD_VERSION, "summary_id": str(payload_input.get("summary_id") or "")}, {"affected": members}, None
+    if operation_type == "split_session":
+        reverted = _operation_id_from_projection_key(str(source.get("projection_instance_key") or ""))
+        if not reverted:
+            raise ValueError("session_identity_conflict")
+        return {"payload_version": PAYLOAD_VERSION}, {"source": _members(source)}, reverted
+    raise ValueError("unsupported_operation_type")
+
+
+def _edit_payload(conn, session: dict, payload_input: dict) -> dict:
+    payload: dict[str, Any] = {"payload_version": PAYLOAD_VERSION}
+    project_id = payload_input.get("project_id")
+    if project_id is not None:
+        row = conn.execute("SELECT * FROM project WHERE id = ?", (int(project_id),)).fetchone()
+        project = dict(row) if row else None
+        if not project_lifecycle_policy.project_selectable_for_editing(project):
+            raise ValueError("project_not_selectable")
+        payload["project"] = {"mode": "set", "project_id": int(project_id)}
+    elif bool(session.get("has_project_override")):
+        payload["project"] = {"mode": "inherit"}
+    if "adjusted_duration_seconds" in payload_input:
+        value = payload_input.get("adjusted_duration_seconds")
+        if value is not None:
+            payload["duration"] = {"mode": "set", "value": int(value)}
+        elif bool(session.get("has_duration_override")):
+            payload["duration"] = {"mode": "inherit"}
+    text = str(payload_input.get("note") or "")
+    if text:
+        payload["note"] = {"mode": "set", "value": text}
+    elif str(session.get("session_note") or ""):
+        payload["note"] = {"mode": "inherit"}
+    return payload
+
+
+def _payload_changes_session(session: dict, payload: dict) -> bool:
+    project = payload.get("project") if isinstance(payload.get("project"), dict) else None
+    if project:
+        if str(project.get("mode")) == "inherit" and bool(session.get("has_project_override")):
+            return True
+        if str(project.get("mode")) == "set" and (
+            int(project.get("project_id") or 0) != int(session.get("project_id") or 0)
+            or not bool(session.get("has_project_override"))
+        ):
+            return True
+    duration = payload.get("duration") if isinstance(payload.get("duration"), dict) else None
+    if duration:
+        if str(duration.get("mode")) == "inherit" and bool(session.get("has_duration_override")):
+            return True
+        if str(duration.get("mode")) == "set" and (
+            int(duration.get("value") or 0) != int(session.get("adjusted_duration_seconds") or 0)
+            or not bool(session.get("has_duration_override"))
+        ):
+            return True
+    note = payload.get("note") if isinstance(payload.get("note"), dict) else None
+    if note:
+        value = "" if str(note.get("mode")) == "inherit" else str(note.get("value") or "")
+        return value != str(session.get("session_note") or "")
+    return False
+
+
+def _affected_members_for_summary(session: dict, summary_id: str) -> list[dict]:
+    if not summary_id:
+        return []
+    from . import project_activity_summary_service
+
+    summaries = project_activity_summary_service.build_activity_summary_rows(
+        list(session.get("_projection_contributions") or []),
+        str(session.get("report_date") or ""),
+        str(session.get("projection_instance_key") or ""),
+    )
+    summary = next((item for item in summaries if str(item.get("summary_id")) == summary_id), None)
+    if not summary:
+        return []
+    identity = str(summary.get("activity_identity_key") or "")
+    return [
+        _member_from_row(row)
+        for row in session.get("_projection_contributions") or []
+        if project_activity_summary_service._activity_group_key(row) == identity
+    ]
+
+
+def _find_request(conn, request_id: str) -> dict | None:
+    row = conn.execute("SELECT * FROM report_session_operation WHERE request_id = ?", (request_id,)).fetchone()
+    if not row:
+        return None
+    operation = _inflate_operation(conn, dict(row))
+    operation["request_signature"] = str(operation.get("payload", {}).get("request_signature") or "")
+    return operation
+
+
+def _inflate_operation(conn, operation: dict) -> dict:
+    member_rows = conn.execute(
+        """SELECT role, activity_id, report_date, slice_start_time, display_order
+           FROM report_session_operation_member
+           WHERE operation_id = ?
+           ORDER BY role, display_order, activity_id""",
+        (int(operation["id"]),),
+    ).fetchall()
+    roles: dict[str, list[dict]] = {}
+    for member in member_rows:
+        item = dict(member)
+        roles.setdefault(str(item.pop("role")), []).append(item)
+    operation["members"] = roles
+    try:
+        operation["payload"] = json.loads(str(operation.get("payload_json") or "{}"))
+    except json.JSONDecodeError:
+        operation["payload"] = {}
+    return operation
+
+
+def _refresh_edit_payload_project_lifecycle(payload: dict, conn) -> None:
+    project = payload.get("project") if isinstance(payload.get("project"), dict) else None
+    if not project or str(project.get("mode") or "") != "set":
+        return
+    project_id = int(project.get("project_id") or 0)
+    row = conn.execute("SELECT * FROM project WHERE id = ?", (project_id,)).fetchone()
+    if not row:
+        project["project_is_deleted"] = True
+        return
+    project.update(
+        {
+            "project_name": str(row["name"] or ""),
+            "project_description": str(row["description"] or ""),
+            "project_is_deleted": bool(row["is_deleted"]),
+            "project_is_archived": bool(row["is_archived"]),
+            "is_report_project": True,
+            "is_report_classified": True,
+            "is_report_uncategorized": False,
+        }
+    )
+
+
+def _request_signature(
+    report_date: str,
+    operation_type: str,
+    base_instance_key: str,
+    base_expected_revision: str,
+    target_instance_key: str | None,
+    target_expected_revision: str | None,
+    direction: str | None,
+    payload: dict,
+    roles: dict[str, list[dict]],
+) -> str:
+    return stable_json_hash(
+        {
+            "report_date": report_date,
+            "operation_type": operation_type,
+            "base_instance_key": base_instance_key,
+            "base_expected_revision": base_expected_revision,
+            "target_instance_key": target_instance_key,
+            "target_expected_revision": target_expected_revision,
+            "direction": direction,
+            "payload": payload,
+            "members": {
+                role: [member_identity_key(member) for member in members]
+                for role, members in sorted(roles.items())
+            },
+        }
+    )
+
+
+def _require_revision(session: dict, expected: str, error: str) -> None:
+    if not expected:
+        raise ValueError("invalid_session_identity")
+    if str(session.get("projection_revision") or "") != str(expected):
+        raise ValueError(error)
+
+
+def _require_adjacent(sessions: list[dict], source: dict, target: dict, direction: str | None) -> None:
+    if direction not in {"previous", "next"}:
+        raise ValueError("invalid_direction")
+    if source is target:
+        raise ValueError("session_identity_conflict")
+    source_index = sessions.index(source)
+    target_index = sessions.index(target)
+    expected_index = source_index - 1 if direction == "previous" else source_index + 1
+    if target_index != expected_index:
+        raise ValueError("session_not_adjacent")
+
+
+def _require_capability(operation_type: str, source: dict, direction: str | None) -> None:
+    if bool(source.get("is_in_progress")):
+        raise ValueError("in_progress")
+    if operation_type == "edit_session" and not bool(source.get("editable")):
+        raise ValueError("not_project_activity")
+    if operation_type == "hide_session" and not bool(source.get("can_hide")):
+        raise ValueError("not_project_activity")
+    if operation_type == "copy_session" and not bool(source.get("can_copy")):
+        raise ValueError("not_project_activity")
+    if operation_type == "hide_activity" and not bool(source.get("can_hide_activity")):
+        raise ValueError("not_project_activity")
+    if operation_type == "split_session" and not bool(source.get("can_split")):
+        raise ValueError("not_merge_session")
+    if operation_type == "merge_sessions":
+        if str(source.get("projection_kind") or "base") == "copy":
+            raise ValueError("not_mergeable")
+        if not bool(source.get("can_merge_" + str(direction))):
+            raise ValueError("not_mergeable")
 
 
 def _next_replay_order(conn, report_date: str) -> int:
@@ -285,62 +601,38 @@ def _next_replay_order(conn, report_date: str) -> int:
     return int(row["next_order"] or 1)
 
 
-def _edit_payload(
-    session: dict,
-    *,
-    project_id: int | None,
-    adjusted_duration_seconds: int | None,
-    note: str,
-) -> dict:
-    payload: dict = {"payload_version": 1}
-    with get_connection() as conn:
-        if project_id is not None:
-            row = conn.execute("SELECT * FROM project WHERE id = ?", (int(project_id),)).fetchone()
-            project = dict(row) if row else None
-            if not project_lifecycle_policy.project_selectable_for_editing(project):
-                raise ValueError("project_not_selectable")
-            if int(session.get("project_id") or 0) != int(project_id) or not bool(session.get("has_project_override")):
-                payload["project"] = {
-                    "mode": "set",
-                    "project_id": int(project_id),
-                    "project_name": str(project.get("name") or ""),
-                    "project_description": str(project.get("description") or ""),
-                    "project_is_deleted": bool(project.get("is_deleted")),
-                    "project_is_archived": bool(project.get("is_archived")),
-                }
-        elif bool(session.get("has_project_override")):
-            payload["project"] = {"mode": "inherit"}
-    if adjusted_duration_seconds is not None:
-        if (
-            not bool(session.get("has_duration_override"))
-            or int(session.get("adjusted_duration_seconds") or 0) != int(adjusted_duration_seconds)
-        ):
-            payload["duration"] = {"mode": "set", "value": int(adjusted_duration_seconds)}
-    elif bool(session.get("has_duration_override")):
-        payload["duration"] = {"mode": "inherit"}
-    text = str(note or "")
-    if text:
-        if str(session.get("session_note") or "") != text:
-            payload["note"] = {"mode": "set", "value": text}
-    elif str(session.get("session_note") or ""):
-        payload["note"] = {"mode": "inherit"}
-    return payload
-
-
 def _members(session: dict) -> list[dict]:
-    return [dict(member) for member in session.get("member_slices") or []]
+    return [_member_from_row(member) for member in session.get("member_slices") or []]
 
 
 def _member_from_row(row: dict) -> dict:
     return {
         "activity_id": int(row.get("activity_id") or row.get("id") or 0),
-        "report_date": str(row.get("report_date") or ""),
+        "report_date": str(row.get("report_date") or "")[:10],
         "slice_start_time": str(row.get("slice_start_time") or row.get("start_time") or ""),
-        "slice_end_time": str(row.get("slice_end_time") or row.get("end_time") or ""),
     }
 
 
+def _operation_id_from_projection_key(key: str | None) -> int | None:
+    if not key or ":" not in key:
+        return None
+    prefix, value = str(key).split(":", 1)
+    if prefix not in {"copy", "merge"}:
+        return None
+    try:
+        result = int(value)
+    except ValueError:
+        return None
+    return result if result > 0 else None
+
+
 __all__ = [
-    "copy_session", "edit_session", "hide_session", "hide_session_activity", "load_operations",
-    "merge_session", "persist_engine_match_states", "split_session",
+    "copy_session",
+    "edit_session",
+    "hide_session",
+    "hide_session_activity",
+    "load_operations",
+    "merge_session",
+    "persist_engine_match_states",
+    "split_session",
 ]

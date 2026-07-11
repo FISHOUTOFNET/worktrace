@@ -323,6 +323,9 @@ def test_bridge_statistics_summary_display_safe_keys_only(bridge):
         "project_duration_seconds",
         "project_duration",
         "activity_count",
+        "session_count",
+        "export_row_count",
+        "snapshot_revision",
         "project_count",
         "app_count",
         "by_project",
@@ -353,6 +356,9 @@ def test_bridge_statistics_summary_display_safe_keys_only(bridge):
         "included_duration",
         "available_formats",
         "export_actions_enabled",
+        "snapshot_revision",
+        "export_row_count",
+        "session_count",
     }
     assert set(summary["export_preview"].keys()) <= allowed_preview_keys
     _assert_no_sensitive_keys(result)

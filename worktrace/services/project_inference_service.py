@@ -540,10 +540,6 @@ def _upsert_assignment(
     )
 
 
-def _sync_activity_project(conn, activity_id: int, project_id: int, auto_classified: bool) -> None:
-    return
-
-
 def _assignment_dict(conn, activity_id: int) -> dict:
     row = conn.execute(
         "SELECT * FROM activity_project_assignment WHERE activity_id = ?",

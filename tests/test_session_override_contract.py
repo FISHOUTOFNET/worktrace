@@ -46,6 +46,18 @@ def _session(day: str = "2026-06-25") -> dict:
     return sessions[0]
 
 
+def _save_session_edit(session: dict, project_id: int, duration: int, note: str, request_id: str) -> None:
+    timeline_api.save_timeline_session_edit(
+        "2026-06-25",
+        session["projection_instance_key"],
+        session["projection_revision"],
+        request_id,
+        project_id,
+        duration,
+        note,
+    )
+
+
 def test_raw_activity_facts_immutable_across_rules_overrides_stats_and_export(temp_db):
     project = create_project("Contract Project")
     folder_project = create_project("Folder Project")
@@ -75,14 +87,7 @@ def test_raw_activity_facts_immutable_across_rules_overrides_stats_and_export(te
         ]
     )
     session = _session()
-    timeline_api.save_timeline_session_override(
-        "2026-06-25",
-        session["activity_ids"],
-        session["activity_member_hash"],
-        project,
-        1200,
-        "contract note",
-    )
+    _save_session_edit(session, project, 1200, "contract note", "req-contract")
     timeline_service.get_project_sessions_by_date("2026-06-25")
     statistics_service.get_statistics_export_summary("2026-06-25", "2026-06-25")
     export_service.build_statistics_csv_rows("2026-06-25", "2026-06-25")
@@ -106,14 +111,7 @@ def test_session_override_exact_match_consistent_across_surfaces(temp_db):
     before = _raw_snapshot()
     session = _session()
 
-    timeline_api.save_timeline_session_override(
-        "2026-06-25",
-        session["activity_ids"],
-        session["activity_member_hash"],
-        project,
-        1500,
-        "exact note",
-    )
+    _save_session_edit(session, project, 1500, "exact note", "req-exact")
 
     timeline_row = timeline_service.get_project_sessions_by_date("2026-06-25")[0]
     overview_row = view_model_service.get_overview_view_model("2026-06-25")["activities"][0]
@@ -140,14 +138,7 @@ def test_rule_reorder_conflict_does_not_apply_old_override(temp_db):
     create_closed_activity(window_title="alpha token", start="09:00:00", end="09:20:00")
     create_closed_activity(window_title="beta token", start="09:20:00", end="09:40:00")
     session = _session()
-    timeline_api.save_timeline_session_override(
-        "2026-06-25",
-        session["activity_ids"],
-        session["activity_member_hash"],
-        override_project,
-        900,
-        "old override",
-    )
+    _save_session_edit(session, override_project, 900, "old override", "req-old")
 
     create_keyword_rule(first_project, "alpha")
     create_keyword_rule(second_project, "beta")
@@ -178,28 +169,14 @@ def test_reconfirm_after_conflict_creates_new_exact_override(temp_db):
     create_closed_activity(window_title="alpha token", start="09:00:00", end="09:20:00")
     create_closed_activity(window_title="beta token", start="09:20:00", end="09:40:00")
     original = _session()
-    timeline_api.save_timeline_session_override(
-        "2026-06-25",
-        original["activity_ids"],
-        original["activity_member_hash"],
-        override_project,
-        900,
-        "old override",
-    )
+    _save_session_edit(original, override_project, 900, "old override", "req-old")
     create_keyword_rule(first_project, "alpha")
     create_keyword_rule(second_project, "beta")
     for aid in original["activity_ids"]:
         assign_project_for_activity(aid)
     split = timeline_service.get_project_sessions_by_date("2026-06-25", ensure_context=False)[0]
 
-    timeline_api.save_timeline_session_override(
-        "2026-06-25",
-        split["activity_ids"],
-        split["activity_member_hash"],
-        reconfirm_project,
-        600,
-        "new override",
-    )
+    _save_session_edit(split, reconfirm_project, 600, "new override", "req-new")
 
     sessions = timeline_service.get_project_sessions_by_date("2026-06-25", ensure_context=False)
     reconfirmed = [row for row in sessions if row.get("has_project_override")]

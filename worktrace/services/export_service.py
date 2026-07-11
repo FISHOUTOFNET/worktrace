@@ -2,26 +2,18 @@ from __future__ import annotations
 
 import csv
 import logging
+import os
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
 from ..db import get_connection, now_str, reset_database
 from ..exports.excel_exporter import export_excel_file
-from ..formatters import (
-    format_activity_project_cell,
-    format_duration,
-    format_status_label,
-)
-from . import statistics_service, timeline_service
+from . import statistics_service
 from .runtime_activity_state_service import clear_runtime_activity_state
 
 logger = logging.getLogger(__name__)
 
-# Ordered CSV columns as (dict_key, csv_header). The writer emits Chinese
-# headers for Excel readability. Columns are display-safe: raw window_title
-# / file_path_hint / full_path / clipboard / note / traceback / SQL are
-# never present in any column.
 _CSV_COLUMNS = [
     ("date", "日期"),
     ("start_time", "开始时间"),
@@ -35,10 +27,6 @@ _CSV_COLUMNS = [
     ("is_adjusted", "是否已修正"),
 ]
 
-# Characters that mark a CSV formula injection attempt. A leading single
-# quote is prepended so spreadsheet applications treat the cell as text
-# instead of evaluating it as a formula. Tab is included because some
-# importers treat a leading tab as a formula trigger.
 _FORMULA_INJECTION_PREFIXES = ("=", "+", "-", "@", "\t")
 
 
@@ -59,75 +47,34 @@ def _escape_csv_cell(value) -> str:
 def build_statistics_csv_rows(date_from: str, date_to: str) -> list[dict]:
     """Build display-safe CSV row dicts for the statistics CSV export."""
     statistics_service.validate_statistics_date_range(date_from, date_to)
-    sessions = timeline_service.get_project_sessions_by_range(
-        date_from,
-        date_to,
-        include_hidden=False,
-        ensure_context=True,
-    )
-    csv_rows: list[dict] = []
-    for session in sessions:
-        if session.get("is_in_progress"):
-            continue
-        duration_seconds = int(
-            session.get("display_duration_seconds")
-            or session.get("duration_seconds")
-            or 0
-        )
-        adjusted_seconds = session.get("adjusted_duration_seconds")
-        has_adjusted = bool(session.get("has_duration_override"))
-        csv_rows.append(
-            {
-                "date": str(session.get("report_date") or ""),
-                "start_time": str(session.get("start_time") or ""),
-                "end_time": str(session.get("end_time") or ""),
-                "duration": format_duration(duration_seconds),
-                "duration_seconds": duration_seconds,
-                "project": _format_session_project_cell(session),
-                "status": format_status_label(session.get("status_code") or session.get("status")),
-                "note": str(session.get("session_note") or ""),
-                "adjusted_duration": format_duration(adjusted_seconds) if has_adjusted else "",
-                "is_adjusted": "是" if has_adjusted else "否",
-            }
-        )
-    return csv_rows
+    from .report_projection_snapshot_service import build_visible_snapshot
+    from .statistics_projection import build_statistics_projection
+
+    return build_statistics_projection(build_visible_snapshot(date_from, date_to, ensure_context=True)).export_rows
 
 
-def _format_session_project_cell(session: dict) -> str:
-    return format_activity_project_cell(
-        {
-            "status": session.get("status_code") or session.get("status") or "normal",
-            "is_report_project": session.get("is_report_project"),
-            "report_project_name": session.get("project_name"),
-        }
-    )
-
-
-def write_statistics_csv(date_from: str, date_to: str, output_path) -> dict:
+def write_statistics_csv(date_from: str, date_to: str, output_path, expected_snapshot_revision: str | None = None) -> dict:
     """Build display-safe CSV rows and write them to ``output_path``."""
     statistics_service.validate_statistics_date_range(date_from, date_to)
 
     path = Path(output_path)
-    # Reject a directory path BEFORE suffix normalization. ``with_suffix``
-    # would otherwise turn ``subdir/`` into ``subdir.csv`` and silently
-    # hide the directory mistake.
     if path.exists() and path.is_dir():
         raise ValueError("invalid_path")
-    # Normalize to a ``.csv`` extension. ``with_suffix`` replaces any
-    # existing suffix, so ``report`` -> ``report.csv`` and
-    # ``report.txt`` -> ``report.csv``; an existing ``.csv`` is unchanged.
     if path.suffix.lower() != ".csv":
         path = path.with_suffix(".csv")
-    # Re-check after suffix normalization in case the new path collides
-    # with an existing directory (e.g. user passed ``report.csv/`` on a
-    # filesystem that allows it).
     if path.exists() and path.is_dir():
         raise ValueError("invalid_path")
     parent = path.parent
     if not parent.exists() or not parent.is_dir():
         raise ValueError("invalid_path")
 
-    csv_rows = build_statistics_csv_rows(date_from, date_to)
+    from .report_projection_snapshot_service import build_visible_snapshot
+    from .statistics_projection import build_statistics_projection
+
+    projection = build_statistics_projection(build_visible_snapshot(date_from, date_to, ensure_context=True))
+    if expected_snapshot_revision is not None and str(expected_snapshot_revision or "") != projection.snapshot_revision:
+        raise ValueError("stale_statistics_snapshot")
+    csv_rows = projection.export_rows
     if not csv_rows:
         raise ValueError("empty_data")
 
@@ -135,13 +82,13 @@ def write_statistics_csv(date_from: str, date_to: str, output_path) -> dict:
     headers = [header for _key, header in _CSV_COLUMNS]
     keys = [key for key, _header in _CSV_COLUMNS]
 
-    # ``newline=""`` is required by the csv module to avoid double ``\r\n``.
-    # ``utf-8-sig`` writes a BOM so Excel opens Chinese headers correctly.
-    with open(path, "w", newline="", encoding="utf-8-sig") as handle:
+    tmp_path = path.with_name(path.name + ".tmp")
+    with open(tmp_path, "w", newline="", encoding="utf-8-sig") as handle:
         writer = csv.writer(handle)
         writer.writerow(headers)
         for row in csv_rows:
             writer.writerow([_escape_csv_cell(row.get(key, "")) for key in keys])
+    os.replace(tmp_path, path)
 
     return {
         "activity_count": len(csv_rows),
@@ -175,6 +122,7 @@ def export_all_local_data(path: str) -> str:
             "activity_project_assignment",
             "report_session_operation",
             "report_session_operation_member",
+            "report_session_operation_dependency",
             "activity_clipboard_event",
             "project",
             "folder_project_rule",

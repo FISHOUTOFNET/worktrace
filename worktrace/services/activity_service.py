@@ -46,10 +46,8 @@ def insert_activity_row(
     start_time: str | None = None,
     project_id: int | None = None,
     file_path_hint: str | None = None,
-    note: str | None = None,
-    auto_classified: bool = False,
-    manual_override: bool = False,
     resource: DetectedResource | None = None,
+    **_ignored,
 ) -> int:
     """Low-level insert of a new open activity row.
 
@@ -62,16 +60,15 @@ def insert_activity_row(
     ts = now_str()
     start = start_time or ts
     project = project_id if project_id is not None else get_or_create_uncategorized_project()
-    manual_assignment = bool(manual_override or project_id is not None)
+    manual_assignment = bool(project_id is not None)
     with get_connection() as conn:
         cur = conn.execute(
             """
             INSERT INTO activity_log(
                 start_time, end_time, duration_seconds, app_name, process_name, window_title,
-                file_path_hint, status, source, is_deleted, is_hidden,
-                auto_classified, manual_override, project_id, note, created_at, updated_at
+                file_path_hint, status, source, is_deleted, is_hidden, created_at, updated_at
             )
-            VALUES (?, NULL, NULL, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?)
+            VALUES (?, NULL, NULL, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?)
             """,
             (
                 start,
@@ -81,10 +78,6 @@ def insert_activity_row(
                 file_path_hint,
                 status,
                 source,
-                0,
-                0,
-                None,
-                None,
                 ts,
                 ts,
             ),
@@ -161,10 +154,8 @@ def create_activity(
     start_time: str | None = None,
     project_id: int | None = None,
     file_path_hint: str | None = None,
-    note: str | None = None,
-    auto_classified: bool = False,
-    manual_override: bool = False,
     resource: DetectedResource | None = None,
+    **_ignored,
 ) -> int:
     """Low-level insert of a new open activity row.
 
@@ -188,9 +179,6 @@ def create_activity(
         start_time=start_time,
         project_id=project_id,
         file_path_hint=file_path_hint,
-        note=note,
-        auto_classified=auto_classified,
-        manual_override=manual_override,
         resource=resource,
     )
 
@@ -402,7 +390,7 @@ def _activity_select_sql(where: str) -> str:
     return f"""
         SELECT
             a.*,
-            p.name AS project_name,
+            pe.name AS project_name,
             apa.source AS assignment_source,
             apa.is_manual AS assignment_is_manual,
             apa.suggested_project_name,
@@ -410,7 +398,6 @@ def _activity_select_sql(where: str) -> str:
             pe.name AS effective_project_name,
             pe.description AS effective_project_description
         FROM activity_log a
-        LEFT JOIN project p ON p.id = a.project_id
         LEFT JOIN activity_project_assignment apa ON apa.activity_id = a.id
         LEFT JOIN project pe ON pe.id = apa.project_id
         WHERE {where}
@@ -549,9 +536,6 @@ def _attach_attribution_fields(row: dict, uncategorized_id: int) -> dict:
         row["project_id"] = uncategorized_id
         row["project_name"] = UNCATEGORIZED_PROJECT
         row["project_description"] = ""
-    source = str(row.get("assignment_source") or "")
-    row["manual_override"] = int(row.get("assignment_is_manual") or 0)
-    row["auto_classified"] = 1 if source in {"keyword_rule", "folder_rule"} else 0
     row.update(official_project_fields(row, uncategorized_id))
     return row
 

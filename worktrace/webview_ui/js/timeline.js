@@ -69,7 +69,7 @@
             App.selectedSessionId = null;
             App.selectedSessionLiveKey = null;
             App.selectedProjectionInstanceKey = null;
-            App.selectedSessionDetailRevision = null;
+            App.selectedProjectionRevision = null;
             App.detailsOwner = null;
             clearEditPanel();
             return;
@@ -213,8 +213,8 @@
                 App.selectedSessionId = found.session_id;
                 App.selectedSessionLiveKey = found.stable_live_key_hash || null;
                 App.selectedProjectionInstanceKey = found.projection_instance_key || null;
-                var detailChanged = App.selectedSessionDetailRevision !== (found.session_detail_revision || "");
-                App.selectedSessionDetailRevision = found.session_detail_revision || "";
+                var detailChanged = App.selectedProjectionRevision !== (found.projection_revision || "");
+                App.selectedProjectionRevision = found.projection_revision || "";
                 var skipDetailReload = (typeof App._timelineEditingActive === "function"
                     && App._timelineEditingActive());
                 if (!skipDetailReload && detailChanged) {
@@ -238,7 +238,7 @@
                 App.selectedSessionId = null;
                 App.selectedSessionLiveKey = null;
                 App.selectedProjectionInstanceKey = null;
-                App.selectedSessionDetailRevision = null;
+                App.selectedProjectionRevision = null;
                 document.getElementById("timeline-details-header").textContent = "选择左侧时段查看详情";
                 document.getElementById("timeline-details-list").innerHTML = "";
                 clearEditPanel();
@@ -316,9 +316,9 @@
         }
         var found = newSelected;
         if (found) {
-            App.selectedSessionDetailRevision = found.session_detail_revision || "";
-            App.timelineRequestState.nextSelectionOwner(App.timelineDate, found.projection_instance_key, found.session_detail_revision || "");
-            loadSessionActivitySummary(found.projection_instance_key, App.timelineDate, found.session_detail_revision || "");
+            App.selectedProjectionRevision = found.projection_revision || "";
+            App.timelineRequestState.nextSelectionOwner(App.timelineDate, found.projection_instance_key, found.projection_revision || "");
+            loadSessionActivitySummary(found.projection_instance_key, App.timelineDate, found.projection_revision || "");
             // Open live sessions are non-editable; a manual click must clear the edit panel.
             if (found.edit_disabled === true) {
                 clearEditPanel();
@@ -339,8 +339,8 @@
     function loadSessionDetails(projectionInstanceKey, date, detailRevision, retriedStale) {
         var detailsHeader = document.getElementById("timeline-details-header");
         var detailsList = document.getElementById("timeline-details-list");
-        var revision = String(detailRevision || App.selectedSessionDetailRevision || "");
-        var owner = App.detailsOwner || App.timelineRequestState.nextSelectionOwner(date, projectionInstanceKey, revision);
+        var revision = String(detailRevision || App.selectedProjectionRevision || "");
+        var owner = App.timelineRequestState.nextSelectionOwner(date, projectionInstanceKey, revision);
         var requestKey = App.timelineRequestState.detailRequestKey(owner);
         if (App.detailsInFlight[requestKey]) return App.detailsInFlight[requestKey];
         // Only show loading when the panel is empty; keep existing summaries visible during refresh.
@@ -468,7 +468,7 @@
         for (var rb = 0; rb < removeButtons.length; rb++) {
             removeButtons[rb].addEventListener("click", function (event) {
                 event.stopPropagation();
-                App.runTimelineSessionOperation("hide_timeline_session_activity", this.getAttribute("data-summary-id"));
+                App.runTimelineSessionOperation("hide_timeline_session_activity", { summaryId: this.getAttribute("data-summary-id") });
             });
         }
         for (var si = 0; si < summaryContinuityKeys.length; si++) {
@@ -716,7 +716,7 @@
     function saveEdit() {
         if (!App.editingSession || App.editSaving) return;
         var projectionInstanceKey = App.editingSession.projection_instance_key || App.selectedProjectionInstanceKey || "";
-        var projectionRevision = App.editingSession.projection_revision || App.editingSession.session_detail_revision || App.selectedSessionDetailRevision || "";
+        var projectionRevision = App.editingSession.projection_revision || App.selectedProjectionRevision || "";
         if (!projectionInstanceKey || !projectionRevision) {
             showEditStatus("无法保存：活动时段已变化，请刷新后重试", true);
             return;
@@ -787,15 +787,27 @@
         var overrideProjectId = (projectChanged || App.editingSession.has_project_override === true)
             ? projectId
             : null;
+        var mutationOwner = App.timelineRequestState.nextMutationOwner(
+            "save_timeline_session_edit",
+            reportDate,
+            projectionInstanceKey,
+            projectionRevision
+        );
+        if (!mutationOwner) {
+            setEditSaving(false);
+            return;
+        }
         App.callBridge(
             "save_timeline_session_edit",
             reportDate,
             projectionInstanceKey,
             projectionRevision,
+            mutationOwner.requestId,
             overrideProjectId,
             adjustedDurationSeconds,
             note
         ).then(function (result) {
+            if (!App.timelineRequestState.isCurrentMutationOwner(mutationOwner)) return;
             if (!result || result.ok === false) {
                 // Keep original data in the form; do not clear.
                 setEditSaving(false);
@@ -827,8 +839,11 @@
             setEditSaving(false);
             refreshTimelineAfterEdit();
         }).catch(function () {
+            if (!App.timelineRequestState.isCurrentMutationOwner(mutationOwner)) return;
             setEditSaving(false);
             showEditStatus("保存失败", true);
+        }).finally(function () {
+            App.timelineRequestState.releaseMutationOwner(mutationOwner);
         });
     }
     App.saveEdit = saveEdit;
@@ -871,25 +886,61 @@
     }
     App.updateSessionActionButtons = updateSessionActionButtons;
 
-    function runTimelineSessionOperation(method, summaryId) {
+    function runTimelineSessionOperation(method, options) {
+        options = options || {};
         var key = App.selectedProjectionInstanceKey;
         var date = currentTimelineReportDate();
-        var revision = App.selectedSessionDetailRevision || "";
+        var revision = App.selectedProjectionRevision || "";
         if (!key || !date) return Promise.resolve();
-        var args = method === "hide_timeline_session_activity"
-            ? [date, key, summaryId, revision]
-            : [date, key, revision];
+        var owner = App.timelineRequestState.nextMutationOwner(method, date, key, revision);
+        if (!owner) return Promise.resolve();
+        var args;
+        if (method === "hide_timeline_session_activity") {
+            args = [date, key, options.summaryId || "", revision, owner.requestId];
+        } else if (method === "merge_timeline_session") {
+            var target = findMergeTarget(key, options.direction);
+            if (!target) {
+                App.timelineRequestState.releaseMutationOwner(owner);
+                return Promise.resolve();
+            }
+            args = [
+                date,
+                key,
+                options.direction,
+                revision,
+                owner.requestId,
+                target.projection_instance_key || "",
+                target.projection_revision || ""
+            ];
+        } else {
+            args = [date, key, revision, owner.requestId];
+        }
         return App.callBridge.apply(null, [method].concat(args)).then(function (result) {
+            if (!App.timelineRequestState.isCurrentMutationOwner(owner)) return null;
             var data = App.handleResult(result, function (message) {
                 showEditStatus(message || "操作失败，请刷新后重试。", true);
             });
             if (!data) return;
             return refreshTimeline();
         }).catch(function () {
+            if (!App.timelineRequestState.isCurrentMutationOwner(owner)) return null;
             showEditStatus("操作失败，请刷新后重试。", true);
+        }).finally(function () {
+            App.timelineRequestState.releaseMutationOwner(owner);
         });
     }
     App.runTimelineSessionOperation = runTimelineSessionOperation;
+
+    function findMergeTarget(sourceKey, direction) {
+        var sessions = App.currentSessions || [];
+        for (var i = 0; i < sessions.length; i++) {
+            if ((sessions[i].projection_instance_key || "") !== sourceKey) continue;
+            var targetIndex = direction === "previous" ? i - 1 : i + 1;
+            if (targetIndex < 0 || targetIndex >= sessions.length) return null;
+            return sessions[targetIndex];
+        }
+        return null;
+    }
 
 
     function normalizeTimelineReportDate(date) {
@@ -908,6 +959,7 @@
         App.selectedSessionId = null;
         App.selectedSessionLiveKey = null;
         App.selectedProjectionInstanceKey = null;
+        App.selectedProjectionRevision = null;
         App.detailsOwner = null;
         ++App.detailsRequestToken;
         App.lastSessionDetailsViewModel = null;
@@ -934,21 +986,21 @@
         var showLoading = options.showLoading !== false;
         var resetSelection = options.resetSelection === true;
         var errorMessage = options.errorMessage || (showLoading ? "加载时间线失败" : "刷新失败");
-        App.timelineRequestState.nextTimelineOwner(date);
+        var timelineOwner = App.timelineRequestState.nextTimelineOwner(date);
         App.timelineDate = date;
         if (resetSelection) {
             resetTimelineReportSelection();
         }
         var loadingOwner = "";
         if (showLoading) {
-            loadingOwner = "timeline-report-" + String(App.timelineRequestToken + 1);
+            loadingOwner = timelineOwner;
             App.timelineLoadingOwner = loadingOwner;
             App.setTimelineLoading(true);
             App.clearTimelineError();
         }
         var token = ++App.timelineRequestToken;
         return App.callBridge("get_timeline", date).then(function (result) {
-            if (token !== App.timelineRequestToken) return;  // stale response
+            if (token !== App.timelineRequestToken || App.timelineOwner !== timelineOwner) return;  // stale response
             var data = App.handleResult(result, function (msg) {
                 App.showTimelineError(msg || errorMessage);
             });
@@ -959,7 +1011,7 @@
             showTimeline(data);
             App.clearTimelineError();
         }).catch(function () {
-            if (token !== App.timelineRequestToken) return;  // stale response
+            if (token !== App.timelineRequestToken || App.timelineOwner !== timelineOwner) return;  // stale response
             // Never surface raw exception text; use the stable fallback so
             // internal details do not leak into the UI.
             App.showTimelineError(errorMessage);

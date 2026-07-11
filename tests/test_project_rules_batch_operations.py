@@ -61,10 +61,6 @@ def _create_closed_activity(
 def _set_manual_override(aid: int) -> None:
     with get_connection() as conn:
         conn.execute(
-            "UPDATE activity_log SET manual_override = 1, updated_at = ? WHERE id = ?",
-            (now_str(), aid),
-        )
-        conn.execute(
             "UPDATE activity_project_assignment SET is_manual = 1, updated_at = ? "
             "WHERE activity_id = ?",
             (now_str(), aid),

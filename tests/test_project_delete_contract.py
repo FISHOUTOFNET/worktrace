@@ -12,6 +12,7 @@ from worktrace.services import (
     export_service,
     folder_rule_service,
     project_service,
+    report_session_operation_service,
     rule_service,
     statistics_service,
     timeline_service,
@@ -38,6 +39,20 @@ def _activity(project_id: int, start: str, end: str, title: str, app: str = "Wor
     )
     assign_activity_project(aid, project_id, manual=True)
     return aid
+
+
+def _edit_session_project(report_date: str, session: dict, project_id: int) -> None:
+    count = getattr(_edit_session_project, "_count", 0) + 1
+    setattr(_edit_session_project, "_count", count)
+    report_session_operation_service.edit_session(
+        report_date,
+        session["projection_instance_key"],
+        session["projection_revision"],
+        f"test-project-delete-{count}",
+        project_id=project_id,
+        adjusted_duration_seconds=None,
+        note="",
+    )
 
 
 def test_delete_project_soft_deletes_and_keeps_facts_rules_and_bindings_hidden(temp_db):
@@ -148,23 +163,9 @@ def test_deleted_project_override_semantics(temp_db):
     valid_activity = _activity(valid, "10:00:00", "10:30:00", "Valid.docx")
 
     deleted_session = timeline_service.get_project_sessions_by_range("2026-06-18", "2026-06-18")[1]
-    timeline_service.update_session_override(
-        "2026-06-18",
-        deleted_session["activity_ids"],
-        deleted_session["activity_member_hash"],
-        project_id=valid,
-        adjusted_duration_seconds=None,
-        note="",
-    )
+    _edit_session_project("2026-06-18", deleted_session, valid)
     valid_session = timeline_service.get_project_sessions_by_range("2026-06-18", "2026-06-18")[0]
-    timeline_service.update_session_override(
-        "2026-06-18",
-        valid_session["activity_ids"],
-        valid_session["activity_member_hash"],
-        project_id=deleted,
-        adjusted_duration_seconds=None,
-        note="",
-    )
+    _edit_session_project("2026-06-18", valid_session, deleted)
 
     project_service.soft_delete_project(deleted)
 

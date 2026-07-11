@@ -66,7 +66,7 @@ def test_folder_rule_wins_over_keyword_rule_and_source_is_persisted(temp_db):
     assign_project_for_activity(aid)
     row = activity_service.get_activity(aid)
     assert row["project_id"] == folder_project
-    assert row["auto_classified"] == 1
+    assert row["assignment_source"] == "folder_rule"
     with get_connection() as conn:
         assignment = conn.execute(
             "SELECT source FROM activity_project_assignment WHERE activity_id = ?",

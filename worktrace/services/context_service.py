@@ -121,7 +121,6 @@ def _recompute_context_assignments_for_date_in_transaction(
             source,
             confidence,
             is_manual=False,
-            auto_classified=False,
         )
     if use_cache:
         _CONTEXT_RECOMPUTE_CACHE[cache_key] = _context_fingerprint(
@@ -345,7 +344,6 @@ def _set_clipboard_context_assignment(conn, row: dict, project_id: int) -> None:
         "clipboard_transition_context",
         70,
         is_manual=False,
-        auto_classified=False,
     )
     row["assignment_project_id"] = int(project_id)
     row["project_id"] = int(project_id)
@@ -450,7 +448,6 @@ def _set_short_gap_context_assignment(conn, row: dict, project_id: int) -> None:
         "anchor_context",
         60,
         is_manual=False,
-        auto_classified=False,
     )
     row["assignment_project_id"] = int(project_id)
     row["project_id"] = int(project_id)
@@ -690,7 +687,6 @@ def _sync_assignment_and_activity(
     source: str,
     confidence: int,
     is_manual: bool,
-    auto_classified: bool,
 ) -> None:
     ts = now_str()
     assignment = conn.execute(

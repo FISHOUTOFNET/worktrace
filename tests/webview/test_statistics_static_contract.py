@@ -584,10 +584,10 @@ def test_api_has_p0_timeline_methods_only():
     api_src = (REPO_ROOT / "worktrace" / "api" / "timeline_api.py").read_text(encoding="utf-8")
     for symbol in (
         "def save_timeline_session_edit",
-        "def update_timeline_session_note",
-        "def update_timeline_session_note_and_duration",
     ):
         assert symbol in api_src
+    assert "def update_timeline_session_note" not in api_src
+    assert "def update_timeline_session_note_and_duration" not in api_src
     for symbol in (
         "class TimelineTimeEditError", "class TimelineSplitError",
         "class TimelineMergeError", "class TimelineVisibilityError",
@@ -824,8 +824,7 @@ def test_service_statistics_tie_breaker_stable(temp_db):
 
 
 def test_service_statistics_all_known_statuses_included(temp_db):
-    """all known statuses (normal/idle/paused/excluded/error)
-    must be included in the summary when closed, non-hidden, non-deleted."""
+    """Central report status policy suppresses paused and unattributed idle/error."""
     from worktrace.services import activity_service, project_service, statistics_service
     pid = project_service.create_project("Client")
     for status in ("normal", "idle", "paused", "excluded", "error"):
@@ -837,10 +836,11 @@ def test_service_statistics_all_known_statuses_included(temp_db):
         activity_service.close_activity(aid, "2026-06-25 09:30:00")
     summary = statistics_service.get_statistics_export_summary("2026-06-25", "2026-06-25")
     by_status = {g["key"]: g for g in summary["by_status"]}
-    assert summary["activity_count"] == 5
-    for status in ("normal", "idle", "paused", "excluded", "error"):
-        assert status in by_status, f"status {status} must be included"
-        assert by_status[status]["activity_count"] == 1
+    assert summary["activity_count"] == 2
+    assert "normal" in by_status
+    assert "excluded" in by_status
+    for status in ("idle", "paused", "error"):
+        assert status not in by_status
 
 
 

@@ -83,7 +83,7 @@ def test_duration_override_then_hide_activity_allocates_from_projected_contribut
                 "base_instance_key": "base:a",
                 "match_state": "active",
                 "members": {
-                    "hidden_activity": [
+                    "affected": [
                         {
                             "report_date": "2026-06-25",
                             "activity_id": 1,
@@ -115,15 +115,14 @@ def test_copy_edit_does_not_change_origin_and_merge_edit_is_independent():
                 "operation_type": "merge_sessions",
                 "base_instance_key": "base:left",
                 "target_instance_key": "base:right",
-                "operation_group_key": "g1",
                 "match_state": "active",
             },
-            _edit(4, "merge:g1", {"duration": {"mode": "set", "value": 900}}),
+            _edit(4, "merge:3", {"duration": {"mode": "set", "value": 900}}),
         ],
     )
 
     by_key = {row["projection_instance_key"]: row for row in result}
     assert by_key["copy:1"]["session_note"] == "copy note"
-    assert by_key["merge:g1"]["duration_seconds"] == 900
+    assert by_key["merge:3"]["duration_seconds"] == 900
     assert "base:left" not in by_key
-    assert sum(row["duration_seconds"] for row in engine.build_projected_activity_contributions([by_key["merge:g1"]])) == 900
+    assert sum(row["duration_seconds"] for row in engine.build_projected_activity_contributions([by_key["merge:3"]])) == 900

@@ -7,9 +7,6 @@ ON session_boundary(occurred_at);
 CREATE INDEX IF NOT EXISTS idx_activity_status
 ON activity_log(status);
 
-CREATE INDEX IF NOT EXISTS idx_activity_project
-ON activity_log(project_id);
-
 CREATE INDEX IF NOT EXISTS idx_folder_project_rule_key
 ON folder_project_rule(normalized_folder_key);
 
@@ -46,14 +43,17 @@ ON report_session_operation(report_date, base_instance_key, match_state);
 CREATE INDEX IF NOT EXISTS idx_report_session_operation_target
 ON report_session_operation(report_date, target_instance_key, match_state);
 
-CREATE INDEX IF NOT EXISTS idx_report_session_operation_group
-ON report_session_operation(report_date, operation_group_key, match_state);
+CREATE INDEX IF NOT EXISTS idx_report_session_operation_request
+ON report_session_operation(request_id);
 
 CREATE INDEX IF NOT EXISTS idx_report_session_operation_member_activity
 ON report_session_operation_member(activity_id, report_date);
 
 CREATE INDEX IF NOT EXISTS idx_report_session_operation_member_role
 ON report_session_operation_member(operation_id, role);
+
+CREATE INDEX IF NOT EXISTS idx_report_session_operation_dependency_child
+ON report_session_operation_dependency(child_operation_id);
 
 CREATE INDEX IF NOT EXISTS idx_project_rule_pattern
 ON project_rule(pattern);

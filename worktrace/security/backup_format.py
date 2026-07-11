@@ -12,7 +12,7 @@ from worktrace.security.kdf import KdfError, KdfParams, derive_backup_key
 
 
 MAGIC = b"WTBACKUP1"
-BACKUP_VERSION = 1
+BACKUP_VERSION = 2
 SALT_BYTES = 16
 MAX_MANIFEST_BYTES = 1024 * 1024
 

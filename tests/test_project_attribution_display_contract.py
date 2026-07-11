@@ -305,7 +305,7 @@ def test_suggested_candidate_short_interrupt_not_report_merged(temp_db, tmp_path
 
     summary = statistics_service.get_statistics_export_summary(TODAY, TODAY)
     assert summary["project_duration_seconds"] == 19 * 60
-    assert [group["display_name"] for group in summary["by_project"]] == ["ProjectA"]
+    assert [group["display_name"] for group in summary["by_project"]] == ["ProjectA", UNCATEGORIZED_PROJECT]
 
     csv_rows = export_service.build_statistics_csv_rows(TODAY, TODAY)
     b_csv = next(row for row in csv_rows if row["start_time"].endswith("09:10:00"))
@@ -487,7 +487,8 @@ def test_excluded_in_history_stats_export_but_no_project_column(temp_db):
 
     # In export
     csv_rows = export_service.build_statistics_csv_rows(TODAY, TODAY)
-    assert csv_rows == []
+    assert len(csv_rows) == 1
+    assert csv_rows[0]["project"] == "已排除"
 
     # In statistics total_duration
     summary = statistics_service.get_statistics_export_summary(TODAY, TODAY)

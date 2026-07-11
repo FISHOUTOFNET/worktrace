@@ -142,77 +142,35 @@ def get_statistics_export_summary(date_from: str, date_to: str) -> dict:
     The returned dict is display-safe and contains no raw DB rows.
     """
     _validate_summary_date_range(date_from, date_to)
-    rows = report_session_projection_service.get_projected_activity_contributions_by_range(
-        date_from,
-        date_to,
-        include_hidden=False,
-        ensure_context=True,
-    )
-    sessions = timeline_service.get_project_sessions_by_range(
-        date_from,
-        date_to,
-        include_hidden=False,
-        ensure_context=False,
-    )
-    # Only closed activities have a finalized duration. ``is_in_progress`` is
-    # set by the timeline service before it projects an open activity's
-    # ``end_time``, so this flag is reliable regardless of the projected
-    # ``end_time`` value.
-    closed_rows = [row for row in rows if not row.get("is_in_progress")]
-    closed_sessions = [session for session in sessions if not session.get("is_in_progress")]
-    all_rows = closed_rows
+    from .report_projection_snapshot_service import build_visible_snapshot
+    from .statistics_projection import build_statistics_projection
 
-    total_duration = sum(int(row.get("duration_seconds") or 0) for row in all_rows)
-    project_duration = 0
-    all_activity_ids: set[int] = set()
-    by_project: dict[str, dict] = {}
-    by_app: dict[str, dict] = {}
-    by_status: dict[str, dict] = {}
-
-    for row in all_rows:
-        duration = int(row.get("duration_seconds") or 0)
-        activity_id = int(row.get("activity_id") or row.get("id") or 0)
-        if activity_id:
-            all_activity_ids.add(activity_id)
-
-        app_name = str(row.get("app_name") or "").strip() or _UNKNOWN_APP_LABEL
-        status_code = str(row.get("status") or "").strip()
-        status_label = format_status_label(status_code)
-
-        _accumulate_summary_group(by_app, app_name, app_name, duration, activity_id)
-        _accumulate_summary_group(by_status, status_code or "unknown", status_label, duration, activity_id)
-
-    for session in closed_sessions:
-        duration = int(session.get("display_duration_seconds") or session.get("duration_seconds") or 0)
-        if not is_normal_project_status(str(session.get("status") or "")):
-            continue
-        activity_ids = [int(aid) for aid in session.get("activity_ids") or []]
-        activity_id = activity_ids[0] if activity_ids else 0
-        if activity_id:
-            all_activity_ids.add(activity_id)
-        project_name = str(session.get("project_name") or UNCATEGORIZED_PROJECT).strip() or UNCATEGORIZED_PROJECT
-        if project_name == UNCATEGORIZED_PROJECT:
-            continue
-        project_duration += duration
-        _accumulate_summary_group(by_project, project_name, project_name, duration, activity_id)
-
-    activity_count = len(all_activity_ids)
+    projection = build_statistics_projection(build_visible_snapshot(date_from, date_to, ensure_context=True))
     return {
         "date_from": date_from,
         "date_to": date_to,
-        "total_duration_seconds": total_duration,
-        "project_duration_seconds": project_duration,
-        "activity_count": activity_count,
-        "project_count": len(by_project),
-        "app_count": len(by_app),
-        "by_project": _build_summary_groups(by_project, project_duration),
-        "by_app": _build_summary_groups(by_app, total_duration),
-        "by_status": _build_summary_groups(by_status, total_duration),
+        "snapshot_revision": projection.snapshot_revision,
+        "total_duration_seconds": projection.total_duration_seconds,
+        "project_duration_seconds": projection.project_duration_seconds,
+        "classified_duration_seconds": projection.classified_duration_seconds,
+        "uncategorized_duration_seconds": projection.uncategorized_duration_seconds,
+        "excluded_duration_seconds": projection.excluded_duration_seconds,
+        "activity_count": projection.activity_count,
+        "session_count": projection.session_count,
+        "export_row_count": projection.export_row_count,
+        "project_count": len(projection.by_project),
+        "app_count": len(projection.by_app),
+        "by_project": projection.by_project,
+        "by_app": projection.by_app,
+        "by_status": projection.by_status,
         "export_preview": {
             "date_from": date_from,
             "date_to": date_to,
-            "included_activity_count": activity_count,
-            "included_duration_seconds": total_duration,
+            "snapshot_revision": projection.snapshot_revision,
+            "included_activity_count": projection.activity_count,
+            "session_count": projection.session_count,
+            "export_row_count": projection.export_row_count,
+            "included_duration_seconds": projection.total_duration_seconds,
             # CSV export is available. Excel / PDF / timesheet are
             # intentionally NOT listed here; the frontend must never offer
             # a format the backend cannot produce.

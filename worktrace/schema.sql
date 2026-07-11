@@ -30,17 +30,8 @@ CREATE TABLE IF NOT EXISTS activity_log (
     ),
     is_deleted INTEGER NOT NULL DEFAULT 0,
     is_hidden INTEGER NOT NULL DEFAULT 0,
-    -- Deprecated: raw activity facts no longer own project, note,
-    -- classification, or manual/session-edit semantics. These fields remain
-    -- temporarily for legacy cleanup only; production report/session/rule
-    -- paths must use projection and override tables instead.
-    auto_classified INTEGER NOT NULL DEFAULT 0,
-    manual_override INTEGER NOT NULL DEFAULT 0,
-    project_id INTEGER,
-    note TEXT,
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    FOREIGN KEY (project_id) REFERENCES project(id)
+    updated_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS settings (
@@ -146,30 +137,44 @@ CREATE TABLE IF NOT EXISTS activity_project_assignment (
 
 CREATE TABLE IF NOT EXISTS report_session_operation (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    request_id TEXT NOT NULL UNIQUE,
     report_date TEXT NOT NULL,
-    operation_type TEXT NOT NULL CHECK(operation_type IN ('edit_session', 'hide_session', 'merge_sessions', 'copy_session', 'hide_activity')),
+    operation_type TEXT NOT NULL CHECK(operation_type IN ('edit_session', 'hide_session', 'merge_sessions', 'copy_session', 'hide_activity', 'split_session')),
     base_instance_key TEXT NOT NULL,
+    base_expected_revision TEXT NOT NULL,
     target_instance_key TEXT,
+    target_expected_revision TEXT,
     direction TEXT CHECK(direction IS NULL OR direction IN ('previous', 'next')),
-    operation_group_key TEXT,
     replay_order INTEGER NOT NULL,
     match_state TEXT NOT NULL DEFAULT 'active' CHECK(match_state IN ('active', 'conflict', 'orphaned', 'superseded')),
+    superseded_by_operation_id INTEGER,
+    reverts_operation_id INTEGER,
     payload_json TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    UNIQUE(report_date, replay_order),
+    FOREIGN KEY(superseded_by_operation_id) REFERENCES report_session_operation(id),
+    FOREIGN KEY(reverts_operation_id) REFERENCES report_session_operation(id)
 );
 
 CREATE TABLE IF NOT EXISTS report_session_operation_member (
     operation_id INTEGER NOT NULL,
-    role TEXT NOT NULL CHECK(role IN ('source', 'target', 'origin', 'copy_origin', 'hidden_activity', 'edit_target')),
+    role TEXT NOT NULL CHECK(role IN ('source', 'target', 'affected')),
     activity_id INTEGER NOT NULL,
     report_date TEXT NOT NULL,
     slice_start_time TEXT NOT NULL,
-    slice_end_time TEXT NOT NULL,
     display_order INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY(operation_id, role, activity_id, report_date, slice_start_time),
     FOREIGN KEY(operation_id) REFERENCES report_session_operation(id) ON DELETE CASCADE,
     FOREIGN KEY(activity_id) REFERENCES activity_log(id)
+);
+
+CREATE TABLE IF NOT EXISTS report_session_operation_dependency (
+    parent_operation_id INTEGER NOT NULL,
+    child_operation_id INTEGER NOT NULL,
+    PRIMARY KEY(parent_operation_id, child_operation_id),
+    FOREIGN KEY(parent_operation_id) REFERENCES report_session_operation(id) ON DELETE CASCADE,
+    FOREIGN KEY(child_operation_id) REFERENCES report_session_operation(id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS activity_clipboard_event (

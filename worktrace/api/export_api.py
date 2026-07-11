@@ -34,10 +34,11 @@ _EXPORT_VALUE_ERROR_CODES = {
     "range_too_large",
     "empty_data",
     "invalid_path",
+    "stale_statistics_snapshot",
 }
 
 
-def export_statistics_csv(date_from: str, date_to: str, output_path) -> dict[str, Any]:
+def export_statistics_csv(date_from: str, date_to: str, output_path, expected_snapshot_revision: str | None = None) -> dict[str, Any]:
     """Export a display-safe CSV for the statistics date range.
 
     Delegates date validation, row building, and file writing to
@@ -56,7 +57,7 @@ def export_statistics_csv(date_from: str, date_to: str, output_path) -> dict[str
     text, window titles, file paths, or notes.
     """
     try:
-        return export_service.write_statistics_csv(date_from, date_to, output_path)
+        return export_service.write_statistics_csv(date_from, date_to, output_path, expected_snapshot_revision)
     except StatisticsExportError:
         raise
     except ValueError as exc:

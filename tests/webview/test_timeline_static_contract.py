@@ -390,7 +390,7 @@ def test_timeline_selection_loads_summary_by_projection_instance_key():
     select_body = func_body(source, "selectTimelineSession")
     show_body = func_body(source, "showTimeline")
 
-    assert "loadSessionActivitySummary(found.projection_instance_key, App.timelineDate, found.session_detail_revision || \"\")" in select_body
+    assert "loadSessionActivitySummary(found.projection_instance_key, App.timelineDate, found.projection_revision || \"\")" in select_body
     assert "loadSessionActivitySummary(found.projection_instance_key, data.date)" in show_body
     assert "data-projection-instance-key" in show_body
     assert "loadSessionActivitySummary(found.project_id" not in source

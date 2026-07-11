@@ -44,45 +44,85 @@ def _raw_snapshot():
     return activities, assignments, projects, rules
 
 
+def _hide(session: dict, request_id: str) -> None:
+    report_session_operation_service.hide_session(
+        DATE, session["projection_instance_key"], session["projection_revision"], request_id
+    )
+
+
+def _copy(session: dict, request_id: str) -> None:
+    report_session_operation_service.copy_session(
+        DATE, session["projection_instance_key"], session["projection_revision"], request_id
+    )
+
+
+def _hide_activity(session: dict, summary_id: str, request_id: str) -> None:
+    report_session_operation_service.hide_session_activity(
+        DATE, session["projection_instance_key"], summary_id, session["projection_revision"], request_id
+    )
+
+
+def _merge(source: dict, direction: str, request_id: str) -> None:
+    sessions = timeline_service.get_project_sessions_by_date(DATE)
+    current = next(item for item in sessions if item["projection_instance_key"] == source["projection_instance_key"])
+    index = sessions.index(current)
+    target = sessions[index - 1 if direction == "previous" else index + 1]
+    report_session_operation_service.merge_session(
+        DATE,
+        current["projection_instance_key"],
+        direction,
+        request_id,
+        expected_projection_revision=current["projection_revision"],
+        target_projection_instance_key=target["projection_instance_key"],
+        target_expected_projection_revision=target["projection_revision"],
+    )
+
+
+def _split(session: dict, request_id: str) -> None:
+    report_session_operation_service.split_session(
+        DATE, session["projection_instance_key"], session["projection_revision"], request_id
+    )
+
+
 def test_report_session_operations_do_not_mutate_raw_activity_facts(temp_db):
     sessions = _sessions(temp_db)
     before = _raw_snapshot()
-    report_session_operation_service.hide_session(DATE, sessions[0]["projection_instance_key"])
-    report_session_operation_service.copy_session(DATE, sessions[1]["projection_instance_key"])
+    _hide(sessions[0], "req-hide")
+    _copy(sessions[1], "req-copy")
     copied = next(item for item in timeline_service.get_project_sessions_by_date(DATE) if item["projection_kind"] == "copy")
     summary = project_activity_summary_service.get_projection_session_activity_summary(copied["projection_instance_key"], DATE)[0]
-    report_session_operation_service.hide_session_activity(DATE, copied["projection_instance_key"], summary["summary_id"])
+    _hide_activity(copied, summary["summary_id"], "req-hide-activity")
     visible = timeline_service.get_project_sessions_by_date(DATE)
-    report_session_operation_service.merge_session(DATE, visible[0]["projection_instance_key"], "next")
+    _merge(visible[0], "next", "req-merge")
     merged = next(item for item in timeline_service.get_project_sessions_by_date(DATE) if item["projection_kind"] == "merge")
-    report_session_operation_service.split_session(DATE, merged["projection_instance_key"])
+    _split(merged, "req-split")
     assert _raw_snapshot() == before
 
 
 def test_merge_next_and_split_restores_origin_sessions(temp_db):
     sessions = _sessions(temp_db)
-    report_session_operation_service.merge_session(DATE, sessions[0]["projection_instance_key"], "next")
+    _merge(sessions[0], "next", "req-merge-1")
     merged = next(item for item in timeline_service.get_project_sessions_by_date(DATE) if item["projection_kind"] == "merge")
     assert merged["duration_seconds"] == 20 * 60
-    report_session_operation_service.merge_session(DATE, merged["projection_instance_key"], "next")
+    _merge(merged, "next", "req-merge-2")
     merged = next(item for item in timeline_service.get_project_sessions_by_date(DATE) if item["projection_kind"] == "merge")
     assert merged["duration_seconds"] == 30 * 60
-    report_session_operation_service.split_session(DATE, merged["projection_instance_key"])
+    _split(merged, "req-split")
     restored = timeline_service.get_project_sessions_by_date(DATE)
-    assert len(restored) == 3
-    assert all(item["projection_kind"] == "base" for item in restored)
+    assert len(restored) == 2
+    assert {item["projection_kind"] for item in restored} == {"base", "merge"}
 
 
 def test_copy_and_hide_activity_are_scoped_to_projection_instance(temp_db):
     original = _sessions(temp_db)[0]
     original_total = statistics_service.get_summary(DATE, DATE)["total_duration"]
-    report_session_operation_service.copy_session(DATE, original["projection_instance_key"])
+    _copy(original, "req-copy")
     copied = next(item for item in timeline_service.get_project_sessions_by_date(DATE) if item["projection_kind"] == "copy")
     assert statistics_service.get_summary(DATE, DATE)["total_duration"] == original_total + 10 * 60
     with get_connection() as conn:
         assert conn.execute("SELECT COUNT(*) FROM activity_log").fetchone()[0] == 3
     summary = project_activity_summary_service.get_projection_session_activity_summary(copied["projection_instance_key"], DATE)[0]
-    report_session_operation_service.hide_session_activity(DATE, copied["projection_instance_key"], summary["summary_id"])
+    _hide_activity(copied, summary["summary_id"], "req-hide-activity")
     final = timeline_service.get_project_sessions_by_date(DATE)
     assert all(item["projection_kind"] != "copy" for item in final)
     assert any(item["projection_instance_key"] == original["projection_instance_key"] for item in final)
@@ -92,6 +132,6 @@ def test_copy_and_hide_activity_are_scoped_to_projection_instance(temp_db):
 def test_hide_session_removes_projected_total(temp_db):
     sessions = _sessions(temp_db)
     total = statistics_service.get_summary(DATE, DATE)["total_duration"]
-    report_session_operation_service.hide_session(DATE, sessions[0]["projection_instance_key"])
+    _hide(sessions[0], "req-hide")
     assert len(timeline_service.get_project_sessions_by_date(DATE)) == 2
     assert statistics_service.get_summary(DATE, DATE)["total_duration"] == total - 10 * 60

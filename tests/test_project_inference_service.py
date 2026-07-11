@@ -100,4 +100,4 @@ def test_manual_override_is_not_overwritten(temp_db):
     assign_project_for_activity(aid)
     row = activity_service.get_activity(aid)
     assert row["project_id"] == manual_project
-    assert row["manual_override"] == 1
+    assert row["assignment_is_manual"] == 1
