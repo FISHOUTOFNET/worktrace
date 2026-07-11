@@ -43,7 +43,8 @@ def test_project_rules_home_keeps_lightweight_entry_points():
     assert 'id="rules-sort-select"' in section
     assert "按上次使用排序" in section
     assert "按首字母排序" in section
-    assert 'id="rules-advanced"' in section
+    assert 'id="rules-advanced"' not in section
+    assert "高级功能" not in section
 
 
 def test_project_rules_home_removes_static_legacy_forms_and_batch_surfaces():
@@ -74,19 +75,12 @@ def test_project_rules_unified_panel_contains_project_and_rule_flows():
     assert re.search(r'id="rules-panel-backfill"[^>]*checked', section)
 
 
-def test_project_rules_advanced_is_collapsed_and_content_is_rendered_by_js():
+def test_project_rules_delete_modal_keeps_history_choice_opt_in():
     section = _rules_section()
-    details = re.search(r'<details[^>]*id="rules-advanced"[^>]*>', section)
-    assert details
-    assert " open" not in details.group(0)
-    assert 'id="rules-advanced-content"' in section
-    advanced_container = re.search(
-        r'<div id="rules-advanced-content"[^>]*>(.*?)</div>',
-        section,
-        re.DOTALL,
-    )
-    assert advanced_container
-    assert advanced_container.group(1).strip() == ""
+    assert 'id="rules-delete-modal"' in section
+    assert "删除后，这条规则不会再用于未来自动归类。" in section
+    assert "同时移除历史中由此规则产生的归类" in section
+    assert 'id="rules-delete-history" type="checkbox"' in section
 
 
 def test_project_rules_script_order_includes_create_panel_before_actions():
@@ -100,7 +94,7 @@ def test_project_rules_static_helper_reads_create_panel_module():
     source = read_rules_module_js()
     assert "function initRulesPanelEvents" in source
     assert "function savePanelRule" in source
-    assert "function renderRulesAdvancedPanel" in source
+    assert "function openProjectRuleDeleteModal" in read_js("rules_keyword_actions.js")
 
 
 def test_project_rules_home_render_only_exposes_edit_project_add_rule_and_delete():
@@ -109,6 +103,7 @@ def test_project_rules_home_render_only_exposes_edit_project_add_rule_and_delete
     row_body = func_body(source, "renderProjectRuleRow")
     assert "rules-project-edit-button" in project_body
     assert "rules-project-add-rule-button" in project_body
+    assert "rules-project-delete-button" in project_body
     assert "rules-count-grid" not in project_body
     assert "rules-project-toggle-button" not in project_body
     assert "rules-project-archive-button" not in project_body
@@ -121,6 +116,7 @@ def test_project_rules_home_render_only_exposes_edit_project_add_rule_and_delete
         "rules-preview-impact-button",
         "rules-backfill-button",
         "rules-batch-checkbox",
+        "rules-status",
     ):
         assert forbidden not in row_body
 
@@ -147,21 +143,17 @@ def test_project_rules_panel_create_backfill_contract_is_stable():
     assert 'callBridge("create_project_keyword_rule"' in body
     assert 'callBridge("backfill_project_rule"' in source
     assert "规则已新增，但应用到历史记录失败" in body
+    assert "同时应用到历史记录（推荐）" in _rules_section()
     assert ".catch(function ()" in body
     for forbidden in ("err.message", "error.message", "reason.message", ".toString"):
         assert forbidden not in body
 
 
-def test_project_rules_excluded_rules_are_advanced_only():
+def test_project_rules_do_not_expose_excluded_or_advanced_actions():
     source = read_rules_module_js()
-    advanced_body = func_body(source, "renderRulesAdvancedPanel")
-    assert "rules-excluded-enabled-toggle" in advanced_body
-    assert "rules-excluded-rule-submit" in advanced_body
-    assert "rules-panel-target-project" not in advanced_body
-    assert "rules-panel-backfill" not in advanced_body
-    assert 'callBridge("set_excluded_rules_enabled"' in source
-    assert 'callBridge("create_excluded_keyword_rule"' in source
-    assert 'callBridge("create_excluded_folder_rule"' in source
+    section = _rules_section()
+    for forbidden in ("rules-advanced", "高级功能", "排除规则", "启用", "禁用", "暂停", "归档"):
+        assert forbidden not in section
 
 
 def test_project_rules_sort_state_is_memory_only():

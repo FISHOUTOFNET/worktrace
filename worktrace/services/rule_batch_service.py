@@ -278,19 +278,23 @@ def backfill_project_rules_batch(rules: Any) -> dict[str, Any]:
                     """
                     INSERT INTO activity_project_assignment(
                         activity_id, project_id, confidence, source, is_manual,
-                        suggested_project_name, created_at, updated_at
+                        suggested_project_name, source_rule_type, source_rule_id,
+                        created_at, updated_at
                     )
-                    VALUES (?, ?, ?, ?, 0, NULL, ?, ?)
+                    VALUES (?, ?, ?, ?, 0, NULL, ?, ?, ?, ?)
                     ON CONFLICT(activity_id) DO UPDATE SET
                         project_id = excluded.project_id,
                         confidence = excluded.confidence,
                         source = excluded.source,
                         is_manual = 0,
                         suggested_project_name = NULL,
+                        source_rule_type = excluded.source_rule_type,
+                        source_rule_id = excluded.source_rule_id,
                         updated_at = excluded.updated_at
                     WHERE activity_project_assignment.is_manual = 0
                     """,
-                    (activity_id, project_id, confidence, source, ts, ts),
+                    (activity_id, project_id, confidence, source, rule_type,
+                     int(rule.get("id") or 0), ts, ts),
                 )
                 if cursor.rowcount != 1:
                     continue

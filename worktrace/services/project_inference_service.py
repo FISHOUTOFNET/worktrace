@@ -3,6 +3,7 @@ from __future__ import annotations
 import ntpath
 import re
 import time
+from dataclasses import dataclass
 
 from ..constants import EXCLUDED_PROJECT, RULE_CACHE_TTL_SECONDS, STATUS_NORMAL, UNCATEGORIZED_PROJECT
 from ..db import get_connection, get_db_path, now_str
@@ -25,6 +26,18 @@ _KEYWORD_RULE_CACHE_TTL_SECONDS = RULE_CACHE_TTL_SECONDS
 _KEYWORD_RULE_CACHE: dict[str, tuple[float, list[dict]]] = {}
 
 
+@dataclass(frozen=True)
+class ProjectAssignmentDecision:
+    """The complete, persistable result of automatic project inference."""
+
+    project_id: int
+    source: str
+    confidence: int
+    suggested_project_name: str | None = None
+    source_rule_type: str | None = None
+    source_rule_id: int | None = None
+
+
 def invalidate_keyword_rule_cache() -> None:
     _KEYWORD_RULE_CACHE.pop(str(get_db_path().resolve()), None)
 
@@ -39,7 +52,7 @@ def _enabled_keyword_rules(conn=None) -> list[dict]:
         with get_connection() as read_conn:
             rows = read_conn.execute(
                 """
-                SELECT pr.project_id, pr.pattern
+                SELECT pr.id, pr.project_id, pr.pattern
                 FROM project_rule pr
                 JOIN project p ON p.id = pr.project_id
                 WHERE pr.enabled = 1
@@ -55,7 +68,7 @@ def _enabled_keyword_rules(conn=None) -> list[dict]:
     else:
         rows = conn.execute(
             """
-            SELECT pr.project_id, pr.pattern
+            SELECT pr.id, pr.project_id, pr.pattern
             FROM project_rule pr
             JOIN project p ON p.id = pr.project_id
             WHERE pr.enabled = 1
@@ -68,7 +81,7 @@ def _enabled_keyword_rules(conn=None) -> list[dict]:
             """,
             (EXCLUDED_PROJECT,),
         ).fetchall()
-    rules = [{"project_id": int(row["project_id"]), "pattern": (row["pattern"] or "").strip().casefold()} for row in rows]
+    rules = [{"id": int(row["id"]), "project_id": int(row["project_id"]), "pattern": (row["pattern"] or "").strip().casefold()} for row in rows]
     _KEYWORD_RULE_CACHE[cache_key] = (now + _KEYWORD_RULE_CACHE_TTL_SECONDS, rules)
     return [dict(row) for row in rules]
 
@@ -97,9 +110,13 @@ def assign_project_for_activity(activity_id: int) -> dict:
             return _assignment_dict(conn, activity_id)
 
         resource = _resource_for_activity(conn, activity_id, activity_dict)
-        project_id, source, confidence, suggested_name = _infer_project_resource_first(conn, activity_dict, resource)
+        decision = _infer_project_resource_first(conn, activity_dict, resource)
 
-        _upsert_assignment(conn, activity_id, project_id, source, confidence, False, suggested_name)
+        _upsert_assignment(
+            conn, activity_id, decision.project_id, decision.source,
+            decision.confidence, False, decision.suggested_project_name,
+            decision.source_rule_type, decision.source_rule_id,
+        )
         return _assignment_dict(conn, activity_id)
 
 
@@ -312,7 +329,9 @@ def _infer_project_resource_first(
     conn,
     activity: dict,
     resource: dict,
-) -> tuple[int, str, int, str | None]:
+    *,
+    exclude_rule: tuple[str, int] | None = None,
+) -> ProjectAssignmentDecision:
     """Infer project using resource-first priority."""
     path_hint = str(resource.get("path_hint") or "").strip()
     is_anchor = bool(resource.get("is_anchor"))
@@ -320,15 +339,16 @@ def _infer_project_resource_first(
 
     # 3. folder/file rule for local path
     if path_hint:
-        rule = folder_rule_service.find_matching_folder_rule(path_hint)
+        excluded_folder_id = exclude_rule[1] if exclude_rule and exclude_rule[0] == "folder" else None
+        rule = folder_rule_service.find_matching_folder_rule(path_hint, exclude_rule_id=excluded_folder_id)
         if rule:
-            return int(rule["project_id"]), "folder_rule", 85, None
+            return ProjectAssignmentDecision(int(rule["project_id"]), "folder_rule", 85, source_rule_type="folder", source_rule_id=int(rule["id"]))
         # Also try parent directory
         parent_dir = ntpath.dirname(path_hint.rstrip("\\/"))
         if parent_dir:
-            rule = folder_rule_service.find_matching_folder_rule(parent_dir)
+            rule = folder_rule_service.find_matching_folder_rule(parent_dir, exclude_rule_id=excluded_folder_id)
             if rule:
-                return int(rule["project_id"]), "folder_rule", 85, None
+                return ProjectAssignmentDecision(int(rule["project_id"]), "folder_rule", 85, source_rule_type="folder", source_rule_id=int(rule["id"]))
 
     # If no path_hint but anchor file with display_name, try folder index
     if not path_hint and is_anchor and display_name:
@@ -336,8 +356,8 @@ def _infer_project_resource_first(
             display_name,
             str(activity.get("start_time") or "") or None,
         )
-        if rule:
-            return int(rule["project_id"]), "folder_rule", 85, None
+        if rule and exclude_rule != ("folder", int(rule["id"])):
+            return ProjectAssignmentDecision(int(rule["project_id"]), "folder_rule", 85, source_rule_type="folder", source_rule_id=int(rule["id"]))
 
 
     # 5. keyword rule against safe classification text
@@ -348,16 +368,16 @@ def _infer_project_resource_first(
     text = _safe_classification_text(activity, resource, clipboard_text)
     for row in _enabled_keyword_rules(conn):
         pattern = row["pattern"]
-        if pattern and pattern in text:
-            return int(row["project_id"]), "keyword_rule", 80, None
+        if pattern and pattern in text and exclude_rule != ("keyword", int(row["id"])):
+            return ProjectAssignmentDecision(int(row["project_id"]), "keyword_rule", 80, source_rule_type="keyword", source_rule_id=int(row["id"]))
 
     # 6. suggested project name from parent folder/workspace
     if is_anchor:
         fallback_name = candidate_project_name_for_resource(resource)
         if fallback_name:
-            return _get_uncategorized_project_id(conn), "suggested_project_name", 40, fallback_name
+            return ProjectAssignmentDecision(_get_uncategorized_project_id(conn), "suggested_project_name", 40, fallback_name)
 
-    return _get_uncategorized_project_id(conn), "uncategorized", 0, None
+    return ProjectAssignmentDecision(_get_uncategorized_project_id(conn), "uncategorized", 0)
 
 
 def candidate_project_name_for_activity(
@@ -386,15 +406,15 @@ def candidate_project_label_for_activity(
             resolved_resource = _resource_for_activity(conn, int(activity_id), activity_dict)
         else:
             resolved_resource = resource or _resource_from_activity_dict(activity_dict)
-        project_id, source, _confidence, suggested_name = _infer_project_resource_first(
+        decision = _infer_project_resource_first(
             conn, activity_dict, resolved_resource
         )
         uncategorized_id = _get_uncategorized_project_id(conn)
-        is_uncategorized = int(project_id) == int(uncategorized_id)
-        if source == "suggested_project_name":
+        is_uncategorized = int(decision.project_id) == int(uncategorized_id)
+        if decision.source == "suggested_project_name":
             return {
                 "id": None,
-                "name": str(suggested_name or "").strip(),
+                "name": str(decision.suggested_project_name or "").strip(),
                 "description": "",
                 "source": "suggested_project_name",
                 "is_uncategorized": False,
@@ -410,15 +430,15 @@ def candidate_project_label_for_activity(
                 "is_suggested_project": False,
             }
         row = conn.execute(
-            "SELECT name, description FROM project WHERE id = ?", (project_id,)
+            "SELECT name, description FROM project WHERE id = ?", (decision.project_id,)
         ).fetchone()
         name = str(row["name"]) if row and row["name"] else ""
         description = str(row["description"]) if row and row["description"] else ""
         return {
-            "id": int(project_id),
+            "id": int(decision.project_id),
             "name": name,
             "description": description,
-            "source": source,
+            "source": decision.source,
             "is_uncategorized": False,
             "is_suggested_project": False,
         }
@@ -466,11 +486,17 @@ def _upsert_assignment(
     confidence: int,
     is_manual: bool,
     suggested_project_name: str | None,
+    source_rule_type: str | None = None,
+    source_rule_id: int | None = None,
 ) -> None:
+    if source not in {"folder_rule", "keyword_rule"}:
+        source_rule_type = None
+        source_rule_id = None
     ts = now_str()
     row = conn.execute(
         """
-        SELECT project_id, source, confidence, is_manual, suggested_project_name
+        SELECT project_id, source, confidence, is_manual, suggested_project_name,
+               source_rule_type, source_rule_id
         FROM activity_project_assignment
         WHERE activity_id = ?
         """,
@@ -482,23 +508,29 @@ def _upsert_assignment(
         and int(row["confidence"]) == confidence
         and int(row["is_manual"]) == int(is_manual)
         and (row["suggested_project_name"] or None) == (suggested_project_name or None)
+        and (row["source_rule_type"] or None) == source_rule_type
+        and (row["source_rule_id"] or None) == source_rule_id
     ):
         return
     conn.execute(
         """
         INSERT INTO activity_project_assignment(
-            activity_id, project_id, confidence, source, is_manual, suggested_project_name, created_at, updated_at
+            activity_id, project_id, confidence, source, is_manual, suggested_project_name,
+            source_rule_type, source_rule_id, created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(activity_id) DO UPDATE SET
             project_id = excluded.project_id,
             confidence = excluded.confidence,
             source = excluded.source,
             is_manual = excluded.is_manual,
             suggested_project_name = excluded.suggested_project_name,
+            source_rule_type = excluded.source_rule_type,
+            source_rule_id = excluded.source_rule_id,
             updated_at = excluded.updated_at
         """,
-        (activity_id, project_id, confidence, source, int(is_manual), suggested_project_name, ts, ts),
+        (activity_id, project_id, confidence, source, int(is_manual), suggested_project_name,
+         source_rule_type, source_rule_id, ts, ts),
     )
 
 

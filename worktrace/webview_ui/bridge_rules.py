@@ -27,6 +27,7 @@ from ..api import project_api, rule_api
 from ..constants import EXCLUDED_PROJECT, UNCATEGORIZED_PROJECT
 
 logger = logging.getLogger(__name__)
+_APPLY_TO_HISTORY_UNSET = object()
 
 
 # Chinese error-message maps: each translates a stable API error code into a user-facing
@@ -493,7 +494,7 @@ class ProjectRulesBridgeMixin:
             return {"ok": False, "error": "新增关键词规则失败"}
 
 
-    def delete_project_keyword_rule(self, rule_id) -> dict[str, Any]:
+    def delete_project_keyword_rule(self, rule_id, apply_to_history=_APPLY_TO_HISTORY_UNSET) -> dict[str, Any]:
         """Delete one existing keyword rule.
 
         Write path only. Strict bridge validation rejects
@@ -514,16 +515,28 @@ class ProjectRulesBridgeMixin:
             # one check, matching the shared rule-id validation pattern.
             if type(rule_id) is not int or rule_id <= 0:
                 return {"ok": False, "error": "操作无效"}
-            result = rule_api.delete_project_keyword_rule(rule_id)
+            if apply_to_history is not _APPLY_TO_HISTORY_UNSET and type(apply_to_history) is not bool:
+                return {"ok": False, "error": "操作无效"}
+            result = (
+                rule_api.delete_project_keyword_rule(rule_id)
+                if apply_to_history is _APPLY_TO_HISTORY_UNSET
+                else rule_api.delete_project_keyword_rule(rule_id, apply_to_history)
+            )
             if result.get("ok") is True:
                 rule = result.get("rule") or {}
+                summary = {
+                    "kind": "keyword",
+                    "id": int(rule.get("id") or rule_id),
+                    "deleted": bool(rule.get("deleted")),
+                }
+                if apply_to_history is not _APPLY_TO_HISTORY_UNSET:
+                    summary.update({
+                        "history_updated": bool(rule.get("history_updated")),
+                        "updated_count": int(rule.get("updated_count") or 0),
+                    })
                 return {
                     "ok": True,
-                    "rule": {
-                        "kind": "keyword",
-                        "id": int(rule.get("id") or rule_id),
-                        "deleted": bool(rule.get("deleted")),
-                    },
+                    "rule": summary,
                 }
             code = str(result.get("error") or "operation_failed")
             return {
@@ -801,7 +814,7 @@ class ProjectRulesBridgeMixin:
             logger.exception("webview bridge update_project_folder_rule failed")
             return {"ok": False, "error": "保存文件夹规则失败"}
 
-    def delete_project_folder_rule(self, rule_id) -> dict[str, Any]:
+    def delete_project_folder_rule(self, rule_id, apply_to_history=_APPLY_TO_HISTORY_UNSET) -> dict[str, Any]:
         """Delete one existing folder rule.
 
         Write path only. Strict bridge validation rejects
@@ -824,16 +837,28 @@ class ProjectRulesBridgeMixin:
             # one check, matching the shared rule-id validation pattern.
             if type(rule_id) is not int or rule_id <= 0:
                 return {"ok": False, "error": "操作无效"}
-            result = rule_api.delete_project_folder_rule(rule_id)
+            if apply_to_history is not _APPLY_TO_HISTORY_UNSET and type(apply_to_history) is not bool:
+                return {"ok": False, "error": "操作无效"}
+            result = (
+                rule_api.delete_project_folder_rule(rule_id)
+                if apply_to_history is _APPLY_TO_HISTORY_UNSET
+                else rule_api.delete_project_folder_rule(rule_id, apply_to_history)
+            )
             if result.get("ok") is True:
                 rule = result.get("rule") or {}
+                summary = {
+                    "kind": "folder",
+                    "id": int(rule.get("id") or rule_id),
+                    "deleted": bool(rule.get("deleted")),
+                }
+                if apply_to_history is not _APPLY_TO_HISTORY_UNSET:
+                    summary.update({
+                        "history_updated": bool(rule.get("history_updated")),
+                        "updated_count": int(rule.get("updated_count") or 0),
+                    })
                 return {
                     "ok": True,
-                    "rule": {
-                        "kind": "folder",
-                        "id": int(rule.get("id") or rule_id),
-                        "deleted": bool(rule.get("deleted")),
-                    },
+                    "rule": summary,
                 }
             code = str(result.get("error") or "operation_failed")
             return {
@@ -1064,6 +1089,30 @@ class ProjectRulesBridgeMixin:
         except Exception:
             logger.exception("webview bridge archive_project_for_rules failed")
             return {"ok": False, "error": "归档项目失败"}
+
+    def delete_project_for_rules(self, project_id) -> dict[str, Any]:
+        """Soft-delete one user project from the Project Rules page."""
+        try:
+            if type(project_id) is not int or project_id <= 0:
+                return {"ok": False, "error": "操作无效"}
+            result = project_api.delete_project_for_rules(project_id)
+            if result.get("ok") is True:
+                project = result.get("project") or {}
+                return {
+                    "ok": True,
+                    "project": {
+                        "id": int(project.get("id") or project_id),
+                        "deleted": bool(project.get("deleted")),
+                    },
+                }
+            code = str(result.get("error") or "operation_failed")
+            return {
+                "ok": False,
+                "error": _PROJECT_LIFECYCLE_ARCHIVE_MESSAGES.get(code, "删除项目失败"),
+            }
+        except Exception:
+            logger.exception("webview bridge delete_project_for_rules failed")
+            return {"ok": False, "error": "删除项目失败"}
 
 
     def preview_project_rule_impact(self, rule_type, rule_id) -> dict[str, Any]:

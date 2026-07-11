@@ -303,8 +303,9 @@ def test_preview_folder_rule_counts_skips_correctly(temp_db):
     counts = result["counts"]
     assert counts["matched_count"] == 2  # eligible + already_target
     assert counts["eligible_count"] == 2
-    assert counts["would_update_count"] == 1
-    assert counts["already_target_count"] == 1
+    # The legacy direct-rule row is upgraded with this specific rule id.
+    assert counts["would_update_count"] == 2
+    assert counts["already_target_count"] == 0
     assert counts["manual_skipped_count"] == 1
     assert counts["hidden_skipped_count"] == 1
     assert counts["deleted_skipped_count"] == 1
@@ -629,8 +630,14 @@ def test_backfill_does_not_modify_already_target_activity(temp_db):
             (aid,),
         )
     result = rule_impact_service.backfill_rule_impact("folder", rule_id)
-    assert result["updated_count"] == 0
-    assert result["already_target_count"] == 1
+    assert result["updated_count"] == 1
+    assert result["already_target_count"] == 0
+    with get_connection() as conn:
+        assignment = conn.execute(
+            "SELECT source_rule_type, source_rule_id FROM activity_project_assignment WHERE activity_id = ?",
+            (aid,),
+        ).fetchone()
+    assert dict(assignment) == {"source_rule_type": "folder", "source_rule_id": rule_id}
 
 
 @pytest.mark.parametrize("source", ["same_project_context", "anchor_context"])

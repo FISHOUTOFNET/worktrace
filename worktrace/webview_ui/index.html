@@ -289,10 +289,6 @@
                         <option value="alpha">按首字母排序</option>
                     </select>
                 </div>
-                <details id="rules-advanced" class="rules-advanced">
-                    <summary>高级功能</summary>
-                    <div id="rules-advanced-content" class="rules-advanced-content"></div>
-                </details>
                 <div id="rules-create-panel" class="rules-create-panel" hidden>
                     <div class="rules-create-panel-backdrop" data-rules-panel-close="1"></div>
                     <aside class="rules-create-panel-sheet" role="dialog" aria-modal="true" aria-labelledby="rules-create-panel-title">
@@ -322,9 +318,18 @@
                             <label id="rules-panel-folder-row" class="rules-panel-field">文件夹路径<input id="rules-panel-folder-path" type="text" maxlength="512" autocomplete="off"></label>
                             <label id="rules-panel-folder-recursive-row" class="rules-panel-check"><input id="rules-panel-folder-recursive" type="checkbox" checked> 包含子文件夹</label>
                             <label id="rules-panel-keyword-row" class="rules-panel-field" hidden>关键词<input id="rules-panel-keyword" type="text" maxlength="200" autocomplete="off"></label>
-                            <label id="rules-panel-backfill-row" class="rules-panel-check"><input id="rules-panel-backfill" type="checkbox" checked> 应用到历史记录</label>
+                            <label id="rules-panel-backfill-row" class="rules-panel-check"><input id="rules-panel-backfill" type="checkbox" checked> 同时应用到历史记录（推荐）</label>
                             <button id="rules-panel-save-rule" class="rules-panel-submit" type="button">新增规则</button>
                         </section>
+                    </aside>
+                </div>
+                <div id="rules-delete-modal" class="rules-create-panel" hidden>
+                    <div class="rules-create-panel-backdrop" data-rules-delete-close="1"></div>
+                    <aside class="rules-create-panel-sheet" role="dialog" aria-modal="true" aria-labelledby="rules-delete-modal-title">
+                        <div class="rules-create-panel-head"><h2 id="rules-delete-modal-title">删除规则</h2></div>
+                        <p>删除后，这条规则不会再用于未来自动归类。</p>
+                        <label class="rules-panel-check"><input id="rules-delete-history" type="checkbox"> 同时移除历史中由此规则产生的归类</label>
+                        <div class="rules-project-actions"><button id="rules-delete-cancel" type="button">取消</button><button id="rules-delete-confirm" type="button">删除规则</button></div>
                     </aside>
                 </div>
                 <div id="rules-error" class="error-banner" hidden>加载项目规则失败</div>

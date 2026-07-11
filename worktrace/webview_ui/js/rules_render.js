@@ -29,6 +29,7 @@
             '  <div class="rules-project-actions">',
             '    <button class="rules-project-edit-button" type="button" data-project-id="' + count(projectId) + '">编辑项目</button>',
             '    <button class="rules-project-add-rule-button" type="button" data-project-id="' + count(projectId) + '">新增规则</button>',
+            '    <button class="rules-project-delete-button" type="button" data-project-id="' + count(projectId) + '">删除项目</button>',
             '  </div>',
             '  <div class="rules-row-list">' + rows + '</div>',
             '</article>'
@@ -40,8 +41,6 @@
         var label = text(rule && rule.kind_label, "规则");
         var target = text(rule && rule.target, "未设置");
         var detail = text(rule && rule.detail, "");
-        var enabled = !!(rule && rule.enabled);
-        var stateLabel = enabled ? "已启用" : "已禁用";
         var kind = ruleKind(rule && rule.kind);
         var ruleId = positiveInt(rule && rule.id);
         var ruleKey = kind + ":" + ruleId;
@@ -50,13 +49,12 @@
         var deleteLabel = deleting ? "正在删除..." : "删除";
         var disabled = deleting ? " disabled" : "";
         return [
-            '<div class="rules-row ' + (enabled ? "" : "is-disabled") + '">',
+            '<div class="rules-row">',
             '  <span class="rules-kind-badge rules-kind-' + kind + '">' + label + '</span>',
             '  <div class="rules-row-main">',
             '    <div class="rules-target">' + target + '</div>',
             detail ? '    <div class="rules-detail">' + detail + '</div>' : "",
             '  </div>',
-            '  <span class="rules-status ' + (enabled ? "is-enabled" : "is-disabled") + '">' + stateLabel + '</span>',
             '  <button class="' + deleteClass + '" type="button" data-rule-kind="' + kind + '" data-rule-id="' + count(ruleId) + '"' + disabled + '>' + deleteLabel + '</button>',
             '</div>'
         ].join("");

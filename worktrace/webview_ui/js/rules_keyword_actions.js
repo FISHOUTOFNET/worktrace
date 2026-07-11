@@ -20,7 +20,6 @@
         if (App.rulesDeletingRuleKey) return;
         var kind = button.getAttribute("data-rule-kind");
         if (kind !== "keyword") {
-            App.showRulesError("删除关键词规则失败");
             return;
         }
         var rawId = button.getAttribute("data-rule-id");
@@ -29,26 +28,67 @@
             App.showRulesError("删除关键词规则失败");
             return;
         }
-        if (!window.confirm("确定删除这条关键词规则吗？删除后该关键词将不再用于自动归类。")) {
-            return;
-        }
+        App.openProjectRuleDeleteModal("keyword", ruleId);
+    }
+    App.handleProjectRuleDelete = handleProjectRuleDelete;
+
+    function initProjectRuleDeleteModal() {
+        var modal = document.getElementById("rules-delete-modal");
+        if (!modal || modal.getAttribute("data-rules-delete-modal-bound") === "1") return;
+        modal.setAttribute("data-rules-delete-modal-bound", "1");
+        document.getElementById("rules-delete-cancel").addEventListener("click", closeModal);
+        modal.addEventListener("click", function (event) {
+            if (event.target && event.target.getAttribute("data-rules-delete-close") === "1") closeModal();
+        });
+        document.getElementById("rules-delete-confirm").addEventListener("click", confirmDelete);
+    }
+
+    function openProjectRuleDeleteModal(kind, ruleId) {
+        initProjectRuleDeleteModal();
+        var modal = document.getElementById("rules-delete-modal");
+        if (!modal || App.rulesDeletingRuleKey || App.rulesDeletingFolderKey) return;
+        App.rulesDeleteModalRule = { kind: kind, id: ruleId };
+        var checkbox = document.getElementById("rules-delete-history");
+        if (checkbox) checkbox.checked = false;
+        modal.hidden = false;
+    }
+    App.openProjectRuleDeleteModal = openProjectRuleDeleteModal;
+
+    function closeModal() {
+        var modal = document.getElementById("rules-delete-modal");
+        if (modal) modal.hidden = true;
+        App.rulesDeleteModalRule = null;
+    }
+
+    function confirmDelete() {
+        var pending = App.rulesDeleteModalRule;
+        if (!pending) return;
+        var checkbox = document.getElementById("rules-delete-history");
+        var applyToHistory = checkbox ? !!checkbox.checked : false;
+        closeModal();
+        deleteRule(pending.kind, pending.id, applyToHistory);
+    }
+
+    function deleteRule(kind, ruleId, applyToHistory) {
         App.setRuleDeleting("keyword:" + ruleId);
+        if (kind === "folder" && App.setFolderDeleting) App.setFolderDeleting("folder:" + ruleId);
         App.clearRulesError();
-        App.callBridge("delete_project_keyword_rule", ruleId).then(function (result) {
+        var method = kind === "folder" ? "delete_project_folder_rule" : "delete_project_keyword_rule";
+        App.callBridge(method, ruleId, applyToHistory).then(function (result) {
             if (result && result.ok === false) {
-                App.showRulesError(result.error || "删除关键词规则失败");
+                App.showRulesError(result.error || "删除规则失败");
                 return;
             }
             return App.loadProjectRules().then(function () {
-                App.showRulesError("关键词规则已删除");
+                App.showRulesError(applyToHistory ? "规则已删除，并已更新受影响的历史记录。" : "规则已删除，历史记录保持不变。");
             });
         }).catch(function () {
-            App.showRulesError("删除关键词规则失败");
+            App.showRulesError("删除规则失败");
         }).then(function () {
             App.setRuleDeleting(null);
+            if (App.setFolderDeleting) App.setFolderDeleting(null);
         });
     }
-    App.handleProjectRuleDelete = handleProjectRuleDelete;
 
     function setRuleDeleting(ruleKey) {
         App.rulesDeletingRuleKey = ruleKey || null;

@@ -62,9 +62,6 @@
         if (App.refreshRulesPanelTargets) {
             App.refreshRulesPanelTargets();
         }
-        if (App.renderRulesAdvancedPanel) {
-            App.renderRulesAdvancedPanel();
-        }
         if (!list || !empty) return;
         var projects = _sortProjectsForRulesHome((data && data.projects) || []);
         if (!projects.length) {

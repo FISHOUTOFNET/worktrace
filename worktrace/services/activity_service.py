@@ -94,9 +94,10 @@ def insert_activity_row(
         conn.execute(
             """
             INSERT INTO activity_project_assignment(
-                activity_id, project_id, confidence, source, is_manual, suggested_project_name, created_at, updated_at
+                activity_id, project_id, confidence, source, is_manual, suggested_project_name,
+                source_rule_type, source_rule_id, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, NULL, ?, ?)
+            VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?)
             ON CONFLICT(activity_id) DO NOTHING
             """,
             (
@@ -737,15 +738,18 @@ def apply_midnight_anchor_assignment(activity_id: int, project_id: int) -> None:
         conn.execute(
             """
             INSERT INTO activity_project_assignment(
-                activity_id, project_id, confidence, source, is_manual, suggested_project_name, created_at, updated_at
+                activity_id, project_id, confidence, source, is_manual, suggested_project_name,
+                source_rule_type, source_rule_id, created_at, updated_at
             )
-            VALUES (?, ?, 90, 'midnight_anchor', 0, NULL, ?, ?)
+            VALUES (?, ?, 90, 'midnight_anchor', 0, NULL, NULL, NULL, ?, ?)
             ON CONFLICT(activity_id) DO UPDATE SET
                 project_id = excluded.project_id,
                 confidence = excluded.confidence,
                 source = excluded.source,
                 is_manual = 0,
                 suggested_project_name = NULL,
+                source_rule_type = NULL,
+                source_rule_id = NULL,
                 updated_at = excluded.updated_at
             """,
             (activity_id, project_id, ts, ts),

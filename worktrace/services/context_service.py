@@ -663,7 +663,8 @@ def _sync_assignment_and_activity(
     with get_connection() as conn:
         assignment = conn.execute(
             """
-            SELECT project_id, source, confidence, is_manual, suggested_project_name
+            SELECT project_id, source, confidence, is_manual, suggested_project_name,
+                   source_rule_type, source_rule_id
             FROM activity_project_assignment
             WHERE activity_id = ?
             """,
@@ -675,6 +676,8 @@ def _sync_assignment_and_activity(
             and int(assignment["confidence"]) == confidence
             and int(assignment["is_manual"]) == int(is_manual)
             and not (assignment["suggested_project_name"] or "")
+            and assignment["source_rule_type"] is None
+            and assignment["source_rule_id"] is None
         )
         if not assignment_changed:
             return
@@ -682,15 +685,18 @@ def _sync_assignment_and_activity(
             conn.execute(
                 """
                 INSERT INTO activity_project_assignment(
-                    activity_id, project_id, confidence, source, is_manual, suggested_project_name, created_at, updated_at
+                    activity_id, project_id, confidence, source, is_manual, suggested_project_name,
+                    source_rule_type, source_rule_id, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, NULL, ?, ?)
+                VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?)
                 ON CONFLICT(activity_id) DO UPDATE SET
                     project_id = excluded.project_id,
                     confidence = excluded.confidence,
                     source = excluded.source,
                     is_manual = excluded.is_manual,
                     suggested_project_name = NULL,
+                    source_rule_type = NULL,
+                    source_rule_id = NULL,
                     updated_at = excluded.updated_at
                 """,
                 (activity_id, project_id, confidence, source, int(is_manual), ts, ts),

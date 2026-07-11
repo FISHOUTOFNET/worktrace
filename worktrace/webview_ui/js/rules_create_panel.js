@@ -10,8 +10,6 @@
     App.rulesPanelLastCreatedProjectId = null;
     App.rulesCreatingPanelProject = false;
     App.rulesCreatingPanelRule = false;
-    App.rulesExcludedToggleInFlight = false;
-    App.rulesCreatingExcludedRule = false;
 
     function initRulesPanelEvents() {
         bindClick("rules-open-create-rule", function () {
@@ -52,14 +50,6 @@
             list.setAttribute("data-rules-panel-open-bound", "1");
             list.addEventListener("click", handleProjectCardPanelClick);
         }
-        var advanced = document.getElementById("rules-advanced");
-        if (advanced && advanced.getAttribute("data-rules-advanced-bound") !== "1") {
-            advanced.setAttribute("data-rules-advanced-bound", "1");
-            advanced.addEventListener("toggle", function () {
-                if (advanced.open) renderRulesAdvancedPanel();
-            });
-            advanced.addEventListener("click", handleRulesAdvancedClick);
-        }
     }
     App.initRulesPanelEvents = initRulesPanelEvents;
 
@@ -78,6 +68,8 @@
         } else if (button.classList.contains("rules-project-add-rule-button")) {
             var projectId = parsePositiveInt(button.getAttribute("data-project-id"));
             openRulesPanel("rule", { projectId: projectId, ruleType: "folder" });
+        } else if (button.classList.contains("rules-project-delete-button")) {
+            deleteProject(button);
         }
     }
 
@@ -89,6 +81,18 @@
             return;
         }
         openRulesPanel("project", { project: project });
+    }
+
+    function deleteProject(button) {
+        var projectId = parsePositiveInt(button.getAttribute("data-project-id"));
+        if (!projectId || !window.confirm("确定删除项目吗？项目将不再显示，历史活动记录不会被删除。")) return;
+        App.callBridge("delete_project_for_rules", projectId).then(function (result) {
+            if (result && result.ok === false) {
+                App.showRulesError(result.error || "删除项目失败");
+                return;
+            }
+            return App.loadProjectRules().then(function () { App.showRulesError("项目已删除"); });
+        }).catch(function () { App.showRulesError("删除项目失败"); });
     }
 
     function openRulesPanel(mode, options) {
@@ -241,11 +245,11 @@
                         showPanelStatus("规则已新增，但应用到历史记录失败", true);
                         return null;
                     }
-                    showPanelStatus("规则已新增并应用到历史记录", false);
+                    showPanelStatus("规则已新增，并已应用到历史记录。", false);
                     return true;
                 });
             }
-            showPanelStatus("规则已新增", false);
+            showPanelStatus("规则已新增。", false);
             return true;
         }).then(function () {
             return App.loadProjectRules();
@@ -254,145 +258,6 @@
         }).then(function () {
             App.rulesCreatingPanelRule = false;
             refreshPanelWriteState();
-        });
-    }
-
-    function renderRulesAdvancedPanel() {
-        var details = document.getElementById("rules-advanced");
-        var content = document.getElementById("rules-advanced-content");
-        if (!details || !content || !details.open) return;
-        var advanced = (App.lastProjectRulesData && App.lastProjectRulesData.advanced) || {};
-        var enabled = !!advanced.excluded_rules_enabled;
-        var rules = advanced.excluded_rules || [];
-        var disabled = (!enabled || App.rulesCreatingExcludedRule) ? " disabled" : "";
-        var rows = rules.length ? rules.map(function (rule) {
-            return App.renderExcludedRuleRow(rule);
-        }).join("") : '<div class="rules-project-empty">暂无排除规则</div>';
-        content.innerHTML = [
-            '<div class="rules-advanced-toggle-row">',
-            '  <label><input id="rules-excluded-enabled-toggle" type="checkbox"' + (enabled ? " checked" : "") + (App.rulesExcludedToggleInFlight ? " disabled" : "") + '> 启用排除规则</label>',
-            '</div>',
-            '<div class="rules-excluded-panel">',
-            enabled ? "" : '  <div class="rules-excluded-disabled-hint">请先启用排除规则</div>',
-            '  <div class="rules-panel-segment">',
-            '    <button class="rules-excluded-type-folder is-active" type="button"' + disabled + '>文件夹规则</button>',
-            '    <button class="rules-excluded-type-keyword" type="button"' + disabled + '>关键词规则</button>',
-            '  </div>',
-            '  <label class="rules-panel-field rules-excluded-folder-row">文件夹路径<input class="rules-excluded-folder-input" type="text" maxlength="512"' + disabled + '></label>',
-            '  <label class="rules-panel-check rules-excluded-recursive-row"><input class="rules-excluded-folder-recursive" type="checkbox" checked' + disabled + '> 包含子文件夹</label>',
-            '  <label class="rules-panel-field rules-excluded-keyword-row" hidden>关键词<input class="rules-excluded-keyword-input" type="text" maxlength="200"' + disabled + '></label>',
-            '  <button class="rules-excluded-rule-submit" type="button"' + disabled + '>新增排除规则</button>',
-            '</div>',
-            '<div class="rules-row-list">' + rows + '</div>'
-        ].join("");
-    }
-    App.renderRulesAdvancedPanel = renderRulesAdvancedPanel;
-
-    function handleRulesAdvancedClick(event) {
-        if (event.target && event.target.closest && event.target.closest(".rules-keyword-delete-button")) {
-            App.handleProjectRuleDelete(event);
-            return;
-        }
-        if (event.target && event.target.closest && event.target.closest(".rules-folder-delete-button")) {
-            App.handleProjectRuleFolderEvent(event);
-            return;
-        }
-        var toggle = event.target && event.target.closest
-            ? event.target.closest("#rules-excluded-enabled-toggle")
-            : null;
-        if (toggle) {
-            setExcludedRulesEnabled(!!toggle.checked);
-            return;
-        }
-        var folderType = event.target && event.target.closest
-            ? event.target.closest(".rules-excluded-type-folder")
-            : null;
-        if (folderType) {
-            setExcludedType("folder");
-            return;
-        }
-        var keywordType = event.target && event.target.closest
-            ? event.target.closest(".rules-excluded-type-keyword")
-            : null;
-        if (keywordType) {
-            setExcludedType("keyword");
-            return;
-        }
-        var submit = event.target && event.target.closest
-            ? event.target.closest(".rules-excluded-rule-submit")
-            : null;
-        if (submit) createExcludedRule();
-    }
-
-    function setExcludedType(type) {
-        var content = document.getElementById("rules-advanced-content");
-        if (!content) return;
-        var isKeyword = type === "keyword";
-        var folderBtn = content.querySelector(".rules-excluded-type-folder");
-        var keywordBtn = content.querySelector(".rules-excluded-type-keyword");
-        var folderRow = content.querySelector(".rules-excluded-folder-row");
-        var recursiveRow = content.querySelector(".rules-excluded-recursive-row");
-        var keywordRow = content.querySelector(".rules-excluded-keyword-row");
-        if (folderBtn) folderBtn.classList.toggle("is-active", !isKeyword);
-        if (keywordBtn) keywordBtn.classList.toggle("is-active", isKeyword);
-        if (folderRow) folderRow.hidden = isKeyword;
-        if (recursiveRow) recursiveRow.hidden = isKeyword;
-        if (keywordRow) keywordRow.hidden = !isKeyword;
-    }
-
-    function setExcludedRulesEnabled(enabled) {
-        if (App.rulesExcludedToggleInFlight) return;
-        App.rulesExcludedToggleInFlight = true;
-        App.callBridge("set_excluded_rules_enabled", enabled).then(function (result) {
-            if (result && result.ok === false) {
-                App.showRulesError(result.error || "更新排除规则状态失败");
-                return;
-            }
-            return App.loadProjectRules().then(function () {
-                App.showRulesError("排除规则状态已更新");
-            });
-        }).catch(function () {
-            App.showRulesError("更新排除规则状态失败");
-        }).then(function () {
-            App.rulesExcludedToggleInFlight = false;
-        });
-    }
-
-    function createExcludedRule() {
-        var advanced = (App.lastProjectRulesData && App.lastProjectRulesData.advanced) || {};
-        if (!advanced.excluded_rules_enabled) {
-            App.showRulesError("请先启用排除规则");
-            return;
-        }
-        if (App.rulesCreatingExcludedRule) return;
-        var content = document.getElementById("rules-advanced-content");
-        if (!content) return;
-        var isKeyword = content.querySelector(".rules-excluded-type-keyword.is-active");
-        var input = content.querySelector(isKeyword ? ".rules-excluded-keyword-input" : ".rules-excluded-folder-input");
-        var value = input ? (input.value || "").trim() : "";
-        if (!value) {
-            App.showRulesError(isKeyword ? "请输入关键词" : "请输入文件夹路径");
-            return;
-        }
-        var recursiveEl = content.querySelector(".rules-excluded-folder-recursive");
-        App.rulesCreatingExcludedRule = true;
-        renderRulesAdvancedPanel();
-        var promise = isKeyword
-            ? App.callBridge("create_excluded_keyword_rule", value)
-            : App.callBridge("create_excluded_folder_rule", value, recursiveEl ? !!recursiveEl.checked : true);
-        promise.then(function (result) {
-            if (result && result.ok === false) {
-                App.showRulesError(result.error || "新增排除规则失败");
-                return;
-            }
-            return App.loadProjectRules().then(function () {
-                App.showRulesError("排除规则已新增");
-            });
-        }).catch(function () {
-            App.showRulesError("新增排除规则失败");
-        }).then(function () {
-            App.rulesCreatingExcludedRule = false;
-            renderRulesAdvancedPanel();
         });
     }
 

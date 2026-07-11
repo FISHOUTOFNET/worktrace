@@ -35,6 +35,8 @@ from ._write_contract import (
 )
 from ..services import folder_rule_service, project_service, rule_service
 
+_APPLY_TO_HISTORY_UNSET = object()
+
 
 class ProjectRuleWriteError(Exception):
     """Stable Project Rules write error for WebView-facing API calls."""
@@ -128,10 +130,12 @@ def create_project_keyword_rule(project_id: Any, keyword: Any) -> dict[str, Any]
         return fail_payload(ERROR_OPERATION_FAILED)
 
 
-def delete_project_keyword_rule(rule_id: Any) -> dict[str, Any]:
+def delete_project_keyword_rule(rule_id: Any, apply_to_history: Any = _APPLY_TO_HISTORY_UNSET) -> dict[str, Any]:
     """Delete one existing keyword rule."""
 
     if not valid_int(rule_id):
+        return fail_payload(ERROR_INVALID_INPUT)
+    if apply_to_history is not _APPLY_TO_HISTORY_UNSET and not valid_bool(apply_to_history):
         return fail_payload(ERROR_INVALID_INPUT)
     try:
         # Reuse the existing existence helper: it only returns True when the
@@ -140,14 +144,19 @@ def delete_project_keyword_rule(rule_id: Any) -> dict[str, Any]:
         # False, so the keyword delete path can never delete a folder rule.
         if not _rule_exists("keyword", rule_id):
             return fail_payload(ERROR_NOT_FOUND)
+        explicit_history_choice = apply_to_history is not _APPLY_TO_HISTORY_UNSET
+        apply_to_history = False if not explicit_history_choice else apply_to_history
+        history_result = {"updated_count": 0}
+        if apply_to_history:
+            from ..services import rule_history_application_service
+            history_result = rule_history_application_service.remove_rule_from_history("keyword", rule_id)
         rule_service.delete_rule(rule_id)
-        return ok_payload(
-            rule={
-                "kind": "keyword",
-                "id": int(rule_id),
-                "deleted": True,
-            }
-        )
+        from ..services import context_service
+        context_service.invalidate_context_recompute_cache()
+        rule = {"kind": "keyword", "id": int(rule_id), "deleted": True}
+        if explicit_history_choice:
+            rule.update({"history_updated": bool(apply_to_history), "updated_count": int(history_result.get("updated_count") or 0)})
+        return ok_payload(rule=rule)
     except ProjectRuleWriteError as exc:
         return fail_payload(exc.code)
     except Exception:
@@ -307,10 +316,12 @@ def update_project_folder_rule(
         return fail_payload(ERROR_OPERATION_FAILED)
 
 
-def delete_project_folder_rule(rule_id: Any) -> dict[str, Any]:
+def delete_project_folder_rule(rule_id: Any, apply_to_history: Any = _APPLY_TO_HISTORY_UNSET) -> dict[str, Any]:
     """Delete one existing folder rule."""
 
     if not valid_int(rule_id):
+        return fail_payload(ERROR_INVALID_INPUT)
+    if apply_to_history is not _APPLY_TO_HISTORY_UNSET and not valid_bool(apply_to_history):
         return fail_payload(ERROR_INVALID_INPUT)
     try:
         # ``_folder_rule_row`` only resolves ids in ``folder_project_rule``;
@@ -319,14 +330,19 @@ def delete_project_folder_rule(rule_id: Any) -> dict[str, Any]:
         # keyword rule.
         if _folder_rule_row(rule_id) is None:
             return fail_payload(ERROR_NOT_FOUND)
+        explicit_history_choice = apply_to_history is not _APPLY_TO_HISTORY_UNSET
+        apply_to_history = False if not explicit_history_choice else apply_to_history
+        history_result = {"updated_count": 0}
+        if apply_to_history:
+            from ..services import rule_history_application_service
+            history_result = rule_history_application_service.remove_rule_from_history("folder", rule_id)
         folder_rule_service.delete_folder_rule(rule_id)
-        return ok_payload(
-            rule={
-                "kind": "folder",
-                "id": int(rule_id),
-                "deleted": True,
-            }
-        )
+        from ..services import context_service
+        context_service.invalidate_context_recompute_cache()
+        rule = {"kind": "folder", "id": int(rule_id), "deleted": True}
+        if explicit_history_choice:
+            rule.update({"history_updated": bool(apply_to_history), "updated_count": int(history_result.get("updated_count") or 0)})
+        return ok_payload(rule=rule)
     except ProjectRuleWriteError as exc:
         return fail_payload(exc.code)
     except Exception:
@@ -361,9 +377,9 @@ def backfill_project_rule(rule_type: Any, rule_id: Any) -> dict[str, Any]:
     if not valid_int(rule_id):
         return fail_payload(ERROR_INVALID_INPUT)
     try:
-        from ..services import rule_impact_service
+        from ..services import rule_history_application_service, rule_impact_service
 
-        result = rule_impact_service.backfill_rule_impact(rule_type, rule_id)
+        result = rule_history_application_service.apply_rule_to_history(rule_type, rule_id)
         return ok_payload(result=result)
     except rule_impact_service.RuleImpactError as exc:
         return fail_payload(exc.code)

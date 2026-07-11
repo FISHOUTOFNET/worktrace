@@ -133,6 +133,10 @@ CREATE TABLE IF NOT EXISTS activity_project_assignment (
     ),
     is_manual INTEGER NOT NULL DEFAULT 0,
     suggested_project_name TEXT,
+    source_rule_type TEXT NULL CHECK (
+        source_rule_type IS NULL OR source_rule_type IN ('folder', 'keyword')
+    ),
+    source_rule_id INTEGER NULL,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     FOREIGN KEY (activity_id) REFERENCES activity_log(id),
@@ -249,6 +253,9 @@ ON activity_project_assignment(project_id);
 
 CREATE INDEX IF NOT EXISTS idx_assignment_source_manual
 ON activity_project_assignment(source, is_manual);
+
+CREATE INDEX IF NOT EXISTS idx_assignment_source_rule
+ON activity_project_assignment(source_rule_type, source_rule_id, is_manual);
 
 CREATE INDEX IF NOT EXISTS idx_project_session_override_hash
 ON project_session_override(report_date, activity_member_hash, match_state);

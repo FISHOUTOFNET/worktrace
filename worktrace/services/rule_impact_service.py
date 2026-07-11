@@ -121,6 +121,8 @@ SELECT
     apa.project_id AS assignment_project_id,
     apa.source AS assignment_source,
     apa.is_manual AS assignment_is_manual,
+    apa.source_rule_type AS assignment_source_rule_type,
+    apa.source_rule_id AS assignment_source_rule_id,
     curr.name AS current_project_name
 FROM activity_log a
 LEFT JOIN activity_resource ar ON ar.activity_id = a.id
@@ -209,6 +211,8 @@ def _classify_activities(activities: list[dict], rule: dict, rule_type: str, con
         already_target = (
             effective_project_id == target_project_id
             and str(activity.get("assignment_source") or "") == expected_source
+            and str(activity.get("assignment_source_rule_type") or "") == rule_type
+            and int(activity.get("assignment_source_rule_id") or 0) == int(rule.get("id") or 0)
         )
         if already_target:
             counts["already_target_count"] += 1
@@ -361,19 +365,22 @@ def backfill_rule_impact(
                 """
                 INSERT INTO activity_project_assignment(
                     activity_id, project_id, confidence, source, is_manual,
-                    suggested_project_name, created_at, updated_at
+                    suggested_project_name, source_rule_type, source_rule_id,
+                    created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, 0, NULL, ?, ?)
+                VALUES (?, ?, ?, ?, 0, NULL, ?, ?, ?, ?)
                 ON CONFLICT(activity_id) DO UPDATE SET
                     project_id = excluded.project_id,
                     confidence = excluded.confidence,
                     source = excluded.source,
                     is_manual = 0,
                     suggested_project_name = NULL,
+                    source_rule_type = excluded.source_rule_type,
+                    source_rule_id = excluded.source_rule_id,
                     updated_at = excluded.updated_at
                 WHERE activity_project_assignment.is_manual = 0
                 """,
-                (activity_id, project_id, confidence, source, ts, ts),
+                (activity_id, project_id, confidence, source, rule_type, rule_id, ts, ts),
             )
             if cursor.rowcount != 1:
                 raise RuleImpactError(ERR_OPERATION_FAILED)

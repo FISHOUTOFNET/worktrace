@@ -161,11 +161,15 @@ def list_folder_rules() -> list[dict]:
     return dict_rows(rows)
 
 
-def find_matching_folder_rule(path_or_parent_dir: str) -> dict | None:
+def find_matching_folder_rule(path_or_parent_dir: str, *, exclude_rule_id: int | None = None) -> dict | None:
     target = (path_or_parent_dir or "").strip()
     if not target:
         return None
-    matches = [row for row in _enabled_folder_rules() if _target_matches_rule(target, row)]
+    matches = [
+        row for row in _enabled_folder_rules()
+        if _target_matches_rule(target, row)
+        and int(row.get("id") or 0) != int(exclude_rule_id or 0)
+    ]
     if not matches:
         return None
     return dict(max(matches, key=lambda row: len(row["normalized_folder_key"] or "")))

@@ -128,6 +128,36 @@ def test_migration_is_idempotent(tmp_path):
         conn.close()
 
 
+def test_old_assignment_table_gets_rule_origin_columns_and_index(tmp_path):
+    from worktrace.db import initialize_database, get_connection, ensure_schema_migrations
+    db_path = str(tmp_path / "test.db")
+    initialize_database(db_path)
+    conn = get_connection()
+    try:
+        conn.execute("ALTER TABLE activity_project_assignment RENAME TO assignment_old")
+        conn.execute(
+            """
+            CREATE TABLE activity_project_assignment (
+                activity_id INTEGER PRIMARY KEY, project_id INTEGER,
+                confidence INTEGER NOT NULL DEFAULT 0, source TEXT NOT NULL,
+                is_manual INTEGER NOT NULL DEFAULT 0, suggested_project_name TEXT,
+                created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO activity_project_assignment SELECT activity_id, project_id, confidence, source, is_manual, suggested_project_name, created_at, updated_at FROM assignment_old"
+        )
+        conn.execute("DROP TABLE assignment_old")
+        ensure_schema_migrations(conn)
+        ensure_schema_migrations(conn)
+        assert {"source_rule_type", "source_rule_id"}.issubset(_get_columns(conn, "activity_project_assignment"))
+        indexes = {row["name"] for row in conn.execute("PRAGMA index_list(activity_project_assignment)").fetchall()}
+        assert "idx_assignment_source_rule" in indexes
+    finally:
+        conn.close()
+
+
 def test_initialize_creates_all_current_schema_tables(temp_db):
     with db.get_connection() as conn:
         tables = _get_tables(conn)

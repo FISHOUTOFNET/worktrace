@@ -275,12 +275,31 @@ def archive_project_for_rules(project_id: Any) -> dict[str, Any]:
         return fail_payload(ERROR_OPERATION_FAILED)
 
 
+def delete_project_for_rules(project_id: Any) -> dict[str, Any]:
+    """Soft-delete a user project from Project Rules without touching facts."""
+    if not valid_int(project_id):
+        return fail_payload(ERROR_INVALID_INPUT)
+    try:
+        project = project_service.get_project(project_id)
+        if not project:
+            return fail_payload(ERROR_NOT_FOUND)
+        if _is_system_or_special_project(project):
+            return fail_payload(ERROR_SYSTEM_PROJECT)
+        project_service.archive_project(project_id)
+        from ..services import context_service
+        context_service.invalidate_context_recompute_cache()
+        return ok_payload(project={"id": int(project_id), "deleted": True, "archived": True})
+    except Exception:
+        return fail_payload(ERROR_OPERATION_FAILED)
+
+
 __all__ = [
     "archive_project",
     "archive_project_for_rules",
     "create_project",
     "create_project_for_rules",
     "delete_project",
+    "delete_project_for_rules",
     "get_project",
     "get_project_by_name",
     "list_active_projects",

@@ -48,6 +48,8 @@ def test_new_database_has_current_schema_and_defaults(temp_db):
     assert "language" in project_columns
     assert "default_billable" not in project_columns
     assert "suggested_project_name" in assignment_columns
+    assert "source_rule_type" in assignment_columns
+    assert "source_rule_id" in assignment_columns
     assert "resource" not in tables
     assert "project_rule" in tables
     assert "folder_project_rule" in tables
@@ -80,6 +82,7 @@ def test_new_database_has_current_schema_and_defaults(temp_db):
     assert "keyword_rule" in assignment_schema
     assert "clipboard_transition_context" in assignment_schema
     assert "same_project_context" in assignment_schema
+    assert "source_rule_type" in assignment_schema
     assert "anchor_keyword" not in assignment_schema
     assert "anchor_resource_default" not in assignment_schema
     assert "rule" not in tables
@@ -125,6 +128,8 @@ def test_reset_database_clears_current_schema_tables(temp_db):
         assert "language" in project_columns
         assert "default_billable" not in project_columns
         assert "suggested_project_name" in assignment_columns
+        assert "source_rule_type" in assignment_columns
+        assert "source_rule_id" in assignment_columns
         assert conn.execute("SELECT value FROM settings WHERE key = 'context_carry_minutes'").fetchone()["value"] == "15"
         assert conn.execute("SELECT value FROM settings WHERE key = 'idle_threshold_seconds'").fetchone()["value"] == "300"
         assert conn.execute("SELECT value FROM settings WHERE key = 'ui_refresh_seconds'").fetchone()["value"] == "10"

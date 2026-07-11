@@ -146,6 +146,7 @@ def ensure_schema_migrations(conn: sqlite3.Connection) -> None:
     exists before running ``ALTER TABLE``.
     """
     ensure_project_language_column(conn)
+    ensure_assignment_rule_origin_columns(conn)
     ensure_report_session_operation_tables(conn)
 
 
@@ -160,6 +161,30 @@ def ensure_project_language_column(conn: sqlite3.Connection) -> None:
         conn.execute(
             "ALTER TABLE project ADD COLUMN language TEXT NOT NULL DEFAULT '中文'"
         )
+
+
+def ensure_assignment_rule_origin_columns(conn: sqlite3.Connection) -> None:
+    """Add direct-rule origin fields to existing assignment tables.
+
+    There is deliberately no foreign key: keyword and folder rules live in
+    separate tables, and a historical assignment may retain its origin after
+    the rule itself is deleted.
+    """
+    columns = {str(row["name"]) for row in conn.execute(
+        "PRAGMA table_info(activity_project_assignment)"
+    ).fetchall()}
+    if "source_rule_type" not in columns:
+        conn.execute(
+            "ALTER TABLE activity_project_assignment ADD COLUMN source_rule_type TEXT NULL"
+        )
+    if "source_rule_id" not in columns:
+        conn.execute(
+            "ALTER TABLE activity_project_assignment ADD COLUMN source_rule_id INTEGER NULL"
+        )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_assignment_source_rule "
+        "ON activity_project_assignment(source_rule_type, source_rule_id, is_manual)"
+    )
 
 
 def ensure_report_session_operation_tables(conn: sqlite3.Connection) -> None:

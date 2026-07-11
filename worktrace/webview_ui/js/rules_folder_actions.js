@@ -34,24 +34,7 @@
             App.showRulesError("删除文件夹规则失败");
             return;
         }
-        if (!window.confirm("确定删除这条文件夹规则吗？删除后该文件夹将不再用于自动归类。")) {
-            return;
-        }
-        App.setFolderDeleting("folder:" + ruleId);
-        App.clearRulesError();
-        App.callBridge("delete_project_folder_rule", ruleId).then(function (result) {
-            if (result && result.ok === false) {
-                App.showRulesError(result.error || "删除文件夹规则失败");
-                return;
-            }
-            return App.loadProjectRules().then(function () {
-                App.showRulesError("文件夹规则已删除");
-            });
-        }).catch(function () {
-            App.showRulesError("删除文件夹规则失败");
-        }).then(function () {
-            App.setFolderDeleting(null);
-        });
+        if (App.openProjectRuleDeleteModal) App.openProjectRuleDeleteModal("folder", ruleId);
     }
     App.handleFolderDelete = handleFolderDelete;
 
