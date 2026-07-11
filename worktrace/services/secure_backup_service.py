@@ -68,6 +68,8 @@ EXPORT_TABLES: tuple[str, ...] = (
     "activity_clipboard_event",
     "project_session_override",
     "project_session_override_member",
+    "report_session_operation",
+    "report_session_operation_member",
     "activity_resource",
 )
 
@@ -97,6 +99,8 @@ _DELETE_ORDER: tuple[str, ...] = (
     "activity_resource",
     "project_session_override_member",
     "project_session_override",
+    "report_session_operation_member",
+    "report_session_operation",
     "activity_clipboard_event",
     "activity_project_assignment",
     "folder_rule_file_index",

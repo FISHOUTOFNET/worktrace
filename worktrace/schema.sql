@@ -170,6 +170,33 @@ CREATE TABLE IF NOT EXISTS project_session_override_member (
     FOREIGN KEY (activity_id) REFERENCES activity_log(id)
 );
 
+CREATE TABLE IF NOT EXISTS report_session_operation (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    report_date TEXT NOT NULL,
+    operation_type TEXT NOT NULL CHECK(operation_type IN ('hide_session', 'merge_sessions', 'copy_session', 'hide_activity')),
+    base_instance_key TEXT NOT NULL,
+    target_instance_key TEXT,
+    direction TEXT CHECK(direction IS NULL OR direction IN ('previous', 'next')),
+    operation_group_key TEXT,
+    match_state TEXT NOT NULL DEFAULT 'active' CHECK(match_state IN ('active', 'conflict', 'orphaned', 'superseded')),
+    payload_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS report_session_operation_member (
+    operation_id INTEGER NOT NULL,
+    role TEXT NOT NULL CHECK(role IN ('source', 'target', 'origin', 'copy_origin', 'hidden_activity')),
+    activity_id INTEGER NOT NULL,
+    report_date TEXT NOT NULL,
+    slice_start_time TEXT NOT NULL,
+    slice_end_time TEXT NOT NULL,
+    display_order INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY(operation_id, role, activity_id, report_date, slice_start_time, slice_end_time),
+    FOREIGN KEY(operation_id) REFERENCES report_session_operation(id) ON DELETE CASCADE,
+    FOREIGN KEY(activity_id) REFERENCES activity_log(id)
+);
+
 CREATE TABLE IF NOT EXISTS activity_clipboard_event (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     activity_id INTEGER NOT NULL,
@@ -228,6 +255,21 @@ ON project_session_override(report_date, activity_member_hash, match_state);
 
 CREATE INDEX IF NOT EXISTS idx_project_session_override_member_activity
 ON project_session_override_member(activity_id, report_date);
+
+CREATE INDEX IF NOT EXISTS idx_report_session_operation_date_state
+ON report_session_operation(report_date, match_state);
+
+CREATE INDEX IF NOT EXISTS idx_report_session_operation_instance
+ON report_session_operation(report_date, base_instance_key, match_state);
+
+CREATE INDEX IF NOT EXISTS idx_report_session_operation_group
+ON report_session_operation(operation_group_key, match_state);
+
+CREATE INDEX IF NOT EXISTS idx_report_session_operation_member_activity
+ON report_session_operation_member(activity_id, report_date);
+
+CREATE INDEX IF NOT EXISTS idx_report_session_operation_member_role
+ON report_session_operation_member(operation_id, role);
 
 CREATE INDEX IF NOT EXISTS idx_project_rule_pattern
 ON project_rule(pattern);

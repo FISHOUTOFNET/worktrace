@@ -5,7 +5,7 @@ from datetime import date, timedelta
 from ..constants import STATUS_EXCLUDED, STATUS_IDLE, STATUS_NORMAL, STATUS_PAUSED, UNCATEGORIZED_PROJECT
 from ..formatters import format_status_label
 from .context_service import recompute_context_assignments_for_date
-from . import timeline_service
+from . import report_session_projection_service, timeline_service
 from .activity_continuity_service import is_normal_project_status
 
 # Maximum inclusive calendar-day span accepted by the read-only
@@ -36,30 +36,30 @@ def get_summary(start_date: str, end_date: str, ensure_context: bool = True) -> 
         include_hidden=False,
         ensure_context=False,
     )
-    rows = timeline_service.get_report_activity_rows(
+    rows = report_session_projection_service.get_projected_activity_contributions_by_range(
         start_date,
         end_date,
         include_hidden=False,
         ensure_context=False,
     )
-    total = sum(int(row.get("report_duration_seconds") or row.get("duration_seconds") or 0) for row in rows)
+    total = sum(int(row.get("duration_seconds") or 0) for row in rows)
     effective = sum(
-        int(row.get("report_duration_seconds") or row.get("duration_seconds") or 0)
+        int(row.get("duration_seconds") or 0)
         for row in rows
         if row.get("status") == STATUS_NORMAL
     )
     idle = sum(
-        int(row.get("report_duration_seconds") or row.get("duration_seconds") or 0)
+        int(row.get("duration_seconds") or 0)
         for row in rows
         if row.get("status") == STATUS_IDLE
     )
     paused = sum(
-        int(row.get("report_duration_seconds") or row.get("duration_seconds") or 0)
+        int(row.get("duration_seconds") or 0)
         for row in rows
         if row.get("status") == STATUS_PAUSED
     )
     excluded = sum(
-        int(row.get("report_duration_seconds") or row.get("duration_seconds") or 0)
+        int(row.get("duration_seconds") or 0)
         for row in rows
         if row.get("status") == STATUS_EXCLUDED
     )
@@ -142,7 +142,7 @@ def get_statistics_export_summary(date_from: str, date_to: str) -> dict:
     The returned dict is display-safe and contains no raw DB rows.
     """
     _validate_summary_date_range(date_from, date_to)
-    rows = timeline_service.get_report_activity_rows(
+    rows = report_session_projection_service.get_projected_activity_contributions_by_range(
         date_from,
         date_to,
         include_hidden=False,
@@ -162,10 +162,7 @@ def get_statistics_export_summary(date_from: str, date_to: str) -> dict:
     closed_sessions = [session for session in sessions if not session.get("is_in_progress")]
     all_rows = closed_rows
 
-    total_duration = sum(
-        int(row.get("report_duration_seconds") or row.get("duration_seconds") or 0)
-        for row in all_rows
-    )
+    total_duration = sum(int(row.get("duration_seconds") or 0) for row in all_rows)
     project_duration = 0
     all_activity_ids: set[int] = set()
     by_project: dict[str, dict] = {}
@@ -173,8 +170,8 @@ def get_statistics_export_summary(date_from: str, date_to: str) -> dict:
     by_status: dict[str, dict] = {}
 
     for row in all_rows:
-        duration = int(row.get("report_duration_seconds") or row.get("duration_seconds") or 0)
-        activity_id = int(row.get("id") or 0)
+        duration = int(row.get("duration_seconds") or 0)
+        activity_id = int(row.get("activity_id") or row.get("id") or 0)
         if activity_id:
             all_activity_ids.add(activity_id)
 

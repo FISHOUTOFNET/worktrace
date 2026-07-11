@@ -68,6 +68,8 @@ def test_report_projection_modules_do_not_mutate_raw_activity_rows():
     violations: list[str] = []
     for relative_path in REPORT_PROJECTION_MODULES + [
         "worktrace/services/report_session_projection_service.py",
+        "worktrace/services/report_session_operation_engine.py",
+        "worktrace/services/report_session_operation_service.py",
     ]:
         source = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
         tree = ast.parse(source, filename=relative_path)

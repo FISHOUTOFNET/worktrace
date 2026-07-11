@@ -386,13 +386,14 @@ def test_timeline_right_panel_uses_session_summary_bridge_contract():
     assert "get_timeline_project_activity_summary" not in source
     assert "get_timeline_session_activity_summary" in source
 
-def test_timeline_selection_loads_summary_by_activity_ids():
+def test_timeline_selection_loads_summary_by_projection_instance_key():
     source = read_resource("js/timeline.js")
     select_body = func_body(source, "selectTimelineSession")
     show_body = func_body(source, "showTimeline")
 
-    assert "loadSessionActivitySummary(found.summary_activity_ids || found.activity_ids, App.timelineDate)" in select_body
-    assert "loadSessionActivitySummary(found.summary_activity_ids || found.activity_ids, data.date)" in show_body
+    assert "loadSessionActivitySummary(found.projection_instance_key, App.timelineDate)" in select_body
+    assert "loadSessionActivitySummary(found.projection_instance_key, data.date)" in show_body
+    assert "data-projection-instance-key" in show_body
     assert "loadSessionActivitySummary(found.project_id" not in source
     assert "loadSessionDetails(found.project_id" not in source
 
@@ -1293,18 +1294,16 @@ def test_save_edit_still_uses_p0_bridge_methods():
     assert '"update_timeline_activity_time"' not in body
     assert '"split_timeline_activity"' not in body
 
-def test_bridge_and_api_do_not_define_advanced_timeline_methods():
+def test_bridge_and_api_expose_only_supported_report_session_operations():
     bridge_src = read_bridge_sources_combined()
     api_src = (REPO_ROOT / "worktrace" / "api" / "timeline_api.py").read_text(encoding="utf-8")
     for forbidden in (
         "def update_timeline_activity_time",
         "def update_timeline_session_time",
         "def split_timeline_activity",
-        "def split_timeline_session",
         "def merge_timeline_activities",
         "def hide_timeline_activity",
         "def soft_delete_timeline_activity",
-        "def hide_timeline_session",
         "def soft_delete_timeline_session",
         "def batch_update_timeline_activities_project",
         "def batch_update_timeline_activities_note",
@@ -1320,6 +1319,15 @@ def test_bridge_and_api_do_not_define_advanced_timeline_methods():
     ):
         assert forbidden not in bridge_src
         assert forbidden not in api_src
+    for required in (
+        "def hide_timeline_session",
+        "def merge_timeline_session",
+        "def split_timeline_session",
+        "def copy_timeline_session",
+        "def hide_timeline_session_activity",
+    ):
+        assert required in bridge_src
+        assert required in api_src
 
 def test_styles_css_has_no_advanced_timeline_selectors():
     source = read_resource("styles.css")

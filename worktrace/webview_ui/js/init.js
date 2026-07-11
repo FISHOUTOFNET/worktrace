@@ -240,6 +240,32 @@
         }
         document.getElementById("edit-save-btn").addEventListener("click", App.saveEdit);
         document.getElementById("edit-cancel-btn").addEventListener("click", App.cancelEdit);
+        var sessionActions = [
+            ["timeline-hide-session", "hide_timeline_session"],
+            ["timeline-merge-previous", "merge_timeline_session", "previous"],
+            ["timeline-merge-next", "merge_timeline_session", "next"],
+            ["timeline-split-session", "split_timeline_session"],
+            ["timeline-copy-session", "copy_timeline_session"]
+        ];
+        for (var actionIndex = 0; actionIndex < sessionActions.length; actionIndex++) {
+            (function (action) {
+                var button = document.getElementById(action[0]);
+                if (!button) return;
+                button.addEventListener("click", function () {
+                    if (action[2]) {
+                        var date = App.currentTimelineReportDate();
+                        var key = App.selectedProjectionInstanceKey;
+                        if (!date || !key) return;
+                        App.callBridge(action[1], date, key, action[2]).then(function (result) {
+                            var data = App.handleResult(result, function () {});
+                            if (data) App.refreshTimeline();
+                        });
+                    } else {
+                        App.runTimelineSessionOperation(action[1]);
+                    }
+                });
+            })(sessionActions[actionIndex]);
+        }
         var noteEl = document.getElementById("edit-note-text");
         if (noteEl) {
             noteEl.addEventListener("input", App.updateNoteCount);

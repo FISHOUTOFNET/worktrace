@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from ..constants import UNCATEGORIZED_PROJECT
-from . import session_override_service
+from . import report_session_operation_engine, session_override_service
 from .project_service import get_or_create_uncategorized_project
 
 
@@ -26,7 +26,30 @@ def get_report_sessions_by_range(
     include_hidden: bool = True,
     ensure_context: bool = True,
 ) -> list[dict]:
+    sessions = get_report_sessions_for_operations(
+        start_date,
+        end_date,
+        include_hidden=include_hidden,
+        ensure_context=ensure_context,
+    )
+    return [_public_session(session) for session in sessions]
+
+
+def get_report_sessions_for_operations(
+    start_date: str,
+    end_date: str,
+    *,
+    include_hidden: bool = True,
+    ensure_context: bool = True,
+) -> list[dict]:
+    """Build final sessions including private, display-safe contribution slices.
+
+    This is an internal service entry used by operation commands and summary
+    aggregation.  The public session entry strips the contribution payload so
+    Timeline cards never receive row-level data they do not render.
+    """
     from . import timeline_service
+    from . import report_session_operation_service
 
     uncategorized_id = get_or_create_uncategorized_project()
     rows = timeline_service.get_report_activity_rows(
@@ -46,7 +69,49 @@ def get_report_sessions_by_range(
     session_override_service.attach_overrides(sessions)
     for session in sessions:
         _finalize_session(session, uncategorized_id)
-    return sorted(sessions, key=timeline_service._session_sort_key, reverse=True)
+        _attach_projection_defaults(session)
+    _attach_contributions(sessions, rows)
+    projected: list[dict] = []
+    by_date: dict[str, list[dict]] = {}
+    for session in sessions:
+        by_date.setdefault(str(session.get("report_date") or ""), []).append(session)
+    for report_date, date_sessions in by_date.items():
+        ordered = sorted(date_sessions, key=timeline_service._session_sort_key, reverse=True)
+        operations = report_session_operation_service.load_operations(report_date)
+        applied = report_session_operation_engine.apply_operations(ordered, operations)
+        report_session_operation_service.persist_engine_match_states(operations)
+        projected.extend(applied)
+    return sorted(projected, key=timeline_service._session_sort_key, reverse=True)
+
+
+def get_projected_activity_contributions_by_range(
+    start_date: str,
+    end_date: str,
+    *,
+    include_hidden: bool = False,
+    ensure_context: bool = True,
+) -> list[dict]:
+    from . import timeline_service
+    from .activity_continuity_service import is_normal_project_status
+
+    sessions = get_report_sessions_for_operations(
+        start_date, end_date, include_hidden=include_hidden, ensure_context=ensure_context
+    )
+    contributions = report_session_operation_engine.build_projected_activity_contributions(sessions)
+    # Structural session operations deliberately apply only to normal project
+    # sessions. Status rows (idle/paused/excluded) remain raw report facts and
+    # must remain in statistics totals and by-status grouping.
+    status_rows = timeline_service.get_report_activity_rows(
+        start_date, end_date, include_hidden=include_hidden, ensure_context=False
+    )
+    for row in status_rows:
+        if is_normal_project_status(str(row.get("status") or "")):
+            continue
+        item = _display_safe_contribution(row)
+        item["projection_instance_key"] = f"status:{item['report_date']}:{item['activity_id']}:{item['slice_start_time']}"
+        item["projection_kind"] = "status"
+        contributions.append(item)
+    return contributions
 
 
 def resolve_current_session(
@@ -84,6 +149,90 @@ def _attach_session_identity(session: dict) -> None:
     session["activity_member_hash"] = member_hash
     session["anchor_activity_id"] = int(activity_ids[0]) if activity_ids else 0
     session["first_activity_id"] = session["anchor_activity_id"] or None
+
+
+def _attach_projection_defaults(session: dict) -> None:
+    member_hash = str(session.get("activity_member_hash") or "")
+    session.update(
+        {
+            "projection_instance_key": f"base:{member_hash}",
+            "projection_kind": "base",
+            "operation_id": None,
+            "operation_group_key": None,
+            "origin_activity_member_hashes": [member_hash] if member_hash else [],
+            "operation_match_state": "active",
+            "can_hide": bool(session.get("editable")),
+            "can_merge_previous": False,
+            "can_merge_next": False,
+            "can_split": False,
+            "can_copy": bool(session.get("editable")),
+            "can_hide_activity": bool(session.get("editable")),
+        }
+    )
+
+
+def _attach_contributions(sessions: list[dict], rows: list[dict]) -> None:
+    by_member = {
+        _member_key_from_row(row): _display_safe_contribution(row)
+        for row in rows
+        if _member_key_from_row(row)[1] > 0
+    }
+    for session in sessions:
+        session["_projection_contributions"] = [
+            dict(by_member[key])
+            for key in (_member_key(member) for member in session.get("member_slices") or [])
+            if key in by_member
+        ]
+
+
+def _display_safe_contribution(row: dict) -> dict:
+    return {
+        "activity_id": int(row.get("id") or row.get("activity_id") or 0),
+        "report_date": str(row.get("report_date") or ""),
+        "slice_start_time": str(row.get("start_time") or ""),
+        "slice_end_time": str(row.get("end_time") or ""),
+        "start_time": str(row.get("start_time") or ""),
+        "end_time": str(row.get("end_time") or ""),
+        "duration_seconds": int(row.get("report_duration_seconds") or row.get("duration_seconds") or 0),
+        "app_name": str(row.get("app_name") or ""),
+        "process_name": str(row.get("process_name") or ""),
+        "status": str(row.get("status") or ""),
+        "is_in_progress": bool(row.get("is_in_progress")),
+        "activity_display_name": str(row.get("activity_display_name") or row.get("app_name") or "未知活动"),
+        "activity_identity_key": str(row.get("activity_identity_key") or row.get("resource_identity_key") or ""),
+        "resource_identity_key": str(row.get("resource_identity_key") or ""),
+        "resource_kind": str(row.get("resource_kind") or ""),
+        "resource_subtype": str(row.get("resource_subtype") or ""),
+        "resource_display_name": str(row.get("resource_display_name") or ""),
+        "display_project_id": int(row.get("display_project_id") or 0),
+        "display_project_name": str(row.get("display_project_name") or UNCATEGORIZED_PROJECT),
+        "display_project_description": str(row.get("display_project_description") or ""),
+        "report_project_id": int(row.get("report_project_id") or 0),
+        "report_project_name": str(row.get("report_project_name") or UNCATEGORIZED_PROJECT),
+        "report_project_description": str(row.get("report_project_description") or ""),
+        "is_report_project": bool(row.get("is_report_project")),
+        "is_report_classified": bool(row.get("is_report_classified")),
+        "is_report_uncategorized": bool(row.get("is_report_uncategorized")),
+        "report_attribution_kind": str(row.get("report_attribution_kind") or "none"),
+        "is_official_project": bool(row.get("is_official_project")),
+    }
+
+
+def _member_key(member: dict) -> tuple[str, int, str, str]:
+    return (
+        str(member.get("report_date") or ""),
+        int(member.get("activity_id") or member.get("id") or 0),
+        str(member.get("slice_start_time") or member.get("start_time") or ""),
+        str(member.get("slice_end_time") or member.get("end_time") or ""),
+    )
+
+
+def _member_key_from_row(row: dict) -> tuple[str, int, str, str]:
+    return _member_key(row)
+
+
+def _public_session(session: dict) -> dict:
+    return {key: value for key, value in session.items() if not key.startswith("_projection_")}
 
 
 def _attach_raw_final_defaults(session: dict, uncategorized_id: int) -> None:

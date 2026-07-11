@@ -67,6 +67,7 @@
             document.getElementById("timeline-details-list").innerHTML = "";
             App.selectedSessionId = null;
             App.selectedSessionLiveKey = null;
+            App.selectedProjectionInstanceKey = null;
             clearEditPanel();
             return;
         }
@@ -93,7 +94,7 @@
             if (s.is_uncategorized) cls += " uncategorized";
             if (s.is_in_progress) cls += " in-progress";
             if (sessionCanTick) cls += " live-projected";
-            if (s.session_id === App.selectedSessionId) cls += " selected";
+            if (s.projection_instance_key === App.selectedProjectionInstanceKey || s.session_id === App.selectedSessionId) cls += " selected";
             // Stable live key data attribute so the ticker / selection continuity locates the session DOM across
             // backend-owned persisted-open refreshes without relying on a
             // display-only activity identity.
@@ -129,7 +130,7 @@
             var sDurText = (!isNaN(sDurSec) && sDurSec >= 0)
                 ? App.formatDuration(initialSec)
                 : (s.duration || "00:00:00");
-            html += '<div class="' + cls + '" data-session-id="' + App.escapeHtml(s.session_id) + '"'
+            html += '<div class="' + cls + '" data-session-id="' + App.escapeHtml(s.session_id) + '" data-projection-instance-key="' + App.escapeHtml(s.projection_instance_key || "") + '"'
                 + (stableKeyHash ? ' data-stable-live-key-hash="' + App.escapeHtml(stableKeyHash) + '"' : '')
                 + (sessSpanId ? ' data-display-span-id="' + App.escapeHtml(sessSpanId) + '"' : '')
                 + ' title="' + App.escapeHtml(projectLabel) + '｜' + App.escapeHtml(startTimeOnly) + '｜' + App.escapeHtml(sDurText) + '"'
@@ -169,14 +170,21 @@
         for (var j = 0; j < items.length; j++) {
             (function (itemEl) {
                 itemEl.addEventListener("click", function () {
-                    var sid = itemEl.getAttribute("data-session-id");
-                    selectTimelineSession(sid, sessions);
+                    selectTimelineSession(itemEl.getAttribute("data-projection-instance-key"), sessions);
                 });
             })(items[j]);
         }
 
-        if (App.selectedSessionId !== null || App.selectedSessionLiveKey) {
+        if (App.selectedProjectionInstanceKey || App.selectedSessionId !== null || App.selectedSessionLiveKey) {
             var found = null;
+            if (App.selectedProjectionInstanceKey) {
+                for (var pk = 0; pk < sessions.length; pk++) {
+                    if (sessions[pk].projection_instance_key === App.selectedProjectionInstanceKey) {
+                        found = sessions[pk];
+                        break;
+                    }
+                }
+            }
             // First try to match by stable_live_key_hash (handles pending / persisted transitions).
             if (App.selectedSessionLiveKey) {
                 for (var sk = 0; sk < sessions.length; sk++) {
@@ -201,10 +209,11 @@
                 // Update the selection anchors so a subsequent refresh can still find the session.
                 App.selectedSessionId = found.session_id;
                 App.selectedSessionLiveKey = found.stable_live_key_hash || null;
+                App.selectedProjectionInstanceKey = found.projection_instance_key || null;
                 var skipDetailReload = (typeof App._timelineEditingActive === "function"
                     && App._timelineEditingActive());
                 if (!skipDetailReload) {
-                    loadSessionActivitySummary(found.summary_activity_ids || found.activity_ids, data.date);
+                    loadSessionActivitySummary(found.projection_instance_key, data.date);
                 }
                 // Only re-populate the edit panel if the user is not mid-edit AND the session is not edit-disabled.
                 if (!found.edit_disabled
@@ -214,6 +223,7 @@
             // Persisted-open live session: clear the edit panel since it cannot be edited.
                     clearEditPanel();
                 }
+                updateSessionActionButtons(found);
             } else {
                 // Selected session disappeared (e.g. re-grouped). Invalidate the pending detail request and clear
                 // the detail cache so a stale response does not backfill the cleared panel.
@@ -222,6 +232,7 @@
                 App.lastSessionActivitySummaryViewModel = null;
                 App.selectedSessionId = null;
                 App.selectedSessionLiveKey = null;
+                App.selectedProjectionInstanceKey = null;
                 document.getElementById("timeline-details-header").textContent = "选择左侧时段查看详情";
                 document.getElementById("timeline-details-list").innerHTML = "";
                 clearEditPanel();
@@ -271,31 +282,33 @@
     }
     App.acceptTimelineDetailsPayload = acceptTimelineDetailsPayload;
 
-    function selectTimelineSession(sessionId, sessions) {
-        App.selectedSessionId = sessionId;
+    function selectTimelineSession(projectionInstanceKey, sessions) {
+        App.selectedProjectionInstanceKey = projectionInstanceKey;
         // Update selected class without full re-render. Match by session_id AND stable_live_key_hash so
         // Persisted-open projection refreshes keep the visual selection.
         var items = document.querySelectorAll("#timeline-sessions-list .timeline-item");
         var newSelected = null;
         for (var j0 = 0; j0 < sessions.length; j0++) {
-            if (sessions[j0].session_id === sessionId) {
+            if (sessions[j0].projection_instance_key === projectionInstanceKey) {
                 newSelected = sessions[j0];
                 break;
             }
         }
+        App.selectedSessionId = newSelected ? newSelected.session_id : null;
         App.selectedSessionLiveKey = (newSelected && newSelected.stable_live_key_hash) || null;
         for (var i = 0; i < items.length; i++) {
             items[i].classList.remove("selected");
             var itemSid = items[i].getAttribute("data-session-id");
             var itemKey = items[i].getAttribute("data-stable-live-key-hash");
-            if (itemSid === sessionId
+            if (items[i].getAttribute("data-projection-instance-key") === projectionInstanceKey
+                || itemSid === App.selectedSessionId
                 || (App.selectedSessionLiveKey && itemKey === App.selectedSessionLiveKey)) {
                 items[i].classList.add("selected");
             }
         }
         var found = newSelected;
         if (found) {
-            loadSessionActivitySummary(found.summary_activity_ids || found.activity_ids, App.timelineDate);
+            loadSessionActivitySummary(found.projection_instance_key, App.timelineDate);
             // Open live sessions are non-editable; a manual click must clear the edit panel.
             if (found.edit_disabled === true) {
                 clearEditPanel();
@@ -303,16 +316,17 @@
                 // A manual click always repopulates the edit panel, even if a prior auto-refresh skipped it.
                 populateEditPanel(found);
             }
+            updateSessionActionButtons(found);
         }
     }
     App.selectTimelineSession = selectTimelineSession;
 
-    function loadSessionActivitySummary(activityIds, date) {
-        return loadSessionDetails(activityIds, date);
+    function loadSessionActivitySummary(projectionInstanceKey, date) {
+        return loadSessionDetails(projectionInstanceKey, date);
     }
     App.loadSessionActivitySummary = loadSessionActivitySummary;
 
-    function loadSessionDetails(activityIds, date) {
+    function loadSessionDetails(projectionInstanceKey, date) {
         var detailsHeader = document.getElementById("timeline-details-header");
         var detailsList = document.getElementById("timeline-details-list");
         // Only show loading when the panel is empty; keep existing summaries visible during refresh.
@@ -322,7 +336,7 @@
         }
 
         var token = ++App.detailsRequestToken;
-        App.callBridge("get_timeline_session_activity_summary", activityIds || [], date).then(function (result) {
+        App.callBridge("get_timeline_session_activity_summary", projectionInstanceKey || "", date).then(function (result) {
             if (token !== App.detailsRequestToken) return;  // stale response
             var data = App.handleResult(result, function (msg) {
                 detailsHeader.textContent = "加载项目活动耗时失败";
@@ -414,10 +428,18 @@
                 + ' data-duration-seconds="' + initialSec + '">' + App.escapeHtml(durationText) + '</div>'
                 + '<div class="summary-item-name" title="' + App.escapeHtml(displayName) + '">' + App.escapeHtml(displayName) + '</div>'
                 + '<div class="summary-item-project" title="' + App.escapeHtml(projectLabel) + '">' + App.escapeHtml(projectLabel) + '</div>'
+                + (row.can_hide_activity ? '<button type="button" class="summary-hide-activity" data-summary-id="' + App.escapeHtml(String(row.summary_id || "")) + '">从该时段移除该活动</button>' : '')
                 + '</div>';
             summaryContinuityKeys.push({ index: i, sec: initialSec, key: summaryContinuityKey });
         }
         detailsList.innerHTML = html;
+        var removeButtons = detailsList.querySelectorAll(".summary-hide-activity");
+        for (var rb = 0; rb < removeButtons.length; rb++) {
+            removeButtons[rb].addEventListener("click", function (event) {
+                event.stopPropagation();
+                App.runTimelineSessionOperation("hide_timeline_session_activity", this.getAttribute("data-summary-id"));
+            });
+        }
         for (var si = 0; si < summaryContinuityKeys.length; si++) {
             var skey = summaryContinuityKeys[si];
             var summaryKey = skey.key || "";
@@ -548,6 +570,7 @@
         App.editSaving = false;
         var panel = document.getElementById("timeline-edit-panel");
         if (panel) panel.hidden = true;
+        updateSessionActionButtons(null);
         var noteEl = document.getElementById("edit-note-text");
         if (noteEl) {
             noteEl.value = "";
@@ -803,6 +826,43 @@
     }
     App.cancelEdit = cancelEdit;
 
+    function updateSessionActionButtons(session) {
+        var fields = [
+            ["timeline-hide-session", "can_hide"],
+            ["timeline-merge-previous", "can_merge_previous"],
+            ["timeline-merge-next", "can_merge_next"],
+            ["timeline-split-session", "can_split"],
+            ["timeline-copy-session", "can_copy"]
+        ];
+        for (var i = 0; i < fields.length; i++) {
+            var button = document.getElementById(fields[i][0]);
+            if (!button) continue;
+            var allowed = !!(session && session[fields[i][1]]);
+            button.hidden = !allowed;
+            button.disabled = !allowed;
+        }
+    }
+    App.updateSessionActionButtons = updateSessionActionButtons;
+
+    function runTimelineSessionOperation(method, summaryId) {
+        var key = App.selectedProjectionInstanceKey;
+        var date = currentTimelineReportDate();
+        if (!key || !date) return Promise.resolve();
+        var args = method === "hide_timeline_session_activity"
+            ? [date, key, summaryId]
+            : [date, key];
+        return App.callBridge.apply(null, [method].concat(args)).then(function (result) {
+            var data = App.handleResult(result, function (message) {
+                showEditStatus(message || "操作失败，请刷新后重试。", true);
+            });
+            if (!data) return;
+            return refreshTimeline();
+        }).catch(function () {
+            showEditStatus("操作失败，请刷新后重试。", true);
+        });
+    }
+    App.runTimelineSessionOperation = runTimelineSessionOperation;
+
 
     function normalizeTimelineReportDate(date) {
         if (date === "--" || date === "") return null;
@@ -819,6 +879,7 @@
     function resetTimelineReportSelection() {
         App.selectedSessionId = null;
         App.selectedSessionLiveKey = null;
+        App.selectedProjectionInstanceKey = null;
         ++App.detailsRequestToken;
         App.lastSessionDetailsViewModel = null;
         App.lastSessionActivitySummaryViewModel = null;

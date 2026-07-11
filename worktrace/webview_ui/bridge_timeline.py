@@ -83,19 +83,28 @@ class TimelineBridgeMixin:
 
     def get_timeline_session_activity_summary(
         self,
-        activity_ids: list[int],
+        projection_instance_key: str | list[int],
         report_date: str | None = None,
     ) -> dict[str, Any]:
         """Return session-scoped activity duration summaries for Timeline."""
         try:
-            ids_result = self._coerce_session_summary_activity_ids(activity_ids)
-            if ids_result is None:
-                return {"ok": False, "error": "请选择有效的活动时段"}
-            ids = ids_result
             if report_date is not None and (
                 not isinstance(report_date, str) or not _DATE_SHAPE_RE.match(report_date)
             ):
                 return {"ok": False, "error": "日期无效"}
+            if isinstance(projection_instance_key, str):
+                if not projection_instance_key.strip():
+                    return {"ok": False, "error": "请选择有效的活动时段"}
+                return view_model_api.get_session_activity_summary_view_model(
+                    report_date=report_date,
+                    projection_instance_key=projection_instance_key.strip(),
+                )
+            # Compatibility fallback for callers not yet carrying projection
+            # identity. New Timeline actions always take the string path.
+            ids_result = self._coerce_session_summary_activity_ids(projection_instance_key)
+            if ids_result is None:
+                return {"ok": False, "error": "请选择有效的活动时段"}
+            ids = ids_result
             if not ids:
                 return {
                     "ok": True,
@@ -211,4 +220,49 @@ class TimelineBridgeMixin:
             return {"ok": False, "error": "操作失败"}
         except Exception:
             logger.exception("webview bridge save_timeline_session_override failed")
+            return dict(_GENERIC_ERROR)
+
+    def hide_timeline_session(self, report_date: str, projection_instance_key: str) -> dict[str, Any]:
+        return self._run_session_operation(timeline_api.hide_timeline_session, report_date, projection_instance_key)
+
+    def merge_timeline_session(self, report_date: str, projection_instance_key: str, direction: str) -> dict[str, Any]:
+        if direction not in {"previous", "next"}:
+            return {"ok": False, "error": "只能合并相邻时段。"}
+        return self._run_session_operation(timeline_api.merge_timeline_session, report_date, projection_instance_key, direction)
+
+    def split_timeline_session(self, report_date: str, projection_instance_key: str) -> dict[str, Any]:
+        return self._run_session_operation(timeline_api.split_timeline_session, report_date, projection_instance_key)
+
+    def copy_timeline_session(self, report_date: str, projection_instance_key: str) -> dict[str, Any]:
+        return self._run_session_operation(timeline_api.copy_timeline_session, report_date, projection_instance_key)
+
+    def hide_timeline_session_activity(self, report_date: str, projection_instance_key: str, summary_id: str) -> dict[str, Any]:
+        if not isinstance(summary_id, str) or not summary_id.strip():
+            return {"ok": False, "error": "请选择有效的活动时段"}
+        return self._run_session_operation(
+            timeline_api.hide_timeline_session_activity, report_date, projection_instance_key, summary_id.strip()
+        )
+
+    @staticmethod
+    def _run_session_operation(action, report_date: str, projection_instance_key: str, *args) -> dict[str, Any]:
+        if not isinstance(report_date, str) or not _DATE_SHAPE_RE.match(report_date):
+            return {"ok": False, "error": "日期无效"}
+        if not isinstance(projection_instance_key, str) or not projection_instance_key.strip():
+            return {"ok": False, "error": "请选择有效的活动时段"}
+        try:
+            action(report_date, projection_instance_key.strip(), *args)
+            return {"ok": True}
+        except ValueError as exc:
+            code = str(exc)
+            if code == "session_identity_conflict":
+                return {"ok": False, "error": "该时段因项目规则更新发生重排，请重新确认。"}
+            if code == "in_progress":
+                return {"ok": False, "error": "进行中记录暂不支持该操作。"}
+            if code == "not_mergeable":
+                return {"ok": False, "error": "只能合并相邻时段。"}
+            if code == "copy_session_not_mergeable":
+                return {"ok": False, "error": "复制时段暂不支持合并。"}
+            return {"ok": False, "error": "操作失败，请刷新后重试。"}
+        except Exception:
+            logger.exception("webview bridge session operation failed")
             return dict(_GENERIC_ERROR)

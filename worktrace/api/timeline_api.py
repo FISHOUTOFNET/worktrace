@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..services import activity_service, project_service, timeline_service
+from ..services import activity_service, project_service, report_session_operation_service, timeline_service
 from ..services.activity_edit_policy import project_editability_code
 from ..services.live_time_service import (
     snapshot_elapsed_seconds,
@@ -157,6 +157,32 @@ def update_timeline_session_note_and_duration(
     timeline_service.update_session_note_and_duration(date, ids, member_hash, text, duration)
 
 
+def hide_timeline_session(report_date: str, projection_instance_key: str) -> None:
+    report_session_operation_service.hide_session(_validate_report_date(report_date), _validate_projection_instance_key(projection_instance_key))
+
+
+def merge_timeline_session(report_date: str, projection_instance_key: str, direction: str) -> None:
+    if direction not in {"previous", "next"}:
+        raise ValueError("invalid_direction")
+    report_session_operation_service.merge_session(_validate_report_date(report_date), _validate_projection_instance_key(projection_instance_key), direction)
+
+
+def split_timeline_session(report_date: str, projection_instance_key: str) -> None:
+    report_session_operation_service.split_session(_validate_report_date(report_date), _validate_projection_instance_key(projection_instance_key))
+
+
+def copy_timeline_session(report_date: str, projection_instance_key: str) -> None:
+    report_session_operation_service.copy_session(_validate_report_date(report_date), _validate_projection_instance_key(projection_instance_key))
+
+
+def hide_timeline_session_activity(report_date: str, projection_instance_key: str, summary_id: str) -> None:
+    if not isinstance(summary_id, str) or not summary_id.strip():
+        raise ValueError("invalid_session_identity")
+    report_session_operation_service.hide_session_activity(
+        _validate_report_date(report_date), _validate_projection_instance_key(projection_instance_key), summary_id.strip()
+    )
+
+
 def _validate_activity_ids(activity_ids: list[int]) -> list[int]:
     # ``bool`` is a subclass of ``int``; reject it so ``True``/``False`` are
     # not silently coerced to ``1``/``0``.
@@ -238,6 +264,12 @@ def _validate_report_date(report_date: str) -> str:
     except ValueError:
         raise ValueError("report_date must be a YYYY-MM-DD string")
     return report_date
+
+
+def _validate_projection_instance_key(value: str) -> str:
+    if not isinstance(value, str) or not value.strip() or len(value) > 200:
+        raise ValueError("invalid_session_identity")
+    return value.strip()
 
 
 def _find_session_by_identity(sessions: list[dict[str, Any]], ids: list[int], member_hash: str) -> dict[str, Any]:
@@ -350,9 +382,14 @@ __all__ = [
     "get_snapshot_extra_seconds",
     "get_snapshot_persisted_id",
     "get_snapshot_seconds_for_date_range",
+    "hide_timeline_session",
+    "hide_timeline_session_activity",
     "list_selectable_projects",
     "preview_session_project_update",
+    "copy_timeline_session",
+    "merge_timeline_session",
     "save_timeline_session_override",
+    "split_timeline_session",
     "update_timeline_session_note",
     "update_timeline_session_note_and_duration",
 ]

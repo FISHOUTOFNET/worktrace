@@ -543,7 +543,7 @@ def get_timeline_view_model(report_date: str | None = None) -> dict[str, Any]:
         if adjusted is not None:
             adjusted = int(adjusted)
         has_override = adjusted is not None
-        display_seconds = adjusted if has_override else raw_seconds
+        display_seconds = int(session.get("display_duration_seconds") or session.get("duration_seconds") or (adjusted if has_override else raw_seconds))
         raw_total_seconds += raw_seconds
         row = {
             "session_id": str(session.get("session_id") or ""),
@@ -597,6 +597,18 @@ def get_timeline_view_model(report_date: str | None = None) -> dict[str, Any]:
             "display_span_id": "",
             "activity_ids": list(session.get("activity_ids") or []),
             "activity_member_hash": str(session.get("activity_member_hash") or ""),
+            "projection_instance_key": str(session.get("projection_instance_key") or ""),
+            "projection_kind": str(session.get("projection_kind") or "base"),
+            "operation_id": session.get("operation_id"),
+            "operation_group_key": session.get("operation_group_key"),
+            "origin_activity_member_hashes": list(session.get("origin_activity_member_hashes") or []),
+            "operation_match_state": str(session.get("operation_match_state") or "active"),
+            "can_hide": bool(session.get("can_hide")),
+            "can_merge_previous": bool(session.get("can_merge_previous")),
+            "can_merge_next": bool(session.get("can_merge_next")),
+            "can_split": bool(session.get("can_split")),
+            "can_copy": bool(session.get("can_copy")),
+            "can_hide_activity": bool(session.get("can_hide_activity")),
             "anchor_activity_id": int(session.get("anchor_activity_id") or 0),
             "first_activity_id": int(session.get("first_activity_id") or 0) or None,
             "open_activity_id": int(session.get("open_activity_id") or 0),
@@ -778,8 +790,9 @@ def get_session_details_view_model(
 
 
 def get_session_activity_summary_view_model(
-    activity_ids: list[int],
+    activity_ids: list[int] | None = None,
     report_date: str | None = None,
+    projection_instance_key: str | None = None,
 ) -> dict[str, Any]:
     """Build the Timeline right-panel summary scoped by session activities."""
     ids = [int(aid) for aid in (activity_ids or [])]
@@ -804,12 +817,14 @@ def get_session_activity_summary_view_model(
         report_date=today,
     )
 
-    rows: list[dict[str, Any]] = project_activity_summary_service.get_session_activity_summary(
-        ids,
-        date,
-        include_hidden=False,
-        ensure_context=True,
-    )
+    if projection_instance_key:
+        rows = project_activity_summary_service.get_projection_session_activity_summary(
+            projection_instance_key, date, ensure_context=True
+        )
+    else:
+        rows = project_activity_summary_service.get_session_activity_summary(
+            ids, date, include_hidden=False, ensure_context=True
+        )
     _apply_live_span_to_rows(
         rows,
         report_model,
@@ -827,6 +842,7 @@ def get_session_activity_summary_view_model(
         "ok": True,
         "date": date,
         "activity_ids": ids,
+        "projection_instance_key": projection_instance_key or "",
         "summary_rows": rows,
         "current_activity": current_activity,
         "live_clock": live_clock,

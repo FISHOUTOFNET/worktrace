@@ -175,6 +175,8 @@ def export_all_local_data(path: str) -> str:
             "activity_project_assignment",
             "project_session_override",
             "project_session_override_member",
+            "report_session_operation",
+            "report_session_operation_member",
             "activity_clipboard_event",
             "project",
             "folder_project_rule",

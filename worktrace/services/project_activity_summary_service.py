@@ -62,6 +62,33 @@ def get_session_activity_summary(
     return build_activity_summary_rows(rows, report_date, scope_key)
 
 
+def get_projection_session_activity_summary(
+    projection_instance_key: str,
+    report_date: str,
+    *,
+    ensure_context: bool = True,
+) -> list[dict]:
+    """Return right-panel summaries scoped to one final projection instance."""
+    from .report_session_projection_service import get_report_sessions_for_operations
+
+    sessions = get_report_sessions_for_operations(
+        report_date, report_date, include_hidden=True, ensure_context=ensure_context
+    )
+    session = next(
+        (item for item in sessions if str(item.get("projection_instance_key") or "") == str(projection_instance_key or "")),
+        None,
+    )
+    if not session:
+        raise ValueError("session_identity_conflict")
+    summaries = build_activity_summary_rows(
+        list(session.get("_projection_contributions") or []), report_date, projection_instance_key
+    )
+    for summary in summaries:
+        summary["projection_instance_key"] = projection_instance_key
+        summary["can_hide_activity"] = bool(session.get("can_hide_activity"))
+    return summaries
+
+
 def _new_group(
     report_date: str,
     scope_key: str,
@@ -161,4 +188,8 @@ def _summary_id(report_date: str, scope_key: str, key: str) -> str:
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()
 
 
-__all__ = ["build_activity_summary_rows", "get_session_activity_summary"]
+__all__ = [
+    "build_activity_summary_rows",
+    "get_projection_session_activity_summary",
+    "get_session_activity_summary",
+]

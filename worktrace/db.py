@@ -146,6 +146,7 @@ def ensure_schema_migrations(conn: sqlite3.Connection) -> None:
     exists before running ``ALTER TABLE``.
     """
     ensure_project_language_column(conn)
+    ensure_report_session_operation_tables(conn)
 
 
 def ensure_project_language_column(conn: sqlite3.Connection) -> None:
@@ -161,6 +162,49 @@ def ensure_project_language_column(conn: sqlite3.Connection) -> None:
         )
 
 
+def ensure_report_session_operation_tables(conn: sqlite3.Connection) -> None:
+    """Create report-session operation tables for databases predating them."""
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS report_session_operation (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            report_date TEXT NOT NULL,
+            operation_type TEXT NOT NULL CHECK(operation_type IN ('hide_session', 'merge_sessions', 'copy_session', 'hide_activity')),
+            base_instance_key TEXT NOT NULL,
+            target_instance_key TEXT,
+            direction TEXT CHECK(direction IS NULL OR direction IN ('previous', 'next')),
+            operation_group_key TEXT,
+            match_state TEXT NOT NULL DEFAULT 'active' CHECK(match_state IN ('active', 'conflict', 'orphaned', 'superseded')),
+            payload_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS report_session_operation_member (
+            operation_id INTEGER NOT NULL,
+            role TEXT NOT NULL CHECK(role IN ('source', 'target', 'origin', 'copy_origin', 'hidden_activity')),
+            activity_id INTEGER NOT NULL,
+            report_date TEXT NOT NULL,
+            slice_start_time TEXT NOT NULL,
+            slice_end_time TEXT NOT NULL,
+            display_order INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY(operation_id, role, activity_id, report_date, slice_start_time, slice_end_time),
+            FOREIGN KEY(operation_id) REFERENCES report_session_operation(id) ON DELETE CASCADE,
+            FOREIGN KEY(activity_id) REFERENCES activity_log(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_report_session_operation_date_state
+        ON report_session_operation(report_date, match_state);
+        CREATE INDEX IF NOT EXISTS idx_report_session_operation_instance
+        ON report_session_operation(report_date, base_instance_key, match_state);
+        CREATE INDEX IF NOT EXISTS idx_report_session_operation_group
+        ON report_session_operation(operation_group_key, match_state);
+        CREATE INDEX IF NOT EXISTS idx_report_session_operation_member_activity
+        ON report_session_operation_member(activity_id, report_date);
+        CREATE INDEX IF NOT EXISTS idx_report_session_operation_member_role
+        ON report_session_operation_member(operation_id, role);
+        """
+    )
+
+
 def drop_all_tables(conn: sqlite3.Connection) -> None:
     conn.executescript(
         """
@@ -169,6 +213,8 @@ def drop_all_tables(conn: sqlite3.Connection) -> None:
         DROP TABLE IF EXISTS folder_rule_index_state;
         DROP TABLE IF EXISTS project_session_override_member;
         DROP TABLE IF EXISTS project_session_override;
+        DROP TABLE IF EXISTS report_session_operation_member;
+        DROP TABLE IF EXISTS report_session_operation;
         DROP TABLE IF EXISTS activity_clipboard_event;
         DROP TABLE IF EXISTS activity_project_assignment;
         DROP TABLE IF EXISTS activity_log;

@@ -262,3 +262,27 @@ def test_forbidden_raw_activity_writes_and_advanced_corrections_static_contract(
             f"forbidden bridge argument reshuffling in bridge_timeline.py: {token}"
         )
     assert not Path("worktrace/webview_ui/js/timeline_correction.js").exists()
+
+
+def test_report_session_operations_never_write_raw_or_rule_facts_static_contract():
+    source = "\n".join(
+        Path(path).read_text(encoding="utf-8")
+        for path in (
+            "worktrace/services/report_session_operation_service.py",
+            "worktrace/services/report_session_operation_engine.py",
+        )
+    )
+    for token in (
+        "UPDATE activity_log SET is_deleted",
+        "UPDATE activity_log SET is_hidden",
+        "DELETE FROM activity_log",
+        "UPDATE activity_log SET duration_seconds",
+        "UPDATE activity_log SET start_time",
+        "UPDATE activity_log SET end_time",
+        "UPDATE activity_project_assignment",
+        "DELETE FROM activity_project_assignment",
+        "DELETE FROM project",
+        "DELETE FROM project_rule",
+        "DELETE FROM folder_project_rule",
+    ):
+        assert token not in source

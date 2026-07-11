@@ -553,9 +553,9 @@ def test_bridge_no_advanced_timeline_methods_for_contract():
     bridge_src = read_bridge_sources_combined()
     for method in (
         "update_timeline_activity_time", "update_timeline_session_time",
-        "split_timeline_activity", "split_timeline_session",
+        "split_timeline_activity",
         "merge_timeline_activities", "hide_timeline_activity",
-        "soft_delete_timeline_activity", "hide_timeline_session",
+        "soft_delete_timeline_activity",
         "soft_delete_timeline_session",
         "batch_update_timeline_activities_project",
         "batch_update_timeline_activities_note",
@@ -595,9 +595,9 @@ def test_api_has_p0_timeline_methods_only():
         "class TimelineBatchProjectError", "class TimelineBatchNoteError",
         "class TimelineRestoreActivityError",
         "def update_timeline_activity_time", "def update_timeline_session_time",
-        "def split_timeline_activity", "def split_timeline_session",
+        "def split_timeline_activity",
         "def merge_timeline_activities", "def hide_timeline_activity",
-        "def soft_delete_timeline_activity", "def hide_timeline_session",
+        "def soft_delete_timeline_activity",
         "def soft_delete_timeline_session",
         "def batch_update_timeline_activities_project",
         "def batch_update_timeline_activities_note",
