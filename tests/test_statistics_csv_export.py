@@ -403,7 +403,7 @@ def test_write_csv_no_resource_or_assignment_mutation(temp_db, tmp_path):
             "SELECT COUNT(*) FROM activity_project_assignment",
         ).fetchone()[0]
         before_note = conn.execute(
-            "SELECT COUNT(*) FROM project_session_override",
+            "SELECT COUNT(*) FROM report_session_operation",
         ).fetchone()[0]
     out = tmp_path / "report.csv"
     export_service.write_statistics_csv("2026-06-25", "2026-06-25", out)
@@ -415,7 +415,7 @@ def test_write_csv_no_resource_or_assignment_mutation(temp_db, tmp_path):
             "SELECT COUNT(*) FROM activity_project_assignment",
         ).fetchone()[0]
         after_note = conn.execute(
-            "SELECT COUNT(*) FROM project_session_override",
+            "SELECT COUNT(*) FROM report_session_operation",
         ).fetchone()[0]
     assert after_res == before_res
     assert after_asg == before_asg

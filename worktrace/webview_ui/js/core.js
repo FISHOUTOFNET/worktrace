@@ -49,6 +49,9 @@
     App.timelineLoaded = false;
     App.timelineLoading = false;
     App.timelineLoadingOwner = null;
+    App.timelineEpoch = 0;
+    App.selectionEpoch = 0;
+    App.detailsOwner = null;
     App.selectedSessionId = null;
     // Stable live key for the selected session. Selection continuity: stable_live_key_hash stays the same
     // when the backend refreshes a persisted-open session identity.

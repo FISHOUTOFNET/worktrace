@@ -255,8 +255,9 @@
                     if (action[2]) {
                         var date = App.currentTimelineReportDate();
                         var key = App.selectedProjectionInstanceKey;
+                        var revision = App.selectedSessionDetailRevision || "";
                         if (!date || !key) return;
-                        App.callBridge(action[1], date, key, action[2]).then(function (result) {
+                        App.callBridge(action[1], date, key, action[2], revision).then(function (result) {
                             var data = App.handleResult(result, function () {});
                             if (data) App.refreshTimeline();
                         });

@@ -156,12 +156,12 @@ def test_rule_reorder_conflict_does_not_apply_old_override(temp_db):
 
     sessions = timeline_service.get_project_sessions_by_date("2026-06-25", ensure_context=False)
     assert len(sessions) == 2
-    assert all(row.get("override_id") is None for row in sessions)
+    assert all(not row.get("has_project_override") for row in sessions)
     assert all(row.get("session_note") == "" for row in sessions)
     assert {row["project_name"] for row in sessions} == {"First Rule", "Second Rule"}
     assert {row["duration_seconds"] for row in sessions} == {1200}
     with get_connection() as conn:
-        states = [row["match_state"] for row in conn.execute("SELECT match_state FROM project_session_override").fetchall()]
+        states = [row["match_state"] for row in conn.execute("SELECT match_state FROM report_session_operation").fetchall()]
     # Projection getters are read-only; unresolved state is computed in
     # memory and never persisted as a side effect of viewing a report.
     assert states == ["active"]
@@ -202,14 +202,14 @@ def test_reconfirm_after_conflict_creates_new_exact_override(temp_db):
     )
 
     sessions = timeline_service.get_project_sessions_by_date("2026-06-25", ensure_context=False)
-    reconfirmed = [row for row in sessions if row.get("override_id")]
+    reconfirmed = [row for row in sessions if row.get("has_project_override")]
     assert len(reconfirmed) == 1
     assert reconfirmed[0]["project_name"] == "Reconfirmed"
     assert reconfirmed[0]["duration_seconds"] == 600
     assert reconfirmed[0]["session_note"] == "new override"
     with get_connection() as conn:
-        states = sorted(row["match_state"] for row in conn.execute("SELECT match_state FROM project_session_override").fetchall())
-    assert states == ["active", "superseded"]
+        states = sorted(row["match_state"] for row in conn.execute("SELECT match_state FROM report_session_operation").fetchall())
+    assert states == ["active", "active"]
 
 
 def test_forbidden_raw_activity_writes_and_advanced_corrections_static_contract():

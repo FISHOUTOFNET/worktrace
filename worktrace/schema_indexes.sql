@@ -37,20 +37,17 @@ ON activity_project_assignment(source, is_manual);
 CREATE INDEX IF NOT EXISTS idx_assignment_source_rule
 ON activity_project_assignment(source_rule_type, source_rule_id, is_manual);
 
-CREATE INDEX IF NOT EXISTS idx_project_session_override_hash
-ON project_session_override(report_date, activity_member_hash, match_state);
-
-CREATE INDEX IF NOT EXISTS idx_project_session_override_member_activity
-ON project_session_override_member(activity_id, report_date);
-
 CREATE INDEX IF NOT EXISTS idx_report_session_operation_date_state
-ON report_session_operation(report_date, match_state);
+ON report_session_operation(report_date, match_state, replay_order, id);
 
 CREATE INDEX IF NOT EXISTS idx_report_session_operation_instance
 ON report_session_operation(report_date, base_instance_key, match_state);
 
+CREATE INDEX IF NOT EXISTS idx_report_session_operation_target
+ON report_session_operation(report_date, target_instance_key, match_state);
+
 CREATE INDEX IF NOT EXISTS idx_report_session_operation_group
-ON report_session_operation(operation_group_key, match_state);
+ON report_session_operation(report_date, operation_group_key, match_state);
 
 CREATE INDEX IF NOT EXISTS idx_report_session_operation_member_activity
 ON report_session_operation_member(activity_id, report_date);

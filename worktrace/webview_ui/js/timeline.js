@@ -7,6 +7,7 @@
 
     function showTimeline(data) {
         if (!data) return;
+        if (data.date) App.timelineDate = data.date;
         App.lastTimelineData = data;
         var nowMs = Date.now();
         var clock = App.getActiveLiveClock();
@@ -69,6 +70,7 @@
             App.selectedSessionLiveKey = null;
             App.selectedProjectionInstanceKey = null;
             App.selectedSessionDetailRevision = null;
+            App.detailsOwner = null;
             clearEditPanel();
             return;
         }
@@ -315,6 +317,7 @@
         var found = newSelected;
         if (found) {
             App.selectedSessionDetailRevision = found.session_detail_revision || "";
+            App.timelineRequestState.nextSelectionOwner(App.timelineDate, found.projection_instance_key, found.session_detail_revision || "");
             loadSessionActivitySummary(found.projection_instance_key, App.timelineDate, found.session_detail_revision || "");
             // Open live sessions are non-editable; a manual click must clear the edit panel.
             if (found.edit_disabled === true) {
@@ -337,7 +340,8 @@
         var detailsHeader = document.getElementById("timeline-details-header");
         var detailsList = document.getElementById("timeline-details-list");
         var revision = String(detailRevision || App.selectedSessionDetailRevision || "");
-        var requestKey = String(date || "") + "|" + String(projectionInstanceKey || "") + "|" + revision;
+        var owner = App.detailsOwner || App.timelineRequestState.nextSelectionOwner(date, projectionInstanceKey, revision);
+        var requestKey = App.timelineRequestState.detailRequestKey(owner);
         if (App.detailsInFlight[requestKey]) return App.detailsInFlight[requestKey];
         // Only show loading when the panel is empty; keep existing summaries visible during refresh.
         if (!detailsList.innerHTML.trim()) {
@@ -349,34 +353,31 @@
 
         var token = ++App.detailsRequestToken;
         var request = App.callBridge("get_timeline_session_activity_summary", projectionInstanceKey || "", date).then(function (result) {
-            if (token !== App.detailsRequestToken || App.selectedProjectionInstanceKey !== projectionInstanceKey || App.timelineDate !== date) return null;
+            if (token !== App.detailsRequestToken || !App.timelineRequestState.isCurrentDetailsOwner(owner)) return null;
             if (result && result.ok === false && result.error === "stale_selection" && !retriedStale) {
-                // A projection key is structural. Refresh once, retain the last
-                // rendered details, then resolve the refreshed selection.
+                // The current owner asks for one Timeline refresh and then stops.
+                // showTimeline/selectTimelineSession becomes the only owner of any follow-up detail request.
                 return App.loadTimelineReport(date, { showLoading: false, resetSelection: false }).then(function () {
-                    if (App.selectedProjectionInstanceKey && App.selectedProjectionInstanceKey === projectionInstanceKey) {
-                        delete App.detailsInFlight[requestKey];
-                        return loadSessionDetails(projectionInstanceKey, date, App.selectedSessionDetailRevision, true);
-                    }
-                    detailsHeader.textContent = "活动时段已更新";
                     return null;
                 });
             }
             var data = App.handleResult(result, function (msg) {
+                if (!App.timelineRequestState.isCurrentDetailsOwner(owner)) return;
                 detailsHeader.textContent = "加载项目活动耗时失败";
                 detailsList.innerHTML = '<div class="timeline-empty">' + App.escapeHtml(msg) + '</div>';
             });
             if (!data) return null;
+            if (!App.timelineRequestState.isCurrentDetailsOwner(owner)) return null;
             if (!acceptTimelineDetailsPayload(data, date)) return null;
             renderSessionDetails(data);
             return data;
         }).catch(function () {
-            if (token !== App.detailsRequestToken || App.selectedProjectionInstanceKey !== projectionInstanceKey) return null;
+            if (token !== App.detailsRequestToken || !App.timelineRequestState.isCurrentDetailsOwner(owner)) return null;
             detailsHeader.textContent = "加载项目活动耗时失败";
             detailsList.innerHTML = '<div class="timeline-empty">无法加载项目活动耗时，请稍后重试。</div>';
             return null;
         }).finally(function () {
-            delete App.detailsInFlight[requestKey];
+            if (App.detailsInFlight[requestKey] === request) delete App.detailsInFlight[requestKey];
         });
         App.detailsInFlight[requestKey] = request;
         return request;
@@ -714,13 +715,9 @@
 
     function saveEdit() {
         if (!App.editingSession || App.editSaving) return;
-        var activityIds = App.editingSession.activity_ids;
-        if (!activityIds || activityIds.length === 0) {
-            showEditStatus("无法保存：缺少活动信息", true);
-            return;
-        }
-        var activityMemberHash = App.editingSession.activity_member_hash || "";
-        if (!activityMemberHash) {
+        var projectionInstanceKey = App.editingSession.projection_instance_key || App.selectedProjectionInstanceKey || "";
+        var projectionRevision = App.editingSession.projection_revision || App.editingSession.session_detail_revision || App.selectedSessionDetailRevision || "";
+        if (!projectionInstanceKey || !projectionRevision) {
             showEditStatus("无法保存：活动时段已变化，请刷新后重试", true);
             return;
         }
@@ -791,13 +788,13 @@
             ? projectId
             : null;
         App.callBridge(
-            "save_timeline_session_override",
-            activityIds,
-            activityMemberHash,
+            "save_timeline_session_edit",
+            reportDate,
+            projectionInstanceKey,
+            projectionRevision,
             overrideProjectId,
             adjustedDurationSeconds,
-            note,
-            reportDate
+            note
         ).then(function (result) {
             if (!result || result.ok === false) {
                 // Keep original data in the form; do not clear.
@@ -877,10 +874,11 @@
     function runTimelineSessionOperation(method, summaryId) {
         var key = App.selectedProjectionInstanceKey;
         var date = currentTimelineReportDate();
+        var revision = App.selectedSessionDetailRevision || "";
         if (!key || !date) return Promise.resolve();
         var args = method === "hide_timeline_session_activity"
-            ? [date, key, summaryId]
-            : [date, key];
+            ? [date, key, summaryId, revision]
+            : [date, key, revision];
         return App.callBridge.apply(null, [method].concat(args)).then(function (result) {
             var data = App.handleResult(result, function (message) {
                 showEditStatus(message || "操作失败，请刷新后重试。", true);
@@ -910,6 +908,7 @@
         App.selectedSessionId = null;
         App.selectedSessionLiveKey = null;
         App.selectedProjectionInstanceKey = null;
+        App.detailsOwner = null;
         ++App.detailsRequestToken;
         App.lastSessionDetailsViewModel = null;
         App.lastSessionActivitySummaryViewModel = null;
@@ -935,6 +934,7 @@
         var showLoading = options.showLoading !== false;
         var resetSelection = options.resetSelection === true;
         var errorMessage = options.errorMessage || (showLoading ? "加载时间线失败" : "刷新失败");
+        App.timelineRequestState.nextTimelineOwner(date);
         App.timelineDate = date;
         if (resetSelection) {
             resetTimelineReportSelection();
@@ -954,6 +954,7 @@
             });
             if (!data) return;
             if (!acceptTimelinePayload(data, date)) return;
+            if (data.date) App.timelineDate = data.date;
             App.timelineLoaded = true;
             showTimeline(data);
             App.clearTimelineError();

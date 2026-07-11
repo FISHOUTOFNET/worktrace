@@ -173,7 +173,7 @@ def test_deleted_project_override_semantics(temp_db):
     assert sessions[0]["project_name"] == "Valid Project"
     assert sessions[0]["activity_ids"] == [deleted_activity]
     assert valid_activity not in sessions[0]["activity_ids"]
-    assert table_count("project_session_override") == 2
+    assert table_count("report_session_operation") == 2
     assert "Deleted Project" not in repr(sessions)
 
 

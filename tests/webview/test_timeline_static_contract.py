@@ -185,7 +185,7 @@ def test_frontend_js_calls_editing_bridge_methods():
     unified session override saving."""
     source = read_all_js()
     assert "list_projects_for_timeline" in source
-    assert "save_timeline_session_override" in source
+    assert "save_timeline_session_edit" in source
 
 def test_frontend_js_has_saving_state():
     """frontend JS must track a saving state to prevent double-submit
@@ -1071,8 +1071,8 @@ def test_no_new_db_schema_for_contract():
         "CREATE TABLE IF NOT EXISTS activity_log",
         "CREATE TABLE IF NOT EXISTS activity_project_assignment",
         "CREATE TABLE IF NOT EXISTS activity_resource",
-        "CREATE TABLE IF NOT EXISTS project_session_override",
-        "CREATE TABLE IF NOT EXISTS project_session_override_member",
+        "CREATE TABLE IF NOT EXISTS report_session_operation",
+        "CREATE TABLE IF NOT EXISTS report_session_operation_member",
     ):
         assert table in schema_src, (
             "schema.sql must still define table: " + table
@@ -1156,8 +1156,8 @@ def test_frontend_js_has_update_note_and_duration_bridge_call():
     """frontend JS must call the unified session override bridge so project,
     note, and adjusted duration are saved together in a single write."""
     source = read_all_js()
-    assert "save_timeline_session_override" in source, (
-        "frontend JS must call save_timeline_session_override bridge method"
+    assert "save_timeline_session_edit" in source, (
+        "frontend JS must call save_timeline_session_edit bridge method"
     )
 
 def test_frontend_js_dirty_state_includes_duration():
@@ -1289,7 +1289,7 @@ def test_index_html_timeline_p0_edit_panel_only():
 
 def test_save_edit_still_uses_p0_bridge_methods():
     body = func_body(read_all_js(), "saveEdit")
-    assert '"save_timeline_session_override"' in body
+    assert '"save_timeline_session_edit"' in body
     assert '"update_timeline_activity_time"' not in body
     assert '"split_timeline_activity"' not in body
 

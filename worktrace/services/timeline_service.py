@@ -14,7 +14,7 @@ from ..db import dict_rows, get_connection
 from ..formatters import format_status_label
 from ..path_utils import split_file_path
 from ..resources.title_parsing import extract_anchor_file_name
-from . import folder_rule_service, report_session_projection_service, session_boundary_service, session_override_service
+from . import folder_rule_service, report_session_projection_service, session_boundary_service
 from .activity_continuity_service import (
     has_hard_boundary_between,
     is_hard_boundary_status,
@@ -26,6 +26,7 @@ from .anchor_predicates import is_file_context_anchor
 from .context_service import recompute_context_assignments_for_date
 from .project_attribution_policy import official_project_fields, report_project_fields
 from .project_service import get_or_create_uncategorized_project
+from .report_projection_identity import member_set_hash
 from .resource_service import attach_resource
 from .settings_service import get_int_setting
 
@@ -183,15 +184,20 @@ def update_session_override(
     adjusted_duration_seconds: int | None,
     note: str,
 ) -> int | None:
+    from . import report_session_operation_service
+
     _require_editable_session_activity_ids(activity_ids)
     session = report_session_projection_service.resolve_current_session(
         report_date,
         activity_ids,
         activity_member_hash,
-        include_hidden=True,
+        include_hidden=False,
         ensure_context=True,
     )
-    return session_override_service.upsert_session_override(
+    return report_session_operation_service.edit_session(
+        report_date,
+        str(session.get("projection_instance_key") or ""),
+        str(session.get("projection_revision") or session.get("session_detail_revision") or ""),
         session,
         project_id=project_id,
         adjusted_duration_seconds=adjusted_duration_seconds,
@@ -206,15 +212,20 @@ def update_session_note_and_duration(
     note: str,
     adjusted_duration_seconds: int | None,
 ) -> int | None:
+    from . import report_session_operation_service
+
     _require_editable_session_activity_ids(activity_ids)
     session = report_session_projection_service.resolve_current_session(
         report_date,
         activity_ids,
         activity_member_hash,
-        include_hidden=True,
+        include_hidden=False,
         ensure_context=True,
     )
-    return session_override_service.upsert_session_override(
+    return report_session_operation_service.edit_session(
+        report_date,
+        str(session.get("projection_instance_key") or ""),
+        str(session.get("projection_revision") or session.get("session_detail_revision") or ""),
         session,
         project_id=session.get("project_id") if session.get("has_project_override") else None,
         adjusted_duration_seconds=adjusted_duration_seconds,
@@ -404,7 +415,7 @@ def _build_session(rows: list[dict], uncategorized_id: int) -> dict:
         _display_duration(row) for row in rows if not bool(row.get("is_in_progress"))
     )
     activity_ids = [int(row["id"]) for row in rows]
-    member_slices = session_override_service.member_slices_for_rows(rows)
+    member_slices = _member_slices_for_rows(rows)
     status_summary = _status_summary(rows)
     session_id = f"{first['id']}-{last['id']}"
     # A session is in-progress if its last row is still open. The flag is
@@ -428,7 +439,7 @@ def _build_session(rows: list[dict], uncategorized_id: int) -> dict:
         "open_activity_id": open_activity_id,
         "activity_ids": activity_ids,
         "member_slices": member_slices,
-        "activity_member_hash": session_override_service.activity_member_hash(
+        "activity_member_hash": member_set_hash(
             str(first.get("report_date") or ""),
             member_slices,
         ),
@@ -783,6 +794,26 @@ def _display_duration(row: dict) -> int:
     if row.get("duration_seconds") is not None:
         return int(row.get("duration_seconds") or 0)
     return 0
+
+
+def _member_slices_for_rows(rows: list[dict]) -> list[dict]:
+    members: list[dict] = []
+    for row in rows:
+        report_date = str(row.get("report_date") or "")[:10]
+        activity_id = int(row.get("id") or row.get("activity_id") or 0)
+        slice_start = str(row.get("start_time") or "")
+        slice_end = str(row.get("end_time") or "")
+        if not report_date or activity_id <= 0 or not slice_start or not slice_end:
+            continue
+        members.append(
+            {
+                "report_date": report_date,
+                "activity_id": activity_id,
+                "slice_start_time": slice_start,
+                "slice_end_time": slice_end,
+            }
+        )
+    return members
 
 
 def _parse_row_time(value: str | None) -> datetime | None:

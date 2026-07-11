@@ -21,6 +21,7 @@ import logging
 from typing import Any
 
 from ..api import (
+    errors as api_errors,
     project_api,
     timeline_api,
     view_model_api,
@@ -192,25 +193,92 @@ class TimelineBridgeMixin:
             logger.exception("webview bridge save_timeline_session_override failed")
             return dict(_GENERIC_ERROR)
 
-    def hide_timeline_session(self, report_date: str, projection_instance_key: str) -> dict[str, Any]:
-        return self._run_session_operation(timeline_api.hide_timeline_session, report_date, projection_instance_key)
+    def save_timeline_session_edit(
+        self,
+        report_date: str,
+        projection_instance_key: str,
+        projection_revision: str,
+        project_id: int | None,
+        adjusted_duration_seconds: int | None,
+        note: str,
+    ) -> dict[str, Any]:
+        """Save Timeline session edits by projection identity and revision."""
+        try:
+            if not isinstance(report_date, str) or not _DATE_SHAPE_RE.match(report_date):
+                return {"ok": False, "error": "invalid_input", "message": "日期无效"}
+            if not isinstance(projection_instance_key, str) or not projection_instance_key.strip():
+                return {"ok": False, "error": "invalid_input", "message": "请选择有效的活动时段"}
+            if not isinstance(projection_revision, str) or not projection_revision.strip():
+                return {"ok": False, "error": "invalid_input", "message": "请选择有效的活动时段"}
+            if not isinstance(note, str):
+                return {"ok": False, "error": "invalid_input", "message": "备注内容无效"}
+            if len(note) > timeline_api.TIMELINE_NOTE_MAX_LENGTH:
+                return {"ok": False, "error": "invalid_input", "message": "备注过长"}
+            pid: int | None = None
+            if project_id is not None:
+                if isinstance(project_id, bool):
+                    return {"ok": False, "error": "invalid_input", "message": "请选择有效的项目"}
+                pid = int(project_id)
+            duration_value: int | None = None
+            if adjusted_duration_seconds is not None:
+                if isinstance(adjusted_duration_seconds, bool):
+                    return {"ok": False, "error": "invalid_input", "message": "时长无效"}
+                duration_value = int(adjusted_duration_seconds)
+            return timeline_api.save_timeline_session_edit(
+                report_date,
+                projection_instance_key.strip(),
+                projection_revision.strip(),
+                pid,
+                duration_value,
+                note,
+            )
+        except Exception as exc:
+            code = api_errors.error_code_from_exception(exc)
+            if code == api_errors.OPERATION_FAILED:
+                logger.exception("webview bridge save_timeline_session_edit failed")
+            return {"ok": False, "error": code, "message": api_errors.public_message_for_code(code)}
 
-    def merge_timeline_session(self, report_date: str, projection_instance_key: str, direction: str) -> dict[str, Any]:
+    def hide_timeline_session(self, report_date: str, projection_instance_key: str, projection_revision: str | None = None) -> dict[str, Any]:
+        return self._run_session_operation(timeline_api.hide_timeline_session, report_date, projection_instance_key, projection_revision)
+
+    def merge_timeline_session(
+        self,
+        report_date: str,
+        projection_instance_key: str,
+        direction: str,
+        projection_revision: str | None = None,
+        target_projection_instance_key: str | None = None,
+        target_projection_revision: str | None = None,
+    ) -> dict[str, Any]:
         if direction not in {"previous", "next"}:
             return {"ok": False, "error": "只能合并相邻时段。"}
-        return self._run_session_operation(timeline_api.merge_timeline_session, report_date, projection_instance_key, direction)
+        return self._run_session_operation(
+            timeline_api.merge_timeline_session,
+            report_date,
+            projection_instance_key,
+            direction,
+            projection_revision,
+            target_projection_instance_key,
+            target_projection_revision,
+        )
 
-    def split_timeline_session(self, report_date: str, projection_instance_key: str) -> dict[str, Any]:
-        return self._run_session_operation(timeline_api.split_timeline_session, report_date, projection_instance_key)
+    def split_timeline_session(self, report_date: str, projection_instance_key: str, projection_revision: str | None = None) -> dict[str, Any]:
+        return self._run_session_operation(timeline_api.split_timeline_session, report_date, projection_instance_key, projection_revision)
 
-    def copy_timeline_session(self, report_date: str, projection_instance_key: str) -> dict[str, Any]:
-        return self._run_session_operation(timeline_api.copy_timeline_session, report_date, projection_instance_key)
+    def copy_timeline_session(self, report_date: str, projection_instance_key: str, projection_revision: str | None = None) -> dict[str, Any]:
+        return self._run_session_operation(timeline_api.copy_timeline_session, report_date, projection_instance_key, projection_revision)
 
-    def hide_timeline_session_activity(self, report_date: str, projection_instance_key: str, summary_id: str) -> dict[str, Any]:
+    def hide_timeline_session_activity(
+        self,
+        report_date: str,
+        projection_instance_key: str,
+        summary_id: str,
+        projection_revision: str | None = None,
+    ) -> dict[str, Any]:
         if not isinstance(summary_id, str) or not summary_id.strip():
             return {"ok": False, "error": "请选择有效的活动时段"}
         return self._run_session_operation(
-            timeline_api.hide_timeline_session_activity, report_date, projection_instance_key, summary_id.strip()
+            timeline_api.hide_timeline_session_activity, report_date, projection_instance_key, summary_id.strip(), projection_revision
         )
 
     @staticmethod
@@ -220,19 +288,9 @@ class TimelineBridgeMixin:
         if not isinstance(projection_instance_key, str) or not projection_instance_key.strip():
             return {"ok": False, "error": "请选择有效的活动时段"}
         try:
-            action(report_date, projection_instance_key.strip(), *args)
-            return {"ok": True}
-        except ValueError as exc:
-            code = str(exc)
-            if code == "session_identity_conflict":
-                return {"ok": False, "error": "该时段因项目规则更新发生重排，请重新确认。"}
-            if code == "in_progress":
-                return {"ok": False, "error": "进行中记录暂不支持该操作。"}
-            if code == "not_mergeable":
-                return {"ok": False, "error": "只能合并相邻时段。"}
-            if code == "copy_session_not_mergeable":
-                return {"ok": False, "error": "复制时段暂不支持合并。"}
-            return {"ok": False, "error": "操作失败，请刷新后重试。"}
-        except Exception:
-            logger.exception("webview bridge session operation failed")
-            return dict(_GENERIC_ERROR)
+            return action(report_date, projection_instance_key.strip(), *args)
+        except Exception as exc:
+            code = api_errors.error_code_from_exception(exc)
+            if code == api_errors.OPERATION_FAILED:
+                logger.exception("webview bridge session operation failed")
+            return {"ok": False, "error": code, "message": api_errors.public_message_for_code(code)}

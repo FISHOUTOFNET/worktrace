@@ -583,7 +583,7 @@ def test_bridge_imports_only_allowed_modules():
 def test_api_has_p0_timeline_methods_only():
     api_src = (REPO_ROOT / "worktrace" / "api" / "timeline_api.py").read_text(encoding="utf-8")
     for symbol in (
-        "def save_timeline_session_override",
+        "def save_timeline_session_edit",
         "def update_timeline_session_note",
         "def update_timeline_session_note_and_duration",
     ):
@@ -620,8 +620,8 @@ def test_no_new_db_schema_for_contract():
         "CREATE TABLE IF NOT EXISTS activity_log",
         "CREATE TABLE IF NOT EXISTS activity_project_assignment",
         "CREATE TABLE IF NOT EXISTS activity_resource",
-        "CREATE TABLE IF NOT EXISTS project_session_override",
-        "CREATE TABLE IF NOT EXISTS project_session_override_member",
+        "CREATE TABLE IF NOT EXISTS report_session_operation",
+        "CREATE TABLE IF NOT EXISTS report_session_operation_member",
     ):
         assert table in schema_src, (
             "schema.sql must still define table: " + table

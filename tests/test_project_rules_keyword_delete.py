@@ -45,7 +45,7 @@ def _counts() -> dict[str, int]:
                 "SELECT COUNT(*) AS c FROM activity_project_assignment"
             ).fetchone()["c"],
             "session_note": conn.execute(
-                "SELECT COUNT(*) AS c FROM project_session_override"
+                "SELECT COUNT(*) AS c FROM report_session_operation"
             ).fetchone()["c"],
         }
 
@@ -327,7 +327,7 @@ def test_delete_keyword_rule_does_not_change_activity_project_assignment_rows(te
     assert after["assignment"] == before["assignment"]
 
 
-def test_delete_keyword_rule_does_not_change_project_session_override_rows(temp_db):
+def test_delete_keyword_rule_does_not_change_report_session_operation_rows(temp_db):
     project = project_service.create_project("Client")
     rule_id = rule_service.create_rule("Spec", project)
     activity_id = activity_service.create_activity(
@@ -340,14 +340,13 @@ def test_delete_keyword_rule_does_not_change_project_session_override_rows(temp_
     with get_connection() as conn:
         conn.execute(
             """
-            INSERT INTO project_session_override(
-                report_date, activity_member_hash, anchor_activity_id,
-                original_start_time, original_end_time, original_raw_duration_seconds,
-                note, created_at, updated_at
+            INSERT INTO report_session_operation(
+                report_date, operation_type, base_instance_key, replay_order,
+                match_state, payload_json, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?)
+            VALUES (?, 'edit_session', ?, 1, 'active', ?, ?, ?)
             """,
-            ("2026-06-18", "c" * 40, activity_id, "2026-06-18 09:00:00", "2026-06-18 09:00:00", "keep", now_str(), now_str()),
+            ("2026-06-18", "base:" + "c" * 40, '{"payload_version":1,"note":{"mode":"set","value":"keep"}}', now_str(), now_str()),
         )
     before = _counts()
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from importlib import resources
+import json
 import logging
 import sqlite3
 from pathlib import Path
@@ -222,11 +223,12 @@ def ensure_report_session_operation_tables(conn: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS report_session_operation (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             report_date TEXT NOT NULL,
-            operation_type TEXT NOT NULL CHECK(operation_type IN ('hide_session', 'merge_sessions', 'copy_session', 'hide_activity')),
+            operation_type TEXT NOT NULL CHECK(operation_type IN ('edit_session', 'hide_session', 'merge_sessions', 'copy_session', 'hide_activity')),
             base_instance_key TEXT NOT NULL,
             target_instance_key TEXT,
             direction TEXT CHECK(direction IS NULL OR direction IN ('previous', 'next')),
             operation_group_key TEXT,
+            replay_order INTEGER NOT NULL DEFAULT 0,
             match_state TEXT NOT NULL DEFAULT 'active' CHECK(match_state IN ('active', 'conflict', 'orphaned', 'superseded')),
             payload_json TEXT NOT NULL DEFAULT '{}',
             created_at TEXT NOT NULL,
@@ -234,16 +236,260 @@ def ensure_report_session_operation_tables(conn: sqlite3.Connection) -> None:
         );
         CREATE TABLE IF NOT EXISTS report_session_operation_member (
             operation_id INTEGER NOT NULL,
-            role TEXT NOT NULL CHECK(role IN ('source', 'target', 'origin', 'copy_origin', 'hidden_activity')),
+            role TEXT NOT NULL CHECK(role IN ('source', 'target', 'origin', 'copy_origin', 'hidden_activity', 'edit_target')),
             activity_id INTEGER NOT NULL,
             report_date TEXT NOT NULL,
             slice_start_time TEXT NOT NULL,
             slice_end_time TEXT NOT NULL,
             display_order INTEGER NOT NULL DEFAULT 0,
-            PRIMARY KEY(operation_id, role, activity_id, report_date, slice_start_time, slice_end_time),
+            PRIMARY KEY(operation_id, role, activity_id, report_date, slice_start_time),
             FOREIGN KEY(operation_id) REFERENCES report_session_operation(id) ON DELETE CASCADE,
             FOREIGN KEY(activity_id) REFERENCES activity_log(id)
         );
+        """
+    )
+    _rebuild_operation_tables_if_legacy(conn)
+    _migrate_project_session_overrides_to_operations(conn)
+    _drop_legacy_project_session_override_tables(conn)
+
+
+def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
+    return bool(conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (name,)).fetchone())
+
+
+def _table_columns(conn: sqlite3.Connection, name: str) -> set[str]:
+    if not _table_exists(conn, name):
+        return set()
+    return {str(row["name"]) for row in conn.execute(f"PRAGMA table_info({name})").fetchall()}
+
+
+def _rebuild_operation_tables_if_legacy(conn: sqlite3.Connection) -> None:
+    columns = _table_columns(conn, "report_session_operation")
+    sql_row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'report_session_operation'"
+    ).fetchone()
+    sql = str(sql_row["sql"] or "") if sql_row else ""
+    member_sql_row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'report_session_operation_member'"
+    ).fetchone()
+    member_sql = str(member_sql_row["sql"] or "") if member_sql_row else ""
+    needs_rebuild = (
+        "replay_order" not in columns
+        or "edit_session" not in sql
+        or "edit_target" not in member_sql
+        or "slice_end_time" in member_sql.partition("PRIMARY KEY")[2].partition(")")[0]
+    )
+    if not needs_rebuild:
+        _backfill_replay_order(conn)
+        return
+    conn.executescript(
+        """
+        ALTER TABLE report_session_operation RENAME TO report_session_operation_legacy;
+        ALTER TABLE report_session_operation_member RENAME TO report_session_operation_member_legacy;
+        CREATE TABLE report_session_operation (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            report_date TEXT NOT NULL,
+            operation_type TEXT NOT NULL CHECK(operation_type IN ('edit_session', 'hide_session', 'merge_sessions', 'copy_session', 'hide_activity')),
+            base_instance_key TEXT NOT NULL,
+            target_instance_key TEXT,
+            direction TEXT CHECK(direction IS NULL OR direction IN ('previous', 'next')),
+            operation_group_key TEXT,
+            replay_order INTEGER NOT NULL DEFAULT 0,
+            match_state TEXT NOT NULL DEFAULT 'active' CHECK(match_state IN ('active', 'conflict', 'orphaned', 'superseded')),
+            payload_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE report_session_operation_member (
+            operation_id INTEGER NOT NULL,
+            role TEXT NOT NULL CHECK(role IN ('source', 'target', 'origin', 'copy_origin', 'hidden_activity', 'edit_target')),
+            activity_id INTEGER NOT NULL,
+            report_date TEXT NOT NULL,
+            slice_start_time TEXT NOT NULL,
+            slice_end_time TEXT NOT NULL,
+            display_order INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY(operation_id, role, activity_id, report_date, slice_start_time),
+            FOREIGN KEY(operation_id) REFERENCES report_session_operation(id) ON DELETE CASCADE,
+            FOREIGN KEY(activity_id) REFERENCES activity_log(id)
+        );
+        INSERT INTO report_session_operation(
+            id, report_date, operation_type, base_instance_key, target_instance_key,
+            direction, operation_group_key, replay_order, match_state, payload_json, created_at, updated_at
+        )
+        SELECT id, report_date, operation_type, base_instance_key, target_instance_key,
+               direction, operation_group_key, 0, match_state, payload_json, created_at, updated_at
+        FROM report_session_operation_legacy;
+        INSERT OR IGNORE INTO report_session_operation_member(
+            operation_id, role, activity_id, report_date, slice_start_time, slice_end_time, display_order
+        )
+        SELECT operation_id, role, activity_id, report_date, slice_start_time, slice_end_time, display_order
+        FROM report_session_operation_member_legacy;
+        DROP TABLE report_session_operation_member_legacy;
+        DROP TABLE report_session_operation_legacy;
+        """
+    )
+    _backfill_replay_order(conn)
+
+
+def _backfill_replay_order(conn: sqlite3.Connection) -> None:
+    dates = [
+        str(row["report_date"])
+        for row in conn.execute(
+            "SELECT DISTINCT report_date FROM report_session_operation WHERE replay_order = 0 ORDER BY report_date"
+        ).fetchall()
+    ]
+    for report_date in dates:
+        rows = conn.execute(
+            "SELECT id FROM report_session_operation WHERE report_date = ? ORDER BY id",
+            (report_date,),
+        ).fetchall()
+        for order, row in enumerate(rows, 1):
+            conn.execute(
+                "UPDATE report_session_operation SET replay_order = ? WHERE id = ? AND replay_order = 0",
+                (order, int(row["id"])),
+            )
+
+
+def _migrate_project_session_overrides_to_operations(conn: sqlite3.Connection) -> None:
+    if not (_table_exists(conn, "project_session_override") and _table_exists(conn, "project_session_override_member")):
+        return
+    existing_marker = conn.execute(
+        """
+        SELECT 1 FROM report_session_operation
+        WHERE operation_type = 'edit_session'
+          AND json_extract(payload_json, '$.migration_source') = 'project_session_override'
+        LIMIT 1
+        """
+    ).fetchone()
+    if existing_marker:
+        return
+    from .services.report_projection_identity import base_projection_key, member_set_hash
+
+    rows = conn.execute(
+        """
+        SELECT o.*, p.name AS project_name, p.description AS project_description,
+               COALESCE(p.is_deleted, 0) AS project_is_deleted,
+               COALESCE(p.is_archived, 0) AS project_is_archived
+        FROM project_session_override o
+        LEFT JOIN project p ON p.id = o.project_id
+        ORDER BY o.report_date, o.updated_at, o.id
+        """
+    ).fetchall()
+    active_by_key: dict[tuple[str, str], int] = {}
+    member_order = "display_order, activity_id" if "display_order" in _table_columns(conn, "project_session_override_member") else "activity_id"
+    for row in rows:
+        members = [dict(member) for member in conn.execute(
+            f"""
+            SELECT activity_id, report_date, slice_start_time, slice_end_time
+            FROM project_session_override_member
+            WHERE override_id = ?
+            ORDER BY {member_order}
+            """,
+            (int(row["id"]),),
+        ).fetchall()]
+        stable_hash = member_set_hash(str(row["report_date"]), members)
+        key = (str(row["report_date"]), stable_hash)
+        if str(row["match_state"]) == "active":
+            active_by_key[key] = int(row["id"])
+    for row in rows:
+        members = [dict(member) for member in conn.execute(
+            f"""
+            SELECT activity_id, report_date, slice_start_time, slice_end_time
+            FROM project_session_override_member
+            WHERE override_id = ?
+            ORDER BY {member_order}
+            """,
+            (int(row["id"]),),
+        ).fetchall()]
+        if not members:
+            match_state = "orphaned"
+        else:
+            stable_hash = member_set_hash(str(row["report_date"]), members)
+            match_state = str(row["match_state"] or "active")
+            if match_state == "active" and active_by_key.get((str(row["report_date"]), stable_hash)) != int(row["id"]):
+                match_state = "superseded"
+        payload = {
+            "payload_version": 1,
+            "migration_source": "project_session_override",
+            "legacy_override_id": int(row["id"]),
+        }
+        if row["project_id"] is not None:
+            payload["project"] = {
+                "mode": "set",
+                "project_id": int(row["project_id"]),
+                "project_name": str(row["project_name"] or ""),
+                "project_description": str(row["project_description"] or ""),
+                "project_is_deleted": bool(int(row["project_is_deleted"] or 0)),
+                "project_is_archived": bool(int(row["project_is_archived"] or 0)),
+            }
+        if row["adjusted_duration_seconds"] is not None:
+            payload["duration"] = {"mode": "set", "value": int(row["adjusted_duration_seconds"])}
+        if str(row["note"] or ""):
+            payload["note"] = {"mode": "set", "value": str(row["note"] or "")}
+        if not any(key in payload for key in ("project", "duration", "note")):
+            continue
+        report_date = str(row["report_date"])
+        conn.execute(
+            "UPDATE report_session_operation SET replay_order = replay_order + 1000000 WHERE report_date = ?",
+            (report_date,),
+        )
+        cur = conn.execute(
+            """
+            INSERT INTO report_session_operation(
+                report_date, operation_type, base_instance_key, target_instance_key,
+                direction, operation_group_key, replay_order, match_state, payload_json,
+                created_at, updated_at
+            ) VALUES (?, 'edit_session', ?, NULL, NULL, NULL, ?, ?, ?, ?, ?)
+            """,
+            (
+                report_date,
+                base_projection_key(report_date, members),
+                int(row["id"]),
+                match_state,
+                json.dumps(payload, ensure_ascii=False, sort_keys=True),
+                str(row["created_at"]),
+                str(row["updated_at"]),
+            ),
+        )
+        operation_id = int(cur.lastrowid)
+        for order, member in enumerate(members):
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO report_session_operation_member(
+                    operation_id, role, activity_id, report_date, slice_start_time, slice_end_time, display_order
+                ) VALUES (?, 'edit_target', ?, ?, ?, ?, ?)
+                """,
+                (
+                    operation_id,
+                    int(member["activity_id"]),
+                    str(member["report_date"]),
+                    str(member["slice_start_time"]),
+                    str(member["slice_end_time"]),
+                    order,
+                ),
+            )
+    _normalize_replay_order(conn)
+
+
+def _normalize_replay_order(conn: sqlite3.Connection) -> None:
+    dates = [
+        str(row["report_date"])
+        for row in conn.execute("SELECT DISTINCT report_date FROM report_session_operation ORDER BY report_date").fetchall()
+    ]
+    for report_date in dates:
+        rows = conn.execute(
+            "SELECT id FROM report_session_operation WHERE report_date = ? ORDER BY replay_order, id",
+            (report_date,),
+        ).fetchall()
+        for order, row in enumerate(rows, 1):
+            conn.execute("UPDATE report_session_operation SET replay_order = ? WHERE id = ?", (order, int(row["id"])))
+
+
+def _drop_legacy_project_session_override_tables(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        DROP TABLE IF EXISTS project_session_override_member;
+        DROP TABLE IF EXISTS project_session_override;
         """
     )
 

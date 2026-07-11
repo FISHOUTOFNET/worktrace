@@ -78,3 +78,35 @@ def test_report_projection_modules_do_not_mutate_raw_activity_rows():
                 if node.func.attr in mutation_helpers:
                     violations.append(f"{relative_path}:{node.lineno} calls {node.func.attr}")
     assert violations == []
+
+
+def test_runtime_has_no_session_override_service_or_legacy_bridge_protocol():
+    violations: list[str] = []
+    for path in (REPO_ROOT / "worktrace").rglob("*"):
+        if path.suffix not in {".py", ".js"}:
+            continue
+        rel = path.relative_to(REPO_ROOT).as_posix()
+        source = path.read_text(encoding="utf-8")
+        if rel == "worktrace/db.py":
+            continue
+        if "session_override_service" in source:
+            violations.append(rel + " imports or references session_override_service")
+        if rel.startswith("worktrace/webview_ui/js") and "save_timeline_session_override" in source:
+            violations.append(rel + " exposes legacy activity-id edit bridge")
+    assert violations == []
+
+
+def test_report_projection_write_path_does_not_use_hidden_scope():
+    source = (REPO_ROOT / "worktrace/services/timeline_service.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    violations = []
+    write_nodes = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name in {"update_session_override", "update_session_note_and_duration"}
+    ]
+    for node in ast.walk(ast.Module(body=write_nodes, type_ignores=[])):
+        if isinstance(node, ast.keyword) and node.arg == "include_hidden":
+            if isinstance(node.value, ast.Constant) and node.value.value is True:
+                violations.append(node.lineno)
+    assert violations == []

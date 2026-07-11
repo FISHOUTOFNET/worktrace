@@ -114,6 +114,31 @@ def save_timeline_session_override(
     )
 
 
+def save_timeline_session_edit(
+    report_date: str,
+    projection_instance_key: str,
+    expected_projection_revision: str,
+    project_id: int | None,
+    adjusted_duration_seconds: int | None,
+    note: str,
+) -> dict[str, Any]:
+    date = _validate_report_date(report_date)
+    key = _validate_projection_instance_key(projection_instance_key)
+    revision = _validate_projection_revision(expected_projection_revision)
+    pid = _validate_optional_project_id(project_id)
+    duration = _validate_adjusted_duration(adjusted_duration_seconds)
+    text = _validate_note(note)
+    report_session_operation_service.edit_session(
+        date,
+        key,
+        revision,
+        project_id=pid,
+        adjusted_duration_seconds=duration,
+        note=text,
+    )
+    return _operation_result(date, key)
+
+
 def update_timeline_session_note(
     report_date: str,
     activity_ids: list[int],
@@ -157,30 +182,65 @@ def update_timeline_session_note_and_duration(
     timeline_service.update_session_note_and_duration(date, ids, member_hash, text, duration)
 
 
-def hide_timeline_session(report_date: str, projection_instance_key: str) -> None:
-    report_session_operation_service.hide_session(_validate_report_date(report_date), _validate_projection_instance_key(projection_instance_key))
+def hide_timeline_session(report_date: str, projection_instance_key: str, expected_projection_revision: str | None = None) -> dict[str, Any]:
+    date = _validate_report_date(report_date)
+    key = _validate_projection_instance_key(projection_instance_key)
+    report_session_operation_service.hide_session(date, key, _validate_optional_projection_revision(expected_projection_revision))
+    return _operation_result(date, None)
 
 
-def merge_timeline_session(report_date: str, projection_instance_key: str, direction: str) -> None:
+def merge_timeline_session(
+    report_date: str,
+    projection_instance_key: str,
+    direction: str,
+    expected_projection_revision: str | None = None,
+    target_projection_instance_key: str | None = None,
+    target_expected_projection_revision: str | None = None,
+) -> dict[str, Any]:
     if direction not in {"previous", "next"}:
         raise ValueError("invalid_direction")
-    report_session_operation_service.merge_session(_validate_report_date(report_date), _validate_projection_instance_key(projection_instance_key), direction)
+    date = _validate_report_date(report_date)
+    key = _validate_projection_instance_key(projection_instance_key)
+    target_key = _validate_projection_instance_key(target_projection_instance_key) if target_projection_instance_key else None
+    report_session_operation_service.merge_session(
+        date,
+        key,
+        direction,
+        expected_projection_revision=_validate_optional_projection_revision(expected_projection_revision),
+        target_projection_instance_key=target_key,
+        target_expected_projection_revision=_validate_optional_projection_revision(target_expected_projection_revision),
+    )
+    return _operation_result(date, target_key)
 
 
-def split_timeline_session(report_date: str, projection_instance_key: str) -> None:
-    report_session_operation_service.split_session(_validate_report_date(report_date), _validate_projection_instance_key(projection_instance_key))
+def split_timeline_session(report_date: str, projection_instance_key: str, expected_projection_revision: str | None = None) -> dict[str, Any]:
+    date = _validate_report_date(report_date)
+    key = _validate_projection_instance_key(projection_instance_key)
+    report_session_operation_service.split_session(date, key, _validate_optional_projection_revision(expected_projection_revision))
+    return _operation_result(date, None)
 
 
-def copy_timeline_session(report_date: str, projection_instance_key: str) -> None:
-    report_session_operation_service.copy_session(_validate_report_date(report_date), _validate_projection_instance_key(projection_instance_key))
+def copy_timeline_session(report_date: str, projection_instance_key: str, expected_projection_revision: str | None = None) -> dict[str, Any]:
+    date = _validate_report_date(report_date)
+    key = _validate_projection_instance_key(projection_instance_key)
+    report_session_operation_service.copy_session(date, key, _validate_optional_projection_revision(expected_projection_revision))
+    return _operation_result(date, None)
 
 
-def hide_timeline_session_activity(report_date: str, projection_instance_key: str, summary_id: str) -> None:
+def hide_timeline_session_activity(
+    report_date: str,
+    projection_instance_key: str,
+    summary_id: str,
+    expected_projection_revision: str | None = None,
+) -> dict[str, Any]:
     if not isinstance(summary_id, str) or not summary_id.strip():
         raise ValueError("invalid_session_identity")
+    date = _validate_report_date(report_date)
+    key = _validate_projection_instance_key(projection_instance_key)
     report_session_operation_service.hide_session_activity(
-        _validate_report_date(report_date), _validate_projection_instance_key(projection_instance_key), summary_id.strip()
+        date, key, summary_id.strip(), _validate_optional_projection_revision(expected_projection_revision)
     )
+    return _operation_result(date, key)
 
 
 def _validate_activity_ids(activity_ids: list[int]) -> list[int]:
@@ -270,6 +330,41 @@ def _validate_projection_instance_key(value: str) -> str:
     if not isinstance(value, str) or not value.strip() or len(value) > 200:
         raise ValueError("invalid_session_identity")
     return value.strip()
+
+
+def _validate_projection_revision(value: str) -> str:
+    if not isinstance(value, str) or len(value.strip()) != 40:
+        raise ValueError("invalid_session_identity")
+    try:
+        int(value.strip(), 16)
+    except ValueError:
+        raise ValueError("invalid_session_identity")
+    return value.strip()
+
+
+def _validate_optional_projection_revision(value: str | None) -> str | None:
+    if value in (None, ""):
+        return None
+    return _validate_projection_revision(value)
+
+
+def _operation_result(report_date: str, projection_instance_key: str | None) -> dict[str, Any]:
+    hint = None
+    if projection_instance_key:
+        session = next(
+            (
+                item
+                for item in timeline_service.get_project_sessions_by_date(report_date, include_hidden=False, ensure_context=True)
+                if str(item.get("projection_instance_key") or "") == projection_instance_key
+            ),
+            None,
+        )
+        if session:
+            hint = {
+                "projection_instance_key": str(session.get("projection_instance_key") or ""),
+                "projection_revision": str(session.get("projection_revision") or session.get("session_detail_revision") or ""),
+            }
+    return {"ok": True, "report_date": report_date, "selection_hint": hint}
 
 
 def _find_session_by_identity(sessions: list[dict[str, Any]], ids: list[int], member_hash: str) -> dict[str, Any]:
@@ -388,6 +483,7 @@ __all__ = [
     "preview_session_project_update",
     "copy_timeline_session",
     "merge_timeline_session",
+    "save_timeline_session_edit",
     "save_timeline_session_override",
     "split_timeline_session",
     "update_timeline_session_note",

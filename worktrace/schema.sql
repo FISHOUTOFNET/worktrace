@@ -144,45 +144,15 @@ CREATE TABLE IF NOT EXISTS activity_project_assignment (
     FOREIGN KEY (project_id) REFERENCES project(id)
 );
 
-CREATE TABLE IF NOT EXISTS project_session_override (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    report_date TEXT NOT NULL,
-    activity_member_hash TEXT NOT NULL,
-    anchor_activity_id INTEGER NOT NULL,
-    original_start_time TEXT NOT NULL,
-    original_end_time TEXT NOT NULL,
-    original_raw_duration_seconds INTEGER NOT NULL,
-    project_id INTEGER,
-    adjusted_duration_seconds INTEGER,
-    note TEXT NOT NULL DEFAULT '',
-    match_state TEXT NOT NULL DEFAULT 'active' CHECK (
-        match_state IN ('active', 'conflict', 'orphaned', 'superseded')
-    ),
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    FOREIGN KEY (anchor_activity_id) REFERENCES activity_log(id),
-    FOREIGN KEY (project_id) REFERENCES project(id)
-);
-
-CREATE TABLE IF NOT EXISTS project_session_override_member (
-    override_id INTEGER NOT NULL,
-    activity_id INTEGER NOT NULL,
-    report_date TEXT NOT NULL,
-    slice_start_time TEXT NOT NULL,
-    slice_end_time TEXT NOT NULL,
-    PRIMARY KEY (override_id, activity_id, report_date, slice_start_time, slice_end_time),
-    FOREIGN KEY (override_id) REFERENCES project_session_override(id) ON DELETE CASCADE,
-    FOREIGN KEY (activity_id) REFERENCES activity_log(id)
-);
-
 CREATE TABLE IF NOT EXISTS report_session_operation (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     report_date TEXT NOT NULL,
-    operation_type TEXT NOT NULL CHECK(operation_type IN ('hide_session', 'merge_sessions', 'copy_session', 'hide_activity')),
+    operation_type TEXT NOT NULL CHECK(operation_type IN ('edit_session', 'hide_session', 'merge_sessions', 'copy_session', 'hide_activity')),
     base_instance_key TEXT NOT NULL,
     target_instance_key TEXT,
     direction TEXT CHECK(direction IS NULL OR direction IN ('previous', 'next')),
     operation_group_key TEXT,
+    replay_order INTEGER NOT NULL,
     match_state TEXT NOT NULL DEFAULT 'active' CHECK(match_state IN ('active', 'conflict', 'orphaned', 'superseded')),
     payload_json TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL,
@@ -191,13 +161,13 @@ CREATE TABLE IF NOT EXISTS report_session_operation (
 
 CREATE TABLE IF NOT EXISTS report_session_operation_member (
     operation_id INTEGER NOT NULL,
-    role TEXT NOT NULL CHECK(role IN ('source', 'target', 'origin', 'copy_origin', 'hidden_activity')),
+    role TEXT NOT NULL CHECK(role IN ('source', 'target', 'origin', 'copy_origin', 'hidden_activity', 'edit_target')),
     activity_id INTEGER NOT NULL,
     report_date TEXT NOT NULL,
     slice_start_time TEXT NOT NULL,
     slice_end_time TEXT NOT NULL,
     display_order INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY(operation_id, role, activity_id, report_date, slice_start_time, slice_end_time),
+    PRIMARY KEY(operation_id, role, activity_id, report_date, slice_start_time),
     FOREIGN KEY(operation_id) REFERENCES report_session_operation(id) ON DELETE CASCADE,
     FOREIGN KEY(activity_id) REFERENCES activity_log(id)
 );

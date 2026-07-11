@@ -56,7 +56,13 @@ def _seed_closed_status_activity(status="idle", project_id=None):
 def _session_note_count(first_activity_id: int) -> int:
     with get_connection() as conn:
         row = conn.execute(
-            "SELECT COUNT(*) AS c FROM project_session_override WHERE anchor_activity_id = ?",
+            """
+            SELECT COUNT(*) AS c
+            FROM report_session_operation o
+            JOIN report_session_operation_member m ON m.operation_id = o.id
+            WHERE o.operation_type = 'edit_session'
+              AND m.activity_id = ?
+            """,
             (first_activity_id,),
         ).fetchone()
     return int(row["c"] or 0)
@@ -300,8 +306,8 @@ def test_save_override_note_and_duration_together(temp_db):
     assert fields["adjusted_duration_seconds"] == 3600
 
 
-def test_save_override_empty_note_and_null_duration_deletes_row(temp_db):
-    """Both empty note + None duration + None project deletes the row."""
+def test_save_override_empty_note_and_null_duration_appends_inherit_command(temp_db):
+    """Empty note + None duration clears final fields without deleting history."""
     ids = _seed_session()
     activity_ids, member_hash = _session_identity(ids[0])
     timeline_api.save_timeline_session_override(
@@ -311,7 +317,10 @@ def test_save_override_empty_note_and_null_duration_deletes_row(temp_db):
     timeline_api.save_timeline_session_override(
         "2026-06-25", activity_ids, member_hash, None, None, ""
     )
-    assert _session_note_count(ids[0]) == 0
+    fields = _session_user_fields(ids[0])
+    assert fields["note"] == ""
+    assert fields["adjusted_duration_seconds"] is None
+    assert _session_note_count(ids[0]) == 2
 
 
 def test_save_override_system_status_activity_rejected_without_partial_write(temp_db):

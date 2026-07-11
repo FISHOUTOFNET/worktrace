@@ -27,7 +27,7 @@ def _counts() -> dict[str, int]:
                 "SELECT COUNT(*) AS c FROM activity_project_assignment"
             ).fetchone()["c"],
             "session_note": conn.execute(
-                "SELECT COUNT(*) AS c FROM project_session_override"
+                "SELECT COUNT(*) AS c FROM report_session_operation"
             ).fetchone()["c"],
         }
 
@@ -188,20 +188,16 @@ def test_toggle_does_not_create_or_delete_projects_rules_or_activity_rows(temp_d
     with get_connection() as conn:
         conn.execute(
             """
-            INSERT INTO project_session_override(
-                report_date, activity_member_hash, anchor_activity_id,
-                original_start_time, original_end_time, original_raw_duration_seconds,
-                note, created_at, updated_at
+            INSERT INTO report_session_operation(
+                report_date, operation_type, base_instance_key, replay_order,
+                match_state, payload_json, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?)
+            VALUES (?, 'edit_session', ?, 1, 'active', ?, ?, ?)
             """,
             (
                 "2026-06-18",
-                "d" * 40,
-                activity_id,
-                "2026-06-18 09:00:00",
-                "2026-06-18 09:00:00",
-                "keep",
+                "base:" + "d" * 40,
+                '{"payload_version":1,"note":{"mode":"set","value":"keep"}}',
                 now_str(),
                 now_str(),
             ),
@@ -462,20 +458,16 @@ def test_toggle_does_not_change_history_activity_assignment_or_session_note_rows
     with get_connection() as conn:
         conn.execute(
             """
-            INSERT INTO project_session_override(
-                report_date, activity_member_hash, anchor_activity_id,
-                original_start_time, original_end_time, original_raw_duration_seconds,
-                note, created_at, updated_at
+            INSERT INTO report_session_operation(
+                report_date, operation_type, base_instance_key, replay_order,
+                match_state, payload_json, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?)
+            VALUES (?, 'edit_session', ?, 1, 'active', ?, ?, ?)
             """,
             (
                 "2026-06-18",
-                "e" * 40,
-                activity_id,
-                "2026-06-18 09:00:00",
-                "2026-06-18 09:00:00",
-                "keep",
+                "base:" + "e" * 40,
+                '{"payload_version":1,"note":{"mode":"set","value":"keep"}}',
                 now_str(),
                 now_str(),
             ),

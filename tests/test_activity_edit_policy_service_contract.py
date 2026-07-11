@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from worktrace.constants import (
@@ -41,15 +43,25 @@ def _session_note_row(activity_id: int) -> dict | None:
     with get_connection() as conn:
         row = conn.execute(
             """
-            SELECT note, adjusted_duration_seconds
-            FROM project_session_override
-            WHERE report_date = ?
-              AND anchor_activity_id = ?
-              AND match_state = 'active'
+            SELECT o.payload_json
+            FROM report_session_operation o
+            JOIN report_session_operation_member m ON m.operation_id = o.id
+            WHERE o.report_date = ?
+              AND m.activity_id = ?
+              AND o.operation_type = 'edit_session'
+              AND o.match_state = 'active'
+            ORDER BY o.replay_order DESC, o.id DESC
+            LIMIT 1
             """,
             (DAY, activity_id),
         ).fetchone()
-    return dict(row) if row else None
+    if not row:
+        return None
+    payload = json.loads(row["payload_json"])
+    return {
+        "note": (payload.get("note") or {}).get("value", ""),
+        "adjusted_duration_seconds": (payload.get("duration") or {}).get("value"),
+    }
 
 
 def _mark_open(activity_id: int) -> None:
@@ -200,7 +212,8 @@ def test_set_session_user_fields_clear_still_requires_editability(temp_db):
     timeline_service.update_session_note_and_duration(
         DAY, session["activity_ids"], session["activity_member_hash"], "", None
     )
-    assert _session_note_row(aid) is None
+    cleared = _session_note_row(aid)
+    assert cleared == {"note": "", "adjusted_duration_seconds": None}
 
     hidden = _activity()
     _mark_hidden(hidden)

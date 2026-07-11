@@ -57,8 +57,10 @@ def test_new_database_has_current_schema_and_defaults(temp_db):
     assert "folder_rule_file_index" in tables
     assert "activity_project_assignment" in tables
     assert "activity_clipboard_event" in tables
-    assert "project_session_override" in tables
-    assert "project_session_override_member" in tables
+    assert "project_session_override" not in tables
+    assert "project_session_override_member" not in tables
+    assert "report_session_operation" in tables
+    assert "report_session_operation_member" in tables
     assert "manual_project_session" not in tables
     assert "manual_project_session_activity" not in tables
     assert setting["value"] == "15"
@@ -88,14 +90,16 @@ def test_new_database_has_current_schema_and_defaults(temp_db):
     assert "rule" not in tables
 
 
-def test_project_session_override_has_user_edit_columns(temp_db):
+def test_report_session_operation_has_user_command_columns(temp_db):
     with db.get_connection() as conn:
-        columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(project_session_override)").fetchall()}
-        assert "activity_member_hash" in columns
-        assert "project_id" in columns
-        assert "adjusted_duration_seconds" in columns
-        assert "note" in columns
+        columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(report_session_operation)").fetchall()}
+        member_columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(report_session_operation_member)").fetchall()}
+        assert "operation_type" in columns
+        assert "base_instance_key" in columns
+        assert "replay_order" in columns
+        assert "payload_json" in columns
         assert "match_state" in columns
+        assert "slice_start_time" in member_columns
 
 
 def test_reset_database_clears_current_schema_tables(temp_db):
@@ -109,8 +113,8 @@ def test_reset_database_clears_current_schema_tables(temp_db):
     with db.get_connection() as conn:
         assert conn.execute("SELECT COUNT(*) AS c FROM activity_log").fetchone()["c"] == 0
         assert conn.execute("SELECT COUNT(*) AS c FROM activity_clipboard_event").fetchone()["c"] == 0
-        assert conn.execute("SELECT COUNT(*) AS c FROM project_session_override").fetchone()["c"] == 0
-        assert conn.execute("SELECT COUNT(*) AS c FROM project_session_override_member").fetchone()["c"] == 0
+        assert conn.execute("SELECT COUNT(*) AS c FROM report_session_operation").fetchone()["c"] == 0
+        assert conn.execute("SELECT COUNT(*) AS c FROM report_session_operation_member").fetchone()["c"] == 0
         assert conn.execute("SELECT COUNT(*) AS c FROM folder_project_rule").fetchone()["c"] == 0
         assert conn.execute("SELECT COUNT(*) AS c FROM folder_rule_index_state").fetchone()["c"] == 0
         assert conn.execute("SELECT COUNT(*) AS c FROM folder_rule_file_index").fetchone()["c"] == 0

@@ -154,6 +154,18 @@ def _finalize_group(group: dict[str, Any]) -> dict[str, Any]:
 
 
 def _activity_group_key(row: dict) -> str:
+    base = _activity_identity_part(row)
+    dimensions = [
+        base,
+        "display_project:" + str(row.get("display_project_id") or 0),
+        "report_project:" + str(row.get("report_project_id") or row.get("project_id") or 0),
+        "status:" + str(row.get("status") or ""),
+        "privacy:" + str(row.get("privacy_scope") or row.get("is_private") or ""),
+    ]
+    return "|".join(dimensions)
+
+
+def _activity_identity_part(row: dict) -> str:
     for field in ("activity_identity_key", "resource_identity_key"):
         value = str(row.get(field) or "").strip()
         if value:

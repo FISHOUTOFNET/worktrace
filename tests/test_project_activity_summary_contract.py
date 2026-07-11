@@ -84,7 +84,9 @@ def test_session_activity_summary_is_scoped_by_activity_ids(monkeypatch):
 
     summary = project_activity_summary_service.get_session_activity_summary([1], "2026-07-09")
 
-    assert [item["activity_identity_key"] for item in summary] == ["file:first"]
+    assert [item["activity_identity_key"] for item in summary] == [
+        "file:first|display_project:10|report_project:10|status:normal|privacy:"
+    ]
     assert summary[0]["activity_ids"] == [1]
     assert summary[0]["duration_seconds"] == 60
 

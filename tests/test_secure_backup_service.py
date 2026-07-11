@@ -102,34 +102,37 @@ def _seed_test_data() -> None:
             (activity_id, "2026-06-25 10:00:30", TEST_WINDOW_TITLE, TEST_FILE_PATH, TEST_COPIED_TEXT, ts, ts),
         )
 
-        # A project session override.
+        # A projected session edit command.
         cur = conn.execute(
             """
-            INSERT INTO project_session_override(
-                report_date, activity_member_hash, anchor_activity_id,
-                original_start_time, original_end_time, original_raw_duration_seconds,
-                project_id, adjusted_duration_seconds, note, match_state, created_at, updated_at
+            INSERT INTO report_session_operation(
+                report_date, operation_type, base_instance_key, target_instance_key,
+                direction, operation_group_key, replay_order, match_state, payload_json, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, 60, ?, 60, ?, 'active', ?, ?)
+            VALUES (?, 'edit_session', ?, NULL, NULL, NULL, 1, 'active', ?, ?, ?)
             """,
             (
                 "2026-06-25",
-                "a" * 40,
-                activity_id,
-                "2026-06-25 10:00:00",
-                "2026-06-25 10:01:00",
-                project_id,
-                TEST_NOTE,
+                "base:" + "a" * 40,
+                json.dumps(
+                    {
+                        "payload_version": 1,
+                        "project": {"mode": "set", "project_id": project_id},
+                        "duration": {"mode": "set", "value": 60},
+                        "note": {"mode": "set", "value": TEST_NOTE},
+                    },
+                    ensure_ascii=False,
+                ),
                 ts,
                 ts,
             ),
         )
         conn.execute(
             """
-            INSERT INTO project_session_override_member(
-                override_id, activity_id, report_date, slice_start_time, slice_end_time
+            INSERT INTO report_session_operation_member(
+                operation_id, role, activity_id, report_date, slice_start_time, slice_end_time
             )
-            VALUES (?, ?, ?, ?, ?)
+            VALUES (?, 'edit_target', ?, ?, ?, ?)
             """,
             (
                 int(cur.lastrowid),
@@ -220,8 +223,8 @@ def _row_counts() -> dict[str, int]:
         "project_rule",
         "activity_project_assignment",
         "activity_clipboard_event",
-        "project_session_override",
-        "project_session_override_member",
+        "report_session_operation",
+        "report_session_operation_member",
         "activity_resource",
     ]
     counts: dict[str, int] = {}
@@ -251,8 +254,8 @@ def test_export_payload_contains_required_tables(temp_db, tmp_path):
         "project_rule",
         "activity_project_assignment",
         "activity_clipboard_event",
-        "project_session_override",
-        "project_session_override_member",
+        "report_session_operation",
+        "report_session_operation_member",
         "activity_resource",
     ]:
         assert required in tables, f"missing table {required} in payload"
@@ -508,8 +511,8 @@ def test_replace_import_restores_all_tables(temp_db, tmp_path):
         "project_rule",
         "activity_project_assignment",
         "activity_clipboard_event",
-        "project_session_override",
-        "project_session_override_member",
+        "report_session_operation",
+        "report_session_operation_member",
         "activity_resource",
     ]:
         assert counts_after[table] == counts_before[table], f"row count mismatch for {table}"
@@ -551,12 +554,11 @@ def test_replace_import_restores_distinctive_data(temp_db, tmp_path):
         assert clipboard is not None
         assert clipboard["copied_text"] == TEST_COPIED_TEXT
 
-        note = conn.execute(
-            "SELECT note FROM project_session_override WHERE anchor_activity_id = ?",
-            (activity["id"],),
+        command = conn.execute(
+            "SELECT payload_json FROM report_session_operation WHERE operation_type = 'edit_session'"
         ).fetchone()
-        assert note is not None
-        assert note["note"] == TEST_NOTE
+        assert command is not None
+        assert json.loads(command["payload_json"])["note"]["value"] == TEST_NOTE
 
 
 def test_folder_rule_file_index_not_imported_and_left_rebuildable(temp_db, tmp_path):

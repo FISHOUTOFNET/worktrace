@@ -22,8 +22,8 @@ EXPECTED_TABLES = {
     "project_rule",
     "activity_project_assignment",
     "activity_clipboard_event",
-    "project_session_override",
-    "project_session_override_member",
+    "report_session_operation",
+    "report_session_operation_member",
     "activity_resource",
 }
 
@@ -326,8 +326,8 @@ def test_reset_database_clears_business_data_and_rebuilds_defaults(temp_db):
         assert conn.execute("SELECT COUNT(*) AS c FROM activity_log").fetchone()["c"] == 0
         assert conn.execute("SELECT COUNT(*) AS c FROM activity_project_assignment").fetchone()["c"] == 0
         assert conn.execute("SELECT COUNT(*) AS c FROM activity_clipboard_event").fetchone()["c"] == 0
-        assert conn.execute("SELECT COUNT(*) AS c FROM project_session_override").fetchone()["c"] == 0
-        assert conn.execute("SELECT COUNT(*) AS c FROM project_session_override_member").fetchone()["c"] == 0
+        assert conn.execute("SELECT COUNT(*) AS c FROM report_session_operation").fetchone()["c"] == 0
+        assert conn.execute("SELECT COUNT(*) AS c FROM report_session_operation_member").fetchone()["c"] == 0
         assert conn.execute("SELECT COUNT(*) AS c FROM folder_project_rule").fetchone()["c"] == 0
         assert conn.execute("SELECT COUNT(*) AS c FROM folder_rule_index_state").fetchone()["c"] == 0
         assert conn.execute("SELECT COUNT(*) AS c FROM folder_rule_file_index").fetchone()["c"] == 0
@@ -349,3 +349,80 @@ def test_reset_database_clears_business_data_and_rebuilds_defaults(temp_db):
     assert uncategorized is not None
     assert excluded is not None
     assert EXPECTED_DEFAULT_SETTINGS.issubset(keys)
+
+
+def test_legacy_project_session_override_migrates_to_edit_command(temp_db):
+    from worktrace.db import ensure_schema_migrations, now_str
+
+    ts = now_str()
+    with db.get_connection() as conn:
+        conn.executescript(
+            """
+            CREATE TABLE project_session_override (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                report_date TEXT NOT NULL,
+                activity_member_hash TEXT NOT NULL,
+                anchor_activity_id INTEGER NOT NULL,
+                original_start_time TEXT NOT NULL,
+                original_end_time TEXT NOT NULL,
+                original_raw_duration_seconds INTEGER NOT NULL,
+                project_id INTEGER,
+                adjusted_duration_seconds INTEGER,
+                note TEXT NOT NULL DEFAULT '',
+                match_state TEXT NOT NULL DEFAULT 'active',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE project_session_override_member (
+                override_id INTEGER NOT NULL,
+                activity_id INTEGER NOT NULL,
+                report_date TEXT NOT NULL,
+                slice_start_time TEXT NOT NULL,
+                slice_end_time TEXT NOT NULL
+            );
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO activity_log(start_time, end_time, duration_seconds, app_name, process_name, window_title, status, source, created_at, updated_at)
+            VALUES ('2026-06-25 09:00:00', '2026-06-25 09:10:00', 600, 'Word', 'winword.exe', 'Spec', 'normal', 'auto', ?, ?)
+            """,
+            (ts, ts),
+        )
+        activity_id = int(conn.execute("SELECT id FROM activity_log").fetchone()["id"])
+        project_id = int(conn.execute("SELECT id FROM project WHERE name = ?", (UNCATEGORIZED_PROJECT,)).fetchone()["id"])
+        cur = conn.execute(
+            """
+            INSERT INTO project_session_override(
+                report_date, activity_member_hash, anchor_activity_id, original_start_time,
+                original_end_time, original_raw_duration_seconds, project_id,
+                adjusted_duration_seconds, note, match_state, created_at, updated_at
+            ) VALUES ('2026-06-25', ?, ?, '2026-06-25 09:00:00', '2026-06-25 09:10:00', 600, ?, 300, 'legacy note', 'active', ?, ?)
+            """,
+            ("f" * 40, activity_id, project_id, ts, ts),
+        )
+        conn.execute(
+            """
+            INSERT INTO project_session_override_member(override_id, activity_id, report_date, slice_start_time, slice_end_time)
+            VALUES (?, ?, '2026-06-25', '2026-06-25 09:00:00', '2026-06-25 09:10:00')
+            """,
+            (int(cur.lastrowid), activity_id),
+        )
+        before = dict(conn.execute("SELECT * FROM activity_log WHERE id = ?", (activity_id,)).fetchone())
+        ensure_schema_migrations(conn)
+        ensure_schema_migrations(conn)
+        after = dict(conn.execute("SELECT * FROM activity_log WHERE id = ?", (activity_id,)).fetchone())
+        tables = _get_tables(conn)
+        command = conn.execute(
+            "SELECT operation_type, payload_json, replay_order, match_state FROM report_session_operation"
+        ).fetchone()
+        member_count = conn.execute("SELECT COUNT(*) AS c FROM report_session_operation_member").fetchone()["c"]
+
+    assert before == after
+    assert "project_session_override" not in tables
+    assert "project_session_override_member" not in tables
+    assert command["operation_type"] == "edit_session"
+    assert command["replay_order"] == 1
+    assert command["match_state"] == "active"
+    assert "legacy note" in command["payload_json"]
+    assert member_count == 1
