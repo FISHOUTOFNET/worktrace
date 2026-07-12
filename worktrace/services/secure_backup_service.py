@@ -1,22 +1,8 @@
 """Encrypted local backup export/import service.
 
-This service bridges the ``worktrace.security.backup_format`` crypto
-container with the real WorkTrace SQLite database. It produces a UTF-8 JSON
-payload of the user-migratable tables, encrypts it into a ``.wtbackup`` file,
-and restores it back into the local database.
-
-Boundary rules (see docs/v0.2-local-security-design.md):
-
-- The UI never imports this module directly. It goes through ``worktrace.api``.
-- This service is the only place that imports both ``worktrace.db`` and
-  ``worktrace.security.backup_format``.
-- No runtime field-level encryption, no SQLCipher, no network, no merge import.
-- Wrong passphrase, corrupted backup, or unsupported version never damage the
-  current database. Decryption and payload validation happen before any DB
-  mutation.
-- Logs record only operation type, result, and exception type. They never
-  include passphrase, decrypted payload, window title, path, note, copied text,
-  or full ciphertext.
+A replace import is validated in a staging database before the live database is
+mutated. The process database write gate is active for the full replacement
+window, with the importing thread as the sole writer.
 """
 
 from __future__ import annotations
@@ -33,7 +19,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
-from ..constants import APP_VERSION
+from ..constants import (
+    APP_VERSION,
+    STATUS_ERROR,
+    STATUS_EXCLUDED,
+    STATUS_IDLE,
+    STATUS_NORMAL,
+    STATUS_PAUSED,
+    TIME_FORMAT,
+)
 from ..db import (
     CURRENT_SCHEMA_VERSION,
     expected_schema_fingerprint,
@@ -52,13 +46,9 @@ from ..security.backup_format import (
     decrypt_encrypted_backup,
     parse_backup_manifest,
 )
-from ..services.settings_service import (
-    clear_settings_cache,
-    get_bool_setting,
-    get_setting,
-    set_setting,
-)
+from ..write_gate import DATABASE_WRITE_GATE
 from .runtime_activity_state_service import clear_runtime_activity_state
+from .settings_service import clear_settings_cache, get_bool_setting, get_setting, set_setting
 
 
 PAYLOAD_FORMAT = "worktrace-local-data"
@@ -66,7 +56,6 @@ PAYLOAD_VERSION = 4
 SCHEMA_VERSION = str(CURRENT_SCHEMA_VERSION)
 BACKUP_FILE_SUFFIX = ".wtbackup"
 
-# Tables exported and imported, in dependency-safe insert order (parents first).
 EXPORT_TABLES: tuple[str, ...] = (
     "project",
     "settings",
@@ -82,25 +71,19 @@ EXPORT_TABLES: tuple[str, ...] = (
     "report_mutation_request",
     "activity_resource",
 )
-
-# Tables excluded from export (derived cache or runtime-only).
 EXCLUDED_TABLES: frozenset[str] = frozenset({"folder_rule_file_index"})
-
-# Settings are opt-in. Runtime, health, heartbeat, pause, failure-counter and
-# import coordination state must never cross a machine boundary.
 MIGRATABLE_SETTINGS: frozenset[str] = frozenset(
     {
         "poll_interval_seconds",
         "idle_threshold_seconds",
         "ui_refresh_seconds",
         "context_carry_minutes",
+        "unrecorded_gap_boundary_seconds",
         "clipboard_capture_enabled",
         "collector_stall_threshold_seconds",
         "clock_jump_threshold_seconds",
     }
 )
-
-# Delete order (children first) to respect foreign keys.
 _DELETE_ORDER: tuple[str, ...] = (
     "activity_resource",
     "report_session_operation_member",
@@ -117,6 +100,13 @@ _DELETE_ORDER: tuple[str, ...] = (
     "settings",
     "project",
 )
+_ALLOWED_ACTIVITY_STATUSES = {
+    STATUS_NORMAL,
+    STATUS_IDLE,
+    STATUS_ERROR,
+    STATUS_EXCLUDED,
+    STATUS_PAUSED,
+}
 
 
 class SecureBackupError(Exception):
@@ -141,8 +131,6 @@ class BackupImportInProgressError(SecureBackupError):
 
 @dataclass(frozen=True)
 class BackupManifestInfo:
-    """Non-sensitive manifest info safe to show in the UI layer."""
-
     version: int
     app_version: str
     created_at: str
@@ -164,29 +152,19 @@ class BackupManifestInfo:
 
 @dataclass(frozen=True)
 class ImportResult:
-    """Result of a successful encrypted backup import."""
-
     mode: str
     imported_tables: dict[str, int] = field(default_factory=dict)
     folder_index_reset: bool = False
 
 
 def export_encrypted_backup(output_path: str | Path, passphrase: str) -> Path:
-    """Export the current local database into an encrypted ``.wtbackup`` file.
-
-    Reads real business data, serializes it as UTF-8 JSON, encrypts it with the
-    given passphrase, and writes the file atomically (temp file + rename).
-    """
     if not passphrase:
         raise SecureBackupError("passphrase is required")
     out = Path(output_path)
     out.parent.mkdir(parents=True, exist_ok=True)
-
     payload = _build_export_payload()
     blob = create_encrypted_backup(payload, passphrase, APP_VERSION)
-
     _atomic_write_bytes(out, blob)
-    # Do not log the full path: it may contain sensitive folder names.
     logging.info("encrypted backup export success suffix=%s", BACKUP_FILE_SUFFIX)
     return out
 
@@ -196,15 +174,6 @@ def import_encrypted_backup(
     passphrase: str,
     mode: str = "replace",
 ) -> ImportResult:
-    """Import an encrypted ``.wtbackup`` file into the current local database.
-
-    Only ``mode="replace"`` is supported. The import runs inside a
-    ``secure_import_guard`` that pauses the collector and blocks collector
-    writes for the duration of the DB replacement. Decryption and payload
-    validation happen inside the guard so that, even on failure, the collector
-    cannot write to the DB mid-import; on failure the prior pause/status
-    state is restored and the DB is left untouched.
-    """
     if not passphrase:
         raise SecureBackupError("passphrase is required")
     if mode != "replace":
@@ -212,42 +181,26 @@ def import_encrypted_backup(
 
     with SECURE_IMPORT_COORDINATOR.acquire() as guard:
         blob = Path(input_path).read_bytes()
-        # Decrypt and validate inside the guard so the collector is already
-        # blocked. If decryption fails, the guard restores prior state on exit.
         payload = _read_and_decrypt(blob, passphrase)
         data = _parse_and_validate_payload(payload)
         imported_counts = _replace_import(data)
-        # Mark the import as succeeded so the guard leaves the app paused
-        # instead of restoring the prior state.
         guard.mark_succeeded()
 
     try:
         _invalidate_caches()
     except Exception as exc:
-        # Replacement is already committed; cache refresh is best-effort and
-        # must not turn an authoritative success into an ambiguous failure.
         logging.warning("encrypted backup cache invalidation failed exc_type=%s", type(exc).__name__)
-    logging.info(
-        "encrypted backup import success mode=%s tables=%d",
-        mode,
-        len(imported_counts),
-    )
+    logging.info("encrypted backup import success mode=%s tables=%d", mode, len(imported_counts))
     return ImportResult(mode=mode, imported_tables=imported_counts, folder_index_reset=True)
 
 
 def parse_encrypted_backup_manifest(input_path: str | Path) -> BackupManifestInfo:
-    """Parse the non-sensitive manifest from a ``.wtbackup`` file.
-
-    Does not decrypt the payload and does not require a passphrase.
-    """
     blob = Path(input_path).read_bytes()
     try:
         manifest = parse_backup_manifest(blob)
     except BackupFormatError as exc:
         raise _classify_format_error(exc) from exc
     return BackupManifestInfo.from_manifest(manifest)
-
-
 
 
 @dataclass
@@ -262,7 +215,7 @@ class _ImportGuardState:
 
 
 class SecureImportCoordinator:
-    """Process-owned import exclusion, collector acknowledgement and write gate."""
+    """Process-owned import exclusion, acknowledgement and global write gate."""
 
     def __init__(self) -> None:
         self._import_lock = threading.Lock()
@@ -281,7 +234,7 @@ class SecureImportCoordinator:
 
     def write_gate_active(self) -> bool:
         with self._state_lock:
-            return self._write_gate
+            return self._write_gate or DATABASE_WRITE_GATE.active()
 
     @contextmanager
     def acquire(self) -> Iterator[_ImportGuardState]:
@@ -302,32 +255,40 @@ class SecureImportCoordinator:
                 result = handler(timeout_seconds=5.0)
                 if not bool(result.get("ok")):
                     raise SecureBackupError("collector_pause_not_acknowledged")
-            # Either the active collector acknowledged or there is no active
-            # writer. Expose the paused runtime state before opening the gate.
+
+            # Pause/runtime writes occur after collector acknowledgement but
+            # before the global gate, so no non-owner writer remains active.
             set_setting("user_paused", "true")
             set_setting("collector_status", "paused")
             clear_runtime_activity_state("secure_import_guard_enter")
-            with self._state_lock:
-                self._write_gate = True
-            yield state
+
+            with DATABASE_WRITE_GATE.acquire():
+                with self._state_lock:
+                    self._write_gate = True
+                try:
+                    yield state
+                except Exception:
+                    if not state.succeeded:
+                        set_setting("user_paused", "true" if prior_user_paused else "false")
+                        set_setting("collector_status", prior_collector_status)
+                        DEFAULT_SNAPSHOT_PUBLISHER.restore_raw(prior_snapshot)
+                    raise
+                else:
+                    try:
+                        clear_runtime_activity_state("secure_import_success")
+                    except Exception as exc:
+                        logging.warning(
+                            "encrypted backup runtime clear failed exc_type=%s",
+                            type(exc).__name__,
+                        )
+                    logging.info("encrypted backup import guard completed paused=true")
+                finally:
+                    with self._state_lock:
+                        self._write_gate = False
         except Exception as exc:
             logging.warning("encrypted backup import failed exc_type=%s", type(exc).__name__)
-            if not state.succeeded:
-                set_setting("user_paused", "true" if prior_user_paused else "false")
-                set_setting("collector_status", prior_collector_status)
-                DEFAULT_SNAPSHOT_PUBLISHER.restore_raw(prior_snapshot)
             raise
-        else:
-            try:
-                clear_runtime_activity_state("secure_import_success")
-            except Exception as exc:
-                logging.warning(
-                    "encrypted backup runtime clear failed exc_type=%s", type(exc).__name__
-                )
-            logging.info("encrypted backup import guard completed paused=true")
         finally:
-            with self._state_lock:
-                self._write_gate = False
             clear_settings_cache()
             self._import_lock.release()
 
@@ -344,16 +305,10 @@ def clear_collector_pause_handler(handler: Any | None = None) -> None:
 
 
 def is_secure_import_in_progress() -> bool:
-    """True when a secure backup import is currently in progress.
-
-    Collector and write paths check this to skip writes that would conflict
-    with an in-progress DB replacement.
-    """
     return SECURE_IMPORT_COORDINATOR.write_gate_active()
 
 
 def _build_export_payload() -> bytes:
-    """Read the current database and serialize migratable tables to JSON bytes."""
     tables: dict[str, list[dict[str, Any]]] = {}
     conn = get_connection()
     try:
@@ -364,9 +319,7 @@ def _build_export_payload() -> bytes:
         for table in EXPORT_TABLES:
             rows = conn.execute(f"SELECT * FROM {table}").fetchall()
             if table == "settings":
-                tables[table] = [
-                    dict(row) for row in rows if row["key"] in MIGRATABLE_SETTINGS
-                ]
+                tables[table] = [dict(row) for row in rows if row["key"] in MIGRATABLE_SETTINGS]
             else:
                 tables[table] = [dict(row) for row in rows]
         conn.commit()
@@ -389,50 +342,27 @@ def _build_export_payload() -> bytes:
 
 
 def _parse_and_validate_payload(payload: bytes) -> dict[str, Any]:
-    """Parse and validate the decrypted JSON payload.
-
-    Raises BackupCorruptedError if the payload is not valid JSON or does not
-    match the expected format/version/tables structure.
-    """
     try:
         data = json.loads(payload.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         logging.warning("encrypted backup payload json parse failed: %s", type(exc).__name__)
         raise BackupCorruptedError("backup file is invalid or corrupted") from exc
-
-    if not isinstance(data, dict):
-        raise BackupCorruptedError("backup file is invalid or corrupted")
-    if data.get("format") != PAYLOAD_FORMAT:
+    if not isinstance(data, dict) or data.get("format") != PAYLOAD_FORMAT:
         raise BackupCorruptedError("backup file is invalid or corrupted")
     if data.get("version") != PAYLOAD_VERSION or str(data.get("schema_version") or "") != SCHEMA_VERSION:
         raise BackupVersionNotSupportedError("backup version is not supported")
     if data.get("schema_fingerprint") != expected_schema_fingerprint():
         raise BackupCorruptedError("backup file is invalid or corrupted")
     tables = data.get("tables")
-    if not isinstance(tables, dict):
+    if not isinstance(tables, dict) or set(tables) != set(EXPORT_TABLES):
         raise BackupCorruptedError("backup file is invalid or corrupted")
-
-    expected_tables = set(EXPORT_TABLES)
-    if set(tables.keys()) != expected_tables:
-        raise BackupCorruptedError("backup file is invalid or corrupted")
-
-    for name, rows in tables.items():
-        if not isinstance(rows, list):
+    for rows in tables.values():
+        if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
             raise BackupCorruptedError("backup file is invalid or corrupted")
-        for row in rows:
-            if not isinstance(row, dict):
-                raise BackupCorruptedError("backup file is invalid or corrupted")
-
     return data
 
 
-
-
 def _replace_import(data: dict[str, Any]) -> dict[str, int]:
-    """Replace all local data with the backup content inside one transaction.
-
-    Returns a dict of table name -> imported row count.
-    """
     staging_path: str | None = None
     try:
         fd, staging_path = tempfile.mkstemp(prefix="worktrace-import-", suffix=".sqlite")
@@ -455,8 +385,6 @@ def _replace_import(data: dict[str, Any]) -> dict[str, int]:
         finally:
             staging.close()
 
-        # Only validated data reaches the live DB. The write gate is active and
-        # collector pause has been acknowledged throughout this transaction.
         with get_connection() as live:
             live.execute("BEGIN IMMEDIATE")
             _delete_all_rows(live)
@@ -464,8 +392,7 @@ def _replace_import(data: dict[str, Any]) -> dict[str, int]:
             source.row_factory = sqlite3.Row
             try:
                 for table in EXPORT_TABLES:
-                    rows = [dict(row) for row in source.execute(f"SELECT * FROM {table}")]
-                    _insert_rows(live, table, rows)
+                    _insert_rows(live, table, [dict(row) for row in source.execute(f"SELECT * FROM {table}")])
             finally:
                 source.close()
             seed_defaults(live)
@@ -480,7 +407,9 @@ def _replace_import(data: dict[str, Any]) -> dict[str, int]:
             )
             _validate_staging_database(live)
         return imported
-    except (sqlite3.DatabaseError, ValueError, KeyError) as exc:
+    except BackupCorruptedError:
+        raise
+    except (sqlite3.DatabaseError, ValueError, KeyError, TypeError) as exc:
         raise BackupCorruptedError("backup file is invalid or corrupted") from exc
     finally:
         if staging_path:
@@ -495,7 +424,7 @@ def _load_import_tables(conn: sqlite3.Connection, tables: dict[str, Any]) -> dic
     for table in EXPORT_TABLES:
         rows = tables.get(table, [])
         if table == "settings":
-            rows = [r for r in rows if r.get("key") in MIGRATABLE_SETTINGS]
+            rows = [row for row in rows if row.get("key") in MIGRATABLE_SETTINGS]
         imported[table] = _insert_rows(conn, table, rows)
     return imported
 
@@ -523,21 +452,48 @@ def _validate_staging_database(conn: sqlite3.Connection) -> None:
     integrity = conn.execute("PRAGMA integrity_check").fetchone()
     if integrity is None or str(integrity[0]).lower() != "ok":
         raise BackupCorruptedError("backup file is invalid or corrupted")
+    _validate_activity_rows(conn)
     _validate_operation_graph(conn)
     _validate_replay_records(conn)
 
 
+def _validate_activity_rows(conn: sqlite3.Connection) -> None:
+    for row in conn.execute(
+        "SELECT id, start_time, end_time, duration_seconds, status FROM activity_log ORDER BY id"
+    ).fetchall():
+        try:
+            start = datetime.strptime(str(row["start_time"] or ""), TIME_FORMAT)
+            end_raw = row["end_time"]
+            end = datetime.strptime(str(end_raw), TIME_FORMAT) if end_raw is not None else None
+            duration = int(row["duration_seconds"])
+        except (TypeError, ValueError) as exc:
+            raise BackupCorruptedError("backup file is invalid or corrupted") from exc
+        if duration < 0 or str(row["status"] or "") not in _ALLOWED_ACTIVITY_STATUSES:
+            raise BackupCorruptedError("backup file is invalid or corrupted")
+        if end is not None:
+            expected = int((end - start).total_seconds())
+            if expected < 0 or duration != expected:
+                raise BackupCorruptedError("backup file is invalid or corrupted")
+
+
 def _validate_replay_records(conn: sqlite3.Connection) -> None:
-    """Build the canonical projection for every imported operation date."""
     from .report_projection_snapshot_service import build_visible_snapshot
+    from .report_session_operation_engine import APPLIED, SUPERSEDED_BY_UNDO
 
     dates = conn.execute(
-        "SELECT DISTINCT report_date FROM report_session_operation ORDER BY report_date"
+        """
+        SELECT report_date FROM report_session_operation
+        UNION
+        SELECT substr(start_time, 1, 10) FROM activity_log WHERE length(start_time) >= 10
+        UNION
+        SELECT substr(end_time, 1, 10) FROM activity_log WHERE end_time IS NOT NULL AND length(end_time) >= 10
+        ORDER BY 1
+        """
     ).fetchall()
     try:
         for date_row in dates:
-            report_date = str(date_row[0])
-            operations: list[dict[str, Any]] = []
+            report_date = str(date_row[0] or "")
+            datetime.strptime(report_date, "%Y-%m-%d")
             for row in conn.execute(
                 "SELECT * FROM report_session_operation WHERE report_date = ? ORDER BY sequence, id",
                 (report_date,),
@@ -545,20 +501,13 @@ def _validate_replay_records(conn: sqlite3.Connection) -> None:
                 operation = dict(row)
                 operation["payload"] = json.loads(str(operation.pop("payload_json")))
                 _validate_operation_payload(operation, conn)
-                members: dict[str, list[dict[str, Any]]] = {}
-                for member in conn.execute(
-                    "SELECT role, activity_id, report_date, slice_start_time "
-                    "FROM report_session_operation_member WHERE operation_id = ? "
-                    "ORDER BY role, display_order, activity_id, slice_start_time",
-                    (operation["id"],),
-                ).fetchall():
-                    member_dict = dict(member)
-                    role = str(member_dict.pop("role"))
-                    members.setdefault(role, []).append(member_dict)
-                operation["members"] = members
-                operations.append(operation)
             snapshot = build_visible_snapshot(report_date, report_date, conn=conn)
-            if any(item.reason in {"invalid_payload", "invalid_edit_payload", "unknown_operation_type"} for item in snapshot.operation_diagnostics):
+            invalid = [
+                item
+                for item in snapshot.operation_diagnostics
+                if item.state not in {APPLIED, SUPERSEDED_BY_UNDO}
+            ]
+            if invalid:
                 raise BackupCorruptedError("backup file is invalid or corrupted")
     except BackupCorruptedError:
         raise
@@ -608,10 +557,55 @@ def _validate_operation_payload(operation: dict[str, Any], conn: sqlite3.Connect
                 raise BackupCorruptedError("backup file is invalid or corrupted")
     elif operation_type == "hide_activity":
         allowed |= {"summary_id"}
-        if "summary_id" in payload and not isinstance(payload["summary_id"], str):
+        if not isinstance(payload.get("summary_id"), str) or not payload["summary_id"]:
             raise BackupCorruptedError("backup file is invalid or corrupted")
+    elif operation_type not in {"hide_session", "copy_session", "merge_sessions", "split_session"}:
+        raise BackupCorruptedError("backup file is invalid or corrupted")
     if set(payload) - allowed:
         raise BackupCorruptedError("backup file is invalid or corrupted")
+
+
+def _validate_operation_graph(conn: sqlite3.Connection) -> None:
+    checks = (
+        """
+        SELECT 1 FROM report_mutation_request r
+        LEFT JOIN report_session_operation o ON o.id = r.operation_id
+        WHERE r.operation_id IS NOT NULL AND o.id IS NULL LIMIT 1
+        """,
+        """
+        SELECT 1 FROM report_mutation_request
+        WHERE json_valid(result_json) = 0
+           OR (outcome_type = 'operation_committed') <> (operation_id IS NOT NULL)
+        LIMIT 1
+        """,
+        """
+        SELECT 1 FROM report_session_operation o
+        WHERE json_valid(o.payload_json) = 0
+           OR NOT EXISTS (
+                SELECT 1 FROM report_session_operation_member m
+                WHERE m.operation_id = o.id AND m.role = 'source'
+           )
+           OR (o.operation_type = 'merge_sessions' AND NOT EXISTS (
+                SELECT 1 FROM report_session_operation_member m
+                WHERE m.operation_id = o.id AND m.role = 'target'
+           ))
+           OR (o.operation_type = 'split_session' AND NOT EXISTS (
+                SELECT 1 FROM report_session_operation m
+                WHERE m.id = o.undo_of_operation_id
+                  AND m.operation_type = 'merge_sessions'
+                  AND m.report_date = o.report_date
+                  AND m.sequence < o.sequence
+           ))
+        LIMIT 1
+        """,
+        """
+        SELECT 1 FROM report_session_operation
+        GROUP BY report_date, sequence HAVING COUNT(*) > 1 LIMIT 1
+        """,
+    )
+    for sql in checks:
+        if conn.execute(sql).fetchone():
+            raise BackupCorruptedError("backup file is invalid or corrupted")
 
 
 def _delete_all_rows(conn: sqlite3.Connection) -> None:
@@ -626,90 +620,27 @@ def _insert_rows(conn: sqlite3.Connection, table: str, rows: list[dict[str, Any]
     if not schema_columns:
         return 0
     expected = set(schema_columns)
-
-    col_clause = ", ".join(f'"{c}"' for c in schema_columns)
+    col_clause = ", ".join(f'"{column}"' for column in schema_columns)
     placeholders = ", ".join("?" for _ in schema_columns)
-    sql = f'INSERT INTO {table} ({col_clause}) VALUES ({placeholders})'
-
+    sql = f"INSERT INTO {table} ({col_clause}) VALUES ({placeholders})"
     inserted = 0
     for row in rows:
-        if set(row.keys()) != expected:
+        if set(row) != expected:
             raise BackupCorruptedError("backup file is invalid or corrupted")
-        values = [row.get(col) for col in schema_columns]
-        conn.execute(sql, values)
+        conn.execute(sql, [row.get(column) for column in schema_columns])
         inserted += 1
     return inserted
 
 
-def _validate_operation_graph(conn: sqlite3.Connection) -> None:
-    duplicate = conn.execute(
-        """
-        SELECT request_id
-        FROM report_mutation_request
-        GROUP BY request_id
-        HAVING COUNT(*) > 1
-        LIMIT 1
-        """
-    ).fetchone()
-    if duplicate:
-        raise BackupCorruptedError("backup file is invalid or corrupted")
-    invalid_request_operation = conn.execute(
-        """
-        SELECT 1
-        FROM report_mutation_request r
-        LEFT JOIN report_session_operation o ON o.id = r.operation_id
-        WHERE r.operation_id IS NOT NULL AND o.id IS NULL
-        LIMIT 1
-        """
-    ).fetchone()
-    if invalid_request_operation:
-        raise BackupCorruptedError("backup file is invalid or corrupted")
-    invalid_receipt = conn.execute(
-        """
-        SELECT 1 FROM report_mutation_request
-        WHERE json_valid(result_json) = 0
-           OR (outcome_type = 'operation_committed') <> (operation_id IS NOT NULL)
-        LIMIT 1
-        """
-    ).fetchone()
-    if invalid_receipt:
-        raise BackupCorruptedError("backup file is invalid or corrupted")
-    invalid_operation = conn.execute(
-        """
-        SELECT 1 FROM report_session_operation o
-        WHERE json_valid(o.payload_json) = 0
-           OR (o.operation_type = 'split_session' AND NOT EXISTS (
-                SELECT 1 FROM report_session_operation m
-                WHERE m.id = o.undo_of_operation_id
-                  AND m.operation_type = 'merge_sessions'
-                  AND m.report_date = o.report_date
-                  AND m.sequence < o.sequence
-           ))
-        LIMIT 1
-        """
-    ).fetchone()
-    if invalid_operation:
-        raise BackupCorruptedError("backup file is invalid or corrupted")
-
-
 def _table_columns(conn: sqlite3.Connection, table: str) -> list[str]:
-    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
-    return [row["name"] for row in rows]
-
-
+    return [str(row["name"]) for row in conn.execute(f"PRAGMA table_info({table})").fetchall()]
 
 
 def _read_and_decrypt(blob: bytes, passphrase: str) -> bytes:
-    """Decrypt a backup blob, mapping crypto errors to service errors.
-
-    The manifest is parsed first (without decryption) so version/structure
-    errors are classified before any decryption attempt.
-    """
     try:
         parse_backup_manifest(blob)
     except BackupFormatError as exc:
         raise _classify_format_error(exc) from exc
-
     try:
         return decrypt_encrypted_backup(blob, passphrase)
     except BackupFormatError as exc:
@@ -718,21 +649,16 @@ def _read_and_decrypt(blob: bytes, passphrase: str) -> bytes:
 
 
 def _classify_format_error(exc: BackupFormatError) -> SecureBackupError:
-    message = str(exc).lower()
-    if "version" in message:
+    if "version" in str(exc).lower():
         return BackupVersionNotSupportedError("backup version is not supported")
     return BackupCorruptedError("backup file is invalid or corrupted")
 
 
-
-
 def _invalidate_caches() -> None:
-    """Invalidate service-layer caches after a replace import."""
     from .folder_rule_service import invalidate_folder_rule_cache
     from .privacy_service import clear_exclude_rules_cache
     from .project_inference_service import invalidate_keyword_rule_cache
     from .project_service import invalidate_uncategorized_project_cache
-    from .settings_service import clear_settings_cache
 
     clear_settings_cache()
     clear_exclude_rules_cache()
@@ -741,10 +667,7 @@ def _invalidate_caches() -> None:
     invalidate_keyword_rule_cache()
 
 
-
-
 def _atomic_write_bytes(path: Path, data: bytes) -> None:
-    """Write bytes to path via a temp file then atomic rename."""
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_bytes(data)
     os.replace(tmp, path)
