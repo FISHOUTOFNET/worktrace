@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any, Iterable, Mapping, Sequence
 
 from .report_projection_identity import (
     base_projection_key,
     copy_projection_key,
+    legacy_projection_revision,
     member_identity_key,
     merge_projection_key,
     projection_revision,
@@ -24,12 +26,35 @@ ORPHANED = "orphaned"
 SUPERSEDED_BY_UNDO = "superseded_by_undo"
 
 
+def _freeze_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return MappingProxyType({str(key): _freeze_value(item) for key, item in value.items()})
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_value(item) for item in value)
+    if isinstance(value, set):
+        return frozenset(_freeze_value(item) for item in value)
+    return value
+
+
+def _mutable_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(key): _mutable_value(item) for key, item in value.items()}
+    if isinstance(value, (tuple, frozenset)):
+        return [_mutable_value(item) for item in value]
+    return deepcopy(value)
+
+
 @dataclass(frozen=True)
 class ReplayResult:
-    final_entries: tuple[dict[str, Any], ...]
-    final_contributions: tuple[dict[str, Any], ...]
+    final_entries: tuple[Mapping[str, Any], ...]
+    final_contributions: tuple[Mapping[str, Any], ...]
     operation_diagnostics: tuple[OperationDiagnostic, ...]
     snapshot_revision: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "final_entries", tuple(_freeze_value(item) for item in self.final_entries))
+        object.__setattr__(self, "final_contributions", tuple(_freeze_value(item) for item in self.final_contributions))
+        object.__setattr__(self, "operation_diagnostics", tuple(self.operation_diagnostics))
 
 
 def replay_operations(
@@ -39,7 +64,7 @@ def replay_operations(
 ) -> ReplayResult:
     """Replay records without modifying sessions, records, payloads or members."""
     projects = _project_map(project_states)
-    sessions = [_prepare_session(item, projects) for item in deepcopy(list(base_sessions))]
+    sessions = [_prepare_session(item, projects) for item in base_sessions]
     records = tuple(sorted((_coerce_operation(item) for item in operation_records), key=lambda op: (op.sequence, op.id)))
     valid_splits, invalid_split_reasons = _validate_splits(sessions, records, projects)
     superseded, undo_by_operation = _undo_closure(records, valid_splits)
@@ -77,20 +102,20 @@ def replay_operations(
 
 def apply_operations(base_sessions: list[dict], operations: list[dict]) -> list[dict]:
     """Boundary adapter for callers that only consume final session dictionaries."""
-    return list(replay_operations(base_sessions, operations).final_entries)
+    return [_mutable_value(item) for item in replay_operations(base_sessions, operations).final_entries]
 
 
 def resolve_projection_instance(projected_sessions: Sequence[Mapping[str, Any]], projection_instance_key: str) -> dict | None:
     for session in projected_sessions:
         if str(session.get("projection_instance_key") or "") == str(projection_instance_key or ""):
-            return session if isinstance(session, dict) else dict(session)
+            return _mutable_value(session)
     return None
 
 
 def build_projected_activity_contributions(projected_sessions: Sequence[Mapping[str, Any]]) -> list[dict]:
     contributions: list[dict] = []
     for session in projected_sessions:
-        rows = [deepcopy(dict(row)) for row in session.get("_projection_contributions") or []]
+        rows = [_mutable_value(row) for row in session.get("_projection_contributions") or []]
         allocations = allocate_duration(int(session.get("duration_seconds") or 0), rows)
         for row, duration in zip(rows, allocations):
             row["duration_seconds"] = duration
@@ -142,6 +167,17 @@ def finalize_projected_session(session: dict[str, Any], project_state: ProjectSt
     return session
 
 
+def _revision_matches(session: Mapping[str, Any], expected: str | None, project_state: ProjectState | None) -> bool:
+    value = str(expected or "")
+    if not value:
+        return False
+    return value in {
+        str(session.get("projection_revision") or ""),
+        projection_revision(dict(session), project_state=project_state),
+        legacy_projection_revision(dict(session), project_state=project_state),
+    }
+
+
 def _apply_one(
     sessions: list[dict[str, Any]], operation: OperationRecord, projects: Mapping[int, ProjectState]
 ) -> tuple[list[dict[str, Any]], OperationDiagnostic]:
@@ -150,7 +186,8 @@ def _apply_one(
     source, source_reason = _resolve_input(sessions, operation.source_instance_key, operation.members_for("source"))
     if source is None:
         return sessions, _diagnostic(operation, source_reason, "source_" + source_reason)
-    if source.get("projection_revision") != operation.source_expected_revision:
+    source_state = projects.get(int(source.get("project_id") or 0))
+    if not _revision_matches(source, operation.source_expected_revision, source_state):
         return sessions, _diagnostic(operation, CONFLICT, "source_revision_conflict")
 
     operation_type = operation.operation_type
@@ -193,7 +230,8 @@ def _apply_one(
             return sessions, _diagnostic(operation, target_reason, "target_" + target_reason)
         if target is source:
             return sessions, _diagnostic(operation, CONFLICT, "same_merge_input")
-        if target.get("projection_revision") != operation.target_expected_revision:
+        target_state = projects.get(int(target.get("project_id") or 0))
+        if not _revision_matches(target, operation.target_expected_revision, target_state):
             return sessions, _diagnostic(operation, CONFLICT, "target_revision_conflict")
         ordered = _ordered_sessions(sessions)
         source_index, target_index = ordered.index(source), ordered.index(target)
@@ -211,13 +249,21 @@ def _apply_one(
 def _validate_splits(
     base_sessions: list[dict[str, Any]], records: tuple[OperationRecord, ...], projects: Mapping[int, ProjectState]
 ) -> tuple[set[int], dict[int, str]]:
+    """Validate split operations while simulating their restored session state.
+
+    A valid split removes the merge output (and any later operation output that
+    consumes the same members) and restores the merge's two inputs. This keeps
+    validation aligned with final replay for repeated merge/split cycles.
+    """
     sessions = deepcopy(base_sessions)
     records_by_id = {operation.id: operation for operation in records}
+    before_operation: dict[int, list[dict[str, Any]]] = {}
     valid: set[int] = set()
     invalid: dict[int, str] = {}
     seen_merge: set[int] = set()
     for operation in records:
         if operation.operation_type != "split_session":
+            before_operation[operation.id] = deepcopy(sessions)
             sessions, _ = _apply_one(sessions, operation, projects)
             continue
         original = records_by_id.get(int(operation.undo_of_operation_id or 0))
@@ -231,12 +277,35 @@ def _validate_splits(
         if source is None:
             invalid[operation.id] = "split_source_" + reason
             continue
-        if source.get("projection_revision") != operation.source_expected_revision:
+        source_state = projects.get(int(source.get("project_id") or 0))
+        if not _revision_matches(source, operation.source_expected_revision, source_state):
             invalid[operation.id] = "source_revision_conflict"
             continue
         if str(source.get("projection_instance_key")) != merge_projection_key(original.id):
             invalid[operation.id] = "split_requires_merge_output"
             continue
+        pre_merge = before_operation.get(original.id)
+        if pre_merge is None:
+            invalid[operation.id] = "split_missing_merge_inputs"
+            continue
+        restored_source, _ = _resolve_input(pre_merge, original.source_instance_key, original.members_for("source"))
+        restored_target, _ = _resolve_input(pre_merge, original.target_instance_key or "", original.members_for("target"))
+        if restored_source is None or restored_target is None:
+            invalid[operation.id] = "split_missing_merge_inputs"
+            continue
+        restored_members = {
+            _member_key(member)
+            for restored in (restored_source, restored_target)
+            for member in restored.get("member_slices") or []
+        }
+        survivors = [
+            item
+            for item in sessions
+            if not restored_members.intersection(
+                {_member_key(member) for member in item.get("member_slices") or []}
+            )
+        ]
+        sessions = _ordered_sessions([*survivors, deepcopy(restored_source), deepcopy(restored_target)])
         seen_merge.add(original.id)
         valid.add(operation.id)
     return valid, invalid
@@ -384,7 +453,7 @@ def _resolve_input(
 
 
 def _prepare_session(value: Mapping[str, Any], projects: Mapping[int, ProjectState]) -> dict[str, Any]:
-    session = deepcopy(dict(value))
+    session = _mutable_value(value)
     session.setdefault("projection_kind", "base")
     session.setdefault("_projection_contributions", [])
     session.setdefault("_base_project_id", int(session.get("project_id") or 0))
@@ -482,7 +551,7 @@ def _identity_tuple(member: ReportMemberIdentity) -> tuple[str, int, str]:
 
 
 def _sorted_members(members: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
-    unique = {_member_key(member): deepcopy(dict(member)) for member in members}
+    unique = {_member_key(member): _mutable_value(member) for member in members}
     return [unique[key] for key in sorted(unique)]
 
 
