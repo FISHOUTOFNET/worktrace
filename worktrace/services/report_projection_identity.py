@@ -49,17 +49,28 @@ def stable_json_hash(payload: Any) -> str:
 
 
 def _project_revision_payload(session: dict[str, Any], project_state: ProjectState | None) -> dict[str, Any]:
+    """Return only durable project semantics for an entry revision.
+
+    Project names, descriptions and lifecycle presentation flags are mutable
+    metadata. Including them caused committed report operations to stop replaying
+    after a project rename, archive or enable/disable action. Snapshot/page
+    revisions still include the complete ``ProjectState`` and therefore refresh
+    display content, while this entry revision remains a durable optimistic-write
+    and replay precondition for the same logical projection.
+    """
     if project_state is not None:
-        return project_state.to_dict()
+        return {
+            "project_id": project_state.project_id,
+            "is_report_project": project_state.is_report_project,
+            "is_report_classified": project_state.is_report_classified,
+            "is_report_uncategorized": project_state.is_report_uncategorized,
+            "is_official_project": project_state.is_official_project,
+            "report_attribution_kind": project_state.report_attribution_kind,
+            "project_key": project_state.project_key,
+            "report_project_key": project_state.report_project_key,
+        }
     return {
         "project_id": int(session.get("project_id") or 0),
-        "project_name": str(session.get("project_name") or ""),
-        "project_description": str(session.get("project_description") or ""),
-        "is_deleted": bool(session.get("project_is_deleted") or session.get("is_deleted")),
-        "is_archived": bool(session.get("project_is_archived") or session.get("is_archived")),
-        "is_enabled": bool(session.get("project_is_enabled", session.get("is_enabled", True))),
-        "is_system": bool(session.get("project_is_system")),
-        "is_special": bool(session.get("project_is_special")),
         "is_report_project": bool(session.get("is_report_project")),
         "is_report_classified": bool(session.get("is_report_classified")),
         "is_report_uncategorized": bool(session.get("is_report_uncategorized")),
@@ -76,11 +87,12 @@ def projection_revision(
     project_state: ProjectState | None = None,
     applied_commands: list[dict[str, Any]] | None = None,
 ) -> str:
-    """Revision for optimistic UI writes and detail cache ownership.
+    """Durable revision for optimistic writes and immutable operation replay.
 
-    Live elapsed seconds are intentionally excluded. Contribution identity and
-    allocated durations are included so structural changes, edit commands and
-    summary grouping changes produce a new revision.
+    Live elapsed seconds and mutable project presentation metadata are excluded.
+    Contribution identity and allocated durations are included so structural
+    changes, edit commands and summary grouping changes still produce a new
+    revision. Full project metadata remains part of the page/snapshot revision.
     """
     del applied_commands  # command history and request metadata are not report content
     is_live = bool(session.get("is_in_progress"))
