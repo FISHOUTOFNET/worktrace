@@ -27,6 +27,10 @@ def _thaw(value: Any) -> Any:
     return value
 
 
+def _freeze_record_tuple(values: tuple[Mapping[str, Any], ...] | list[Mapping[str, Any]]) -> tuple[Mapping[str, Any], ...]:
+    return tuple(_freeze(dict(value)) for value in values)
+
+
 @dataclass(frozen=True, order=True)
 class ReportMemberIdentity:
     report_date: str
@@ -230,15 +234,33 @@ ReportEntry = ReportSessionEntry | StandaloneStatusEntry
 
 @dataclass(frozen=True)
 class ReportProjectionSnapshot:
+    """Immutable canonical snapshot.
+
+    Runtime projection records remain mapping-shaped for the existing adapters,
+    but every mapping and nested collection is recursively frozen at the domain
+    boundary. Callers that need to enrich a record must explicitly copy it.
+    """
+
     start_date: str
     end_date: str
-    base_sessions: tuple[ReportSessionEntry, ...]
-    final_entries: tuple[ReportEntry, ...]
-    final_sessions: tuple[ReportSessionEntry, ...]
-    standalone_status_entries: tuple[StandaloneStatusEntry, ...]
-    final_contributions: tuple[ReportContribution, ...]
+    base_sessions: tuple[Mapping[str, Any], ...]
+    final_entries: tuple[Mapping[str, Any], ...]
+    final_sessions: tuple[Mapping[str, Any], ...]
+    standalone_status_entries: tuple[Mapping[str, Any], ...]
+    final_contributions: tuple[Mapping[str, Any], ...]
     operation_diagnostics: tuple[OperationDiagnostic, ...]
     snapshot_revision: str
+
+    def __post_init__(self) -> None:
+        for field_name in (
+            "base_sessions",
+            "final_entries",
+            "final_sessions",
+            "standalone_status_entries",
+            "final_contributions",
+        ):
+            object.__setattr__(self, field_name, _freeze_record_tuple(getattr(self, field_name)))
+        object.__setattr__(self, "operation_diagnostics", tuple(self.operation_diagnostics))
 
 
 @dataclass(frozen=True)
