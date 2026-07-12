@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Any
+from contextlib import contextmanager
+from contextvars import ContextVar
+from typing import Any, Iterator
 
 from ..db import get_connection
 from . import report_session_operation_engine as engine
@@ -17,24 +19,56 @@ from .report_projection_model import (
 from .report_status_policy import STANDALONE_STATUS, SUPPRESSED, decide_report_status
 
 
+_REQUEST_SNAPSHOT_CACHE: ContextVar[dict[tuple[str, str], ReportProjectionSnapshot] | None] = ContextVar(
+    "worktrace_report_snapshot_cache", default=None
+)
+
+
+@contextmanager
+def snapshot_read_scope() -> Iterator[None]:
+    """Reuse canonical snapshots only inside one explicit API request.
+
+    Nested callers such as page-revision construction and Details aggregation
+    receive the exact same immutable snapshot. The ContextVar is reset at the
+    API boundary, so no snapshot can leak into a later WebView request or a
+    mutation unit of work.
+    """
+    existing = _REQUEST_SNAPSHOT_CACHE.get()
+    if existing is not None:
+        yield
+        return
+    token = _REQUEST_SNAPSHOT_CACHE.set({})
+    try:
+        yield
+    finally:
+        _REQUEST_SNAPSHOT_CACHE.reset(token)
+
+
 def build_visible_snapshot(start_date: str, end_date: str, *, conn=None) -> ReportProjectionSnapshot:
-    """Build a deterministic snapshot without modifying any persistent state.
+    """Build a deterministic snapshot without modifying persistent state.
 
     An owned connection and a caller-owned transaction use the exact same
-    implementation.  The owned path starts a deferred read transaction so all
-    tables are observed from one SQLite snapshot.
+    implementation. The owned path starts a deferred read transaction so all
+    tables are observed from one SQLite snapshot. Explicit request scopes reuse
+    the immutable result for repeated reads of the same range.
     """
     if conn is not None:
         return _build_snapshot(conn, start_date, end_date)
+    cache = _REQUEST_SNAPSHOT_CACHE.get()
+    key = (str(start_date), str(end_date))
+    if cache is not None and key in cache:
+        return cache[key]
     with get_connection() as read_conn:
         read_conn.execute("BEGIN")
         try:
             result = _build_snapshot(read_conn, start_date, end_date)
             read_conn.commit()
-            return result
         except Exception:
             read_conn.rollback()
             raise
+    if cache is not None:
+        cache[key] = result
+    return result
 
 
 def _build_snapshot(conn, start_date: str, end_date: str) -> ReportProjectionSnapshot:
@@ -87,10 +121,10 @@ def _build_snapshot(conn, start_date: str, end_date: str) -> ReportProjectionSna
             project_states,
         )
         final_sessions.extend(
-            item for item in replay.final_entries if not bool(item.get("project_is_deleted"))
+            dict(item) for item in replay.final_entries if not bool(item.get("project_is_deleted"))
         )
         final_contributions.extend(
-            item for item in replay.final_contributions if not bool(item.get("project_is_deleted"))
+            dict(item) for item in replay.final_contributions if not bool(item.get("project_is_deleted"))
         )
         diagnostics.extend(replay.operation_diagnostics)
 
@@ -200,16 +234,14 @@ def _build_snapshot(conn, start_date: str, end_date: str) -> ReportProjectionSna
             "diagnostics": [item.to_dict() for item in diagnostics],
         }
     )
-    # The domain object is immutable; dictionaries here are internal entry
-    # records and are converted by explicit allowlist adapters at API edges.
     return ReportProjectionSnapshot(
         start_date=start_date,
         end_date=end_date,
-        base_sessions=tuple(base_sessions),  # type: ignore[arg-type]
-        final_entries=tuple(final_entries),  # type: ignore[arg-type]
-        final_sessions=tuple(final_sessions),  # type: ignore[arg-type]
-        standalone_status_entries=tuple(standalone_entries),  # type: ignore[arg-type]
-        final_contributions=tuple(final_contributions),  # type: ignore[arg-type]
+        base_sessions=tuple(base_sessions),
+        final_entries=tuple(final_entries),
+        final_sessions=tuple(final_sessions),
+        standalone_status_entries=tuple(standalone_entries),
+        final_contributions=tuple(final_contributions),
         operation_diagnostics=tuple(diagnostics),
         snapshot_revision=revision,
     )
@@ -222,4 +254,4 @@ def _load_project_states(conn, uncategorized_id: int) -> list[ProjectState]:
     ]
 
 
-__all__ = ["ReportProjectionSnapshot", "build_visible_snapshot"]
+__all__ = ["ReportProjectionSnapshot", "build_visible_snapshot", "snapshot_read_scope"]
