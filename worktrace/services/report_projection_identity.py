@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any
+from typing import Any, Mapping
 
 from .report_projection_model import OperationDiagnostic, ProjectState, ReportMemberIdentity
 
 
-def member_identity_key(member: dict[str, Any] | ReportMemberIdentity, *, report_date: str = "") -> tuple[str, int, str]:
+def member_identity_key(member: Mapping[str, Any] | ReportMemberIdentity, *, report_date: str = "") -> tuple[str, int, str]:
     """Stable logical report-slice identity.
 
     End time and elapsed seconds are mutable content. They must not participate
@@ -22,7 +22,7 @@ def member_identity_key(member: dict[str, Any] | ReportMemberIdentity, *, report
     )
 
 
-def member_set_hash(report_date: str, members: list[dict[str, Any]]) -> str:
+def member_set_hash(report_date: str, members: SequenceMapping) -> str:
     parts = [
         "|".join((key[0], str(key[1]), key[2]))
         for key in sorted(member_identity_key(member, report_date=report_date) for member in members)
@@ -30,7 +30,12 @@ def member_set_hash(report_date: str, members: list[dict[str, Any]]) -> str:
     return hashlib.sha1("\n".join(parts).encode("utf-8")).hexdigest()
 
 
-def base_projection_key(report_date: str, members: list[dict[str, Any]]) -> str:
+# Small structural alias keeps public annotations readable without coupling the
+# identity module to one mutable container implementation.
+SequenceMapping = list[Mapping[str, Any]] | tuple[Mapping[str, Any], ...]
+
+
+def base_projection_key(report_date: str, members: SequenceMapping) -> str:
     return f"base:{member_set_hash(report_date, members)}"
 
 
@@ -48,16 +53,8 @@ def stable_json_hash(payload: Any) -> str:
     ).hexdigest()
 
 
-def _project_revision_payload(session: dict[str, Any], project_state: ProjectState | None) -> dict[str, Any]:
-    """Return only durable project semantics for an entry revision.
-
-    Project names, descriptions and lifecycle presentation flags are mutable
-    metadata. Including them caused committed report operations to stop replaying
-    after a project rename, archive or enable/disable action. Snapshot/page
-    revisions still include the complete ``ProjectState`` and therefore refresh
-    display content, while this entry revision remains a durable optimistic-write
-    and replay precondition for the same logical projection.
-    """
+def _project_revision_payload(session: Mapping[str, Any], project_state: ProjectState | None) -> dict[str, Any]:
+    """Return only durable project semantics for an entry revision."""
     if project_state is not None:
         return {
             "project_id": project_state.project_id,
@@ -81,20 +78,33 @@ def _project_revision_payload(session: dict[str, Any], project_state: ProjectSta
     }
 
 
-def projection_revision(
-    session: dict[str, Any],
-    *,
-    project_state: ProjectState | None = None,
-    applied_commands: list[dict[str, Any]] | None = None,
-) -> str:
-    """Durable revision for optimistic writes and immutable operation replay.
+def _legacy_project_revision_payload(session: Mapping[str, Any], project_state: ProjectState | None) -> dict[str, Any]:
+    """Exact v4 pre-fix project payload for existing operation ledgers."""
+    if project_state is not None:
+        return project_state.to_dict()
+    return {
+        "project_id": int(session.get("project_id") or 0),
+        "project_name": str(session.get("project_name") or ""),
+        "project_description": str(session.get("project_description") or ""),
+        "is_deleted": bool(session.get("project_is_deleted") or session.get("is_deleted")),
+        "is_archived": bool(session.get("project_is_archived") or session.get("is_archived")),
+        "is_enabled": bool(session.get("project_is_enabled", session.get("is_enabled", True))),
+        "is_system": bool(session.get("project_is_system")),
+        "is_special": bool(session.get("project_is_special")),
+        "is_report_project": bool(session.get("is_report_project")),
+        "is_report_classified": bool(session.get("is_report_classified")),
+        "is_report_uncategorized": bool(session.get("is_report_uncategorized")),
+        "is_official_project": bool(session.get("is_official_project")),
+        "report_attribution_kind": str(session.get("report_attribution_kind") or "none"),
+        "project_key": str(session.get("project_key") or ""),
+        "report_project_key": str(session.get("report_project_key") or ""),
+    }
 
-    Live elapsed seconds and mutable project presentation metadata are excluded.
-    Contribution identity and allocated durations are included so structural
-    changes, edit commands and summary grouping changes still produce a new
-    revision. Full project metadata remains part of the page/snapshot revision.
-    """
-    del applied_commands  # command history and request metadata are not report content
+
+def _projection_revision_with_project(
+    session: Mapping[str, Any],
+    project_payload: Mapping[str, Any],
+) -> str:
     is_live = bool(session.get("is_in_progress"))
     contributions = []
     for row in session.get("_projection_contributions") or []:
@@ -108,25 +118,52 @@ def projection_revision(
                 "status": str(row.get("status") or ""),
             }
         )
-    payload = {
-        "projection_instance_key": str(session.get("projection_instance_key") or ""),
-        "projection_kind": str(session.get("projection_kind") or ""),
-        "members": [member_identity_key(member) for member in session.get("member_slices") or []],
-        "project": _project_revision_payload(session, project_state),
-        "has_project_override": bool(session.get("has_project_override")),
-        "duration": {
-            "value": None if is_live else int(session.get("duration_seconds") or 0),
-            "adjusted": None if is_live else session.get("adjusted_duration_seconds"),
-            "has_override": bool(session.get("has_duration_override")),
-        },
-        "note": str(session.get("session_note") or ""),
-        "contributions": sorted(contributions, key=lambda item: item["member"]),
-    }
-    return stable_json_hash(payload)
+    return stable_json_hash(
+        {
+            "projection_instance_key": str(session.get("projection_instance_key") or ""),
+            "projection_kind": str(session.get("projection_kind") or ""),
+            "members": [member_identity_key(member) for member in session.get("member_slices") or []],
+            "project": dict(project_payload),
+            "has_project_override": bool(session.get("has_project_override")),
+            "duration": {
+                "value": None if is_live else int(session.get("duration_seconds") or 0),
+                "adjusted": None if is_live else session.get("adjusted_duration_seconds"),
+                "has_override": bool(session.get("has_duration_override")),
+            },
+            "note": str(session.get("session_note") or ""),
+            "contributions": sorted(contributions, key=lambda item: item["member"]),
+        }
+    )
+
+
+def projection_revision(
+    session: Mapping[str, Any],
+    *,
+    project_state: ProjectState | None = None,
+    applied_commands: list[dict[str, Any]] | None = None,
+) -> str:
+    """Durable revision for optimistic writes and immutable operation replay."""
+    del applied_commands
+    return _projection_revision_with_project(
+        session,
+        _project_revision_payload(session, project_state),
+    )
+
+
+def legacy_projection_revision(
+    session: Mapping[str, Any],
+    *,
+    project_state: ProjectState | None = None,
+) -> str:
+    """Compute the previous v4 revision solely to replay persisted operations."""
+    return _projection_revision_with_project(
+        session,
+        _legacy_project_revision_payload(session, project_state),
+    )
 
 
 def snapshot_revision(
-    entries: list[dict[str, Any]] | tuple[dict[str, Any], ...],
+    entries: SequenceMapping,
     diagnostics: list[OperationDiagnostic] | tuple[OperationDiagnostic, ...],
 ) -> str:
     return stable_json_hash(
@@ -146,6 +183,7 @@ def snapshot_revision(
 __all__ = [
     "base_projection_key",
     "copy_projection_key",
+    "legacy_projection_revision",
     "member_identity_key",
     "member_set_hash",
     "merge_projection_key",
