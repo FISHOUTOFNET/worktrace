@@ -10,15 +10,13 @@ from .report_projection_model import OperationDiagnostic, ProjectState, ReportMe
 
 
 SequenceMapping = list[Mapping[str, Any]] | tuple[Mapping[str, Any], ...]
+DURABLE_REVISION_PREFIX = "d4a1ab1e"
 
 
 def _restore_mapping_proxy(value: dict[str, Any]) -> Mapping[str, Any]:
     return MappingProxyType(value)
 
 
-# Replay results use mappingproxy internally. Register a deterministic reduction
-# so callers may deepcopy an operation fixture or immutable replay result without
-# weakening the runtime mapping itself.
 copyreg.pickle(MappingProxyType, lambda value: (_restore_mapping_proxy, (dict(value),)))
 
 
@@ -57,6 +55,22 @@ def stable_json_hash(payload: Any) -> str:
     return hashlib.sha1(
         json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")
     ).hexdigest()
+
+
+def is_versioned_durable_revision(value: str | None) -> bool:
+    text = str(value or "")
+    return len(text) == 40 and text.startswith(DURABLE_REVISION_PREFIX)
+
+
+def is_legacy_revision(value: str | None) -> bool:
+    text = str(value or "")
+    if len(text) != 40 or is_versioned_durable_revision(text):
+        return False
+    try:
+        int(text, 16)
+    except ValueError:
+        return False
+    return True
 
 
 def _project_revision_payload(session: Mapping[str, Any], project_state: ProjectState | None) -> dict[str, Any]:
@@ -148,12 +162,13 @@ def projection_revision(
     project_state: ProjectState | None = None,
     applied_commands: list[dict[str, Any]] | None = None,
 ) -> str:
-    """Durable revision for optimistic writes and immutable operation replay."""
+    """Versioned durable revision for optimistic writes and operation replay."""
     del applied_commands
-    return _projection_revision_with_project(
+    digest = _projection_revision_with_project(
         session,
         _project_revision_payload(session, project_state),
     )
+    return DURABLE_REVISION_PREFIX + digest[len(DURABLE_REVISION_PREFIX) :]
 
 
 def legacy_projection_revision(
@@ -161,7 +176,7 @@ def legacy_projection_revision(
     *,
     project_state: ProjectState | None = None,
 ) -> str:
-    """Compute the previous v4 revision solely to replay persisted operations."""
+    """Compute the previous v4 revision when its historical metadata is known."""
     return _projection_revision_with_project(
         session,
         _legacy_project_revision_payload(session, project_state),
@@ -187,8 +202,11 @@ def snapshot_revision(
 
 
 __all__ = [
+    "DURABLE_REVISION_PREFIX",
     "base_projection_key",
     "copy_projection_key",
+    "is_legacy_revision",
+    "is_versioned_durable_revision",
     "legacy_projection_revision",
     "member_identity_key",
     "member_set_hash",
