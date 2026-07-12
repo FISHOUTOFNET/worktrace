@@ -19,15 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
-from ..constants import (
-    APP_VERSION,
-    STATUS_ERROR,
-    STATUS_EXCLUDED,
-    STATUS_IDLE,
-    STATUS_NORMAL,
-    STATUS_PAUSED,
-    TIME_FORMAT,
-)
+from ..constants import APP_VERSION
 from ..db import (
     CURRENT_SCHEMA_VERSION,
     expected_schema_fingerprint,
@@ -39,7 +31,6 @@ from ..db import (
     seed_defaults,
 )
 from ..security.backup_format import (
-    BACKUP_VERSION,
     BackupFormatError,
     BackupManifest,
     create_encrypted_backup,
@@ -48,6 +39,7 @@ from ..security.backup_format import (
 )
 from ..write_gate import DATABASE_WRITE_GATE
 from .runtime_activity_state_service import clear_runtime_activity_state
+from .secure_backup_validation import BackupValidationError, validate_staging_database
 from .settings_service import clear_settings_cache, get_bool_setting, get_setting, set_setting
 
 
@@ -100,13 +92,6 @@ _DELETE_ORDER: tuple[str, ...] = (
     "settings",
     "project",
 )
-_ALLOWED_ACTIVITY_STATUSES = {
-    STATUS_NORMAL,
-    STATUS_IDLE,
-    STATUS_ERROR,
-    STATUS_EXCLUDED,
-    STATUS_PAUSED,
-}
 
 
 class SecureBackupError(Exception):
@@ -248,6 +233,7 @@ class SecureImportCoordinator:
         prior_collector_status = get_setting("collector_status", "stopped") or "stopped"
         prior_snapshot = DEFAULT_SNAPSHOT_PUBLISHER.read_raw()
         state = _ImportGuardState(prior_user_paused, prior_collector_status, prior_snapshot)
+        pause_state_changed = False
         try:
             with self._state_lock:
                 handler = self._pause_handler
@@ -256,11 +242,10 @@ class SecureImportCoordinator:
                 if not bool(result.get("ok")):
                     raise SecureBackupError("collector_pause_not_acknowledged")
 
-            # Pause/runtime writes occur after collector acknowledgement but
-            # before the global gate, so no non-owner writer remains active.
             set_setting("user_paused", "true")
             set_setting("collector_status", "paused")
             clear_runtime_activity_state("secure_import_guard_enter")
+            pause_state_changed = True
 
             with DATABASE_WRITE_GATE.acquire():
                 with self._state_lock:
@@ -286,6 +271,10 @@ class SecureImportCoordinator:
                     with self._state_lock:
                         self._write_gate = False
         except Exception as exc:
+            if pause_state_changed and not state.succeeded and not DATABASE_WRITE_GATE.active():
+                set_setting("user_paused", "true" if prior_user_paused else "false")
+                set_setting("collector_status", prior_collector_status)
+                DEFAULT_SNAPSHOT_PUBLISHER.restore_raw(prior_snapshot)
             logging.warning("encrypted backup import failed exc_type=%s", type(exc).__name__)
             raise
         finally:
@@ -443,169 +432,10 @@ def _reset_derived_folder_index(conn: sqlite3.Connection) -> None:
 
 
 def _validate_staging_database(conn: sqlite3.Connection) -> None:
-    if int(conn.execute("PRAGMA user_version").fetchone()[0] or 0) != CURRENT_SCHEMA_VERSION:
-        raise BackupCorruptedError("backup file is invalid or corrupted")
-    if schema_fingerprint(conn) != expected_schema_fingerprint():
-        raise BackupCorruptedError("backup file is invalid or corrupted")
-    if conn.execute("PRAGMA foreign_key_check").fetchone():
-        raise BackupCorruptedError("backup file is invalid or corrupted")
-    integrity = conn.execute("PRAGMA integrity_check").fetchone()
-    if integrity is None or str(integrity[0]).lower() != "ok":
-        raise BackupCorruptedError("backup file is invalid or corrupted")
-    _validate_activity_rows(conn)
-    _validate_operation_graph(conn)
-    _validate_replay_records(conn)
-
-
-def _validate_activity_rows(conn: sqlite3.Connection) -> None:
-    for row in conn.execute(
-        "SELECT id, start_time, end_time, duration_seconds, status FROM activity_log ORDER BY id"
-    ).fetchall():
-        try:
-            start = datetime.strptime(str(row["start_time"] or ""), TIME_FORMAT)
-            end_raw = row["end_time"]
-            end = datetime.strptime(str(end_raw), TIME_FORMAT) if end_raw is not None else None
-            duration = int(row["duration_seconds"])
-        except (TypeError, ValueError) as exc:
-            raise BackupCorruptedError("backup file is invalid or corrupted") from exc
-        if duration < 0 or str(row["status"] or "") not in _ALLOWED_ACTIVITY_STATUSES:
-            raise BackupCorruptedError("backup file is invalid or corrupted")
-        if end is not None:
-            expected = int((end - start).total_seconds())
-            if expected < 0 or duration != expected:
-                raise BackupCorruptedError("backup file is invalid or corrupted")
-
-
-def _validate_replay_records(conn: sqlite3.Connection) -> None:
-    from .report_projection_snapshot_service import build_visible_snapshot
-    from .report_session_operation_engine import APPLIED, SUPERSEDED_BY_UNDO
-
-    dates = conn.execute(
-        """
-        SELECT report_date FROM report_session_operation
-        UNION
-        SELECT substr(start_time, 1, 10) FROM activity_log WHERE length(start_time) >= 10
-        UNION
-        SELECT substr(end_time, 1, 10) FROM activity_log WHERE end_time IS NOT NULL AND length(end_time) >= 10
-        ORDER BY 1
-        """
-    ).fetchall()
     try:
-        for date_row in dates:
-            report_date = str(date_row[0] or "")
-            datetime.strptime(report_date, "%Y-%m-%d")
-            for row in conn.execute(
-                "SELECT * FROM report_session_operation WHERE report_date = ? ORDER BY sequence, id",
-                (report_date,),
-            ).fetchall():
-                operation = dict(row)
-                operation["payload"] = json.loads(str(operation.pop("payload_json")))
-                _validate_operation_payload(operation, conn)
-            snapshot = build_visible_snapshot(report_date, report_date, conn=conn)
-            invalid = [
-                item
-                for item in snapshot.operation_diagnostics
-                if item.state not in {APPLIED, SUPERSEDED_BY_UNDO}
-            ]
-            if invalid:
-                raise BackupCorruptedError("backup file is invalid or corrupted")
-    except BackupCorruptedError:
-        raise
-    except Exception as exc:
+        validate_staging_database(conn)
+    except BackupValidationError as exc:
         raise BackupCorruptedError("backup file is invalid or corrupted") from exc
-
-
-def _validate_operation_payload(operation: dict[str, Any], conn: sqlite3.Connection) -> None:
-    payload = operation.get("payload")
-    if not isinstance(payload, dict) or payload.get("payload_version") != 4:
-        raise BackupCorruptedError("backup file is invalid or corrupted")
-    operation_type = str(operation.get("operation_type") or "")
-    allowed = {"payload_version"}
-    if operation_type == "edit_session":
-        allowed |= {"project", "duration", "note"}
-        if not any(key in payload for key in ("project", "duration", "note")):
-            raise BackupCorruptedError("backup file is invalid or corrupted")
-        project = payload.get("project")
-        if project is not None:
-            if not isinstance(project, dict) or set(project) - {"mode", "project_id"}:
-                raise BackupCorruptedError("backup file is invalid or corrupted")
-            if project.get("mode") == "set":
-                project_id = project.get("project_id")
-                if not isinstance(project_id, int) or not conn.execute(
-                    "SELECT 1 FROM project WHERE id = ?", (project_id,)
-                ).fetchone():
-                    raise BackupCorruptedError("backup file is invalid or corrupted")
-            elif project.get("mode") != "inherit":
-                raise BackupCorruptedError("backup file is invalid or corrupted")
-        duration = payload.get("duration")
-        if duration is not None:
-            if not isinstance(duration, dict) or set(duration) - {"mode", "value"}:
-                raise BackupCorruptedError("backup file is invalid or corrupted")
-            if duration.get("mode") == "set":
-                if not isinstance(duration.get("value"), int) or duration["value"] < 0:
-                    raise BackupCorruptedError("backup file is invalid or corrupted")
-            elif duration.get("mode") != "inherit":
-                raise BackupCorruptedError("backup file is invalid or corrupted")
-        note = payload.get("note")
-        if note is not None:
-            if not isinstance(note, dict) or set(note) - {"mode", "value"}:
-                raise BackupCorruptedError("backup file is invalid or corrupted")
-            if note.get("mode") == "set":
-                if not isinstance(note.get("value"), str):
-                    raise BackupCorruptedError("backup file is invalid or corrupted")
-            elif note.get("mode") != "inherit":
-                raise BackupCorruptedError("backup file is invalid or corrupted")
-    elif operation_type == "hide_activity":
-        allowed |= {"summary_id"}
-        if not isinstance(payload.get("summary_id"), str) or not payload["summary_id"]:
-            raise BackupCorruptedError("backup file is invalid or corrupted")
-    elif operation_type not in {"hide_session", "copy_session", "merge_sessions", "split_session"}:
-        raise BackupCorruptedError("backup file is invalid or corrupted")
-    if set(payload) - allowed:
-        raise BackupCorruptedError("backup file is invalid or corrupted")
-
-
-def _validate_operation_graph(conn: sqlite3.Connection) -> None:
-    checks = (
-        """
-        SELECT 1 FROM report_mutation_request r
-        LEFT JOIN report_session_operation o ON o.id = r.operation_id
-        WHERE r.operation_id IS NOT NULL AND o.id IS NULL LIMIT 1
-        """,
-        """
-        SELECT 1 FROM report_mutation_request
-        WHERE json_valid(result_json) = 0
-           OR (outcome_type = 'operation_committed') <> (operation_id IS NOT NULL)
-        LIMIT 1
-        """,
-        """
-        SELECT 1 FROM report_session_operation o
-        WHERE json_valid(o.payload_json) = 0
-           OR NOT EXISTS (
-                SELECT 1 FROM report_session_operation_member m
-                WHERE m.operation_id = o.id AND m.role = 'source'
-           )
-           OR (o.operation_type = 'merge_sessions' AND NOT EXISTS (
-                SELECT 1 FROM report_session_operation_member m
-                WHERE m.operation_id = o.id AND m.role = 'target'
-           ))
-           OR (o.operation_type = 'split_session' AND NOT EXISTS (
-                SELECT 1 FROM report_session_operation m
-                WHERE m.id = o.undo_of_operation_id
-                  AND m.operation_type = 'merge_sessions'
-                  AND m.report_date = o.report_date
-                  AND m.sequence < o.sequence
-           ))
-        LIMIT 1
-        """,
-        """
-        SELECT 1 FROM report_session_operation
-        GROUP BY report_date, sequence HAVING COUNT(*) > 1 LIMIT 1
-        """,
-    )
-    for sql in checks:
-        if conn.execute(sql).fetchone():
-            raise BackupCorruptedError("backup file is invalid or corrupted")
 
 
 def _delete_all_rows(conn: sqlite3.Connection) -> None:
