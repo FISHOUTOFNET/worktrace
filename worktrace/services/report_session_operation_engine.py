@@ -10,6 +10,7 @@ from typing import Any, Iterable, Mapping, Sequence
 from .report_projection_identity import (
     base_projection_key,
     copy_projection_key,
+    is_legacy_revision,
     legacy_projection_revision,
     member_identity_key,
     merge_projection_key,
@@ -167,15 +168,27 @@ def finalize_projected_session(session: dict[str, Any], project_state: ProjectSt
     return session
 
 
-def _revision_matches(session: Mapping[str, Any], expected: str | None, project_state: ProjectState | None) -> bool:
+def _revision_matches(
+    session: Mapping[str, Any],
+    expected: str | None,
+    project_state: ProjectState | None,
+    *,
+    allow_legacy_member_fallback: bool = False,
+) -> bool:
     value = str(expected or "")
     if not value:
         return False
-    return value in {
+    if value in {
         str(session.get("projection_revision") or ""),
         projection_revision(dict(session), project_state=project_state),
         legacy_projection_revision(dict(session), project_state=project_state),
-    }
+    }:
+        return True
+    # Pre-cutover v4 revisions embedded mutable project presentation fields.
+    # After a rename/archive those historical bytes cannot be reconstructed.
+    # Legacy records are therefore replayed by their persisted exact member set;
+    # new version-prefixed revisions never take this fallback path.
+    return allow_legacy_member_fallback and is_legacy_revision(value)
 
 
 def _apply_one(
@@ -187,7 +200,12 @@ def _apply_one(
     if source is None:
         return sessions, _diagnostic(operation, source_reason, "source_" + source_reason)
     source_state = projects.get(int(source.get("project_id") or 0))
-    if not _revision_matches(source, operation.source_expected_revision, source_state):
+    if not _revision_matches(
+        source,
+        operation.source_expected_revision,
+        source_state,
+        allow_legacy_member_fallback=bool(operation.members_for("source")),
+    ):
         return sessions, _diagnostic(operation, CONFLICT, "source_revision_conflict")
 
     operation_type = operation.operation_type
@@ -231,7 +249,12 @@ def _apply_one(
         if target is source:
             return sessions, _diagnostic(operation, CONFLICT, "same_merge_input")
         target_state = projects.get(int(target.get("project_id") or 0))
-        if not _revision_matches(target, operation.target_expected_revision, target_state):
+        if not _revision_matches(
+            target,
+            operation.target_expected_revision,
+            target_state,
+            allow_legacy_member_fallback=bool(operation.members_for("target")),
+        ):
             return sessions, _diagnostic(operation, CONFLICT, "target_revision_conflict")
         ordered = _ordered_sessions(sessions)
         source_index, target_index = ordered.index(source), ordered.index(target)
@@ -249,12 +272,7 @@ def _apply_one(
 def _validate_splits(
     base_sessions: list[dict[str, Any]], records: tuple[OperationRecord, ...], projects: Mapping[int, ProjectState]
 ) -> tuple[set[int], dict[int, str]]:
-    """Validate split operations while simulating their restored session state.
-
-    A valid split removes the merge output (and any later operation output that
-    consumes the same members) and restores the merge's two inputs. This keeps
-    validation aligned with final replay for repeated merge/split cycles.
-    """
+    """Validate split operations while simulating their restored session state."""
     sessions = deepcopy(base_sessions)
     records_by_id = {operation.id: operation for operation in records}
     before_operation: dict[int, list[dict[str, Any]]] = {}
@@ -278,7 +296,12 @@ def _validate_splits(
             invalid[operation.id] = "split_source_" + reason
             continue
         source_state = projects.get(int(source.get("project_id") or 0))
-        if not _revision_matches(source, operation.source_expected_revision, source_state):
+        if not _revision_matches(
+            source,
+            operation.source_expected_revision,
+            source_state,
+            allow_legacy_member_fallback=bool(operation.members_for("source")),
+        ):
             invalid[operation.id] = "source_revision_conflict"
             continue
         if str(source.get("projection_instance_key")) != merge_projection_key(original.id):
