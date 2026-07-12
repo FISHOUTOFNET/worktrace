@@ -119,13 +119,13 @@ def test_existing_exact_duration_override_is_preserved_by_unchanged_rounded_edit
         source["projection_revision"],
         "set-exact-duration",
         project_id=None,
-        adjusted_duration_seconds=625,
+        adjusted_duration_seconds=610,
         note="",
     )
     assert first.outcome_type == "operation_committed"
     overridden = build_visible_snapshot(DATE, DATE).final_sessions[0]
     assert overridden["has_duration_override"] is True
-    assert overridden["adjusted_duration_seconds"] == 625
+    assert overridden["adjusted_duration_seconds"] == 610
 
     second = mutations.edit_session(
         DATE,
@@ -138,8 +138,8 @@ def test_existing_exact_duration_override_is_preserved_by_unchanged_rounded_edit
     )
     assert second.outcome_type == "operation_committed"
     updated = build_visible_snapshot(DATE, DATE).final_sessions[0]
-    assert updated["duration_seconds"] == 625
-    assert updated["adjusted_duration_seconds"] == 625
+    assert updated["duration_seconds"] == 610
+    assert updated["adjusted_duration_seconds"] == 610
     assert updated["has_duration_override"] is True
     assert updated["session_note"] == "memo"
 
