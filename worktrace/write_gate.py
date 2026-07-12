@@ -9,13 +9,7 @@ from typing import Iterator
 
 
 class ProcessDatabaseWriteGate:
-    """Reject concurrent import writes and post-import stale write intents.
-
-    Every activation advances the database generation, and release advances it
-    again. A thread that read the old database before replacement cannot later
-    write cached/derived results until it performs a fresh read. This closes the
-    folder-index race even when an imported rule reuses the same integer ID.
-    """
+    """Reject concurrent import writes and post-import stale write intents."""
 
     def __init__(self) -> None:
         self._lock = threading.RLock()
@@ -66,6 +60,9 @@ class ProcessDatabaseWriteGate:
                 self._generation += 1
                 self._active = False
                 self._owner_thread_id = None
+                # The owner performed or rolled back the replacement and is the
+                # only thread that can safely continue without a fresh read.
+                self._thread_state.observed_generation = self._generation
 
 
 DATABASE_WRITE_GATE = ProcessDatabaseWriteGate()
