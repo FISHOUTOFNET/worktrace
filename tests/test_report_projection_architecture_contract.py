@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-pytestmark = pytest.mark.contract
+pytestmark = [pytest.mark.contract, pytest.mark.db]
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -110,3 +110,40 @@ def test_report_projection_write_path_does_not_use_hidden_scope():
             if isinstance(node.value, ast.Constant) and node.value.value is True:
                 violations.append(node.lineno)
     assert violations == []
+
+
+def test_cutover_removed_legacy_report_symbols_from_production():
+    forbidden = {
+        "ensure_context",
+        "recompute_context_assignments_for_date",
+        "persist_engine_match_states",
+        "report_session_operation_dependency",
+        "report_session_operation_supersession",
+        "request_input_signature",
+        "override_match_state",
+        "refresh_revision",
+        "live_state_revision",
+        "display_projection_revision",
+        "page_structure_revision",
+    }
+    source = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (REPO_ROOT / "worktrace").rglob("*")
+        if path.suffix in {".py", ".sql", ".js"}
+    )
+    assert {symbol for symbol in forbidden if symbol in source} == set()
+
+
+def test_pure_engine_has_no_sqlite_or_webview_dependency():
+    path = REPO_ROOT / "worktrace/services/report_session_operation_engine.py"
+    source = path.read_text(encoding="utf-8")
+    assert "sqlite" not in source.lower()
+    assert "webview" not in source.lower()
+
+
+def test_excel_and_csv_depend_on_canonical_snapshot_analytics():
+    excel = (REPO_ROOT / "worktrace/exports/excel_exporter.py").read_text(encoding="utf-8")
+    export = (REPO_ROOT / "worktrace/services/export_service.py").read_text(encoding="utf-8")
+    assert "build_visible_snapshot" in excel and "build_statistics_projection" in excel
+    assert "timeline_service" not in excel
+    assert "build_visible_snapshot" in export and "build_statistics_projection" in export

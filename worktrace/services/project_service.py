@@ -301,7 +301,6 @@ def soft_delete_project(project_id: int) -> None:
 
 
 def _invalidate_project_lifecycle_caches() -> None:
-    from .context_service import invalidate_context_recompute_cache
     from .folder_rule_service import invalidate_folder_rule_cache
     from .privacy_service import clear_exclude_rules_cache
     from .project_inference_service import invalidate_keyword_rule_cache
@@ -309,7 +308,6 @@ def _invalidate_project_lifecycle_caches() -> None:
     invalidate_folder_rule_cache()
     invalidate_keyword_rule_cache()
     clear_exclude_rules_cache()
-    invalidate_context_recompute_cache()
 
 
 def get_or_create_uncategorized_project(*, conn=None) -> int:

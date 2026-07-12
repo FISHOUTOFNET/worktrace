@@ -12,7 +12,8 @@ from typing import Any, TypedDict
 
 
 class Session(TypedDict, total=False):
-    session_id: str
+    projection_instance_key: str
+    projection_revision: str
     project_id: int
     project_name: str
     project_description: str

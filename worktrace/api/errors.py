@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import sqlite3
 
+from ..services.report_projection_model import ReportDomainError
+
 
 INVALID_INPUT = "invalid_input"
 STALE_SELECTION = "stale_selection"
@@ -18,6 +20,7 @@ DATABASE_BUSY = "database_busy"
 PROJECT_NOT_SELECTABLE = "project_not_selectable"
 OPERATION_NOT_ALLOWED = "operation_not_allowed"
 OPERATION_FAILED = "operation_failed"
+OPERATION_NO_EFFECT = "operation_no_effect"
 TARGET_REVISION_CONFLICT = "target_revision_conflict"
 SESSION_NOT_ADJACENT = "session_not_adjacent"
 REQUEST_ID_CONFLICT = "request_id_conflict"
@@ -40,6 +43,8 @@ class StateError(ApiError):
 
 
 def error_code_from_exception(exc: BaseException) -> str:
+    if isinstance(exc, ReportDomainError):
+        return exc.code
     if isinstance(exc, sqlite3.Error):
         code = getattr(exc, "sqlite_errorname", "")
         text = str(exc).lower()
@@ -76,6 +81,7 @@ def public_message_for_code(code: str) -> str:
         REQUEST_ID_CONFLICT: "操作请求已被其他内容占用，请刷新后重试。",
         OPERATION_NOT_ALLOWED: "当前活动时段不支持该操作。",
         OPERATION_FAILED: "操作失败，请刷新后重试。",
+        OPERATION_NO_EFFECT: "操作未产生变化。",
     }.get(code, "操作失败，请刷新后重试。")
 
 
@@ -85,6 +91,7 @@ __all__ = [
     "INVALID_INPUT",
     "NotFoundError",
     "OPERATION_FAILED",
+    "OPERATION_NO_EFFECT",
     "OPERATION_NOT_ALLOWED",
     "PROJECT_NOT_SELECTABLE",
     "REVISION_CONFLICT",

@@ -132,16 +132,11 @@ def build_revision_parts(
             current_activity.get("display_project")
         ),
     }
-    page_structure_revision = _hash(marker)
-    live_clock_revision = _hash(live_clock_input)
-    display_projection_revision = _hash(display_projection_input)
+    live_revision = _hash(live_clock_input)
+    page_revision = _hash([marker, display_projection_input])
     return {
-        "live_clock_revision": live_clock_revision,
-        "display_projection_revision": display_projection_revision,
-        "page_structure_revision": page_structure_revision,
-        "refresh_revision": ":".join(
-            [live_clock_revision, display_projection_revision, page_structure_revision]
-        ),
+        "live_revision": live_revision,
+        "page_revision": page_revision,
     }
 
 

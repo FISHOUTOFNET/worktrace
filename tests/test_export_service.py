@@ -30,6 +30,7 @@ def test_excel_export_file_creation(temp_db, tmp_path):
         "开始时间",
         "结束时间",
         "时长",
+        "时长秒数",
         "项目",
         "状态",
         "备注",
@@ -136,17 +137,12 @@ def test_clear_all_success_re_seeds_default_settings(temp_db) -> None:
 
 
 def test_clear_all_rejects_when_secure_import_in_progress(temp_db) -> None:
+    from worktrace.services.secure_backup_service import SECURE_IMPORT_COORDINATOR
+
     aid = _seed_business_data()
-    set_setting("secure_import_in_progress", "true")
-    try:
-        export_service.clear_all_local_data(confirm=True)
-    except ValueError:
-        pass
-    else:
-        raise AssertionError(
-            "clear-all must reject when secure_import_in_progress is true"
-        )
-    assert get_bool_setting("secure_import_in_progress", False) is True
+    with SECURE_IMPORT_COORDINATOR.acquire():
+        with pytest.raises(ValueError):
+            export_service.clear_all_local_data(confirm=True)
     from worktrace.services import activity_service as act_svc
     activities = act_svc.get_activities_by_range(
         "2026-06-18", "2026-06-18"
@@ -228,13 +224,7 @@ def test_clear_all_guard_enter_and_exit_set_setting_sequence(
     export_service.clear_all_local_data(confirm=True)
 
     enter_keys = [(k, v) for (k, v) in calls if k == "secure_import_in_progress"]
-    assert ("secure_import_in_progress", "true") in enter_keys, (
-        "guard enter must set secure_import_in_progress=true"
-    )
-    assert enter_keys[-1] == ("secure_import_in_progress", "false"), (
-        "guard success exit must set secure_import_in_progress=false; "
-        f"got {enter_keys[-1]}"
-    )
+    assert enter_keys == []
     user_paused_calls = [(k, v) for (k, v) in calls if k == "user_paused"]
     assert ("user_paused", "true") in user_paused_calls, (
         "guard enter must set user_paused=true"

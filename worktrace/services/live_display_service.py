@@ -11,7 +11,7 @@ This module retains ONLY the low-level pure helpers used by
 display-safe field extraction, stable live identity
 (``_stable_live_key`` / ``_stable_live_key_hash``), live-clock anchor,
 current-activity summary (``build_current_activity_summary``),
-refresh-revision computation (``compute_refresh_revision``), classification,
+live display identity computation, classification,
 and the persisted-open live-seconds helper.
 
 Display projection is purely a UI overlay. It NEVER writes the DB or changes
@@ -48,7 +48,6 @@ from .live_time_service import (
     snapshot_start_time,
 )
 from .project_attribution_policy import is_official_project_source
-from .activity_display_projection import build_revision_parts
 from .settings_service import get_setting
 
 
@@ -623,82 +622,9 @@ def persisted_open_live_seconds(
     return _snapshot_total_seconds(snapshot)
 
 
-# Unified refresh-revision computation
-
-
-def compute_refresh_revision(
-    snapshot: ActivitySnapshotContract | None,
-    collector_status: str,
-    user_paused: bool,
-    today: str,
-    report_date: str | None = None,
-    display_model: dict[str, Any] | None = None,
-) -> tuple[str, dict[str, Any]]:
-    """Compute split live/page revisions for the heartbeat path."""
-    if report_date is None:
-        report_date = today
-    current_activity_key = _live_display_key(snapshot)
-    current_status = _snapshot_status(snapshot)
-    is_persisted = bool(snapshot and snapshot.get("is_persisted"))
-    persisted_id = int(snapshot_persisted_id(snapshot) or 0) if snapshot else 0
-    model = display_model or {}
-    display_structural_signature = str(model.get("display_structural_signature") or "")
-    marker: dict[str, Any] = {
-        "row_count": 0,
-        "visible_row_count": 0,
-        "max_id": 0,
-        "closed_max_updated_at": "",
-        "max_updated_at": "",
-        "open_row_count": 0,
-        "open_max_id": 0,
-        "open_max_updated_at": "",
-        "open_end_time_presence": "",
-        "hidden_count": 0,
-        "deleted_count": 0,
-    }
-    try:
-        marker = activity_service.get_activity_structure_marker_by_date(report_date)
-    except Exception:
-        pass
-    revision_parts = build_revision_parts(
-        model,
-        marker,
-        snapshot_status=current_status,
-        collector_status=collector_status,
-        user_paused=user_paused,
-        today=today,
-        report_date=report_date or "",
-    )
-    revision = revision_parts["refresh_revision"]
-    debug_inputs = {
-        "current_activity_key": current_activity_key,
-        "current_status": current_status,
-        "is_persisted": is_persisted,
-        "persisted_id": persisted_id,
-        "collector_status": collector_status,
-        "user_paused": user_paused,
-        "today": today,
-        "display_structural_signature": display_structural_signature,
-        "structural_signature": revision_parts["page_structure_revision"],
-        "live_clock_revision": revision_parts["live_clock_revision"],
-        "live_state_revision": revision_parts["live_clock_revision"],
-        "display_projection_revision": revision_parts["display_projection_revision"],
-        "page_structure_revision": revision_parts["page_structure_revision"],
-        "refresh_revision": revision,
-        "activity_structure_marker": marker,
-        "row_count": int(marker.get("row_count") or 0),
-        "latest_id": int(marker.get("max_id") or 0),
-        # Kept for debug visibility only — NOT part of live_state_revision.
-        "latest_updated_at": str(marker.get("max_updated_at") or ""),
-        "latest_kind": "",
-    }
-    return revision, debug_inputs
-
-
 __all__ = [
     "build_current_activity_summary",
     "classify_live_state",
-    "compute_refresh_revision",
     "is_live_eligible_for_normal",
     "persisted_open_live_seconds",
 ]

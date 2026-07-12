@@ -78,8 +78,11 @@
 
     function nextMutationOwner(method, date, projectionInstanceKey, projectionRevision, argsSignature) {
         var intentKey = mutationIntentKey(method, date, projectionInstanceKey, projectionRevision, argsSignature);
-        if (App.mutationOwner && App.mutationOwner.inFlight) {
-            return App.mutationOwner.intentKey === intentKey ? App.mutationOwner : null;
+        if (App.mutationOwner && (App.mutationOwner.state === "pending" || App.mutationOwner.state === "unknown")) {
+            if (App.mutationOwner.intentKey !== intentKey) return null;
+            App.mutationOwner.state = "pending";
+            App.mutationState = "pending";
+            return App.mutationOwner;
         }
         App.mutationEpoch = (App.mutationEpoch || 0) + 1;
         App.mutationOwner = {
@@ -90,20 +93,38 @@
             projectionRevision: projectionRevision || "",
             intentKey: intentKey,
             requestId: newRequestId(),
-            inFlight: true
+            state: "pending",
+            payload: null,
+            result: null
         };
+        App.mutationState = "pending";
         return App.mutationOwner;
     }
 
     function isCurrentMutationOwner(owner) {
-        return !!owner && App.mutationOwner === owner && owner.inFlight === true;
+        return !!owner && App.mutationOwner === owner
+            && (owner.state === "pending" || owner.state === "unknown");
     }
 
-    function releaseMutationOwner(owner) {
-        if (isCurrentMutationOwner(owner)) {
-            owner.inFlight = false;
+    function transitionMutation(owner, state, result) {
+        if (!owner || App.mutationOwner !== owner) return false;
+        owner.state = state;
+        App.mutationState = state;
+        if (result !== undefined) owner.result = result;
+        return true;
+    }
+
+    function markMutationUnknown(owner) {
+        return transitionMutation(owner, "unknown");
+    }
+
+    function releaseMutationOwner(owner, finalState, result) {
+        if (owner && App.mutationOwner === owner) {
+            transitionMutation(owner, finalState || "confirmed_failure", result);
             App.mutationOwner = null;
+            return true;
         }
+        return false;
     }
 
     App.timelineEpoch = App.timelineEpoch || 0;
@@ -111,16 +132,22 @@
     App.detailsOwner = App.detailsOwner || null;
     App.mutationEpoch = App.mutationEpoch || 0;
     App.mutationOwner = App.mutationOwner || null;
+    App.mutationState = App.mutationState || "idle";
+    App.MUTATION_STATES = Object.freeze([
+        "idle", "pending", "unknown", "confirmed_success", "confirmed_failure"
+    ]);
     App.timelineRequestState = {
         absoluteDate: absoluteDate,
         detailRequestKey: detailRequestKey,
         isCurrentDetailsOwner: isCurrentDetailsOwner,
         isCurrentMutationOwner: isCurrentMutationOwner,
         mutationIntentKey: mutationIntentKey,
+        markMutationUnknown: markMutationUnknown,
         newRequestId: newRequestId,
         nextMutationOwner: nextMutationOwner,
         nextSelectionOwner: nextSelectionOwner,
         nextTimelineOwner: nextTimelineOwner,
-        releaseMutationOwner: releaseMutationOwner
+        releaseMutationOwner: releaseMutationOwner,
+        transitionMutation: transitionMutation
     };
 })();

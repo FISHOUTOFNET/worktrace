@@ -241,7 +241,8 @@ def test_list_projects_for_timeline_no_traceback_on_error(bridge):
     ):
         result = bridge.list_projects_for_timeline()
     assert result["ok"] is False
-    assert result["error"] == "操作失败"
+    assert result["error"] == "operation_failed"
+    assert result["message"] == "操作失败"
     assert "boom" not in str(result)
     assert "traceback" not in str(result).lower()
 

@@ -5,13 +5,13 @@ from typing import Any
 
 from ..constants import UNCATEGORIZED_PROJECT
 from ..formatters import format_duration, format_safe_display_name
-from . import timeline_service
 
 
 def build_activity_summary_rows(
     rows: list[dict],
     report_date: str,
     scope_key: str,
+    projection_revision: str,
 ) -> list[dict]:
     """Aggregate already-scoped report rows into activity summary rows."""
     groups: dict[str, dict[str, Any]] = {}
@@ -35,31 +35,17 @@ def build_activity_summary_rows(
         activity_id = int(row.get("id") or row.get("activity_id") or 0)
         if activity_id > 0 and activity_id not in group["activity_ids"]:
             group["activity_ids"].append(activity_id)
+        group["member_identities"].append(
+            (
+                str(row.get("report_date") or report_date),
+                activity_id,
+                str(row.get("slice_start_time") or row.get("start_time") or ""),
+            )
+        )
 
-    summaries = [_finalize_group(group) for group in groups.values()]
+    summaries = [_finalize_group(group, projection_revision) for group in groups.values()]
     summaries.sort(key=lambda item: (-int(item.get("duration_seconds") or 0), str(item.get("activity_name") or "")))
     return summaries
-
-
-def get_session_activity_summary(
-    activity_ids: list[int],
-    report_date: str,
-    include_hidden: bool = False,
-    ensure_context: bool = True,
-) -> list[dict]:
-    """Return Timeline right-panel summaries scoped by activity ids and date."""
-    ids = [int(aid) for aid in (activity_ids or [])]
-    if not ids:
-        return []
-    rows = timeline_service.get_session_activity_details(
-        ids,
-        report_date=report_date,
-        ensure_context=ensure_context,
-    )
-    if not include_hidden:
-        rows = [row for row in rows if not bool(row.get("is_hidden"))]
-    scope_key = "session:" + ",".join(str(aid) for aid in ids)
-    return build_activity_summary_rows(rows, report_date, scope_key)
 
 
 def get_projection_session_activity_summary(
@@ -67,30 +53,40 @@ def get_projection_session_activity_summary(
     report_date: str,
     *,
     expected_projection_revision: str | None = None,
-    ensure_context: bool = False,
-) -> list[dict]:
+ ) -> dict[str, Any]:
     """Return right-panel summaries scoped to one final projection instance."""
     from .report_session_operation_engine import build_projected_activity_contributions
     from .report_projection_snapshot_service import build_visible_snapshot
 
-    snapshot = build_visible_snapshot(report_date, report_date, ensure_context=ensure_context)
-    sessions = snapshot.final_sessions
+    snapshot = build_visible_snapshot(report_date, report_date)
+    sessions = snapshot.final_entries
     session = next(
         (item for item in sessions if str(item.get("projection_instance_key") or "") == str(projection_instance_key or "")),
         None,
     )
     if not session:
         raise ValueError("stale_selection")
-    if expected_projection_revision is not None and str(session.get("projection_revision") or "") != str(expected_projection_revision or ""):
+    resolved_revision = str(session.get("projection_revision") or "")
+    if expected_projection_revision is not None and resolved_revision != str(expected_projection_revision or ""):
         raise ValueError("stale_selection")
-    contributions = build_projected_activity_contributions([session])
+    if str(session.get("row_kind") or "") == "standalone_status":
+        contributions = [
+            row for row in snapshot.final_contributions
+            if str(row.get("projection_instance_key") or "") == projection_instance_key
+        ]
+    else:
+        contributions = build_projected_activity_contributions([session])
     summaries = build_activity_summary_rows(
-        contributions, report_date, projection_instance_key
+        contributions, report_date, projection_instance_key, resolved_revision
     )
     for summary in summaries:
         summary["projection_instance_key"] = projection_instance_key
         summary["can_hide_activity"] = bool(session.get("can_hide_activity"))
-    return summaries
+    return {
+        "projection_instance_key": projection_instance_key,
+        "resolved_projection_revision": resolved_revision,
+        "summary_rows": summaries,
+    }
 
 
 def _new_group(
@@ -106,7 +102,9 @@ def _new_group(
     accounted_project_description = str(row.get("report_project_description") or "")
     return {
         "row_kind": "project_activity_summary",
-        "summary_id": _summary_id(report_date, scope_key, key),
+        "summary_id": "",
+        "_report_date": report_date,
+        "_scope_key": scope_key,
         "activity_identity_key": key,
         "activity_name": _activity_display_name(row),
         "duration_seconds": 0,
@@ -121,6 +119,7 @@ def _new_group(
         "display_project_name": display_project_name,
         "display_project_description": display_project_description,
         "activity_ids": [],
+        "member_identities": [],
         "is_in_progress": False,
         "open_activity_id": 0,
         "closed_duration_seconds": 0,
@@ -144,7 +143,7 @@ def _new_group(
     }
 
 
-def _finalize_group(group: dict[str, Any]) -> dict[str, Any]:
+def _finalize_group(group: dict[str, Any], projection_revision: str) -> dict[str, Any]:
     seconds = int(group.get("duration_seconds") or 0)
     group["duration"] = format_duration(seconds)
     group["display_base_seconds"] = seconds
@@ -154,19 +153,19 @@ def _finalize_group(group: dict[str, Any]) -> dict[str, Any]:
         group["exportable"] = False
         group["disable_reason"] = "进行中记录暂不支持编辑"
     group["activity_ids"] = sorted(int(aid) for aid in group.get("activity_ids") or [])
+    member_identities = sorted(set(tuple(item) for item in group.pop("member_identities", [])))
+    group["summary_id"] = _summary_id(
+        str(group.pop("_report_date", "")),
+        str(group.pop("_scope_key", "")),
+        projection_revision,
+        str(group.get("activity_identity_key") or ""),
+        member_identities,
+    )
     return group
 
 
 def _activity_group_key(row: dict) -> str:
-    base = _activity_identity_part(row)
-    dimensions = [
-        base,
-        "display_project:" + str(row.get("display_project_id") or 0),
-        "report_project:" + str(row.get("report_project_id") or row.get("project_id") or 0),
-        "status:" + str(row.get("status") or ""),
-        "privacy:" + str(row.get("privacy_scope") or row.get("is_private") or ""),
-    ]
-    return "|".join(dimensions)
+    return _activity_identity_part(row)
 
 
 def _activity_identity_part(row: dict) -> str:
@@ -199,13 +198,18 @@ def _activity_display_name(row: dict) -> str:
     return "未知"
 
 
-def _summary_id(report_date: str, scope_key: str, key: str) -> str:
-    raw = f"{report_date}|{scope_key}|{key}"
+def _summary_id(
+    report_date: str,
+    scope_key: str,
+    projection_revision: str,
+    key: str,
+    member_identities: list[tuple],
+) -> str:
+    raw = f"{report_date}|{scope_key}|{projection_revision}|{key}|{member_identities!r}"
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()
 
 
 __all__ = [
     "build_activity_summary_rows",
     "get_projection_session_activity_summary",
-    "get_session_activity_summary",
 ]

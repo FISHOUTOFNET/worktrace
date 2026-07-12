@@ -12,39 +12,31 @@ from ..constants import (
 )
 from ..db import dict_rows, get_connection
 from ..formatters import format_status_label
-from ..path_utils import split_file_path
 from ..resources.title_parsing import extract_anchor_file_name
-from . import folder_rule_service, report_session_projection_service, session_boundary_service
+from . import clipboard_service, report_session_projection_service, session_boundary_service
 from .activity_continuity_service import (
     has_hard_boundary_between,
     is_hard_boundary_status,
-    is_normal_project_status,
     is_report_short_context_duration,
 )
-from .activity_edit_policy import require_project_editable_activity
-from .anchor_predicates import is_file_context_anchor
-from .context_service import recompute_context_assignments_for_date
+from .context_service import ReportContextProjection
 from .project_attribution_policy import official_project_fields, report_project_fields
 from .report_projection_identity import member_set_hash
 from .report_status_policy import SESSION_CONTRIBUTION, decide_report_status
 from .resource_service import attach_resource
 from .settings_service import get_int_setting
 
-def get_project_sessions_by_date(date: str, include_hidden: bool = False, ensure_context: bool = False) -> list[dict]:
-    return get_project_sessions_by_range(date, date, include_hidden=include_hidden, ensure_context=ensure_context)
+def get_project_sessions_by_date(date: str) -> list[dict]:
+    return get_project_sessions_by_range(date, date)
 
 
 def get_project_sessions_by_range(
     start_date: str,
     end_date: str,
-    include_hidden: bool = False,
-    ensure_context: bool = False,
 ) -> list[dict]:
     return report_session_projection_service.get_report_sessions_by_range(
         start_date,
         end_date,
-        include_hidden=include_hidden,
-        ensure_context=ensure_context,
     )
 
 
@@ -82,15 +74,28 @@ def get_report_activity_rows(
     start_date: str,
     end_date: str,
     include_hidden: bool = False,
-    ensure_context: bool = False,
     conn=None,
 ) -> list[dict]:
-    if ensure_context:
-        _ensure_context_for_report_range(start_date, end_date)
     uncategorized_id = _uncategorized_project_id(conn)
     rows = _load_activity_rows_for_report_range(start_date, end_date, include_hidden, conn=conn)
     boundary_times = _boundary_times_for_rows(rows, conn=conn)
-    rows = _with_reporting_projects(_with_display_projects(rows, uncategorized_id), boundary_times, conn=conn)
+    rows = _with_display_projects(rows, uncategorized_id)
+    activity_ids = [int(row.get("id") or 0) for row in rows if int(row.get("id") or 0)]
+    if conn is None:
+        with get_connection() as read_conn:
+            clipboard_times = clipboard_service.clipboard_times_for_activity_ids(read_conn, activity_ids)
+            carry_minutes = max(0, get_int_setting("context_carry_minutes", DEFAULT_CONTEXT_CARRY_MINUTES, conn=read_conn))
+    else:
+        clipboard_times = clipboard_service.clipboard_times_for_activity_ids(conn, activity_ids)
+        carry_minutes = max(0, get_int_setting("context_carry_minutes", DEFAULT_CONTEXT_CARRY_MINUTES, conn=conn))
+    rows = list(
+        ReportContextProjection.build(
+            rows,
+            carry_minutes=carry_minutes,
+            boundary_times=boundary_times,
+            clipboard_times=clipboard_times,
+        ).rows
+    )
     return [
         row
         for row in _with_report_dates(rows)
@@ -113,138 +118,6 @@ def _uncategorized_project_id(conn=None) -> int:
 
 def get_default_report_date(today: date_type | None = None) -> str:
     return (today or date_type.today()).isoformat()
-
-
-def get_session_activity_details(
-    activity_ids: list[int],
-    report_date: str | None = None,
-    ensure_context: bool = True,
-) -> list[dict]:
-    rows = _load_session_rows(activity_ids, newest_first=True, report_date=report_date, ensure_context=ensure_context)
-    details = []
-    for row in rows:
-        item = dict(row)
-        item["duration_seconds"] = _display_duration(row)
-        item["project_id"] = row.get("report_project_id")
-        item["project_name"] = row.get("report_project_name") or UNCATEGORIZED_PROJECT
-        item["project_description"] = row.get("report_project_description") or ""
-        item["official_project_name"] = row.get("display_project_name") or UNCATEGORIZED_PROJECT
-        item["is_official_project"] = bool(row.get("is_official_project"))
-        item["is_report_project"] = bool(row.get("is_report_project"))
-        item["is_report_classified"] = bool(
-            row.get("is_report_classified", row.get("is_report_project"))
-        )
-        item["is_report_uncategorized"] = bool(
-            row.get("is_report_uncategorized", not row.get("is_report_project"))
-        )
-        item["report_attribution_kind"] = row.get("report_attribution_kind") or "none"
-        item["candidate_project_name"] = row.get("candidate_project_name") or ""
-        item["display_project"] = row.get("display_project")
-        item["candidate_project"] = row.get("candidate_project")
-        item["project_transition"] = row.get("project_transition")
-        item["project_transition_pending"] = bool(row.get("project_transition_pending"))
-        item["activity_display_name"] = row.get("activity_display_name") or row.get("app_name") or "未知活动"
-        # Ensure is_in_progress is set for both paths: the report path
-        # already sets it from the pre-projection end_time, while the direct
-        # path computes it from the raw end_time (NULL for open activities).
-        if "is_in_progress" not in item:
-            item["is_in_progress"] = _parse_row_time(row.get("end_time")) is None
-        details.append(item)
-    return details
-
-
-def get_session_anchor_folders(activity_ids: list[int]) -> list[str]:
-    """Return the local anchor folders for the given session activities.
-
-    Reuses the shared file-context-anchor predicate so that browser tabs
-    / email / code files are not treated as session anchor folders, while
-    file-context anchors (docx / pdf / xlsx / ...) still surface their
-    parent directory. The row's project state is intentionally NOT
-    required to be concrete: this function only returns the explainable
-    anchor folder for the session, regardless of whether the activity has
-    been assigned to a project.
-    """
-    if not activity_ids:
-        return []
-    placeholders = ",".join("?" for _ in activity_ids)
-    with get_connection() as conn:
-        rows = conn.execute(
-            f"""
-            SELECT *
-            FROM activity_log a
-            WHERE a.id IN ({placeholders})
-              AND a.is_deleted = 0
-            ORDER BY a.start_time, a.id
-            """,
-            activity_ids,
-        ).fetchall()
-    folders = []
-    for row in [attach_resource(item) for item in dict_rows(rows)]:
-        if not is_file_context_anchor(row):
-            continue
-        path_hint = (row.get("resource_path_hint") or "").strip()
-        folder = ""
-        if path_hint:
-            full_path, parent_dir, _ = split_file_path(path_hint)
-            folder = parent_dir
-        if folder and folder not in folders:
-            folders.append(folder)
-    return folders
-
-
-def preview_session_project_update(session_activity_ids: list[int], project_id: int) -> dict:
-    if not session_activity_ids:
-        return {
-            "folder_rule_conflicts": [],
-            "unassigned_anchor_files": [],
-        }
-    if int(project_id) == int(_uncategorized_project_id()):
-        return {
-            "folder_rule_conflicts": [],
-            "unassigned_anchor_files": [],
-        }
-    placeholders = ",".join("?" for _ in session_activity_ids)
-    with get_connection() as conn:
-        rows = [
-            attach_resource(row)
-            for row in dict_rows(
-                conn.execute(
-                    f"""
-                    SELECT a.*
-                    FROM activity_log a
-                    WHERE a.id IN ({placeholders})
-                      AND a.is_deleted = 0
-                    ORDER BY a.start_time, a.id
-                    """,
-                    session_activity_ids,
-                ).fetchall()
-            )
-        ]
-
-    folder_rule_conflicts = []
-    unassigned_anchor_files = []
-    for row in rows:
-        if not row.get("resource_is_anchor"):
-            continue
-        target_path = row.get("resource_path_hint") or ""
-        if target_path:
-            _, parent_dir, _ = split_file_path(target_path)
-            target_path = target_path or parent_dir
-        rule = folder_rule_service.find_matching_folder_rule(target_path)
-        if rule:
-            if int(rule["project_id"]) != int(project_id):
-                folder_rule_conflicts.append(_anchor_preview_item(row, rule.get("project_name")))
-            continue
-        unassigned_anchor_files.append(_anchor_preview_item(row, None))
-    return {
-        "folder_rule_conflicts": folder_rule_conflicts,
-        "unassigned_anchor_files": unassigned_anchor_files,
-    }
-
-
-def _require_editable_session_activity_ids(activity_ids) -> None:
-    for activity_id in activity_ids or []:
-        require_project_editable_activity(int(activity_id))
 
 
 def _load_activity_rows_for_report_range(start_date: str, end_date: str, include_hidden: bool, *, conn=None) -> list[dict]:
@@ -297,56 +170,6 @@ def _load_activity_rows_for_report_range(start_date: str, end_date: str, include
     return [attach_resource(row, conn=conn) for row in dict_rows(rows)]
 
 
-def _load_session_rows(
-    activity_ids: list[int],
-    newest_first: bool = False,
-    report_date: str | None = None,
-    ensure_context: bool = True,
-) -> list[dict]:
-    if report_date:
-        activity_set = {int(activity_id) for activity_id in activity_ids}
-        rows = [
-            row
-            for row in get_report_activity_rows(
-                report_date,
-                report_date,
-                include_hidden=True,
-                ensure_context=ensure_context,
-            )
-            if int(row["id"]) in activity_set
-        ]
-        return sorted(rows, key=lambda row: (row.get("start_time") or "", int(row["id"])), reverse=newest_first)
-    placeholders = ",".join("?" for _ in activity_ids)
-    order_direction = "DESC" if newest_first else "ASC"
-    with get_connection() as conn:
-        rows = conn.execute(
-            f"""
-            SELECT
-                a.*,
-                apa.suggested_project_name,
-                apa.source AS assignment_source,
-                apa.is_manual AS assignment_is_manual,
-                apa.project_id AS effective_project_id,
-                p.name AS effective_project_name,
-                p.description AS effective_project_description,
-                COALESCE(p.is_archived, 0) AS effective_project_is_archived,
-                COALESCE(p.is_deleted, 0) AS effective_project_is_deleted
-            FROM activity_log a
-            LEFT JOIN activity_project_assignment apa ON apa.activity_id = a.id
-            LEFT JOIN project p ON p.id = apa.project_id
-            WHERE a.id IN ({placeholders})
-            ORDER BY a.start_time {order_direction}, a.id {order_direction}
-            """,
-            activity_ids,
-        ).fetchall()
-    uncategorized_id = _uncategorized_project_id()
-    loaded_rows = _with_display_projects(
-        [attach_resource(row) for row in dict_rows(rows)],
-        uncategorized_id,
-    )
-    return _with_reporting_projects(loaded_rows, _boundary_times_for_rows(loaded_rows))
-
-
 def _can_merge(previous: dict, current: dict, boundary_times: list[str] | None = None) -> bool:
     if not (_can_participate_in_report_session(previous) and _can_participate_in_report_session(current)):
         return False
@@ -378,7 +201,6 @@ def _build_session(rows: list[dict], uncategorized_id: int) -> dict:
     activity_ids = [int(row["id"]) for row in rows]
     member_slices = _member_slices_for_rows(rows)
     status_summary = _status_summary(rows)
-    session_id = f"{first['id']}-{last['id']}"
     # A session is in-progress if its last row is still open. The flag is
     # set by _split_calendar_report_rows from the original (pre-projection)
     # end_time so it reflects DB state, not the projected display end_time.
@@ -386,7 +208,6 @@ def _build_session(rows: list[dict], uncategorized_id: int) -> dict:
     open_activity_id = int(last.get("id") or 0) if is_in_progress else 0
     return {
         "row_kind": "project_session",
-        "session_id": session_id,
         "project_id": project_id,
         "project_name": project_name,
         "project_description": project_description,
@@ -590,13 +411,13 @@ def _is_project_anchor(row: dict) -> bool:
     Only official direct project rows anchor report-level short-interrupt
     merges; context-derived rows must not chain.
     """
-    if not is_normal_project_status(str(row.get("status") or "")):
+    if str(row.get("status") or "") != STATUS_NORMAL:
         return False
     return bool(row.get("is_official_project"))
 
 
 def _is_midnight_report_anchor(row: dict) -> bool:
-    if not is_normal_project_status(str(row.get("status") or "")):
+    if str(row.get("status") or "") != STATUS_NORMAL:
         return False
     return str(row.get("assignment_source") or "") == "midnight_anchor" and bool(row.get("is_report_project"))
 
@@ -631,14 +452,14 @@ def _find_midnight_context_merge(
 
 
 def _is_same_report_project_normal(row: dict, anchor_key: str) -> bool:
-    return is_normal_project_status(str(row.get("status") or "")) and str(row.get("report_project_key") or "") == anchor_key
+    return str(row.get("status") or "") == STATUS_NORMAL and str(row.get("report_project_key") or "") == anchor_key
 
 
 def _is_short_merge_interrupt(row: dict, anchor_key: str) -> bool:
     if _is_candidate_project_row(row):
         return False
     return (
-        is_normal_project_status(str(row.get("status") or ""))
+        str(row.get("status") or "") == STATUS_NORMAL
         and not bool(row.get("is_report_project"))
         and str(row.get("report_project_key") or "") != anchor_key
     )
@@ -714,24 +535,6 @@ def _has_unrecorded_gap_between(previous: dict, current: dict) -> bool:
     return gap_seconds > threshold
 
 
-def _ensure_context_for_report_range(start_date: str, end_date: str) -> None:
-    current = date_type.fromisoformat(start_date) - timedelta(days=1)
-    final = date_type.fromisoformat(end_date)
-    while current <= final:
-        recompute_context_assignments_for_date(current.isoformat())
-        current += timedelta(days=1)
-
-
-def _ensure_context_for_report_range_in_transaction(conn, start_date: str, end_date: str) -> None:
-    from .context_service import _recompute_context_assignments_for_date_in_transaction
-
-    current = date_type.fromisoformat(start_date) - timedelta(days=1)
-    final = date_type.fromisoformat(end_date)
-    while current <= final:
-        _recompute_context_assignments_for_date_in_transaction(conn, current.isoformat(), use_cache=True)
-        current += timedelta(days=1)
-
-
 def _attach_display_project(row: dict, uncategorized_id: int) -> None:
     """Attach display-safe project fields to a row using the attribution policy.
 
@@ -753,26 +556,9 @@ def _attach_display_project(row: dict, uncategorized_id: int) -> None:
     row["is_suggested_project"] = False
 
 
-def _anchor_preview_item(row: dict, current_project_name: str | None) -> dict:
-    path_hint = row.get("resource_path_hint") or ""
-    parent_dir = ""
-    if path_hint:
-        _, parent_dir, _ = split_file_path(path_hint)
-    return {
-        "activity_id": int(row["id"]),
-        "display_name": row.get("activity_display_name") or "未知文件",
-        "full_path": path_hint,
-        "parent_dir": parent_dir,
-        "current_project_name": current_project_name or "",
-    }
-
-
 def _session_sort_key(session: dict) -> tuple[str, int]:
-    first_id = str(session.get("session_id") or "0").split("-", 1)[0]
-    try:
-        start_id = int(first_id)
-    except ValueError:
-        start_id = 0
+    activity_ids = [int(value) for value in session.get("activity_ids") or []]
+    start_id = min(activity_ids) if activity_ids else 0
     return (str(session.get("sort_time") or session.get("start_time") or ""), start_id)
 
 

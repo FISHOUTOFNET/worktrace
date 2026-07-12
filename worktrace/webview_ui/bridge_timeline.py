@@ -7,7 +7,7 @@ Boundary rules (enforced by ``tests/test_ui_backend_boundary.py``):
   ``worktrace.services``, ``worktrace.db``, ``worktrace.collector``,
   ``worktrace.security``, ``worktrace.runtime``, or ``worktrace.config``.
 - Methods return JSON-serializable dicts/lists only.
-- Methods catch exceptions and return ``{"ok": false, "error": "操作失败"}``
+- Methods catch exceptions and return a stable machine code plus Chinese message.
   style payloads without tracebacks.
 - Methods do not log window titles, file paths, notes, or copied text.
 
@@ -29,8 +29,6 @@ from ..api import (
 from ..formatters import format_duration, format_resource_type
 from .bridge_common import (
     _DATE_SHAPE_RE,
-    _GENERIC_ERROR,
-    _coerce_activity_ids,
 )
 
 logger = logging.getLogger(__name__)
@@ -59,28 +57,7 @@ class TimelineBridgeMixin:
             return view_model_api.get_timeline_view_model(date)
         except Exception:
             logger.exception("webview bridge get_timeline failed")
-            return dict(_GENERIC_ERROR)
-
-    def get_timeline_session_details(
-        self,
-        activity_ids: list[int],
-        report_date: str | None = None,
-    ) -> dict[str, Any]:
-        """Return the Timeline Details ViewModel for a session.
-
-        The complete Details ViewModel (DB detail rows, display-safe
-        resource/project fields,
-        edit_disabled / disable_reason, live clock fields, single-sample
-        Activity Display Model contract) is built by
-        ``view_model_service``. ``live_projection`` / ``live_display``
-        aliases are not surfaced.
-        """
-        try:
-            ids = [int(aid) for aid in (activity_ids or [])]
-            return view_model_api.get_session_details_view_model(ids, report_date)
-        except Exception:
-            logger.exception("webview bridge get_timeline_session_details failed")
-            return dict(_GENERIC_ERROR)
+            return {"ok": False, "error": "operation_failed", "message": "操作失败"}
 
     def get_timeline_session_activity_summary(
         self,
@@ -101,14 +78,11 @@ class TimelineBridgeMixin:
                 projection_instance_key=projection_instance_key.strip(),
                 expected_projection_revision=(expected_projection_revision or "").strip() or None,
             )
-        except ValueError as exc:
-            code = str(exc)
-            if code == "stale_selection":
-                return {"ok": False, "error": "stale_selection", "message": "活动时段已更新，正在刷新"}
-            return {"ok": False, "error": "invalid_input", "message": "请选择有效的活动时段"}
-        except Exception:
-            logger.exception("webview bridge get_timeline_session_activity_summary failed")
-            return {"ok": False, "error": "operation_failed", "message": "加载项目活动耗时失败"}
+        except Exception as exc:
+            code = api_errors.error_code_from_exception(exc)
+            if code == api_errors.OPERATION_FAILED:
+                logger.exception("webview bridge get_timeline_session_activity_summary failed")
+            return {"ok": False, "error": code, "message": api_errors.public_message_for_code(code)}
 
     def list_projects_for_timeline(self) -> dict[str, Any]:
         """Return the list of projects selectable for Timeline reclassification.
@@ -132,7 +106,7 @@ class TimelineBridgeMixin:
             return {"ok": True, "projects": items}
         except Exception:
             logger.exception("webview bridge list_projects_for_timeline failed")
-            return dict(_GENERIC_ERROR)
+            return {"ok": False, "error": "operation_failed", "message": "操作失败"}
 
     def save_timeline_session_edit(
         self,
@@ -195,7 +169,7 @@ class TimelineBridgeMixin:
         target_projection_revision: str,
     ) -> dict[str, Any]:
         if direction not in {"previous", "next"}:
-            return {"ok": False, "error": "只能合并相邻时段。"}
+            return {"ok": False, "error": "invalid_input", "message": "只能合并相邻时段。"}
         return self._run_session_operation(
             timeline_api.merge_timeline_session,
             report_date,
@@ -222,7 +196,7 @@ class TimelineBridgeMixin:
         request_id: str,
     ) -> dict[str, Any]:
         if not isinstance(summary_id, str) or not summary_id.strip():
-            return {"ok": False, "error": "请选择有效的活动时段"}
+            return {"ok": False, "error": "invalid_input", "message": "请选择有效的活动时段"}
         return self._run_session_operation(
             timeline_api.hide_timeline_session_activity,
             report_date,
@@ -235,9 +209,9 @@ class TimelineBridgeMixin:
     @staticmethod
     def _run_session_operation(action, report_date: str, projection_instance_key: str, *args) -> dict[str, Any]:
         if not isinstance(report_date, str) or not _DATE_SHAPE_RE.match(report_date):
-            return {"ok": False, "error": "日期无效"}
+            return {"ok": False, "error": "invalid_input", "message": "日期无效"}
         if not isinstance(projection_instance_key, str) or not projection_instance_key.strip():
-            return {"ok": False, "error": "请选择有效的活动时段"}
+            return {"ok": False, "error": "invalid_input", "message": "请选择有效的活动时段"}
         try:
             return action(report_date, projection_instance_key.strip(), *args)
         except Exception as exc:

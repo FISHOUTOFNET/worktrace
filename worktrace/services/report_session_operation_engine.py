@@ -1,12 +1,10 @@
-"""Pure, in-memory projection of user report-session operations.
-
-The engine deliberately knows nothing about SQLite or the WebView.  It only
-applies already-resolved operation records to the final automatic sessions.
-"""
+"""Deterministic, side-effect-free replay of immutable report operations."""
 
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import dataclass
+from typing import Any, Iterable, Mapping, Sequence
 
 from .report_projection_identity import (
     base_projection_key,
@@ -14,221 +12,344 @@ from .report_projection_identity import (
     member_identity_key,
     merge_projection_key,
     projection_revision,
+    snapshot_revision,
 )
+from .report_projection_model import OperationDiagnostic, OperationRecord, ProjectState, ReportMemberIdentity
 
 
-ACTIVE = "active"
+OPERATION_PAYLOAD_VERSION = 4
+APPLIED = "applied"
 CONFLICT = "conflict"
 ORPHANED = "orphaned"
+SUPERSEDED_BY_UNDO = "superseded_by_undo"
+
+
+@dataclass(frozen=True)
+class ReplayResult:
+    final_entries: tuple[dict[str, Any], ...]
+    final_contributions: tuple[dict[str, Any], ...]
+    operation_diagnostics: tuple[OperationDiagnostic, ...]
+    snapshot_revision: str
+
+
+def replay_operations(
+    base_sessions: Sequence[Mapping[str, Any]],
+    operation_records: Sequence[OperationRecord | Mapping[str, Any]],
+    project_states: Sequence[ProjectState] | Mapping[int, ProjectState] = (),
+) -> ReplayResult:
+    """Replay records without modifying sessions, records, payloads or members."""
+    projects = _project_map(project_states)
+    sessions = [_prepare_session(item, projects) for item in deepcopy(list(base_sessions))]
+    records = tuple(sorted((_coerce_operation(item) for item in operation_records), key=lambda op: (op.sequence, op.id)))
+    valid_splits, invalid_split_reasons = _validate_splits(sessions, records, projects)
+    superseded, undo_by_operation = _undo_closure(records, valid_splits)
+    diagnostics: list[OperationDiagnostic] = []
+
+    for operation in records:
+        if operation.operation_type == "split_session":
+            reason = invalid_split_reasons.get(operation.id)
+            diagnostics.append(_diagnostic(operation, CONFLICT if reason else APPLIED, reason or "undo_applied"))
+            continue
+        if operation.id in superseded:
+            diagnostics.append(
+                _diagnostic(
+                    operation,
+                    SUPERSEDED_BY_UNDO,
+                    "superseded_by_undo",
+                    undo_operation_id=undo_by_operation.get(operation.id),
+                )
+            )
+            continue
+        sessions, diagnostic = _apply_one(sessions, operation, projects)
+        diagnostics.append(diagnostic)
+
+    sessions = _ordered_sessions(sessions)
+    _refresh_capabilities(sessions)
+    contributions = tuple(build_projected_activity_contributions(sessions))
+    result_diagnostics = tuple(sorted(diagnostics, key=lambda item: (item.sequence, item.operation_id)))
+    return ReplayResult(
+        final_entries=tuple(sessions),
+        final_contributions=contributions,
+        operation_diagnostics=result_diagnostics,
+        snapshot_revision=snapshot_revision(sessions, result_diagnostics),
+    )
 
 
 def apply_operations(base_sessions: list[dict], operations: list[dict]) -> list[dict]:
-    """Apply active operations in stable creation order.
-
-    Operation dictionaries are annotated with ``_engine_match_state`` when
-    their persisted identity no longer resolves.  The caller may persist that
-    state; this module itself never writes anything.
-    """
-    sessions = []
-    for session in base_sessions:
-        item = deepcopy(session)
-        item.setdefault("_applied_commands", [])
-        finalize_projected_session(item)
-        sessions.append(item)
-    known_members = {
-        _member_key(member)
-        for session in base_sessions
-        for member in session.get("member_slices") or []
-    }
-    for operation in sorted(
-        operations,
-        key=lambda item: (
-            int(item.get("replay_order") or item.get("id") or 0),
-            int(item.get("id") or 0),
-        ),
-        ):
-        if str(operation.get("match_state") or ACTIVE) != ACTIVE:
-            continue
-        operation_type = str(operation.get("operation_type") or "")
-        if operation_type == "split_session":
-            continue
-        source = resolve_projection_instance(sessions, str(operation.get("base_instance_key") or ""))
-        target = resolve_projection_instance(sessions, str(operation.get("target_instance_key") or ""))
-        if operation_type == "edit_session":
-            if source is None:
-                _mark_unresolved(operation, known_members)
-                continue
-            _apply_edit_session(source, operation)
-            _record_command(source, operation)
-            finalize_projected_session(source)
-            continue
-        if operation_type == "merge_sessions":
-            if source is None or target is None or source is target:
-                _mark_unresolved(operation, known_members)
-                continue
-            merged = _merge_sessions(source, target, operation)
-            source_index = sessions.index(source)
-            target_index = sessions.index(target)
-            # Preserve the target's list position; this is the UI neighbour
-            # the user explicitly selected rather than a reconstructed time
-            # ordering.
-            sessions[target_index] = merged
-            sessions.pop(source_index)
-            _record_command(merged, operation)
-            finalize_projected_session(merged)
-            continue
-        if source is None:
-            _mark_unresolved(operation, known_members)
-            continue
-        if operation_type == "hide_session":
-            _record_command(source, operation)
-            sessions.remove(source)
-        elif operation_type == "copy_session":
-            copy = deepcopy(source)
-            operation_id = int(operation.get("id") or 0)
-            copy.update(
-                {
-                    "projection_instance_key": copy_projection_key(operation_id),
-                    "projection_kind": "copy",
-                    "operation_id": operation_id,
-                    "can_merge_previous": False,
-                    "can_merge_next": False,
-                }
-            )
-            _record_command(copy, operation)
-            finalize_projected_session(copy)
-            sessions.insert(sessions.index(source) + 1, copy)
-        elif operation_type == "hide_activity":
-            _hide_activity_members(source, operation)
-            _record_command(source, operation)
-            finalize_projected_session(source)
-            if int(source.get("duration_seconds") or 0) <= 0:
-                sessions.remove(source)
-        else:
-            operation["_engine_match_state"] = CONFLICT
-    _refresh_capabilities(sessions)
-    for session in sessions:
-        session["projection_revision"] = projection_revision(session)
-    return sessions
+    """Boundary adapter for callers that only consume final session dictionaries."""
+    return list(replay_operations(base_sessions, operations).final_entries)
 
 
-def resolve_projection_instance(projected_sessions: list[dict], projection_instance_key: str) -> dict | None:
+def resolve_projection_instance(projected_sessions: Sequence[Mapping[str, Any]], projection_instance_key: str) -> dict | None:
     for session in projected_sessions:
         if str(session.get("projection_instance_key") or "") == str(projection_instance_key or ""):
-            return session
+            return session if isinstance(session, dict) else dict(session)
     return None
 
 
-def build_projected_activity_contributions(projected_sessions: list[dict]) -> list[dict]:
-    """Return display-safe contribution slices scaled to projected duration."""
+def build_projected_activity_contributions(projected_sessions: Sequence[Mapping[str, Any]]) -> list[dict]:
     contributions: list[dict] = []
     for session in projected_sessions:
-        rows = [dict(row) for row in session.get("_projection_contributions") or []]
-        if not rows or int(session.get("duration_seconds") or 0) <= 0:
-            continue
-        display_total = max(0, int(session.get("duration_seconds") or 0))
-        durations = allocate_duration(display_total, rows)
-        for row, duration in zip(rows, durations):
+        rows = [deepcopy(dict(row)) for row in session.get("_projection_contributions") or []]
+        allocations = allocate_duration(int(session.get("duration_seconds") or 0), rows)
+        for row, duration in zip(rows, allocations):
             row["duration_seconds"] = duration
-            row["projection_instance_key"] = session.get("projection_instance_key")
-            row["projection_kind"] = session.get("projection_kind")
-            row["project_id"] = session.get("project_id")
-            row["project_name"] = session.get("project_name")
-            row["project_description"] = session.get("project_description")
-            row["is_report_project"] = session.get("is_report_project")
-            row["is_report_classified"] = session.get("is_report_classified")
-            row["is_report_uncategorized"] = session.get("is_report_uncategorized")
+            row["projection_instance_key"] = str(session.get("projection_instance_key") or "")
+            row["projection_revision"] = str(session.get("projection_revision") or "")
+            row["project_id"] = int(session.get("project_id") or row.get("project_id") or 0)
+            row["project_name"] = str(session.get("project_name") or row.get("project_name") or "")
+            row["project_description"] = str(session.get("project_description") or "")
+            row["is_in_progress"] = bool(session.get("is_in_progress"))
             contributions.append(row)
     return contributions
 
 
-def allocate_duration(display_total: int, rows: list[dict]) -> list[int]:
-    """Deterministically allocate a session duration across contribution rows."""
-    total = max(0, int(display_total or 0))
-    bases = [max(0, int(row.get("_basis_duration_seconds") or row.get("duration_seconds") or 0)) for row in rows]
-    basis_total = sum(bases)
+def allocate_duration(display_total: int, rows: Sequence[Mapping[str, Any]]) -> list[int]:
     if not rows:
         return []
-    if total <= 0:
-        return [0 for _ in rows]
+    total = max(0, int(display_total))
+    bases = [max(0, int(row.get("_basis_duration_seconds", row.get("duration_seconds", 0)) or 0)) for row in rows]
+    basis_total = sum(bases)
     if basis_total <= 0:
-        result = [0 for _ in rows]
-        result[0] = total
-        return result
-    floors = [(total * basis) // basis_total for basis in bases]
-    remainder = total - sum(floors)
-    ranked = sorted(
-        range(len(rows)),
-        key=lambda index: (
-            -((total * bases[index]) % basis_total),
-            _member_key(rows[index]),
-        ),
-    )
-    for index in ranked[:remainder]:
-        floors[index] += 1
-    return floors
+        quotient, remainder = divmod(total, len(rows))
+        return [quotient + (1 if index < remainder else 0) for index in range(len(rows))]
+    raw = [total * basis / basis_total for basis in bases]
+    result = [int(value) for value in raw]
+    remainder = total - sum(result)
+    order = sorted(range(len(rows)), key=lambda index: (-(raw[index] - result[index]), _member_key(rows[index])))
+    for index in order[:remainder]:
+        result[index] += 1
+    return result
 
 
-def finalize_projected_session(session: dict) -> dict:
-    """Rebuild all aggregate fields from members, edits and contributions."""
-    rows = [dict(row) for row in session.get("_projection_contributions") or []]
-    for row in rows:
-        row.setdefault("_basis_duration_seconds", int(row.get("duration_seconds") or 0))
-    members = _sorted_members(session.get("member_slices") or rows)
+def finalize_projected_session(session: dict[str, Any], project_state: ProjectState | None = None) -> dict[str, Any]:
+    members = _sorted_members(session.get("member_slices") or [])
     session["member_slices"] = members
-    session["activity_ids"] = _ordered_unique([int(member.get("activity_id") or 0) for member in members if int(member.get("activity_id") or 0) > 0])
-    if members:
-        session["anchor_activity_id"] = int(members[0].get("activity_id") or 0)
-        session["first_activity_id"] = session["anchor_activity_id"] or None
-    start_values = [str(member.get("slice_start_time") or member.get("start_time") or "") for member in members]
-    end_values = [str(member.get("slice_end_time") or member.get("end_time") or "") for member in members]
-    if start_values:
-        session["start_time"] = min(value for value in start_values if value)
-    if end_values:
-        session["end_time"] = max(value for value in end_values if value)
-    raw_duration = sum(max(0, int(row.get("_basis_duration_seconds") or row.get("duration_seconds") or 0)) for row in rows)
-    session["raw_duration_seconds"] = raw_duration
-    if bool(session.get("has_duration_override")) and session.get("adjusted_duration_seconds") is not None:
-        final_duration = max(0, int(session.get("adjusted_duration_seconds") or 0))
+    session["activity_ids"] = sorted({int(member.get("activity_id") or member.get("id") or 0) for member in members})
+    basis = sum(max(0, int(row.get("_basis_duration_seconds", row.get("duration_seconds", 0)) or 0)) for row in session.get("_projection_contributions") or [])
+    if bool(session.get("has_duration_override")):
+        duration = max(0, int(session.get("adjusted_duration_seconds") or 0))
     else:
-        final_duration = raw_duration
-        session["adjusted_duration_seconds"] = None
-        session["has_duration_override"] = False
-    allocated = allocate_duration(final_duration, rows)
-    for row, duration in zip(rows, allocated):
-        row["duration_seconds"] = duration
-        row["projection_instance_key"] = session.get("projection_instance_key")
-        row["projection_kind"] = session.get("projection_kind")
-        row["project_id"] = session.get("project_id")
-        row["project_name"] = session.get("project_name")
-        row["project_description"] = session.get("project_description")
-        row["report_project_id"] = session.get("project_id")
-        row["report_project_name"] = session.get("project_name")
-        row["report_project_description"] = session.get("project_description")
-        row["is_report_project"] = session.get("is_report_project")
-        row["is_report_classified"] = session.get("is_report_classified")
-        row["is_report_uncategorized"] = session.get("is_report_uncategorized")
-    session["_projection_contributions"] = rows
-    session["event_count"] = len(rows)
-    session["duration_seconds"] = final_duration
-    session["display_duration_seconds"] = final_duration
-    session["closed_duration_seconds"] = 0 if bool(session.get("is_in_progress")) else final_duration
-    session["activity_member_hash"] = base_projection_key(str(session.get("report_date") or ""), members).split(":", 1)[1]
+        duration = basis
+    session["duration_seconds"] = duration
+    report_date = str(session.get("report_date") or "")
+    session["activity_member_hash"] = base_projection_key(report_date, members).split(":", 1)[1]
     if not str(session.get("projection_instance_key") or ""):
-        session["projection_instance_key"] = base_projection_key(str(session.get("report_date") or ""), members)
+        session["projection_instance_key"] = base_projection_key(report_date, members)
     session["editable"] = bool(session.get("editable", True)) and not bool(session.get("is_in_progress"))
     session["exportable"] = bool(session.get("exportable", True)) and not bool(session.get("is_in_progress"))
-    session["projection_revision"] = projection_revision(session)
+    session["projection_revision"] = projection_revision(session, project_state=project_state)
     return session
 
 
-def _merge_sessions(source: dict, target: dict, operation: dict) -> dict:
+def _apply_one(
+    sessions: list[dict[str, Any]], operation: OperationRecord, projects: Mapping[int, ProjectState]
+) -> tuple[list[dict[str, Any]], OperationDiagnostic]:
+    if not _payload_is_valid(operation):
+        return sessions, _diagnostic(operation, CONFLICT, "invalid_payload")
+    source, source_reason = _resolve_input(sessions, operation.source_instance_key, operation.members_for("source"))
+    if source is None:
+        return sessions, _diagnostic(operation, source_reason, "source_" + source_reason)
+    if source.get("projection_revision") != operation.source_expected_revision:
+        return sessions, _diagnostic(operation, CONFLICT, "source_revision_conflict")
+
+    operation_type = operation.operation_type
+    if operation_type == "edit_session":
+        edited = deepcopy(source)
+        if not _apply_edit(edited, operation.payload, projects):
+            return sessions, _diagnostic(operation, CONFLICT, "invalid_edit_payload")
+        finalize_projected_session(edited, projects.get(int(edited.get("project_id") or 0)))
+        return _replace_session(sessions, source, edited), _diagnostic(operation, APPLIED, "")
+    if operation_type == "hide_session":
+        return _remove_sessions(sessions, source), _diagnostic(operation, APPLIED, "")
+    if operation_type == "copy_session":
+        copied = deepcopy(source)
+        copied["projection_instance_key"] = copy_projection_key(operation.id)
+        copied["projection_kind"] = "copy"
+        copied["operation_id"] = operation.id
+        finalize_projected_session(copied, projects.get(int(copied.get("project_id") or 0)))
+        return _ordered_sessions([*sessions, copied]), _diagnostic(operation, APPLIED, "")
+    if operation_type == "hide_activity":
+        affected = {_identity_tuple(member) for member in operation.members_for("affected")}
+        current = {_member_key(member) for member in source.get("member_slices") or []}
+        removed = affected & current
+        if not affected or not removed:
+            return sessions, _diagnostic(operation, CONFLICT, "hide_activity_no_matching_member")
+        edited = deepcopy(source)
+        edited["member_slices"] = [member for member in edited.get("member_slices") or [] if _member_key(member) not in removed]
+        edited["_projection_contributions"] = [row for row in edited.get("_projection_contributions") or [] if _member_key(row) not in removed]
+        if not edited["member_slices"]:
+            return _remove_sessions(sessions, source), _diagnostic(operation, APPLIED, "")
+        if bool(edited.get("has_duration_override")):
+            old_rows = list(source.get("_projection_contributions") or [])
+            allocated = allocate_duration(int(source.get("duration_seconds") or 0), old_rows)
+            retained = sum(value for row, value in zip(old_rows, allocated) if _member_key(row) not in removed)
+            edited["adjusted_duration_seconds"] = retained
+        finalize_projected_session(edited, projects.get(int(edited.get("project_id") or 0)))
+        return _replace_session(sessions, source, edited), _diagnostic(operation, APPLIED, "")
+    if operation_type == "merge_sessions":
+        target, target_reason = _resolve_input(sessions, operation.target_instance_key or "", operation.members_for("target"))
+        if target is None:
+            return sessions, _diagnostic(operation, target_reason, "target_" + target_reason)
+        if target is source:
+            return sessions, _diagnostic(operation, CONFLICT, "same_merge_input")
+        if target.get("projection_revision") != operation.target_expected_revision:
+            return sessions, _diagnostic(operation, CONFLICT, "target_revision_conflict")
+        ordered = _ordered_sessions(sessions)
+        source_index, target_index = ordered.index(source), ordered.index(target)
+        expected_index = source_index - 1 if operation.direction == "previous" else source_index + 1
+        if operation.direction not in {"previous", "next"} or expected_index != target_index:
+            return sessions, _diagnostic(operation, CONFLICT, "session_not_adjacent")
+        if str(source.get("projection_kind") or "base") == "copy" or str(target.get("projection_kind") or "base") == "copy":
+            return sessions, _diagnostic(operation, CONFLICT, "copy_cannot_merge")
+        merged = _merge_sessions(source, target, operation.id)
+        finalize_projected_session(merged, projects.get(int(merged.get("project_id") or 0)))
+        return _ordered_sessions([item for item in sessions if item is not source and item is not target] + [merged]), _diagnostic(operation, APPLIED, "")
+    return sessions, _diagnostic(operation, CONFLICT, "unknown_operation_type")
+
+
+def _validate_splits(
+    base_sessions: list[dict[str, Any]], records: tuple[OperationRecord, ...], projects: Mapping[int, ProjectState]
+) -> tuple[set[int], dict[int, str]]:
+    sessions = deepcopy(base_sessions)
+    records_by_id = {operation.id: operation for operation in records}
+    valid: set[int] = set()
+    invalid: dict[int, str] = {}
+    seen_merge: set[int] = set()
+    for operation in records:
+        if operation.operation_type != "split_session":
+            sessions, _ = _apply_one(sessions, operation, projects)
+            continue
+        original = records_by_id.get(int(operation.undo_of_operation_id or 0))
+        if original is None or original.operation_type != "merge_sessions" or original.sequence >= operation.sequence:
+            invalid[operation.id] = "invalid_undo_target"
+            continue
+        if original.id in seen_merge:
+            invalid[operation.id] = "duplicate_split"
+            continue
+        source, reason = _resolve_input(sessions, operation.source_instance_key, operation.members_for("source"))
+        if source is None:
+            invalid[operation.id] = "split_source_" + reason
+            continue
+        if source.get("projection_revision") != operation.source_expected_revision:
+            invalid[operation.id] = "source_revision_conflict"
+            continue
+        if str(source.get("projection_instance_key")) != merge_projection_key(original.id):
+            invalid[operation.id] = "split_requires_merge_output"
+            continue
+        seen_merge.add(original.id)
+        valid.add(operation.id)
+    return valid, invalid
+
+
+def _undo_closure(
+    records: tuple[OperationRecord, ...], valid_splits: set[int]
+) -> tuple[set[int], dict[int, int]]:
+    children: dict[int, set[int]] = {}
+    for operation in records:
+        for key in (operation.source_instance_key, operation.target_instance_key):
+            parent = _producer_operation_id(key)
+            if parent is not None:
+                children.setdefault(parent, set()).add(operation.id)
+    superseded: set[int] = set()
+    undo_by_operation: dict[int, int] = {}
+    for split in (item for item in records if item.id in valid_splits):
+        pending = [int(split.undo_of_operation_id or 0)]
+        while pending:
+            operation_id = pending.pop()
+            if operation_id in superseded:
+                continue
+            superseded.add(operation_id)
+            undo_by_operation[operation_id] = split.id
+            pending.extend(sorted(children.get(operation_id, ()), reverse=True))
+    return superseded, undo_by_operation
+
+
+def _payload_is_valid(operation: OperationRecord) -> bool:
+    payload = operation.payload
+    if int(payload.get("payload_version") or 0) != OPERATION_PAYLOAD_VERSION:
+        return False
+    allowed = {"payload_version"}
+    if operation.operation_type == "edit_session":
+        allowed |= {"project", "duration", "note"}
+    elif operation.operation_type == "hide_activity":
+        allowed |= {"summary_id"}
+    return set(payload) <= allowed
+
+
+def _apply_edit(session: dict[str, Any], payload: Mapping[str, Any], projects: Mapping[int, ProjectState]) -> bool:
+    project = payload.get("project")
+    if project is not None:
+        if not isinstance(project, Mapping) or set(project) - {"mode", "project_id"}:
+            return False
+        mode = str(project.get("mode") or "")
+        if mode == "set":
+            state = projects.get(int(project.get("project_id") or 0))
+            if state is None:
+                return False
+            _apply_project_state(session, state)
+            session["has_project_override"] = True
+        elif mode == "inherit":
+            base_state = projects.get(int(session.get("_base_project_id") or 0))
+            if base_state is None:
+                return False
+            _apply_project_state(session, base_state)
+            session["has_project_override"] = False
+        else:
+            return False
+    duration = payload.get("duration")
+    if duration is not None:
+        if not isinstance(duration, Mapping) or set(duration) - {"mode", "value"}:
+            return False
+        mode = str(duration.get("mode") or "")
+        if mode == "set" and isinstance(duration.get("value"), int) and int(duration["value"]) >= 0:
+            session["adjusted_duration_seconds"] = int(duration["value"])
+            session["has_duration_override"] = True
+        elif mode == "inherit":
+            session["adjusted_duration_seconds"] = None
+            session["has_duration_override"] = False
+        else:
+            return False
+    note = payload.get("note")
+    if note is not None:
+        if not isinstance(note, Mapping) or set(note) - {"mode", "value"}:
+            return False
+        mode = str(note.get("mode") or "")
+        if mode == "set" and isinstance(note.get("value"), str):
+            session["session_note"] = str(note["value"])
+        elif mode == "inherit":
+            session["session_note"] = ""
+        else:
+            return False
+    return any(key in payload for key in ("project", "duration", "note"))
+
+
+def _apply_project_state(session: dict[str, Any], state: ProjectState) -> None:
+    session.update(
+        {
+            "project_id": state.project_id,
+            "project_name": state.project_name,
+            "project_description": state.project_description,
+            "project_is_deleted": state.is_deleted,
+            "project_is_archived": state.is_archived,
+            "project_is_enabled": state.is_enabled,
+            "project_is_system": state.is_system,
+            "project_is_special": state.is_special,
+            "is_report_project": state.is_report_project,
+            "is_report_classified": state.is_report_classified,
+            "is_report_uncategorized": state.is_report_uncategorized,
+            "is_official_project": state.is_official_project,
+            "report_attribution_kind": state.report_attribution_kind,
+            "project_key": state.project_key,
+            "report_project_key": state.report_project_key,
+        }
+    )
+
+
+def _merge_sessions(source: dict[str, Any], target: dict[str, Any], operation_id: int) -> dict[str, Any]:
     merged = deepcopy(target)
-    operation_id = int(operation.get("id") or 0)
-    members = _sorted_members([*(source.get("member_slices") or []), *(target.get("member_slices") or [])])
-    origins = _ordered_unique([*(source.get("origin_activity_member_hashes") or []), *(target.get("origin_activity_member_hashes") or [])])
     contributions = []
-    for row in build_projected_activity_contributions([source, target]):
+    for row in build_projected_activity_contributions((source, target)):
         item = dict(row)
         item["_basis_duration_seconds"] = int(item.get("duration_seconds") or 0)
         contributions.append(item)
@@ -237,130 +358,150 @@ def _merge_sessions(source: dict, target: dict, operation: dict) -> dict:
             "projection_instance_key": merge_projection_key(operation_id),
             "projection_kind": "merge",
             "operation_id": operation_id,
-            "member_slices": members,
-            "activity_ids": _ordered_unique([*(source.get("activity_ids") or []), *(target.get("activity_ids") or [])]),
-            "origin_activity_member_hashes": origins,
+            "member_slices": _sorted_members([*(source.get("member_slices") or []), *(target.get("member_slices") or [])]),
             "_projection_contributions": contributions,
             "has_duration_override": False,
             "adjusted_duration_seconds": None,
-            "_applied_commands": [*(source.get("_applied_commands") or []), *(target.get("_applied_commands") or [])],
         }
     )
     return merged
 
 
-def _hide_activity_members(session: dict, operation: dict) -> None:
-    hidden = {_member_key(member) for member in operation.get("members", {}).get("affected", [])}
-    if not hidden:
-        operation["_engine_match_state"] = CONFLICT
-        return
-    contributions = list(session.get("_projection_contributions") or [])
-    current_allocated = build_projected_activity_contributions([session])
-    current_by_member = {_member_key(row): row for row in current_allocated}
-    session["_projection_contributions"] = [
-        dict(current_by_member.get(_member_key(row), row))
-        for row in contributions
-        if _member_key(row) not in hidden
-    ]
-    session["member_slices"] = [member for member in session.get("member_slices") or [] if _member_key(member) not in hidden]
-    hidden_ids = {int(member[1]) for member in hidden}
-    session["activity_ids"] = [aid for aid in session.get("activity_ids") or [] if int(aid) not in hidden_ids or any(int(item.get("activity_id") or 0) == int(aid) for item in session["member_slices"])]
-    if bool(session.get("has_duration_override")):
-        session["adjusted_duration_seconds"] = sum(int(row.get("duration_seconds") or 0) for row in session["_projection_contributions"])
+def _resolve_input(
+    sessions: Sequence[dict[str, Any]], key: str, expected_members: Sequence[ReportMemberIdentity]
+) -> tuple[dict[str, Any] | None, str]:
+    by_key = [item for item in sessions if str(item.get("projection_instance_key") or "") == key]
+    if len(by_key) == 1:
+        return by_key[0], ""
+    expected = {_identity_tuple(member) for member in expected_members}
+    if expected:
+        exact = [item for item in sessions if {_member_key(member) for member in item.get("member_slices") or []} == expected]
+        if len(exact) == 1:
+            return exact[0], ""
+        present = expected & {_member_key(member) for item in sessions for member in item.get("member_slices") or []}
+        return None, CONFLICT if present else ORPHANED
+    return None, ORPHANED
 
 
-def _mark_unresolved(operation: dict, known_members: set[tuple]) -> None:
-    members = [member for role in (operation.get("members") or {}).values() for member in role]
-    found = any(_member_key(member) in known_members for member in members)
-    operation["_engine_match_state"] = CONFLICT if found else ORPHANED
+def _prepare_session(value: Mapping[str, Any], projects: Mapping[int, ProjectState]) -> dict[str, Any]:
+    session = deepcopy(dict(value))
+    session.setdefault("projection_kind", "base")
+    session.setdefault("_projection_contributions", [])
+    session.setdefault("_base_project_id", int(session.get("project_id") or 0))
+    state = projects.get(int(session.get("project_id") or 0))
+    if state is not None:
+        _apply_project_state(session, state)
+    return finalize_projected_session(session, state)
 
 
-def _refresh_capabilities(sessions: list[dict]) -> None:
-    for index, session in enumerate(sessions):
-        kind = str(session.get("projection_kind") or "base")
+def _coerce_operation(value: OperationRecord | Mapping[str, Any]) -> OperationRecord:
+    if isinstance(value, OperationRecord):
+        return value
+    members = value.get("members") if isinstance(value.get("members"), Mapping) else {}
+    return OperationRecord(
+        id=int(value.get("id") or 0),
+        report_date=str(value.get("report_date") or ""),
+        sequence=int(value.get("sequence") or 0),
+        operation_type=str(value.get("operation_type") or ""),
+        source_instance_key=str(value.get("source_instance_key") or ""),
+        source_expected_revision=str(value.get("source_expected_revision") or ""),
+        target_instance_key=str(value.get("target_instance_key")) if value.get("target_instance_key") is not None else None,
+        target_expected_revision=str(value.get("target_expected_revision")) if value.get("target_expected_revision") is not None else None,
+        direction=str(value.get("direction")) if value.get("direction") is not None else None,
+        undo_of_operation_id=int(value["undo_of_operation_id"]) if value.get("undo_of_operation_id") is not None else None,
+        payload=value.get("payload") if isinstance(value.get("payload"), Mapping) else {},
+        members=members,
+        created_at=str(value.get("created_at") or ""),
+    )
+
+
+def _project_map(values: Sequence[ProjectState] | Mapping[int, ProjectState]) -> dict[int, ProjectState]:
+    if isinstance(values, Mapping):
+        return {int(key): value for key, value in values.items()}
+    return {state.project_id: state for state in values}
+
+
+def _ordered_sessions(sessions: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    return sorted(sessions, key=_session_sort_key)
+
+
+def _session_sort_key(session: Mapping[str, Any]) -> tuple[str, str, str]:
+    members = _sorted_members(session.get("member_slices") or [])
+    first = str(members[0].get("slice_start_time") or "") if members else str(session.get("start_time") or "")
+    return (str(session.get("report_date") or ""), first, str(session.get("projection_instance_key") or ""))
+
+
+def _replace_session(sessions: list[dict[str, Any]], old: dict[str, Any], new: dict[str, Any]) -> list[dict[str, Any]]:
+    return _ordered_sessions([new if item is old else item for item in sessions])
+
+
+def _remove_sessions(sessions: list[dict[str, Any]], *removed: dict[str, Any]) -> list[dict[str, Any]]:
+    removed_ids = {id(item) for item in removed}
+    return _ordered_sessions(item for item in sessions if id(item) not in removed_ids)
+
+
+def _refresh_capabilities(sessions: list[dict[str, Any]]) -> None:
+    ordered = _ordered_sessions(sessions)
+    for index, session in enumerate(ordered):
         normal = str(session.get("row_kind") or "project_session") == "project_session" and not bool(session.get("is_in_progress"))
+        kind = str(session.get("projection_kind") or "base")
         session["can_hide"] = normal
         session["can_copy"] = normal
-        session["can_hide_activity"] = normal and bool(session.get("_projection_contributions"))
+        session["can_hide_activity"] = normal and bool(session.get("member_slices"))
         session["can_split"] = kind == "merge"
-        session["can_merge_previous"] = normal and kind != "copy" and index > 0 and _mergeable_neighbour(sessions[index - 1])
-        session["can_merge_next"] = normal and kind != "copy" and index + 1 < len(sessions) and _mergeable_neighbour(sessions[index + 1])
+        session["can_merge_previous"] = normal and kind != "copy" and index > 0 and str(ordered[index - 1].get("projection_kind") or "base") != "copy"
+        session["can_merge_next"] = normal and kind != "copy" and index + 1 < len(ordered) and str(ordered[index + 1].get("projection_kind") or "base") != "copy"
         session["projection_revision"] = projection_revision(session)
 
 
-def _mergeable_neighbour(session: dict) -> bool:
-    return str(session.get("row_kind") or "project_session") == "project_session" and not bool(session.get("is_in_progress")) and str(session.get("projection_kind") or "base") != "copy"
+def _diagnostic(
+    operation: OperationRecord,
+    state: str,
+    reason: str,
+    *,
+    undo_operation_id: int | None = None,
+) -> OperationDiagnostic:
+    return OperationDiagnostic(
+        operation_id=operation.id,
+        sequence=operation.sequence,
+        operation_type=operation.operation_type,
+        state=state,
+        reason=reason,
+        source_instance_key=operation.source_instance_key,
+        target_instance_key=operation.target_instance_key,
+        undo_operation_id=undo_operation_id,
+    )
 
 
-def _member_key(member: dict) -> tuple[str, int, str]:
-    return member_identity_key(member)
+def _member_key(member: Mapping[str, Any]) -> tuple[str, int, str]:
+    return member_identity_key(dict(member))
 
 
-def _sorted_members(members: list[dict]) -> list[dict]:
-    unique = {_member_key(member): dict(member) for member in members}
+def _identity_tuple(member: ReportMemberIdentity) -> tuple[str, int, str]:
+    return (member.report_date, member.activity_id, member.slice_start_time)
+
+
+def _sorted_members(members: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    unique = {_member_key(member): deepcopy(dict(member)) for member in members}
     return [unique[key] for key in sorted(unique)]
 
 
-def _ordered_unique(values: list) -> list:
-    seen: set = set()
-    result = []
-    for value in values:
-        marker = str(value)
-        if marker not in seen:
-            seen.add(marker)
-            result.append(value)
-    return result
+def _producer_operation_id(key: str | None) -> int | None:
+    if not key or ":" not in key:
+        return None
+    prefix, value = key.split(":", 1)
+    if prefix not in {"copy", "merge"}:
+        return None
+    try:
+        result = int(value)
+    except ValueError:
+        return None
+    return result if result > 0 else None
 
 
-def _apply_edit_session(session: dict, operation: dict) -> None:
-    payload = operation.get("payload") or {}
-    if int(payload.get("payload_version") or 0) != 3:
-        operation["_engine_match_state"] = CONFLICT
-        return
-    project = payload.get("project") if isinstance(payload.get("project"), dict) else None
-    if project:
-        mode = str(project.get("mode") or "unchanged")
-        if mode == "set":
-            session["project_id"] = int(project.get("project_id") or 0)
-            session["project_name"] = str(project.get("project_name") or session.get("project_name") or "")
-            session["project_description"] = str(project.get("project_description") or "")
-            session["project_is_deleted"] = bool(project.get("project_is_deleted"))
-            session["project_is_archived"] = bool(project.get("project_is_archived"))
-            session["has_project_override"] = True
-            session["is_report_project"] = bool(project.get("is_report_project", True))
-            session["is_report_classified"] = bool(project.get("is_report_classified", True))
-            session["is_report_uncategorized"] = bool(project.get("is_report_uncategorized", False))
-        elif mode == "inherit":
-            session["project_id"] = session.get("raw_assignment_project_id") or session.get("project_id")
-            session["project_name"] = session.get("raw_assignment_project_name") or session.get("project_name")
-            session["project_description"] = session.get("raw_assignment_project_description") or ""
-            session["has_project_override"] = False
-    duration = payload.get("duration") if isinstance(payload.get("duration"), dict) else None
-    if duration:
-        mode = str(duration.get("mode") or "unchanged")
-        if mode == "set":
-            session["adjusted_duration_seconds"] = max(0, int(duration.get("value") or 0))
-            session["has_duration_override"] = True
-        elif mode == "inherit":
-            session["adjusted_duration_seconds"] = None
-            session["has_duration_override"] = False
-    note = payload.get("note") if isinstance(payload.get("note"), dict) else None
-    if note:
-        mode = str(note.get("mode") or "unchanged")
-        if mode == "set":
-            session["session_note"] = str(note.get("value") or "")
-        elif mode == "inherit":
-            session["session_note"] = ""
-
-
-def _record_command(session: dict, operation: dict) -> None:
-    commands = list(session.get("_applied_commands") or [])
-    commands.append(
-        {
-            "id": int(operation.get("id") or 0),
-            "replay_order": int(operation.get("replay_order") or operation.get("id") or 0),
-            "operation_type": str(operation.get("operation_type") or ""),
-            "payload": operation.get("payload") or {},
-        }
-    )
-    session["_applied_commands"] = commands
+__all__ = [
+    "APPLIED", "CONFLICT", "OPERATION_PAYLOAD_VERSION", "ORPHANED", "ReplayResult",
+    "SUPERSEDED_BY_UNDO", "allocate_duration", "apply_operations",
+    "build_projected_activity_contributions", "finalize_projected_session",
+    "replay_operations", "resolve_projection_instance",
+]

@@ -32,7 +32,7 @@ import json
 from typing import Any
 
 from ..constants import UNCATEGORIZED_PROJECT
-from ..formatters import format_duration, format_resource_type, format_safe_display_name
+from ..formatters import format_duration
 from ..contracts.live_display_contracts import (
     ActivitySnapshotContract,
     CurrentActivityContract,
@@ -49,7 +49,6 @@ from . import (
 )
 from .activity_display_model_service import build_activity_display_model
 from .activity_display_projection import build_kpi_live_targets
-from .activity_continuity_service import is_normal_project_status
 from .activity_row_overlay import (
     ROW_KIND_ACTIVITY_DETAIL_ROW,
     ROW_KIND_PROJECT_ACTIVITY_SUMMARY_ROW,
@@ -57,7 +56,7 @@ from .activity_row_overlay import (
     ROW_KIND_RECENT_PROJECT_SESSION_ROW,
     apply_live_span_to_row,
 )
-from .live_display_service import compute_refresh_revision
+from .report_projection_identity import stable_json_hash
 from .settings_service import get_bool_setting, get_int_setting, get_setting
 
 # Maximum number of recent activities in the Overview VM.
@@ -178,24 +177,23 @@ def _revision_fields_for_model(
     today: str,
     report_date: str,
 ) -> dict[str, str]:
-    collector_status = _get_collector_status()
-    user_paused = _is_user_paused()
-    refresh_revision, debug_inputs = compute_refresh_revision(
-        snapshot,
-        collector_status,
-        user_paused,
-        today,
-        report_date,
-        display_model=model,
+    from .report_projection_snapshot_service import build_visible_snapshot
+
+    live_clock = model.get("live_clock") or {}
+    live_revision = stable_json_hash(
+        {
+            "key": live_clock.get("stable_live_key_hash") or live_clock.get("stable_live_key"),
+            "state": live_clock.get("live_state"),
+            "span": live_clock.get("display_span_id"),
+            "project_live": live_clock.get("is_project_duration_live"),
+        }
     )
+    report_revision = build_visible_snapshot(report_date, report_date).snapshot_revision
     return {
-        "refresh_revision": refresh_revision,
-        "live_clock_revision": str(debug_inputs.get("live_clock_revision") or ""),
-        "live_state_revision": str(debug_inputs.get("live_state_revision") or ""),
-        "display_projection_revision": str(
-            debug_inputs.get("display_projection_revision") or ""
+        "live_revision": live_revision,
+        "page_revision": stable_json_hash(
+            [report_revision, live_revision if report_date == today else ""]
         ),
-        "page_structure_revision": str(debug_inputs.get("page_structure_revision") or ""),
     }
 
 
@@ -296,12 +294,23 @@ def get_overview_view_model(today: str | None = None) -> dict[str, Any]:
     )
 
     project_count = len(project_service.list_active_projects())
-    sessions = timeline_service.get_project_sessions_by_date(
-        scoped_today, include_hidden=False, ensure_context=True
-    )
+    from .report_projection_snapshot_service import build_visible_snapshot
+    from .report_status_policy import decide_report_status
+
+    overview_projection = build_visible_snapshot(scoped_today, scoped_today)
+    sessions = list(overview_projection.final_sessions)
 
     recent_rows: list[dict[str, Any]] = []
     for session in sessions:
+        contribution_rows = list(session.get("_projection_contributions") or [])
+        if contribution_rows and not any(
+            decide_report_status(
+                str(item.get("status") or ""),
+                has_project_attribution=bool(item.get("is_report_project")),
+            ).visible_in_recent
+            for item in contribution_rows
+        ):
+            continue
         recent_rows.append(_session_to_overview_row(session))
     _apply_live_span_to_rows(
         recent_rows,
@@ -420,8 +429,6 @@ def _session_to_overview_row(session: dict[str, Any]) -> dict[str, Any]:
         "project_name": str(session.get("project_name") or "未归类"),
         "project_description": str(session.get("project_description") or ""),
         "project_id": int(session.get("project_id") or 0),
-        "raw_assignment_project_id": int(session.get("raw_assignment_project_id") or 0),
-        "raw_assignment_project_name": str(session.get("raw_assignment_project_name") or "未归类"),
         "row_kind": "project_session",
         "is_uncategorized": is_report_uncategorized,
         "is_classified": is_report_classified,
@@ -435,7 +442,6 @@ def _session_to_overview_row(session: dict[str, Any]) -> dict[str, Any]:
         "duration": format_duration(base_seconds),
         "duration_seconds": base_seconds,
         "display_duration_seconds": int(session.get("display_duration_seconds") or base_seconds),
-        "raw_duration_seconds": int(session.get("raw_duration_seconds") or base_seconds),
         "duration_seconds_at_sample": base_seconds,
         "display_base_seconds": base_seconds,
         "live_base_seconds": base_seconds,
@@ -473,8 +479,6 @@ def _session_to_overview_row(session: dict[str, Any]) -> dict[str, Any]:
         ),
         "status": str(session.get("status") or "normal"),
         "status_summary": str(session.get("status_summary") or ""),
-        "override_id": session.get("override_id"),
-        "override_match_state": session.get("override_match_state"),
         "has_project_override": bool(session.get("has_project_override")),
         "has_duration_override": bool(session.get("has_duration_override")),
         "session_note": str(session.get("session_note") or ""),
@@ -520,17 +524,17 @@ def get_timeline_view_model(report_date: str | None = None) -> dict[str, Any]:
     identity_fields = _live_identity_fields(live_model)
     revision_fields = _revision_fields_for_model(
         snapshot,
-        live_model,
+        report_model,
         today=today,
-        report_date=today,
+        report_date=scoped_report_date,
     )
 
-    sessions_raw = timeline_service.get_project_sessions_by_date(
-        scoped_report_date, include_hidden=False, ensure_context=True
-    )
+    from .report_projection_snapshot_service import build_visible_snapshot
+
+    report_projection = build_visible_snapshot(scoped_report_date, scoped_report_date)
+    sessions_raw = list(report_projection.final_entries)
 
     sessions: list[dict[str, Any]] = []
-    raw_total_seconds = 0
 
     for session in sessions_raw:
         is_session_in_progress = bool(session.get("is_in_progress"))
@@ -538,27 +542,21 @@ def get_timeline_view_model(report_date: str | None = None) -> dict[str, Any]:
         is_report_classified = bool(session.get("is_report_classified", is_report_project))
         is_report_uncategorized = bool(session.get("is_report_uncategorized", not is_report_project))
         start_time = str(session.get("start_time") or "")
-        raw_seconds = int(session.get("raw_duration_seconds") or session.get("duration_seconds") or 0)
+        base_seconds = int(session.get("duration_seconds") or 0)
         adjusted = session.get("adjusted_duration_seconds")
         if adjusted is not None:
             adjusted = int(adjusted)
         has_override = adjusted is not None
-        display_seconds = int(session.get("display_duration_seconds") or session.get("duration_seconds") or (adjusted if has_override else raw_seconds))
-        raw_total_seconds += raw_seconds
+        display_seconds = int(session.get("duration_seconds") or (adjusted if has_override else base_seconds))
         row = {
-            "session_id": str(session.get("session_id") or ""),
-            "row_kind": "project_session",
+            "row_kind": str(session.get("row_kind") or "project_session"),
             "project_name": str(session.get("project_name") or "未归类"),
             "project_description": str(session.get("project_description") or ""),
             "project_id": int(session.get("project_id") or 0),
-            "raw_assignment_project_id": int(session.get("raw_assignment_project_id") or 0),
-            "raw_assignment_project_name": str(session.get("raw_assignment_project_name") or "未归类"),
             "start_time": start_time,
             "end_time": str(session.get("end_time") or ""),
             "duration": format_duration(display_seconds),
             "duration_seconds": display_seconds,
-            "raw_duration": format_duration(raw_seconds),
-            "raw_duration_seconds": raw_seconds,
             "display_duration_seconds": display_seconds,
             "duration_seconds_at_sample": display_seconds,
             "display_base_seconds": display_seconds,
@@ -602,7 +600,6 @@ def get_timeline_view_model(report_date: str | None = None) -> dict[str, Any]:
             "projection_kind": str(session.get("projection_kind") or "base"),
             "operation_id": session.get("operation_id"),
             "origin_activity_member_hashes": list(session.get("origin_activity_member_hashes") or []),
-            "operation_match_state": str(session.get("operation_match_state") or "active"),
             "can_hide": bool(session.get("can_hide")),
             "can_merge_previous": bool(session.get("can_merge_previous")),
             "can_merge_next": bool(session.get("can_merge_next")),
@@ -614,8 +611,6 @@ def get_timeline_view_model(report_date: str | None = None) -> dict[str, Any]:
             "open_activity_id": int(session.get("open_activity_id") or 0),
             "closed_duration_seconds": int(session.get("closed_duration_seconds") or 0),
             "session_note": str(session.get("session_note") or ""),
-            "override_id": session.get("override_id"),
-            "override_match_state": session.get("override_match_state"),
             "has_project_override": bool(session.get("has_project_override")),
             "editable": bool(session.get("editable", not is_session_in_progress)),
             "exportable": bool(session.get("exportable", not is_session_in_progress)),
@@ -652,140 +647,17 @@ def get_timeline_view_model(report_date: str | None = None) -> dict[str, Any]:
         "date": scoped_report_date,
         "total_duration": format_duration(display_total_seconds),
         "total_seconds": display_total_seconds,
-        "raw_total_duration": format_duration(raw_total_seconds),
-        "raw_total_seconds": raw_total_seconds,
         "current_activity": current_activity,
         "live_clock": live_clock,
         **identity_fields,
         **revision_fields,
         "activity_display_model": live_model,
         "report_activity_display_model": report_model,
-        "sessions": sessions,
+        "entries": sessions,
+        "snapshot_revision": report_projection.snapshot_revision,
         "today_total_seconds": display_total_seconds,
         "today_total_base_seconds": today_total_base_seconds,
         "current_activity_elapsed_seconds": elapsed,
-    }
-
-
-# Session Details ViewModel
-
-
-def get_session_details_view_model(
-    activity_ids: list[int],
-    report_date: str | None = None,
-) -> dict[str, Any]:
-    """Build the Timeline Details ViewModel from a single display model.
-
-    Details list only real DB activity rows plus Activity Display Model
-    projection for a persisted open row. No borrowed pending resource or
-    virtual normal-live detail row is inserted.
-
-    Single-sample contract: ``current_activity_snapshot`` is read EXACTLY
-    ONCE here and the resulting ``snapshot`` is passed to
-    :func:`build_activity_display_model` (via ``snapshot=...``). The
-    builder MUST NOT re-read the setting on this path.
-    """
-    ids = [int(aid) for aid in (activity_ids or [])]
-    date = report_date or timeline_service.get_default_report_date()
-    today = timeline_service.get_default_report_date()
-    snapshot = _get_current_activity_snapshot()
-    report_model = build_activity_display_model(
-        report_date=date, today=today, snapshot=snapshot
-    )
-    live_model = (
-        report_model
-        if date == today
-        else build_activity_display_model(report_date=today, today=today, snapshot=snapshot)
-    )
-    live_clock = live_model.get("live_clock") or {}
-    current_activity = live_model.get("current_activity") or {}
-    identity_fields = _live_identity_fields(live_model)
-    revision_fields = _revision_fields_for_model(
-        snapshot,
-        live_model,
-        today=today,
-        report_date=today,
-    )
-
-    if not ids:
-        return {
-            "ok": True,
-            "date": date,
-            "activities": [],
-            "current_activity": current_activity,
-            "live_clock": live_clock,
-            **identity_fields,
-            **revision_fields,
-            "activity_display_model": live_model,
-            "report_activity_display_model": report_model,
-        }
-
-    rows = [
-        row
-        for row in timeline_service.get_session_activity_details(
-            ids, report_date=date, ensure_context=True
-        )
-        if is_normal_project_status(str(row.get("status") or ""))
-    ]
-    activities: list[dict[str, Any]] = []
-    for row in rows:
-        start_time = str(row.get("start_time") or "")
-        end_time = str(row.get("end_time") or "")
-        row_seconds = int(row.get("duration_seconds") or 0)
-        is_in_progress = bool(row.get("is_in_progress"))
-        detail_row = {
-            "activity_id": int(row.get("id") or 0),
-            "row_kind": "activity_detail",
-            "start_time": start_time,
-            "end_time": end_time,
-            "duration": format_duration(row_seconds),
-            "duration_seconds": row_seconds,
-            "app_name": str(row.get("app_name") or ""),
-            "resource_type": format_resource_type(
-                row.get("resource_kind"), row.get("resource_subtype")
-            ),
-            "resource_name": format_safe_display_name(row),
-            **_detail_report_attribution_fields(row),
-            "status": str(row.get("status") or ""),
-            "status_code": str(row.get("status") or "normal"),
-            "display_status": str(row.get("display_status") or row.get("status_summary") or ""),
-            "is_in_progress": is_in_progress,
-            "is_live_projected": False,
-            "is_virtual": False,
-            "is_virtual_live": False,
-            "contributes_to_totals": True,
-            "live_delta_eligible": False,
-            "live_display_key": "",
-            "live_state": "",
-            "stable_live_key": "",
-            "stable_live_key_hash": "",
-            "live_started_at_epoch_ms": 0,
-            "carry_seconds": 0,
-            "display_span_id": "",
-            "source": "db",
-            "editable": not is_in_progress,
-            "exportable": not is_in_progress,
-            "edit_disabled": bool(is_in_progress),
-            "disable_reason": "进行中记录暂不支持编辑" if is_in_progress else "",
-        }
-        activities.append(detail_row)
-    # Apply the unified live-span overlay to matching detail rows only.
-    _apply_live_span_to_rows(activities, report_model, row_kind=ROW_KIND_ACTIVITY_DETAIL_ROW)
-    for detail_row in activities:
-        if detail_row.get("is_in_progress") and not detail_row.get("edit_disabled"):
-            detail_row["edit_disabled"] = True
-            detail_row["disable_reason"] = detail_row.get("disable_reason") or "进行中记录暂不支持编辑"
-
-    return {
-        "ok": True,
-        "date": date,
-        "activities": activities,
-        "current_activity": current_activity,
-        "live_clock": live_clock,
-        **identity_fields,
-        **revision_fields,
-        "activity_display_model": live_model,
-        "report_activity_display_model": report_model,
     }
 
 
@@ -812,17 +684,17 @@ def get_session_activity_summary_view_model(
     identity_fields = _live_identity_fields(live_model)
     revision_fields = _revision_fields_for_model(
         snapshot,
-        live_model,
+        report_model,
         today=today,
-        report_date=today,
+        report_date=date,
     )
 
-    rows = project_activity_summary_service.get_projection_session_activity_summary(
+    detail_projection = project_activity_summary_service.get_projection_session_activity_summary(
         projection_instance_key,
         date,
         expected_projection_revision=expected_projection_revision,
-        ensure_context=False,
     )
+    rows = list(detail_projection["summary_rows"])
     _apply_live_span_to_rows(
         rows,
         report_model,
@@ -840,7 +712,7 @@ def get_session_activity_summary_view_model(
         "ok": True,
         "date": date,
         "projection_instance_key": projection_instance_key,
-        "resolved_projection_revision": expected_projection_revision or "",
+        "resolved_projection_revision": detail_projection["resolved_projection_revision"],
         "summary_rows": rows,
         "current_activity": current_activity,
         "live_clock": live_clock,
@@ -865,8 +737,8 @@ def get_refresh_state_view_model(report_date: str | None = None) -> RefreshState
     Single-sample contract: the ``current_activity_snapshot`` is read
     EXACTLY ONCE in this function and the resulting ``snapshot`` is passed
     to BOTH :func:`build_activity_display_model` (via ``snapshot=...``)
-    AND :func:`compute_refresh_revision`. This guarantees the returned
-    ``refresh_revision``, ``debug_inputs.current_activity_key``,
+    and the canonical report revision. This guarantees the returned
+    current activity identity,
     ``live_clock``, ``current_activity``, and ``activity_display_model``
     all originate from the same sample — no double-read race.
     """
@@ -880,14 +752,13 @@ def get_refresh_state_view_model(report_date: str | None = None) -> RefreshState
     user_paused = _is_user_paused()
     paused = bool(user_paused) or collector_status == "paused"
     today = timeline_service.get_default_report_date()
-    requested_report_date = report_date or today
-    scoped_report_date = today
+    scoped_report_date = report_date or today
 
     # Pass the already-read snapshot into the display model so it does
-    # NOT re-read the setting. ``refresh_revision`` and ``live_clock``
+    # NOT re-read the setting. The page revision and live clock
     # share the same sample.
     model = build_activity_display_model(
-        report_date=scoped_report_date,
+        report_date=today,
         today=today,
         snapshot=snapshot,
     )
@@ -895,25 +766,25 @@ def get_refresh_state_view_model(report_date: str | None = None) -> RefreshState
     current_activity = model.get("current_activity") or {}
     display_span_id = str(live_clock.get("display_span_id") or "")
 
-    refresh_revision, debug_inputs = compute_refresh_revision(
-        snapshot,
-        collector_status,
-        user_paused,
-        today,
-        scoped_report_date,
-        display_model=model,
+    from .report_projection_snapshot_service import build_visible_snapshot
+
+    report_snapshot = build_visible_snapshot(scoped_report_date, scoped_report_date)
+    current_activity_key = str(current_activity.get("stable_live_key") or live_clock.get("stable_live_key") or "")
+    current_activity_status = str(current_activity.get("status") or live_clock.get("live_state") or "")
+    is_persisted = bool(current_activity.get("is_persisted"))
+    persisted_activity_id = int(current_activity.get("activity_id") or 0)
+    latest_activity_id = persisted_activity_id
+    live_revision = stable_json_hash(
+        {
+            "key": current_activity_key,
+            "status": current_activity_status,
+            "persisted_id": persisted_activity_id,
+            "display_span_id": display_span_id,
+        }
     )
-    current_activity_key = str(debug_inputs.get("current_activity_key") or "")
-    current_activity_status = str(debug_inputs.get("current_status") or "")
-    is_persisted = bool(debug_inputs.get("is_persisted"))
-    persisted_activity_id = int(debug_inputs.get("persisted_id") or 0)
-    latest_activity_id = int(debug_inputs.get("latest_id") or 0)
-    live_clock_revision = str(debug_inputs.get("live_clock_revision") or "")
-    live_state_revision = str(debug_inputs.get("live_state_revision") or "")
-    display_projection_revision = str(
-        debug_inputs.get("display_projection_revision") or ""
+    page_revision = stable_json_hash(
+        [report_snapshot.snapshot_revision, live_revision if scoped_report_date == today else ""]
     )
-    page_structure_revision = str(debug_inputs.get("page_structure_revision") or "")
 
     if paused or collector_status == "paused":
         status_display = "已暂停"
@@ -941,14 +812,10 @@ def get_refresh_state_view_model(report_date: str | None = None) -> RefreshState
         "current_activity_status": current_activity_status,
         "is_persisted": is_persisted,
         "persisted_activity_id": persisted_activity_id,
-        "live_clock_revision": live_clock_revision,
-        "live_state_revision": live_state_revision,
-        "display_projection_revision": display_projection_revision,
-        "page_structure_revision": page_structure_revision,
-        "refresh_revision": refresh_revision,
+        "live_revision": live_revision,
+        "page_revision": page_revision,
         "today": today,
         "report_date": scoped_report_date,
-        "requested_report_date": requested_report_date,
         "latest_activity_id": latest_activity_id,
         # Unified live clock (single source of truth for the frontend).
         "live_clock": live_clock,
@@ -973,6 +840,5 @@ __all__ = [
     "get_overview_view_model",
     "get_refresh_state_view_model",
     "get_session_activity_summary_view_model",
-    "get_session_details_view_model",
     "get_timeline_view_model",
 ]

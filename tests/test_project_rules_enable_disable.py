@@ -188,20 +188,23 @@ def test_toggle_does_not_create_or_delete_projects_rules_or_activity_rows(temp_d
     with get_connection() as conn:
         cur = conn.execute(
             """
-            INSERT INTO report_session_operation(
-                report_date, operation_type, base_instance_key, base_expected_revision, replay_order,
-                match_state, payload_json, created_at, updated_at
-            )
-            VALUES (?, 'edit_session', ?, ?, 1, 'active', ?, ?, ?)
+                INSERT INTO report_session_operation(
+                    report_date, operation_type, source_instance_key, source_expected_revision, sequence,
+                    payload_json, created_at
+                )
+                VALUES (?, 'edit_session', ?, ?, 1, ?, ?)
             """,
             (
                 "2026-06-18",
                 "base:" + "d" * 40,
                 "revision-d",
-                '{"payload_version":3,"note":{"mode":"set","value":"keep"}}',
-                now_str(),
-                now_str(),
+                    '{"payload_version":4,"note":{"mode":"set","value":"keep"}}',
+                    now_str(),
             ),
+        )
+        conn.execute(
+            "INSERT INTO report_session_operation_member(operation_id, role, activity_id, report_date, slice_start_time) VALUES (?, 'source', ?, ?, ?)",
+            (int(cur.lastrowid), activity_id, "2026-06-18", "2026-06-18 09:00:00"),
         )
         conn.execute(
             """INSERT INTO report_mutation_request(
@@ -465,20 +468,23 @@ def test_toggle_does_not_change_history_activity_assignment_or_session_note_rows
     with get_connection() as conn:
         cur = conn.execute(
             """
-            INSERT INTO report_session_operation(
-                report_date, operation_type, base_instance_key, base_expected_revision, replay_order,
-                match_state, payload_json, created_at, updated_at
-            )
-            VALUES (?, 'edit_session', ?, ?, 1, 'active', ?, ?, ?)
+                INSERT INTO report_session_operation(
+                    report_date, operation_type, source_instance_key, source_expected_revision, sequence,
+                    payload_json, created_at
+                )
+                VALUES (?, 'edit_session', ?, ?, 1, ?, ?)
             """,
             (
                 "2026-06-18",
                 "base:" + "e" * 40,
                 "revision-e",
-                '{"payload_version":3,"note":{"mode":"set","value":"keep"}}',
-                now_str(),
-                now_str(),
+                    '{"payload_version":4,"note":{"mode":"set","value":"keep"}}',
+                    now_str(),
             ),
+        )
+        conn.execute(
+            "INSERT INTO report_session_operation_member(operation_id, role, activity_id, report_date, slice_start_time) VALUES (?, 'source', ?, ?, ?)",
+            (int(cur.lastrowid), activity_id, "2026-06-18", "2026-06-18 09:00:00"),
         )
         conn.execute(
             """INSERT INTO report_mutation_request(

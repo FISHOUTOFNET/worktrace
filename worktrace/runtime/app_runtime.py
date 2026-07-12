@@ -22,6 +22,10 @@ from ..collector.collector import CollectorControl, run_collector
 from ..collector.single_instance import acquire_single_instance, release_single_instance
 from ..services import activity_lifecycle_service, folder_index_service, recovery_service
 from ..services.runtime_activity_state_service import record_runtime_boundary
+from ..services.secure_backup_service import (
+    clear_collector_pause_handler,
+    register_collector_pause_handler,
+)
 from ..services.settings_service import set_setting
 
 if TYPE_CHECKING:
@@ -150,6 +154,7 @@ class AppRuntime:
             return {"ok": False, "error": "collector_start_failed"}
         set_setting("collector_status", "running")
         set_setting("collector_health_state", "healthy")
+        register_collector_pause_handler(self.pause_collection_now)
         return {"ok": True, "started": True, "already_running": False}
 
     def pause_collection_now(self, timeout_seconds: float = 5.0) -> dict[str, object]:
@@ -159,10 +164,9 @@ class AppRuntime:
             or self._collector_thread is None
             or not self._collector_thread.is_alive()
         ):
-            set_setting("user_paused", "true")
-            if self.owns_collector:
-                record_runtime_boundary("pause_fallback")
-            return {"ok": False, "pause_pending": True}
+            # There is no live collector writer to acknowledge. The paused
+            # state will be established atomically by the import coordinator.
+            return {"ok": True, "pause_pending": False, "collector_active": False}
         return self.collector_control.request_pause(timeout_seconds=timeout_seconds)
 
     def request_shutdown(self) -> None:
@@ -177,6 +181,7 @@ class AppRuntime:
         if self._shutdown:
             return
         self._shutdown = True
+        clear_collector_pause_handler(self.pause_collection_now)
         self.stop_event.set()
         if self._index_thread:
             self._index_thread.join(timeout=5)

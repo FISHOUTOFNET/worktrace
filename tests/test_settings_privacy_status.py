@@ -122,11 +122,11 @@ def test_api_secure_import_in_progress_field_is_bool(temp_db) -> None:
 
 
 def test_api_secure_import_in_progress_reflects_backup_guard(temp_db) -> None:
-    set_setting("secure_import_in_progress", "true")
-    status = get_settings_privacy_status()["status"]
-    assert status["secure_import_in_progress"] is True
+    from worktrace.services.secure_backup_service import SECURE_IMPORT_COORDINATOR
 
-    set_setting("secure_import_in_progress", "false")
+    with SECURE_IMPORT_COORDINATOR.acquire():
+        status = get_settings_privacy_status()["status"]
+        assert status["secure_import_in_progress"] is True
     status = get_settings_privacy_status()["status"]
     assert status["secure_import_in_progress"] is False
 

@@ -219,12 +219,6 @@ def _after_clipboard_change(activity_id: int, copied_at: str) -> None:
         assign_project_for_activity(activity_id)
     except Exception:
         pass
-    try:
-        from .context_service import invalidate_context_recompute_cache
-
-        invalidate_context_recompute_cache(str(copied_at or "")[:10] or None)
-    except Exception:
-        pass
 
 
 def _hash_text(text: str) -> str:

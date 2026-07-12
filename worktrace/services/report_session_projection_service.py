@@ -10,52 +10,30 @@ from .report_projection_identity import base_projection_key, member_identity_key
 
 def get_report_sessions_by_date(
     date: str,
-    *,
-    include_hidden: bool = False,
-    ensure_context: bool = False,
 ) -> list[dict]:
-    return get_report_sessions_by_range(
-        date,
-        date,
-        include_hidden=include_hidden,
-        ensure_context=ensure_context,
-    )
+    return get_report_sessions_by_range(date, date)
 
 
-def get_visible_report_sessions_by_date(date: str, *, ensure_context: bool = False) -> list[dict]:
+def get_visible_report_sessions_by_date(date: str) -> list[dict]:
     """The sole UI/report projection scope: hidden raw activity is excluded."""
-    return get_report_sessions_by_date(date, include_hidden=False, ensure_context=ensure_context)
+    return get_report_sessions_by_date(date)
 
 
-def get_visible_report_sessions_for_operations_by_date(date: str, *, ensure_context: bool = False) -> list[dict]:
+def get_visible_report_sessions_for_operations_by_date(date: str) -> list[dict]:
     """Visible canonical sessions for resolvers and contribution consumers."""
-    return get_report_sessions_for_operations(
-        date, date, include_hidden=False, ensure_context=ensure_context
-    )
+    return get_report_sessions_for_operations(date, date)
 
 
 def get_report_sessions_by_range(
     start_date: str,
     end_date: str,
-    *,
-    include_hidden: bool = False,
-    ensure_context: bool = False,
 ) -> list[dict]:
-    sessions = get_report_sessions_for_operations(
-        start_date,
-        end_date,
-        include_hidden=include_hidden,
-        ensure_context=ensure_context,
-    )
-    return [_public_session(session) for session in sessions]
+    return [public_session_dto(session) for session in get_report_sessions_for_operations(start_date, end_date)]
 
 
 def get_report_sessions_for_operations(
     start_date: str,
     end_date: str,
-    *,
-    include_hidden: bool = True,
-    ensure_context: bool = False,
 ) -> list[dict]:
     """Build final sessions including private, display-safe contribution slices.
 
@@ -63,11 +41,9 @@ def get_report_sessions_for_operations(
     aggregation.  The public session entry strips the contribution payload so
     Timeline cards never receive row-level data they do not render.
     """
-    if include_hidden:
-        raise ValueError("include_hidden report projection writes are not supported")
     from .report_projection_snapshot_service import build_visible_snapshot
 
-    snapshot = build_visible_snapshot(start_date, end_date, ensure_context=ensure_context)
+    snapshot = build_visible_snapshot(start_date, end_date)
     projected = [
         session
         for session in snapshot.final_sessions
@@ -81,33 +57,21 @@ def get_report_sessions_for_operations(
 def get_projected_activity_contributions_by_range(
     start_date: str,
     end_date: str,
-    *,
-    include_hidden: bool = False,
-    ensure_context: bool = False,
 ) -> list[dict]:
     from .report_projection_snapshot_service import build_visible_snapshot
 
-    if include_hidden:
-        raise ValueError("include_hidden report projection writes are not supported")
-    return build_visible_snapshot(start_date, end_date, ensure_context=ensure_context).final_contributions
+    return list(build_visible_snapshot(start_date, end_date).final_contributions)
 
 
 def resolve_current_session(
     report_date: str,
     activity_ids: list[int],
     activity_member_hash: str,
-    *,
-    include_hidden: bool = False,
-    ensure_context: bool = False,
 ) -> dict:
     ids = {int(aid) for aid in activity_ids}
     if not report_date or not ids or not activity_member_hash:
         raise ValueError("invalid_session_identity")
-    sessions = get_report_sessions_by_date(
-        report_date,
-        include_hidden=include_hidden,
-        ensure_context=ensure_context,
-    )
+    sessions = get_report_sessions_by_date(report_date)
     for session in sessions:
         if str(session.get("activity_member_hash") or "") != str(activity_member_hash):
             continue
@@ -137,7 +101,6 @@ def _attach_projection_defaults(session: dict) -> None:
             "projection_kind": "base",
             "operation_id": None,
             "origin_activity_member_hashes": [member_hash] if member_hash else [],
-            "operation_match_state": "active",
             "can_hide": bool(session.get("editable")),
             "can_merge_previous": False,
             "can_merge_next": False,
@@ -208,23 +171,33 @@ def _attach_detail_revision(session: dict) -> None:
     session["projection_revision"] = projection_revision(session)
 
 
-def _public_session(session: dict) -> dict:
-    return {key: value for key, value in session.items() if not key.startswith("_projection_")}
+_PUBLIC_SESSION_FIELDS = (
+    "row_kind", "report_date", "projection_instance_key", "projection_revision",
+    "projection_kind", "operation_id", "project_id", "project_name",
+    "project_description", "project_is_deleted", "project_is_archived",
+    "project_is_enabled", "is_official_project", "report_attribution_kind",
+    "is_report_project", "is_report_classified", "is_report_uncategorized",
+    "is_classified", "is_uncategorized", "contributes_to_totals",
+    "start_time", "end_time", "duration_seconds", "closed_duration_seconds",
+    "adjusted_duration_seconds", "has_duration_override", "session_note",
+    "has_project_override",
+    "is_in_progress", "editable", "exportable", "activity_ids", "member_slices",
+    "activity_member_hash", "anchor_activity_id", "first_activity_id", "event_count",
+    "status", "status_code", "status_summary", "can_hide", "can_copy",
+    "can_hide_activity", "can_merge_previous", "can_merge_next", "can_split",
+)
+
+
+def public_session_dto(session: dict) -> dict:
+    """Explicit WebView/report boundary; private engine fields are never inferred."""
+    return {field: session.get(field) for field in _PUBLIC_SESSION_FIELDS}
 
 
 def _attach_raw_final_defaults(session: dict, uncategorized_id: int) -> None:
-    raw_project_id = int(session.get("project_id") or uncategorized_id)
-    raw_project_name = str(session.get("project_name") or UNCATEGORIZED_PROJECT)
-    raw_project_description = str(session.get("project_description") or "")
-    raw_duration = int(session.get("duration_seconds") or 0)
-    session["raw_assignment_project_id"] = raw_project_id
-    session["raw_assignment_project_name"] = raw_project_name
-    session["raw_assignment_project_description"] = raw_project_description
-    session["raw_duration_seconds"] = raw_duration
-    session["display_duration_seconds"] = raw_duration
+    session["project_id"] = int(session.get("project_id") or uncategorized_id)
+    session["project_name"] = str(session.get("project_name") or UNCATEGORIZED_PROJECT)
+    session["project_description"] = str(session.get("project_description") or "")
     session["adjusted_duration_seconds"] = None
-    session["override_id"] = None
-    session["override_match_state"] = None
     session["has_project_override"] = False
     session["has_duration_override"] = False
     session["project_is_deleted"] = bool(session.get("project_is_deleted"))
@@ -234,14 +207,8 @@ def _attach_raw_final_defaults(session: dict, uncategorized_id: int) -> None:
 
 def _finalize_session(session: dict, uncategorized_id: int) -> None:
     original_closed_duration = int(session.get("closed_duration_seconds") or 0)
-    display_duration = int(
-        session.get("display_duration_seconds")
-        if session.get("display_duration_seconds") is not None
-        else session.get("raw_duration_seconds")
-        or 0
-    )
+    display_duration = int(session.get("duration_seconds") or 0)
     session["duration_seconds"] = display_duration
-    session["display_duration_seconds"] = display_duration
     if bool(session.get("is_in_progress")):
         session["closed_duration_seconds"] = original_closed_duration
     else:

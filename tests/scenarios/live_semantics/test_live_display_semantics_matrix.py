@@ -21,7 +21,7 @@ def test_normal_activity_is_persisted_open_on_its_first_sample(live):
     assert len(rows) == 1 and rows[0]["end_time"] is None
     pages = live.pages(details_ids=[int(rows[0]["id"])])
     assert pages["overview"]["live_clock"]["live_state"] == "persisted_open"
-    assert pages["timeline"]["sessions"][0]["open_activity_id"] == rows[0]["id"]
+    assert pages["timeline"]["entries"][0]["open_activity_id"] == rows[0]["id"]
 
 
 def test_window_switch_closes_the_previous_row_and_opens_its_own_row(live):

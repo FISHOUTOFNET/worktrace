@@ -45,7 +45,7 @@ def test_manifest_is_parseable() -> None:
     manifest = parse_backup_manifest(blob)
 
     assert isinstance(manifest, BackupManifest)
-    assert manifest.version == 3
+    assert manifest.version == 4
     assert manifest.app_version == "0.2-test"
     assert manifest.kdf.algorithm == "scrypt"
     assert manifest.payload_format == "wtenc1"

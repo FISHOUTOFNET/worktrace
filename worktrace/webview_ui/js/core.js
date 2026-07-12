@@ -52,15 +52,10 @@
     App.timelineEpoch = 0;
     App.selectionEpoch = 0;
     App.detailsOwner = null;
-    App.selectedSessionId = null;
-    // Stable live key for the selected session. Selection continuity: stable_live_key_hash stays the same
-    // when the backend refreshes a persisted-open session identity.
-    App.selectedSessionLiveKey = null;
     App.selectedProjectionRevision = null;
 
     // races a manual refresh.
     App.timelineRequestToken = 0;
-    App.detailsRequestToken = 0;
     App.detailsInFlight = {};
     App.overviewRequestToken = 0;
     App.recentRequestToken = 0;
@@ -258,7 +253,7 @@
 
     function handleResult(result, onError) {
         if (result && result.ok === false) {
-            onError(result.error || "操作失败");
+            onError(result.message || "操作失败", result.error || "operation_failed");
             return null;
         }
         return result;
@@ -630,11 +625,8 @@
                 || (clock && clock.stable_live_key_hash)
                 || ""
             ),
-            refreshRevision: String(payload.refresh_revision || ""),
-            liveClockRevision: String(payload.live_clock_revision || payload.live_state_revision || ""),
-            liveStateRevision: String(payload.live_state_revision || payload.live_clock_revision || ""),
-            displayProjectionRevision: String(payload.display_projection_revision || ""),
-            pageStructureRevision: String(payload.page_structure_revision || ""),
+            liveRevision: String(payload.live_revision || ""),
+            pageRevision: String(payload.page_revision || ""),
             sampleId: String(payload.sample_id || ""),
             currentActivityDisplaySpanId: String(current.current_activity_display_span_id || ""),
             currentResourceIdentityHash: String(current.current_resource_identity_hash || "")
@@ -684,11 +676,8 @@
             liveClock: incomingClock,
             displaySpanId: identity.displaySpanId,
             stableLiveKeyHash: identity.stableLiveKeyHash,
-            refreshRevision: identity.refreshRevision,
-            liveClockRevision: identity.liveClockRevision,
-            liveStateRevision: identity.liveStateRevision,
-            displayProjectionRevision: identity.displayProjectionRevision,
-            pageStructureRevision: identity.pageStructureRevision,
+            liveRevision: identity.liveRevision,
+            pageRevision: identity.pageRevision,
             sampleId: identity.sampleId,
             currentActivityDisplaySpanId: identity.currentActivityDisplaySpanId,
             currentResourceIdentityHash: identity.currentResourceIdentityHash
@@ -733,11 +722,8 @@
             liveClock: existing.liveClock || null,
             displaySpanId: existing.displaySpanId || "",
             stableLiveKeyHash: existing.stableLiveKeyHash || "",
-            refreshRevision: existing.refreshRevision || "",
-            liveClockRevision: existing.liveClockRevision || "",
-            liveStateRevision: existing.liveStateRevision || "",
-            displayProjectionRevision: existing.displayProjectionRevision || "",
-            pageStructureRevision: existing.pageStructureRevision || "",
+            liveRevision: existing.liveRevision || "",
+            pageRevision: existing.pageRevision || "",
             sampleId: existing.sampleId || "",
             currentActivityDisplaySpanId: existing.currentActivityDisplaySpanId || "",
             currentResourceIdentityHash: existing.currentResourceIdentityHash || ""
@@ -810,8 +796,7 @@
     App.noteRejectedPagePayload = noteRejectedPagePayload;
 
     // SINGLE SOURCE OF TRUTH for live-row continuity keys. Uses ``stable_live_key_hash`` so the key
-    // survives persisted-open refreshes (session_id / activity_id
-    // change across the transition; stable_live_key_hash does not).
+    // survives persisted-open refreshes.
     //
     // The same key MUST be used for both render seeding and ticker updates —
     // a mismatch (e.g. render seeds ``recent:live:<hash>`` while the ticker
@@ -826,8 +811,8 @@
         if (item.display_span_id) {
             return prefix + ":span:" + item.display_span_id;
         }
-        if (item.session_id) {
-            return prefix + ":" + item.session_id;
+        if (item.projection_instance_key) {
+            return prefix + ":" + item.projection_instance_key;
         }
         if (item.activity_id) {
             return prefix + ":" + item.activity_id;

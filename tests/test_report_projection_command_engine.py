@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+from copy import deepcopy
+
 from worktrace.services import report_session_operation_engine as engine
+from worktrace.services.report_projection_model import ProjectState
+
+
+DATE = "2026-06-25"
 
 
 def _session(key: str, aid: int, start: str, seconds: int, project_id: int = 1) -> dict:
     return {
         "row_kind": "project_session",
-        "report_date": "2026-06-25",
+        "report_date": DATE,
         "projection_instance_key": key,
         "projection_kind": "base",
         "project_id": project_id,
@@ -18,20 +24,12 @@ def _session(key: str, aid: int, start: str, seconds: int, project_id: int = 1) 
         "editable": True,
         "exportable": True,
         "is_in_progress": False,
-        "member_slices": [
-            {
-                "report_date": "2026-06-25",
-                "activity_id": aid,
-                "slice_start_time": start,
-                "slice_end_time": "2026-06-25 09:10:00",
-            }
-        ],
+        "member_slices": [{"report_date": DATE, "activity_id": aid, "slice_start_time": start}],
         "_projection_contributions": [
             {
-                "report_date": "2026-06-25",
+                "report_date": DATE,
                 "activity_id": aid,
                 "slice_start_time": start,
-                "slice_end_time": "2026-06-25 09:10:00",
                 "duration_seconds": seconds,
                 "activity_identity_key": f"activity:{aid}",
                 "status": "normal",
@@ -40,89 +38,152 @@ def _session(key: str, aid: int, start: str, seconds: int, project_id: int = 1) 
     }
 
 
-def _edit(op_id: int, key: str, payload: dict) -> dict:
+def _member(aid: int, start: str) -> dict:
+    return {"report_date": DATE, "activity_id": aid, "slice_start_time": start}
+
+
+def _operation(op_id: int, kind: str, source: dict, **values) -> dict:
     return {
         "id": op_id,
-        "replay_order": op_id,
-        "operation_type": "edit_session",
-        "base_instance_key": key,
-        "match_state": "active",
-        "payload": {"payload_version": 3, **payload},
+        "report_date": DATE,
+        "sequence": op_id,
+        "operation_type": kind,
+        "source_instance_key": source["projection_instance_key"],
+        "source_expected_revision": source["projection_revision"],
+        "payload": {"payload_version": engine.OPERATION_PAYLOAD_VERSION},
+        "members": {"source": source["member_slices"]},
+        **values,
     }
 
 
-def test_duration_override_then_hide_activity_allocates_from_projected_contribution():
-    session = _session("base:a", 1, "2026-06-25 09:00:00", 600)
-    session["member_slices"].append(
-        {
-            "report_date": "2026-06-25",
-            "activity_id": 2,
-            "slice_start_time": "2026-06-25 09:10:00",
-            "slice_end_time": "2026-06-25 09:20:00",
-        }
+def _project(name: str = "P1", **changes) -> ProjectState:
+    values = dict(
+        project_id=1,
+        project_name=name,
+        project_description="description",
+        is_deleted=False,
+        is_archived=False,
+        is_enabled=True,
+        is_system=False,
+        is_special=False,
+        is_report_project=True,
+        is_report_classified=True,
+        is_report_uncategorized=False,
+        is_official_project=True,
+        report_attribution_kind="direct",
+        project_key="project:1",
+        report_project_key="project:1",
     )
-    session["_projection_contributions"].append(
-        {
-            "report_date": "2026-06-25",
-            "activity_id": 2,
-            "slice_start_time": "2026-06-25 09:10:00",
-            "slice_end_time": "2026-06-25 09:20:00",
-            "duration_seconds": 600,
-            "activity_identity_key": "activity:2",
-            "status": "normal",
-        }
-    )
-    result = engine.apply_operations(
-        [session],
-        [
-            _edit(1, "base:a", {"duration": {"mode": "set", "value": 600}}),
-            {
-                "id": 2,
-                "replay_order": 2,
-                "operation_type": "hide_activity",
-                "base_instance_key": "base:a",
-                "match_state": "active",
-                "members": {
-                    "affected": [
-                        {
-                            "report_date": "2026-06-25",
-                            "activity_id": 1,
-                            "slice_start_time": "2026-06-25 09:00:00",
-                            "slice_end_time": "2026-06-25 09:10:00",
-                        }
-                    ]
-                },
-            },
-        ],
-    )
-
-    assert len(result) == 1
-    assert result[0]["duration_seconds"] == 300
-    assert sum(row["duration_seconds"] for row in engine.build_projected_activity_contributions(result)) == 300
+    values.update(changes)
+    return ProjectState(**values)
 
 
-def test_copy_edit_does_not_change_origin_and_merge_edit_is_independent():
-    left = _session("base:left", 1, "2026-06-25 09:00:00", 600, project_id=1)
-    right = _session("base:right", 2, "2026-06-25 09:10:00", 600, project_id=2)
-    result = engine.apply_operations(
-        [left, right],
-        [
-            {"id": 1, "replay_order": 1, "operation_type": "copy_session", "base_instance_key": "base:left", "match_state": "active"},
-            _edit(2, "copy:1", {"note": {"mode": "set", "value": "copy note"}}),
-            {
-                "id": 3,
-                "replay_order": 3,
-                "operation_type": "merge_sessions",
-                "base_instance_key": "base:left",
-                "target_instance_key": "base:right",
-                "match_state": "active",
-            },
-            _edit(4, "merge:3", {"duration": {"mode": "set", "value": 900}}),
-        ],
+def test_replay_is_deterministic_and_does_not_modify_inputs():
+    base = [_session("base:a", 1, f"{DATE} 09:00:00", 600)]
+    prepared = engine.replay_operations(base, []).final_entries[0]
+    operation = _operation(
+        1,
+        "edit_session",
+        prepared,
+        payload={"payload_version": 4, "note": {"mode": "set", "value": "note"}},
     )
+    before_base, before_operation = deepcopy(base), deepcopy(operation)
+    first = engine.replay_operations(base, [operation])
+    second = engine.replay_operations(base, [operation])
+    assert first == second
+    assert base == before_base
+    assert operation == before_operation
+    assert first.operation_diagnostics[0].state == engine.APPLIED
 
-    by_key = {row["projection_instance_key"]: row for row in result}
-    assert by_key["copy:1"]["session_note"] == "copy note"
-    assert by_key["merge:3"]["duration_seconds"] == 900
-    assert "base:left" not in by_key
-    assert sum(row["duration_seconds"] for row in engine.build_projected_activity_contributions([by_key["merge:3"]])) == 900
+
+def test_project_state_changes_revision_but_live_elapsed_does_not():
+    live = _session("base:a", 1, f"{DATE} 09:00:00", 10)
+    live["is_in_progress"] = True
+    first = engine.replay_operations([live], [], [_project()]).final_entries[0]
+    live["_projection_contributions"][0]["duration_seconds"] = 999
+    second = engine.replay_operations([live], [], [_project()]).final_entries[0]
+    renamed = engine.replay_operations([live], [], [_project(name="Renamed")]).final_entries[0]
+    assert first["projection_revision"] == second["projection_revision"]
+    assert first["projection_revision"] != renamed["projection_revision"]
+
+
+def test_merge_revalidates_adjacency_direction_and_revisions():
+    base = [
+        _session("base:left", 1, f"{DATE} 09:00:00", 600),
+        _session("base:middle", 2, f"{DATE} 09:10:00", 600),
+        _session("base:right", 3, f"{DATE} 09:20:00", 600),
+    ]
+    prepared = {row["projection_instance_key"]: row for row in engine.replay_operations(base, []).final_entries}
+    invalid = _operation(
+        1,
+        "merge_sessions",
+        prepared["base:left"],
+        target_instance_key="base:right",
+        target_expected_revision=prepared["base:right"]["projection_revision"],
+        direction="next",
+        members={"source": prepared["base:left"]["member_slices"], "target": prepared["base:right"]["member_slices"]},
+    )
+    result = engine.replay_operations(base, [invalid])
+    assert result.operation_diagnostics[0].reason == "session_not_adjacent"
+    assert len(result.final_entries) == 3
+    invalid["target_instance_key"] = "base:middle"
+    invalid["members"]["target"] = prepared["base:middle"]["member_slices"]
+    invalid["target_expected_revision"] = "stale"
+    result = engine.replay_operations(base, [invalid])
+    assert result.operation_diagnostics[0].reason == "target_revision_conflict"
+
+
+def test_strict_member_recovery_distinguishes_conflict_and_orphaned():
+    base = [_session("base:current", 1, f"{DATE} 09:00:00", 600)]
+    prepared = engine.replay_operations(base, []).final_entries[0]
+    recovered = _operation(1, "hide_session", prepared)
+    recovered["source_instance_key"] = "base:old-key"
+    assert engine.replay_operations(base, [recovered]).operation_diagnostics[0].state == engine.APPLIED
+    partial = deepcopy(recovered)
+    partial["members"]["source"].append(_member(2, f"{DATE} 09:10:00"))
+    assert engine.replay_operations(base, [partial]).operation_diagnostics[0].state == engine.CONFLICT
+    missing = deepcopy(recovered)
+    missing["members"]["source"] = [_member(9, f"{DATE} 10:00:00")]
+    assert engine.replay_operations(base, [missing]).operation_diagnostics[0].state == engine.ORPHANED
+
+
+def test_split_supersedes_merge_and_all_descendants_without_virtual_entry():
+    base = [
+        _session("base:left", 1, f"{DATE} 09:00:00", 600),
+        _session("base:right", 2, f"{DATE} 09:10:00", 600),
+    ]
+    prepared = {row["projection_instance_key"]: row for row in engine.replay_operations(base, []).final_entries}
+    merge = _operation(
+        1,
+        "merge_sessions",
+        prepared["base:left"],
+        target_instance_key="base:right",
+        target_expected_revision=prepared["base:right"]["projection_revision"],
+        direction="next",
+        members={"source": prepared["base:left"]["member_slices"], "target": prepared["base:right"]["member_slices"]},
+    )
+    merged = engine.replay_operations(base, [merge]).final_entries[0]
+    edit = _operation(
+        2,
+        "edit_session",
+        merged,
+        payload={"payload_version": 4, "note": {"mode": "set", "value": "descendant"}},
+    )
+    edited = engine.replay_operations(base, [merge, edit]).final_entries[0]
+    split = _operation(3, "split_session", edited, undo_of_operation_id=1)
+    result = engine.replay_operations(base, [merge, edit, split])
+    assert [row["projection_instance_key"] for row in result.final_entries] == ["base:left", "base:right"]
+    assert [item.state for item in result.operation_diagnostics] == [
+        engine.SUPERSEDED_BY_UNDO,
+        engine.SUPERSEDED_BY_UNDO,
+        engine.APPLIED,
+    ]
+
+
+def test_invalid_edit_payload_is_diagnostic_only():
+    base = [_session("base:a", 1, f"{DATE} 09:00:00", 600)]
+    prepared = engine.replay_operations(base, []).final_entries[0]
+    operation = _operation(1, "edit_session", prepared, payload={"payload_version": 999, "note": {"mode": "set", "value": "x"}})
+    result = engine.replay_operations(base, [operation])
+    assert result.operation_diagnostics[0].reason == "invalid_payload"
+    assert "_applied_commands" not in result.final_entries[0]

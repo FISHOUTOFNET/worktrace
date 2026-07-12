@@ -34,14 +34,14 @@ ON activity_project_assignment(source, is_manual);
 CREATE INDEX IF NOT EXISTS idx_assignment_source_rule
 ON activity_project_assignment(source_rule_type, source_rule_id, is_manual);
 
-CREATE INDEX IF NOT EXISTS idx_report_session_operation_date_state
-ON report_session_operation(report_date, match_state, replay_order, id);
+CREATE INDEX IF NOT EXISTS idx_report_session_operation_date_sequence
+ON report_session_operation(report_date, sequence, id);
 
 CREATE INDEX IF NOT EXISTS idx_report_session_operation_instance
-ON report_session_operation(report_date, base_instance_key, match_state);
+ON report_session_operation(report_date, source_instance_key);
 
 CREATE INDEX IF NOT EXISTS idx_report_session_operation_target
-ON report_session_operation(report_date, target_instance_key, match_state);
+ON report_session_operation(report_date, target_instance_key);
 
 CREATE INDEX IF NOT EXISTS idx_report_mutation_request_operation
 ON report_mutation_request(operation_id);
@@ -51,12 +51,6 @@ ON report_session_operation_member(activity_id, report_date);
 
 CREATE INDEX IF NOT EXISTS idx_report_session_operation_member_role
 ON report_session_operation_member(operation_id, role);
-
-CREATE INDEX IF NOT EXISTS idx_report_session_operation_dependency_child
-ON report_session_operation_dependency(child_operation_id);
-
-CREATE INDEX IF NOT EXISTS idx_report_session_operation_supersession_superseding
-ON report_session_operation_supersession(superseding_operation_id);
 
 CREATE INDEX IF NOT EXISTS idx_project_rule_pattern
 ON project_rule(pattern);

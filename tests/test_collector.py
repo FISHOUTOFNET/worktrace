@@ -282,7 +282,7 @@ def test_collector_skips_active_window_when_import_guard_active(temp_db, monkeyp
 
     settings_service.set_setting("first_run_notice_accepted", "true")
     settings_service.set_setting("user_paused", "false")
-    settings_service.set_setting("secure_import_in_progress", "true")
+    monkeypatch.setattr(collector_mod, "is_secure_import_in_progress", lambda: True)
     settings_service.set_setting("poll_interval_seconds", "1")
     settings_service.set_setting("current_activity_snapshot", '{"status":"normal"}')
     adapter = RaisingAdapter()
@@ -301,7 +301,7 @@ def test_collector_skips_active_window_when_import_guard_active(temp_db, monkeyp
 def test_no_new_activity_during_import_guard(temp_db, monkeypatch):
     settings_service.set_setting("first_run_notice_accepted", "true")
     settings_service.set_setting("user_paused", "false")
-    settings_service.set_setting("secure_import_in_progress", "true")
+    monkeypatch.setattr(collector_mod, "is_secure_import_in_progress", lambda: True)
     settings_service.set_setting("poll_interval_seconds", "1")
     settings_service.set_setting("idle_threshold_seconds", "60")
 
@@ -325,7 +325,7 @@ def test_no_real_title_path_stored_during_import_guard(temp_db, monkeypatch):
 
     settings_service.set_setting("first_run_notice_accepted", "true")
     settings_service.set_setting("user_paused", "false")
-    settings_service.set_setting("secure_import_in_progress", "true")
+    monkeypatch.setattr(collector_mod, "is_secure_import_in_progress", lambda: True)
     settings_service.set_setting("poll_interval_seconds", "1")
     settings_service.set_setting("idle_threshold_seconds", "60")
 

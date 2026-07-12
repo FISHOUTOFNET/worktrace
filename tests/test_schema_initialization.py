@@ -1,5 +1,7 @@
 from worktrace import db
 from worktrace.constants import EXCLUDED_PROJECT, UNCATEGORIZED_PROJECT
+from worktrace.db import now_str
+import sqlite3
 import pytest
 
 pytestmark = [pytest.mark.db, pytest.mark.contract]
@@ -82,8 +84,9 @@ def test_new_database_has_current_schema_and_defaults(temp_db):
     assert exclude_rule_count["c"] == 0
     assert "midnight_anchor" in assignment_schema
     assert "keyword_rule" in assignment_schema
-    assert "clipboard_transition_context" in assignment_schema
-    assert "same_project_context" in assignment_schema
+    assert "clipboard_transition_context" not in assignment_schema
+    assert "anchor_context" not in assignment_schema
+    assert "same_project_context" not in assignment_schema
     assert "source_rule_type" in assignment_schema
     assert "anchor_keyword" not in assignment_schema
     assert "anchor_resource_default" not in assignment_schema
@@ -95,11 +98,51 @@ def test_report_session_operation_has_user_command_columns(temp_db):
         columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(report_session_operation)").fetchall()}
         member_columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(report_session_operation_member)").fetchall()}
         assert "operation_type" in columns
-        assert "base_instance_key" in columns
-        assert "replay_order" in columns
+        assert "source_instance_key" in columns
+        assert "sequence" in columns
         assert "payload_json" in columns
-        assert "match_state" in columns
+        assert "match_state" not in columns
+        assert "undo_of_operation_id" in columns
         assert "slice_start_time" in member_columns
+
+
+def test_same_version_schema_drift_fails_closed(tmp_path):
+    path = tmp_path / "drift.db"
+    db.configure_database(path)
+    with db.get_connection() as conn:
+        conn.execute("CREATE TABLE project(id INTEGER PRIMARY KEY)")
+        conn.execute(f"PRAGMA user_version = {db.CURRENT_SCHEMA_VERSION}")
+    with pytest.raises(ValueError, match="database_schema_incompatible"):
+        db.initialize_database(path)
+
+
+def test_operation_and_receipt_json_and_cardinality_constraints(temp_db):
+    timestamp = now_str()
+    with db.get_connection() as conn:
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                """INSERT INTO report_session_operation(
+                    report_date, sequence, operation_type, source_instance_key,
+                    source_expected_revision, payload_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                ("2026-07-01", 1, "hide_session", "base:a", "revision", "not-json", timestamp),
+            )
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                """INSERT INTO report_session_operation(
+                    report_date, sequence, operation_type, source_instance_key,
+                    source_expected_revision, payload_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                ("2026-07-01", 1, "merge_sessions", "base:a", "revision", '{"payload_version":4}', timestamp),
+            )
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                """INSERT INTO report_mutation_request(
+                    request_id, input_signature, outcome_type, operation_id,
+                    result_json, created_at, committed_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                ("request", "signature", "no_op", 1, "{}", timestamp, timestamp),
+            )
 
 
 def test_reset_database_clears_current_schema_tables(temp_db):

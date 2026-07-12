@@ -36,25 +36,15 @@ class StatisticsSummaryError(ValueError):
 def get_summary(
     start_date: str,
     end_date: str,
-    ensure_context: bool = True,
 ) -> dict[str, Any]:
-    return statistics_service.get_summary(
-        start_date,
-        end_date,
-        ensure_context=ensure_context,
-    )
+    return statistics_service.get_summary(start_date, end_date)
 
 
 def get_project_stats(
     start_date: str,
     end_date: str,
-    ensure_context: bool = True,
 ) -> list[dict[str, Any]]:
-    return statistics_service.get_project_stats(
-        start_date,
-        end_date,
-        ensure_context=ensure_context,
-    )
+    return statistics_service.get_project_stats(start_date, end_date)
 
 
 def get_uncategorized_duration(start_date: str, end_date: str) -> int:

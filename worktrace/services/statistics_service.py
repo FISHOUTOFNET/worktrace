@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date
 
 from ..constants import STATUS_EXCLUDED, STATUS_IDLE, STATUS_NORMAL, STATUS_PAUSED, UNCATEGORIZED_PROJECT
 from ..formatters import format_status_label
@@ -19,7 +19,7 @@ STATISTICS_SUMMARY_MAX_RANGE_DAYS = 31
 _UNKNOWN_APP_LABEL = "未知应用"
 
 
-def get_summary(start_date: str, end_date: str, ensure_context: bool = False) -> dict:
+def get_summary(start_date: str, end_date: str) -> dict:
     """Return a DB-only statistics summary for the inclusive date range.
 
     This function is DB-ONLY. It does NOT project the current live
@@ -30,7 +30,7 @@ def get_summary(start_date: str, end_date: str, ensure_context: bool = False) ->
     guarantees the KPI base, the recent items, and the live clock all
     share one sample.
     """
-    projection = _build_projection(start_date, end_date, ensure_context=ensure_context)
+    projection = _build_projection(start_date, end_date)
     by_status = {str(row["key"]): int(row["duration_seconds"]) for row in projection.by_status}
     return {
         "total_duration": projection.total_duration_seconds,
@@ -43,7 +43,7 @@ def get_summary(start_date: str, end_date: str, ensure_context: bool = False) ->
     }
 
 
-def get_project_stats(start_date: str, end_date: str, ensure_context: bool = False) -> list[dict]:
+def get_project_stats(start_date: str, end_date: str) -> list[dict]:
     """Return DB-only per-project statistics for the inclusive date range.
 
     This function is DB-ONLY. It does NOT project the current live
@@ -51,7 +51,7 @@ def get_project_stats(start_date: str, end_date: str, ensure_context: bool = Fal
     of those live semantics are owned by
     :mod:`worktrace.services.activity_display_model_service`.
     """
-    projection = _build_projection(start_date, end_date, ensure_context=ensure_context)
+    projection = _build_projection(start_date, end_date)
     return [
         {
             "project": row["display_name"],
@@ -70,19 +70,11 @@ def get_uncategorized_duration(start_date: str, end_date: str) -> int:
     )
 
 
-def _ensure_context_range(start_date: str, end_date: str) -> None:
-    current = date.fromisoformat(start_date) - timedelta(days=1)
-    final = date.fromisoformat(end_date)
-    while current <= final:
-        recompute_context_assignments_for_date(current.isoformat())
-        current += timedelta(days=1)
-
-
-def _build_projection(start_date: str, end_date: str, *, ensure_context: bool = False):
+def _build_projection(start_date: str, end_date: str):
     from .report_projection_snapshot_service import build_visible_snapshot
     from .statistics_projection import build_statistics_projection
 
-    return build_statistics_projection(build_visible_snapshot(start_date, end_date, ensure_context=ensure_context))
+    return build_statistics_projection(build_visible_snapshot(start_date, end_date))
 
 
 def get_statistics_export_summary(date_from: str, date_to: str) -> dict:
@@ -103,7 +95,7 @@ def get_statistics_export_summary(date_from: str, date_to: str) -> dict:
     from .report_projection_snapshot_service import build_visible_snapshot
     from .statistics_projection import build_statistics_projection
 
-    projection = build_statistics_projection(build_visible_snapshot(date_from, date_to, ensure_context=False))
+    projection = build_statistics_projection(build_visible_snapshot(date_from, date_to))
     return {
         "date_from": date_from,
         "date_to": date_to,
@@ -118,9 +110,9 @@ def get_statistics_export_summary(date_from: str, date_to: str) -> dict:
         "export_row_count": projection.export_row_count,
         "project_count": len(projection.by_project),
         "app_count": len(projection.by_app),
-        "by_project": projection.by_project,
-        "by_app": projection.by_app,
-        "by_status": projection.by_status,
+        "by_project": list(projection.by_project),
+        "by_app": list(projection.by_app),
+        "by_status": list(projection.by_status),
         "export_preview": {
             "date_from": date_from,
             "date_to": date_to,

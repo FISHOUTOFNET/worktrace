@@ -59,7 +59,7 @@ def resource_row(activity_id: int) -> dict | None:
 
 def assign_activity_project(activity_id: int, project_id: int, *, manual: bool = True) -> None:
     ts = now_str()
-    source = "manual" if manual else "anchor_context"
+    source = "manual" if manual else "folder_rule"
     confidence = 100 if manual else 60
     with get_connection() as conn:
         conn.execute(

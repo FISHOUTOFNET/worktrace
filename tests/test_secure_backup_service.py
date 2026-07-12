@@ -115,11 +115,11 @@ def _seed_test_data() -> None:
         cur = conn.execute(
             """
             INSERT INTO report_session_operation(
-                report_date, operation_type, base_instance_key, base_expected_revision,
-                target_instance_key, target_expected_revision, direction, replay_order, match_state,
-                payload_json, created_at, updated_at
+                report_date, operation_type, source_instance_key, source_expected_revision,
+                target_instance_key, target_expected_revision, direction, sequence,
+                payload_json, created_at
             )
-            VALUES (?, 'edit_session', ?, ?, NULL, NULL, NULL, 1, 'active', ?, ?, ?)
+            VALUES (?, 'edit_session', ?, ?, NULL, NULL, NULL, 1, ?, ?)
             """,
             (
                 "2026-06-25",
@@ -127,7 +127,7 @@ def _seed_test_data() -> None:
                 "b" * 40,
                 json.dumps(
                     {
-                            "payload_version": 3,
+                        "payload_version": 4,
                         "project": {"mode": "set", "project_id": project_id},
                         "duration": {"mode": "set", "value": 60},
                         "note": {"mode": "set", "value": TEST_NOTE},
@@ -135,10 +135,23 @@ def _seed_test_data() -> None:
                     ensure_ascii=False,
                 ),
                 ts,
-                ts,
             ),
         )
         operation_id = int(cur.lastrowid)
+        conn.execute(
+            """
+            INSERT INTO report_session_operation_member(
+                operation_id, role, activity_id, report_date, slice_start_time
+            )
+            VALUES (?, 'source', ?, ?, ?)
+            """,
+            (
+                operation_id,
+                activity_id,
+                "2026-06-25",
+                "2026-06-25 10:00:00",
+            ),
+        )
         conn.execute(
             """
             INSERT INTO report_mutation_request(
@@ -161,20 +174,6 @@ def _seed_test_data() -> None:
                 ),
                 ts,
                 ts,
-            ),
-        )
-        conn.execute(
-            """
-            INSERT INTO report_session_operation_member(
-                operation_id, role, activity_id, report_date, slice_start_time
-            )
-            VALUES (?, 'source', ?, ?, ?)
-            """,
-            (
-                operation_id,
-                activity_id,
-                "2026-06-25",
-                "2026-06-25 10:00:00",
             ),
         )
 
@@ -250,8 +249,6 @@ def _row_counts() -> dict[str, int]:
         "report_session_operation",
         "report_mutation_request",
         "report_session_operation_member",
-        "report_session_operation_dependency",
-        "report_session_operation_supersession",
         "activity_resource",
     ]
     counts: dict[str, int] = {}
@@ -269,7 +266,7 @@ def test_export_payload_contains_required_tables(temp_db, tmp_path):
     data = json.loads(payload.decode("utf-8"))
 
     assert data["format"] == "worktrace-local-data"
-    assert data["version"] == 3
+    assert data["version"] == 4
     tables = data["tables"]
     for required in [
         "project",
@@ -284,8 +281,6 @@ def test_export_payload_contains_required_tables(temp_db, tmp_path):
         "report_session_operation",
         "report_mutation_request",
         "report_session_operation_member",
-        "report_session_operation_dependency",
-        "report_session_operation_supersession",
         "activity_resource",
     ]:
         assert required in tables, f"missing table {required} in payload"
@@ -323,6 +318,8 @@ def test_export_payload_excludes_runtime_state_settings(temp_db):
     assert "collector_status" not in settings_rows
     assert "last_collector_heartbeat" not in settings_rows
     assert "user_paused" not in settings_rows
+    assert "secure_import_in_progress" not in settings_rows
+    assert settings_rows <= secure_backup_service.MIGRATABLE_SETTINGS
 
 
 def test_secure_import_guard_clears_runtime_pending_on_boundary(temp_db):
@@ -330,7 +327,7 @@ def test_secure_import_guard_clears_runtime_pending_on_boundary(temp_db):
     set_setting("current_activity_snapshot", '{"status":"normal"}')
     set_setting("pending_short_seconds", "12")
 
-    with secure_backup_service._secure_import_guard():
+    with secure_backup_service.SECURE_IMPORT_COORDINATOR.acquire():
         assert get_setting("current_activity_snapshot", "") == ""
         assert get_setting("pending_short_seconds", "") == "0"
 
@@ -676,7 +673,7 @@ def test_api_parse_manifest_does_not_require_passphrase(temp_db, tmp_path):
 
     info = backup_api.parse_encrypted_backup_manifest(str(out))
 
-    assert info.version == 3
+    assert info.version == 4
     assert info.payload_format == "wtenc1"
 
 
@@ -723,7 +720,6 @@ def test_export_uses_atomic_write(temp_db, tmp_path):
 
 def _reset_guard_and_pause_state() -> None:
     """Clear the import guard and pause/status settings to a clean baseline."""
-    set_setting("secure_import_in_progress", "false")
     set_setting("user_paused", "false")
     set_setting("collector_status", "stopped")
     set_setting("current_activity_snapshot", "")
@@ -756,7 +752,7 @@ def test_import_sets_secure_import_in_progress_during_replacement(temp_db, tmp_p
     original_replace = secure_backup_service._replace_import
 
     def spy_replace(data):
-        captured["guard_during_replace"] = get_bool_setting("secure_import_in_progress", False)
+        captured["guard_during_replace"] = secure_backup_service.is_secure_import_in_progress()
         captured["user_paused_during_replace"] = get_bool_setting("user_paused", False)
         captured["collector_status_during_replace"] = get_setting("collector_status", "")
         captured["snapshot_during_replace"] = get_setting("current_activity_snapshot", "")
@@ -778,7 +774,7 @@ def test_import_clears_secure_import_in_progress_after_success(temp_db, tmp_path
 
     secure_backup_service.import_encrypted_backup(out, "correct-passphrase", mode="replace")
 
-    assert get_bool_setting("secure_import_in_progress", False) is False
+    assert secure_backup_service.is_secure_import_in_progress() is False
 
 
 def test_import_clears_secure_import_in_progress_after_failure(temp_db, tmp_path):
@@ -788,7 +784,7 @@ def test_import_clears_secure_import_in_progress_after_failure(temp_db, tmp_path
     with pytest.raises(BackupDecryptionError):
         secure_backup_service.import_encrypted_backup(out, "wrong-passphrase")
 
-    assert get_bool_setting("secure_import_in_progress", False) is False
+    assert secure_backup_service.is_secure_import_in_progress() is False
 
 
 def test_import_success_leaves_user_paused_and_collector_status_paused(temp_db, tmp_path):
@@ -804,7 +800,6 @@ def test_import_success_leaves_user_paused_and_collector_status_paused(temp_db, 
 def test_wrong_passphrase_restores_prior_pause_status(temp_db, tmp_path):
     out = _make_backup(tmp_path)
     # Set a distinctive prior state.
-    set_setting("secure_import_in_progress", "false")
     set_setting("user_paused", "false")
     set_setting("collector_status", "running")
     set_setting("current_activity_snapshot", '{"app":"prior-snapshot-marker"}')
@@ -812,7 +807,7 @@ def test_wrong_passphrase_restores_prior_pause_status(temp_db, tmp_path):
     with pytest.raises(BackupDecryptionError):
         secure_backup_service.import_encrypted_backup(out, "wrong-passphrase")
 
-    assert get_bool_setting("secure_import_in_progress", False) is False
+    assert secure_backup_service.is_secure_import_in_progress() is False
     assert get_bool_setting("user_paused", False) is False
     assert get_setting("collector_status", "") == "running"
     assert get_setting("current_activity_snapshot", "") == '{"app":"prior-snapshot-marker"}'
@@ -821,7 +816,6 @@ def test_wrong_passphrase_restores_prior_pause_status(temp_db, tmp_path):
 def test_corrupted_backup_restores_prior_pause_status(temp_db, tmp_path):
     out = _make_backup(tmp_path)
     _corrupt_backup(out)
-    set_setting("secure_import_in_progress", "false")
     set_setting("user_paused", "true")
     set_setting("collector_status", "stopped")
     set_setting("current_activity_snapshot", '{"app":"corrupt-prior-marker"}')
@@ -829,7 +823,7 @@ def test_corrupted_backup_restores_prior_pause_status(temp_db, tmp_path):
     with pytest.raises((BackupCorruptedError, BackupDecryptionError)):
         secure_backup_service.import_encrypted_backup(out, "correct-passphrase")
 
-    assert get_bool_setting("secure_import_in_progress", False) is False
+    assert secure_backup_service.is_secure_import_in_progress() is False
     assert get_bool_setting("user_paused", False) is True
     assert get_setting("collector_status", "") == "stopped"
     assert get_setting("current_activity_snapshot", "") == '{"app":"corrupt-prior-marker"}'
@@ -837,13 +831,13 @@ def test_corrupted_backup_restores_prior_pause_status(temp_db, tmp_path):
 
 def test_existing_secure_import_in_progress_rejects_new_import(temp_db, tmp_path):
     out = _make_backup(tmp_path)
-    set_setting("secure_import_in_progress", "true")
-
-    with pytest.raises(BackupImportInProgressError):
-        secure_backup_service.import_encrypted_backup(out, "correct-passphrase")
-
-    # The guard should still be true (the rejected call did not clear it).
-    assert get_bool_setting("secure_import_in_progress", False) is True
+    coordinator = secure_backup_service.SECURE_IMPORT_COORDINATOR
+    assert coordinator._import_lock.acquire(blocking=False)
+    try:
+        with pytest.raises(BackupImportInProgressError):
+            secure_backup_service.import_encrypted_backup(out, "correct-passphrase")
+    finally:
+        coordinator._import_lock.release()
 
 
 def test_current_activity_snapshot_cleared_during_import(temp_db, tmp_path, monkeypatch):
@@ -917,12 +911,11 @@ def test_after_rollback_import_guard_cleared(temp_db, tmp_path, monkeypatch):
     with pytest.raises(sqlite3.OperationalError):
         secure_backup_service.import_encrypted_backup(out, "correct-passphrase")
 
-    assert get_bool_setting("secure_import_in_progress", False) is False
+    assert secure_backup_service.is_secure_import_in_progress() is False
 
 
 def test_after_rollback_previous_pause_status_restored(temp_db, tmp_path, monkeypatch):
     out = _make_backup(tmp_path)
-    set_setting("secure_import_in_progress", "false")
     set_setting("user_paused", "false")
     set_setting("collector_status", "running")
     set_setting("current_activity_snapshot", '{"app":"rollback-prior-marker"}')

@@ -172,8 +172,10 @@ def test_deleted_project_override_semantics(temp_db):
     sessions = timeline_service.get_project_sessions_by_range("2026-06-18", "2026-06-18")
     assert len(sessions) == 1
     assert sessions[0]["project_name"] == "Valid Project"
-    assert sessions[0]["activity_ids"] == [deleted_activity]
-    assert valid_activity not in sessions[0]["activity_ids"]
+    # Project lifecycle is resolved at replay time. Deleting either the base
+    # or edit target changes the relevant projection revision, so stale edits
+    # conflict and only the still-reportable base activity remains.
+    assert sessions[0]["activity_ids"] == [valid_activity]
     assert table_count("report_session_operation") == 2
     assert "Deleted Project" not in repr(sessions)
 

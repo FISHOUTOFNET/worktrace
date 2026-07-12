@@ -243,9 +243,8 @@ class RecentActivityRowContract(TypedDict, total=False):
 
 
 class TimelineSessionRowContract(RecentActivityRowContract, total=False):
-    session_id: str
-    raw_duration: str
-    raw_duration_seconds: int
+    projection_instance_key: str
+    projection_revision: str
     adjusted_duration_seconds: int | None
     has_duration_override: bool
     status: str
@@ -315,9 +314,8 @@ class RefreshStateContract(TypedDict, total=False):
     current_activity_status: str
     is_persisted: bool
     persisted_activity_id: int
-    live_state_revision: str
-    page_structure_revision: str
-    refresh_revision: str
+    live_revision: str
+    page_revision: str
     today: str
     report_date: str
     latest_activity_id: int

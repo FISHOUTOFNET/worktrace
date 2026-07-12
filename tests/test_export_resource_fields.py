@@ -86,6 +86,7 @@ def test_excel_sessions_sheet_omits_activity_resource_detail_columns(temp_db):
             "开始时间",
             "结束时间",
             "时长",
+            "时长秒数",
             "项目",
             "状态",
             "备注",
@@ -134,7 +135,8 @@ def test_excel_sessions_status_and_project_display_contract(temp_db):
         rows = [[cell.value for cell in row] for row in ws.iter_rows(min_row=2)]
 
         by_status = {row[status_col]: row for row in rows}
-        assert set(by_status) == {"正常"}
-        assert by_status["正常"][project_col] == "Client"
+        assert set(by_status) == {"空闲、正常", "异常、已排除"}
+        assert by_status["空闲、正常"][project_col] == "Client"
+        assert by_status["异常、已排除"][project_col] == "已排除"
         for raw in ("normal", "idle", "paused", "excluded", "error"):
             assert raw not in by_status

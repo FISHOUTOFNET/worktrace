@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from importlib import resources
 import logging
+import hashlib
+import json
 import sqlite3
 from pathlib import Path
 from typing import Iterable
@@ -15,7 +17,7 @@ from .constants import (
     UNCATEGORIZED_PROJECT,
 )
 
-CURRENT_SCHEMA_VERSION = 3
+CURRENT_SCHEMA_VERSION = 4
 
 
 def read_schema_sql() -> str:
@@ -95,10 +97,55 @@ def apply_current_schema(conn: sqlite3.Connection) -> None:
         conn.executescript(read_schema_sql())
         ensure_current_indexes(conn)
         conn.execute(f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION}")
+        _require_current_schema_fingerprint(conn)
     else:
-        conn.executescript(read_schema_sql())
-        ensure_current_indexes(conn)
+        _require_current_schema_fingerprint(conn)
     seed_defaults(conn)
+
+
+def schema_fingerprint(conn: sqlite3.Connection) -> str:
+    """Return a stable fingerprint for all application schema objects.
+
+    Tables, explicit indexes, triggers and their SQL definitions are part of
+    the contract. SQLite-owned objects are deliberately excluded.
+    """
+    rows = conn.execute(
+        """
+        SELECT type, name, tbl_name, sql
+        FROM sqlite_master
+        WHERE name NOT LIKE 'sqlite_%'
+          AND type IN ('table', 'index', 'trigger', 'view')
+        ORDER BY type, name
+        """
+    ).fetchall()
+    canonical = [
+        (
+            str(row["type"]),
+            str(row["name"]),
+            str(row["tbl_name"]),
+            " ".join(str(row["sql"] or "").split()),
+        )
+        for row in rows
+    ]
+    return hashlib.sha256(
+        json.dumps(canonical, ensure_ascii=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def expected_schema_fingerprint() -> str:
+    reference = sqlite3.connect(":memory:")
+    reference.row_factory = sqlite3.Row
+    try:
+        reference.executescript(read_schema_sql())
+        reference.executescript(read_schema_indexes_sql())
+        return schema_fingerprint(reference)
+    finally:
+        reference.close()
+
+
+def _require_current_schema_fingerprint(conn: sqlite3.Connection) -> None:
+    if schema_fingerprint(conn) != expected_schema_fingerprint():
+        raise ValueError("database_schema_incompatible")
 
 
 def seed_defaults(conn: sqlite3.Connection) -> None:
@@ -130,7 +177,6 @@ def seed_defaults(conn: sqlite3.Connection) -> None:
         "user_paused": "false",
         "context_carry_minutes": str(DEFAULT_CONTEXT_CARRY_MINUTES),
         "clipboard_capture_enabled": "false",
-        "secure_import_in_progress": "false",
     }
     for key, value in defaults.items():
         conn.execute(
@@ -199,8 +245,6 @@ def drop_all_tables(conn: sqlite3.Connection) -> None:
         DROP TABLE IF EXISTS activity_resource;
         DROP TABLE IF EXISTS folder_rule_file_index;
         DROP TABLE IF EXISTS folder_rule_index_state;
-        DROP TABLE IF EXISTS report_session_operation_supersession;
-        DROP TABLE IF EXISTS report_session_operation_dependency;
         DROP TABLE IF EXISTS report_session_operation_member;
         DROP TABLE IF EXISTS report_mutation_request;
         DROP TABLE IF EXISTS report_session_operation;

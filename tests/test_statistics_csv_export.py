@@ -203,14 +203,15 @@ def test_build_csv_rows_all_statuses_exported(temp_db):
             status=status,
         )
     rows = export_service.build_statistics_csv_rows("2026-06-25", "2026-06-25")
-    assert len(rows) == 4
+    # Export is entry-based: one closed final entry produces one record even
+    # when it contains multiple allocated status contributions.
+    assert len(rows) == 2
     by_start = {row["start_time"][-8:]: row for row in rows}
-    assert by_start["09:00:00"]["status"] == "正常"
+    assert "正常" in by_start["09:00:00"]["status"]
     assert by_start["09:00:00"]["project"] == "Client"
-    assert by_start["09:30:00"]["project"] == "Client"
-    assert by_start["10:30:00"]["status"] == "已排除"
+    assert "空闲" in by_start["09:00:00"]["status"]
+    assert "已排除" in by_start["10:30:00"]["status"]
     assert by_start["10:30:00"]["project"] == "已排除"
-    assert by_start["11:00:00"]["project"] == "Client"
 
 
 def test_build_csv_rows_multi_day_range(temp_db):

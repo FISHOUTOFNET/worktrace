@@ -4,13 +4,17 @@ import hashlib
 import json
 from typing import Any
 
+from .report_projection_model import OperationDiagnostic, ProjectState, ReportMemberIdentity
 
-def member_identity_key(member: dict[str, Any], *, report_date: str = "") -> tuple[str, int, str]:
+
+def member_identity_key(member: dict[str, Any] | ReportMemberIdentity, *, report_date: str = "") -> tuple[str, int, str]:
     """Stable logical report-slice identity.
 
     End time and elapsed seconds are mutable content. They must not participate
     in report projection identity.
     """
+    if isinstance(member, ReportMemberIdentity):
+        return (member.report_date, member.activity_id, member.slice_start_time)
     return (
         str(member.get("report_date") or report_date or "")[:10],
         int(member.get("activity_id") or member.get("id") or 0),
@@ -44,19 +48,48 @@ def stable_json_hash(payload: Any) -> str:
     ).hexdigest()
 
 
-def projection_revision(session: dict[str, Any], *, applied_commands: list[dict[str, Any]] | None = None) -> str:
+def _project_revision_payload(session: dict[str, Any], project_state: ProjectState | None) -> dict[str, Any]:
+    if project_state is not None:
+        return project_state.to_dict()
+    return {
+        "project_id": int(session.get("project_id") or 0),
+        "project_name": str(session.get("project_name") or ""),
+        "project_description": str(session.get("project_description") or ""),
+        "is_deleted": bool(session.get("project_is_deleted") or session.get("is_deleted")),
+        "is_archived": bool(session.get("project_is_archived") or session.get("is_archived")),
+        "is_enabled": bool(session.get("project_is_enabled", session.get("is_enabled", True))),
+        "is_system": bool(session.get("project_is_system")),
+        "is_special": bool(session.get("project_is_special")),
+        "is_report_project": bool(session.get("is_report_project")),
+        "is_report_classified": bool(session.get("is_report_classified")),
+        "is_report_uncategorized": bool(session.get("is_report_uncategorized")),
+        "is_official_project": bool(session.get("is_official_project")),
+        "report_attribution_kind": str(session.get("report_attribution_kind") or "none"),
+        "project_key": str(session.get("project_key") or ""),
+        "report_project_key": str(session.get("report_project_key") or ""),
+    }
+
+
+def projection_revision(
+    session: dict[str, Any],
+    *,
+    project_state: ProjectState | None = None,
+    applied_commands: list[dict[str, Any]] | None = None,
+) -> str:
     """Revision for optimistic UI writes and detail cache ownership.
 
     Live elapsed seconds are intentionally excluded. Contribution identity and
     allocated durations are included so structural changes, edit commands and
     summary grouping changes produce a new revision.
     """
+    del applied_commands  # command history and request metadata are not report content
+    is_live = bool(session.get("is_in_progress"))
     contributions = []
     for row in session.get("_projection_contributions") or []:
         contributions.append(
             {
                 "member": member_identity_key(row),
-                "duration": int(row.get("duration_seconds") or 0),
+                "duration": None if is_live else int(row.get("duration_seconds") or 0),
                 "activity_identity_key": str(row.get("activity_identity_key") or ""),
                 "display_project_id": int(row.get("display_project_id") or 0),
                 "report_project_id": int(row.get("report_project_id") or row.get("project_id") or 0),
@@ -67,30 +100,35 @@ def projection_revision(session: dict[str, Any], *, applied_commands: list[dict[
         "projection_instance_key": str(session.get("projection_instance_key") or ""),
         "projection_kind": str(session.get("projection_kind") or ""),
         "members": [member_identity_key(member) for member in session.get("member_slices") or []],
-        "commands": [
-            {
-                "id": int(command.get("id") or 0),
-                "replay_order": int(command.get("replay_order") or command.get("id") or 0),
-                "type": str(command.get("operation_type") or ""),
-                "payload": command.get("payload") or command.get("payload_json") or {},
-            }
-            for command in (applied_commands or session.get("_applied_commands") or [])
-        ],
-        "project": {
-            "id": int(session.get("project_id") or 0),
-            "deleted": bool(session.get("project_is_deleted")),
-            "archived": bool(session.get("project_is_archived")),
-            "has_override": bool(session.get("has_project_override")),
-        },
+        "project": _project_revision_payload(session, project_state),
+        "has_project_override": bool(session.get("has_project_override")),
         "duration": {
-            "value": int(session.get("duration_seconds") or 0),
-            "adjusted": session.get("adjusted_duration_seconds"),
+            "value": None if is_live else int(session.get("duration_seconds") or 0),
+            "adjusted": None if is_live else session.get("adjusted_duration_seconds"),
             "has_override": bool(session.get("has_duration_override")),
         },
         "note": str(session.get("session_note") or ""),
         "contributions": sorted(contributions, key=lambda item: item["member"]),
     }
     return stable_json_hash(payload)
+
+
+def snapshot_revision(
+    entries: list[dict[str, Any]] | tuple[dict[str, Any], ...],
+    diagnostics: list[OperationDiagnostic] | tuple[OperationDiagnostic, ...],
+) -> str:
+    return stable_json_hash(
+        {
+            "entries": [
+                {
+                    "key": str(entry.get("projection_instance_key") or ""),
+                    "revision": str(entry.get("projection_revision") or ""),
+                }
+                for entry in entries
+            ],
+            "diagnostics": [diagnostic.to_dict() for diagnostic in diagnostics],
+        }
+    )
 
 
 __all__ = [
@@ -100,5 +138,6 @@ __all__ = [
     "member_set_hash",
     "merge_projection_key",
     "projection_revision",
+    "snapshot_revision",
     "stable_json_hash",
 ]

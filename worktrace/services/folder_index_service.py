@@ -368,13 +368,20 @@ def _worker_loop(stop_event: threading.Event) -> None:
         logging.exception("folder index startup validation failed")
     while not stop_event.is_set():
         try:
+            from .secure_backup_service import is_secure_import_in_progress
+
+            if is_secure_import_in_progress():
+                stop_event.wait(_WORKER_IDLE_SECONDS)
+                continue
             ensure_index_states_for_folder_rules()
             while not stop_event.is_set():
+                if is_secure_import_in_progress():
+                    break
                 rule_ids = _pending_rule_ids()
                 if not rule_ids:
                     break
                 for rule_id in rule_ids:
-                    if stop_event.is_set():
+                    if stop_event.is_set() or is_secure_import_in_progress():
                         break
                     rebuild_folder_index(rule_id, stop_event)
             stop_event.wait(_WORKER_IDLE_SECONDS)

@@ -69,9 +69,21 @@ test("same mutation intent reuses request id while in flight", () => {
   const first = App.timelineRequestState.nextMutationOwner("edit", "2026-06-25", "base:a", "rev-a", "[1]");
   const second = App.timelineRequestState.nextMutationOwner("edit", "2026-06-25", "base:a", "rev-a", "[1]");
   assert.equal(second, first);
+  assert.equal(second.state, "pending");
   assert.equal(second.requestId, first.requestId);
   assert.equal(
     App.timelineRequestState.nextMutationOwner("edit", "2026-06-25", "base:a", "rev-a", "[2]"),
     null
   );
+});
+
+test("unknown mutation retry keeps the owner and request id", () => {
+  const App = loadState();
+  const first = App.timelineRequestState.nextMutationOwner("edit", "2026-06-25", "base:a", "rev-a", "[1]");
+  App.timelineRequestState.markMutationUnknown(first);
+  assert.equal(first.state, "unknown");
+  const retry = App.timelineRequestState.nextMutationOwner("edit", "2026-06-25", "base:a", "rev-a", "[1]");
+  assert.equal(retry, first);
+  assert.equal(retry.requestId, first.requestId);
+  assert.equal(retry.state, "pending");
 });

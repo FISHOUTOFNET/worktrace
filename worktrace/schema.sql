@@ -114,9 +114,6 @@ CREATE TABLE IF NOT EXISTS activity_project_assignment (
         source IN (
             'manual',
             'keyword_rule',
-            'anchor_context',
-            'same_project_context',
-            'clipboard_transition_context',
             'folder_rule',
             'midnight_anchor',
             'suggested_project_name',
@@ -139,19 +136,38 @@ CREATE TABLE IF NOT EXISTS report_session_operation (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     report_date TEXT NOT NULL,
     operation_type TEXT NOT NULL CHECK(operation_type IN ('edit_session', 'hide_session', 'merge_sessions', 'copy_session', 'hide_activity', 'split_session')),
-    base_instance_key TEXT NOT NULL,
-    base_expected_revision TEXT NOT NULL,
+    source_instance_key TEXT NOT NULL,
+    source_expected_revision TEXT NOT NULL,
     target_instance_key TEXT,
     target_expected_revision TEXT,
     direction TEXT CHECK(direction IS NULL OR direction IN ('previous', 'next')),
-    replay_order INTEGER NOT NULL,
-    match_state TEXT NOT NULL DEFAULT 'active' CHECK(match_state IN ('active', 'conflict', 'orphaned', 'superseded')),
-    reverts_operation_id INTEGER,
-    payload_json TEXT NOT NULL DEFAULT '{}',
+    sequence INTEGER NOT NULL CHECK(sequence > 0),
+    undo_of_operation_id INTEGER,
+    payload_json TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(payload_json)),
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    UNIQUE(report_date, replay_order),
-    FOREIGN KEY(reverts_operation_id) REFERENCES report_session_operation(id)
+    UNIQUE(report_date, sequence),
+    UNIQUE(undo_of_operation_id),
+    CHECK(
+        (operation_type = 'merge_sessions'
+         AND target_instance_key IS NOT NULL
+         AND target_expected_revision IS NOT NULL
+         AND direction IS NOT NULL
+         AND undo_of_operation_id IS NULL)
+        OR
+        (operation_type = 'split_session'
+         AND target_instance_key IS NULL
+         AND target_expected_revision IS NULL
+         AND direction IS NULL
+         AND undo_of_operation_id IS NOT NULL)
+        OR
+        (operation_type NOT IN ('merge_sessions', 'split_session')
+         AND target_instance_key IS NULL
+         AND target_expected_revision IS NULL
+         AND direction IS NULL
+         AND undo_of_operation_id IS NULL)
+    ),
+    CHECK(undo_of_operation_id IS NULL OR undo_of_operation_id <> id),
+    FOREIGN KEY(undo_of_operation_id) REFERENCES report_session_operation(id)
 );
 
 CREATE TABLE IF NOT EXISTS report_mutation_request (
@@ -159,9 +175,13 @@ CREATE TABLE IF NOT EXISTS report_mutation_request (
     input_signature TEXT NOT NULL,
     outcome_type TEXT NOT NULL CHECK(outcome_type IN ('operation_committed', 'no_op')),
     operation_id INTEGER,
-    result_json TEXT NOT NULL DEFAULT '{}',
+    result_json TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(result_json)),
     created_at TEXT NOT NULL,
     committed_at TEXT NOT NULL,
+    CHECK(
+        (outcome_type = 'operation_committed' AND operation_id IS NOT NULL)
+        OR (outcome_type = 'no_op' AND operation_id IS NULL)
+    ),
     FOREIGN KEY(operation_id) REFERENCES report_session_operation(id)
 );
 
@@ -177,24 +197,53 @@ CREATE TABLE IF NOT EXISTS report_session_operation_member (
     FOREIGN KEY(activity_id) REFERENCES activity_log(id)
 );
 
-CREATE TABLE IF NOT EXISTS report_session_operation_dependency (
-    parent_operation_id INTEGER NOT NULL,
-    child_operation_id INTEGER NOT NULL,
-    PRIMARY KEY(parent_operation_id, child_operation_id),
-    FOREIGN KEY(parent_operation_id) REFERENCES report_session_operation(id) ON DELETE CASCADE,
-    FOREIGN KEY(child_operation_id) REFERENCES report_session_operation(id) ON DELETE CASCADE
-);
+CREATE TRIGGER IF NOT EXISTS validate_report_split_operation
+BEFORE INSERT ON report_session_operation
+WHEN NEW.operation_type = 'split_session'
+BEGIN
+    SELECT CASE WHEN NOT EXISTS (
+        SELECT 1
+        FROM report_session_operation original
+        WHERE original.id = NEW.undo_of_operation_id
+          AND original.operation_type = 'merge_sessions'
+          AND original.report_date = NEW.report_date
+          AND original.sequence < NEW.sequence
+    ) THEN RAISE(ABORT, 'invalid_split_operation') END;
+END;
 
-CREATE TABLE IF NOT EXISTS report_session_operation_supersession (
-    superseded_operation_id INTEGER NOT NULL,
-    superseding_operation_id INTEGER NOT NULL,
-    reason TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    PRIMARY KEY(superseded_operation_id, superseding_operation_id),
-    CHECK(superseded_operation_id <> superseding_operation_id),
-    FOREIGN KEY(superseded_operation_id) REFERENCES report_session_operation(id) ON DELETE CASCADE,
-    FOREIGN KEY(superseding_operation_id) REFERENCES report_session_operation(id) ON DELETE CASCADE
-);
+CREATE TRIGGER IF NOT EXISTS validate_report_operation_receipt_members
+BEFORE INSERT ON report_mutation_request
+WHEN NEW.outcome_type = 'operation_committed'
+BEGIN
+    SELECT CASE WHEN (
+        SELECT COUNT(*) FROM report_session_operation_member
+        WHERE operation_id = NEW.operation_id AND role = 'source'
+    ) = 0 THEN RAISE(ABORT, 'missing_source_members') END;
+    SELECT CASE WHEN EXISTS (
+        SELECT 1 FROM report_session_operation operation
+        WHERE operation.id = NEW.operation_id
+          AND (
+              (operation.operation_type = 'merge_sessions' AND (
+                  (SELECT COUNT(*) FROM report_session_operation_member
+                   WHERE operation_id = NEW.operation_id AND role = 'target') = 0
+                  OR (SELECT COUNT(*) FROM report_session_operation_member
+                      WHERE operation_id = NEW.operation_id AND role = 'affected') <> 0
+              ))
+              OR
+              (operation.operation_type = 'hide_activity' AND (
+                  (SELECT COUNT(*) FROM report_session_operation_member
+                   WHERE operation_id = NEW.operation_id AND role = 'affected') = 0
+                  OR (SELECT COUNT(*) FROM report_session_operation_member
+                      WHERE operation_id = NEW.operation_id AND role = 'target') <> 0
+              ))
+              OR
+              (operation.operation_type NOT IN ('merge_sessions', 'hide_activity') AND (
+                  (SELECT COUNT(*) FROM report_session_operation_member
+                   WHERE operation_id = NEW.operation_id AND role IN ('target', 'affected')) <> 0
+              ))
+          )
+    ) THEN RAISE(ABORT, 'invalid_operation_member_cardinality') END;
+END;
 
 CREATE TABLE IF NOT EXISTS activity_clipboard_event (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

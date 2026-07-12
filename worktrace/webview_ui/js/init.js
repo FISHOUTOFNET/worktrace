@@ -95,7 +95,7 @@
         App.activePageRefreshInFlight = true;
         var statePromise = state && state.ok
             ? Promise.resolve(state)
-            : App.callBridge("get_refresh_state").then(function (result) {
+            : App.callBridge("get_refresh_state", App.currentPage === "timeline" ? App.timelineDate : null).then(function (result) {
                 return App.handleResult(result, function () { return null; });
             });
         return statePromise.then(function (acceptedState) {
@@ -363,7 +363,7 @@
 
     function refreshCurrentActivityFromState(state, options) {
         if (!state || !state.current_activity) return;
-        if (!App.liveRuntime || App.liveRuntime.refreshRevision !== String(state.refresh_revision || "")) return;
+        if (!App.liveRuntime || App.liveRuntime.liveRevision !== String(state.live_revision || "")) return;
         options = options || {};
         updateCurrentActivityCacheFromRefreshState(state);
         if (options.forceRender !== true) return;
@@ -385,7 +385,7 @@
 
     function refreshTimelineCurrentActivityFromState(state) {
         if (App.currentPage !== "timeline" || !state || !state.current_activity) return;
-        if (!App.liveRuntime || App.liveRuntime.refreshRevision !== String(state.refresh_revision || "")) return;
+        if (!App.liveRuntime || App.liveRuntime.liveRevision !== String(state.live_revision || "")) return;
         updateCurrentActivityCacheFromRefreshState(state);
         App.renderCurrentActivityElement(
             document.getElementById("timeline-current"),
@@ -399,29 +399,21 @@
     function runRevisionCheck() {
         if (App.refreshCheckInFlight) return;
         App.refreshCheckInFlight = true;
-        App.callBridge("get_refresh_state").then(function (result) {
+        App.callBridge("get_refresh_state", App.currentPage === "timeline" ? App.timelineDate : null).then(function (result) {
             var state = App.handleResult(result, function () {
                 return null;
             });
             if (!state) return;
             var previousState = App.lastRefreshState;
-            var prevRevision = previousState && previousState.refresh_revision;
-            var newRevision = state.refresh_revision;
-            var isFirstCheck = prevRevision === null || prevRevision === undefined;
-            var revisionChanged = isFirstCheck || prevRevision !== newRevision;
-            var prevLiveRevision = previousState && (previousState.live_clock_revision || previousState.live_state_revision || previousState.refresh_revision);
-            var newLiveRevision = state.live_clock_revision || state.live_state_revision || state.refresh_revision;
-            var prevDisplayProjectionRevision = previousState && (previousState.display_projection_revision || previousState.refresh_revision);
-            var newDisplayProjectionRevision = state.display_projection_revision || state.refresh_revision;
-            var prevPageRevision = previousState && (previousState.page_structure_revision || previousState.refresh_revision);
-            var newPageRevision = state.page_structure_revision || state.refresh_revision;
+            var prevPageRevision = previousState && previousState.page_revision;
+            var newPageRevision = state.page_revision;
+            var isFirstCheck = prevPageRevision === null || prevPageRevision === undefined;
+            var prevLiveRevision = previousState && previousState.live_revision;
+            var newLiveRevision = state.live_revision;
             var liveStateChanged = isFirstCheck || prevLiveRevision !== newLiveRevision;
-            var displayProjectionChanged = isFirstCheck || prevDisplayProjectionRevision !== newDisplayProjectionRevision;
             var pageStructureChanged = isFirstCheck || prevPageRevision !== newPageRevision;
             var currentActivityIdentityChanged = currentActivityRenderIdentity(previousState) !== currentActivityRenderIdentity(state);
-            var renderCurrentActivity = revisionChanged
-                || liveStateChanged
-                || displayProjectionChanged
+            var renderCurrentActivity = liveStateChanged
                 || pageStructureChanged
                 || currentActivityIdentityChanged
                 || App.liveClockContractRefreshRequested;
@@ -431,7 +423,7 @@
             refreshStatusFromRefreshState(state);
             var triggeredHeavyRefresh = false;
             // the refresh_state payload (no get_status call). When revision
-            if (liveStateChanged || displayProjectionChanged || pageStructureChanged || App.liveClockContractRefreshRequested) {
+            if (pageStructureChanged || App.liveClockContractRefreshRequested) {
                 triggeredHeavyRefresh = true;
                 App.liveClockContractRefreshRequested = false;
                 refreshCurrentPageData(state);
@@ -475,7 +467,7 @@
         // Load the first-run privacy notice BEFORE refreshing the main UI
         App.loadFirstRunNotice().then(function (noticeConfirmed) {
             if (!noticeConfirmed) return;
-            App.callBridge("get_refresh_state").then(function (result) {
+            App.callBridge("get_refresh_state", App.currentPage === "timeline" ? App.timelineDate : null).then(function (result) {
                 var state = App.handleResult(result, function () { return null; });
                 if (state) {
                     App.acceptRefreshStateRuntime(state);

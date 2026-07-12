@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from ..db import get_connection
-from . import context_service, rule_impact_service
+from . import rule_impact_service
 from .project_inference_service import (
     _infer_project_resource_first,
     _resource_for_activity,
@@ -91,10 +91,6 @@ def _reassign_deleted_rule_history(conn, rows: list, exclude_rule=None) -> dict:
         )
         affected_dates.update(_context_dates_for_activity(activity))
         updated_count += 1
-    for affected_date in sorted(affected_dates):
-        context_service._recompute_context_assignments_for_date_in_transaction(
-            conn, affected_date, use_cache=False
-        )
     return {
         "updated_count": updated_count,
         "matched_count": updated_count,
@@ -148,8 +144,6 @@ def _invalidate_rule_delete_caches(affected_dates: list[str]) -> None:
     invalidate_folder_rule_cache()
     invalidate_keyword_rule_cache()
     clear_exclude_rules_cache()
-    for affected_date in affected_dates:
-        context_service.invalidate_context_recompute_cache(affected_date)
 
 
 def _public_history_result(result: dict) -> dict:

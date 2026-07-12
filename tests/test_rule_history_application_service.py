@@ -89,7 +89,7 @@ def test_delete_rule_rejects_non_bool_history_flag(temp_db):
         assert rule_api.delete_project_keyword_rule(rule_id, invalid) == {"ok": False, "error": "invalid_input"}
 
 
-def test_delete_keyword_rule_rolls_back_when_context_recompute_fails(temp_db, monkeypatch):
+def test_delete_keyword_rule_rolls_back_when_direct_reassignment_fails(temp_db, monkeypatch):
     first_project = project_service.create_project("First")
     second_project = project_service.create_project("Second")
     first_rule = rule_service.create_rule("Spec", first_project)
@@ -98,11 +98,11 @@ def test_delete_keyword_rule_rolls_back_when_context_recompute_fails(temp_db, mo
     project_inference_service.assign_project_for_activity(activity_id)
 
     def boom(*args, **kwargs):
-        raise RuntimeError("context boom")
+        raise RuntimeError("reassignment boom")
 
-    from worktrace.services import context_service
+    from worktrace.services import rule_history_application_service
 
-    monkeypatch.setattr(context_service, "_recompute_context_assignments_for_date_in_transaction", boom)
+    monkeypatch.setattr(rule_history_application_service, "_infer_project_resource_first", boom)
 
     result = rule_api.delete_project_keyword_rule(first_rule, True)
 

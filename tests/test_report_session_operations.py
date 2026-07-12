@@ -90,7 +90,7 @@ def test_report_session_operations_do_not_mutate_raw_activity_facts(temp_db):
     _hide(sessions[0], "req-hide")
     _copy(sessions[1], "req-copy")
     copied = next(item for item in timeline_service.get_project_sessions_by_date(DATE) if item["projection_kind"] == "copy")
-    summary = project_activity_summary_service.get_projection_session_activity_summary(copied["projection_instance_key"], DATE)[0]
+    summary = project_activity_summary_service.get_projection_session_activity_summary(copied["projection_instance_key"], DATE)["summary_rows"][0]
     _hide_activity(copied, summary["summary_id"], "req-hide-activity")
     visible = timeline_service.get_project_sessions_by_date(DATE)
     _merge(visible[0], "next", "req-merge")
@@ -121,7 +121,7 @@ def test_copy_and_hide_activity_are_scoped_to_projection_instance(temp_db):
     assert statistics_service.get_summary(DATE, DATE)["total_duration"] == original_total + 10 * 60
     with get_connection() as conn:
         assert conn.execute("SELECT COUNT(*) FROM activity_log").fetchone()[0] == 3
-    summary = project_activity_summary_service.get_projection_session_activity_summary(copied["projection_instance_key"], DATE)[0]
+    summary = project_activity_summary_service.get_projection_session_activity_summary(copied["projection_instance_key"], DATE)["summary_rows"][0]
     _hide_activity(copied, summary["summary_id"], "req-hide-activity")
     final = timeline_service.get_project_sessions_by_date(DATE)
     assert all(item["projection_kind"] != "copy" for item in final)

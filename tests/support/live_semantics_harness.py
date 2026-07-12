@@ -123,14 +123,20 @@ class LiveSemanticsHarness:
 
     def pages(self, *, details_ids: list[int] | None = None, date: str | None = None) -> dict:
         report_date = date or self.date
+        timeline = self.bridge.get_timeline(report_date)
+        entries = timeline.get("entries") or []
+        details = {"ok": True, "summary_rows": []}
+        if entries:
+            selected = entries[0]
+            details = self.bridge.get_timeline_session_activity_summary(
+                selected["projection_instance_key"],
+                report_date,
+                selected["projection_revision"],
+            )
         return {
             "overview": self.bridge.get_overview(),
             "recent": self.bridge.get_recent_activities(),
-            "timeline": self.bridge.get_timeline(report_date),
-            "details": self.bridge.get_timeline_session_details(
-                details_ids or [],
-                report_date,
-            ),
+            "timeline": timeline,
+            "details": details,
             "refresh": self.bridge.get_refresh_state(report_date),
         }
-

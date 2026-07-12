@@ -55,19 +55,16 @@
         );
 
         var listEl = document.getElementById("timeline-sessions-list");
-        var sessions = data.sessions || [];
+        var sessions = data.entries || [];
         App.currentSessions = sessions;
         if (sessions.length === 0) {
             listEl.innerHTML = '<div class="timeline-empty">当日暂无活动记录</div>';
             // Invalidate any pending detail request and clear the detail cache so a stale response does not
             // backfill the cleared panel and the ticker does not project against a stale payload.
-            ++App.detailsRequestToken;
             App.lastSessionDetailsViewModel = null;
             App.lastSessionActivitySummaryViewModel = null;
             document.getElementById("timeline-details-header").textContent = "选择左侧时段查看详情";
             document.getElementById("timeline-details-list").innerHTML = "";
-            App.selectedSessionId = null;
-            App.selectedSessionLiveKey = null;
             App.selectedProjectionInstanceKey = null;
             App.selectedProjectionRevision = null;
             App.detailsOwner = null;
@@ -133,7 +130,7 @@
             var sDurText = (!isNaN(sDurSec) && sDurSec >= 0)
                 ? App.formatDuration(initialSec)
                 : (s.duration || "00:00:00");
-            html += '<div class="' + cls + '" data-session-id="' + App.escapeHtml(s.session_id) + '" data-projection-instance-key="' + App.escapeHtml(s.projection_instance_key || "") + '"'
+            html += '<div class="' + cls + '" data-projection-instance-key="' + App.escapeHtml(s.projection_instance_key || "") + '"'
                 + (stableKeyHash ? ' data-stable-live-key-hash="' + App.escapeHtml(stableKeyHash) + '"' : '')
                 + (sessSpanId ? ' data-display-span-id="' + App.escapeHtml(sessSpanId) + '"' : '')
                 + ' title="' + App.escapeHtml(projectLabel) + '｜' + App.escapeHtml(startTimeOnly) + '｜' + App.escapeHtml(sDurText) + '"'
@@ -178,7 +175,7 @@
             })(items[j]);
         }
 
-        if (App.selectedProjectionInstanceKey || App.selectedSessionId !== null || App.selectedSessionLiveKey) {
+        if (App.selectedProjectionInstanceKey) {
             var found = null;
             if (App.selectedProjectionInstanceKey) {
                 for (var pk = 0; pk < sessions.length; pk++) {
@@ -188,20 +185,8 @@
                     }
                 }
             }
-            // First try to match by stable_live_key_hash (handles pending / persisted transitions).
-            if (App.selectedSessionLiveKey) {
-                for (var sk = 0; sk < sessions.length; sk++) {
-                    if (sessions[sk].stable_live_key_hash
-                        && sessions[sk].stable_live_key_hash === App.selectedSessionLiveKey) {
-                        found = sessions[sk];
-                        break;
-                    }
-                }
-            }
             if (found) {
                 // Update the selection anchors so a subsequent refresh can still find the session.
-                App.selectedSessionId = found.session_id;
-                App.selectedSessionLiveKey = found.stable_live_key_hash || null;
                 App.selectedProjectionInstanceKey = found.projection_instance_key || null;
                 App.selectedProjectionRevision = found.projection_revision || "";
                 var owner = App.timelineRequestState.nextSelectionOwner(data.date, found.projection_instance_key, found.projection_revision || "");
@@ -212,7 +197,7 @@
                 }
                 // Only re-populate the edit panel if the user is not mid-edit AND the session is not edit-disabled.
                 if (!found.edit_disabled
-                    && (!App.editingSession || App.editingSession.session_id !== found.session_id || !isEditDirty())) {
+                    && (!App.editingSession || App.editingSession.projection_instance_key !== found.projection_instance_key || !isEditDirty())) {
                     populateEditPanel(found);
                 } else if (found.edit_disabled) {
             // Persisted-open live session: clear the edit panel since it cannot be edited.
@@ -222,11 +207,8 @@
             } else {
                 // Selected session disappeared (e.g. re-grouped). Invalidate the pending detail request and clear
                 // the detail cache so a stale response does not backfill the cleared panel.
-                ++App.detailsRequestToken;
                 App.lastSessionDetailsViewModel = null;
                 App.lastSessionActivitySummaryViewModel = null;
-                App.selectedSessionId = null;
-                App.selectedSessionLiveKey = null;
                 App.selectedProjectionInstanceKey = null;
                 App.selectedProjectionRevision = null;
                 document.getElementById("timeline-details-header").textContent = "选择左侧时段查看详情";
@@ -282,8 +264,7 @@
 
     function selectTimelineSession(projectionInstanceKey, sessions) {
         App.selectedProjectionInstanceKey = projectionInstanceKey;
-        // Update selected class without full re-render. Match by session_id AND stable_live_key_hash so
-        // Persisted-open projection refreshes keep the visual selection.
+        // Update selected class from the canonical projection identity.
         var items = document.querySelectorAll("#timeline-sessions-list .timeline-item");
         var newSelected = null;
         for (var j0 = 0; j0 < sessions.length; j0++) {
@@ -292,14 +273,9 @@
                 break;
             }
         }
-        App.selectedSessionId = newSelected ? newSelected.session_id : null;
-        App.selectedSessionLiveKey = (newSelected && newSelected.stable_live_key_hash) || null;
         for (var i = 0; i < items.length; i++) {
             items[i].classList.remove("selected");
-            var itemSid = items[i].getAttribute("data-session-id");
-            var itemKey = items[i].getAttribute("data-stable-live-key-hash");
-            if (items[i].getAttribute("data-projection-instance-key") === projectionInstanceKey
-                || (App.selectedSessionLiveKey && itemKey === App.selectedSessionLiveKey && !items[i].getAttribute("data-projection-instance-key"))) {
+            if (items[i].getAttribute("data-projection-instance-key") === projectionInstanceKey) {
                 items[i].classList.add("selected");
             }
         }
@@ -340,9 +316,8 @@
             detailsHeader.textContent = "正在刷新项目活动耗时…";
         }
 
-        var token = ++App.detailsRequestToken;
         var request = App.callBridge("get_timeline_session_activity_summary", projectionInstanceKey || "", date, revision).then(function (result) {
-            if (token !== App.detailsRequestToken || !App.timelineRequestState.isCurrentDetailsOwner(owner)) return null;
+            if (!App.timelineRequestState.isCurrentDetailsOwner(owner)) return null;
             if (result && result.ok === false && result.error === "stale_selection" && !retriedStale) {
                 // The current owner asks for one Timeline refresh and then stops.
                 // showTimeline/selectTimelineSession becomes the only owner of any follow-up detail request.
@@ -368,7 +343,7 @@
             renderSessionDetails(data);
             return data;
         }).catch(function () {
-            if (token !== App.detailsRequestToken || !App.timelineRequestState.isCurrentDetailsOwner(owner)) return null;
+            if (!App.timelineRequestState.isCurrentDetailsOwner(owner)) return null;
             detailsHeader.textContent = "加载项目活动耗时失败";
             detailsList.innerHTML = '<div class="timeline-empty">无法加载项目活动耗时，请稍后重试。</div>';
             return null;
@@ -547,7 +522,7 @@
             select.disabled = true;
             loadProjects().then(function (projects) {
                 // Only render if we are still editing the same session.
-                if (App.editingSession && App.editingSession.session_id === session.session_id) {
+                if (App.editingSession && App.editingSession.projection_instance_key === session.projection_instance_key) {
                     renderProjectSelect(projects, session.project_id);
                 }
             });
@@ -563,9 +538,7 @@
         if (durInput) {
             var durSrc = (session.adjusted_duration_seconds != null)
                 ? session.adjusted_duration_seconds
-                : ((session.raw_duration_seconds != null)
-                    ? session.raw_duration_seconds
-                    : session.duration_seconds);
+                : session.duration_seconds;
             var durMin = Math.round((parseInt(durSrc, 10) || 0) / 60);
             durInput.value = isNaN(durMin) ? "" : String(durMin);
             durInput.disabled = false;
@@ -644,7 +617,7 @@
         if (durInput && !durInput.disabled) {
             var durBaselineSrc = (App.editingSession.adjusted_duration_seconds != null)
                 ? App.editingSession.adjusted_duration_seconds
-                : App.editingSession.raw_duration_seconds;
+                : App.editingSession.duration_seconds;
             var durBaselineMin = Math.round((parseInt(durBaselineSrc, 10) || 0) / 60);
             var durBaselineStr = isNaN(durBaselineMin) ? "" : String(durBaselineMin);
             if ((durInput.value || "") !== durBaselineStr) return true;
@@ -709,6 +682,41 @@
     }
     App.setEditSaving = setEditSaving;
 
+    function blockDifferentMutationIntent() {
+        showEditStatus("已有操作结果尚未确认，请先重试同一操作或刷新核对。", true);
+    }
+
+    function markMutationUnknown(owner) {
+        App.timelineRequestState.markMutationUnknown(owner);
+        setEditSaving(false);
+        showEditStatus("操作结果尚未确认，可重试同一操作或刷新核对。", true);
+    }
+
+    function consumeMutationResult(result) {
+        App.lastMutationSnapshotRevision = String((result && result.snapshot_revision) || "");
+        App.lastMutationOutcomeType = String((result && result.outcome_type) || "");
+        var hint = result && result.selection_hint;
+        if (!hint) {
+            resetTimelineReportSelection();
+            return;
+        }
+        App.selectedProjectionInstanceKey = String(
+            hint.projection_instance_key || hint.instance_key || hint.key || ""
+        ) || null;
+        App.selectedProjectionRevision = String(
+            hint.projection_revision || hint.revision || ""
+        );
+    }
+
+    function refreshAfterConfirmedMutation() {
+        return App.loadTimelineReport(currentTimelineReportDate(), {
+            showLoading: false,
+            resetSelection: false,
+            rejectOnError: true,
+            errorMessage: "操作已保存，但刷新失败"
+        });
+    }
+
     function saveEdit() {
         if (!App.editingSession || App.editSaving) return;
         var projectionInstanceKey = App.editingSession.projection_instance_key || App.selectedProjectionInstanceKey || "";
@@ -758,7 +766,7 @@
         // Duration is considered changed when the input differs from the baseline, matching isEditDirty.
         var durBaselineSrc = (App.editingSession.adjusted_duration_seconds != null)
             ? App.editingSession.adjusted_duration_seconds
-            : App.editingSession.raw_duration_seconds;
+            : App.editingSession.duration_seconds;
         var durBaselineMin = Math.round((parseInt(durBaselineSrc, 10) || 0) / 60);
         var durBaselineStr = isNaN(durBaselineMin) ? "" : String(durBaselineMin);
         var durationChanged = durRawValue !== durBaselineStr;
@@ -792,8 +800,13 @@
         );
         if (!mutationOwner) {
             setEditSaving(false);
+            blockDifferentMutationIntent();
             return;
         }
+        mutationOwner.payload = [
+            reportDate, projectionInstanceKey, projectionRevision, mutationOwner.requestId,
+            overrideProjectId, adjustedDurationSeconds, note
+        ];
         App.callBridge(
             "save_timeline_session_edit",
             reportDate,
@@ -808,43 +821,21 @@
             if (!result || result.ok === false) {
                 // Keep original data in the form; do not clear.
                 setEditSaving(false);
-                showEditStatus(result && result.error ? result.error : "保存失败", true);
-                App.timelineRequestState.releaseMutationOwner(mutationOwner);
+                showEditStatus(result && result.message ? result.message : "保存失败", true);
+                App.timelineRequestState.releaseMutationOwner(mutationOwner, "confirmed_failure", result);
                 return;
             }
-            // Update the editingSession baseline to the saved values so isEditDirty() returns false and Cancel
-            // after save does not revert to the pre-save values.
-            if (App.editingSession) {
-                if (projectChanged) {
-                    App.editingSession.project_id = projectId;
-                    App.editingSession.has_project_override = true;
-                }
-                if (noteOrDurationChanged) {
-                    App.editingSession.session_note = note;
-                    App.editingSession.adjusted_duration_seconds = adjustedDurationSeconds;
-                    App.editingSession.has_duration_override = (adjustedDurationSeconds != null);
-                    App.editingSession.display_duration_seconds = (adjustedDurationSeconds != null)
-                        ? adjustedDurationSeconds
-                        : (App.editingSession.raw_duration_seconds != null
-                            ? App.editingSession.raw_duration_seconds
-                            : App.editingSession.duration_seconds);
-                    // Keep duration_seconds aligned with the display value so a stale snapshot is not rendered before refresh.
-                    App.editingSession.duration_seconds = App.editingSession.display_duration_seconds;
-                }
-            }
-            showEditStatus("保存成功", false);
-            // Reset saving state before refreshing; a refresh failure is a separate concern.
+            App.timelineRequestState.transitionMutation(mutationOwner, "confirmed_success", result);
+            consumeMutationResult(result);
             setEditSaving(false);
-            return refreshTimelineAfterEdit().then(function () {
-                App.timelineRequestState.releaseMutationOwner(mutationOwner);
-            }, function (err) {
-                App.timelineRequestState.releaseMutationOwner(mutationOwner);
-                throw err;
+            App.timelineRequestState.releaseMutationOwner(mutationOwner, "confirmed_success", result);
+            showEditStatus("保存成功", false);
+            return refreshAfterConfirmedMutation().catch(function () {
+                showEditStatus("操作已保存，但刷新失败", true);
             });
         }).catch(function () {
             if (!App.timelineRequestState.isCurrentMutationOwner(mutationOwner)) return;
-            setEditSaving(false);
-            showEditStatus("保存失败", true);
+            markMutationUnknown(mutationOwner);
         });
     }
     App.saveEdit = saveEdit;
@@ -893,48 +884,59 @@
         var date = currentTimelineReportDate();
         var revision = App.selectedProjectionRevision || "";
         if (!key || !date) return Promise.resolve();
-        var argsSignature = JSON.stringify(options || {});
+        var mergeTarget = method === "merge_timeline_session"
+            ? findMergeTarget(key, options.direction)
+            : null;
+        if (method === "merge_timeline_session" && !mergeTarget) {
+            showEditStatus("只能合并相邻时段。", true);
+            return Promise.resolve();
+        }
+        var argsSignature = JSON.stringify([
+            options || {},
+            mergeTarget ? mergeTarget.projection_instance_key || "" : "",
+            mergeTarget ? mergeTarget.projection_revision || "" : ""
+        ]);
         var owner = App.timelineRequestState.nextMutationOwner(method, date, key, revision, argsSignature);
-        if (!owner) return Promise.resolve();
+        if (!owner) {
+            blockDifferentMutationIntent();
+            return Promise.resolve();
+        }
         var args;
         if (method === "hide_timeline_session_activity") {
             args = [date, key, options.summaryId || "", revision, owner.requestId];
         } else if (method === "merge_timeline_session") {
-            var target = findMergeTarget(key, options.direction);
-            if (!target) {
-                App.timelineRequestState.releaseMutationOwner(owner);
-                return Promise.resolve();
-            }
             args = [
                 date,
                 key,
                 options.direction,
                 revision,
                 owner.requestId,
-                target.projection_instance_key || "",
-                target.projection_revision || ""
+                mergeTarget.projection_instance_key || "",
+                mergeTarget.projection_revision || ""
             ];
         } else {
             args = [date, key, revision, owner.requestId];
         }
+        owner.payload = args.slice();
         return App.callBridge.apply(null, [method].concat(args)).then(function (result) {
             if (!App.timelineRequestState.isCurrentMutationOwner(owner)) return null;
             var data = App.handleResult(result, function (message) {
                 showEditStatus(message || "操作失败，请刷新后重试。", true);
             });
             if (!data) {
-                App.timelineRequestState.releaseMutationOwner(owner);
+                App.timelineRequestState.releaseMutationOwner(owner, "confirmed_failure", result);
                 return;
             }
-            return refreshTimeline().then(function () {
-                App.timelineRequestState.releaseMutationOwner(owner);
-            }, function (err) {
-                App.timelineRequestState.releaseMutationOwner(owner);
-                throw err;
+            App.timelineRequestState.transitionMutation(owner, "confirmed_success", result);
+            consumeMutationResult(result);
+            App.timelineRequestState.releaseMutationOwner(owner, "confirmed_success", result);
+            showEditStatus("操作成功", false);
+            return refreshAfterConfirmedMutation().catch(function () {
+                showEditStatus("操作已保存，但刷新失败", true);
             });
         }).catch(function () {
             if (!App.timelineRequestState.isCurrentMutationOwner(owner)) return null;
-            showEditStatus("操作失败，请刷新后重试。", true);
+            markMutationUnknown(owner);
         });
     }
     App.runTimelineSessionOperation = runTimelineSessionOperation;
@@ -975,12 +977,9 @@
     App.currentTimelineReportDate = currentTimelineReportDate;
 
     function resetTimelineReportSelection() {
-        App.selectedSessionId = null;
-        App.selectedSessionLiveKey = null;
         App.selectedProjectionInstanceKey = null;
         App.selectedProjectionRevision = null;
         App.detailsOwner = null;
-        ++App.detailsRequestToken;
         App.lastSessionDetailsViewModel = null;
         App.lastSessionActivitySummaryViewModel = null;
         var detailsHeader = document.getElementById("timeline-details-header");
@@ -1005,6 +1004,7 @@
         var showLoading = options.showLoading !== false;
         var resetSelection = options.resetSelection === true;
         var errorMessage = options.errorMessage || (showLoading ? "加载时间线失败" : "刷新失败");
+        var rejectOnError = options.rejectOnError === true;
         var timelineOwner = App.timelineRequestState.nextTimelineOwner(date);
         App.timelineDate = date;
         if (resetSelection) {
@@ -1023,7 +1023,10 @@
             var data = App.handleResult(result, function (msg) {
                 App.showTimelineError(msg || errorMessage);
             });
-            if (!data) return;
+            if (!data) {
+                if (rejectOnError) throw new Error("timeline_refresh_failed");
+                return;
+            }
             if (!acceptTimelinePayload(data, date)) return;
             if (data.date) App.timelineDate = data.date;
             App.timelineLoaded = true;
@@ -1034,6 +1037,7 @@
             // Never surface raw exception text; use the stable fallback so
             // internal details do not leak into the UI.
             App.showTimelineError(errorMessage);
+            if (rejectOnError) throw new Error("timeline_refresh_failed");
         }).then(function () {
             releaseTimelineLoadingOwner(loadingOwner);
         }, function (err) {

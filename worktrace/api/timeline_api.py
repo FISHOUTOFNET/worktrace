@@ -28,51 +28,15 @@ def get_default_report_date() -> str:
 
 def get_project_sessions_by_date(
     date: str,
-    include_hidden: bool = False,
-    ensure_context: bool = True,
 ) -> list[dict[str, Any]]:
-    return timeline_service.get_project_sessions_by_date(
-        date,
-        include_hidden=include_hidden,
-        ensure_context=ensure_context,
-    )
+    return timeline_service.get_project_sessions_by_date(date)
 
 
 def get_project_sessions_by_range(
     start_date: str,
     end_date: str,
-    include_hidden: bool = False,
-    ensure_context: bool = True,
 ) -> list[dict[str, Any]]:
-    return timeline_service.get_project_sessions_by_range(
-        start_date,
-        end_date,
-        include_hidden=include_hidden,
-        ensure_context=ensure_context,
-    )
-
-
-def get_session_activity_details(
-    activity_ids: list[int],
-    report_date: str | None = None,
-    ensure_context: bool = True,
-) -> list[dict[str, Any]]:
-    return timeline_service.get_session_activity_details(
-        activity_ids,
-        report_date=report_date,
-        ensure_context=ensure_context,
-    )
-
-
-def get_session_anchor_folders(activity_ids: list[int]) -> list[str]:
-    return timeline_service.get_session_anchor_folders(activity_ids)
-
-
-def preview_session_project_update(
-    session_activity_ids: list[int],
-    project_id: int,
-) -> dict[str, Any]:
-    return timeline_service.preview_session_project_update(session_activity_ids, project_id)
+    return timeline_service.get_project_sessions_by_range(start_date, end_date)
 
 
 
@@ -354,8 +318,6 @@ __all__ = [
     "get_default_report_date",
     "get_project_sessions_by_date",
     "get_project_sessions_by_range",
-    "get_session_activity_details",
-    "get_session_anchor_folders",
     "get_snapshot_elapsed_seconds",
     "get_snapshot_extra_seconds",
     "get_snapshot_persisted_id",
@@ -363,7 +325,6 @@ __all__ = [
     "hide_timeline_session",
     "hide_timeline_session_activity",
     "list_selectable_projects",
-    "preview_session_project_update",
     "copy_timeline_session",
     "merge_timeline_session",
     "save_timeline_session_edit",

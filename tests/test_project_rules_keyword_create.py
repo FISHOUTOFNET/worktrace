@@ -412,13 +412,17 @@ def test_create_keyword_rule_does_not_change_report_session_operation_rows(temp_
     with get_connection() as conn:
         cur = conn.execute(
             """
-            INSERT INTO report_session_operation(
-                report_date, operation_type, base_instance_key, base_expected_revision, replay_order,
-                match_state, payload_json, created_at, updated_at
-            )
-            VALUES (?, 'edit_session', ?, ?, 1, 'active', ?, ?, ?)
+                INSERT INTO report_session_operation(
+                    report_date, operation_type, source_instance_key, source_expected_revision, sequence,
+                    payload_json, created_at
+                )
+                VALUES (?, 'edit_session', ?, ?, 1, ?, ?)
             """,
-            ("2026-06-18", "base:" + "b" * 40, "revision-b", '{"payload_version":3,"note":{"mode":"set","value":"keep"}}', now_str(), now_str()),
+                ("2026-06-18", "base:" + "b" * 40, "revision-b", '{"payload_version":4,"note":{"mode":"set","value":"keep"}}', now_str()),
+        )
+        conn.execute(
+            "INSERT INTO report_session_operation_member(operation_id, role, activity_id, report_date, slice_start_time) VALUES (?, 'source', ?, ?, ?)",
+            (int(cur.lastrowid), activity_id, "2026-06-18", "2026-06-18 09:00:00"),
         )
         conn.execute(
             """INSERT INTO report_mutation_request(

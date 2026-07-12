@@ -50,7 +50,7 @@ def build_statistics_csv_rows(date_from: str, date_to: str) -> list[dict]:
     from .report_projection_snapshot_service import build_visible_snapshot
     from .statistics_projection import build_statistics_projection
 
-    return build_statistics_projection(build_visible_snapshot(date_from, date_to, ensure_context=False)).export_rows
+    return list(build_statistics_projection(build_visible_snapshot(date_from, date_to)).export_records)
 
 
 def write_statistics_csv(date_from: str, date_to: str, output_path, expected_snapshot_revision: str | None = None) -> dict:
@@ -71,10 +71,10 @@ def write_statistics_csv(date_from: str, date_to: str, output_path, expected_sna
     from .report_projection_snapshot_service import build_visible_snapshot
     from .statistics_projection import build_statistics_projection
 
-    projection = build_statistics_projection(build_visible_snapshot(date_from, date_to, ensure_context=False))
+    projection = build_statistics_projection(build_visible_snapshot(date_from, date_to))
     if expected_snapshot_revision is not None and str(expected_snapshot_revision or "") != projection.snapshot_revision:
         raise ValueError("stale_statistics_snapshot")
-    csv_rows = projection.export_rows
+    csv_rows = projection.export_records
     if not csv_rows:
         raise ValueError("empty_data")
 
@@ -91,7 +91,8 @@ def write_statistics_csv(date_from: str, date_to: str, output_path, expected_sna
     os.replace(tmp_path, path)
 
     return {
-        "activity_count": len(csv_rows),
+        "activity_count": projection.activity_count,
+        "export_row_count": len(csv_rows),
         "duration_seconds": total_seconds,
         "filename": path.name,
     }
@@ -123,8 +124,6 @@ def export_all_local_data(path: str) -> str:
             "report_session_operation",
             "report_mutation_request",
             "report_session_operation_member",
-            "report_session_operation_dependency",
-            "report_session_operation_supersession",
             "activity_clipboard_event",
             "project",
             "folder_project_rule",
@@ -162,7 +161,9 @@ def _destructive_reset_guard() -> Iterator[None]:
         set_setting,
     )
 
-    if get_bool_setting("secure_import_in_progress", False):
+    from .secure_backup_service import is_secure_import_in_progress
+
+    if is_secure_import_in_progress():
         logging.warning("clear-all rejected: destructive operation in progress")
         raise ValueError("operation_in_progress")
 
@@ -175,7 +176,6 @@ def _destructive_reset_guard() -> Iterator[None]:
     set_setting("user_paused", "true")
     set_setting("collector_status", "paused")
     clear_runtime_activity_state("clear_all_guard_enter")
-    set_setting("secure_import_in_progress", "true")
     clear_settings_cache()
 
     try:
@@ -190,7 +190,6 @@ def _destructive_reset_guard() -> Iterator[None]:
         set_setting("user_paused", "true" if prior_user_paused else "false")
         set_setting("collector_status", prior_collector_status)
         DEFAULT_SNAPSHOT_PUBLISHER.restore_raw(prior_snapshot)
-        set_setting("secure_import_in_progress", "false")
         clear_settings_cache()
         raise
     else:
@@ -200,7 +199,6 @@ def _destructive_reset_guard() -> Iterator[None]:
         set_setting("user_paused", "true")
         set_setting("collector_status", "paused")
         clear_runtime_activity_state("clear_all_success")
-        set_setting("secure_import_in_progress", "false")
         clear_settings_cache()
         logging.info("clear-all destructive reset guard completed paused=true")
 
@@ -216,7 +214,6 @@ def _invalidate_clear_all_caches() -> None:
     the user see pre-clear context on the next Timeline / Statistics
     load.
     """
-    from .context_service import invalidate_context_recompute_cache
     from .folder_rule_service import invalidate_folder_rule_cache
     from .privacy_service import clear_exclude_rules_cache
     from .project_inference_service import invalidate_keyword_rule_cache
@@ -228,4 +225,3 @@ def _invalidate_clear_all_caches() -> None:
     invalidate_uncategorized_project_cache()
     invalidate_folder_rule_cache()
     invalidate_keyword_rule_cache()
-    invalidate_context_recompute_cache()

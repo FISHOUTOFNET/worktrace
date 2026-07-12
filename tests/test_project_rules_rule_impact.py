@@ -635,7 +635,7 @@ def test_backfill_does_not_modify_already_target_activity(temp_db):
     assert dict(assignment) == {"source_rule_type": "folder", "source_rule_id": rule_id}
 
 
-@pytest.mark.parametrize("source", ["same_project_context", "anchor_context"])
+@pytest.mark.parametrize("source", ["uncategorized", "suggested_project_name"])
 def test_backfill_upgrades_context_source_when_project_id_already_matches(temp_db, source):
     project = project_service.create_project("P")
     rule_id = folder_rule_service.create_or_update_folder_rule("D:\\CaseA", project)

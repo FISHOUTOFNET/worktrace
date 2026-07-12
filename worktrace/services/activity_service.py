@@ -274,7 +274,7 @@ def increment_activity_duration(activity_id: int, seconds: int) -> None:
     This write is a *natural growth* update on an open row — the
     duration is derived from ``now - start_time`` and is NOT a
     structural change. The ``updated_at`` column is therefore NOT
-    bumped, so ``compute_refresh_revision`` (which excludes
+    bumped, so the page revision (which excludes
     ``updated_at`` from the per-row structural signature) does not
     trigger a heavy refresh on every collector tick.
     on every collector tick.
@@ -309,7 +309,7 @@ def set_activity_duration(activity_id: int, seconds: int) -> None:
     This write is a *natural growth* update on an open row — the
     duration is derived from ``now - start_time`` and is NOT a
     structural change. The ``updated_at`` column is therefore NOT
-    bumped, so ``compute_refresh_revision`` (which excludes
+    bumped, so the page revision (which excludes
     ``updated_at`` from the per-row structural signature) does not
     trigger a heavy refresh on every collector tick.
     on every collector tick.
