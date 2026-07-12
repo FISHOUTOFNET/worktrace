@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any, Mapping
+
 from ..db import get_connection
 from ..constants import EXCLUDED_APP_NAME, STATUS_EXCLUDED, UNCATEGORIZED_PROJECT
 from . import report_session_operation_engine
@@ -35,21 +37,25 @@ def get_report_sessions_for_operations(
     start_date: str,
     end_date: str,
 ) -> list[dict]:
-    """Build final sessions including private, display-safe contribution slices.
+    """Build mutable adapter copies of final canonical sessions.
 
-    This is an internal service entry used by operation commands and summary
-    aggregation. The public session entry strips the contribution payload so
-    Timeline cards never receive row-level data they do not render.
+    The canonical snapshot recursively freezes its records. Internal consumers
+    that add a detail revision or other adapter-only fields must copy explicitly
+    rather than mutating the domain snapshot.
     """
     from .report_projection_snapshot_service import build_visible_snapshot
 
     snapshot = build_visible_snapshot(start_date, end_date)
     projected = [
-        session
+        dict(session)
         for session in snapshot.final_sessions
         if project_lifecycle_policy.final_session_is_reportable(session)
     ]
     for session in projected:
+        session["_projection_contributions"] = [
+            dict(item) for item in session.get("_projection_contributions") or []
+        ]
+        session["member_slices"] = [dict(item) for item in session.get("member_slices") or []]
         _attach_detail_revision(session)
     return projected
 
@@ -60,7 +66,7 @@ def get_projected_activity_contributions_by_range(
 ) -> list[dict]:
     from .report_projection_snapshot_service import build_visible_snapshot
 
-    return list(build_visible_snapshot(start_date, end_date).final_contributions)
+    return [dict(item) for item in build_visible_snapshot(start_date, end_date).final_contributions]
 
 
 def resolve_current_session(
@@ -125,7 +131,7 @@ def _attach_contributions(sessions: list[dict], rows: list[dict]) -> None:
         ]
 
 
-def _display_safe_contribution(row: dict) -> dict:
+def _display_safe_contribution(row: Mapping[str, Any]) -> dict:
     activity_id = int(row.get("id") or row.get("activity_id") or 0)
     report_date = str(row.get("report_date") or "")
     slice_start = str(row.get("start_time") or "")
@@ -184,11 +190,11 @@ def _display_safe_contribution(row: dict) -> dict:
     }
 
 
-def _member_key(member: dict) -> tuple[str, int, str]:
-    return member_identity_key(member)
+def _member_key(member: Mapping[str, Any]) -> tuple[str, int, str]:
+    return member_identity_key(dict(member))
 
 
-def _member_key_from_row(row: dict) -> tuple[str, int, str, str]:
+def _member_key_from_row(row: Mapping[str, Any]) -> tuple[str, int, str]:
     return _member_key(row)
 
 
@@ -214,7 +220,7 @@ _PUBLIC_SESSION_FIELDS = (
 )
 
 
-def public_session_dto(session: dict) -> dict:
+def public_session_dto(session: Mapping[str, Any]) -> dict:
     """Explicit WebView/report boundary; private engine fields are never inferred."""
     return {field: session.get(field) for field in _PUBLIC_SESSION_FIELDS}
 
