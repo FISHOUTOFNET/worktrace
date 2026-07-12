@@ -6,6 +6,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any, Iterator
 
+from ..constants import DEFAULT_UNRECORDED_GAP_BOUNDARY_SECONDS
 from ..db import get_connection
 from . import report_session_operation_engine as engine
 from . import report_session_operation_service, timeline_service
@@ -16,7 +17,9 @@ from .report_projection_model import (
     ReportProjectionSnapshot,
     project_state_from_row,
 )
+from .report_session_builder import build_report_sessions
 from .report_status_policy import STANDALONE_STATUS, SUPPRESSED, decide_report_status
+from .settings_service import get_int_setting
 
 
 _REQUEST_SNAPSHOT_CACHE: ContextVar[dict[tuple[str, str], ReportProjectionSnapshot] | None] = ContextVar(
@@ -26,13 +29,7 @@ _REQUEST_SNAPSHOT_CACHE: ContextVar[dict[tuple[str, str], ReportProjectionSnapsh
 
 @contextmanager
 def snapshot_read_scope() -> Iterator[None]:
-    """Reuse canonical snapshots only inside one explicit API request.
-
-    Nested callers such as page-revision construction and Details aggregation
-    receive the exact same immutable snapshot. The ContextVar is reset at the
-    API boundary, so no snapshot can leak into a later WebView request or a
-    mutation unit of work.
-    """
+    """Reuse canonical snapshots only inside one explicit API request."""
     existing = _REQUEST_SNAPSHOT_CACHE.get()
     if existing is not None:
         yield
@@ -49,8 +46,8 @@ def build_visible_snapshot(start_date: str, end_date: str, *, conn=None) -> Repo
 
     An owned connection and a caller-owned transaction use the exact same
     implementation. The owned path starts a deferred read transaction so all
-    tables are observed from one SQLite snapshot. Explicit request scopes reuse
-    the immutable result for repeated reads of the same range.
+    tables and policy settings are observed from one SQLite snapshot. Explicit
+    request scopes reuse the immutable result for repeated reads of the range.
     """
     if conn is not None:
         return _build_snapshot(conn, start_date, end_date)
@@ -78,17 +75,25 @@ def _build_snapshot(conn, start_date: str, end_date: str) -> ReportProjectionSna
     project_states = _load_project_states(conn, uncategorized_id)
     rows = timeline_service.get_report_activity_rows(start_date, end_date, conn=conn)
 
-    # A deleted direct project removes the fact from every report surface; the
-    # raw activity and direct assignment remain untouched for audit purposes.
     reportable_rows = [
         row
         for row in rows
         if not bool(row.get("effective_project_is_deleted") or row.get("report_project_is_deleted"))
     ]
-    base_sessions = timeline_service._build_sessions_from_rows(
+    boundaries = timeline_service._boundary_times_for_rows(reportable_rows, conn=conn)
+    gap_threshold = max(
+        60,
+        get_int_setting(
+            "unrecorded_gap_boundary_seconds",
+            DEFAULT_UNRECORDED_GAP_BOUNDARY_SECONDS,
+            conn=conn,
+        ),
+    )
+    base_sessions = build_report_sessions(
         reportable_rows,
         uncategorized_id,
-        timeline_service._boundary_times_for_rows(reportable_rows, conn=conn),
+        boundary_times=boundaries,
+        unrecorded_gap_boundary_seconds=gap_threshold,
     )
     for session in base_sessions:
         projection._attach_session_identity(session)
