@@ -1,18 +1,29 @@
 from __future__ import annotations
 
+import copyreg
 import hashlib
 import json
+from types import MappingProxyType
 from typing import Any, Mapping
 
 from .report_projection_model import OperationDiagnostic, ProjectState, ReportMemberIdentity
 
 
-def member_identity_key(member: Mapping[str, Any] | ReportMemberIdentity, *, report_date: str = "") -> tuple[str, int, str]:
-    """Stable logical report-slice identity.
+SequenceMapping = list[Mapping[str, Any]] | tuple[Mapping[str, Any], ...]
 
-    End time and elapsed seconds are mutable content. They must not participate
-    in report projection identity.
-    """
+
+def _restore_mapping_proxy(value: dict[str, Any]) -> Mapping[str, Any]:
+    return MappingProxyType(value)
+
+
+# Replay results use mappingproxy internally. Register a deterministic reduction
+# so callers may deepcopy an operation fixture or immutable replay result without
+# weakening the runtime mapping itself.
+copyreg.pickle(MappingProxyType, lambda value: (_restore_mapping_proxy, (dict(value),)))
+
+
+def member_identity_key(member: Mapping[str, Any] | ReportMemberIdentity, *, report_date: str = "") -> tuple[str, int, str]:
+    """Stable logical report-slice identity."""
     if isinstance(member, ReportMemberIdentity):
         return (member.report_date, member.activity_id, member.slice_start_time)
     return (
@@ -28,11 +39,6 @@ def member_set_hash(report_date: str, members: SequenceMapping) -> str:
         for key in sorted(member_identity_key(member, report_date=report_date) for member in members)
     ]
     return hashlib.sha1("\n".join(parts).encode("utf-8")).hexdigest()
-
-
-# Small structural alias keeps public annotations readable without coupling the
-# identity module to one mutable container implementation.
-SequenceMapping = list[Mapping[str, Any]] | tuple[Mapping[str, Any], ...]
 
 
 def base_projection_key(report_date: str, members: SequenceMapping) -> str:
