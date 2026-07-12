@@ -10,6 +10,7 @@ from worktrace.db import get_connection
 from worktrace.services import activity_service, project_service
 from worktrace.services import report_session_operation_service as mutations
 from worktrace.services import secure_backup_service
+from worktrace.services.report_projection_identity import DURABLE_REVISION_PREFIX
 from worktrace.services.report_projection_snapshot_service import (
     build_visible_snapshot,
     snapshot_read_scope,
@@ -166,6 +167,19 @@ def test_database_generation_rejects_stale_background_results_until_fresh_read(t
     assert project_service.get_project_by_name("FreshWrite") is not None
 
 
+def test_secure_validation_accepts_open_activity_with_null_duration(temp_db):
+    project_id = project_service.create_project("P")
+    activity_service.create_activity(
+        "Open",
+        "open.exe",
+        "Open",
+        project_id=project_id,
+        start_time=f"{DATE} 08:00:00",
+    )
+    with get_connection() as conn:
+        secure_backup_service._validate_staging_database(conn)
+
+
 def test_secure_validation_rejects_semantically_invalid_activity_without_operations(temp_db):
     project_id = project_service.create_project("P")
     activity_id = _closed("09:00:00", "09:01:00", project_id)
@@ -175,7 +189,7 @@ def test_secure_validation_rejects_semantically_invalid_activity_without_operati
             secure_backup_service._validate_staging_database(conn)
 
 
-def test_secure_validation_rejects_revision_conflict_operation(temp_db):
+def test_secure_validation_rejects_versioned_revision_conflict(temp_db):
     project_id = project_service.create_project("P")
     activity_id = _closed("09:00:00", "09:01:00", project_id)
     source = build_visible_snapshot(DATE, DATE).final_sessions[0]
@@ -190,7 +204,7 @@ def test_secure_validation_rejects_revision_conflict_operation(temp_db):
             (
                 DATE,
                 str(source["projection_instance_key"]),
-                "0" * 40,
+                DURABLE_REVISION_PREFIX + "0" * (40 - len(DURABLE_REVISION_PREFIX)),
                 '{"payload_version":4}',
             ),
         )
