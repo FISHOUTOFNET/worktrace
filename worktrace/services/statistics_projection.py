@@ -38,26 +38,31 @@ def build_statistics_projection(snapshot: ReportProjectionSnapshot) -> ReportAna
     by_project: dict[str, dict] = {}
     by_app: dict[str, dict] = {}
     by_status: dict[str, dict] = {}
-    total = classified = uncategorized = excluded = project_duration = 0
+    total = classified = uncategorized = project_duration = 0
     closed_keys = {str(record["_record_key"]) for record in records}
+    record_by_key = {str(record["_record_key"]): record for record in records}
+
     for record in records:
         duration = int(record["duration_seconds"])
         total += duration
-        if record["status_code"] == STATUS_EXCLUDED:
-            excluded += duration
-        elif bool(record["is_uncategorized"]):
-            uncategorized += duration
-        else:
-            classified += duration
-            project_duration += duration
+        if not bool(record["_standalone_excluded"]):
+            if bool(record["is_uncategorized"]):
+                uncategorized += duration
+            else:
+                classified += duration
+                project_duration += duration
         _accumulate(by_project, str(record["project"]), duration, record["_member_identities"], str(record["_record_key"]))
         members.update(tuple(item) for item in record["_member_identities"])
 
-    # Contribution allocation powers app/status analytics, never export row
-    # structure.  Only contributions owned by a closed exported entry count.
+    # Contribution allocation owns status and application analytics. This lets
+    # attributed excluded time remain inside its project session while the
+    # excluded-duration metric counts only the excluded contribution itself.
+    excluded = 0
+    contributed_keys: set[str] = set()
     for key, contributions in contributions_by_entry.items():
         if key not in closed_keys:
             continue
+        contributed_keys.add(key)
         for row in contributions:
             identity = (
                 str(row.get("report_date") or ""),
@@ -65,10 +70,21 @@ def build_statistics_projection(snapshot: ReportProjectionSnapshot) -> ReportAna
                 str(row.get("slice_start_time") or ""),
             )
             duration = int(row.get("duration_seconds") or 0)
-            app = "已排除" if bool(row.get("privacy_redacted")) else str(row.get("app_name") or "未知应用")
-            _accumulate(by_app, app, duration, [identity], key)
             status = str(row.get("status") or "unknown")
+            privacy_redacted = bool(row.get("privacy_redacted")) or status == STATUS_EXCLUDED
+            if status == STATUS_EXCLUDED:
+                excluded += duration
+            app = "已排除" if privacy_redacted else str(row.get("app_name") or "未知应用")
+            _accumulate(by_app, app, duration, [identity], key)
             _accumulate(by_status, status, duration, [identity], key, display_name=format_status_label(status))
+
+    # Defensive fallback for a valid standalone excluded entry whose
+    # contribution payload is absent. Canonical snapshots normally always
+    # provide one, but analytics must not silently lose excluded time.
+    for key in closed_keys - contributed_keys:
+        record = record_by_key[key]
+        if bool(record["_standalone_excluded"]):
+            excluded += int(record["duration_seconds"])
 
     return ReportAnalyticsProjection(
         snapshot_revision=snapshot.snapshot_revision,
@@ -102,8 +118,11 @@ def _build_export_records(snapshot: ReportProjectionSnapshot) -> list[dict[str, 
         key = str(entry.get("projection_instance_key") or "")
         rows = contributions.get(key, [])
         statuses = sorted({str(row.get("status") or "normal") for row in rows}) or [str(entry.get("status_code") or "normal")]
-        excluded = bool(entry.get("privacy_redacted")) or STATUS_EXCLUDED in statuses
-        project = "已排除" if excluded else str(entry.get("project_name") or UNCATEGORIZED_PROJECT)
+        standalone_excluded = (
+            str(entry.get("row_kind") or "") == "standalone_status"
+            and (bool(entry.get("privacy_redacted")) or STATUS_EXCLUDED in statuses)
+        )
+        project = "已排除" if standalone_excluded else str(entry.get("project_name") or UNCATEGORIZED_PROJECT)
         members = sorted(
             {
                 (
@@ -123,11 +142,12 @@ def _build_export_records(snapshot: ReportProjectionSnapshot) -> list[dict[str, 
                 "duration_seconds": duration,
                 "project": project,
                 "status": "、".join(format_status_label(value) for value in statuses),
-                "status_code": STATUS_EXCLUDED if excluded else "+".join(statuses),
+                "status_code": STATUS_EXCLUDED if standalone_excluded else "+".join(statuses),
                 "note": str(entry.get("session_note") or ""),
                 "adjusted_duration": format_duration(entry.get("adjusted_duration_seconds")) if bool(entry.get("has_duration_override")) else "",
                 "is_adjusted": "是" if bool(entry.get("has_duration_override")) else "否",
-                "is_uncategorized": not excluded and not bool(entry.get("is_report_classified")),
+                "is_uncategorized": not standalone_excluded and not bool(entry.get("is_report_classified")),
+                "_standalone_excluded": standalone_excluded,
                 "_member_identities": members,
                 "_record_key": key,
             }
