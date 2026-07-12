@@ -41,7 +41,31 @@ jobs:
         run: python -m compileall worktrace
 
       - name: Run Python tests
-        run: python -m pytest -q --cache-clear
+        id: pytest
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          & python -m pytest -q --cache-clear 2>&1 | Tee-Object -FilePath pytest.log
+          exit $LASTEXITCODE
+
+      - name: Print pytest failure tail
+        if: steps.pytest.outcome == 'failure'
+        shell: pwsh
+        run: Get-Content -LiteralPath pytest.log -Tail 500
+
+      - name: Upload pytest log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-python-3.11
+          path: pytest.log
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Enforce pytest result
+        if: steps.pytest.outcome == 'failure'
+        shell: pwsh
+        run: exit 1
 
   python312-compat:
     name: Python 3.12 compatibility (manual)
@@ -51,11 +75,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Keep the supported compatibility set explicit. Python 3.11 is
-        # excluded here because the primary test job already covers it.
-        python-version: ["3.11", "3.12"]
-        exclude:
-          - python-version: "3.11"
+        python-version: ["3.12"]
 
     steps:
       - name: Check out repository
@@ -80,7 +100,31 @@ jobs:
         run: python -m compileall worktrace
 
       - name: Run Python tests
-        run: python -m pytest -q --cache-clear
+        id: pytest
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          & python -m pytest -q --cache-clear 2>&1 | Tee-Object -FilePath pytest.log
+          exit $LASTEXITCODE
+
+      - name: Print pytest failure tail
+        if: steps.pytest.outcome == 'failure'
+        shell: pwsh
+        run: Get-Content -LiteralPath pytest.log -Tail 500
+
+      - name: Upload pytest log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-python-${{ matrix.python-version }}
+          path: pytest.log
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Enforce pytest result
+        if: steps.pytest.outcome == 'failure'
+        shell: pwsh
+        run: exit 1
 
   node-tests:
     name: WebView Node tests
