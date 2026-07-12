@@ -77,6 +77,73 @@ def test_edit_no_effect_writes_only_receipt(temp_db):
         assert conn.execute("SELECT outcome_type FROM report_mutation_request").fetchone()[0] == "no_op"
 
 
+def test_minute_editor_baseline_does_not_create_duration_override_on_note_only_save(temp_db):
+    project_id = project_service.create_project("P")
+    _closed("10:00:00", "10:10:25", project_id=project_id)
+    source = build_visible_snapshot(DATE, DATE).final_sessions[0]
+    assert source["duration_seconds"] == 625
+    assert source["has_duration_override"] is False
+
+    result = mutations.edit_session(
+        DATE,
+        source["projection_instance_key"],
+        source["projection_revision"],
+        "note-with-rounded-duration",
+        project_id=None,
+        adjusted_duration_seconds=600,
+        note="memo",
+    )
+    assert result.outcome_type == "operation_committed"
+    updated = build_visible_snapshot(DATE, DATE).final_sessions[0]
+    assert updated["duration_seconds"] == 625
+    assert updated["has_duration_override"] is False
+    assert updated["session_note"] == "memo"
+
+    with get_connection() as conn:
+        payload = json.loads(
+            conn.execute(
+                "SELECT payload_json FROM report_session_operation WHERE id = ?",
+                (result.operation_id,),
+            ).fetchone()[0]
+        )
+    assert "duration" not in payload
+
+
+def test_existing_exact_duration_override_is_preserved_by_unchanged_rounded_editor_value(temp_db):
+    project_id = project_service.create_project("P")
+    _closed("11:00:00", "11:10:25", project_id=project_id)
+    source = build_visible_snapshot(DATE, DATE).final_sessions[0]
+    first = mutations.edit_session(
+        DATE,
+        source["projection_instance_key"],
+        source["projection_revision"],
+        "set-exact-duration",
+        project_id=None,
+        adjusted_duration_seconds=625,
+        note="",
+    )
+    assert first.outcome_type == "operation_committed"
+    overridden = build_visible_snapshot(DATE, DATE).final_sessions[0]
+    assert overridden["has_duration_override"] is True
+    assert overridden["adjusted_duration_seconds"] == 625
+
+    second = mutations.edit_session(
+        DATE,
+        overridden["projection_instance_key"],
+        overridden["projection_revision"],
+        "note-preserves-exact-duration",
+        project_id=None,
+        adjusted_duration_seconds=600,
+        note="memo",
+    )
+    assert second.outcome_type == "operation_committed"
+    updated = build_visible_snapshot(DATE, DATE).final_sessions[0]
+    assert updated["duration_seconds"] == 625
+    assert updated["adjusted_duration_seconds"] == 625
+    assert updated["has_duration_override"] is True
+    assert updated["session_note"] == "memo"
+
+
 def test_standalone_excluded_is_timeline_entry_but_open_entry_is_not_exported(temp_db):
     _closed("09:00:00", "09:10:00", status="excluded", app="Secret")
     snapshot = build_visible_snapshot(DATE, DATE)
@@ -91,6 +158,56 @@ def test_standalone_excluded_is_timeline_entry_but_open_entry_is_not_exported(te
     snapshot = build_visible_snapshot(DATE, DATE)
     assert len(snapshot.standalone_status_entries) == 2
     assert len(build_statistics_projection(snapshot).export_records) == 1
+
+
+def test_attributed_excluded_is_redacted_without_reclassifying_the_whole_project_session(temp_db):
+    project_id = project_service.create_project("P")
+    _closed("09:00:00", "09:10:00", project_id=project_id, app="NormalA")
+    excluded_id = _closed("09:10:00", "09:12:00", status="excluded", app="Secret")
+    _closed("09:12:00", "09:20:00", project_id=project_id, app="NormalB")
+
+    snapshot = build_visible_snapshot(DATE, DATE)
+    assert len(snapshot.final_sessions) == 1
+    assert snapshot.standalone_status_entries == ()
+    session = snapshot.final_sessions[0]
+    assert session["project_name"] == "P"
+    assert session["duration_seconds"] == 20 * 60
+
+    excluded_rows = [
+        row
+        for row in snapshot.final_contributions
+        if int(row.get("activity_id") or 0) == excluded_id
+    ]
+    assert len(excluded_rows) == 1
+    excluded = excluded_rows[0]
+    assert excluded["privacy_redacted"] is True
+    assert excluded["activity_display_name"] == "已排除"
+    assert excluded["app_name"] == ""
+    assert excluded["process_name"] == ""
+    assert excluded["resource_identity_key"] == ""
+    assert "Secret" not in json.dumps(excluded, ensure_ascii=False)
+
+    details = get_projection_session_activity_summary(
+        session["projection_instance_key"],
+        DATE,
+        expected_projection_revision=session["projection_revision"],
+    )
+    assert "Secret" not in json.dumps(details, ensure_ascii=False)
+    assert any(row["activity_name"] == "已排除" for row in details["summary_rows"])
+
+    analytics = build_statistics_projection(snapshot)
+    assert analytics.total_duration_seconds == 20 * 60
+    assert analytics.project_duration_seconds == 20 * 60
+    assert analytics.classified_duration_seconds == 20 * 60
+    assert analytics.excluded_duration_seconds == 2 * 60
+    assert analytics.uncategorized_duration_seconds == 0
+    assert analytics.by_project[0]["display_name"] == "P"
+    assert analytics.by_project[0]["duration_seconds"] == 20 * 60
+    by_status = {row["key"]: row["duration_seconds"] for row in analytics.by_status}
+    assert by_status["excluded"] == 2 * 60
+    assert analytics.export_records[0]["project"] == "P"
+    assert "已排除" in analytics.export_records[0]["status"]
+    assert "Secret" not in json.dumps(analytics.export_records, ensure_ascii=False)
 
 
 def test_details_resolves_actual_revision_and_public_dto_is_allowlisted(temp_db):
