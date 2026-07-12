@@ -178,7 +178,7 @@ def test_timeline_db_only_contract_open_row_ignores_current_snapshot(temp_db):
     assert sessions[0]["duration_seconds"] == 10
 
     summary = statistics_service.get_summary(today_str, today_str)
-    assert summary["total_duration"] == 10
+    assert summary["total_duration"] == 0
     assert 999 not in (
         summary.get("total_duration", 0),
         summary.get("classified_duration", 0),
@@ -330,10 +330,10 @@ def test_auto_suggested_project_name_displays_without_creating_project(temp_db):
     assert sessions[0]["project_name"] == UNCATEGORIZED_PROJECT
     assert sessions[0]["is_uncategorized"] is True
     assert sessions[0]["is_official_project"] is False
-    # The suggested name is retained as candidate_project_name metadata.
+    # Read projection must not invent or materialize candidate metadata.
     rows = timeline_service.get_report_activity_rows("2026-06-18", "2026-06-18")
     suggested_row = next(r for r in rows if int(r["id"]) == aid)
-    assert suggested_row["candidate_project_name"] == "ClientA"
+    assert suggested_row["candidate_project_name"] == ""
     # No project row is auto-created for the suggested name.
     assert "ClientA" not in [project["name"] for project in project_service.list_selectable_projects()]
     with get_connection() as conn:

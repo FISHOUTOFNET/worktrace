@@ -51,8 +51,8 @@ from .runtime_activity_state_service import clear_runtime_activity_state
 
 
 PAYLOAD_FORMAT = "worktrace-local-data"
-PAYLOAD_VERSION = 2
-SCHEMA_VERSION = "2"
+PAYLOAD_VERSION = 3
+SCHEMA_VERSION = "3"
 BACKUP_FILE_SUFFIX = ".wtbackup"
 
 # Tables exported and imported, in dependency-safe insert order (parents first).
@@ -67,8 +67,10 @@ EXPORT_TABLES: tuple[str, ...] = (
     "activity_project_assignment",
     "activity_clipboard_event",
     "report_session_operation",
+    "report_mutation_request",
     "report_session_operation_member",
     "report_session_operation_dependency",
+    "report_session_operation_supersession",
     "activity_resource",
 )
 
@@ -96,8 +98,10 @@ SECURE_IMPORT_GUARD_KEY = "secure_import_in_progress"
 # Delete order (children first) to respect foreign keys.
 _DELETE_ORDER: tuple[str, ...] = (
     "activity_resource",
+    "report_session_operation_supersession",
     "report_session_operation_dependency",
     "report_session_operation_member",
+    "report_mutation_request",
     "report_session_operation",
     "activity_clipboard_event",
     "activity_project_assignment",
@@ -454,7 +458,7 @@ def _validate_operation_graph(conn: sqlite3.Connection) -> None:
     duplicate = conn.execute(
         """
         SELECT request_id
-        FROM report_session_operation
+        FROM report_mutation_request
         GROUP BY request_id
         HAVING COUNT(*) > 1
         LIMIT 1
@@ -473,6 +477,29 @@ def _validate_operation_graph(conn: sqlite3.Connection) -> None:
         """
     ).fetchone()
     if invalid_dependency:
+        raise BackupCorruptedError("backup file is invalid or corrupted")
+    invalid_supersession = conn.execute(
+        """
+        SELECT 1
+        FROM report_session_operation_supersession s
+        LEFT JOIN report_session_operation p ON p.id = s.superseded_operation_id
+        LEFT JOIN report_session_operation c ON c.id = s.superseding_operation_id
+        WHERE p.id IS NULL OR c.id IS NULL OR p.id = c.id
+        LIMIT 1
+        """
+    ).fetchone()
+    if invalid_supersession:
+        raise BackupCorruptedError("backup file is invalid or corrupted")
+    invalid_request_operation = conn.execute(
+        """
+        SELECT 1
+        FROM report_mutation_request r
+        LEFT JOIN report_session_operation o ON o.id = r.operation_id
+        WHERE r.operation_id IS NOT NULL AND o.id IS NULL
+        LIMIT 1
+        """
+    ).fetchone()
+    if invalid_request_operation:
         raise BackupCorruptedError("backup file is invalid or corrupted")
 
 

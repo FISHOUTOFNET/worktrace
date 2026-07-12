@@ -1,5 +1,7 @@
 import pytest
 
+pytestmark = [pytest.mark.db, pytest.mark.unit]
+
 from worktrace.services import session_boundary_service
 from worktrace.services.session_boundary_policy import (
     ALLOWED_HARD_BOUNDARY_REASONS,

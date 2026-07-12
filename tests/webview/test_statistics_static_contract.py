@@ -750,13 +750,12 @@ def test_bridge_statistics_explicit_bool_rejection_comment():
 
 def test_service_statistics_status_inclusion_semantics_documented():
     """statistics_service.py must document the status inclusion
-    semantics (normal/idle/paused/excluded/error all included)."""
+    semantics owned by the central report status policy."""
     service_path = REPO_ROOT / "worktrace" / "services" / "statistics_service.py"
     source = service_path.read_text(encoding="utf-8")
     # The documented semantics block.
-    assert "normal" in source and "idle" in source and "paused" in source
-    assert "excluded" in source and "error" in source
-    assert "included" in source
+    assert "normal" in source and "idle/error/excluded" in source and "paused" in source
+    assert "suppressed" in source and "central report status policy" in source
 
 
 
@@ -836,11 +835,9 @@ def test_service_statistics_all_known_statuses_included(temp_db):
         activity_service.close_activity(aid, "2026-06-25 09:30:00")
     summary = statistics_service.get_statistics_export_summary("2026-06-25", "2026-06-25")
     by_status = {g["key"]: g for g in summary["by_status"]}
-    assert summary["activity_count"] == 2
-    assert "normal" in by_status
-    assert "excluded" in by_status
-    for status in ("idle", "paused", "error"):
-        assert status not in by_status
+    assert summary["activity_count"] == 4
+    assert set(by_status) == {"normal", "idle", "excluded", "error"}
+    assert "paused" not in by_status
 
 
 

@@ -137,7 +137,6 @@ CREATE TABLE IF NOT EXISTS activity_project_assignment (
 
 CREATE TABLE IF NOT EXISTS report_session_operation (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    request_id TEXT NOT NULL UNIQUE,
     report_date TEXT NOT NULL,
     operation_type TEXT NOT NULL CHECK(operation_type IN ('edit_session', 'hide_session', 'merge_sessions', 'copy_session', 'hide_activity', 'split_session')),
     base_instance_key TEXT NOT NULL,
@@ -147,14 +146,23 @@ CREATE TABLE IF NOT EXISTS report_session_operation (
     direction TEXT CHECK(direction IS NULL OR direction IN ('previous', 'next')),
     replay_order INTEGER NOT NULL,
     match_state TEXT NOT NULL DEFAULT 'active' CHECK(match_state IN ('active', 'conflict', 'orphaned', 'superseded')),
-    superseded_by_operation_id INTEGER,
     reverts_operation_id INTEGER,
     payload_json TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     UNIQUE(report_date, replay_order),
-    FOREIGN KEY(superseded_by_operation_id) REFERENCES report_session_operation(id),
     FOREIGN KEY(reverts_operation_id) REFERENCES report_session_operation(id)
+);
+
+CREATE TABLE IF NOT EXISTS report_mutation_request (
+    request_id TEXT PRIMARY KEY,
+    input_signature TEXT NOT NULL,
+    outcome_type TEXT NOT NULL CHECK(outcome_type IN ('operation_committed', 'no_op')),
+    operation_id INTEGER,
+    result_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    committed_at TEXT NOT NULL,
+    FOREIGN KEY(operation_id) REFERENCES report_session_operation(id)
 );
 
 CREATE TABLE IF NOT EXISTS report_session_operation_member (
@@ -175,6 +183,17 @@ CREATE TABLE IF NOT EXISTS report_session_operation_dependency (
     PRIMARY KEY(parent_operation_id, child_operation_id),
     FOREIGN KEY(parent_operation_id) REFERENCES report_session_operation(id) ON DELETE CASCADE,
     FOREIGN KEY(child_operation_id) REFERENCES report_session_operation(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS report_session_operation_supersession (
+    superseded_operation_id INTEGER NOT NULL,
+    superseding_operation_id INTEGER NOT NULL,
+    reason TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY(superseded_operation_id, superseding_operation_id),
+    CHECK(superseded_operation_id <> superseding_operation_id),
+    FOREIGN KEY(superseded_operation_id) REFERENCES report_session_operation(id) ON DELETE CASCADE,
+    FOREIGN KEY(superseding_operation_id) REFERENCES report_session_operation(id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS activity_clipboard_event (

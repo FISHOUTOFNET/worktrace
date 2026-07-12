@@ -10,6 +10,8 @@ from worktrace.db import get_connection
 from worktrace.platforms.base import ActiveWindow
 from worktrace.services import settings_service
 
+pytestmark = [pytest.mark.db, pytest.mark.collector_runtime, pytest.mark.contract]
+
 
 class _RaisingActiveWindowAdapter:
     def get_active_window(self):
@@ -52,7 +54,7 @@ def test_transient_adapter_failure_only_updates_health_not_activity_continuity(t
     stop_event = threading.Event()
     captured = {}
 
-    def fake_sleep(_stop_event, _control, next_poll_deadline):
+    def fake_wait(_stop_event, _control, next_poll_deadline):
         captured["pending"] = settings_service.get_setting("pending_short_seconds")
         captured["snapshot"] = settings_service.get_setting("current_activity_snapshot")
         captured["health"] = settings_service.get_setting("collector_health_state")
@@ -61,7 +63,7 @@ def test_transient_adapter_failure_only_updates_health_not_activity_continuity(t
         stop_event.set()
         return next_poll_deadline + 1
 
-    monkeypatch.setattr(collector_mod, "_sleep_until_next_poll", fake_sleep)
+    monkeypatch.setattr(collector_mod, "_sleep_until_next_poll", fake_wait)
 
     run_collector(adapter, stop_event)
 
@@ -94,7 +96,7 @@ def test_privacy_failure_only_updates_health_not_activity_continuity(temp_db, mo
         lambda _window: (_ for _ in ()).throw(RuntimeError("privacy failed")),
     )
 
-    def fake_sleep(_stop_event, _control, next_poll_deadline):
+    def fake_wait(_stop_event, _control, next_poll_deadline):
         captured["pending"] = settings_service.get_setting("pending_short_seconds")
         captured["snapshot"] = settings_service.get_setting("current_activity_snapshot")
         captured["phase"] = settings_service.get_setting("collector_last_failure_phase")
@@ -102,7 +104,7 @@ def test_privacy_failure_only_updates_health_not_activity_continuity(temp_db, mo
         stop_event.set()
         return next_poll_deadline + 1
 
-    monkeypatch.setattr(collector_mod, "_sleep_until_next_poll", fake_sleep)
+    monkeypatch.setattr(collector_mod, "_sleep_until_next_poll", fake_wait)
 
     run_collector(Adapter(), stop_event)
 
@@ -127,14 +129,14 @@ def test_clipboard_failure_does_not_block_normal_activity_observation(temp_db, m
         def get_clipboard_events(self):
             raise RuntimeError("clipboard failed")
 
-    def fake_sleep(_stop_event, _control, next_poll_deadline):
+    def fake_wait(_stop_event, _control, next_poll_deadline):
         captured["snapshot"] = settings_service.get_setting("current_activity_snapshot")
         captured["last_failure_phase"] = settings_service.get_setting("collector_last_failure_phase")
         _assert_no_error_activity_or_boundary_before_stop()
         stop_event.set()
         return next_poll_deadline + 1
 
-    monkeypatch.setattr(collector_mod, "_sleep_until_next_poll", fake_sleep)
+    monkeypatch.setattr(collector_mod, "_sleep_until_next_poll", fake_wait)
 
     run_collector(Adapter(), stop_event)
 
@@ -149,7 +151,7 @@ def test_consecutive_transient_failures_reach_failing_without_activity_error(tem
     attempts = {"count": 0}
     captured = {}
 
-    def fake_sleep(_stop_event, _control, next_poll_deadline):
+    def fake_wait(_stop_event, _control, next_poll_deadline):
         attempts["count"] += 1
         if attempts["count"] >= 3:
             captured["health"] = settings_service.get_setting("collector_health_state")
@@ -157,7 +159,7 @@ def test_consecutive_transient_failures_reach_failing_without_activity_error(tem
             stop_event.set()
         return next_poll_deadline + 1
 
-    monkeypatch.setattr(collector_mod, "_sleep_until_next_poll", fake_sleep)
+    monkeypatch.setattr(collector_mod, "_sleep_until_next_poll", fake_wait)
 
     run_collector(_RaisingActiveWindowAdapter(), stop_event)
 

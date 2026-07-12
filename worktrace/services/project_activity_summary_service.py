@@ -66,18 +66,22 @@ def get_projection_session_activity_summary(
     projection_instance_key: str,
     report_date: str,
     *,
-    ensure_context: bool = True,
+    expected_projection_revision: str | None = None,
+    ensure_context: bool = False,
 ) -> list[dict]:
     """Return right-panel summaries scoped to one final projection instance."""
     from .report_session_operation_engine import build_projected_activity_contributions
-    from .report_session_projection_service import get_visible_report_sessions_for_operations_by_date
+    from .report_projection_snapshot_service import build_visible_snapshot
 
-    sessions = get_visible_report_sessions_for_operations_by_date(report_date, ensure_context=ensure_context)
+    snapshot = build_visible_snapshot(report_date, report_date, ensure_context=ensure_context)
+    sessions = snapshot.final_sessions
     session = next(
         (item for item in sessions if str(item.get("projection_instance_key") or "") == str(projection_instance_key or "")),
         None,
     )
     if not session:
+        raise ValueError("stale_selection")
+    if expected_projection_revision is not None and str(session.get("projection_revision") or "") != str(expected_projection_revision or ""):
         raise ValueError("stale_selection")
     contributions = build_projected_activity_contributions([session])
     summaries = build_activity_summary_rows(

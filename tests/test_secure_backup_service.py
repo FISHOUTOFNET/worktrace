@@ -115,11 +115,11 @@ def _seed_test_data() -> None:
         cur = conn.execute(
             """
             INSERT INTO report_session_operation(
-                request_id, report_date, operation_type, base_instance_key, base_expected_revision,
+                report_date, operation_type, base_instance_key, base_expected_revision,
                 target_instance_key, target_expected_revision, direction, replay_order, match_state,
                 payload_json, created_at, updated_at
             )
-            VALUES ('backup-seed-edit', ?, 'edit_session', ?, ?, NULL, NULL, NULL, 1, 'active', ?, ?, ?)
+            VALUES (?, 'edit_session', ?, ?, NULL, NULL, NULL, 1, 'active', ?, ?, ?)
             """,
             (
                 "2026-06-25",
@@ -127,10 +127,35 @@ def _seed_test_data() -> None:
                 "b" * 40,
                 json.dumps(
                     {
-                        "payload_version": 2,
+                            "payload_version": 3,
                         "project": {"mode": "set", "project_id": project_id},
                         "duration": {"mode": "set", "value": 60},
                         "note": {"mode": "set", "value": TEST_NOTE},
+                    },
+                    ensure_ascii=False,
+                ),
+                ts,
+                ts,
+            ),
+        )
+        operation_id = int(cur.lastrowid)
+        conn.execute(
+            """
+            INSERT INTO report_mutation_request(
+                request_id, input_signature, outcome_type, operation_id, result_json, created_at, committed_at
+            )
+            VALUES ('backup-seed-edit', 'seed-signature', 'operation_committed', ?, ?, ?, ?)
+            """,
+            (
+                operation_id,
+                json.dumps(
+                    {
+                        "request_id": "backup-seed-edit",
+                        "outcome_type": "operation_committed",
+                        "operation_id": operation_id,
+                        "report_date": "2026-06-25",
+                        "selection_hint": None,
+                        "snapshot_revision": "c" * 40,
                     },
                     ensure_ascii=False,
                 ),
@@ -146,7 +171,7 @@ def _seed_test_data() -> None:
             VALUES (?, 'source', ?, ?, ?)
             """,
             (
-                int(cur.lastrowid),
+                operation_id,
                 activity_id,
                 "2026-06-25",
                 "2026-06-25 10:00:00",
@@ -223,7 +248,10 @@ def _row_counts() -> dict[str, int]:
         "activity_project_assignment",
         "activity_clipboard_event",
         "report_session_operation",
+        "report_mutation_request",
         "report_session_operation_member",
+        "report_session_operation_dependency",
+        "report_session_operation_supersession",
         "activity_resource",
     ]
     counts: dict[str, int] = {}
@@ -241,7 +269,7 @@ def test_export_payload_contains_required_tables(temp_db, tmp_path):
     data = json.loads(payload.decode("utf-8"))
 
     assert data["format"] == "worktrace-local-data"
-    assert data["version"] == 2
+    assert data["version"] == 3
     tables = data["tables"]
     for required in [
         "project",
@@ -254,7 +282,10 @@ def test_export_payload_contains_required_tables(temp_db, tmp_path):
         "activity_project_assignment",
         "activity_clipboard_event",
         "report_session_operation",
+        "report_mutation_request",
         "report_session_operation_member",
+        "report_session_operation_dependency",
+        "report_session_operation_supersession",
         "activity_resource",
     ]:
         assert required in tables, f"missing table {required} in payload"
@@ -539,7 +570,14 @@ def test_replace_import_restores_distinctive_data(temp_db, tmp_path):
         ).fetchone()
         assert activity is not None
         assert activity["file_path_hint"] == TEST_FILE_PATH
-        operation = conn.execute("SELECT payload_json FROM report_session_operation WHERE request_id = 'backup-seed-edit'").fetchone()
+        operation = conn.execute(
+            """
+            SELECT o.payload_json
+            FROM report_mutation_request r
+            JOIN report_session_operation o ON o.id = r.operation_id
+            WHERE r.request_id = 'backup-seed-edit'
+            """
+        ).fetchone()
         assert TEST_NOTE in operation["payload_json"]
 
         resource = conn.execute(
@@ -638,7 +676,7 @@ def test_api_parse_manifest_does_not_require_passphrase(temp_db, tmp_path):
 
     info = backup_api.parse_encrypted_backup_manifest(str(out))
 
-    assert info.version == 2
+    assert info.version == 3
     assert info.payload_format == "wtenc1"
 
 

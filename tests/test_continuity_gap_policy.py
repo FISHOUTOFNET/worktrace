@@ -1,5 +1,9 @@
+import pytest
+
 from worktrace.constants import STATUS_ERROR, STATUS_EXCLUDED, STATUS_IDLE, STATUS_NORMAL, STATUS_PAUSED
 from worktrace.services import activity_continuity_service, activity_service, settings_service
+
+pytestmark = [pytest.mark.db, pytest.mark.unit]
 
 
 def _activity(name: str, status: str, start: str, end: str):

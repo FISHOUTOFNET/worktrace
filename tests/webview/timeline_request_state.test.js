@@ -42,7 +42,18 @@ test("old detail owner cannot write after selection changes", () => {
   assert.equal(App.timelineRequestState.isCurrentDetailsOwner(ownerB), true);
 });
 
-test("request deduplication key includes date key revision and epochs", () => {
+test("request deduplication key is stable for the same timeline date key and revision", () => {
+  const App = loadState();
+  App.timelineRequestState.nextTimelineOwner("2026-06-25");
+  const first = App.timelineRequestState.nextSelectionOwner("2026-06-25", "base:a", "rev-a");
+  const second = App.timelineRequestState.nextSelectionOwner("2026-06-25", "base:a", "rev-a");
+  assert.equal(
+    App.timelineRequestState.detailRequestKey(first),
+    App.timelineRequestState.detailRequestKey(second)
+  );
+});
+
+test("request deduplication key changes when revision changes", () => {
   const App = loadState();
   App.timelineRequestState.nextTimelineOwner("2026-06-25");
   const first = App.timelineRequestState.nextSelectionOwner("2026-06-25", "base:a", "rev-a");
@@ -50,5 +61,17 @@ test("request deduplication key includes date key revision and epochs", () => {
   assert.notEqual(
     App.timelineRequestState.detailRequestKey(first),
     App.timelineRequestState.detailRequestKey(second)
+  );
+});
+
+test("same mutation intent reuses request id while in flight", () => {
+  const App = loadState();
+  const first = App.timelineRequestState.nextMutationOwner("edit", "2026-06-25", "base:a", "rev-a", "[1]");
+  const second = App.timelineRequestState.nextMutationOwner("edit", "2026-06-25", "base:a", "rev-a", "[1]");
+  assert.equal(second, first);
+  assert.equal(second.requestId, first.requestId);
+  assert.equal(
+    App.timelineRequestState.nextMutationOwner("edit", "2026-06-25", "base:a", "rev-a", "[2]"),
+    null
   );
 });

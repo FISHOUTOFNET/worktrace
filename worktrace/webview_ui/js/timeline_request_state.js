@@ -40,11 +40,10 @@
 
     function detailRequestKey(owner) {
         return [
+            String(owner.timelineEpoch || 0),
             owner.absoluteReportDate || "",
             owner.projectionInstanceKey || "",
-            owner.projectionRevision || "",
-            String(owner.timelineEpoch || 0),
-            String(owner.selectionEpoch || 0)
+            owner.projectionRevision || ""
         ].join("|");
     }
 
@@ -67,8 +66,21 @@
             + "-" + hex.slice(16, 20) + "-" + hex.slice(20);
     }
 
-    function nextMutationOwner(method, date, projectionInstanceKey, projectionRevision) {
-        if (App.mutationOwner && App.mutationOwner.inFlight) return null;
+    function mutationIntentKey(method, date, projectionInstanceKey, projectionRevision, argsSignature) {
+        return [
+            method || "",
+            absoluteDate(date) || "",
+            projectionInstanceKey || "",
+            projectionRevision || "",
+            argsSignature || ""
+        ].join("|");
+    }
+
+    function nextMutationOwner(method, date, projectionInstanceKey, projectionRevision, argsSignature) {
+        var intentKey = mutationIntentKey(method, date, projectionInstanceKey, projectionRevision, argsSignature);
+        if (App.mutationOwner && App.mutationOwner.inFlight) {
+            return App.mutationOwner.intentKey === intentKey ? App.mutationOwner : null;
+        }
         App.mutationEpoch = (App.mutationEpoch || 0) + 1;
         App.mutationOwner = {
             mutationEpoch: App.mutationEpoch,
@@ -76,6 +88,7 @@
             absoluteReportDate: absoluteDate(date),
             projectionInstanceKey: projectionInstanceKey || "",
             projectionRevision: projectionRevision || "",
+            intentKey: intentKey,
             requestId: newRequestId(),
             inFlight: true
         };
@@ -103,6 +116,7 @@
         detailRequestKey: detailRequestKey,
         isCurrentDetailsOwner: isCurrentDetailsOwner,
         isCurrentMutationOwner: isCurrentMutationOwner,
+        mutationIntentKey: mutationIntentKey,
         newRequestId: newRequestId,
         nextMutationOwner: nextMutationOwner,
         nextSelectionOwner: nextSelectionOwner,

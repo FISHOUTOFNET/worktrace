@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import datetime
 
+import pytest
+
 from worktrace.api import rule_api
 from worktrace.db import get_connection, now_str
 from worktrace.services import (
@@ -14,6 +16,8 @@ from worktrace.services import (
     rule_history_application_service,
     rule_service,
 )
+
+pytestmark = [pytest.mark.db, pytest.mark.integration]
 
 
 def _closed_activity(title: str = "Spec document") -> int:

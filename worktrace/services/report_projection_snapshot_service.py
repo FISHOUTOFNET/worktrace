@@ -5,8 +5,8 @@ from typing import Any
 
 from ..db import get_connection
 from . import report_session_operation_engine, report_session_operation_service, timeline_service
-from .project_service import get_or_create_uncategorized_project
 from .report_projection_identity import stable_json_hash
+from .report_status_policy import STANDALONE_STATUS, SUPPRESSED, decide_report_status
 
 
 @dataclass(frozen=True)
@@ -19,6 +19,9 @@ class ReportProjectionSnapshot:
     commands: list[dict[str, Any]]
     final_sessions: list[dict[str, Any]]
     final_contributions: list[dict[str, Any]]
+    standalone_status_rows: list[dict[str, Any]]
+    suppressed_rows: list[dict[str, Any]]
+    operation_lifecycle_records: list[dict[str, Any]]
     snapshot_revision: str
 
 
@@ -26,11 +29,9 @@ def build_visible_snapshot(
     start_date: str,
     end_date: str,
     *,
-    ensure_context: bool = True,
+    ensure_context: bool = False,
     conn=None,
 ) -> ReportProjectionSnapshot:
-    if ensure_context and conn is None:
-        timeline_service._ensure_context_for_report_range(start_date, end_date)
     if conn is None:
         with get_connection() as own_conn:
             own_conn.execute("BEGIN")
@@ -38,7 +39,7 @@ def build_visible_snapshot(
     if ensure_context:
         timeline_service._ensure_context_for_report_range_in_transaction(conn, start_date, end_date)
 
-    uncategorized_id = get_or_create_uncategorized_project(conn=conn)
+    uncategorized_id = timeline_service._uncategorized_project_id(conn)
     rows = timeline_service.get_report_activity_rows(
         start_date,
         end_date,
@@ -52,7 +53,6 @@ def build_visible_snapshot(
         timeline_service._boundary_times_for_rows(rows, conn=conn),
     )
     from . import report_session_projection_service
-    from .activity_continuity_service import is_normal_project_status
 
     for session in base_sessions:
         report_session_projection_service._attach_session_identity(session)
@@ -67,8 +67,9 @@ def build_visible_snapshot(
     for session in base_sessions:
         by_date.setdefault(str(session.get("report_date") or ""), []).append(session)
     for report_date, sessions in by_date.items():
-        operations = report_session_operation_service.load_operations(report_date, conn=conn)
-        commands.extend(operations)
+        lifecycle = report_session_operation_service.load_operation_lifecycle(report_date, conn=conn)
+        operations = [item for item in lifecycle if str(item.get("match_state") or "") == "active"]
+        commands.extend(lifecycle)
         ordered = sorted(sessions, key=timeline_service._session_sort_key, reverse=True)
         final_sessions.extend(report_session_operation_engine.apply_operations(ordered, operations))
     final_sessions = [
@@ -78,12 +79,31 @@ def build_visible_snapshot(
     ]
 
     final_contributions = report_session_operation_engine.build_projected_activity_contributions(final_sessions)
-    status_rows = [dict(row) for row in rows if not is_normal_project_status(str(row.get("status") or ""))]
+    status_rows = [
+        dict(row)
+        for row in rows
+        if decide_report_status(
+            str(row.get("status") or ""),
+            has_project_attribution=bool(row.get("is_report_project")),
+        ).decision
+        != "session_contribution"
+    ]
+    standalone_status_rows: list[dict[str, Any]] = []
+    suppressed_rows: list[dict[str, Any]] = []
     for row in status_rows:
+        decision = decide_report_status(str(row.get("status") or ""), has_project_attribution=bool(row.get("is_report_project")))
+        if decision.decision == SUPPRESSED:
+            suppressed = dict(row)
+            suppressed["status_decision"] = decision.decision
+            suppressed_rows.append(suppressed)
+            continue
+        if decision.decision != STANDALONE_STATUS:
+            continue
         item = report_session_projection_service._display_safe_contribution(row)
         item["projection_instance_key"] = f"status:{item['report_date']}:{item['activity_id']}:{item['slice_start_time']}"
         item["projection_kind"] = "status"
         final_contributions.append(item)
+        standalone_status_rows.append(item)
 
     revision = stable_json_hash(
         {
@@ -119,6 +139,14 @@ def build_visible_snapshot(
                 for row in status_rows
             ],
             "commands": [(command.get("id"), command.get("replay_order"), command.get("match_state")) for command in commands],
+            "standalone_status_rows": [
+                (row.get("projection_instance_key"), row.get("duration_seconds"), row.get("status"))
+                for row in standalone_status_rows
+            ],
+            "suppressed_rows": [
+                (row.get("id") or row.get("activity_id"), row.get("report_date"), row.get("status"))
+                for row in suppressed_rows
+            ],
         }
     )
     return ReportProjectionSnapshot(
@@ -130,6 +158,9 @@ def build_visible_snapshot(
         commands=commands,
         final_sessions=sorted(final_sessions, key=timeline_service._session_sort_key, reverse=True),
         final_contributions=final_contributions,
+        standalone_status_rows=standalone_status_rows,
+        suppressed_rows=suppressed_rows,
+        operation_lifecycle_records=commands,
         snapshot_revision=revision,
     )
 

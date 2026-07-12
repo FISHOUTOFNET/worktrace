@@ -15,7 +15,7 @@ from .constants import (
     UNCATEGORIZED_PROJECT,
 )
 
-CURRENT_SCHEMA_VERSION = 2
+CURRENT_SCHEMA_VERSION = 3
 
 
 def read_schema_sql() -> str:
@@ -199,8 +199,10 @@ def drop_all_tables(conn: sqlite3.Connection) -> None:
         DROP TABLE IF EXISTS activity_resource;
         DROP TABLE IF EXISTS folder_rule_file_index;
         DROP TABLE IF EXISTS folder_rule_index_state;
+        DROP TABLE IF EXISTS report_session_operation_supersession;
         DROP TABLE IF EXISTS report_session_operation_dependency;
         DROP TABLE IF EXISTS report_session_operation_member;
+        DROP TABLE IF EXISTS report_mutation_request;
         DROP TABLE IF EXISTS report_session_operation;
         DROP TABLE IF EXISTS activity_clipboard_event;
         DROP TABLE IF EXISTS activity_project_assignment;

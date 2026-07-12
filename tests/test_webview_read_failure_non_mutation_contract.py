@@ -1,6 +1,10 @@
+import pytest
+
 from worktrace.db import get_connection
 from worktrace.services import settings_service
 from worktrace.webview_ui.bridge import WebViewBridge
+
+pytestmark = [pytest.mark.db, pytest.mark.integration, pytest.mark.contract]
 
 
 def _boundary_count() -> int:

@@ -4,9 +4,6 @@ from datetime import date, timedelta
 
 from ..constants import STATUS_EXCLUDED, STATUS_IDLE, STATUS_NORMAL, STATUS_PAUSED, UNCATEGORIZED_PROJECT
 from ..formatters import format_status_label
-from .context_service import recompute_context_assignments_for_date
-from . import report_session_projection_service, timeline_service
-from .activity_continuity_service import is_normal_project_status
 
 # Maximum inclusive calendar-day span accepted by the read-only
 # statistics/export summary. A 31-day span (e.g. 2026-06-01..2026-07-01) is
@@ -14,10 +11,15 @@ from .activity_continuity_service import is_normal_project_status
 # never reads an unbounded amount of data.
 STATISTICS_SUMMARY_MAX_RANGE_DAYS = 31
 
+# Statistics uses the central report status policy: normal rows always count;
+# attributed idle/error/excluded rows count through their report attribution
+# (excluded remains privacy-redacted); unattributed idle/error and paused rows
+# are suppressed.
+
 _UNKNOWN_APP_LABEL = "未知应用"
 
 
-def get_summary(start_date: str, end_date: str, ensure_context: bool = True) -> dict:
+def get_summary(start_date: str, end_date: str, ensure_context: bool = False) -> dict:
     """Return a DB-only statistics summary for the inclusive date range.
 
     This function is DB-ONLY. It does NOT project the current live
@@ -28,61 +30,20 @@ def get_summary(start_date: str, end_date: str, ensure_context: bool = True) -> 
     guarantees the KPI base, the recent items, and the live clock all
     share one sample.
     """
-    if ensure_context:
-        _ensure_context_range(start_date, end_date)
-    sessions = timeline_service.get_project_sessions_by_range(
-        start_date,
-        end_date,
-        include_hidden=False,
-        ensure_context=False,
-    )
-    rows = report_session_projection_service.get_projected_activity_contributions_by_range(
-        start_date,
-        end_date,
-        include_hidden=False,
-        ensure_context=False,
-    )
-    total = sum(int(row.get("duration_seconds") or 0) for row in rows)
-    effective = sum(
-        int(row.get("duration_seconds") or 0)
-        for row in rows
-        if row.get("status") == STATUS_NORMAL
-    )
-    idle = sum(
-        int(row.get("duration_seconds") or 0)
-        for row in rows
-        if row.get("status") == STATUS_IDLE
-    )
-    paused = sum(
-        int(row.get("duration_seconds") or 0)
-        for row in rows
-        if row.get("status") == STATUS_PAUSED
-    )
-    excluded = sum(
-        int(row.get("duration_seconds") or 0)
-        for row in rows
-        if row.get("status") == STATUS_EXCLUDED
-    )
-    uncategorized = 0
-    classified = 0
-    for session in sessions:
-        seconds = int(session.get("display_duration_seconds") or session.get("duration_seconds") or 0)
-        if str(session.get("project_name") or UNCATEGORIZED_PROJECT) == UNCATEGORIZED_PROJECT:
-            uncategorized += seconds
-        else:
-            classified += seconds
+    projection = _build_projection(start_date, end_date, ensure_context=ensure_context)
+    by_status = {str(row["key"]): int(row["duration_seconds"]) for row in projection.by_status}
     return {
-        "total_duration": total,
-        "effective_duration": effective,
-        "classified_duration": classified,
-        "idle_duration": idle,
-        "paused_duration": paused,
-        "excluded_duration": excluded,
-        "uncategorized_duration": uncategorized,
+        "total_duration": projection.total_duration_seconds,
+        "effective_duration": by_status.get(STATUS_NORMAL, 0),
+        "classified_duration": projection.classified_duration_seconds,
+        "idle_duration": by_status.get(STATUS_IDLE, 0),
+        "paused_duration": by_status.get(STATUS_PAUSED, 0),
+        "excluded_duration": projection.excluded_duration_seconds,
+        "uncategorized_duration": projection.uncategorized_duration_seconds,
     }
 
 
-def get_project_stats(start_date: str, end_date: str, ensure_context: bool = True) -> list[dict]:
+def get_project_stats(start_date: str, end_date: str, ensure_context: bool = False) -> list[dict]:
     """Return DB-only per-project statistics for the inclusive date range.
 
     This function is DB-ONLY. It does NOT project the current live
@@ -90,25 +51,15 @@ def get_project_stats(start_date: str, end_date: str, ensure_context: bool = Tru
     of those live semantics are owned by
     :mod:`worktrace.services.activity_display_model_service`.
     """
-    if ensure_context:
-        _ensure_context_range(start_date, end_date)
-    groups: dict[str, dict] = {}
-    for session in timeline_service.get_project_sessions_by_range(
-        start_date,
-        end_date,
-        include_hidden=False,
-        ensure_context=False,
-    ):
-        if session["status"] not in {STATUS_NORMAL, "mixed"}:
-            continue
-        project = str(session.get("project_name") or UNCATEGORIZED_PROJECT)
-        description = str(session.get("project_description") or "").strip()
-        group = groups.setdefault(project, {"project": project, "total_duration": 0, "record_count": 0})
-        if description and not group.get("project_description"):
-            group["project_description"] = description
-        group["total_duration"] += int(session.get("duration_seconds") or 0)
-        group["record_count"] += 1
-    return sorted(groups.values(), key=lambda row: (-int(row["total_duration"]), str(row["project"]).casefold()))
+    projection = _build_projection(start_date, end_date, ensure_context=ensure_context)
+    return [
+        {
+            "project": row["display_name"],
+            "total_duration": row["duration_seconds"],
+            "record_count": row.get("record_count") or row["activity_count"],
+        }
+        for row in projection.by_project
+    ]
 
 
 def get_uncategorized_duration(start_date: str, end_date: str) -> int:
@@ -125,6 +76,13 @@ def _ensure_context_range(start_date: str, end_date: str) -> None:
     while current <= final:
         recompute_context_assignments_for_date(current.isoformat())
         current += timedelta(days=1)
+
+
+def _build_projection(start_date: str, end_date: str, *, ensure_context: bool = False):
+    from .report_projection_snapshot_service import build_visible_snapshot
+    from .statistics_projection import build_statistics_projection
+
+    return build_statistics_projection(build_visible_snapshot(start_date, end_date, ensure_context=ensure_context))
 
 
 def get_statistics_export_summary(date_from: str, date_to: str) -> dict:
@@ -145,7 +103,7 @@ def get_statistics_export_summary(date_from: str, date_to: str) -> dict:
     from .report_projection_snapshot_service import build_visible_snapshot
     from .statistics_projection import build_statistics_projection
 
-    projection = build_statistics_projection(build_visible_snapshot(date_from, date_to, ensure_context=True))
+    projection = build_statistics_projection(build_visible_snapshot(date_from, date_to, ensure_context=False))
     return {
         "date_from": date_from,
         "date_to": date_to,

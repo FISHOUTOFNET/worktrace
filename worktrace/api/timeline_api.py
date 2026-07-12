@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..services import project_service, report_session_operation_service, timeline_service
+from ..services import report_session_operation_service, timeline_service
 from ..services.activity_edit_policy import project_editability_code
 from ..services.live_time_service import (
     snapshot_elapsed_seconds,
@@ -102,7 +102,7 @@ def save_timeline_session_edit(
     pid = _validate_optional_project_id(project_id)
     duration = _validate_adjusted_duration(adjusted_duration_seconds)
     text = _validate_note(note)
-    report_session_operation_service.edit_session(
+    result = report_session_operation_service.edit_session(
         date,
         key,
         revision,
@@ -111,14 +111,14 @@ def save_timeline_session_edit(
         adjusted_duration_seconds=duration,
         note=text,
     )
-    return _operation_result(date, key)
+    return _operation_result(result)
 
 
 def hide_timeline_session(report_date: str, projection_instance_key: str, expected_projection_revision: str, request_id: str) -> dict[str, Any]:
     date = _validate_report_date(report_date)
     key = _validate_projection_instance_key(projection_instance_key)
-    report_session_operation_service.hide_session(date, key, _validate_projection_revision(expected_projection_revision), _validate_request_id(request_id))
-    return _operation_result(date, None)
+    result = report_session_operation_service.hide_session(date, key, _validate_projection_revision(expected_projection_revision), _validate_request_id(request_id))
+    return _operation_result(result)
 
 
 def merge_timeline_session(
@@ -135,7 +135,7 @@ def merge_timeline_session(
     date = _validate_report_date(report_date)
     key = _validate_projection_instance_key(projection_instance_key)
     target_key = _validate_projection_instance_key(target_projection_instance_key)
-    operation_id = report_session_operation_service.merge_session(
+    result = report_session_operation_service.merge_session(
         date,
         key,
         direction,
@@ -144,21 +144,21 @@ def merge_timeline_session(
         target_projection_instance_key=target_key,
         target_expected_projection_revision=_validate_projection_revision(target_expected_projection_revision),
     )
-    return _operation_result(date, f"merge:{operation_id}")
+    return _operation_result(result)
 
 
 def split_timeline_session(report_date: str, projection_instance_key: str, expected_projection_revision: str, request_id: str) -> dict[str, Any]:
     date = _validate_report_date(report_date)
     key = _validate_projection_instance_key(projection_instance_key)
-    report_session_operation_service.split_session(date, key, _validate_projection_revision(expected_projection_revision), _validate_request_id(request_id))
-    return _operation_result(date, None)
+    result = report_session_operation_service.split_session(date, key, _validate_projection_revision(expected_projection_revision), _validate_request_id(request_id))
+    return _operation_result(result)
 
 
 def copy_timeline_session(report_date: str, projection_instance_key: str, expected_projection_revision: str, request_id: str) -> dict[str, Any]:
     date = _validate_report_date(report_date)
     key = _validate_projection_instance_key(projection_instance_key)
-    operation_id = report_session_operation_service.copy_session(date, key, _validate_projection_revision(expected_projection_revision), _validate_request_id(request_id))
-    return _operation_result(date, f"copy:{operation_id}")
+    result = report_session_operation_service.copy_session(date, key, _validate_projection_revision(expected_projection_revision), _validate_request_id(request_id))
+    return _operation_result(result)
 
 
 def hide_timeline_session_activity(
@@ -172,14 +172,14 @@ def hide_timeline_session_activity(
         raise ValueError("invalid_session_identity")
     date = _validate_report_date(report_date)
     key = _validate_projection_instance_key(projection_instance_key)
-    report_session_operation_service.hide_session_activity(
+    result = report_session_operation_service.hide_session_activity(
         date,
         key,
         summary_id.strip(),
         _validate_projection_revision(expected_projection_revision),
         _validate_request_id(request_id),
     )
-    return _operation_result(date, key)
+    return _operation_result(result)
 
 
 def _validate_project_id(project_id: int) -> int:
@@ -193,9 +193,6 @@ def _validate_project_id(project_id: int) -> int:
         raise ValueError("project_id must be an integer")
     if pid <= 0:
         raise ValueError("project_id must be a positive integer")
-    project = project_service.get_project(pid)
-    if not project:
-        raise ValueError("project_id does not exist")
     return pid
 
 
@@ -251,23 +248,16 @@ def _validate_request_id(value: str) -> str:
     return text
 
 
-def _operation_result(report_date: str, projection_instance_key: str | None) -> dict[str, Any]:
-    hint = None
-    if projection_instance_key:
-        session = next(
-            (
-                item
-                for item in timeline_service.get_project_sessions_by_date(report_date, include_hidden=False, ensure_context=True)
-                if str(item.get("projection_instance_key") or "") == projection_instance_key
-            ),
-            None,
-        )
-        if session:
-            hint = {
-                "projection_instance_key": str(session.get("projection_instance_key") or ""),
-                "projection_revision": str(session.get("projection_revision") or ""),
-            }
-    return {"ok": True, "report_date": report_date, "selection_hint": hint}
+def _operation_result(result) -> dict[str, Any]:
+    return {
+        "ok": True,
+        "request_id": result.request_id,
+        "outcome_type": result.outcome_type,
+        "operation_id": result.operation_id,
+        "report_date": result.report_date,
+        "selection_hint": result.selection_hint,
+        "snapshot_revision": result.snapshot_revision,
+    }
 
 
 def _validate_note(note: str) -> str:

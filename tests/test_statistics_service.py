@@ -17,34 +17,19 @@ def test_statistics_aggregation(temp_db):
     idle = activity_service.create_activity("空闲", "idle", "用户空闲", status="idle", start_time="2026-06-18 10:00:00")
     activity_service.close_activity(idle, "2026-06-18 10:15:00")
     summary = statistics_service.get_summary("2026-06-18", "2026-06-18")
-    assert summary["total_duration"] == 4500
+    assert summary["total_duration"] == 3600
     assert summary["effective_duration"] == 3600
     assert summary["classified_duration"] == 3600
-    assert summary["idle_duration"] == 900
+    assert summary["idle_duration"] == 0
     stats = statistics_service.get_project_stats("2026-06-18", "2026-06-18")
     assert stats[0]["project"] == "Client"
     assert stats[0]["total_duration"] == 3600
 
 
-def test_summary_ensures_context_once_and_reuses_it_for_project_stats(temp_db, monkeypatch):
-    context_calls = []
-    session_calls = []
-
-    def fake_recompute(day):
-        context_calls.append(day)
-
-    def fake_sessions(start, end, include_hidden=True, ensure_context=True):
-        session_calls.append((start, end, include_hidden, ensure_context))
-        return []
-
-    monkeypatch.setattr(statistics_service, "recompute_context_assignments_for_date", fake_recompute)
-    monkeypatch.setattr(statistics_service.timeline_service, "get_project_sessions_by_range", fake_sessions)
-
+def test_summary_read_does_not_materialize_context(temp_db):
     summary = statistics_service.get_summary("2026-06-18", "2026-06-19")
 
     assert summary["total_duration"] == 0
-    assert context_calls == ["2026-06-17", "2026-06-18", "2026-06-19"]
-    assert session_calls == [("2026-06-18", "2026-06-19", False, False)]
 
 
 def test_project_stats_count_context_assigned_short_gap(temp_db):
@@ -70,7 +55,7 @@ def test_project_stats_count_context_assigned_short_gap(temp_db):
     stats = statistics_service.get_project_stats("2026-06-18", "2026-06-18")
 
     assert stats == [{"project": "A", "total_duration": 900, "record_count": 1}]
-    assert activity_service.get_activity(b)["project_id"] == project_a
+    assert activity_service.get_activity(b)["project_id"] != project_a
 
 
 def test_statistics_split_cross_midnight_projects_by_calendar_day(temp_db):
@@ -107,9 +92,9 @@ def test_statistics_split_cross_midnight_projects_by_calendar_day(temp_db):
     assert statistics_service.get_project_stats("2026-06-18", "2026-06-18") == [
         {"project": "A", "total_duration": 10 * 60, "record_count": 1}
     ]
-    assert current["total_duration"] == 75 * 60
+    assert current["total_duration"] == 45 * 60
     assert current["effective_duration"] == 45 * 60
-    assert current["idle_duration"] == 30 * 60
+    assert current["idle_duration"] == 0
     assert statistics_service.get_project_stats("2026-06-19", "2026-06-19") == [
         {"project": "A", "total_duration": 30 * 60, "record_count": 1},
         {"project": "B", "total_duration": 15 * 60, "record_count": 1},

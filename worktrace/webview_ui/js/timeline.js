@@ -97,7 +97,7 @@
             if (s.is_uncategorized) cls += " uncategorized";
             if (s.is_in_progress) cls += " in-progress";
             if (sessionCanTick) cls += " live-projected";
-            if (s.projection_instance_key === App.selectedProjectionInstanceKey || s.session_id === App.selectedSessionId) cls += " selected";
+            if (s.projection_instance_key === App.selectedProjectionInstanceKey) cls += " selected";
             // Stable live key data attribute so the ticker / selection continuity locates the session DOM across
             // backend-owned persisted-open refreshes without relying on a
             // display-only activity identity.
@@ -198,27 +198,17 @@
                     }
                 }
             }
-            // Fall back to session_id match (closed sessions, or live
-            // sessions that have not transitioned yet).
-            if (!found && App.selectedSessionId !== null) {
-                for (var k = 0; k < sessions.length; k++) {
-                    if (sessions[k].session_id === App.selectedSessionId) {
-                        found = sessions[k];
-                        break;
-                    }
-                }
-            }
             if (found) {
                 // Update the selection anchors so a subsequent refresh can still find the session.
                 App.selectedSessionId = found.session_id;
                 App.selectedSessionLiveKey = found.stable_live_key_hash || null;
                 App.selectedProjectionInstanceKey = found.projection_instance_key || null;
-                var detailChanged = App.selectedProjectionRevision !== (found.projection_revision || "");
                 App.selectedProjectionRevision = found.projection_revision || "";
+                var owner = App.timelineRequestState.nextSelectionOwner(data.date, found.projection_instance_key, found.projection_revision || "");
                 var skipDetailReload = (typeof App._timelineEditingActive === "function"
                     && App._timelineEditingActive());
-                if (!skipDetailReload && detailChanged) {
-                    loadSessionActivitySummary(found.projection_instance_key, data.date);
+                if (!skipDetailReload) {
+                    loadSessionActivitySummary(found.projection_instance_key, data.date, found.projection_revision || "", owner);
                 }
                 // Only re-populate the edit panel if the user is not mid-edit AND the session is not edit-disabled.
                 if (!found.edit_disabled
@@ -309,16 +299,15 @@
             var itemSid = items[i].getAttribute("data-session-id");
             var itemKey = items[i].getAttribute("data-stable-live-key-hash");
             if (items[i].getAttribute("data-projection-instance-key") === projectionInstanceKey
-                || itemSid === App.selectedSessionId
-                || (App.selectedSessionLiveKey && itemKey === App.selectedSessionLiveKey)) {
+                || (App.selectedSessionLiveKey && itemKey === App.selectedSessionLiveKey && !items[i].getAttribute("data-projection-instance-key"))) {
                 items[i].classList.add("selected");
             }
         }
         var found = newSelected;
         if (found) {
             App.selectedProjectionRevision = found.projection_revision || "";
-            App.timelineRequestState.nextSelectionOwner(App.timelineDate, found.projection_instance_key, found.projection_revision || "");
-            loadSessionActivitySummary(found.projection_instance_key, App.timelineDate, found.projection_revision || "");
+            var owner = App.timelineRequestState.nextSelectionOwner(App.timelineDate, found.projection_instance_key, found.projection_revision || "");
+            loadSessionActivitySummary(found.projection_instance_key, App.timelineDate, found.projection_revision || "", owner);
             // Open live sessions are non-editable; a manual click must clear the edit panel.
             if (found.edit_disabled === true) {
                 clearEditPanel();
@@ -331,16 +320,16 @@
     }
     App.selectTimelineSession = selectTimelineSession;
 
-    function loadSessionActivitySummary(projectionInstanceKey, date, detailRevision) {
-        return loadSessionDetails(projectionInstanceKey, date, detailRevision);
+    function loadSessionActivitySummary(projectionInstanceKey, date, detailRevision, owner) {
+        return loadSessionDetails(projectionInstanceKey, date, detailRevision, false, owner);
     }
     App.loadSessionActivitySummary = loadSessionActivitySummary;
 
-    function loadSessionDetails(projectionInstanceKey, date, detailRevision, retriedStale) {
+    function loadSessionDetails(projectionInstanceKey, date, detailRevision, retriedStale, existingOwner) {
         var detailsHeader = document.getElementById("timeline-details-header");
         var detailsList = document.getElementById("timeline-details-list");
         var revision = String(detailRevision || App.selectedProjectionRevision || "");
-        var owner = App.timelineRequestState.nextSelectionOwner(date, projectionInstanceKey, revision);
+        var owner = existingOwner || App.timelineRequestState.nextSelectionOwner(date, projectionInstanceKey, revision);
         var requestKey = App.timelineRequestState.detailRequestKey(owner);
         if (App.detailsInFlight[requestKey]) return App.detailsInFlight[requestKey];
         // Only show loading when the panel is empty; keep existing summaries visible during refresh.
@@ -352,13 +341,20 @@
         }
 
         var token = ++App.detailsRequestToken;
-        var request = App.callBridge("get_timeline_session_activity_summary", projectionInstanceKey || "", date).then(function (result) {
+        var request = App.callBridge("get_timeline_session_activity_summary", projectionInstanceKey || "", date, revision).then(function (result) {
             if (token !== App.detailsRequestToken || !App.timelineRequestState.isCurrentDetailsOwner(owner)) return null;
             if (result && result.ok === false && result.error === "stale_selection" && !retriedStale) {
                 // The current owner asks for one Timeline refresh and then stops.
                 // showTimeline/selectTimelineSession becomes the only owner of any follow-up detail request.
                 return App.loadTimelineReport(date, { showLoading: false, resetSelection: false }).then(function () {
-                    return null;
+                    var selected = findSessionByProjectionKey(App.selectedProjectionInstanceKey);
+                    if (!selected) {
+                        resetTimelineReportSelection();
+                        return null;
+                    }
+                    var retryOwner = App.timelineRequestState.nextSelectionOwner(date, selected.projection_instance_key, selected.projection_revision || "");
+                    App.selectedProjectionRevision = selected.projection_revision || "";
+                    return loadSessionDetails(selected.projection_instance_key, date, selected.projection_revision || "", true, retryOwner);
                 });
             }
             var data = App.handleResult(result, function (msg) {
@@ -791,7 +787,8 @@
             "save_timeline_session_edit",
             reportDate,
             projectionInstanceKey,
-            projectionRevision
+            projectionRevision,
+            JSON.stringify([overrideProjectId, adjustedDurationSeconds, note])
         );
         if (!mutationOwner) {
             setEditSaving(false);
@@ -812,6 +809,7 @@
                 // Keep original data in the form; do not clear.
                 setEditSaving(false);
                 showEditStatus(result && result.error ? result.error : "保存失败", true);
+                App.timelineRequestState.releaseMutationOwner(mutationOwner);
                 return;
             }
             // Update the editingSession baseline to the saved values so isEditDirty() returns false and Cancel
@@ -837,13 +835,16 @@
             showEditStatus("保存成功", false);
             // Reset saving state before refreshing; a refresh failure is a separate concern.
             setEditSaving(false);
-            refreshTimelineAfterEdit();
+            return refreshTimelineAfterEdit().then(function () {
+                App.timelineRequestState.releaseMutationOwner(mutationOwner);
+            }, function (err) {
+                App.timelineRequestState.releaseMutationOwner(mutationOwner);
+                throw err;
+            });
         }).catch(function () {
             if (!App.timelineRequestState.isCurrentMutationOwner(mutationOwner)) return;
             setEditSaving(false);
             showEditStatus("保存失败", true);
-        }).finally(function () {
-            App.timelineRequestState.releaseMutationOwner(mutationOwner);
         });
     }
     App.saveEdit = saveEdit;
@@ -892,7 +893,8 @@
         var date = currentTimelineReportDate();
         var revision = App.selectedProjectionRevision || "";
         if (!key || !date) return Promise.resolve();
-        var owner = App.timelineRequestState.nextMutationOwner(method, date, key, revision);
+        var argsSignature = JSON.stringify(options || {});
+        var owner = App.timelineRequestState.nextMutationOwner(method, date, key, revision, argsSignature);
         if (!owner) return Promise.resolve();
         var args;
         if (method === "hide_timeline_session_activity") {
@@ -920,16 +922,33 @@
             var data = App.handleResult(result, function (message) {
                 showEditStatus(message || "操作失败，请刷新后重试。", true);
             });
-            if (!data) return;
-            return refreshTimeline();
+            if (!data) {
+                App.timelineRequestState.releaseMutationOwner(owner);
+                return;
+            }
+            return refreshTimeline().then(function () {
+                App.timelineRequestState.releaseMutationOwner(owner);
+            }, function (err) {
+                App.timelineRequestState.releaseMutationOwner(owner);
+                throw err;
+            });
         }).catch(function () {
             if (!App.timelineRequestState.isCurrentMutationOwner(owner)) return null;
             showEditStatus("操作失败，请刷新后重试。", true);
-        }).finally(function () {
-            App.timelineRequestState.releaseMutationOwner(owner);
         });
     }
     App.runTimelineSessionOperation = runTimelineSessionOperation;
+
+    function findSessionByProjectionKey(projectionInstanceKey) {
+        var sessions = App.currentSessions || [];
+        for (var i = 0; i < sessions.length; i++) {
+            if ((sessions[i].projection_instance_key || "") === (projectionInstanceKey || "")) {
+                return sessions[i];
+            }
+        }
+        return null;
+    }
+    App.findSessionByProjectionKey = findSessionByProjectionKey;
 
     function findMergeTarget(sourceKey, direction) {
         var sessions = App.currentSessions || [];

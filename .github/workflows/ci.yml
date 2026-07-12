@@ -22,6 +22,11 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
@@ -30,8 +35,14 @@ jobs:
       - name: Check test inventory
         run: python scripts/test_inventory.py --check
 
+      - name: Compile Python
+        run: python -m compileall worktrace
+
       - name: Run tests
-        run: pytest
+        run: python -m pytest -q
+
+      - name: Run webview Node tests
+        run: node --test tests/webview/*.test.js
 
   pyinstaller-smoke:
     name: PyInstaller build smoke

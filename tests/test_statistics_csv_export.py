@@ -183,7 +183,7 @@ def test_build_csv_rows_excludes_deleted(temp_db):
 
 
 def test_build_csv_rows_all_statuses_exported(temp_db):
-    """Status policy exports normal plus standalone excluded only."""
+    """Status policy exports attributed status contributions and suppresses paused."""
     pid = project_service.create_project("Client")
     statuses = ("normal", "idle", "paused", "excluded", "error")
     starts = [
@@ -203,11 +203,14 @@ def test_build_csv_rows_all_statuses_exported(temp_db):
             status=status,
         )
     rows = export_service.build_statistics_csv_rows("2026-06-25", "2026-06-25")
-    assert len(rows) == 2
+    assert len(rows) == 4
     by_start = {row["start_time"][-8:]: row for row in rows}
     assert by_start["09:00:00"]["status"] == "正常"
     assert by_start["09:00:00"]["project"] == "Client"
+    assert by_start["09:30:00"]["project"] == "Client"
     assert by_start["10:30:00"]["status"] == "已排除"
+    assert by_start["10:30:00"]["project"] == "已排除"
+    assert by_start["11:00:00"]["project"] == "Client"
 
 
 def test_build_csv_rows_multi_day_range(temp_db):

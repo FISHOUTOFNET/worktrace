@@ -793,6 +793,7 @@ def get_session_activity_summary_view_model(
     *,
     report_date: str | None = None,
     projection_instance_key: str,
+    expected_projection_revision: str | None = None,
 ) -> dict[str, Any]:
     """Build the Timeline right-panel summary scoped by session activities."""
     date = report_date or timeline_service.get_default_report_date()
@@ -817,7 +818,10 @@ def get_session_activity_summary_view_model(
     )
 
     rows = project_activity_summary_service.get_projection_session_activity_summary(
-        projection_instance_key, date, ensure_context=False
+        projection_instance_key,
+        date,
+        expected_projection_revision=expected_projection_revision,
+        ensure_context=False,
     )
     _apply_live_span_to_rows(
         rows,
@@ -836,6 +840,7 @@ def get_session_activity_summary_view_model(
         "ok": True,
         "date": date,
         "projection_instance_key": projection_instance_key,
+        "resolved_projection_revision": expected_projection_revision or "",
         "summary_rows": rows,
         "current_activity": current_activity,
         "live_clock": live_clock,

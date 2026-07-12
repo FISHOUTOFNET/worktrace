@@ -9,11 +9,12 @@ from typing import Any
 from ..db import get_connection, now_str
 from . import project_lifecycle_policy
 from . import report_session_operation_engine as engine
+from .report_projection_model import MutationResult
 from .report_projection_identity import member_identity_key, stable_json_hash
 
 ACTIVE = "active"
 SUPERSEDED = "superseded"
-PAYLOAD_VERSION = 2
+PAYLOAD_VERSION = 3
 
 
 def edit_session(
@@ -25,7 +26,7 @@ def edit_session(
     project_id: int | None,
     adjusted_duration_seconds: int | None,
     note: str,
-) -> int | None:
+) -> MutationResult:
     return _run_uow(
         report_date,
         request_id,
@@ -36,9 +37,8 @@ def edit_session(
     )
 
 
-def hide_session(report_date: str, projection_instance_key: str, expected_projection_revision: str, request_id: str) -> int:
+def hide_session(report_date: str, projection_instance_key: str, expected_projection_revision: str, request_id: str) -> MutationResult:
     result = _run_uow(report_date, request_id, "hide_session", projection_instance_key, expected_projection_revision)
-    assert result is not None
     return result
 
 
@@ -51,7 +51,7 @@ def merge_session(
     expected_projection_revision: str,
     target_projection_instance_key: str,
     target_expected_projection_revision: str,
-) -> int:
+) -> MutationResult:
     if direction not in {"previous", "next"}:
         raise ValueError("invalid_direction")
     result = _run_uow(
@@ -64,19 +64,16 @@ def merge_session(
         target_expected_projection_revision=target_expected_projection_revision,
         direction=direction,
     )
-    assert result is not None
     return result
 
 
-def split_session(report_date: str, projection_instance_key: str, expected_projection_revision: str, request_id: str) -> int:
+def split_session(report_date: str, projection_instance_key: str, expected_projection_revision: str, request_id: str) -> MutationResult:
     result = _run_uow(report_date, request_id, "split_session", projection_instance_key, expected_projection_revision)
-    assert result is not None
     return result
 
 
-def copy_session(report_date: str, projection_instance_key: str, expected_projection_revision: str, request_id: str) -> int:
+def copy_session(report_date: str, projection_instance_key: str, expected_projection_revision: str, request_id: str) -> MutationResult:
     result = _run_uow(report_date, request_id, "copy_session", projection_instance_key, expected_projection_revision)
-    assert result is not None
     return result
 
 
@@ -86,7 +83,7 @@ def hide_session_activity(
     summary_id: str,
     expected_projection_revision: str,
     request_id: str,
-) -> int:
+) -> MutationResult:
     result = _run_uow(
         report_date,
         request_id,
@@ -95,7 +92,6 @@ def hide_session_activity(
         expected_projection_revision,
         payload_input={"summary_id": summary_id},
     )
-    assert result is not None
     return result
 
 
@@ -108,6 +104,22 @@ def load_operations(report_date: str, *, conn=None) -> list[dict]:
            WHERE report_date = ? AND match_state = ?
            ORDER BY replay_order ASC, id ASC""",
         (report_date, ACTIVE),
+    ).fetchall()
+    operations = [_inflate_operation(conn, dict(row)) for row in rows]
+    for operation in operations:
+        _refresh_edit_payload_project_lifecycle(operation["payload"], conn)
+    return operations
+
+
+def load_operation_lifecycle(report_date: str, *, conn=None) -> list[dict]:
+    if conn is None:
+        with get_connection() as read_conn:
+            return load_operation_lifecycle(report_date, conn=read_conn)
+    rows = conn.execute(
+        """SELECT * FROM report_session_operation
+           WHERE report_date = ?
+           ORDER BY replay_order ASC, id ASC""",
+        (report_date,),
     ).fetchall()
     operations = [_inflate_operation(conn, dict(row)) for row in rows]
     for operation in operations:
@@ -142,7 +154,7 @@ def _run_uow(
     target_expected_projection_revision: str | None = None,
     direction: str | None = None,
     payload_input: dict[str, Any] | None = None,
-) -> int | None:
+) -> MutationResult:
     if not request_id:
         raise ValueError("invalid_request_id")
     input_signature = stable_json_hash(
@@ -162,10 +174,10 @@ def _run_uow(
             conn.execute("BEGIN IMMEDIATE")
             existing = _find_request(conn, request_id)
             if existing:
-                if str(existing.get("payload", {}).get("request_input_signature") or "") != input_signature:
+                if str(existing.get("input_signature") or "") != input_signature:
                     raise ValueError("request_id_conflict")
                 conn.commit()
-                return int(existing["id"])
+                return _mutation_result_from_ledger(existing)
             from .report_projection_snapshot_service import build_visible_snapshot
 
             snapshot = build_visible_snapshot(report_date, report_date, ensure_context=True, conn=conn)
@@ -203,11 +215,20 @@ def _run_uow(
                 roles,
             )
             if operation_type == "edit_session" and not _payload_changes_session(source, payload):
-                return None
+                result = MutationResult(
+                    request_id=request_id,
+                    outcome_type="no_op",
+                    operation_id=None,
+                    report_date=report_date,
+                    selection_hint=_selection_hint(source),
+                    snapshot_revision=str(snapshot.snapshot_revision or ""),
+                )
+                _insert_request_ledger(conn, request_id, input_signature, result)
+                conn.commit()
+                return result
             replay_order = _next_replay_order(conn, report_date)
             operation_id = _insert_operation(
                 conn,
-                request_id,
                 report_date,
                 operation_type,
                 base_instance_key,
@@ -230,8 +251,17 @@ def _run_uow(
             after = engine.apply_operations(_base_sessions_for_date(snapshot, report_date), candidate)
             if not _operation_effective(operation_id, operation_type, before_keys, after, candidate):
                 raise ValueError("operation_no_effect")
+            result = MutationResult(
+                request_id=request_id,
+                outcome_type="operation_committed",
+                operation_id=operation_id,
+                report_date=report_date,
+                selection_hint=_deterministic_selection_hint(operation_type, operation_id, source),
+                snapshot_revision=str(snapshot.snapshot_revision or ""),
+            )
+            _insert_request_ledger(conn, request_id, input_signature, result)
             conn.commit()
-            return operation_id
+            return result
         except Exception:
             conn.rollback()
             raise
@@ -274,7 +304,6 @@ def _operation_effective(operation_id: int, operation_type: str, before_keys: se
 
 def _insert_operation(
     conn,
-    request_id: str,
     report_date: str,
     operation_type: str,
     base_instance_key: str,
@@ -295,12 +324,11 @@ def _insert_operation(
     payload_to_store["request_input_signature"] = input_signature
     cur = conn.execute(
         """INSERT INTO report_session_operation(
-            request_id, report_date, operation_type, base_instance_key, base_expected_revision,
+            report_date, operation_type, base_instance_key, base_expected_revision,
             target_instance_key, target_expected_revision, direction, replay_order, match_state,
             reverts_operation_id, payload_json, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
-            request_id,
             report_date,
             operation_type,
             base_instance_key,
@@ -368,12 +396,20 @@ def _supersede_split_descendants(conn, split_operation_id: int, reverted_operati
     ids = [int(row["id"]) for row in rows if int(row["id"]) != split_operation_id]
     if not ids:
         return
+    ts = now_str()
+    for operation_id in ids:
+        conn.execute(
+            """INSERT OR IGNORE INTO report_session_operation_supersession(
+                superseded_operation_id, superseding_operation_id, reason, created_at
+            ) VALUES (?, ?, ?, ?)""",
+            (operation_id, split_operation_id, "split_revert", ts),
+        )
     placeholders = ",".join("?" for _ in ids)
     conn.execute(
         f"""UPDATE report_session_operation
-            SET match_state = ?, superseded_by_operation_id = ?, updated_at = ?
+            SET match_state = ?, updated_at = ?
             WHERE match_state = ? AND id IN ({placeholders})""",
-        (SUPERSEDED, split_operation_id, now_str(), ACTIVE, *ids),
+        (SUPERSEDED, ts, ACTIVE, *ids),
     )
 
 
@@ -475,12 +511,60 @@ def _affected_members_for_summary(session: dict, summary_id: str) -> list[dict]:
 
 
 def _find_request(conn, request_id: str) -> dict | None:
-    row = conn.execute("SELECT * FROM report_session_operation WHERE request_id = ?", (request_id,)).fetchone()
-    if not row:
+    row = conn.execute("SELECT * FROM report_mutation_request WHERE request_id = ?", (request_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def _insert_request_ledger(conn, request_id: str, input_signature: str, result: MutationResult) -> None:
+    ts = now_str()
+    conn.execute(
+        """INSERT INTO report_mutation_request(
+            request_id, input_signature, outcome_type, operation_id, result_json, created_at, committed_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (
+            request_id,
+            input_signature,
+            result.outcome_type,
+            result.operation_id,
+            json.dumps(result.to_dict(), ensure_ascii=False, sort_keys=True),
+            ts,
+            ts,
+        ),
+    )
+
+
+def _mutation_result_from_ledger(row: dict) -> MutationResult:
+    try:
+        payload = json.loads(str(row.get("result_json") or "{}"))
+    except json.JSONDecodeError:
+        raise ValueError("request_id_conflict")
+    return MutationResult(
+        request_id=str(row.get("request_id") or payload.get("request_id") or ""),
+        outcome_type=str(row.get("outcome_type") or payload.get("outcome_type") or ""),
+        operation_id=payload.get("operation_id"),
+        report_date=str(payload.get("report_date") or ""),
+        selection_hint=payload.get("selection_hint") if isinstance(payload.get("selection_hint"), dict) else None,
+        snapshot_revision=payload.get("snapshot_revision"),
+    )
+
+
+def _selection_hint(session: dict | None) -> dict | None:
+    if not session:
         return None
-    operation = _inflate_operation(conn, dict(row))
-    operation["request_signature"] = str(operation.get("payload", {}).get("request_signature") or "")
-    return operation
+    return {
+        "projection_instance_key": str(session.get("projection_instance_key") or ""),
+        "projection_revision": str(session.get("projection_revision") or ""),
+    }
+
+
+def _deterministic_selection_hint(operation_type: str, operation_id: int, source: dict) -> dict | None:
+    if operation_type == "copy_session":
+        return {"projection_instance_key": f"copy:{operation_id}", "projection_revision": ""}
+    if operation_type == "merge_sessions":
+        return {"projection_instance_key": f"merge:{operation_id}", "projection_revision": ""}
+    if operation_type in {"hide_session", "split_session"}:
+        return None
+    return _selection_hint(source)
 
 
 def _inflate_operation(conn, operation: dict) -> dict:
@@ -631,6 +715,7 @@ __all__ = [
     "edit_session",
     "hide_session",
     "hide_session_activity",
+    "load_operation_lifecycle",
     "load_operations",
     "merge_session",
     "persist_engine_match_states",

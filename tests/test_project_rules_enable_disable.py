@@ -186,23 +186,28 @@ def test_toggle_does_not_create_or_delete_projects_rules_or_activity_rows(temp_d
         project_id=project,
     )
     with get_connection() as conn:
-        conn.execute(
+        cur = conn.execute(
             """
             INSERT INTO report_session_operation(
-                request_id, report_date, operation_type, base_instance_key, base_expected_revision, replay_order,
+                report_date, operation_type, base_instance_key, base_expected_revision, replay_order,
                 match_state, payload_json, created_at, updated_at
             )
-            VALUES (?, ?, 'edit_session', ?, ?, 1, 'active', ?, ?, ?)
+            VALUES (?, 'edit_session', ?, ?, 1, 'active', ?, ?, ?)
             """,
             (
-                "test-enable-disable-d",
                 "2026-06-18",
                 "base:" + "d" * 40,
                 "revision-d",
-                '{"payload_version":1,"note":{"mode":"set","value":"keep"}}',
+                '{"payload_version":3,"note":{"mode":"set","value":"keep"}}',
                 now_str(),
                 now_str(),
             ),
+        )
+        conn.execute(
+            """INSERT INTO report_mutation_request(
+                request_id, input_signature, outcome_type, operation_id, result_json, created_at, committed_at
+            ) VALUES (?, ?, 'operation_committed', ?, '{}', ?, ?)""",
+            ("test-enable-disable-d", "seed-d", int(cur.lastrowid), now_str(), now_str()),
         )
     before = _counts()
 
@@ -458,23 +463,28 @@ def test_toggle_does_not_change_history_activity_assignment_or_session_note_rows
         project_id=project,
     )
     with get_connection() as conn:
-        conn.execute(
+        cur = conn.execute(
             """
             INSERT INTO report_session_operation(
-                request_id, report_date, operation_type, base_instance_key, base_expected_revision, replay_order,
+                report_date, operation_type, base_instance_key, base_expected_revision, replay_order,
                 match_state, payload_json, created_at, updated_at
             )
-            VALUES (?, ?, 'edit_session', ?, ?, 1, 'active', ?, ?, ?)
+            VALUES (?, 'edit_session', ?, ?, 1, 'active', ?, ?, ?)
             """,
             (
-                "test-enable-disable-e",
                 "2026-06-18",
                 "base:" + "e" * 40,
                 "revision-e",
-                '{"payload_version":1,"note":{"mode":"set","value":"keep"}}',
+                '{"payload_version":3,"note":{"mode":"set","value":"keep"}}',
                 now_str(),
                 now_str(),
             ),
+        )
+        conn.execute(
+            """INSERT INTO report_mutation_request(
+                request_id, input_signature, outcome_type, operation_id, result_json, created_at, committed_at
+            ) VALUES (?, ?, 'operation_committed', ?, '{}', ?, ?)""",
+            ("test-enable-disable-e", "seed-e", int(cur.lastrowid), now_str(), now_str()),
         )
     before = _counts()
 

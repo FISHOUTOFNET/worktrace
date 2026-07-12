@@ -86,6 +86,7 @@ class TimelineBridgeMixin:
         self,
         projection_instance_key: str,
         report_date: str | None = None,
+        expected_projection_revision: str | None = None,
     ) -> dict[str, Any]:
         """Return session-scoped activity duration summaries for Timeline."""
         try:
@@ -98,6 +99,7 @@ class TimelineBridgeMixin:
             return view_model_api.get_session_activity_summary_view_model(
                 report_date=report_date,
                 projection_instance_key=projection_instance_key.strip(),
+                expected_projection_revision=(expected_projection_revision or "").strip() or None,
             )
         except ValueError as exc:
             code = str(exc)

@@ -314,7 +314,7 @@ def _ordered_unique(values: list) -> list:
 
 def _apply_edit_session(session: dict, operation: dict) -> None:
     payload = operation.get("payload") or {}
-    if int(payload.get("payload_version") or 1) not in {1, 2}:
+    if int(payload.get("payload_version") or 0) != 3:
         operation["_engine_match_state"] = CONFLICT
         return
     project = payload.get("project") if isinstance(payload.get("project"), dict) else None

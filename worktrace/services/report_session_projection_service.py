@@ -12,7 +12,7 @@ def get_report_sessions_by_date(
     date: str,
     *,
     include_hidden: bool = False,
-    ensure_context: bool = True,
+    ensure_context: bool = False,
 ) -> list[dict]:
     return get_report_sessions_by_range(
         date,
@@ -22,12 +22,12 @@ def get_report_sessions_by_date(
     )
 
 
-def get_visible_report_sessions_by_date(date: str, *, ensure_context: bool = True) -> list[dict]:
+def get_visible_report_sessions_by_date(date: str, *, ensure_context: bool = False) -> list[dict]:
     """The sole UI/report projection scope: hidden raw activity is excluded."""
     return get_report_sessions_by_date(date, include_hidden=False, ensure_context=ensure_context)
 
 
-def get_visible_report_sessions_for_operations_by_date(date: str, *, ensure_context: bool = True) -> list[dict]:
+def get_visible_report_sessions_for_operations_by_date(date: str, *, ensure_context: bool = False) -> list[dict]:
     """Visible canonical sessions for resolvers and contribution consumers."""
     return get_report_sessions_for_operations(
         date, date, include_hidden=False, ensure_context=ensure_context
@@ -39,7 +39,7 @@ def get_report_sessions_by_range(
     end_date: str,
     *,
     include_hidden: bool = False,
-    ensure_context: bool = True,
+    ensure_context: bool = False,
 ) -> list[dict]:
     sessions = get_report_sessions_for_operations(
         start_date,
@@ -55,7 +55,7 @@ def get_report_sessions_for_operations(
     end_date: str,
     *,
     include_hidden: bool = True,
-    ensure_context: bool = True,
+    ensure_context: bool = False,
 ) -> list[dict]:
     """Build final sessions including private, display-safe contribution slices.
 
@@ -83,7 +83,7 @@ def get_projected_activity_contributions_by_range(
     end_date: str,
     *,
     include_hidden: bool = False,
-    ensure_context: bool = True,
+    ensure_context: bool = False,
 ) -> list[dict]:
     from .report_projection_snapshot_service import build_visible_snapshot
 
@@ -98,7 +98,7 @@ def resolve_current_session(
     activity_member_hash: str,
     *,
     include_hidden: bool = False,
-    ensure_context: bool = True,
+    ensure_context: bool = False,
 ) -> dict:
     ids = {int(aid) for aid in activity_ids}
     if not report_date or not ids or not activity_member_hash:

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from tests.support.activity_factory import create_closed_activity
 from tests.support.db_helpers import fetch_all
 from tests.support.project_factory import create_folder_rule, create_keyword_rule, create_project
@@ -17,6 +19,8 @@ from worktrace.services import (
     view_model_service,
 )
 from worktrace.services.project_inference_service import assign_project_for_activity
+
+pytestmark = [pytest.mark.db, pytest.mark.integration, pytest.mark.contract]
 
 
 RAW_COLUMNS = (

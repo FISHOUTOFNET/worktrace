@@ -26,7 +26,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..constants import STATUS_NORMAL, UNCATEGORIZED_PROJECT
+from ..constants import UNCATEGORIZED_PROJECT
 
 # --- Source classification ---
 
@@ -216,8 +216,7 @@ def report_project_fields(row: dict, uncategorized_id: int) -> dict:
     effective_project_name = str(attribution["effective_project_name"] or "").strip()
     effective_project_is_deleted = bool(attribution["effective_project_is_deleted"])
     is_report_project = (
-        str(row.get("status") or "").strip() == STATUS_NORMAL
-        and is_report_visible_project_source(source)
+        is_report_visible_project_source(source)
         and effective_project_id > 0
         and effective_project_id != int(uncategorized_id)
         and bool(effective_project_name)

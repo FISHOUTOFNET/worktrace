@@ -25,12 +25,12 @@ from .activity_edit_policy import require_project_editable_activity
 from .anchor_predicates import is_file_context_anchor
 from .context_service import recompute_context_assignments_for_date
 from .project_attribution_policy import official_project_fields, report_project_fields
-from .project_service import get_or_create_uncategorized_project
 from .report_projection_identity import member_set_hash
+from .report_status_policy import SESSION_CONTRIBUTION, decide_report_status
 from .resource_service import attach_resource
 from .settings_service import get_int_setting
 
-def get_project_sessions_by_date(date: str, include_hidden: bool = False, ensure_context: bool = True) -> list[dict]:
+def get_project_sessions_by_date(date: str, include_hidden: bool = False, ensure_context: bool = False) -> list[dict]:
     return get_project_sessions_by_range(date, date, include_hidden=include_hidden, ensure_context=ensure_context)
 
 
@@ -38,7 +38,7 @@ def get_project_sessions_by_range(
     start_date: str,
     end_date: str,
     include_hidden: bool = False,
-    ensure_context: bool = True,
+    ensure_context: bool = False,
 ) -> list[dict]:
     return report_session_projection_service.get_report_sessions_by_range(
         start_date,
@@ -71,27 +71,44 @@ def _build_sessions_from_rows(rows: list[dict], uncategorized_id: int, boundary_
 
 
 def _is_project_session_row(row: dict) -> bool:
-    return is_normal_project_status(str(row.get("status") or ""))
+    decision = decide_report_status(
+        str(row.get("status") or ""),
+        has_project_attribution=bool(row.get("is_report_project")),
+    )
+    return decision.decision == SESSION_CONTRIBUTION
 
 
 def get_report_activity_rows(
     start_date: str,
     end_date: str,
     include_hidden: bool = False,
-    ensure_context: bool = True,
+    ensure_context: bool = False,
     conn=None,
 ) -> list[dict]:
     if ensure_context:
         _ensure_context_for_report_range(start_date, end_date)
-    uncategorized_id = get_or_create_uncategorized_project(conn=conn) if conn is not None else get_or_create_uncategorized_project()
+    uncategorized_id = _uncategorized_project_id(conn)
     rows = _load_activity_rows_for_report_range(start_date, end_date, include_hidden, conn=conn)
     boundary_times = _boundary_times_for_rows(rows, conn=conn)
-    rows = _with_reporting_projects(_with_display_projects(rows, uncategorized_id), boundary_times)
+    rows = _with_reporting_projects(_with_display_projects(rows, uncategorized_id), boundary_times, conn=conn)
     return [
         row
         for row in _with_report_dates(rows)
         if start_date <= str(row.get("report_date") or "") <= end_date
     ]
+
+
+def _uncategorized_project_id(conn=None) -> int:
+    if conn is not None:
+        row = conn.execute("SELECT id FROM project WHERE name = ?", (UNCATEGORIZED_PROJECT,)).fetchone()
+        if not row:
+            raise ValueError("report_context_not_ready")
+        return int(row["id"])
+    with get_connection() as read_conn:
+        row = read_conn.execute("SELECT id FROM project WHERE name = ?", (UNCATEGORIZED_PROJECT,)).fetchone()
+        if not row:
+            raise ValueError("report_context_not_ready")
+        return int(row["id"])
 
 
 def get_default_report_date(today: date_type | None = None) -> str:
@@ -181,7 +198,7 @@ def preview_session_project_update(session_activity_ids: list[int], project_id: 
             "folder_rule_conflicts": [],
             "unassigned_anchor_files": [],
         }
-    if int(project_id) == int(get_or_create_uncategorized_project()):
+    if int(project_id) == int(_uncategorized_project_id()):
         return {
             "folder_rule_conflicts": [],
             "unassigned_anchor_files": [],
@@ -322,7 +339,7 @@ def _load_session_rows(
             """,
             activity_ids,
         ).fetchall()
-    uncategorized_id = get_or_create_uncategorized_project()
+    uncategorized_id = _uncategorized_project_id()
     loaded_rows = _with_display_projects(
         [attach_resource(row) for row in dict_rows(rows)],
         uncategorized_id,
@@ -336,6 +353,8 @@ def _can_merge(previous: dict, current: dict, boundary_times: list[str] | None =
     if str(previous.get("report_date") or "") != str(current.get("report_date") or ""):
         return False
     if _has_session_boundary_between(previous, current, boundary_times):
+        return False
+    if _has_unrecorded_gap_between(previous, current):
         return False
     return str(previous.get("report_project_key") or "") == str(current.get("report_project_key") or "")
 
@@ -416,13 +435,19 @@ def _with_display_projects(rows: list[dict], uncategorized_id: int) -> list[dict
     return rows
 
 
-def _with_reporting_projects(rows: list[dict], boundary_times: list[str] | None = None) -> list[dict]:
+def _with_reporting_projects(rows: list[dict], boundary_times: list[str] | None = None, *, conn=None) -> list[dict]:
     for row in rows:
         _attach_original_report_project(row)
-    carry_minutes = max(0, get_int_setting("context_carry_minutes", DEFAULT_CONTEXT_CARRY_MINUTES))
+    carry_minutes = max(0, get_int_setting("context_carry_minutes", DEFAULT_CONTEXT_CARRY_MINUTES, conn=conn))
     if carry_minutes <= 0:
         return rows
     for anchor_index, anchor in enumerate(rows):
+        if _is_midnight_report_anchor(anchor):
+            merge = _find_midnight_context_merge(rows, anchor_index, carry_minutes, boundary_times)
+            if merge is not None:
+                for interrupt_index in merge:
+                    _attach_merged_report_project(rows[interrupt_index], anchor)
+            continue
         if not _is_project_anchor(anchor):
             continue
         merge = _find_short_context_merge(rows, anchor_index, carry_minutes, boundary_times)
@@ -497,9 +522,9 @@ def _attach_merged_report_project(row: dict, anchor: dict) -> None:
     anchor (candidate / derived / uncategorized) never propagates a
     project name onto interrupt rows.
     """
-    if not anchor.get("is_official_project"):
-        # Non-official anchor: do not merge a project name. Keep the
-        # row's own (uncategorized) report project.
+    if not anchor.get("is_report_project"):
+        # Non-report anchor: do not merge a project name. Keep the row's own
+        # report project.
         return
     row["report_project_id"] = anchor.get("report_project_id")
     row["report_project_name"] = anchor.get("report_project_name") or UNCATEGORIZED_PROJECT
@@ -549,6 +574,13 @@ def _find_short_context_merge(
             interrupt_indices.append(pos)
             continue
         return None
+    if (
+        interrupt_indices
+        and str(anchor.get("assignment_source") or "") == "midnight_anchor"
+        and is_report_short_context_duration(_seconds_for_rows(rows, interrupt_indices))
+        and _minutes_between(_anchor_context_time(anchor), rows[interrupt_indices[-1]]["start_time"]) <= carry_minutes
+    ):
+        return interrupt_indices
     return None
 
 
@@ -560,9 +592,42 @@ def _is_project_anchor(row: dict) -> bool:
     """
     if not is_normal_project_status(str(row.get("status") or "")):
         return False
-    if row.get("assignment_source") == "midnight_anchor":
-        return False
     return bool(row.get("is_official_project"))
+
+
+def _is_midnight_report_anchor(row: dict) -> bool:
+    if not is_normal_project_status(str(row.get("status") or "")):
+        return False
+    return str(row.get("assignment_source") or "") == "midnight_anchor" and bool(row.get("is_report_project"))
+
+
+def _find_midnight_context_merge(
+    rows: list[dict],
+    anchor_index: int,
+    carry_minutes: int,
+    boundary_times: list[str] | None = None,
+) -> list[int] | None:
+    anchor = rows[anchor_index]
+    interrupt_indices: list[int] = []
+    for pos in range(anchor_index + 1, len(rows)):
+        row = rows[pos]
+        if _has_session_boundary_between(rows[pos - 1], row, boundary_times):
+            return None
+        if is_hard_boundary_status(str(row.get("status") or "")):
+            return None
+        if _is_project_anchor(row) or _is_midnight_report_anchor(row):
+            break
+        if _is_short_merge_interrupt(row, str(anchor.get("report_project_key") or "")):
+            interrupt_indices.append(pos)
+            continue
+        break
+    if (
+        interrupt_indices
+        and is_report_short_context_duration(_seconds_for_rows(rows, interrupt_indices))
+        and _minutes_between(_anchor_context_time(anchor), rows[interrupt_indices[-1]]["start_time"]) <= carry_minutes
+    ):
+        return interrupt_indices
+    return None
 
 
 def _is_same_report_project_normal(row: dict, anchor_key: str) -> bool:
@@ -591,7 +656,7 @@ def _seconds_for_rows(rows: list[dict], indexes: list[int]) -> int:
 
 
 def _can_participate_in_report_session(row: dict) -> bool:
-    return is_normal_project_status(str(row.get("status") or ""))
+    return _is_project_session_row(row)
 
 
 def _anchor_context_time(row: dict) -> str:
@@ -609,6 +674,8 @@ def _has_session_boundary_between(previous: dict, current: dict, boundary_times:
     boundary_end = current.get("start_time") or ""
     if not boundary_start or not boundary_end:
         return False
+    if boundary_times is not None:
+        return _has_boundary_time_between(boundary_times, str(boundary_start), str(boundary_end))
     return has_hard_boundary_between(str(boundary_start), str(boundary_end))
 
 

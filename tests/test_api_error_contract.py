@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import sqlite3
 
+import pytest
+
 from worktrace.api import errors
+
+pytestmark = [pytest.mark.unit, pytest.mark.contract, pytest.mark.db]
 
 
 def test_sqlite_busy_and_locked_map_to_stable_database_busy_code():

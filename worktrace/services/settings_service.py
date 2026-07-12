@@ -20,7 +20,11 @@ def _settings_db_key() -> str:
     return str(get_db_path().resolve())
 
 
-def get_setting(key: str, default: str | None = None) -> str | None:
+def get_setting(key: str, default: str | None = None, *, conn=None) -> str | None:
+    if conn is not None:
+        row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+        value = row["value"] if row else None
+        return value if value is not None else default
     cache_key = (_settings_db_key(), key)
     now = time.monotonic()
     cached = _SETTING_CACHE.get(cache_key)
@@ -49,15 +53,15 @@ def set_setting(key: str, value: str) -> None:
     _SETTING_CACHE[(_settings_db_key(), key)] = (time.monotonic() + _SETTING_CACHE_TTL_SECONDS, value)
 
 
-def get_bool_setting(key: str, default: bool = False) -> bool:
-    raw = get_setting(key)
+def get_bool_setting(key: str, default: bool = False, *, conn=None) -> bool:
+    raw = get_setting(key, conn=conn)
     if raw is None or raw == "":
         return default
     return raw.strip().lower() == "true"
 
 
-def get_int_setting(key: str, default: int) -> int:
-    raw = get_setting(key)
+def get_int_setting(key: str, default: int, *, conn=None) -> int:
+    raw = get_setting(key, conn=conn)
     if raw is None or raw == "":
         return default
     try:

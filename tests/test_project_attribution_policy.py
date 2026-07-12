@@ -377,12 +377,12 @@ def test_report_project_fields_uncategorized_empty_unknown_not_visible(source):
     assert fields["is_report_project"] is False
 
 
-def test_report_project_fields_requires_normal_status():
+def test_report_project_fields_preserves_attributed_status_project():
     row = _row("manual", project_id=10, project_name="Project", status=STATUS_IDLE)
     fields = report_project_fields(row, UNCATEGORIZED_ID)
-    assert fields["report_project_name"] == UNCATEGORIZED_PROJECT
+    assert fields["report_project_name"] == "Project"
     assert fields["report_attribution_kind"] == "official_direct"
-    assert fields["is_report_project"] is False
+    assert fields["is_report_project"] is True
 
 
 # --- candidate_project_fields ---

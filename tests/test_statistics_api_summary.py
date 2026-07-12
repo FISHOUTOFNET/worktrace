@@ -180,9 +180,10 @@ def test_service_summary_by_status_groups_correctly(temp_db):
     summary = statistics_service.get_statistics_export_summary("2026-06-25", "2026-06-25")
     by_status = {g["key"]: g for g in summary["by_status"]}
     assert "normal" in by_status
-    assert "idle" not in by_status
+    assert "idle" in by_status
     assert by_status["normal"]["display_name"] == "正常"
     assert by_status["normal"]["duration_seconds"] == 1800
+    assert by_status["idle"]["duration_seconds"] == 900
     _assert_no_sensitive_keys(summary)
 
 
@@ -211,20 +212,21 @@ def test_service_summary_project_stats_only_include_normal_status_rows(temp_db):
     )
 
     summary = statistics_service.get_statistics_export_summary("2026-06-25", "2026-06-25")
-    assert summary["total_duration_seconds"] == 1800
-    assert summary["project_duration_seconds"] == 1800
-    assert summary["activity_count"] == 1
+    assert summary["total_duration_seconds"] == 2700
+    assert summary["project_duration_seconds"] == 2700
+    assert summary["activity_count"] == 3
     assert summary["project_count"] == 1
 
     by_project = {g["display_name"]: g for g in summary["by_project"]}
     assert list(by_project) == ["A"]
-    assert by_project["A"]["duration_seconds"] == 1800
+    assert by_project["A"]["duration_seconds"] == 2700
     assert by_project["A"]["percentage"] == pytest.approx(100.0)
 
     by_status = {g["key"]: g for g in summary["by_status"]}
-    assert set(by_status) == {"normal"}
+    assert set(by_status) == {"normal", "idle", "error"}
     assert by_status["normal"]["duration_seconds"] == 1800
-    assert by_status["normal"]["percentage"] == pytest.approx(100.0)
+    assert by_status["idle"]["duration_seconds"] == 600
+    assert by_status["error"]["duration_seconds"] == 300
 
 
 def test_service_summary_empty_range_returns_zero(temp_db):

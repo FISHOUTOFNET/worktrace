@@ -50,7 +50,7 @@ def build_statistics_csv_rows(date_from: str, date_to: str) -> list[dict]:
     from .report_projection_snapshot_service import build_visible_snapshot
     from .statistics_projection import build_statistics_projection
 
-    return build_statistics_projection(build_visible_snapshot(date_from, date_to, ensure_context=True)).export_rows
+    return build_statistics_projection(build_visible_snapshot(date_from, date_to, ensure_context=False)).export_rows
 
 
 def write_statistics_csv(date_from: str, date_to: str, output_path, expected_snapshot_revision: str | None = None) -> dict:
@@ -71,7 +71,7 @@ def write_statistics_csv(date_from: str, date_to: str, output_path, expected_sna
     from .report_projection_snapshot_service import build_visible_snapshot
     from .statistics_projection import build_statistics_projection
 
-    projection = build_statistics_projection(build_visible_snapshot(date_from, date_to, ensure_context=True))
+    projection = build_statistics_projection(build_visible_snapshot(date_from, date_to, ensure_context=False))
     if expected_snapshot_revision is not None and str(expected_snapshot_revision or "") != projection.snapshot_revision:
         raise ValueError("stale_statistics_snapshot")
     csv_rows = projection.export_rows
@@ -121,8 +121,10 @@ def export_all_local_data(path: str) -> str:
             "activity_resource",
             "activity_project_assignment",
             "report_session_operation",
+            "report_mutation_request",
             "report_session_operation_member",
             "report_session_operation_dependency",
+            "report_session_operation_supersession",
             "activity_clipboard_event",
             "project",
             "folder_project_rule",

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from ..constants import STATUS_EXCLUDED, STATUS_PAUSED, UNCATEGORIZED_PROJECT
+from ..constants import STATUS_EXCLUDED, UNCATEGORIZED_PROJECT
 from ..formatters import format_activity_project_cell, format_duration, format_status_label
 from .report_projection_snapshot_service import ReportProjectionSnapshot
 from .report_status_policy import decide_report_status
@@ -53,8 +53,8 @@ def build_statistics_projection(snapshot: ReportProjectionSnapshot) -> Statistic
         else:
             classified += duration
             project_duration += duration
-        _accumulate(by_project, project, project, duration, row.get("_activity_ids") or [])
-        _accumulate(by_status, status or "unknown", str(row.get("status") or ""), duration, row.get("_activity_ids") or [])
+        _accumulate(by_project, project, project, duration, row.get("_activity_ids") or [], row.get("_record_key"))
+        _accumulate(by_status, status or "unknown", str(row.get("status") or ""), duration, row.get("_activity_ids") or [], row.get("_record_key"))
     for contribution in snapshot.final_contributions:
         activity_id = int(contribution.get("activity_id") or 0)
         report_date = str(contribution.get("report_date") or "")
@@ -62,7 +62,7 @@ def build_statistics_projection(snapshot: ReportProjectionSnapshot) -> Statistic
             continue
         duration = int(contribution.get("duration_seconds") or 0)
         app_name = str(contribution.get("app_name") or "").strip() or _UNKNOWN_APP_LABEL
-        _accumulate(by_app, app_name, app_name, duration, [activity_id])
+        _accumulate(by_app, app_name, app_name, duration, [activity_id], contribution.get("projection_instance_key"))
     return StatisticsProjection(
         snapshot_revision=snapshot.snapshot_revision,
         total_duration_seconds=total,
@@ -85,56 +85,67 @@ def build_statistics_projection(snapshot: ReportProjectionSnapshot) -> Statistic
 
 def _build_export_rows(snapshot: ReportProjectionSnapshot) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
-    for session in snapshot.final_sessions:
-        if session.get("is_in_progress"):
+    sessions_by_key = {
+        str(session.get("projection_instance_key") or ""): session
+        for session in snapshot.final_sessions
+    }
+    for contribution in snapshot.final_contributions:
+        session = sessions_by_key.get(str(contribution.get("projection_instance_key") or ""))
+        if session and session.get("is_in_progress"):
             continue
-        duration = int(session.get("display_duration_seconds") or session.get("duration_seconds") or 0)
+        duration = int(contribution.get("duration_seconds") or 0)
         if duration <= 0:
             continue
-        status = str(session.get("status_code") or session.get("status") or "normal")
-        if status == STATUS_PAUSED:
+        status = str(contribution.get("status") or (session or {}).get("status_code") or "normal")
+        decision = decide_report_status(status, has_project_attribution=bool(contribution.get("is_report_project")))
+        if not decision.exportable:
             continue
+        project = "已排除" if decision.privacy_redacted else _format_contribution_project_cell(contribution)
         rows.append(
             {
-                "date": str(session.get("report_date") or ""),
-                "start_time": str(session.get("start_time") or ""),
-                "end_time": str(session.get("end_time") or ""),
+                "date": str(contribution.get("report_date") or ""),
+                "start_time": str(contribution.get("start_time") or contribution.get("slice_start_time") or ""),
+                "end_time": str(contribution.get("end_time") or contribution.get("slice_end_time") or ""),
                 "duration": format_duration(duration),
                 "duration_seconds": duration,
-                "project": _format_session_project_cell(session),
+                "project": project,
                 "status": format_status_label(status),
                 "status_code": status,
-                "note": str(session.get("session_note") or ""),
-                "adjusted_duration": format_duration(session.get("adjusted_duration_seconds")) if session.get("has_duration_override") else "",
-                "is_adjusted": "是" if session.get("has_duration_override") else "否",
-                "_activity_ids": [int(aid) for aid in session.get("activity_ids") or [] if int(aid) > 0],
+                "note": str((session or {}).get("session_note") or ""),
+                "adjusted_duration": format_duration((session or {}).get("adjusted_duration_seconds")) if (session or {}).get("has_duration_override") else "",
+                "is_adjusted": "是" if (session or {}).get("has_duration_override") else "否",
+                "_activity_ids": [int(contribution.get("activity_id") or 0)],
+                "_record_key": str(contribution.get("projection_instance_key") or ""),
             }
         )
-    for row in snapshot.status_rows:
-        status = str(row.get("status") or "")
-        decision = decide_report_status(status, has_project_attribution=False)
-        if not decision.exportable or decision.decision != "standalone_status":
-            continue
-        duration = int(row.get("duration_seconds") or 0)
-        if duration <= 0:
-            continue
-        rows.append(
-            {
-                "date": str(row.get("report_date") or str(row.get("start_time") or "")[:10]),
-                "start_time": str(row.get("start_time") or ""),
-                "end_time": str(row.get("end_time") or ""),
-                "duration": format_duration(duration),
-                "duration_seconds": duration,
-                "project": "已排除",
-                "status": format_status_label(status),
-                "status_code": status,
-                "note": "",
-                "adjusted_duration": "",
-                "is_adjusted": "否",
-                "_activity_ids": [int(row.get("activity_id") or row.get("id") or 0)],
-            }
+    return _aggregate_export_rows(rows)
+
+
+def _aggregate_export_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped: dict[tuple, dict[str, Any]] = {}
+    for row in rows:
+        key = (
+            row.get("date"),
+            row.get("_record_key"),
+            row.get("project"),
+            row.get("status_code"),
+            row.get("note"),
+            row.get("adjusted_duration"),
+            row.get("is_adjusted"),
         )
-    return rows
+        current = grouped.get(key)
+        if current is None:
+            grouped[key] = dict(row)
+            continue
+        current["duration_seconds"] = int(current.get("duration_seconds") or 0) + int(row.get("duration_seconds") or 0)
+        current["duration"] = format_duration(int(current["duration_seconds"]))
+        current["start_time"] = min(str(current.get("start_time") or ""), str(row.get("start_time") or ""))
+        current["end_time"] = max(str(current.get("end_time") or ""), str(row.get("end_time") or ""))
+        current["_activity_ids"] = sorted(set([*(current.get("_activity_ids") or []), *(row.get("_activity_ids") or [])]))
+    return sorted(
+        grouped.values(),
+        key=lambda item: (str(item.get("date") or ""), str(item.get("start_time") or ""), str(item.get("_record_key") or "")),
+    )
 
 
 def _format_session_project_cell(session: dict) -> str:
@@ -147,9 +158,17 @@ def _format_session_project_cell(session: dict) -> str:
     )
 
 
-def _accumulate(groups: dict[str, dict], key: str, display_name: str, duration: int, activity_ids: list[int]) -> None:
-    group = groups.setdefault(key, {"display_name": display_name, "duration_seconds": 0, "activity_ids": set()})
+def _format_contribution_project_cell(row: dict) -> str:
+    if row.get("is_report_project"):
+        return str(row.get("project_name") or row.get("report_project_name") or UNCATEGORIZED_PROJECT)
+    return UNCATEGORIZED_PROJECT
+
+
+def _accumulate(groups: dict[str, dict], key: str, display_name: str, duration: int, activity_ids: list[int], record_key: str | None = None) -> None:
+    group = groups.setdefault(key, {"display_name": display_name, "duration_seconds": 0, "activity_ids": set(), "record_keys": set()})
     group["duration_seconds"] += duration
+    if record_key:
+        group["record_keys"].add(str(record_key))
     for activity_id in activity_ids:
         if activity_id:
             group["activity_ids"].add(int(activity_id))
@@ -165,6 +184,7 @@ def _build_groups(groups: dict[str, dict], total_duration: int) -> list[dict[str
                 "display_name": str(group["display_name"]),
                 "duration_seconds": duration,
                 "activity_count": len(group["activity_ids"]),
+                "record_count": len(group.get("record_keys") or []),
                 "percentage": round(duration / total_duration * 100, 1) if total_duration > 0 else 0.0,
             }
         )

@@ -390,8 +390,8 @@ def test_timeline_selection_loads_summary_by_projection_instance_key():
     select_body = func_body(source, "selectTimelineSession")
     show_body = func_body(source, "showTimeline")
 
-    assert "loadSessionActivitySummary(found.projection_instance_key, App.timelineDate, found.projection_revision || \"\")" in select_body
-    assert "loadSessionActivitySummary(found.projection_instance_key, data.date)" in show_body
+    assert "loadSessionActivitySummary(found.projection_instance_key, App.timelineDate, found.projection_revision || \"\", owner)" in select_body
+    assert "loadSessionActivitySummary(found.projection_instance_key, data.date, found.projection_revision || \"\", owner)" in show_body
     assert "data-projection-instance-key" in show_body
     assert "loadSessionActivitySummary(found.project_id" not in source
     assert "loadSessionDetails(found.project_id" not in source
@@ -432,14 +432,11 @@ def test_frontend_js_has_request_token_guard_for_session_details():
 
 def test_frontend_js_preserves_selected_session_across_refresh():
     """frontend JS must keep the selected session selected across
-    auto-refresh. The session must be matched by session_id, and if it
+    auto-refresh. The session must be matched by projection key, and if it
     disappears the selection must clear gracefully without JS errors."""
     source = read_all_js()
-    assert "selectedSessionId" in source
-    # The selected session must be matched by session_id after refresh.
-    assert "session_id === App.selectedSessionId" in source or (
-        "sessions[k].session_id === App.selectedSessionId" in source
-    )
+    assert "selectedProjectionInstanceKey" in source
+    assert "sessions[pk].projection_instance_key === App.selectedProjectionInstanceKey" in source
 
 def test_frontend_js_handles_disappeared_selected_session_gracefully():
     """when the last selected session no longer exists

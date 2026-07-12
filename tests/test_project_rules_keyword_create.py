@@ -410,15 +410,21 @@ def test_create_keyword_rule_does_not_change_report_session_operation_rows(temp_
         project_id=project,
     )
     with get_connection() as conn:
-        conn.execute(
+        cur = conn.execute(
             """
             INSERT INTO report_session_operation(
-                request_id, report_date, operation_type, base_instance_key, base_expected_revision, replay_order,
+                report_date, operation_type, base_instance_key, base_expected_revision, replay_order,
                 match_state, payload_json, created_at, updated_at
             )
-            VALUES (?, ?, 'edit_session', ?, ?, 1, 'active', ?, ?, ?)
+            VALUES (?, 'edit_session', ?, ?, 1, 'active', ?, ?, ?)
             """,
-            ("test-keyword-create-b", "2026-06-18", "base:" + "b" * 40, "revision-b", '{"payload_version":1,"note":{"mode":"set","value":"keep"}}', now_str(), now_str()),
+            ("2026-06-18", "base:" + "b" * 40, "revision-b", '{"payload_version":3,"note":{"mode":"set","value":"keep"}}', now_str(), now_str()),
+        )
+        conn.execute(
+            """INSERT INTO report_mutation_request(
+                request_id, input_signature, outcome_type, operation_id, result_json, created_at, committed_at
+            ) VALUES (?, ?, 'operation_committed', ?, '{}', ?, ?)""",
+            ("test-keyword-create-b", "seed-b", int(cur.lastrowid), now_str(), now_str()),
         )
     before = _counts()
 

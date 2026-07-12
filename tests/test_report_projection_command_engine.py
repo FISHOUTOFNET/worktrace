@@ -47,7 +47,7 @@ def _edit(op_id: int, key: str, payload: dict) -> dict:
         "operation_type": "edit_session",
         "base_instance_key": key,
         "match_state": "active",
-        "payload": {"payload_version": 1, **payload},
+        "payload": {"payload_version": 3, **payload},
     }
 
 
