@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from ..db import get_connection
-from ..constants import UNCATEGORIZED_PROJECT
+from ..constants import EXCLUDED_APP_NAME, STATUS_EXCLUDED, UNCATEGORIZED_PROJECT
 from . import report_session_operation_engine
 from . import project_lifecycle_policy
 from .project_service import get_or_create_uncategorized_project
@@ -38,7 +38,7 @@ def get_report_sessions_for_operations(
     """Build final sessions including private, display-safe contribution slices.
 
     This is an internal service entry used by operation commands and summary
-    aggregation.  The public session entry strips the contribution payload so
+    aggregation. The public session entry strips the contribution payload so
     Timeline cards never receive row-level data they do not render.
     """
     from .report_projection_snapshot_service import build_visible_snapshot
@@ -126,24 +126,50 @@ def _attach_contributions(sessions: list[dict], rows: list[dict]) -> None:
 
 
 def _display_safe_contribution(row: dict) -> dict:
+    activity_id = int(row.get("id") or row.get("activity_id") or 0)
+    report_date = str(row.get("report_date") or "")
+    slice_start = str(row.get("start_time") or "")
+    status = str(row.get("status") or "")
+    privacy_redacted = status == STATUS_EXCLUDED
+
+    if privacy_redacted:
+        app_name = ""
+        process_name = ""
+        activity_display_name = EXCLUDED_APP_NAME
+        activity_identity_key = f"excluded:{report_date}:{activity_id}:{slice_start}"
+        resource_identity_key = ""
+        resource_kind = ""
+        resource_subtype = ""
+        resource_display_name = ""
+    else:
+        app_name = str(row.get("app_name") or "")
+        process_name = str(row.get("process_name") or "")
+        activity_display_name = str(row.get("activity_display_name") or row.get("app_name") or "未知活动")
+        activity_identity_key = str(row.get("activity_identity_key") or row.get("resource_identity_key") or "")
+        resource_identity_key = str(row.get("resource_identity_key") or "")
+        resource_kind = str(row.get("resource_kind") or "")
+        resource_subtype = str(row.get("resource_subtype") or "")
+        resource_display_name = str(row.get("resource_display_name") or "")
+
     return {
-        "activity_id": int(row.get("id") or row.get("activity_id") or 0),
-        "report_date": str(row.get("report_date") or ""),
-        "slice_start_time": str(row.get("start_time") or ""),
+        "activity_id": activity_id,
+        "report_date": report_date,
+        "slice_start_time": slice_start,
         "slice_end_time": str(row.get("end_time") or ""),
-        "start_time": str(row.get("start_time") or ""),
+        "start_time": slice_start,
         "end_time": str(row.get("end_time") or ""),
         "duration_seconds": int(row.get("report_duration_seconds") or row.get("duration_seconds") or 0),
-        "app_name": str(row.get("app_name") or ""),
-        "process_name": str(row.get("process_name") or ""),
-        "status": str(row.get("status") or ""),
+        "app_name": app_name,
+        "process_name": process_name,
+        "status": status,
         "is_in_progress": bool(row.get("is_in_progress")),
-        "activity_display_name": str(row.get("activity_display_name") or row.get("app_name") or "未知活动"),
-        "activity_identity_key": str(row.get("activity_identity_key") or row.get("resource_identity_key") or ""),
-        "resource_identity_key": str(row.get("resource_identity_key") or ""),
-        "resource_kind": str(row.get("resource_kind") or ""),
-        "resource_subtype": str(row.get("resource_subtype") or ""),
-        "resource_display_name": str(row.get("resource_display_name") or ""),
+        "activity_display_name": activity_display_name,
+        "activity_identity_key": activity_identity_key,
+        "resource_identity_key": resource_identity_key,
+        "resource_kind": resource_kind,
+        "resource_subtype": resource_subtype,
+        "resource_display_name": resource_display_name,
+        "privacy_redacted": privacy_redacted,
         "display_project_id": int(row.get("display_project_id") or 0),
         "display_project_name": str(row.get("display_project_name") or UNCATEGORIZED_PROJECT),
         "display_project_description": str(row.get("display_project_description") or ""),
