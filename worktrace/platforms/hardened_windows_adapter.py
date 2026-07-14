@@ -7,12 +7,13 @@ import time
 from collections import deque
 from ctypes import wintypes
 from datetime import datetime
+from typing import Callable
 
 from ..constants import TIME_FORMAT
 from . import windows_adapter as legacy
 from .base import ActiveWindow, ClipboardTextEvent
 
-_PATH_SUCCESS_TTL_SECONDS = 3.0
+_PATH_SUCCESS_TTL_SECONDS = 0.5
 _PATH_FAILURE_TTL_SECONDS = 0.75
 _MAX_PATH_CACHE = 256
 _MAX_CLIPBOARD_QUEUE = 100
@@ -22,7 +23,7 @@ _timeout_slots = threading.BoundedSemaphore(_RESOLVER_CAPACITY)
 
 
 def _bounded_run_with_timeout(func, timeout_seconds: float, *args):
-    """Bound abandoned blocking workers so repeated COM hangs cannot grow forever."""
+    """Bound abandoned blocking workers so repeated COM hangs stay bounded."""
     if not _timeout_slots.acquire(blocking=False):
         raise TimeoutError("blocking resolver capacity exhausted")
     result_box: list = [None]
@@ -46,8 +47,8 @@ def _bounded_run_with_timeout(func, timeout_seconds: float, *args):
     return result_box[0]
 
 
-# The existing catalog/resolver remains the single source of application-specific
-# COM knowledge.  Only its timeout primitive is replaced with a bounded one.
+# Retain one catalog of application-specific COM paths, while replacing the
+# unbounded timeout primitive process-wide.
 legacy._run_with_timeout = _bounded_run_with_timeout
 
 
@@ -55,11 +56,12 @@ class HardenedWindowsAdapter:
     """Shipping Windows adapter with explicit, resettable runtime lifecycle."""
 
     def __init__(self) -> None:
-        self._clipboard = _ClipboardMonitor()
         self._path_lock = threading.Lock()
         self._path_cache: dict[
-            tuple[int | None, int | None, str, str], tuple[float, str | None]
+            tuple[int | None, int | None, str, str],
+            tuple[float, str | None],
         ] = {}
+        self._clipboard = _ClipboardMonitor(self.get_active_window)
 
     def get_active_window(self) -> ActiveWindow:
         import psutil
@@ -71,12 +73,10 @@ class HardenedWindowsAdapter:
         _, pid = win32process.GetWindowThreadProcessId(hwnd)
         process_name = "unknown"
         app_name = "unknown"
-        process_create_time: float | None = None
         try:
             process = psutil.Process(pid)
             process_name = process.name()
             app_name = process_name
-            process_create_time = float(process.create_time())
         except psutil.Error:
             pass
 
@@ -85,10 +85,6 @@ class HardenedWindowsAdapter:
         if not file_path_hint:
             file_path_hint = self._cached_path(cache_key)
         if not file_path_hint:
-            # Resolve before returning the first sample.  This prevents a
-            # folder-only exclusion rule from seeing a real title before the
-            # corresponding path is known.  The legacy resolver has its own
-            # per-source timeouts and the global bounded timeout primitive.
             try:
                 file_path_hint = legacy._resolve_active_file_path(
                     process_name,
@@ -96,7 +92,10 @@ class HardenedWindowsAdapter:
                     pid,
                 )
             except Exception:
-                logging.debug("synchronous active path resolution failed", exc_info=True)
+                logging.debug(
+                    "synchronous active path resolution failed",
+                    exc_info=True,
+                )
                 file_path_hint = None
             self._store_path(cache_key, file_path_hint)
 
@@ -135,7 +134,11 @@ class HardenedWindowsAdapter:
         key: tuple[int | None, int | None, str, str],
         value: str | None,
     ) -> None:
-        ttl = _PATH_SUCCESS_TTL_SECONDS if value else _PATH_FAILURE_TTL_SECONDS
+        ttl = (
+            _PATH_SUCCESS_TTL_SECONDS
+            if value
+            else _PATH_FAILURE_TTL_SECONDS
+        )
         with self._path_lock:
             if len(self._path_cache) >= _MAX_PATH_CACHE:
                 self._path_cache.clear()
@@ -143,7 +146,10 @@ class HardenedWindowsAdapter:
 
     def get_idle_seconds(self) -> int:
         class LASTINPUTINFO(ctypes.Structure):
-            _fields_ = [("cbSize", wintypes.UINT), ("dwTime", wintypes.DWORD)]
+            _fields_ = [
+                ("cbSize", wintypes.UINT),
+                ("dwTime", wintypes.DWORD),
+            ]
 
         last_input = LASTINPUTINFO()
         last_input.cbSize = ctypes.sizeof(last_input)
@@ -174,14 +180,22 @@ class HardenedWindowsAdapter:
 
 
 class _ClipboardMonitor:
-    def __init__(self) -> None:
-        self._events: deque[ClipboardTextEvent] = deque(maxlen=_MAX_CLIPBOARD_QUEUE)
+    def __init__(
+        self,
+        source_window_provider: Callable[[], ActiveWindow] | None = None,
+    ) -> None:
+        self._events: deque[ClipboardTextEvent] = deque(
+            maxlen=_MAX_CLIPBOARD_QUEUE
+        )
         self._lock = threading.Lock()
         self._lifecycle_lock = threading.Lock()
         self._enabled = False
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._last_sequence: int | None = None
+        self._source_window_provider = (
+            source_window_provider or legacy._get_foreground_active_window
+        )
 
     def set_enabled(self, enabled: bool) -> None:
         with self._lifecycle_lock:
@@ -237,7 +251,10 @@ class _ClipboardMonitor:
                     self._last_sequence = sequence
                     self._capture(sequence)
             except Exception:
-                logging.debug("clipboard monitor loop failed", exc_info=True)
+                logging.debug(
+                    "clipboard monitor loop failed",
+                    exc_info=True,
+                )
 
     def _capture(self, sequence: int) -> None:
         if not self._enabled:
@@ -247,19 +264,13 @@ class _ClipboardMonitor:
             return
         event = ClipboardTextEvent(
             text=text,
-            source_window=self._source_window(),
+            source_window=self._source_window_provider(),
             copied_at=datetime.now().strftime(TIME_FORMAT),
             sequence_number=sequence,
         )
         with self._lock:
             if self._enabled:
                 self._events.append(event)
-
-    @staticmethod
-    def _source_window() -> ActiveWindow:
-        # Clipboard source resolution is deliberately lightweight.  The
-        # collector's privacy check will re-evaluate this window before binding.
-        return legacy._get_foreground_active_window()
 
 
 __all__ = ["HardenedWindowsAdapter"]
