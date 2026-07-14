@@ -124,6 +124,12 @@ class CollectorStateMachine:
         self.state = "stopped"
         self.active_signature = None
 
+    def reset_runtime_state(self, reason: str = "runtime_reset") -> None:
+        """Forget process-local identities after destructive DB maintenance."""
+        self.recorder.clear_runtime_state(reason)
+        self.state = "stopped"
+        self.active_signature = None
+
     def split_at_midnight(self, at_time: str) -> None:
         if self.recorder.split_at_midnight(at_time):
             session_boundary_service.record_hard_boundary(at_time, "midnight")
