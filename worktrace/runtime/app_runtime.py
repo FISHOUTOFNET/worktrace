@@ -1,12 +1,8 @@
 """Process-level application runtime.
 
-Encapsulates the collector thread, folder-index worker, stop event, single
-instance lock, and recovery logic.
-``main.py`` now only creates an ``AppRuntime``, initializes it, runs the UI
-main loop, and shuts it down.
-
-The runtime is single-process, multi-thread: UI thread + collector thread.
-No network service, no background Windows service, no cloud sync.
+Owns every long-lived runtime component: collector, folder-index worker,
+platform adapter, pause/reset command channel, single-instance lock and
+startup recovery.
 """
 
 from __future__ import annotations
@@ -21,10 +17,11 @@ from ..collector import collector_health
 from ..collector.collector import CollectorControl, run_collector
 from ..collector.single_instance import acquire_single_instance, release_single_instance
 from ..services import activity_lifecycle_service, folder_index_service, recovery_service
-from ..services.runtime_activity_state_service import record_runtime_boundary
 from ..services.secure_backup_service import (
     clear_collector_pause_handler,
+    clear_collector_reset_handler,
     register_collector_pause_handler,
+    register_collector_reset_handler,
 )
 from ..services.settings_service import set_setting
 
@@ -50,147 +47,142 @@ def _choose_adapter():
 
 
 class AppRuntime:
-    """Owns collector and folder-index threads plus the stop event.
-
-    Lifecycle::
-
-        runtime = AppRuntime(paths)
-        runtime.initialize()
-        # Privacy gate: only after first-run notice accepted:
-        runtime.start_background_workers()  # folder index worker (local path probing)
-        runtime.start_collector()           # collector thread
-        runtime.shutdown()                  # join threads, close open record, release lock
-
-    Both ``start_background_workers`` and ``start_collector`` are gated by
-    the first-run privacy notice in ``webview_main.main`` /
-    ``bridge.toggle_pause`` / ``bridge.accept_first_run_notice``. The
-    folder index worker probes local ``os.path.exists(file_path)`` for
-    ready indexes, which is privacy-relevant local path probing; it must
-    not start before the user has accepted the privacy notice.
-    """
+    """Single owner for process-level worker and adapter lifecycle."""
 
     def __init__(self, paths: "_Paths") -> None:
         self.paths = paths
         self.stop_event = threading.Event()
         self.owns_collector = False
         self.collector_control = CollectorControl()
+        self._lifecycle_lock = threading.RLock()
+        self._adapter = _choose_adapter()
         self._collector_thread: threading.Thread | None = None
         self._index_thread: threading.Thread | None = None
         self._initialized = False
         self._shutdown = False
 
     def initialize(self) -> None:
-        """Initialize the database, acquire single-instance lock, and recover
-        unclosed records.
-
-        Privacy gate: ``initialize`` only does non-collection startup work
-        (DB init, single-instance lock, recovery). It must NOT start the
-        folder index worker because the worker probes local
-        ``os.path.exists(file_path)`` paths for ready indexes, which is
-        privacy-relevant local path probing. The worker is started
-        separately via ``start_background_workers`` only after the
-        first-run privacy notice has been accepted.
-        """
+        """Initialize the DB, acquire the instance lock and recover stale rows."""
         db.initialize_database(self.paths.db_path)
-
         self.owns_collector = acquire_single_instance()
         if not self.owns_collector:
             logging.warning(
                 "single instance collector lock not acquired; UI will start without collector"
             )
-
         if self.owns_collector:
             recovery_service.recover_unclosed_records()
         self._initialized = True
 
     def start_background_workers(self) -> bool:
-        """Start the folder index worker once. Safe to call multiple times.
-
-        Returns ``True`` when this call actually started the worker,
-        ``False`` when the worker was already running or this instance
-        does not own the collector (no-op). Idempotent: repeated calls
-        do not spawn duplicate workers.
-
-        Privacy gate: callers (``webview_main.main``,
-        ``bridge.toggle_pause``, ``bridge.accept_first_run_notice``)
-        must only invoke this after the first-run privacy notice has
-        been accepted. The worker's ``validate_ready_indexes`` startup
-        pass probes ``os.path.exists(file_path)`` for ready indexes,
-        which is privacy-relevant local path probing.
-        """
-        if not self.owns_collector:
-            return False
-        if self._index_thread is not None:
-            return False
-        thread = folder_index_service.start_folder_index_worker(self.stop_event)
-        if thread is None:
-            return False
-        self._index_thread = thread
-        return True
+        """Start or replace the folder-index worker under the lifecycle lock."""
+        with self._lifecycle_lock:
+            if not self.owns_collector or self._shutdown or self.stop_event.is_set():
+                return False
+            if self._index_thread is not None and self._index_thread.is_alive():
+                return False
+            self._index_thread = folder_index_service.start_folder_index_worker(
+                self.stop_event
+            )
+            return self._index_thread is not None
 
     def start_collector(self) -> dict[str, object]:
-        """Start the collector thread once. Safe to call multiple times."""
-        if self._shutdown or self.stop_event.is_set():
-            return {"ok": False, "error": "runtime_stopping"}
-        if not self.owns_collector:
-            return {"ok": False, "error": "collector_not_owned"}
-        if self._collector_thread is not None and self._collector_thread.is_alive():
-            return {"ok": True, "started": False, "already_running": True}
-        if self._collector_thread is not None and not self._collector_thread.is_alive():
-            collector_health.record_health_code("thread_dead_replaced")
-            self._collector_thread = None
-            self.collector_control = CollectorControl()
-        try:
-            self._collector_thread = threading.Thread(
-                target=run_collector,
-                args=(_choose_adapter(), self.stop_event, self.collector_control),
-                name="WorkTraceCollector",
-                daemon=True,
-            )
-            self._collector_thread.start()
-        except Exception:
-            logging.exception("collector thread start failed")
-            self._collector_thread = None
-            return {"ok": False, "error": "collector_start_failed"}
-        set_setting("collector_status", "running")
-        set_setting("collector_health_state", "healthy")
+        """Start the collector exactly once under the lifecycle lock."""
+        with self._lifecycle_lock:
+            if self._shutdown or self.stop_event.is_set():
+                return {"ok": False, "error": "runtime_stopping"}
+            if not self.owns_collector:
+                return {"ok": False, "error": "collector_not_owned"}
+            if self._collector_thread is not None and self._collector_thread.is_alive():
+                self._register_maintenance_handlers()
+                return {"ok": True, "started": False, "already_running": True}
+            if self._collector_thread is not None:
+                collector_health.record_health_code("thread_dead_replaced")
+                self._collector_thread = None
+                self.collector_control = CollectorControl()
+            try:
+                self._collector_thread = threading.Thread(
+                    target=run_collector,
+                    args=(self._adapter, self.stop_event, self.collector_control),
+                    name="WorkTraceCollector",
+                    daemon=True,
+                )
+                self._collector_thread.start()
+            except Exception:
+                logging.exception("collector thread start failed")
+                self._collector_thread = None
+                return {"ok": False, "error": "collector_start_failed"}
+            set_setting("collector_status", "running")
+            set_setting("collector_health_state", "healthy")
+            self._register_maintenance_handlers()
+            return {"ok": True, "started": True, "already_running": False}
+
+    def _register_maintenance_handlers(self) -> None:
         register_collector_pause_handler(self.pause_collection_now)
-        return {"ok": True, "started": True, "already_running": False}
+        register_collector_reset_handler(self.reset_collection_runtime_now)
 
     def pause_collection_now(self, timeout_seconds: float = 5.0) -> dict[str, object]:
-        """Ask the collector to finalize the current activity before pausing."""
+        """Finalize the current activity and establish the paused state."""
         if (
             not self.owns_collector
             or self._collector_thread is None
             or not self._collector_thread.is_alive()
         ):
-            # There is no live collector writer to acknowledge. The paused
-            # state will be established atomically by the import coordinator.
             return {"ok": True, "pause_pending": False, "collector_active": False}
         return self.collector_control.request_pause(timeout_seconds=timeout_seconds)
+
+    def reset_collection_runtime_now(
+        self, timeout_seconds: float = 5.0
+    ) -> dict[str, object]:
+        """Forget all collector/adapter identity before destructive DB work."""
+        if (
+            not self.owns_collector
+            or self._collector_thread is None
+            or not self._collector_thread.is_alive()
+        ):
+            self._reset_adapter_runtime_state()
+            return {"ok": True, "reset_pending": False, "collector_active": False}
+        result = self.collector_control.request_reset(timeout_seconds=timeout_seconds)
+        if bool(result.get("ok")):
+            self._reset_adapter_runtime_state()
+        return result
+
+    def _reset_adapter_runtime_state(self) -> None:
+        resetter = getattr(self._adapter, "reset_runtime_state", None)
+        if resetter is not None:
+            resetter()
+
+    def set_clipboard_capture_enabled(self, enabled: bool) -> None:
+        setter = getattr(self._adapter, "set_clipboard_capture_enabled", None)
+        if setter is not None:
+            setter(bool(enabled))
 
     def request_shutdown(self) -> None:
         """Signal the collector and index threads to stop."""
         self.stop_event.set()
 
     def shutdown(self) -> None:
-        """Join threads, close the current open record, and release the lock.
+        """Join workers, close rows, stop adapter services and release the lock."""
+        with self._lifecycle_lock:
+            if self._shutdown:
+                return
+            self._shutdown = True
+            clear_collector_pause_handler(self.pause_collection_now)
+            clear_collector_reset_handler(self.reset_collection_runtime_now)
+            self.stop_event.set()
+            index_thread = self._index_thread
+            collector_thread = self._collector_thread
 
-        Idempotent: safe to call more than once.
-        """
-        if self._shutdown:
-            return
-        self._shutdown = True
-        clear_collector_pause_handler(self.pause_collection_now)
-        self.stop_event.set()
-        if self._index_thread:
-            self._index_thread.join(timeout=5)
-        if self._collector_thread:
-            self._collector_thread.join(timeout=5)
+        if index_thread:
+            index_thread.join(timeout=5)
+        if collector_thread:
+            collector_thread.join(timeout=5)
         if self.owns_collector:
             activity_lifecycle_service.close_all_open_activities()
             set_setting("collector_status", "stopped")
             release_single_instance()
+        shutdown_adapter = getattr(self._adapter, "shutdown", None)
+        if shutdown_adapter is not None:
+            shutdown_adapter()
         logging.info("app shutdown")
 
 
