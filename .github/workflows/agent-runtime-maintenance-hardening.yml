@@ -3,6 +3,8 @@ name: Apply runtime maintenance hardening
 on:
   push:
     branches: [agent/runtime-maintenance-hardening]
+  pull_request:
+    branches: [main]
 
 permissions:
   contents: write
