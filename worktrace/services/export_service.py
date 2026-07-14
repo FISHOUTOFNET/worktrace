@@ -5,7 +5,7 @@ import logging
 import os
 from pathlib import Path
 
-from ..db import get_connection, now_str, reset_database
+from ..db import get_connection, now_str
 from ..exports.excel_exporter import export_excel_file
 from . import statistics_service
 
@@ -148,9 +148,10 @@ def export_all_local_data(path: str) -> str:
 
 
 def clear_all_local_data(confirm: bool) -> None:
-    """Clear local data through the acknowledged maintenance coordinator."""
+    """Clear local data atomically through the maintenance coordinator."""
     if not confirm:
         raise ValueError("confirmation is required")
+    from .database_maintenance_service import clear_all_live_data
     from .secure_backup_service import (
         BackupImportInProgressError,
         SECURE_IMPORT_COORDINATOR,
@@ -158,7 +159,7 @@ def clear_all_local_data(confirm: bool) -> None:
 
     try:
         with SECURE_IMPORT_COORDINATOR.acquire(reason="clear_all") as guard:
-            reset_database()
+            clear_all_live_data()
             guard.mark_succeeded()
     except BackupImportInProgressError as exc:
         raise ValueError("operation_in_progress") from exc
