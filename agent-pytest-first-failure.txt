@@ -1,57 +1,22 @@
-......................................................................F
+........................................................................ [  2%]
+...........................F
 ================================== FAILURES ===================================
-_________________ test_start_background_workers_is_idempotent _________________
+______ test_collector_observation_time_is_after_active_window_fast_path _______
 
-temp_db = WindowsPath('C:/Users/���� Sun Yi/AppData/Local/Temp/pytest-of-���� Sun Yi/pytest-3134/test_start_background_workers_1/worktrace.db')
-tmp_path = WindowsPath('C:/Users/���� Sun Yi/AppData/Local/Temp/pytest-of-���� Sun Yi/pytest-3134/test_start_background_workers_1')
-monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x00000267018A12D0>
+    def test_collector_observation_time_is_after_active_window_fast_path():
+        source = inspect.getsource(run_collector)
+        active_pos = source.find("active_window = adapter.get_active_window()")
+        observation_pos = source.find("observation_time = now_str()", active_pos)
+        transition_pos = source.find('machine.transition_to("recording"', observation_pos)
+        assert active_pos != -1
+        assert observation_pos > active_pos
+>       assert transition_pos > observation_pos
+E       assert -1 > 4911
 
-    def test_start_background_workers_is_idempotent(temp_db, tmp_path, monkeypatch):
-        """``start_background_workers()`` is idempotent: second call returns
-        ``False`` and the worker is not started twice."""
-        monkeypatch.setattr(
-            "worktrace.runtime.app_runtime.acquire_single_instance", lambda: True
-        )
-        monkeypatch.setattr(
-            "worktrace.runtime.app_runtime.release_single_instance", lambda: None
-        )
-    
-        start_calls = {"count": 0}
-    
-        def _fake_start(stop_event):
-            start_calls["count"] += 1
-            return _fake_thread()
-    
-        monkeypatch.setattr(
-            folder_index_service, "start_folder_index_worker", _fake_start
-        )
-    
-        paths = _make_paths(temp_db, tmp_path)
-        runtime = AppRuntime(paths)
-        try:
-            runtime.initialize()
-            first = runtime.start_background_workers()
->           second = runtime.start_background_workers()
-                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-tests\test_app_runtime_privacy_gate.py:140: 
-_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
-
-self = <worktrace.runtime.app_runtime.AppRuntime object at 0x00000267018A2C50>
-
-    def start_background_workers(self) -> bool:
-        """Start or replace the folder-index worker under the lifecycle lock."""
-        with self._lifecycle_lock:
-            if not self.owns_collector or self._shutdown or self.stop_event.is_set():
-                return False
->           if self._index_thread is not None and self._index_thread.is_alive():
-                                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^
-E           AttributeError: 'T' object has no attribute 'is_alive'
-
-worktrace\runtime\app_runtime.py:82: AttributeError
+tests\test_collector.py:166: AssertionError
 =========================== short test summary info ===========================
-FAILED tests/test_app_runtime_privacy_gate.py::test_start_background_workers_is_idempotent - AttributeError: 'T' object has no attribute 'is_alive'
+FAILED tests/test_collector.py::test_collector_observation_time_is_after_active_window_fast_path - assert -1 > 4911
 !!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!
-1 failed, 70 passed in 33.79s
+1 failed, 99 passed in 56.64s
 
 PYTEST_EXIT_CODE=1
