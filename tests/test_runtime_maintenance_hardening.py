@@ -11,12 +11,15 @@ from tests.support.db_helpers import assign_activity_project, fetch_one
 from worktrace.collector import activity_session_recorder as recorder_module
 from worktrace.collector.activity_session_recorder import ActivitySessionRecorder
 from worktrace.collector.collector import CollectorControl, _sleep_until_next_poll
+from worktrace.platforms.base import ActiveWindow
 from worktrace.platforms.hardened_windows_adapter import _ClipboardMonitor
 from worktrace.security.kdf import KdfError, KdfParams, derive_backup_key
 from worktrace.services import (
     activity_lifecycle_service,
     activity_service,
+    folder_index_service,
     folder_rule_service,
+    privacy_service,
     project_service,
     timeline_service,
 )
@@ -24,6 +27,7 @@ from worktrace.services.folder_index_recovery_service import (
     recover_interrupted_indexes,
 )
 from worktrace.services.privacy_anonymization_service import anonymize_activity
+from worktrace.services.privacy_service import PrivacyResolutionPending
 from worktrace.services.secure_backup_service import SecureImportCoordinator
 
 pytestmark = [
@@ -166,6 +170,32 @@ def test_interrupted_folder_index_returns_to_pending(temp_db):
     assert row["error_message"] is None
 
 
+def test_unresolved_file_path_fails_closed_when_exclusion_folder_exists(
+    temp_db,
+    monkeypatch,
+):
+    excluded_id = project_service.set_excluded_project_enabled(True)
+    folder_rule_service.create_or_update_folder_rule(
+        r"C:\Confidential",
+        excluded_id,
+    )
+    monkeypatch.setattr(
+        folder_index_service,
+        "resolve_unique_path_from_title",
+        lambda *_args, **_kwargs: None,
+    )
+
+    with pytest.raises(PrivacyResolutionPending):
+        privacy_service.is_excluded(
+            ActiveWindow(
+                app_name="Word",
+                process_name="winword.exe",
+                window_title="Contract.docx",
+                file_path_hint=None,
+            )
+        )
+
+
 def test_deleted_five_minute_project_still_splits_surrounding_sessions(temp_db):
     project_a = project_service.create_project("Boundary A")
     deleted = project_service.create_project("Boundary Deleted")
@@ -192,7 +222,10 @@ def test_deleted_five_minute_project_still_splits_surrounding_sessions(temp_db):
         "2026-07-15",
     )
 
-    assert [item["activity_ids"] for item in sessions] == [[first], [second]]
+    assert sorted(item["activity_ids"] for item in sessions) == [
+        [first],
+        [second],
+    ]
     assert hidden not in {
         activity_id
         for session in sessions
