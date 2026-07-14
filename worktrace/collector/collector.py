@@ -18,6 +18,7 @@ from ..services.settings_service import (
     set_setting,
 )
 from . import collector_health
+from .clock_tracker import ClockTracker
 from .heartbeat import update_heartbeat
 from .state_machine import CollectorStateMachine
 
@@ -118,6 +119,7 @@ def run_collector(
     control: CollectorControl | None = None,
 ) -> None:
     machine = CollectorStateMachine()
+    clock_tracker = ClockTracker()
     last_loop_time: str | None = None
     heartbeat_counter = 0
     prune_counter = 0
@@ -132,11 +134,32 @@ def run_collector(
         phase = "loop"
         try:
             now = now_str()
+            monotonic_now = time.monotonic()
             phase = "gate_check"
             idle_threshold_seconds = get_int_setting(
                 "idle_threshold_seconds",
                 DEFAULT_IDLE_THRESHOLD_SECONDS,
             )
+            discontinuity = clock_tracker.observe(
+                now,
+                monotonic_now,
+                clock_jump_threshold_seconds=get_int_setting(
+                    "clock_jump_threshold_seconds",
+                    300,
+                ),
+                stall_threshold_seconds=get_int_setting(
+                    "collector_stall_threshold_seconds",
+                    180,
+                ),
+            )
+            if discontinuity is not None:
+                _set_clipboard_capture_enabled(adapter, False)
+                machine.reset_for_time_jump(discontinuity.safe_end_time)
+                collector_health.record_health_code(discontinuity.reason, now)
+                last_loop_time = now
+                next_poll_deadline = monotonic_now + POLL_CADENCE_SECONDS
+                continue
+
             maintenance_active = is_secure_import_in_progress()
             prune_counter += 1
             if prune_counter >= 20 and not maintenance_active:
