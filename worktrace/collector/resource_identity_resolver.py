@@ -13,9 +13,13 @@ from ..constants import (
 from ..path_utils import normalize_path_key
 from ..platforms.base import ActiveWindow
 from ..resources.resource_builders import make_system_resource, resource_signature
-from ..resources.resource_identity import infer_resource_for_activity, infer_resource_from_active_window
+from ..resources.resource_identity import (
+    infer_resource_for_activity,
+    infer_resource_from_active_window,
+)
 from ..resources.types import DetectedResource
-from ..services import activity_service, privacy_service
+from ..services import privacy_service
+from ..services.privacy_anonymization_service import update_path_or_anonymize
 from .transition_types import ActivitySignature
 
 
@@ -26,11 +30,7 @@ class ResourceMatch:
 
 
 class ResourceIdentityResolver:
-    """Collector resource identity boundary.
-
-    Owns ActiveWindow -> payload conversion, privacy-safe system payloads,
-    resource signatures, same-resource checks, and late path supplement.
-    """
+    """Collector resource identity and late-path privacy boundary."""
 
     def payload_for(self, status: str, active_window: ActiveWindow | None) -> dict:
         if status == STATUS_EXCLUDED:
@@ -73,7 +73,12 @@ class ResourceIdentityResolver:
             "resource": resource,
         }
 
-    def normalize_for_privacy(self, status: str, payload: dict, active_window: ActiveWindow | None) -> tuple[str, dict]:
+    def normalize_for_privacy(
+        self,
+        status: str,
+        payload: dict,
+        active_window: ActiveWindow | None,
+    ) -> tuple[str, dict]:
         if status != STATUS_NORMAL or not self.payload_resource_is_excluded(payload):
             return status, payload
         return STATUS_EXCLUDED, self.payload_for(STATUS_EXCLUDED, active_window)
@@ -109,7 +114,12 @@ class ResourceIdentityResolver:
             return ResourceMatch(False)
 
         if current_signature == new_signature:
-            self._supplement_path_if_needed(current, new_payload, persisted_activity_id)
+            if self._supplement_path_if_needed(
+                current,
+                new_payload,
+                persisted_activity_id,
+            ):
+                return ResourceMatch(False)
             return ResourceMatch(True, new_signature)
 
         if self.signatures_represent_same_resource(
@@ -118,7 +128,12 @@ class ResourceIdentityResolver:
             current,
             new_payload,
         ):
-            self._supplement_path_if_needed(current, new_payload, persisted_activity_id)
+            if self._supplement_path_if_needed(
+                current,
+                new_payload,
+                persisted_activity_id,
+            ):
+                return ResourceMatch(False)
             return ResourceMatch(True, new_signature)
 
         return ResourceMatch(False)
@@ -136,7 +151,10 @@ class ResourceIdentityResolver:
         old_resource = current.get("resource")
         new_resource = payload.get("resource")
 
-        if isinstance(old_resource, DetectedResource) and isinstance(new_resource, DetectedResource):
+        if isinstance(old_resource, DetectedResource) and isinstance(
+            new_resource,
+            DetectedResource,
+        ):
             if old_resource.resource_kind != new_resource.resource_kind:
                 return False
             if old_resource.resource_subtype != new_resource.resource_subtype:
@@ -189,14 +207,14 @@ class ResourceIdentityResolver:
             ("file_name:", "file_path:"),
         ):
             if old_key.startswith(prefix_a) and new_key.startswith(prefix_b):
-                name_part = old_key[len(prefix_a):]
-                path_part = new_key[len(prefix_b):]
+                name_part = old_key[len(prefix_a) :]
+                path_part = new_key[len(prefix_b) :]
                 basename = ntpath.basename(path_part).lower().replace(" ", "-")
                 if basename == name_part:
                     return True
             if old_key.startswith(prefix_b) and new_key.startswith(prefix_a):
-                path_part = old_key[len(prefix_b):]
-                name_part = new_key[len(prefix_a):]
+                path_part = old_key[len(prefix_b) :]
+                name_part = new_key[len(prefix_a) :]
                 basename = ntpath.basename(path_part).lower().replace(" ", "-")
                 if basename == name_part:
                     return True
@@ -209,33 +227,30 @@ class ResourceIdentityResolver:
         try:
             return privacy_service.is_resource_excluded(resource)
         except Exception:
-            return False
+            # Privacy uncertainty is exclusion, never permission to persist.
+            return True
 
     def _supplement_path_if_needed(
         self,
         current: dict,
         payload: dict,
         persisted_activity_id: int | None,
-    ) -> None:
+    ) -> bool:
+        """Return True when late path discovery converted the row to excluded."""
         old_path = (current.get("file_path_hint") or "").strip()
         new_path = (payload.get("file_path_hint") or "").strip()
         new_resource = payload.get("resource")
-
-        if not old_path and new_path:
+        if not new_path and isinstance(new_resource, DetectedResource):
+            new_path = str(new_resource.path_hint or "").strip()
+        if old_path or not new_path:
+            return False
+        if persisted_activity_id is None:
             current["file_path_hint"] = new_path
-            if persisted_activity_id is not None:
-                activity_service.update_activity_file_path_hint(persisted_activity_id, new_path)
-        elif (
-            not old_path
-            and isinstance(new_resource, DetectedResource)
-            and new_resource.path_hint
-        ):
-            current["file_path_hint"] = new_resource.path_hint
-            if persisted_activity_id is not None:
-                activity_service.update_activity_file_path_hint(
-                    persisted_activity_id,
-                    new_resource.path_hint,
-                )
+            return False
+        excluded = update_path_or_anonymize(persisted_activity_id, new_path)
+        if not excluded:
+            current["file_path_hint"] = new_path
+        return excluded
 
 
 DEFAULT_RESOURCE_IDENTITY_RESOLVER = ResourceIdentityResolver()
