@@ -49,7 +49,9 @@ def test_timeline_session_api_returns_recursively_plain_detached_dto(temp_db):
 
     assert len(sessions) == 1
     session = sessions[0]
+    assert isinstance(session["activity_ids"], list)
     assert session["activity_ids"] == [activity_id]
+    assert isinstance(session["activity_member_hash"], str)
     assert isinstance(session["member_slices"], list)
     assert isinstance(session["member_slices"][0], dict)
     _assert_plain_data(sessions)
