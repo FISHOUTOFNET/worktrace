@@ -17,6 +17,7 @@ from ..collector import collector_health
 from ..collector.collector import CollectorControl, run_collector
 from ..collector.single_instance import acquire_single_instance, release_single_instance
 from ..services import activity_lifecycle_service, folder_index_service, recovery_service
+from ..services.folder_index_recovery_service import recover_interrupted_indexes
 from ..services.secure_backup_service import (
     clear_collector_pause_handler,
     clear_collector_reset_handler,
@@ -80,6 +81,7 @@ class AppRuntime:
                 return False
             if self._index_thread is not None and self._index_thread.is_alive():
                 return False
+            recover_interrupted_indexes()
             self._index_thread = folder_index_service.start_folder_index_worker(
                 self.stop_event
             )
