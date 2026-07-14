@@ -42,37 +42,6 @@ _RECENT_LIMIT: int = 20
 _DATE_SHAPE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
-
-def _coerce_activity_ids(activity_ids: list[int]) -> list[int] | None:
-    """Validate and normalize the ``activity_ids`` argument from JS.
-
-    Returns a deduplicated list of positive ints, or ``None`` if the input
-    is not a usable list of positive integers. This is a bridge-level guard
-    so the API layer always receives clean ints; the API layer performs the
-    deeper existence checks. ``bool`` values are rejected explicitly so
-    ``True``/``False`` are not coerced to ``1``/``0``.
-    """
-    if not isinstance(activity_ids, list) or not activity_ids:
-        return None
-    ids: list[int] = []
-    seen: set[int] = set()
-    for raw in activity_ids:
-        if isinstance(raw, bool):
-            return None
-        try:
-            value = int(raw)
-        except (TypeError, ValueError):
-            return None
-        if value <= 0:
-            return None
-        if value in seen:
-            continue
-        seen.add(value)
-        ids.append(value)
-    return ids if ids else None
-
-
-
 def _safe_resource_display_name(row: dict[str, Any]) -> str:
     """Return a display-safe resource name for a Timeline detail row.
 
@@ -191,7 +160,6 @@ __all__ = [
     "_DATE_SHAPE_RE",
     "_GENERIC_ERROR",
     "_RECENT_LIMIT",
-    "_coerce_activity_ids",
     "_safe_resource_display_name",
     "_snapshot_summary",
     "_statistics_summary_payload",
