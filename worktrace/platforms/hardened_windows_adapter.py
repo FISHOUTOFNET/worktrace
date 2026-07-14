@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import Callable
 
 from ..constants import TIME_FORMAT
+from ..resources.title_parsing import extract_file_name_from_title
 from . import windows_adapter as legacy
 from .base import ActiveWindow, ClipboardTextEvent
 
@@ -18,6 +19,15 @@ _PATH_FAILURE_TTL_SECONDS = 0.75
 _MAX_PATH_CACHE = 256
 _MAX_CLIPBOARD_QUEUE = 100
 _RESOLVER_CAPACITY = 2
+_EXTRA_LOCAL_FILE_PROCESSES = {
+    "code.exe",
+    "devenv.exe",
+    "notepad++.exe",
+    "explorer.exe",
+    "sublime_text.exe",
+    "pycharm64.exe",
+    "idea64.exe",
+}
 
 _timeout_slots = threading.BoundedSemaphore(_RESOLVER_CAPACITY)
 
@@ -47,9 +57,19 @@ def _bounded_run_with_timeout(func, timeout_seconds: float, *args):
     return result_box[0]
 
 
-# Retain one catalog of application-specific COM paths, while replacing the
-# unbounded timeout primitive process-wide.
 legacy._run_with_timeout = _bounded_run_with_timeout
+
+
+def _privacy_path_required(process_name: str, title: str) -> bool:
+    if not extract_file_name_from_title(title):
+        return False
+    process_key = str(process_name or "").strip().casefold()
+    if process_key in _EXTRA_LOCAL_FILE_PROCESSES:
+        return True
+    return any(
+        legacy._process_matches_entry(process_name, entry)
+        for entry in legacy._all_com_catalog_entries()
+    )
 
 
 class HardenedWindowsAdapter:
@@ -80,11 +100,12 @@ class HardenedWindowsAdapter:
         except psutil.Error:
             pass
 
+        requires_path = _privacy_path_required(process_name, title)
         cache_key = (hwnd, pid, process_name, title)
         file_path_hint = legacy._resolve_title_file_path(title)
-        if not file_path_hint:
+        if not file_path_hint and requires_path:
             file_path_hint = self._cached_path(cache_key)
-        if not file_path_hint:
+        if not file_path_hint and requires_path:
             try:
                 file_path_hint = legacy._resolve_active_file_path(
                     process_name,
@@ -112,6 +133,7 @@ class HardenedWindowsAdapter:
             pid=pid,
             hwnd=hwnd,
             window_class=window_class,
+            privacy_path_required=requires_path,
         )
 
     def _cached_path(
