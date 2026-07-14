@@ -3,19 +3,28 @@ from __future__ import annotations
 import time
 
 from ..constants import (
-    EXCLUDED_PROJECT,
     EXCLUDED_APP_NAME,
     EXCLUDED_PROCESS_NAME,
+    EXCLUDED_PROJECT,
     EXCLUDED_WINDOW_TITLE,
     RULE_CACHE_TTL_SECONDS,
     STATUS_EXCLUDED,
 )
 from ..db import dict_rows, get_connection, get_db_path
-from ..path_utils import is_path_under_folder, normalize_folder_key, normalize_path_key
+from ..path_utils import (
+    is_path_under_folder,
+    normalize_folder_key,
+    normalize_path_key,
+)
 from ..platforms.base import ActiveWindow
+from ..resources.title_parsing import extract_file_name_from_title
 
 _EXCLUDE_RULE_CACHE_TTL_SECONDS = RULE_CACHE_TTL_SECONDS
 _EXCLUDE_RULE_CACHE: dict[str, tuple[float, dict[str, list[dict]]]] = {}
+
+
+class PrivacyResolutionPending(RuntimeError):
+    """A privacy-sensitive file window cannot yet be classified safely."""
 
 
 def clear_exclude_rules_cache() -> None:
@@ -23,6 +32,7 @@ def clear_exclude_rules_cache() -> None:
 
 
 def is_excluded(active_window: ActiveWindow) -> bool:
+    """Evaluate exclusion rules, failing closed while a file path is unknown."""
     haystack = " ".join(
         [
             active_window.app_name,
@@ -31,11 +41,30 @@ def is_excluded(active_window: ActiveWindow) -> bool:
             active_window.file_path_hint or "",
         ]
     ).casefold()
-    return (
-        _matches_exclude_keyword(haystack)
-        or _matches_exclude_folder(active_window.file_path_hint)
-        or _matches_indexed_exclude_folder(active_window.window_title)
+    if _matches_exclude_keyword(haystack):
+        return True
+    if _matches_exclude_folder(active_window.file_path_hint):
+        return True
+
+    folder_rules = _exclude_rules()["folders"]
+    if not folder_rules:
+        return False
+    file_name = extract_file_name_from_title(active_window.window_title)
+    if not file_name:
+        return False
+
+    from .folder_index_service import resolve_unique_path_from_title
+
+    path = resolve_unique_path_from_title(
+        active_window.window_title,
+        include_excluded=True,
     )
+    if path:
+        return _matches_exclude_folder(path)
+    # A folder-only privacy rule exists and the foreground title looks like a
+    # file, but neither the adapter nor index can prove its path.  Do not treat
+    # uncertainty as permission to store the real title.
+    raise PrivacyResolutionPending("privacy_path_unresolved")
 
 
 def is_resource_excluded(resource) -> bool:
@@ -164,7 +193,9 @@ def _matches_exclude_folder(file_path_hint: str | None) -> bool:
     target_key = normalize_folder_key(target) or normalize_path_key(target)
     for row in _exclude_rules()["folders"]:
         folder = str(row.get("folder_path") or "")
-        if target_key and target_key == str(row.get("normalized_folder_key") or ""):
+        if target_key and target_key == str(
+            row.get("normalized_folder_key") or ""
+        ):
             return True
         if folder and is_path_under_folder(
             target,
@@ -175,16 +206,10 @@ def _matches_exclude_folder(file_path_hint: str | None) -> bool:
     return False
 
 
-def _matches_indexed_exclude_folder(window_title: str | None) -> bool:
-    if not (window_title or "").strip():
-        return False
-    from .folder_index_service import resolve_unique_path_from_title
-
-    # Deliberately allow database/index failures to propagate.  The collector
-    # treats privacy-evaluation errors as a failed observation and therefore
-    # never persists real metadata on an uncertain decision.
-    path = resolve_unique_path_from_title(
-        window_title,
-        include_excluded=True,
-    )
-    return _matches_exclude_folder(path)
+__all__ = [
+    "PrivacyResolutionPending",
+    "clear_exclude_rules_cache",
+    "is_excluded",
+    "is_resource_excluded",
+    "make_excluded_activity_payload",
+]
