@@ -1,10 +1,4 @@
-"""Aggregate application-control facade for the UI.
-
-Holds a module-level reference to the ``AppRuntime`` so the UI can request
-collector start and shutdown without importing ``worktrace.runtime`` or holding
-the stop event directly. This module is intentionally light: it is not a god
-object. UI code may also import the specific api modules directly.
-"""
+"""Aggregate application-control facade for the UI."""
 
 from __future__ import annotations
 
@@ -21,7 +15,7 @@ _runtime: "AppRuntime | None" = None
 
 
 def set_runtime(runtime: "AppRuntime | None") -> None:
-    """Register the active ``AppRuntime`` instance. Called once during startup."""
+    """Register the active ``AppRuntime`` instance."""
     global _runtime
     _runtime = runtime
 
@@ -31,13 +25,7 @@ def get_runtime() -> "AppRuntime | None":
 
 
 def start_collection_after_privacy_gate() -> dict[str, Any]:
-    """Unified startup entry that enforces the first-run privacy gate.
-
-    Fail-closed: if the notice has not been accepted (or the read raises),
-    no worker / collector starts and caller state is not mutated. On
-    success starts ``start_background_workers`` BEFORE
-    ``start_collector`` (folder index warm-up) and returns ``{"ok": True}``.
-    """
+    """Start workers and collector only after the privacy gate is accepted."""
     try:
         notice_accepted = settings_api.first_run_notice_accepted()
     except Exception:
@@ -48,17 +36,19 @@ def start_collection_after_privacy_gate() -> dict[str, Any]:
         return {"ok": False, "error": "请先确认隐私说明"}
     if not notice_accepted:
         return {"ok": False, "error": "请先确认隐私说明"}
+    if _runtime is None:
+        return {"ok": False, "error": "collector_start_failed"}
+
+    background_error = False
     try:
-        if _runtime is not None:
-            _runtime.start_background_workers()
+        _runtime.start_background_workers()
     except Exception:
+        background_error = True
         logging.exception(
             "app_api.start_collection_after_privacy_gate: background "
             "workers start failed after gate passed"
         )
     try:
-        if _runtime is None:
-            return {"ok": False, "error": "collector_start_failed"}
         collector_result = _runtime.start_collector()
     except Exception:
         logging.exception(
@@ -68,17 +58,14 @@ def start_collection_after_privacy_gate() -> dict[str, Any]:
         return {"ok": False, "error": "collector_start_failed"}
     if isinstance(collector_result, dict) and not collector_result.get("ok"):
         return dict(collector_result)
-    return {"ok": True}
+    return {
+        "ok": True,
+        "background_worker_degraded": background_error,
+    }
 
 
 def pause_collection_now() -> dict[str, Any]:
-    """Pause collection through the runtime/collector lifecycle owner.
-
-    The UI must not clear ``current_activity_snapshot`` itself. When no
-    collector can acknowledge the command, fail safe by marking the user
-    paused so the next collector loop closes the activity; snapshot cleanup
-    remains recorder-owned.
-    """
+    """Pause through the runtime lifecycle owner."""
     try:
         if _runtime is not None:
             return dict(_runtime.pause_collection_now())
@@ -95,45 +82,30 @@ def pause_collection_now() -> dict[str, Any]:
         return {"ok": False, "pause_pending": True}
 
 
-def start_collector() -> dict[str, object]:
-    """Start the collector thread if it has not been started yet.
+def set_clipboard_capture_enabled(enabled: bool) -> None:
+    """Apply a clipboard privacy toggle immediately to the live adapter."""
+    if _runtime is not None:
+        _runtime.set_clipboard_capture_enabled(bool(enabled))
 
-    Runtime-internal helper. UI callers MUST go through
-    :func:`start_collection_after_privacy_gate` so the privacy gate is
-    enforced in exactly one place.
-    """
+
+def start_collector() -> dict[str, object]:
     if _runtime is not None:
         return dict(_runtime.start_collector())
     return {"ok": False, "error": "collector_start_failed"}
 
 
 def start_background_workers() -> bool:
-    """Start background workers (folder index worker) if not started yet.
-
-    Runtime-internal helper. UI callers MUST go through
-    :func:`start_collection_after_privacy_gate` so the privacy gate is
-    enforced in exactly one place. Returns ``True`` when this call
-    actually started the worker, ``False`` when already running or this
-    instance does not own the collector.
-    """
     if _runtime is not None:
         return _runtime.start_background_workers()
     return False
 
 
 def request_shutdown() -> None:
-    """Signal the collector and index threads to stop.
-
-    Called by the UI when the user exits from the tray or closes the window
-    without a tray. The actual thread join and cleanup happens in
-    ``AppRuntime.shutdown``.
-    """
     if _runtime is not None:
         _runtime.request_shutdown()
 
 
 def owns_collector() -> bool:
-    """Whether this process instance owns the collector."""
     if _runtime is not None:
         return _runtime.owns_collector
     return False
@@ -144,6 +116,7 @@ __all__ = [
     "owns_collector",
     "pause_collection_now",
     "request_shutdown",
+    "set_clipboard_capture_enabled",
     "set_runtime",
     "start_background_workers",
     "start_collection_after_privacy_gate",
