@@ -1,18 +1,27 @@
 from __future__ import annotations
 
+import copyreg
 import hashlib
 import json
-from typing import Any
+from types import MappingProxyType
+from typing import Any, Mapping
 
 from .report_projection_model import OperationDiagnostic, ProjectState, ReportMemberIdentity
 
 
-def member_identity_key(member: dict[str, Any] | ReportMemberIdentity, *, report_date: str = "") -> tuple[str, int, str]:
-    """Stable logical report-slice identity.
+SequenceMapping = list[Mapping[str, Any]] | tuple[Mapping[str, Any], ...]
+DURABLE_REVISION_PREFIX = "d4a1ab1e"
 
-    End time and elapsed seconds are mutable content. They must not participate
-    in report projection identity.
-    """
+
+def _restore_mapping_proxy(value: dict[str, Any]) -> Mapping[str, Any]:
+    return MappingProxyType(value)
+
+
+copyreg.pickle(MappingProxyType, lambda value: (_restore_mapping_proxy, (dict(value),)))
+
+
+def member_identity_key(member: Mapping[str, Any] | ReportMemberIdentity, *, report_date: str = "") -> tuple[str, int, str]:
+    """Stable logical report-slice identity."""
     if isinstance(member, ReportMemberIdentity):
         return (member.report_date, member.activity_id, member.slice_start_time)
     return (
@@ -22,7 +31,7 @@ def member_identity_key(member: dict[str, Any] | ReportMemberIdentity, *, report
     )
 
 
-def member_set_hash(report_date: str, members: list[dict[str, Any]]) -> str:
+def member_set_hash(report_date: str, members: SequenceMapping) -> str:
     parts = [
         "|".join((key[0], str(key[1]), key[2]))
         for key in sorted(member_identity_key(member, report_date=report_date) for member in members)
@@ -30,7 +39,7 @@ def member_set_hash(report_date: str, members: list[dict[str, Any]]) -> str:
     return hashlib.sha1("\n".join(parts).encode("utf-8")).hexdigest()
 
 
-def base_projection_key(report_date: str, members: list[dict[str, Any]]) -> str:
+def base_projection_key(report_date: str, members: SequenceMapping) -> str:
     return f"base:{member_set_hash(report_date, members)}"
 
 
@@ -48,7 +57,49 @@ def stable_json_hash(payload: Any) -> str:
     ).hexdigest()
 
 
-def _project_revision_payload(session: dict[str, Any], project_state: ProjectState | None) -> dict[str, Any]:
+def is_versioned_durable_revision(value: str | None) -> bool:
+    text = str(value or "")
+    return len(text) == 40 and text.startswith(DURABLE_REVISION_PREFIX)
+
+
+def is_legacy_revision(value: str | None) -> bool:
+    text = str(value or "")
+    if len(text) != 40 or is_versioned_durable_revision(text):
+        return False
+    try:
+        int(text, 16)
+    except ValueError:
+        return False
+    return True
+
+
+def _project_revision_payload(session: Mapping[str, Any], project_state: ProjectState | None) -> dict[str, Any]:
+    """Return only durable project semantics for an entry revision."""
+    if project_state is not None:
+        return {
+            "project_id": project_state.project_id,
+            "is_report_project": project_state.is_report_project,
+            "is_report_classified": project_state.is_report_classified,
+            "is_report_uncategorized": project_state.is_report_uncategorized,
+            "is_official_project": project_state.is_official_project,
+            "report_attribution_kind": project_state.report_attribution_kind,
+            "project_key": project_state.project_key,
+            "report_project_key": project_state.report_project_key,
+        }
+    return {
+        "project_id": int(session.get("project_id") or 0),
+        "is_report_project": bool(session.get("is_report_project")),
+        "is_report_classified": bool(session.get("is_report_classified")),
+        "is_report_uncategorized": bool(session.get("is_report_uncategorized")),
+        "is_official_project": bool(session.get("is_official_project")),
+        "report_attribution_kind": str(session.get("report_attribution_kind") or "none"),
+        "project_key": str(session.get("project_key") or ""),
+        "report_project_key": str(session.get("report_project_key") or ""),
+    }
+
+
+def _legacy_project_revision_payload(session: Mapping[str, Any], project_state: ProjectState | None) -> dict[str, Any]:
+    """Exact v4 pre-fix project payload for existing operation ledgers."""
     if project_state is not None:
         return project_state.to_dict()
     return {
@@ -70,19 +121,10 @@ def _project_revision_payload(session: dict[str, Any], project_state: ProjectSta
     }
 
 
-def projection_revision(
-    session: dict[str, Any],
-    *,
-    project_state: ProjectState | None = None,
-    applied_commands: list[dict[str, Any]] | None = None,
+def _projection_revision_with_project(
+    session: Mapping[str, Any],
+    project_payload: Mapping[str, Any],
 ) -> str:
-    """Revision for optimistic UI writes and detail cache ownership.
-
-    Live elapsed seconds are intentionally excluded. Contribution identity and
-    allocated durations are included so structural changes, edit commands and
-    summary grouping changes produce a new revision.
-    """
-    del applied_commands  # command history and request metadata are not report content
     is_live = bool(session.get("is_in_progress"))
     contributions = []
     for row in session.get("_projection_contributions") or []:
@@ -96,25 +138,53 @@ def projection_revision(
                 "status": str(row.get("status") or ""),
             }
         )
-    payload = {
-        "projection_instance_key": str(session.get("projection_instance_key") or ""),
-        "projection_kind": str(session.get("projection_kind") or ""),
-        "members": [member_identity_key(member) for member in session.get("member_slices") or []],
-        "project": _project_revision_payload(session, project_state),
-        "has_project_override": bool(session.get("has_project_override")),
-        "duration": {
-            "value": None if is_live else int(session.get("duration_seconds") or 0),
-            "adjusted": None if is_live else session.get("adjusted_duration_seconds"),
-            "has_override": bool(session.get("has_duration_override")),
-        },
-        "note": str(session.get("session_note") or ""),
-        "contributions": sorted(contributions, key=lambda item: item["member"]),
-    }
-    return stable_json_hash(payload)
+    return stable_json_hash(
+        {
+            "projection_instance_key": str(session.get("projection_instance_key") or ""),
+            "projection_kind": str(session.get("projection_kind") or ""),
+            "members": [member_identity_key(member) for member in session.get("member_slices") or []],
+            "project": dict(project_payload),
+            "has_project_override": bool(session.get("has_project_override")),
+            "duration": {
+                "value": None if is_live else int(session.get("duration_seconds") or 0),
+                "adjusted": None if is_live else session.get("adjusted_duration_seconds"),
+                "has_override": bool(session.get("has_duration_override")),
+            },
+            "note": str(session.get("session_note") or ""),
+            "contributions": sorted(contributions, key=lambda item: item["member"]),
+        }
+    )
+
+
+def projection_revision(
+    session: Mapping[str, Any],
+    *,
+    project_state: ProjectState | None = None,
+    applied_commands: list[dict[str, Any]] | None = None,
+) -> str:
+    """Versioned durable revision for optimistic writes and operation replay."""
+    del applied_commands
+    digest = _projection_revision_with_project(
+        session,
+        _project_revision_payload(session, project_state),
+    )
+    return DURABLE_REVISION_PREFIX + digest[len(DURABLE_REVISION_PREFIX) :]
+
+
+def legacy_projection_revision(
+    session: Mapping[str, Any],
+    *,
+    project_state: ProjectState | None = None,
+) -> str:
+    """Compute the previous v4 revision when its historical metadata is known."""
+    return _projection_revision_with_project(
+        session,
+        _legacy_project_revision_payload(session, project_state),
+    )
 
 
 def snapshot_revision(
-    entries: list[dict[str, Any]] | tuple[dict[str, Any], ...],
+    entries: SequenceMapping,
     diagnostics: list[OperationDiagnostic] | tuple[OperationDiagnostic, ...],
 ) -> str:
     return stable_json_hash(
@@ -132,8 +202,12 @@ def snapshot_revision(
 
 
 __all__ = [
+    "DURABLE_REVISION_PREFIX",
     "base_projection_key",
     "copy_projection_key",
+    "is_legacy_revision",
+    "is_versioned_durable_revision",
+    "legacy_projection_revision",
     "member_identity_key",
     "member_set_hash",
     "merge_projection_key",

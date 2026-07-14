@@ -4,6 +4,7 @@ from importlib import resources
 import logging
 import hashlib
 import json
+import re
 import sqlite3
 from pathlib import Path
 from typing import Iterable
@@ -12,12 +13,78 @@ from . import config
 from .constants import (
     DEFAULT_CONTEXT_CARRY_MINUTES,
     DEFAULT_IDLE_THRESHOLD_SECONDS,
+    DEFAULT_UNRECORDED_GAP_BOUNDARY_SECONDS,
     EXCLUDED_PROJECT,
     TIME_FORMAT,
     UNCATEGORIZED_PROJECT,
 )
+from .write_gate import DATABASE_WRITE_GATE
 
 CURRENT_SCHEMA_VERSION = 4
+
+
+_WRITE_TOKEN_RE = re.compile(
+    r"\b(?:INSERT|UPDATE|DELETE|REPLACE|CREATE|DROP|ALTER|VACUUM|REINDEX|ATTACH|DETACH)\b",
+    re.IGNORECASE,
+)
+_DB_MUTATING_PRAGMAS = {
+    "APPLICATION_ID",
+    "AUTO_VACUUM",
+    "JOURNAL_MODE",
+    "PAGE_SIZE",
+    "USER_VERSION",
+}
+
+
+def _pragma_name(upper_sql: str) -> str:
+    value = upper_sql.removeprefix("PRAGMA").strip()
+    value = value.split("=", 1)[0].split("(", 1)[0].strip()
+    if "." in value:
+        value = value.rsplit(".", 1)[-1]
+    return value.split()[0] if value else ""
+
+
+def _sql_requires_write_gate(sql: str) -> bool:
+    text = str(sql or "").strip()
+    if not text:
+        return False
+    upper = text.upper()
+    if upper.startswith("BEGIN IMMEDIATE") or upper.startswith("BEGIN EXCLUSIVE"):
+        return True
+    if upper.startswith("PRAGMA"):
+        return _pragma_name(upper) in _DB_MUTATING_PRAGMAS and (
+            "=" in text or _pragma_name(upper) == "JOURNAL_MODE"
+        )
+    return bool(_WRITE_TOKEN_RE.search(text))
+
+
+def _sql_records_business_read(sql: str) -> bool:
+    upper = str(sql or "").lstrip().upper()
+    return upper.startswith("SELECT") or upper.startswith("WITH") or upper.startswith("EXPLAIN")
+
+
+class WorkTraceConnection(sqlite3.Connection):
+    """SQLite connection enforcing import exclusion and generation freshness."""
+
+    def _require_write_allowed(self, sql: str) -> None:
+        if _sql_requires_write_gate(sql):
+            DATABASE_WRITE_GATE.require_current_thread_allowed()
+
+    def execute(self, sql, parameters=(), /):  # type: ignore[override]
+        text = str(sql)
+        self._require_write_allowed(text)
+        cursor = super().execute(sql, parameters)
+        if _sql_records_business_read(text):
+            DATABASE_WRITE_GATE.note_current_thread_read()
+        return cursor
+
+    def executemany(self, sql, seq_of_parameters, /):  # type: ignore[override]
+        self._require_write_allowed(str(sql))
+        return super().executemany(sql, seq_of_parameters)
+
+    def executescript(self, sql_script, /):  # type: ignore[override]
+        self._require_write_allowed(str(sql_script))
+        return super().executescript(sql_script)
 
 
 def read_schema_sql() -> str:
@@ -53,25 +120,24 @@ def get_db_path() -> Path:
 
 
 def get_connection() -> sqlite3.Connection:
-    conn = sqlite3.connect(get_db_path(), timeout=5, check_same_thread=False)
+    conn = sqlite3.connect(
+        get_db_path(),
+        timeout=5,
+        check_same_thread=False,
+        factory=WorkTraceConnection,
+    )
     conn.row_factory = sqlite3.Row
     apply_connection_pragmas(conn)
     return conn
 
 
 def apply_connection_pragmas(conn: sqlite3.Connection) -> None:
-    """Apply settings which are local to this connection.
-
-    WAL is a database property.  Setting it while opening every short-lived
-    reader can contend with the collector, so it is established only at
-    database lifecycle boundaries below.
-    """
+    """Apply connection-local settings without taking the database write gate."""
     conn.execute("PRAGMA busy_timeout = 5000;")
     conn.execute("PRAGMA foreign_keys = ON;")
 
 
 def ensure_wal(conn: sqlite3.Connection) -> None:
-    """Establish the database-wide WAL contract at an explicit lifecycle edge."""
     conn.execute("PRAGMA journal_mode = WAL;")
 
 
@@ -88,7 +154,6 @@ def initialize_database(path: str | Path | None = None) -> None:
 
 
 def apply_current_schema(conn: sqlite3.Connection) -> None:
-    """Create the current schema or reject incompatible existing data."""
     version = int(conn.execute("PRAGMA user_version").fetchone()[0] or 0)
     has_user_tables = _database_has_user_tables(conn)
     if has_user_tables and version != CURRENT_SCHEMA_VERSION:
@@ -104,11 +169,6 @@ def apply_current_schema(conn: sqlite3.Connection) -> None:
 
 
 def schema_fingerprint(conn: sqlite3.Connection) -> str:
-    """Return a stable fingerprint for all application schema objects.
-
-    Tables, explicit indexes, triggers and their SQL definitions are part of
-    the contract. SQLite-owned objects are deliberately excluded.
-    """
     rows = conn.execute(
         """
         SELECT type, name, tbl_name, sql
@@ -151,10 +211,6 @@ def _require_current_schema_fingerprint(conn: sqlite3.Connection) -> None:
 def seed_defaults(conn: sqlite3.Connection) -> None:
     ts = now_str()
     defaults = {
-        # Poll interval default is 1 second. WorkTrace is a local automatic
-        # time-tracking tool; the immediacy of current activity change
-        # perception takes priority over the minor polling overhead. No
-        # system-level foreground event hook is used.
         "poll_interval_seconds": "1",
         "idle_threshold_seconds": str(DEFAULT_IDLE_THRESHOLD_SECONDS),
         "current_activity_snapshot": "",
@@ -176,6 +232,7 @@ def seed_defaults(conn: sqlite3.Connection) -> None:
         "ui_refresh_seconds": "10",
         "user_paused": "false",
         "context_carry_minutes": str(DEFAULT_CONTEXT_CARRY_MINUTES),
+        "unrecorded_gap_boundary_seconds": str(DEFAULT_UNRECORDED_GAP_BOUNDARY_SECONDS),
         "clipboard_capture_enabled": "false",
     }
     for key, value in defaults.items():

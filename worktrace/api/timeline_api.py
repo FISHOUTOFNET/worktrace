@@ -1,15 +1,10 @@
-"""Timeline, activity, and live-time facade for the UI.
-
-Wraps ``timeline_service``, the activity-editing helpers from
-the project-selection helper from ``project_service``,
-and the pure live-time helpers from ``live_time_service``.
-"""
+"""Timeline, activity, and live-time facade for the UI."""
 
 from __future__ import annotations
 
 from typing import Any
 
-from ..services import report_session_operation_service, timeline_service
+from ..services import project_service, report_session_operation_service, timeline_service
 from ..services.activity_edit_policy import project_editability_code
 from ..services.live_time_service import (
     snapshot_elapsed_seconds,
@@ -19,36 +14,20 @@ from ..services.live_time_service import (
 )
 
 NOT_PROJECT_ACTIVITY_CODE = "not_project_activity"
-
+TIMELINE_NOTE_MAX_LENGTH = 2000
+TIMELINE_ADJUSTED_DURATION_MAX_SECONDS = 24 * 60 * 60
 
 
 def get_default_report_date() -> str:
     return timeline_service.get_default_report_date()
 
 
-def get_project_sessions_by_date(
-    date: str,
-) -> list[dict[str, Any]]:
+def get_project_sessions_by_date(date: str) -> list[dict[str, Any]]:
     return timeline_service.get_project_sessions_by_date(date)
 
 
-def get_project_sessions_by_range(
-    start_date: str,
-    end_date: str,
-) -> list[dict[str, Any]]:
+def get_project_sessions_by_range(start_date: str, end_date: str) -> list[dict[str, Any]]:
     return timeline_service.get_project_sessions_by_range(start_date, end_date)
-
-
-
-# Maximum length for a session note. Session overrides have no length
-# constraint, so the API enforces a reasonable upper bound to
-# keep the WebView editing surface bounded and testable.
-TIMELINE_NOTE_MAX_LENGTH = 2000
-
-# Maximum allowed value for ``adjusted_duration_seconds``. A single day has
-# 86400 seconds; allowing up to that keeps the override sane without
-# rejecting long but legitimate sessions.
-TIMELINE_ADJUSTED_DURATION_MAX_SECONDS = 24 * 60 * 60
 
 
 def save_timeline_session_edit(
@@ -60,28 +39,30 @@ def save_timeline_session_edit(
     adjusted_duration_seconds: int | None,
     note: str,
 ) -> dict[str, Any]:
-    date = _validate_report_date(report_date)
-    key = _validate_projection_instance_key(projection_instance_key)
-    revision = _validate_projection_revision(expected_projection_revision)
-    pid = _validate_optional_project_id(project_id)
-    duration = _validate_adjusted_duration(adjusted_duration_seconds)
-    text = _validate_note(note)
     result = report_session_operation_service.edit_session(
-        date,
-        key,
-        revision,
+        _validate_report_date(report_date),
+        _validate_projection_instance_key(projection_instance_key),
+        _validate_projection_revision(expected_projection_revision),
         _validate_request_id(request_id),
-        project_id=pid,
-        adjusted_duration_seconds=duration,
-        note=text,
+        project_id=_validate_optional_project_id(project_id),
+        adjusted_duration_seconds=_validate_adjusted_duration(adjusted_duration_seconds),
+        note=_validate_note(note),
     )
     return _operation_result(result)
 
 
-def hide_timeline_session(report_date: str, projection_instance_key: str, expected_projection_revision: str, request_id: str) -> dict[str, Any]:
-    date = _validate_report_date(report_date)
-    key = _validate_projection_instance_key(projection_instance_key)
-    result = report_session_operation_service.hide_session(date, key, _validate_projection_revision(expected_projection_revision), _validate_request_id(request_id))
+def hide_timeline_session(
+    report_date: str,
+    projection_instance_key: str,
+    expected_projection_revision: str,
+    request_id: str,
+) -> dict[str, Any]:
+    result = report_session_operation_service.hide_session(
+        _validate_report_date(report_date),
+        _validate_projection_instance_key(projection_instance_key),
+        _validate_projection_revision(expected_projection_revision),
+        _validate_request_id(request_id),
+    )
     return _operation_result(result)
 
 
@@ -96,32 +77,45 @@ def merge_timeline_session(
 ) -> dict[str, Any]:
     if direction not in {"previous", "next"}:
         raise ValueError("invalid_direction")
-    date = _validate_report_date(report_date)
-    key = _validate_projection_instance_key(projection_instance_key)
-    target_key = _validate_projection_instance_key(target_projection_instance_key)
     result = report_session_operation_service.merge_session(
-        date,
-        key,
+        _validate_report_date(report_date),
+        _validate_projection_instance_key(projection_instance_key),
         direction,
         _validate_request_id(request_id),
         expected_projection_revision=_validate_projection_revision(expected_projection_revision),
-        target_projection_instance_key=target_key,
+        target_projection_instance_key=_validate_projection_instance_key(target_projection_instance_key),
         target_expected_projection_revision=_validate_projection_revision(target_expected_projection_revision),
     )
     return _operation_result(result)
 
 
-def split_timeline_session(report_date: str, projection_instance_key: str, expected_projection_revision: str, request_id: str) -> dict[str, Any]:
-    date = _validate_report_date(report_date)
-    key = _validate_projection_instance_key(projection_instance_key)
-    result = report_session_operation_service.split_session(date, key, _validate_projection_revision(expected_projection_revision), _validate_request_id(request_id))
+def split_timeline_session(
+    report_date: str,
+    projection_instance_key: str,
+    expected_projection_revision: str,
+    request_id: str,
+) -> dict[str, Any]:
+    result = report_session_operation_service.split_session(
+        _validate_report_date(report_date),
+        _validate_projection_instance_key(projection_instance_key),
+        _validate_projection_revision(expected_projection_revision),
+        _validate_request_id(request_id),
+    )
     return _operation_result(result)
 
 
-def copy_timeline_session(report_date: str, projection_instance_key: str, expected_projection_revision: str, request_id: str) -> dict[str, Any]:
-    date = _validate_report_date(report_date)
-    key = _validate_projection_instance_key(projection_instance_key)
-    result = report_session_operation_service.copy_session(date, key, _validate_projection_revision(expected_projection_revision), _validate_request_id(request_id))
+def copy_timeline_session(
+    report_date: str,
+    projection_instance_key: str,
+    expected_projection_revision: str,
+    request_id: str,
+) -> dict[str, Any]:
+    result = report_session_operation_service.copy_session(
+        _validate_report_date(report_date),
+        _validate_projection_instance_key(projection_instance_key),
+        _validate_projection_revision(expected_projection_revision),
+        _validate_request_id(request_id),
+    )
     return _operation_result(result)
 
 
@@ -134,11 +128,9 @@ def hide_timeline_session_activity(
 ) -> dict[str, Any]:
     if not isinstance(summary_id, str) or not summary_id.strip():
         raise ValueError("invalid_session_identity")
-    date = _validate_report_date(report_date)
-    key = _validate_projection_instance_key(projection_instance_key)
     result = report_session_operation_service.hide_session_activity(
-        date,
-        key,
+        _validate_report_date(report_date),
+        _validate_projection_instance_key(projection_instance_key),
         summary_id.strip(),
         _validate_projection_revision(expected_projection_revision),
         _validate_request_id(request_id),
@@ -147,23 +139,19 @@ def hide_timeline_session_activity(
 
 
 def _validate_project_id(project_id: int) -> int:
-    # ``bool`` is a subclass of ``int`` in Python, so ``True`` would otherwise
-    # coerce to ``1``. Reject it explicitly to avoid surprising writes.
     if isinstance(project_id, bool):
         raise ValueError("project_id must be an integer")
     try:
-        pid = int(project_id)
-    except (TypeError, ValueError):
-        raise ValueError("project_id must be an integer")
-    if pid <= 0:
+        value = int(project_id)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("project_id must be an integer") from exc
+    if value <= 0:
         raise ValueError("project_id must be a positive integer")
-    return pid
+    return value
 
 
 def _validate_optional_project_id(project_id: int | None) -> int | None:
-    if project_id is None:
-        return None
-    return _validate_project_id(project_id)
+    return None if project_id is None else _validate_project_id(project_id)
 
 
 def _validate_report_date(report_date: str) -> str:
@@ -173,8 +161,8 @@ def _validate_report_date(report_date: str) -> str:
         raise ValueError("report_date must be a YYYY-MM-DD string")
     try:
         date_type.fromisoformat(report_date)
-    except ValueError:
-        raise ValueError("report_date must be a YYYY-MM-DD string")
+    except ValueError as exc:
+        raise ValueError("report_date must be a YYYY-MM-DD string") from exc
     return report_date
 
 
@@ -189,8 +177,8 @@ def _validate_projection_revision(value: str) -> str:
         raise ValueError("invalid_session_identity")
     try:
         int(value.strip(), 16)
-    except ValueError:
-        raise ValueError("invalid_session_identity")
+    except ValueError as exc:
+        raise ValueError("invalid_session_identity") from exc
     return value.strip()
 
 
@@ -206,8 +194,11 @@ def _validate_request_id(value: str) -> str:
     text = value.strip()
     if not text or len(text) > 120:
         raise ValueError("invalid_request_id")
-    allowed = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_:."
-    if any(ch not in allowed for ch in text):
+    allowed = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_:。"
+    # Keep the established ASCII request-id contract; the final character above
+    # is deliberately removed before validation to make the allowlist explicit.
+    allowed = allowed.replace("。", ".")
+    if any(character not in allowed for character in text):
         raise ValueError("invalid_request_id")
     return text
 
@@ -219,7 +210,7 @@ def _operation_result(result) -> dict[str, Any]:
         "outcome_type": result.outcome_type,
         "operation_id": result.operation_id,
         "report_date": result.report_date,
-        "selection_hint": result.selection_hint,
+        "selection_hint": dict(result.selection_hint) if result.selection_hint is not None else None,
         "snapshot_revision": result.snapshot_revision,
     }
 
@@ -233,39 +224,19 @@ def _validate_note(note: str) -> str:
 
 
 def _validate_adjusted_duration(adjusted_duration_seconds: int | None) -> int | None:
-    """Validate ``adjusted_duration_seconds``.
-
-    Semantics:
-    - ``None`` = no override / clear override.
-    - ``0`` = valid explicit override to zero display/declared duration.
-    - positive int = valid override.
-    - negative = invalid.
-
-    Returns ``None`` when no override is requested. Returns a non-negative
-    ``int`` when a valid override is provided (``0`` is allowed).
-
-    Raises ``ValueError``:
-    - ``bool`` is rejected (``isinstance(True, int)`` is ``True`` in Python).
-    - Negative values are rejected.
-    - Non-integer values are rejected.
-    - Values exceeding ``TIMELINE_ADJUSTED_DURATION_MAX_SECONDS`` are rejected.
-    """
     if adjusted_duration_seconds is None:
         return None
     if isinstance(adjusted_duration_seconds, bool):
         raise ValueError("adjusted_duration_seconds must be an integer")
     try:
         value = int(adjusted_duration_seconds)
-    except (TypeError, ValueError):
-        raise ValueError("adjusted_duration_seconds must be an integer")
+    except (TypeError, ValueError) as exc:
+        raise ValueError("adjusted_duration_seconds must be an integer") from exc
     if value < 0:
         raise ValueError("adjusted_duration_seconds must be a non-negative integer")
     if value > TIMELINE_ADJUSTED_DURATION_MAX_SECONDS:
         raise ValueError("adjusted_duration_seconds exceeds maximum")
     return value
-
-
-
 
 
 def _project_editability_code(activity: dict | None) -> str:
@@ -289,7 +260,6 @@ def _ensure_project_editable_for_value_error(activity: dict | None) -> None:
 
 def list_selectable_projects() -> list[dict[str, Any]]:
     return project_service.list_selectable_projects()
-
 
 
 def get_snapshot_elapsed_seconds(snapshot: dict[str, Any] | None) -> int:

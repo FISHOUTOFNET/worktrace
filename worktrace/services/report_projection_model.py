@@ -1,30 +1,63 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from types import MappingProxyType
 from typing import Any, Mapping
 
 from ..constants import EXCLUDED_PROJECT, UNCATEGORIZED_PROJECT
 
 
-def _freeze(value: Any) -> Any:
+class FrozenDict(dict):
+    """A JSON-compatible immutable mapping used at domain boundaries."""
+
+    @staticmethod
+    def _blocked(*_args, **_kwargs):
+        raise TypeError("frozen mapping")
+
+    __setitem__ = _blocked
+    __delitem__ = _blocked
+    clear = _blocked
+    pop = _blocked
+    popitem = _blocked
+    setdefault = _blocked
+    update = _blocked
+    __ior__ = _blocked
+
+    def __copy__(self):
+        return self
+
+    def __deepcopy__(self, memo):
+        memo[id(self)] = self
+        return self
+
+    def copy(self) -> dict:
+        """Return an explicit mutable adapter copy."""
+        return dict(self)
+
+
+def freeze_value(value: Any) -> Any:
+    if isinstance(value, FrozenDict):
+        return value
     if isinstance(value, Mapping):
-        return MappingProxyType({str(key): _freeze(item) for key, item in value.items()})
+        return FrozenDict({str(key): freeze_value(item) for key, item in value.items()})
     if isinstance(value, (list, tuple)):
-        return tuple(_freeze(item) for item in value)
+        return tuple(freeze_value(item) for item in value)
     if isinstance(value, set):
-        return frozenset(_freeze(item) for item in value)
+        return frozenset(freeze_value(item) for item in value)
     return value
 
 
-def _thaw(value: Any) -> Any:
+def thaw_value(value: Any) -> Any:
     if isinstance(value, Mapping):
-        return {str(key): _thaw(item) for key, item in value.items()}
+        return {str(key): thaw_value(item) for key, item in value.items()}
     if isinstance(value, (tuple, frozenset)):
-        return [_thaw(item) for item in value]
+        return [thaw_value(item) for item in value]
     if hasattr(value, "to_dict"):
         return value.to_dict()
     return value
+
+
+def _freeze_record_tuple(values: tuple[Mapping[str, Any], ...] | list[Mapping[str, Any]]) -> tuple[Mapping[str, Any], ...]:
+    return tuple(freeze_value(dict(value)) for value in values)
 
 
 @dataclass(frozen=True, order=True)
@@ -156,7 +189,7 @@ class OperationRecord:
     created_at: str = ""
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "payload", _freeze(self.payload))
+        object.__setattr__(self, "payload", freeze_value(self.payload))
         normalized = {
             str(role): tuple(
                 member
@@ -170,7 +203,7 @@ class OperationRecord:
             )
             for role, identities in self.members.items()
         }
-        object.__setattr__(self, "members", MappingProxyType(normalized))
+        object.__setattr__(self, "members", FrozenDict(normalized))
 
     def members_for(self, role: str) -> tuple[ReportMemberIdentity, ...]:
         return self.members.get(role, ())
@@ -187,7 +220,7 @@ class OperationRecord:
             "target_expected_revision": self.target_expected_revision,
             "direction": self.direction,
             "undo_of_operation_id": self.undo_of_operation_id,
-            "payload": _thaw(self.payload),
+            "payload": thaw_value(self.payload),
             "members": {
                 role: [member.to_dict() for member in identities]
                 for role, identities in self.members.items()
@@ -209,7 +242,7 @@ class OperationDiagnostic:
     details: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "details", _freeze(self.details))
+        object.__setattr__(self, "details", freeze_value(self.details))
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -221,7 +254,7 @@ class OperationDiagnostic:
             "source_instance_key": self.source_instance_key,
             "target_instance_key": self.target_instance_key,
             "undo_operation_id": self.undo_operation_id,
-            "details": _thaw(self.details),
+            "details": thaw_value(self.details),
         }
 
 
@@ -230,15 +263,28 @@ ReportEntry = ReportSessionEntry | StandaloneStatusEntry
 
 @dataclass(frozen=True)
 class ReportProjectionSnapshot:
+    """Recursively immutable canonical snapshot with mapping-compatible records."""
+
     start_date: str
     end_date: str
-    base_sessions: tuple[ReportSessionEntry, ...]
-    final_entries: tuple[ReportEntry, ...]
-    final_sessions: tuple[ReportSessionEntry, ...]
-    standalone_status_entries: tuple[StandaloneStatusEntry, ...]
-    final_contributions: tuple[ReportContribution, ...]
+    base_sessions: tuple[Mapping[str, Any], ...]
+    final_entries: tuple[Mapping[str, Any], ...]
+    final_sessions: tuple[Mapping[str, Any], ...]
+    standalone_status_entries: tuple[Mapping[str, Any], ...]
+    final_contributions: tuple[Mapping[str, Any], ...]
     operation_diagnostics: tuple[OperationDiagnostic, ...]
     snapshot_revision: str
+
+    def __post_init__(self) -> None:
+        for field_name in (
+            "base_sessions",
+            "final_entries",
+            "final_sessions",
+            "standalone_status_entries",
+            "final_contributions",
+        ):
+            object.__setattr__(self, field_name, _freeze_record_tuple(getattr(self, field_name)))
+        object.__setattr__(self, "operation_diagnostics", tuple(self.operation_diagnostics))
 
 
 @dataclass(frozen=True)
@@ -254,7 +300,7 @@ class MutationResult:
 
     def __post_init__(self) -> None:
         if self.selection_hint is not None:
-            object.__setattr__(self, "selection_hint", _freeze(self.selection_hint))
+            object.__setattr__(self, "selection_hint", freeze_value(self.selection_hint))
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -262,7 +308,7 @@ class MutationResult:
             "outcome_type": self.outcome_type,
             "operation_id": self.operation_id,
             "report_date": self.report_date,
-            "selection_hint": _thaw(self.selection_hint),
+            "selection_hint": thaw_value(self.selection_hint),
             "snapshot_revision": self.snapshot_revision,
             "error": self.error,
             "message": self.message,
@@ -310,7 +356,7 @@ def project_state_from_row(
     if not project_name and uncategorized_id is not None and project_id == int(uncategorized_id):
         project_name, uncategorized = UNCATEGORIZED_PROJECT, True
     report_project = bool(value("is_report_project", not uncategorized and project_id > 0))
-    project_key = str(value("project_key", "") or f"project:{project_id}" if project_id else "project:none")
+    project_key = str(value("project_key", "") or (f"project:{project_id}" if project_id else "project:none"))
     report_key = str(value("report_project_key", "") or "")
     if not report_key:
         report_key = f"uncategorized:{project_id}" if uncategorized else f"project:{project_id}"
@@ -334,10 +380,10 @@ def project_state_from_row(
 
 
 __all__ = [
-    "DatabaseBusyError", "InvalidInputError", "MutationResult", "OperationDiagnostic",
+    "DatabaseBusyError", "FrozenDict", "InvalidInputError", "MutationResult", "OperationDiagnostic",
     "OperationNoEffectError", "OperationNotAllowedError", "OperationRecord", "ProjectNotSelectableError",
     "ProjectState", "ReportContribution", "ReportDomainError", "ReportMemberIdentity",
     "ReportProjectionSnapshot", "ReportSessionEntry", "RequestIdConflictError", "RevisionConflictError",
     "SessionNotAdjacentError", "StandaloneStatusEntry", "StaleSelectionError", "TargetRevisionConflictError",
-    "project_state_from_row",
+    "freeze_value", "project_state_from_row", "thaw_value",
 ]

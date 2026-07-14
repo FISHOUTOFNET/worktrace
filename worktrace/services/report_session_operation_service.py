@@ -201,11 +201,11 @@ def _operation_input(conn, operation_type: str, source: dict, target: dict | Non
             payload["project"] = {"mode": "set", "project_id": int(project_id)}
         elif bool(source.get("has_project_override")):
             payload["project"] = {"mode": "inherit"}
-        duration = values.get("adjusted_duration_seconds")
+
+        duration = _duration_edit_payload(source, values.get("adjusted_duration_seconds"))
         if duration is not None:
-            payload["duration"] = {"mode": "set", "value": int(duration)}
-        elif bool(source.get("has_duration_override")):
-            payload["duration"] = {"mode": "inherit"}
+            payload["duration"] = duration
+
         note = str(values.get("note") or "")
         if note:
             payload["note"] = {"mode": "set", "value": note}
@@ -227,6 +227,36 @@ def _operation_input(conn, operation_type: str, source: dict, target: dict | Non
         if undo_of is None:
             raise OperationNotAllowedError()
     return payload, roles, undo_of
+
+
+def _duration_edit_payload(source: Mapping[str, Any], requested_value: Any) -> dict[str, Any] | None:
+    """Translate the minute-based editor request into a sparse duration patch.
+
+    The current WebView renders session duration as rounded whole minutes and
+    sends that displayed value with project/note-only saves. Treat that exact
+    rounded baseline as unchanged so a 10:25 session is not silently rewritten
+    to 10:00, and preserve an existing exact override when its rounded display
+    value is submitted unchanged. ``None`` still clears a real override.
+    """
+    has_override = bool(source.get("has_duration_override"))
+    if requested_value is None:
+        return {"mode": "inherit"} if has_override else None
+
+    requested = int(requested_value)
+    current = int(
+        source.get("adjusted_duration_seconds")
+        if has_override and source.get("adjusted_duration_seconds") is not None
+        else source.get("duration_seconds") or 0
+    )
+    if requested == current or requested == _rounded_editor_seconds(current):
+        return None
+    return {"mode": "set", "value": requested}
+
+
+def _rounded_editor_seconds(seconds: int) -> int:
+    value = max(0, int(seconds or 0))
+    # Mirrors JavaScript Math.round(value / 60) for non-negative durations.
+    return ((value + 30) // 60) * 60
 
 
 def _affected_members(source: dict, summary_id: str) -> list[dict]:

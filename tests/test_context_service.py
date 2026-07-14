@@ -1,17 +1,32 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import datetime, timedelta
 
+import pytest
+
+from worktrace.constants import STATUS_ERROR, STATUS_EXCLUDED, STATUS_IDLE
 from worktrace.services.context_service import ReportContextProjection
 
 
-def _row(aid: int, start: str, *, project_id: int = 0, source: str = "uncategorized", status: str = "normal") -> dict:
-    end = start[:-2] + "30"
+def _row(
+    aid: int,
+    start: str,
+    *,
+    seconds: int = 30,
+    project_id: int = 0,
+    source: str = "uncategorized",
+    status: str = "normal",
+) -> dict:
+    start_dt = datetime.strptime(start, "%Y-%m-%d %H:%M:%S")
+    end = (start_dt + timedelta(seconds=seconds)).strftime("%Y-%m-%d %H:%M:%S")
     project = project_id > 0
     return {
         "id": aid,
         "start_time": start,
         "end_time": end,
+        "duration_seconds": seconds,
+        "report_duration_seconds": seconds,
         "status": status,
         "assignment_source": source,
         "report_project_id": project_id,
@@ -70,3 +85,56 @@ def test_clipboard_transition_and_hard_boundary_policy():
         clipboard_times={1: ["2026-07-01 09:00:50"]},
     )
     assert blocked.rows[1]["is_report_project"] is False
+
+
+@pytest.mark.parametrize("status", [STATUS_IDLE, STATUS_ERROR, STATUS_EXCLUDED])
+def test_short_special_status_is_attributed_between_matching_projects(status: str):
+    result = ReportContextProjection.build(
+        [
+            _row(1, "2026-07-01 09:00:00", seconds=60, project_id=7, source="manual"),
+            _row(2, "2026-07-01 09:01:00", seconds=10 * 60, status=status),
+            _row(3, "2026-07-01 09:11:00", seconds=60, project_id=7, source="folder_rule"),
+        ],
+        carry_minutes=15,
+    )
+    assert result.rows[1]["report_project_id"] == 7
+    assert result.rows[1]["is_report_project"] is True
+    assert result.rows[1]["is_official_project"] is False
+
+
+@pytest.mark.parametrize("status", [STATUS_IDLE, STATUS_ERROR, STATUS_EXCLUDED])
+def test_special_status_over_context_limit_is_not_attributed(status: str):
+    result = ReportContextProjection.build(
+        [
+            _row(1, "2026-07-01 09:00:00", seconds=60, project_id=7, source="manual"),
+            _row(2, "2026-07-01 09:01:00", seconds=16 * 60, status=status),
+            _row(3, "2026-07-01 09:17:00", seconds=60, project_id=7, source="folder_rule"),
+        ],
+        carry_minutes=15,
+    )
+    assert result.rows[1]["is_report_project"] is False
+    assert result.attributions == ()
+
+
+def test_following_anchor_uses_target_start_and_does_not_charge_anchor_duration():
+    result = ReportContextProjection.build(
+        [
+            _row(1, "2026-07-01 09:00:00", seconds=10 * 60, status=STATUS_IDLE),
+            _row(2, "2026-07-01 09:10:00", seconds=60 * 60, project_id=7, source="manual"),
+        ],
+        carry_minutes=15,
+    )
+    assert result.rows[0]["report_project_id"] == 7
+
+
+def test_long_idle_or_error_blocks_context_propagation():
+    for status in (STATUS_IDLE, STATUS_ERROR):
+        result = ReportContextProjection.build(
+            [
+                _row(1, "2026-07-01 09:00:00", seconds=60, project_id=7, source="manual"),
+                _row(2, "2026-07-01 09:01:00", seconds=16 * 60, status=status),
+                _row(3, "2026-07-01 09:17:00", seconds=30),
+            ],
+            carry_minutes=15,
+        )
+        assert result.rows[2]["is_report_project"] is False
