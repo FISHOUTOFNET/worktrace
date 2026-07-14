@@ -2,8 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from typing import TYPE_CHECKING
 
 from ..constants import TIME_FORMAT
+
+if TYPE_CHECKING:
+    from .state_machine import CollectorStateMachine
 
 
 @dataclass(frozen=True)
@@ -15,7 +19,7 @@ class ClockDiscontinuity:
 
 
 class ClockTracker:
-    """Compare wall and monotonic time before activity duration is updated."""
+    """Own clock discontinuity detection and its continuity-boundary policy."""
 
     def __init__(self) -> None:
         self._last_wall: datetime | None = None
@@ -67,6 +71,14 @@ class ClockTracker:
             wall_delta_seconds=wall_delta,
             monotonic_delta_seconds=monotonic_delta,
         )
+
+    @staticmethod
+    def apply_discontinuity(
+        machine: "CollectorStateMachine",
+        discontinuity: ClockDiscontinuity,
+    ) -> None:
+        """Apply the clock policy outside the collector loop's orchestration code."""
+        machine.reset_for_time_jump(discontinuity.safe_end_time)
 
 
 __all__ = ["ClockDiscontinuity", "ClockTracker"]
