@@ -18,6 +18,7 @@ permissions:
 jobs:
   apply:
     runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
@@ -26,100 +27,23 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Apply guarded replacements
-        shell: bash
+      - name: Apply repository patch
+        run: python scripts/apply_canonical_fix_once.py
+      - name: Validate focused contracts
+        shell: pwsh
         run: |
-          python - <<'PY'
-          from pathlib import Path
-
-          def replace_once(path: str, old: str, new: str) -> None:
-              file = Path(path)
-              text = file.read_text(encoding="utf-8")
-              count = text.count(old)
-              if count != 1:
-                  raise SystemExit(f"{path}: expected one replacement, found {count}")
-              file.write_text(text.replace(old, new, 1), encoding="utf-8")
-
-          replace_once(
-              "worktrace/services/report_session_projection_service.py",
-              '    "activity_ids", "member_slices", "anchor_activity_id", "first_activity_id",\n',
-              '    "activity_ids", "member_slices", "activity_member_hash", "anchor_activity_id", "first_activity_id",\n',
-          )
-
-          replace_once(
-              "tests/test_statistics_csv_export.py",
-              '    assert by_start["10:30:00"]["project"] == "已排除"\n',
-              '    assert by_start["10:30:00"]["project"] == "Client"\n',
-          )
-
-          replace_once(
-              "worktrace/services/report_session_operation_engine.py",
-              'from types import MappingProxyType\n',
-              '',
-          )
-          replace_once(
-              "worktrace/services/report_session_operation_engine.py",
-              'from .report_projection_model import OperationDiagnostic, OperationRecord, ProjectState, ReportMemberIdentity\n',
-              'from .report_projection_model import (\n'
-              '    OperationDiagnostic,\n'
-              '    OperationRecord,\n'
-              '    ProjectState,\n'
-              '    ReportMemberIdentity,\n'
-              '    freeze_value,\n'
-              '    thaw_value,\n'
-              ')\n',
-          )
-          replace_once(
-              "worktrace/services/report_session_operation_engine.py",
-              '''def _freeze_value(value: Any) -> Any:\n    if isinstance(value, Mapping):\n        return MappingProxyType({str(key): _freeze_value(item) for key, item in value.items()})\n    if isinstance(value, (list, tuple)):\n        return tuple(_freeze_value(item) for item in value)\n    if isinstance(value, set):\n        return frozenset(_freeze_value(item) for item in value)\n    return value\n\n\ndef _mutable_value(value: Any) -> Any:\n    if isinstance(value, Mapping):\n        return {str(key): _mutable_value(item) for key, item in value.items()}\n    if isinstance(value, (tuple, frozenset)):\n        return [_mutable_value(item) for item in value]\n    return deepcopy(value)\n''',
-              '''_freeze_value = freeze_value\n_mutable_value = thaw_value\n''',
-          )
-
-          runner = "scripts/run_affected_tests.py"
-          replace_once(
-              runner,
-              'RULES: list[dict] = [\n',
-              '''CANONICAL_REPORT_PROJECTION_TRIGGERS: list[str] = [\n    "worktrace/services/context_service.py",\n    "worktrace/services/report_status_policy.py",\n    "worktrace/services/report_projection_identity.py",\n    "worktrace/services/report_projection_model.py",\n    "worktrace/services/report_projection_snapshot_service.py",\n    "worktrace/services/report_session_builder.py",\n    "worktrace/services/report_session_projection_service.py",\n    "worktrace/services/report_session_operation_engine.py",\n    "worktrace/services/report_session_operation_service.py",\n    "worktrace/services/statistics_projection.py",\n]\n\n\nRULES: list[dict] = [\n''',
-          )
-          replace_once(
-              runner,
-              '    {\n        "id": "D. Timeline API / service / bridge",\n',
-              '''    {\n        "id": "D0. Canonical report projection",\n        "triggers": CANONICAL_REPORT_PROJECTION_TRIGGERS,\n        "tests": [\n            "tests/test_report_projection_architecture_contract.py",\n            "tests/test_report_projection_cutover.py",\n            "tests/test_projection_governance_regressions.py",\n            "tests/test_projection_revision_compatibility.py",\n            "tests/test_report_projection_command_engine.py",\n            "tests/test_report_session_operations.py",\n            "tests/test_timeline_service.py",\n            "tests/test_timeline_api_editing.py",\n            "tests/test_webview_bridge_editing.py",\n            "tests/test_project_activity_summary_contract.py",\n            "tests/test_project_delete_contract.py",\n            "tests/test_statistics_service.py",\n            "tests/test_export_resource_fields.py",\n            "tests/test_statistics_csv_export.py",\n            "tests/test_run_affected_tests.py",\n        ],\n        "smoke": [],\n        "warnings": [\n            "Canonical report projection changed; running cross-layer projection, Timeline, and Statistics contracts.",\n        ],\n        "markers": ["contract and integration"],\n    },\n    {\n        "id": "D. Timeline API / service / bridge",\n''',
-          )
-          replace_once(
-              runner,
-              '            "worktrace/services/secure_backup_service.py",\n',
-              '            "worktrace/services/secure_backup_service.py",\n'
-              '            "worktrace/services/secure_backup_validation.py",\n'
-              '            "worktrace/write_gate.py",\n',
-          )
-          replace_once(
-              runner,
-              '            "tests/test_secure_backup_service.py",\n',
-              '            "tests/test_secure_backup_service.py",\n'
-              '            "tests/test_projection_governance_regressions.py",\n',
-          )
-
-          run_tests_path = Path("tests/test_run_affected_tests.py")
-          run_tests = run_tests_path.read_text(encoding="utf-8")
-          marker = "def test_canonical_projection_files_select_cross_layer_suite"
-          if marker in run_tests:
-              raise SystemExit("runner regression test already exists")
-          run_tests += '''\n\n\ndef test_canonical_projection_files_select_cross_layer_suite(runner):\n    required = {\n        "tests/test_report_projection_cutover.py",\n        "tests/test_projection_governance_regressions.py",\n        "tests/test_timeline_api_editing.py",\n        "tests/test_project_delete_contract.py",\n        "tests/test_statistics_service.py",\n        "tests/test_statistics_csv_export.py",\n    }\n    for changed in runner.CANONICAL_REPORT_PROJECTION_TRIGGERS:\n        selection = runner.select_targets([changed])\n        assert required <= set(selection.pytest_targets), (\n            f"{changed} must select the canonical cross-layer suite"\n        )\n\n\ndef test_secure_validation_and_write_gate_select_security_regressions(runner):\n    for changed in (\n        "worktrace/services/secure_backup_validation.py",\n        "worktrace/write_gate.py",\n    ):\n        selection = runner.select_targets([changed])\n        assert "tests/test_secure_backup_service.py" in selection.pytest_targets\n        assert "tests/test_projection_governance_regressions.py" in selection.pytest_targets\n'''
-          run_tests_path.write_text(run_tests, encoding="utf-8")
-
-          architecture_path = Path("tests/test_report_projection_architecture_contract.py")
-          architecture = architecture_path.read_text(encoding="utf-8")
-          marker = "def test_projection_engine_reuses_domain_freeze_thaw"
-          if marker in architecture:
-              raise SystemExit("architecture regression guards already exist")
-          architecture += '''\n\n\ndef test_projection_engine_reuses_domain_freeze_thaw():\n    source = (REPO_ROOT / "worktrace/services/report_session_operation_engine.py").read_text(encoding="utf-8")\n    assert "def _freeze_value" not in source\n    assert "def _mutable_value" not in source\n    assert "_freeze_value = freeze_value" in source\n    assert "_mutable_value = thaw_value" in source\n\n\ndef test_production_has_no_legacy_activity_id_mutation_resolvers():\n    forbidden = {\n        "resolve_current_session",\n        "_coerce_activity_ids",\n        "save_activity_session_override",\n        "save_timeline_session_override",\n    }\n    source = "\\n".join(\n        path.read_text(encoding="utf-8")\n        for path in (REPO_ROOT / "worktrace").rglob("*")\n        if path.suffix in {".py", ".js"}\n    )\n    assert {symbol for symbol in forbidden if symbol in source} == set()\n'''
-          architecture_path.write_text(architecture, encoding="utf-8")
-
-          Path(".github/workflows/apply-canonical-fix-once.yml").unlink()
-          PY
-      - name: Commit guarded replacements
-        shell: bash
+          python -m compileall worktrace
+          python -m pytest -q `
+            tests/test_projection_plain_dto_contract.py `
+            tests/test_project_delete_contract.py `
+            tests/test_webview_bridge_editing.py `
+            tests/test_statistics_service.py::test_statistics_aggregation `
+            tests/test_statistics_csv_export.py::test_build_csv_rows_all_statuses_exported `
+            tests/test_export_resource_fields.py::test_excel_sessions_status_and_project_display_contract `
+            tests/test_report_projection_architecture_contract.py `
+            tests/test_run_affected_tests.py
+      - name: Commit validated patch
+        shell: pwsh
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
