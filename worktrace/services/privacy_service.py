@@ -24,7 +24,7 @@ _EXCLUDE_RULE_CACHE: dict[str, tuple[float, dict[str, list[dict]]]] = {}
 
 
 class PrivacyResolutionPending(RuntimeError):
-    """A privacy-sensitive file window cannot yet be classified safely."""
+    """A privacy-sensitive local-file window cannot yet be classified safely."""
 
 
 def clear_exclude_rules_cache() -> None:
@@ -32,7 +32,7 @@ def clear_exclude_rules_cache() -> None:
 
 
 def is_excluded(active_window: ActiveWindow) -> bool:
-    """Evaluate exclusion rules, failing closed while a local-file path is unknown."""
+    """Evaluate exclusions; unresolved local-file privacy decisions fail closed."""
     haystack = " ".join(
         [
             active_window.app_name,
@@ -47,7 +47,7 @@ def is_excluded(active_window: ActiveWindow) -> bool:
         return True
 
     folder_rules = _exclude_rules()["folders"]
-    if not folder_rules or not active_window.privacy_path_required:
+    if not folder_rules:
         return False
     file_name = extract_file_name_from_title(active_window.window_title)
     if not file_name:
@@ -61,7 +61,9 @@ def is_excluded(active_window: ActiveWindow) -> bool:
     )
     if path:
         return _matches_exclude_folder(path)
-    raise PrivacyResolutionPending("privacy_path_unresolved")
+    if active_window.privacy_path_required:
+        raise PrivacyResolutionPending("privacy_path_unresolved")
+    return False
 
 
 def is_resource_excluded(resource) -> bool:
