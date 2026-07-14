@@ -12,6 +12,9 @@ class ActiveWindow:
     hwnd: int | None = None
     window_class: str | None = None
     activity_start_time: str | None = None
+    # True only when the platform adapter has identified this as a local-file
+    # application whose path is required for folder-exclusion privacy.
+    privacy_path_required: bool = False
 
 
 @dataclass(frozen=True)
