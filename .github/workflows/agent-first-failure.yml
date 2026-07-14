@@ -1,0 +1,48 @@
+name: Agent first pytest failure
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: agent-first-pytest-failure
+  cancel-in-progress: true
+
+jobs:
+  diagnose:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/runtime-maintenance-hardening
+          clean: true
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+      - name: Capture first failure
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          python -m pytest -x -q --cache-clear *> agent-pytest-first-failure.txt
+          $exitCode = $LASTEXITCODE
+          Add-Content agent-pytest-first-failure.txt "`nPYTEST_EXIT_CODE=$exitCode"
+          exit 0
+      - name: Commit diagnostic
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add agent-pytest-first-failure.txt
+          git commit -m "Record first pytest failure diagnostic"
+          git push origin HEAD:agent/runtime-maintenance-hardening
