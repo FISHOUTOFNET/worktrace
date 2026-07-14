@@ -112,7 +112,7 @@ def test_release_validation_contains_required_baseline_items(phrase):
 @pytest.mark.parametrize(
     "phrase",
     [
-        "runs-on: windows-latest",
+        "runs-on: [self-hosted, Windows, X64]",
         'python-version: ["3.11", "3.12"]',
         "pip install -r requirements.txt",
         "pytest",
