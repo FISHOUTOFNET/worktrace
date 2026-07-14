@@ -154,7 +154,7 @@ def run_collector(
             )
             if discontinuity is not None:
                 _set_clipboard_capture_enabled(adapter, False)
-                machine.reset_for_time_jump(discontinuity.safe_end_time)
+                clock_tracker.apply_discontinuity(machine, discontinuity)
                 collector_health.record_health_code(discontinuity.reason, now)
                 last_loop_time = now
                 next_poll_deadline = monotonic_now + POLL_CADENCE_SECONDS
