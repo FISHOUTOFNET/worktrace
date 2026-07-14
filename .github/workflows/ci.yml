@@ -1,6 +1,7 @@
 name: CI
 
 on:
+  push:
   pull_request:
   workflow_dispatch:
 
@@ -8,7 +9,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -42,29 +43,34 @@ jobs:
       - name: Run Python tests
         id: pytest
         shell: pwsh
-        continue-on-error: true
         run: |
-          & python -m pytest -q --cache-clear 2>&1 | Tee-Object -FilePath pytest.log
-          exit $LASTEXITCODE
+          New-Item -ItemType Directory -Force -Path "test-results" | Out-Null
+          & python -m pytest -q --cache-clear --junitxml="test-results/pytest-junit.xml" 2>&1 |
+            Tee-Object -FilePath "test-results/pytest.log"
+          $pytestExitCode = $LASTEXITCODE
+          Write-Host "pytest exit code: $pytestExitCode"
+          exit $pytestExitCode
 
-      - name: Print pytest failure tail
-        if: steps.pytest.outcome == 'failure'
+      - name: Publish pytest failure summary
+        if: failure() && steps.pytest.outcome == 'failure'
         shell: pwsh
-        run: Get-Content -LiteralPath pytest.log -Tail 500
+        run: |
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "## Pytest failure tail"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '```text'
+          Get-Content -Path "test-results/pytest.log" -Tail 250 |
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '```'
 
-      - name: Upload pytest log
-        if: always()
+      - name: Upload Python test diagnostics
+        if: failure() && steps.pytest.outcome == 'failure'
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
-          name: pytest-python-3.11
-          path: pytest.log
-          if-no-files-found: error
+          name: pytest-python-3.11-run-${{ github.run_number }}-attempt-${{ github.run_attempt }}
+          path: test-results/
+          if-no-files-found: warn
           retention-days: 1
-
-      - name: Enforce pytest result
-        if: steps.pytest.outcome == 'failure'
-        shell: pwsh
-        run: exit 1
 
   python312-compat:
     name: Python 3.12 compatibility (manual)
@@ -74,7 +80,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.12"]
+        # Keep the supported compatibility set explicit. Python 3.11 is
+        # excluded here because the primary test job already covers it.
+        python-version: ["3.11", "3.12"]
+        exclude:
+          - python-version: "3.11"
 
     steps:
       - name: Check out repository
@@ -101,29 +111,34 @@ jobs:
       - name: Run Python tests
         id: pytest
         shell: pwsh
-        continue-on-error: true
         run: |
-          & python -m pytest -q --cache-clear 2>&1 | Tee-Object -FilePath pytest.log
-          exit $LASTEXITCODE
+          New-Item -ItemType Directory -Force -Path "test-results" | Out-Null
+          & python -m pytest -q --cache-clear --junitxml="test-results/pytest-junit.xml" 2>&1 |
+            Tee-Object -FilePath "test-results/pytest.log"
+          $pytestExitCode = $LASTEXITCODE
+          Write-Host "pytest exit code: $pytestExitCode"
+          exit $pytestExitCode
 
-      - name: Print pytest failure tail
-        if: steps.pytest.outcome == 'failure'
+      - name: Publish pytest failure summary
+        if: failure() && steps.pytest.outcome == 'failure'
         shell: pwsh
-        run: Get-Content -LiteralPath pytest.log -Tail 500
+        run: |
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "## Pytest failure tail"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '```text'
+          Get-Content -Path "test-results/pytest.log" -Tail 250 |
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '```'
 
-      - name: Upload pytest log
-        if: always()
+      - name: Upload Python test diagnostics
+        if: failure() && steps.pytest.outcome == 'failure'
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
-          name: pytest-python-${{ matrix.python-version }}
-          path: pytest.log
-          if-no-files-found: error
+          name: pytest-python-${{ matrix.python-version }}-run-${{ github.run_number }}-attempt-${{ github.run_attempt }}
+          path: test-results/
+          if-no-files-found: warn
           retention-days: 1
-
-      - name: Enforce pytest result
-        if: steps.pytest.outcome == 'failure'
-        shell: pwsh
-        run: exit 1
 
   node-tests:
     name: WebView Node tests
