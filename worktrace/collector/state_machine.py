@@ -74,9 +74,6 @@ class CollectorStateMachine:
                 previous_status == STATUS_NORMAL
                 and self.recorder.persisted_activity_id is not None
             ):
-                # A path or resource may become privacy-sensitive after the
-                # first sample.  Redact the already persisted row, its resource
-                # and clipboard events before transitioning to the anonymous row.
                 anonymize_activity(self.recorder.persisted_activity_id)
         signature = self.resolver.signature_for_payload(payload)
 
@@ -159,7 +156,11 @@ class CollectorStateMachine:
         self.active_signature = None
 
     def reset_runtime_state(self, reason: str = "runtime_reset") -> None:
-        """Forget process-local identities after destructive DB maintenance."""
+        """Seal the old generation, then forget every process-local identity."""
+        if self.recorder.current_payload is not None:
+            self.stop(now_str(), reason="secure_import")
+        else:
+            activity_lifecycle_service.close_all_open_activities(now_str())
         self.recorder.clear_runtime_state(reason)
         self.state = "stopped"
         self.active_signature = None
