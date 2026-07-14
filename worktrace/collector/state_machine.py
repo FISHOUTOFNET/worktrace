@@ -12,8 +12,14 @@ from ..constants import (
 )
 from ..db import now_str
 from ..platforms.base import ActiveWindow, ClipboardTextEvent
-from ..services import activity_lifecycle_service, clipboard_service, privacy_service, session_boundary_service
+from ..services import (
+    activity_lifecycle_service,
+    clipboard_service,
+    privacy_service,
+    session_boundary_service,
+)
 from ..services.activity_status_policy import does_status_require_boundary
+from ..services.privacy_anonymization_service import anonymize_activity
 from .activity_session_recorder import ActivitySessionRecorder
 from .resource_identity_resolver import (
     DEFAULT_RESOURCE_IDENTITY_RESOLVER,
@@ -51,11 +57,27 @@ class CollectorStateMachine:
             self.pause(transition_time)
             return
 
-        status = STATE_TO_STATUS[state]
-        payload = self.resolver.payload_for(status, active_window)
-        status, payload = self.resolver.normalize_for_privacy(status, payload, active_window)
+        requested_status = STATE_TO_STATUS[state]
+        previous_status = ""
+        if self.recorder.current_payload is not None:
+            previous_status = str(self.recorder.current_payload.get("status") or "")
+
+        payload = self.resolver.payload_for(requested_status, active_window)
+        status, payload = self.resolver.normalize_for_privacy(
+            requested_status,
+            payload,
+            active_window,
+        )
         if status == STATUS_EXCLUDED:
             state = "excluded"
+            if (
+                previous_status == STATUS_NORMAL
+                and self.recorder.persisted_activity_id is not None
+            ):
+                # A path or resource may become privacy-sensitive after the
+                # first sample.  Redact the already persisted row, its resource
+                # and clipboard events before transitioning to the anonymous row.
+                anonymize_activity(self.recorder.persisted_activity_id)
         signature = self.resolver.signature_for_payload(payload)
 
         match = self.resolver.current_matches(
@@ -73,9 +95,6 @@ class CollectorStateMachine:
             self.active_signature = self.recorder.current_signature or effective_signature
             return
 
-        previous_status = ""
-        if self.recorder.current_payload is not None:
-            previous_status = str(self.recorder.current_payload.get("status") or "")
         boundary_required = does_status_require_boundary(status, 0)
         boundary_reason = _boundary_reason_for_status(status)
         end_reason = (
@@ -83,7 +102,12 @@ class CollectorStateMachine:
             if boundary_required
             else ActivityEndReason.RESOURCE_SWITCH
         )
-        self.recorder.observe(payload, signature, transition_time, end_reason=end_reason)
+        self.recorder.observe(
+            payload,
+            signature,
+            transition_time,
+            end_reason=end_reason,
+        )
         if boundary_required:
             self.recorder.clear_short_buffers()
             if previous_status != status:
@@ -98,15 +122,25 @@ class CollectorStateMachine:
         else:
             logging.info("collector state transition state=%s", state)
 
-    def record_clipboard_event(self, event: ClipboardTextEvent, at_time: str | None = None) -> int | None:
+    def record_clipboard_event(
+        self,
+        event: ClipboardTextEvent,
+        at_time: str | None = None,
+    ) -> int | None:
         if not event.text:
             return None
         if privacy_service.is_excluded(event.source_window):
             return None
         copied_at = event.copied_at or at_time or now_str()
-        activity_id = self._current_activity_id_for_clipboard_event(event, copied_at)
+        activity_id = self._current_activity_id_for_clipboard_event(
+            event,
+            copied_at,
+        )
         if activity_id is None:
-            activity_id = clipboard_service.find_activity_for_clipboard_event(event.source_window, copied_at)
+            activity_id = clipboard_service.find_activity_for_clipboard_event(
+                event.source_window,
+                copied_at,
+            )
         if activity_id is None:
             return None
         return clipboard_service.record_clipboard_event(
@@ -166,11 +200,22 @@ class CollectorStateMachine:
         self.recorder.clear_short_buffers()
         session_boundary_service.record_hard_boundary(at_time, reason)
 
-    def _current_activity_id_for_clipboard_event(self, event: ClipboardTextEvent, copied_at: str) -> int | None:
+    def _current_activity_id_for_clipboard_event(
+        self,
+        event: ClipboardTextEvent,
+        copied_at: str,
+    ) -> int | None:
         current = self.recorder.current_payload
         if current is None or current.get("status") != STATUS_NORMAL:
             return None
         payload = self.resolver.payload_for(STATUS_NORMAL, event.source_window)
+        status, payload = self.resolver.normalize_for_privacy(
+            STATUS_NORMAL,
+            payload,
+            event.source_window,
+        )
+        if status != STATUS_NORMAL:
+            return None
         signature = self.resolver.signature_for_payload(payload)
         match = self.resolver.current_matches(
             current=current,
