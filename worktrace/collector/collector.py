@@ -262,11 +262,7 @@ def run_collector(
                 if excluded:
                     machine.transition_to("excluded", at_time=observation_time)
                 else:
-                    machine.transition_to(
-                        "recording",
-                        active_window,
-                        at_time=observation_time,
-                    )
+                    machine.transition_to("recording", active_window, at_time=observation_time)
                     for event in clipboard_events:
                         machine.record_clipboard_event(
                             event,
