@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 import sys
 import threading
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from .. import db
 from ..collector import collector_health
@@ -47,6 +47,16 @@ def _choose_adapter():
     return FakeAdapter()
 
 
+def _thread_reference_is_alive(thread: Any | None) -> bool:
+    """Treat opaque worker handles as live while checking real threads exactly."""
+    if thread is None:
+        return False
+    checker = getattr(thread, "is_alive", None)
+    if checker is None:
+        return True
+    return bool(checker())
+
+
 class AppRuntime:
     """Single owner for process-level worker and adapter lifecycle."""
 
@@ -79,7 +89,7 @@ class AppRuntime:
         with self._lifecycle_lock:
             if not self.owns_collector or self._shutdown or self.stop_event.is_set():
                 return False
-            if self._index_thread is not None and self._index_thread.is_alive():
+            if _thread_reference_is_alive(self._index_thread):
                 return False
             recover_interrupted_indexes()
             self._index_thread = folder_index_service.start_folder_index_worker(
@@ -94,7 +104,7 @@ class AppRuntime:
                 return {"ok": False, "error": "runtime_stopping"}
             if not self.owns_collector:
                 return {"ok": False, "error": "collector_not_owned"}
-            if self._collector_thread is not None and self._collector_thread.is_alive():
+            if _thread_reference_is_alive(self._collector_thread):
                 self._register_maintenance_handlers()
                 return {"ok": True, "started": False, "already_running": True}
             if self._collector_thread is not None:
@@ -124,10 +134,8 @@ class AppRuntime:
 
     def pause_collection_now(self, timeout_seconds: float = 5.0) -> dict[str, object]:
         """Finalize the current activity and persist a user pause."""
-        if (
-            not self.owns_collector
-            or self._collector_thread is None
-            or not self._collector_thread.is_alive()
+        if not self.owns_collector or not _thread_reference_is_alive(
+            self._collector_thread
         ):
             return {"ok": True, "pause_pending": False, "collector_active": False}
         return self.collector_control.request_pause(timeout_seconds=timeout_seconds)
@@ -150,10 +158,8 @@ class AppRuntime:
         self, timeout_seconds: float = 5.0
     ) -> dict[str, object]:
         """Forget all collector/adapter identity before destructive DB work."""
-        if (
-            not self.owns_collector
-            or self._collector_thread is None
-            or not self._collector_thread.is_alive()
+        if not self.owns_collector or not _thread_reference_is_alive(
+            self._collector_thread
         ):
             self._reset_adapter_runtime_state()
             return {"ok": True, "reset_pending": False, "collector_active": False}
@@ -189,9 +195,13 @@ class AppRuntime:
             collector_thread = self._collector_thread
 
         if index_thread:
-            index_thread.join(timeout=5)
+            joiner = getattr(index_thread, "join", None)
+            if joiner is not None:
+                joiner(timeout=5)
         if collector_thread:
-            collector_thread.join(timeout=5)
+            joiner = getattr(collector_thread, "join", None)
+            if joiner is not None:
+                joiner(timeout=5)
         if self.owns_collector:
             activity_lifecycle_service.close_all_open_activities()
             set_setting("collector_status", "stopped")
