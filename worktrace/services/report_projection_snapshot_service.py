@@ -21,10 +21,9 @@ from .report_session_builder import build_report_sessions
 from .report_status_policy import STANDALONE_STATUS, SUPPRESSED, decide_report_status
 from .settings_service import get_int_setting
 
-
-_REQUEST_SNAPSHOT_CACHE: ContextVar[dict[tuple[str, str], ReportProjectionSnapshot] | None] = ContextVar(
-    "worktrace_report_snapshot_cache", default=None
-)
+_REQUEST_SNAPSHOT_CACHE: ContextVar[
+    dict[tuple[str, str], ReportProjectionSnapshot] | None
+] = ContextVar("worktrace_report_snapshot_cache", default=None)
 
 
 @contextmanager
@@ -41,14 +40,13 @@ def snapshot_read_scope() -> Iterator[None]:
         _REQUEST_SNAPSHOT_CACHE.reset(token)
 
 
-def build_visible_snapshot(start_date: str, end_date: str, *, conn=None) -> ReportProjectionSnapshot:
-    """Build a deterministic snapshot without modifying persistent state.
-
-    An owned connection and a caller-owned transaction use the exact same
-    implementation. The owned path starts a deferred read transaction so all
-    tables and policy settings are observed from one SQLite snapshot. Explicit
-    request scopes reuse the immutable result for repeated reads of the range.
-    """
+def build_visible_snapshot(
+    start_date: str,
+    end_date: str,
+    *,
+    conn=None,
+) -> ReportProjectionSnapshot:
+    """Build a deterministic snapshot without modifying persistent state."""
     if conn is not None:
         return _build_snapshot(conn, start_date, end_date)
     cache = _REQUEST_SNAPSHOT_CACHE.get()
@@ -73,14 +71,33 @@ def _build_snapshot(conn, start_date: str, end_date: str) -> ReportProjectionSna
 
     uncategorized_id = timeline_service._uncategorized_project_id(conn)
     project_states = _load_project_states(conn, uncategorized_id)
-    rows = timeline_service.get_report_activity_rows(start_date, end_date, conn=conn)
+    rows = timeline_service.get_report_activity_rows(
+        start_date,
+        end_date,
+        conn=conn,
+    )
 
-    reportable_rows = [
+    # Visibility is applied after continuity is established.  A soft-deleted
+    # project remains a real interval in the fact layer and must split the
+    # visible sessions on either side even though its own row is suppressed.
+    deleted_rows = [
         row
         for row in rows
-        if not bool(row.get("effective_project_is_deleted") or row.get("report_project_is_deleted"))
+        if bool(
+            row.get("effective_project_is_deleted")
+            or row.get("report_project_is_deleted")
+        )
     ]
-    boundaries = timeline_service._boundary_times_for_rows(reportable_rows, conn=conn)
+    reportable_rows = [row for row in rows if row not in deleted_rows]
+    boundary_values = list(
+        timeline_service._boundary_times_for_rows(rows, conn=conn)
+    )
+    for row in deleted_rows:
+        for value in (row.get("start_time"), row.get("end_time")):
+            if value:
+                boundary_values.append(str(value))
+    boundaries = sorted(set(boundary_values))
+
     gap_threshold = max(
         60,
         get_int_setting(
@@ -110,7 +127,8 @@ def _build_snapshot(conn, start_date: str, end_date: str) -> ReportProjectionSna
     dates.update(
         str(row["report_date"])
         for row in conn.execute(
-            "SELECT DISTINCT report_date FROM report_session_operation WHERE report_date BETWEEN ? AND ?",
+            "SELECT DISTINCT report_date FROM report_session_operation "
+            "WHERE report_date BETWEEN ? AND ?",
             (start_date, end_date),
         ).fetchall()
     )
@@ -119,17 +137,28 @@ def _build_snapshot(conn, start_date: str, end_date: str) -> ReportProjectionSna
     final_contributions: list[dict[str, Any]] = []
     diagnostics: list[OperationDiagnostic] = []
     for report_date in sorted(dates):
-        date_base = [item for item in base_sessions if str(item.get("report_date") or "") == report_date]
+        date_base = [
+            item
+            for item in base_sessions
+            if str(item.get("report_date") or "") == report_date
+        ]
         replay = engine.replay_operations(
             date_base,
-            report_session_operation_service.load_operations(report_date, conn=conn),
+            report_session_operation_service.load_operations(
+                report_date,
+                conn=conn,
+            ),
             project_states,
         )
         final_sessions.extend(
-            dict(item) for item in replay.final_entries if not bool(item.get("project_is_deleted"))
+            dict(item)
+            for item in replay.final_entries
+            if not bool(item.get("project_is_deleted"))
         )
         final_contributions.extend(
-            dict(item) for item in replay.final_contributions if not bool(item.get("project_is_deleted"))
+            dict(item)
+            for item in replay.final_contributions
+            if not bool(item.get("project_is_deleted"))
         )
         diagnostics.extend(replay.operation_diagnostics)
 
@@ -149,13 +178,19 @@ def _build_snapshot(conn, start_date: str, end_date: str) -> ReportProjectionSna
                 "app_name": "已排除",
                 "process_name": "",
                 "activity_display_name": "已排除",
-                "activity_identity_key": f"excluded:{contribution['activity_id']}",
+                "activity_identity_key": (
+                    f"excluded:{contribution['activity_id']}"
+                ),
                 "resource_identity_key": "",
                 "resource_display_name": "",
                 "privacy_redacted": True,
             }
         )
-        key = f"status:{contribution['report_date']}:{contribution['activity_id']}:{contribution['slice_start_time']}"
+        key = (
+            f"status:{contribution['report_date']}:"
+            f"{contribution['activity_id']}:"
+            f"{contribution['slice_start_time']}"
+        )
         contribution["projection_instance_key"] = key
         revision = stable_json_hash(
             {
@@ -185,7 +220,11 @@ def _build_snapshot(conn, start_date: str, end_date: str) -> ReportProjectionSna
                 "start_time": contribution["start_time"],
                 "end_time": contribution["end_time"],
                 "duration_seconds": contribution["duration_seconds"],
-                "closed_duration_seconds": 0 if contribution["is_in_progress"] else contribution["duration_seconds"],
+                "closed_duration_seconds": (
+                    0
+                    if contribution["is_in_progress"]
+                    else contribution["duration_seconds"]
+                ),
                 "status": contribution["status"],
                 "status_code": contribution["status"],
                 "status_summary": contribution["status"],
@@ -204,19 +243,34 @@ def _build_snapshot(conn, start_date: str, end_date: str) -> ReportProjectionSna
             }
         )
 
-    final_sessions = sorted(final_sessions, key=timeline_service._session_sort_key)
+    final_sessions = sorted(
+        final_sessions,
+        key=timeline_service._session_sort_key,
+    )
     standalone_entries = sorted(
         standalone_entries,
-        key=lambda item: (str(item.get("start_time") or ""), str(item.get("projection_instance_key") or "")),
+        key=lambda item: (
+            str(item.get("start_time") or ""),
+            str(item.get("projection_instance_key") or ""),
+        ),
     )
     final_entries = sorted(
         [*final_sessions, *standalone_entries],
-        key=lambda item: (str(item.get("start_time") or ""), str(item.get("projection_instance_key") or "")),
+        key=lambda item: (
+            str(item.get("start_time") or ""),
+            str(item.get("projection_instance_key") or ""),
+        ),
     )
     revision = stable_json_hash(
         {
             "range": [start_date, end_date],
-            "projects": [state.to_dict() for state in sorted(project_states, key=lambda item: item.project_id)],
+            "projects": [
+                state.to_dict()
+                for state in sorted(
+                    project_states,
+                    key=lambda item: item.project_id,
+                )
+            ],
             "entries": [
                 {
                     "key": item.get("projection_instance_key"),
@@ -229,7 +283,11 @@ def _build_snapshot(conn, start_date: str, end_date: str) -> ReportProjectionSna
             "contributions": [
                 {
                     "key": item.get("projection_instance_key"),
-                    "member": [item.get("report_date"), item.get("activity_id"), item.get("slice_start_time")],
+                    "member": [
+                        item.get("report_date"),
+                        item.get("activity_id"),
+                        item.get("slice_start_time"),
+                    ],
                     "duration": item.get("duration_seconds"),
                     "status": item.get("status"),
                     "project_id": item.get("project_id"),
@@ -254,9 +312,16 @@ def _build_snapshot(conn, start_date: str, end_date: str) -> ReportProjectionSna
 
 def _load_project_states(conn, uncategorized_id: int) -> list[ProjectState]:
     return [
-        project_state_from_row(dict(row), uncategorized_id=uncategorized_id)
+        project_state_from_row(
+            dict(row),
+            uncategorized_id=uncategorized_id,
+        )
         for row in conn.execute("SELECT * FROM project ORDER BY id").fetchall()
     ]
 
 
-__all__ = ["ReportProjectionSnapshot", "build_visible_snapshot", "snapshot_read_scope"]
+__all__ = [
+    "ReportProjectionSnapshot",
+    "build_visible_snapshot",
+    "snapshot_read_scope",
+]
