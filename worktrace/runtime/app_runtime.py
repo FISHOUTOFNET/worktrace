@@ -38,9 +38,9 @@ if TYPE_CHECKING:
 def _choose_adapter():
     """Return the platform adapter for the current OS."""
     if sys.platform.startswith("win"):
-        from ..platforms.windows_adapter import WindowsAdapter
+        from ..platforms.hardened_windows_adapter import HardenedWindowsAdapter
 
-        return WindowsAdapter()
+        return HardenedWindowsAdapter()
     from ..platforms.fake_adapter import FakeAdapter
 
     return FakeAdapter()
