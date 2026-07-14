@@ -24,7 +24,7 @@ from ..services.secure_backup_service import (
     register_collector_pause_handler,
     register_collector_reset_handler,
 )
-from ..services.settings_service import set_setting
+from ..services.settings_service import get_bool_setting, set_setting
 
 if TYPE_CHECKING:
     from .. import config
@@ -119,11 +119,11 @@ class AppRuntime:
             return {"ok": True, "started": True, "already_running": False}
 
     def _register_maintenance_handlers(self) -> None:
-        register_collector_pause_handler(self.pause_collection_now)
+        register_collector_pause_handler(self.quiesce_collection_now)
         register_collector_reset_handler(self.reset_collection_runtime_now)
 
     def pause_collection_now(self, timeout_seconds: float = 5.0) -> dict[str, object]:
-        """Finalize the current activity and establish the paused state."""
+        """Finalize the current activity and persist a user pause."""
         if (
             not self.owns_collector
             or self._collector_thread is None
@@ -131,6 +131,20 @@ class AppRuntime:
         ):
             return {"ok": True, "pause_pending": False, "collector_active": False}
         return self.collector_control.request_pause(timeout_seconds=timeout_seconds)
+
+    def quiesce_collection_now(
+        self,
+        timeout_seconds: float = 5.0,
+    ) -> dict[str, object]:
+        """Pause writers for maintenance without changing the user's intent."""
+        prior_user_paused = get_bool_setting("user_paused", False)
+        result = self.pause_collection_now(timeout_seconds=timeout_seconds)
+        if bool(result.get("ok")):
+            set_setting(
+                "user_paused",
+                "true" if prior_user_paused else "false",
+            )
+        return result
 
     def reset_collection_runtime_now(
         self, timeout_seconds: float = 5.0
@@ -168,7 +182,7 @@ class AppRuntime:
             if self._shutdown:
                 return
             self._shutdown = True
-            clear_collector_pause_handler(self.pause_collection_now)
+            clear_collector_pause_handler(self.quiesce_collection_now)
             clear_collector_reset_handler(self.reset_collection_runtime_now)
             self.stop_event.set()
             index_thread = self._index_thread
