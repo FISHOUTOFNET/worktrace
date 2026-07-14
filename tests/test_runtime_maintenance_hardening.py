@@ -10,6 +10,7 @@ from tests.support.db_helpers import assign_activity_project, fetch_one
 
 from worktrace.collector import activity_session_recorder as recorder_module
 from worktrace.collector.activity_session_recorder import ActivitySessionRecorder
+from worktrace.collector.clock_tracker import ClockTracker
 from worktrace.collector.collector import CollectorControl, _sleep_until_next_poll
 from worktrace.platforms.base import ActiveWindow
 from worktrace.platforms.hardened_windows_adapter import _ClipboardMonitor
@@ -86,6 +87,69 @@ def test_long_poll_gap_rebases_instead_of_replaying_ticks():
     )
 
     assert next_deadline == pytest.approx(28_801.0)
+
+
+def test_clock_tracker_detects_collector_stall():
+    tracker = ClockTracker()
+    assert tracker.observe(
+        "2026-07-15 09:00:00",
+        100.0,
+        clock_jump_threshold_seconds=300,
+        stall_threshold_seconds=180,
+    ) is None
+
+    event = tracker.observe(
+        "2026-07-15 09:10:00",
+        700.0,
+        clock_jump_threshold_seconds=300,
+        stall_threshold_seconds=180,
+    )
+
+    assert event is not None
+    assert event.reason == "collector_stall"
+    assert event.safe_end_time == "2026-07-15 09:00:00"
+
+
+def test_clock_tracker_detects_backward_wall_clock_jump():
+    tracker = ClockTracker()
+    tracker.observe(
+        "2026-07-15 10:00:00",
+        100.0,
+        clock_jump_threshold_seconds=300,
+        stall_threshold_seconds=180,
+    )
+
+    event = tracker.observe(
+        "2026-07-15 09:00:00",
+        101.0,
+        clock_jump_threshold_seconds=300,
+        stall_threshold_seconds=180,
+    )
+
+    assert event is not None
+    assert event.reason == "clock_jump_backward"
+    assert event.safe_end_time == "2026-07-15 09:00:00"
+
+
+def test_clock_tracker_detects_forward_wall_clock_jump():
+    tracker = ClockTracker()
+    tracker.observe(
+        "2026-07-15 10:00:00",
+        100.0,
+        clock_jump_threshold_seconds=300,
+        stall_threshold_seconds=180,
+    )
+
+    event = tracker.observe(
+        "2026-07-15 12:00:00",
+        101.0,
+        clock_jump_threshold_seconds=300,
+        stall_threshold_seconds=180,
+    )
+
+    assert event is not None
+    assert event.reason == "clock_jump_forward"
+    assert event.safe_end_time == "2026-07-15 10:00:01"
 
 
 def test_recorder_generation_reset_forgets_old_activity_id(monkeypatch):
