@@ -3,14 +3,11 @@ from __future__ import annotations
 import csv
 import logging
 import os
-from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator
 
 from ..db import get_connection, now_str, reset_database
 from ..exports.excel_exporter import export_excel_file
 from . import statistics_service
-from .runtime_activity_state_service import clear_runtime_activity_state
 
 logger = logging.getLogger(__name__)
 
@@ -31,13 +28,7 @@ _FORMULA_INJECTION_PREFIXES = ("=", "+", "-", "@", "\t")
 
 
 def _escape_csv_cell(value) -> str:
-    """Render a cell value as a string and escape CSV formula injection.
-
-    Values starting with ``=`` / ``+`` / ``-`` / ``@`` / tab get a single
-    leading quote prepended so Excel / LibreOffice / Google Sheets treat the
-    cell as plain text instead of evaluating it as a formula. Non-string
-    values are coerced via ``str()``.
-    """
+    """Render a cell value as text and escape spreadsheet formula injection."""
     text = "" if value is None else str(value)
     if text and text[0] in _FORMULA_INJECTION_PREFIXES:
         return "'" + text
@@ -50,10 +41,19 @@ def build_statistics_csv_rows(date_from: str, date_to: str) -> list[dict]:
     from .report_projection_snapshot_service import build_visible_snapshot
     from .statistics_projection import build_statistics_projection
 
-    return list(build_statistics_projection(build_visible_snapshot(date_from, date_to)).export_records)
+    return list(
+        build_statistics_projection(
+            build_visible_snapshot(date_from, date_to)
+        ).export_records
+    )
 
 
-def write_statistics_csv(date_from: str, date_to: str, output_path, expected_snapshot_revision: str | None = None) -> dict:
+def write_statistics_csv(
+    date_from: str,
+    date_to: str,
+    output_path,
+    expected_snapshot_revision: str | None = None,
+) -> dict:
     """Build display-safe CSV rows and write them to ``output_path``."""
     statistics_service.validate_statistics_date_range(date_from, date_to)
 
@@ -71,8 +71,13 @@ def write_statistics_csv(date_from: str, date_to: str, output_path, expected_sna
     from .report_projection_snapshot_service import build_visible_snapshot
     from .statistics_projection import build_statistics_projection
 
-    projection = build_statistics_projection(build_visible_snapshot(date_from, date_to))
-    if expected_snapshot_revision is not None and str(expected_snapshot_revision or "") != projection.snapshot_revision:
+    projection = build_statistics_projection(
+        build_visible_snapshot(date_from, date_to)
+    )
+    if (
+        expected_snapshot_revision is not None
+        and str(expected_snapshot_revision or "") != projection.snapshot_revision
+    ):
         raise ValueError("stale_statistics_snapshot")
     csv_rows = projection.export_records
     if not csv_rows:
@@ -109,7 +114,9 @@ def export_excel(start_date: str, end_date: str, path: str) -> str:
 
 
 def export_all_local_data(path: str) -> str:
+    """Export one consistent read snapshot using the canonical backup table set."""
     from openpyxl import Workbook
+    from .secure_backup_service import EXPORT_TABLES
 
     out = Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -117,103 +124,50 @@ def export_all_local_data(path: str) -> str:
     default = wb.active
     wb.remove(default)
     with get_connection() as conn:
-        for table in [
-            "activity_log",
-            "activity_resource",
-            "activity_project_assignment",
-            "report_session_operation",
-            "report_mutation_request",
-            "report_session_operation_member",
-            "activity_clipboard_event",
-            "project",
-            "folder_project_rule",
-            "project_rule",
-            "settings",
-        ]:
-            ws = wb.create_sheet(table)
-            rows = conn.execute(f"SELECT * FROM {table}").fetchall()
-            columns = [item["name"] for item in conn.execute(f"PRAGMA table_info({table})").fetchall()]
-            ws.append(columns)
-            for row in rows:
-                ws.append([row[col] for col in columns])
+        conn.execute("BEGIN")
+        try:
+            for table in EXPORT_TABLES:
+                ws = wb.create_sheet(table)
+                rows = conn.execute(f"SELECT * FROM {table}").fetchall()
+                columns = [
+                    item["name"]
+                    for item in conn.execute(
+                        f"PRAGMA table_info({table})"
+                    ).fetchall()
+                ]
+                ws.append(columns)
+                for row in rows:
+                    ws.append([row[col] for col in columns])
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
     wb.save(out)
     logging.info("all local data export success")
     return str(out)
 
 
 def clear_all_local_data(confirm: bool) -> None:
-    """Clear all local data by resetting the database."""
+    """Clear local data through the acknowledged maintenance coordinator."""
     if not confirm:
         raise ValueError("confirmation is required")
-    with _destructive_reset_guard():
-        reset_database()
+    from .secure_backup_service import (
+        BackupImportInProgressError,
+        SECURE_IMPORT_COORDINATOR,
+    )
+
+    try:
+        with SECURE_IMPORT_COORDINATOR.acquire(reason="clear_all") as guard:
+            reset_database()
+            guard.mark_succeeded()
+    except BackupImportInProgressError as exc:
+        raise ValueError("operation_in_progress") from exc
     _invalidate_clear_all_caches()
     logging.info("all local data cleared at %s", now_str())
 
 
-@contextmanager
-def _destructive_reset_guard() -> Iterator[None]:
-    """Narrow destructive reset guard for ``clear_all_local_data``."""
-    from ..services.settings_service import (
-        clear_settings_cache,
-        get_bool_setting,
-        get_setting,
-        set_setting,
-    )
-
-    from .secure_backup_service import is_secure_import_in_progress
-
-    if is_secure_import_in_progress():
-        logging.warning("clear-all rejected: destructive operation in progress")
-        raise ValueError("operation_in_progress")
-
-    prior_user_paused = get_bool_setting("user_paused", False)
-    prior_collector_status = get_setting("collector_status", "stopped") or "stopped"
-    from ..collector.snapshot_publisher import DEFAULT_SNAPSHOT_PUBLISHER
-
-    prior_snapshot = DEFAULT_SNAPSHOT_PUBLISHER.read_raw()
-
-    set_setting("user_paused", "true")
-    set_setting("collector_status", "paused")
-    clear_runtime_activity_state("clear_all_guard_enter")
-    clear_settings_cache()
-
-    try:
-        yield
-    except Exception as exc:
-        # Restore prior state on failure. Do not log the exception message:
-        # it may carry sensitive details from upstream layers. Only log the
-        # exception type so internal details stay out of the log file.
-        logging.warning(
-            "clear-all destructive reset failed exc_type=%s", type(exc).__name__
-        )
-        set_setting("user_paused", "true" if prior_user_paused else "false")
-        set_setting("collector_status", prior_collector_status)
-        DEFAULT_SNAPSHOT_PUBLISHER.restore_raw(prior_snapshot)
-        clear_settings_cache()
-        raise
-    else:
-        # On success leave the app paused so the user can verify the cleared
-        # state before resuming. reset_database re-seeds defaults, so we
-        # re-assert the paused state here, matching secure-import semantics.
-        set_setting("user_paused", "true")
-        set_setting("collector_status", "paused")
-        clear_runtime_activity_state("clear_all_success")
-        clear_settings_cache()
-        logging.info("clear-all destructive reset guard completed paused=true")
-
-
 def _invalidate_clear_all_caches() -> None:
-    """Invalidate service-layer caches after a clear-all reset.
-
-    Mirrors the ``secure_backup_service._invalidate_caches`` set so the
-    clear-all path invalidates the same caches a successful encrypted
-    backup import does. The context recompute cache is included because
-    ``reset_database`` drops all activity / project / rule rows that the
-    context recompute cache is derived from; leaving it stale would let
-    the user see pre-clear context on the next Timeline / Statistics
-    load.
-    """
+    """Invalidate every cache derived from the replaced database generation."""
     from .folder_rule_service import invalidate_folder_rule_cache
     from .privacy_service import clear_exclude_rules_cache
     from .project_inference_service import invalidate_keyword_rule_cache
