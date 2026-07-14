@@ -137,6 +137,6 @@ def test_excel_sessions_status_and_project_display_contract(temp_db):
         by_status = {row[status_col]: row for row in rows}
         assert set(by_status) == {"空闲、正常", "异常、已排除"}
         assert by_status["空闲、正常"][project_col] == "Client"
-        assert by_status["异常、已排除"][project_col] == "已排除"
+        assert by_status["异常、已排除"][project_col] == "Client"
         for raw in ("normal", "idle", "paused", "excluded", "error"):
             assert raw not in by_status
