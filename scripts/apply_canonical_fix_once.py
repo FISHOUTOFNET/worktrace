@@ -193,7 +193,7 @@ def test_production_has_no_legacy_activity_id_mutation_resolvers():
         "save_activity_session_override",
         "save_timeline_session_override",
     }
-    source = "\n".join(
+    source = chr(10).join(
         path.read_text(encoding="utf-8")
         for path in (REPO_ROOT / "worktrace").rglob("*")
         if path.suffix in {".py", ".js"}
