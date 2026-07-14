@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass
-from types import MappingProxyType
 from typing import Any, Iterable, Mapping, Sequence
 
 from .report_projection_identity import (
@@ -17,7 +16,14 @@ from .report_projection_identity import (
     projection_revision,
     snapshot_revision,
 )
-from .report_projection_model import OperationDiagnostic, OperationRecord, ProjectState, ReportMemberIdentity
+from .report_projection_model import (
+    OperationDiagnostic,
+    OperationRecord,
+    ProjectState,
+    ReportMemberIdentity,
+    freeze_value,
+    thaw_value,
+)
 
 
 OPERATION_PAYLOAD_VERSION = 4
@@ -27,22 +33,8 @@ ORPHANED = "orphaned"
 SUPERSEDED_BY_UNDO = "superseded_by_undo"
 
 
-def _freeze_value(value: Any) -> Any:
-    if isinstance(value, Mapping):
-        return MappingProxyType({str(key): _freeze_value(item) for key, item in value.items()})
-    if isinstance(value, (list, tuple)):
-        return tuple(_freeze_value(item) for item in value)
-    if isinstance(value, set):
-        return frozenset(_freeze_value(item) for item in value)
-    return value
-
-
-def _mutable_value(value: Any) -> Any:
-    if isinstance(value, Mapping):
-        return {str(key): _mutable_value(item) for key, item in value.items()}
-    if isinstance(value, (tuple, frozenset)):
-        return [_mutable_value(item) for item in value]
-    return deepcopy(value)
+_freeze_value = freeze_value
+_mutable_value = thaw_value
 
 
 @dataclass(frozen=True)

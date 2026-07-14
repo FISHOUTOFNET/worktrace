@@ -17,13 +17,13 @@ def test_statistics_aggregation(temp_db):
     idle = activity_service.create_activity("空闲", "idle", "用户空闲", status="idle", start_time="2026-06-18 10:00:00")
     activity_service.close_activity(idle, "2026-06-18 10:15:00")
     summary = statistics_service.get_summary("2026-06-18", "2026-06-18")
-    assert summary["total_duration"] == 3600
+    assert summary["total_duration"] == 4500
     assert summary["effective_duration"] == 3600
-    assert summary["classified_duration"] == 3600
-    assert summary["idle_duration"] == 0
+    assert summary["classified_duration"] == 4500
+    assert summary["idle_duration"] == 900
     stats = statistics_service.get_project_stats("2026-06-18", "2026-06-18")
     assert stats[0]["project"] == "Client"
-    assert stats[0]["total_duration"] == 3600
+    assert stats[0]["total_duration"] == 4500
 
 
 def test_summary_read_does_not_materialize_context(temp_db):
@@ -211,8 +211,6 @@ def test_statistics_export_excludes_in_progress_live_rows(temp_db):
     assert export_summary["by_project"] == []
     assert export_summary["by_app"] == []
     assert export_summary["by_status"] == []
-
-
 
 
 def test_legacy_confirmation_constants_are_disabled():

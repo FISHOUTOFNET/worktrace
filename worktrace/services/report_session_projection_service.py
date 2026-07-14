@@ -2,12 +2,10 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-from ..db import get_connection
 from ..constants import EXCLUDED_APP_NAME, STATUS_EXCLUDED, UNCATEGORIZED_PROJECT
-from . import report_session_operation_engine
 from . import project_lifecycle_policy
-from .project_service import get_or_create_uncategorized_project
 from .report_projection_identity import base_projection_key, member_identity_key, member_set_hash, projection_revision
+from .report_projection_model import thaw_value
 
 
 def get_report_sessions_by_date(
@@ -33,29 +31,33 @@ def get_report_sessions_by_range(
     return [public_session_dto(session) for session in get_report_sessions_for_operations(start_date, end_date)]
 
 
+def _mutable_record(value: Mapping[str, Any]) -> dict[str, Any]:
+    """Thaw one canonical record into a detached plain-data adapter value."""
+    result = thaw_value(value)
+    if not isinstance(result, dict):
+        raise TypeError("canonical record must thaw to dict")
+    return result
+
+
 def get_report_sessions_for_operations(
     start_date: str,
     end_date: str,
 ) -> list[dict]:
-    """Build mutable adapter copies of final canonical sessions.
+    """Build detached mutable copies of final canonical sessions.
 
-    The canonical snapshot recursively freezes its records. Internal consumers
-    that add a detail revision or other adapter-only fields must copy explicitly
-    rather than mutating the domain snapshot.
+    The canonical snapshot recursively freezes its records. Adapter consumers
+    must cross this boundary through one recursive thaw rather than selectively
+    converting known list fields, otherwise future nested values can leak tuple
+    or frozen mapping implementations into public/service contracts.
     """
     from .report_projection_snapshot_service import build_visible_snapshot
 
-    snapshot = build_visible_snapshot(start_date, end_date)
     projected = [
-        dict(session)
-        for session in snapshot.final_sessions
+        _mutable_record(session)
+        for session in build_visible_snapshot(start_date, end_date).final_sessions
         if project_lifecycle_policy.final_session_is_reportable(session)
     ]
     for session in projected:
-        session["_projection_contributions"] = [
-            dict(item) for item in session.get("_projection_contributions") or []
-        ]
-        session["member_slices"] = [dict(item) for item in session.get("member_slices") or []]
         _attach_detail_revision(session)
     return projected
 
@@ -66,27 +68,10 @@ def get_projected_activity_contributions_by_range(
 ) -> list[dict]:
     from .report_projection_snapshot_service import build_visible_snapshot
 
-    return [dict(item) for item in build_visible_snapshot(start_date, end_date).final_contributions]
-
-
-def resolve_current_session(
-    report_date: str,
-    activity_ids: list[int],
-    activity_member_hash: str,
-) -> dict:
-    ids = {int(aid) for aid in activity_ids}
-    if not report_date or not ids or not activity_member_hash:
-        raise ValueError("invalid_session_identity")
-    sessions = get_report_sessions_by_date(report_date)
-    for session in sessions:
-        if str(session.get("activity_member_hash") or "") != str(activity_member_hash):
-            continue
-        if {int(aid) for aid in session.get("activity_ids") or []} != ids:
-            continue
-        if not bool(session.get("editable", False)):
-            raise ValueError("not_project_activity")
-        return session
-    raise ValueError("session_identity_conflict")
+    return [
+        _mutable_record(item)
+        for item in build_visible_snapshot(start_date, end_date).final_contributions
+    ]
 
 
 def _attach_session_identity(session: dict) -> None:
@@ -212,17 +197,21 @@ _PUBLIC_SESSION_FIELDS = (
     "is_classified", "is_uncategorized", "contributes_to_totals",
     "start_time", "end_time", "duration_seconds", "closed_duration_seconds",
     "adjusted_duration_seconds", "has_duration_override", "session_note",
-    "has_project_override",
-    "is_in_progress", "editable", "exportable", "activity_ids", "member_slices",
-    "activity_member_hash", "anchor_activity_id", "first_activity_id", "event_count",
-    "status", "status_code", "status_summary", "can_hide", "can_copy",
-    "can_hide_activity", "can_merge_previous", "can_merge_next", "can_split",
+    "has_project_override", "is_in_progress", "editable", "exportable",
+    "activity_ids", "member_slices", "activity_member_hash", "anchor_activity_id", "first_activity_id",
+    "event_count", "status", "status_code", "status_summary", "can_hide",
+    "can_copy", "can_hide_activity", "can_merge_previous", "can_merge_next",
+    "can_split",
 )
 
 
 def public_session_dto(session: Mapping[str, Any]) -> dict:
-    """Explicit WebView/report boundary; private engine fields are never inferred."""
-    return {field: session.get(field) for field in _PUBLIC_SESSION_FIELDS}
+    """Return an allowlisted, recursively plain WebView/report DTO."""
+    selected = {field: session.get(field) for field in _PUBLIC_SESSION_FIELDS}
+    result = thaw_value(selected)
+    if not isinstance(result, dict):
+        raise TypeError("public session DTO must be dict")
+    return result
 
 
 def _attach_raw_final_defaults(session: dict, uncategorized_id: int) -> None:
