@@ -39,14 +39,7 @@ def is_excluded(active_window: ActiveWindow) -> bool:
 
 
 def is_resource_excluded(resource) -> bool:
-    """Return True if a DetectedResource (or dict) should be excluded.
-
-    Inspects the same fields as :func:`is_excluded`, plus resource-specific
-    fields such as ``uri_host``, ``display_name``, ``identity_key`` and safe
-    ``metadata_json`` entries. This is used after resource detection to make
-    sure a resource that surfaces an excluded keyword (e.g. a browser host or
-    email subject) is anonymized just like an excluded active window.
-    """
+    """Return True if a DetectedResource (or dict) should be excluded."""
     if resource is None:
         return False
     if isinstance(resource, dict):
@@ -63,6 +56,7 @@ def is_resource_excluded(resource) -> bool:
         metadata_raw = resource.get("metadata_json")
         if metadata_raw:
             fields.append(str(metadata_raw))
+        resource_path = resource.get("path_hint")
     else:
         fields = [
             resource.app_name or "",
@@ -76,12 +70,11 @@ def is_resource_excluded(resource) -> bool:
         ]
         if resource.metadata_json:
             fields.append(resource.metadata_json)
+        resource_path = resource.path_hint
     haystack = " ".join(fields).casefold()
     if _matches_exclude_keyword(haystack):
         return True
-    if _matches_exclude_folder(resource.path_hint if not isinstance(resource, dict) else resource.get("path_hint")):
-        return True
-    return False
+    return _matches_exclude_folder(resource_path)
 
 
 def make_excluded_activity_payload() -> dict:
@@ -114,7 +107,10 @@ def _exclude_rules() -> dict[str, list[dict]]:
         ).fetchone()
         if not project or not int(project["enabled"] or 0):
             result = {"keywords": [], "folders": []}
-            _EXCLUDE_RULE_CACHE[cache_key] = (now + _EXCLUDE_RULE_CACHE_TTL_SECONDS, result)
+            _EXCLUDE_RULE_CACHE[cache_key] = (
+                now + _EXCLUDE_RULE_CACHE_TTL_SECONDS,
+                result,
+            )
             return result
         project_id = int(project["id"])
         keywords = dict_rows(
@@ -143,7 +139,10 @@ def _exclude_rules() -> dict[str, list[dict]]:
             ).fetchall()
         )
     result = {"keywords": keywords, "folders": folders}
-    _EXCLUDE_RULE_CACHE[cache_key] = (now + _EXCLUDE_RULE_CACHE_TTL_SECONDS, result)
+    _EXCLUDE_RULE_CACHE[cache_key] = (
+        now + _EXCLUDE_RULE_CACHE_TTL_SECONDS,
+        result,
+    )
     return {
         key: [dict(row) for row in rows]
         for key, rows in result.items()
@@ -167,7 +166,11 @@ def _matches_exclude_folder(file_path_hint: str | None) -> bool:
         folder = str(row.get("folder_path") or "")
         if target_key and target_key == str(row.get("normalized_folder_key") or ""):
             return True
-        if folder and is_path_under_folder(target, folder, bool(row.get("recursive"))):
+        if folder and is_path_under_folder(
+            target,
+            folder,
+            bool(row.get("recursive")),
+        ):
             return True
     return False
 
@@ -175,10 +178,13 @@ def _matches_exclude_folder(file_path_hint: str | None) -> bool:
 def _matches_indexed_exclude_folder(window_title: str | None) -> bool:
     if not (window_title or "").strip():
         return False
-    try:
-        from .folder_index_service import resolve_unique_path_from_title
+    from .folder_index_service import resolve_unique_path_from_title
 
-        path = resolve_unique_path_from_title(window_title, include_excluded=True)
-    except Exception:
-        return False
+    # Deliberately allow database/index failures to propagate.  The collector
+    # treats privacy-evaluation errors as a failed observation and therefore
+    # never persists real metadata on an uncertain decision.
+    path = resolve_unique_path_from_title(
+        window_title,
+        include_excluded=True,
+    )
     return _matches_exclude_folder(path)
