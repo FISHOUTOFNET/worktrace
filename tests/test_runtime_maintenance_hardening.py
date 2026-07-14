@@ -192,6 +192,7 @@ def test_unresolved_file_path_fails_closed_when_exclusion_folder_exists(
                 process_name="winword.exe",
                 window_title="Contract.docx",
                 file_path_hint=None,
+                privacy_path_required=True,
             )
         )
 
