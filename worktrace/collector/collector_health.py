@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import sqlite3
 from datetime import datetime
 
 from ..db import now_str
@@ -23,7 +24,6 @@ def record_collector_started(at_time: str | None = None) -> None:
 
 def record_successful_observation(at_time: str | None = None) -> None:
     at = at_time or now_str()
-    # Preserve runtime-only recovery evidence after clearing current health.
     previous_state = get_setting("collector_health_state", HEALTH_STOPPED)
     previous_failures = get_int_setting("collector_consecutive_failures", 0)
     if previous_state in (HEALTH_DEGRADED, HEALTH_FAILING) or previous_failures > 0:
@@ -39,7 +39,11 @@ def record_successful_observation(at_time: str | None = None) -> None:
     set_setting("collector_last_failure_kind", "")
 
 
-def record_transient_failure(phase: str, exc: BaseException, at_time: str | None = None) -> None:
+def record_transient_failure(
+    phase: str,
+    exc: BaseException,
+    at_time: str | None = None,
+) -> None:
     at = at_time or now_str()
     failures = get_int_setting("collector_consecutive_failures", 0) + 1
     state = HEALTH_FAILING if failures >= _FAILING_THRESHOLD else HEALTH_DEGRADED
@@ -56,7 +60,11 @@ def record_transient_failure(phase: str, exc: BaseException, at_time: str | None
     )
 
 
-def record_fatal_failure(phase: str, exc: BaseException, at_time: str | None = None) -> None:
+def record_fatal_failure(
+    phase: str,
+    exc: BaseException,
+    at_time: str | None = None,
+) -> None:
     at = at_time or now_str()
     set_setting("collector_health_state", HEALTH_STOPPED)
     set_setting("collector_last_failure_at", at)
@@ -88,7 +96,32 @@ def record_health_code(code: str, at_time: str | None = None) -> None:
 
 
 def is_transient_failure(exc: BaseException) -> bool:
-    return not isinstance(exc, (SystemExit, KeyboardInterrupt, MemoryError))
+    """Retry environmental contention, but stop on corruption/programming faults."""
+    if isinstance(
+        exc,
+        (
+            SystemExit,
+            KeyboardInterrupt,
+            MemoryError,
+            AssertionError,
+            TypeError,
+            AttributeError,
+            KeyError,
+        ),
+    ):
+        return False
+    if isinstance(exc, sqlite3.DatabaseError):
+        message = str(exc).lower()
+        return any(
+            token in message
+            for token in (
+                "locked",
+                "busy",
+                "secure_import_in_progress",
+                "database_generation_changed",
+            )
+        )
+    return True
 
 
 def _safe_phase(phase: str) -> str:
