@@ -32,7 +32,7 @@ def clear_exclude_rules_cache() -> None:
 
 
 def is_excluded(active_window: ActiveWindow) -> bool:
-    """Evaluate exclusion rules, failing closed while a file path is unknown."""
+    """Evaluate exclusion rules, failing closed while a local-file path is unknown."""
     haystack = " ".join(
         [
             active_window.app_name,
@@ -47,7 +47,7 @@ def is_excluded(active_window: ActiveWindow) -> bool:
         return True
 
     folder_rules = _exclude_rules()["folders"]
-    if not folder_rules:
+    if not folder_rules or not active_window.privacy_path_required:
         return False
     file_name = extract_file_name_from_title(active_window.window_title)
     if not file_name:
@@ -61,9 +61,6 @@ def is_excluded(active_window: ActiveWindow) -> bool:
     )
     if path:
         return _matches_exclude_folder(path)
-    # A folder-only privacy rule exists and the foreground title looks like a
-    # file, but neither the adapter nor index can prove its path.  Do not treat
-    # uncertainty as permission to store the real title.
     raise PrivacyResolutionPending("privacy_path_unresolved")
 
 
