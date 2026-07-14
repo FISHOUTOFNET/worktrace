@@ -1426,3 +1426,31 @@ def test_governance_suite_stays_focused(runner, capsys):
     assert "tests/test_test_inventory.py" in out
     assert "python -m pytest" in out
     assert "python -m pytest'" not in out
+
+
+def test_canonical_projection_files_select_cross_layer_suite(runner):
+    required = {
+        "tests/test_report_projection_cutover.py",
+        "tests/test_projection_governance_regressions.py",
+        "tests/test_projection_plain_dto_contract.py",
+        "tests/test_timeline_api_editing.py",
+        "tests/test_project_delete_contract.py",
+        "tests/test_statistics_service.py",
+        "tests/test_statistics_csv_export.py",
+    }
+    for changed in runner.CANONICAL_REPORT_PROJECTION_TRIGGERS:
+        selection = runner.select_targets([changed])
+        assert required <= set(selection.pytest_targets), (
+            f"{changed} must select the canonical cross-layer suite"
+        )
+
+
+def test_secure_validation_and_write_gate_select_security_regressions(runner):
+    for changed in (
+        "worktrace/services/secure_backup_validation.py",
+        "worktrace/write_gate.py",
+    ):
+        selection = runner.select_targets([changed])
+        assert "tests/test_secure_backup_service.py" in selection.pytest_targets
+        assert "tests/test_projection_governance_regressions.py" in selection.pytest_targets
+

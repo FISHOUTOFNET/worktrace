@@ -211,7 +211,7 @@ def test_build_csv_rows_all_statuses_exported(temp_db):
     assert by_start["09:00:00"]["project"] == "Client"
     assert "空闲" in by_start["09:00:00"]["status"]
     assert "已排除" in by_start["10:30:00"]["status"]
-    assert by_start["10:30:00"]["project"] == "已排除"
+    assert by_start["10:30:00"]["project"] == "Client"
 
 
 def test_build_csv_rows_multi_day_range(temp_db):

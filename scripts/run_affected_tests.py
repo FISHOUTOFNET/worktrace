@@ -66,6 +66,20 @@ CONFTEST_BROAD_SUITE: list[str] = [
 
 
 
+CANONICAL_REPORT_PROJECTION_TRIGGERS: list[str] = [
+    "worktrace/services/context_service.py",
+    "worktrace/services/report_status_policy.py",
+    "worktrace/services/report_projection_identity.py",
+    "worktrace/services/report_projection_model.py",
+    "worktrace/services/report_projection_snapshot_service.py",
+    "worktrace/services/report_session_builder.py",
+    "worktrace/services/report_session_projection_service.py",
+    "worktrace/services/report_session_operation_engine.py",
+    "worktrace/services/report_session_operation_service.py",
+    "worktrace/services/statistics_projection.py",
+]
+
+
 RULES: list[dict] = [
     {
         "id": "A. WebView frontend resources",
@@ -318,6 +332,33 @@ RULES: list[dict] = [
         "markers": ["contract and integration"],
     },
     {
+        "id": "D0. Canonical report projection",
+        "triggers": CANONICAL_REPORT_PROJECTION_TRIGGERS,
+        "tests": [
+            "tests/test_report_projection_architecture_contract.py",
+            "tests/test_report_projection_cutover.py",
+            "tests/test_projection_governance_regressions.py",
+            "tests/test_projection_revision_compatibility.py",
+            "tests/test_report_projection_command_engine.py",
+            "tests/test_report_session_operations.py",
+            "tests/test_projection_plain_dto_contract.py",
+            "tests/test_timeline_service.py",
+            "tests/test_timeline_api_editing.py",
+            "tests/test_webview_bridge_editing.py",
+            "tests/test_project_activity_summary_contract.py",
+            "tests/test_project_delete_contract.py",
+            "tests/test_statistics_service.py",
+            "tests/test_export_resource_fields.py",
+            "tests/test_statistics_csv_export.py",
+            "tests/test_run_affected_tests.py",
+        ],
+        "smoke": [],
+        "warnings": [
+            "Canonical report projection changed; running cross-layer projection, Timeline, and Statistics contracts.",
+        ],
+        "markers": ["contract and integration"],
+    },
+    {
         "id": "D. Timeline API / service / bridge",
         "triggers": [
             "worktrace/api/timeline_api.py",
@@ -397,6 +438,8 @@ RULES: list[dict] = [
         "triggers": [
             "worktrace/security/",
             "worktrace/services/secure_backup_service.py",
+            "worktrace/services/secure_backup_validation.py",
+            "worktrace/write_gate.py",
             "docs/v0.2-local-security-design.md",
             "docs/v0.2-boundary.md",
             "docs/research/v0.2-field-encryption-scan.md",
@@ -406,6 +449,7 @@ RULES: list[dict] = [
             "tests/test_security_backup_format.py",
             "tests/test_security_key_manager.py",
             "tests/test_secure_backup_service.py",
+            "tests/test_projection_governance_regressions.py",
             "tests/test_v02_local_security_design.py",
         ],
         "smoke": [],

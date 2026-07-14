@@ -198,7 +198,7 @@ _PUBLIC_SESSION_FIELDS = (
     "start_time", "end_time", "duration_seconds", "closed_duration_seconds",
     "adjusted_duration_seconds", "has_duration_override", "session_note",
     "has_project_override", "is_in_progress", "editable", "exportable",
-    "activity_ids", "member_slices", "anchor_activity_id", "first_activity_id",
+    "activity_ids", "member_slices", "activity_member_hash", "anchor_activity_id", "first_activity_id",
     "event_count", "status", "status_code", "status_summary", "can_hide",
     "can_copy", "can_hide_activity", "can_merge_previous", "can_merge_next",
     "can_split",

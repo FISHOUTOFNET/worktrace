@@ -147,3 +147,27 @@ def test_excel_and_csv_depend_on_canonical_snapshot_analytics():
     assert "build_visible_snapshot" in excel and "build_statistics_projection" in excel
     assert "timeline_service" not in excel
     assert "build_visible_snapshot" in export and "build_statistics_projection" in export
+
+
+def test_projection_engine_reuses_domain_freeze_thaw():
+    source = (REPO_ROOT / "worktrace/services/report_session_operation_engine.py").read_text(encoding="utf-8")
+    assert "def _freeze_value" not in source
+    assert "def _mutable_value" not in source
+    assert "_freeze_value = freeze_value" in source
+    assert "_mutable_value = thaw_value" in source
+
+
+def test_production_has_no_legacy_activity_id_mutation_resolvers():
+    forbidden = {
+        "resolve_current_session",
+        "_coerce_activity_ids",
+        "save_activity_session_override",
+        "save_timeline_session_override",
+    }
+    source = chr(10).join(
+        path.read_text(encoding="utf-8")
+        for path in (REPO_ROOT / "worktrace").rglob("*")
+        if path.suffix in {".py", ".js"}
+    )
+    assert {symbol for symbol in forbidden if symbol in source} == set()
+
