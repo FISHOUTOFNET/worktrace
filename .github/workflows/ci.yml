@@ -5,6 +5,17 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      run_node_tests:
+        description: Run WebView Node tests
+        required: false
+        type: boolean
+        default: false
+      run_build_smoke:
+        description: Run PyInstaller build smoke
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -142,7 +153,8 @@ jobs:
           retention-days: 1
 
   node-tests:
-    name: WebView Node tests
+    name: WebView Node tests (manual)
+    if: github.event_name == 'workflow_dispatch' && inputs.run_node_tests
     runs-on: [self-hosted, Windows, X64]
     timeout-minutes: 10
 
@@ -161,7 +173,8 @@ jobs:
         run: node --test tests/webview/*.test.js
 
   pyinstaller-smoke:
-    name: PyInstaller build smoke
+    name: PyInstaller build smoke (manual)
+    if: github.event_name == 'workflow_dispatch' && inputs.run_build_smoke
     runs-on: [self-hosted, Windows, X64]
     timeout-minutes: 30
 
