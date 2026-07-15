@@ -5,83 +5,23 @@ from __future__ import annotations
 from typing import Any
 
 from ..constants import STATUS_NORMAL
-from ..formatters import format_duration, format_status_label
-from . import view_model_service
+from ..formatters import format_duration
+from . import page_revision_service, view_model_service
 from .activity_display_model_service import build_activity_display_model
 from .report_projection_identity import stable_json_hash
 from .report_revision_service import get_report_structure_revision
 from .settings_service import get_bool_setting, get_int_setting, get_setting
 
 
-def _live_revision(current_activity: dict[str, Any], live_clock: dict[str, Any]) -> str:
-    return stable_json_hash(
-        {
-            "key": current_activity.get("stable_live_key")
-            or live_clock.get("stable_live_key"),
-            "status": current_activity.get("status") or live_clock.get("live_state"),
-            "persisted_id": int(current_activity.get("activity_id") or 0),
-            "display_span_id": str(live_clock.get("display_span_id") or ""),
-            "project_id": int(current_activity.get("project_id") or 0),
-        }
-    )
-
-
 def _apply_structure_revision(
     payload: dict[str, Any], *, report_date: str, today: str
 ) -> None:
-    structure_revision = get_report_structure_revision(report_date)
-    payload["structure_revision"] = structure_revision
-    payload["page_revision"] = stable_json_hash(
-        [
-            structure_revision,
-            str(payload.get("live_revision") or "") if report_date == today else "",
-        ]
+    payload["structure_revision"] = get_report_structure_revision(report_date)
+    page_revision_service.apply_page_revision(
+        payload,
+        report_date=report_date,
+        today=today,
     )
-
-
-def _standalone_overview_row(entry: dict[str, Any]) -> dict[str, Any]:
-    duration = int(entry.get("duration_seconds") or 0)
-    status = str(entry.get("status_code") or entry.get("status") or "excluded")
-    return {
-        "project_name": "已排除",
-        "project_description": "",
-        "project_id": 0,
-        "row_kind": "standalone_status",
-        "is_uncategorized": False,
-        "is_classified": False,
-        "is_report_project": False,
-        "is_report_classified": False,
-        "is_report_uncategorized": False,
-        "report_attribution_kind": "standalone_status",
-        "is_official_project": False,
-        "start_time": str(entry.get("start_time") or ""),
-        "end_time": str(entry.get("end_time") or ""),
-        "duration": format_duration(duration),
-        "duration_seconds": duration,
-        "display_duration_seconds": duration,
-        "duration_seconds_at_sample": duration,
-        "display_base_seconds": duration,
-        "live_base_seconds": duration,
-        "is_in_progress": bool(entry.get("is_in_progress")),
-        "is_live_projected": False,
-        "is_virtual": False,
-        "is_virtual_live": False,
-        "contributes_to_totals": True,
-        "live_delta_eligible": False,
-        "activity_ids": list(entry.get("activity_ids") or []),
-        "closed_duration_seconds": int(entry.get("closed_duration_seconds") or 0),
-        "source": "canonical_status",
-        "editable": False,
-        "exportable": bool(entry.get("exportable")),
-        "edit_disabled": True,
-        "disable_reason": "系统状态行不可编辑",
-        "status_code": status,
-        "display_status": format_status_label(status),
-        "status": status,
-        "status_summary": format_status_label(status),
-        "projection_instance_key": str(entry.get("projection_instance_key") or ""),
-        "projection_revision": str(entry.get("projection_revision") or ""),
-    }
 
 
 def get_overview_view_model(today: str | None = None) -> dict[str, Any]:
@@ -91,19 +31,14 @@ def get_overview_view_model(today: str | None = None) -> dict[str, Any]:
 
     snapshot = build_visible_snapshot(scoped_today, scoped_today)
     standalone = [
-        _standalone_overview_row(dict(entry))
+        dict(entry)
         for entry in snapshot.standalone_status_entries
         if not bool(entry.get("is_in_progress"))
     ]
-    activities = [*list(payload.get("activities") or []), *standalone]
-    activities.sort(
-        key=lambda row: (
-            str(row.get("start_time") or ""),
-            str(row.get("projection_instance_key") or ""),
-        ),
-        reverse=True,
-    )
-    payload["activities"] = activities[:20]
+
+    # Status-only excluded intervals contribute to canonical totals but are
+    # intentionally absent from Recent. Timeline is their anonymous view.
+    payload["activities"] = list(payload.get("activities") or [])[:20]
 
     extra = sum(int(row.get("duration_seconds") or 0) for row in standalone)
     total = int(payload.get("today_total_seconds") or 0) + extra
@@ -205,7 +140,7 @@ def get_refresh_state_view_model(report_date: str | None = None) -> dict[str, An
     )
     live_clock = model.get("live_clock") or {}
     current_activity = model.get("current_activity") or {}
-    live_revision = _live_revision(current_activity, live_clock)
+    live_revision = page_revision_service.live_revision(current_activity, live_clock)
     structure_revision = get_report_structure_revision(scoped_date)
     page_revision = stable_json_hash(
         [structure_revision, live_revision if scoped_date == today else ""]
