@@ -242,7 +242,6 @@ class SecureImportCoordinator:
                     self._write_gate = True
                 try:
                     yield state
-                else:
                     state.succeeded = True
                 finally:
                     with self._state_lock:
