@@ -17,12 +17,16 @@ on:
         type: boolean
         default: false
 
+env:
+  PYTHONUTF8: "1"
+  PYTHONIOENCODING: utf-8
+
 permissions:
   contents: read
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   tests:
@@ -50,126 +54,47 @@ jobs:
         run: python scripts/test_inventory.py --check
 
       - name: Compile Python
-        run: python -m compileall worktrace
+        run: python -m compileall worktrace scripts/pytest_diagnostics.py
 
       - name: Run Python tests
         id: pytest
         shell: pwsh
         run: |
+          $utf8 = [System.Text.UTF8Encoding]::new($false)
+          [Console]::InputEncoding = $utf8
+          [Console]::OutputEncoding = $utf8
+          $OutputEncoding = $utf8
+          $PSNativeCommandUseErrorActionPreference = $false
+
           New-Item -ItemType Directory -Force -Path "test-results" | Out-Null
-          & python -m pytest -q -ra --tb=short --cache-clear --junitxml="test-results/pytest-junit.xml" 2>&1 |
-            Tee-Object -FilePath "test-results/pytest.log"
+          & python -m pytest -q -ra --tb=short --color=no --cache-clear `
+            --junitxml="test-results/pytest-junit.xml" *> "test-results/pytest.log"
           $pytestExitCode = $LASTEXITCODE
+
           Write-Host "pytest exit code: $pytestExitCode"
+          if ($pytestExitCode -eq 0) {
+            Get-Content -LiteralPath "test-results/pytest.log" -Tail 5 |
+              ForEach-Object { Write-Host $_ }
+          }
+          else {
+            Write-Host "pytest failed; compact diagnostics follow in the next step"
+          }
           exit $pytestExitCode
 
       - name: Publish pytest failure diagnostics
         if: failure() && steps.pytest.outcome == 'failure'
         shell: pwsh
         run: |
-          $junitPath = "test-results/pytest-junit.xml"
-          $logPath = "test-results/pytest.log"
-
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "## Pytest failure diagnostics"
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
-
-          if (Test-Path -LiteralPath $junitPath) {
-            try {
-              [xml]$junit = Get-Content -LiteralPath $junitPath -Raw
-              $allCases = @($junit.SelectNodes("//testcase"))
-              $failureCases = @($junit.SelectNodes("//testcase[failure]"))
-              $errorCases = @($junit.SelectNodes("//testcase[error]"))
-              $skippedCases = @($junit.SelectNodes("//testcase[skipped]"))
-              $problemCases = @($junit.SelectNodes("//testcase[failure or error]"))
-
-              $passed = [Math]::Max(
-                0,
-                $allCases.Count - $failureCases.Count - $errorCases.Count - $skippedCases.Count
-              )
-              $counts = "Total: $($allCases.Count) | Passed: $passed | Failed: $($failureCases.Count) | Errors: $($errorCases.Count) | Skipped: $($skippedCases.Count)"
-              Write-Host "=== PYTEST_FAILURE_SUMMARY_BEGIN ==="
-              Write-Host $counts
-              Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value $counts
-
-              $index = 0
-              foreach ($case in $problemCases) {
-                $index += 1
-                $className = $case.GetAttribute("classname")
-                $testName = $case.GetAttribute("name")
-                $testId = if ([string]::IsNullOrWhiteSpace($className)) {
-                  $testName
-                }
-                else {
-                  "$className::$testName"
-                }
-
-                $problem = $case.SelectSingleNode("failure | error")
-                $message = $problem.GetAttribute("message")
-                $traceback = [string]$problem.InnerText
-                $diagnostic = "$testId`n$message`n$traceback"
-                if ($diagnostic.Length -gt 3000) {
-                  $diagnostic = $diagnostic.Substring(0, 3000) + "`n... truncated ..."
-                }
-
-                Write-Host "[$index/$($problemCases.Count)] $diagnostic"
-
-                if ($index -le 50) {
-                  $annotation = $diagnostic.Replace("%", "%25").Replace("`r", "%0D").Replace("`n", "%0A")
-                  Write-Host "::error title=Pytest failure::$annotation"
-                }
-
-                if ($index -le 50) {
-                  Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
-                  Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "**$index. $testId**"
-                  Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
-                  Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '```text'
-                  Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value $diagnostic
-                  Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '```'
-                }
-              }
-              Write-Host "=== PYTEST_FAILURE_SUMMARY_END ==="
-            }
-            catch {
-              $message = "Could not parse pytest JUnit: $($_.Exception.Message)"
-              $escaped = $message.Replace("%", "%25").Replace("`r", "%0D").Replace("`n", "%0A")
-              Write-Host "::warning title=Pytest JUnit parse failure::$escaped"
-              Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value $message
-            }
-          }
-          else {
-            $message = "JUnit report was not generated."
-            Write-Host "::warning title=Pytest diagnostics unavailable::$message"
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value $message
-          }
-
-          if (Test-Path -LiteralPath $logPath) {
-            $tail = Get-Content -LiteralPath $logPath -Tail 250
-            Write-Host "=== PYTEST_LOG_TAIL_BEGIN ==="
-            $tail | ForEach-Object { Write-Host $_ }
-            Write-Host "=== PYTEST_LOG_TAIL_END ==="
-
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "### Pytest log tail"
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '```text'
-            $tail | Add-Content -Path $env:GITHUB_STEP_SUMMARY
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '```'
-          }
-
-          exit 0
+          & python scripts/pytest_diagnostics.py `
+            --junit "test-results/pytest-junit.xml" `
+            --log "test-results/pytest.log" `
+            --summary "$env:GITHUB_STEP_SUMMARY"
 
   python312-compat:
     name: Python 3.12 compatibility (manual)
     if: github.event_name == 'workflow_dispatch'
     runs-on: [self-hosted, Windows, X64]
     timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        # Keep the supported compatibility set explicit. Python 3.11 is
-        # excluded here because the primary test job already covers it.
-        python-version: ["3.11", "3.12"]
-        exclude:
-          - python-version: "3.11"
 
     steps:
       - name: Check out repository
@@ -180,7 +105,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.12"
 
       - name: Install dependencies
         run: |
@@ -191,112 +116,41 @@ jobs:
         run: python scripts/test_inventory.py --check
 
       - name: Compile Python
-        run: python -m compileall worktrace
+        run: python -m compileall worktrace scripts/pytest_diagnostics.py
 
       - name: Run Python tests
         id: pytest
         shell: pwsh
         run: |
+          $utf8 = [System.Text.UTF8Encoding]::new($false)
+          [Console]::InputEncoding = $utf8
+          [Console]::OutputEncoding = $utf8
+          $OutputEncoding = $utf8
+          $PSNativeCommandUseErrorActionPreference = $false
+
           New-Item -ItemType Directory -Force -Path "test-results" | Out-Null
-          & python -m pytest -q -ra --tb=short --cache-clear --junitxml="test-results/pytest-junit.xml" 2>&1 |
-            Tee-Object -FilePath "test-results/pytest.log"
+          & python -m pytest -q -ra --tb=short --color=no --cache-clear `
+            --junitxml="test-results/pytest-junit.xml" *> "test-results/pytest.log"
           $pytestExitCode = $LASTEXITCODE
+
           Write-Host "pytest exit code: $pytestExitCode"
+          if ($pytestExitCode -eq 0) {
+            Get-Content -LiteralPath "test-results/pytest.log" -Tail 5 |
+              ForEach-Object { Write-Host $_ }
+          }
+          else {
+            Write-Host "pytest failed; compact diagnostics follow in the next step"
+          }
           exit $pytestExitCode
 
       - name: Publish pytest failure diagnostics
         if: failure() && steps.pytest.outcome == 'failure'
         shell: pwsh
         run: |
-          $junitPath = "test-results/pytest-junit.xml"
-          $logPath = "test-results/pytest.log"
-
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "## Pytest failure diagnostics"
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
-
-          if (Test-Path -LiteralPath $junitPath) {
-            try {
-              [xml]$junit = Get-Content -LiteralPath $junitPath -Raw
-              $allCases = @($junit.SelectNodes("//testcase"))
-              $failureCases = @($junit.SelectNodes("//testcase[failure]"))
-              $errorCases = @($junit.SelectNodes("//testcase[error]"))
-              $skippedCases = @($junit.SelectNodes("//testcase[skipped]"))
-              $problemCases = @($junit.SelectNodes("//testcase[failure or error]"))
-
-              $passed = [Math]::Max(
-                0,
-                $allCases.Count - $failureCases.Count - $errorCases.Count - $skippedCases.Count
-              )
-              $counts = "Total: $($allCases.Count) | Passed: $passed | Failed: $($failureCases.Count) | Errors: $($errorCases.Count) | Skipped: $($skippedCases.Count)"
-              Write-Host "=== PYTEST_FAILURE_SUMMARY_BEGIN ==="
-              Write-Host $counts
-              Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value $counts
-
-              $index = 0
-              foreach ($case in $problemCases) {
-                $index += 1
-                $className = $case.GetAttribute("classname")
-                $testName = $case.GetAttribute("name")
-                $testId = if ([string]::IsNullOrWhiteSpace($className)) {
-                  $testName
-                }
-                else {
-                  "$className::$testName"
-                }
-
-                $problem = $case.SelectSingleNode("failure | error")
-                $message = $problem.GetAttribute("message")
-                $traceback = [string]$problem.InnerText
-                $diagnostic = "$testId`n$message`n$traceback"
-                if ($diagnostic.Length -gt 3000) {
-                  $diagnostic = $diagnostic.Substring(0, 3000) + "`n... truncated ..."
-                }
-
-                Write-Host "[$index/$($problemCases.Count)] $diagnostic"
-
-                if ($index -le 50) {
-                  $annotation = $diagnostic.Replace("%", "%25").Replace("`r", "%0D").Replace("`n", "%0A")
-                  Write-Host "::error title=Pytest failure::$annotation"
-                }
-
-                if ($index -le 50) {
-                  Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
-                  Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "**$index. $testId**"
-                  Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
-                  Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '```text'
-                  Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value $diagnostic
-                  Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '```'
-                }
-              }
-              Write-Host "=== PYTEST_FAILURE_SUMMARY_END ==="
-            }
-            catch {
-              $message = "Could not parse pytest JUnit: $($_.Exception.Message)"
-              $escaped = $message.Replace("%", "%25").Replace("`r", "%0D").Replace("`n", "%0A")
-              Write-Host "::warning title=Pytest JUnit parse failure::$escaped"
-              Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value $message
-            }
-          }
-          else {
-            $message = "JUnit report was not generated."
-            Write-Host "::warning title=Pytest diagnostics unavailable::$message"
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value $message
-          }
-
-          if (Test-Path -LiteralPath $logPath) {
-            $tail = Get-Content -LiteralPath $logPath -Tail 250
-            Write-Host "=== PYTEST_LOG_TAIL_BEGIN ==="
-            $tail | ForEach-Object { Write-Host $_ }
-            Write-Host "=== PYTEST_LOG_TAIL_END ==="
-
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "### Pytest log tail"
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '```text'
-            $tail | Add-Content -Path $env:GITHUB_STEP_SUMMARY
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '```'
-          }
-
-          exit 0
+          & python scripts/pytest_diagnostics.py `
+            --junit "test-results/pytest-junit.xml" `
+            --log "test-results/pytest.log" `
+            --summary "$env:GITHUB_STEP_SUMMARY"
 
   node-tests:
     name: WebView Node tests (manual)
