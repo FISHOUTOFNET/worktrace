@@ -84,6 +84,37 @@ jobs:
           if-no-files-found: warn
           retention-days: 1
 
+  failure-reader:
+    name: Read compact pytest failures
+    needs: tests
+    if: always() && needs.tests.result == 'failure'
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 5
+
+    steps:
+      - name: Print JUnit failures
+        shell: pwsh
+        run: |
+          $path = "test-results/pytest-junit.xml"
+          if (-not (Test-Path -LiteralPath $path)) {
+            Write-Host "NO_JUNIT_FILE"
+            exit 0
+          }
+          [xml]$document = Get-Content -LiteralPath $path -Raw
+          $nodes = @($document.SelectNodes("//testcase[failure or error]"))
+          Write-Host "FAILURE_COUNT=$($nodes.Count)"
+          foreach ($node in $nodes) {
+            $failure = $node.failure
+            if ($null -eq $failure) { $failure = $node.error }
+            $message = [string]$failure.message
+            $text = [string]$failure.InnerText
+            if ($message.Length -gt 500) { $message = $message.Substring(0, 500) }
+            if ($text.Length -gt 1200) { $text = $text.Substring(0, 1200) }
+            Write-Host "FAILED_CASE=$($node.classname)::$($node.name)"
+            Write-Host "FAILED_MESSAGE=$message"
+            Write-Host "FAILED_TEXT=$text"
+          }
+
   python312-compat:
     name: Python 3.12 compatibility (manual)
     if: github.event_name == 'workflow_dispatch'
@@ -92,8 +123,6 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Keep the supported compatibility set explicit. Python 3.11 is
-        # excluded here because the primary test job already covers it.
         python-version: ["3.11", "3.12"]
         exclude:
           - python-version: "3.11"
