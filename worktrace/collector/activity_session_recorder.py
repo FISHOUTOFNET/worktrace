@@ -50,6 +50,7 @@ class ActivitySessionRecorder:
     current_last_seen_time: str | None = None
     persisted_activity_id: int | None = None
     persisted_checkpoint_seconds: int = 0
+    checkpoint_on_next_observation: bool = False
     project_ownership_state: ProjectOwnershipState | None = field(default=None)
     resolver: ResourceIdentityResolver = field(default=DEFAULT_RESOURCE_IDENTITY_RESOLVER)
     snapshot_publisher: SnapshotPublisher = field(default_factory=SnapshotPublisher)
@@ -157,6 +158,7 @@ class ActivitySessionRecorder:
         self.current_last_seen_time = None
         self.persisted_activity_id = None
         self.persisted_checkpoint_seconds = 0
+        self.checkpoint_on_next_observation = False
         self.clear_snapshot()
 
     def stop(
@@ -199,13 +201,16 @@ class ActivitySessionRecorder:
         self.current_last_seen_time = None
         self.persisted_activity_id = None
         self.persisted_checkpoint_seconds = 0
+        self.checkpoint_on_next_observation = False
         self.project_ownership_state = clear_ownership_state()
         self.clear_snapshot()
         clear_runtime_activity_state(reason)
 
     def ensure_persisted_for_clipboard(self, at_time: str) -> int | None:
         self._ensure_persisted(at_time)
-        self._checkpoint_persisted_progress(at_time)
+        # A clipboard event is a durable child fact and therefore checkpoints
+        # the parent activity at the event time even inside the 30-second window.
+        self._checkpoint_persisted_progress(at_time, force=True)
         self._publish_snapshot(at_time)
         return self.persisted_activity_id
 
@@ -223,6 +228,7 @@ class ActivitySessionRecorder:
         self.current_last_seen_time = at_time
         self.persisted_activity_id = None
         self.persisted_checkpoint_seconds = 0
+        self.checkpoint_on_next_observation = False
         self._begin_project_ownership(payload, at_time)
         if payload.get("status") == STATUS_NORMAL and midnight_project_id is not None:
             self._persist_midnight_anchor(midnight_project_id, at_time)
@@ -298,6 +304,9 @@ class ActivitySessionRecorder:
         )
         self.persisted_activity_id = activity_id
         self.persisted_checkpoint_seconds = 0
+        # Preserve an exact post-midnight recovery point on the first sample;
+        # this is at most one extra write per day, not per heartbeat.
+        self.checkpoint_on_next_observation = True
         self._publish_snapshot(at_time)
 
     def _current_concrete_project_id(self) -> int | None:
@@ -322,7 +331,8 @@ class ActivitySessionRecorder:
         if self.persisted_activity_id is None or self.current_start_time is None:
             return
         elapsed = seconds_between(self.current_start_time, at_time)
-        if not force and (
+        effective_force = bool(force or self.checkpoint_on_next_observation)
+        if not effective_force and (
             elapsed - int(self.persisted_checkpoint_seconds)
             < OPEN_ACTIVITY_CHECKPOINT_SECONDS
         ):
@@ -335,6 +345,7 @@ class ActivitySessionRecorder:
             int(self.persisted_checkpoint_seconds),
             int(elapsed),
         )
+        self.checkpoint_on_next_observation = False
 
     # Compatibility alias for focused tests and older callers. Production
     # observations use the throttled checkpoint method above.
