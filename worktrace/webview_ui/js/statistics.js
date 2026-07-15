@@ -46,7 +46,20 @@
         };
     }
 
+    function invalidateStatisticsSelection() {
+        App.statisticsLoaded = false;
+        App.statisticsAcceptedPayload = null;
+        App.statisticsSnapshotRevision = "";
+        var exportBtn = document.getElementById("stats-export-action-btn");
+        if (exportBtn) exportBtn.disabled = true;
+        setStatisticsExportStatus("", "");
+    }
+    App.invalidateStatisticsSelection = invalidateStatisticsSelection;
+
     function loadStatisticsExportSummary() {
+        if (App.statisticsLoading) {
+            return App.statisticsLoadPromise || Promise.resolve(null);
+        }
         var range = selectedRange();
         var rangeMsg = validateStatisticsDateRange(range.dateFrom, range.dateTo);
         if (rangeMsg) {
@@ -57,19 +70,25 @@
         var token = App.requestCoordinator.beginLatest("statistics", key);
         setStatisticsLoading(true);
         App.clearStatisticsError();
-        return App.callBridge("get_statistics_export_summary", range.dateFrom, range.dateTo).then(function (result) {
+        App.statisticsLoadPromise = App.callBridge(
+            "get_statistics_export_summary",
+            range.dateFrom,
+            range.dateTo
+        ).then(function (result) {
             if (!App.requestCoordinator.isCurrent(token)) return null;
             var data = App.handleResult(result, function (msg) {
                 showStatisticsError(msg || "加载统计失败");
             });
             if (!data || !data.summary) return null;
             var summary = data.summary;
-            var exportRevision = summary.export_revision
+            var ticket = data.export_ticket || {};
+            var exportRevision = ticket.revision
+                || summary.export_revision
                 || (summary.export_preview && summary.export_preview.export_revision)
                 || "";
             App.statisticsAcceptedPayload = {
-                dateFrom: String(summary.date_from || range.dateFrom),
-                dateTo: String(summary.date_to || range.dateTo),
+                dateFrom: String(ticket.date_from || summary.date_from || range.dateFrom),
+                dateTo: String(ticket.date_to || summary.date_to || range.dateTo),
                 exportRevision: String(exportRevision)
             };
             App.statisticsSnapshotRevision = String(exportRevision);
@@ -82,7 +101,9 @@
             return null;
         }).finally(function () {
             if (App.requestCoordinator.isCurrent(token)) setStatisticsLoading(false);
+            App.statisticsLoadPromise = null;
         });
+        return App.statisticsLoadPromise;
     }
     App.loadStatisticsExportSummary = loadStatisticsExportSummary;
 
@@ -136,7 +157,6 @@
             var formats = preview.available_formats || [];
             formatsEl.textContent = formats.length ? formats.join("、") : "--";
         }
-        setStatisticsLoading(false);
     }
     App.renderExportPreview = renderExportPreview;
 
@@ -153,17 +173,24 @@
         var toEl = document.getElementById("statistics-date-to");
         if (fromEl) fromEl.value = from;
         if (toEl) toEl.value = today;
+        invalidateStatisticsSelection();
         return loadStatisticsExportSummary();
     }
     App.applyStatisticsQuickRange = applyStatisticsQuickRange;
 
-    App.initStatisticsDefaults = function () {
+    function initStatisticsDefaults() {
         var today = App.localTodayStr();
         var fromEl = document.getElementById("statistics-date-from");
         var toEl = document.getElementById("statistics-date-to");
         if (fromEl && !fromEl.value) fromEl.value = today;
         if (toEl && !toEl.value) toEl.value = today;
-    };
+        [fromEl, toEl].forEach(function (element) {
+            if (!element || element.dataset.statisticsChangeBound === "1") return;
+            element.dataset.statisticsChangeBound = "1";
+            element.addEventListener("change", invalidateStatisticsSelection);
+        });
+    }
+    App.initStatisticsDefaults = initStatisticsDefaults;
 
     function setStatisticsExportStatus(message, kind) {
         var el = document.getElementById("stats-export-status");
@@ -184,7 +211,8 @@
     App.setStatisticsExportSaving = setStatisticsExportSaving;
 
     function exportStatisticsCsv() {
-        if (App.statisticsExportSaving || App.statisticsLoading) return;
+        if (App.statisticsExportSaving) return;
+        if (App.statisticsLoading) return;
         var accepted = App.statisticsAcceptedPayload;
         if (!accepted || !accepted.exportRevision) {
             setStatisticsExportStatus("请先加载统计数据", "error");
@@ -192,12 +220,7 @@
         }
         setStatisticsExportSaving(true);
         setStatisticsExportStatus("正在导出…", "info");
-        App.callBridge(
-            "export_statistics_csv",
-            accepted.dateFrom,
-            accepted.dateTo,
-            accepted.exportRevision
-        ).then(function (result) {
+        App.callBridge("export_statistics_csv", accepted.dateFrom, accepted.dateTo, accepted.exportRevision).then(function (result) {
             if (!result) {
                 setStatisticsExportStatus("导出失败", "error");
             } else if (result.cancelled) {
