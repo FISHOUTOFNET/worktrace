@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ..services import secure_backup_service
+from ..services import privacy_gate_service, secure_backup_service
 from ..services.secure_backup_service import (
     BackupCorruptedError,
     BackupDecryptionError,
@@ -33,14 +33,16 @@ def import_encrypted_backup(
     passphrase: str,
     mode: str = "replace",
 ) -> ImportResult:
-    """Import an encrypted ``.wtbackup`` file into the current local database.
+    """Replace business data while retaining installation-scoped consent.
 
-    Runs inside a secure import guard that pauses the collector and blocks
-    collector writes for the duration of the DB replacement. On success the
-    app is left paused so the user can verify the imported data before
-    resuming recording.
+    The secure import coordinator still leaves collection paused and resets
+    runtime identity. Privacy acceptance belongs to the current installation,
+    not to the imported business-data payload.
     """
-    return secure_backup_service.import_encrypted_backup(input_path, passphrase, mode)
+    privacy_state = privacy_gate_service.capture_installation_privacy_state()
+    result = secure_backup_service.import_encrypted_backup(input_path, passphrase, mode)
+    privacy_gate_service.restore_installation_privacy_state(privacy_state)
+    return result
 
 
 def parse_encrypted_backup_manifest(input_path: str | Path) -> BackupManifestInfo:
