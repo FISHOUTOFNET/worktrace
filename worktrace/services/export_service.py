@@ -25,6 +25,12 @@ _CSV_COLUMNS = [
 ]
 
 _FORMULA_INJECTION_PREFIXES = ("=", "+", "-", "@", "\t")
+_DERIVED_RUNTIME_TABLES = frozenset(
+    {
+        "folder_rule_index_state",
+        "folder_rule_file_index",
+    }
+)
 
 
 def _escape_csv_cell(value) -> str:
@@ -113,10 +119,20 @@ def export_excel(start_date: str, end_date: str, path: str) -> str:
         raise
 
 
-def export_all_local_data(path: str) -> str:
-    """Export one consistent read snapshot using the canonical backup table set."""
-    from openpyxl import Workbook
+def _local_data_export_tables() -> tuple[str, ...]:
+    """Return user fact/config tables, excluding rebuildable runtime indexes."""
     from .secure_backup_service import EXPORT_TABLES
+
+    return tuple(
+        table
+        for table in EXPORT_TABLES
+        if table not in _DERIVED_RUNTIME_TABLES
+    )
+
+
+def export_all_local_data(path: str) -> str:
+    """Export a consistent user-data snapshot under one read transaction."""
+    from openpyxl import Workbook
 
     out = Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -126,7 +142,7 @@ def export_all_local_data(path: str) -> str:
     with get_connection() as conn:
         conn.execute("BEGIN")
         try:
-            for table in EXPORT_TABLES:
+            for table in _local_data_export_tables():
                 ws = wb.create_sheet(table)
                 rows = conn.execute(f"SELECT * FROM {table}").fetchall()
                 columns = [
