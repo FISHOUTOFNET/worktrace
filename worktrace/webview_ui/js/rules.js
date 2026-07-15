@@ -88,7 +88,7 @@
     }
     App.loadProjectRules = loadProjectRules;
 
-    function sortProjectsForRulesHome(projects) {
+    function _sortProjectsForRulesHome(projects) {
         var list = (projects || []).slice();
         var mode = App.rulesSortMode || "last_used";
         list.sort(function (a, b) {
@@ -108,7 +108,7 @@
         });
         return list;
     }
-    App.sortProjectsForRulesHome = sortProjectsForRulesHome;
+    App.sortProjectsForRulesHome = _sortProjectsForRulesHome;
 
     function showProjectRules(data) {
         App.rulesLoaded = true;
@@ -117,7 +117,7 @@
         var empty = document.getElementById("rules-empty");
         if (App.refreshRulesPanelTargets) App.refreshRulesPanelTargets();
         if (!list || !empty) return;
-        var projects = sortProjectsForRulesHome((data && data.projects) || []);
+        var projects = _sortProjectsForRulesHome((data && data.projects) || []);
         if (!projects.length) {
             list.innerHTML = "";
             empty.hidden = false;
@@ -139,7 +139,7 @@
             App.loadProjectRules();
             return;
         }
-        var projects = sortProjectsForRulesHome(
+        var projects = _sortProjectsForRulesHome(
             (App.lastProjectRulesData.projects || [])
         );
         if (!projects.length) return;
