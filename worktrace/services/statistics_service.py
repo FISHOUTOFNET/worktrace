@@ -11,25 +11,12 @@ from ..constants import (
 )
 from ..formatters import format_status_label
 
-# Maximum inclusive calendar-day span accepted by the read-only
-# statistics/export summary. A 31-day span (e.g. 2026-06-01..2026-07-01) is
-# allowed; anything wider is rejected as ``range_too_large`` so the summary
-# never reads an unbounded amount of data.
 STATISTICS_SUMMARY_MAX_RANGE_DAYS = 31
-
-# Statistics uses the central report status policy: normal rows always count;
-# attributed idle/error/excluded rows count through their report attribution
-# (excluded remains privacy-redacted); unattributed idle/error and paused rows
-# are suppressed.
-
 _UNKNOWN_APP_LABEL = "未知应用"
 
 
 def get_summary(start_date: str, end_date: str) -> dict:
-    """Return a DB-only statistics summary for the inclusive date range.
-
-    This function is DB-ONLY. It does NOT project the current live snapshot.
-    """
+    """Return a DB-only statistics summary for the inclusive date range."""
     projection = _build_projection(start_date, end_date)
     by_status = {
         str(row["key"]): int(row["duration_seconds"])
@@ -54,6 +41,7 @@ def get_project_stats(start_date: str, end_date: str) -> list[dict]:
             "project": row["display_name"],
             "total_duration": row["duration_seconds"],
             "record_count": row.get("record_count") or row["activity_count"],
+            "is_concrete": bool(row.get("is_concrete")),
         }
         for row in projection.by_project
     ]
@@ -89,6 +77,7 @@ def get_statistics_export_summary(date_from: str, date_to: str) -> dict:
         "date_from": date_from,
         "date_to": date_to,
         "snapshot_revision": projection.snapshot_revision,
+        "export_revision": projection.export_revision,
         "total_duration_seconds": projection.total_duration_seconds,
         "project_duration_seconds": projection.project_duration_seconds,
         "classified_duration_seconds": projection.classified_duration_seconds,
@@ -100,8 +89,8 @@ def get_statistics_export_summary(date_from: str, date_to: str) -> dict:
         "report_slice_count": projection.report_slice_count,
         "session_count": projection.session_count,
         "export_row_count": projection.export_row_count,
-        "project_count": len(projection.by_project),
-        "app_count": len(projection.by_app),
+        "project_count": projection.concrete_project_count,
+        "app_count": projection.concrete_app_count,
         "by_project": list(projection.by_project),
         "by_app": list(projection.by_app),
         "by_status": list(projection.by_status),
@@ -109,14 +98,12 @@ def get_statistics_export_summary(date_from: str, date_to: str) -> dict:
             "date_from": date_from,
             "date_to": date_to,
             "snapshot_revision": projection.snapshot_revision,
+            "export_revision": projection.export_revision,
             "included_activity_count": projection.activity_count,
             "included_report_slice_count": projection.report_slice_count,
             "session_count": projection.session_count,
             "export_row_count": projection.export_row_count,
             "included_duration_seconds": projection.total_duration_seconds,
-            # CSV export is available. Excel / PDF / timesheet are
-            # intentionally NOT listed here; the frontend must never offer
-            # a format the backend cannot produce.
             "available_formats": ["csv"],
             "export_actions_enabled": True,
         },
