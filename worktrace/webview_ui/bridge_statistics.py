@@ -44,6 +44,7 @@ class StatisticsBridgeMixin:
 
     def get_statistics_export_summary(self, date_from, date_to) -> dict[str, Any]:
         try:
+            # bool, None, and every other non-string input are rejected explicitly.
             if not isinstance(date_from, str) or not isinstance(date_to, str):
                 return {"ok": False, "error": "请选择有效日期", "summary": None}
             if not _DATE_SHAPE_RE.match(date_from) or not _DATE_SHAPE_RE.match(date_to):
