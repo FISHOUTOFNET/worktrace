@@ -1,0 +1,55 @@
+name: Agent apply runtime fixes hosted
+
+on:
+  push:
+    branches: [agent/runtime-projection-consistency-hardening]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: ${{ !contains(github.event.head_commit.message, '[agent-applied]') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/runtime-projection-consistency-hardening
+          clean: true
+          fetch-depth: 0
+      - name: Extract and apply fixes
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          raw = Path('.github/workflows/agent-apply-runtime-fixes.yml').read_text(encoding='utf-8')
+          start = raw.index("          @'\n") + len("          @'\n")
+          end = raw.index("          '@ | Set-Content", start)
+          lines = raw[start:end].splitlines()
+          script = '\n'.join(line[10:] if line.startswith('          ') else line for line in lines) + '\n'
+          bad = '''replace_once('worktrace/webview_ui/js/statistics.js',
+              '        var fromEl = document.getElementById("statistics-date-from");\\n        var toEl = document.getElementById("statistics-date-to");\\n        var dateFrom = fromEl ? fromEl.value : "";\\n        var dateTo = toEl ? toEl.value : "";\\n',
+              '        var acceptedRange = App.acceptedStatisticsRange || {};\\n        var dateFrom = acceptedRange.dateFrom || "";\\n        var dateTo = acceptedRange.dateTo || "";\\n',
+              )'''
+          good = '''path = 'worktrace/webview_ui/js/statistics.js'
+          text = read(path)
+          marker = '    function exportStatisticsCsv() {'
+          before, after = text.split(marker, 1)
+          old_range = '        var fromEl = document.getElementById("statistics-date-from");\\n        var toEl = document.getElementById("statistics-date-to");\\n        var dateFrom = fromEl ? fromEl.value : "";\\n        var dateTo = toEl ? toEl.value : "";\\n'
+          new_range = '        var acceptedRange = App.acceptedStatisticsRange || {};\\n        var dateFrom = acceptedRange.dateFrom || "";\\n        var dateTo = acceptedRange.dateTo || "";\\n'
+          if old_range not in after:
+              raise RuntimeError('statistics export range pattern missing')
+          write(path, before + marker + after.replace(old_range, new_range, 1))'''
+          if bad not in script:
+              raise RuntimeError('unable to correct statistics patch')
+          Path('apply_fixes.py').write_text(script.replace(bad, good), encoding='utf-8')
+          PY
+          python apply_fixes.py
+          python -m compileall worktrace
+          rm -f .github/workflows/agent-apply-hosted.yml .github/workflows/agent-apply-runtime-fixes.yml apply_fixes.py
+          git config user.name openai-agent
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Harden runtime privacy and frontend request coordination [agent-applied]'
+          git push origin HEAD:agent/runtime-projection-consistency-hardening
