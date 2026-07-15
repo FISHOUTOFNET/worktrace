@@ -36,6 +36,8 @@ def _group_payload(group: dict[str, Any], *, project: bool = False) -> dict[str,
 
 
 def _statistics_summary_payload(summary: dict[str, Any]) -> dict[str, Any]:
+    """Return display data only; export concurrency tokens live in an envelope."""
+
     by_project = [
         _group_payload(group, project=True)
         for group in (summary.get("by_project") or [])
@@ -47,12 +49,9 @@ def _statistics_summary_payload(summary: dict[str, Any]) -> dict[str, Any]:
     total_seconds = int(summary.get("total_duration_seconds") or 0)
     project_seconds = int(summary.get("project_duration_seconds") or 0)
     preview = summary.get("export_preview") or {}
-    export_revision = str(summary.get("export_revision") or "")
     return {
         "date_from": str(summary.get("date_from") or ""),
         "date_to": str(summary.get("date_to") or ""),
-        "snapshot_revision": str(summary.get("snapshot_revision") or ""),
-        "export_revision": export_revision,
         "total_duration_seconds": total_seconds,
         "total_duration": format_duration(total_seconds),
         "project_duration_seconds": project_seconds,
@@ -68,10 +67,6 @@ def _statistics_summary_payload(summary: dict[str, Any]) -> dict[str, Any]:
         "export_preview": {
             "date_from": str(preview.get("date_from") or ""),
             "date_to": str(preview.get("date_to") or ""),
-            "snapshot_revision": str(preview.get("snapshot_revision") or ""),
-            "export_revision": str(
-                preview.get("export_revision") or export_revision
-            ),
             "included_activity_count": int(
                 preview.get("included_activity_count") or 0
             ),
