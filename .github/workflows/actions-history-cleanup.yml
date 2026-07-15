@@ -1,0 +1,198 @@
+name: One-time Actions history cleanup
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/actions-history-cleanup.yml
+
+permissions:
+  actions: write
+  contents: write
+
+jobs:
+  cleanup:
+    name: Remove obsolete workflow runs and artifacts
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Clean Actions history
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          CURRENT_RUN_ID: ${{ github.run_id }}
+          KEEP_RUNS_PER_ACTIVE_WORKFLOW: "10"
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import time
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+
+          token = os.environ["GH_TOKEN"]
+          repo = os.environ["REPOSITORY"]
+          current_run_id = int(os.environ["CURRENT_RUN_ID"])
+          keep_count = int(os.environ["KEEP_RUNS_PER_ACTIVE_WORKFLOW"])
+          summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+          api_root = "https://api.github.com"
+          cleanup_path = ".github/workflows/actions-history-cleanup.yml"
+          temp_branches = [
+              "agent/actions-history-cleanup-20260715",
+              "agent/actions-history-cleanup-merge",
+          ]
+
+          def api(method, path, body=None):
+              data = None if body is None else json.dumps(body).encode("utf-8")
+              request = urllib.request.Request(
+                  api_root + path,
+                  data=data,
+                  method=method,
+                  headers={
+                      "Authorization": f"Bearer {token}",
+                      "Accept": "application/vnd.github+json",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                      "Content-Type": "application/json",
+                      "User-Agent": "worktrace-actions-history-cleanup",
+                  },
+              )
+              try:
+                  with urllib.request.urlopen(request, timeout=30) as response:
+                      payload = response.read()
+                      return json.loads(payload) if payload else None
+              except urllib.error.HTTPError as exc:
+                  detail = exc.read().decode("utf-8", errors="replace")
+                  raise RuntimeError(f"{method} {path} -> HTTP {exc.code}: {detail}") from exc
+
+          def paginate(path, key):
+              items = []
+              page = 1
+              separator = "&" if "?" in path else "?"
+              while True:
+                  response = api("GET", f"{path}{separator}per_page=100&page={page}")
+                  batch = list(response.get(key, []))
+                  items.extend(batch)
+                  if len(batch) < 100:
+                      return items
+                  page += 1
+
+          repository = api("GET", f"/repos/{repo}")
+          default_branch = repository["default_branch"]
+          workflow_items = api(
+              "GET",
+              f"/repos/{repo}/contents/.github/workflows?ref={urllib.parse.quote(default_branch, safe='')}",
+          )
+          active_paths = sorted(
+              item["path"]
+              for item in workflow_items
+              if item.get("type") == "file"
+              and item.get("name", "").lower().endswith((".yml", ".yaml"))
+              and item.get("path") != cleanup_path
+          )
+          if not active_paths:
+              raise RuntimeError("No permanent workflow files found; refusing destructive cleanup")
+
+          runs = paginate(f"/repos/{repo}/actions/runs", "workflow_runs")
+          keep_ids = {current_run_id}
+          for path in active_paths:
+              matching = sorted(
+                  (run for run in runs if run.get("path") == path),
+                  key=lambda run: run.get("created_at", ""),
+                  reverse=True,
+              )
+              keep_ids.update(int(run["id"]) for run in matching[:keep_count])
+
+          for run in runs:
+              if run.get("status") != "completed" and run.get("path") != cleanup_path:
+                  keep_ids.add(int(run["id"]))
+
+          stale_runs = []
+          for run in runs:
+              run_id = int(run["id"])
+              if run_id == current_run_id:
+                  continue
+              if run.get("path") == cleanup_path or (
+                  run.get("status") == "completed" and run_id not in keep_ids
+              ):
+                  stale_runs.append(run)
+          stale_runs.sort(key=lambda run: run.get("created_at", ""))
+          stale_ids = {int(run["id"]) for run in stale_runs}
+
+          artifacts = paginate(f"/repos/{repo}/actions/artifacts", "artifacts")
+          deleted_artifacts = 0
+          artifact_failures = []
+          for artifact in artifacts:
+              workflow_run = artifact.get("workflow_run") or {}
+              run_id = workflow_run.get("id")
+              if not artifact.get("expired") and run_id not in stale_ids:
+                  continue
+              try:
+                  api("DELETE", f"/repos/{repo}/actions/artifacts/{artifact['id']}")
+                  deleted_artifacts += 1
+              except Exception as exc:
+                  artifact_failures.append(f"{artifact['id']}: {exc}")
+
+          deleted_runs = 0
+          run_failures = []
+          for run in stale_runs:
+              run_id = int(run["id"])
+              try:
+                  if run.get("status") != "completed":
+                      try:
+                          api("POST", f"/repos/{repo}/actions/runs/{run_id}/force-cancel", {})
+                      except Exception:
+                          try:
+                              api("POST", f"/repos/{repo}/actions/runs/{run_id}/cancel", {})
+                          except Exception:
+                              pass
+                      time.sleep(1)
+
+                  last_error = None
+                  for attempt in range(4):
+                      try:
+                          api("DELETE", f"/repos/{repo}/actions/runs/{run_id}")
+                          deleted_runs += 1
+                          last_error = None
+                          break
+                      except Exception as exc:
+                          last_error = exc
+                          time.sleep(attempt + 1)
+                  if last_error is not None:
+                      raise last_error
+              except Exception as exc:
+                  run_failures.append(f"{run_id} [{run.get('name')}]: {exc}")
+
+          branch_failures = []
+          for branch in temp_branches:
+              try:
+                  encoded_ref = urllib.parse.quote(f"heads/{branch}", safe="/")
+                  api("DELETE", f"/repos/{repo}/git/refs/{encoded_ref}")
+              except Exception as exc:
+                  branch_failures.append(f"{branch}: {exc}")
+
+          lines = [
+              "## Actions history cleanup",
+              "",
+              f"- Permanent workflow files: {', '.join(active_paths)}",
+              f"- Runs inspected: {len(runs)}",
+              f"- Runs deleted: {deleted_runs}",
+              f"- Runs retained: {len(runs) - deleted_runs}",
+              f"- Artifacts inspected: {len(artifacts)}",
+              f"- Artifacts deleted: {deleted_artifacts}",
+              f"- Run deletion failures: {len(run_failures)}",
+              f"- Artifact deletion failures: {len(artifact_failures)}",
+              f"- Branch deletion failures: {len(branch_failures)}",
+          ]
+          print("\n".join(lines))
+          if summary_path:
+              with open(summary_path, "a", encoding="utf-8") as handle:
+                  handle.write("\n".join(lines) + "\n")
+
+          try:
+              api("DELETE", f"/repos/{repo}/actions/runs/{current_run_id}")
+          except Exception as exc:
+              print(f"Current cleanup run may remain as the newest record: {exc}")
+          PY
