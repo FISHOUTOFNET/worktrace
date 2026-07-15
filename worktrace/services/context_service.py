@@ -81,9 +81,6 @@ class ReportContextProjection:
         )
         attributions: list[ReportContextAttribution] = []
 
-        # Persisted derived sources are never trusted as direct facts. Fresh v4
-        # databases cannot create them, but clearing them keeps in-memory and
-        # imported callers deterministic.
         for row in projected:
             if str(row.get("assignment_source") or "") in DERIVED_CONTEXT_SOURCES:
                 _clear_project(row)
@@ -120,9 +117,13 @@ def _context_role(row: Mapping[str, Any], carry_seconds: int) -> ContextRowRole:
     visible_direct = direct and _has_visible_direct_project(row)
     can_anchor = status == STATUS_NORMAL and visible_direct
     eligible = _eligible(row, carry_seconds)
-    boundary = status == STATUS_PAUSED or does_status_require_boundary(
-        status,
-        _row_duration_seconds(row),
+    context_limit_barrier = (
+        status in {STATUS_IDLE, STATUS_ERROR, STATUS_EXCLUDED} and not eligible
+    )
+    boundary = (
+        status == STATUS_PAUSED
+        or context_limit_barrier
+        or does_status_require_boundary(status, _row_duration_seconds(row))
     )
     return ContextRowRole(
         has_durable_direct_assignment=direct,
@@ -186,12 +187,13 @@ def _clipboard_attribution(
         return None
     previous = rows[index - 1]
     current = rows[index]
-    # Clipboard transition is a normal-activity transition mechanism. System
-    # statuses use the bounded neighbour policy instead.
     if str(current.get("status") or "") != STATUS_NORMAL:
         return None
     if (
-        not _context_role(previous, REPORT_CONTEXT_SHORT_MERGE_SECONDS).can_anchor_context
+        not _context_role(
+            previous,
+            REPORT_CONTEXT_SHORT_MERGE_SECONDS,
+        ).can_anchor_context
         or _crosses_boundary(previous, current, boundaries)
     ):
         return None
@@ -203,7 +205,9 @@ def _clipboard_attribution(
         copied = _parse(copied_at)
         if (
             copied is not None
-            and 0 <= (current_start - copied).total_seconds() <= CLIPBOARD_TRANSITION_SECONDS
+            and 0
+            <= (current_start - copied).total_seconds()
+            <= CLIPBOARD_TRANSITION_SECONDS
         ):
             return previous, "clipboard_transition_context"
     return None
@@ -245,7 +249,10 @@ def _find_anchor(
             return None
         role = _context_role(rows[cursor], carry_seconds)
         if role.can_anchor_context:
-            if _context_distance_seconds(rows[origin], rows[cursor], step) <= carry_seconds:
+            if (
+                _context_distance_seconds(rows[origin], rows[cursor], step)
+                <= carry_seconds
+            ):
                 return rows[cursor]
             return None
         if role.blocks_context_search:
