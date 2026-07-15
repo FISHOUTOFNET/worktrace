@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
@@ -93,3 +94,13 @@ def test_open_activity_progress_is_checkpointed(monkeypatch):
         f"2026-07-16 00:00:{OPEN_ACTIVITY_CHECKPOINT_SECONDS:02d}",
     )
     assert writes == [(41, OPEN_ACTIVITY_CHECKPOINT_SECONDS)]
+
+
+def test_view_model_api_routes_to_page_owned_services():
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "worktrace/api/view_model_api.py").read_text(encoding="utf-8")
+    assert "overview_view_model_service" in source
+    assert "timeline_view_model_service" in source
+    assert "session_detail_view_model_service" in source
+    assert "refresh_state_view_model_service" in source
+    assert "view_model_hardening_service" not in source
