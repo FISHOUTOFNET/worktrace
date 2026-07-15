@@ -15,15 +15,8 @@ def create_or_update_activity_resource(
     resource: DetectedResource,
     conn: sqlite3.Connection | None = None,
 ) -> None:
-    """Upsert the ``activity_resource`` row for *activity_id*.
+    """Persist one resource, avoiding writes when semantic fields are unchanged."""
 
-    This is the single write entry point for activity resources.  When the
-    activity is excluded the resource is always replaced by an anonymous
-    system/excluded resource, regardless of what the caller passed in.
-
-    An open connection may be supplied via *conn* so that the upsert
-    participates in the caller's transaction (e.g. ``activity_service.create_activity``).
-    """
     resource = _enforce_anonymous_if_excluded(activity_id, resource, conn)
     ts = now_str()
     path_key = normalize_path_key(resource.path_hint) if resource.path_hint else None
@@ -57,6 +50,22 @@ def create_or_update_activity_resource(
                 uri_hint = excluded.uri_hint,
                 metadata_json = excluded.metadata_json,
                 updated_at = excluded.updated_at
+            WHERE activity_resource.resource_kind IS NOT excluded.resource_kind
+               OR activity_resource.resource_subtype IS NOT excluded.resource_subtype
+               OR activity_resource.display_name IS NOT excluded.display_name
+               OR activity_resource.identity_key IS NOT excluded.identity_key
+               OR activity_resource.is_anchor IS NOT excluded.is_anchor
+               OR activity_resource.confidence IS NOT excluded.confidence
+               OR activity_resource.source IS NOT excluded.source
+               OR activity_resource.app_name IS NOT excluded.app_name
+               OR activity_resource.process_name IS NOT excluded.process_name
+               OR activity_resource.window_title IS NOT excluded.window_title
+               OR activity_resource.path_hint IS NOT excluded.path_hint
+               OR activity_resource.path_key IS NOT excluded.path_key
+               OR activity_resource.uri_scheme IS NOT excluded.uri_scheme
+               OR activity_resource.uri_host IS NOT excluded.uri_host
+               OR activity_resource.uri_hint IS NOT excluded.uri_hint
+               OR activity_resource.metadata_json IS NOT excluded.metadata_json
             """,
             (
                 activity_id,
@@ -84,14 +93,19 @@ def create_or_update_activity_resource(
     if conn is not None:
         _upsert(conn)
     else:
-        with get_connection() as c:
-            _upsert(c)
+        with get_connection() as own_conn:
+            _upsert(own_conn)
 
 
-def get_resource_for_activity(activity_id: int, *, conn: sqlite3.Connection | None = None) -> dict | None:
+def get_resource_for_activity(
+    activity_id: int,
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> dict | None:
     if conn is not None:
         row = conn.execute(
-            "SELECT * FROM activity_resource WHERE activity_id = ?", (activity_id,)
+            "SELECT * FROM activity_resource WHERE activity_id = ?",
+            (activity_id,),
         ).fetchone()
         return dict(row) if row else None
     with get_connection() as read_conn:
@@ -102,22 +116,22 @@ def get_resource_for_activity(activity_id: int, *, conn: sqlite3.Connection | No
     return dict(row) if row else None
 
 
-def attach_resource(row: dict, *, conn: sqlite3.Connection | None = None) -> dict:
-    """Attach resource-first display fields to *row*.
+def attach_resource(
+    row: dict,
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> dict:
+    """Attach resource-first display fields to an activity row."""
 
-    Uses ``activity_resource`` as the source of truth.  When no persisted
-    resource exists, falls back to ``detect_resource(active_window)`` to
-    produce a temporary resource for display purposes only.
-    """
     item = dict(row)
     activity_id = item.get("id")
     if activity_id is None:
         return item
     resource = get_resource_for_activity(int(activity_id), conn=conn)
     if resource is None:
-        # No persisted resource — derive a temporary one for display.
         from ..platforms.base import ActiveWindow
         from ..resources.detectors import detect_resource
+
         active_window = ActiveWindow(
             app_name=item.get("app_name") or "",
             process_name=item.get("process_name") or "",
@@ -140,7 +154,9 @@ def attach_resource(row: dict, *, conn: sqlite3.Connection | None = None) -> dic
         item["resource_is_anchor"] = bool(resource["is_anchor"])
         item["resource_path_hint"] = resource.get("path_hint")
         item["resource_uri_host"] = resource.get("uri_host")
-    item["activity_display_name"] = item.get("resource_display_name") or item.get("app_name", "")
+    item["activity_display_name"] = (
+        item.get("resource_display_name") or item.get("app_name", "")
+    )
     item["activity_identity_key"] = item.get("resource_identity_key") or ""
     return item
 
@@ -150,13 +166,10 @@ def _enforce_anonymous_if_excluded(
     resource: DetectedResource,
     conn: sqlite3.Connection | None = None,
 ) -> DetectedResource:
-    """Return an anonymous excluded resource if the activity is excluded.
+    """Return an anonymous excluded resource for excluded activities."""
 
-    This is the single anonymisation safety net: even if a caller passes a real
-    resource, we never persist real resource metadata for an excluded activity.
-    """
-    def _get_status(c: sqlite3.Connection) -> str | None:
-        row = c.execute(
+    def _get_status(connection) -> str | None:
+        row = connection.execute(
             "SELECT status FROM activity_log WHERE id = ?",
             (activity_id,),
         ).fetchone()
@@ -165,8 +178,8 @@ def _enforce_anonymous_if_excluded(
     if conn is not None:
         status = _get_status(conn)
     else:
-        with get_connection() as c:
-            status = _get_status(c)
+        with get_connection() as own_conn:
+            status = _get_status(own_conn)
 
     if status != STATUS_EXCLUDED:
         return resource
