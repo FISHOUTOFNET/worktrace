@@ -24,6 +24,7 @@ env:
 permissions:
   contents: read
 
+# Each validation run is evidence for an exact PR head and must finish.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
