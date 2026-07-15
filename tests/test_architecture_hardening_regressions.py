@@ -16,6 +16,7 @@ from worktrace.services import (
     privacy_gate_service,
     project_service,
     report_revision_service,
+    report_session_edit_service,
     rule_batch_service,
     rule_service,
     statistics_service,
@@ -174,6 +175,61 @@ def test_persisted_open_session_allows_project_and_note_but_not_duration(temp_db
             600,
             "open memo",
         )
+
+
+def test_persisted_open_session_project_only_edit_is_effective(temp_db):
+    first_project = project_service.create_project("ProjectOnlyA")
+    second_project = project_service.create_project("ProjectOnlyB")
+    _activity("10:00:00", None, project_id=first_project)
+    source = build_visible_snapshot(DATE, DATE).final_sessions[0]
+
+    result = timeline_api.save_timeline_session_edit(
+        DATE,
+        source["projection_instance_key"],
+        source["projection_revision"],
+        "open-project-only-edit",
+        second_project,
+        None,
+        "",
+    )
+
+    assert result["ok"] is True
+    updated = build_visible_snapshot(DATE, DATE).final_sessions[0]
+    assert int(updated["project_id"]) == second_project
+
+
+def test_open_session_no_op_rolls_back_manual_assignment(temp_db):
+    first_project = project_service.create_project("RollbackA")
+    second_project = project_service.create_project("RollbackB")
+    open_id = _activity("11:00:00", None, project_id=first_project)
+    source = build_visible_snapshot(DATE, DATE).final_sessions[0]
+
+    with patch.object(
+        report_session_edit_service.operations,
+        "_expected_effect",
+        return_value=False,
+    ):
+        result = report_session_edit_service.edit_session(
+            DATE,
+            source["projection_instance_key"],
+            source["projection_revision"],
+            "open-project-forced-no-op",
+            project_id=second_project,
+            adjusted_duration_seconds=None,
+            note="forced no-op",
+        )
+
+    assert result.outcome_type == "no_op"
+    with get_connection() as conn:
+        assignment = conn.execute(
+            "SELECT project_id, source, is_manual "
+            "FROM activity_project_assignment WHERE activity_id = ?",
+            (open_id,),
+        ).fetchone()
+    assert assignment is not None
+    assert int(assignment["project_id"]) == first_project
+    assert assignment["source"] == "manual"
+    assert int(assignment["is_manual"]) == 1
 
 
 def test_rule_batch_refreshes_generation_before_write_lock(temp_db):
