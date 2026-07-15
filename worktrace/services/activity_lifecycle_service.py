@@ -28,6 +28,15 @@ def _mark_inference_retry_safely(activity_id: int) -> None:
         )
 
 
+def _retry_pending_inference_safely(limit: int = 10) -> None:
+    try:
+        from .assignment_command_service import retry_pending_inference
+
+        retry_pending_inference(limit)
+    except Exception:
+        logging.exception("bounded assignment inference retry failed")
+
+
 def finalize_closed_activity_ids(closed_ids: list[int]) -> None:
     """Run project inference / automatic rules after close transactions."""
     if not closed_ids:
@@ -43,6 +52,9 @@ def finalize_closed_activity_ids(closed_ids: list[int]) -> None:
                 aid,
             )
             _mark_inference_retry_safely(aid)
+    # Reconciliation is opportunity-based and bounded; it adds no worker or
+    # retry table and cannot overwrite manual assignments.
+    _retry_pending_inference_safely(10)
 
 
 def start_activity(*, start_time: str, source: str, payload: dict[str, Any]) -> int:
