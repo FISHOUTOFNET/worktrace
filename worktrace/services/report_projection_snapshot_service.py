@@ -77,9 +77,6 @@ def _build_snapshot(conn, start_date: str, end_date: str) -> ReportProjectionSna
         conn=conn,
     )
 
-    # Visibility is applied after continuity is established.  A soft-deleted
-    # project remains a real interval in the fact layer and must split the
-    # visible sessions on either side even though its own row is suppressed.
     deleted_rows = [
         row
         for row in rows
@@ -261,22 +258,54 @@ def _build_snapshot(conn, start_date: str, end_date: str) -> ReportProjectionSna
             str(item.get("projection_instance_key") or ""),
         ),
     )
-    revision = stable_json_hash(
+
+    revision_payload = {
+        "range": [start_date, end_date],
+        "projects": [
+            state.to_dict()
+            for state in sorted(project_states, key=lambda item: item.project_id)
+        ],
+        "entries": [
+            {
+                "key": item.get("projection_instance_key"),
+                "revision": item.get("projection_revision"),
+                "duration": item.get("duration_seconds"),
+                "in_progress": item.get("is_in_progress"),
+            }
+            for item in final_entries
+        ],
+        "contributions": [
+            {
+                "key": item.get("projection_instance_key"),
+                "member": [
+                    item.get("report_date"),
+                    item.get("activity_id"),
+                    item.get("slice_start_time"),
+                ],
+                "duration": item.get("duration_seconds"),
+                "status": item.get("status"),
+                "project_id": item.get("project_id"),
+            }
+            for item in final_contributions
+        ],
+        "diagnostics": [item.to_dict() for item in diagnostics],
+    }
+    revision = stable_json_hash(revision_payload)
+
+    structure_revision = stable_json_hash(
         {
             "range": [start_date, end_date],
-            "projects": [
-                state.to_dict()
-                for state in sorted(
-                    project_states,
-                    key=lambda item: item.project_id,
-                )
-            ],
+            "projects": revision_payload["projects"],
             "entries": [
                 {
                     "key": item.get("projection_instance_key"),
-                    "revision": item.get("projection_revision"),
-                    "duration": item.get("duration_seconds"),
-                    "in_progress": item.get("is_in_progress"),
+                    "revision": (
+                        None if item.get("is_in_progress") else item.get("projection_revision")
+                    ),
+                    "kind": item.get("row_kind") or item.get("projection_kind"),
+                    "project_id": item.get("project_id"),
+                    "status": item.get("status"),
+                    "in_progress": bool(item.get("is_in_progress")),
                 }
                 for item in final_entries
             ],
@@ -288,16 +317,49 @@ def _build_snapshot(conn, start_date: str, end_date: str) -> ReportProjectionSna
                         item.get("activity_id"),
                         item.get("slice_start_time"),
                     ],
-                    "duration": item.get("duration_seconds"),
+                    "duration": None if item.get("is_in_progress") else item.get("duration_seconds"),
                     "status": item.get("status"),
                     "project_id": item.get("project_id"),
+                    "in_progress": bool(item.get("is_in_progress")),
                 }
                 for item in final_contributions
             ],
-            "diagnostics": [item.to_dict() for item in diagnostics],
+            "diagnostics": revision_payload["diagnostics"],
         }
     )
-    return ReportProjectionSnapshot(
+
+    export_revision = stable_json_hash(
+        {
+            "range": [start_date, end_date],
+            "entries": [
+                {
+                    "key": item.get("projection_instance_key"),
+                    "revision": item.get("projection_revision"),
+                    "duration": item.get("closed_duration_seconds", item.get("duration_seconds")),
+                    "project_id": item.get("project_id"),
+                    "status": item.get("status"),
+                }
+                for item in final_entries
+                if not item.get("is_in_progress") and item.get("exportable", True)
+            ],
+            "contributions": [
+                {
+                    "member": [
+                        item.get("report_date"),
+                        item.get("activity_id"),
+                        item.get("slice_start_time"),
+                    ],
+                    "duration": item.get("duration_seconds"),
+                    "project_id": item.get("project_id"),
+                    "status": item.get("status"),
+                }
+                for item in final_contributions
+                if not item.get("is_in_progress")
+            ],
+        }
+    )
+
+    result = ReportProjectionSnapshot(
         start_date=start_date,
         end_date=end_date,
         base_sessions=tuple(base_sessions),
@@ -308,6 +370,11 @@ def _build_snapshot(conn, start_date: str, end_date: str) -> ReportProjectionSna
         operation_diagnostics=tuple(diagnostics),
         snapshot_revision=revision,
     )
+    # The dataclass intentionally remains backward compatible. These read-only
+    # derived revisions are attached without introducing a schema or model cutover.
+    object.__setattr__(result, "structure_revision", structure_revision)
+    object.__setattr__(result, "export_revision", export_revision)
+    return result
 
 
 def _load_project_states(conn, uncategorized_id: int) -> list[ProjectState]:
