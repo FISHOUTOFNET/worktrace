@@ -1,7 +1,7 @@
 """Runtime activity state cleanup owner.
 
-This module owns cleanup of transient activity state stored outside
-``activity_log``. It never deletes history rows or finalized activity data.
+This module owns transient activity state stored outside ``activity_log``. It
+never deletes history rows or finalized activity data.
 """
 
 from __future__ import annotations
@@ -10,7 +10,6 @@ import logging
 
 from . import session_boundary_service
 from .settings_service import clear_settings_cache, set_setting
-
 
 PENDING_CARRY_PROVENANCE_KEY = "pending_short_carry_provenance"
 
@@ -39,6 +38,17 @@ def clear_runtime_activity_state(
     )
 
 
+def restore_runtime_activity_snapshot(snapshot: str, reason: str) -> None:
+    """Restore an already validated identity-free display snapshot."""
+    set_setting("current_activity_snapshot", str(snapshot or ""))
+    clear_settings_cache()
+    logging.info(
+        "runtime activity snapshot restored reason=%s present=%s",
+        reason,
+        bool(snapshot),
+    )
+
+
 def record_runtime_boundary(
     reason: str,
     *,
@@ -59,4 +69,5 @@ __all__ = [
     "PENDING_CARRY_PROVENANCE_KEY",
     "clear_runtime_activity_state",
     "record_runtime_boundary",
+    "restore_runtime_activity_snapshot",
 ]
