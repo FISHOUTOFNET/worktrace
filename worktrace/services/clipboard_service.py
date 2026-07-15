@@ -28,20 +28,32 @@ def record_clipboard_event(
     text_hash = _hash_text(copied_text)
     ts = now_str()
     with get_connection() as conn:
+        # This transaction-local check is the final privacy gate. It rejects an
+        # event that was already drained from the adapter when the user disabled
+        # capture before persistence.
+        if not _capture_enabled_in_transaction(conn):
+            return None
         activity = conn.execute(
             "SELECT id, status FROM activity_log WHERE id = ? AND is_deleted = 0",
             (activity_id,),
         ).fetchone()
         if not activity or activity["status"] != STATUS_NORMAL:
             return None
-        existing = _find_duplicate_event(conn, int(activity_id), copied_time, text_hash, sequence_number)
+        existing = _find_duplicate_event(
+            conn,
+            int(activity_id),
+            copied_time,
+            text_hash,
+            sequence_number,
+        )
         if existing is not None:
             return existing
         cur = conn.execute(
             """
             INSERT INTO activity_clipboard_event(
-                activity_id, copied_at, app_name, process_name, window_title, file_path_hint,
-                copied_text, text_hash, text_length, clipboard_sequence, created_at, updated_at
+                activity_id, copied_at, app_name, process_name, window_title,
+                file_path_hint, copied_text, text_hash, text_length,
+                clipboard_sequence, created_at, updated_at
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
@@ -66,6 +78,20 @@ def record_clipboard_event(
     return event_id
 
 
+def _capture_enabled_in_transaction(conn) -> bool:
+    row = conn.execute(
+        "SELECT value FROM settings WHERE key = 'clipboard_capture_enabled'"
+    ).fetchone()
+    if row is None:
+        return False
+    return str(row["value"] or "").strip().casefold() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 def clipboard_text_for_activity(conn, activity_id: int) -> str:
     rows = conn.execute(
         """
@@ -76,10 +102,15 @@ def clipboard_text_for_activity(conn, activity_id: int) -> str:
         """,
         (int(activity_id),),
     ).fetchall()
-    return "\n".join(str(row["copied_text"] or "") for row in rows if row["copied_text"])
+    return "\n".join(
+        str(row["copied_text"] or "") for row in rows if row["copied_text"]
+    )
 
 
-def clipboard_times_for_activity_ids(conn, activity_ids: list[int]) -> dict[int, list[str]]:
+def clipboard_times_for_activity_ids(
+    conn,
+    activity_ids: list[int],
+) -> dict[int, list[str]]:
     ids = [int(value) for value in activity_ids]
     if not ids:
         return {}
@@ -95,11 +126,16 @@ def clipboard_times_for_activity_ids(conn, activity_ids: list[int]) -> dict[int,
     ).fetchall()
     result: dict[int, list[str]] = {}
     for row in rows:
-        result.setdefault(int(row["activity_id"]), []).append(str(row["copied_at"] or ""))
+        result.setdefault(int(row["activity_id"]), []).append(
+            str(row["copied_at"] or "")
+        )
     return result
 
 
-def find_activity_for_clipboard_event(source_window: ActiveWindow, copied_at: str) -> int | None:
+def find_activity_for_clipboard_event(
+    source_window: ActiveWindow,
+    copied_at: str,
+) -> int | None:
     if not copied_at:
         return None
     with get_connection() as conn:
@@ -166,7 +202,10 @@ def list_file_text_mappings(start_time: str, end_time: str) -> list[dict]:
     return dict_rows(rows)
 
 
-def prune_old_events(retention_days: int = CLIPBOARD_RETENTION_DAYS, now: str | None = None) -> int:
+def prune_old_events(
+    retention_days: int = CLIPBOARD_RETENTION_DAYS,
+    now: str | None = None,
+) -> int:
     cutoff = _retention_cutoff(retention_days, now)
     with get_connection() as conn:
         cur = conn.execute(
@@ -230,4 +269,6 @@ def _retention_cutoff(retention_days: int, now: str | None) -> str:
         base = datetime.strptime(now, TIME_FORMAT)
     else:
         base = datetime.now()
-    return (base - timedelta(days=max(0, int(retention_days)))).strftime(TIME_FORMAT)
+    return (base - timedelta(days=max(0, int(retention_days)))).strftime(
+        TIME_FORMAT
+    )
