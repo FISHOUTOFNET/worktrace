@@ -65,6 +65,19 @@ def test_snapshot_setting_is_process_local(temp_db):
     assert row is None
 
 
+def test_runtime_snapshot_defaults_empty_and_preserves_exact_raw_value(temp_db):
+    clear_runtime_activity_state("test_empty")
+    assert settings_service.get_setting("current_activity_snapshot") == ""
+
+    raw = '{"app":"Editor", "status":"normal"}'
+    settings_service.set_setting("current_activity_snapshot", raw)
+    assert settings_service.get_setting("current_activity_snapshot") == raw
+    assert get_runtime_activity_snapshot() == {
+        "app": "Editor",
+        "status": "normal",
+    }
+
+
 def test_open_activity_progress_is_checkpointed(monkeypatch):
     writes: list[tuple[int, int]] = []
     monkeypatch.setattr(
