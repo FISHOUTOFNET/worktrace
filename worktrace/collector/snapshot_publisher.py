@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import json
-
 from ..constants import (
     STATUS_ERROR,
     STATUS_EXCLUDED,
@@ -17,15 +15,20 @@ from ..services.project_ownership_service import (
     serialize_project_ownership,
     uncategorized_label,
 )
-from ..services.runtime_activity_state_service import clear_runtime_activity_state
-from ..services.settings_service import get_setting, set_setting
+from ..services.runtime_activity_state_service import (
+    clear_runtime_activity_state,
+    get_runtime_activity_snapshot,
+    publish_runtime_activity_snapshot,
+    read_runtime_activity_snapshot_raw,
+    restore_runtime_activity_snapshot,
+)
 from .transition_types import seconds_between
 
 SYSTEM_STATUSES = {STATUS_IDLE, STATUS_PAUSED, STATUS_EXCLUDED, STATUS_ERROR}
 
 
 class SnapshotPublisher:
-    """Sole current_activity_snapshot writer."""
+    """Sole publisher of the process-local current-activity display sample."""
 
     def publish(
         self,
@@ -35,6 +38,7 @@ class SnapshotPublisher:
         at_time: str,
         project_ownership_state: ProjectOwnershipState | None,
         persisted_activity_id: int | None,
+        checkpoint_seconds: int = 0,
     ) -> None:
         if payload is None or start_time is None:
             self.clear()
@@ -66,15 +70,18 @@ class SnapshotPublisher:
         status = payload.get("status") or STATUS_NORMAL
 
         ownership = project_ownership_state
-        if status in SYSTEM_STATUSES or ownership is None or ownership.display_project is None:
+        if (
+            status in SYSTEM_STATUSES
+            or ownership is None
+            or ownership.display_project is None
+        ):
             display_label = uncategorized_label()
             candidate_label = uncategorized_label()
             transition_dict = serialize_project_ownership(None)["project_transition"]
         else:
             display_label = ownership.display_project
             candidate_label = ownership.candidate_project or uncategorized_label()
-            # Snapshots retain the transition shape only for old readers.
-            # A pending confirmation window is no longer a runtime contract.
+            # Compatibility shape only. There is no pending confirmation window.
             transition_dict = {
                 **ownership.project_transition.to_dict(),
                 "pending": False,
@@ -87,7 +94,6 @@ class SnapshotPublisher:
 
         display_project_dict = display_label.to_dict()
         candidate_project_dict = candidate_label.to_dict()
-        project_transition_pending = False
         inferred_project_name = display_label.name or UNCATEGORIZED_PROJECT
 
         snapshot: ActivitySnapshotContract = {
@@ -106,17 +112,17 @@ class SnapshotPublisher:
             "status": status,
             "start_time": start_time,
             "elapsed_seconds": elapsed,
-            # Raw rows are never extended by absorbed short activity. Keep
-            # the contract field for readers that have not yet dropped it.
+            "checkpoint_seconds": max(0, int(checkpoint_seconds)),
+            # Compatibility fields remain display-only and are never persisted.
             "extra_seconds": 0,
             "persisted_activity_id": persisted_activity_id,
             "is_persisted": persisted_activity_id is not None,
             "display_project": display_project_dict,
             "candidate_project": candidate_project_dict,
             "project_transition": transition_dict,
-            "project_transition_pending": project_transition_pending,
+            "project_transition_pending": False,
         }
-        set_setting("current_activity_snapshot", json.dumps(snapshot, ensure_ascii=False))
+        publish_runtime_activity_snapshot(snapshot, "collector_snapshot_publish")
 
     def clear(self, reason: str = "snapshot_clear") -> None:
         clear_runtime_activity_state(
@@ -127,10 +133,14 @@ class SnapshotPublisher:
         )
 
     def restore_raw(self, value: str) -> None:
-        set_setting("current_activity_snapshot", value or "")
+        restore_runtime_activity_snapshot(value, "snapshot_publisher_restore")
 
     def read_raw(self) -> str:
-        return get_setting("current_activity_snapshot", "") or ""
+        return read_runtime_activity_snapshot_raw()
+
+    def read(self) -> ActivitySnapshotContract | None:
+        value = get_runtime_activity_snapshot()
+        return value if isinstance(value, dict) else None
 
 
 DEFAULT_SNAPSHOT_PUBLISHER = SnapshotPublisher()
