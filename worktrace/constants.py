@@ -49,6 +49,10 @@ ANCHOR_FILE_EXTENSIONS = (
     ".csv",
 )
 
+# Increment only when the substantive privacy notice changes and renewed
+# consent is required. This is installation state and is not backup data.
+PRIVACY_NOTICE_VERSION = "1"
+
 PRIVACY_NOTICE_TEXT = """WorkTrace 将在本机记录：
 - 当前活动应用名称、进程名称、窗口标题
 - 可识别的本地文件路径（如 Word、Excel、PPT、PDF、代码文件等），用于文件夹规则和项目归类
