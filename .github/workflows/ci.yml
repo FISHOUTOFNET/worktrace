@@ -12,12 +12,12 @@ concurrency:
 
 jobs:
   failure-list:
-    name: Read complete pytest failure list
+    name: Read pytest failure messages
     runs-on: [self-hosted, Windows, X64]
     timeout-minutes: 5
 
     steps:
-      - name: Print failing test identities
+      - name: Print failing test messages
         shell: pwsh
         run: |
           $path = "test-results/pytest-junit.xml"
@@ -29,5 +29,10 @@ jobs:
           $nodes = @($document.SelectNodes("//testcase[failure or error]"))
           Write-Host "FAILURE_COUNT=$($nodes.Count)"
           foreach ($node in $nodes) {
+            $failure = $node.failure
+            if ($null -eq $failure) { $failure = $node.error }
+            $message = ([string]$failure.message) -replace "`r|`n", " "
+            if ($message.Length -gt 700) { $message = $message.Substring(0, 700) }
             Write-Host "FAILED_CASE=$($node.classname)::$($node.name)"
+            Write-Host "FAILED_MESSAGE=$message"
           }
