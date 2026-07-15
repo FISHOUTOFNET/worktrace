@@ -17,6 +17,8 @@ ACTIVITY_FACT_STATUSES = {
     STATUS_ERROR,
 }
 USER_OBSERVABLE_STATUSES = set(ACTIVITY_FACT_STATUSES)
+# This set describes direct collection-time inference only. Report-time context
+# attribution has a separate policy in context_service.
 PROJECT_ATTRIBUTABLE_STATUSES = {STATUS_NORMAL}
 DURATION_COUNTED_STATUSES = {STATUS_NORMAL}
 REPORTABLE_STATUSES = set(ACTIVITY_FACT_STATUSES)
@@ -78,7 +80,7 @@ def is_recovery_error_status(status: str) -> bool:
 
 
 def is_collector_health_status(status: str) -> bool:
-    return False
+    return normalize_status(status) in COLLECTOR_HEALTH_STATUSES
 
 
 def is_interrupt_status(status: str) -> bool:
