@@ -85,7 +85,7 @@ def upsert_assignment(
         (activity_id,),
     ).fetchone()
     if existing is not None:
-        return not protect_manual and False
+        return False
 
     try:
         conn.execute(
