@@ -30,14 +30,35 @@
             App.projectsLoadPromise = request;
             return request;
         };
-        App.invalidateProjectCatalog = function () {
-            App.projectsCache = null;
-            App.projectsLoading = false;
-            App.projectsLoadPromise = null;
-            return App.loadProjects();
-        };
     }
     installProjectCatalogCoordinator();
+
+    function closestTimelineItem(target) {
+        while (target && target !== document) {
+            if (target.classList && target.classList.contains("timeline-item")) return target;
+            target = target.parentElement;
+        }
+        return null;
+    }
+
+    function installTimelineProjectLoadGate() {
+        var list = document.getElementById("timeline-sessions-list");
+        if (!list || list.getAttribute("data-project-load-gate") === "1") return;
+        list.setAttribute("data-project-load-gate", "1");
+        list.addEventListener("click", function (event) {
+            if (!App.projectsLoading || !App.projectsLoadPromise) return;
+            var item = closestTimelineItem(event.target);
+            if (!item) return;
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            var epoch = App.dataEpoch || 0;
+            App.projectsLoadPromise.then(function () {
+                if (epoch !== (App.dataEpoch || 0)) return;
+                if (document.body.contains(item)) item.click();
+            });
+        }, true);
+    }
+    installTimelineProjectLoadGate();
 
     function loadProjectRules() {
         if (App.rulesLoadPromise) return App.rulesLoadPromise;
