@@ -1,13 +1,55 @@
 ........................................................................ [  2%]
 ........................................................................ [  4%]
 ........................................................................ [  7%]
-.....................F
+........................FF.F............................................ [  9%]
+........................................................................ [ 12%]
+........................................................................ [ 14%]
+........................................................................ [ 17%]
+........................................................................ [ 19%]
+........................................................................ [ 22%]
+........................................................................ [ 24%]
+........................................................................ [ 27%]
+........................................................................ [ 29%]
+........................................................................ [ 32%]
+........................................................................ [ 34%]
+........................................................................ [ 37%]
+........................................................................ [ 39%]
+........................................................................ [ 42%]
+........................................................................ [ 44%]
+........................................................................ [ 47%]
+........................................................................ [ 49%]
+........................................................................ [ 51%]
+........................................F............................... [ 54%]
+........................................................................ [ 56%]
+........................................................................ [ 59%]
+........................................................................ [ 61%]
+........................................................................ [ 64%]
+........................................................................ [ 66%]
+........................................................................ [ 69%]
+........................................................................ [ 71%]
+........................................................................ [ 74%]
+........................................................................ [ 76%]
+........................................................................ [ 79%]
+........................................................................ [ 81%]
+........................................................................ [ 84%]
+........................................................................ [ 86%]
+........................................................................ [ 89%]
+........................................................................ [ 91%]
+........................................................................ [ 94%]
+........................................................................ [ 96%]
+........................................................................ [ 98%]
+..............................                                           [100%]
 ================================== FAILURES ===================================
-__________ test_clear_all_success_sets_pause_guard_and_clears_after ___________
+________ test_clear_all_failure_restores_prior_state_and_clears_guard _________
 
-temp_db = WindowsPath('C:/Users/���� Sun Yi/AppData/Local/Temp/pytest-of-���� Sun Yi/pytest-3142/test_clear_all_success_sets_pa0/worktrace.db')
+temp_db = WindowsPath('C:/Users/���� Sun Yi/AppData/Local/Temp/pytest-of-���� Sun Yi/pytest-3144/test_clear_all_failure_restore0/worktrace.db')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x000002A43CC0D1D0>
 
-    def test_clear_all_success_sets_pause_guard_and_clears_after(temp_db) -> None:
+    def test_clear_all_failure_restores_prior_state_and_clears_guard(
+        temp_db, monkeypatch
+    ) -> None:
+        # Guard must clear secure_import_in_progress and best-effort restore
+        # prior state on failure; exception propagates for stable API message.
         _seed_business_data()
         set_setting("user_paused", "false")
         set_setting("collector_status", "running")
@@ -15,18 +57,78 @@ temp_db = WindowsPath('C:/Users/���� Sun Yi/AppData/Local/Temp/pytest-of
         set_setting("pending_short_seconds", "12")
         set_setting("secure_import_in_progress", "false")
     
+        def _boom() -> None:
+            raise RuntimeError("reset_database boom")
+    
+>       monkeypatch.setattr(export_service, "reset_database", _boom)
+E       AttributeError: <module 'worktrace.services.export_service' from 'C:\\actions-runner\\_work\\worktrace\\worktrace\\worktrace\\services\\export_service.py'> has no attribute 'reset_database'
+
+tests\test_export_service.py:170: AttributeError
+___________ test_clear_all_guard_clears_runtime_pending_on_boundary ___________
+
+temp_db = WindowsPath('C:/Users/���� Sun Yi/AppData/Local/Temp/pytest-of-���� Sun Yi/pytest-3144/test_clear_all_guard_clears_ru0/worktrace.db')
+
+    def test_clear_all_guard_clears_runtime_pending_on_boundary(temp_db) -> None:
+        set_setting("pending_short_seconds", "12")
+        set_setting("current_activity_snapshot", '{"status":"normal"}')
+        set_setting("secure_import_in_progress", "false")
+    
+>       with export_service._destructive_reset_guard():
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: module 'worktrace.services.export_service' has no attribute '_destructive_reset_guard'
+
+tests\test_export_service.py:194: AttributeError
+__________ test_clear_all_guard_enter_and_exit_set_setting_sequence ___________
+
+temp_db = WindowsPath('C:/Users/���� Sun Yi/AppData/Local/Temp/pytest-of-���� Sun Yi/pytest-3144/test_clear_all_guard_enter_and0/worktrace.db')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x000002A43F5D5DD0>
+
+    def test_clear_all_guard_enter_and_exit_set_setting_sequence(
+        temp_db, monkeypatch
+    ) -> None:
+        calls: list[tuple[str, str]] = []
+    
+        real_set_setting = set_setting
+    
+        def _spy_set_setting(key: str, value: str) -> None:
+            calls.append((key, value))
+            real_set_setting(key, value)
+    
+        monkeypatch.setattr(
+            "worktrace.services.settings_service.set_setting", _spy_set_setting
+        )
+    
         export_service.clear_all_local_data(confirm=True)
     
-        assert get_bool_setting("secure_import_in_progress", False) is False
->       assert get_bool_setting("user_paused", False) is True
-E       AssertionError: assert False is True
-E        +  where False = get_bool_setting('user_paused', False)
+        enter_keys = [(k, v) for (k, v) in calls if k == "secure_import_in_progress"]
+        assert enter_keys == []
+        user_paused_calls = [(k, v) for (k, v) in calls if k == "user_paused"]
+>       assert ("user_paused", "true") in user_paused_calls, (
+            "guard enter must set user_paused=true"
+        )
+E       AssertionError: guard enter must set user_paused=true
+E       assert ('user_paused', 'true') in []
 
-tests\test_export_service.py:116: AssertionError
+tests\test_export_service.py:229: AssertionError
+_________ test_existing_secure_import_in_progress_rejects_new_import __________
+
+temp_db = WindowsPath('C:/Users/���� Sun Yi/AppData/Local/Temp/pytest-of-���� Sun Yi/pytest-3144/test_existing_secure_import_in0/worktrace.db')
+tmp_path = WindowsPath('C:/Users/���� Sun Yi/AppData/Local/Temp/pytest-of-���� Sun Yi/pytest-3144/test_existing_secure_import_in0')
+
+    def test_existing_secure_import_in_progress_rejects_new_import(temp_db, tmp_path):
+        out = _make_backup(tmp_path)
+        coordinator = secure_backup_service.SECURE_IMPORT_COORDINATOR
+>       assert coordinator._import_lock.acquire(blocking=False)
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: 'SecureImportCoordinator' object has no attribute '_import_lock'
+
+tests\test_secure_backup_service.py:835: AttributeError
 =========================== short test summary info ===========================
-FAILED tests/test_export_service.py::test_clear_all_success_sets_pause_guard_and_clears_after - AssertionError: assert False is True
- +  where False = get_bool_setting('user_paused', False)
-!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!
-1 failed, 237 passed in 89.41s (0:01:29)
+FAILED tests/test_export_service.py::test_clear_all_failure_restores_prior_state_and_clears_guard - AttributeError: <module 'worktrace.services.export_service' from 'C:\\actions-runner\\_work\\worktrace\\worktrace\\worktrace\\services\\export_service.py'> has no attribute 'reset_database'
+FAILED tests/test_export_service.py::test_clear_all_guard_clears_runtime_pending_on_boundary - AttributeError: module 'worktrace.services.export_service' has no attribute '_destructive_reset_guard'
+FAILED tests/test_export_service.py::test_clear_all_guard_enter_and_exit_set_setting_sequence - AssertionError: guard enter must set user_paused=true
+assert ('user_paused', 'true') in []
+FAILED tests/test_secure_backup_service.py::test_existing_secure_import_in_progress_rejects_new_import - AttributeError: 'SecureImportCoordinator' object has no attribute '_import_lock'
+4 failed, 2906 passed in 524.06s (0:08:44)
 
 PYTEST_EXIT_CODE=1
