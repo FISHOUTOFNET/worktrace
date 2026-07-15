@@ -77,6 +77,9 @@ def _persist_open_activity_unchecked(
         start_time=start_time, source=source, **payload
     )
     activity_service.finalize_created_activity(activity_id)
+    # An open row has a durable zero-second recovery checkpoint from creation.
+    # Later growth is throttled by ActivitySessionRecorder.
+    activity_service.set_activity_duration(activity_id, 0)
     _sync_open_row_project_safely(activity_id, status=payload.get("status"))
     return activity_id
 
@@ -122,6 +125,7 @@ def persist_midnight_anchor(
         start_time=start_time, source=source, **payload
     )
     activity_service.finalize_created_activity(activity_id)
+    activity_service.set_activity_duration(activity_id, 0)
     activity_service.apply_midnight_anchor_assignment(activity_id, int(project_id))
     return activity_id
 

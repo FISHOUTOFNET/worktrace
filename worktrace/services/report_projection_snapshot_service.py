@@ -9,7 +9,13 @@ from typing import Any, Iterator
 from ..constants import DEFAULT_UNRECORDED_GAP_BOUNDARY_SECONDS
 from ..db import get_connection
 from . import report_session_operation_engine as engine
-from . import report_session_operation_service, timeline_service
+from . import report_session_operation_service
+from .report_fact_query_service import (
+    boundary_times_for_rows,
+    get_uncategorized_project_id,
+    load_report_activity_rows,
+    session_sort_key,
+)
 from .report_projection_identity import stable_json_hash
 from .report_projection_model import (
     OperationDiagnostic,
@@ -18,6 +24,10 @@ from .report_projection_model import (
     project_state_from_row,
 )
 from .report_session_builder import build_report_sessions
+from .report_session_projection_service import (
+    build_base_projection,
+    display_safe_contribution,
+)
 from .report_status_policy import STANDALONE_STATUS, SUPPRESSED, decide_report_status
 from .settings_service import get_int_setting
 
@@ -67,17 +77,15 @@ def build_visible_snapshot(
 
 
 def _build_snapshot(conn, start_date: str, end_date: str) -> ReportProjectionSnapshot:
-    from . import report_session_projection_service as projection
-
-    uncategorized_id = timeline_service._uncategorized_project_id(conn)
+    uncategorized_id = get_uncategorized_project_id(conn)
     project_states = _load_project_states(conn, uncategorized_id)
-    rows = timeline_service.get_report_activity_rows(
+    rows = load_report_activity_rows(
         start_date,
         end_date,
         conn=conn,
     )
 
-    # Visibility is applied after continuity is established.  A soft-deleted
+    # Visibility is applied after continuity is established. A soft-deleted
     # project remains a real interval in the fact layer and must split the
     # visible sessions on either side even though its own row is suppressed.
     deleted_rows = [
@@ -89,9 +97,7 @@ def _build_snapshot(conn, start_date: str, end_date: str) -> ReportProjectionSna
         )
     ]
     reportable_rows = [row for row in rows if row not in deleted_rows]
-    boundary_values = list(
-        timeline_service._boundary_times_for_rows(rows, conn=conn)
-    )
+    boundary_values = list(boundary_times_for_rows(rows, conn=conn))
     for row in deleted_rows:
         for value in (row.get("start_time"), row.get("end_time")):
             if value:
@@ -112,12 +118,12 @@ def _build_snapshot(conn, start_date: str, end_date: str) -> ReportProjectionSna
         boundary_times=boundaries,
         unrecorded_gap_boundary_seconds=gap_threshold,
     )
-    for session in base_sessions:
-        projection._attach_session_identity(session)
-        projection._attach_raw_final_defaults(session, uncategorized_id)
-        projection._finalize_session(session, uncategorized_id)
-        projection._attach_projection_defaults(session)
-    projection._attach_contributions(base_sessions, reportable_rows)
+    base_projection = build_base_projection(
+        base_sessions,
+        reportable_rows,
+        uncategorized_id,
+    )
+    base_sessions = list(base_projection.sessions)
 
     dates = {
         str(session.get("report_date") or "")
@@ -172,7 +178,7 @@ def _build_snapshot(conn, start_date: str, end_date: str) -> ReportProjectionSna
             continue
         if decision.decision != STANDALONE_STATUS:
             continue
-        contribution = projection._display_safe_contribution(row)
+        contribution = display_safe_contribution(row)
         contribution.update(
             {
                 "app_name": "已排除",
@@ -243,10 +249,7 @@ def _build_snapshot(conn, start_date: str, end_date: str) -> ReportProjectionSna
             }
         )
 
-    final_sessions = sorted(
-        final_sessions,
-        key=timeline_service._session_sort_key,
-    )
+    final_sessions = sorted(final_sessions, key=session_sort_key)
     standalone_entries = sorted(
         standalone_entries,
         key=lambda item: (

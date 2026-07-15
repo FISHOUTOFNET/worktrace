@@ -3,9 +3,25 @@ from __future__ import annotations
 import time
 
 from ..db import get_connection, get_db_path, now_str
+from .runtime_activity_state_service import (
+    CURRENT_ACTIVITY_SNAPSHOT_KEY,
+    PENDING_CARRY_PROVENANCE_KEY,
+    PENDING_SHORT_SECONDS_KEY,
+    get_legacy_runtime_setting,
+    read_runtime_activity_snapshot_raw,
+    restore_runtime_activity_snapshot,
+    set_legacy_runtime_setting,
+)
 
 _SETTING_CACHE_TTL_SECONDS = 2.0
 _SETTING_CACHE: dict[tuple[str, str], tuple[float, str | None]] = {}
+_RUNTIME_ONLY_KEYS = frozenset(
+    {
+        CURRENT_ACTIVITY_SNAPSHOT_KEY,
+        PENDING_SHORT_SECONDS_KEY,
+        PENDING_CARRY_PROVENANCE_KEY,
+    }
+)
 
 
 def clear_settings_cache(key: str | None = None) -> None:
@@ -20,7 +36,23 @@ def _settings_db_key() -> str:
     return str(get_db_path().resolve())
 
 
+def _get_runtime_only_setting(key: str, default: str | None) -> str | None:
+    if key == CURRENT_ACTIVITY_SNAPSHOT_KEY:
+        value = read_runtime_activity_snapshot_raw(database_key=_settings_db_key())
+        return value if value != "" else (default if default is not None else "")
+    return get_legacy_runtime_setting(
+        key,
+        default,
+        database_key=_settings_db_key(),
+    )
+
+
 def get_setting(key: str, default: str | None = None, *, conn=None) -> str | None:
+    # Runtime-only values intentionally bypass SQLite and the settings cache.
+    # ``conn`` is ignored for these keys because they are not transactional
+    # database facts.
+    if key in _RUNTIME_ONLY_KEYS:
+        return _get_runtime_only_setting(key, default)
     if conn is not None:
         row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
         value = row["value"] if row else None
@@ -40,6 +72,20 @@ def get_setting(key: str, default: str | None = None, *, conn=None) -> str | Non
 
 
 def set_setting(key: str, value: str) -> None:
+    if key in _RUNTIME_ONLY_KEYS:
+        if key == CURRENT_ACTIVITY_SNAPSHOT_KEY:
+            restore_runtime_activity_snapshot(
+                value,
+                "settings_compat_write",
+                database_key=_settings_db_key(),
+            )
+        else:
+            set_legacy_runtime_setting(
+                key,
+                value,
+                database_key=_settings_db_key(),
+            )
+        return
     ts = now_str()
     with get_connection() as conn:
         conn.execute(
@@ -50,7 +96,10 @@ def set_setting(key: str, value: str) -> None:
             """,
             (key, value, ts),
         )
-    _SETTING_CACHE[(_settings_db_key(), key)] = (time.monotonic() + _SETTING_CACHE_TTL_SECONDS, value)
+    _SETTING_CACHE[(_settings_db_key(), key)] = (
+        time.monotonic() + _SETTING_CACHE_TTL_SECONDS,
+        value,
+    )
 
 
 def get_bool_setting(key: str, default: bool = False, *, conn=None) -> bool:

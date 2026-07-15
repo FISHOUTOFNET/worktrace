@@ -1,11 +1,24 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Mapping
 
 from ..constants import EXCLUDED_APP_NAME, STATUS_EXCLUDED, UNCATEGORIZED_PROJECT
 from . import project_lifecycle_policy
-from .report_projection_identity import base_projection_key, member_identity_key, member_set_hash, projection_revision
+from .report_projection_identity import (
+    base_projection_key,
+    member_identity_key,
+    member_set_hash,
+    projection_revision,
+)
 from .report_projection_model import thaw_value
+
+
+@dataclass(frozen=True)
+class BaseProjectionResult:
+    """Detached base sessions ready for operation replay."""
+
+    sessions: tuple[dict[str, Any], ...]
 
 
 def get_report_sessions_by_date(
@@ -28,7 +41,10 @@ def get_report_sessions_by_range(
     start_date: str,
     end_date: str,
 ) -> list[dict]:
-    return [public_session_dto(session) for session in get_report_sessions_for_operations(start_date, end_date)]
+    return [
+        public_session_dto(session)
+        for session in get_report_sessions_for_operations(start_date, end_date)
+    ]
 
 
 def _mutable_record(value: Mapping[str, Any]) -> dict[str, Any]:
@@ -43,13 +59,7 @@ def get_report_sessions_for_operations(
     start_date: str,
     end_date: str,
 ) -> list[dict]:
-    """Build detached mutable copies of final canonical sessions.
-
-    The canonical snapshot recursively freezes its records. Adapter consumers
-    must cross this boundary through one recursive thaw rather than selectively
-    converting known list fields, otherwise future nested values can leak tuple
-    or frozen mapping implementations into public/service contracts.
-    """
+    """Build detached mutable copies of final canonical sessions."""
     from .report_projection_snapshot_service import build_visible_snapshot
 
     projected = [
@@ -74,6 +84,28 @@ def get_projected_activity_contributions_by_range(
     ]
 
 
+def build_base_projection(
+    sessions: list[dict[str, Any]],
+    rows: list[dict[str, Any]],
+    uncategorized_id: int,
+) -> BaseProjectionResult:
+    """Run the complete base-session preparation pipeline behind one API."""
+
+    for session in sessions:
+        _attach_session_identity(session)
+        _attach_raw_final_defaults(session, uncategorized_id)
+        _finalize_session(session, uncategorized_id)
+        _attach_projection_defaults(session)
+    _attach_contributions(sessions, rows)
+    return BaseProjectionResult(sessions=tuple(sessions))
+
+
+def display_safe_contribution(row: Mapping[str, Any]) -> dict[str, Any]:
+    """Public display-safe contribution adapter for standalone status rows."""
+
+    return _display_safe_contribution(row)
+
+
 def _attach_session_identity(session: dict) -> None:
     members = list(session.get("member_slices") or [])
     report_date = str(session.get("report_date") or "")[:10]
@@ -88,7 +120,10 @@ def _attach_projection_defaults(session: dict) -> None:
     member_hash = str(session.get("activity_member_hash") or "")
     session.update(
         {
-            "projection_instance_key": base_projection_key(str(session.get("report_date") or ""), session.get("member_slices") or []),
+            "projection_instance_key": base_projection_key(
+                str(session.get("report_date") or ""),
+                session.get("member_slices") or [],
+            ),
             "projection_kind": "base",
             "operation_id": None,
             "origin_activity_member_hashes": [member_hash] if member_hash else [],
@@ -111,7 +146,10 @@ def _attach_contributions(sessions: list[dict], rows: list[dict]) -> None:
     for session in sessions:
         session["_projection_contributions"] = [
             dict(by_member[key])
-            for key in (_member_key(member) for member in session.get("member_slices") or [])
+            for key in (
+                _member_key(member)
+                for member in session.get("member_slices") or []
+            )
             if key in by_member
         ]
 
@@ -127,7 +165,9 @@ def _display_safe_contribution(row: Mapping[str, Any]) -> dict:
         app_name = ""
         process_name = ""
         activity_display_name = EXCLUDED_APP_NAME
-        activity_identity_key = f"excluded:{report_date}:{activity_id}:{slice_start}"
+        activity_identity_key = (
+            f"excluded:{report_date}:{activity_id}:{slice_start}"
+        )
         resource_identity_key = ""
         resource_kind = ""
         resource_subtype = ""
@@ -135,8 +175,16 @@ def _display_safe_contribution(row: Mapping[str, Any]) -> dict:
     else:
         app_name = str(row.get("app_name") or "")
         process_name = str(row.get("process_name") or "")
-        activity_display_name = str(row.get("activity_display_name") or row.get("app_name") or "未知活动")
-        activity_identity_key = str(row.get("activity_identity_key") or row.get("resource_identity_key") or "")
+        activity_display_name = str(
+            row.get("activity_display_name")
+            or row.get("app_name")
+            or "未知活动"
+        )
+        activity_identity_key = str(
+            row.get("activity_identity_key")
+            or row.get("resource_identity_key")
+            or ""
+        )
         resource_identity_key = str(row.get("resource_identity_key") or "")
         resource_kind = str(row.get("resource_kind") or "")
         resource_subtype = str(row.get("resource_subtype") or "")
@@ -149,7 +197,11 @@ def _display_safe_contribution(row: Mapping[str, Any]) -> dict:
         "slice_end_time": str(row.get("end_time") or ""),
         "start_time": slice_start,
         "end_time": str(row.get("end_time") or ""),
-        "duration_seconds": int(row.get("report_duration_seconds") or row.get("duration_seconds") or 0),
+        "duration_seconds": int(
+            row.get("report_duration_seconds")
+            or row.get("duration_seconds")
+            or 0
+        ),
         "app_name": app_name,
         "process_name": process_name,
         "status": status,
@@ -162,15 +214,25 @@ def _display_safe_contribution(row: Mapping[str, Any]) -> dict:
         "resource_display_name": resource_display_name,
         "privacy_redacted": privacy_redacted,
         "display_project_id": int(row.get("display_project_id") or 0),
-        "display_project_name": str(row.get("display_project_name") or UNCATEGORIZED_PROJECT),
-        "display_project_description": str(row.get("display_project_description") or ""),
+        "display_project_name": str(
+            row.get("display_project_name") or UNCATEGORIZED_PROJECT
+        ),
+        "display_project_description": str(
+            row.get("display_project_description") or ""
+        ),
         "report_project_id": int(row.get("report_project_id") or 0),
-        "report_project_name": str(row.get("report_project_name") or UNCATEGORIZED_PROJECT),
-        "report_project_description": str(row.get("report_project_description") or ""),
+        "report_project_name": str(
+            row.get("report_project_name") or UNCATEGORIZED_PROJECT
+        ),
+        "report_project_description": str(
+            row.get("report_project_description") or ""
+        ),
         "is_report_project": bool(row.get("is_report_project")),
         "is_report_classified": bool(row.get("is_report_classified")),
         "is_report_uncategorized": bool(row.get("is_report_uncategorized")),
-        "report_attribution_kind": str(row.get("report_attribution_kind") or "none"),
+        "report_attribution_kind": str(
+            row.get("report_attribution_kind") or "none"
+        ),
         "is_official_project": bool(row.get("is_official_project")),
     }
 
@@ -216,8 +278,12 @@ def public_session_dto(session: Mapping[str, Any]) -> dict:
 
 def _attach_raw_final_defaults(session: dict, uncategorized_id: int) -> None:
     session["project_id"] = int(session.get("project_id") or uncategorized_id)
-    session["project_name"] = str(session.get("project_name") or UNCATEGORIZED_PROJECT)
-    session["project_description"] = str(session.get("project_description") or "")
+    session["project_name"] = str(
+        session.get("project_name") or UNCATEGORIZED_PROJECT
+    )
+    session["project_description"] = str(
+        session.get("project_description") or ""
+    )
     session["adjusted_duration_seconds"] = None
     session["has_project_override"] = False
     session["has_duration_override"] = False
@@ -236,8 +302,12 @@ def _finalize_session(session: dict, uncategorized_id: int) -> None:
         session["closed_duration_seconds"] = display_duration
     project_id = int(session.get("project_id") or uncategorized_id)
     session["project_id"] = project_id
-    session["project_name"] = str(session.get("project_name") or UNCATEGORIZED_PROJECT)
-    session["project_description"] = str(session.get("project_description") or "")
+    session["project_name"] = str(
+        session.get("project_name") or UNCATEGORIZED_PROJECT
+    )
+    session["project_description"] = str(
+        session.get("project_description") or ""
+    )
     session["project_is_deleted"] = bool(session.get("project_is_deleted"))
     session["project_is_archived"] = bool(session.get("project_is_archived"))
     is_uncat = project_id == int(uncategorized_id)
@@ -246,13 +316,37 @@ def _finalize_session(session: dict, uncategorized_id: int) -> None:
         is_report_classified = not is_uncat
         is_report_uncategorized = is_uncat
     else:
-        is_report_project = bool(session.get("is_report_project", not is_uncat))
-        is_report_classified = bool(session.get("is_report_classified", is_report_project))
-        is_report_uncategorized = bool(session.get("is_report_uncategorized", not is_report_project))
+        is_report_project = bool(
+            session.get("is_report_project", not is_uncat)
+        )
+        is_report_classified = bool(
+            session.get("is_report_classified", is_report_project)
+        )
+        is_report_uncategorized = bool(
+            session.get("is_report_uncategorized", not is_report_project)
+        )
     session["is_report_project"] = is_report_project
     session["is_report_classified"] = is_report_classified
     session["is_report_uncategorized"] = is_report_uncategorized
     session["is_classified"] = is_report_classified
     session["is_uncategorized"] = is_report_uncategorized
-    session["editable"] = bool(session.get("editable", True)) and not bool(session.get("is_in_progress"))
-    session["exportable"] = bool(session.get("exportable", True)) and not bool(session.get("is_in_progress"))
+    session["editable"] = bool(session.get("editable", True)) and not bool(
+        session.get("is_in_progress")
+    )
+    session["exportable"] = bool(session.get("exportable", True)) and not bool(
+        session.get("is_in_progress")
+    )
+
+
+__all__ = [
+    "BaseProjectionResult",
+    "build_base_projection",
+    "display_safe_contribution",
+    "get_projected_activity_contributions_by_range",
+    "get_report_sessions_by_date",
+    "get_report_sessions_by_range",
+    "get_report_sessions_for_operations",
+    "get_visible_report_sessions_by_date",
+    "get_visible_report_sessions_for_operations_by_date",
+    "public_session_dto",
+]

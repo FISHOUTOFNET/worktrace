@@ -1,9 +1,9 @@
 """Process-level application runtime.
 
-Owns every long-lived runtime component: collector, folder-index worker,
-platform adapter, pause/reset command channel, single-instance lock and
-startup recovery. Authorization belongs to the application-command boundary;
-the runtime only reports lifecycle state.
+Owns every long-lived runtime component: application instance lease, collector,
+folder-index worker, platform adapter, pause/reset command channel and startup
+recovery. A process that does not own the application lease never initializes
+or opens the database and never creates the WebView.
 """
 
 from __future__ import annotations
@@ -59,12 +59,12 @@ def _thread_reference_is_alive(thread: Any | None) -> bool:
 
 
 class AppRuntime:
-    """Single owner for process-level worker and adapter lifecycle."""
+    """Single owner for application, worker and adapter lifecycle."""
 
     def __init__(self, paths: "_Paths") -> None:
         self.paths = paths
         self.stop_event = threading.Event()
-        self.owns_collector = False
+        self.owns_application_instance = False
         self.collector_control = CollectorControl()
         self._lifecycle_lock = threading.RLock()
         self._adapter = _choose_adapter()
@@ -73,22 +73,52 @@ class AppRuntime:
         self._initialized = False
         self._shutdown = False
 
-    def initialize(self) -> None:
-        """Initialize the DB, acquire the instance lock and recover stale rows."""
-        db.initialize_database(self.paths.db_path)
-        self.owns_collector = acquire_single_instance()
-        if not self.owns_collector:
-            logging.warning(
-                "single instance collector lock not acquired; UI will start without collector"
-            )
-        if self.owns_collector:
-            recovery_service.recover_unclosed_records()
-        self._initialized = True
+    @property
+    def owns_collector(self) -> bool:
+        """Compatibility alias: collector ownership equals app ownership."""
+        return bool(self.owns_application_instance)
+
+    @owns_collector.setter
+    def owns_collector(self, value: bool) -> None:
+        """Compatibility setter for focused lifecycle tests and adapters."""
+        self.owns_application_instance = bool(value)
+
+    def initialize(self) -> bool:
+        """Acquire the app lease before opening the database.
+
+        Returns ``False`` when another WorkTrace process already owns the same
+        user-data directory. In that case no database initialization or recovery
+        is attempted.
+        """
+        with self._lifecycle_lock:
+            if self._initialized:
+                return self.owns_application_instance
+            if self._shutdown:
+                return False
+            self.owns_application_instance = acquire_single_instance()
+            if not self.owns_application_instance:
+                logging.warning(
+                    "single application instance lock not acquired; startup aborted"
+                )
+                return False
+            try:
+                db.initialize_database(self.paths.db_path)
+                recovery_service.recover_unclosed_records()
+            except Exception:
+                release_single_instance()
+                self.owns_application_instance = False
+                raise
+            self._initialized = True
+            return True
 
     def start_background_workers(self) -> bool:
         """Start the folder-index worker when lifecycle state permits."""
         with self._lifecycle_lock:
-            if not self.owns_collector or self._shutdown or self.stop_event.is_set():
+            if (
+                not self.owns_application_instance
+                or self._shutdown
+                or self.stop_event.is_set()
+            ):
                 return False
             if _thread_reference_is_alive(self._index_thread):
                 return False
@@ -103,7 +133,9 @@ class AppRuntime:
         with self._lifecycle_lock:
             if self._shutdown or self.stop_event.is_set():
                 return {"ok": False, "error": "runtime_stopping"}
-            if not self.owns_collector:
+            if not self.owns_application_instance:
+                # Keep the established API error while ownership now represents
+                # the whole application rather than a collector-only lease.
                 return {"ok": False, "error": "collector_not_owned"}
             if _thread_reference_is_alive(self._collector_thread):
                 self._register_maintenance_handlers()
@@ -135,7 +167,7 @@ class AppRuntime:
 
     def pause_collection_now(self, timeout_seconds: float = 5.0) -> dict[str, object]:
         """Finalize the current activity and persist a user pause."""
-        if not self.owns_collector or not _thread_reference_is_alive(
+        if not self.owns_application_instance or not _thread_reference_is_alive(
             self._collector_thread
         ):
             return {"ok": True, "pause_pending": False, "collector_active": False}
@@ -161,7 +193,7 @@ class AppRuntime:
         self, timeout_seconds: float = 5.0
     ) -> dict[str, object]:
         """Forget all collector/adapter identity before destructive DB work."""
-        if not self.owns_collector or not _thread_reference_is_alive(
+        if not self.owns_application_instance or not _thread_reference_is_alive(
             self._collector_thread
         ):
             self._reset_adapter_runtime_state()
@@ -189,7 +221,7 @@ class AppRuntime:
         self.stop_event.set()
 
     def shutdown(self) -> None:
-        """Stop writers before closing rows or releasing the instance lease."""
+        """Stop writers before closing rows or releasing the application lease."""
         with self._lifecycle_lock:
             if self._shutdown:
                 return
@@ -222,12 +254,13 @@ class AppRuntime:
         writers_stopped = not _thread_reference_is_alive(
             collector_thread
         ) and not _thread_reference_is_alive(index_thread)
-        if self.owns_collector and writers_stopped:
-            activity_lifecycle_service.close_all_open_activities()
-            set_setting("collector_status", "stopped")
+        if self.owns_application_instance and writers_stopped:
+            if self._initialized:
+                activity_lifecycle_service.close_all_open_activities()
+                set_setting("collector_status", "stopped")
             release_single_instance()
-            self.owns_collector = False
-        elif self.owns_collector:
+            self.owns_application_instance = False
+        elif self.owns_application_instance:
             collector_health.record_health_code("shutdown_writer_still_alive")
             logging.error("app shutdown retained instance lock: writer alive")
 

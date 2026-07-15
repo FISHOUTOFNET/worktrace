@@ -20,9 +20,10 @@ from .constants import (
     UNCATEGORIZED_PROJECT,
 )
 from .report_structure_generation import bump_generation
+from .schema_migrations import MIN_SUPPORTED_SCHEMA_VERSION, migrate_schema
 from .write_gate import DATABASE_WRITE_GATE
 
-CURRENT_SCHEMA_VERSION = 4
+CURRENT_SCHEMA_VERSION = 5
 
 _WRITE_TOKEN_RE = re.compile(
     r"\b(?:INSERT|UPDATE|DELETE|REPLACE|CREATE|DROP|ALTER|VACUUM|REINDEX|ATTACH|DETACH)\b",
@@ -365,15 +366,29 @@ def initialize_database(path: str | Path | None = None) -> None:
 def apply_current_schema(conn: sqlite3.Connection) -> None:
     version = int(conn.execute("PRAGMA user_version").fetchone()[0] or 0)
     has_user_tables = _database_has_user_tables(conn)
-    if has_user_tables and version != CURRENT_SCHEMA_VERSION:
-        raise ValueError("database_schema_incompatible")
     if not has_user_tables:
         conn.executescript(read_schema_sql())
         ensure_current_indexes(conn)
         conn.execute(f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION}")
         _require_current_schema_fingerprint(conn)
-    else:
+        seed_defaults(conn)
+        return
+
+    if version < MIN_SUPPORTED_SCHEMA_VERSION or version > CURRENT_SCHEMA_VERSION:
+        raise ValueError("database_schema_incompatible")
+    if version < CURRENT_SCHEMA_VERSION:
+        # The supported source schema must be structurally known before any
+        # data migration is allowed to run. v4 and v5 share the same table/index
+        # fingerprint; v5 only removes transient rows from settings.
         _require_current_schema_fingerprint(conn)
+        version = migrate_schema(
+            conn,
+            current_version=version,
+            target_version=CURRENT_SCHEMA_VERSION,
+        )
+    if version != CURRENT_SCHEMA_VERSION:
+        raise ValueError("database_schema_incompatible")
+    _require_current_schema_fingerprint(conn)
     seed_defaults(conn)
 
 
@@ -427,9 +442,6 @@ def seed_defaults(conn: sqlite3.Connection) -> None:
     defaults = {
         "poll_interval_seconds": "1",
         "idle_threshold_seconds": str(DEFAULT_IDLE_THRESHOLD_SECONDS),
-        "current_activity_snapshot": "",
-        "pending_short_seconds": "0",
-        "pending_short_carry_provenance": "",
         "collector_status": "stopped",
         "collector_health_state": "stopped",
         "collector_last_successful_observation_at": "",
