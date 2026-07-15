@@ -3,6 +3,42 @@
     "use strict";
     var App = window.WorkTraceApp = window.WorkTraceApp || {};
 
+    // timeline.js is loaded before this module and init.js is loaded after it.
+    // Install the shared catalog loader synchronously here so initial preload,
+    // Timeline selection, and rule mutations all observe the same in-flight
+    // Promise and database generation.
+    function installProjectCatalogCoordinator() {
+        App.loadProjects = function () {
+            if (App.projectsCache) return Promise.resolve(App.projectsCache);
+            if (App.projectsLoadPromise) return App.projectsLoadPromise;
+            App.projectsLoading = true;
+            var epoch = App.dataEpoch || 0;
+            var request = App.callBridge("list_projects_for_timeline").then(function (result) {
+                if (epoch !== (App.dataEpoch || 0)) return null;
+                if (result && result.ok !== false && result.projects) {
+                    App.projectsCache = result.projects;
+                }
+                return App.projectsCache;
+            }).catch(function () {
+                return null;
+            }).finally(function () {
+                if (App.projectsLoadPromise === request) {
+                    App.projectsLoadPromise = null;
+                    App.projectsLoading = false;
+                }
+            });
+            App.projectsLoadPromise = request;
+            return request;
+        };
+        App.invalidateProjectCatalog = function () {
+            App.projectsCache = null;
+            App.projectsLoading = false;
+            App.projectsLoadPromise = null;
+            return App.loadProjects();
+        };
+    }
+    installProjectCatalogCoordinator();
+
     function loadProjectRules() {
         if (App.rulesLoadPromise) return App.rulesLoadPromise;
         var token = App.requestCoordinator.beginLatest("rules", "home");
@@ -106,16 +142,4 @@
         banner.textContent = message || "加载项目规则失败";
     };
     App.clearRulesError = function () { App.showRulesError(""); };
-
-    // init.js is the last static script. Load the small cross-module
-    // coordinator after the window is fully initialized without modifying the
-    // large HTML template or adding a bundler.
-    window.addEventListener("load", function () {
-        if (document.querySelector('script[data-worktrace-hardening="1"]')) return;
-        var script = document.createElement("script");
-        script.src = "js/frontend_hardening.js";
-        script.async = false;
-        script.setAttribute("data-worktrace-hardening", "1");
-        document.body.appendChild(script);
-    });
 })();
