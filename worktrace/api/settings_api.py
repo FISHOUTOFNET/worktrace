@@ -1,20 +1,17 @@
-"""Settings, privacy, and collector-status facade for the UI.
-
-Wraps ``settings_service`` and the reset-database path from ``export_service``.
-Also consolidates the current-activity snapshot JSON parsing used by UI views.
-"""
+"""Settings, privacy, backup, and collector-status facade for the UI."""
 
 from __future__ import annotations
 
 import json
 import os
-
 from typing import Any
 
 from . import backup_api, view_model_api
-from ..constants import PRIVACY_NOTICE_TEXT
-from ..services import export_service
-from ..services.runtime_activity_state_service import clear_runtime_activity_state as _clear_runtime_activity_state
+from ..constants import PRIVACY_NOTICE_TEXT, PRIVACY_NOTICE_VERSION
+from ..services import export_service, privacy_gate_service
+from ..services.runtime_activity_state_service import (
+    clear_runtime_activity_state as _clear_runtime_activity_state,
+)
 from ..services.secure_backup_service import (
     BackupCorruptedError,
     BackupDecryptionError,
@@ -23,7 +20,6 @@ from ..services.secure_backup_service import (
     SecureBackupError,
 )
 from ..services.settings_service import (
-    clear_settings_cache,
     get_bool_setting,
     get_int_setting,
     get_list_setting,
@@ -31,7 +27,6 @@ from ..services.settings_service import (
     set_list_setting,
     set_setting,
 )
-
 
 
 def get_setting_value(key: str, default: str | None = None) -> str | None:
@@ -58,9 +53,7 @@ def set_list_setting_value(key: str, values: list[str]) -> None:
     set_list_setting(key, values)
 
 
-
 def get_current_activity_snapshot() -> dict[str, Any] | None:
-    """Read and parse the ``current_activity_snapshot`` setting."""
     raw = get_setting("current_activity_snapshot", "") or ""
     if not raw:
         return None
@@ -75,14 +68,12 @@ def clear_runtime_activity_state(reason: str) -> None:
     _clear_runtime_activity_state(reason)
 
 
-
 def first_run_notice_accepted() -> bool:
-    return get_bool_setting("first_run_notice_accepted", False)
+    return privacy_gate_service.is_privacy_notice_accepted()
 
 
 def accept_first_run_notice() -> None:
-    set_setting("first_run_notice_accepted", "true")
-
+    privacy_gate_service.accept_privacy_notice()
 
 
 def is_user_paused() -> bool:
@@ -114,9 +105,7 @@ def set_collector_status(value: str) -> None:
 
 
 def is_paused() -> bool:
-    """True when the user paused or the collector status is paused."""
     return is_user_paused() or get_collector_status() == "paused"
-
 
 
 def get_export_path() -> str:
@@ -132,64 +121,52 @@ def is_clipboard_capture_enabled() -> bool:
 
 
 def set_clipboard_capture_enabled(value: bool) -> None:
+    if value:
+        privacy_gate_service.require_sensitive_runtime_allowed()
     set_setting("clipboard_capture_enabled", "true" if value else "false")
-
 
 
 def clear_all_local_data(confirm: bool) -> None:
     export_service.clear_all_local_data(confirm=confirm)
 
 
-
 def get_settings_privacy_status() -> dict[str, Any]:
-    """Return a read-only status snapshot for the Settings / Privacy WebView page.
-
-    Exposes only safety-status booleans and a display-safe first-run notice
-    sub-dict. No path, no clipboard content, no passphrase, no DB write, no
-    backup export/import action is surfaced here. All return values must be
-    JSON-serializable.
-    """
     try:
-        export_path_configured = bool(get_export_path())
-        clipboard_enabled = bool(is_clipboard_capture_enabled())
-        try:
-            secure_import_in_progress = bool(backup_api.is_secure_import_in_progress())
-        except Exception:
-            # Defensive: never let the backup facade leak tracebacks to the UI.
-            secure_import_in_progress = False
-        # Display-safe notice: raw DB key name never exposed; only boolean + availability flags surfaced.
-        try:
-            notice_accepted = bool(first_run_notice_accepted())
-        except Exception:
-            # Defensive: never let a settings read failure leak a traceback.
-            notice_accepted = False
-        status: dict[str, Any] = {
-            "page": "settings_privacy",
-            "storage_model": "local_only",
-            "clipboard_capture_enabled": clipboard_enabled,
-            "export_path_configured": export_path_configured,
-            "secure_import_in_progress": secure_import_in_progress,
-            "encrypted_backup": {
-                "supported": True,
-                "export_available_in_webview": True,
-                "import_available_in_webview": True,
-                "manifest_preview_available_in_webview": True,
-            },
-            "destructive_actions": {
-                "clear_all_local_data_available_in_webview": True,
-            },
-            "first_run_notice": {
-                "accepted": notice_accepted,
-                "view_available_in_webview": True,
-                "accept_required": not notice_accepted,
+        notice_accepted = first_run_notice_accepted()
+        clipboard_enabled = is_clipboard_capture_enabled()
+        if clipboard_enabled and not notice_accepted:
+            clipboard_enabled = False
+        return {
+            "ok": True,
+            "status": {
+                "page": "settings_privacy",
+                "storage_model": "local_only",
+                "clipboard_capture_enabled": clipboard_enabled,
+                "export_path_configured": bool(get_export_path()),
+                "secure_import_in_progress": bool(
+                    backup_api.is_secure_import_in_progress()
+                ),
+                "encrypted_backup": {
+                    "supported": True,
+                    "export_available_in_webview": True,
+                    "import_available_in_webview": True,
+                    "manifest_preview_available_in_webview": True,
+                },
+                "destructive_actions": {
+                    "clear_all_local_data_available_in_webview": True,
+                },
+                "first_run_notice": {
+                    "accepted": notice_accepted,
+                    "accepted_version": (
+                        PRIVACY_NOTICE_VERSION if notice_accepted else ""
+                    ),
+                    "view_available_in_webview": True,
+                    "accept_required": not notice_accepted,
+                },
             },
         }
-        return {"ok": True, "status": status}
     except Exception:
-        # Collapse unexpected errors; never expose traceback/SQL/paths.
         return {"ok": False, "error": "加载设置状态失败"}
-
-
 
 
 def export_encrypted_backup_for_webview(
@@ -197,63 +174,47 @@ def export_encrypted_backup_for_webview(
     passphrase: str,
     confirm_passphrase: str,
 ) -> dict[str, Any]:
-    """Export an encrypted ``.wtbackup`` file from the WebView UI."""
-    if not isinstance(output_path, str) or isinstance(output_path, bool):
+    if not isinstance(output_path, str) or isinstance(output_path, bool) or not output_path.strip():
         return {"ok": False, "error": "请选择有效的备份保存位置"}
-    if not output_path or not output_path.strip():
-        return {"ok": False, "error": "请选择有效的备份保存位置"}
-    if not isinstance(passphrase, str) or isinstance(passphrase, bool):
+    if not isinstance(passphrase, str) or isinstance(passphrase, bool) or not passphrase.strip():
         return {"ok": False, "error": "请输入备份口令"}
-    if not passphrase or not passphrase.strip():
-        return {"ok": False, "error": "请输入备份口令"}
-    # confirm_passphrase mismatch uses exact comparison (no trim) so spaces are not silently dropped.
-    if not isinstance(confirm_passphrase, str) or isinstance(confirm_passphrase, bool):
-        return {"ok": False, "error": "两次输入的备份口令不一致"}
-    if confirm_passphrase != passphrase:
+    if not isinstance(confirm_passphrase, str) or confirm_passphrase != passphrase:
         return {"ok": False, "error": "两次输入的备份口令不一致"}
     normalized_path = output_path
     if not normalized_path.lower().endswith(".wtbackup"):
-        normalized_path = normalized_path + ".wtbackup"
+        normalized_path += ".wtbackup"
     try:
         backup_api.export_encrypted_backup(normalized_path, passphrase)
     except Exception:
-        # Collapse service exceptions; never expose traceback/SQL/path.
         return {"ok": False, "error": "导出加密备份失败"}
-    # Return only the basename so the full path never reaches the UI.
-    filename = os.path.basename(normalized_path)
-    return {"ok": True, "filename": filename, "message": "加密备份已导出"}
-
-
+    return {
+        "ok": True,
+        "filename": os.path.basename(normalized_path),
+        "message": "加密备份已导出",
+    }
 
 
 def preview_encrypted_backup_manifest_for_webview(
     input_path: str,
 ) -> dict[str, Any]:
-    """Preview the non-sensitive manifest of a ``.wtbackup`` file."""
-    if not isinstance(input_path, str) or isinstance(input_path, bool):
-        return {"ok": False, "error": "请选择有效的加密备份文件"}
-    if not input_path or not input_path.strip():
-        return {"ok": False, "error": "请选择有效的加密备份文件"}
-    if not input_path.lower().endswith(".wtbackup"):
+    if not isinstance(input_path, str) or isinstance(input_path, bool) or not input_path.strip() or not input_path.lower().endswith(".wtbackup"):
         return {"ok": False, "error": "请选择有效的加密备份文件"}
     try:
         info = backup_api.parse_encrypted_backup_manifest(input_path)
     except Exception:
-        # Collapse backup/service exceptions; never expose traceback/SQL/path.
         return {"ok": False, "error": "读取备份清单失败"}
-    # Display-safe manifest: only six non-sensitive fields; salt/ciphertext/payload/DB never included.
-    filename = os.path.basename(input_path)
-    manifest: dict[str, Any] = {
-        "version": int(info.version),
-        "app_version": str(info.app_version),
-        "created_at": str(info.created_at),
-        "kdf_algorithm": str(info.kdf_algorithm),
-        "payload_format": str(info.payload_format),
-        "payload_alg": str(info.payload_alg),
+    return {
+        "ok": True,
+        "filename": os.path.basename(input_path),
+        "manifest": {
+            "version": int(info.version),
+            "app_version": str(info.app_version),
+            "created_at": str(info.created_at),
+            "kdf_algorithm": str(info.kdf_algorithm),
+            "payload_format": str(info.payload_format),
+            "payload_alg": str(info.payload_alg),
+        },
     }
-    return {"ok": True, "filename": filename, "manifest": manifest}
-
-
 
 
 def import_encrypted_backup_for_webview(
@@ -261,22 +222,11 @@ def import_encrypted_backup_for_webview(
     passphrase: str,
     confirm_text: str,
 ) -> dict[str, Any]:
-    """Import an encrypted ``.wtbackup`` file from the WebView UI."""
-    # Suffix is NOT auto-appended on import; wrong suffix is rejected.
-    if not isinstance(input_path, str) or isinstance(input_path, bool):
+    if not isinstance(input_path, str) or isinstance(input_path, bool) or not input_path.strip() or not input_path.lower().endswith(".wtbackup"):
         return {"ok": False, "error": "请选择有效的加密备份文件"}
-    if not input_path or not input_path.strip():
-        return {"ok": False, "error": "请选择有效的加密备份文件"}
-    if not input_path.lower().endswith(".wtbackup"):
-        return {"ok": False, "error": "请选择有效的加密备份文件"}
-    # passphrase is not trimmed/normalized/written to any global state.
-    if not isinstance(passphrase, str) or isinstance(passphrase, bool):
+    if not isinstance(passphrase, str) or isinstance(passphrase, bool) or not passphrase.strip():
         return {"ok": False, "error": "请输入备份口令"}
-    if not passphrase or not passphrase.strip():
-        return {"ok": False, "error": "请输入备份口令"}
-    if not isinstance(confirm_text, str) or isinstance(confirm_text, bool):
-        return {"ok": False, "error": "请输入确认文字：导入并替换"}
-    if confirm_text.strip() != "导入并替换":
+    if not isinstance(confirm_text, str) or isinstance(confirm_text, bool) or confirm_text.strip() != "导入并替换":
         return {"ok": False, "error": "请输入确认文字：导入并替换"}
     try:
         result = backup_api.import_encrypted_backup(
@@ -289,97 +239,59 @@ def import_encrypted_backup_for_webview(
     except BackupVersionNotSupportedError:
         return {"ok": False, "error": "备份文件版本不受支持"}
     except (SecureBackupError, RuntimeError, Exception):
-        # Collapse remaining exceptions; never expose traceback/SQL/path/passphrase/salt/ciphertext/payload.
         return {"ok": False, "error": "导入加密备份失败"}
-    # Aggregate imported_tables into display-safe counts only.
     imported_tables = result.imported_tables or {}
-    imported_table_count = int(len(imported_tables))
-    imported_row_count = int(sum(imported_tables.values()))
     return {
         "ok": True,
         "message": "加密备份已导入，WorkTrace 已暂停，请检查数据后手动恢复记录",
-        "imported_table_count": imported_table_count,
-        "imported_row_count": imported_row_count,
+        "imported_table_count": len(imported_tables),
+        "imported_row_count": sum(imported_tables.values()),
         "folder_index_reset": bool(result.folder_index_reset),
     }
 
 
-
-
 def clear_all_local_data_for_webview(confirm_text: str) -> dict[str, Any]:
-    """Clear all local data from the WebView UI."""
-    if not isinstance(confirm_text, str) or isinstance(confirm_text, bool):
-        return {"ok": False, "error": "请输入确认文字：清空本地数据"}
-    if confirm_text.strip() != "清空本地数据":
+    if not isinstance(confirm_text, str) or isinstance(confirm_text, bool) or confirm_text.strip() != "清空本地数据":
         return {"ok": False, "error": "请输入确认文字：清空本地数据"}
     try:
         export_service.clear_all_local_data(confirm=True)
     except Exception:
-        # Collapse exceptions (incl. in-progress guard); never expose traceback/SQL/path/clipboard/window title/note.
         return {"ok": False, "error": "清空本地数据失败"}
-    # Refresh status so frontend re-renders; still report success if read fails so it is not masked.
-    try:
-        status_result = get_settings_privacy_status()
-        if status_result.get("ok"):
-            return {
-                "ok": True,
-                "message": "本地数据已清空",
-                "status": status_result["status"],
-            }
-    except Exception:
-        pass
-    return {"ok": True, "message": "本地数据已清空"}
-
-
+    result = {"ok": True, "message": "本地数据已清空"}
+    status_result = get_settings_privacy_status()
+    if status_result.get("ok"):
+        result["status"] = status_result["status"]
+    return result
 
 
 def set_clipboard_capture_enabled_for_webview(enabled: bool) -> dict[str, Any]:
-    """Write the ``clipboard_capture_enabled`` flag from the WebView UI.
-
-    Narrow write facade. Accepts only a real ``bool``; any other type
-    (``None``, ``"true"`` / ``"false"`` strings, ``0`` / ``1`` ints,
-    lists, dicts, objects, etc.) is rejected with a stable Chinese message
-    and does NOT mutate the underlying setting. On success the updated
-    Settings / Privacy status snapshot is returned so the frontend can
-    re-render without a second round-trip.
-
-    The payload never carries the setting key name, clipboard content,
-    export path, passphrase, traceback, SQL, or raw exception text. This
-    facade does not call backup export / import / manifest,
-    ``clear_all_local_data``, or any schema mutation.
-    """
     if enabled is not True and enabled is not False:
         return {"ok": False, "error": "请选择有效的剪贴板记录状态"}
+    if enabled and not privacy_gate_service.is_sensitive_runtime_allowed():
+        return {"ok": False, "error": "请先确认隐私说明"}
     try:
         set_clipboard_capture_enabled(enabled)
         status_result = get_settings_privacy_status()
         if not status_result.get("ok"):
-            # Status read failed after a successful write; surface generic failure so frontend re-loads.
             return {"ok": False, "error": "设置剪贴板记录失败"}
         return {"ok": True, "status": status_result["status"]}
     except Exception:
-        # Collapse unexpected errors; never expose traceback/SQL/paths.
         return {"ok": False, "error": "设置剪贴板记录失败"}
 
 
-
-
-_FIRST_RUN_NOTICE_HIGHLIGHTS: list[str] = [
+_FIRST_RUN_NOTICE_HIGHLIGHTS = [
     "本地保存",
     "不截屏录屏",
     "不主动读正文",
     "用户可清空",
 ]
-
 _FIRST_RUN_NOTICE_TITLE = "WorkTrace 隐私说明"
 
 
 def get_first_run_notice_for_webview() -> dict[str, Any]:
-    """Return the display-safe first-run privacy notice payload for WebView."""
     try:
-        accepted = bool(first_run_notice_accepted())
+        accepted = first_run_notice_accepted()
     except Exception:
-        # Fail-closed: never return fallback body or expose traceback/SQL/paths; frontend must block accept.
         return {
             "ok": False,
             "error": "隐私说明加载失败。为保护隐私，WorkTrace 暂不会启动记录。请重启应用或重新安装。",
@@ -387,6 +299,7 @@ def get_first_run_notice_for_webview() -> dict[str, Any]:
     return {
         "ok": True,
         "accepted": accepted,
+        "notice_version": PRIVACY_NOTICE_VERSION,
         "title": _FIRST_RUN_NOTICE_TITLE,
         "highlights": list(_FIRST_RUN_NOTICE_HIGHLIGHTS),
         "notice_text": str(PRIVACY_NOTICE_TEXT),
@@ -394,26 +307,19 @@ def get_first_run_notice_for_webview() -> dict[str, Any]:
 
 
 def accept_first_run_notice_for_webview() -> dict[str, Any]:
-    """Accept the first-run privacy notice from the WebView UI."""
     try:
         accept_first_run_notice()
-        # Belt-and-suspenders: set_setting already refreshes the cache, but
-        # explicit clear guarantees no stale TTL window (no-op when key absent).
-        clear_settings_cache("first_run_notice_accepted")
         return {
             "ok": True,
             "accepted": True,
+            "notice_version": PRIVACY_NOTICE_VERSION,
             "message": "已确认隐私说明",
         }
     except Exception:
-        # Collapse unexpected errors; never expose traceback/SQL/paths.
         return {"ok": False, "error": "确认隐私说明失败"}
 
 
-
-
 def get_refresh_state(report_date: str | None = None) -> dict[str, Any]:
-    """Return a lightweight refresh-state payload for the frontend heartbeat."""
     try:
         return view_model_api.get_refresh_state_view_model(report_date)
     except Exception:
@@ -429,10 +335,10 @@ __all__ = [
     "export_encrypted_backup_for_webview",
     "first_run_notice_accepted",
     "get_bool_setting_value",
-    "get_collector_status",
+    "get_collector_consecutive_failures",
     "get_collector_health_state",
     "get_collector_last_successful_observation_at",
-    "get_collector_consecutive_failures",
+    "get_collector_status",
     "get_current_activity_snapshot",
     "get_export_path",
     "get_first_run_notice_for_webview",
