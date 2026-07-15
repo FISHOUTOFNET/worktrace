@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
+from ..services.privacy_gate_service import is_sensitive_runtime_allowed
 from ..services.runtime_activity_state_service import record_runtime_boundary
 from . import settings_api
 
@@ -27,11 +28,11 @@ def get_runtime() -> "AppRuntime | None":
 def start_collection_after_privacy_gate() -> dict[str, Any]:
     """Start workers and collector only after the privacy gate is accepted."""
     try:
-        notice_accepted = settings_api.first_run_notice_accepted()
+        notice_accepted = is_sensitive_runtime_allowed()
     except Exception:
         logging.exception(
-            "app_api.start_collection_after_privacy_gate: first-run "
-            "notice read failed; failing closed"
+            "app_api.start_collection_after_privacy_gate: privacy gate read "
+            "failed; failing closed"
         )
         return {"ok": False, "error": "请先确认隐私说明"}
     if not notice_accepted:
@@ -84,6 +85,8 @@ def pause_collection_now() -> dict[str, Any]:
 
 def set_clipboard_capture_enabled(enabled: bool) -> None:
     """Apply a clipboard privacy toggle immediately to the live adapter."""
+    if enabled and not is_sensitive_runtime_allowed():
+        raise PermissionError("privacy_notice_required")
     if _runtime is not None:
         _runtime.set_clipboard_capture_enabled(bool(enabled))
 
