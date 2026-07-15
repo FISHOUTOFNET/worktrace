@@ -22,8 +22,7 @@ env:
   PYTHONIOENCODING: utf-8
 
 permissions:
-  contents: read
-  issues: write
+  contents: write
 
 # Each validation run is evidence for an exact PR head and must finish.
 concurrency:
@@ -40,6 +39,7 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.head_ref || github.ref_name }}
           clean: true
           show-progress: false
 
@@ -87,49 +87,33 @@ jobs:
         if: failure() && steps.pytest.outcome == 'failure'
         shell: pwsh
         run: |
+          New-Item -ItemType Directory -Force -Path diagnostics | Out-Null
           & python scripts/pytest_diagnostics.py `
             --junit "test-results/pytest-junit.xml" `
             --log "test-results/pytest.log" `
             --summary "$env:GITHUB_STEP_SUMMARY" 2>&1 |
-              Tee-Object -FilePath "test-results/pytest-diagnostics.txt"
+              Tee-Object -FilePath "diagnostics/pytest-hardening-latest.txt"
 
-      - name: Post compact diagnostics to pull request
+      - name: Commit compact diagnostics to repair branch
         if: failure() && steps.pytest.outcome == 'failure' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
         shell: pwsh
         env:
-          GH_TOKEN: ${{ github.token }}
-          REPOSITORY: ${{ github.repository }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_REF: ${{ github.head_ref }}
         run: |
-          $diagnosticsPath = "test-results/pytest-diagnostics.txt"
-          if (-not (Test-Path -LiteralPath $diagnosticsPath)) {
+          $path = "diagnostics/pytest-hardening-latest.txt"
+          if (-not (Test-Path -LiteralPath $path)) {
             Write-Warning "Compact diagnostics file is missing"
             exit 0
           }
-          $diagnostics = Get-Content -LiteralPath $diagnosticsPath -Raw
-          if ($diagnostics.Length -gt 50000) {
-            $diagnostics = $diagnostics.Substring(0, 50000) + "`n... truncated ..."
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add $path
+          if (git diff --cached --quiet) {
+            Write-Host "Diagnostics unchanged"
+            exit 0
           }
-          $comment = @"
-          <!-- worktrace-pytest-diagnostics -->
-          ## Pytest diagnostics for run $env:GITHUB_RUN_ID
-
-          ```text
-          $diagnostics
-          ```
-          "@
-          $payload = @{ body = $comment } | ConvertTo-Json -Depth 3
-          $headers = @{
-            Authorization = "Bearer $env:GH_TOKEN"
-            Accept = "application/vnd.github+json"
-            "X-GitHub-Api-Version" = "2022-11-28"
-          }
-          Invoke-RestMethod `
-            -Method POST `
-            -Uri "https://api.github.com/repos/$env:REPOSITORY/issues/$env:PR_NUMBER/comments" `
-            -Headers $headers `
-            -ContentType "application/json" `
-            -Body $payload | Out-Null
+          git commit -m "Capture pytest failure diagnostics [skip ci]"
+          git push origin "HEAD:$env:HEAD_REF"
 
   python312-compat:
     name: Python 3.12 compatibility (manual)
@@ -141,6 +125,7 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.ref_name }}
           clean: true
           show-progress: false
 
@@ -203,6 +188,7 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.ref_name }}
           clean: true
           show-progress: false
 
@@ -224,6 +210,7 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.ref_name }}
           clean: true
           show-progress: false
 
