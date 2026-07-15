@@ -6,8 +6,7 @@ import json
 import os
 from typing import Any
 
-from . import backup_api, view_model_api
-from ..constants import PRIVACY_NOTICE_TEXT, PRIVACY_NOTICE_VERSION
+from ..constants import PRIVACY_NOTICE_TEXT
 from ..services import export_service, privacy_gate_service
 from ..services.runtime_activity_state_service import (
     clear_runtime_activity_state as _clear_runtime_activity_state,
@@ -27,6 +26,7 @@ from ..services.settings_service import (
     set_list_setting,
     set_setting,
 )
+from . import backup_api, view_model_api
 
 
 def get_setting_value(key: str, default: str | None = None) -> str | None:
@@ -45,7 +45,10 @@ def get_int_setting_value(key: str, default: int) -> int:
     return get_int_setting(key, default)
 
 
-def get_list_setting_value(key: str, default: list[str] | None = None) -> list[str]:
+def get_list_setting_value(
+    key: str,
+    default: list[str] | None = None,
+) -> list[str]:
     return get_list_setting(key, default)
 
 
@@ -121,7 +124,6 @@ def is_clipboard_capture_enabled() -> bool:
 
 
 def set_clipboard_capture_enabled(value: bool) -> None:
-    """Persist the preference only; AppRuntime owns the sensitive-runtime gate."""
     set_setting("clipboard_capture_enabled", "true" if value else "false")
 
 
@@ -167,17 +169,9 @@ def export_encrypted_backup_for_webview(
     passphrase: str,
     confirm_passphrase: str,
 ) -> dict[str, Any]:
-    if (
-        not isinstance(output_path, str)
-        or isinstance(output_path, bool)
-        or not output_path.strip()
-    ):
+    if not isinstance(output_path, str) or not output_path.strip():
         return {"ok": False, "error": "请选择有效的备份保存位置"}
-    if (
-        not isinstance(passphrase, str)
-        or isinstance(passphrase, bool)
-        or not passphrase.strip()
-    ):
+    if not isinstance(passphrase, str) or not passphrase.strip():
         return {"ok": False, "error": "请输入备份口令"}
     if not isinstance(confirm_passphrase, str) or confirm_passphrase != passphrase:
         return {"ok": False, "error": "两次输入的备份口令不一致"}
@@ -200,7 +194,6 @@ def preview_encrypted_backup_manifest_for_webview(
 ) -> dict[str, Any]:
     if (
         not isinstance(input_path, str)
-        or isinstance(input_path, bool)
         or not input_path.strip()
         or not input_path.lower().endswith(".wtbackup")
     ):
@@ -230,26 +223,19 @@ def import_encrypted_backup_for_webview(
 ) -> dict[str, Any]:
     if (
         not isinstance(input_path, str)
-        or isinstance(input_path, bool)
         or not input_path.strip()
         or not input_path.lower().endswith(".wtbackup")
     ):
         return {"ok": False, "error": "请选择有效的加密备份文件"}
-    if (
-        not isinstance(passphrase, str)
-        or isinstance(passphrase, bool)
-        or not passphrase.strip()
-    ):
+    if not isinstance(passphrase, str) or not passphrase.strip():
         return {"ok": False, "error": "请输入备份口令"}
-    if (
-        not isinstance(confirm_text, str)
-        or isinstance(confirm_text, bool)
-        or confirm_text.strip() != "导入并替换"
-    ):
+    if not isinstance(confirm_text, str) or confirm_text.strip() != "导入并替换":
         return {"ok": False, "error": "请输入确认文字：导入并替换"}
     try:
         result = backup_api.import_encrypted_backup(
-            input_path, passphrase, mode="replace"
+            input_path,
+            passphrase,
+            mode="replace",
         )
     except BackupImportInProgressError:
         return {"ok": False, "error": "已有加密备份导入正在进行"}
@@ -257,7 +243,9 @@ def import_encrypted_backup_for_webview(
         return {"ok": False, "error": "备份口令错误或文件已损坏"}
     except BackupVersionNotSupportedError:
         return {"ok": False, "error": "备份文件版本不受支持"}
-    except (SecureBackupError, RuntimeError, Exception):
+    except (SecureBackupError, RuntimeError):
+        return {"ok": False, "error": "导入加密备份失败"}
+    except Exception:
         return {"ok": False, "error": "导入加密备份失败"}
     imported_tables = result.imported_tables or {}
     return {
@@ -270,17 +258,13 @@ def import_encrypted_backup_for_webview(
 
 
 def clear_all_local_data_for_webview(confirm_text: str) -> dict[str, Any]:
-    if (
-        not isinstance(confirm_text, str)
-        or isinstance(confirm_text, bool)
-        or confirm_text.strip() != "清空本地数据"
-    ):
+    if not isinstance(confirm_text, str) or confirm_text.strip() != "清空本地数据":
         return {"ok": False, "error": "请输入确认文字：清空本地数据"}
     try:
         export_service.clear_all_local_data(confirm=True)
     except Exception:
         return {"ok": False, "error": "清空本地数据失败"}
-    result = {"ok": True, "message": "本地数据已清空"}
+    result: dict[str, Any] = {"ok": True, "message": "本地数据已清空"}
     status_result = get_settings_privacy_status()
     if status_result.get("ok"):
         result["status"] = status_result["status"]
@@ -288,7 +272,6 @@ def clear_all_local_data_for_webview(confirm_text: str) -> dict[str, Any]:
 
 
 def set_clipboard_capture_enabled_for_webview(enabled: bool) -> dict[str, Any]:
-    """Persist a validated preference; bridge/AppRuntime applies the gate."""
     if enabled is not True and enabled is not False:
         return {"ok": False, "error": "请选择有效的剪贴板记录状态"}
     try:
@@ -321,7 +304,6 @@ def get_first_run_notice_for_webview() -> dict[str, Any]:
     return {
         "ok": True,
         "accepted": accepted,
-        "notice_version": PRIVACY_NOTICE_VERSION,
         "title": _FIRST_RUN_NOTICE_TITLE,
         "highlights": list(_FIRST_RUN_NOTICE_HIGHLIGHTS),
         "notice_text": str(PRIVACY_NOTICE_TEXT),
@@ -334,7 +316,6 @@ def accept_first_run_notice_for_webview() -> dict[str, Any]:
         return {
             "ok": True,
             "accepted": True,
-            "notice_version": PRIVACY_NOTICE_VERSION,
             "message": "已确认隐私说明",
         }
     except Exception:
