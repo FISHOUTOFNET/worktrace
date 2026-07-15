@@ -70,7 +70,7 @@ def does_status_require_boundary(
     value = normalize_status(status)
     if value == STATUS_PAUSED:
         return True
-    if value in {STATUS_IDLE, STATUS_ERROR, STATUS_EXCLUDED}:
+    if value in {STATUS_IDLE, STATUS_ERROR}:
         return not can_status_soft_carry(value, duration_seconds)
     return False
 
@@ -80,7 +80,8 @@ def is_recovery_error_status(status: str) -> bool:
 
 
 def is_collector_health_status(status: str) -> bool:
-    return normalize_status(status) in COLLECTOR_HEALTH_STATUSES
+    """Collector health values are not activity-row statuses."""
+    return False
 
 
 def is_interrupt_status(status: str) -> bool:
