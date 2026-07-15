@@ -92,6 +92,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Keep the supported compatibility set explicit. Python 3.11 is
+        # excluded here because the primary test job already covers it.
         python-version: ["3.11", "3.12"]
         exclude:
           - python-version: "3.11"
