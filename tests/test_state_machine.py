@@ -1,19 +1,29 @@
-from tests.support.db_helpers import assign_activity_project
 import json
 
 import pytest
 
-pytestmark = [pytest.mark.collector_runtime, pytest.mark.integration, pytest.mark.db, pytest.mark.security_privacy]
-
+from tests.support.db_helpers import assign_activity_project
 from worktrace.collector.state_machine import CollectorStateMachine
 from worktrace.constants import EXCLUDED_WINDOW_TITLE
 from worktrace.db import get_connection
 from worktrace.platforms.base import ActiveWindow, ClipboardTextEvent
-from worktrace.services import activity_service, folder_rule_service, project_service, rule_service, settings_service
+from worktrace.services import (
+    activity_service,
+    folder_rule_service,
+    project_service,
+    rule_service,
+    settings_service,
+)
+
+pytestmark = [
+    pytest.mark.collector_runtime,
+    pytest.mark.integration,
+    pytest.mark.db,
+    pytest.mark.security_privacy,
+]
 
 
 def _enable_excluded_project_with_keyword(keyword: str) -> int:
-    """Enable the 排除规则 project and add a keyword rule. Returns the project id."""
     excluded_project = project_service.get_or_create_excluded_project()
     project_service.set_project_enabled(excluded_project, True)
     rule_service.create_rule(keyword, excluded_project)
@@ -21,7 +31,9 @@ def _enable_excluded_project_with_keyword(keyword: str) -> int:
 
 
 def _snapshot():
-    return json.loads(settings_service.get_setting("current_activity_snapshot", "") or "{}")
+    return json.loads(
+        settings_service.get_setting("current_activity_snapshot", "") or "{}"
+    )
 
 
 def test_state_transitions_persist_when_segment_reaches_threshold(temp_db):
@@ -60,6 +72,32 @@ def test_excluded_transition_anonymizes_snapshot_title(temp_db):
     assert open_activity["status"] == "excluded"
 
 
+def test_switching_to_excluded_window_preserves_previous_normal_row(temp_db):
+    _enable_excluded_project_with_keyword("银行")
+    machine = CollectorStateMachine()
+    machine.transition_to(
+        "recording",
+        ActiveWindow("Word", "winword.exe", "Client memo.docx - Word"),
+        at_time="2026-06-18 09:00:00",
+    )
+    previous_id = int(activity_service.get_open_activity()["id"])
+
+    machine.transition_to(
+        "recording",
+        ActiveWindow("BankApp", "bank.exe", "银行账户"),
+        at_time="2026-06-18 09:05:00",
+    )
+
+    previous = activity_service.get_activity(previous_id)
+    current = activity_service.get_open_activity()
+    assert previous["status"] == "normal"
+    assert previous["window_title"] == "Client memo.docx - Word"
+    assert previous["end_time"] == "2026-06-18 09:05:00"
+    assert current is not None
+    assert current["status"] == "excluded"
+    assert current["window_title"] == EXCLUDED_WINDOW_TITLE
+
+
 def test_pause_resume_short_segments_are_persisted(temp_db):
     machine = CollectorStateMachine()
     machine.transition_to(
@@ -84,15 +122,25 @@ def test_state_machine_writes_file_path_hint_to_snapshot(temp_db):
     machine = CollectorStateMachine()
     machine.transition_to(
         "recording",
-        ActiveWindow("Word", "winword.exe", "Spec.docx - Word", "D:\\CaseA\\Spec.docx"),
+        ActiveWindow(
+            "Word",
+            "winword.exe",
+            "Spec.docx - Word",
+            "D:\\CaseA\\Spec.docx",
+        ),
         at_time="2026-06-18 09:00:00",
     )
     assert _snapshot()["file_path_hint"] == "D:\\CaseA\\Spec.docx"
 
 
-def test_current_activity_snapshot_uses_folder_rule_project_before_persistence(temp_db):
+def test_current_activity_snapshot_uses_folder_rule_project_before_persistence(
+    temp_db,
+):
     project_id = project_service.create_project("21IP0300")
-    folder_rule_service.create_or_update_folder_rule("D:\\Work\\1-21IP0300", project_id)
+    folder_rule_service.create_or_update_folder_rule(
+        "D:\\Work\\1-21IP0300",
+        project_id,
+    )
     machine = CollectorStateMachine()
 
     machine.transition_to(
@@ -120,12 +168,22 @@ def test_state_machine_fills_missing_path_without_splitting(temp_db):
     )
     machine.transition_to(
         "recording",
-        ActiveWindow("Word", "winword.exe", "Spec.docx - Word", "D:\\CaseA\\Spec.docx"),
+        ActiveWindow(
+            "Word",
+            "winword.exe",
+            "Spec.docx - Word",
+            "D:\\CaseA\\Spec.docx",
+        ),
         at_time="2026-06-18 09:00:30",
     )
     machine.transition_to(
         "recording",
-        ActiveWindow("Word", "winword.exe", "Spec.docx - Word", "D:\\CaseA\\Spec.docx"),
+        ActiveWindow(
+            "Word",
+            "winword.exe",
+            "Spec.docx - Word",
+            "D:\\CaseA\\Spec.docx",
+        ),
         at_time="2026-06-18 09:01:00",
     )
     row = activity_service.get_open_activity()
@@ -138,7 +196,12 @@ def test_state_machine_keeps_activity_when_new_path_is_missing(temp_db):
     machine = CollectorStateMachine()
     machine.transition_to(
         "recording",
-        ActiveWindow("Word", "winword.exe", "Spec.docx - Word", "D:\\CaseA\\Spec.docx"),
+        ActiveWindow(
+            "Word",
+            "winword.exe",
+            "Spec.docx - Word",
+            "D:\\CaseA\\Spec.docx",
+        ),
         at_time="2026-06-18 09:00:00",
     )
     machine.transition_to(
@@ -159,21 +222,38 @@ def test_state_machine_splits_when_both_paths_differ(temp_db):
     machine = CollectorStateMachine()
     machine.transition_to(
         "recording",
-        ActiveWindow("Word", "winword.exe", "Spec.docx - Word", "D:\\CaseA\\Spec.docx"),
+        ActiveWindow(
+            "Word",
+            "winword.exe",
+            "Spec.docx - Word",
+            "D:\\CaseA\\Spec.docx",
+        ),
         at_time="2026-06-18 09:00:00",
     )
     machine.transition_to(
         "recording",
-        ActiveWindow("Word", "winword.exe", "Spec.docx - Word", "D:\\CaseA\\Spec.docx"),
+        ActiveWindow(
+            "Word",
+            "winword.exe",
+            "Spec.docx - Word",
+            "D:\\CaseA\\Spec.docx",
+        ),
         at_time="2026-06-18 09:01:00",
     )
     first_id = activity_service.get_open_activity()["id"]
     machine.transition_to(
         "recording",
-        ActiveWindow("Word", "winword.exe", "Spec.docx - Word", "D:\\CaseB\\Spec.docx"),
+        ActiveWindow(
+            "Word",
+            "winword.exe",
+            "Spec.docx - Word",
+            "D:\\CaseB\\Spec.docx",
+        ),
         at_time="2026-06-18 09:01:10",
     )
-    assert activity_service.get_activity(first_id)["end_time"] == "2026-06-18 09:01:10"
+    assert activity_service.get_activity(first_id)["end_time"] == (
+        "2026-06-18 09:01:10"
+    )
     open_activity = activity_service.get_open_activity()
     assert open_activity is not None
     assert open_activity["file_path_hint"] == "D:\\CaseB\\Spec.docx"
@@ -207,11 +287,13 @@ def test_midnight_split_restarts_with_persistent_temporary_anchor(temp_db):
     new_row = activity_service.get_open_activity()
     with get_connection() as conn:
         assignment = conn.execute(
-            "SELECT source, is_manual FROM activity_project_assignment WHERE activity_id = ?",
+            "SELECT source, is_manual FROM activity_project_assignment "
+            "WHERE activity_id = ?",
             (new_row["id"],),
         ).fetchone()
         boundaries = conn.execute(
-            "SELECT occurred_at, reason FROM session_boundary ORDER BY occurred_at"
+            "SELECT occurred_at, reason FROM session_boundary "
+            "ORDER BY occurred_at"
         ).fetchall()
 
         assert old_row["end_time"] == "2026-06-19 00:00:00"
@@ -227,18 +309,30 @@ def test_midnight_split_restarts_with_persistent_temporary_anchor(temp_db):
 
 
 def test_clipboard_event_forces_short_activity_into_history(temp_db):
+    settings_service.set_setting("clipboard_capture_enabled", "true")
     machine = CollectorStateMachine()
     window = ActiveWindow("Edge", "msedge.exe", "Research")
-    machine.transition_to("recording", window, at_time="2026-06-18 09:00:00")
+    machine.transition_to(
+        "recording",
+        window,
+        at_time="2026-06-18 09:00:00",
+    )
 
     event_id = machine.record_clipboard_event(
-        ClipboardTextEvent("copied text", window, copied_at="2026-06-18 09:00:05", sequence_number=7),
+        ClipboardTextEvent(
+            "copied text",
+            window,
+            copied_at="2026-06-18 09:00:05",
+            sequence_number=7,
+        ),
         at_time="2026-06-18 09:00:05",
     )
 
     row = activity_service.get_open_activity()
     with get_connection() as conn:
-        event_count = conn.execute("SELECT COUNT(*) AS c FROM activity_clipboard_event").fetchone()["c"]
+        event_count = conn.execute(
+            "SELECT COUNT(*) AS c FROM activity_clipboard_event"
+        ).fetchone()["c"]
     assert event_id is not None
     assert row is not None
     assert row["start_time"] == "2026-06-18 09:00:00"
@@ -247,17 +341,29 @@ def test_clipboard_event_forces_short_activity_into_history(temp_db):
 
 
 def test_clipboard_event_for_excluded_window_is_not_recorded(temp_db):
+    settings_service.set_setting("clipboard_capture_enabled", "true")
     _enable_excluded_project_with_keyword("Secret")
     machine = CollectorStateMachine()
     window = ActiveWindow("Edge", "msedge.exe", "Secret page")
-    machine.transition_to("recording", window, at_time="2026-06-18 09:00:00")
+    machine.transition_to(
+        "recording",
+        window,
+        at_time="2026-06-18 09:00:00",
+    )
 
     event_id = machine.record_clipboard_event(
-        ClipboardTextEvent("sensitive copied text", window, copied_at="2026-06-18 09:00:05", sequence_number=8),
+        ClipboardTextEvent(
+            "sensitive copied text",
+            window,
+            copied_at="2026-06-18 09:00:05",
+            sequence_number=8,
+        ),
         at_time="2026-06-18 09:00:05",
     )
 
     with get_connection() as conn:
-        event_count = conn.execute("SELECT COUNT(*) AS c FROM activity_clipboard_event").fetchone()["c"]
+        event_count = conn.execute(
+            "SELECT COUNT(*) AS c FROM activity_clipboard_event"
+        ).fetchone()["c"]
     assert event_id is None
     assert event_count == 0

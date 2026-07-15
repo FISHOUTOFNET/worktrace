@@ -1,7 +1,7 @@
 """Encrypted local backup export/import and destructive-maintenance boundary.
 
 A replacement is validated in a staging database before the live database is
-mutated.  Collector pause and process-local reset are acknowledged before the
+mutated. Collector pause and process-local reset are acknowledged before the
 process database write gate is acquired, so no stale runtime identity can write
 to the replacement generation.
 """
@@ -39,9 +39,17 @@ from ..security.backup_format import (
     parse_backup_manifest,
 )
 from ..write_gate import DATABASE_WRITE_GATE
-from .runtime_activity_state_service import clear_runtime_activity_state
+from .runtime_activity_state_service import (
+    clear_runtime_activity_state,
+    restore_runtime_activity_snapshot,
+)
 from .secure_backup_validation import BackupValidationError, validate_staging_database
-from .settings_service import clear_settings_cache, get_bool_setting, get_setting, set_setting
+from .settings_service import (
+    clear_settings_cache,
+    get_bool_setting,
+    get_setting,
+    set_setting,
+)
 
 PAYLOAD_FORMAT = "worktrace-local-data"
 PAYLOAD_VERSION = 4
@@ -93,6 +101,9 @@ _DELETE_ORDER: tuple[str, ...] = (
     "session_boundary",
     "settings",
     "project",
+)
+_UNSAFE_SNAPSHOT_IDENTITY_KEYS = frozenset(
+    {"id", "activity_id", "open_activity_id", "persisted_activity_id"}
 )
 
 
@@ -218,19 +229,25 @@ def _require_bounded_backup_file(path: Path) -> None:
 class _ImportGuardState:
     prior_user_paused: bool
     prior_collector_status: str
-    prior_snapshot: str
     succeeded: bool = False
 
     def mark_succeeded(self) -> None:
+        """Mark a destructive operation as committed before leaving its body."""
         self.succeeded = True
 
 
 class SecureImportCoordinator:
-    """Single coordinator for all destructive live-database maintenance."""
+    """Single coordinator for all destructive live-database maintenance.
+
+    ``maintenance_active`` covers pause acknowledgement, runtime reset, the
+    database write gate, validation, and rollback. The collector therefore has
+    no interval in which it may resume between pause and replacement.
+    """
 
     def __init__(self) -> None:
         self._maintenance_lock = threading.Lock()
         self._state_lock = threading.Lock()
+        self._maintenance_active = False
         self._write_gate = False
         self._pause_handler: Any = None
         self._reset_handler: Any = None
@@ -254,8 +271,13 @@ class SecureImportCoordinator:
                 self._reset_handler = None
 
     def write_gate_active(self) -> bool:
+        """Return whether any destructive maintenance operation is active."""
         with self._state_lock:
-            return self._write_gate or DATABASE_WRITE_GATE.active()
+            return (
+                self._maintenance_active
+                or self._write_gate
+                or DATABASE_WRITE_GATE.active()
+            )
 
     @contextmanager
     def acquire(
@@ -269,30 +291,26 @@ class SecureImportCoordinator:
                 "another destructive operation is already in progress"
             )
 
-        from ..collector.snapshot_publisher import DEFAULT_SNAPSHOT_PUBLISHER
+        with self._state_lock:
+            self._maintenance_active = True
+            pause_handler = self._pause_handler
+            reset_handler = self._reset_handler
 
         prior_user_paused = get_bool_setting("user_paused", False)
-        prior_collector_status = get_setting("collector_status", "stopped") or "stopped"
-        prior_snapshot = DEFAULT_SNAPSHOT_PUBLISHER.read_raw()
-        state = _ImportGuardState(
-            prior_user_paused,
-            prior_collector_status,
-            prior_snapshot,
+        prior_collector_status = (
+            get_setting("collector_status", "stopped") or "stopped"
         )
-        pause_state_changed = False
+        prior_snapshot = get_setting("current_activity_snapshot", "") or ""
+        state = _ImportGuardState(
+            prior_user_paused=prior_user_paused,
+            prior_collector_status=prior_collector_status,
+        )
         try:
-            with self._state_lock:
-                pause_handler = self._pause_handler
-                reset_handler = self._reset_handler
-
             if pause_handler is not None:
                 result = pause_handler(timeout_seconds=5.0)
                 if not bool(result.get("ok")):
                     raise SecureBackupError("collector_pause_not_acknowledged")
 
-            # Reset before replacing the database.  This discards the paused
-            # row's activity id and every other process-local identity while
-            # they still refer to the old generation.
             if reset_handler is not None:
                 result = reset_handler(timeout_seconds=5.0)
                 if not bool(result.get("ok")):
@@ -301,7 +319,6 @@ class SecureImportCoordinator:
             set_setting("user_paused", "true")
             set_setting("collector_status", "paused")
             clear_runtime_activity_state(f"{reason}_guard_enter")
-            pause_state_changed = True
 
             with DATABASE_WRITE_GATE.acquire():
                 with self._state_lock:
@@ -309,35 +326,31 @@ class SecureImportCoordinator:
                 try:
                     yield state
                 except Exception:
-                    if not state.succeeded:
-                        set_setting(
-                            "user_paused",
-                            "true" if prior_user_paused else "false",
-                        )
-                        set_setting("collector_status", prior_collector_status)
-                        DEFAULT_SNAPSHOT_PUBLISHER.restore_raw(prior_snapshot)
                     raise
                 else:
-                    clear_runtime_activity_state(f"{reason}_success")
-                    logging.info(
-                        "runtime maintenance completed reason=%s paused=true",
-                        reason,
-                    )
+                    state.succeeded = True
                 finally:
                     with self._state_lock:
                         self._write_gate = False
+
+            clear_runtime_activity_state(f"{reason}_success")
+            logging.info(
+                "runtime maintenance completed reason=%s paused=true",
+                reason,
+            )
         except Exception as exc:
-            if (
-                pause_state_changed
-                and not state.succeeded
-                and not DATABASE_WRITE_GATE.active()
-            ):
+            if not state.succeeded:
                 set_setting(
                     "user_paused",
                     "true" if prior_user_paused else "false",
                 )
                 set_setting("collector_status", prior_collector_status)
-                DEFAULT_SNAPSHOT_PUBLISHER.restore_raw(prior_snapshot)
+                clear_runtime_activity_state(f"{reason}_rollback")
+                if _snapshot_is_safe_to_restore(prior_snapshot):
+                    restore_runtime_activity_snapshot(
+                        prior_snapshot,
+                        f"{reason}_rollback",
+                    )
             logging.warning(
                 "runtime maintenance failed reason=%s exc_type=%s",
                 reason,
@@ -345,6 +358,9 @@ class SecureImportCoordinator:
             )
             raise
         finally:
+            with self._state_lock:
+                self._write_gate = False
+                self._maintenance_active = False
             clear_settings_cache()
             self._maintenance_lock.release()
 
@@ -373,6 +389,28 @@ def is_secure_import_in_progress() -> bool:
     return SECURE_IMPORT_COORDINATOR.write_gate_active()
 
 
+def _snapshot_is_safe_to_restore(snapshot: str) -> bool:
+    if not snapshot:
+        return False
+    try:
+        value = json.loads(snapshot)
+    except (TypeError, json.JSONDecodeError):
+        return False
+    return not _contains_persisted_identity(value)
+
+
+def _contains_persisted_identity(value: Any) -> bool:
+    if isinstance(value, dict):
+        if bool(value.get("is_persisted")):
+            return True
+        if any(key in value for key in _UNSAFE_SNAPSHOT_IDENTITY_KEYS):
+            return True
+        return any(_contains_persisted_identity(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_contains_persisted_identity(item) for item in value)
+    return False
+
+
 def _build_export_payload() -> bytes:
     tables: dict[str, list[dict[str, Any]]] = {}
     conn = get_connection()
@@ -385,7 +423,9 @@ def _build_export_payload() -> bytes:
             rows = conn.execute(f"SELECT * FROM {table}").fetchall()
             if table == "settings":
                 tables[table] = [
-                    dict(row) for row in rows if row["key"] in MIGRATABLE_SETTINGS
+                    dict(row)
+                    for row in rows
+                    if row["key"] in MIGRATABLE_SETTINGS
                 ]
             else:
                 tables[table] = [dict(row) for row in rows]
@@ -523,7 +563,9 @@ def _load_import_tables(
     for table in EXPORT_TABLES:
         rows = tables.get(table, [])
         if table == "settings":
-            rows = [row for row in rows if row.get("key") in MIGRATABLE_SETTINGS]
+            rows = [
+                row for row in rows if row.get("key") in MIGRATABLE_SETTINGS
+            ]
         imported[table] = _insert_rows(conn, table, rows)
     return imported
 

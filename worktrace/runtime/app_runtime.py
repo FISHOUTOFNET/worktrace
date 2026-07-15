@@ -24,7 +24,7 @@ from ..services.secure_backup_service import (
     register_collector_pause_handler,
     register_collector_reset_handler,
 )
-from ..services.settings_service import get_bool_setting, set_setting
+from ..services.settings_service import get_bool_setting, get_setting, set_setting
 
 if TYPE_CHECKING:
     from .. import config
@@ -144,14 +144,16 @@ class AppRuntime:
         self,
         timeout_seconds: float = 5.0,
     ) -> dict[str, object]:
-        """Pause writers for maintenance without changing the user's intent."""
+        """Pause writers for maintenance without changing exposed user intent."""
         prior_user_paused = get_bool_setting("user_paused", False)
+        prior_collector_status = get_setting("collector_status", "stopped") or "stopped"
         result = self.pause_collection_now(timeout_seconds=timeout_seconds)
         if bool(result.get("ok")):
             set_setting(
                 "user_paused",
                 "true" if prior_user_paused else "false",
             )
+            set_setting("collector_status", prior_collector_status)
         return result
 
     def reset_collection_runtime_now(
@@ -183,33 +185,57 @@ class AppRuntime:
         self.stop_event.set()
 
     def shutdown(self) -> None:
-        """Join workers, close rows, stop adapter services and release the lock."""
+        """Stop writers before closing rows or releasing the instance lease."""
         with self._lifecycle_lock:
             if self._shutdown:
                 return
             self._shutdown = True
             clear_collector_pause_handler(self.quiesce_collection_now)
             clear_collector_reset_handler(self.reset_collection_runtime_now)
+            self.set_clipboard_capture_enabled(False)
             self.stop_event.set()
             index_thread = self._index_thread
             collector_thread = self._collector_thread
+
+        adapter_shutdown = False
+        if collector_thread:
+            joiner = getattr(collector_thread, "join", None)
+            if joiner is not None:
+                joiner(timeout=5)
+            if _thread_reference_is_alive(collector_thread):
+                # A platform call may still be blocking. Shutting down the
+                # adapter is the only bounded way to unblock adapter-owned work.
+                shutdown_adapter = getattr(self._adapter, "shutdown", None)
+                if shutdown_adapter is not None:
+                    shutdown_adapter()
+                    adapter_shutdown = True
+                if joiner is not None:
+                    joiner(timeout=5)
 
         if index_thread:
             joiner = getattr(index_thread, "join", None)
             if joiner is not None:
                 joiner(timeout=5)
-        if collector_thread:
-            joiner = getattr(collector_thread, "join", None)
-            if joiner is not None:
-                joiner(timeout=5)
-        if self.owns_collector:
+
+        writers_stopped = not _thread_reference_is_alive(
+            collector_thread
+        ) and not _thread_reference_is_alive(index_thread)
+        if self.owns_collector and writers_stopped:
             activity_lifecycle_service.close_all_open_activities()
             set_setting("collector_status", "stopped")
             release_single_instance()
-        shutdown_adapter = getattr(self._adapter, "shutdown", None)
-        if shutdown_adapter is not None:
-            shutdown_adapter()
-        logging.info("app shutdown")
+            self.owns_collector = False
+        elif self.owns_collector:
+            # Never release the single-instance lease while an old writer may
+            # resume and write into the same database generation.
+            collector_health.record_health_code("shutdown_writer_still_alive")
+            logging.error("runtime shutdown retained instance lock: writer alive")
+
+        if not adapter_shutdown:
+            shutdown_adapter = getattr(self._adapter, "shutdown", None)
+            if shutdown_adapter is not None:
+                shutdown_adapter()
+        logging.info("app shutdown writers_stopped=%s", writers_stopped)
 
 
 __all__ = ["AppRuntime"]
