@@ -1,44 +1,27 @@
 ........................................................................ [  2%]
-...........................................F
+........................................................................ [  4%]
+........................................................................ [  7%]
+...................F
 ================================== FAILURES ===================================
-_________________ test_collector_health_logging_is_sanitized __________________
+_______________ test_export_all_and_clear_requires_confirmation _______________
 
-    def test_collector_health_logging_is_sanitized():
-        source = _source("worktrace/collector/collector_health.py")
-        forbidden = (
-            "exc_info=True",
-            "format_exc",
-            "traceback",
-            "window_title",
-            "file_path",
-            "clipboard",
-            "sql",
-            "note",
-        )
-        offenders = [token for token in forbidden if token in source.lower()]
->       assert offenders == []
-E       AssertionError: assert ['sql'] == []
-E         
-E         Left contains one more item: 'sql'
-E         
-E         Full diff:
-E         - []
-E         + [
-E         +     'sql',
-E         + ]
+temp_db = WindowsPath('C:/Users/���� Sun Yi/AppData/Local/Temp/pytest-of-���� Sun Yi/pytest-3139/test_export_all_and_clear_requ0/worktrace.db')
+tmp_path = WindowsPath('C:/Users/���� Sun Yi/AppData/Local/Temp/pytest-of-���� Sun Yi/pytest-3139/test_export_all_and_clear_requ0')
 
-tests\test_collector_architecture_contract.py:173: AssertionError
+    def test_export_all_and_clear_requires_confirmation(temp_db, tmp_path):
+        path = export_service.export_all_local_data(str(tmp_path / "all.xlsx"))
+        assert Path(path).exists()
+        wb = load_workbook(path)
+        assert "folder_project_rule" in wb.sheetnames
+>       assert "folder_rule_index_state" not in wb.sheetnames
+E       AssertionError: assert 'folder_rule_index_state' not in ['project', 'settings', 'session_boundary', 'activity_log', 'folder_project_rule', 'project_rule', ...]
+E        +  where ['project', 'settings', 'session_boundary', 'activity_log', 'folder_project_rule', 'project_rule', ...] = <openpyxl.workbook.workbook.Workbook object at 0x0000012CDA1866D0>.sheetnames
+
+tests\test_export_service.py:65: AssertionError
 =========================== short test summary info ===========================
-FAILED tests/test_collector_architecture_contract.py::test_collector_health_logging_is_sanitized - AssertionError: assert ['sql'] == []
-  
-  Left contains one more item: 'sql'
-  
-  Full diff:
-  - []
-  + [
-  +     'sql',
-  + ]
+FAILED tests/test_export_service.py::test_export_all_and_clear_requires_confirmation - AssertionError: assert 'folder_rule_index_state' not in ['project', 'settings', 'session_boundary', 'activity_log', 'folder_project_rule', 'project_rule', ...]
+ +  where ['project', 'settings', 'session_boundary', 'activity_log', 'folder_project_rule', 'project_rule', ...] = <openpyxl.workbook.workbook.Workbook object at 0x0000012CDA1866D0>.sheetnames
 !!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!
-1 failed, 115 passed in 56.60s
+1 failed, 235 passed in 74.52s (0:01:14)
 
 PYTEST_EXIT_CODE=1
