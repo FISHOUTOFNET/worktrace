@@ -74,269 +74,140 @@
                     </div>
                 </div>
             </section>
+
             <section id="page-timeline" class="page">
                 <header class="page-header">
                     <h1>时间详情</h1>
                     <div class="timeline-date-nav">
-                        <button id="timeline-prev-btn" class="date-nav-btn" type="button">&lt;</button>
-                        <input id="timeline-date-input" type="date" class="date-display date-input">
-                        <button id="timeline-next-btn" class="date-nav-btn" type="button">&gt;</button>
-                        <button id="timeline-today-btn" class="date-nav-btn today-btn" type="button">今日</button>
+                        <button id="timeline-prev-btn" class="timeline-nav-btn" aria-label="前一天">‹</button>
+                        <input id="timeline-date-input" type="date" class="timeline-date-input">
+                        <button id="timeline-next-btn" class="timeline-nav-btn" aria-label="后一天">›</button>
+                        <button id="timeline-today-btn" class="timeline-today-btn">今天</button>
                     </div>
                 </header>
                 <div id="timeline-error" class="error-banner" hidden>加载失败，请稍后重试。</div>
-                <div id="timeline-loading" class="timeline-loading" hidden>加载中…</div>
-                <div class="timeline-summary">
-                    <div class="timeline-total-card">
-                        <span class="timeline-total-label">当日总时长</span>
-                        <span id="timeline-total" class="timeline-total-value">00:00:00</span>
-                    </div>
-                    <div id="timeline-current" class="timeline-current">当前活动：无</div>
+                <div id="timeline-loading" class="timeline-loading" hidden>正在加载...</div>
+                <div class="timeline-current-card">
+                    <div class="card-title">当前活动</div>
+                    <div id="timeline-current" class="current-text">当前活动：无</div>
                 </div>
                 <div class="timeline-layout">
-                    <div class="timeline-sessions">
-                        <div class="card-title">活动时段</div>
-                        <div id="timeline-sessions-list" class="timeline-list">
-                            <div class="timeline-empty">暂无活动</div>
-                        </div>
+                    <div class="timeline-main">
+                        <div id="timeline-session-list" class="timeline-session-list"></div>
+                        <div id="timeline-empty" class="timeline-empty" hidden>当日暂无记录</div>
                     </div>
-                    <div class="timeline-details">
-                        <div id="timeline-details-header" class="timeline-details-header">选择左侧时段查看详情</div>
-                        <div id="timeline-details-list" class="timeline-list">
-                            <div class="timeline-empty">暂无详情</div>
+                    <aside id="timeline-details-panel" class="timeline-details-panel">
+                        <div class="timeline-details-title">活动详情</div>
+                        <div id="timeline-details-empty" class="timeline-details-empty">请选择一个活动时段</div>
+                        <div id="timeline-details-content" hidden>
+                            <div class="timeline-details-row">
+                                <span class="timeline-details-label">项目</span>
+                                <span id="timeline-details-project" class="timeline-details-value">--</span>
+                            </div>
+                            <div class="timeline-details-row">
+                                <span class="timeline-details-label">时段</span>
+                                <span id="timeline-details-time" class="timeline-details-value">--</span>
+                            </div>
+                            <div class="timeline-details-row">
+                                <span class="timeline-details-label">时长</span>
+                                <span id="timeline-details-duration" class="timeline-details-value">--</span>
+                            </div>
+                            <div class="timeline-details-row timeline-details-status-row">
+                                <span class="timeline-details-label">状态</span>
+                                <span id="timeline-details-status" class="timeline-details-value">--</span>
+                            </div>
+                            <div id="timeline-details-activities" class="timeline-details-activities"></div>
+                            <div class="timeline-details-actions">
+                                <button id="timeline-edit-session" class="timeline-action-btn">修改项目/时长/备注</button>
+                                <button id="timeline-hide-session" class="timeline-action-btn timeline-danger-btn">隐藏时段</button>
+                                <button id="timeline-merge-previous" class="timeline-action-btn">与上一时段合并</button>
+                                <button id="timeline-merge-next" class="timeline-action-btn">与下一时段合并</button>
+                                <button id="timeline-split-session" class="timeline-action-btn">拆分合并时段</button>
+                                <button id="timeline-copy-session" class="timeline-action-btn">复制时段</button>
+                            </div>
                         </div>
-                        <div id="timeline-edit-panel" class="timeline-edit-panel" hidden>
-                            <div id="timeline-session-actions" class="timeline-session-actions">
-                                <button id="timeline-hide-session" type="button">删除该时段</button>
-                                <button id="timeline-merge-previous" type="button">合并到上一时段</button>
-                                <button id="timeline-merge-next" type="button">合并到下一时段</button>
-                                <button id="timeline-split-session" type="button">拆分合并时段</button>
-                                <button id="timeline-copy-session" type="button">复制该时段</button>
-                            </div>
-                            <div class="edit-panel-title">编辑当前时段</div>
-                            <div class="edit-section-label">项目</div>
-                            <div class="edit-field">
-                                <label for="edit-project-select" class="edit-label">项目</label>
-                                <select id="edit-project-select" class="edit-select" disabled>
-                                    <option value="">加载中…</option>
-                                </select>
-                            </div>
-                            <div class="edit-section-label">时长（分钟）</div>
-                            <div class="edit-field edit-duration-section">
-                                <input type="number" id="edit-duration-input" class="edit-input edit-duration-input" min="0" step="1" placeholder="留空使用真实时长" disabled>
-                                <div class="edit-duration-hint">仅修改显示/申报时长，不改变后台真实活动记录。</div>
-                                <span id="edit-duration-status" class="edit-duration-hint"></span>
-                            </div>
-                            <div class="edit-section-label">备注</div>
-                            <div class="edit-field">
-                                <label for="edit-note-text" class="edit-label">备注</label>
-                                <textarea id="edit-note-text" class="edit-note" rows="3" placeholder="为该时段添加备注" disabled></textarea>
-                                <div class="edit-note-meta">
-                                    <span id="edit-note-count" class="edit-note-count">0 / 2000</span>
-                                </div>
-                            </div>
-                            <div class="edit-actions">
-                                <button id="edit-save-btn" class="edit-btn edit-save-btn" type="button" disabled>保存</button>
-                                <button id="edit-cancel-btn" class="edit-btn edit-cancel-btn" type="button" disabled>取消</button>
-                            </div>
-                            <div id="edit-status" class="edit-status" hidden></div>
+                    </aside>
+                </div>
+                <div id="timeline-edit-panel" class="timeline-edit-panel" hidden>
+                    <div class="timeline-edit-header">
+                        <div class="timeline-edit-title">编辑活动时段</div>
+                        <button id="edit-cancel-btn" class="timeline-edit-close" aria-label="关闭">×</button>
+                    </div>
+                    <div class="timeline-edit-body">
+                        <label class="timeline-edit-label" for="edit-project-select">项目</label>
+                        <select id="edit-project-select" class="timeline-edit-select"></select>
+                        <label class="timeline-edit-label" for="edit-duration-input">时长（分钟）</label>
+                        <input id="edit-duration-input" type="number" min="0" step="1" class="timeline-edit-input">
+                        <div id="edit-duration-status" class="timeline-edit-status"></div>
+                        <label class="timeline-edit-label" for="edit-note-text">备注</label>
+                        <textarea id="edit-note-text" maxlength="2000" class="timeline-edit-textarea"></textarea>
+                        <div id="edit-note-count" class="timeline-edit-note-count">0 / 2000</div>
+                        <div id="edit-status" class="timeline-edit-status"></div>
+                    </div>
+                    <div class="timeline-edit-footer">
+                        <button id="edit-save-btn" class="timeline-edit-save">保存</button>
+                        <button id="edit-cancel-footer-btn" class="timeline-edit-cancel">取消</button>
                     </div>
                 </div>
             </section>
+
             <section id="page-statistics" class="page">
-                <header class="page-header stats-header">
-                    <div class="stats-header-text">
-                        <h1>统计 / 导出</h1>
-                        <p class="stats-subtitle">查看统计并导出当前范围内的活动记录为 CSV 文件。</p>
-                    </div>
+                <header class="page-header">
+                    <h1>统计与导出</h1>
                 </header>
-                <div class="stats-controls">
-                    <div class="stats-date-range">
-                        <label for="statistics-date-from" class="stats-date-label">开始</label>
-                        <input type="date" id="statistics-date-from" class="stats-date-input">
-                        <label for="statistics-date-to" class="stats-date-label">结束</label>
-                        <input type="date" id="statistics-date-to" class="stats-date-input">
-                        <button id="statistics-load-btn" class="stats-load-btn" type="button">加载统计</button>
-                    </div>
-                    <div class="stats-quick-range">
-                        <button id="statistics-today-btn" class="stats-quick-btn" type="button">今天</button>
-                        <button id="statistics-7d-btn" class="stats-quick-btn" type="button">最近 7 天</button>
-                        <button id="statistics-month-btn" class="stats-quick-btn" type="button">本月</button>
-                    </div>
-                </div>
                 <div id="statistics-error" class="error-banner" hidden>加载统计失败</div>
-                <div id="statistics-loading" class="stats-loading" hidden>正在加载统计…</div>
-                <div class="stats-closed-only-hint">
-                    统计与导出预览仅包含已完成活动；当前进行中活动不会计入，结束后会进入统计。
+                <div class="statistics-controls">
+                    <label for="statistics-date-from">开始日期</label>
+                    <input id="statistics-date-from" type="date">
+                    <label for="statistics-date-to">结束日期</label>
+                    <input id="statistics-date-to" type="date">
+                    <button id="statistics-load-btn">加载统计</button>
+                    <button id="statistics-today-btn">今天</button>
+                    <button id="statistics-7d-btn">近 7 天</button>
+                    <button id="statistics-month-btn">本月</button>
                 </div>
-                <div class="stats-summary-grid">
-                    <div class="stats-summary-card">
-                        <div class="stats-summary-label">总时长</div>
-                        <div id="stats-total" class="stats-summary-value">00:00:00</div>
-                    </div>
-                    <div class="stats-summary-card">
-                        <div class="stats-summary-label">活动数</div>
-                        <div id="stats-activity-count" class="stats-summary-value">0</div>
-                    </div>
-                    <div class="stats-summary-card">
-                        <div class="stats-summary-label">项目数</div>
-                        <div id="stats-project-count" class="stats-summary-value">0</div>
-                    </div>
-                    <div class="stats-summary-card">
-                        <div class="stats-summary-label">应用数</div>
-                        <div id="stats-app-count" class="stats-summary-value">0</div>
-                    </div>
+                <div id="statistics-loading" class="statistics-loading" hidden>正在加载统计...</div>
+                <div class="statistics-kpi-grid">
+                    <div class="kpi-card"><div class="kpi-label">总时长</div><div id="stats-total" class="kpi-value">00:00:00</div></div>
+                    <div class="kpi-card"><div class="kpi-label">活动数</div><div id="stats-activity-count" class="kpi-value">0</div></div>
+                    <div class="kpi-card"><div class="kpi-label">项目数</div><div id="stats-project-count" class="kpi-value">0</div></div>
+                    <div class="kpi-card"><div class="kpi-label">应用数</div><div id="stats-app-count" class="kpi-value">0</div></div>
                 </div>
-                <div class="stats-tables">
-                    <div class="stats-table-card">
-                        <div class="card-title">按项目</div>
-                        <div class="stats-table-wrap">
-                            <table class="stats-table">
-                                <thead>
-                                    <tr>
-                                        <th>名称</th>
-                                        <th>时长</th>
-                                        <th>活动数</th>
-                                        <th>占比</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="stats-by-project"></tbody>
-                            </table>
-                        </div>
-                        <div id="stats-empty-project" class="stats-empty" hidden>暂无统计数据</div>
-                    </div>
-                    <div class="stats-table-card">
-                        <div class="card-title">按应用</div>
-                        <div class="stats-table-wrap">
-                            <table class="stats-table">
-                                <thead>
-                                    <tr>
-                                        <th>名称</th>
-                                        <th>时长</th>
-                                        <th>活动数</th>
-                                        <th>占比</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="stats-by-app"></tbody>
-                            </table>
-                        </div>
-                        <div id="stats-empty-app" class="stats-empty" hidden>暂无统计数据</div>
-                    </div>
-                    <div class="stats-table-card">
-                        <div class="card-title">按状态</div>
-                        <div class="stats-table-wrap">
-                            <table class="stats-table">
-                                <thead>
-                                    <tr>
-                                        <th>名称</th>
-                                        <th>时长</th>
-                                        <th>活动数</th>
-                                        <th>占比</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="stats-by-status"></tbody>
-                            </table>
-                        </div>
-                        <div id="stats-empty-status" class="stats-empty" hidden>暂无统计数据</div>
-                    </div>
+                <div class="statistics-grid">
+                    <article class="statistics-card">
+                        <h2>按项目</h2>
+                        <table><tbody id="stats-by-project"></tbody></table>
+                        <div id="stats-empty-project" class="statistics-empty">暂无项目数据</div>
+                    </article>
+                    <article class="statistics-card">
+                        <h2>按应用</h2>
+                        <table><tbody id="stats-by-app"></tbody></table>
+                        <div id="stats-empty-app" class="statistics-empty">暂无应用数据</div>
+                    </article>
+                    <article class="statistics-card">
+                        <h2>按状态</h2>
+                        <table><tbody id="stats-by-status"></tbody></table>
+                        <div id="stats-empty-status" class="statistics-empty">暂无状态数据</div>
+                    </article>
                 </div>
-                <div id="statistics-export-preview" class="stats-export-preview">
-                    <div class="card-title">导出预览</div>
-                    <div class="stats-closed-only-hint">
-                        统计与导出预览仅包含已完成活动；当前进行中活动不会计入，结束后会进入统计。
-                    </div>
-                    <div class="stats-export-rows">
-                        <div class="stats-export-row">
-                            <span class="stats-export-label">当前范围</span>
-                            <span id="stats-export-range" class="stats-export-value">--</span>
-                        </div>
-                        <div class="stats-export-row">
-                            <span class="stats-export-label">纳入活动数</span>
-                            <span id="stats-export-count" class="stats-export-value">0</span>
-                        </div>
-                        <div class="stats-export-row">
-                            <span class="stats-export-label">纳入总时长</span>
-                            <span id="stats-export-duration" class="stats-export-value">00:00:00</span>
-                        </div>
-                        <div class="stats-export-row">
-                            <span class="stats-export-label">可导出格式</span>
-                            <span id="stats-export-formats" class="stats-export-value">--</span>
-                        </div>
-                    </div>
-                    <div class="stats-export-hint">
-                        导出当前范围内已结束、非隐藏的活动记录为 CSV；不包含窗口标题、文件路径等敏感信息。导出范围最多 31 天。
-                    </div>
-                    <div id="stats-export-status" class="stats-export-status" hidden></div>
-                    <button id="stats-export-action-btn" class="stats-export-action-btn" type="button">导出 CSV</button>
-                </div>
+                <article class="statistics-card statistics-export-card">
+                    <h2>导出预览</h2>
+                    <p>范围：<span id="stats-export-range">--</span></p>
+                    <p>活动数：<span id="stats-export-count">0</span></p>
+                    <p>总时长：<span id="stats-export-duration">00:00:00</span></p>
+                    <p>格式：<span id="stats-export-formats">--</span></p>
+                    <button id="stats-export-action-btn" disabled>导出 CSV</button>
+                    <p id="stats-export-status" class="stats-export-status" hidden></p>
+                </article>
             </section>
+
             <section id="page-rules" class="page">
-                <header class="page-header rules-header">
-                    <div class="rules-header-text">
-                        <h1>项目规则</h1>
-                        <p class="rules-subtitle">用文件夹和关键词规则自动归类活动，首页只保留日常查看、新增和删除。</p>
-                    </div>
-                </header>
-                <div id="rules-readonly-hint" class="rules-readonly-hint">
-                    本页只通过本地 bridge 调用 Python 服务，不使用浏览器存储，也不会发起网络请求。
-                </div>
-                <div class="rules-home-toolbar">
-                    <button id="rules-open-create-rule" class="rules-primary-action" type="button">新建规则</button>
-                    <button id="rules-open-create-project" class="rules-secondary-action" type="button">新建项目</button>
-                    <label class="rules-sort-label" for="rules-sort-select">排序</label>
-                    <select id="rules-sort-select" class="rules-sort-select">
-                        <option value="last_used">按上次使用排序</option>
-                        <option value="alpha">按首字母排序</option>
-                    </select>
-                </div>
-                <div id="rules-create-panel" class="rules-create-panel" hidden>
-                    <div class="rules-create-panel-backdrop" data-rules-panel-close="1"></div>
-                    <aside class="rules-create-panel-sheet" role="dialog" aria-modal="true" aria-labelledby="rules-create-panel-title">
-                        <div class="rules-create-panel-head">
-                            <h2 id="rules-create-panel-title">新建规则</h2>
-                            <button id="rules-create-panel-close" class="rules-icon-button" type="button" aria-label="关闭">×</button>
-                        </div>
-                        <div class="rules-panel-tabs">
-                            <button id="rules-panel-rule-tab" class="rules-panel-tab is-active" type="button">规则</button>
-                            <button id="rules-panel-project-tab" class="rules-panel-tab" type="button">项目</button>
-                        </div>
-                        <div id="rules-panel-status" class="rules-panel-status" hidden></div>
-                        <section id="rules-panel-project-section" class="rules-panel-section" hidden>
-                            <label class="rules-panel-field">项目名称<input id="rules-panel-project-name" type="text" maxlength="100" autocomplete="off"></label>
-                            <label class="rules-panel-field">项目描述<input id="rules-panel-project-description" type="text" maxlength="500" autocomplete="off"></label>
-                            <label class="rules-panel-field">项目语言<select id="rules-panel-project-language"><option value="中文">中文</option><option value="英语">英语</option><option value="日语">日语</option><option value="其他">其他</option></select></label>
-                            <label id="rules-panel-project-language-other-row" class="rules-panel-field" hidden>其他语言<input id="rules-panel-project-language-other" type="text" maxlength="50" autocomplete="off"></label>
-                            <button id="rules-panel-save-project" class="rules-panel-submit" type="button">保存项目</button>
-                        </section>
-                        <section id="rules-panel-rule-section" class="rules-panel-section">
-                            <div class="rules-panel-segment">
-                                <button id="rules-panel-folder-type" class="is-active" type="button">文件夹规则</button>
-                                <button id="rules-panel-keyword-type" type="button">关键词规则</button>
-                            </div>
-                            <label class="rules-panel-field">目标项目<select id="rules-panel-target-project"></select></label>
-                            <button id="rules-panel-create-project-inline" class="rules-inline-action" type="button">在此新建项目</button>
-                            <label id="rules-panel-folder-row" class="rules-panel-field">文件夹路径<input id="rules-panel-folder-path" type="text" maxlength="512" autocomplete="off"></label>
-                            <label id="rules-panel-folder-recursive-row" class="rules-panel-check"><input id="rules-panel-folder-recursive" type="checkbox" checked> 包含子文件夹</label>
-                            <label id="rules-panel-keyword-row" class="rules-panel-field" hidden>关键词<input id="rules-panel-keyword" type="text" maxlength="200" autocomplete="off"></label>
-                            <label id="rules-panel-backfill-row" class="rules-panel-check"><input id="rules-panel-backfill" type="checkbox" checked> 同时应用到历史记录（推荐）</label>
-                            <button id="rules-panel-save-rule" class="rules-panel-submit" type="button">新增规则</button>
-                        </section>
-                    </aside>
-                </div>
-                <div id="rules-delete-modal" class="rules-create-panel" hidden>
-                    <div class="rules-create-panel-backdrop" data-rules-delete-close="1"></div>
-                    <aside class="rules-create-panel-sheet" role="dialog" aria-modal="true" aria-labelledby="rules-delete-modal-title">
-                        <div class="rules-create-panel-head"><h2 id="rules-delete-modal-title">删除规则</h2></div>
-                        <p>删除后，这条规则不会再用于未来自动归类。</p>
-                        <label class="rules-panel-check"><input id="rules-delete-history" type="checkbox"> 同时移除历史中由此规则产生的归类</label>
-                        <div class="rules-project-actions"><button id="rules-delete-cancel" type="button">取消</button><button id="rules-delete-confirm" type="button">删除规则</button></div>
-                    </aside>
-                </div>
+                <header class="page-header"><h1>项目规则</h1></header>
                 <div id="rules-error" class="error-banner" hidden>加载项目规则失败</div>
-                <div id="rules-loading" class="rules-loading" hidden>正在加载项目规则…</div>
-                <div id="rules-list" class="rules-list"></div>
-                <div id="rules-empty" class="rules-empty" hidden>暂无项目规则。</div>
+                <div id="rules-loading" hidden>正在加载项目规则...</div>
+                <div id="rules-content"></div>
             </section>
+
             <section id="page-settings" class="page">
                 <header class="page-header settings-header">
                     <div class="settings-header-text">
@@ -426,6 +297,7 @@
     <script src="js/timeline.js"></script>
     <script src="js/statistics.js"></script>
     <script src="js/settings.js"></script>
+    <script src="js/privacy_gate_state.js"></script>
     <script src="js/rules.js"></script>
     <script src="js/rules_render.js"></script>
     <script src="js/rules_create_panel.js"></script>
