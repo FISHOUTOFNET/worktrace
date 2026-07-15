@@ -70,7 +70,7 @@ def does_status_require_boundary(
     value = normalize_status(status)
     if value == STATUS_PAUSED:
         return True
-    if value in {STATUS_IDLE, STATUS_ERROR}:
+    if value in {STATUS_IDLE, STATUS_ERROR, STATUS_EXCLUDED}:
         return not can_status_soft_carry(value, duration_seconds)
     return False
 
