@@ -22,49 +22,102 @@ def upsert_assignment(
     source_rule_id: int | None = None,
     protect_manual: bool = False,
 ) -> bool:
-    """Write one assignment and return whether the expected row was owned.
+    """Write one assignment without relying on UPSERT ``rowcount`` semantics.
 
-    Automatic batch callers use ``protect_manual=True`` so a concurrent manual
-    classification turns the entire enclosing transaction into a conflict.
+    The caller owns the transaction. Automatic callers set ``protect_manual``;
+    an assignment that became manual inside the same write transaction is then
+    reported as not owned so the caller can roll back the whole command.
     """
 
+    activity_id = int(activity_id)
     if source not in {"folder_rule", "keyword_rule"}:
         source_rule_type = None
         source_rule_id = None
     timestamp = now_str()
-    manual_guard = "WHERE activity_project_assignment.is_manual = 0" if protect_manual else ""
-    cursor = conn.execute(
-        f"""
-        INSERT INTO activity_project_assignment(
-            activity_id, project_id, confidence, source, is_manual,
-            suggested_project_name, source_rule_type, source_rule_id,
-            created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(activity_id) DO UPDATE SET
-            project_id = excluded.project_id,
-            confidence = excluded.confidence,
-            source = excluded.source,
-            is_manual = excluded.is_manual,
-            suggested_project_name = excluded.suggested_project_name,
-            source_rule_type = excluded.source_rule_type,
-            source_rule_id = excluded.source_rule_id,
-            updated_at = excluded.updated_at
-        {manual_guard}
-        """,
-        (
-            int(activity_id),
-            project_id,
-            int(confidence),
-            source,
-            int(is_manual),
-            suggested_project_name,
-            source_rule_type,
-            source_rule_id,
-            timestamp,
-            timestamp,
-        ),
-    )
-    return cursor.rowcount == 1
+
+    if protect_manual:
+        cursor = conn.execute(
+            """
+            UPDATE activity_project_assignment
+            SET project_id = ?, confidence = ?, source = ?, is_manual = ?,
+                suggested_project_name = ?, source_rule_type = ?,
+                source_rule_id = ?, updated_at = ?
+            WHERE activity_id = ? AND is_manual = 0
+            """,
+            (
+                project_id,
+                int(confidence),
+                source,
+                int(is_manual),
+                suggested_project_name,
+                source_rule_type,
+                source_rule_id,
+                timestamp,
+                activity_id,
+            ),
+        )
+    else:
+        cursor = conn.execute(
+            """
+            UPDATE activity_project_assignment
+            SET project_id = ?, confidence = ?, source = ?, is_manual = ?,
+                suggested_project_name = ?, source_rule_type = ?,
+                source_rule_id = ?, updated_at = ?
+            WHERE activity_id = ?
+            """,
+            (
+                project_id,
+                int(confidence),
+                source,
+                int(is_manual),
+                suggested_project_name,
+                source_rule_type,
+                source_rule_id,
+                timestamp,
+                activity_id,
+            ),
+        )
+    if cursor.rowcount == 1:
+        return True
+
+    existing = conn.execute(
+        "SELECT is_manual FROM activity_project_assignment WHERE activity_id = ?",
+        (activity_id,),
+    ).fetchone()
+    if existing is not None:
+        return not protect_manual and False
+
+    try:
+        conn.execute(
+            """
+            INSERT INTO activity_project_assignment(
+                activity_id, project_id, confidence, source, is_manual,
+                suggested_project_name, source_rule_type, source_rule_id,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                activity_id,
+                project_id,
+                int(confidence),
+                source,
+                int(is_manual),
+                suggested_project_name,
+                source_rule_type,
+                source_rule_id,
+                timestamp,
+                timestamp,
+            ),
+        )
+        return True
+    except Exception:
+        current = conn.execute(
+            "SELECT is_manual FROM activity_project_assignment WHERE activity_id = ?",
+            (activity_id,),
+        ).fetchone()
+        if protect_manual and current is not None and int(current["is_manual"] or 0):
+            return False
+        raise
 
 
 def mark_inference_retry(conn, activity_id: int, uncategorized_project_id: int) -> None:
