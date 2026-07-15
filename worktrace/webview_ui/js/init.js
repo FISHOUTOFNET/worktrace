@@ -208,7 +208,8 @@
         return App.activePageRefreshPromise;
     }
     App.refreshCurrentPageData = refreshCurrentPageData;
-    App.refreshAll = function () { return refreshCurrentPageData(); };
+    function refreshAll() { return refreshCurrentPageData(); }
+    App.refreshAll = refreshAll;
 
     function fullReconcileCollectionViews(reason) {
         if (App.reconcileInFlight) return App.activePageRefreshPromise || Promise.resolve();
@@ -409,8 +410,8 @@
     function init() {
         initNav();
         initButtons();
-        App.loadFirstRunNotice().then(function (noticeLoaded) {
-            if (!noticeLoaded) return;
+        App.loadFirstRunNotice().then(function (noticeConfirmed) {
+            if (!noticeConfirmed) return;
             var preload = typeof App.loadProjects === "function"
                 ? App.loadProjects()
                 : Promise.resolve();
