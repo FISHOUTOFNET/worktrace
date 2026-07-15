@@ -89,7 +89,17 @@ jobs:
           & python scripts/pytest_diagnostics.py `
             --junit "test-results/pytest-junit.xml" `
             --log "test-results/pytest.log" `
-            --summary "$env:GITHUB_STEP_SUMMARY"
+            --summary "$env:GITHUB_STEP_SUMMARY" 2>&1 |
+              Tee-Object -FilePath "test-results/pytest-diagnostics.txt"
+
+      - name: Upload compact pytest diagnostics
+        if: failure() && steps.pytest.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-diagnostics-${{ github.run_id }}
+          path: test-results/pytest-diagnostics.txt
+          if-no-files-found: warn
+          retention-days: 1
 
   python312-compat:
     name: Python 3.12 compatibility (manual)
@@ -151,7 +161,17 @@ jobs:
           & python scripts/pytest_diagnostics.py `
             --junit "test-results/pytest-junit.xml" `
             --log "test-results/pytest.log" `
-            --summary "$env:GITHUB_STEP_SUMMARY"
+            --summary "$env:GITHUB_STEP_SUMMARY" 2>&1 |
+              Tee-Object -FilePath "test-results/pytest-diagnostics.txt"
+
+      - name: Upload compact pytest diagnostics
+        if: failure() && steps.pytest.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-diagnostics-${{ github.run_id }}
+          path: test-results/pytest-diagnostics.txt
+          if-no-files-found: warn
+          retention-days: 1
 
   node-tests:
     name: WebView Node tests (manual)
