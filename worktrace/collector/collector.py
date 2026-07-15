@@ -260,8 +260,6 @@ def run_collector(
                 try:
                     excluded = privacy_service.is_excluded(active_window)
                 except privacy_service.PrivacyResolutionPending:
-                    # When an exclusion folder exists but the active local path
-                    # cannot be resolved, the safe observation is anonymous.
                     collector_health.record_health_code(
                         "privacy_resolution_pending",
                         observation_time,
@@ -273,11 +271,7 @@ def run_collector(
                     if excluded:
                         machine.transition_to("excluded", at_time=observation_time)
                     else:
-                        machine.transition_to(
-                            "recording",
-                            active_window,
-                            at_time=observation_time,
-                        )
+                        machine.transition_to("recording", active_window, at_time=observation_time)
                         for event in clipboard_events:
                             machine.record_clipboard_event(
                                 event,
