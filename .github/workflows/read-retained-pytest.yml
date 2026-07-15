@@ -1,0 +1,39 @@
+name: Read retained pytest diagnostics
+
+on:
+  pull_request_target:
+    types: [edited]
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  read-retained-pytest:
+    if: github.event.pull_request.number == 10 && contains(github.event.pull_request.body, '[read-retained-pytest]')
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 5
+    steps:
+      - name: Post retained pytest tail
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $logPath = 'C:\actions-runner\_work\worktrace\worktrace\test-results\pytest.log'
+          if (-not (Test-Path -LiteralPath $logPath)) {
+            throw "Retained pytest log not found: $logPath"
+          }
+          $tail = Get-Content -LiteralPath $logPath -Tail 100
+          $text = $tail -join "`n"
+          if ($text.Length -gt 55000) {
+            $text = $text.Substring($text.Length - 55000)
+          }
+          $body = "### Retained pytest performance diagnostics`n`n``````text`n$text`n``````"
+          $headers = @{
+            Authorization = "Bearer $env:GH_TOKEN"
+            Accept = 'application/vnd.github+json'
+            'X-GitHub-Api-Version' = '2022-11-28'
+          }
+          $payload = @{ body = $body } | ConvertTo-Json -Compress
+          $uri = "$env:GITHUB_API_URL/repos/$env:GITHUB_REPOSITORY/issues/${{ github.event.pull_request.number }}/comments"
+          Invoke-RestMethod -Method Post -Uri $uri -Headers $headers -Body $payload -ContentType 'application/json' | Out-Null
