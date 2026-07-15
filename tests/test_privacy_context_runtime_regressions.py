@@ -5,10 +5,12 @@ import threading
 import pytest
 
 from worktrace.collector.collector import run_collector
+from worktrace.collector.state_machine import CollectorStateMachine
 from worktrace.constants import EXCLUDED_WINDOW_TITLE
 from worktrace.platforms.base import ActiveWindow
 from worktrace.services import (
     activity_service,
+    folder_rule_service,
     privacy_service,
     project_service,
     settings_service,
@@ -69,6 +71,41 @@ def test_collector_turns_unresolved_privacy_observation_into_excluded_row(
     excluded = [row for row in rows if row["status"] == "excluded"]
     assert excluded
     assert excluded[-1]["window_title"] == EXCLUDED_WINDOW_TITLE
+
+
+def test_same_resource_late_excluded_path_redacts_its_existing_row(temp_db):
+    excluded_id = project_service.get_or_create_excluded_project()
+    project_service.set_project_enabled(excluded_id, True)
+    folder_rule_service.create_or_update_folder_rule(
+        "D:\\Private",
+        excluded_id,
+    )
+    machine = CollectorStateMachine()
+    machine.transition_to(
+        "recording",
+        ActiveWindow("Word", "winword.exe", "Spec.docx - Word"),
+        at_time="2026-07-15 09:00:00",
+    )
+    previous_id = int(activity_service.get_open_activity()["id"])
+
+    machine.transition_to(
+        "recording",
+        ActiveWindow(
+            "Word",
+            "winword.exe",
+            "Spec.docx - Word",
+            "D:\\Private\\Spec.docx",
+        ),
+        at_time="2026-07-15 09:01:00",
+    )
+
+    previous = activity_service.get_activity(previous_id)
+    current = activity_service.get_open_activity()
+    assert previous["status"] == "excluded"
+    assert previous["window_title"] == EXCLUDED_WINDOW_TITLE
+    assert previous["file_path_hint"] is None
+    assert current is not None
+    assert current["status"] == "excluded"
 
 
 def test_session_project_semantics_do_not_depend_on_first_contribution():
