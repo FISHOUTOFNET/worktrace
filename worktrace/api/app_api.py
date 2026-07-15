@@ -26,7 +26,12 @@ def get_runtime() -> "AppRuntime | None":
 
 def start_collection_after_privacy_gate() -> dict[str, Any]:
     """Authorize once, then delegate lifecycle work to ``AppRuntime``."""
-    if not privacy_gate_service.is_sensitive_runtime_allowed():
+    try:
+        allowed = settings_api.first_run_notice_accepted()
+    except Exception:
+        logging.exception("privacy notice state read failed")
+        allowed = False
+    if not allowed:
         return {"ok": False, "error": "请先确认隐私说明"}
     if _runtime is None:
         return {"ok": False, "error": "collector_start_failed"}
@@ -74,8 +79,8 @@ def pause_collection_now() -> dict[str, Any]:
 
 
 def set_clipboard_capture_enabled(enabled: bool) -> None:
-    """Authorize enabling before applying the runtime state."""
-    if enabled:
+    """Apply an authorized clipboard state to a live runtime when present."""
+    if enabled and _runtime is not None:
         privacy_gate_service.require_sensitive_runtime_allowed()
     if _runtime is not None:
         applied = _runtime.set_clipboard_capture_enabled(bool(enabled))
