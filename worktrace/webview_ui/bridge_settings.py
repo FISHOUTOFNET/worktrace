@@ -76,30 +76,39 @@ class SettingsBridgeMixin:
             return {"ok": False, "error": "加载设置状态失败"}
 
     def set_clipboard_capture_enabled(self, enabled) -> dict[str, Any]:
-        """Persist through the API first, then apply runtime with compensation."""
+        """Apply authorization/runtime first, then persist with compensation."""
+        if enabled is not True and enabled is not False:
+            return {"ok": False, "error": "请选择有效的剪贴板记录状态"}
+
         try:
-            if enabled is not True and enabled is not False:
-                return {"ok": False, "error": "请选择有效的剪贴板记录状态"}
             previous = bool(settings_api.is_clipboard_capture_enabled())
-            result = settings_api.set_clipboard_capture_enabled_for_webview(enabled)
-            if not result.get("ok"):
-                return result
-            try:
-                app_api.set_clipboard_capture_enabled(enabled)
-            except Exception:
-                logger.exception("clipboard runtime apply failed")
-                rollback = settings_api.set_clipboard_capture_enabled_for_webview(previous)
-                try:
-                    app_api.set_clipboard_capture_enabled(previous)
-                except Exception:
-                    logger.exception("clipboard runtime compensation failed")
-                if not rollback.get("ok"):
-                    logger.error("clipboard persisted compensation failed")
-                return {"ok": False, "error": "设置剪贴板记录失败"}
-            return {"ok": True, "status": result["status"]}
         except Exception:
-            logger.exception("webview bridge set_clipboard_capture_enabled failed")
+            logger.exception("clipboard preference read failed")
             return {"ok": False, "error": "设置剪贴板记录失败"}
+
+        try:
+            app_api.set_clipboard_capture_enabled(enabled)
+        except Exception:
+            logger.exception("clipboard authorization or runtime apply failed")
+            return {"ok": False, "error": "设置剪贴板记录失败"}
+
+        try:
+            result = settings_api.set_clipboard_capture_enabled_for_webview(enabled)
+        except Exception:
+            logger.exception("clipboard preference persistence failed")
+            try:
+                app_api.set_clipboard_capture_enabled(previous)
+            except Exception:
+                logger.exception("clipboard runtime compensation failed")
+            return {"ok": False, "error": "设置剪贴板记录失败"}
+
+        if not result.get("ok"):
+            try:
+                app_api.set_clipboard_capture_enabled(previous)
+            except Exception:
+                logger.exception("clipboard runtime compensation failed")
+            return result
+        return {"ok": True, "status": result["status"]}
 
     def export_encrypted_backup(
         self,
