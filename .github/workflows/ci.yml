@@ -88,17 +88,22 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path diagnostics | Out-Null
+          $rawPath = "test-results/pytest-diagnostics-raw.txt"
           & python scripts/pytest_diagnostics.py `
             --junit "test-results/pytest-junit.xml" `
             --log "test-results/pytest.log" `
             --summary "$env:GITHUB_STEP_SUMMARY" 2>&1 |
-              Tee-Object -FilePath "diagnostics/pytest-hardening-latest.txt"
+              Tee-Object -FilePath $rawPath
+          @(
+            "run_id=$env:GITHUB_RUN_ID",
+            "tested_head=$env:GITHUB_SHA",
+            "",
+            (Get-Content -LiteralPath $rawPath -Raw)
+          ) | Set-Content -LiteralPath "diagnostics/pytest-hardening-latest.txt" -Encoding UTF8
 
-      - name: Commit compact diagnostics to repair branch
+      - name: Publish diagnostics on isolated branch
         if: failure() && steps.pytest.outcome == 'failure' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
         shell: pwsh
-        env:
-          HEAD_REF: ${{ github.head_ref }}
         run: |
           $path = "diagnostics/pytest-hardening-latest.txt"
           if (-not (Test-Path -LiteralPath $path)) {
@@ -107,13 +112,10 @@ jobs:
           }
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B worktrace-ci-diagnostics
           git add $path
-          if (git diff --cached --quiet) {
-            Write-Host "Diagnostics unchanged"
-            exit 0
-          }
-          git commit -m "Capture pytest failure diagnostics [skip ci]"
-          git push origin "HEAD:$env:HEAD_REF"
+          git commit -m "Capture pytest diagnostics for run $env:GITHUB_RUN_ID"
+          git push --force origin "HEAD:agent/worktrace-ci-diagnostics"
 
   python312-compat:
     name: Python 3.12 compatibility (manual)
