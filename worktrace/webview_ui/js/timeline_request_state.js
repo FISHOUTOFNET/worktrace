@@ -33,9 +33,6 @@
             projectionInstanceKey: projectionInstanceKey || "",
             projectionRevision: projectionRevision || ""
         };
-        // The same logical selection reuses its owner. Network de-duplication
-        // may therefore safely retain the first request callback while a
-        // repeated click waits on the same Promise.
         if (App.detailsOwner
             && App.detailsOwner.dataEpoch === candidate.dataEpoch
             && App.detailsOwner.timelineEpoch === candidate.timelineEpoch
@@ -171,16 +168,17 @@
     function share(channel, logicalKey, factory) {
         var key = [App.dataEpoch || 0, channel, logicalKey || ""].join("|");
         if (sharedPromises[key]) return sharedPromises[key];
-        var promise;
+        var source;
         try {
-            promise = Promise.resolve().then(factory);
+            source = Promise.resolve().then(factory);
         } catch (error) {
-            promise = Promise.reject(error);
+            source = Promise.reject(error);
         }
-        sharedPromises[key] = promise.finally(function () {
-            if (sharedPromises[key] === sharedPromises[key]) delete sharedPromises[key];
+        var shared = source.finally(function () {
+            if (sharedPromises[key] === shared) delete sharedPromises[key];
         });
-        return sharedPromises[key];
+        sharedPromises[key] = shared;
+        return shared;
     }
 
     function bumpDataEpoch() {
@@ -197,7 +195,11 @@
         App.projectsLoadPromise = null;
         App.statisticsAcceptedPayload = null;
         App.rulesLoadPromise = null;
+        App.refreshCheckInFlight = false;
+        App.activePageRefreshInFlight = false;
+        App.activePageRefreshPromise = null;
         App.activePageRefreshPending = null;
+        App.reconcileInFlight = false;
         for (var key in sharedPromises) delete sharedPromises[key];
         for (var channel in requestSequences) requestSequences[channel] += 1;
         return App.dataEpoch;
