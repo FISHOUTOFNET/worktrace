@@ -21,8 +21,8 @@ def _snapshot_summary(snapshot: dict[str, Any] | None) -> dict[str, Any]:
     return view_model_api.build_current_activity_summary(snapshot)
 
 
-def _group_payload(group: dict[str, Any], *, project: bool = False) -> dict[str, Any]:
-    payload = {
+def _group_payload(group: dict[str, Any]) -> dict[str, Any]:
+    return {
         "key": str(group.get("key") or ""),
         "display_name": str(group.get("display_name") or ""),
         "duration_seconds": int(group.get("duration_seconds") or 0),
@@ -30,17 +30,13 @@ def _group_payload(group: dict[str, Any], *, project: bool = False) -> dict[str,
         "activity_count": int(group.get("activity_count") or 0),
         "percentage": float(group.get("percentage") or 0.0),
     }
-    if project:
-        payload["is_concrete_project"] = bool(group.get("is_concrete_project"))
-    return payload
 
 
 def _statistics_summary_payload(summary: dict[str, Any]) -> dict[str, Any]:
     """Return display data only; export concurrency tokens live in an envelope."""
 
     by_project = [
-        _group_payload(group, project=True)
-        for group in (summary.get("by_project") or [])
+        _group_payload(group) for group in (summary.get("by_project") or [])
     ]
     by_app = [_group_payload(group) for group in (summary.get("by_app") or [])]
     by_status = [
