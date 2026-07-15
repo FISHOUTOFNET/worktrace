@@ -39,7 +39,7 @@ def _settings_db_key() -> str:
 def _get_runtime_only_setting(key: str, default: str | None) -> str | None:
     if key == CURRENT_ACTIVITY_SNAPSHOT_KEY:
         value = read_runtime_activity_snapshot_raw(database_key=_settings_db_key())
-        return value if value != "" else default
+        return value if value != "" else (default if default is not None else "")
     return get_legacy_runtime_setting(
         key,
         default,
