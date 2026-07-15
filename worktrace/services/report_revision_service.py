@@ -6,7 +6,7 @@ import threading
 from datetime import date as date_type, timedelta
 from typing import Any
 
-from ..db import get_connection, get_db_path
+from ..db import get_connection, get_db_key
 from ..report_structure_generation import current_generation
 from .report_projection_identity import stable_json_hash
 
@@ -179,7 +179,7 @@ def get_report_structure_revision(report_date: str, *, conn=None) -> str:
     if conn is not None:
         return _build_report_structure_revision(report_date, conn)
 
-    database_key = str(get_db_path().resolve())
+    database_key = get_db_key()
     generation = current_generation(database_key)
     cache_key = (database_key, report_date)
     with _CACHE_LOCK:
