@@ -32,14 +32,16 @@ def accepted_privacy_notice_version(*, conn=None) -> str:
 def is_privacy_notice_accepted(*, conn=None) -> bool:
     """Return whether this installation accepted the current notice version.
 
-    Existing installations that only carry the legacy boolean remain accepted;
-    the next explicit acceptance writes the versioned key as well.
+    The legacy boolean predates versioned consent and therefore represents only
+    version 1. Once the substantive notice version is incremented, installations
+    without an explicit matching version must pass through the gate again.
     """
 
     version = accepted_privacy_notice_version(conn=conn)
     if version:
         return version == PRIVACY_NOTICE_VERSION
-    return get_bool_setting("first_run_notice_accepted", False, conn=conn)
+    legacy = get_bool_setting("first_run_notice_accepted", False, conn=conn)
+    return bool(legacy and PRIVACY_NOTICE_VERSION == "1")
 
 
 def accept_privacy_notice() -> None:
