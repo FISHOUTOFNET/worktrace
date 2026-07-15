@@ -10,6 +10,12 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Callable
 
+from .services.runtime_activity_state_service import (
+    CURRENT_ACTIVITY_SNAPSHOT_KEY,
+    PENDING_CARRY_PROVENANCE_KEY,
+    PENDING_SHORT_SECONDS_KEY,
+)
+
 MIN_SUPPORTED_SCHEMA_VERSION = 4
 
 Migration = Callable[[sqlite3.Connection], None]
@@ -21,9 +27,9 @@ def migrate_4_to_5(conn: sqlite3.Connection) -> None:
     conn.executemany(
         "DELETE FROM settings WHERE key = ?",
         [
-            ("current_activity_snapshot",),
-            ("pending_short_seconds",),
-            ("pending_short_carry_provenance",),
+            (CURRENT_ACTIVITY_SNAPSHOT_KEY,),
+            (PENDING_SHORT_SECONDS_KEY,),
+            (PENDING_CARRY_PROVENANCE_KEY,),
         ],
     )
 
