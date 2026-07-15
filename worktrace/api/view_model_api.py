@@ -1,8 +1,4 @@
-"""ViewModel API facade — sole bridge-facing entry for page display payloads.
-
-This boundary owns request-scoped canonical snapshot reuse. It does not build or
-reinterpret page semantics; the service layer remains the only ViewModel owner.
-"""
+"""ViewModel API facade — sole bridge-facing entry for page display payloads."""
 
 from __future__ import annotations
 
@@ -10,17 +6,17 @@ from typing import Any
 
 from ..services.live_display_service import build_current_activity_summary
 from ..services.report_projection_snapshot_service import snapshot_read_scope
-from ..services import view_model_service
+from ..services import view_model_hardening_service
 
 
 def get_overview_view_model(today: str | None = None) -> dict[str, Any]:
     with snapshot_read_scope():
-        return view_model_service.get_overview_view_model(today)
+        return view_model_hardening_service.get_overview_view_model(today)
 
 
 def get_timeline_view_model(report_date: str | None = None) -> dict[str, Any]:
     with snapshot_read_scope():
-        return view_model_service.get_timeline_view_model(report_date)
+        return view_model_hardening_service.get_timeline_view_model(report_date)
 
 
 def get_session_activity_summary_view_model(
@@ -30,7 +26,7 @@ def get_session_activity_summary_view_model(
     expected_projection_revision: str | None = None,
 ) -> dict[str, Any]:
     with snapshot_read_scope():
-        return view_model_service.get_session_activity_summary_view_model(
+        return view_model_hardening_service.get_session_activity_summary_view_model(
             report_date=report_date,
             projection_instance_key=projection_instance_key,
             expected_projection_revision=expected_projection_revision,
@@ -38,8 +34,7 @@ def get_session_activity_summary_view_model(
 
 
 def get_refresh_state_view_model(report_date: str | None = None) -> dict[str, Any]:
-    with snapshot_read_scope():
-        return view_model_service.get_refresh_state_view_model(report_date)
+    return view_model_hardening_service.get_refresh_state_view_model(report_date)
 
 
 __all__ = [
