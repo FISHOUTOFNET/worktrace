@@ -86,6 +86,15 @@ def edit_session(
     )
 
 
+def _find_open_activity_entry(sessions, activity_id: int):
+    for entry in sessions:
+        if int(entry.get("open_activity_id") or 0) == activity_id:
+            return entry
+        if activity_id in {int(value or 0) for value in entry.get("activity_ids") or []}:
+            return entry
+    return None
+
+
 def _edit_open_session(
     report_date: str,
     source_key: str,
@@ -140,16 +149,6 @@ def _edit_open_session(
             ):
                 raise OperationNotAllowedError()
 
-            if project_id is not None and not assignment_command_service.upsert_assignment(
-                conn,
-                activity_id=open_activity_id,
-                project_id=int(project_id),
-                confidence=100,
-                source="manual",
-                is_manual=True,
-            ):
-                raise OperationNotAllowedError()
-
             payload, roles, undo_of = operations._operation_input(
                 conn,
                 "edit_session",
@@ -163,8 +162,35 @@ def _edit_open_session(
             )
             if "duration" in payload:
                 raise OperationNotAllowedError()
+
+            if project_id is not None and not assignment_command_service.upsert_assignment(
+                conn,
+                activity_id=open_activity_id,
+                project_id=int(project_id),
+                confidence=100,
+                source="manual",
+                is_manual=True,
+            ):
+                raise OperationNotAllowedError()
+
+            operation_before = build_visible_snapshot(
+                report_date,
+                report_date,
+                conn=conn,
+            )
+            current_source = _find_open_activity_entry(
+                operation_before.final_sessions,
+                open_activity_id,
+            )
+            if current_source is None or not bool(current_source.get("is_in_progress")):
+                raise OperationNotAllowedError()
+            current_key = str(current_source.get("projection_instance_key") or "")
+            current_revision = str(current_source.get("projection_revision") or "")
+            if not current_key or not current_revision:
+                raise StaleSelectionError()
+
             if not roles.get("source"):
-                slice_start = str(source.get("start_time") or "")
+                slice_start = str(current_source.get("start_time") or "")
                 if not slice_start:
                     raise StaleSelectionError()
                 roles["source"] = [
@@ -182,8 +208,8 @@ def _edit_open_session(
                 report_date=report_date,
                 sequence=sequence,
                 operation_type="edit_session",
-                source_instance_key=source_key,
-                source_expected_revision=source_revision,
+                source_instance_key=current_key,
+                source_expected_revision=current_revision,
                 target_instance_key=None,
                 target_expected_revision=None,
                 direction=None,
@@ -204,20 +230,27 @@ def _edit_open_session(
                 diagnostic
                 and diagnostic.state == APPLIED
                 and operations._expected_effect(
-                    "edit_session", operation_id, before, after, source
+                    "edit_session",
+                    operation_id,
+                    operation_before,
+                    after,
+                    current_source,
                 )
             )
             if not effective:
                 conn.execute("ROLLBACK TO report_operation")
                 conn.execute("RELEASE report_operation")
-                current = operations._find_entry(before.final_sessions, source_key)
+                current = _find_open_activity_entry(
+                    operation_before.final_sessions,
+                    open_activity_id,
+                )
                 result = MutationResult(
                     request_id=request_id,
                     outcome_type="no_op",
                     operation_id=None,
                     report_date=report_date,
                     selection_hint=operations._selection_hint(current),
-                    snapshot_revision=before.snapshot_revision,
+                    snapshot_revision=operation_before.snapshot_revision,
                     error="operation_no_effect",
                     message="操作未产生变化",
                 )
@@ -229,7 +262,10 @@ def _edit_open_session(
                     operation_id=operation_id,
                     report_date=report_date,
                     selection_hint=operations._post_selection(
-                        "edit_session", operation_id, source_key, after
+                        "edit_session",
+                        operation_id,
+                        current_key,
+                        after,
                     ),
                     snapshot_revision=after.snapshot_revision,
                 )
