@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from unittest.mock import Mock
 
+import pytest
+
 from worktrace import db
 from worktrace.collector.activity_session_recorder import (
     ActivitySessionRecorder,
@@ -13,6 +15,13 @@ from worktrace.services.runtime_activity_state_service import (
     clear_runtime_activity_state,
     get_runtime_activity_snapshot,
 )
+
+pytestmark = [
+    pytest.mark.collector_runtime,
+    pytest.mark.integration,
+    pytest.mark.db,
+    pytest.mark.serial,
+]
 
 
 def test_duplicate_runtime_does_not_initialize_database(tmp_path, monkeypatch):
