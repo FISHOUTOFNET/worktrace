@@ -32,7 +32,8 @@
         var to = new Date(+toParts[0], +toParts[1] - 1, +toParts[2]);
         if (isNaN(from.getTime()) || isNaN(to.getTime())) return "请选择有效日期";
         if (from > to) return "请选择有效日期范围";
-        if (Math.round((to - from) / 86400000) > 30) return "日期范围过大";
+        var diffDays = Math.round((to - from) / 86400000);
+        if (diffDays > 30) return "日期范围过大";
         return null;
     }
     App.validateStatisticsDateRange = validateStatisticsDateRange;
@@ -57,9 +58,7 @@
     App.invalidateStatisticsSelection = invalidateStatisticsSelection;
 
     function loadStatisticsExportSummary() {
-        if (App.statisticsLoading) {
-            return App.statisticsLoadPromise || Promise.resolve(null);
-        }
+        if (App.statisticsLoading) return App.statisticsLoadPromise || Promise.resolve(null);
         var range = selectedRange();
         var rangeMsg = validateStatisticsDateRange(range.dateFrom, range.dateTo);
         if (rangeMsg) {
@@ -216,6 +215,11 @@
         var accepted = App.statisticsAcceptedPayload;
         if (!accepted || !accepted.exportRevision) {
             setStatisticsExportStatus("请先加载统计数据", "error");
+            return;
+        }
+        var rangeMessage = validateStatisticsDateRange(accepted.dateFrom, accepted.dateTo);
+        if (rangeMessage) {
+            setStatisticsExportStatus(rangeMessage, "error");
             return;
         }
         setStatisticsExportSaving(true);
