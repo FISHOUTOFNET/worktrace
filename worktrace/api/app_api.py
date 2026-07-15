@@ -79,8 +79,8 @@ def pause_collection_now() -> dict[str, Any]:
 
 
 def set_clipboard_capture_enabled(enabled: bool) -> None:
-    """Authorize enabling, then apply the runtime state when one exists."""
-    if enabled:
+    """Authorize and apply a live clipboard runtime state when one exists."""
+    if enabled and _runtime is not None:
         privacy_gate_service.require_sensitive_runtime_allowed()
     if _runtime is not None:
         applied = _runtime.set_clipboard_capture_enabled(bool(enabled))
