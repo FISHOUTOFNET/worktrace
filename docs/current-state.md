@@ -20,9 +20,8 @@
 
 ## Migrated Pages
 
-- **Overview**: canonical daily KPIs (including anonymous standalone excluded
-  duration), current activity, project-session Recent rows, pause/resume, and
-  auto-refresh.
+- **Overview**: canonical daily KPIs, current activity, recent activities,
+  anonymous standalone excluded intervals, pause/resume, and auto-refresh.
 - **Timeline / Time Details**: date navigation, daily total, canonical session
   list, per-session activity summaries, project/note editing for safe persisted
   open normal sessions, and the closed-session correction operations below.
@@ -80,7 +79,6 @@ and all-or-nothing inside one `BEGIN IMMEDIATE` transaction.
   with inclusive date ranges of at most 31 days.
 - `project_count` counts only concrete projects actually present in the range;
   “未归类” and anonymous “已排除” remain display buckets, not projects.
-- `app_count` excludes the anonymous “已排除” privacy bucket.
 - CSV export uses the exact accepted closed-record `export_revision`; natural
   growth of an open activity cannot invalidate a closed-data export.
 - CSV is UTF-8 BOM with Chinese headers and formula-injection escaping. Only
@@ -112,7 +110,7 @@ WebView -> bridge -> worktrace.api -> worktrace.services
   report_projection_snapshot_service (canonical report query)
   report_revision_service (structure/export revision semantics)
   report_session_operation_service + report_session_edit_service (mutation ledger)
-  assignment_command_service (batch/retry assignment command boundary)
+  assignment_command_service (assignment write/retry boundary)
   privacy_gate_service + AppRuntime (sensitive runtime ownership)
   activity_lifecycle_service (open-row command facade)
   collector -> activity_lifecycle_service
@@ -130,8 +128,9 @@ by the DOM-only local ticker and do not request a full page reload.
   `view_model_hardening_service` only corrects cross-surface metric/revision
   semantics and safe open-edit capability flags.
 - All Timeline writes remain ledger operations with idempotent request receipts.
-- Batch assignment writes and transient inference retry markers use
-  `assignment_command_service`; retry is bounded and preserves manual facts.
+- Automatic and batch assignment commands share
+  `assignment_command_service`; transient inference failures are marked using
+  the existing assignment row and retried in bounded batches.
 
 ## Privacy Boundary
 
