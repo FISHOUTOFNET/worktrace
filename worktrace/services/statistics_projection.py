@@ -13,6 +13,7 @@ from .report_projection_snapshot_service import ReportProjectionSnapshot
 @dataclass(frozen=True)
 class ReportAnalyticsProjection:
     snapshot_revision: str
+    export_revision: str
     total_duration_seconds: int
     project_duration_seconds: int
     classified_duration_seconds: int
@@ -23,6 +24,8 @@ class ReportAnalyticsProjection:
     session_count: int
     entry_count: int
     export_row_count: int
+    concrete_project_count: int
+    concrete_app_count: int
     by_project: tuple[dict[str, Any], ...]
     by_app: tuple[dict[str, Any], ...]
     by_status: tuple[dict[str, Any], ...]
@@ -52,7 +55,9 @@ def build_statistics_projection(
     for record in records:
         duration = int(record["duration_seconds"])
         total += duration
-        if not bool(record["_standalone_excluded"]):
+        standalone_excluded = bool(record["_standalone_excluded"])
+        is_concrete_project = bool(record["_concrete_project"])
+        if not standalone_excluded:
             if bool(record["is_uncategorized"]):
                 uncategorized += duration
             else:
@@ -65,13 +70,11 @@ def build_statistics_projection(
             duration,
             identities,
             str(record["_record_key"]),
+            is_concrete=is_concrete_project,
         )
         members.update(identities)
         activity_ids.update(int(item[1]) for item in identities if int(item[1]) > 0)
 
-    # Contribution allocation owns status and application analytics. This lets
-    # attributed excluded time remain inside its project session while the
-    # excluded-duration metric counts only the excluded contribution itself.
     excluded = 0
     contributed_keys: set[str] = set()
     for key, contributions in contributions_by_entry.items():
@@ -96,7 +99,14 @@ def build_statistics_projection(
                 if privacy_redacted
                 else str(row.get("app_name") or "未知应用")
             )
-            _accumulate(by_app, app, duration, [identity], key)
+            _accumulate(
+                by_app,
+                app,
+                duration,
+                [identity],
+                key,
+                is_concrete=not privacy_redacted and app not in {"", "未知应用"},
+            )
             _accumulate(
                 by_status,
                 status,
@@ -104,18 +114,22 @@ def build_statistics_projection(
                 [identity],
                 key,
                 display_name=format_status_label(status),
+                is_concrete=False,
             )
 
-    # Defensive fallback for a valid standalone excluded entry whose
-    # contribution payload is absent. Canonical snapshots normally always
-    # provide one, but analytics must not silently lose excluded time.
     for key in closed_keys - contributed_keys:
         record = record_by_key[key]
         if bool(record["_standalone_excluded"]):
             excluded += int(record["duration_seconds"])
 
+    project_groups = tuple(_groups(by_project, total))
+    app_groups = tuple(_groups(by_app, total))
+    status_groups = tuple(_groups(by_status, total))
     return ReportAnalyticsProjection(
         snapshot_revision=snapshot.snapshot_revision,
+        export_revision=str(
+            getattr(snapshot, "export_revision", snapshot.snapshot_revision)
+        ),
         total_duration_seconds=total,
         project_duration_seconds=project_duration,
         classified_duration_seconds=classified,
@@ -134,9 +148,15 @@ def build_statistics_projection(
             if not bool(entry.get("is_in_progress"))
         ),
         export_row_count=len(records),
-        by_project=tuple(_groups(by_project, total)),
-        by_app=tuple(_groups(by_app, total)),
-        by_status=tuple(_groups(by_status, total)),
+        concrete_project_count=sum(
+            1 for item in project_groups if bool(item.get("is_concrete"))
+        ),
+        concrete_app_count=sum(
+            1 for item in app_groups if bool(item.get("is_concrete"))
+        ),
+        by_project=project_groups,
+        by_app=app_groups,
+        by_status=status_groups,
         export_records=tuple(_public_record(record) for record in records),
     )
 
@@ -194,6 +214,10 @@ def _build_export_records(
                 for member in entry.get("member_slices") or []
             }
         )
+        is_uncategorized = (
+            not standalone_excluded
+            and not bool(entry.get("is_report_classified"))
+        )
         result.append(
             {
                 "date": str(entry.get("report_date") or ""),
@@ -219,9 +243,11 @@ def _build_export_records(
                 "is_adjusted": (
                     "是" if bool(entry.get("has_duration_override")) else "否"
                 ),
-                "is_uncategorized": (
+                "is_uncategorized": is_uncategorized,
+                "_concrete_project": (
                     not standalone_excluded
-                    and not bool(entry.get("is_report_classified"))
+                    and not is_uncategorized
+                    and int(entry.get("project_id") or 0) > 0
                 ),
                 "_standalone_excluded": standalone_excluded,
                 "_member_identities": members,
@@ -262,6 +288,7 @@ def _accumulate(
     record_key: str,
     *,
     display_name: str | None = None,
+    is_concrete: bool = False,
 ) -> None:
     group = groups.setdefault(
         name,
@@ -270,11 +297,13 @@ def _accumulate(
             "members": set(),
             "records": set(),
             "display_name": display_name or name,
+            "is_concrete": bool(is_concrete),
         },
     )
     group["duration"] += duration
     group["members"].update(tuple(item) for item in members)
     group["records"].add(record_key)
+    group["is_concrete"] = bool(group["is_concrete"] or is_concrete)
 
 
 def _groups(groups: dict[str, dict], total: int) -> list[dict[str, Any]]:
@@ -292,6 +321,7 @@ def _groups(groups: dict[str, dict], total: int) -> list[dict[str, Any]]:
             ),
             "report_slice_count": len(value["members"]),
             "record_count": len(value["records"]),
+            "is_concrete": bool(value.get("is_concrete")),
             "percentage": (
                 round(int(value["duration"]) / total * 100, 1)
                 if total
