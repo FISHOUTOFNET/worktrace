@@ -1,25 +1,22 @@
 name: Architecture hardening diagnostics
 
 on:
-  pull_request:
-    branches: [main]
-  workflow_dispatch:
+  push:
+    branches: [agent/worktrace-architecture-hardening]
 
 permissions:
-  contents: read
-
-concurrency:
-  group: hardening-diagnostics-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  contents: write
 
 jobs:
   diagnose:
-    name: Focused hardening contracts
+    if: github.actor != 'github-actions[bot]'
+    name: Capture project-count failure
     runs-on: [self-hosted, Windows, X64]
-    timeout-minutes: 20
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: agent/worktrace-architecture-hardening
           clean: true
       - uses: actions/setup-python@v5
         with:
@@ -28,21 +25,14 @@ jobs:
       - name: Install dependencies
         shell: pwsh
         run: python -m pip install --disable-pip-version-check -q -r requirements.txt
-      - name: Clear-all privacy contract
+      - name: Capture failing assertion
         shell: pwsh
-        run: python -m pytest -q --tb=short tests/test_architecture_hardening_regressions.py::test_clear_all_preserves_installation_privacy_but_pauses_sensitive_runtime
-      - name: Structure revision contract
-        shell: pwsh
-        run: python -m pytest -q --tb=short tests/test_architecture_hardening_regressions.py::test_structure_revision_ignores_open_duration_but_tracks_structure
-      - name: Export revision contract
-        shell: pwsh
-        run: python -m pytest -q --tb=short tests/test_architecture_hardening_regressions.py::test_export_revision_is_exact_closed_record_revision
-      - name: Project count contract
-        shell: pwsh
-        run: python -m pytest -q --tb=short tests/test_architecture_hardening_regressions.py::test_project_count_excludes_uncategorized_and_excluded_buckets
-      - name: Open session edit contract
-        shell: pwsh
-        run: python -m pytest -q --tb=short tests/test_architecture_hardening_regressions.py::test_persisted_open_session_allows_project_and_note_but_not_duration
-      - name: Frontend coordination contract
-        shell: pwsh
-        run: python -m pytest -q --tb=short tests/test_architecture_hardening_regressions.py::test_frontend_generation_and_coalescing_contracts_are_shipping
+        run: |
+          New-Item -ItemType Directory -Force -Path diagnostics | Out-Null
+          python -m pytest -vv --tb=long tests/test_architecture_hardening_regressions.py::test_project_count_excludes_uncategorized_and_excluded_buckets *> diagnostics/project-count.txt
+          if ($LASTEXITCODE -eq 0) { "test passed" | Set-Content diagnostics/project-count.txt }
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add diagnostics/project-count.txt
+          git commit -m "Capture project count diagnostic [skip ci]"
+          git push origin HEAD:agent/worktrace-architecture-hardening
