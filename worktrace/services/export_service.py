@@ -60,7 +60,12 @@ def write_statistics_csv(
     output_path,
     expected_snapshot_revision: str | None = None,
 ) -> dict:
-    """Build display-safe CSV rows and write them to ``output_path``."""
+    """Build display-safe CSV rows and write them to ``output_path``.
+
+    ``expected_snapshot_revision`` is retained as a public compatibility name,
+    but its value now represents the export-only revision. Natural growth of an
+    open activity therefore cannot invalidate an export containing closed rows.
+    """
     statistics_service.validate_statistics_date_range(date_from, date_to)
 
     path = Path(output_path)
@@ -82,7 +87,7 @@ def write_statistics_csv(
     )
     if (
         expected_snapshot_revision is not None
-        and str(expected_snapshot_revision or "") != projection.snapshot_revision
+        and str(expected_snapshot_revision or "") != projection.export_revision
     ):
         raise ValueError("stale_statistics_snapshot")
     csv_rows = projection.export_records
