@@ -1,8 +1,9 @@
-"""Timeline edit command supporting safe persisted-open project/note edits.
+"""Timeline edit command supporting persisted-open project/note edits.
 
 Closed-session edits delegate to the canonical mutation UOW. Open sessions use
-the same operation ledger, request receipts, replay engine, and optimistic
-revision contract, but reject duration and every structural operation.
+the same request receipts and operation replay, while the selected project is
+also persisted as the activity's manual assignment in the same transaction.
+Duration and structural operations remain unavailable while the row is open.
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ import sqlite3
 
 from ..constants import STATUS_NORMAL
 from ..db import get_connection
+from . import assignment_command_service
 from . import report_session_operation_service as operations
 from .report_projection_identity import stable_json_hash
 from .report_projection_model import (
@@ -36,8 +38,6 @@ def edit_session(
     note: str,
 ) -> MutationResult:
     if adjusted_duration_seconds is not None:
-        # The frontend sends ``None`` for a disabled open duration editor.
-        # Closed sessions retain the existing exact-duration semantics.
         with get_connection() as conn:
             from .report_projection_snapshot_service import build_visible_snapshot
 
@@ -131,11 +131,22 @@ def _edit_open_session(
                 raise StaleSelectionError()
             if str(source.get("projection_revision") or "") != source_revision:
                 raise RevisionConflictError()
+            open_activity_id = int(source.get("open_activity_id") or 0)
             if (
                 not bool(source.get("is_in_progress"))
-                or int(source.get("open_activity_id") or 0) <= 0
+                or open_activity_id <= 0
                 or str(source.get("status_code") or source.get("status") or "")
                 != STATUS_NORMAL
+            ):
+                raise OperationNotAllowedError()
+
+            if project_id is not None and not assignment_command_service.upsert_assignment(
+                conn,
+                activity_id=open_activity_id,
+                project_id=int(project_id),
+                confidence=100,
+                source="manual",
+                is_manual=True,
             ):
                 raise OperationNotAllowedError()
 
@@ -152,6 +163,18 @@ def _edit_open_session(
             )
             if "duration" in payload:
                 raise OperationNotAllowedError()
+            if not roles.get("source"):
+                slice_start = str(source.get("start_time") or "")
+                if not slice_start:
+                    raise StaleSelectionError()
+                roles["source"] = [
+                    {
+                        "report_date": report_date,
+                        "activity_id": open_activity_id,
+                        "slice_start_time": slice_start,
+                    }
+                ]
+
             sequence = operations._next_sequence(conn, report_date)
             conn.execute("SAVEPOINT report_operation")
             operation_id = operations._insert_operation(
