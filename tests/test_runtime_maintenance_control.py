@@ -8,9 +8,15 @@ from worktrace.collector import activity_session_recorder as recorder_module
 from worktrace.collector.activity_session_recorder import ActivitySessionRecorder
 from worktrace.collector.clock_tracker import ClockTracker
 from worktrace.collector.collector import CollectorControl, _sleep_until_next_poll
+from worktrace.platforms import hardened_windows_adapter as adapter_module
+from worktrace.platforms.base import ActiveWindow
 from worktrace.platforms.hardened_windows_adapter import _ClipboardMonitor
 from worktrace.security.kdf import KdfError, KdfParams, derive_backup_key
-from worktrace.services.secure_backup_service import SecureImportCoordinator
+from worktrace.services import settings_service
+from worktrace.services.secure_backup_service import (
+    SecureBackupError,
+    SecureImportCoordinator,
+)
 
 pytestmark = [
     pytest.mark.db,
@@ -161,24 +167,52 @@ def test_recorder_generation_reset_forgets_old_activity_id(monkeypatch):
 def test_maintenance_coordinator_pauses_and_resets_before_operation(temp_db):
     calls: list[str] = []
     coordinator = SecureImportCoordinator()
-    coordinator.register_collector_pause_handler(
-        lambda timeout_seconds=5.0: (
-            calls.append("pause")
-            or {"ok": True, "pause_pending": False}
-        )
-    )
-    coordinator.register_collector_reset_handler(
-        lambda timeout_seconds=5.0: (
-            calls.append("reset")
-            or {"ok": True, "reset_pending": False}
-        )
-    )
+
+    def pause(timeout_seconds=5.0):
+        assert coordinator.write_gate_active() is True
+        calls.append("pause")
+        return {"ok": True, "pause_pending": False}
+
+    def reset(timeout_seconds=5.0):
+        assert coordinator.write_gate_active() is True
+        calls.append("reset")
+        return {"ok": True, "reset_pending": False}
+
+    coordinator.register_collector_pause_handler(pause)
+    coordinator.register_collector_reset_handler(reset)
 
     with coordinator.acquire(reason="test") as guard:
+        assert coordinator.write_gate_active() is True
         calls.append("operation")
         guard.mark_succeeded()
 
     assert calls == ["pause", "reset", "operation"]
+    assert coordinator.write_gate_active() is False
+
+
+def test_maintenance_reset_failure_restores_intent_without_stale_snapshot(temp_db):
+    coordinator = SecureImportCoordinator()
+    settings_service.set_setting("user_paused", "false")
+    settings_service.set_setting("collector_status", "running")
+    settings_service.set_setting(
+        "current_activity_snapshot",
+        '{"persisted_activity_id":77}',
+    )
+    coordinator.register_collector_pause_handler(
+        lambda timeout_seconds=5.0: {"ok": True, "pause_pending": False}
+    )
+    coordinator.register_collector_reset_handler(
+        lambda timeout_seconds=5.0: {"ok": False, "reset_pending": False}
+    )
+
+    with pytest.raises(SecureBackupError, match="reset_not_acknowledged"):
+        with coordinator.acquire(reason="failure"):
+            pytest.fail("operation must not start")
+
+    assert coordinator.write_gate_active() is False
+    assert settings_service.get_bool_setting("user_paused", True) is False
+    assert settings_service.get_setting("collector_status", "") == "running"
+    assert settings_service.get_setting("current_activity_snapshot", "") == ""
 
 
 def test_clipboard_monitor_does_not_start_or_retain_while_disabled():
@@ -187,6 +221,56 @@ def test_clipboard_monitor_does_not_start_or_retain_while_disabled():
     monitor.set_enabled(False)
     assert monitor.drain() == []
     assert monitor._thread is None
+
+
+def test_clipboard_disable_waits_for_inflight_capture_and_drops_generation(
+    monkeypatch,
+):
+    read_started = threading.Event()
+    allow_read = threading.Event()
+
+    def read_text():
+        read_started.set()
+        assert allow_read.wait(timeout=2)
+        return "sensitive"
+
+    monkeypatch.setattr(
+        adapter_module.legacy,
+        "_read_clipboard_unicode_text",
+        read_text,
+    )
+    monitor = _ClipboardMonitor(
+        lambda: ActiveWindow("Word", "winword.exe", "Secret.docx")
+    )
+    monitor.set_enabled(True)
+    generation = monitor._generation
+    capture = threading.Thread(
+        target=lambda: monitor._capture_locked(7, generation),
+        daemon=True,
+    )
+    # `_capture_locked` requires the same serialization lock used by the real
+    # monitor loop.
+    def serialized_capture():
+        with monitor._lifecycle_lock:
+            monitor._capture_locked(7, generation)
+
+    capture = threading.Thread(target=serialized_capture, daemon=True)
+    capture.start()
+    assert read_started.wait(timeout=1)
+
+    disabled = threading.Event()
+    disable_thread = threading.Thread(
+        target=lambda: (monitor.set_enabled(False), disabled.set()),
+        daemon=True,
+    )
+    disable_thread.start()
+    assert disabled.wait(timeout=0.05) is False
+    allow_read.set()
+    capture.join(timeout=2)
+    disable_thread.join(timeout=2)
+
+    assert disabled.is_set()
+    assert monitor.drain() == []
 
 
 def test_kdf_rejects_excessive_resource_parameters():
