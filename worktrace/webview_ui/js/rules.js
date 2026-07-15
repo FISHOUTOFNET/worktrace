@@ -1,32 +1,90 @@
 // WorkTrace WebView frontend - Project Rules core module.
-
 (function () {
     "use strict";
     var App = window.WorkTraceApp = window.WorkTraceApp || {};
 
-    function loadProjectRules() {
-        if (App.rulesLoading) {
-            return Promise.resolve();
+    // timeline.js is loaded before this module and init.js is loaded after it.
+    // Install the shared catalog loader synchronously here so initial preload,
+    // Timeline selection, and rule mutations all observe the same in-flight
+    // Promise and database generation.
+    function installProjectCatalogCoordinator() {
+        App.loadProjects = function () {
+            if (App.projectsCache) return Promise.resolve(App.projectsCache);
+            if (App.projectsLoadPromise) return App.projectsLoadPromise;
+            App.projectsLoading = true;
+            var epoch = App.dataEpoch || 0;
+            var request = App.callBridge("list_projects_for_timeline").then(function (result) {
+                if (epoch !== (App.dataEpoch || 0)) return null;
+                if (result && result.ok !== false && result.projects) {
+                    App.projectsCache = result.projects;
+                }
+                return App.projectsCache;
+            }).catch(function () {
+                return null;
+            }).finally(function () {
+                if (App.projectsLoadPromise === request) {
+                    App.projectsLoadPromise = null;
+                    App.projectsLoading = false;
+                }
+            });
+            App.projectsLoadPromise = request;
+            return request;
+        };
+    }
+    installProjectCatalogCoordinator();
+
+    function closestTimelineItem(target) {
+        while (target && target !== document) {
+            if (target.classList && target.classList.contains("timeline-item")) return target;
+            target = target.parentElement;
         }
-        var token = ++App.rulesRequestToken;
+        return null;
+    }
+
+    function installTimelineProjectLoadGate() {
+        var list = document.getElementById("timeline-sessions-list");
+        if (!list || list.getAttribute("data-project-load-gate") === "1") return;
+        list.setAttribute("data-project-load-gate", "1");
+        list.addEventListener("click", function (event) {
+            if (!App.projectsLoading || !App.projectsLoadPromise) return;
+            var item = closestTimelineItem(event.target);
+            if (!item) return;
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            var epoch = App.dataEpoch || 0;
+            App.projectsLoadPromise.then(function () {
+                if (epoch !== (App.dataEpoch || 0)) return;
+                if (document.body.contains(item)) item.click();
+            });
+        }, true);
+    }
+    installTimelineProjectLoadGate();
+
+    function loadProjectRules() {
+        if (App.rulesLoadPromise) return App.rulesLoadPromise;
+        var token = App.requestCoordinator.beginLatest("rules", "home");
         App.setRulesLoading(true);
         App.clearRulesError();
-        return App.callBridge("get_project_rules").then(function (result) {
-            if (token !== App.rulesRequestToken) return;
+        var request = App.callBridge("get_project_rules").then(function (result) {
+            if (!App.requestCoordinator.isCurrent(token)) return null;
             if (result && result.ok === false) {
                 App.showRulesError("加载项目规则失败");
-                return;
+                return null;
             }
             App.showProjectRules(result || { projects: [] });
             App.clearRulesError();
+            return result;
         }).catch(function () {
-            if (token !== App.rulesRequestToken) return;
-            App.showRulesError("加载项目规则失败");
-        }).then(function () {
-            if (token === App.rulesRequestToken) {
-                App.setRulesLoading(false);
+            if (App.requestCoordinator.isCurrent(token)) {
+                App.showRulesError("加载项目规则失败");
             }
+            return null;
+        }).finally(function () {
+            if (App.rulesLoadPromise === request) App.rulesLoadPromise = null;
+            if (App.requestCoordinator.isCurrent(token)) App.setRulesLoading(false);
         });
+        App.rulesLoadPromise = request;
+        return request;
     }
     App.loadProjectRules = loadProjectRules;
 
@@ -36,8 +94,7 @@
         list.sort(function (a, b) {
             if (mode === "alpha") {
                 return App.safeText(a && a.name, "").localeCompare(
-                    App.safeText(b && b.name, ""),
-                    "zh-Hans-CN"
+                    App.safeText(b && b.name, ""), "zh-Hans-CN"
                 );
             }
             var aUsed = App.safeText(a && a.last_used_at, "");
@@ -46,8 +103,7 @@
             if (aUsed && !bUsed) return -1;
             if (!aUsed && bUsed) return 1;
             return App.safeText(a && a.name, "").localeCompare(
-                App.safeText(b && b.name, ""),
-                "zh-Hans-CN"
+                App.safeText(b && b.name, ""), "zh-Hans-CN"
             );
         });
         return list;
@@ -59,9 +115,7 @@
         App.lastProjectRulesData = data || { projects: [] };
         var list = document.getElementById("rules-list");
         var empty = document.getElementById("rules-empty");
-        if (App.refreshRulesPanelTargets) {
-            App.refreshRulesPanelTargets();
-        }
+        if (App.refreshRulesPanelTargets) App.refreshRulesPanelTargets();
         if (!list || !empty) return;
         var projects = _sortProjectsForRulesHome((data && data.projects) || []);
         if (!projects.length) {
@@ -78,48 +132,35 @@
     }
     App.showProjectRules = showProjectRules;
 
-    function rerenderProjectRulesList() {
+    App.rerenderProjectRulesList = function () {
         var list = document.getElementById("rules-list");
         if (!list) return;
         if (!App.lastProjectRulesData) {
             App.loadProjectRules();
             return;
         }
-        var projects = _sortProjectsForRulesHome((App.lastProjectRulesData && App.lastProjectRulesData.projects) || []);
-        if (!projects.length) {
-            return;
-        }
+        var projects = _sortProjectsForRulesHome(
+            (App.lastProjectRulesData.projects || [])
+        );
+        if (!projects.length) return;
         list.innerHTML = projects.map(function (project) {
             return App.renderProjectRuleProject(project);
         }).join("");
         App.bindProjectRuleDelete();
         App.bindProjectRuleFolderEvents();
-    }
-    App.rerenderProjectRulesList = rerenderProjectRulesList;
+    };
 
-    function setRulesLoading(loading) {
+    App.setRulesLoading = function (loading) {
         App.rulesLoading = loading;
         var el = document.getElementById("rules-loading");
         if (el) el.hidden = !loading;
-    }
-    App.setRulesLoading = setRulesLoading;
+    };
 
-    function showRulesError(message) {
+    App.showRulesError = function (message) {
         var banner = document.getElementById("rules-error");
         if (!banner) return;
-        if (!message) {
-            banner.hidden = true;
-            banner.textContent = "加载项目规则失败";
-            return;
-        }
-        banner.hidden = false;
-        banner.textContent = message;
-    }
-    App.showRulesError = showRulesError;
-
-    function clearRulesError() {
-        App.showRulesError("");
-    }
-    App.clearRulesError = clearRulesError;
-
+        banner.hidden = !message;
+        banner.textContent = message || "加载项目规则失败";
+    };
+    App.clearRulesError = function () { App.showRulesError(""); };
 })();

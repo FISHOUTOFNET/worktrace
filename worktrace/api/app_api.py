@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
+from ..services import assignment_command_service, privacy_gate_service
 from ..services.runtime_activity_state_service import record_runtime_boundary
 from . import settings_api
 
@@ -15,7 +16,6 @@ _runtime: "AppRuntime | None" = None
 
 
 def set_runtime(runtime: "AppRuntime | None") -> None:
-    """Register the active ``AppRuntime`` instance."""
     global _runtime
     _runtime = runtime
 
@@ -25,47 +25,43 @@ def get_runtime() -> "AppRuntime | None":
 
 
 def start_collection_after_privacy_gate() -> dict[str, Any]:
-    """Start workers and collector only after the privacy gate is accepted."""
+    """Authorize once, then delegate lifecycle work to ``AppRuntime``."""
     try:
-        notice_accepted = settings_api.first_run_notice_accepted()
+        allowed = privacy_gate_service.is_sensitive_runtime_allowed()
     except Exception:
-        logging.exception(
-            "app_api.start_collection_after_privacy_gate: first-run "
-            "notice read failed; failing closed"
-        )
-        return {"ok": False, "error": "请先确认隐私说明"}
-    if not notice_accepted:
+        logging.exception("privacy notice state read failed")
+        allowed = False
+    if not allowed:
         return {"ok": False, "error": "请先确认隐私说明"}
     if _runtime is None:
         return {"ok": False, "error": "collector_start_failed"}
 
     background_error = False
     try:
+        assignment_command_service.retry_pending_inference(100)
+    except Exception:
+        background_error = True
+        logging.exception("pending assignment inference retry failed")
+    try:
         _runtime.start_background_workers()
     except Exception:
         background_error = True
         logging.exception(
-            "app_api.start_collection_after_privacy_gate: background "
-            "workers start failed after gate passed"
+            "app_api.start_collection_after_privacy_gate: background workers failed"
         )
     try:
         collector_result = _runtime.start_collector()
     except Exception:
         logging.exception(
-            "app_api.start_collection_after_privacy_gate: collector "
-            "start failed after gate passed"
+            "app_api.start_collection_after_privacy_gate: collector start failed"
         )
         return {"ok": False, "error": "collector_start_failed"}
     if isinstance(collector_result, dict) and not collector_result.get("ok"):
         return dict(collector_result)
-    return {
-        "ok": True,
-        "background_worker_degraded": background_error,
-    }
+    return {"ok": True, "background_worker_degraded": background_error}
 
 
 def pause_collection_now() -> dict[str, Any]:
-    """Pause through the runtime lifecycle owner."""
     try:
         if _runtime is not None:
             return dict(_runtime.pause_collection_now())
@@ -83,18 +79,24 @@ def pause_collection_now() -> dict[str, Any]:
 
 
 def set_clipboard_capture_enabled(enabled: bool) -> None:
-    """Apply a clipboard privacy toggle immediately to the live adapter."""
+    """Authorize and apply a live clipboard runtime state when one exists."""
+    if enabled and _runtime is not None:
+        privacy_gate_service.require_sensitive_runtime_allowed()
     if _runtime is not None:
-        _runtime.set_clipboard_capture_enabled(bool(enabled))
+        applied = _runtime.set_clipboard_capture_enabled(bool(enabled))
+        if not applied:
+            raise RuntimeError("clipboard_runtime_rejected")
 
 
 def start_collector() -> dict[str, object]:
+    """Low-level lifecycle facade; authorization is owned by startup commands."""
     if _runtime is not None:
         return dict(_runtime.start_collector())
     return {"ok": False, "error": "collector_start_failed"}
 
 
 def start_background_workers() -> bool:
+    """Low-level lifecycle facade; authorization is owned by startup commands."""
     if _runtime is not None:
         return _runtime.start_background_workers()
     return False
@@ -106,9 +108,7 @@ def request_shutdown() -> None:
 
 
 def owns_collector() -> bool:
-    if _runtime is not None:
-        return _runtime.owns_collector
-    return False
+    return bool(_runtime is not None and _runtime.owns_collector)
 
 
 __all__ = [

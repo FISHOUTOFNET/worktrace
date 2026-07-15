@@ -2,7 +2,8 @@
 
 Owns every long-lived runtime component: collector, folder-index worker,
 platform adapter, pause/reset command channel, single-instance lock and
-startup recovery.
+startup recovery. Authorization belongs to the application-command boundary;
+the runtime only reports lifecycle state.
 """
 
 from __future__ import annotations
@@ -85,7 +86,7 @@ class AppRuntime:
         self._initialized = True
 
     def start_background_workers(self) -> bool:
-        """Start or replace the folder-index worker under the lifecycle lock."""
+        """Start the folder-index worker when lifecycle state permits."""
         with self._lifecycle_lock:
             if not self.owns_collector or self._shutdown or self.stop_event.is_set():
                 return False
@@ -175,10 +176,13 @@ class AppRuntime:
         if resetter is not None:
             resetter()
 
-    def set_clipboard_capture_enabled(self, enabled: bool) -> None:
+    def set_clipboard_capture_enabled(self, enabled: bool) -> bool:
+        """Apply the already-authorized clipboard-capture runtime state."""
+        effective = bool(enabled)
         setter = getattr(self._adapter, "set_clipboard_capture_enabled", None)
         if setter is not None:
-            setter(bool(enabled))
+            setter(effective)
+        return True
 
     def request_shutdown(self) -> None:
         """Signal the collector and index threads to stop."""
@@ -203,8 +207,6 @@ class AppRuntime:
             if joiner is not None:
                 joiner(timeout=5)
             if _thread_reference_is_alive(collector_thread):
-                # A platform call may still be blocking. Shutting down the
-                # adapter is the only bounded way to unblock adapter-owned work.
                 shutdown_adapter = getattr(self._adapter, "shutdown", None)
                 if shutdown_adapter is not None:
                     shutdown_adapter()
@@ -226,16 +228,11 @@ class AppRuntime:
             release_single_instance()
             self.owns_collector = False
         elif self.owns_collector:
-            # Never release the single-instance lease while an old writer may
-            # resume and write into the same database generation.
             collector_health.record_health_code("shutdown_writer_still_alive")
-            logging.error("runtime shutdown retained instance lock: writer alive")
+            logging.error("app shutdown retained instance lock: writer alive")
 
         if not adapter_shutdown:
             shutdown_adapter = getattr(self._adapter, "shutdown", None)
             if shutdown_adapter is not None:
                 shutdown_adapter()
         logging.info("app shutdown writers_stopped=%s", writers_stopped)
-
-
-__all__ = ["AppRuntime"]

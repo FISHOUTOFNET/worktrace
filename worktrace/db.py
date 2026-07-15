@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from importlib import resources
-import logging
 import hashlib
 import json
+import logging
 import re
 import sqlite3
+from importlib import resources
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Mapping
 
 from . import config
 from .constants import (
@@ -18,10 +18,10 @@ from .constants import (
     TIME_FORMAT,
     UNCATEGORIZED_PROJECT,
 )
+from .report_structure_generation import bump_generation
 from .write_gate import DATABASE_WRITE_GATE
 
 CURRENT_SCHEMA_VERSION = 4
-
 
 _WRITE_TOKEN_RE = re.compile(
     r"\b(?:INSERT|UPDATE|DELETE|REPLACE|CREATE|DROP|ALTER|VACUUM|REINDEX|ATTACH|DETACH)\b",
@@ -34,6 +34,24 @@ _DB_MUTATING_PRAGMAS = {
     "PAGE_SIZE",
     "USER_VERSION",
 }
+_REPORT_STRUCTURE_TABLES = {
+    "ACTIVITY_LOG",
+    "ACTIVITY_PROJECT_ASSIGNMENT",
+    "ACTIVITY_RESOURCE",
+    "ACTIVITY_CLIPBOARD_EVENT",
+    "SESSION_BOUNDARY",
+    "REPORT_SESSION_OPERATION",
+    "REPORT_SESSION_OPERATION_MEMBER",
+    "PROJECT",
+}
+_REPORT_STRUCTURE_SETTINGS = {
+    "context_carry_minutes",
+    "unrecorded_gap_boundary_seconds",
+}
+_ACTIVITY_LOG_UPDATE_RE = re.compile(
+    r"\bUPDATE\s+(?:[A-Z0-9_]+\.)?ACTIVITY_LOG\s+SET\s+(.*?)(?:\s+WHERE\s+|$)",
+    re.IGNORECASE | re.DOTALL,
+)
 
 
 def _pragma_name(upper_sql: str) -> str:
@@ -60,15 +78,103 @@ def _sql_requires_write_gate(sql: str) -> bool:
 
 def _sql_records_business_read(sql: str) -> bool:
     upper = str(sql or "").lstrip().upper()
-    return upper.startswith("SELECT") or upper.startswith("WITH") or upper.startswith("EXPLAIN")
+    return (
+        upper.startswith("SELECT")
+        or upper.startswith("WITH")
+        or upper.startswith("EXPLAIN")
+    )
+
+
+def _parameter_values(parameters) -> list[object]:
+    if isinstance(parameters, Mapping):
+        return list(parameters.values())
+    if isinstance(parameters, (tuple, list)):
+        return list(parameters)
+    return []
+
+
+def _activity_log_update_changes_structure(sql: str) -> bool:
+    match = _ACTIVITY_LOG_UPDATE_RE.search(sql)
+    if match is None:
+        return True
+    columns: set[str] = set()
+    for assignment in match.group(1).split(","):
+        left = assignment.split("=", 1)[0].strip().rsplit(".", 1)[-1]
+        left = left.strip('"`[] ').upper()
+        if left:
+            columns.add(left)
+    if not columns:
+        return True
+    return not columns.issubset({"DURATION_SECONDS", "UPDATED_AT"})
+
+
+def _sql_affects_report_structure(sql: str, parameters=()) -> bool:
+    text = str(sql or "").strip()
+    if not text or not _WRITE_TOKEN_RE.search(text):
+        return False
+    upper = " ".join(text.upper().split())
+
+    if upper.startswith(("CREATE ", "DROP ", "ALTER ")):
+        return "SETTINGS" in upper or any(
+            re.search(rf"\b{table}\b", upper)
+            for table in _REPORT_STRUCTURE_TABLES
+        )
+
+    if re.search(r"\bACTIVITY_LOG\b", upper):
+        if upper.startswith("UPDATE"):
+            return _activity_log_update_changes_structure(text)
+        return True
+
+    if re.search(r"\bSETTINGS\b", upper):
+        if upper.startswith("DELETE"):
+            return True
+        values = {
+            str(value)
+            for value in _parameter_values(parameters)
+            if isinstance(value, str)
+        }
+        return not values or bool(values & _REPORT_STRUCTURE_SETTINGS)
+
+    return any(
+        re.search(rf"\b{table}\b", upper)
+        for table in _REPORT_STRUCTURE_TABLES
+    )
 
 
 class WorkTraceConnection(sqlite3.Connection):
-    """SQLite connection enforcing import exclusion and generation freshness."""
+    """SQLite connection enforcing write exclusion and structural generations."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._report_structure_dirty = False
+        self._report_structure_database_key = ""
 
     def _require_write_allowed(self, sql: str) -> None:
         if _sql_requires_write_gate(sql):
             DATABASE_WRITE_GATE.require_current_thread_allowed()
+
+    def _mark_report_structure_dirty(
+        self,
+        sql: str,
+        parameters=(),
+        *,
+        rowcount: int | None = None,
+    ) -> None:
+        if rowcount == 0:
+            return
+        if _sql_affects_report_structure(sql, parameters):
+            self._report_structure_dirty = True
+
+    def _publish_report_structure_generation(self) -> None:
+        if not self._report_structure_dirty:
+            return
+        key = str(self._report_structure_database_key or "")
+        self._report_structure_dirty = False
+        if key:
+            bump_generation(key)
+
+    def _discard_report_structure_generation(self) -> None:
+        self._report_structure_dirty = False
 
     def execute(self, sql, parameters=(), /):  # type: ignore[override]
         text = str(sql)
@@ -76,23 +182,64 @@ class WorkTraceConnection(sqlite3.Connection):
         cursor = super().execute(sql, parameters)
         if _sql_records_business_read(text):
             DATABASE_WRITE_GATE.note_current_thread_read()
+        else:
+            self._mark_report_structure_dirty(
+                text,
+                parameters,
+                rowcount=cursor.rowcount,
+            )
         return cursor
 
     def executemany(self, sql, seq_of_parameters, /):  # type: ignore[override]
-        self._require_write_allowed(str(sql))
-        return super().executemany(sql, seq_of_parameters)
+        text = str(sql)
+        self._require_write_allowed(text)
+        items = list(seq_of_parameters)
+        cursor = super().executemany(sql, items)
+        if cursor.rowcount != 0 and any(
+            _sql_affects_report_structure(text, parameters)
+            for parameters in items
+        ):
+            self._report_structure_dirty = True
+        return cursor
 
     def executescript(self, sql_script, /):  # type: ignore[override]
-        self._require_write_allowed(str(sql_script))
-        return super().executescript(sql_script)
+        text = str(sql_script)
+        self._require_write_allowed(text)
+        cursor = super().executescript(sql_script)
+        self._mark_report_structure_dirty(text, rowcount=cursor.rowcount)
+        return cursor
+
+    def commit(self) -> None:  # type: ignore[override]
+        super().commit()
+        self._publish_report_structure_generation()
+
+    def rollback(self) -> None:  # type: ignore[override]
+        super().rollback()
+        self._discard_report_structure_generation()
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        try:
+            result = super().__exit__(exc_type, exc_value, traceback)
+        except Exception:
+            self._discard_report_structure_generation()
+            raise
+        if exc_type is None:
+            self._publish_report_structure_generation()
+        else:
+            self._discard_report_structure_generation()
+        return result
 
 
 def read_schema_sql() -> str:
-    return resources.files(__package__).joinpath("schema.sql").read_text(encoding="utf-8")
+    return resources.files(__package__).joinpath("schema.sql").read_text(
+        encoding="utf-8"
+    )
 
 
 def read_schema_indexes_sql() -> str:
-    return resources.files(__package__).joinpath("schema_indexes.sql").read_text(encoding="utf-8")
+    return resources.files(__package__).joinpath("schema_indexes.sql").read_text(
+        encoding="utf-8"
+    )
 
 
 _db_path: Path | None = None
@@ -120,13 +267,16 @@ def get_db_path() -> Path:
 
 
 def get_connection() -> sqlite3.Connection:
+    database_path = get_db_path()
     conn = sqlite3.connect(
-        get_db_path(),
+        database_path,
         timeout=5,
         check_same_thread=False,
         factory=WorkTraceConnection,
     )
     conn.row_factory = sqlite3.Row
+    if isinstance(conn, WorkTraceConnection):
+        conn._report_structure_database_key = str(database_path.resolve())
     apply_connection_pragmas(conn)
     return conn
 
@@ -188,7 +338,11 @@ def schema_fingerprint(conn: sqlite3.Connection) -> str:
         for row in rows
     ]
     return hashlib.sha256(
-        json.dumps(canonical, ensure_ascii=True, separators=(",", ":")).encode("utf-8")
+        json.dumps(
+            canonical,
+            ensure_ascii=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
     ).hexdigest()
 
 
@@ -232,7 +386,9 @@ def seed_defaults(conn: sqlite3.Connection) -> None:
         "ui_refresh_seconds": "10",
         "user_paused": "false",
         "context_carry_minutes": str(DEFAULT_CONTEXT_CARRY_MINUTES),
-        "unrecorded_gap_boundary_seconds": str(DEFAULT_UNRECORDED_GAP_BOUNDARY_SECONDS),
+        "unrecorded_gap_boundary_seconds": str(
+            DEFAULT_UNRECORDED_GAP_BOUNDARY_SECONDS
+        ),
         "clipboard_capture_enabled": "false",
     }
     for key, value in defaults.items():
@@ -287,13 +443,21 @@ def ensure_current_indexes(conn: sqlite3.Connection) -> None:
 
 
 def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
-    return bool(conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (name,)).fetchone())
+    return bool(
+        conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            (name,),
+        ).fetchone()
+    )
 
 
 def _table_columns(conn: sqlite3.Connection, name: str) -> set[str]:
     if not _table_exists(conn, name):
         return set()
-    return {str(row["name"]) for row in conn.execute(f"PRAGMA table_info({name})").fetchall()}
+    return {
+        str(row["name"])
+        for row in conn.execute(f"PRAGMA table_info({name})").fetchall()
+    }
 
 
 def drop_all_tables(conn: sqlite3.Connection) -> None:

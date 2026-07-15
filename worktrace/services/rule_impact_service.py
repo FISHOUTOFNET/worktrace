@@ -7,19 +7,16 @@ from typing import Any
 from ..constants import STATUS_NORMAL
 from ..db import get_connection, now_str
 from ..formatters import format_safe_display_name
-from . import clipboard_service, folder_rule_service
+from . import clipboard_service, folder_index_service, folder_rule_service
 from . import project_lifecycle_policy
 from .project_inference_service import keyword_pattern_matches
 
 MAX_RULE_BACKFILL_ACTIVITIES = 100
 DEFAULT_SAMPLE_LIMIT = 20
 
-# Folder / keyword inference confidences (match project_inference_service).
 _FOLDER_RULE_CONFIDENCE = 85
 _KEYWORD_RULE_CONFIDENCE = 80
 
-# Internal stable error codes raised as RuleImpactError. The API layer maps
-# these to the ``_write_contract`` stable codes.
 ERR_NOT_FOUND = "not_found"
 ERR_RULE_DISABLED = "rule_disabled"
 ERR_PROJECT_NOT_AVAILABLE = "project_not_available"
@@ -33,9 +30,6 @@ class RuleImpactError(Exception):
     def __init__(self, code: str) -> None:
         super().__init__(code)
         self.code = code
-
-
-# Rule + project resolution
 
 
 def _resolve_folder_rule(conn, rule_id: int) -> dict | None:
@@ -55,8 +49,6 @@ def _resolve_folder_rule(conn, rule_id: int) -> dict | None:
 
 
 def _resolve_keyword_rule(conn, rule_id: int) -> dict | None:
-    # ``rule_type = 'keyword'`` guard: a folder rule id never resolves here,
-    # so a folder id passed on the keyword path returns None -> not_found.
     row = conn.execute(
         """
         SELECT pr.id, pr.pattern, pr.project_id, pr.enabled,
@@ -73,8 +65,6 @@ def _resolve_keyword_rule(conn, rule_id: int) -> dict | None:
 
 
 def _project_available(rule: dict) -> bool:
-    """A target project is available for backfill when it exists, is enabled,
-    not archived, and is not the special ``排除规则`` project."""
     return project_lifecycle_policy.project_available_for_inference(
         {
             "name": rule.get("project_name"),
@@ -91,7 +81,12 @@ def _rule_target(rule: dict, rule_type: str) -> str:
     return str(rule.get("pattern") or "")
 
 
-def _rule_summary(rule: dict, rule_type: str, *, project_available: bool) -> dict[str, Any]:
+def _rule_summary(
+    rule: dict,
+    rule_type: str,
+    *,
+    project_available: bool,
+) -> dict[str, Any]:
     return {
         "kind": rule_type,
         "id": int(rule.get("id") or 0),
@@ -102,8 +97,6 @@ def _rule_summary(rule: dict, rule_type: str, *, project_available: bool) -> dic
         "project_available": bool(project_available),
     }
 
-
-# Activity fetch + eligibility classification
 
 _ACTIVITY_SQL = """
 SELECT
@@ -136,15 +129,54 @@ def _fetch_activities(conn) -> list[dict]:
     return [dict(row) for row in conn.execute(_ACTIVITY_SQL).fetchall()]
 
 
+def _activity_matches_folder_read_only(activity: dict, rule: dict, conn) -> bool:
+    """Match a folder rule without starting index-maintenance writes.
+
+    Direct path matching is attempted first. Title-only matching may consult an
+    already-ready folder index through the caller's transaction, but an index
+    miss never requests a refresh from inside that transaction.
+    """
+
+    if folder_rule_service._activity_matches_folder(
+        activity,
+        str(rule.get("folder_path") or ""),
+        bool(int(rule.get("recursive") or 0)),
+    ):
+        return True
+
+    file_name = folder_index_service._activity_file_name(activity)
+    if not file_name:
+        return False
+    candidates = folder_index_service.lookup_indexed_paths_for_file_name(
+        file_name,
+        str(activity.get("start_time") or "") or None,
+        include_excluded=False,
+        request_refresh_on_miss=False,
+        conn=conn,
+    )
+    if not candidates:
+        return False
+
+    matched_project_ids: set[int] = set()
+    for candidate in candidates:
+        matched_rule = folder_rule_service.find_matching_folder_rule(
+            str(candidate.get("file_path") or ""),
+            conn=conn,
+        )
+        if matched_rule:
+            matched_project_ids.add(int(matched_rule["project_id"]))
+    if len(matched_project_ids) > 1:
+        return False
+    return any(
+        int(candidate.get("folder_rule_id") or 0) == int(rule.get("id") or 0)
+        for candidate in candidates
+    )
+
+
 def _activity_matches(activity: dict, rule: dict, rule_type: str, conn) -> bool:
     if rule_type == "folder":
-        return folder_rule_service._activity_matches_folder(
-            activity,
-            str(rule.get("folder_path") or ""),
-            bool(int(rule.get("recursive") or 0)),
-            int(rule.get("id") or 0),
-        )
-    # keyword: reuse the single keyword text/match code path.
+        return _activity_matches_folder_read_only(activity, rule, conn)
+
     pattern = str(rule.get("pattern") or "").strip().casefold()
     if not pattern:
         return False
@@ -159,18 +191,18 @@ def _activity_matches(activity: dict, rule: dict, rule_type: str, conn) -> bool:
         "uri_host": activity.get("resource_uri_host"),
     }
     clipboard_text = clipboard_service.clipboard_text_for_activity(
-        conn, int(activity.get("id") or 0)
+        conn,
+        int(activity.get("id") or 0),
     )
     return keyword_pattern_matches(pattern, activity, resource, clipboard_text)
 
 
-def _classify_activities(activities: list[dict], rule: dict, rule_type: str, conn) -> dict:
-    """Classify every activity into skip buckets / eligible / matched.
-
-    Returns a dict with all count fields and the ``would_update`` activity
-    list (eligible + matched + not already on target). Used by both preview
-    (read-only) and backfill (re-validated inside the write transaction).
-    """
+def _classify_activities(
+    activities: list[dict],
+    rule: dict,
+    rule_type: str,
+    conn,
+) -> dict:
     target_project_id = int(rule.get("project_id") or 0)
     expected_source = "folder_rule" if rule_type == "folder" else "keyword_rule"
     counts = {
@@ -205,14 +237,13 @@ def _classify_activities(activities: list[dict], rule: dict, rule_type: str, con
         if not _activity_matches(activity, rule, rule_type, conn):
             continue
         counts["matched_count"] += 1
-        effective_project_id = int(
-            activity.get("assignment_project_id") or 0
-        )
+        effective_project_id = int(activity.get("assignment_project_id") or 0)
         already_target = (
             effective_project_id == target_project_id
             and str(activity.get("assignment_source") or "") == expected_source
             and str(activity.get("assignment_source_rule_type") or "") == rule_type
-            and int(activity.get("assignment_source_rule_id") or 0) == int(rule.get("id") or 0)
+            and int(activity.get("assignment_source_rule_id") or 0)
+            == int(rule.get("id") or 0)
         )
         if already_target:
             counts["already_target_count"] += 1
@@ -223,14 +254,7 @@ def _classify_activities(activities: list[dict], rule: dict, rule_type: str, con
     return counts
 
 
-# Display-safe sample rows
-
-
 def _sample_row(activity: dict, rule: dict, rule_type: str) -> dict[str, Any]:
-    target_project_name = str(rule.get("project_name") or "")
-    # ``format_safe_display_name`` deliberately skips raw ``window_title`` /
-    # ``file_path_hint`` / ``note``; it falls back through
-    # resource_display_name -> app_name -> process_name -> "未知".
     resource_name = format_safe_display_name(
         {
             "resource_display_name": activity.get("resource_display_name"),
@@ -245,12 +269,17 @@ def _sample_row(activity: dict, rule: dict, rule_type: str) -> dict[str, Any]:
         "duration_seconds": int(activity.get("duration_seconds") or 0),
         "resource_name": resource_name,
         "current_project_name": str(activity.get("current_project_name") or ""),
-        "target_project_name": target_project_name,
+        "target_project_name": str(rule.get("project_name") or ""),
         "match_source": rule_type + "_rule",
     }
 
 
-def _sample_rows(would_update: list[dict], rule: dict, rule_type: str, limit: int) -> list[dict]:
+def _sample_rows(
+    would_update: list[dict],
+    rule: dict,
+    rule_type: str,
+    limit: int,
+) -> list[dict]:
     if limit <= 0:
         return []
     return [
@@ -259,33 +288,29 @@ def _sample_rows(would_update: list[dict], rule: dict, rule_type: str, limit: in
     ]
 
 
-# Public API
-
-
 def preview_rule_impact(
-    rule_type: str, rule_id: int, sample_limit: int = DEFAULT_SAMPLE_LIMIT
+    rule_type: str,
+    rule_id: int,
+    sample_limit: int = DEFAULT_SAMPLE_LIMIT,
 ) -> dict[str, Any]:
-    """Read-only impact preview for one existing folder / keyword rule.
-
-    Returns the impact dict ``{"rule": {...}, "counts": {...}, "samples": [...]}``.
-    Raises ``RuleImpactError`` with a stable ``code`` for ``not_found``.
-    Disabled rules and unavailable target projects return ``ok`` payload with
-    zero counts and empty samples (availability surfaced in the rule summary).
-    """
     if not isinstance(rule_type, str) or rule_type not in {"folder", "keyword"}:
         raise RuleImpactError(ERR_NOT_FOUND)
     if type(rule_id) is not int or rule_id <= 0:
         raise RuleImpactError(ERR_NOT_FOUND)
     with get_connection() as conn:
-        if rule_type == "folder":
-            rule = _resolve_folder_rule(conn, rule_id)
-        else:
-            rule = _resolve_keyword_rule(conn, rule_id)
+        rule = (
+            _resolve_folder_rule(conn, rule_id)
+            if rule_type == "folder"
+            else _resolve_keyword_rule(conn, rule_id)
+        )
         if not rule:
             raise RuleImpactError(ERR_NOT_FOUND)
         project_avail = _project_available(rule)
-        rule_summary = _rule_summary(rule, rule_type, project_available=project_avail)
-        # Disabled rule / unavailable project: informational zero preview.
+        rule_summary = _rule_summary(
+            rule,
+            rule_type,
+            project_available=project_avail,
+        )
         if not int(rule.get("enabled") or 0) or not project_avail:
             return {
                 "rule": rule_summary,
@@ -305,7 +330,10 @@ def preview_rule_impact(
         activities = _fetch_activities(conn)
         classified = _classify_activities(activities, rule, rule_type, conn)
         samples = _sample_rows(
-            classified["would_update"], rule, rule_type, int(sample_limit)
+            classified["would_update"],
+            rule,
+            rule_type,
+            int(sample_limit),
         )
         return {
             "rule": rule_summary,
@@ -317,7 +345,9 @@ def preview_rule_impact(
                 "manual_skipped_count": classified["manual_skipped_count"],
                 "hidden_skipped_count": classified["hidden_skipped_count"],
                 "deleted_skipped_count": classified["deleted_skipped_count"],
-                "in_progress_skipped_count": classified["in_progress_skipped_count"],
+                "in_progress_skipped_count": classified[
+                    "in_progress_skipped_count"
+                ],
                 "non_normal_skipped_count": classified["non_normal_skipped_count"],
             },
             "samples": samples,
@@ -325,26 +355,26 @@ def preview_rule_impact(
 
 
 def backfill_rule_impact(
-    rule_type: str, rule_id: int, max_updates: int = MAX_RULE_BACKFILL_ACTIVITIES
+    rule_type: str,
+    rule_id: int,
+    max_updates: int = MAX_RULE_BACKFILL_ACTIVITIES,
 ) -> dict[str, Any]:
-    """Explicit safe backfill of matched eligible activities for one rule.
-
-    Returns the result dict with ``updated_count`` and all skip / count
-    fields. Raises ``RuleImpactError`` with a stable ``code`` for
-    ``not_found`` / ``rule_disabled`` / ``project_not_available`` /
-    ``too_many_matches`` / ``operation_failed``. Writes nothing on any error.
-    """
     if not isinstance(rule_type, str) or rule_type not in {"folder", "keyword"}:
         raise RuleImpactError(ERR_NOT_FOUND)
     if type(rule_id) is not int or rule_id <= 0:
         raise RuleImpactError(ERR_NOT_FOUND)
     source = "folder_rule" if rule_type == "folder" else "keyword_rule"
-    confidence = _FOLDER_RULE_CONFIDENCE if rule_type == "folder" else _KEYWORD_RULE_CONFIDENCE
+    confidence = (
+        _FOLDER_RULE_CONFIDENCE
+        if rule_type == "folder"
+        else _KEYWORD_RULE_CONFIDENCE
+    )
     with get_connection() as conn:
-        if rule_type == "folder":
-            rule = _resolve_folder_rule(conn, rule_id)
-        else:
-            rule = _resolve_keyword_rule(conn, rule_id)
+        rule = (
+            _resolve_folder_rule(conn, rule_id)
+            if rule_type == "folder"
+            else _resolve_keyword_rule(conn, rule_id)
+        )
         if not rule:
             raise RuleImpactError(ERR_NOT_FOUND)
         if not int(rule.get("enabled") or 0):
@@ -380,11 +410,19 @@ def backfill_rule_impact(
                     updated_at = excluded.updated_at
                 WHERE activity_project_assignment.is_manual = 0
                 """,
-                (activity_id, project_id, confidence, source, rule_type, rule_id, ts, ts),
+                (
+                    activity_id,
+                    project_id,
+                    confidence,
+                    source,
+                    rule_type,
+                    rule_id,
+                    ts,
+                    ts,
+                ),
             )
             if cursor.rowcount != 1:
                 raise RuleImpactError(ERR_OPERATION_FAILED)
-        # Context manager commits on clean exit; any raise above rolls back.
         return {
             "rule": _rule_summary(rule, rule_type, project_available=True),
             "updated_count": len(would_update),

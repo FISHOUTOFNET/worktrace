@@ -10,27 +10,45 @@
     function nextTimelineOwner(date) {
         App.timelineEpoch = (App.timelineEpoch || 0) + 1;
         App.timelineOwner = {
+            dataEpoch: App.dataEpoch || 0,
             timelineEpoch: App.timelineEpoch,
             absoluteReportDate: absoluteDate(date)
         };
         return App.timelineOwner;
     }
 
+    function detailTuple(owner) {
+        return [
+            owner.absoluteReportDate || "",
+            owner.projectionInstanceKey || "",
+            owner.projectionRevision || ""
+        ].join("|");
+    }
+
     function nextSelectionOwner(date, projectionInstanceKey, projectionRevision) {
-        App.selectionEpoch = (App.selectionEpoch || 0) + 1;
-        App.detailsOwner = {
+        var candidate = {
+            dataEpoch: App.dataEpoch || 0,
             timelineEpoch: App.timelineEpoch || 0,
-            selectionEpoch: App.selectionEpoch,
             absoluteReportDate: absoluteDate(date),
             projectionInstanceKey: projectionInstanceKey || "",
             projectionRevision: projectionRevision || ""
         };
-        return App.detailsOwner;
+        if (App.detailsOwner
+            && App.detailsOwner.dataEpoch === candidate.dataEpoch
+            && App.detailsOwner.timelineEpoch === candidate.timelineEpoch
+            && detailTuple(App.detailsOwner) === detailTuple(candidate)) {
+            return App.detailsOwner;
+        }
+        App.selectionEpoch = (App.selectionEpoch || 0) + 1;
+        candidate.selectionEpoch = App.selectionEpoch;
+        App.detailsOwner = candidate;
+        return candidate;
     }
 
     function isCurrentDetailsOwner(owner) {
         return !!owner
             && App.detailsOwner === owner
+            && owner.dataEpoch === (App.dataEpoch || 0)
             && owner.timelineEpoch === (App.timelineEpoch || 0)
             && owner.selectionEpoch === (App.selectionEpoch || 0)
             && owner.absoluteReportDate === absoluteDate(App.timelineDate)
@@ -40,10 +58,9 @@
 
     function detailRequestKey(owner) {
         return [
+            String(owner.dataEpoch || 0),
             String(owner.timelineEpoch || 0),
-            owner.absoluteReportDate || "",
-            owner.projectionInstanceKey || "",
-            owner.projectionRevision || ""
+            detailTuple(owner)
         ].join("|");
     }
 
@@ -86,6 +103,7 @@
         }
         App.mutationEpoch = (App.mutationEpoch || 0) + 1;
         App.mutationOwner = {
+            dataEpoch: App.dataEpoch || 0,
             mutationEpoch: App.mutationEpoch,
             method: method || "",
             absoluteReportDate: absoluteDate(date),
@@ -103,6 +121,7 @@
 
     function isCurrentMutationOwner(owner) {
         return !!owner && App.mutationOwner === owner
+            && owner.dataEpoch === (App.dataEpoch || 0)
             && (owner.state === "pending" || owner.state === "unknown");
     }
 
@@ -127,6 +146,66 @@
         return false;
     }
 
+    var requestSequences = App.requestSequences || {};
+    var sharedPromises = App.sharedPromises || {};
+
+    function beginLatest(channel, logicalKey) {
+        requestSequences[channel] = (requestSequences[channel] || 0) + 1;
+        return {
+            channel: channel,
+            logicalKey: String(logicalKey || ""),
+            sequence: requestSequences[channel],
+            dataEpoch: App.dataEpoch || 0
+        };
+    }
+
+    function isCurrentRequest(token) {
+        return !!token
+            && token.dataEpoch === (App.dataEpoch || 0)
+            && token.sequence === requestSequences[token.channel];
+    }
+
+    function share(channel, logicalKey, factory) {
+        var key = [App.dataEpoch || 0, channel, logicalKey || ""].join("|");
+        if (sharedPromises[key]) return sharedPromises[key];
+        var source;
+        try {
+            source = Promise.resolve().then(factory);
+        } catch (error) {
+            source = Promise.reject(error);
+        }
+        var shared = source.finally(function () {
+            if (sharedPromises[key] === shared) delete sharedPromises[key];
+        });
+        sharedPromises[key] = shared;
+        return shared;
+    }
+
+    function bumpDataEpoch() {
+        App.dataEpoch = (App.dataEpoch || 0) + 1;
+        App.timelineEpoch = (App.timelineEpoch || 0) + 1;
+        App.selectionEpoch = (App.selectionEpoch || 0) + 1;
+        App.detailsOwner = null;
+        App.timelineOwner = null;
+        App.mutationOwner = null;
+        App.mutationState = "idle";
+        App.detailsInFlight = {};
+        App.projectsCache = null;
+        App.projectsLoading = false;
+        App.projectsLoadPromise = null;
+        App.statisticsAcceptedPayload = null;
+        App.rulesLoadPromise = null;
+        App.refreshCheckInFlight = false;
+        App.activePageRefreshInFlight = false;
+        App.activePageRefreshPromise = null;
+        App.activePageRefreshPending = null;
+        App.reconcileInFlight = false;
+        for (var key in sharedPromises) delete sharedPromises[key];
+        for (var channel in requestSequences) requestSequences[channel] += 1;
+        return App.dataEpoch;
+    }
+
+    App.dataEpoch = App.dataEpoch || 0;
     App.timelineEpoch = App.timelineEpoch || 0;
     App.selectionEpoch = App.selectionEpoch || 0;
     App.detailsOwner = App.detailsOwner || null;
@@ -136,6 +215,12 @@
     App.MUTATION_STATES = Object.freeze([
         "idle", "pending", "unknown", "confirmed_success", "confirmed_failure"
     ]);
+    App.requestCoordinator = {
+        beginLatest: beginLatest,
+        bumpDataEpoch: bumpDataEpoch,
+        isCurrent: isCurrentRequest,
+        share: share
+    };
     App.timelineRequestState = {
         absoluteDate: absoluteDate,
         detailRequestKey: detailRequestKey,
