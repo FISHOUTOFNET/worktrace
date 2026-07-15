@@ -77,7 +77,7 @@ def get_statistics_export_summary(date_from: str, date_to: str) -> dict:
         "session_count": projection.session_count,
         "export_row_count": projection.export_row_count,
         "project_count": projection.concrete_project_count,
-        "app_count": len(projection.by_app),
+        "app_count": projection.concrete_app_count,
         "by_project": list(projection.by_project),
         "by_app": list(projection.by_app),
         "by_status": list(projection.by_status),
