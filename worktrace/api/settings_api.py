@@ -121,8 +121,7 @@ def is_clipboard_capture_enabled() -> bool:
 
 
 def set_clipboard_capture_enabled(value: bool) -> None:
-    if value:
-        privacy_gate_service.require_sensitive_runtime_allowed()
+    """Persist the preference only; AppRuntime owns the sensitive-runtime gate."""
     set_setting("clipboard_capture_enabled", "true" if value else "false")
 
 
@@ -133,15 +132,12 @@ def clear_all_local_data(confirm: bool) -> None:
 def get_settings_privacy_status() -> dict[str, Any]:
     try:
         notice_accepted = first_run_notice_accepted()
-        clipboard_enabled = is_clipboard_capture_enabled()
-        if clipboard_enabled and not notice_accepted:
-            clipboard_enabled = False
         return {
             "ok": True,
             "status": {
                 "page": "settings_privacy",
                 "storage_model": "local_only",
-                "clipboard_capture_enabled": clipboard_enabled,
+                "clipboard_capture_enabled": is_clipboard_capture_enabled(),
                 "export_path_configured": bool(get_export_path()),
                 "secure_import_in_progress": bool(
                     backup_api.is_secure_import_in_progress()
@@ -157,9 +153,6 @@ def get_settings_privacy_status() -> dict[str, Any]:
                 },
                 "first_run_notice": {
                     "accepted": notice_accepted,
-                    "accepted_version": (
-                        PRIVACY_NOTICE_VERSION if notice_accepted else ""
-                    ),
                     "view_available_in_webview": True,
                     "accept_required": not notice_accepted,
                 },
@@ -174,9 +167,17 @@ def export_encrypted_backup_for_webview(
     passphrase: str,
     confirm_passphrase: str,
 ) -> dict[str, Any]:
-    if not isinstance(output_path, str) or isinstance(output_path, bool) or not output_path.strip():
+    if (
+        not isinstance(output_path, str)
+        or isinstance(output_path, bool)
+        or not output_path.strip()
+    ):
         return {"ok": False, "error": "请选择有效的备份保存位置"}
-    if not isinstance(passphrase, str) or isinstance(passphrase, bool) or not passphrase.strip():
+    if (
+        not isinstance(passphrase, str)
+        or isinstance(passphrase, bool)
+        or not passphrase.strip()
+    ):
         return {"ok": False, "error": "请输入备份口令"}
     if not isinstance(confirm_passphrase, str) or confirm_passphrase != passphrase:
         return {"ok": False, "error": "两次输入的备份口令不一致"}
@@ -197,7 +198,12 @@ def export_encrypted_backup_for_webview(
 def preview_encrypted_backup_manifest_for_webview(
     input_path: str,
 ) -> dict[str, Any]:
-    if not isinstance(input_path, str) or isinstance(input_path, bool) or not input_path.strip() or not input_path.lower().endswith(".wtbackup"):
+    if (
+        not isinstance(input_path, str)
+        or isinstance(input_path, bool)
+        or not input_path.strip()
+        or not input_path.lower().endswith(".wtbackup")
+    ):
         return {"ok": False, "error": "请选择有效的加密备份文件"}
     try:
         info = backup_api.parse_encrypted_backup_manifest(input_path)
@@ -222,11 +228,24 @@ def import_encrypted_backup_for_webview(
     passphrase: str,
     confirm_text: str,
 ) -> dict[str, Any]:
-    if not isinstance(input_path, str) or isinstance(input_path, bool) or not input_path.strip() or not input_path.lower().endswith(".wtbackup"):
+    if (
+        not isinstance(input_path, str)
+        or isinstance(input_path, bool)
+        or not input_path.strip()
+        or not input_path.lower().endswith(".wtbackup")
+    ):
         return {"ok": False, "error": "请选择有效的加密备份文件"}
-    if not isinstance(passphrase, str) or isinstance(passphrase, bool) or not passphrase.strip():
+    if (
+        not isinstance(passphrase, str)
+        or isinstance(passphrase, bool)
+        or not passphrase.strip()
+    ):
         return {"ok": False, "error": "请输入备份口令"}
-    if not isinstance(confirm_text, str) or isinstance(confirm_text, bool) or confirm_text.strip() != "导入并替换":
+    if (
+        not isinstance(confirm_text, str)
+        or isinstance(confirm_text, bool)
+        or confirm_text.strip() != "导入并替换"
+    ):
         return {"ok": False, "error": "请输入确认文字：导入并替换"}
     try:
         result = backup_api.import_encrypted_backup(
@@ -251,7 +270,11 @@ def import_encrypted_backup_for_webview(
 
 
 def clear_all_local_data_for_webview(confirm_text: str) -> dict[str, Any]:
-    if not isinstance(confirm_text, str) or isinstance(confirm_text, bool) or confirm_text.strip() != "清空本地数据":
+    if (
+        not isinstance(confirm_text, str)
+        or isinstance(confirm_text, bool)
+        or confirm_text.strip() != "清空本地数据"
+    ):
         return {"ok": False, "error": "请输入确认文字：清空本地数据"}
     try:
         export_service.clear_all_local_data(confirm=True)
@@ -265,10 +288,9 @@ def clear_all_local_data_for_webview(confirm_text: str) -> dict[str, Any]:
 
 
 def set_clipboard_capture_enabled_for_webview(enabled: bool) -> dict[str, Any]:
+    """Persist a validated preference; bridge/AppRuntime applies the gate."""
     if enabled is not True and enabled is not False:
         return {"ok": False, "error": "请选择有效的剪贴板记录状态"}
-    if enabled and not privacy_gate_service.is_sensitive_runtime_allowed():
-        return {"ok": False, "error": "请先确认隐私说明"}
     try:
         set_clipboard_capture_enabled(enabled)
         status_result = get_settings_privacy_status()
