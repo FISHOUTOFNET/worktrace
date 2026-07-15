@@ -26,6 +26,7 @@ class ReportAnalyticsProjection:
     entry_count: int
     export_row_count: int
     concrete_project_count: int
+    concrete_app_count: int
     by_project: tuple[dict[str, Any], ...]
     by_app: tuple[dict[str, Any], ...]
     by_status: tuple[dict[str, Any], ...]
@@ -48,6 +49,7 @@ def build_statistics_projection(
     by_project: dict[str, dict] = {}
     by_app: dict[str, dict] = {}
     by_status: dict[str, dict] = {}
+    concrete_apps: set[str] = set()
     total = classified = uncategorized = project_duration = 0
     closed_keys = {str(record["_record_key"]) for record in private_records}
     record_by_key = {str(record["_record_key"]): record for record in private_records}
@@ -55,9 +57,7 @@ def build_statistics_projection(
     for record in private_records:
         duration = int(record["duration_seconds"])
         total += duration
-        concrete_project = not bool(record["_standalone_excluded"]) and not bool(
-            record["is_uncategorized"]
-        )
+        concrete_project = bool(record["_is_concrete_project"])
         if not bool(record["_standalone_excluded"]):
             if bool(record["is_uncategorized"]):
                 uncategorized += duration
@@ -94,6 +94,8 @@ def build_statistics_projection(
             if status == STATUS_EXCLUDED:
                 excluded += duration
             app = "已排除" if privacy_redacted else str(row.get("app_name") or "未知应用")
+            if not privacy_redacted:
+                concrete_apps.add(app)
             _accumulate(by_app, app, duration, [identity], key)
             _accumulate(
                 by_status,
@@ -132,6 +134,7 @@ def build_statistics_projection(
         concrete_project_count=sum(
             1 for group in project_groups if bool(group.get("is_concrete_project"))
         ),
+        concrete_app_count=len(concrete_apps),
         by_project=project_groups,
         by_app=tuple(_groups(by_app, total)),
         by_status=tuple(_groups(by_status, total)),
@@ -163,6 +166,15 @@ def _build_export_records(snapshot: ReportProjectionSnapshot) -> list[dict[str, 
         project = "已排除" if standalone_excluded else str(
             entry.get("project_name") or UNCATEGORIZED_PROJECT
         )
+        project_id = int(
+            entry.get("report_project_id") or entry.get("project_id") or 0
+        )
+        is_concrete_project = bool(
+            not standalone_excluded
+            and project_id > 0
+            and project != UNCATEGORIZED_PROJECT
+            and not bool(entry.get("project_is_deleted"))
+        )
         members = sorted(
             {
                 (
@@ -193,6 +205,7 @@ def _build_export_records(snapshot: ReportProjectionSnapshot) -> list[dict[str, 
                 "is_uncategorized": not standalone_excluded
                 and not bool(entry.get("is_report_classified")),
                 "_standalone_excluded": standalone_excluded,
+                "_is_concrete_project": is_concrete_project,
                 "_member_identities": members,
                 "_record_key": key,
             }
