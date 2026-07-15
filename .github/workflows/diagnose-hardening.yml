@@ -1,47 +1,93 @@
 name: Architecture hardening diagnostics
 
 on:
-  push:
-    branches: [agent/worktrace-architecture-hardening]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: hardening-diagnostics-${{ github.ref }}
+  group: hardening-diagnostics-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
   diagnose:
     name: Focused hardening contracts
     runs-on: [self-hosted, Windows, X64]
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
           clean: true
-      - name: Install dependencies quietly
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          check-latest: false
+      - name: Install dependencies
         shell: pwsh
         run: python -m pip install --disable-pip-version-check -q -r requirements.txt
-      - name: Run focused contracts
+
+      - id: architecture
+        name: Architecture hardening regressions
+        continue-on-error: true
+        shell: pwsh
+        run: python -m pytest -q --tb=short --maxfail=10 tests/test_architecture_hardening_regressions.py
+      - id: privacy_status
+        name: Settings privacy status
+        continue-on-error: true
+        shell: pwsh
+        run: python -m pytest -q --tb=short --maxfail=10 tests/test_settings_privacy_status.py
+      - id: runtime_privacy
+        name: Runtime privacy gate
+        continue-on-error: true
+        shell: pwsh
+        run: python -m pytest -q --tb=short --maxfail=10 tests/test_app_runtime_privacy_gate.py
+      - id: statistics
+        name: Statistics summary
+        continue-on-error: true
+        shell: pwsh
+        run: python -m pytest -q --tb=short --maxfail=10 tests/test_statistics_api_summary.py
+      - id: export
+        name: CSV export
+        continue-on-error: true
+        shell: pwsh
+        run: python -m pytest -q --tb=short --maxfail=10 tests/test_export_service.py
+      - id: rule_batch
+        name: Rule batch operations
+        continue-on-error: true
+        shell: pwsh
+        run: python -m pytest -q --tb=short --maxfail=10 tests/test_project_rules_batch_operations.py
+      - id: projection_cutover
+        name: Projection cutover
+        continue-on-error: true
+        shell: pwsh
+        run: python -m pytest -q --tb=short --maxfail=10 tests/test_report_projection_cutover.py
+      - id: projection_contract
+        name: Projection architecture contract
+        continue-on-error: true
+        shell: pwsh
+        run: python -m pytest -q --tb=short --maxfail=10 tests/test_report_projection_architecture_contract.py
+      - id: webview_entry
+        name: WebView entry contracts
+        continue-on-error: true
+        shell: pwsh
+        run: python -m pytest -q --tb=short --maxfail=10 tests/test_webview_entry.py
+
+      - name: Fail when any focused contract failed
+        if: always()
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path "test-results" | Out-Null
-          & python -m pytest -q --tb=short --maxfail=30 `
-            tests/test_architecture_hardening_regressions.py `
-            tests/test_settings_privacy_status.py `
-            tests/test_app_runtime_privacy_gate.py `
-            tests/test_statistics_api_summary.py `
-            tests/test_export_service.py `
-            tests/test_project_rules_batch_operations.py `
-            tests/test_report_projection_cutover.py `
-            tests/test_report_projection_architecture_contract.py `
-            tests/test_webview_entry.py `
-            2>&1 | Tee-Object -FilePath "test-results/focused.log"
-          $code = $LASTEXITCODE
-          if ($code -ne 0) {
-            Write-Host "=== FOCUSED_FAILURE_TAIL_BEGIN ==="
-            Get-Content -LiteralPath "test-results/focused.log" -Tail 180
-            Write-Host "=== FOCUSED_FAILURE_TAIL_END ==="
-          }
-          exit $code
+          $outcomes = @(
+            '${{ steps.architecture.outcome }}',
+            '${{ steps.privacy_status.outcome }}',
+            '${{ steps.runtime_privacy.outcome }}',
+            '${{ steps.statistics.outcome }}',
+            '${{ steps.export.outcome }}',
+            '${{ steps.rule_batch.outcome }}',
+            '${{ steps.projection_cutover.outcome }}',
+            '${{ steps.projection_contract.outcome }}',
+            '${{ steps.webview_entry.outcome }}'
+          )
+          if ($outcomes -contains 'failure') { exit 1 }
