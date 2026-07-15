@@ -19,6 +19,7 @@ from ..services import (
     session_boundary_service,
 )
 from ..services.activity_status_policy import does_status_require_boundary
+from ..services.privacy_anonymization_service import anonymize_activity
 from .activity_session_recorder import ActivitySessionRecorder
 from .resource_identity_resolver import (
     DEFAULT_RESOURCE_IDENTITY_RESOLVER,
@@ -59,14 +60,27 @@ class CollectorStateMachine:
         requested_status = STATE_TO_STATUS[state]
         previous_status = ""
         if self.recorder.current_payload is not None:
-            previous_status = str(self.recorder.current_payload.get("status") or "")
+            previous_status = str(
+                self.recorder.current_payload.get("status") or ""
+            )
 
-        payload = self.resolver.payload_for(requested_status, active_window)
+        raw_payload = self.resolver.payload_for(requested_status, active_window)
+        raw_signature = self.resolver.signature_for_payload(raw_payload)
+        redact_current = self._should_redact_current_activity(
+            requested_status,
+            raw_payload,
+            raw_signature,
+        )
         status, payload = self.resolver.normalize_for_privacy(
             requested_status,
-            payload,
+            raw_payload,
             active_window,
         )
+        if redact_current and self.recorder.persisted_activity_id is not None:
+            # A path discovered after persistence belongs to the same logical
+            # resource and is now known to be excluded. Redact that resource's
+            # own history, never the previous unrelated foreground window.
+            anonymize_activity(self.recorder.persisted_activity_id)
         if status == STATUS_EXCLUDED:
             state = "excluded"
         signature = self.resolver.signature_for_payload(payload)
@@ -83,7 +97,9 @@ class CollectorStateMachine:
             self.recorder.current_signature = effective_signature
             self.recorder.observe(payload, effective_signature, transition_time)
             self.state = state
-            self.active_signature = self.recorder.current_signature or effective_signature
+            self.active_signature = (
+                self.recorder.current_signature or effective_signature
+            )
             return
 
         boundary_required = does_status_require_boundary(status, 0)
@@ -112,6 +128,31 @@ class CollectorStateMachine:
             logging.info("collector state transition status=excluded")
         else:
             logging.info("collector state transition state=%s", state)
+
+    def _should_redact_current_activity(
+        self,
+        requested_status: str,
+        raw_payload: dict,
+        raw_signature: ActivitySignature,
+    ) -> bool:
+        current = self.recorder.current_payload
+        current_signature = self.recorder.current_signature
+        if (
+            requested_status != STATUS_NORMAL
+            or current is None
+            or str(current.get("status") or "") != STATUS_NORMAL
+            or current_signature is None
+            or self.recorder.persisted_activity_id is None
+        ):
+            return False
+        if not self.resolver.payload_resource_is_excluded(raw_payload):
+            return False
+        return self.resolver.signatures_represent_same_resource(
+            current_signature,
+            raw_signature,
+            current,
+            raw_payload,
+        )
 
     def record_clipboard_event(
         self,
