@@ -53,61 +53,72 @@ def _report_runtime_missing() -> int:
     return 2
 
 
+def _report_already_running() -> int:
+    message = "WorkTrace 已在运行。"
+    print(message, file=sys.stderr)
+    logging.info("webview startup skipped: application instance already running")
+    return 0
+
+
 def main() -> int:
     paths = config.resolve_paths()
     config.ensure_directories(paths)
     setup_logging(paths.log_path)
     logging.info("webview ui startup")
 
-    if detect_webview2_runtime() == "missing":
-        return _report_runtime_missing()
-
-    try:
-        webview = _check_pywebview_available()
-    except RuntimeError as exc:
-        print(str(exc), file=sys.stderr)
-        return 2
-
+    # Acquire the application instance before runtime probing or any database
+    # initialization. A second process exits without constructing a WebView.
     runtime = AppRuntime(paths)
-    runtime.initialize()
+    if not runtime.initialize():
+        return _report_already_running()
     app_api.set_runtime(runtime)
 
     try:
-        startup_result = app_api.start_collection_after_privacy_gate()
-        if not startup_result.get("ok"):
-            logging.error(
-                "collector startup rejected error=%s",
-                startup_result.get("error", "unknown"),
+        if detect_webview2_runtime() == "missing":
+            return _report_runtime_missing()
+
+        try:
+            webview = _check_pywebview_available()
+        except RuntimeError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+
+        try:
+            startup_result = app_api.start_collection_after_privacy_gate()
+            if not startup_result.get("ok"):
+                logging.error(
+                    "collector startup rejected error=%s",
+                    startup_result.get("error", "unknown"),
+                )
+            elif startup_result.get("background_worker_degraded"):
+                logging.warning("collector started with background worker degradation")
+        except Exception:
+            logging.exception(
+                "webview startup: start_collection_after_privacy_gate raised; "
+                "user can retry via sidebar toggle"
             )
-        elif startup_result.get("background_worker_degraded"):
-            logging.warning("collector started with background worker degradation")
-    except Exception:
-        logging.exception(
-            "webview startup: start_collection_after_privacy_gate raised; "
-            "user can retry via sidebar toggle"
-        )
 
-    bridge = WebViewBridge()
-    index_path = resource_path("index.html")
+        bridge = WebViewBridge()
+        index_path = resource_path("index.html")
 
-    try:
-        window = webview.create_window(
-            title="WorkTrace",
-            url=str(index_path),
-            js_api=bridge,
-            width=1080,
-            height=720,
-            min_size=(800, 540),
-        )
-        bridge.set_window(window)
-        webview.start()
-    except Exception:
-        logging.exception("webview start failed")
-        print(missing_runtime_message(), file=sys.stderr)
-        return 2
+        try:
+            window = webview.create_window(
+                title="WorkTrace",
+                url=str(index_path),
+                js_api=bridge,
+                width=1080,
+                height=720,
+                min_size=(800, 540),
+            )
+            bridge.set_window(window)
+            webview.start()
+        except Exception:
+            logging.exception("webview start failed")
+            print(missing_runtime_message(), file=sys.stderr)
+            return 2
+        return 0
     finally:
         runtime.shutdown()
-    return 0
 
 
 if __name__ == "__main__":
