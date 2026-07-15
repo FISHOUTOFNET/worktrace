@@ -25,6 +25,7 @@ def get_runtime() -> "AppRuntime | None":
 
 
 def start_collection_after_privacy_gate() -> dict[str, Any]:
+    """Authorize once, then delegate lifecycle work to ``AppRuntime``."""
     if not privacy_gate_service.is_sensitive_runtime_allowed():
         return {"ok": False, "error": "请先确认隐私说明"}
     if _runtime is None:
@@ -73,23 +74,24 @@ def pause_collection_now() -> dict[str, Any]:
 
 
 def set_clipboard_capture_enabled(enabled: bool) -> None:
+    """Authorize enabling before applying the runtime state."""
     if enabled:
         privacy_gate_service.require_sensitive_runtime_allowed()
     if _runtime is not None:
-        _runtime.set_clipboard_capture_enabled(bool(enabled))
+        applied = _runtime.set_clipboard_capture_enabled(bool(enabled))
+        if not applied:
+            raise RuntimeError("clipboard_runtime_rejected")
 
 
 def start_collector() -> dict[str, object]:
-    if not privacy_gate_service.is_sensitive_runtime_allowed():
-        return {"ok": False, "error": "privacy_notice_required"}
+    """Low-level lifecycle facade; authorization is owned by startup commands."""
     if _runtime is not None:
         return dict(_runtime.start_collector())
     return {"ok": False, "error": "collector_start_failed"}
 
 
 def start_background_workers() -> bool:
-    if not privacy_gate_service.is_sensitive_runtime_allowed():
-        return False
+    """Low-level lifecycle facade; authorization is owned by startup commands."""
     if _runtime is not None:
         return _runtime.start_background_workers()
     return False
