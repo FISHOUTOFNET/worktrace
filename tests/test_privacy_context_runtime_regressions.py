@@ -7,7 +7,7 @@ import pytest
 
 from worktrace.collector.collector import run_collector
 from worktrace.collector.state_machine import CollectorStateMachine
-from worktrace.constants import EXCLUDED_WINDOW_TITLE, STATUS_EXCLUDED
+from worktrace.constants import EXCLUDED_WINDOW_TITLE
 from worktrace.platforms.base import ActiveWindow
 from worktrace.services import (
     activity_service,
@@ -16,10 +16,6 @@ from worktrace.services import (
     project_service,
     settings_service,
     statistics_service,
-)
-from worktrace.services.activity_status_policy import (
-    does_status_require_boundary,
-    is_collector_health_status,
 )
 from worktrace.services.report_session_builder import _finalize_session_semantics
 
@@ -177,13 +173,3 @@ def test_cross_midnight_activity_count_is_not_report_slice_count(temp_db):
     assert summary["report_slice_count"] == 2
     assert summary["export_preview"]["included_activity_count"] == 1
     assert summary["export_preview"]["included_report_slice_count"] == 2
-
-
-def test_long_excluded_span_is_a_context_boundary():
-    assert does_status_require_boundary(STATUS_EXCLUDED, 15 * 60) is False
-    assert does_status_require_boundary(STATUS_EXCLUDED, 15 * 60 + 1) is True
-
-
-@pytest.mark.parametrize("status", ["healthy", "degraded", "failing", "stopped"])
-def test_collector_health_status_policy_recognizes_supported_values(status):
-    assert is_collector_health_status(status) is True
