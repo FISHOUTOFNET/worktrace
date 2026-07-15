@@ -22,11 +22,11 @@ def upsert_assignment(
     source_rule_id: int | None = None,
     protect_manual: bool = False,
 ) -> bool:
-    """Write one assignment without relying on UPSERT ``rowcount`` semantics.
+    """Write one assignment using explicit ownership checks.
 
-    The caller owns the transaction. Automatic callers set ``protect_manual``;
-    an assignment that became manual inside the same write transaction is then
-    reported as not owned so the caller can roll back the whole command.
+    Batch callers already hold ``BEGIN IMMEDIATE``. Reading ownership before
+    UPDATE is therefore deterministic and avoids SQLite UPSERT ``rowcount``
+    differences across Python/SQLite builds.
     """
 
     activity_id = int(activity_id)
@@ -34,30 +34,14 @@ def upsert_assignment(
         source_rule_type = None
         source_rule_id = None
     timestamp = now_str()
-
-    if protect_manual:
-        cursor = conn.execute(
-            """
-            UPDATE activity_project_assignment
-            SET project_id = ?, confidence = ?, source = ?, is_manual = ?,
-                suggested_project_name = ?, source_rule_type = ?,
-                source_rule_id = ?, updated_at = ?
-            WHERE activity_id = ? AND is_manual = 0
-            """,
-            (
-                project_id,
-                int(confidence),
-                source,
-                int(is_manual),
-                suggested_project_name,
-                source_rule_type,
-                source_rule_id,
-                timestamp,
-                activity_id,
-            ),
-        )
-    else:
-        cursor = conn.execute(
+    existing = conn.execute(
+        "SELECT is_manual FROM activity_project_assignment WHERE activity_id = ?",
+        (activity_id,),
+    ).fetchone()
+    if existing is not None:
+        if protect_manual and int(existing["is_manual"] or 0):
+            return False
+        conn.execute(
             """
             UPDATE activity_project_assignment
             SET project_id = ?, confidence = ?, source = ?, is_manual = ?,
@@ -77,47 +61,30 @@ def upsert_assignment(
                 activity_id,
             ),
         )
-    if cursor.rowcount == 1:
         return True
 
-    existing = conn.execute(
-        "SELECT is_manual FROM activity_project_assignment WHERE activity_id = ?",
-        (activity_id,),
-    ).fetchone()
-    if existing is not None:
-        return False
-
-    try:
-        conn.execute(
-            """
-            INSERT INTO activity_project_assignment(
-                activity_id, project_id, confidence, source, is_manual,
-                suggested_project_name, source_rule_type, source_rule_id,
-                created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                activity_id,
-                project_id,
-                int(confidence),
-                source,
-                int(is_manual),
-                suggested_project_name,
-                source_rule_type,
-                source_rule_id,
-                timestamp,
-                timestamp,
-            ),
-        )
-        return True
-    except Exception:
-        current = conn.execute(
-            "SELECT is_manual FROM activity_project_assignment WHERE activity_id = ?",
-            (activity_id,),
-        ).fetchone()
-        if protect_manual and current is not None and int(current["is_manual"] or 0):
-            return False
-        raise
+    conn.execute(
+        """
+        INSERT INTO activity_project_assignment(
+            activity_id, project_id, confidence, source, is_manual,
+            suggested_project_name, source_rule_type, source_rule_id,
+            created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            activity_id,
+            project_id,
+            int(confidence),
+            source,
+            int(is_manual),
+            suggested_project_name,
+            source_rule_type,
+            source_rule_id,
+            timestamp,
+            timestamp,
+        ),
+    )
+    return True
 
 
 def mark_inference_retry(conn, activity_id: int, uncategorized_project_id: int) -> None:
