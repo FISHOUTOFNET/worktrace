@@ -1,43 +1,43 @@
 // WorkTrace WebView frontend - Project Rules core module.
-
 (function () {
     "use strict";
     var App = window.WorkTraceApp = window.WorkTraceApp || {};
 
     function loadProjectRules() {
-        if (App.rulesLoading) {
-            return Promise.resolve();
-        }
-        var token = ++App.rulesRequestToken;
+        if (App.rulesLoadPromise) return App.rulesLoadPromise;
+        var token = App.requestCoordinator.beginLatest("rules", "home");
         App.setRulesLoading(true);
         App.clearRulesError();
-        return App.callBridge("get_project_rules").then(function (result) {
-            if (token !== App.rulesRequestToken) return;
+        var request = App.callBridge("get_project_rules").then(function (result) {
+            if (!App.requestCoordinator.isCurrent(token)) return null;
             if (result && result.ok === false) {
                 App.showRulesError("加载项目规则失败");
-                return;
+                return null;
             }
             App.showProjectRules(result || { projects: [] });
             App.clearRulesError();
+            return result;
         }).catch(function () {
-            if (token !== App.rulesRequestToken) return;
-            App.showRulesError("加载项目规则失败");
-        }).then(function () {
-            if (token === App.rulesRequestToken) {
-                App.setRulesLoading(false);
+            if (App.requestCoordinator.isCurrent(token)) {
+                App.showRulesError("加载项目规则失败");
             }
+            return null;
+        }).finally(function () {
+            if (App.rulesLoadPromise === request) App.rulesLoadPromise = null;
+            if (App.requestCoordinator.isCurrent(token)) App.setRulesLoading(false);
         });
+        App.rulesLoadPromise = request;
+        return request;
     }
     App.loadProjectRules = loadProjectRules;
 
-    function _sortProjectsForRulesHome(projects) {
+    function sortProjectsForRulesHome(projects) {
         var list = (projects || []).slice();
         var mode = App.rulesSortMode || "last_used";
         list.sort(function (a, b) {
             if (mode === "alpha") {
                 return App.safeText(a && a.name, "").localeCompare(
-                    App.safeText(b && b.name, ""),
-                    "zh-Hans-CN"
+                    App.safeText(b && b.name, ""), "zh-Hans-CN"
                 );
             }
             var aUsed = App.safeText(a && a.last_used_at, "");
@@ -46,24 +46,21 @@
             if (aUsed && !bUsed) return -1;
             if (!aUsed && bUsed) return 1;
             return App.safeText(a && a.name, "").localeCompare(
-                App.safeText(b && b.name, ""),
-                "zh-Hans-CN"
+                App.safeText(b && b.name, ""), "zh-Hans-CN"
             );
         });
         return list;
     }
-    App.sortProjectsForRulesHome = _sortProjectsForRulesHome;
+    App.sortProjectsForRulesHome = sortProjectsForRulesHome;
 
     function showProjectRules(data) {
         App.rulesLoaded = true;
         App.lastProjectRulesData = data || { projects: [] };
         var list = document.getElementById("rules-list");
         var empty = document.getElementById("rules-empty");
-        if (App.refreshRulesPanelTargets) {
-            App.refreshRulesPanelTargets();
-        }
+        if (App.refreshRulesPanelTargets) App.refreshRulesPanelTargets();
         if (!list || !empty) return;
-        var projects = _sortProjectsForRulesHome((data && data.projects) || []);
+        var projects = sortProjectsForRulesHome((data && data.projects) || []);
         if (!projects.length) {
             list.innerHTML = "";
             empty.hidden = false;
@@ -78,48 +75,35 @@
     }
     App.showProjectRules = showProjectRules;
 
-    function rerenderProjectRulesList() {
+    App.rerenderProjectRulesList = function () {
         var list = document.getElementById("rules-list");
         if (!list) return;
         if (!App.lastProjectRulesData) {
             App.loadProjectRules();
             return;
         }
-        var projects = _sortProjectsForRulesHome((App.lastProjectRulesData && App.lastProjectRulesData.projects) || []);
-        if (!projects.length) {
-            return;
-        }
+        var projects = sortProjectsForRulesHome(
+            (App.lastProjectRulesData.projects || [])
+        );
+        if (!projects.length) return;
         list.innerHTML = projects.map(function (project) {
             return App.renderProjectRuleProject(project);
         }).join("");
         App.bindProjectRuleDelete();
         App.bindProjectRuleFolderEvents();
-    }
-    App.rerenderProjectRulesList = rerenderProjectRulesList;
+    };
 
-    function setRulesLoading(loading) {
+    App.setRulesLoading = function (loading) {
         App.rulesLoading = loading;
         var el = document.getElementById("rules-loading");
         if (el) el.hidden = !loading;
-    }
-    App.setRulesLoading = setRulesLoading;
+    };
 
-    function showRulesError(message) {
+    App.showRulesError = function (message) {
         var banner = document.getElementById("rules-error");
         if (!banner) return;
-        if (!message) {
-            banner.hidden = true;
-            banner.textContent = "加载项目规则失败";
-            return;
-        }
-        banner.hidden = false;
-        banner.textContent = message;
-    }
-    App.showRulesError = showRulesError;
-
-    function clearRulesError() {
-        App.showRulesError("");
-    }
-    App.clearRulesError = clearRulesError;
-
+        banner.hidden = !message;
+        banner.textContent = message || "加载项目规则失败";
+    };
+    App.clearRulesError = function () { App.showRulesError(""); };
 })();
