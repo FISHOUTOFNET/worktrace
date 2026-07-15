@@ -1,4 +1,4 @@
-"""Selected-rule batch operations service."""
+"""Selected-rule batch planning and transactional application."""
 
 from __future__ import annotations
 
@@ -57,13 +57,18 @@ def _resolve_rule(conn, rule_type: str, rule_id: int) -> dict | None:
 
 def _rule_summary(rule: dict, rule_type: str, *, project_available: bool) -> dict[str, Any]:
     return rule_impact_service._rule_summary(
-        rule, rule_type, project_available=project_available
+        rule,
+        rule_type,
+        project_available=project_available,
     )
 
 
 def _classify_for_rule(activities, rule, rule_type, conn) -> dict:
     return rule_impact_service._classify_activities(
-        activities, rule, rule_type, conn
+        activities,
+        rule,
+        rule_type,
+        conn,
     )
 
 
@@ -81,89 +86,133 @@ def _zero_counts() -> dict[str, int]:
     }
 
 
+def _build_plan(
+    conn,
+    normalized: list[dict[str, Any]],
+    *,
+    require_applicable: bool,
+) -> dict[str, Any]:
+    activities = rule_impact_service._fetch_activities(conn)
+    resolved: list[dict[str, Any]] = []
+    winners: dict[int, int] = {}
+    collision_counts: dict[int, int] = {}
+
+    for index, entry in enumerate(normalized):
+        rule = _resolve_rule(conn, entry["rule_type"], entry["rule_id"])
+        if not rule:
+            raise RuleBatchError(ERR_NOT_FOUND)
+        enabled = bool(int(rule.get("enabled") or 0))
+        available = rule_impact_service._project_available(rule)
+        if require_applicable and not enabled:
+            raise RuleBatchError(ERR_RULE_DISABLED)
+        if require_applicable and not available:
+            raise RuleBatchError(ERR_PROJECT_NOT_AVAILABLE)
+
+        if enabled and available:
+            classified = _classify_for_rule(
+                activities,
+                rule,
+                entry["rule_type"],
+                conn,
+            )
+        else:
+            classified = _zero_counts()
+            classified["would_update"] = []
+        resolved.append(
+            {
+                "entry": entry,
+                "rule": rule,
+                "available": available,
+                "classified": classified,
+            }
+        )
+        collision_counts[index] = 0
+        for activity in classified.get("would_update") or []:
+            activity_id = int(activity.get("id") or 0)
+            if activity_id in winners:
+                collision_counts[index] += 1
+            else:
+                winners[activity_id] = index
+
+    aggregate = _zero_counts()
+    for item in resolved:
+        for key in _zero_counts():
+            aggregate[key] += int(item["classified"].get(key) or 0)
+    aggregate["would_update_count"] = len(winners)
+    aggregate["collision_skipped_count"] = sum(collision_counts.values())
+    return {
+        "resolved": resolved,
+        "winners": winners,
+        "collision_counts": collision_counts,
+        "aggregate": aggregate,
+    }
+
+
 def preview_project_rules_batch_impact(rules: Any) -> dict[str, Any]:
     normalized = _normalize_rules(rules)
-    aggregate = _zero_counts()
-    summaries: list[dict[str, Any]] = []
     samples: list[dict[str, Any]] = []
     with get_connection() as conn:
-        activities = rule_impact_service._fetch_activities(conn)
-        for entry in normalized:
-            rule = _resolve_rule(conn, entry["rule_type"], entry["rule_id"])
-            if not rule:
-                raise RuleBatchError(ERR_NOT_FOUND)
-            available = rule_impact_service._project_available(rule)
+        plan = _build_plan(conn, normalized, require_applicable=False)
+        summaries: list[dict[str, Any]] = []
+        winner_ids = set(plan["winners"])
+        for index, item in enumerate(plan["resolved"]):
+            counts = {
+                key: int(item["classified"].get(key) or 0)
+                for key in _zero_counts()
+            }
+            counts["collision_skipped_count"] = int(
+                plan["collision_counts"].get(index) or 0
+            )
             summary = _rule_summary(
-                rule, entry["rule_type"], project_available=available
+                item["rule"],
+                item["entry"]["rule_type"],
+                project_available=bool(item["available"]),
             )
-            if not int(rule.get("enabled") or 0) or not available:
-                summary["counts"] = _zero_counts()
-                summaries.append(summary)
-                continue
-            classified = _classify_for_rule(
-                activities, rule, entry["rule_type"], conn
-            )
-            counts = {key: int(classified[key]) for key in _zero_counts()}
             summary["counts"] = counts
             summaries.append(summary)
-            for key, value in counts.items():
-                aggregate[key] += value
+
             remaining = MAX_BATCH_SAMPLE_ROWS - len(samples)
             if remaining > 0:
+                owned = [
+                    row
+                    for row in item["classified"].get("would_update") or []
+                    if int(row.get("id") or 0) in winner_ids
+                    and plan["winners"].get(int(row.get("id") or 0)) == index
+                ]
                 samples.extend(
                     rule_impact_service._sample_rows(
-                        classified["would_update"],
-                        rule,
-                        entry["rule_type"],
+                        owned,
+                        item["rule"],
+                        item["entry"]["rule_type"],
                         remaining,
                     )
                 )
-    return {"rules": summaries, "counts": aggregate, "samples": samples}
+    return {
+        "rules": summaries,
+        "counts": plan["aggregate"],
+        "samples": samples,
+    }
 
 
 def backfill_project_rules_batch(rules: Any) -> dict[str, Any]:
-    """Resolve, cap, and apply first-rule-wins inside one write transaction."""
-
     normalized = _normalize_rules(rules)
     conn = get_connection()
     try:
         conn.execute("BEGIN IMMEDIATE")
-        activities = rule_impact_service._fetch_activities(conn)
-        resolved: list[dict[str, Any]] = []
-        winners: dict[int, int] = {}
-        collision_counts: dict[int, int] = {}
-        for index, entry in enumerate(normalized):
-            rule = _resolve_rule(conn, entry["rule_type"], entry["rule_id"])
-            if not rule:
-                raise RuleBatchError(ERR_NOT_FOUND)
-            if not int(rule.get("enabled") or 0):
-                raise RuleBatchError(ERR_RULE_DISABLED)
-            if not rule_impact_service._project_available(rule):
-                raise RuleBatchError(ERR_PROJECT_NOT_AVAILABLE)
-            classified = _classify_for_rule(
-                activities, rule, entry["rule_type"], conn
-            )
-            resolved.append(
-                {"entry": entry, "rule": rule, "classified": classified}
-            )
-            collision_counts[index] = 0
-            for activity in classified["would_update"]:
-                activity_id = int(activity.get("id") or 0)
-                if activity_id in winners:
-                    collision_counts[index] += 1
-                else:
-                    winners[activity_id] = index
-
+        plan = _build_plan(conn, normalized, require_applicable=True)
+        winners = plan["winners"]
         if len(winners) > MAX_BATCH_BACKFILL_ACTIVITIES:
             raise RuleBatchError(ERR_TOO_MANY_MATCHES)
 
-        updated_by_rule = {index: 0 for index in range(len(resolved))}
+        updated_by_rule = {index: 0 for index in range(len(plan["resolved"]))}
         for activity_id, index in winners.items():
-            item = resolved[index]
+            item = plan["resolved"][index]
             entry = item["entry"]
             rule = item["rule"]
             source = (
-                "folder_rule" if entry["rule_type"] == "folder" else "keyword_rule"
+                "folder_rule"
+                if entry["rule_type"] == "folder"
+                else "keyword_rule"
             )
             confidence = (
                 rule_impact_service._FOLDER_RULE_CONFIDENCE
@@ -183,14 +232,18 @@ def backfill_project_rules_batch(rules: Any) -> dict[str, Any]:
                 raise RuleBatchError(ERR_OPERATION_FAILED)
             updated_by_rule[index] += 1
 
-        aggregate = _zero_counts()
-        aggregate.update({"updated_count": 0, "collision_skipped_count": 0})
+        aggregate = dict(plan["aggregate"])
+        aggregate["updated_count"] = sum(updated_by_rule.values())
         per_rule: list[dict[str, Any]] = []
-        for index, item in enumerate(resolved):
-            classified = item["classified"]
-            counts = {key: int(classified[key]) for key in _zero_counts()}
+        for index, item in enumerate(plan["resolved"]):
+            counts = {
+                key: int(item["classified"].get(key) or 0)
+                for key in _zero_counts()
+            }
             counts["updated_count"] = updated_by_rule[index]
-            counts["collision_skipped_count"] = collision_counts[index]
+            counts["collision_skipped_count"] = int(
+                plan["collision_counts"].get(index) or 0
+            )
             per_rule.append(
                 {
                     "rule": _rule_summary(
@@ -201,12 +254,6 @@ def backfill_project_rules_batch(rules: Any) -> dict[str, Any]:
                     "counts": counts,
                 }
             )
-            for key in _zero_counts():
-                aggregate[key] += counts[key]
-            aggregate["updated_count"] += counts["updated_count"]
-            aggregate["collision_skipped_count"] += counts[
-                "collision_skipped_count"
-            ]
         conn.commit()
         return {
             "rules": per_rule,
