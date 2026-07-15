@@ -11,31 +11,35 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  read-failures:
-    name: Read pytest failures
-    runs-on: [self-hosted, Windows, X64]
-    timeout-minutes: 5
+  targeted:
+    name: Repair diagnostic (${{ matrix.group }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - group: privacy-state
+            tests: tests/test_state_machine.py tests/test_privacy_context_runtime_regressions.py
+          - group: context-report-statistics
+            tests: tests/test_context_service.py tests/test_statistics_service.py tests/test_statistics_api_summary.py tests/test_projection_revision_compatibility.py
+          - group: clipboard-runtime
+            tests: tests/test_clipboard_service.py tests/test_runtime_maintenance_control.py
+          - group: maintenance-backup
+            tests: tests/test_export_service.py tests/test_secure_backup_service.py tests/test_settings_privacy_status.py
 
     steps:
-      - name: Print compact JUnit failures
-        shell: pwsh
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
         run: |
-          $path = "test-results/pytest-junit.xml"
-          if (-not (Test-Path -LiteralPath $path)) {
-            Write-Host "NO_JUNIT_FILE"
-            exit 0
-          }
-          [xml]$document = Get-Content -LiteralPath $path -Raw
-          $nodes = @($document.SelectNodes("//testcase[failure or error]"))
-          Write-Host "FAILURE_COUNT=$($nodes.Count)"
-          foreach ($node in $nodes) {
-            $failure = $node.failure
-            if ($null -eq $failure) { $failure = $node.error }
-            $message = [string]$failure.message
-            $text = [string]$failure.InnerText
-            if ($message.Length -gt 500) { $message = $message.Substring(0, 500) }
-            if ($text.Length -gt 1500) { $text = $text.Substring(0, 1500) }
-            Write-Host "FAILED_CASE=$($node.classname)::$($node.name)"
-            Write-Host "FAILED_MESSAGE=$message"
-            Write-Host "FAILED_TEXT=$text"
-          }
+          python -m pip install --disable-pip-version-check -q -r requirements.txt
+
+      - name: Run targeted tests
+        run: python -m pytest -q --tb=short ${{ matrix.tests }}
