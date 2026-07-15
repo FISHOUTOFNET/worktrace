@@ -37,6 +37,7 @@ from worktrace.api.settings_api import (
     preview_encrypted_backup_manifest_for_webview,
     set_clipboard_capture_enabled_for_webview,
 )
+from worktrace.services import privacy_gate_service
 from worktrace.services.secure_backup_service import (
     BackupCorruptedError,
     BackupDecryptionError,
@@ -496,6 +497,7 @@ def test_bridge_write_method_signature_has_one_required_param() -> None:
 
 
 def test_bridge_write_true_success(temp_db) -> None:
+    privacy_gate_service.accept_privacy_notice()
     set_setting("clipboard_capture_enabled", "false")
     bridge = WebViewBridge()
     result = bridge.set_clipboard_capture_enabled(True)
@@ -512,6 +514,7 @@ def test_bridge_write_false_success(temp_db) -> None:
 
 
 def test_bridge_write_success_payload_has_only_ok_and_status(temp_db) -> None:
+    privacy_gate_service.accept_privacy_notice()
     bridge = WebViewBridge()
     result = bridge.set_clipboard_capture_enabled(True)
     assert set(result.keys()) == {"ok", "status"}

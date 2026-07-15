@@ -255,7 +255,7 @@ def test_start_collection_after_privacy_gate_fails_closed_when_notice_not_accept
     fake_runtime, calls = _make_recording_runtime()
     monkeypatch.setattr("worktrace.api.app_api._runtime", fake_runtime)
     monkeypatch.setattr(
-        "worktrace.api.settings_api.first_run_notice_accepted", lambda: False
+        "worktrace.services.privacy_gate_service.is_sensitive_runtime_allowed", lambda: False
     )
 
     result = app_api.start_collection_after_privacy_gate()
@@ -276,7 +276,7 @@ def test_start_collection_after_privacy_gate_does_not_bypass_runtime_boundary(mo
     settings_service.set_setting("current_activity_snapshot", '{"active": true}')
     settings_service.set_setting("pending_short_seconds", "7")
     monkeypatch.setattr(
-        "worktrace.api.settings_api.first_run_notice_accepted", lambda: False
+        "worktrace.services.privacy_gate_service.is_sensitive_runtime_allowed", lambda: False
     )
 
     result = app_api.start_collection_after_privacy_gate()
@@ -287,7 +287,7 @@ def test_start_collection_after_privacy_gate_does_not_bypass_runtime_boundary(mo
     assert settings_service.get_setting("pending_short_seconds") == "7"
 
     monkeypatch.setattr(
-        "worktrace.api.settings_api.first_run_notice_accepted", lambda: True
+        "worktrace.services.privacy_gate_service.is_sensitive_runtime_allowed", lambda: True
     )
     result = app_api.start_collection_after_privacy_gate()
 
@@ -307,7 +307,7 @@ def test_start_collection_after_privacy_gate_fails_closed_when_notice_read_raise
     def _raise() -> bool:
         raise RuntimeError("settings read failed")
 
-    monkeypatch.setattr("worktrace.api.settings_api.first_run_notice_accepted", _raise)
+    monkeypatch.setattr("worktrace.services.privacy_gate_service.is_sensitive_runtime_allowed", _raise)
 
     result = app_api.start_collection_after_privacy_gate()
 
@@ -332,7 +332,7 @@ def test_start_collection_after_privacy_gate_starts_workers_before_collector(mon
     )()
     monkeypatch.setattr("worktrace.api.app_api._runtime", fake_runtime)
     monkeypatch.setattr(
-        "worktrace.api.settings_api.first_run_notice_accepted", lambda: True
+        "worktrace.services.privacy_gate_service.is_sensitive_runtime_allowed", lambda: True
     )
 
     order: list[str] = []
@@ -357,7 +357,7 @@ def test_start_collection_after_privacy_gate_returns_ok_on_success(monkeypatch):
     )()
     monkeypatch.setattr("worktrace.api.app_api._runtime", fake_runtime)
     monkeypatch.setattr(
-        "worktrace.api.settings_api.first_run_notice_accepted", lambda: True
+        "worktrace.services.privacy_gate_service.is_sensitive_runtime_allowed", lambda: True
     )
 
     result = app_api.start_collection_after_privacy_gate()
@@ -380,7 +380,7 @@ def test_start_collection_after_privacy_gate_returns_failure_when_collector_star
     )()
     monkeypatch.setattr("worktrace.api.app_api._runtime", fake_runtime)
     monkeypatch.setattr(
-        "worktrace.api.settings_api.first_run_notice_accepted", lambda: True
+        "worktrace.services.privacy_gate_service.is_sensitive_runtime_allowed", lambda: True
     )
 
     result = app_api.start_collection_after_privacy_gate()
