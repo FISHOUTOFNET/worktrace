@@ -86,6 +86,17 @@ def _zero_counts() -> dict[str, int]:
     }
 
 
+def _begin_immediate_after_generation_refresh(conn) -> None:
+    """Refresh the thread's DB generation before acquiring the write lock.
+
+    A database replacement between the read and ``BEGIN IMMEDIATE`` still
+    changes the generation and is rejected by the process write gate.
+    """
+
+    conn.execute("SELECT 1").fetchone()
+    conn.execute("BEGIN IMMEDIATE")
+
+
 def _build_plan(
     conn,
     normalized: list[dict[str, Any]],
@@ -198,7 +209,7 @@ def backfill_project_rules_batch(rules: Any) -> dict[str, Any]:
     normalized = _normalize_rules(rules)
     conn = get_connection()
     try:
-        conn.execute("BEGIN IMMEDIATE")
+        _begin_immediate_after_generation_refresh(conn)
         plan = _build_plan(conn, normalized, require_applicable=True)
         winners = plan["winners"]
         if len(winners) > MAX_BATCH_BACKFILL_ACTIVITIES:
@@ -277,7 +288,7 @@ def set_project_rules_batch_enabled(rules: Any, enabled: Any) -> dict[str, Any]:
     conn = get_connection()
     has_folder = has_keyword = False
     try:
-        conn.execute("BEGIN IMMEDIATE")
+        _begin_immediate_after_generation_refresh(conn)
         resolved = []
         for entry in normalized:
             rule = _resolve_rule(conn, entry["rule_type"], entry["rule_id"])
