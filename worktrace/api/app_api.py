@@ -27,7 +27,7 @@ def get_runtime() -> "AppRuntime | None":
 def start_collection_after_privacy_gate() -> dict[str, Any]:
     """Authorize once, then delegate lifecycle work to ``AppRuntime``."""
     try:
-        allowed = settings_api.first_run_notice_accepted()
+        allowed = privacy_gate_service.is_sensitive_runtime_allowed()
     except Exception:
         logging.exception("privacy notice state read failed")
         allowed = False
