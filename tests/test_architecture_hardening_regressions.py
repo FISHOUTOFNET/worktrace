@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 from unittest.mock import patch
 
@@ -14,12 +15,15 @@ from worktrace.services import (
     privacy_gate_service,
     project_service,
     report_revision_service,
+    rule_batch_service,
+    rule_service,
     statistics_service,
     view_model_hardening_service,
 )
 from worktrace.services.report_projection_snapshot_service import build_visible_snapshot
 from worktrace.services.statistics_projection import build_statistics_projection
 from worktrace.webview_ui.bridge import WebViewBridge
+from worktrace.write_gate import DATABASE_WRITE_GATE
 
 pytestmark = [pytest.mark.db, pytest.mark.integration, pytest.mark.contract]
 DATE = "2026-07-15"
@@ -169,6 +173,43 @@ def test_persisted_open_session_allows_project_and_note_but_not_duration(temp_db
             600,
             "open memo",
         )
+
+
+def test_rule_batch_refreshes_generation_before_write_lock(temp_db):
+    activity_id = _activity("13:00:00", "13:10:00")
+    project_id = project_service.create_project("GenerationTarget")
+    rule_id = rule_service.create_rule("Word", project_id)
+
+    DATABASE_WRITE_GATE.note_current_thread_read()
+    thread_errors: list[BaseException] = []
+
+    def rotate_generation() -> None:
+        try:
+            with DATABASE_WRITE_GATE.acquire():
+                pass
+        except BaseException as exc:  # pragma: no cover - assertion reports it
+            thread_errors.append(exc)
+
+    thread = threading.Thread(target=rotate_generation)
+    thread.start()
+    thread.join(timeout=5)
+    assert not thread.is_alive()
+    assert thread_errors == []
+
+    result = rule_batch_service.backfill_project_rules_batch(
+        [{"rule_type": "keyword", "rule_id": rule_id}]
+    )
+    assert result["counts"]["updated_count"] == 1
+    with get_connection() as conn:
+        assignment = conn.execute(
+            "SELECT project_id, source, is_manual "
+            "FROM activity_project_assignment WHERE activity_id = ?",
+            (activity_id,),
+        ).fetchone()
+    assert assignment is not None
+    assert int(assignment["project_id"]) == project_id
+    assert assignment["source"] == "keyword_rule"
+    assert int(assignment["is_manual"]) == 0
 
 
 def test_runtime_and_backup_facades_have_single_owners():
