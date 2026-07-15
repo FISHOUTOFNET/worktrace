@@ -148,8 +148,8 @@ by the DOM-only local ticker and do not request a full page reload.
 - `python -m compileall worktrace`
 - `pytest`
 - `node --test tests/webview/*.test.js`
-- Failed CI publishes a one-day compact `pytest-diagnostics` artifact for exact
-  failure identification without retaining the full pytest output.
+- Failed same-repository PR CI posts a compact, run-scoped pytest diagnostic
+  comment without relying on artifact storage or retaining the full test log.
 - Local paths: DB at `%LOCALAPPDATA%\WorkTrace\data\worktrace.db`; logs at
   `%LOCALAPPDATA%\WorkTrace\logs\worktrace.log`; default exports at
   `Documents\WorkTrace Exports`.
