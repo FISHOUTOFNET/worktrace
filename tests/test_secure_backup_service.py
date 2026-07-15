@@ -832,12 +832,13 @@ def test_corrupted_backup_restores_prior_pause_status(temp_db, tmp_path):
 def test_existing_secure_import_in_progress_rejects_new_import(temp_db, tmp_path):
     out = _make_backup(tmp_path)
     coordinator = secure_backup_service.SECURE_IMPORT_COORDINATOR
-    assert coordinator._import_lock.acquire(blocking=False)
-    try:
+    with coordinator.acquire(reason="test_existing_secure_import") as guard:
         with pytest.raises(BackupImportInProgressError):
-            secure_backup_service.import_encrypted_backup(out, "correct-passphrase")
-    finally:
-        coordinator._import_lock.release()
+            secure_backup_service.import_encrypted_backup(
+                out,
+                "correct-passphrase",
+            )
+        guard.mark_succeeded()
 
 
 def test_current_activity_snapshot_cleared_during_import(temp_db, tmp_path, monkeypatch):
