@@ -1,0 +1,38 @@
+name: Patch runtime-state test contract
+
+on:
+  push:
+    branches:
+      - agent/architecture-runtime-boundaries
+    paths:
+      - .github/workflows/patch-runtime-state-test-contract.yml
+      - scripts/patch_runtime_state_test_contract.py
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: agent/architecture-runtime-boundaries
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Apply exact test contract update
+        run: python scripts/patch_runtime_state_test_contract.py
+      - name: Commit patched test
+        shell: bash
+        run: |
+          if git diff --quiet -- tests/test_secure_backup_service.py; then
+            echo "No test patch required"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add tests/test_secure_backup_service.py
+          git commit -m "Update backup runtime-state contract [skip ci]"
+          git push origin HEAD:agent/architecture-runtime-boundaries
