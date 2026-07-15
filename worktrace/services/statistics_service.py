@@ -2,7 +2,13 @@ from __future__ import annotations
 
 from datetime import date
 
-from ..constants import STATUS_EXCLUDED, STATUS_IDLE, STATUS_NORMAL, STATUS_PAUSED, UNCATEGORIZED_PROJECT
+from ..constants import (
+    STATUS_EXCLUDED,
+    STATUS_IDLE,
+    STATUS_NORMAL,
+    STATUS_PAUSED,
+    UNCATEGORIZED_PROJECT,
+)
 from ..formatters import format_status_label
 
 # Maximum inclusive calendar-day span accepted by the read-only
@@ -22,16 +28,13 @@ _UNKNOWN_APP_LABEL = "未知应用"
 def get_summary(start_date: str, end_date: str) -> dict:
     """Return a DB-only statistics summary for the inclusive date range.
 
-    This function is DB-ONLY. It does NOT project the current live
-    snapshot. The Overview / KPI live overlay is owned by
-    :mod:`worktrace.services.activity_display_model_service` and applied
-    by :mod:`worktrace.services.view_model_service` on top of the DB-only
-    base returned here. Keeping statistics DB-only is the contract that
-    guarantees the KPI base, the recent items, and the live clock all
-    share one sample.
+    This function is DB-ONLY. It does NOT project the current live snapshot.
     """
     projection = _build_projection(start_date, end_date)
-    by_status = {str(row["key"]): int(row["duration_seconds"]) for row in projection.by_status}
+    by_status = {
+        str(row["key"]): int(row["duration_seconds"])
+        for row in projection.by_status
+    }
     return {
         "total_duration": projection.total_duration_seconds,
         "effective_duration": by_status.get(STATUS_NORMAL, 0),
@@ -44,13 +47,7 @@ def get_summary(start_date: str, end_date: str) -> dict:
 
 
 def get_project_stats(start_date: str, end_date: str) -> list[dict]:
-    """Return DB-only per-project statistics for the inclusive date range.
-
-    This function is DB-ONLY. It does NOT project the current live
-    snapshot nor apply the persisted_open display-project overlay. Both
-    of those live semantics are owned by
-    :mod:`worktrace.services.activity_display_model_service`.
-    """
+    """Return DB-only per-project statistics for the inclusive date range."""
     projection = _build_projection(start_date, end_date)
     return [
         {
@@ -74,28 +71,20 @@ def _build_projection(start_date: str, end_date: str):
     from .report_projection_snapshot_service import build_visible_snapshot
     from .statistics_projection import build_statistics_projection
 
-    return build_statistics_projection(build_visible_snapshot(start_date, end_date))
+    return build_statistics_projection(
+        build_visible_snapshot(start_date, end_date)
+    )
 
 
 def get_statistics_export_summary(date_from: str, date_to: str) -> dict:
-    """Return a read-only statistics + export-preview payload for a date range.
-
-    Inputs are ``YYYY-MM-DD`` strings. ``date_from`` must be on or before
-    ``date_to`` and the inclusive span must not exceed
-    ``STATISTICS_SUMMARY_MAX_RANGE_DAYS`` calendar days. Violations raise
-    ``ValueError`` (the API layer maps these to stable error codes).
-
-    Non-string inputs (including ``None`` and ``bool``) are rejected as
-    ``invalid_date``. ``bool`` is rejected explicitly because it is not a
-    date string even though it is a subclass of ``int``.
-
-    The returned dict is display-safe and contains no raw DB rows.
-    """
+    """Return a read-only statistics + export-preview payload for a date range."""
     _validate_summary_date_range(date_from, date_to)
     from .report_projection_snapshot_service import build_visible_snapshot
     from .statistics_projection import build_statistics_projection
 
-    projection = build_statistics_projection(build_visible_snapshot(date_from, date_to))
+    projection = build_statistics_projection(
+        build_visible_snapshot(date_from, date_to)
+    )
     return {
         "date_from": date_from,
         "date_to": date_to,
@@ -103,9 +92,12 @@ def get_statistics_export_summary(date_from: str, date_to: str) -> dict:
         "total_duration_seconds": projection.total_duration_seconds,
         "project_duration_seconds": projection.project_duration_seconds,
         "classified_duration_seconds": projection.classified_duration_seconds,
-        "uncategorized_duration_seconds": projection.uncategorized_duration_seconds,
+        "uncategorized_duration_seconds": (
+            projection.uncategorized_duration_seconds
+        ),
         "excluded_duration_seconds": projection.excluded_duration_seconds,
         "activity_count": projection.activity_count,
+        "report_slice_count": projection.report_slice_count,
         "session_count": projection.session_count,
         "export_row_count": projection.export_row_count,
         "project_count": len(projection.by_project),
@@ -118,6 +110,7 @@ def get_statistics_export_summary(date_from: str, date_to: str) -> dict:
             "date_to": date_to,
             "snapshot_revision": projection.snapshot_revision,
             "included_activity_count": projection.activity_count,
+            "included_report_slice_count": projection.report_slice_count,
             "session_count": projection.session_count,
             "export_row_count": projection.export_row_count,
             "included_duration_seconds": projection.total_duration_seconds,
@@ -131,22 +124,7 @@ def get_statistics_export_summary(date_from: str, date_to: str) -> dict:
 
 
 def validate_statistics_date_range(date_from: str, date_to: str) -> None:
-    """Validate the date range shared by the Statistics summary and CSV export.
-
-    This is the single canonical validation used by both the read-only
-    summary (``get_statistics_export_summary``) and the CSV export
-    (``export_service.build_statistics_csv_rows`` / ``write_statistics_csv``)
-    so summary and export enforce identical rules.
-
-    Raises ``ValueError`` with a stable code token (``invalid_date`` /
-    ``invalid_range`` / ``range_too_large``) so the API layer can map to
-    user-facing messages without echoing internal details. ``bool`` is
-    rejected explicitly because it is not a date string even though it
-    is a subclass of ``int``.
-    """
-    # ``bool`` is a subclass of ``int`` but not of ``str``; the ``str``
-    # isinstance check below rejects it so ``True`` / ``False`` never reach
-    # ``date.fromisoformat``.
+    """Validate the date range shared by summary and CSV export."""
     if not isinstance(date_from, str) or not isinstance(date_to, str):
         raise ValueError("invalid_date")
     try:
@@ -172,18 +150,29 @@ def _accumulate_summary_group(
 ) -> None:
     group = groups.setdefault(
         key,
-        {"display_name": display_name, "duration_seconds": 0, "activity_ids": set()},
+        {
+            "display_name": display_name,
+            "duration_seconds": 0,
+            "activity_ids": set(),
+        },
     )
     group["duration_seconds"] += duration
     if activity_id:
         group["activity_ids"].add(activity_id)
 
 
-def _build_summary_groups(groups: dict[str, dict], total_duration: int) -> list[dict]:
+def _build_summary_groups(
+    groups: dict[str, dict],
+    total_duration: int,
+) -> list[dict]:
     items: list[dict] = []
     for key, group in groups.items():
         duration = int(group["duration_seconds"])
-        percentage = round(duration / total_duration * 100, 1) if total_duration > 0 else 0.0
+        percentage = (
+            round(duration / total_duration * 100, 1)
+            if total_duration > 0
+            else 0.0
+        )
         items.append(
             {
                 "key": key,
@@ -193,5 +182,10 @@ def _build_summary_groups(groups: dict[str, dict], total_duration: int) -> list[
                 "percentage": percentage,
             }
         )
-    items.sort(key=lambda item: (-item["duration_seconds"], str(item["display_name"]).casefold()))
+    items.sort(
+        key=lambda item: (
+            -item["duration_seconds"],
+            str(item["display_name"]).casefold(),
+        )
+    )
     return items
