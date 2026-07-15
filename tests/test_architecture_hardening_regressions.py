@@ -12,6 +12,7 @@ from worktrace.db import get_connection, now_str
 from worktrace.services import (
     activity_service,
     database_maintenance_service,
+    folder_rule_service,
     privacy_gate_service,
     project_service,
     report_revision_service,
@@ -210,6 +211,40 @@ def test_rule_batch_refreshes_generation_before_write_lock(temp_db):
     assert int(assignment["project_id"]) == project_id
     assert assignment["source"] == "keyword_rule"
     assert int(assignment["is_manual"]) == 0
+
+
+def test_rule_batch_applies_folder_and_keyword_in_one_transaction(temp_db):
+    folder_project = project_service.create_project("FolderTarget")
+    keyword_project = project_service.create_project("KeywordTarget")
+    folder_rule_id = folder_rule_service.create_or_update_folder_rule(
+        "D:\\BatchFolder",
+        folder_project,
+    )
+    keyword_rule_id = rule_service.create_rule("batch-keyword", keyword_project)
+
+    folder_activity = activity_service.create_activity(
+        "Word",
+        "winword.exe",
+        "Document.docx - Word",
+        start_time=f"{DATE} 14:00:00",
+        file_path_hint="D:\\BatchFolder\\Document.docx",
+    )
+    activity_service.close_activity(folder_activity, f"{DATE} 14:10:00")
+    keyword_activity = activity_service.create_activity(
+        "Excel",
+        "excel.exe",
+        "batch-keyword.xlsx - Excel",
+        start_time=f"{DATE} 15:00:00",
+    )
+    activity_service.close_activity(keyword_activity, f"{DATE} 15:10:00")
+
+    result = rule_batch_service.backfill_project_rules_batch(
+        [
+            {"rule_type": "folder", "rule_id": folder_rule_id},
+            {"rule_type": "keyword", "rule_id": keyword_rule_id},
+        ]
+    )
+    assert result["counts"]["updated_count"] == 2
 
 
 def test_runtime_and_backup_facades_have_single_owners():
