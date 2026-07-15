@@ -1,7 +1,21 @@
 name: CI
 
 on:
+  push:
+    branches: [main]
   pull_request:
+  workflow_dispatch:
+    inputs:
+      run_node_tests:
+        description: Run WebView Node tests
+        required: false
+        type: boolean
+        default: false
+      run_build_smoke:
+        description: Run PyInstaller build smoke
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -11,28 +25,202 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  failure-list:
-    name: Read pytest failure messages
+  tests:
+    name: Windows tests (Python 3.11)
     runs-on: [self-hosted, Windows, X64]
-    timeout-minutes: 5
+    timeout-minutes: 30
 
     steps:
-      - name: Print failing test messages
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          clean: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Check test inventory
+        run: python scripts/test_inventory.py --check
+
+      - name: Compile Python
+        run: python -m compileall worktrace
+
+      - name: Run Python tests
+        id: pytest
         shell: pwsh
         run: |
-          $path = "test-results/pytest-junit.xml"
-          if (-not (Test-Path -LiteralPath $path)) {
-            Write-Host "NO_JUNIT_FILE"
-            exit 0
+          New-Item -ItemType Directory -Force -Path "test-results" | Out-Null
+          & python -m pytest -q --cache-clear --junitxml="test-results/pytest-junit.xml" 2>&1 |
+            Tee-Object -FilePath "test-results/pytest.log"
+          $pytestExitCode = $LASTEXITCODE
+          Write-Host "pytest exit code: $pytestExitCode"
+          exit $pytestExitCode
+
+      - name: Publish pytest failure summary
+        if: failure() && steps.pytest.outcome == 'failure'
+        shell: pwsh
+        run: |
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "## Pytest failure tail"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '```text'
+          Get-Content -Path "test-results/pytest.log" -Tail 250 |
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '```'
+
+      - name: Upload Python test diagnostics
+        if: failure() && steps.pytest.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-python-3.11-run-${{ github.run_number }}-attempt-${{ github.run_attempt }}
+          path: test-results/
+          if-no-files-found: warn
+          retention-days: 1
+
+  python312-compat:
+    name: Python 3.12 compatibility (manual)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+        exclude:
+          - python-version: "3.11"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          clean: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Check test inventory
+        run: python scripts/test_inventory.py --check
+
+      - name: Compile Python
+        run: python -m compileall worktrace
+
+      - name: Run Python tests
+        id: pytest
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "test-results" | Out-Null
+          & python -m pytest -q --cache-clear --junitxml="test-results/pytest-junit.xml" 2>&1 |
+            Tee-Object -FilePath "test-results/pytest.log"
+          $pytestExitCode = $LASTEXITCODE
+          Write-Host "pytest exit code: $pytestExitCode"
+          exit $pytestExitCode
+
+      - name: Publish pytest failure summary
+        if: failure() && steps.pytest.outcome == 'failure'
+        shell: pwsh
+        run: |
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "## Pytest failure tail"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '```text'
+          Get-Content -Path "test-results/pytest.log" -Tail 250 |
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '```'
+
+      - name: Upload Python test diagnostics
+        if: failure() && steps.pytest.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-python-${{ matrix.python-version }}-run-${{ github.run_number }}-attempt-${{ github.run_attempt }}
+          path: test-results/
+          if-no-files-found: warn
+          retention-days: 1
+
+  node-tests:
+    name: WebView Node tests (manual)
+    if: github.event_name == 'workflow_dispatch' && inputs.run_node_tests
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          clean: true
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Run webview Node tests
+        run: node --test tests/webview/*.test.js
+
+  pyinstaller-smoke:
+    name: PyInstaller build smoke (manual)
+    if: github.event_name == 'workflow_dispatch' && inputs.run_build_smoke
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          clean: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pyinstaller
+
+      - name: Build single-file exe
+        run: python -m PyInstaller --noconfirm --clean WorkTrace.spec
+
+      - name: Verify single-file exe
+        shell: pwsh
+        run: |
+          if (-not (Test-Path -LiteralPath "dist\WorkTrace.exe")) {
+            throw "dist\WorkTrace.exe was not generated"
           }
-          [xml]$document = Get-Content -LiteralPath $path -Raw
-          $nodes = @($document.SelectNodes("//testcase[failure or error]"))
-          Write-Host "FAILURE_COUNT=$($nodes.Count)"
-          foreach ($node in $nodes) {
-            $failure = $node.failure
-            if ($null -eq $failure) { $failure = $node.error }
-            $message = ([string]$failure.message) -replace "`r|`n", " "
-            if ($message.Length -gt 700) { $message = $message.Substring(0, 700) }
-            Write-Host "FAILED_CASE=$($node.classname)::$($node.name)"
-            Write-Host "FAILED_MESSAGE=$message"
+
+      - name: Build per-user installer
+        shell: pwsh
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_windows_installer.ps1
+
+      - name: Verify installer
+        shell: pwsh
+        run: |
+          if (-not (Test-Path -LiteralPath "dist\WorkTrace-Setup.exe")) {
+            throw "dist\WorkTrace-Setup.exe was not generated"
           }
+
+      - name: Upload release smoke artifacts
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: actions/upload-artifact@v4
+        with:
+          name: worktrace-windows-smoke
+          path: |
+            dist/WorkTrace.exe
+            dist/WorkTrace-Setup.exe
+          if-no-files-found: error
+          retention-days: 1
