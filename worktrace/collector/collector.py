@@ -260,6 +260,7 @@ def run_collector(
                 try:
                     excluded = privacy_service.is_excluded(active_window)
                 except privacy_service.PrivacyResolutionPending:
+                    # An unresolved path is represented by an anonymous sample.
                     collector_health.record_health_code(
                         "privacy_resolution_pending",
                         observation_time,
