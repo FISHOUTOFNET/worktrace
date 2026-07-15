@@ -134,7 +134,7 @@ def test_overview_counts_standalone_excluded_without_showing_it_in_recent(temp_d
 def test_persisted_open_session_allows_project_and_note_but_not_duration(temp_db):
     first_project = project_service.create_project("A")
     second_project = project_service.create_project("B")
-    _activity("09:00:00", None, project_id=first_project)
+    open_id = _activity("09:00:00", None, project_id=first_project)
     source = build_visible_snapshot(DATE, DATE).final_sessions[0]
     result = timeline_api.save_timeline_session_edit(
         DATE,
@@ -149,6 +149,16 @@ def test_persisted_open_session_allows_project_and_note_but_not_duration(temp_db
     updated = build_visible_snapshot(DATE, DATE).final_sessions[0]
     assert updated["project_id"] == second_project
     assert updated["session_note"] == "open memo"
+    with get_connection() as conn:
+        assignment = conn.execute(
+            "SELECT project_id, source, is_manual "
+            "FROM activity_project_assignment WHERE activity_id = ?",
+            (open_id,),
+        ).fetchone()
+    assert assignment is not None
+    assert int(assignment["project_id"]) == second_project
+    assert assignment["source"] == "manual"
+    assert int(assignment["is_manual"]) == 1
     with pytest.raises(Exception):
         timeline_api.save_timeline_session_edit(
             DATE,
