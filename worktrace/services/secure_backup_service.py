@@ -99,6 +99,9 @@ _DELETE_ORDER: tuple[str, ...] = (
     "settings",
     "project",
 )
+_UNSAFE_SNAPSHOT_IDENTITY_KEYS = frozenset(
+    {"id", "activity_id", "open_activity_id", "persisted_activity_id"}
+)
 
 
 class SecureBackupError(Exception):
@@ -294,6 +297,7 @@ class SecureImportCoordinator:
         prior_collector_status = (
             get_setting("collector_status", "stopped") or "stopped"
         )
+        prior_snapshot = get_setting("current_activity_snapshot", "") or ""
         state = _ImportGuardState(
             prior_user_paused=prior_user_paused,
             prior_collector_status=prior_collector_status,
@@ -321,10 +325,6 @@ class SecureImportCoordinator:
                 except Exception:
                     raise
                 else:
-                    # Normal context exit is a successful maintenance boundary.
-                    # Destructive callers may still mark success explicitly at
-                    # the exact commit point so a later exception is not treated
-                    # as an uncommitted rollback.
                     state.succeeded = True
                 finally:
                     with self._state_lock:
@@ -336,10 +336,6 @@ class SecureImportCoordinator:
                 reason,
             )
         except Exception as exc:
-            # Never restore a raw snapshot from the prior database generation.
-            # It may contain a closed or replaced activity id. Restore only
-            # user intent and lifecycle status; the collector republishes a
-            # fresh snapshot on its next successful observation.
             if not state.succeeded:
                 set_setting(
                     "user_paused",
@@ -347,6 +343,8 @@ class SecureImportCoordinator:
                 )
                 set_setting("collector_status", prior_collector_status)
                 clear_runtime_activity_state(f"{reason}_rollback")
+                if _snapshot_is_safe_to_restore(prior_snapshot):
+                    set_setting("current_activity_snapshot", prior_snapshot)
             logging.warning(
                 "runtime maintenance failed reason=%s exc_type=%s",
                 reason,
@@ -383,6 +381,28 @@ def clear_collector_reset_handler(handler: Any | None = None) -> None:
 def is_secure_import_in_progress() -> bool:
     """Compatibility name for the process destructive-maintenance gate."""
     return SECURE_IMPORT_COORDINATOR.write_gate_active()
+
+
+def _snapshot_is_safe_to_restore(snapshot: str) -> bool:
+    if not snapshot:
+        return False
+    try:
+        value = json.loads(snapshot)
+    except (TypeError, json.JSONDecodeError):
+        return False
+    return not _contains_persisted_identity(value)
+
+
+def _contains_persisted_identity(value: Any) -> bool:
+    if isinstance(value, dict):
+        if bool(value.get("is_persisted")):
+            return True
+        if any(key in value for key in _UNSAFE_SNAPSHOT_IDENTITY_KEYS):
+            return True
+        return any(_contains_persisted_identity(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_contains_persisted_identity(item) for item in value)
+    return False
 
 
 def _build_export_payload() -> bytes:
