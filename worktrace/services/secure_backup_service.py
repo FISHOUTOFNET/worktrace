@@ -1,10 +1,4 @@
-"""Encrypted local backup export/import and destructive-maintenance boundary.
-
-A replacement is validated in a staging database before the live database is
-mutated. Collector pause and process-local reset are acknowledged before the
-process database write gate is acquired, so no stale runtime identity can write
-to the replacement generation.
-"""
+"""Encrypted local backup and destructive database-maintenance boundary."""
 
 from __future__ import annotations
 
@@ -39,6 +33,7 @@ from ..security.backup_format import (
     parse_backup_manifest,
 )
 from ..write_gate import DATABASE_WRITE_GATE
+from . import privacy_gate_service
 from .runtime_activity_state_service import (
     clear_runtime_activity_state,
     restore_runtime_activity_snapshot,
@@ -120,7 +115,7 @@ class BackupCorruptedError(SecureBackupError):
 
 
 class BackupVersionNotSupportedError(SecureBackupError):
-    """The backup version is not supported by this WorkTrace build."""
+    """The backup version is not supported by this build."""
 
 
 class BackupImportInProgressError(SecureBackupError):
@@ -153,6 +148,159 @@ class ImportResult:
     mode: str
     imported_tables: dict[str, int] = field(default_factory=dict)
     folder_index_reset: bool = False
+
+
+@dataclass
+class _ImportGuardState:
+    prior_user_paused: bool
+    prior_collector_status: str
+    succeeded: bool = False
+
+    def mark_succeeded(self) -> None:
+        self.succeeded = True
+
+
+class SecureImportCoordinator:
+    """Single owner for pause, reset, write gate and destructive replacement."""
+
+    def __init__(self) -> None:
+        self._maintenance_lock = threading.Lock()
+        self._state_lock = threading.Lock()
+        self._maintenance_active = False
+        self._write_gate = False
+        self._pause_handler: Any = None
+        self._reset_handler: Any = None
+
+    def register_collector_pause_handler(self, handler: Any) -> None:
+        with self._state_lock:
+            self._pause_handler = handler
+
+    def clear_collector_pause_handler(self, handler: Any | None = None) -> None:
+        with self._state_lock:
+            if handler is None or self._pause_handler == handler:
+                self._pause_handler = None
+
+    def register_collector_reset_handler(self, handler: Any) -> None:
+        with self._state_lock:
+            self._reset_handler = handler
+
+    def clear_collector_reset_handler(self, handler: Any | None = None) -> None:
+        with self._state_lock:
+            if handler is None or self._reset_handler == handler:
+                self._reset_handler = None
+
+    def write_gate_active(self) -> bool:
+        with self._state_lock:
+            return (
+                self._maintenance_active
+                or self._write_gate
+                or DATABASE_WRITE_GATE.active()
+            )
+
+    @contextmanager
+    def acquire(
+        self,
+        *,
+        reason: str = "secure_import",
+    ) -> Iterator[_ImportGuardState]:
+        if not self._maintenance_lock.acquire(blocking=False):
+            logging.warning("runtime maintenance rejected reason=%s", reason)
+            raise BackupImportInProgressError(
+                "another destructive operation is already in progress"
+            )
+
+        with self._state_lock:
+            self._maintenance_active = True
+            pause_handler = self._pause_handler
+            reset_handler = self._reset_handler
+
+        prior_user_paused = get_bool_setting("user_paused", False)
+        prior_collector_status = (
+            get_setting("collector_status", "stopped") or "stopped"
+        )
+        prior_snapshot = get_setting("current_activity_snapshot", "") or ""
+        state = _ImportGuardState(
+            prior_user_paused=prior_user_paused,
+            prior_collector_status=prior_collector_status,
+        )
+        try:
+            if pause_handler is not None:
+                result = pause_handler(timeout_seconds=5.0)
+                if not bool(result.get("ok")):
+                    raise SecureBackupError("collector_pause_not_acknowledged")
+            if reset_handler is not None:
+                result = reset_handler(timeout_seconds=5.0)
+                if not bool(result.get("ok")):
+                    raise SecureBackupError("collector_reset_not_acknowledged")
+
+            set_setting("user_paused", "true")
+            set_setting("collector_status", "paused")
+            clear_runtime_activity_state(f"{reason}_guard_enter")
+
+            with DATABASE_WRITE_GATE.acquire():
+                with self._state_lock:
+                    self._write_gate = True
+                try:
+                    yield state
+                else:
+                    state.succeeded = True
+                finally:
+                    with self._state_lock:
+                        self._write_gate = False
+
+            clear_runtime_activity_state(f"{reason}_success")
+            logging.info(
+                "runtime maintenance completed reason=%s paused=true",
+                reason,
+            )
+        except Exception as exc:
+            if not state.succeeded:
+                set_setting(
+                    "user_paused",
+                    "true" if prior_user_paused else "false",
+                )
+                set_setting("collector_status", prior_collector_status)
+                clear_runtime_activity_state(f"{reason}_rollback")
+                if _snapshot_is_safe_to_restore(prior_snapshot):
+                    restore_runtime_activity_snapshot(
+                        prior_snapshot,
+                        f"{reason}_rollback",
+                    )
+            logging.warning(
+                "runtime maintenance failed reason=%s exc_type=%s",
+                reason,
+                type(exc).__name__,
+            )
+            raise
+        finally:
+            with self._state_lock:
+                self._write_gate = False
+                self._maintenance_active = False
+            clear_settings_cache()
+            self._maintenance_lock.release()
+
+
+SECURE_IMPORT_COORDINATOR = SecureImportCoordinator()
+
+
+def register_collector_pause_handler(handler: Any) -> None:
+    SECURE_IMPORT_COORDINATOR.register_collector_pause_handler(handler)
+
+
+def clear_collector_pause_handler(handler: Any | None = None) -> None:
+    SECURE_IMPORT_COORDINATOR.clear_collector_pause_handler(handler)
+
+
+def register_collector_reset_handler(handler: Any) -> None:
+    SECURE_IMPORT_COORDINATOR.register_collector_reset_handler(handler)
+
+
+def clear_collector_reset_handler(handler: Any | None = None) -> None:
+    SECURE_IMPORT_COORDINATOR.clear_collector_reset_handler(handler)
+
+
+def is_secure_import_in_progress() -> bool:
+    return SECURE_IMPORT_COORDINATOR.write_gate_active()
 
 
 def export_encrypted_backup(output_path: str | Path, passphrase: str) -> Path:
@@ -225,170 +373,6 @@ def _require_bounded_backup_file(path: Path) -> None:
         raise BackupCorruptedError("backup file is invalid or corrupted")
 
 
-@dataclass
-class _ImportGuardState:
-    prior_user_paused: bool
-    prior_collector_status: str
-    succeeded: bool = False
-
-    def mark_succeeded(self) -> None:
-        """Mark a destructive operation as committed before leaving its body."""
-        self.succeeded = True
-
-
-class SecureImportCoordinator:
-    """Single coordinator for all destructive live-database maintenance.
-
-    ``maintenance_active`` covers pause acknowledgement, runtime reset, the
-    database write gate, validation, and rollback. The collector therefore has
-    no interval in which it may resume between pause and replacement.
-    """
-
-    def __init__(self) -> None:
-        self._maintenance_lock = threading.Lock()
-        self._state_lock = threading.Lock()
-        self._maintenance_active = False
-        self._write_gate = False
-        self._pause_handler: Any = None
-        self._reset_handler: Any = None
-
-    def register_collector_pause_handler(self, handler: Any) -> None:
-        with self._state_lock:
-            self._pause_handler = handler
-
-    def clear_collector_pause_handler(self, handler: Any | None = None) -> None:
-        with self._state_lock:
-            if handler is None or self._pause_handler == handler:
-                self._pause_handler = None
-
-    def register_collector_reset_handler(self, handler: Any) -> None:
-        with self._state_lock:
-            self._reset_handler = handler
-
-    def clear_collector_reset_handler(self, handler: Any | None = None) -> None:
-        with self._state_lock:
-            if handler is None or self._reset_handler == handler:
-                self._reset_handler = None
-
-    def write_gate_active(self) -> bool:
-        """Return whether any destructive maintenance operation is active."""
-        with self._state_lock:
-            return (
-                self._maintenance_active
-                or self._write_gate
-                or DATABASE_WRITE_GATE.active()
-            )
-
-    @contextmanager
-    def acquire(
-        self,
-        *,
-        reason: str = "secure_import",
-    ) -> Iterator[_ImportGuardState]:
-        if not self._maintenance_lock.acquire(blocking=False):
-            logging.warning("runtime maintenance rejected reason=%s", reason)
-            raise BackupImportInProgressError(
-                "another destructive operation is already in progress"
-            )
-
-        with self._state_lock:
-            self._maintenance_active = True
-            pause_handler = self._pause_handler
-            reset_handler = self._reset_handler
-
-        prior_user_paused = get_bool_setting("user_paused", False)
-        prior_collector_status = (
-            get_setting("collector_status", "stopped") or "stopped"
-        )
-        prior_snapshot = get_setting("current_activity_snapshot", "") or ""
-        state = _ImportGuardState(
-            prior_user_paused=prior_user_paused,
-            prior_collector_status=prior_collector_status,
-        )
-        try:
-            if pause_handler is not None:
-                result = pause_handler(timeout_seconds=5.0)
-                if not bool(result.get("ok")):
-                    raise SecureBackupError("collector_pause_not_acknowledged")
-
-            if reset_handler is not None:
-                result = reset_handler(timeout_seconds=5.0)
-                if not bool(result.get("ok")):
-                    raise SecureBackupError("collector_reset_not_acknowledged")
-
-            set_setting("user_paused", "true")
-            set_setting("collector_status", "paused")
-            clear_runtime_activity_state(f"{reason}_guard_enter")
-
-            with DATABASE_WRITE_GATE.acquire():
-                with self._state_lock:
-                    self._write_gate = True
-                try:
-                    yield state
-                except Exception:
-                    raise
-                else:
-                    state.succeeded = True
-                finally:
-                    with self._state_lock:
-                        self._write_gate = False
-
-            clear_runtime_activity_state(f"{reason}_success")
-            logging.info(
-                "runtime maintenance completed reason=%s paused=true",
-                reason,
-            )
-        except Exception as exc:
-            if not state.succeeded:
-                set_setting(
-                    "user_paused",
-                    "true" if prior_user_paused else "false",
-                )
-                set_setting("collector_status", prior_collector_status)
-                clear_runtime_activity_state(f"{reason}_rollback")
-                if _snapshot_is_safe_to_restore(prior_snapshot):
-                    restore_runtime_activity_snapshot(
-                        prior_snapshot,
-                        f"{reason}_rollback",
-                    )
-            logging.warning(
-                "runtime maintenance failed reason=%s exc_type=%s",
-                reason,
-                type(exc).__name__,
-            )
-            raise
-        finally:
-            with self._state_lock:
-                self._write_gate = False
-                self._maintenance_active = False
-            clear_settings_cache()
-            self._maintenance_lock.release()
-
-
-SECURE_IMPORT_COORDINATOR = SecureImportCoordinator()
-
-
-def register_collector_pause_handler(handler: Any) -> None:
-    SECURE_IMPORT_COORDINATOR.register_collector_pause_handler(handler)
-
-
-def clear_collector_pause_handler(handler: Any | None = None) -> None:
-    SECURE_IMPORT_COORDINATOR.clear_collector_pause_handler(handler)
-
-
-def register_collector_reset_handler(handler: Any) -> None:
-    SECURE_IMPORT_COORDINATOR.register_collector_reset_handler(handler)
-
-
-def clear_collector_reset_handler(handler: Any | None = None) -> None:
-    SECURE_IMPORT_COORDINATOR.clear_collector_reset_handler(handler)
-
-
-def is_secure_import_in_progress() -> bool:
-    """Compatibility name for the process destructive-maintenance gate."""
-    return SECURE_IMPORT_COORDINATOR.write_gate_active()
-
-
 def _snapshot_is_safe_to_restore(snapshot: str) -> bool:
     if not snapshot:
         return False
@@ -436,17 +420,16 @@ def _build_export_payload() -> bytes:
     finally:
         conn.close()
 
-    payload_dict = {
-        "format": PAYLOAD_FORMAT,
-        "version": PAYLOAD_VERSION,
-        "created_at": _utc_now(),
-        "app_version": APP_VERSION,
-        "schema_version": SCHEMA_VERSION,
-        "schema_fingerprint": current_schema_fingerprint,
-        "tables": tables,
-    }
     payload = json.dumps(
-        payload_dict,
+        {
+            "format": PAYLOAD_FORMAT,
+            "version": PAYLOAD_VERSION,
+            "created_at": _utc_now(),
+            "app_version": APP_VERSION,
+            "schema_version": SCHEMA_VERSION,
+            "schema_fingerprint": current_schema_fingerprint,
+            "tables": tables,
+        },
         ensure_ascii=False,
         separators=(",", ":"),
     ).encode("utf-8")
@@ -487,6 +470,8 @@ def _parse_and_validate_payload(payload: bytes) -> dict[str, Any]:
 
 
 def _replace_import(data: dict[str, Any]) -> dict[str, int]:
+    """Replace business data and restore installation consent atomically."""
+
     staging_path: str | None = None
     try:
         fd, staging_path = tempfile.mkstemp(
@@ -514,6 +499,9 @@ def _replace_import(data: dict[str, Any]) -> dict[str, int]:
 
         with get_connection() as live:
             live.execute("BEGIN IMMEDIATE")
+            privacy_state = privacy_gate_service.capture_installation_privacy_state(
+                conn=live
+            )
             _delete_all_rows(live)
             source = sqlite3.connect(staging_path)
             source.row_factory = sqlite3.Row
@@ -530,17 +518,21 @@ def _replace_import(data: dict[str, Any]) -> dict[str, int]:
             finally:
                 source.close()
             seed_defaults(live)
+            privacy_gate_service.restore_installation_privacy_state(
+                privacy_state,
+                conn=live,
+            )
             _reset_derived_folder_index(live)
-            live.execute(
-                "UPDATE settings SET value = 'true', updated_at = ? "
-                "WHERE key = 'user_paused'",
-                (now_str(),),
-            )
-            live.execute(
-                "UPDATE settings SET value = 'paused', updated_at = ? "
-                "WHERE key = 'collector_status'",
-                (now_str(),),
-            )
+            timestamp = now_str()
+            for key, value in (
+                ("user_paused", "true"),
+                ("collector_status", "paused"),
+                ("clipboard_capture_enabled", "false"),
+            ):
+                live.execute(
+                    "UPDATE settings SET value = ?, updated_at = ? WHERE key = ?",
+                    (value, timestamp, key),
+                )
             _validate_staging_database(live)
         return imported
     except BackupCorruptedError:
