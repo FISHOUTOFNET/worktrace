@@ -5,6 +5,7 @@ import json
 import logging
 import re
 import sqlite3
+from functools import lru_cache
 from importlib import resources
 from pathlib import Path
 from typing import Iterable, Mapping
@@ -48,6 +49,9 @@ _REPORT_STRUCTURE_SETTINGS = {
     "context_carry_minutes",
     "unrecorded_gap_boundary_seconds",
 }
+_REPORT_STRUCTURE_NONE = 0
+_REPORT_STRUCTURE_ALWAYS = 1
+_REPORT_STRUCTURE_SETTINGS_PARAMETERS = 2
 _ACTIVITY_LOG_UPDATE_RE = re.compile(
     r"\bUPDATE\s+(?:[A-Z0-9_]+\.)?ACTIVITY_LOG\s+SET\s+(.*?)(?:\s+WHERE\s+|$)",
     re.IGNORECASE | re.DOTALL,
@@ -62,6 +66,7 @@ def _pragma_name(upper_sql: str) -> str:
     return value.split()[0] if value else ""
 
 
+@lru_cache(maxsize=1024)
 def _sql_requires_write_gate(sql: str) -> bool:
     text = str(sql or "").strip()
     if not text:
@@ -70,8 +75,9 @@ def _sql_requires_write_gate(sql: str) -> bool:
     if upper.startswith("BEGIN IMMEDIATE") or upper.startswith("BEGIN EXCLUSIVE"):
         return True
     if upper.startswith("PRAGMA"):
-        return _pragma_name(upper) in _DB_MUTATING_PRAGMAS and (
-            "=" in text or _pragma_name(upper) == "JOURNAL_MODE"
+        pragma = _pragma_name(upper)
+        return pragma in _DB_MUTATING_PRAGMAS and (
+            "=" in text or pragma == "JOURNAL_MODE"
         )
     return bool(_WRITE_TOKEN_RE.search(text))
 
@@ -85,12 +91,23 @@ def _sql_records_business_read(sql: str) -> bool:
     )
 
 
-def _parameter_values(parameters) -> list[object]:
+def _parameter_values(parameters):
     if isinstance(parameters, Mapping):
-        return list(parameters.values())
+        return parameters.values()
     if isinstance(parameters, (tuple, list)):
-        return list(parameters)
-    return []
+        return parameters
+    return ()
+
+
+def _parameters_affect_report_structure(parameters) -> bool:
+    found_string = False
+    for value in _parameter_values(parameters):
+        if not isinstance(value, str):
+            continue
+        found_string = True
+        if value in _REPORT_STRUCTURE_SETTINGS:
+            return True
+    return not found_string
 
 
 def _activity_log_update_changes_structure(sql: str) -> bool:
@@ -108,37 +125,48 @@ def _activity_log_update_changes_structure(sql: str) -> bool:
     return not columns.issubset({"DURATION_SECONDS", "UPDATED_AT"})
 
 
-def _sql_affects_report_structure(sql: str, parameters=()) -> bool:
+@lru_cache(maxsize=1024)
+def _classify_report_structure_sql(sql: str) -> int:
+    """Classify one SQL template once; parameters are handled separately."""
+
     text = str(sql or "").strip()
     if not text or not _WRITE_TOKEN_RE.search(text):
-        return False
+        return _REPORT_STRUCTURE_NONE
     upper = " ".join(text.upper().split())
 
     if upper.startswith(("CREATE ", "DROP ", "ALTER ")):
-        return "SETTINGS" in upper or any(
+        if "SETTINGS" in upper or any(
             re.search(rf"\b{table}\b", upper)
             for table in _REPORT_STRUCTURE_TABLES
-        )
+        ):
+            return _REPORT_STRUCTURE_ALWAYS
+        return _REPORT_STRUCTURE_NONE
 
     if re.search(r"\bACTIVITY_LOG\b", upper):
-        if upper.startswith("UPDATE"):
-            return _activity_log_update_changes_structure(text)
-        return True
+        if upper.startswith("UPDATE") and not _activity_log_update_changes_structure(text):
+            return _REPORT_STRUCTURE_NONE
+        return _REPORT_STRUCTURE_ALWAYS
 
     if re.search(r"\bSETTINGS\b", upper):
         if upper.startswith("DELETE"):
-            return True
-        values = {
-            str(value)
-            for value in _parameter_values(parameters)
-            if isinstance(value, str)
-        }
-        return not values or bool(values & _REPORT_STRUCTURE_SETTINGS)
+            return _REPORT_STRUCTURE_ALWAYS
+        return _REPORT_STRUCTURE_SETTINGS_PARAMETERS
 
-    return any(
+    if any(
         re.search(rf"\b{table}\b", upper)
         for table in _REPORT_STRUCTURE_TABLES
-    )
+    ):
+        return _REPORT_STRUCTURE_ALWAYS
+    return _REPORT_STRUCTURE_NONE
+
+
+def _sql_affects_report_structure(sql: str, parameters=()) -> bool:
+    classification = _classify_report_structure_sql(str(sql))
+    if classification == _REPORT_STRUCTURE_ALWAYS:
+        return True
+    if classification == _REPORT_STRUCTURE_SETTINGS_PARAMETERS:
+        return _parameters_affect_report_structure(parameters)
+    return False
 
 
 class WorkTraceConnection(sqlite3.Connection):
@@ -160,7 +188,7 @@ class WorkTraceConnection(sqlite3.Connection):
         *,
         rowcount: int | None = None,
     ) -> None:
-        if rowcount == 0:
+        if rowcount == 0 or self._report_structure_dirty:
             return
         if _sql_affects_report_structure(sql, parameters):
             self._report_structure_dirty = True
@@ -193,12 +221,30 @@ class WorkTraceConnection(sqlite3.Connection):
     def executemany(self, sql, seq_of_parameters, /):  # type: ignore[override]
         text = str(sql)
         self._require_write_allowed(text)
-        items = list(seq_of_parameters)
-        cursor = super().executemany(sql, items)
-        if cursor.rowcount != 0 and any(
-            _sql_affects_report_structure(text, parameters)
-            for parameters in items
-        ):
+        if self._report_structure_dirty:
+            return super().executemany(sql, seq_of_parameters)
+
+        classification = _classify_report_structure_sql(text)
+        if classification == _REPORT_STRUCTURE_NONE:
+            return super().executemany(sql, seq_of_parameters)
+
+        if classification == _REPORT_STRUCTURE_ALWAYS:
+            cursor = super().executemany(sql, seq_of_parameters)
+            if cursor.rowcount != 0:
+                self._report_structure_dirty = True
+            return cursor
+
+        affects_structure = False
+
+        def tracked_parameters():
+            nonlocal affects_structure
+            for parameters in seq_of_parameters:
+                if not affects_structure and _parameters_affect_report_structure(parameters):
+                    affects_structure = True
+                yield parameters
+
+        cursor = super().executemany(sql, tracked_parameters())
+        if cursor.rowcount != 0 and affects_structure:
             self._report_structure_dirty = True
         return cursor
 
@@ -230,12 +276,14 @@ class WorkTraceConnection(sqlite3.Connection):
         return result
 
 
+@lru_cache(maxsize=1)
 def read_schema_sql() -> str:
     return resources.files(__package__).joinpath("schema.sql").read_text(
         encoding="utf-8"
     )
 
 
+@lru_cache(maxsize=1)
 def read_schema_indexes_sql() -> str:
     return resources.files(__package__).joinpath("schema_indexes.sql").read_text(
         encoding="utf-8"
@@ -243,6 +291,7 @@ def read_schema_indexes_sql() -> str:
 
 
 _db_path: Path | None = None
+_db_key: str | None = None
 
 
 def now_str() -> str:
@@ -252,10 +301,12 @@ def now_str() -> str:
 
 
 def configure_database(path: str | Path | None = None) -> Path:
-    global _db_path
-    _db_path = Path(path) if path is not None else config.resolve_paths().db_path
-    _db_path.parent.mkdir(parents=True, exist_ok=True)
-    return _db_path
+    global _db_path, _db_key
+    database_path = Path(path) if path is not None else config.resolve_paths().db_path
+    database_path.parent.mkdir(parents=True, exist_ok=True)
+    _db_path = database_path
+    _db_key = str(database_path.resolve())
+    return database_path
 
 
 def get_db_path() -> Path:
@@ -264,6 +315,14 @@ def get_db_path() -> Path:
         configure_database()
     assert _db_path is not None
     return _db_path
+
+
+def get_db_key() -> str:
+    global _db_key
+    if _db_key is None:
+        configure_database()
+    assert _db_key is not None
+    return _db_key
 
 
 def get_connection() -> sqlite3.Connection:
@@ -276,7 +335,7 @@ def get_connection() -> sqlite3.Connection:
     )
     conn.row_factory = sqlite3.Row
     if isinstance(conn, WorkTraceConnection):
-        conn._report_structure_database_key = str(database_path.resolve())
+        conn._report_structure_database_key = get_db_key()
     apply_connection_pragmas(conn)
     return conn
 
@@ -346,6 +405,7 @@ def schema_fingerprint(conn: sqlite3.Connection) -> str:
     ).hexdigest()
 
 
+@lru_cache(maxsize=1)
 def expected_schema_fingerprint() -> str:
     reference = sqlite3.connect(":memory:")
     reference.row_factory = sqlite3.Row
