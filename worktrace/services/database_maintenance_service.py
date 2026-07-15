@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from ..db import get_connection, now_str, seed_defaults
+from . import privacy_gate_service
 
 _DELETE_ORDER: tuple[str, ...] = (
     "activity_resource",
@@ -22,6 +23,7 @@ _DELETE_ORDER: tuple[str, ...] = (
 _POST_CLEAR_SETTINGS: dict[str, str] = {
     "user_paused": "true",
     "collector_status": "paused",
+    "clipboard_capture_enabled": "false",
 }
 
 
@@ -42,18 +44,28 @@ def _apply_post_clear_settings(conn) -> None:
 
 
 def clear_all_live_data() -> None:
-    """Delete all user/runtime rows atomically while retaining the schema."""
+    """Delete business/runtime rows atomically while retaining installation consent."""
     with get_connection() as conn:
         conn.execute("BEGIN IMMEDIATE")
         try:
+            privacy_state = privacy_gate_service.capture_installation_privacy_state(
+                conn=conn
+            )
             for table in _DELETE_ORDER:
                 conn.execute(f"DELETE FROM {table}")
             seed_defaults(conn)
+            privacy_gate_service.restore_installation_privacy_state(
+                privacy_state,
+                conn=conn,
+            )
             _apply_post_clear_settings(conn)
             conn.commit()
         except Exception:
             conn.rollback()
             raise
+    from .settings_service import clear_settings_cache
+
+    clear_settings_cache()
 
 
 __all__ = ["clear_all_live_data"]
