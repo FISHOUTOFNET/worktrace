@@ -1,3 +1,10 @@
+"""Statistics status semantics.
+
+The central report status policy includes normal and attributable
+idle/error/excluded time, keeps paused separate, and leaves suppressed
+unattributed statuses outside reportable totals.
+"""
+
 from __future__ import annotations
 
 from datetime import date
