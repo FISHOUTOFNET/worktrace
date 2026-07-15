@@ -78,6 +78,11 @@ class AppRuntime:
         """Compatibility alias: collector ownership equals app ownership."""
         return bool(self.owns_application_instance)
 
+    @owns_collector.setter
+    def owns_collector(self, value: bool) -> None:
+        """Compatibility setter for focused lifecycle tests and adapters."""
+        self.owns_application_instance = bool(value)
+
     def initialize(self) -> bool:
         """Acquire the app lease before opening the database.
 
@@ -129,7 +134,9 @@ class AppRuntime:
             if self._shutdown or self.stop_event.is_set():
                 return {"ok": False, "error": "runtime_stopping"}
             if not self.owns_application_instance:
-                return {"ok": False, "error": "application_instance_not_owned"}
+                # Keep the established API error while ownership now represents
+                # the whole application rather than a collector-only lease.
+                return {"ok": False, "error": "collector_not_owned"}
             if _thread_reference_is_alive(self._collector_thread):
                 self._register_maintenance_handlers()
                 return {"ok": True, "started": False, "already_running": True}
