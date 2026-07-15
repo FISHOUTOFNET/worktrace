@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import shutil
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -40,7 +41,7 @@ class _FastTestScrypt:
 
 
 @pytest.fixture(scope="session")
-def _initialized_db_template(tmp_path_factory) -> Path:
+def _initialized_db_template(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """Build the canonical empty test database once per pytest process."""
 
     template_dir = tmp_path_factory.mktemp("worktrace-db-template")
@@ -52,7 +53,7 @@ def _initialized_db_template(tmp_path_factory) -> Path:
 
 
 @pytest.fixture()
-def temp_db(tmp_path, _initialized_db_template):
+def temp_db(tmp_path: Path, _initialized_db_template: Path) -> Path:
     """Provide an isolated canonical database without rebuilding its schema."""
 
     path = tmp_path / "worktrace.db"
@@ -62,7 +63,7 @@ def temp_db(tmp_path, _initialized_db_template):
 
 
 @pytest.fixture(autouse=True)
-def _accelerate_backup_service_kdf(request):
+def _accelerate_backup_service_kdf(request: pytest.FixtureRequest) -> Iterator[None]:
     """Keep service integration tests focused on backup orchestration semantics."""
 
     if Path(str(request.node.fspath)).name != "test_secure_backup_service.py":
