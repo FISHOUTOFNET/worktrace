@@ -1,0 +1,175 @@
+run_id=29412095410
+tested_head=346a82fbe24f10a3bfc78a769193424dfbd61b8f
+scope=focused-hardening
+
+=== PYTEST_FAILURE_MANIFEST_BEGIN ===
+Total: 778 | Passed: 755 | Failed: 23 | Errors: 0 | Skipped: 0
+[1/23] tests.test_app_runtime_privacy_gate::test_start_collection_after_privacy_gate_does_not_bypass_runtime_boundary | failure | tests\test_app_runtime_privacy_gate.py:294 | assert False is True
+[2/23] tests.test_app_runtime_privacy_gate::test_start_collection_after_privacy_gate_starts_workers_before_collector | failure | tests\test_app_runtime_privacy_gate.py:341 | assert False is True
+[3/23] tests.test_app_runtime_privacy_gate::test_start_collection_after_privacy_gate_returns_ok_on_success | failure | tests\test_app_runtime_privacy_gate.py:365 | assert False is True
+[4/23] tests.test_app_runtime_privacy_gate::test_start_collection_after_privacy_gate_returns_failure_when_collector_start_fails | failure | tests\test_app_runtime_privacy_gate.py:388 | AssertionError: assert {'ok': False,...': '请先确认隐私说明'} == {'ok': False,...start_failed'} Omitting 1 identical items, use -vv to show Differing items: {'error': '请先确认隐私说明'} != {'error': 'collector_start_failed'} Full diff: { 'ok': False, -...
+[5/23] tests.test_architecture_hardening_regressions::test_persisted_open_session_allows_project_and_note_but_not_duration | failure | tests\test_architecture_hardening_regressions.py:151 | AssertionError: assert '' == 'open memo' - open memo
+[6/23] tests.test_project_rules_batch_operations::test_batch_apply_success | failure | tests\test_project_rules_batch_operations.py:402 | assert False is True
+[7/23] tests.test_project_rules_batch_operations::test_batch_apply_never_sets_manual_override_on_all_updated_rows | failure | tests\test_project_rules_batch_operations.py:916 | assert False is True
+[8/23] tests.test_release_docs::test_ci_workflow_contains_required_release_smoke_steps[python-version: ["3.11", "3.12"]] | failure | tests\test_release_docs.py:126 | AssertionError: CI workflow missing phrase: python-version: ["3.11", "3.12"] assert 'python-version: ["3.11", "3.12"]' in 'name: CI\n\non:\n push:\n branches: [main]\n pull_request:\n workflow_dispatch:\n inputs:\n run_node_te...WorkTrac...
+[9/23] tests.test_release_docs::test_ci_workflow_contains_required_release_smoke_steps[pip install -r requirements.txt] | failure | tests\test_release_docs.py:126 | AssertionError: CI workflow missing phrase: pip install -r requirements.txt assert 'pip install -r requirements.txt' in 'name: CI\n\non:\n push:\n branches: [main]\n pull_request:\n workflow_dispatch:\n inputs:\n run_node_te...WorkTrace....
+[10/23] tests.test_release_docs::test_current_state_documents_project_rules_lifecycle | failure | tests\test_release_docs.py:284 | AssertionError: current-state.md must document user project create / edit / enable-disable / archive as shipped capabilities assert 'user project create / edit / enable-disable / archive' in '# WorkTrace Current State\n\n> **Default entr...
+[11/23] tests.test_release_docs::test_current_state_description_is_unambiguous | failure | tests\test_release_docs.py:482 | AssertionError: current-state.md must list user project create / edit / enable-disable / archive as distinct capabilities (unambiguous wording) assert 'user project create / edit / enable-disable / archive' in '# WorkTrace Current State\...
+[12/23] tests.test_settings_privacy_status::test_bridge_write_true_success | failure | tests\test_settings_privacy_status.py:502 | assert False is True
+[13/23] tests.test_settings_privacy_status::test_bridge_write_success_payload_has_only_ok_and_status | failure | tests\test_settings_privacy_status.py:517 | AssertionError: assert {'error', 'ok'} == {'ok', 'status'} Extra items in the left set: 'error' Extra items in the right set: 'status' Full diff: { + 'error', 'ok', - 'status', }
+[14/23] tests.test_settings_privacy_status::test_bridge_write_api_ok_false_passes_error_through | failure | tests\test_settings_privacy_status.py:648 | AssertionError: assert {'ok': False,...: '设置剪贴板记录失败'} == {'ok': False,...选择有效的剪贴板记录状态'} Omitting 1 identical items, use -vv to show Differing items: {'error': '设置剪贴板记录失败'} != {'error': '请选择有效的剪贴板记录状态'} Full diff: { 'ok': False, - 'error'...
+[15/23] tests.test_webview_bridge_statistics::test_bridge_statistics_summary_display_safe_keys_only | failure | tests\test_webview_bridge_statistics.py:348 | AssertionError: unexpected group keys: {'is_concrete_project'} assert {'activity_co...', 'key', ...} <= {'activity_co... 'percentage'} Extra items in the left set: 'is_concrete_project'
+[16/23] tests.webview.test_frontend_global_boundaries::test_frontend_module_all_functions_still_defined | failure | tests\webview\test_frontend_global_boundaries.py:483 | AssertionError: frontend module split is missing function definitions: refreshAll. These would cause ReferenceError at runtime. assert not ['refreshAll']
+[17/23] tests.webview.test_project_rules_static_contract::test_project_rules_sort_state_is_memory_only | failure | tests\webview\test_project_rules_static_contract.py:164 | assert 'function _sortProjectsForRulesHome' in '// WorkTrace WebView frontend - Project Rules core module.\n(function () {\n "use strict";\n var App = window.W...esDeletingFolderKey ? "正在删除..." : "删除";\n });\n }\n App.setFolderDeleting =...
+[18/23] tests.webview.test_settings_static_contract::test_init_js_does_not_start_refresh_on_notice_load_failure | failure | tests\webview\test_settings_static_contract.py:1512 | AssertionError: init() .then callback must receive a noticeConfirmed boolean from loadFirstRunNotice assert 'noticeConfirmed' in 'function init() {\n initNav();\n initButtons();\n App.loadFirstRunNotice().then(function (notice...eartbeat...
+[19/23] tests.webview.test_statistics_static_contract::test_frontend_js_statistics_loading_double_click_guard | failure | tests\webview\test_statistics_static_contract.py:654 | AssertionError: loadStatisticsExportSummary must guard against concurrent loads assert 'if (App.statisticsLoading) return' in 'function loadStatisticsExportSummary() {\n if (App.statisticsLoading) {\n return App.statisticsLoad... return...
+[20/23] tests.webview.test_statistics_static_contract::test_frontend_js_statistics_client_side_range_validator | failure | tests\webview\test_statistics_static_contract.py:676 | assert 'diffDays' in 'function validateStatisticsDateRange(dateFrom, dateTo) {\n if (!dateFrom || !dateTo) return "请选择有效日期";\n ...0) return "日期范围过大";\n return null;\n }\n App.validateStatisticsDateRange = validateStatisticsDateRange;\n'
+[21/23] tests.webview.test_statistics_static_contract::test_bridge_statistics_explicit_bool_rejection_comment | failure | tests\webview\test_statistics_static_contract.py:744 | AssertionError: bridge must document bool rejection in get_statistics_export_summary assert 'bool' in 'def get_statistics_export_summary(self, date_from, date_to) -> dict[str, Any]:\n try:\n if not isin... bridge get_statistics_export_su...
+[22/23] tests.webview.test_statistics_static_contract::test_service_statistics_status_inclusion_semantics_documented | failure | tests\webview\test_statistics_static_contract.py:757 | assert ('normal' in 'from __future__ import annotations\n\nfrom datetime import date\n\nfrom ..constants import (\n STATUS_EXCLUDED,\n ...n key=lambda item: (-item["duration_seconds"], str(item["display_name"]).casefold())\n )\n return i...
+[23/23] tests.webview.test_statistics_static_contract::test_frontend_js_statistics_export_uses_validate_statistics_date_range | failure | tests\webview\test_statistics_static_contract.py:1000 | AssertionError: exportStatisticsCsv must call validateStatisticsDateRange assert 'validateStatisticsDateRange' in 'function exportStatisticsCsv() {\n if (App.statisticsExportSaving) return;\n if (App.statisticsLoading)...n setStatisticsE...
+=== PYTEST_FAILURE_MANIFEST_END ===
+=== PYTEST_FAILURE_DETAILS_BEGIN ===
+--- [1/23] tests.test_app_runtime_privacy_gate::test_start_collection_after_privacy_gate_does_not_bypass_runtime_boundary ---
+tests\test_app_runtime_privacy_gate.py:294: in test_start_collection_after_privacy_gate_does_not_bypass_runtime_boundary
+    assert result["ok"] is True
+E   assert False is True
+--- [2/23] tests.test_app_runtime_privacy_gate::test_start_collection_after_privacy_gate_starts_workers_before_collector ---
+tests\test_app_runtime_privacy_gate.py:341: in test_start_collection_after_privacy_gate_starts_workers_before_collector
+    assert result["ok"] is True
+E   assert False is True
+--- [3/23] tests.test_app_runtime_privacy_gate::test_start_collection_after_privacy_gate_returns_ok_on_success ---
+tests\test_app_runtime_privacy_gate.py:365: in test_start_collection_after_privacy_gate_returns_ok_on_success
+    assert result["ok"] is True
+E   assert False is True
+--- [4/23] tests.test_app_runtime_privacy_gate::test_start_collection_after_privacy_gate_returns_failure_when_collector_start_fails ---
+tests\test_app_runtime_privacy_gate.py:388: in test_start_collection_after_privacy_gate_returns_failure_when_collector_start_fails
+    assert result == {"ok": False, "error": "collector_start_failed"}
+E   AssertionError: assert {'ok': False,...': '请先确认隐私说明'} == {'ok': False,...start_failed'}
+E     
+E     Omitting 1 identical items, use -vv to show
+E     Differing items:
+E     {'error': '请先确认隐私说明'} != {'error': 'collector_start_failed'}
+E     
+E     Full diff:
+E       {
+E           'ok': False,
+E     -     'error': 'collector_start_failed',
+E     +     'error': '请先确认隐私说明',
+E       }
+--- [5/23] tests.test_architecture_hardening_regressions::test_persisted_open_session_allows_project_and_note_but_not_duration ---
+tests\test_architecture_hardening_regressions.py:151: in test_persisted_open_session_allows_project_and_note_but_not_duration
+    assert updated["session_note"] == "open memo"
+E   AssertionError: assert '' == 'open memo'
+E     
+E     - open memo
+--- [6/23] tests.test_project_rules_batch_operations::test_batch_apply_success ---
+tests\test_project_rules_batch_operations.py:402: in test_batch_apply_success
+    assert result["ok"] is True
+E   assert False is True
+--- [7/23] tests.test_project_rules_batch_operations::test_batch_apply_never_sets_manual_override_on_all_updated_rows ---
+tests\test_project_rules_batch_operations.py:916: in test_batch_apply_never_sets_manual_override_on_all_updated_rows
+    assert result["ok"] is True
+E   assert False is True
+--- [8/23] tests.test_release_docs::test_ci_workflow_contains_required_release_smoke_steps[python-version: ["3.11", "3.12"]] ---
+tests\test_release_docs.py:126: in test_ci_workflow_contains_required_release_smoke_steps
+    assert phrase in workflow, f"CI workflow missing phrase: {phrase}"
+E   AssertionError: CI workflow missing phrase: python-version: ["3.11", "3.12"]
+E   assert 'python-version: ["3.11", "3.12"]' in 'name: CI\n\non:\n  push:\n    branches: [main]\n  pull_request:\n  workflow_dispatch:\n    inputs:\n      run_node_te...WorkTrace.exe\n            dist/WorkTrace-Setup.exe\n          if-no-files-found: error\n          retention-days: 1\n'
+--- [9/23] tests.test_release_docs::test_ci_workflow_contains_required_release_smoke_steps[pip install -r requirements.txt] ---
+tests\test_release_docs.py:126: in test_ci_workflow_contains_required_release_smoke_steps
+    assert phrase in workflow, f"CI workflow missing phrase: {phrase}"
+E   AssertionError: CI workflow missing phrase: pip install -r requirements.txt
+E   assert 'pip install -r requirements.txt' in 'name: CI\n\non:\n  push:\n    branches: [main]\n  pull_request:\n  workflow_dispatch:\n    inputs:\n      run_node_te...WorkTrace.exe\n            dist/WorkTrace-Setup.exe\n          if-no-files-found: error\n          retention-days: 1\n'
+--- [10/23] tests.test_release_docs::test_current_state_documents_project_rules_lifecycle ---
+tests\test_release_docs.py:284: in test_current_state_documents_project_rules_lifecycle
+    assert "user project create / edit / enable-disable / archive" in text, (
+E   AssertionError: current-state.md must document user project create / edit / enable-disable / archive as shipped capabilities
+E   assert 'user project create / edit / enable-disable / archive' in '# WorkTrace Current State\n\n> **Default entry point for AI tools and developers.** Read this file first.\n> It is a ...; logs at\n  `%LOCALAPPDATA%\\WorkTrace\\logs\\worktrace.log`; default exports at\n  `Documents\\WorkTrace Exports`.\n'
+--- [11/23] tests.test_release_docs::test_current_state_description_is_unambiguous ---
+tests\test_release_docs.py:482: in test_current_state_description_is_unambiguous
+    assert "user project create / edit / enable-disable / archive" in text, (
+E   AssertionError: current-state.md must list user project create / edit / enable-disable / archive as distinct capabilities (unambiguous wording)
+E   assert 'user project create / edit / enable-disable / archive' in '# WorkTrace Current State\n\n> **Default entry point for AI tools and developers.** Read this file first.\n> It is a ...; logs at\n  `%LOCALAPPDATA%\\WorkTrace\\logs\\worktrace.log`; default exports at\n  `Documents\\WorkTrace Exports`.\n'
+--- [12/23] tests.test_settings_privacy_status::test_bridge_write_true_success ---
+tests\test_settings_privacy_status.py:502: in test_bridge_write_true_success
+    assert result["ok"] is True
+E   assert False is True
+--- [13/23] tests.test_settings_privacy_status::test_bridge_write_success_payload_has_only_ok_and_status ---
+tests\test_settings_privacy_status.py:517: in test_bridge_write_success_payload_has_only_ok_and_status
+    assert set(result.keys()) == {"ok", "status"}
+E   AssertionError: assert {'error', 'ok'} == {'ok', 'status'}
+E     
+E     Extra items in the left set:
+E     'error'
+E     Extra items in the right set:
+E     'status'
+E     
+E     Full diff:
+E       {
+E     +     'error',
+E           'ok',
+E     -     'status',
+E       }
+--- [14/23] tests.test_settings_privacy_status::test_bridge_write_api_ok_false_passes_error_through ---
+tests\test_settings_privacy_status.py:648: in test_bridge_write_api_ok_false_passes_error_through
+    assert result == api_result
+E   AssertionError: assert {'ok': False,...: '设置剪贴板记录失败'} == {'ok': False,...选择有效的剪贴板记录状态'}
+E     
+E     Omitting 1 identical items, use -vv to show
+E     Differing items:
+E     {'error': '设置剪贴板记录失败'} != {'error': '请选择有效的剪贴板记录状态'}
+E     
+E     Full diff:
+E       {
+E           'ok': False,
+E     -     'error': '请选择有效的剪贴板记录状态',
+E     ?               ^^^^^^     ^^
+E     +     'error': '设置剪贴板记录失败',
+E     ?               ^^     ^^
+E       }
+--- [15/23] tests.test_webview_bridge_statistics::test_bridge_statistics_summary_display_safe_keys_only ---
+tests\test_webview_bridge_statistics.py:348: in test_bridge_statistics_summary_display_safe_keys_only
+    assert set(group.keys()) <= allowed_group_keys, (
+E   AssertionError: unexpected group keys: {'is_concrete_project'}
+E   assert {'activity_co...', 'key', ...} <= {'activity_co... 'percentage'}
+E     
+E     Extra items in the left set:
+E     'is_concrete_project'
+--- [16/23] tests.webview.test_frontend_global_boundaries::test_frontend_module_all_functions_still_defined ---
+tests\webview\test_frontend_global_boundaries.py:483: in test_frontend_module_all_functions_still_defined
+    assert not missing, (
+E   AssertionError: frontend module split is missing function definitions: refreshAll. These would cause ReferenceError at runtime.
+E   assert not ['refreshAll']
+--- [17/23] tests.webview.test_project_rules_static_contract::test_project_rules_sort_state_is_memory_only ---
+tests\webview\test_project_rules_static_contract.py:164: in test_project_rules_sort_state_is_memory_only
+    assert "function _sortProjectsForRulesHome" in source
+E   assert 'function _sortProjectsForRulesHome' in '// WorkTrace WebView frontend - Project Rules core module.\n(function () {\n    "use strict";\n    var App = window.W...esDeletingFolderKey ? "正在删除..." : "删除";\n        });\n    }\n    App.setFolderDeleting = setFolderDeleting;\n\n})();\n'
+--- [18/23] tests.webview.test_settings_static_contract::test_init_js_does_not_start_refresh_on_notice_load_failure ---
+tests\webview\test_settings_static_contract.py:1512: in test_init_js_does_not_start_refresh_on_notice_load_failure
+    assert "noticeConfirmed" in body, (
+E   AssertionError: init() .then callback must receive a noticeConfirmed boolean from loadFirstRunNotice
+E   assert 'noticeConfirmed' in 'function init() {\n        initNav();\n        initButtons();\n        App.loadFirstRunNotice().then(function (notice...eartbeat();\n            }, startHeartbeat);\n        });\n    }\n    App.init = init;\n\n    var initStarted = false;'
+--- [19/23] tests.webview.test_statistics_static_contract::test_frontend_js_statistics_loading_double_click_guard ---
+tests\webview\test_statistics_static_contract.py:654: in test_frontend_js_statistics_loading_double_click_guard
+    assert "if (App.statisticsLoading) return" in body, (
+E   AssertionError: loadStatisticsExportSummary must guard against concurrent loads
+E   assert 'if (App.statisticsLoading) return' in 'function loadStatisticsExportSummary() {\n        if (App.statisticsLoading) {\n            return App.statisticsLoad...        return App.statisticsLoadPromise;\n    }\n    App.loadStatisticsExportSummary = loadStatisticsExportSummary;\n'
+--- [20/23] tests.webview.test_statistics_static_contract::test_frontend_js_statistics_client_side_range_validator ---
+tests\webview\test_statistics_static_contract.py:676: in test_frontend_js_statistics_client_side_range_validator
+    assert "diffDays" in body
+E   assert 'diffDays' in 'function validateStatisticsDateRange(dateFrom, dateTo) {\n        if (!dateFrom || !dateTo) return "请选择有效日期";\n      ...0) return "日期范围过大";\n        return null;\n    }\n    App.validateStatisticsDateRange = validateStatisticsDateRange;\n'
+--- [21/23] tests.webview.test_statistics_static_contract::test_bridge_statistics_explicit_bool_rejection_comment ---
+tests\webview\test_statistics_static_contract.py:744: in test_bridge_statistics_explicit_bool_rejection_comment
+    assert "bool" in body, (
+E   AssertionError: bridge must document bool rejection in get_statistics_export_summary
+E   assert 'bool' in 'def get_statistics_export_summary(self, date_from, date_to) -> dict[str, Any]:\n        try:\n            if not isin... bridge get_statistics_export_summary failed")\n            return {"ok": False, "error": "加载统计失败", "summary": None}\n'
+--- [22/23] tests.webview.test_statistics_static_contract::test_service_statistics_status_inclusion_semantics_documented ---
+tests\webview\test_statistics_static_contract.py:757: in test_service_statistics_status_inclusion_semantics_documented
+    assert "normal" in source and "idle/error/excluded" in source and "paused" in source
+E   assert ('normal' in 'from __future__ import annotations\n\nfrom datetime import date\n\nfrom ..constants import (\n    STATUS_EXCLUDED,\n ...n        key=lambda item: (-item["duration_seconds"], str(item["display_name"]).casefold())\n    )\n    return items\n')
+--- [23/23] tests.webview.test_statistics_static_contract::test_frontend_js_statistics_export_uses_validate_statistics_date_range ---
+tests\webview\test_statistics_static_contract.py:1000: in test_frontend_js_statistics_export_uses_validate_statistics_date_range
+    assert "validateStatisticsDateRange" in body, (
+E   AssertionError: exportStatisticsCsv must call validateStatisticsDateRange
+E   assert 'validateStatisticsDateRange' in 'function exportStatisticsCsv() {\n        if (App.statisticsExportSaving) return;\n        if (App.statisticsLoading)...n            setStatisticsExportSaving(false);\n        });\n    }\n    App.exportStatisticsCsv = exportStatisticsCsv;'
+=== PYTEST_FAILURE_DETAILS_END ===
