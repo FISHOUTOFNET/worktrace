@@ -104,7 +104,7 @@ def read_runtime_activity_snapshot_raw(
         snapshot = _SNAPSHOTS.get(key)
         if snapshot is None:
             return ""
-        return json.dumps(snapshot, ensure_ascii=False)
+        return json.dumps(snapshot, ensure_ascii=False, separators=(",", ":"))
 
 
 def restore_runtime_activity_snapshot(
@@ -115,9 +115,10 @@ def restore_runtime_activity_snapshot(
 ) -> None:
     """Restore a validated display sample without writing SQLite.
 
-    String input remains supported for test/compatibility callers. Invalid JSON
-    is retained only as an in-memory raw override so legacy readers fail closed
-    exactly as before; production publishers always provide mappings.
+    String input remains supported for test/compatibility callers. Its exact
+    representation is retained in memory while the parsed mapping is used by
+    typed readers. Production publishers provide mappings and therefore have no
+    raw compatibility representation.
     """
 
     key = _key(database_key)
@@ -136,11 +137,8 @@ def restore_runtime_activity_snapshot(
             _RAW_OVERRIDES[key] = raw
             _bump_locked(key)
         return
-    if isinstance(value, dict):
-        publish_runtime_activity_snapshot(value, reason, database_key=key)
-        return
     with _LOCK:
-        _SNAPSHOTS[key] = None
+        _SNAPSHOTS[key] = deepcopy(value) if isinstance(value, dict) else None
         _RAW_OVERRIDES[key] = raw
         _bump_locked(key)
 
@@ -171,7 +169,10 @@ def clear_runtime_activity_state(
                 (PENDING_CARRY_PROVENANCE_KEY, ""),
             ):
                 compat_key = (key, legacy_key)
-                changed = changed or _LEGACY_COMPAT_VALUES.get(compat_key, default) != default
+                changed = (
+                    changed
+                    or _LEGACY_COMPAT_VALUES.get(compat_key, default) != default
+                )
                 _LEGACY_COMPAT_VALUES[compat_key] = default
         if changed or clear_ownership:
             _bump_locked(key)
