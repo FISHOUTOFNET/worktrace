@@ -13,8 +13,9 @@ def get_report_structure_revision(report_date: str, *, conn=None) -> str:
     """Return a lightweight revision that excludes natural open-row duration.
 
     The revision tracks every durable fact that can change visible report
-    structure or attribution. It deliberately omits ``duration_seconds`` so a
-    collector tick does not request a full page reload.
+    structure, display identity, grouping, or attribution. It deliberately
+    omits ``duration_seconds`` and sampling timestamps so a collector tick does
+    not request a full page reload.
     """
 
     day = date_type.fromisoformat(report_date)
@@ -27,7 +28,8 @@ def get_report_structure_revision(report_date: str, *, conn=None) -> str:
             for row in connection.execute(
                 """
                 SELECT
-                    a.id, a.start_time, a.end_time, a.status,
+                    a.id, a.start_time, a.end_time, a.status, a.source,
+                    a.app_name, a.process_name, a.window_title, a.file_path_hint,
                     a.is_hidden, a.is_deleted,
                     apa.project_id, apa.source AS assignment_source,
                     apa.is_manual, apa.source_rule_type, apa.source_rule_id,
@@ -49,9 +51,26 @@ def get_report_structure_revision(report_date: str, *, conn=None) -> str:
             ).fetchall()
         ]
         activity_ids = [int(row["id"]) for row in activities]
+        resources: list[dict[str, Any]] = []
         clipboard: list[dict[str, Any]] = []
         if activity_ids:
             placeholders = ",".join("?" for _ in activity_ids)
+            resources = [
+                dict(row)
+                for row in connection.execute(
+                    f"""
+                    SELECT activity_id, resource_kind, resource_subtype,
+                           display_name, identity_key, is_anchor, confidence,
+                           source, app_name, process_name, window_title,
+                           path_hint, path_key, uri_scheme, uri_host, uri_hint,
+                           metadata_json
+                    FROM activity_resource
+                    WHERE activity_id IN ({placeholders})
+                    ORDER BY activity_id, id
+                    """,
+                    activity_ids,
+                ).fetchall()
+            ]
             clipboard = [
                 dict(row)
                 for row in connection.execute(
@@ -125,6 +144,7 @@ def get_report_structure_revision(report_date: str, *, conn=None) -> str:
             {
                 "report_date": report_date,
                 "activities": activities,
+                "resources": resources,
                 "clipboard": clipboard,
                 "boundaries": boundaries,
                 "operations": operations,
