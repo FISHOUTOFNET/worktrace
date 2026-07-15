@@ -19,7 +19,6 @@ from ..services import (
     session_boundary_service,
 )
 from ..services.activity_status_policy import does_status_require_boundary
-from ..services.privacy_anonymization_service import anonymize_activity
 from .activity_session_recorder import ActivitySessionRecorder
 from .resource_identity_resolver import (
     DEFAULT_RESOURCE_IDENTITY_RESOLVER,
@@ -70,11 +69,6 @@ class CollectorStateMachine:
         )
         if status == STATUS_EXCLUDED:
             state = "excluded"
-            if (
-                previous_status == STATUS_NORMAL
-                and self.recorder.persisted_activity_id is not None
-            ):
-                anonymize_activity(self.recorder.persisted_activity_id)
         signature = self.resolver.signature_for_payload(payload)
 
         match = self.resolver.current_matches(
@@ -126,7 +120,12 @@ class CollectorStateMachine:
     ) -> int | None:
         if not event.text:
             return None
-        if privacy_service.is_excluded(event.source_window):
+        try:
+            if privacy_service.is_excluded(event.source_window):
+                return None
+        except privacy_service.PrivacyResolutionPending:
+            # A clipboard source whose path cannot be resolved safely is not a
+            # permissible persistence target. Dropping the event is fail-closed.
             return None
         copied_at = event.copied_at or at_time or now_str()
         activity_id = self._current_activity_id_for_clipboard_event(
