@@ -56,10 +56,10 @@ def get_report_structure_revision(report_date: str, *, conn=None) -> str:
                 dict(row)
                 for row in connection.execute(
                     f"""
-                    SELECT id, activity_id, captured_at
+                    SELECT id, activity_id, copied_at
                     FROM activity_clipboard_event
                     WHERE activity_id IN ({placeholders})
-                    ORDER BY activity_id, captured_at, id
+                    ORDER BY activity_id, copied_at, id
                     """,
                     activity_ids,
                 ).fetchall()
@@ -68,7 +68,7 @@ def get_report_structure_revision(report_date: str, *, conn=None) -> str:
             dict(row)
             for row in connection.execute(
                 """
-                SELECT occurred_at, boundary_type
+                SELECT occurred_at, reason
                 FROM session_boundary
                 WHERE occurred_at >= ? AND occurred_at <= ?
                 ORDER BY occurred_at, id
