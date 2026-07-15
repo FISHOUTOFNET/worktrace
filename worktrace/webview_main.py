@@ -1,19 +1,4 @@
-"""WebView UI entry point (default and only shipping UI).
-
-Starts a pywebview shell that talks to ``worktrace.api`` through
-``worktrace.webview_ui.bridge.WebViewBridge``. This is the default entry
-point used by ``python -m worktrace.main`` and by the packaged
-``WorkTrace.exe``. There is no Tkinter fallback: a missing WebView2 Runtime
-or pywebview dependency is a blocking error that exits with a non-zero code.
-
-This module mirrors the startup shape of ``worktrace.main``: resolve paths,
-initialize logging, create and initialize ``AppRuntime``, register it with
-``app_api``, then run the WebView main loop. On exit, ``runtime.shutdown`` is
-called so the collector thread, folder-index worker, and single-instance lock
-are released.
-
-Importing this module does not start the GUI. Call ``main()`` to start.
-"""
+"""WebView UI entry point (default and only shipping UI)."""
 
 from __future__ import annotations
 
@@ -42,12 +27,7 @@ def setup_logging(log_path) -> None:
 
 
 def resource_path(relative: str) -> Path:
-    """Resolve a webview_ui resource path.
-
-    Works for source runs and PyInstaller-packaged runs. When frozen,
-    ``sys._MEIPASS`` is the bundle root and the resources are bundled under
-    ``worktrace/webview_ui/`` (see WorkTrace.spec).
-    """
+    """Resolve a bundled WebView resource for source and frozen builds."""
     base = getattr(sys, "_MEIPASS", None)
     if base:
         return Path(base) / "worktrace" / "webview_ui" / relative
@@ -55,11 +35,6 @@ def resource_path(relative: str) -> Path:
 
 
 def _check_pywebview_available() -> Any:
-    """Import pywebview lazily and return the module.
-
-    Returns a clear error if pywebview is not installed so the caller can show
-    a helpful message instead of an ImportError traceback.
-    """
     try:
         import webview
 
@@ -72,12 +47,6 @@ def _check_pywebview_available() -> Any:
 
 
 def _report_runtime_missing() -> int:
-    """Print a clear message when WebView2 Runtime is missing and exit.
-
-    Does not raise; returns a non-zero exit code so the caller can surface
-    the message to the user. WorkTrace ships only the WebView UI: the user
-    must install the WebView2 Runtime and restart WorkTrace.
-    """
     msg = missing_runtime_message()
     print(msg, file=sys.stderr)
     logging.error("webview startup aborted: WebView2 Runtime missing")
@@ -90,8 +59,6 @@ def main() -> int:
     setup_logging(paths.log_path)
     logging.info("webview ui startup")
 
-    # Pre-flight: fail fast with a clear message when WebView2 Runtime is missing on Windows
-    # (avoids a pywebview traceback).
     if detect_webview2_runtime() == "missing":
         return _report_runtime_missing()
 
@@ -105,11 +72,15 @@ def main() -> int:
     runtime.initialize()
     app_api.set_runtime(runtime)
 
-    # Unified privacy-gate startup: enforced by app_api.start_collection_after_privacy_gate
-    # so this entry does not duplicate the first-run notice / fail-closed logic. On success it
-    # starts background workers BEFORE the collector; on failure the runtime stays stopped.
     try:
-        app_api.start_collection_after_privacy_gate()
+        startup_result = app_api.start_collection_after_privacy_gate()
+        if not startup_result.get("ok"):
+            logging.error(
+                "collector startup rejected error=%s",
+                startup_result.get("error", "unknown"),
+            )
+        elif startup_result.get("background_worker_degraded"):
+            logging.warning("collector started with background worker degradation")
     except Exception:
         logging.exception(
             "webview startup: start_collection_after_privacy_gate raised; "
@@ -120,8 +91,6 @@ def main() -> int:
     index_path = resource_path("index.html")
 
     try:
-        # Capture the window so the bridge can later open a native CSV save dialog. create_window
-        # returns before start(); the dialog runs later from a JS callback, so this is safe.
         window = webview.create_window(
             title="WorkTrace",
             url=str(index_path),
@@ -133,8 +102,6 @@ def main() -> int:
         bridge.set_window(window)
         webview.start()
     except Exception:
-        # pywebview may raise when the WebView2 backend cannot initialize even though the registry
-        # check passed; surface a clear message without a traceback.
         logging.exception("webview start failed")
         print(missing_runtime_message(), file=sys.stderr)
         return 2

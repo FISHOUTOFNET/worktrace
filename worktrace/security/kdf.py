@@ -5,9 +5,11 @@ from typing import Any
 
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 
-
 BACKUP_KEY_BYTES = 32
 MIN_SALT_BYTES = 16
+MAX_SCRYPT_N = 2**18
+MAX_SCRYPT_R = 32
+MAX_SCRYPT_P = 8
 
 
 class KdfError(Exception):
@@ -56,7 +58,13 @@ def derive_backup_key(passphrase: str, salt: bytes, params: KdfParams) -> bytes:
     if params.algorithm != "scrypt":
         raise KdfError("Unsupported backup KDF")
 
-    kdf = Scrypt(salt=salt, length=params.length, n=params.n, r=params.r, p=params.p)
+    kdf = Scrypt(
+        salt=salt,
+        length=params.length,
+        n=params.n,
+        r=params.r,
+        p=params.p,
+    )
     return kdf.derive(passphrase.encode("utf-8"))
 
 
@@ -71,3 +79,9 @@ def _validate_params(params: KdfParams) -> None:
         raise KdfError("Invalid scrypt n parameter")
     if params.r < 1 or params.p < 1:
         raise KdfError("Invalid scrypt parameters")
+    if (
+        params.n > MAX_SCRYPT_N
+        or params.r > MAX_SCRYPT_R
+        or params.p > MAX_SCRYPT_P
+    ):
+        raise KdfError("Unsupported scrypt resource parameters")

@@ -1,8 +1,8 @@
-"""Semantic validation for a decrypted secure-backup staging database."""
+"""Semantic normalization and validation for a secure-backup staging DB."""
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 import sqlite3
 from typing import Any
@@ -16,7 +16,6 @@ from ..constants import (
     TIME_FORMAT,
 )
 from ..db import CURRENT_SCHEMA_VERSION, expected_schema_fingerprint, schema_fingerprint
-
 
 _ALLOWED_ACTIVITY_STATUSES = {
     STATUS_NORMAL,
@@ -32,10 +31,17 @@ class BackupValidationError(ValueError):
 
 
 def validate_staging_database(conn: sqlite3.Connection) -> None:
+    """Normalize restore-only runtime state, then validate all semantics."""
     if int(conn.execute("PRAGMA user_version").fetchone()[0] or 0) != CURRENT_SCHEMA_VERSION:
         raise BackupValidationError("schema version")
     if schema_fingerprint(conn) != expected_schema_fingerprint():
         raise BackupValidationError("schema fingerprint")
+
+    # An open row belongs to the exporting process generation and cannot remain
+    # open after a replace import.  Seal it at start + already-observed duration;
+    # this preserves recorded work without using the importing machine's clock.
+    _seal_imported_open_activity_rows(conn)
+
     if conn.execute("PRAGMA foreign_key_check").fetchone():
         raise BackupValidationError("foreign key")
     integrity = conn.execute("PRAGMA integrity_check").fetchone()
@@ -46,21 +52,46 @@ def validate_staging_database(conn: sqlite3.Connection) -> None:
     _validate_replay_records(conn)
 
 
-def _validate_activity_rows(conn: sqlite3.Connection) -> None:
-    """Validate raw activity semantics without inventing a stricter clock model.
+def _seal_imported_open_activity_rows(conn: sqlite3.Connection) -> None:
+    rows = conn.execute(
+        """
+        SELECT id, start_time, duration_seconds
+        FROM activity_log
+        WHERE end_time IS NULL
+        ORDER BY id
+        """
+    ).fetchall()
+    for row in rows:
+        try:
+            start = datetime.strptime(str(row["start_time"] or ""), TIME_FORMAT)
+            duration = max(0, int(row["duration_seconds"] or 0))
+        except (TypeError, ValueError) as exc:
+            raise BackupValidationError("activity encoding") from exc
+        end = start + timedelta(seconds=duration)
+        conn.execute(
+            """
+            UPDATE activity_log
+            SET end_time = ?, duration_seconds = ?
+            WHERE id = ? AND end_time IS NULL
+            """,
+            (end.strftime(TIME_FORMAT), duration, int(row["id"])),
+        )
 
-    Closed production rows have a non-negative wall-clock interval and store at
-    least that interval. The duration may be larger because close/recovery keeps
-    the maximum of observed elapsed time and the final wall-clock delta. Open
-    rows may have a NULL duration or a non-negative live duration.
-    """
+
+def _validate_activity_rows(conn: sqlite3.Connection) -> None:
+    """Validate activity intervals and duration semantics."""
     for row in conn.execute(
-        "SELECT id, start_time, end_time, duration_seconds, status FROM activity_log ORDER BY id"
+        "SELECT id, start_time, end_time, duration_seconds, status "
+        "FROM activity_log ORDER BY id"
     ).fetchall():
         try:
             start = datetime.strptime(str(row["start_time"] or ""), TIME_FORMAT)
             end_raw = row["end_time"]
-            end = datetime.strptime(str(end_raw), TIME_FORMAT) if end_raw is not None else None
+            end = (
+                datetime.strptime(str(end_raw), TIME_FORMAT)
+                if end_raw is not None
+                else None
+            )
             duration_raw = row["duration_seconds"]
             duration = int(duration_raw) if duration_raw is not None else None
         except (TypeError, ValueError) as exc:
@@ -70,7 +101,7 @@ def _validate_activity_rows(conn: sqlite3.Connection) -> None:
         if duration is not None and duration < 0:
             raise BackupValidationError("negative duration")
         if end is None:
-            continue
+            raise BackupValidationError("open activity after normalization")
         if duration is None:
             raise BackupValidationError("closed activity missing duration")
         wall_seconds = int((end - start).total_seconds())
@@ -88,7 +119,8 @@ def _validate_replay_records(conn: sqlite3.Connection) -> None:
         UNION
         SELECT substr(start_time, 1, 10) FROM activity_log WHERE length(start_time) >= 10
         UNION
-        SELECT substr(end_time, 1, 10) FROM activity_log WHERE end_time IS NOT NULL AND length(end_time) >= 10
+        SELECT substr(end_time, 1, 10) FROM activity_log
+        WHERE end_time IS NOT NULL AND length(end_time) >= 10
         ORDER BY 1
         """
     ).fetchall()
@@ -97,11 +129,14 @@ def _validate_replay_records(conn: sqlite3.Connection) -> None:
             report_date = str(date_row[0] or "")
             datetime.strptime(report_date, "%Y-%m-%d")
             for row in conn.execute(
-                "SELECT * FROM report_session_operation WHERE report_date = ? ORDER BY sequence, id",
+                "SELECT * FROM report_session_operation "
+                "WHERE report_date = ? ORDER BY sequence, id",
                 (report_date,),
             ).fetchall():
                 operation = dict(row)
-                operation["payload"] = json.loads(str(operation.pop("payload_json")))
+                operation["payload"] = json.loads(
+                    str(operation.pop("payload_json"))
+                )
                 _validate_operation_payload(operation, conn)
             snapshot = build_visible_snapshot(report_date, report_date, conn=conn)
             invalid = [
@@ -117,7 +152,10 @@ def _validate_replay_records(conn: sqlite3.Connection) -> None:
         raise BackupValidationError("operation replay") from exc
 
 
-def _validate_operation_payload(operation: dict[str, Any], conn: sqlite3.Connection) -> None:
+def _validate_operation_payload(
+    operation: dict[str, Any],
+    conn: sqlite3.Connection,
+) -> None:
     payload = operation.get("payload")
     if not isinstance(payload, dict) or payload.get("payload_version") != 4:
         raise BackupValidationError("operation payload version")
@@ -134,7 +172,8 @@ def _validate_operation_payload(operation: dict[str, Any], conn: sqlite3.Connect
             if project.get("mode") == "set":
                 project_id = project.get("project_id")
                 if not isinstance(project_id, int) or not conn.execute(
-                    "SELECT 1 FROM project WHERE id = ?", (project_id,)
+                    "SELECT 1 FROM project WHERE id = ?",
+                    (project_id,),
                 ).fetchone():
                     raise BackupValidationError("project reference")
             elif project.get("mode") != "inherit":
@@ -144,7 +183,10 @@ def _validate_operation_payload(operation: dict[str, Any], conn: sqlite3.Connect
             if not isinstance(duration, dict) or set(duration) - {"mode", "value"}:
                 raise BackupValidationError("duration patch")
             if duration.get("mode") == "set":
-                if not isinstance(duration.get("value"), int) or duration["value"] < 0:
+                if (
+                    not isinstance(duration.get("value"), int)
+                    or duration["value"] < 0
+                ):
                     raise BackupValidationError("duration value")
             elif duration.get("mode") != "inherit":
                 raise BackupValidationError("duration mode")
@@ -161,7 +203,12 @@ def _validate_operation_payload(operation: dict[str, Any], conn: sqlite3.Connect
         allowed |= {"summary_id"}
         if not isinstance(payload.get("summary_id"), str) or not payload["summary_id"]:
             raise BackupValidationError("summary id")
-    elif operation_type not in {"hide_session", "copy_session", "merge_sessions", "split_session"}:
+    elif operation_type not in {
+        "hide_session",
+        "copy_session",
+        "merge_sessions",
+        "split_session",
+    }:
         raise BackupValidationError("operation type")
     if set(payload) - allowed:
         raise BackupValidationError("unknown payload field")

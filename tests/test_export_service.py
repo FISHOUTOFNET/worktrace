@@ -2,7 +2,11 @@ from pathlib import Path
 
 from openpyxl import load_workbook
 
-from worktrace.services import activity_service, export_service
+from worktrace.services import (
+    activity_service,
+    database_maintenance_service,
+    export_service,
+)
 from worktrace.services.settings_service import (
     get_bool_setting,
     get_setting,
@@ -73,8 +77,6 @@ def test_export_all_and_clear_requires_confirmation(temp_db, tmp_path):
         raise AssertionError("clear_all_local_data should require confirmation")
 
 
-
-
 def _seed_business_data() -> int:
     """Insert a small amount of business data so a clear-all has something
     to drop, and the post-clear state can be asserted as empty."""
@@ -140,9 +142,10 @@ def test_clear_all_rejects_when_secure_import_in_progress(temp_db) -> None:
     from worktrace.services.secure_backup_service import SECURE_IMPORT_COORDINATOR
 
     aid = _seed_business_data()
-    with SECURE_IMPORT_COORDINATOR.acquire():
+    with SECURE_IMPORT_COORDINATOR.acquire() as guard:
         with pytest.raises(ValueError):
             export_service.clear_all_local_data(confirm=True)
+        guard.mark_succeeded()
     from worktrace.services import activity_service as act_svc
     activities = act_svc.get_activities_by_range(
         "2026-06-18", "2026-06-18"
@@ -155,45 +158,47 @@ def test_clear_all_rejects_when_secure_import_in_progress(temp_db) -> None:
 def test_clear_all_failure_restores_prior_state_and_clears_guard(
     temp_db, monkeypatch
 ) -> None:
-    # Guard must clear secure_import_in_progress and best-effort restore
-    # prior state on failure; exception propagates for stable API message.
-    _seed_business_data()
+    from worktrace.services import secure_backup_service
+
+    aid = _seed_business_data()
     set_setting("user_paused", "false")
     set_setting("collector_status", "running")
     set_setting("current_activity_snapshot", '{"app":"Word"}')
     set_setting("pending_short_seconds", "12")
-    set_setting("secure_import_in_progress", "false")
 
     def _boom() -> None:
-        raise RuntimeError("reset_database boom")
+        raise RuntimeError("clear_all_live_data boom")
 
-    monkeypatch.setattr(export_service, "reset_database", _boom)
+    monkeypatch.setattr(
+        database_maintenance_service,
+        "clear_all_live_data",
+        _boom,
+    )
 
-    try:
+    with pytest.raises(RuntimeError, match="clear_all_live_data boom"):
         export_service.clear_all_local_data(confirm=True)
-    except RuntimeError:
-        pass
-    else:
-        raise AssertionError(
-            "clear-all must re-raise the reset_database exception"
-        )
 
-    # The guard must be cleared so the collector is not permanently blocked.
-    assert get_bool_setting("secure_import_in_progress", False) is False
+    assert secure_backup_service.is_secure_import_in_progress() is False
     assert get_bool_setting("user_paused", False) is False
     assert get_setting("collector_status", "") == "running"
     assert (get_setting("current_activity_snapshot", "") or "") == '{"app":"Word"}'
     assert get_setting("pending_short_seconds", "") == "0"
+    activities = activity_service.get_activities_by_range(
+        "2026-06-18", "2026-06-18"
+    )
+    assert any(item["id"] == aid for item in activities)
 
 
 def test_clear_all_guard_clears_runtime_pending_on_boundary(temp_db) -> None:
+    from worktrace.services.secure_backup_service import SECURE_IMPORT_COORDINATOR
+
     set_setting("pending_short_seconds", "12")
     set_setting("current_activity_snapshot", '{"status":"normal"}')
-    set_setting("secure_import_in_progress", "false")
 
-    with export_service._destructive_reset_guard():
+    with SECURE_IMPORT_COORDINATOR.acquire(reason="clear_all_test") as guard:
         assert get_setting("pending_short_seconds", "") == "0"
         assert get_setting("current_activity_snapshot", "") == ""
+        guard.mark_succeeded()
 
 
 def test_clear_all_success_invalidates_context_recompute_cache(temp_db) -> None:
@@ -206,38 +211,42 @@ def test_clear_all_success_invalidates_context_recompute_cache(temp_db) -> None:
     assert activities == []
 
 
-def test_clear_all_guard_enter_and_exit_set_setting_sequence(
+def test_clear_all_guard_exposes_safe_state_during_database_clear(
     temp_db, monkeypatch
 ) -> None:
-    calls: list[tuple[str, str]] = []
+    from worktrace.services import secure_backup_service
 
-    real_set_setting = set_setting
+    captured: dict[str, object] = {}
+    real_clear = database_maintenance_service.clear_all_live_data
 
-    def _spy_set_setting(key: str, value: str) -> None:
-        calls.append((key, value))
-        real_set_setting(key, value)
+    def _spy_clear() -> None:
+        captured["maintenance_active"] = (
+            secure_backup_service.is_secure_import_in_progress()
+        )
+        captured["user_paused"] = get_bool_setting("user_paused", False)
+        captured["collector_status"] = get_setting("collector_status", "")
+        captured["snapshot"] = get_setting("current_activity_snapshot", "")
+        captured["pending"] = get_setting("pending_short_seconds", "")
+        real_clear()
 
     monkeypatch.setattr(
-        "worktrace.services.settings_service.set_setting", _spy_set_setting
+        database_maintenance_service,
+        "clear_all_live_data",
+        _spy_clear,
     )
+    set_setting("user_paused", "false")
+    set_setting("collector_status", "running")
+    set_setting("current_activity_snapshot", '{"status":"normal"}')
+    set_setting("pending_short_seconds", "12")
 
     export_service.clear_all_local_data(confirm=True)
 
-    enter_keys = [(k, v) for (k, v) in calls if k == "secure_import_in_progress"]
-    assert enter_keys == []
-    user_paused_calls = [(k, v) for (k, v) in calls if k == "user_paused"]
-    assert ("user_paused", "true") in user_paused_calls, (
-        "guard enter must set user_paused=true"
-    )
-    assert user_paused_calls[-1] == ("user_paused", "true"), (
-        "guard success exit must leave user_paused=true; "
-        f"got {user_paused_calls[-1]}"
-    )
-    status_calls = [(k, v) for (k, v) in calls if k == "collector_status"]
-    assert ("collector_status", "paused") in status_calls, (
-        "guard enter must set collector_status=paused"
-    )
-    assert status_calls[-1] == ("collector_status", "paused"), (
-        "guard success exit must leave collector_status=paused; "
-        f"got {status_calls[-1]}"
-    )
+    assert captured == {
+        "maintenance_active": True,
+        "user_paused": True,
+        "collector_status": "paused",
+        "snapshot": "",
+        "pending": "0",
+    }
+    assert get_bool_setting("user_paused", False) is True
+    assert get_setting("collector_status", "") == "paused"

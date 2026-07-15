@@ -3,19 +3,28 @@ from __future__ import annotations
 import time
 
 from ..constants import (
-    EXCLUDED_PROJECT,
     EXCLUDED_APP_NAME,
     EXCLUDED_PROCESS_NAME,
+    EXCLUDED_PROJECT,
     EXCLUDED_WINDOW_TITLE,
     RULE_CACHE_TTL_SECONDS,
     STATUS_EXCLUDED,
 )
 from ..db import dict_rows, get_connection, get_db_path
-from ..path_utils import is_path_under_folder, normalize_folder_key, normalize_path_key
+from ..path_utils import (
+    is_path_under_folder,
+    normalize_folder_key,
+    normalize_path_key,
+)
 from ..platforms.base import ActiveWindow
+from ..resources.title_parsing import extract_file_name_from_title
 
 _EXCLUDE_RULE_CACHE_TTL_SECONDS = RULE_CACHE_TTL_SECONDS
 _EXCLUDE_RULE_CACHE: dict[str, tuple[float, dict[str, list[dict]]]] = {}
+
+
+class PrivacyResolutionPending(RuntimeError):
+    """A privacy-sensitive local-file window cannot yet be classified safely."""
 
 
 def clear_exclude_rules_cache() -> None:
@@ -23,6 +32,7 @@ def clear_exclude_rules_cache() -> None:
 
 
 def is_excluded(active_window: ActiveWindow) -> bool:
+    """Evaluate exclusions; unresolved local-file privacy decisions fail closed."""
     haystack = " ".join(
         [
             active_window.app_name,
@@ -31,22 +41,33 @@ def is_excluded(active_window: ActiveWindow) -> bool:
             active_window.file_path_hint or "",
         ]
     ).casefold()
-    return (
-        _matches_exclude_keyword(haystack)
-        or _matches_exclude_folder(active_window.file_path_hint)
-        or _matches_indexed_exclude_folder(active_window.window_title)
+    if _matches_exclude_keyword(haystack):
+        return True
+    if _matches_exclude_folder(active_window.file_path_hint):
+        return True
+
+    folder_rules = _exclude_rules()["folders"]
+    if not folder_rules:
+        return False
+    file_name = extract_file_name_from_title(active_window.window_title)
+    if not file_name:
+        return False
+
+    from .folder_index_service import resolve_unique_path_from_title
+
+    path = resolve_unique_path_from_title(
+        active_window.window_title,
+        include_excluded=True,
     )
+    if path:
+        return _matches_exclude_folder(path)
+    if active_window.privacy_path_required:
+        raise PrivacyResolutionPending("privacy_path_unresolved")
+    return False
 
 
 def is_resource_excluded(resource) -> bool:
-    """Return True if a DetectedResource (or dict) should be excluded.
-
-    Inspects the same fields as :func:`is_excluded`, plus resource-specific
-    fields such as ``uri_host``, ``display_name``, ``identity_key`` and safe
-    ``metadata_json`` entries. This is used after resource detection to make
-    sure a resource that surfaces an excluded keyword (e.g. a browser host or
-    email subject) is anonymized just like an excluded active window.
-    """
+    """Return True if a DetectedResource (or dict) should be excluded."""
     if resource is None:
         return False
     if isinstance(resource, dict):
@@ -63,6 +84,7 @@ def is_resource_excluded(resource) -> bool:
         metadata_raw = resource.get("metadata_json")
         if metadata_raw:
             fields.append(str(metadata_raw))
+        resource_path = resource.get("path_hint")
     else:
         fields = [
             resource.app_name or "",
@@ -76,12 +98,11 @@ def is_resource_excluded(resource) -> bool:
         ]
         if resource.metadata_json:
             fields.append(resource.metadata_json)
+        resource_path = resource.path_hint
     haystack = " ".join(fields).casefold()
     if _matches_exclude_keyword(haystack):
         return True
-    if _matches_exclude_folder(resource.path_hint if not isinstance(resource, dict) else resource.get("path_hint")):
-        return True
-    return False
+    return _matches_exclude_folder(resource_path)
 
 
 def make_excluded_activity_payload() -> dict:
@@ -114,7 +135,10 @@ def _exclude_rules() -> dict[str, list[dict]]:
         ).fetchone()
         if not project or not int(project["enabled"] or 0):
             result = {"keywords": [], "folders": []}
-            _EXCLUDE_RULE_CACHE[cache_key] = (now + _EXCLUDE_RULE_CACHE_TTL_SECONDS, result)
+            _EXCLUDE_RULE_CACHE[cache_key] = (
+                now + _EXCLUDE_RULE_CACHE_TTL_SECONDS,
+                result,
+            )
             return result
         project_id = int(project["id"])
         keywords = dict_rows(
@@ -143,7 +167,10 @@ def _exclude_rules() -> dict[str, list[dict]]:
             ).fetchall()
         )
     result = {"keywords": keywords, "folders": folders}
-    _EXCLUDE_RULE_CACHE[cache_key] = (now + _EXCLUDE_RULE_CACHE_TTL_SECONDS, result)
+    _EXCLUDE_RULE_CACHE[cache_key] = (
+        now + _EXCLUDE_RULE_CACHE_TTL_SECONDS,
+        result,
+    )
     return {
         key: [dict(row) for row in rows]
         for key, rows in result.items()
@@ -165,20 +192,23 @@ def _matches_exclude_folder(file_path_hint: str | None) -> bool:
     target_key = normalize_folder_key(target) or normalize_path_key(target)
     for row in _exclude_rules()["folders"]:
         folder = str(row.get("folder_path") or "")
-        if target_key and target_key == str(row.get("normalized_folder_key") or ""):
+        if target_key and target_key == str(
+            row.get("normalized_folder_key") or ""
+        ):
             return True
-        if folder and is_path_under_folder(target, folder, bool(row.get("recursive"))):
+        if folder and is_path_under_folder(
+            target,
+            folder,
+            bool(row.get("recursive")),
+        ):
             return True
     return False
 
 
-def _matches_indexed_exclude_folder(window_title: str | None) -> bool:
-    if not (window_title or "").strip():
-        return False
-    try:
-        from .folder_index_service import resolve_unique_path_from_title
-
-        path = resolve_unique_path_from_title(window_title, include_excluded=True)
-    except Exception:
-        return False
-    return _matches_exclude_folder(path)
+__all__ = [
+    "PrivacyResolutionPending",
+    "clear_exclude_rules_cache",
+    "is_excluded",
+    "is_resource_excluded",
+    "make_excluded_activity_payload",
+]

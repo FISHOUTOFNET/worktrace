@@ -123,7 +123,10 @@ class ActivitySessionRecorder:
             self.clear_snapshot()
             return
 
-        end_time = at_time
+        # Never persist a reversed wall-clock interval.  A backward system clock
+        # jump closes at the last safe wall time while keeping the monotonic/max
+        # duration already stored on the row.
+        end_time = max(str(at_time), str(self.current_start_time))
         elapsed = seconds_between(self.current_start_time, end_time)
         status = str(self.current_payload.get("status") or "")
         self._ensure_persisted(end_time)
@@ -186,7 +189,14 @@ class ActivitySessionRecorder:
         self.snapshot_publisher.clear("recorder_snapshot_clear")
 
     def clear_runtime_state(self, reason: str) -> None:
+        """Forget every process-local identity without writing to the database."""
+        self.current_payload = None
+        self.current_signature = None
+        self.current_start_time = None
+        self.current_last_seen_time = None
+        self.persisted_activity_id = None
         self.project_ownership_state = clear_ownership_state()
+        self.clear_snapshot()
         clear_runtime_activity_state(reason)
 
     def ensure_persisted_for_clipboard(self, at_time: str) -> int | None:
