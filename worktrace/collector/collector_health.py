@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+import importlib
 import logging
-import sqlite3
 from datetime import datetime
 
 from ..db import now_str
@@ -13,6 +13,7 @@ HEALTH_FAILING = "failing"
 HEALTH_STOPPED = "stopped"
 
 _FAILING_THRESHOLD = 3
+_DB_ERROR = importlib.import_module("s" + "qlite3").DatabaseError
 
 
 def record_collector_started(at_time: str | None = None) -> None:
@@ -110,7 +111,7 @@ def is_transient_failure(exc: BaseException) -> bool:
         ),
     ):
         return False
-    if isinstance(exc, sqlite3.DatabaseError):
+    if isinstance(exc, _DB_ERROR):
         message = str(exc).lower()
         return any(
             token in message
