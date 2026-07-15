@@ -635,12 +635,18 @@ def test_import_re_seeds_defaults(temp_db, tmp_path):
             ).fetchone()
             assert row is not None, f"system project {name} missing after import"
 
-        # Runtime-state settings should be re-seeded with defaults.
-        for key in ("collector_status", "user_paused", "current_activity_snapshot"):
+        # Durable runtime controls are re-seeded; the live activity sample is
+        # process-local and must not be recreated as a SQLite setting.
+        for key in ("collector_status", "user_paused"):
             row = conn.execute(
                 "SELECT value FROM settings WHERE key = ?", (key,)
             ).fetchone()
             assert row is not None, f"runtime setting {key} missing after import"
+        snapshot_row = conn.execute(
+            "SELECT value FROM settings WHERE key = ?",
+            ("current_activity_snapshot",),
+        ).fetchone()
+        assert snapshot_row is None
 
 
 
