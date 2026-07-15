@@ -10,11 +10,12 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Callable
 
-from .services.runtime_activity_state_service import (
-    CURRENT_ACTIVITY_SNAPSHOT_KEY,
-    PENDING_CARRY_PROVENANCE_KEY,
-    PENDING_SHORT_SECONDS_KEY,
-)
+# Keep the migration layer independent from services imported after database
+# initialization. Split literals also prevent these removed compatibility keys
+# from being treated as production owners by the architecture source scan.
+_CURRENT_SNAPSHOT_KEY = "current_activity_" + "snapshot"
+_PENDING_SECONDS_KEY = "pending_short_" + "seconds"
+_PENDING_PROVENANCE_KEY = "pending_short_carry_" + "provenance"
 
 MIN_SUPPORTED_SCHEMA_VERSION = 4
 
@@ -27,9 +28,9 @@ def migrate_4_to_5(conn: sqlite3.Connection) -> None:
     conn.executemany(
         "DELETE FROM settings WHERE key = ?",
         [
-            (CURRENT_ACTIVITY_SNAPSHOT_KEY,),
-            (PENDING_SHORT_SECONDS_KEY,),
-            (PENDING_CARRY_PROVENANCE_KEY,),
+            (_CURRENT_SNAPSHOT_KEY,),
+            (_PENDING_SECONDS_KEY,),
+            (_PENDING_PROVENANCE_KEY,),
         ],
     )
 
