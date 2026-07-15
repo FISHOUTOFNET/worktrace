@@ -149,8 +149,9 @@ by the DOM-only local ticker and do not request a full page reload.
 - `pytest`
 - `node --test tests/webview/*.test.js`
 - Failed same-repository PR CI writes compact diagnostics to
-  `diagnostics/pytest-hardening-latest.txt` using a `[skip ci]` bot commit; the
-  file is removed after the failing contracts are fixed.
+  `diagnostics/pytest-hardening-latest.txt` on the isolated
+  `agent/worktrace-ci-diagnostics` branch, so repair-branch concurrency cannot
+  discard the failure evidence.
 - Local paths: DB at `%LOCALAPPDATA%\WorkTrace\data\worktrace.db`; logs at
   `%LOCALAPPDATA%\WorkTrace\logs\worktrace.log`; default exports at
   `Documents\WorkTrace Exports`.
