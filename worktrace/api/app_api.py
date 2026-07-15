@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
+from ..services import privacy_gate_service
 from ..services.runtime_activity_state_service import record_runtime_boundary
 from . import settings_api
 
@@ -25,16 +26,8 @@ def get_runtime() -> "AppRuntime | None":
 
 
 def start_collection_after_privacy_gate() -> dict[str, Any]:
-    """Start workers and collector only after the privacy gate is accepted."""
-    try:
-        notice_accepted = settings_api.first_run_notice_accepted()
-    except Exception:
-        logging.exception(
-            "app_api.start_collection_after_privacy_gate: first-run "
-            "notice read failed; failing closed"
-        )
-        return {"ok": False, "error": "请先确认隐私说明"}
-    if not notice_accepted:
+    """Start every sensitive runtime component after one canonical gate."""
+    if not privacy_gate_service.is_sensitive_runtime_allowed():
         return {"ok": False, "error": "请先确认隐私说明"}
     if _runtime is None:
         return {"ok": False, "error": "collector_start_failed"}
@@ -45,15 +38,13 @@ def start_collection_after_privacy_gate() -> dict[str, Any]:
     except Exception:
         background_error = True
         logging.exception(
-            "app_api.start_collection_after_privacy_gate: background "
-            "workers start failed after gate passed"
+            "app_api.start_collection_after_privacy_gate: background workers failed"
         )
     try:
         collector_result = _runtime.start_collector()
     except Exception:
         logging.exception(
-            "app_api.start_collection_after_privacy_gate: collector "
-            "start failed after gate passed"
+            "app_api.start_collection_after_privacy_gate: collector start failed"
         )
         return {"ok": False, "error": "collector_start_failed"}
     if isinstance(collector_result, dict) and not collector_result.get("ok"):
@@ -84,17 +75,23 @@ def pause_collection_now() -> dict[str, Any]:
 
 def set_clipboard_capture_enabled(enabled: bool) -> None:
     """Apply a clipboard privacy toggle immediately to the live adapter."""
+    if enabled:
+        privacy_gate_service.require_sensitive_runtime_allowed()
     if _runtime is not None:
         _runtime.set_clipboard_capture_enabled(bool(enabled))
 
 
 def start_collector() -> dict[str, object]:
+    if not privacy_gate_service.is_sensitive_runtime_allowed():
+        return {"ok": False, "error": "privacy_notice_required"}
     if _runtime is not None:
         return dict(_runtime.start_collector())
     return {"ok": False, "error": "collector_start_failed"}
 
 
 def start_background_workers() -> bool:
+    if not privacy_gate_service.is_sensitive_runtime_allowed():
+        return False
     if _runtime is not None:
         return _runtime.start_background_workers()
     return False
