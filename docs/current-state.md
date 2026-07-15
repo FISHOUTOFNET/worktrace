@@ -145,7 +145,7 @@ by the DOM-only local ticker and do not request a full page reload.
 ## Common Test Commands
 
 - `python scripts/run_affected_tests.py`
-- `python -m compileall worktrace`
+- `python -m compileall -q worktrace scripts/pytest_diagnostics.py`
 - `pytest`
 - `node --test tests/webview/*.test.js`
 - Failed same-repository PR CI writes compact diagnostics, the run ID, and the
