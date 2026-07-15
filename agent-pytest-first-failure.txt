@@ -1,27 +1,32 @@
 ........................................................................ [  2%]
 ........................................................................ [  4%]
 ........................................................................ [  7%]
-...................F
+.....................F
 ================================== FAILURES ===================================
-_______________ test_export_all_and_clear_requires_confirmation _______________
+__________ test_clear_all_success_sets_pause_guard_and_clears_after ___________
 
-temp_db = WindowsPath('C:/Users/���� Sun Yi/AppData/Local/Temp/pytest-of-���� Sun Yi/pytest-3139/test_export_all_and_clear_requ0/worktrace.db')
-tmp_path = WindowsPath('C:/Users/���� Sun Yi/AppData/Local/Temp/pytest-of-���� Sun Yi/pytest-3139/test_export_all_and_clear_requ0')
+temp_db = WindowsPath('C:/Users/���� Sun Yi/AppData/Local/Temp/pytest-of-���� Sun Yi/pytest-3142/test_clear_all_success_sets_pa0/worktrace.db')
 
-    def test_export_all_and_clear_requires_confirmation(temp_db, tmp_path):
-        path = export_service.export_all_local_data(str(tmp_path / "all.xlsx"))
-        assert Path(path).exists()
-        wb = load_workbook(path)
-        assert "folder_project_rule" in wb.sheetnames
->       assert "folder_rule_index_state" not in wb.sheetnames
-E       AssertionError: assert 'folder_rule_index_state' not in ['project', 'settings', 'session_boundary', 'activity_log', 'folder_project_rule', 'project_rule', ...]
-E        +  where ['project', 'settings', 'session_boundary', 'activity_log', 'folder_project_rule', 'project_rule', ...] = <openpyxl.workbook.workbook.Workbook object at 0x0000012CDA1866D0>.sheetnames
+    def test_clear_all_success_sets_pause_guard_and_clears_after(temp_db) -> None:
+        _seed_business_data()
+        set_setting("user_paused", "false")
+        set_setting("collector_status", "running")
+        set_setting("current_activity_snapshot", '{"app":"Word"}')
+        set_setting("pending_short_seconds", "12")
+        set_setting("secure_import_in_progress", "false")
+    
+        export_service.clear_all_local_data(confirm=True)
+    
+        assert get_bool_setting("secure_import_in_progress", False) is False
+>       assert get_bool_setting("user_paused", False) is True
+E       AssertionError: assert False is True
+E        +  where False = get_bool_setting('user_paused', False)
 
-tests\test_export_service.py:65: AssertionError
+tests\test_export_service.py:116: AssertionError
 =========================== short test summary info ===========================
-FAILED tests/test_export_service.py::test_export_all_and_clear_requires_confirmation - AssertionError: assert 'folder_rule_index_state' not in ['project', 'settings', 'session_boundary', 'activity_log', 'folder_project_rule', 'project_rule', ...]
- +  where ['project', 'settings', 'session_boundary', 'activity_log', 'folder_project_rule', 'project_rule', ...] = <openpyxl.workbook.workbook.Workbook object at 0x0000012CDA1866D0>.sheetnames
+FAILED tests/test_export_service.py::test_clear_all_success_sets_pause_guard_and_clears_after - AssertionError: assert False is True
+ +  where False = get_bool_setting('user_paused', False)
 !!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!
-1 failed, 235 passed in 74.52s (0:01:14)
+1 failed, 237 passed in 89.41s (0:01:29)
 
 PYTEST_EXIT_CODE=1
