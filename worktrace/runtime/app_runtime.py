@@ -18,6 +18,7 @@ from ..collector.collector import CollectorControl, run_collector
 from ..collector.single_instance import acquire_single_instance, release_single_instance
 from ..services import activity_lifecycle_service, folder_index_service, recovery_service
 from ..services.folder_index_recovery_service import recover_interrupted_indexes
+from ..services.privacy_gate_service import is_sensitive_runtime_allowed
 from ..services.secure_backup_service import (
     clear_collector_pause_handler,
     clear_collector_reset_handler,
@@ -87,7 +88,12 @@ class AppRuntime:
     def start_background_workers(self) -> bool:
         """Start or replace the folder-index worker under the lifecycle lock."""
         with self._lifecycle_lock:
-            if not self.owns_collector or self._shutdown or self.stop_event.is_set():
+            if (
+                not self.owns_collector
+                or self._shutdown
+                or self.stop_event.is_set()
+                or not is_sensitive_runtime_allowed()
+            ):
                 return False
             if _thread_reference_is_alive(self._index_thread):
                 return False
@@ -102,6 +108,12 @@ class AppRuntime:
         with self._lifecycle_lock:
             if self._shutdown or self.stop_event.is_set():
                 return {"ok": False, "error": "runtime_stopping"}
+            if not is_sensitive_runtime_allowed():
+                try:
+                    self.set_clipboard_capture_enabled(False)
+                except Exception:
+                    logging.exception("clipboard fail-closed during privacy gate")
+                return {"ok": False, "error": "privacy_notice_required"}
             if not self.owns_collector:
                 return {"ok": False, "error": "collector_not_owned"}
             if _thread_reference_is_alive(self._collector_thread):
@@ -176,9 +188,12 @@ class AppRuntime:
             resetter()
 
     def set_clipboard_capture_enabled(self, enabled: bool) -> None:
+        effective = bool(enabled) and is_sensitive_runtime_allowed()
         setter = getattr(self._adapter, "set_clipboard_capture_enabled", None)
         if setter is not None:
-            setter(bool(enabled))
+            setter(effective)
+        if enabled and not effective:
+            raise PermissionError("privacy_notice_required")
 
     def request_shutdown(self) -> None:
         """Signal the collector and index threads to stop."""
@@ -203,8 +218,6 @@ class AppRuntime:
             if joiner is not None:
                 joiner(timeout=5)
             if _thread_reference_is_alive(collector_thread):
-                # A platform call may still be blocking. Shutting down the
-                # adapter is the only bounded way to unblock adapter-owned work.
                 shutdown_adapter = getattr(self._adapter, "shutdown", None)
                 if shutdown_adapter is not None:
                     shutdown_adapter()
@@ -226,8 +239,6 @@ class AppRuntime:
             release_single_instance()
             self.owns_collector = False
         elif self.owns_collector:
-            # Never release the single-instance lease while an old writer may
-            # resume and write into the same database generation.
             collector_health.record_health_code("shutdown_writer_still_alive")
             logging.error("runtime shutdown retained instance lock: writer alive")
 
@@ -236,6 +247,3 @@ class AppRuntime:
             if shutdown_adapter is not None:
                 shutdown_adapter()
         logging.info("app shutdown writers_stopped=%s", writers_stopped)
-
-
-__all__ = ["AppRuntime"]
