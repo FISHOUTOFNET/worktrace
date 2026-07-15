@@ -3,17 +3,10 @@ APP_VERSION = "0.1.0"
 
 TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 
-# Deprecated compatibility shape only. Raw collector activity has no
-# persistence threshold and production code must not read this value.
 HISTORY_PERSIST_THRESHOLD_SECONDS = 0
-# Deprecated compatibility constant. Project display no longer waits or
-# inherits an earlier project while a candidate is confirmed.
 PROJECT_OWNERSHIP_CONFIRM_SECONDS = 0
 DEFAULT_IDLE_THRESHOLD_SECONDS = 5 * 60
 DEFAULT_CONTEXT_CARRY_MINUTES = 15
-# Context-attributable normal/idle/error/excluded rows share one bounded
-# attribution window. Keep the hard product cap aligned with the default
-# setting so no legacy five-minute status threshold silently truncates it.
 REPORT_CONTEXT_SHORT_MERGE_SECONDS = DEFAULT_CONTEXT_CARRY_MINUTES * 60
 DEFAULT_UNRECORDED_GAP_BOUNDARY_SECONDS = DEFAULT_CONTEXT_CARRY_MINUTES * 60
 RULE_CACHE_TTL_SECONDS = 5.0
@@ -49,8 +42,6 @@ ANCHOR_FILE_EXTENSIONS = (
     ".csv",
 )
 
-# Increment only when the substantive privacy notice changes and renewed
-# consent is required. This is installation state and is not backup data.
 PRIVACY_NOTICE_VERSION = "1"
 
 PRIVACY_NOTICE_TEXT = """WorkTrace 将在本机记录：
