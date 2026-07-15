@@ -23,35 +23,29 @@ _CSV_COLUMNS = [
     ("adjusted_duration", "修正时长"),
     ("is_adjusted", "是否已修正"),
 ]
-
 _FORMULA_INJECTION_PREFIXES = ("=", "+", "-", "@", "\t")
 _DERIVED_RUNTIME_TABLES = frozenset(
-    {
-        "folder_rule_index_state",
-        "folder_rule_file_index",
-    }
+    {"folder_rule_index_state", "folder_rule_file_index"}
 )
 
 
 def _escape_csv_cell(value) -> str:
-    """Render a cell value as text and escape spreadsheet formula injection."""
     text = "" if value is None else str(value)
     if text and text[0] in _FORMULA_INJECTION_PREFIXES:
         return "'" + text
     return text
 
 
-def build_statistics_csv_rows(date_from: str, date_to: str) -> list[dict]:
-    """Build display-safe CSV row dicts for the statistics CSV export."""
-    statistics_service.validate_statistics_date_range(date_from, date_to)
+def _statistics_projection(date_from: str, date_to: str):
     from .report_projection_snapshot_service import build_visible_snapshot
     from .statistics_projection import build_statistics_projection
 
-    return list(
-        build_statistics_projection(
-            build_visible_snapshot(date_from, date_to)
-        ).export_records
-    )
+    return build_statistics_projection(build_visible_snapshot(date_from, date_to))
+
+
+def build_statistics_csv_rows(date_from: str, date_to: str) -> list[dict]:
+    statistics_service.validate_statistics_date_range(date_from, date_to)
+    return list(_statistics_projection(date_from, date_to).export_records)
 
 
 def write_statistics_csv(
@@ -60,9 +54,14 @@ def write_statistics_csv(
     output_path,
     expected_snapshot_revision: str | None = None,
 ) -> dict:
-    """Build display-safe CSV rows and write them to ``output_path``."""
-    statistics_service.validate_statistics_date_range(date_from, date_to)
+    """Write the exact accepted closed-record projection to CSV.
 
+    ``expected_snapshot_revision`` is retained as an API compatibility name;
+    its value is the closed-record ``export_revision``. Natural growth of an
+    open activity therefore cannot invalidate a closed-data export.
+    """
+
+    statistics_service.validate_statistics_date_range(date_from, date_to)
     path = Path(output_path)
     if path.exists() and path.is_dir():
         raise ValueError("invalid_path")
@@ -74,16 +73,10 @@ def write_statistics_csv(
     if not parent.exists() or not parent.is_dir():
         raise ValueError("invalid_path")
 
-    from .report_projection_snapshot_service import build_visible_snapshot
-    from .statistics_projection import build_statistics_projection
-
-    projection = build_statistics_projection(
-        build_visible_snapshot(date_from, date_to)
-    )
-    if (
-        expected_snapshot_revision is not None
-        and str(expected_snapshot_revision or "") != projection.snapshot_revision
-    ):
+    projection = _statistics_projection(date_from, date_to)
+    if expected_snapshot_revision is not None and str(
+        expected_snapshot_revision or ""
+    ) != projection.export_revision:
         raise ValueError("stale_statistics_snapshot")
     csv_rows = projection.export_records
     if not csv_rows:
@@ -92,7 +85,6 @@ def write_statistics_csv(
     total_seconds = sum(int(row["duration_seconds"]) for row in csv_rows)
     headers = [header for _key, header in _CSV_COLUMNS]
     keys = [key for key, _header in _CSV_COLUMNS]
-
     tmp_path = path.with_name(path.name + ".tmp")
     with open(tmp_path, "w", newline="", encoding="utf-8-sig") as handle:
         writer = csv.writer(handle)
@@ -100,7 +92,6 @@ def write_statistics_csv(
         for row in csv_rows:
             writer.writerow([_escape_csv_cell(row.get(key, "")) for key in keys])
     os.replace(tmp_path, path)
-
     return {
         "activity_count": projection.activity_count,
         "export_row_count": len(csv_rows),
@@ -120,18 +111,14 @@ def export_excel(start_date: str, end_date: str, path: str) -> str:
 
 
 def _local_data_export_tables() -> tuple[str, ...]:
-    """Return user fact/config tables, excluding rebuildable runtime indexes."""
     from .secure_backup_service import EXPORT_TABLES
 
     return tuple(
-        table
-        for table in EXPORT_TABLES
-        if table not in _DERIVED_RUNTIME_TABLES
+        table for table in EXPORT_TABLES if table not in _DERIVED_RUNTIME_TABLES
     )
 
 
 def export_all_local_data(path: str) -> str:
-    """Export a consistent user-data snapshot under one read transaction."""
     from openpyxl import Workbook
 
     out = Path(path)
@@ -164,7 +151,6 @@ def export_all_local_data(path: str) -> str:
 
 
 def clear_all_local_data(confirm: bool) -> None:
-    """Clear local data atomically through the maintenance coordinator."""
     if not confirm:
         raise ValueError("confirmation is required")
     from .database_maintenance_service import clear_all_live_data
@@ -184,7 +170,6 @@ def clear_all_local_data(confirm: bool) -> None:
 
 
 def _invalidate_clear_all_caches() -> None:
-    """Invalidate every cache derived from the replaced database generation."""
     from .folder_rule_service import invalidate_folder_rule_cache
     from .privacy_service import clear_exclude_rules_cache
     from .project_inference_service import invalidate_keyword_rule_cache
