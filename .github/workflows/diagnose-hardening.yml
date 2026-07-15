@@ -1,18 +1,17 @@
-name: Architecture hardening diagnostics
+name: Apply architecture hardening completion
 
 on:
-  push:
-    branches: [agent/worktrace-architecture-hardening]
+  pull_request:
+    branches: [main]
 
 permissions:
   contents: write
 
 jobs:
-  diagnose:
+  apply:
     if: github.actor != 'github-actions[bot]'
-    name: Capture project-count failure
     runs-on: [self-hosted, Windows, X64]
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
@@ -22,17 +21,342 @@ jobs:
         with:
           python-version: "3.11"
           check-latest: false
+      - name: Apply completion patch
+        shell: pwsh
+        run: |
+          @'
+          from pathlib import Path
+
+          def read(path):
+              return Path(path).read_text(encoding="utf-8")
+
+          def write(path, text):
+              Path(path).write_text(text, encoding="utf-8", newline="\n")
+
+          def replace_once(path, old, new):
+              text = read(path)
+              if old not in text:
+                  raise RuntimeError(f"missing patch anchor in {path}: {old[:100]!r}")
+              text = text.replace(old, new, 1)
+              write(path, text)
+
+          # Privacy-version migration: a legacy boolean represents only v1.
+          replace_once(
+              "worktrace/services/privacy_gate_service.py",
+              '    return get_bool_setting("first_run_notice_accepted", False, conn=conn)\n',
+              '    legacy = get_bool_setting("first_run_notice_accepted", False, conn=conn)\n'
+              '    return bool(legacy and PRIVACY_NOTICE_VERSION == "1")\n',
+          )
+
+          # Structure revision owns every durable display/grouping fact, but not open duration.
+          replace_once(
+              "worktrace/services/report_revision_service.py",
+              '                SELECT id, start_time, end_time, status, is_hidden, is_deleted\n'
+              '                FROM activity_log\n',
+              '                SELECT id, start_time, end_time, status, source, app_name,\n'
+              '                       process_name, window_title, file_path_hint,\n'
+              '                       is_hidden, is_deleted\n'
+              '                FROM activity_log\n',
+          )
+          replace_once(
+              "worktrace/services/report_revision_service.py",
+              '        clipboard = []\n'
+              '        if activity_ids:\n'
+              '            placeholders = ",".join("?" for _ in activity_ids)\n'
+              '            clipboard = [\n',
+              '        resources = []\n'
+              '        clipboard = []\n'
+              '        if activity_ids:\n'
+              '            placeholders = ",".join("?" for _ in activity_ids)\n'
+              '            resources = [\n'
+              '                dict(row)\n'
+              '                for row in connection.execute(\n'
+              '                    f"""\n'
+              '                    SELECT activity_id, resource_kind, resource_subtype, display_name,\n'
+              '                           identity_key, is_anchor, confidence, source, app_name,\n'
+              '                           process_name, window_title, path_hint, path_key,\n'
+              '                           uri_scheme, uri_host, uri_hint, metadata_json\n'
+              '                    FROM activity_resource\n'
+              '                    WHERE activity_id IN ({placeholders})\n'
+              '                    ORDER BY activity_id, id\n'
+              '                    """,\n'
+              '                    activity_ids,\n'
+              '                ).fetchall()\n'
+              '            ]\n'
+              '            clipboard = [\n',
+          )
+          replace_once(
+              "worktrace/services/report_revision_service.py",
+              '                "clipboard": clipboard,\n',
+              '                "resources": resources,\n'
+              '                "clipboard": clipboard,\n',
+          )
+
+          # Canonical metrics: concrete projects/apps are explicit facts, not label heuristics.
+          replace_once(
+              "worktrace/services/statistics_projection.py",
+              '    concrete_project_count: int\n'
+              '    by_project: tuple[dict[str, Any], ...]\n',
+              '    concrete_project_count: int\n'
+              '    concrete_app_count: int\n'
+              '    by_project: tuple[dict[str, Any], ...]\n',
+          )
+          replace_once(
+              "worktrace/services/statistics_projection.py",
+              '    by_status: dict[str, dict] = {}\n'
+              '    total = classified = uncategorized = project_duration = 0\n',
+              '    by_status: dict[str, dict] = {}\n'
+              '    concrete_apps: set[str] = set()\n'
+              '    total = classified = uncategorized = project_duration = 0\n',
+          )
+          replace_once(
+              "worktrace/services/statistics_projection.py",
+              '        concrete_project = not bool(record["_standalone_excluded"]) and not bool(\n'
+              '            record["is_uncategorized"]\n'
+              '        )\n',
+              '        concrete_project = bool(record["_is_concrete_project"])\n',
+          )
+          replace_once(
+              "worktrace/services/statistics_projection.py",
+              '            app = "已排除" if privacy_redacted else str(row.get("app_name") or "未知应用")\n'
+              '            _accumulate(by_app, app, duration, [identity], key)\n',
+              '            app = "已排除" if privacy_redacted else str(row.get("app_name") or "未知应用")\n'
+              '            if not privacy_redacted:\n'
+              '                concrete_apps.add(app)\n'
+              '            _accumulate(by_app, app, duration, [identity], key)\n',
+          )
+          replace_once(
+              "worktrace/services/statistics_projection.py",
+              '        concrete_project_count=sum(\n'
+              '            1 for group in project_groups if bool(group.get("is_concrete_project"))\n'
+              '        ),\n'
+              '        concrete_project_count=sum(\n'
+              '            1 for group in project_groups if bool(group.get("is_concrete_project"))\n'
+              '        ),\n'
+              '        concrete_app_count=len(concrete_apps),\n',
+          )
+          replace_once(
+              "worktrace/services/statistics_projection.py",
+              '        project = "已排除" if standalone_excluded else str(\n'
+              '            entry.get("project_name") or UNCATEGORIZED_PROJECT\n'
+              '        )\n'
+              '        members = sorted(\n',
+              '        project = "已排除" if standalone_excluded else str(\n'
+              '            entry.get("project_name") or UNCATEGORIZED_PROJECT\n'
+              '        )\n'
+              '        project_id = int(\n'
+              '            entry.get("report_project_id") or entry.get("project_id") or 0\n'
+              '        )\n'
+              '        is_concrete_project = bool(\n'
+              '            not standalone_excluded\n'
+              '            and project_id > 0\n'
+              '            and project != UNCATEGORIZED_PROJECT\n'
+              '            and not bool(entry.get("project_is_deleted"))\n'
+              '        )\n'
+              '        members = sorted(\n',
+          )
+          replace_once(
+              "worktrace/services/statistics_projection.py",
+              '                "_standalone_excluded": standalone_excluded,\n'
+              '                "_member_identities": members,\n',
+              '                "_standalone_excluded": standalone_excluded,\n'
+              '                "_is_concrete_project": is_concrete_project,\n'
+              '                "_member_identities": members,\n',
+          )
+          replace_once(
+              "worktrace/services/statistics_service.py",
+              '        "app_count": len(projection.by_app),\n',
+              '        "app_count": projection.concrete_app_count,\n',
+          )
+
+          # Standalone excluded entries affect Overview totals, never Recent.
+          replace_once(
+              "worktrace/services/view_model_hardening_service.py",
+              '    activities = [*list(payload.get("activities") or []), *standalone]\n'
+              '    activities.sort(\n'
+              '        key=lambda row: (\n'
+              '            str(row.get("start_time") or ""),\n'
+              '            str(row.get("projection_instance_key") or ""),\n'
+              '        ),\n'
+              '        reverse=True,\n'
+              '    )\n'
+              '    payload["activities"] = activities[:20]\n',
+              '    # Status-only excluded intervals contribute to canonical totals but are\n'
+              '    # intentionally absent from Recent. Timeline remains their anonymous view.\n'
+              '    payload["activities"] = list(payload.get("activities") or [])[:20]\n',
+          )
+
+          # One assignment command owns all automatic/manual upserts.
+          replace_once(
+              "worktrace/services/project_inference_service.py",
+              'from . import clipboard_service, folder_index_service, folder_rule_service\n',
+              'from . import (\n'
+              '    assignment_command_service,\n'
+              '    clipboard_service,\n'
+              '    folder_index_service,\n'
+              '    folder_rule_service,\n'
+              ')\n',
+          )
+          path = "worktrace/services/project_inference_service.py"
+          text = read(path)
+          start = text.index("def _upsert_assignment(")
+          end = text.index("\ndef _assignment_dict", start)
+          replacement = '''def _upsert_assignment(\n    conn,\n    activity_id: int,\n    project_id: int,\n    source: str,\n    confidence: int,\n    is_manual: bool,\n    suggested_project_name: str | None,\n    source_rule_type: str | None = None,\n    source_rule_id: int | None = None,\n) -> None:\n    assignment_command_service.upsert_assignment(\n        conn,\n        activity_id=activity_id,\n        project_id=project_id,\n        confidence=confidence,\n        source=source,\n        is_manual=is_manual,\n        suggested_project_name=suggested_project_name,\n        source_rule_type=source_rule_type,\n        source_rule_id=source_rule_id,\n        protect_manual=not is_manual,\n    )\n\n'''
+          write(path, text[:start] + replacement + text[end + 1:])
+
+          replace_once(
+              "worktrace/services/activity_service.py",
+              'from .activity_edit_policy import is_project_editable_activity, require_project_editable_activity\n',
+              'from . import assignment_command_service\n'
+              'from .activity_edit_policy import is_project_editable_activity, require_project_editable_activity\n',
+          )
+          path = "worktrace/services/activity_service.py"
+          text = read(path)
+          old_start = text.index('        assignment_source = "manual" if manual_assignment else "uncategorized"\n')
+          old_end = text.index('        _write_resource_in_conn(', old_start)
+          new_block = '''        assignment_source = "manual" if manual_assignment else "uncategorized"\n        assignment_command_service.upsert_assignment(\n            conn,\n            activity_id=activity_id,\n            project_id=int(project),\n            confidence=100 if manual_assignment else 0,\n            source=assignment_source,\n            is_manual=manual_assignment,\n            protect_manual=False,\n        )\n'''
+          write(path, text[:old_start] + new_block + text[old_end:])
+
+          replace_once(
+              "worktrace/services/rule_impact_service.py",
+              'from ..db import get_connection, now_str\n',
+              'from ..db import get_connection\n'
+              'from . import assignment_command_service\n',
+          )
+          path = "worktrace/services/rule_impact_service.py"
+          text = read(path)
+          old = '''        ts = now_str()\n        for activity in would_update:\n            activity_id = int(activity.get("id") or 0)\n            cursor = conn.execute(\n                """\n                INSERT INTO activity_project_assignment(\n                    activity_id, project_id, confidence, source, is_manual,\n                    suggested_project_name, source_rule_type, source_rule_id,\n                    created_at, updated_at\n                )\n                VALUES (?, ?, ?, ?, 0, NULL, ?, ?, ?, ?)\n                ON CONFLICT(activity_id) DO UPDATE SET\n                    project_id = excluded.project_id,\n                    confidence = excluded.confidence,\n                    source = excluded.source,\n                    is_manual = 0,\n                    suggested_project_name = NULL,\n                    source_rule_type = excluded.source_rule_type,\n                    source_rule_id = excluded.source_rule_id,\n                    updated_at = excluded.updated_at\n                WHERE activity_project_assignment.is_manual = 0\n                """,\n                (activity_id, project_id, confidence, source, rule_type, rule_id, ts, ts),\n            )\n            if cursor.rowcount != 1:\n                raise RuleImpactError(ERR_OPERATION_FAILED)\n'''
+          new = '''        for activity in would_update:\n            activity_id = int(activity.get("id") or 0)\n            if not assignment_command_service.upsert_assignment(\n                conn,\n                activity_id=activity_id,\n                project_id=project_id,\n                confidence=confidence,\n                source=source,\n                source_rule_type=rule_type,\n                source_rule_id=rule_id,\n                protect_manual=True,\n            ):\n                raise RuleImpactError(ERR_OPERATION_FAILED)\n'''
+          if old not in text:
+              raise RuntimeError("missing rule impact assignment block")
+          write(path, text.replace(old, new, 1))
+
+          replace_once(
+              "worktrace/services/activity_lifecycle_service.py",
+              '            _mark_inference_retry_safely(aid)\n\n\n',
+              '            _mark_inference_retry_safely(aid)\n'
+              '    try:\n'
+              '        from .assignment_command_service import retry_pending_inference\n\n'
+              '        retry_pending_inference(10)\n'
+              '    except Exception:\n'
+              '        logging.exception("bounded assignment inference retry failed")\n\n\n',
+          )
+
+          # Shared project catalog Promise and explicit open-edit capability handling.
+          path = "worktrace/webview_ui/js/timeline.js"
+          text = read(path)
+          old = '''    function loadProjects() {\n        // Load and cache the selectable projects list so we do not hit the bridge on every session select.\n        if (App.projectsCache || App.projectsLoading) {\n            return Promise.resolve(App.projectsCache);\n        }\n        App.projectsLoading = true;\n        return App.callBridge("list_projects_for_timeline").then(function (result) {\n            App.projectsLoading = false;\n            if (result && result.ok !== false && result.projects) {\n                App.projectsCache = result.projects;\n            }\n            return App.projectsCache;\n        }).catch(function () {\n            App.projectsLoading = false;\n            return null;\n        });\n    }\n'''
+          new = '''    function loadProjects() {\n        if (App.projectsCache) return Promise.resolve(App.projectsCache);\n        if (App.projectsLoadPromise) return App.projectsLoadPromise;\n        App.projectsLoading = true;\n        var epoch = App.dataEpoch || 0;\n        var request = App.callBridge("list_projects_for_timeline").then(function (result) {\n            if (epoch !== (App.dataEpoch || 0)) return null;\n            if (result && result.ok !== false && result.projects) {\n                App.projectsCache = result.projects;\n            }\n            return App.projectsCache;\n        }).catch(function () {\n            return null;\n        }).finally(function () {\n            if (App.projectsLoadPromise === request) {\n                App.projectsLoadPromise = null;\n                App.projectsLoading = false;\n            }\n        });\n        App.projectsLoadPromise = request;\n        return request;\n    }\n'''
+          if old not in text:
+              raise RuntimeError("missing timeline project loader")
+          text = text.replace(old, new, 1)
+          text = text.replace(
+              '            durInput.disabled = false;\n',
+              '            durInput.disabled = session.can_edit_duration === false;\n',
+              1,
+          )
+          text = text.replace(
+              '            durStatusEl.textContent = session.has_duration_override ? "已修正" : "";\n',
+              '            durStatusEl.textContent = session.can_edit_duration === false\n'
+              '                ? "进行中活动暂不支持修改时长"\n'
+              '                : (session.has_duration_override ? "已修正" : "");\n',
+              1,
+          )
+          text = text.replace(
+              '            noteEl.disabled = false;\n',
+              '            noteEl.disabled = session.can_edit_note === false;\n',
+              1,
+          )
+          text = text.replace(
+              '        if (select) select.disabled = saving;\n'
+              '        if (noteEl) noteEl.disabled = saving;\n'
+              '        if (durInput) durInput.disabled = saving;\n',
+              '        if (select) select.disabled = saving || !!(App.editingSession && App.editingSession.can_edit_project === false);\n'
+              '        if (noteEl) noteEl.disabled = saving || !!(App.editingSession && App.editingSession.can_edit_note === false);\n'
+              '        if (durInput) durInput.disabled = saving || !!(App.editingSession && App.editingSession.can_edit_duration === false);\n',
+              1,
+          )
+          text = text.replace(
+              '        var durRawValue = durInput ? (durInput.value || "").trim() : "";\n'
+              '        var adjustedDurationSeconds = null;\n'
+              '        if (durRawValue !== "") {\n',
+              '        var durationEditable = App.editingSession.can_edit_duration !== false;\n'
+              '        var durRawValue = durationEditable && durInput ? (durInput.value || "").trim() : "";\n'
+              '        var adjustedDurationSeconds = null;\n'
+              '        if (durationEditable && durRawValue !== "") {\n',
+              1,
+          )
+          text = text.replace(
+              '        var durationChanged = durRawValue !== durBaselineStr;\n',
+              '        var durationChanged = durationEditable && durRawValue !== durBaselineStr;\n',
+              1,
+          )
+          write(path, text)
+
+          # The coordinator is already loaded before page modules need it; remove late monkey-patching.
+          path = "worktrace/webview_ui/js/rules.js"
+          text = read(path)
+          marker = '''\n    // init.js is the last static script. Load the small cross-module\n    // coordinator after the window is fully initialized without modifying the\n    // large HTML template or adding a bundler.\n    window.addEventListener("load", function () {\n        if (document.querySelector('script[data-worktrace-hardening="1"]')) return;\n        var script = document.createElement("script");\n        script.src = "js/frontend_hardening.js";\n        script.async = false;\n        script.setAttribute("data-worktrace-hardening", "1");\n        document.body.appendChild(script);\n    });\n'''
+          if marker not in text:
+              raise RuntimeError("missing delayed frontend hardening loader")
+          write(path, text.replace(marker, "\n", 1))
+          Path("worktrace/webview_ui/js/frontend_hardening.js").unlink(missing_ok=True)
+
+          # Remove the duration mutation bridge hack and observer; Timeline owns its controls.
+          path = "worktrace/webview_ui/js/init.js"
+          text = read(path)
+          text = text.replace(
+              '            if (method === "save_timeline_session_edit"\n'
+              '                && App.editingSession\n'
+              '                && App.editingSession.can_edit_duration === false) {\n'
+              '                args[5] = null;\n'
+              '            }\n',
+              '',
+              1,
+          )
+          observer_start = text.find('    function enforceEditCapabilities() {\n')
+          observer_end = text.find('    function refreshStatus() {\n', observer_start)
+          if observer_start < 0 or observer_end < 0:
+              raise RuntimeError("missing edit capability observer")
+          text = text[:observer_start] + text[observer_end:]
+          text = text.replace('        installEditCapabilityObserver();\n', '', 1)
+          write(path, text)
+
+          # Correct product documentation: standalone status is a totals/Timeline fact, not Recent.
+          replace_once(
+              "docs/current-state.md",
+              '- **Overview**: canonical daily KPIs, current activity, recent activities,\n'
+              '  anonymous standalone excluded intervals, pause/resume, and auto-refresh.\n',
+              '- **Overview**: canonical daily KPIs (including anonymous standalone\n'
+              '  excluded duration), current activity, project-session Recent rows,\n'
+              '  pause/resume, and auto-refresh.\n',
+          )
+
+          # Remove temporary diagnostics from the final tree.
+          Path("diagnostics/project-count.txt").unlink(missing_ok=True)
+          Path(".github/workflows/diagnose-hardening.yml").unlink()
+          '@ | Set-Content -LiteralPath apply_hardening.py -Encoding UTF8
+          python apply_hardening.py
+          Remove-Item apply_hardening.py
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Complete architecture hardening boundaries"
+          git push origin HEAD:agent/worktrace-architecture-hardening
       - name: Install dependencies
         shell: pwsh
         run: python -m pip install --disable-pip-version-check -q -r requirements.txt
-      - name: Capture failing assertion
+      - name: Run focused Python contracts
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path diagnostics | Out-Null
-          python -m pytest -vv --tb=long tests/test_architecture_hardening_regressions.py::test_project_count_excludes_uncategorized_and_excluded_buckets *> diagnostics/project-count.txt
-          if ($LASTEXITCODE -eq 0) { "test passed" | Set-Content diagnostics/project-count.txt }
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add diagnostics/project-count.txt
-          git commit -m "Capture project count diagnostic [skip ci]"
-          git push origin HEAD:agent/worktrace-architecture-hardening
+          python -m compileall -q worktrace
+          python -m pytest -q --tb=short --maxfail=20 `
+            tests/test_architecture_hardening_regressions.py `
+            tests/test_settings_privacy_status.py `
+            tests/test_app_runtime_privacy_gate.py `
+            tests/test_statistics_api_summary.py `
+            tests/test_export_service.py `
+            tests/test_project_rules_batch_operations.py `
+            tests/test_report_projection_cutover.py `
+            tests/test_report_projection_architecture_contract.py `
+            tests/test_webview_entry.py
