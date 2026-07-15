@@ -36,10 +36,10 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      - name: Check out repository
+      - name: Check out exact event revision
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.head_ref || github.ref_name }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           clean: true
           show-progress: false
 
@@ -56,7 +56,18 @@ jobs:
         run: python scripts/test_inventory.py --check
 
       - name: Compile Python
-        run: python -m compileall -q worktrace scripts/pytest_diagnostics.py
+        id: compile
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "test-results" | Out-Null
+          & python -m compileall -q worktrace scripts/pytest_diagnostics.py *> "test-results/compile.log"
+          $compileExitCode = $LASTEXITCODE
+          Write-Host "compile exit code: $compileExitCode"
+          if ($compileExitCode -ne 0) {
+            Get-Content -LiteralPath "test-results/compile.log" -Tail 120 |
+              ForEach-Object { Write-Host $_ }
+          }
+          exit $compileExitCode
 
       - name: Run Python tests
         id: pytest
@@ -83,26 +94,41 @@ jobs:
           }
           exit $pytestExitCode
 
-      - name: Publish pytest failure diagnostics
-        if: failure() && steps.pytest.outcome == 'failure'
+      - name: Publish validation diagnostics
+        if: failure() && (steps.compile.outcome == 'failure' || steps.pytest.outcome == 'failure')
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path diagnostics | Out-Null
-          $rawPath = "test-results/pytest-diagnostics-raw.txt"
-          & python scripts/pytest_diagnostics.py `
-            --junit "test-results/pytest-junit.xml" `
-            --log "test-results/pytest.log" `
-            --summary "$env:GITHUB_STEP_SUMMARY" 2>&1 |
-              Tee-Object -FilePath $rawPath
+          $diagnosticPath = "diagnostics/pytest-hardening-latest.txt"
           @(
             "run_id=$env:GITHUB_RUN_ID",
             "tested_head=$env:GITHUB_SHA",
-            "",
-            (Get-Content -LiteralPath $rawPath -Raw)
-          ) | Set-Content -LiteralPath "diagnostics/pytest-hardening-latest.txt" -Encoding UTF8
+            "compile_outcome=${{ steps.compile.outcome }}",
+            "pytest_outcome=${{ steps.pytest.outcome }}",
+            ""
+          ) | Set-Content -LiteralPath $diagnosticPath -Encoding UTF8
+
+          if ("${{ steps.compile.outcome }}" -eq "failure") {
+            "=== COMPILE_FAILURE_BEGIN ===" | Add-Content -LiteralPath $diagnosticPath -Encoding UTF8
+            if (Test-Path -LiteralPath "test-results/compile.log") {
+              Get-Content -LiteralPath "test-results/compile.log" -Tail 200 |
+                Add-Content -LiteralPath $diagnosticPath -Encoding UTF8
+            }
+            "=== COMPILE_FAILURE_END ===" | Add-Content -LiteralPath $diagnosticPath -Encoding UTF8
+          }
+          elseif ("${{ steps.pytest.outcome }}" -eq "failure") {
+            $rawPath = "test-results/pytest-diagnostics-raw.txt"
+            & python scripts/pytest_diagnostics.py `
+              --junit "test-results/pytest-junit.xml" `
+              --log "test-results/pytest.log" `
+              --summary "$env:GITHUB_STEP_SUMMARY" 2>&1 |
+                Tee-Object -FilePath $rawPath
+            Get-Content -LiteralPath $rawPath -Raw |
+              Add-Content -LiteralPath $diagnosticPath -Encoding UTF8
+          }
 
       - name: Publish diagnostics on isolated branch
-        if: failure() && steps.pytest.outcome == 'failure' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        if: failure() && (steps.compile.outcome == 'failure' || steps.pytest.outcome == 'failure') && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
         shell: pwsh
         run: |
           $path = "diagnostics/pytest-hardening-latest.txt"
@@ -114,7 +140,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -B worktrace-ci-diagnostics
           git add $path
-          git commit -m "Capture pytest diagnostics for run $env:GITHUB_RUN_ID"
+          git commit -m "Capture validation diagnostics for run $env:GITHUB_RUN_ID"
           git push --force origin "HEAD:agent/worktrace-ci-diagnostics"
 
   python312-compat:
@@ -124,10 +150,10 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      - name: Check out repository
+      - name: Check out exact dispatch revision
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.ref_name }}
+          ref: ${{ github.sha }}
           clean: true
           show-progress: false
 
@@ -187,10 +213,10 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      - name: Check out repository
+      - name: Check out exact dispatch revision
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.ref_name }}
+          ref: ${{ github.sha }}
           clean: true
           show-progress: false
 
@@ -209,10 +235,10 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      - name: Check out repository
+      - name: Check out exact dispatch revision
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.ref_name }}
+          ref: ${{ github.sha }}
           clean: true
           show-progress: false
 
