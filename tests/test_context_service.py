@@ -150,25 +150,18 @@ def test_direct_special_status_preserves_own_project_and_blocks_context(
 ):
     result = ReportContextProjection.build(
         [
-            _row(
-                1,
-                "2026-07-01 09:00:00",
-                seconds=60,
-                project_id=7,
-                source="manual",
-            ),
+            _row(1, "2026-07-01 09:00:00", seconds=30),
             _row(
                 2,
-                "2026-07-01 09:01:00",
+                "2026-07-01 09:00:30",
                 seconds=60,
                 project_id=8,
                 source="folder_rule",
                 status=status,
             ),
-            _row(3, "2026-07-01 09:02:00", seconds=30),
             _row(
-                4,
-                "2026-07-01 09:02:30",
+                3,
+                "2026-07-01 09:01:30",
                 seconds=60,
                 project_id=7,
                 source="keyword_rule",
@@ -176,36 +169,35 @@ def test_direct_special_status_preserves_own_project_and_blocks_context(
         ],
         carry_minutes=15,
     )
+    assert result.rows[0]["is_report_project"] is False
     assert result.rows[1]["report_project_id"] == 8
     assert result.rows[1]["report_attribution_kind"] == "official_direct"
-    assert result.rows[2]["is_report_project"] is False
     assert all(item.activity_id != 2 for item in result.attributions)
 
 
 def test_deleted_direct_project_remains_context_barrier():
     result = ReportContextProjection.build(
         [
-            _row(1, "2026-07-01 09:00:00", project_id=7, source="manual"),
+            _row(1, "2026-07-01 09:00:00"),
             _row(
                 2,
-                "2026-07-01 09:01:00",
+                "2026-07-01 09:00:30",
                 project_id=8,
                 source="manual",
                 status=STATUS_IDLE,
                 deleted=True,
             ),
-            _row(3, "2026-07-01 09:01:30"),
             _row(
-                4,
-                "2026-07-01 09:02:00",
+                3,
+                "2026-07-01 09:01:00",
                 project_id=7,
                 source="folder_rule",
             ),
         ],
         carry_minutes=15,
     )
+    assert result.rows[0]["is_report_project"] is False
     assert result.rows[1]["is_report_project"] is False
-    assert result.rows[2]["is_report_project"] is False
 
 
 @pytest.mark.parametrize("status", [STATUS_IDLE, STATUS_ERROR, STATUS_EXCLUDED])
@@ -261,25 +253,25 @@ def test_following_anchor_uses_target_start_and_does_not_charge_anchor_duration(
     assert result.rows[0]["report_project_id"] == 7
 
 
-def test_long_idle_or_error_blocks_context_propagation():
-    for status in (STATUS_IDLE, STATUS_ERROR):
-        result = ReportContextProjection.build(
-            [
-                _row(
-                    1,
-                    "2026-07-01 09:00:00",
-                    seconds=60,
-                    project_id=7,
-                    source="manual",
-                ),
-                _row(
-                    2,
-                    "2026-07-01 09:01:00",
-                    seconds=16 * 60,
-                    status=status,
-                ),
-                _row(3, "2026-07-01 09:17:00", seconds=30),
-            ],
-            carry_minutes=15,
-        )
-        assert result.rows[2]["is_report_project"] is False
+@pytest.mark.parametrize("status", [STATUS_IDLE, STATUS_ERROR, STATUS_EXCLUDED])
+def test_long_special_status_blocks_context_propagation(status: str):
+    result = ReportContextProjection.build(
+        [
+            _row(
+                1,
+                "2026-07-01 09:00:00",
+                seconds=60,
+                project_id=7,
+                source="manual",
+            ),
+            _row(
+                2,
+                "2026-07-01 09:01:00",
+                seconds=16 * 60,
+                status=status,
+            ),
+            _row(3, "2026-07-01 09:17:00", seconds=30),
+        ],
+        carry_minutes=15,
+    )
+    assert result.rows[2]["is_report_project"] is False
