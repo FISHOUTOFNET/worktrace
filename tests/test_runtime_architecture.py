@@ -61,8 +61,7 @@ def test_snapshot_setting_is_process_local(temp_db):
         row = conn.execute(
             "SELECT value FROM settings WHERE key = 'current_activity_snapshot'"
         ).fetchone()
-    assert row is not None
-    assert row["value"] == ""
+    assert row is None
 
 
 def test_open_activity_progress_is_checkpointed(monkeypatch):
