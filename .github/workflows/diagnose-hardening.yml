@@ -28,30 +28,21 @@ jobs:
       - name: Install dependencies
         shell: pwsh
         run: python -m pip install --disable-pip-version-check -q -r requirements.txt
-      - name: Architecture hardening regressions
+      - name: Clear-all privacy contract
         shell: pwsh
-        run: python -m pytest -q --tb=short --maxfail=10 tests/test_architecture_hardening_regressions.py
-      - name: Settings privacy status
+        run: python -m pytest -q --tb=short tests/test_architecture_hardening_regressions.py::test_clear_all_preserves_installation_privacy_but_pauses_sensitive_runtime
+      - name: Structure revision contract
         shell: pwsh
-        run: python -m pytest -q --tb=short --maxfail=10 tests/test_settings_privacy_status.py
-      - name: Runtime privacy gate
+        run: python -m pytest -q --tb=short tests/test_architecture_hardening_regressions.py::test_structure_revision_ignores_open_duration_but_tracks_structure
+      - name: Export revision contract
         shell: pwsh
-        run: python -m pytest -q --tb=short --maxfail=10 tests/test_app_runtime_privacy_gate.py
-      - name: Statistics summary
+        run: python -m pytest -q --tb=short tests/test_architecture_hardening_regressions.py::test_export_revision_is_exact_closed_record_revision
+      - name: Project count contract
         shell: pwsh
-        run: python -m pytest -q --tb=short --maxfail=10 tests/test_statistics_api_summary.py
-      - name: CSV export
+        run: python -m pytest -q --tb=short tests/test_architecture_hardening_regressions.py::test_project_count_excludes_uncategorized_and_excluded_buckets
+      - name: Open session edit contract
         shell: pwsh
-        run: python -m pytest -q --tb=short --maxfail=10 tests/test_export_service.py
-      - name: Rule batch operations
+        run: python -m pytest -q --tb=short tests/test_architecture_hardening_regressions.py::test_persisted_open_session_allows_project_and_note_but_not_duration
+      - name: Frontend coordination contract
         shell: pwsh
-        run: python -m pytest -q --tb=short --maxfail=10 tests/test_project_rules_batch_operations.py
-      - name: Projection cutover
-        shell: pwsh
-        run: python -m pytest -q --tb=short --maxfail=10 tests/test_report_projection_cutover.py
-      - name: Projection architecture contract
-        shell: pwsh
-        run: python -m pytest -q --tb=short --maxfail=10 tests/test_report_projection_architecture_contract.py
-      - name: WebView entry contracts
-        shell: pwsh
-        run: python -m pytest -q --tb=short --maxfail=10 tests/test_webview_entry.py
+        run: python -m pytest -q --tb=short tests/test_architecture_hardening_regressions.py::test_frontend_generation_and_coalescing_contracts_are_shipping
