@@ -80,6 +80,8 @@ class SettingsBridgeMixin:
         try:
             if enabled is not True and enabled is not False:
                 return {"ok": False, "error": "请选择有效的剪贴板记录状态"}
+            if enabled and not settings_api.first_run_notice_accepted():
+                return {"ok": False, "error": "请先确认隐私说明"}
             previous = bool(settings_api.is_clipboard_capture_enabled())
             app_api.set_clipboard_capture_enabled(enabled)
             result = settings_api.set_clipboard_capture_enabled_for_webview(enabled)
