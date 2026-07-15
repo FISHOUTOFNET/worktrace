@@ -106,4 +106,16 @@
         banner.textContent = message || "加载项目规则失败";
     };
     App.clearRulesError = function () { App.showRulesError(""); };
+
+    // init.js is the last static script. Load the small cross-module
+    // coordinator after the window is fully initialized without modifying the
+    // large HTML template or adding a bundler.
+    window.addEventListener("load", function () {
+        if (document.querySelector('script[data-worktrace-hardening="1"]')) return;
+        var script = document.createElement("script");
+        script.src = "js/frontend_hardening.js";
+        script.async = false;
+        script.setAttribute("data-worktrace-hardening", "1");
+        document.body.appendChild(script);
+    });
 })();
