@@ -2,7 +2,8 @@
 
 Owns every long-lived runtime component: collector, folder-index worker,
 platform adapter, pause/reset command channel, single-instance lock and
-startup recovery.
+startup recovery. Authorization belongs to the application-command boundary;
+the runtime only reports lifecycle state.
 """
 
 from __future__ import annotations
@@ -16,12 +17,7 @@ from .. import db
 from ..collector import collector_health
 from ..collector.collector import CollectorControl, run_collector
 from ..collector.single_instance import acquire_single_instance, release_single_instance
-from ..services import (
-    activity_lifecycle_service,
-    folder_index_service,
-    privacy_gate_service,
-    recovery_service,
-)
+from ..services import activity_lifecycle_service, folder_index_service, recovery_service
 from ..services.folder_index_recovery_service import recover_interrupted_indexes
 from ..services.secure_backup_service import (
     clear_collector_pause_handler,
@@ -90,10 +86,8 @@ class AppRuntime:
         self._initialized = True
 
     def start_background_workers(self) -> bool:
-        """Start the folder-index worker only after installation consent."""
+        """Start the folder-index worker when lifecycle state permits."""
         with self._lifecycle_lock:
-            if not privacy_gate_service.is_sensitive_runtime_allowed():
-                return False
             if not self.owns_collector or self._shutdown or self.stop_event.is_set():
                 return False
             if _thread_reference_is_alive(self._index_thread):
@@ -107,8 +101,6 @@ class AppRuntime:
     def start_collector(self) -> dict[str, object]:
         """Start the collector exactly once under the lifecycle lock."""
         with self._lifecycle_lock:
-            if not privacy_gate_service.is_sensitive_runtime_allowed():
-                return {"ok": False, "error": "privacy_notice_required"}
             if self._shutdown or self.stop_event.is_set():
                 return {"ok": False, "error": "runtime_stopping"}
             if not self.owns_collector:
@@ -185,13 +177,12 @@ class AppRuntime:
             resetter()
 
     def set_clipboard_capture_enabled(self, enabled: bool) -> bool:
-        """Toggle clipboard capture, failing closed before privacy consent."""
-        allowed = not enabled or privacy_gate_service.is_sensitive_runtime_allowed()
-        effective = bool(enabled and allowed)
+        """Apply the already-authorized clipboard-capture runtime state."""
+        effective = bool(enabled)
         setter = getattr(self._adapter, "set_clipboard_capture_enabled", None)
         if setter is not None:
             setter(effective)
-        return effective == bool(enabled)
+        return True
 
     def request_shutdown(self) -> None:
         """Signal the collector and index threads to stop."""
