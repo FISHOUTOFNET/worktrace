@@ -56,9 +56,10 @@ def write_statistics_csv(
 ) -> dict:
     """Write the exact accepted closed-record projection to CSV.
 
-    ``expected_snapshot_revision`` is retained as an API compatibility name;
-    its value is the closed-record ``export_revision``. Natural growth of an
-    open activity therefore cannot invalidate a closed-data export.
+    New clients send ``export_revision``. During the cutover, existing callers
+    may still send the full canonical ``snapshot_revision``; both represent an
+    accepted read of the same range, while only the export revision is stable
+    across natural growth of an open activity.
     """
 
     statistics_service.validate_statistics_date_range(date_from, date_to)
@@ -74,10 +75,13 @@ def write_statistics_csv(
         raise ValueError("invalid_path")
 
     projection = _statistics_projection(date_from, date_to)
-    if expected_snapshot_revision is not None and str(
-        expected_snapshot_revision or ""
-    ) != projection.export_revision:
-        raise ValueError("stale_statistics_snapshot")
+    if expected_snapshot_revision is not None:
+        expected = str(expected_snapshot_revision or "")
+        if expected not in {
+            projection.export_revision,
+            projection.snapshot_revision,
+        }:
+            raise ValueError("stale_statistics_snapshot")
     csv_rows = projection.export_records
     if not csv_rows:
         raise ValueError("empty_data")
