@@ -66,23 +66,25 @@ def main() -> int:
     setup_logging(paths.log_path)
     logging.info("webview ui startup")
 
-    # Acquire the application instance before runtime probing or any database
-    # initialization. A second process exits without constructing a WebView.
+    # Pre-flight checks do not open user data or construct a window. The app
+    # lease is still acquired before database initialization and before the
+    # WebView is created.
+    if detect_webview2_runtime() == "missing":
+        return _report_runtime_missing()
+
+    try:
+        webview = _check_pywebview_available()
+    except RuntimeError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
     runtime = AppRuntime(paths)
-    if not runtime.initialize():
+    initialized = runtime.initialize()
+    if initialized is False:
         return _report_already_running()
     app_api.set_runtime(runtime)
 
     try:
-        if detect_webview2_runtime() == "missing":
-            return _report_runtime_missing()
-
-        try:
-            webview = _check_pywebview_available()
-        except RuntimeError as exc:
-            print(str(exc), file=sys.stderr)
-            return 2
-
         try:
             startup_result = app_api.start_collection_after_privacy_gate()
             if not startup_result.get("ok"):
