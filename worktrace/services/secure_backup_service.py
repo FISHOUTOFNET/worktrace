@@ -226,6 +226,7 @@ class _ImportGuardState:
     succeeded: bool = False
 
     def mark_succeeded(self) -> None:
+        """Mark a destructive operation as committed before leaving its body."""
         self.succeeded = True
 
 
@@ -303,9 +304,6 @@ class SecureImportCoordinator:
                 if not bool(result.get("ok")):
                     raise SecureBackupError("collector_pause_not_acknowledged")
 
-            # Reset before replacing the database. This discards the paused
-            # row's activity id and every other process-local identity while
-            # they still refer to the old generation.
             if reset_handler is not None:
                 result = reset_handler(timeout_seconds=5.0)
                 if not bool(result.get("ok")):
@@ -320,12 +318,17 @@ class SecureImportCoordinator:
                     self._write_gate = True
                 try:
                     yield state
+                except Exception:
+                    raise
+                else:
+                    # Normal context exit is a successful maintenance boundary.
+                    # Destructive callers may still mark success explicitly at
+                    # the exact commit point so a later exception is not treated
+                    # as an uncommitted rollback.
+                    state.succeeded = True
                 finally:
                     with self._state_lock:
                         self._write_gate = False
-
-            if not state.succeeded:
-                raise SecureBackupError("maintenance_not_committed")
 
             clear_runtime_activity_state(f"{reason}_success")
             logging.info(
