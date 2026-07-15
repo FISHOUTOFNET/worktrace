@@ -39,7 +39,10 @@ from ..security.backup_format import (
     parse_backup_manifest,
 )
 from ..write_gate import DATABASE_WRITE_GATE
-from .runtime_activity_state_service import clear_runtime_activity_state
+from .runtime_activity_state_service import (
+    clear_runtime_activity_state,
+    restore_runtime_activity_snapshot,
+)
 from .secure_backup_validation import BackupValidationError, validate_staging_database
 from .settings_service import (
     clear_settings_cache,
@@ -268,7 +271,7 @@ class SecureImportCoordinator:
                 self._reset_handler = None
 
     def write_gate_active(self) -> bool:
-        """Return whether any destructive-maintenance phase is active."""
+        """Return whether any destructive maintenance operation is active."""
         with self._state_lock:
             return (
                 self._maintenance_active
@@ -344,7 +347,10 @@ class SecureImportCoordinator:
                 set_setting("collector_status", prior_collector_status)
                 clear_runtime_activity_state(f"{reason}_rollback")
                 if _snapshot_is_safe_to_restore(prior_snapshot):
-                    set_setting("current_activity_snapshot", prior_snapshot)
+                    restore_runtime_activity_snapshot(
+                        prior_snapshot,
+                        f"{reason}_rollback",
+                    )
             logging.warning(
                 "runtime maintenance failed reason=%s exc_type=%s",
                 reason,
