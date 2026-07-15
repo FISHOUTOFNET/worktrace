@@ -13,6 +13,7 @@ from worktrace.services import (
     project_service,
     report_revision_service,
     statistics_service,
+    view_model_hardening_service,
 )
 from worktrace.services.report_projection_snapshot_service import build_visible_snapshot
 from worktrace.services.statistics_projection import build_statistics_projection
@@ -73,6 +74,17 @@ def test_structure_revision_ignores_open_duration_but_tracks_structure(temp_db):
     assert report_revision_service.get_report_structure_revision(DATE) != before
 
 
+def test_structure_revision_tracks_resource_display_facts(temp_db):
+    activity_id = _activity("09:00:00", None)
+    before = report_revision_service.get_report_structure_revision(DATE)
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE activity_resource SET display_name = ? WHERE activity_id = ?",
+            ("Renamed.docx", activity_id),
+        )
+    assert report_revision_service.get_report_structure_revision(DATE) != before
+
+
 def test_export_revision_is_exact_closed_record_revision(temp_db):
     project_id = project_service.create_project("Client")
     _activity("09:00:00", "09:30:00", project_id=project_id)
@@ -89,7 +101,7 @@ def test_export_revision_is_exact_closed_record_revision(temp_db):
     assert third.export_revision == first.export_revision
 
 
-def test_project_count_excludes_uncategorized_and_excluded_buckets(temp_db):
+def test_project_and_app_counts_exclude_privacy_and_uncategorized_buckets(temp_db):
     project_id = project_service.create_project("Client")
     _activity("09:00:00", "09:30:00", project_id=project_id)
     _activity("10:00:00", "10:10:00")
@@ -98,11 +110,22 @@ def test_project_count_excludes_uncategorized_and_excluded_buckets(temp_db):
     names = {row["display_name"] for row in summary["by_project"]}
     assert {"Client", "未归类", "已排除"}.issubset(names)
     assert summary["project_count"] == 1
+    assert summary["app_count"] == 1
     assert {
         row["display_name"]
         for row in summary["by_project"]
         if row["is_concrete_project"]
     } == {"Client"}
+
+
+def test_overview_counts_standalone_excluded_without_showing_it_in_recent(temp_db):
+    _activity("11:00:00", "11:05:00", status="excluded", app="Secret")
+    payload = view_model_hardening_service.get_overview_view_model(DATE)
+    assert payload["today_total_seconds"] == 300
+    assert all(
+        str(row.get("row_kind") or "") != "standalone_status"
+        for row in payload.get("activities") or []
+    )
 
 
 def test_persisted_open_session_allows_project_and_note_but_not_duration(temp_db):
@@ -140,9 +163,13 @@ def test_frontend_generation_and_coalescing_contracts_are_shipping():
     request_state = (root / "worktrace/webview_ui/js/timeline_request_state.js").read_text(encoding="utf-8")
     init = (root / "worktrace/webview_ui/js/init.js").read_text(encoding="utf-8")
     statistics = (root / "worktrace/webview_ui/js/statistics.js").read_text(encoding="utf-8")
+    rules = (root / "worktrace/webview_ui/js/rules.js").read_text(encoding="utf-8")
     assert "bumpDataEpoch" in request_state
     assert "dataEpoch" in request_state
     assert "activePageRefreshPending" in init
     assert "resetClientGeneration" in init
     assert "statisticsAcceptedPayload" in statistics
     assert "exportRevision" in statistics
+    assert "projectsLoadPromise" in rules
+    assert "data-project-load-gate" in rules
+    assert "stopImmediatePropagation" in rules
