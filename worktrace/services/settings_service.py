@@ -3,14 +3,23 @@ from __future__ import annotations
 import time
 
 from ..db import get_connection, get_db_path, now_str
+from .runtime_activity_state_service import (
+    CURRENT_ACTIVITY_SNAPSHOT_KEY,
+    PENDING_CARRY_PROVENANCE_KEY,
+    PENDING_SHORT_SECONDS_KEY,
+    get_legacy_runtime_setting,
+    read_runtime_activity_snapshot_raw,
+    restore_runtime_activity_snapshot,
+    set_legacy_runtime_setting,
+)
 
 _SETTING_CACHE_TTL_SECONDS = 2.0
 _SETTING_CACHE: dict[tuple[str, str], tuple[float, str | None]] = {}
 _RUNTIME_ONLY_KEYS = frozenset(
     {
-        "current_activity_snapshot",
-        "pending_short_seconds",
-        "pending_short_carry_provenance",
+        CURRENT_ACTIVITY_SNAPSHOT_KEY,
+        PENDING_SHORT_SECONDS_KEY,
+        PENDING_CARRY_PROVENANCE_KEY,
     }
 )
 
@@ -28,12 +37,7 @@ def _settings_db_key() -> str:
 
 
 def _get_runtime_only_setting(key: str, default: str | None) -> str | None:
-    from .runtime_activity_state_service import (
-        get_legacy_runtime_setting,
-        read_runtime_activity_snapshot_raw,
-    )
-
-    if key == "current_activity_snapshot":
+    if key == CURRENT_ACTIVITY_SNAPSHOT_KEY:
         value = read_runtime_activity_snapshot_raw(database_key=_settings_db_key())
         return value if value != "" else default
     return get_legacy_runtime_setting(
@@ -69,12 +73,7 @@ def get_setting(key: str, default: str | None = None, *, conn=None) -> str | Non
 
 def set_setting(key: str, value: str) -> None:
     if key in _RUNTIME_ONLY_KEYS:
-        from .runtime_activity_state_service import (
-            restore_runtime_activity_snapshot,
-            set_legacy_runtime_setting,
-        )
-
-        if key == "current_activity_snapshot":
+        if key == CURRENT_ACTIVITY_SNAPSHOT_KEY:
             restore_runtime_activity_snapshot(
                 value,
                 "settings_compat_write",
