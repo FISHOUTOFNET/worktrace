@@ -1,0 +1,47 @@
+name: Architecture hardening diagnostics
+
+on:
+  push:
+    branches: [agent/worktrace-architecture-hardening]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hardening-diagnostics-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  diagnose:
+    name: Focused hardening contracts
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          clean: true
+      - name: Install dependencies quietly
+        shell: pwsh
+        run: python -m pip install --disable-pip-version-check -q -r requirements.txt
+      - name: Run focused contracts
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "test-results" | Out-Null
+          & python -m pytest -q --tb=short --maxfail=30 `
+            tests/test_architecture_hardening_regressions.py `
+            tests/test_settings_privacy_status.py `
+            tests/test_app_runtime_privacy_gate.py `
+            tests/test_statistics_api_summary.py `
+            tests/test_export_service.py `
+            tests/test_project_rules_batch_operations.py `
+            tests/test_report_projection_cutover.py `
+            tests/test_report_projection_architecture_contract.py `
+            tests/test_webview_entry.py `
+            2>&1 | Tee-Object -FilePath "test-results/focused.log"
+          $code = $LASTEXITCODE
+          if ($code -ne 0) {
+            Write-Host "=== FOCUSED_FAILURE_TAIL_BEGIN ==="
+            Get-Content -LiteralPath "test-results/focused.log" -Tail 180
+            Write-Host "=== FOCUSED_FAILURE_TAIL_END ==="
+          }
+          exit $code
