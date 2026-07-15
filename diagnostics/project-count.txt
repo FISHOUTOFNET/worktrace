@@ -1,0 +1,29 @@
+============================= test session starts =============================
+platform win32 -- Python 3.11.9, pytest-9.1.1, pluggy-1.6.0 -- C:\actions-runner\_work\_tool\Python\3.11.9\x64\python.exe
+cachedir: .pytest_cache
+rootdir: C:\actions-runner\_work\worktrace\worktrace
+configfile: pytest.ini
+collecting ... collected 1 item
+
+tests/test_architecture_hardening_regressions.py::test_project_count_excludes_uncategorized_and_excluded_buckets FAILED [100%]
+
+================================== FAILURES ===================================
+_______ test_project_count_excludes_uncategorized_and_excluded_buckets ________
+
+temp_db = WindowsPath('C:/Users/���� Sun Yi/AppData/Local/Temp/pytest-of-���� Sun Yi/pytest-3182/test_project_count_excludes_un0/worktrace.db')
+
+    def test_project_count_excludes_uncategorized_and_excluded_buckets(temp_db):
+        project_id = project_service.create_project("Client")
+        _activity("09:00:00", "09:30:00", project_id=project_id)
+        _activity("10:00:00", "10:10:00")
+        _activity("11:00:00", "11:05:00", status="excluded", app="Secret")
+        summary = statistics_service.get_statistics_export_summary(DATE, DATE)
+        names = {row["display_name"] for row in summary["by_project"]}
+        assert {"Client", "δ����", "���ų�"}.issubset(names)
+>       assert summary["project_count"] == 1
+E       assert 2 == 1
+
+tests\test_architecture_hardening_regressions.py:100: AssertionError
+=========================== short test summary info ===========================
+FAILED tests/test_architecture_hardening_regressions.py::test_project_count_excludes_uncategorized_and_excluded_buckets - assert 2 == 1
+============================== 1 failed in 0.87s ==============================
