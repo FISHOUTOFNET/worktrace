@@ -61,7 +61,8 @@ Their absence is intentional and is not a frontend defect.
 ## Internal / API Project Rules Capabilities
 
 The following backend/API capabilities remain available for tests, maintenance,
-or future product decisions, but are not part of the shipping UI contract:
+or future product decisions, but are not part of the shipping UI contract. The
+backend lifecycle covers user project create / edit / enable-disable / archive:
 
 - enable/disable existing rules and edit folder/keyword rules;
 - project enable-disable and archive;
