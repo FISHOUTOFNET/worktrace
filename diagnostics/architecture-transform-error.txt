@@ -1,8 +1,8 @@
 Traceback (most recent call last):
-  File "/home/runner/work/_temp/8c891c4e-991e-4ad2-9532-ffee093cfbfa.py", line 15, in <module>
+  File "C:\actions-runner\_work\_temp\fc7b580c-41c6-413a-a22a-e86182c4d4b7.py", line 15, in <module>
     exec(compile(script, str(source_path), 'exec'), {'__name__': '__main__'})
-         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File ".github/workflows/apply-architecture-source-transforms.yml", line 1
+         ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ".github\workflows\apply-architecture-source-transforms.yml", line 1
     name: Apply architecture source transforms
              ^
 IndentationError: unexpected indent
