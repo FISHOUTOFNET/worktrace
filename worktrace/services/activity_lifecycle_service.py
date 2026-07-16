@@ -103,6 +103,17 @@ def force_persist_open_activity_for_clipboard(
     )
 
 
+def checkpoint_activity(activity_id: int, duration_seconds: int) -> bool:
+    """Persist a monotonic checkpoint through the lifecycle write owner."""
+
+    with get_connection() as conn:
+        return activity_fact_repository.checkpoint_activity_duration(
+            conn,
+            activity_id,
+            duration_seconds,
+        )
+
+
 def close_activity(
     activity_id: int,
     end_time: str,
@@ -245,6 +256,7 @@ def _sync_open_row_project_safely(
 
 
 __all__ = [
+    "checkpoint_activity",
     "close_activity",
     "close_all_open_activities",
     "finalize_closed_activity_ids",
