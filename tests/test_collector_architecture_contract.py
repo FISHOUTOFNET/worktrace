@@ -128,7 +128,7 @@ def test_collector_loop_stays_free_of_session_policy_and_display_projection():
 def test_collector_loop_never_turns_transient_failures_into_activity_error():
     source = _source("worktrace/collector/collector.py")
     assert 'transition_to("error"' not in source
-    assert "collector_status\", \"error\"" not in source
+    assert 'collector_status", "error"' not in source
 
 
 def test_collector_loop_does_not_turn_stall_gaps_into_time_jump_boundaries():
@@ -251,7 +251,12 @@ def test_live_display_has_no_virtual_or_borrowed_anchor_production_states():
         "worktrace/services/activity_row_overlay.py",
         "worktrace/services/view_model_service.py",
     )
-    forbidden_states = ("borrowed_anchor_pending", "current_only_pending", "current_only_zero", "borrowed_anchor_static")
+    forbidden_states = (
+        "borrowed_anchor_pending",
+        "current_only_pending",
+        "current_only_zero",
+        "borrowed_anchor_static",
+    )
     offenders = [
         f"{path}: {token}"
         for path in modules
@@ -278,6 +283,7 @@ def test_display_model_has_no_raw_db_mutation_or_borrowed_anchor_lookup():
 def test_pending_short_settings_are_limited_to_compatibility_cleanup():
     allowed = {
         "worktrace/db.py",
+        "worktrace/schema_migrations.py",
         "worktrace/services/runtime_activity_state_service.py",
         "worktrace/services/secure_backup_service.py",
     }
