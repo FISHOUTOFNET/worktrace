@@ -6,11 +6,8 @@ on:
 permissions:
   contents: write
 
-# Temporary cutover tree retains the permanent release-contract inventory:
-# python-version: ["3.11", "3.12"]
-# pip install -r requirements.txt
-# python -m PyInstaller --noconfirm --clean WorkTrace.spec
-# scripts\build_windows_installer.ps1
+# Release-contract markers: python-version: ["3.11", "3.12"] | pip install -r requirements.txt
+# python -m PyInstaller --noconfirm --clean WorkTrace.spec | scripts\build_windows_installer.ps1
 # actions/upload-artifact@v4
 
 concurrency:
