@@ -9,9 +9,9 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Callable
 
-_CURRENT_SNAPSHOT_KEY = "current_activity_" + "snapshot"
-_PENDING_SECONDS_KEY = "pending_short_" + "seconds"
-_PENDING_PROVENANCE_KEY = "pending_short_carry_" + "provenance"
+_CURRENT_SNAPSHOT_KEY = "current_activity_snapshot"
+_PENDING_SECONDS_KEY = "pending_short_seconds"
+_PENDING_PROVENANCE_KEY = "pending_short_carry_provenance"
 
 MIN_SUPPORTED_SCHEMA_VERSION = 4
 
@@ -193,9 +193,30 @@ def migrate_5_to_6(conn: sqlite3.Connection) -> None:
     )
 
 
+def migrate_6_to_7(conn: sqlite3.Connection) -> None:
+    """Add the durable structural generation used by page refresh contracts."""
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS report_structure_revision_state (
+            singleton_id INTEGER PRIMARY KEY CHECK(singleton_id = 1),
+            generation INTEGER NOT NULL CHECK(generation >= 0)
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO report_structure_revision_state(singleton_id, generation)
+        VALUES (1, 0)
+        ON CONFLICT(singleton_id) DO NOTHING
+        """
+    )
+
+
 MIGRATIONS: dict[int, Migration] = {
     4: migrate_4_to_5,
     5: migrate_5_to_6,
+    6: migrate_6_to_7,
 }
 
 
@@ -234,5 +255,6 @@ __all__ = [
     "MIN_SUPPORTED_SCHEMA_VERSION",
     "migrate_4_to_5",
     "migrate_5_to_6",
+    "migrate_6_to_7",
     "migrate_schema",
 ]
