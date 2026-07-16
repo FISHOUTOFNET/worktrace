@@ -1,8 +1,8 @@
 """Statistics / Export bridge mixin.
 
-This bridge exposes display-safe summaries and a separate export ticket. It
-imports only API facades and formatting helpers; DB and service ownership stay
-behind the API boundary.
+The bridge validates transport shapes, calls API capabilities and maps stable
+error codes. Statistics aggregation and display DTO shaping remain behind the
+API boundary.
 """
 
 from __future__ import annotations
@@ -13,8 +13,7 @@ from typing import Any
 from ..api import export_api, statistics_api
 from ..api.export_api import StatisticsExportError
 from ..api.statistics_api import StatisticsSummaryError
-from ..formatters import format_duration
-from .bridge_common import _DATE_SHAPE_RE, _statistics_summary_payload
+from .bridge_common import _DATE_SHAPE_RE
 
 logger = logging.getLogger(__name__)
 
@@ -44,21 +43,18 @@ class StatisticsBridgeMixin:
 
     def get_statistics_export_summary(self, date_from, date_to) -> dict[str, Any]:
         try:
-            # bool, None, and every other non-string input are rejected explicitly.
             if not isinstance(date_from, str) or not isinstance(date_to, str):
                 return {"ok": False, "error": "请选择有效日期", "summary": None}
             if not _DATE_SHAPE_RE.match(date_from) or not _DATE_SHAPE_RE.match(date_to):
                 return {"ok": False, "error": "请选择有效日期", "summary": None}
-            summary = statistics_api.get_statistics_export_summary(date_from, date_to)
-            revision = str(summary.get("export_revision") or "")
+            envelope = statistics_api.get_statistics_export_view_model(
+                date_from,
+                date_to,
+            )
             return {
                 "ok": True,
-                "summary": _statistics_summary_payload(summary),
-                "export_ticket": {
-                    "date_from": str(summary.get("date_from") or date_from),
-                    "date_to": str(summary.get("date_to") or date_to),
-                    "revision": revision,
-                },
+                "summary": envelope["summary"],
+                "export_ticket": envelope["export_ticket"],
             }
         except StatisticsSummaryError as exc:
             return {
@@ -105,7 +101,9 @@ class StatisticsBridgeMixin:
                 "ok": True,
                 "filename": str(result.get("filename") or ""),
                 "activity_count": int(result.get("activity_count") or 0),
-                "duration": format_duration(result.get("duration_seconds") or 0),
+                "duration": statistics_api.format_export_duration(
+                    int(result.get("duration_seconds") or 0)
+                ),
                 "cancelled": False,
             }
         except StatisticsExportError as exc:
