@@ -23,7 +23,7 @@ from .report_structure_generation import bump_generation
 from .schema_migrations import MIN_SUPPORTED_SCHEMA_VERSION, migrate_schema
 from .write_gate import DATABASE_WRITE_GATE
 
-CURRENT_SCHEMA_VERSION = 6
+CURRENT_SCHEMA_VERSION = 7
 
 _RETIRED_SCHEMA_TRIGGERS = (
     "close_existing_open_activity_before_insert",
@@ -202,6 +202,19 @@ class WorkTraceConnection(sqlite3.Connection):
         if _sql_affects_report_structure(sql, parameters):
             self._report_structure_dirty = True
 
+    def _persist_report_structure_generation(self) -> None:
+        """Increment the durable generation inside the pending write transaction."""
+
+        if not self._report_structure_dirty:
+            return
+        super().execute(
+            """
+            UPDATE report_structure_revision_state
+            SET generation = generation + 1
+            WHERE singleton_id = 1
+            """
+        )
+
     def _publish_report_structure_generation(self) -> None:
         if not self._report_structure_dirty:
             return
@@ -268,7 +281,12 @@ class WorkTraceConnection(sqlite3.Connection):
         return cursor
 
     def commit(self) -> None:  # type: ignore[override]
-        super().commit()
+        try:
+            self._persist_report_structure_generation()
+            super().commit()
+        except Exception:
+            self._discard_report_structure_generation()
+            raise
         self._publish_report_structure_generation()
 
     def rollback(self) -> None:  # type: ignore[override]
@@ -277,6 +295,8 @@ class WorkTraceConnection(sqlite3.Connection):
 
     def __exit__(self, exc_type, exc_value, traceback):
         try:
+            if exc_type is None:
+                self._persist_report_structure_generation()
             result = super().__exit__(exc_type, exc_value, traceback)
         except Exception:
             self._discard_report_structure_generation()
@@ -291,6 +311,13 @@ class WorkTraceConnection(sqlite3.Connection):
 @lru_cache(maxsize=1)
 def read_schema_sql() -> str:
     return resources.files(__package__).joinpath("schema.sql").read_text(
+        encoding="utf-8"
+    )
+
+
+@lru_cache(maxsize=1)
+def read_internal_schema_sql() -> str:
+    return resources.files(__package__).joinpath("schema_internal.sql").read_text(
         encoding="utf-8"
     )
 
@@ -380,6 +407,7 @@ def apply_current_schema(conn: sqlite3.Connection) -> None:
     has_user_tables = _database_has_user_tables(conn)
     if not has_user_tables:
         conn.executescript(read_schema_sql())
+        conn.executescript(read_internal_schema_sql())
         ensure_current_indexes(conn)
         conn.execute(f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION}")
         _require_current_schema_fingerprint(conn)
@@ -414,9 +442,9 @@ def _require_supported_source_schema(
     conn: sqlite3.Connection,
     version: int,
 ) -> None:
-    """Validate the stable v4/v5 structural boundary before migration."""
+    """Validate a supported structural boundary before migration."""
 
-    if version not in {4, 5}:
+    if version not in {4, 5, 6}:
         raise ValueError("database_schema_incompatible")
     required = {
         "project": {"id", "name", "is_deleted"},
@@ -474,6 +502,7 @@ def expected_schema_fingerprint() -> str:
     reference.row_factory = sqlite3.Row
     try:
         reference.executescript(read_schema_sql())
+        reference.executescript(read_internal_schema_sql())
         reference.executescript(read_schema_indexes_sql())
         return schema_fingerprint(reference)
     finally:
@@ -487,6 +516,13 @@ def _require_current_schema_fingerprint(conn: sqlite3.Connection) -> None:
 
 def seed_defaults(conn: sqlite3.Connection) -> None:
     ts = now_str()
+    conn.execute(
+        """
+        INSERT INTO report_structure_revision_state(singleton_id, generation)
+        VALUES (1, 0)
+        ON CONFLICT(singleton_id) DO NOTHING
+        """
+    )
     defaults = {
         "poll_interval_seconds": "1",
         "idle_threshold_seconds": str(DEFAULT_IDLE_THRESHOLD_SECONDS),
@@ -615,5 +651,6 @@ def drop_all_tables(conn: sqlite3.Connection) -> None:
         DROP TABLE IF EXISTS project_rule;
         DROP TABLE IF EXISTS project;
         DROP TABLE IF EXISTS settings;
+        DROP TABLE IF EXISTS report_structure_revision_state;
         """
     )
