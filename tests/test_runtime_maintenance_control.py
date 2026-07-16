@@ -8,9 +8,9 @@ from worktrace.collector import activity_session_recorder as recorder_module
 from worktrace.collector.activity_session_recorder import ActivitySessionRecorder
 from worktrace.collector.clock_tracker import ClockTracker
 from worktrace.collector.collector import CollectorControl, _sleep_until_next_poll
-from worktrace.platforms import hardened_windows_adapter as adapter_module
+from worktrace.platforms import windows_clipboard as clipboard_module
 from worktrace.platforms.base import ActiveWindow
-from worktrace.platforms.hardened_windows_adapter import _ClipboardMonitor
+from worktrace.platforms.windows_clipboard import ClipboardMonitor
 from worktrace.security.kdf import KdfError, KdfParams, derive_backup_key
 from worktrace.services import settings_service
 from worktrace.services.secure_backup_service import (
@@ -215,8 +215,12 @@ def test_maintenance_reset_failure_restores_intent_without_stale_snapshot(temp_d
     assert settings_service.get_setting("current_activity_snapshot", "") == ""
 
 
+def _window() -> ActiveWindow:
+    return ActiveWindow("Word", "winword.exe", "Secret.docx")
+
+
 def test_clipboard_monitor_does_not_start_or_retain_while_disabled():
-    monitor = _ClipboardMonitor()
+    monitor = ClipboardMonitor(_window)
 
     monitor.set_enabled(False)
     assert monitor.drain() == []
@@ -235,21 +239,15 @@ def test_clipboard_disable_waits_for_inflight_capture_and_drops_generation(
         return "sensitive"
 
     monkeypatch.setattr(
-        adapter_module.legacy,
-        "_read_clipboard_unicode_text",
+        clipboard_module,
+        "read_clipboard_unicode_text",
         read_text,
     )
-    monitor = _ClipboardMonitor(
-        lambda: ActiveWindow("Word", "winword.exe", "Secret.docx")
-    )
+    monitor = ClipboardMonitor(_window)
     monitor.set_enabled(True)
     generation = monitor._generation
-    capture = threading.Thread(
-        target=lambda: monitor._capture_locked(7, generation),
-        daemon=True,
-    )
-    # `_capture_locked` requires the same serialization lock used by the real
-    # monitor loop.
+
+    # ``_capture_locked`` uses the same serialization lock as the real loop.
     def serialized_capture():
         with monitor._lifecycle_lock:
             monitor._capture_locked(7, generation)
@@ -271,6 +269,7 @@ def test_clipboard_disable_waits_for_inflight_capture_and_drops_generation(
 
     assert disabled.is_set()
     assert monitor.drain() == []
+    monitor.shutdown()
 
 
 def test_kdf_rejects_excessive_resource_parameters():
