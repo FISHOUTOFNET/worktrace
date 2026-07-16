@@ -111,18 +111,8 @@ def request_shutdown() -> None:
         _runtime.request_shutdown()
 
 
-def owns_collector() -> bool:
-    """Compatibility UI query for the application-instance lease."""
-
-    return bool(
-        _runtime is not None
-        and getattr(_runtime, "owns_application_instance", False)
-    )
-
-
 __all__ = [
     "get_runtime",
-    "owns_collector",
     "pause_collection_now",
     "request_shutdown",
     "set_clipboard_capture_enabled",
