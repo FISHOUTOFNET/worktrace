@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sqlite3
 
 import pytest
 
@@ -67,25 +68,21 @@ def test_open_fact_insert_rolls_back_as_one_unit(temp_db, monkeypatch):
         ).fetchone()["c"] == 0
 
 
-def test_database_seals_prior_open_fact_and_keeps_one_open_owner(temp_db):
+def test_lifecycle_service_is_the_only_open_row_transition_owner(temp_db):
     first = persist_open_activity(
         start_time="2026-07-16 09:00:00",
         source=SOURCE_AUTO,
         payload=_normal_payload("First"),
     )
 
-    fixture_second = activity_service.create_activity(
-        "Word",
-        "winword.exe",
-        "Low-level second open row",
-        start_time="2026-07-16 09:01:00",
-    )
-    with get_connection() as conn:
-        open_rows = conn.execute(
-            "SELECT id FROM activity_log WHERE end_time IS NULL"
-        ).fetchall()
-    assert [int(row["id"]) for row in open_rows] == [fixture_second]
-    assert activity_service.get_activity(first)["end_time"] == "2026-07-16 09:01:00"
+    with pytest.raises(sqlite3.IntegrityError):
+        activity_service.create_activity(
+            "Word",
+            "winword.exe",
+            "Low-level second open row",
+            start_time="2026-07-16 09:01:00",
+        )
+    assert activity_service.get_activity(first)["end_time"] is None
 
     second = start_activity(
         start_time="2026-07-16 09:05:00",
@@ -98,10 +95,7 @@ def test_database_seals_prior_open_fact_and_keeps_one_open_owner(temp_db):
             "SELECT id FROM activity_log WHERE end_time IS NULL"
         ).fetchall()
     assert [int(row["id"]) for row in open_rows] == [second]
-    assert (
-        activity_service.get_activity(fixture_second)["end_time"]
-        == "2026-07-16 09:05:00"
-    )
+    assert activity_service.get_activity(first)["end_time"] == "2026-07-16 09:05:00"
 
 
 def test_failed_folder_generation_preserves_previous_active_index(
