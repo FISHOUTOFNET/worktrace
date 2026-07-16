@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from contextvars import ContextVar
 from typing import Any, Iterator
 
 from ..constants import DEFAULT_UNRECORDED_GAP_BOUNDARY_SECONDS
 from ..db import get_connection
 from . import report_operation_repository
 from . import report_session_operation_engine as engine
+from .page_read_context import current_page_read_context, page_read_scope
 from .report_fact_query_service import (
     boundary_times_for_rows,
     get_uncategorized_project_id,
@@ -31,23 +31,13 @@ from .report_session_projection_service import (
 from .report_status_policy import STANDALONE_STATUS, SUPPRESSED, decide_report_status
 from .settings_service import get_int_setting
 
-_REQUEST_SNAPSHOT_CACHE: ContextVar[
-    dict[tuple[str, str], ReportProjectionSnapshot] | None
-] = ContextVar("worktrace_report_snapshot_cache", default=None)
-
 
 @contextmanager
 def snapshot_read_scope() -> Iterator[None]:
-    """Reuse canonical snapshots only inside one explicit API request."""
-    existing = _REQUEST_SNAPSHOT_CACHE.get()
-    if existing is not None:
+    """Compatibility name for the request-level page read scope."""
+
+    with page_read_scope():
         yield
-        return
-    token = _REQUEST_SNAPSHOT_CACHE.set({})
-    try:
-        yield
-    finally:
-        _REQUEST_SNAPSHOT_CACHE.reset(token)
 
 
 def build_visible_snapshot(
@@ -57,12 +47,20 @@ def build_visible_snapshot(
     conn=None,
 ) -> ReportProjectionSnapshot:
     """Build a deterministic snapshot without modifying persistent state."""
+
     if conn is not None:
         return _build_snapshot(conn, start_date, end_date)
-    cache = _REQUEST_SNAPSHOT_CACHE.get()
+
+    context = current_page_read_context()
     key = (str(start_date), str(end_date))
-    if cache is not None and key in cache:
-        return cache[key]
+    if context is not None:
+        cached = context.snapshot_cache.get(key)
+        if cached is not None:
+            return cached
+        result = _build_snapshot(context.conn, start_date, end_date)
+        context.snapshot_cache[key] = result
+        return result
+
     with get_connection() as read_conn:
         read_conn.execute("BEGIN")
         try:
@@ -71,8 +69,6 @@ def build_visible_snapshot(
         except Exception:
             read_conn.rollback()
             raise
-    if cache is not None:
-        cache[key] = result
     return result
 
 
