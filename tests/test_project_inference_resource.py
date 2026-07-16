@@ -1,7 +1,8 @@
 from __future__ import annotations
-from tests.support.db_helpers import assign_activity_project
 
-from worktrace.services import activity_service, folder_rule_service, project_inference_service, project_service, rule_service
+from tests.support import activity_factory as activity_service
+from tests.support.db_helpers import assign_activity_project
+from worktrace.services import folder_rule_service, project_inference_service, project_service, rule_service
 from worktrace.services.project_inference_service import (
     _safe_classification_text,
     assign_project_for_activity,
@@ -88,7 +89,6 @@ class TestKeywordRuleMatchesSafeFields:
             start_time="2026-06-18 09:00:00",
         )
         assignment = assign_project_for_activity(aid)
-        # folder_rule would also match if there was one, but keyword should match path_hint
         assert assignment["source"] in ("keyword_rule", "folder_rule")
         assert activity_service.get_activity(aid)["project_id"] == pid
 
@@ -129,7 +129,6 @@ class TestOldActivityFallback:
     def test_old_activity_without_resource(self, temp_db):
         pid = project_service.create_project("ClientA")
         folder_rule_service.create_or_update_folder_rule("D:\\ClientA", pid)
-        # Insert activity_log directly, bypassing create_activity to simulate old data without resource
         from worktrace.db import get_connection
         with get_connection() as conn:
             cur = conn.execute(
@@ -213,7 +212,6 @@ class TestSafeClassificationText:
             "uri_host": None,
         }
         text = _safe_classification_text(activity, resource)
-        # Should not contain any body/content fields
         assert "body" not in text
         assert "content" not in text
         assert "email_body" not in text
