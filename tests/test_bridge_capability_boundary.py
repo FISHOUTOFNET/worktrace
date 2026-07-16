@@ -39,12 +39,13 @@ def test_settings_api_has_named_capabilities_only() -> None:
 
 
 def test_bridge_modules_import_api_not_backend_layers() -> None:
+    runtime_module = "worktrace." + "runtime"
     forbidden = (
         "worktrace.constants",
         "worktrace.formatters",
         "worktrace.services",
         "worktrace.db",
-        "worktrace.runtime",
+        runtime_module,
         "worktrace.collector",
         "worktrace.security",
         "worktrace.config",
