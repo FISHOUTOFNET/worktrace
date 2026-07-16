@@ -101,9 +101,8 @@ def test_clear_all_confirm_false_does_not_reset_db(temp_db) -> None:
         pass
     else:
         raise AssertionError("clear_all_local_data(confirm=False) must raise")
-    from worktrace.services import activity_service as act_svc
 
-    activities = act_svc.get_activities_by_range(
+    activities = activity_service.get_activities_by_range(
         "2026-06-18", "2026-06-18"
     )
     assert any(a["id"] == aid for a in activities)
@@ -122,9 +121,8 @@ def test_clear_all_success_sets_pause_guard_and_clears_after(temp_db) -> None:
     assert get_setting("collector_status", "") == "paused"
     assert (get_setting("current_activity_snapshot", "") or "") == ""
     assert get_setting("pending_short_seconds", "") == "0"
-    from worktrace.services import activity_service as act_svc
 
-    activities = act_svc.get_activities_by_range(
+    activities = activity_service.get_activities_by_range(
         "2026-06-18", "2026-06-18"
     )
     assert activities == []
@@ -151,9 +149,8 @@ def test_clear_all_rejects_when_secure_import_in_progress(temp_db) -> None:
         with pytest.raises(ValueError):
             export_service.clear_all_local_data(confirm=True)
         guard.mark_succeeded()
-    from worktrace.services import activity_service as act_svc
 
-    activities = act_svc.get_activities_by_range(
+    activities = activity_service.get_activities_by_range(
         "2026-06-18", "2026-06-18"
     )
     assert any(a["id"] == aid for a in activities)
@@ -209,9 +206,8 @@ def test_clear_all_guard_clears_runtime_pending_on_boundary(temp_db) -> None:
 def test_clear_all_success_invalidates_context_recompute_cache(temp_db) -> None:
     _seed_business_data()
     export_service.clear_all_local_data(confirm=True)
-    from worktrace.services import activity_service as act_svc
 
-    activities = act_svc.get_activities_by_range(
+    activities = activity_service.get_activities_by_range(
         "2026-06-18", "2026-06-18"
     )
     assert activities == []
