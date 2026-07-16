@@ -61,7 +61,7 @@ def migrate_5_to_6(conn: sqlite3.Connection) -> None:
     )
     conn.execute(
         """
-        CREATE TABLE folder_rule_index_state (
+        CREATE TABLE IF NOT EXISTS folder_rule_index_state (
             folder_rule_id INTEGER PRIMARY KEY,
             status TEXT NOT NULL CHECK (
                 status IN ('pending', 'indexing', 'ready', 'stale', 'error')
@@ -124,7 +124,7 @@ def migrate_5_to_6(conn: sqlite3.Connection) -> None:
     )
     conn.execute(
         """
-        CREATE TABLE folder_rule_file_index (
+        CREATE TABLE IF NOT EXISTS folder_rule_file_index (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             folder_rule_id INTEGER NOT NULL,
             generation INTEGER NOT NULL DEFAULT 1,
@@ -156,7 +156,7 @@ def migrate_5_to_6(conn: sqlite3.Connection) -> None:
 
     conn.executescript(
         """
-        CREATE TABLE history_mutation_job (
+        CREATE TABLE IF NOT EXISTS history_mutation_job (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             kind TEXT NOT NULL CHECK (
                 kind IN ('rule_backfill', 'rule_remove', 'rule_delete')
@@ -175,7 +175,7 @@ def migrate_5_to_6(conn: sqlite3.Connection) -> None:
             updated_at TEXT NOT NULL
         );
 
-        CREATE TABLE history_mutation_job_rule (
+        CREATE TABLE IF NOT EXISTS history_mutation_job_rule (
             job_id INTEGER NOT NULL,
             rule_type TEXT NOT NULL CHECK(rule_type IN ('folder', 'keyword')),
             rule_id INTEGER NOT NULL,
