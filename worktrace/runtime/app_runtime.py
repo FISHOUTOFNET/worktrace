@@ -9,9 +9,11 @@ business database or creates the WebView.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 import logging
 import sys
 import threading
+import time
 from typing import TYPE_CHECKING, Any
 
 from .. import db
@@ -44,6 +46,17 @@ if TYPE_CHECKING:
         log_path: str
 
     _Paths = _Paths  # noqa: F811
+
+
+class RuntimePhase(str, Enum):
+    NEW = "new"
+    INITIALIZED = "initialized"
+    STARTING = "starting"
+    RUNNING = "running"
+    DEGRADED = "degraded"
+    STOPPING = "stopping"
+    STOPPED = "stopped"
+    FAILED = "failed"
 
 
 @dataclass(frozen=True)
@@ -117,7 +130,7 @@ def _thread_reference_is_alive(thread: Any | None) -> bool:
     if thread is None:
         return False
     checker = getattr(thread, "is_alive", None)
-    return True if checker is None else bool(checker())
+    return bool(checker()) if checker is not None else False
 
 
 class AppRuntime:
@@ -128,6 +141,7 @@ class AppRuntime:
         self.stop_event = threading.Event()
         self.owns_application_instance = False
         self.collector_control = CollectorControl()
+        self.phase = RuntimePhase.NEW
         self._lifecycle_lock = threading.RLock()
         self._adapter = adapter if adapter is not None else _choose_adapter()
         self._collector_thread: threading.Thread | None = None
@@ -144,6 +158,7 @@ class AppRuntime:
                 return False
             self.owns_application_instance = acquire_single_instance()
             if not self.owns_application_instance:
+                self.phase = RuntimePhase.FAILED
                 logging.warning(
                     "single application instance lock not acquired; startup aborted"
                 )
@@ -154,15 +169,17 @@ class AppRuntime:
             except Exception:
                 release_single_instance()
                 self.owns_application_instance = False
+                self.phase = RuntimePhase.FAILED
                 raise
             self._initialized = True
+            self.phase = RuntimePhase.INITIALIZED
             return True
 
     def start_background_workers(self) -> WorkerReadiness:
-        """Start or confirm both derived-state workers."""
+        """Initialize, then start or confirm both derived-state workers."""
 
         with self._lifecycle_lock:
-            if not self.owns_application_instance:
+            if not self._initialized or not self.owns_application_instance:
                 return WorkerReadiness(False, False, error="runtime_not_owned")
             if self._shutdown or self.stop_event.is_set():
                 return WorkerReadiness(False, False, error="runtime_stopping")
@@ -170,23 +187,36 @@ class AppRuntime:
             index_ready = _thread_reference_is_alive(self._index_thread)
             index_started = False
             if not index_ready:
-                recover_interrupted_indexes()
-                self._index_thread = folder_index_service.start_folder_index_worker(
-                    self.stop_event
-                )
-                index_ready = _thread_reference_is_alive(self._index_thread)
-                index_started = index_ready
+                try:
+                    recover_interrupted_indexes()
+                    folder_index_service.ensure_index_states_for_folder_rules()
+                    folder_index_service.validate_ready_indexes(self.stop_event)
+                    self._index_thread = (
+                        folder_index_service.start_folder_index_worker(
+                            self.stop_event
+                        )
+                    )
+                    index_ready = _thread_reference_is_alive(self._index_thread)
+                    index_started = index_ready
+                except Exception:
+                    self._index_thread = None
+                    logging.exception("folder index worker initialization failed")
 
             history_ready = _thread_reference_is_alive(self._history_thread)
             history_started = False
             if not history_ready:
-                self._history_thread = (
-                    history_mutation_job_service.start_history_worker(
-                        self.stop_event
+                try:
+                    history_mutation_job_service.run_pending_jobs(limit=0)
+                    self._history_thread = (
+                        history_mutation_job_service.start_history_worker(
+                            self.stop_event
+                        )
                     )
-                )
-                history_ready = _thread_reference_is_alive(self._history_thread)
-                history_started = history_ready
+                    history_ready = _thread_reference_is_alive(self._history_thread)
+                    history_started = history_ready
+                except Exception:
+                    self._history_thread = None
+                    logging.exception("history worker initialization failed")
 
             error = None if index_ready and history_ready else "worker_start_failed"
             return WorkerReadiness(
@@ -199,6 +229,27 @@ class AppRuntime:
 
     def start_authorized_collection(self) -> RuntimeStartResult:
         """Run retry, worker readiness and Collector startup in one owner."""
+
+        with self._lifecycle_lock:
+            if not self._initialized or not self.owns_application_instance:
+                return RuntimeStartResult(
+                    ok=False,
+                    collector_ready=False,
+                    folder_index_ready=False,
+                    history_worker_ready=False,
+                    degraded=True,
+                    error_code="runtime_not_owned",
+                )
+            if self._shutdown or self.stop_event.is_set():
+                return RuntimeStartResult(
+                    ok=False,
+                    collector_ready=False,
+                    folder_index_ready=False,
+                    history_worker_ready=False,
+                    degraded=True,
+                    error_code="runtime_stopping",
+                )
+            self.phase = RuntimePhase.STARTING
 
         retry_degraded = False
         try:
@@ -221,6 +272,7 @@ class AppRuntime:
             collector_result = self.start_collector()
         except Exception:
             logging.exception("collector startup failed")
+            self.phase = RuntimePhase.FAILED
             return RuntimeStartResult(
                 ok=False,
                 collector_ready=False,
@@ -231,6 +283,7 @@ class AppRuntime:
             )
 
         if not bool(collector_result.get("ok")):
+            self.phase = RuntimePhase.FAILED
             return RuntimeStartResult(
                 ok=False,
                 collector_ready=False,
@@ -243,6 +296,7 @@ class AppRuntime:
             )
 
         degraded = bool(retry_degraded or not workers.ready)
+        self.phase = RuntimePhase.DEGRADED if degraded else RuntimePhase.RUNNING
         return RuntimeStartResult(
             ok=True,
             collector_ready=True,
@@ -252,7 +306,11 @@ class AppRuntime:
             degraded=degraded,
         )
 
-    def start_collector(self) -> dict[str, object]:
+    def start_collector(
+        self,
+        *,
+        startup_timeout_seconds: float = 5.0,
+    ) -> dict[str, object]:
         with self._lifecycle_lock:
             if self._shutdown or self.stop_event.is_set():
                 return {"ok": False, "error": "runtime_stopping"}
@@ -265,10 +323,19 @@ class AppRuntime:
                 collector_health.record_health_code("thread_dead_replaced")
                 self._collector_thread = None
                 self.collector_control = CollectorControl()
+
+            ready_event = threading.Event()
+            failed_event = threading.Event()
             try:
                 self._collector_thread = threading.Thread(
                     target=run_collector,
-                    args=(self._adapter, self.stop_event, self.collector_control),
+                    args=(
+                        self._adapter,
+                        self.stop_event,
+                        self.collector_control,
+                        ready_event,
+                        failed_event,
+                    ),
                     name="WorkTraceCollector",
                     daemon=True,
                 )
@@ -277,10 +344,27 @@ class AppRuntime:
                 logging.exception("collector thread start failed")
                 self._collector_thread = None
                 return {"ok": False, "error": "collector_start_failed"}
-            set_setting("collector_status", "running")
-            set_setting("collector_health_state", "healthy")
-            self._register_maintenance_handlers()
-            return {"ok": True, "started": True, "already_running": False}
+
+        deadline = time.monotonic() + max(0.1, float(startup_timeout_seconds))
+        while time.monotonic() < deadline:
+            if ready_event.wait(timeout=0.05):
+                self._register_maintenance_handlers()
+                return {"ok": True, "started": True, "already_running": False}
+            if failed_event.is_set() or not _thread_reference_is_alive(
+                self._collector_thread
+            ):
+                break
+
+        collector_health.record_health_code("collector_startup_not_ready")
+        self.stop_event.set()
+        thread = self._collector_thread
+        if thread is not None:
+            joiner = getattr(thread, "join", None)
+            if joiner is not None:
+                joiner(timeout=1)
+        self._collector_thread = None
+        self.phase = RuntimePhase.FAILED
+        return {"ok": False, "error": "collector_start_failed"}
 
     def _register_maintenance_handlers(self) -> None:
         register_collector_pause_handler(self.quiesce_collection_now)
@@ -352,6 +436,7 @@ class AppRuntime:
         return True
 
     def request_shutdown(self) -> None:
+        self.phase = RuntimePhase.STOPPING
         self.stop_event.set()
 
     def shutdown(self) -> None:
@@ -359,6 +444,7 @@ class AppRuntime:
             if self._shutdown:
                 return
             self._shutdown = True
+            self.phase = RuntimePhase.STOPPING
             clear_collector_pause_handler(self.quiesce_collection_now)
             clear_collector_reset_handler(self.reset_collection_runtime_now)
             clear_quiesce_handler(self.quiesce_collection_now)
@@ -399,9 +485,13 @@ class AppRuntime:
                 set_setting("collector_status", "stopped")
             release_single_instance()
             self.owns_application_instance = False
+            self.phase = RuntimePhase.STOPPED
         elif self.owns_application_instance:
+            self.phase = RuntimePhase.FAILED
             collector_health.record_health_code("shutdown_writer_still_alive")
             logging.error("app shutdown retained instance lock: writer alive")
+        else:
+            self.phase = RuntimePhase.STOPPED
 
         if not adapter_shutdown:
             shutdown_adapter = getattr(self._adapter, "shutdown", None)
@@ -412,6 +502,7 @@ class AppRuntime:
 
 __all__ = [
     "AppRuntime",
+    "RuntimePhase",
     "RuntimeStartResult",
     "WorkerReadiness",
 ]
