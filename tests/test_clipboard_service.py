@@ -1,9 +1,9 @@
 import pytest
 
+from tests.support import activity_factory as activity_service
 from worktrace.db import get_connection
 from worktrace.platforms.base import ActiveWindow
 from worktrace.services import (
-    activity_service,
     clipboard_service,
     project_service,
     rule_service,
