@@ -2,8 +2,8 @@ from pathlib import Path
 
 from openpyxl import load_workbook
 
+from tests.support import activity_factory as activity_service
 from worktrace.services import (
-    activity_service,
     database_maintenance_service,
     export_service,
 )
