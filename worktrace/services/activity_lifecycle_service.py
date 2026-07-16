@@ -1,26 +1,32 @@
-"""ActivityLifecycle Command Facade — sole owner of open-row transitions."""
+"""Activity lifecycle command boundary.
+
+Every durable lifecycle transition is committed in one SQLite transaction.
+Project inference remains a post-commit, retryable derivation and can never
+prevent the caller from receiving an already-created activity id.
+"""
 
 from __future__ import annotations
 
 import logging
 from typing import Any
 
-from ..constants import STATUS_NORMAL
+from ..constants import STATUS_NORMAL, UNCATEGORIZED_PROJECT
 from ..db import get_connection, now_str
-from . import activity_service
+from . import activity_fact_repository
 
 
 def _mark_inference_retry_safely(activity_id: int) -> None:
     try:
         from .assignment_command_service import mark_inference_retry
-        from .project_inference_service import _get_uncategorized_project_id
 
         with get_connection() as conn:
-            mark_inference_retry(
-                conn,
-                activity_id,
-                _get_uncategorized_project_id(conn),
-            )
+            row = conn.execute(
+                "SELECT id FROM project WHERE name = ?",
+                (UNCATEGORIZED_PROJECT,),
+            ).fetchone()
+            if row is None:
+                return
+            mark_inference_retry(conn, activity_id, int(row["id"]))
     except Exception:
         logging.exception(
             "close-finalize inference retry marker failed for activity_id=%s",
@@ -29,35 +35,60 @@ def _mark_inference_retry_safely(activity_id: int) -> None:
 
 
 def finalize_closed_activity_ids(closed_ids: list[int]) -> None:
-    """Run project inference / automatic rules after close transactions."""
+    """Run project inference after the close transaction has committed."""
+
     if not closed_ids:
         return
     from .project_inference_service import process_new_activity
 
-    for aid in closed_ids:
+    for activity_id in closed_ids:
         try:
-            process_new_activity(aid)
+            process_new_activity(activity_id)
         except Exception:
             logging.exception(
                 "close-finalize inference failed for activity_id=%s",
-                aid,
+                activity_id,
             )
-            _mark_inference_retry_safely(aid)
+            _mark_inference_retry_safely(activity_id)
 
 
 def start_activity(*, start_time: str, source: str, payload: dict[str, Any]) -> int:
-    close_all_open_activities(start_time)
-    return activity_service.insert_activity_row(
-        start_time=start_time, source=source, **payload
+    """Atomically close the prior open row and create the replacement."""
+
+    prepared = activity_fact_repository.prepare_activity(
+        start_time=start_time,
+        source=source,
+        payload=payload,
     )
+    with get_connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        closed_ids = activity_fact_repository.close_all_open_activities(
+            conn,
+            start_time,
+        )
+        activity_id = activity_fact_repository.insert_open_activity(conn, prepared)
+        conn.commit()
+    finalize_closed_activity_ids(closed_ids)
+    _sync_open_row_project_safely(activity_id, status=prepared.status)
+    return activity_id
 
 
 def persist_open_activity(
     *, start_time: str, source: str, payload: dict[str, Any]
 ) -> int:
-    return _persist_open_activity_unchecked(
-        start_time=start_time, source=source, payload=payload
+    """Create one open fact and return its id immediately after commit."""
+
+    prepared = activity_fact_repository.prepare_activity(
+        start_time=start_time,
+        source=source,
+        payload=payload,
     )
+    with get_connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        activity_id = activity_fact_repository.insert_open_activity(conn, prepared)
+        conn.commit()
+    _sync_open_row_project_safely(activity_id, status=prepared.status)
+    return activity_id
 
 
 def force_persist_open_activity_for_clipboard(
@@ -66,22 +97,10 @@ def force_persist_open_activity_for_clipboard(
     if payload.get("status") != STATUS_NORMAL:
         return None
     return persist_open_activity(
-        start_time=start_time, source=source, payload=payload
+        start_time=start_time,
+        source=source,
+        payload=payload,
     )
-
-
-def _persist_open_activity_unchecked(
-    *, start_time: str, source: str, payload: dict[str, Any]
-) -> int:
-    activity_id = activity_service.insert_activity_row(
-        start_time=start_time, source=source, **payload
-    )
-    activity_service.finalize_created_activity(activity_id)
-    # An open row has a durable zero-second recovery checkpoint from creation.
-    # Later growth is throttled by ActivitySessionRecorder.
-    activity_service.set_activity_duration(activity_id, 0)
-    _sync_open_row_project_safely(activity_id, status=payload.get("status"))
-    return activity_id
 
 
 def close_activity(
@@ -90,26 +109,28 @@ def close_activity(
     *,
     duration_seconds: int | None = None,
 ) -> None:
-    safe_end = _safe_end_time(activity_id, end_time)
-    activity_service.close_activity_row(
-        activity_id, safe_end, duration_seconds=duration_seconds
-    )
-    finalize_closed_activity_ids([activity_id])
+    with get_connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        changed = activity_fact_repository.close_activity(
+            conn,
+            activity_id,
+            end_time,
+            duration_seconds=duration_seconds,
+        )
+        conn.commit()
+    if changed:
+        finalize_closed_activity_ids([int(activity_id)])
 
 
 def close_all_open_activities(end_time: str | None = None) -> list[int]:
     requested_end = end_time or now_str()
     with get_connection() as conn:
-        rows = conn.execute(
-            "SELECT id, start_time FROM activity_log "
-            "WHERE end_time IS NULL ORDER BY id"
-        ).fetchall()
-    closed_ids: list[int] = []
-    for row in rows:
-        activity_id = int(row["id"])
-        safe_end = max(str(requested_end or ""), str(row["start_time"] or ""))
-        activity_service.close_activity_row(activity_id, safe_end)
-        closed_ids.append(activity_id)
+        conn.execute("BEGIN IMMEDIATE")
+        closed_ids = activity_fact_repository.close_all_open_activities(
+            conn,
+            requested_end,
+        )
+        conn.commit()
     finalize_closed_activity_ids(closed_ids)
     return closed_ids
 
@@ -121,12 +142,18 @@ def persist_midnight_anchor(
     payload: dict[str, Any],
     project_id: int,
 ) -> int:
-    activity_id = activity_service.insert_activity_row(
-        start_time=start_time, source=source, **payload
+    prepared = activity_fact_repository.prepare_activity(
+        start_time=start_time,
+        source=source,
+        payload=payload,
+        initial_project_id=int(project_id),
+        assignment_source="midnight_anchor",
+        assignment_confidence=90,
     )
-    activity_service.finalize_created_activity(activity_id)
-    activity_service.set_activity_duration(activity_id, 0)
-    activity_service.apply_midnight_anchor_assignment(activity_id, int(project_id))
+    with get_connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        activity_id = activity_fact_repository.insert_open_activity(conn, prepared)
+        conn.commit()
     return activity_id
 
 
@@ -137,14 +164,18 @@ def recover_close_activity(
     duration_seconds: int | None = None,
     status: str | None = None,
 ) -> None:
-    safe_end = _safe_end_time(activity_id, end_time)
-    activity_service.close_activity_row(
-        activity_id,
-        safe_end,
-        duration_seconds=duration_seconds,
-        status=status,
-    )
-    finalize_closed_activity_ids([activity_id])
+    with get_connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        changed = activity_fact_repository.close_activity(
+            conn,
+            activity_id,
+            end_time,
+            duration_seconds=duration_seconds,
+            status=status,
+        )
+        conn.commit()
+    if changed:
+        finalize_closed_activity_ids([int(activity_id)])
 
 
 def recover_cross_midnight_segment(
@@ -156,37 +187,49 @@ def recover_cross_midnight_segment(
     payload: dict[str, Any],
     project_id: int | None = None,
 ) -> int:
-    activity_id = activity_service.insert_activity_row(
+    prepared = activity_fact_repository.prepare_activity(
         start_time=start_time,
         source=source,
-        status=status,
-        **payload,
+        payload={**payload, "status": status},
+        initial_project_id=(
+            int(project_id)
+            if status == STATUS_NORMAL and project_id is not None
+            else None
+        ),
+        assignment_source=(
+            "midnight_anchor"
+            if status == STATUS_NORMAL and project_id is not None
+            else None
+        ),
+        assignment_confidence=(
+            90 if status == STATUS_NORMAL and project_id is not None else None
+        ),
     )
-    activity_service.finalize_created_activity(activity_id)
-    if status == STATUS_NORMAL and project_id is not None:
-        activity_service.apply_midnight_anchor_assignment(activity_id, int(project_id))
-    close_activity(activity_id, end_time)
+    with get_connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        activity_id = activity_fact_repository.insert_open_activity(conn, prepared)
+        activity_fact_repository.close_activity(conn, activity_id, end_time)
+        conn.commit()
+    finalize_closed_activity_ids([activity_id])
     return activity_id
 
 
 def recover_first_half_close(
-    activity_id: int, end_time: str, duration_seconds: int
+    activity_id: int,
+    end_time: str,
+    duration_seconds: int,
 ) -> None:
-    close_activity(activity_id, end_time, duration_seconds=duration_seconds)
-
-
-def _safe_end_time(activity_id: int, requested_end: str) -> str:
-    with get_connection() as conn:
-        row = conn.execute(
-            "SELECT start_time FROM activity_log WHERE id = ?", (int(activity_id),)
-        ).fetchone()
-    if not row:
-        return str(requested_end or "")
-    return max(str(requested_end or ""), str(row["start_time"] or ""))
+    close_activity(
+        activity_id,
+        end_time,
+        duration_seconds=duration_seconds,
+    )
 
 
 def _sync_open_row_project_safely(
-    activity_id: int, *, status: str | None
+    activity_id: int,
+    *,
+    status: str | None,
 ) -> None:
     if status != STATUS_NORMAL:
         return
@@ -196,7 +239,8 @@ def _sync_open_row_project_safely(
         sync_persisted_open_activity_project(activity_id)
     except Exception:
         logging.exception(
-            "open-row project sync failed for activity_id=%s", activity_id
+            "open-row project sync failed for activity_id=%s",
+            activity_id,
         )
 
 
