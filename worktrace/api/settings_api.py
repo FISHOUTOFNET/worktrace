@@ -1,4 +1,4 @@
-"""Settings, privacy, backup, and collector-status facade for the UI."""
+"""Settings, privacy, backup, and collector-status capability facade."""
 
 from __future__ import annotations
 
@@ -9,7 +9,6 @@ from ..constants import PRIVACY_NOTICE_TEXT
 from ..services import export_service, privacy_gate_service
 from ..services.runtime_activity_state_service import (
     clear_runtime_activity_state as _clear_runtime_activity_state,
-    sample_runtime_activity_state,
 )
 from ..services.secure_backup_service import (
     BackupCorruptedError,
@@ -29,6 +28,8 @@ from ..services.settings_service import (
 from . import backup_api, view_model_api
 
 
+# Compatibility helpers retained for internal tests and composition code. They
+# are intentionally omitted from __all__; WebView capabilities use named APIs.
 def get_setting_value(key: str, default: str | None = None) -> str | None:
     return get_setting(key, default)
 
@@ -54,12 +55,6 @@ def get_list_setting_value(
 
 def set_list_setting_value(key: str, values: list[str]) -> None:
     set_list_setting(key, values)
-
-
-def get_current_activity_snapshot() -> dict[str, Any] | None:
-    """Return the typed process-local sample without a settings round-trip."""
-
-    return sample_runtime_activity_state().snapshot
 
 
 def clear_runtime_activity_state(reason: str) -> None:
@@ -325,36 +320,20 @@ def get_refresh_state(report_date: str | None = None) -> dict[str, Any]:
 
 
 __all__ = [
-    "accept_first_run_notice",
     "accept_first_run_notice_for_webview",
-    "clear_all_local_data",
     "clear_all_local_data_for_webview",
-    "clear_runtime_activity_state",
     "export_encrypted_backup_for_webview",
-    "first_run_notice_accepted",
-    "get_bool_setting_value",
     "get_collector_consecutive_failures",
     "get_collector_health_state",
     "get_collector_last_successful_observation_at",
     "get_collector_status",
-    "get_current_activity_snapshot",
-    "get_export_path",
     "get_first_run_notice_for_webview",
-    "get_int_setting_value",
-    "get_list_setting_value",
     "get_refresh_state",
-    "get_setting_value",
     "get_settings_privacy_status",
-    "get_ui_refresh_seconds",
     "import_encrypted_backup_for_webview",
     "is_clipboard_capture_enabled",
-    "is_paused",
     "is_user_paused",
     "preview_encrypted_backup_manifest_for_webview",
-    "set_clipboard_capture_enabled",
     "set_clipboard_capture_enabled_for_webview",
-    "set_collector_status",
-    "set_list_setting_value",
-    "set_setting_value",
     "set_user_paused",
 ]
