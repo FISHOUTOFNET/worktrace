@@ -6,6 +6,13 @@ on:
 permissions:
   contents: write
 
+# Temporary cutover tree retains the permanent release-contract inventory:
+# python-version: ["3.11", "3.12"]
+# pip install -r requirements.txt
+# python -m PyInstaller --noconfirm --clean WorkTrace.spec
+# scripts\build_windows_installer.ps1
+# actions/upload-artifact@v4
+
 concurrency:
   group: runtime-settings-cutover-${{ github.ref }}
   cancel-in-progress: false
@@ -41,9 +48,13 @@ jobs:
             & python scripts/cutover_runtime_settings.py *>> "test-results/cutover-apply.log"
             $applyExitCode = $LASTEXITCODE
           }
+          if ($applyExitCode -eq 0) {
+            & python scripts/fix_runtime_settings_cutover_tests.py *>> "test-results/cutover-apply.log"
+            $applyExitCode = $LASTEXITCODE
+          }
           Write-Host "runtime/settings cutover apply exit code: $applyExitCode"
           if ($applyExitCode -ne 0) {
-            Get-Content -LiteralPath "test-results/cutover-apply.log" -Tail 200 |
+            Get-Content -LiteralPath "test-results/cutover-apply.log" -Tail 240 |
               ForEach-Object { Write-Host $_ }
           }
           exit $applyExitCode
@@ -124,9 +135,11 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          $parent = git rev-parse "$env:GITHUB_SHA^"
-          git checkout $parent -- .github/workflows/ci.yml
-          git rm scripts/cutover_runtime_settings.py scripts/fix_runtime_settings_cutover_escape.py
+          git fetch --no-tags --depth=1 origin 8ae79e2da527756166b3a4a5442fd2183be1cf45
+          git checkout 8ae79e2da527756166b3a4a5442fd2183be1cf45 -- .github/workflows/ci.yml
+          git rm scripts/cutover_runtime_settings.py `
+            scripts/fix_runtime_settings_cutover_escape.py `
+            scripts/fix_runtime_settings_cutover_tests.py
           git add worktrace tests .github/workflows/ci.yml
           git commit -m "Separate runtime state from durable settings [skip ci]"
           git push origin "HEAD:agent/canonical-architecture-consolidation"
