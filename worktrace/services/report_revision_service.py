@@ -8,16 +8,17 @@ from typing import Any
 
 from ..db import get_connection, get_db_key
 from ..report_structure_generation import current_generation
+from .page_read_context import current_page_read_context
 from .report_projection_identity import stable_json_hash
 
-_CACHE_LOCK = threading.Lock()
+_STRUCTURE_CACHE_LOCK = threading.Lock()
 _STRUCTURE_REVISION_CACHE: dict[tuple[str, str], tuple[int, str]] = {}
 
 
 def clear_report_structure_revision_cache(database_key: str | None = None) -> None:
     """Drop cached hashes, normally after tests or explicit DB reconfiguration."""
 
-    with _CACHE_LOCK:
+    with _STRUCTURE_CACHE_LOCK:
         if database_key is None:
             _STRUCTURE_REVISION_CACHE.clear()
             return
@@ -170,19 +171,24 @@ def get_report_structure_revision(report_date: str, *, conn=None) -> str:
     """Return the single structural revision used by pages and heartbeat.
 
     Transaction-bound callers receive an immediate hash of their uncommitted
-    view. Ordinary refresh callers reuse a cached hash until a structural write
-    transaction publishes a new process-local generation. Natural open-row
-    duration ticks do not publish that generation.
+    view. Page requests reuse the request-level read transaction. Ordinary
+    refresh callers reuse a cached hash until a structural write transaction
+    publishes a new generation. Natural open-row duration ticks do not publish
+    that generation.
     """
 
     date_type.fromisoformat(report_date)
     if conn is not None:
         return _build_report_structure_revision(report_date, conn)
 
+    page_context = current_page_read_context()
+    if page_context is not None:
+        return _build_report_structure_revision(report_date, page_context.conn)
+
     database_key = get_db_key()
     generation = current_generation(database_key)
     cache_key = (database_key, report_date)
-    with _CACHE_LOCK:
+    with _STRUCTURE_CACHE_LOCK:
         cached = _STRUCTURE_REVISION_CACHE.get(cache_key)
     if cached is not None and cached[0] == generation:
         return cached[1]
@@ -198,7 +204,7 @@ def get_report_structure_revision(report_date: str, *, conn=None) -> str:
 
     generation_after = current_generation(database_key)
     if generation_after == generation:
-        with _CACHE_LOCK:
+        with _STRUCTURE_CACHE_LOCK:
             _STRUCTURE_REVISION_CACHE[cache_key] = (generation, value)
     return value
 
