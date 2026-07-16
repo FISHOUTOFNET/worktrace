@@ -8,11 +8,16 @@ import pytest
 
 from worktrace.collector.state_machine import CollectorStateMachine
 from worktrace.platforms.base import ActiveWindow
-from worktrace.services import activity_service, settings_service, timeline_service
+from worktrace.services import activity_service, settings_service
 from worktrace.webview_ui.bridge import WebViewBridge
 
 
-pytestmark = [pytest.mark.contract, pytest.mark.integration, pytest.mark.db, pytest.mark.live_display]
+pytestmark = [
+    pytest.mark.contract,
+    pytest.mark.integration,
+    pytest.mark.db,
+    pytest.mark.live_display,
+]
 DATE = "2026-06-18"
 
 
@@ -21,7 +26,10 @@ def _window(title: str) -> ActiveWindow:
 
 
 def _rows() -> list[dict]:
-    return sorted(activity_service.get_activities_by_date(DATE), key=lambda row: row["start_time"])
+    return sorted(
+        activity_service.get_activities_by_date(DATE),
+        key=lambda row: row["start_time"],
+    )
 
 
 def test_fresh_normal_activity_immediately_owns_a_persisted_open_row(temp_db):
@@ -29,7 +37,9 @@ def test_fresh_normal_activity_immediately_owns_a_persisted_open_row(temp_db):
     machine.transition_to("recording", _window("A"), at_time=f"{DATE} 09:00:00")
 
     rows = _rows()
-    snapshot = json.loads(settings_service.get_setting("current_activity_snapshot", "{}") or "{}")
+    snapshot = json.loads(
+        settings_service.get_setting("current_activity_snapshot", "{}") or "{}"
+    )
     assert len(rows) == 1 and rows[0]["end_time"] is None
     assert snapshot["persisted_activity_id"] == rows[0]["id"]
     assert WebViewBridge().get_overview()["live_clock"]["live_state"] == "persisted_open"
@@ -67,6 +77,10 @@ def test_stop_and_restart_do_not_restore_stale_snapshot_metadata(temp_db):
     machine.transition_to("stopped", at_time=f"{DATE} 09:00:05")
     machine.transition_to("recording", _window("B"), at_time=f"{DATE} 09:00:10")
 
-    snapshot = json.loads(settings_service.get_setting("current_activity_snapshot", "{}") or "{}")
+    snapshot = json.loads(
+        settings_service.get_setting("current_activity_snapshot", "{}") or "{}"
+    )
     assert snapshot["persisted_activity_id"] == _rows()[-1]["id"]
-    assert snapshot.get("window_title") == "B"
+    assert snapshot["activity_display_name"] == "B"
+    assert "window_title" not in snapshot
+    assert "file_path_hint" not in snapshot
