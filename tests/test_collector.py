@@ -1,6 +1,7 @@
+import inspect
+import re
 import threading
 import time
-import inspect
 
 import pytest
 
@@ -160,7 +161,15 @@ def test_collector_observation_time_is_after_active_window_fast_path():
     source = inspect.getsource(run_collector)
     active_pos = source.find("active_window = adapter.get_active_window()")
     observation_pos = source.find("observation_time = now_str()", active_pos)
-    transition_pos = source.find('machine.transition_to("recording"', observation_pos)
+    transition_match = re.search(
+        r'machine\.transition_to\(\s*"recording"',
+        source[observation_pos:],
+    )
+    transition_pos = (
+        observation_pos + transition_match.start()
+        if transition_match is not None
+        else -1
+    )
     assert active_pos != -1
     assert observation_pos > active_pos
     assert transition_pos > observation_pos
