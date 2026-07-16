@@ -46,9 +46,6 @@ def _enable_excluded_project_with_keyword(keyword: str) -> int:
     return excluded_project
 
 
-# 1. Excluded resource is forced anonymous even when a real resource is passed
-
-
 class TestExcludedResourceForcedAnonymous:
     def test_excluded_resource_forced_anonymous_even_when_resource_passed(self, temp_db):
         real_resource = DetectedResource(
@@ -114,9 +111,6 @@ class TestExcludedResourceForcedAnonymous:
         assert resource["app_name"] == EXCLUDED_APP_NAME
         assert resource["uri_host"] is None
         assert resource["path_hint"] is None
-
-
-# 2. privacy_service.is_resource_excluded
 
 
 class TestResourceExclusion:
@@ -237,9 +231,6 @@ class TestResourceExclusion:
         assert resource["uri_host"] is None
 
 
-# 3. EmailDetector detects email_file from window_title .eml/.msg
-
-
 class TestEmailFileFromWindowTitle:
     def test_outlook_eml_file_from_title(self):
         aw = ActiveWindow(
@@ -304,9 +295,6 @@ class TestEmailFileFromWindowTitle:
         assert result.path_hint == "D:\\Emails\\通知.eml"
 
 
-# 4. IDE workspace is_anchor=True and suggests project
-
-
 class TestIdeWorkspaceAnchorAndProject:
     def test_ide_workspace_is_anchor_and_suggests_project(self):
         aw = ActiveWindow(
@@ -345,9 +333,6 @@ class TestIdeWorkspaceAnchorAndProject:
         assert assignment["suggested_project_name"] == "MyProject"
 
 
-# 5. Current activity snapshot uses resource display name
-
-
 def _snapshot():
     return json.loads(runtime_state_fixture.get_setting("current_activity_snapshot", "") or "{}")
 
@@ -364,7 +349,6 @@ class TestCurrentSnapshotUsesResourceDisplayName:
         assert snap["resource_kind"] == "browser_tab"
         assert snap["resource_display_name"] == "GitHub"
         assert snap["activity_display_name"] == "GitHub"
-        # Should not be the generic app name "Chrome"
         assert snap["activity_display_name"] != "Chrome"
 
     def test_email_snapshot_shows_email_subject(self, temp_db):
@@ -392,15 +376,11 @@ class TestCurrentSnapshotUsesResourceDisplayName:
         assert snap["resource_subtype"] == "ide_workspace"
         assert snap["resource_display_name"] == "MyProject"
         assert snap["activity_display_name"] == "MyProject"
-        assert snap["inferred_project_name"] == UNCATEGORIZED_PROJECT
-
-
-# 6. update_activity_file_path_hint syncs activity_resource
+        assert snap["display_project"]["name"] == UNCATEGORIZED_PROJECT
 
 
 class TestUpdateFilePathHintUpdatesActivityResource:
     def test_update_file_path_hint_updates_activity_resource(self, temp_db):
-        # Create a name-only resource via title (no file_path_hint)
         aid = activity_service.create_activity(
             "Word",
             "winword.exe",
@@ -414,7 +394,6 @@ class TestUpdateFilePathHintUpdatesActivityResource:
         assert resource["path_key"] is None
         assert resource["identity_key"].startswith("office_file_name:")
 
-        # Now supplement with a full path
         activity_service.update_activity_file_path_hint(aid, "D:\\Docs\\合同.docx")
 
         resource = get_resource_for_activity(aid)
@@ -442,4 +421,3 @@ class TestUpdateFilePathHintUpdatesActivityResource:
         assert resource["path_hint"] is None
         assert resource["path_key"] is None
         assert resource["display_name"] == EXCLUDED_APP_NAME
-

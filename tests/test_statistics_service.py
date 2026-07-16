@@ -30,7 +30,6 @@ def test_statistics_aggregation(temp_db):
 
 def test_summary_read_does_not_materialize_context(temp_db):
     summary = statistics_service.get_summary("2026-06-18", "2026-06-19")
-
     assert summary["total_duration"] == 0
 
 
@@ -40,8 +39,6 @@ def test_project_stats_count_context_assigned_short_gap(temp_db):
         "Word", "word.exe", "A1.docx", project_id=project_a, start_time="2026-06-18 09:00:00"
     )
     activity_service.finalize_created_activity(a1)
-    # Test fixtures construct each historical row explicitly; close the current
-    # fact before inserting the next one to preserve the open-row invariant.
     activity_service.close_all_open_rows("2026-06-18 09:05:00")
     b = activity_service.create_activity(
         "Word", "word.exe", "Unassigned.docx", start_time="2026-06-18 09:05:00"
@@ -55,7 +52,6 @@ def test_project_stats_count_context_assigned_short_gap(temp_db):
     activity_service.close_all_open_rows("2026-06-18 09:15:00")
 
     stats = statistics_service.get_project_stats("2026-06-18", "2026-06-18")
-
     assert stats == [{"project": "A", "total_duration": 900, "record_count": 1}]
     assert activity_service.get_activity(b)["project_id"] != project_a
 
@@ -67,8 +63,6 @@ def test_statistics_split_cross_midnight_projects_by_calendar_day(temp_db):
         "Word", "word.exe", "A1.docx", project_id=project_a, start_time="2026-06-18 23:50:00"
     )
     activity_service.finalize_created_activity(a1)
-    # Test fixtures construct each historical row explicitly; close the current
-    # fact before inserting the next one to preserve the open-row invariant.
     activity_service.close_all_open_rows("2026-06-19 00:10:00")
     a2 = activity_service.create_activity(
         "Word", "word.exe", "A2.docx", project_id=project_a, start_time="2026-06-19 00:10:00"
@@ -120,67 +114,33 @@ def test_project_stats_count_project_records_split_by_boundary(temp_db):
     ]
 
 
-def _pending_persisted_open_snapshot(
+def _persisted_open_snapshot(
     *,
     aid: int,
     start_time: str,
     display_name: str = "ProjectA",
-    candidate_name: str = "ProjectB",
 ) -> dict:
-    """Build a pending persisted_open snapshot with display_project /
-    candidate_project blocks for KPI convergence tests."""
-    display = {
-        "id": 12,
-        "name": display_name,
-        "description": display_name + " description",
-        "source": "inherited",
-        "is_uncategorized": False,
-        "is_suggested_project": False,
-    }
-    candidate = {
-        "id": 18,
-        "name": candidate_name,
-        "description": candidate_name + " description",
-        "source": "folder_rule",
-        "is_uncategorized": False,
-        "is_suggested_project": False,
-    }
     return {
         "app_name": "AppA",
         "process_name": "AppA.exe",
-        "inferred_project_name": display_name,
         "start_time": start_time,
         "elapsed_seconds": 60,
-        "extra_seconds": 0,
         "status": "normal",
         "is_persisted": True,
         "persisted_activity_id": aid,
-        "display_project": display,
-        "candidate_project": candidate,
-        "project_transition": {
-            "pending": True,
-            "started_at": "",
-            "elapsed_seconds": 12,
-            "threshold_seconds": 30,
-            "from_project_id": 12,
-            "to_project_id": 18,
+        "display_project": {
+            "id": 12,
+            "name": display_name,
+            "description": display_name + " description",
+            "source": "keyword_rule",
+            "is_uncategorized": False,
+            "is_suggested_project": False,
         },
-        "project_transition_pending": True,
     }
 
 
 def test_statistics_export_excludes_in_progress_live_rows(temp_db):
-    """Statistics / Export pages remain closed-only.
-
-    The Statistics / Export preview is served by
-    ``get_statistics_export_summary``, which filters out in-progress
-    rows. This must hold even when a persisted_open snapshot is active: the
-    open DB row must not contribute to the closed-only KPIs.
-
-    ``get_summary`` is a different function used by the Overview KPI; it
-    intentionally counts open DB rows. The closed-only contract is owned by
-    ``get_statistics_export_summary``.
-    """
+    """Statistics / Export pages remain closed-only."""
     from datetime import datetime, timedelta
     from worktrace.constants import TIME_FORMAT
 
@@ -194,16 +154,14 @@ def test_statistics_export_excludes_in_progress_live_rows(temp_db):
     assign_activity_project(aid, project_b_id)
     activity_service.set_activity_duration(aid, 60)
 
-    snapshot = _pending_persisted_open_snapshot(aid=aid, start_time=start_time)
+    snapshot = _persisted_open_snapshot(aid=aid, start_time=start_time)
     runtime_state_fixture.set_setting(
         "current_activity_snapshot", json.dumps(snapshot, ensure_ascii=False)
     )
     settings_service.clear_settings_cache()
 
     export_summary = statistics_service.get_statistics_export_summary(today, today)
-    assert export_summary["total_duration_seconds"] == 0, (
-        "Statistics/Export closed-only preview must NOT count in-progress rows"
-    )
+    assert export_summary["total_duration_seconds"] == 0
     assert export_summary["activity_count"] == 0
     assert export_summary["by_project"] == []
     assert export_summary["by_app"] == []
@@ -211,7 +169,6 @@ def test_statistics_export_excludes_in_progress_live_rows(temp_db):
 
 
 def test_legacy_confirmation_constants_are_disabled():
-    """Collector persistence and formal-project display have no timer gate."""
     from worktrace.constants import (
         HISTORY_PERSIST_THRESHOLD_SECONDS,
         PROJECT_OWNERSHIP_CONFIRM_SECONDS,
@@ -222,14 +179,20 @@ def test_legacy_confirmation_constants_are_disabled():
 
 
 def test_project_ownership_service_has_no_confirm_window():
-    """Snapshots retain a zero-valued compatibility transition shape."""
+    from inspect import signature
+
     from worktrace.services.project_ownership_service import (
-        ProjectTransition,
+        ProjectLabel,
+        ProjectOwnershipState,
         begin_ownership_for_new_resource,
     )
-    transition = ProjectTransition(
-        pending=False,
-        started_at="",
-        elapsed_seconds=0,
+
+    official = ProjectLabel(name="ProjectA", id=12, source="keyword_rule")
+    state = begin_ownership_for_new_resource(official)
+    assert state == ProjectOwnershipState(
+        display_project=official,
+        candidate_project=official,
     )
-    assert transition.threshold_seconds == 0
+    assert tuple(signature(begin_ownership_for_new_resource).parameters) == ("candidate",)
+    assert not hasattr(state, "project_transition")
+    assert not hasattr(state, "last_confirmed_project")

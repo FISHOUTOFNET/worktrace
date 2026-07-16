@@ -27,6 +27,7 @@ def current_activity_snapshot(
     if start_time is None:
         start = datetime.now() - timedelta(seconds=elapsed_seconds)
         start_time = start.strftime(TIME_FORMAT)
+    is_uncategorized = project_name in {"", "未归类"}
     return {
         "app_name": app_name,
         "process_name": process_name,
@@ -40,8 +41,8 @@ def current_activity_snapshot(
             "id": None,
             "name": project_name,
             "description": "",
-            "source": "uncategorized",
-            "is_uncategorized": project_name in {"", "未归类"},
+            "source": "uncategorized" if is_uncategorized else "keyword_rule",
+            "is_uncategorized": is_uncategorized,
             "is_suggested_project": False,
         },
     }

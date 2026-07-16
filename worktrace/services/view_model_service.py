@@ -1,29 +1,9 @@
 """Page ViewModel constructor — projects the unified Activity Display Model.
 
 Assembles the page-level ViewModel for Overview / Recent / Timeline /
-Details. Owns NO live-display semantics: every live
-semantic (live clock, display span identity, persisted-open overlay, project
-transition) is decided by
-:mod:`worktrace.services.activity_display_model_service`. This module only:
-
-1. Calls :func:`build_activity_display_model` once per request.
-2. Projects page payloads from that model.
-3. Builds ordinary DB list payloads (sessions, activity details).
-4. Applies ``apply_live_span_to_row`` to the matching persisted DB row when
-   the display model marks that surface materializable.
-
-Boundary:
-
-- Lives in ``worktrace.services``; imports display-model modules,
-  ``live_display_service``, ``timeline_service``, ``statistics_service``,
-  ``project_service``, ``settings_service`` and stdlib only. MUST NOT be
-  imported by ``worktrace.webview_ui.*`` directly — bridge uses
-  ``worktrace.api.view_model_api``.
-- JSON-serializable only. Raw ``window_title`` / ``file_path_hint`` /
-  clipboard / SQL / tracebacks / paths / passphrases NEVER surfaced.
-- All page payloads for the same snapshot share the SAME ``live_clock`` /
-  ``display_span_id`` / ``stable_live_key_hash`` /
-  ``live_started_at_epoch_ms`` / ``carry_seconds``.
+Details. Owns no live-display semantics: every live semantic, display span
+identity, persisted-open overlay, and official project attribution is decided by
+``activity_display_model_service``. This module projects page payloads only.
 """
 
 from __future__ import annotations
@@ -62,11 +42,7 @@ from .report_revision_service import get_report_structure_revision
 from .runtime_activity_state_service import sample_runtime_activity_state
 from .settings_service import get_bool_setting, get_int_setting, get_setting
 
-# Maximum number of recent activities in the Overview VM.
 _RECENT_LIMIT = 20
-
-
-# Snapshot / status access helpers
 
 
 def _get_current_activity_snapshot() -> ActivitySnapshotContract | None:
@@ -91,12 +67,6 @@ def _apply_live_span_to_rows(
     *,
     row_kind: str,
 ) -> None:
-    """Apply the unified live-span overlay to every matching DB row.
-
-    Mutates rows in place. Rows that do not match the live span's anchor
-    activity id are left untouched. This is the ONLY path through which a
-    live overlay enters Recent / Timeline / Details.
-    """
     span = _first_display_span(model)
     if not span:
         return
@@ -104,9 +74,7 @@ def _apply_live_span_to_rows(
         surface = "recent"
     elif row_kind == ROW_KIND_PROJECT_SESSION_ROW:
         surface = "timeline"
-    elif row_kind == ROW_KIND_ACTIVITY_DETAIL_ROW:
-        surface = "details"
-    elif row_kind == ROW_KIND_PROJECT_ACTIVITY_SUMMARY_ROW:
+    elif row_kind in {ROW_KIND_ACTIVITY_DETAIL_ROW, ROW_KIND_PROJECT_ACTIVITY_SUMMARY_ROW}:
         surface = "details"
     else:
         surface = ""
@@ -122,7 +90,6 @@ def _first_display_span(model: dict[str, Any]) -> DisplaySpanContract | None:
 
 
 def _set_summary_activity_ids(rows: list[dict[str, Any]]) -> None:
-    """Attach read-only Timeline summary scope without changing session IDs."""
     for row in rows:
         ids = _unique_positive_ids(row.get("activity_ids") or [])
         if row.get("is_live_projected"):
@@ -173,26 +140,19 @@ def _revision_fields_for_model(
     today: str,
     report_date: str,
 ) -> dict[str, str]:
-    """Return the same revision tuple consumed by the heartbeat owner."""
-
     del snapshot
     live_clock = model.get("live_clock") or {}
     current_activity = model.get("current_activity") or {}
-    live_revision = page_revision_service.live_revision(
-        current_activity,
-        live_clock,
-    )
+    live_revision = page_revision_service.live_revision(current_activity, live_clock)
     structure_revision = get_report_structure_revision(report_date)
     return {
         "live_revision": live_revision,
         "structure_revision": structure_revision,
         "page_revision": stable_json_hash(
-            [
-                structure_revision,
-                live_revision if report_date == today else "",
-            ]
+            [structure_revision, live_revision if report_date == today else ""]
         ),
     }
+
 
 def _live_identity_fields(model: dict[str, Any]) -> dict[str, Any]:
     live_clock = model.get("live_clock") or {}
@@ -216,20 +176,6 @@ def _detail_report_project_dict(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _detail_candidate_project_dict(row: dict[str, Any]) -> dict[str, Any]:
-    candidate_name = str(row.get("candidate_project_name") or "")
-    if candidate_name:
-        return {
-            "id": None,
-            "name": candidate_name,
-            "description": "",
-            "source": str(row.get("assignment_source") or "candidate"),
-            "is_uncategorized": False,
-            "is_suggested_project": True,
-        }
-    return _detail_report_project_dict(row)
-
-
 def _detail_report_attribution_fields(row: dict[str, Any]) -> dict[str, Any]:
     is_report_project = bool(row.get("is_report_project"))
     is_report_classified = bool(row.get("is_report_classified", is_report_project))
@@ -239,9 +185,6 @@ def _detail_report_attribution_fields(row: dict[str, Any]) -> dict[str, Any]:
         "project_name": str(row.get("project_name") or UNCATEGORIZED_PROJECT),
         "project_description": str(row.get("project_description") or ""),
         "display_project": row.get("display_project") or _detail_report_project_dict(row),
-        "candidate_project": row.get("candidate_project") or _detail_candidate_project_dict(row),
-        "project_transition": row.get("project_transition"),
-        "project_transition_pending": bool(row.get("project_transition_pending")),
         "is_uncategorized": bool(row.get("is_report_uncategorized", not is_report_project)),
         "is_classified": bool(row.get("is_report_classified", is_report_project)),
         "is_report_project": is_report_project,
@@ -254,27 +197,7 @@ def _detail_report_attribution_fields(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-
-# Overview ViewModel
-
-
 def get_overview_view_model(today: str | None = None) -> dict[str, Any]:
-    """Build the Overview page ViewModel from a single display model.
-
-    Live projection comes only from the Activity Display Model. Normal live
-    activity materializes only its own persisted open row; it never borrows a
-    closed anchor or creates a pending virtual row. Contract fallbacks remain
-    display-only and do not represent short-activity absorption.
-
-    KPI totals (``today_total_seconds`` / ``classified_seconds`` /
-    ``uncategorized_seconds``) are computed from the same overlay +
-    materialized rows so the KPI, recent items, and live clock share one
-    sample.
-
-    Single-sample contract: ``current_activity_snapshot`` is read EXACTLY
-    ONCE here and passed to :func:`build_activity_display_model`; the builder
-    MUST NOT re-read the setting on this path.
-    """
     scoped_today = today or timeline_service.get_default_report_date()
     snapshot = _get_current_activity_snapshot()
     model = build_activity_display_model(
@@ -330,10 +253,6 @@ def get_overview_view_model(today: str | None = None) -> dict[str, Any]:
     if isinstance(status_display_item, dict):
         recent_rows.insert(0, dict(status_display_item))
 
-    # KPI totals computed from the overlaid rows. Classification uses the
-    # explicit ``is_classified`` / ``is_uncategorized`` flags propagated by
-    # ``_session_to_overview_row``; a missing field MUST NOT silently fall
-    # back to the classified bucket (no falsy-default behavior).
     total_rows = [r for r in recent_rows if r.get("contributes_to_totals") is not False]
     today_total_seconds = sum(int(r.get("duration_seconds") or 0) for r in total_rows)
     classified_seconds = sum(
@@ -346,11 +265,9 @@ def get_overview_view_model(today: str | None = None) -> dict[str, Any]:
         for r in total_rows
         if bool(r.get("is_uncategorized"))
     )
-    standalone_total_seconds = sum(
-        int(entry.get("duration_seconds") or 0)
-        for entry in standalone_entries
+    today_total_seconds += sum(
+        int(entry.get("duration_seconds") or 0) for entry in standalone_entries
     )
-    today_total_seconds += standalone_total_seconds
     active_elapsed = _current_elapsed_at_sample(live_clock)
     live_projects = _clock_projects_live_duration(live_clock)
     today_total_base_seconds = (
@@ -362,22 +279,18 @@ def get_overview_view_model(today: str | None = None) -> dict[str, Any]:
     uncategorized_base_seconds = uncategorized_seconds
     live_span_id = str(live_clock.get("display_span_id") or "")
     live_total_rows = [
-        r
-        for r in total_rows
+        row
+        for row in total_rows
         if live_span_id
-        and str(r.get("display_span_id") or "") == live_span_id
-        and r.get("live_delta_eligible") is True
+        and str(row.get("display_span_id") or "") == live_span_id
+        and row.get("live_delta_eligible") is True
     ]
-    live_row_is_classified = any(bool(r.get("is_classified")) for r in live_total_rows)
-    live_row_is_uncategorized = any(bool(r.get("is_uncategorized")) for r in live_total_rows)
-    if live_projects and live_row_is_classified:
+    if live_projects and any(bool(row.get("is_classified")) for row in live_total_rows):
         classified_base_seconds = max(0, classified_seconds - active_elapsed)
-    if live_projects and live_row_is_uncategorized:
+    if live_projects and any(bool(row.get("is_uncategorized")) for row in live_total_rows):
         uncategorized_base_seconds = max(0, uncategorized_seconds - active_elapsed)
     kpi_live_targets = build_kpi_live_targets(total_rows, live_clock)
-
     items = recent_rows[:_RECENT_LIMIT]
-
     elapsed = int(current_activity.get("elapsed_seconds") or 0)
 
     return {
@@ -405,8 +318,6 @@ def get_overview_view_model(today: str | None = None) -> dict[str, Any]:
         "classified_base_seconds": classified_base_seconds,
         "uncategorized_base_seconds": uncategorized_base_seconds,
         "current_activity_elapsed_seconds": elapsed,
-        # KPI live-base fields for the frontend ticker: the ticker renders
-        # ``display_base_seconds + current_elapsed_now``.
         "kpi_live_base": {
             "today_total_seconds": today_total_base_seconds,
             "classified_seconds": classified_base_seconds,
@@ -417,22 +328,6 @@ def get_overview_view_model(today: str | None = None) -> dict[str, Any]:
 
 
 def _session_to_overview_row(session: dict[str, Any]) -> dict[str, Any]:
-    """Project a timeline session dict into an Overview recent-item row.
-
-    The classification flags (``project_id`` / ``is_uncategorized`` /
-    ``is_classified``) MUST be propagated explicitly from the source
-    session so the Overview KPI ``classified_seconds`` /
-    ``uncategorized_seconds`` split is based on a positive field check
-    rather than relying on a missing field's falsy default.
-
-    ``activity_ids`` / ``first_activity_id`` MUST be propagated so
-    ``apply_live_span_to_row`` can match a persisted_open anchor that is
-    NOT the session's first activity (the common case when a closed
-    activity precedes the open one in the same session). ``activity_id``
-    stays equal to ``first_activity_id`` to preserve session identity;
-    the live overlay matches via ``activity_ids`` membership, not via
-    ``activity_id`` equality.
-    """
     base_seconds = int(session.get("duration_seconds") or 0)
     is_in_progress = bool(session.get("is_in_progress"))
     is_report_project = bool(session.get("is_report_project", session.get("is_classified")))
@@ -499,26 +394,7 @@ def _session_to_overview_row(session: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-# Timeline ViewModel
-
-
 def get_timeline_view_model(report_date: str | None = None) -> dict[str, Any]:
-    """Build the Timeline page ViewModel from a single display model.
-
-    Timeline sessions come from DB rows plus Activity Display Model projection.
-    Normal live activity materializes only its own persisted open row; there
-    are no borrowed-anchor or pending virtual sessions. Contract fallbacks do
-    not represent short-activity absorption.
-
-    ``raw_total_seconds`` is the sum of raw DB durations (unaffected by
-    the display-only live overlay or adjusted overrides). ``total_seconds``
-    / ``today_total_seconds`` use the display durations after overlay.
-
-    Single-sample contract: ``current_activity_snapshot`` is read EXACTLY
-    ONCE here and the resulting ``snapshot`` is passed to
-    :func:`build_activity_display_model` (via ``snapshot=...``). The
-    builder MUST NOT re-read the setting on this path.
-    """
     scoped_report_date = report_date or timeline_service.get_default_report_date()
     today = timeline_service.get_default_report_date()
     snapshot = _get_current_activity_snapshot()
@@ -547,7 +423,6 @@ def get_timeline_view_model(report_date: str | None = None) -> dict[str, Any]:
 
     report_projection = build_visible_snapshot(scoped_report_date, scoped_report_date)
     sessions_raw = list(report_projection.final_entries)
-
     sessions: list[dict[str, Any]] = []
 
     for session in sessions_raw:
@@ -632,9 +507,6 @@ def get_timeline_view_model(report_date: str | None = None) -> dict[str, Any]:
             "disable_reason": "进行中记录暂不支持编辑" if is_session_in_progress else "",
             "source": "db",
             "display_project": None,
-            "candidate_project": None,
-            "project_transition": None,
-            "project_transition_pending": False,
         }
         sessions.append(row)
     _apply_live_span_to_rows(sessions, report_model, row_kind=ROW_KIND_PROJECT_SESSION_ROW)
@@ -642,14 +514,13 @@ def get_timeline_view_model(report_date: str | None = None) -> dict[str, Any]:
     for row in sessions:
         enable_safe_open_edit(row)
 
-    display_total_seconds = sum(int(r.get("duration_seconds") or 0) for r in sessions)
+    display_total_seconds = sum(int(row.get("duration_seconds") or 0) for row in sessions)
     active_elapsed = _current_elapsed_at_sample(report_live_clock)
     today_total_base_seconds = (
         max(0, display_total_seconds - active_elapsed)
         if _clock_projects_live_duration(report_live_clock)
         else display_total_seconds
     )
-
     elapsed = int(current_activity.get("elapsed_seconds") or 0)
 
     return {
@@ -677,7 +548,6 @@ def get_session_activity_summary_view_model(
     projection_instance_key: str,
     expected_projection_revision: str | None = None,
 ) -> dict[str, Any]:
-    """Build the Timeline right-panel summary scoped by session activities."""
     date = report_date or timeline_service.get_default_report_date()
     today = timeline_service.get_default_report_date()
     snapshot = _get_current_activity_snapshot()
@@ -716,7 +586,12 @@ def get_session_activity_summary_view_model(
             row["edit_disabled"] = True
             row["disable_reason"] = row.get("disable_reason") or "进行中记录暂不支持编辑"
         row["duration"] = format_duration(int(row.get("duration_seconds") or 0))
-    rows.sort(key=lambda item: (-int(item.get("duration_seconds") or 0), str(item.get("activity_name") or "")))
+    rows.sort(
+        key=lambda item: (
+            -int(item.get("duration_seconds") or 0),
+            str(item.get("activity_name") or ""),
+        )
+    )
 
     return {
         "ok": True,
