@@ -70,6 +70,30 @@ def prepare_activity(
             status=status,
             start_time=start_time,
         )
+
+    payload_project_id = payload.get("project_id")
+    resolved_project_id = (
+        int(initial_project_id)
+        if initial_project_id is not None
+        else (
+            int(payload_project_id)
+            if payload_project_id is not None
+            else None
+        )
+    )
+    payload_manual = (
+        initial_project_id is None
+        and payload_project_id is not None
+        and assignment_source is None
+    )
+    resolved_manual = bool(assignment_is_manual or payload_manual)
+    resolved_source = assignment_source or (
+        "manual" if resolved_manual else None
+    )
+    resolved_confidence = assignment_confidence
+    if resolved_confidence is None and resolved_manual:
+        resolved_confidence = 100
+
     return PreparedActivity(
         start_time=str(start_time),
         source=str(source),
@@ -79,12 +103,10 @@ def prepare_activity(
         file_path_hint=str(file_path_hint) if file_path_hint else None,
         status=status,
         resource=resource,
-        initial_project_id=(
-            int(initial_project_id) if initial_project_id is not None else None
-        ),
-        assignment_source=assignment_source,
-        assignment_confidence=assignment_confidence,
-        assignment_is_manual=bool(assignment_is_manual),
+        initial_project_id=resolved_project_id,
+        assignment_source=resolved_source,
+        assignment_confidence=resolved_confidence,
+        assignment_is_manual=resolved_manual,
     )
 
 
@@ -123,7 +145,7 @@ def insert_open_activity(conn, prepared: PreparedActivity) -> int:
         if row is None:
             raise ValueError("activity_context_not_ready")
         project_id = int(row["id"])
-    assignment_source = prepared.assignment_source or (
+    effective_source = prepared.assignment_source or (
         "manual" if prepared.assignment_is_manual else "uncategorized"
     )
     confidence = (
@@ -144,7 +166,7 @@ def insert_open_activity(conn, prepared: PreparedActivity) -> int:
             activity_id,
             project_id,
             confidence,
-            assignment_source,
+            effective_source,
             int(prepared.assignment_is_manual),
             timestamp,
             timestamp,
@@ -176,12 +198,13 @@ def close_activity(
         """,
         (int(activity_id),),
     ).fetchone()
-    if row is None:
-        return False
-    if row["end_time"] is not None:
+    if row is None or row["end_time"] is not None:
         return False
     safe_end = max(str(end_time or ""), str(row["start_time"] or ""))
-    duration, reversed_clock = _duration_seconds(str(row["start_time"]), safe_end)
+    duration, reversed_clock = _duration_seconds(
+        str(row["start_time"]),
+        safe_end,
+    )
     duration = max(duration, int(row["duration_seconds"] or 0))
     if duration_seconds is not None:
         duration = max(duration, max(0, int(duration_seconds)))
