@@ -1,0 +1,72 @@
+name: Trigger architecture source transforms
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/trigger-architecture-source-transforms.yml
+
+permissions:
+  contents: write
+
+jobs:
+  transform:
+    if: github.event.pull_request.head.ref == 'agent/canonical-architecture-consolidation'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out PR head branch
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+          clean: true
+          show-progress: false
+
+      - name: Execute transform with diagnostics
+        shell: python {0}
+        run: |
+          from pathlib import Path
+          import subprocess
+          import traceback
+
+          source_path = Path('.github/workflows/apply-architecture-source-transforms.yml')
+          lines = source_path.read_text(encoding='utf-8').splitlines()
+          step_line = '      - name: Apply deterministic source transforms'
+          run_line = '        run: |'
+          end_line = '      - name: Commit transformed sources'
+          step_index = lines.index(step_line)
+          run_index = lines.index(run_line, step_index)
+          end_index = lines.index(end_line, run_index)
+          script_lines = []
+          for line in lines[run_index + 1:end_index]:
+              if line.startswith('          '):
+                  script_lines.append(line[10:])
+              elif not line:
+                  script_lines.append('')
+              else:
+                  raise RuntimeError(f'unexpected transform indentation: {line!r}')
+          script = '\n'.join(script_lines) + '\n'
+          try:
+              exec(compile(script, str(source_path), 'exec'), {'__name__': '__main__'})
+              Path('diagnostics/architecture-transform-error.txt').unlink(missing_ok=True)
+          except Exception:
+              failure = traceback.format_exc()
+              subprocess.run(['git', 'reset', '--hard', 'HEAD'], check=True)
+              diagnostics = Path('diagnostics')
+              diagnostics.mkdir(exist_ok=True)
+              (diagnostics / 'architecture-transform-error.txt').write_text(
+                  failure,
+                  encoding='utf-8',
+              )
+          Path('.github/workflows/trigger-architecture-source-transforms.yml').unlink(missing_ok=True)
+
+      - name: Commit transformed sources or diagnostics
+        shell: bash
+        run: |
+          git config user.name "worktrace-architecture-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "Consolidate source ownership boundaries [skip ci]"
+          git push origin "HEAD:${{ github.event.pull_request.head.ref }}"
