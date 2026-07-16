@@ -203,3 +203,13 @@ def test_frontend_does_not_replace_bridge_or_patch_edit_dom_after_render():
     assert "MutationObserver" not in source
     assert 'method.indexOf("project")' not in source
     assert 'method.indexOf("rule")' not in source
+
+
+def test_rules_flow_refreshes_project_catalog_explicitly():
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "worktrace/webview_ui/js/rules.js").read_text(
+        encoding="utf-8"
+    )
+    assert "refreshSharedProjectCatalog" in source
+    assert 'method.indexOf("project")' not in source
+    assert 'method.indexOf("rule")' not in source
