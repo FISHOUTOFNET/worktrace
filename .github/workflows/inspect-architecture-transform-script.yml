@@ -1,0 +1,43 @@
+name: Inspect architecture transform source lines
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/inspect-architecture-transform-script.yml
+
+permissions:
+  contents: write
+
+jobs:
+  inspect:
+    if: github.event.pull_request.head.ref == 'agent/canonical-architecture-consolidation'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+          clean: true
+          show-progress: false
+      - name: Write extracted Python lines
+        shell: python {0}
+        run: |
+          from pathlib import Path
+          lines = Path('.github/workflows/apply-architecture-source-transforms.yml').read_text(encoding='utf-8').splitlines()
+          step = lines.index('      - name: Apply deterministic source transforms')
+          run = lines.index('        run: |', step)
+          end = lines.index('      - name: Commit transformed sources', run)
+          extracted = [line[10:] if line.startswith('          ') else '' for line in lines[run + 1:end]]
+          preview = '\n'.join(f'{i + 1:03d}: {line!r}' for i, line in enumerate(extracted[:60]))
+          Path('diagnostics/architecture-transform-preview.txt').write_text(preview + '\n', encoding='utf-8')
+          Path('.github/workflows/inspect-architecture-transform-script.yml').unlink()
+      - name: Commit preview
+        shell: bash
+        run: |
+          git config user.name "worktrace-architecture-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git commit -m "Record architecture transform preview [skip ci]"
+          git pull --rebase origin "${{ github.event.pull_request.head.ref }}"
+          git push origin "HEAD:${{ github.event.pull_request.head.ref }}"
