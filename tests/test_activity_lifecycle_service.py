@@ -4,7 +4,7 @@ These tests verify the architecture invariants for the open-row state machine:
 
 - ``activity_lifecycle_service`` owns open-row lifecycle transitions.
 - ``activity_service`` remains a low-level CRUD helper and does not run project
-  inference; the database rejects a second simultaneous open row.
+  inference; the database seals the previous open row before a replacement.
 - ``start_activity`` closes and finalizes the prior row before inserting the
   replacement.
 - Manual assignments are never overridden.
@@ -352,7 +352,7 @@ def test_persist_open_activity_persists_without_elapsed_gate(temp_db_setup):
 
 
 def test_sync_persisted_open_activity_project_skips_missing_row(temp_db_setup):
-    assert sync_persisted_open_activity_project(999999) is None
+    assert sync_persisted_open_activity_project(999999) == {}
 
 
 def test_start_activity_closes_prior_open_row_at_safe_time(temp_db_setup):
@@ -411,7 +411,11 @@ def test_recovery_clamps_future_heartbeat_to_now(temp_db_setup, monkeypatch):
         "Doc",
         start_time="2026-07-01 09:50:00",
     )
-    monkeypatch.setattr(recovery_service, "_now", lambda: now)
+    monkeypatch.setattr(
+        recovery_service,
+        "now_str",
+        lambda: now.strftime(TIME_FORMAT),
+    )
     recovery_service.recover_unclosed_records()
     row = activity_service.get_activity(aid)
     assert row["end_time"] == now.strftime(TIME_FORMAT)
