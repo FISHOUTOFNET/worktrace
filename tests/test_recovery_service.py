@@ -1,3 +1,4 @@
+from tests.support import runtime_state_fixture
 import pytest
 
 pytestmark = [pytest.mark.collector_runtime, pytest.mark.integration, pytest.mark.db]
@@ -71,13 +72,13 @@ def test_recovery_splits_unclosed_cross_midnight_record(temp_db):
 def test_recovery_clears_stale_runtime_state_without_open_row(temp_db):
     settings_service.set_setting("last_collector_heartbeat", "2000-01-01 09:09:00")
     settings_service.set_setting("last_shutdown_at", "2000-01-01 09:10:00")
-    settings_service.set_setting("pending_short_seconds", "12")
-    settings_service.set_setting("current_activity_snapshot", '{"status":"normal"}')
+    runtime_state_fixture.set_setting("pending_short_seconds", "12")
+    runtime_state_fixture.set_setting("current_activity_snapshot", '{"status":"normal"}')
 
     recovery_service.recover_unclosed_records()
 
-    assert settings_service.get_setting("pending_short_seconds") == "0"
-    assert settings_service.get_setting("current_activity_snapshot", "") == ""
+    assert runtime_state_fixture.get_setting("pending_short_seconds") == "0"
+    assert runtime_state_fixture.get_setting("current_activity_snapshot", "") == ""
 
     machine = CollectorStateMachine()
     window = ActiveWindow("A", "a.exe", "A")

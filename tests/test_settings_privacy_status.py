@@ -16,6 +16,7 @@ write-side action surface.
 """
 
 from __future__ import annotations
+from tests.support import runtime_state_fixture
 
 import inspect
 import json
@@ -169,7 +170,7 @@ def test_api_payload_does_not_leak_sensitive_tokens(temp_db) -> None:
     # never carry path strings, clipboard content, or passphrases.
     set_setting("export_path", SENSITIVE_EXPORT_PATH)
     set_setting("clipboard_capture_enabled", "true")
-    set_setting("current_activity_snapshot", '{"clipboard":"' + SENSITIVE_CLIPBOARD_TOKEN + '"}')
+    runtime_state_fixture.set_setting("current_activity_snapshot", '{"clipboard":"' + SENSITIVE_CLIPBOARD_TOKEN + '"}')
     serialized = json.dumps(get_settings_privacy_status(), ensure_ascii=False)
     for token in (
         SENSITIVE_EXPORT_PATH,
@@ -339,7 +340,7 @@ def test_api_write_success_payload_is_json_serializable(temp_db) -> None:
 
 def test_api_write_payload_does_not_leak_sensitive_tokens(temp_db) -> None:
     set_setting("export_path", SENSITIVE_EXPORT_PATH)
-    set_setting("current_activity_snapshot", '{"clipboard":"' + SENSITIVE_CLIPBOARD_TOKEN + '"}')
+    runtime_state_fixture.set_setting("current_activity_snapshot", '{"clipboard":"' + SENSITIVE_CLIPBOARD_TOKEN + '"}')
     result = set_clipboard_capture_enabled_for_webview(True)
     serialized = json.dumps(result, ensure_ascii=False)
     for token in (
@@ -585,7 +586,7 @@ def test_bridge_write_api_exception_returns_generic_error(temp_db) -> None:
 
 def test_bridge_write_payload_does_not_leak_sensitive_tokens(temp_db) -> None:
     set_setting("export_path", SENSITIVE_EXPORT_PATH)
-    set_setting("current_activity_snapshot", '{"clipboard":"' + SENSITIVE_CLIPBOARD_TOKEN + '"}')
+    runtime_state_fixture.set_setting("current_activity_snapshot", '{"clipboard":"' + SENSITIVE_CLIPBOARD_TOKEN + '"}')
     bridge = WebViewBridge()
     result = bridge.set_clipboard_capture_enabled(True)
     serialized = json.dumps(result, ensure_ascii=False)
@@ -1931,7 +1932,7 @@ def test_api_first_run_notice_payload_is_json_serializable(temp_db) -> None:
 
 def test_api_first_run_notice_payload_does_not_leak_sensitive_tokens(temp_db) -> None:
     set_setting("export_path", SENSITIVE_EXPORT_PATH)
-    set_setting("current_activity_snapshot", '{"clipboard":"' + SENSITIVE_CLIPBOARD_TOKEN + '"}')
+    runtime_state_fixture.set_setting("current_activity_snapshot", '{"clipboard":"' + SENSITIVE_CLIPBOARD_TOKEN + '"}')
     serialized = json.dumps(get_first_run_notice_for_webview(), ensure_ascii=False)
     for token in (
         SENSITIVE_EXPORT_PATH,

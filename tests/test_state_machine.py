@@ -1,3 +1,4 @@
+from tests.support import runtime_state_fixture
 import json
 
 import pytest
@@ -32,7 +33,7 @@ def _enable_excluded_project_with_keyword(keyword: str) -> int:
 
 def _snapshot():
     return json.loads(
-        settings_service.get_setting("current_activity_snapshot", "") or "{}"
+        runtime_state_fixture.get_setting("current_activity_snapshot", "") or "{}"
     )
 
 

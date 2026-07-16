@@ -116,7 +116,6 @@ class SnapshotPublisher:
         clear_runtime_activity_state(
             reason,
             clear_snapshot=True,
-            clear_pending=False,
             clear_ownership=False,
         )
 

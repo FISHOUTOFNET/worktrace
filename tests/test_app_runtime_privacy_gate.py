@@ -1,6 +1,7 @@
 """Privacy-gate and structured runtime startup contracts."""
 
 from __future__ import annotations
+from tests.support import runtime_state_fixture
 
 import threading
 from unittest.mock import patch
@@ -369,14 +370,14 @@ def test_startup_recovery_runtime_cleanup_is_single_owner(
         lambda: None,
     )
 
-    settings_service.set_setting("current_activity_snapshot", '{"old": true}')
-    settings_service.set_setting("pending_short_seconds", "9")
+    runtime_state_fixture.set_setting("current_activity_snapshot", '{"old": true}')
+    runtime_state_fixture.set_setting("pending_short_seconds", "9")
     runtime = AppRuntime(_make_paths(temp_db, tmp_path))
     try:
         runtime.initialize()
         assert calls == ["runtime"]
-        assert settings_service.get_setting("current_activity_snapshot") == ""
-        assert settings_service.get_setting("pending_short_seconds") == "0"
+        assert runtime_state_fixture.get_setting("current_activity_snapshot") == ""
+        assert runtime_state_fixture.get_setting("pending_short_seconds") == "0"
 
         stop_event = threading.Event()
         stop_event.set()
@@ -411,8 +412,8 @@ def test_non_owner_runtime_does_not_clear_owner_live_state(
         lambda *args, **kwargs: close_calls.append("close"),
     )
 
-    settings_service.set_setting("current_activity_snapshot", '{"owner": true}')
-    settings_service.set_setting("pending_short_seconds", "11")
+    runtime_state_fixture.set_setting("current_activity_snapshot", '{"owner": true}')
+    runtime_state_fixture.set_setting("pending_short_seconds", "11")
     runtime = AppRuntime(_make_paths(temp_db, tmp_path))
 
     runtime.initialize()
@@ -421,5 +422,5 @@ def test_non_owner_runtime_does_not_clear_owner_live_state(
     assert runtime.owns_application_instance is False
     assert calls == []
     assert close_calls == []
-    assert settings_service.get_setting("current_activity_snapshot") == '{"owner": true}'
-    assert settings_service.get_setting("pending_short_seconds") == "11"
+    assert runtime_state_fixture.get_setting("current_activity_snapshot") == '{"owner": true}'
+    assert runtime_state_fixture.get_setting("pending_short_seconds") == "0"

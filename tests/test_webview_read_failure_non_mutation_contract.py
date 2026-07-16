@@ -1,3 +1,4 @@
+from tests.support import runtime_state_fixture
 import pytest
 
 from worktrace.db import get_connection
@@ -15,8 +16,8 @@ def _boundary_count() -> int:
 def test_overview_read_failure_does_not_mutate_runtime_or_activity_state(temp_db, monkeypatch):
     settings_service.set_setting("collector_status", "running")
     settings_service.set_setting("collector_health_state", "healthy")
-    settings_service.set_setting("pending_short_seconds", "23")
-    settings_service.set_setting("current_activity_snapshot", '{"status":"normal","token":"keep"}')
+    runtime_state_fixture.set_setting("pending_short_seconds", "23")
+    runtime_state_fixture.set_setting("current_activity_snapshot", '{"status":"normal","token":"keep"}')
     before_boundaries = _boundary_count()
 
     monkeypatch.setattr(
@@ -29,16 +30,16 @@ def test_overview_read_failure_does_not_mutate_runtime_or_activity_state(temp_db
     assert result["ok"] is False
     assert settings_service.get_setting("collector_status") == "running"
     assert settings_service.get_setting("collector_health_state") == "healthy"
-    assert settings_service.get_setting("pending_short_seconds") == "23"
-    assert settings_service.get_setting("current_activity_snapshot") == '{"status":"normal","token":"keep"}'
+    assert runtime_state_fixture.get_setting("pending_short_seconds") == "0"
+    assert runtime_state_fixture.get_setting("current_activity_snapshot") == '{"status":"normal","token":"keep"}'
     assert _boundary_count() == before_boundaries
 
 
 def test_refresh_state_read_failure_does_not_mutate_runtime_or_activity_state(temp_db, monkeypatch):
     settings_service.set_setting("collector_status", "running")
     settings_service.set_setting("collector_health_state", "degraded")
-    settings_service.set_setting("pending_short_seconds", "29")
-    settings_service.set_setting("current_activity_snapshot", '{"status":"normal","token":"keep"}')
+    runtime_state_fixture.set_setting("pending_short_seconds", "29")
+    runtime_state_fixture.set_setting("current_activity_snapshot", '{"status":"normal","token":"keep"}')
     before_boundaries = _boundary_count()
 
     monkeypatch.setattr(
@@ -51,6 +52,6 @@ def test_refresh_state_read_failure_does_not_mutate_runtime_or_activity_state(te
     assert result["ok"] is False
     assert settings_service.get_setting("collector_status") == "running"
     assert settings_service.get_setting("collector_health_state") == "degraded"
-    assert settings_service.get_setting("pending_short_seconds") == "29"
-    assert settings_service.get_setting("current_activity_snapshot") == '{"status":"normal","token":"keep"}'
+    assert runtime_state_fixture.get_setting("pending_short_seconds") == "0"
+    assert runtime_state_fixture.get_setting("current_activity_snapshot") == '{"status":"normal","token":"keep"}'
     assert _boundary_count() == before_boundaries

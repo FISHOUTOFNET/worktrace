@@ -1,3 +1,4 @@
+from tests.support import runtime_state_fixture
 from tests.support import activity_factory as activity_service
 from tests.support.db_helpers import assign_activity_project
 import json
@@ -194,7 +195,7 @@ def test_statistics_export_excludes_in_progress_live_rows(temp_db):
     activity_service.set_activity_duration(aid, 60)
 
     snapshot = _pending_persisted_open_snapshot(aid=aid, start_time=start_time)
-    settings_service.set_setting(
+    runtime_state_fixture.set_setting(
         "current_activity_snapshot", json.dumps(snapshot, ensure_ascii=False)
     )
     settings_service.clear_settings_cache()

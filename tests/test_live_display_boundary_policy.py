@@ -1,6 +1,7 @@
 """Boundary contracts: normal rows belong to their own persisted activity."""
 
 from __future__ import annotations
+from tests.support import runtime_state_fixture
 
 import json
 
@@ -31,7 +32,7 @@ def test_collector_switch_creates_a_new_open_row_without_carrying_the_prior_row(
 
 
 def test_pause_snapshot_is_status_only_and_has_no_normal_live_overlay(temp_db):
-    settings_service.set_setting("current_activity_snapshot", json.dumps({"status": "paused", "elapsed_seconds": 10}))
+    runtime_state_fixture.set_setting("current_activity_snapshot", json.dumps({"status": "paused", "elapsed_seconds": 10}))
     settings_service.set_setting("collector_status", "paused")
     settings_service.clear_settings_cache()
     overview = WebViewBridge().get_overview()

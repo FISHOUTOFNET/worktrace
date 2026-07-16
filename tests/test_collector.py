@@ -1,3 +1,4 @@
+from tests.support import runtime_state_fixture
 import inspect
 import re
 import threading
@@ -48,7 +49,7 @@ def test_collector_loop_with_fake_adapter(temp_db, monkeypatch):
     assert rows[0]["window_title"] == "Doc"
     assert rows[0]["status"] == "normal"
     assert settings_service.get_setting("collector_status") == "stopped"
-    assert settings_service.get_setting("current_activity_snapshot", "") == ""
+    assert runtime_state_fixture.get_setting("current_activity_snapshot", "") == ""
 
 
 def test_legacy_five_second_poll_interval_is_normalized(temp_db):
@@ -190,7 +191,7 @@ def test_collector_pause_does_not_poll_active_window(temp_db, monkeypatch):
     settings_service.set_setting("first_run_notice_accepted", "true")
     settings_service.set_setting("user_paused", "true")
     settings_service.set_setting("poll_interval_seconds", "1")
-    settings_service.set_setting("current_activity_snapshot", '{"status":"normal"}')
+    runtime_state_fixture.set_setting("current_activity_snapshot", '{"status":"normal"}')
     adapter = RaisingAdapter()
     stop_event = threading.Event()
     _stop_after_poll(monkeypatch, stop_event)
@@ -202,7 +203,7 @@ def test_collector_pause_does_not_poll_active_window(temp_db, monkeypatch):
     rows = activity_service.get_activities_by_date(time.strftime("%Y-%m-%d"))
     non_system_rows = [r for r in rows if r["resource_kind"] != "system"]
     assert non_system_rows == [], f"no real app activity expected while paused, got {non_system_rows}"
-    assert settings_service.get_setting("current_activity_snapshot", "") == ""
+    assert runtime_state_fixture.get_setting("current_activity_snapshot", "") == ""
 
 
 def test_collector_control_pause_finalizes_before_exposing_paused(monkeypatch):
@@ -293,7 +294,7 @@ def test_collector_skips_active_window_when_import_guard_active(temp_db, monkeyp
     settings_service.set_setting("user_paused", "false")
     monkeypatch.setattr(collector_mod, "is_secure_import_in_progress", lambda: True)
     settings_service.set_setting("poll_interval_seconds", "1")
-    settings_service.set_setting("current_activity_snapshot", '{"status":"normal"}')
+    runtime_state_fixture.set_setting("current_activity_snapshot", '{"status":"normal"}')
     adapter = RaisingAdapter()
     stop_event = threading.Event()
     _stop_after_poll(monkeypatch, stop_event)

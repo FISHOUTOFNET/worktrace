@@ -1,4 +1,5 @@
 from __future__ import annotations
+from tests.support import runtime_state_fixture
 
 import json
 
@@ -348,7 +349,7 @@ class TestIdeWorkspaceAnchorAndProject:
 
 
 def _snapshot():
-    return json.loads(settings_service.get_setting("current_activity_snapshot", "") or "{}")
+    return json.loads(runtime_state_fixture.get_setting("current_activity_snapshot", "") or "{}")
 
 
 class TestCurrentSnapshotUsesResourceDisplayName:

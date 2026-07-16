@@ -28,6 +28,7 @@ intentionally project-blind.
 """
 
 from __future__ import annotations
+from tests.support import runtime_state_fixture
 
 import json
 
@@ -40,7 +41,7 @@ pytestmark = [pytest.mark.db, pytest.mark.live_display, pytest.mark.contract]
 
 
 def _snapshot() -> dict:
-    raw = settings_service.get_setting("current_activity_snapshot", "") or ""
+    raw = runtime_state_fixture.get_setting("current_activity_snapshot", "") or ""
     if not raw:
         return {}
     return json.loads(raw)

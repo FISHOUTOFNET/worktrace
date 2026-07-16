@@ -5,6 +5,7 @@ collector. Any noise reduction is a read-only report projection concern.
 """
 
 from __future__ import annotations
+from tests.support import runtime_state_fixture
 
 import json
 
@@ -36,7 +37,7 @@ def _rows() -> list[dict]:
 
 
 def _snapshot() -> dict:
-    return json.loads(settings_service.get_setting("current_activity_snapshot", "") or "{}")
+    return json.loads(runtime_state_fixture.get_setting("current_activity_snapshot", "") or "{}")
 
 
 def test_new_activity_persists_immediately(temp_db):

@@ -1,6 +1,7 @@
 """Small end-to-end contracts for the current collector and live product."""
 
 from __future__ import annotations
+from tests.support import runtime_state_fixture
 
 import json
 
@@ -38,7 +39,7 @@ def test_fresh_normal_activity_immediately_owns_a_persisted_open_row(temp_db):
 
     rows = _rows()
     snapshot = json.loads(
-        settings_service.get_setting("current_activity_snapshot", "{}") or "{}"
+        runtime_state_fixture.get_setting("current_activity_snapshot", "{}") or "{}"
     )
     assert len(rows) == 1 and rows[0]["end_time"] is None
     assert snapshot["persisted_activity_id"] == rows[0]["id"]
@@ -78,7 +79,7 @@ def test_stop_and_restart_do_not_restore_stale_snapshot_metadata(temp_db):
     machine.transition_to("recording", _window("B"), at_time=f"{DATE} 09:00:10")
 
     snapshot = json.loads(
-        settings_service.get_setting("current_activity_snapshot", "{}") or "{}"
+        runtime_state_fixture.get_setting("current_activity_snapshot", "{}") or "{}"
     )
     assert snapshot["persisted_activity_id"] == _rows()[-1]["id"]
     assert snapshot["activity_display_name"] == "B"
