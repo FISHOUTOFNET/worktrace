@@ -228,7 +228,7 @@ class AppRuntime:
             )
 
     def start_authorized_collection(self) -> RuntimeStartResult:
-        """Run retry, worker readiness and Collector startup in one owner."""
+        """Start the critical Collector before optional derived-state workers."""
 
         with self._lifecycle_lock:
             if not self._initialized or not self.owns_application_instance:
@@ -259,6 +259,28 @@ class AppRuntime:
             logging.exception("pending assignment inference retry failed")
 
         try:
+            collector_result = self.start_collector()
+        except Exception:
+            logging.exception("collector startup failed")
+            collector_result = {
+                "ok": False,
+                "error": "collector_start_failed",
+            }
+
+        if not bool(collector_result.get("ok")):
+            self.phase = RuntimePhase.FAILED
+            return RuntimeStartResult(
+                ok=False,
+                collector_ready=False,
+                folder_index_ready=False,
+                history_worker_ready=False,
+                degraded=True,
+                error_code=str(
+                    collector_result.get("error") or "collector_start_failed"
+                ),
+            )
+
+        try:
             workers = self.start_background_workers()
         except Exception:
             logging.exception("background worker startup failed")
@@ -266,33 +288,6 @@ class AppRuntime:
                 index_ready=False,
                 history_ready=False,
                 error="worker_start_failed",
-            )
-
-        try:
-            collector_result = self.start_collector()
-        except Exception:
-            logging.exception("collector startup failed")
-            self.phase = RuntimePhase.FAILED
-            return RuntimeStartResult(
-                ok=False,
-                collector_ready=False,
-                folder_index_ready=workers.index_ready,
-                history_worker_ready=workers.history_ready,
-                degraded=True,
-                error_code="collector_start_failed",
-            )
-
-        if not bool(collector_result.get("ok")):
-            self.phase = RuntimePhase.FAILED
-            return RuntimeStartResult(
-                ok=False,
-                collector_ready=False,
-                folder_index_ready=workers.index_ready,
-                history_worker_ready=workers.history_ready,
-                degraded=True,
-                error_code=str(
-                    collector_result.get("error") or "collector_start_failed"
-                ),
             )
 
         degraded = bool(retry_degraded or not workers.ready)
