@@ -8,6 +8,7 @@ business database or creates the WebView.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import logging
 import sys
 import threading
@@ -19,6 +20,7 @@ from ..collector.collector import CollectorControl, run_collector
 from ..collector.single_instance import acquire_single_instance, release_single_instance
 from ..services import (
     activity_lifecycle_service,
+    assignment_command_service,
     folder_index_service,
     history_mutation_job_service,
     recovery_service,
@@ -44,6 +46,63 @@ if TYPE_CHECKING:
     _Paths = _Paths  # noqa: F811
 
 
+@dataclass(frozen=True)
+class WorkerReadiness:
+    """Structured readiness for derived-state workers."""
+
+    index_ready: bool
+    history_ready: bool
+    index_started: bool = False
+    history_started: bool = False
+    error: str | None = None
+
+    @property
+    def ready(self) -> bool:
+        return bool(self.index_ready and self.history_ready)
+
+    @property
+    def started_any(self) -> bool:
+        return bool(self.index_started or self.history_started)
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "ready": self.ready,
+            "index_ready": self.index_ready,
+            "history_ready": self.history_ready,
+            "index_started": self.index_started,
+            "history_started": self.history_started,
+            "error": self.error,
+        }
+
+
+@dataclass(frozen=True)
+class RuntimeStartResult:
+    """Complete result of the authorized startup sequence."""
+
+    ok: bool
+    collector_ready: bool
+    folder_index_ready: bool
+    history_worker_ready: bool
+    already_running: bool = False
+    degraded: bool = False
+    error_code: str | None = None
+
+    def to_dict(self) -> dict[str, object]:
+        result: dict[str, object] = {
+            "ok": self.ok,
+            "collector_ready": self.collector_ready,
+            "folder_index_ready": self.folder_index_ready,
+            "history_worker_ready": self.history_worker_ready,
+            "already_running": self.already_running,
+            "degraded": self.degraded,
+            "background_worker_degraded": self.degraded,
+        }
+        if self.error_code:
+            result["error"] = self.error_code
+            result["error_code"] = self.error_code
+        return result
+
+
 def _choose_adapter():
     if sys.platform.startswith("win"):
         from ..platforms.hardened_windows_adapter import HardenedWindowsAdapter
@@ -64,26 +123,18 @@ def _thread_reference_is_alive(thread: Any | None) -> bool:
 class AppRuntime:
     """Single owner for application, worker and adapter lifecycle."""
 
-    def __init__(self, paths: "_Paths") -> None:
+    def __init__(self, paths: "_Paths", adapter: Any | None = None) -> None:
         self.paths = paths
         self.stop_event = threading.Event()
         self.owns_application_instance = False
         self.collector_control = CollectorControl()
         self._lifecycle_lock = threading.RLock()
-        self._adapter = _choose_adapter()
+        self._adapter = adapter if adapter is not None else _choose_adapter()
         self._collector_thread: threading.Thread | None = None
         self._index_thread: threading.Thread | None = None
         self._history_thread: threading.Thread | None = None
         self._initialized = False
         self._shutdown = False
-
-    @property
-    def owns_collector(self) -> bool:
-        return bool(self.owns_application_instance)
-
-    @owns_collector.setter
-    def owns_collector(self, value: bool) -> None:
-        self.owns_application_instance = bool(value)
 
     def initialize(self) -> bool:
         with self._lifecycle_lock:
@@ -107,38 +158,99 @@ class AppRuntime:
             self._initialized = True
             return True
 
-    def start_background_workers(self) -> bool:
-        """Start both derived-state workers and report complete readiness."""
+    def start_background_workers(self) -> WorkerReadiness:
+        """Start or confirm both derived-state workers."""
 
         with self._lifecycle_lock:
-            if (
-                not self.owns_application_instance
-                or self._shutdown
-                or self.stop_event.is_set()
-            ):
-                return False
+            if not self.owns_application_instance:
+                return WorkerReadiness(False, False, error="runtime_not_owned")
+            if self._shutdown or self.stop_event.is_set():
+                return WorkerReadiness(False, False, error="runtime_stopping")
 
-            started = False
             index_ready = _thread_reference_is_alive(self._index_thread)
+            index_started = False
             if not index_ready:
                 recover_interrupted_indexes()
                 self._index_thread = folder_index_service.start_folder_index_worker(
                     self.stop_event
                 )
-                index_ready = self._index_thread is not None
-                started = started or index_ready
+                index_ready = _thread_reference_is_alive(self._index_thread)
+                index_started = index_ready
 
             history_ready = _thread_reference_is_alive(self._history_thread)
+            history_started = False
             if not history_ready:
                 self._history_thread = (
                     history_mutation_job_service.start_history_worker(
                         self.stop_event
                     )
                 )
-                history_ready = self._history_thread is not None
-                started = started or history_ready
+                history_ready = _thread_reference_is_alive(self._history_thread)
+                history_started = history_ready
 
-            return bool(started and index_ready and history_ready)
+            error = None if index_ready and history_ready else "worker_start_failed"
+            return WorkerReadiness(
+                index_ready=index_ready,
+                history_ready=history_ready,
+                index_started=index_started,
+                history_started=history_started,
+                error=error,
+            )
+
+    def start_authorized_collection(self) -> RuntimeStartResult:
+        """Run retry, worker readiness and Collector startup in one owner."""
+
+        retry_degraded = False
+        try:
+            assignment_command_service.retry_pending_inference(100)
+        except Exception:
+            retry_degraded = True
+            logging.exception("pending assignment inference retry failed")
+
+        try:
+            workers = self.start_background_workers()
+        except Exception:
+            logging.exception("background worker startup failed")
+            workers = WorkerReadiness(
+                index_ready=False,
+                history_ready=False,
+                error="worker_start_failed",
+            )
+
+        try:
+            collector_result = self.start_collector()
+        except Exception:
+            logging.exception("collector startup failed")
+            return RuntimeStartResult(
+                ok=False,
+                collector_ready=False,
+                folder_index_ready=workers.index_ready,
+                history_worker_ready=workers.history_ready,
+                degraded=True,
+                error_code="collector_start_failed",
+            )
+
+        if not bool(collector_result.get("ok")):
+            return RuntimeStartResult(
+                ok=False,
+                collector_ready=False,
+                folder_index_ready=workers.index_ready,
+                history_worker_ready=workers.history_ready,
+                degraded=True,
+                error_code=str(
+                    collector_result.get("error") or "collector_start_failed"
+                ),
+            )
+
+        degraded = bool(retry_degraded or not workers.ready)
+        return RuntimeStartResult(
+            ok=True,
+            collector_ready=True,
+            folder_index_ready=workers.index_ready,
+            history_worker_ready=workers.history_ready,
+            already_running=bool(collector_result.get("already_running")),
+            degraded=degraded,
+        )
 
     def start_collector(self) -> dict[str, object]:
         with self._lifecycle_lock:
@@ -175,19 +287,30 @@ class AppRuntime:
         register_collector_reset_handler(self.reset_collection_runtime_now)
         register_quiesce_handler(self.quiesce_collection_now)
 
-    def pause_collection_now(self, timeout_seconds: float = 5.0) -> dict[str, object]:
+    def pause_collection_now(
+        self,
+        timeout_seconds: float = 5.0,
+    ) -> dict[str, object]:
         if not self.owns_application_instance or not _thread_reference_is_alive(
             self._collector_thread
         ):
-            return {"ok": True, "pause_pending": False, "collector_active": False}
-        return self.collector_control.request_pause(timeout_seconds=timeout_seconds)
+            return {
+                "ok": True,
+                "pause_pending": False,
+                "collector_active": False,
+            }
+        return self.collector_control.request_pause(
+            timeout_seconds=timeout_seconds
+        )
 
     def quiesce_collection_now(
         self,
         timeout_seconds: float = 5.0,
     ) -> dict[str, object]:
         prior_user_paused = get_bool_setting("user_paused", False)
-        prior_collector_status = get_setting("collector_status", "stopped") or "stopped"
+        prior_collector_status = (
+            get_setting("collector_status", "stopped") or "stopped"
+        )
         result = self.pause_collection_now(timeout_seconds=timeout_seconds)
         if bool(result.get("ok")):
             set_setting(
@@ -198,14 +321,21 @@ class AppRuntime:
         return result
 
     def reset_collection_runtime_now(
-        self, timeout_seconds: float = 5.0
+        self,
+        timeout_seconds: float = 5.0,
     ) -> dict[str, object]:
         if not self.owns_application_instance or not _thread_reference_is_alive(
             self._collector_thread
         ):
             self._reset_adapter_runtime_state()
-            return {"ok": True, "reset_pending": False, "collector_active": False}
-        result = self.collector_control.request_reset(timeout_seconds=timeout_seconds)
+            return {
+                "ok": True,
+                "reset_pending": False,
+                "collector_active": False,
+            }
+        result = self.collector_control.request_reset(
+            timeout_seconds=timeout_seconds
+        )
         if bool(result.get("ok")):
             self._reset_adapter_runtime_state()
         return result
@@ -278,3 +408,10 @@ class AppRuntime:
             if shutdown_adapter is not None:
                 shutdown_adapter()
         logging.info("app shutdown writers_stopped=%s", writers_stopped)
+
+
+__all__ = [
+    "AppRuntime",
+    "RuntimeStartResult",
+    "WorkerReadiness",
+]
