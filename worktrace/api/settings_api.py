@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 from typing import Any
 
@@ -10,6 +9,7 @@ from ..constants import PRIVACY_NOTICE_TEXT
 from ..services import export_service, privacy_gate_service
 from ..services.runtime_activity_state_service import (
     clear_runtime_activity_state as _clear_runtime_activity_state,
+    sample_runtime_activity_state,
 )
 from ..services.secure_backup_service import (
     BackupCorruptedError,
@@ -57,14 +57,9 @@ def set_list_setting_value(key: str, values: list[str]) -> None:
 
 
 def get_current_activity_snapshot() -> dict[str, Any] | None:
-    raw = get_setting("current_activity_snapshot", "") or ""
-    if not raw:
-        return None
-    try:
-        value = json.loads(raw)
-    except json.JSONDecodeError:
-        return None
-    return value if isinstance(value, dict) else None
+    """Return the typed process-local sample without a settings round-trip."""
+
+    return sample_runtime_activity_state().snapshot
 
 
 def clear_runtime_activity_state(reason: str) -> None:
