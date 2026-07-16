@@ -345,6 +345,8 @@ def _run_reinference_batch(job: dict, batch_size: int) -> None:
             len(activity_ids) < max(1, int(batch_size))
             or last_id >= int(job["cutoff_activity_id"] or 0)
         )
+        if completed:
+            _finalize_rule_in_transaction(conn, job, payload)
         _advance_job(
             conn,
             job_id=int(job["id"]),
@@ -352,11 +354,11 @@ def _run_reinference_batch(job: dict, batch_size: int) -> None:
             processed=len(activity_ids),
             changed=changed,
             skipped=0,
-            completed=False,
+            completed=completed,
         )
         conn.commit()
     if completed:
-        _finalize_reinference_job(_load_job(int(job["id"])) or job)
+        _invalidate_rule_caches(rule_type)
 
 
 def _advance_job(
@@ -394,20 +396,9 @@ def _advance_job(
 def _finalize_reinference_job(job: dict) -> None:
     payload = _payload(job)
     rule_type = str(payload["rule_type"])
-    rule_id = int(payload["rule_id"])
-    table, extra = _rule_table(rule_type)
     with get_connection() as conn:
         conn.execute("BEGIN IMMEDIATE")
-        if job["kind"] == "rule_delete":
-            conn.execute(
-                f"DELETE FROM {table} WHERE id = ?{extra}",
-                (rule_id,),
-            )
-        elif bool(payload.get("restore_enabled")):
-            conn.execute(
-                f"UPDATE {table} SET enabled = 1, updated_at = ? WHERE id = ?{extra}",
-                (now_str(), rule_id),
-            )
+        _finalize_rule_in_transaction(conn, job, payload)
         conn.execute(
             """
             UPDATE history_mutation_job
@@ -418,6 +409,26 @@ def _finalize_reinference_job(job: dict) -> None:
         )
         conn.commit()
     _invalidate_rule_caches(rule_type)
+
+
+def _finalize_rule_in_transaction(conn, job: dict, payload: dict[str, Any]) -> None:
+    rule_type = str(payload["rule_type"])
+    rule_id = int(payload["rule_id"])
+    table, extra = _rule_table(rule_type)
+    if job["kind"] == "rule_delete":
+        cursor = conn.execute(
+            f"DELETE FROM {table} WHERE id = ?{extra}",
+            (rule_id,),
+        )
+        if cursor.rowcount != 1:
+            raise ValueError("rule_delete_failed")
+    elif bool(payload.get("restore_enabled")):
+        cursor = conn.execute(
+            f"UPDATE {table} SET enabled = 1, updated_at = ? WHERE id = ?{extra}",
+            (now_str(), rule_id),
+        )
+        if cursor.rowcount != 1:
+            raise ValueError("rule_restore_failed")
 
 
 def _complete_job(job_id: int) -> None:
