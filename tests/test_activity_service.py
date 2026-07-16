@@ -1,5 +1,3 @@
-import sqlite3
-
 import pytest
 
 from tests.support.db_helpers import assign_activity_project
@@ -21,21 +19,15 @@ def test_create_close_and_manual_updates(temp_db):
     assert row["assignment_is_manual"] == 1
 
 
-def test_low_level_create_does_not_close_existing_open_record(temp_db):
-    """Low-level creation does not transition the existing open row.
-
-    The database invariant rejects a second open row; production transitions
-    must use ``activity_lifecycle_service.start_activity``.
-    """
-
+def test_low_level_create_seals_existing_open_record(temp_db):
     first = activity_service.create_activity(
         "A", "a.exe", "A", start_time="2026-06-18 09:00:00"
     )
-    with pytest.raises(sqlite3.IntegrityError):
-        activity_service.create_activity(
-            "B", "b.exe", "B", start_time="2026-06-18 09:10:00"
-        )
-    assert activity_service.get_activity(first)["end_time"] is None
+    second = activity_service.create_activity(
+        "B", "b.exe", "B", start_time="2026-06-18 09:10:00"
+    )
+    assert activity_service.get_activity(first)["end_time"] == "2026-06-18 09:10:00"
+    assert activity_service.get_activity(second)["end_time"] is None
 
 
 def test_activity_duration_writes_are_monotonic(temp_db):
