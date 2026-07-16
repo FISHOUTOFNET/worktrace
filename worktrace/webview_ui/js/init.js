@@ -1,7 +1,108 @@
-// WorkTrace WebView frontend — initialization and refresh coordination.
+// WorkTrace WebView frontend — initialization, fixed bridge client, and runtime store.
 (function () {
     "use strict";
     var App = window.WorkTraceApp = window.WorkTraceApp || {};
+
+    function invokeBridge(method, argsLike) {
+        if (!window.pywebview || !window.pywebview.api) {
+            return Promise.reject(new Error("bridge unavailable"));
+        }
+        var fn = window.pywebview.api[method];
+        if (typeof fn !== "function") {
+            return Promise.reject(new Error("bridge method unavailable"));
+        }
+        return fn.apply(window.pywebview.api, Array.prototype.slice.call(argsLike || []));
+    }
+
+    function fixedBridgeMethod(method) {
+        return function () { return invokeBridge(method, arguments); };
+    }
+
+    App.bridge = Object.freeze({
+        acceptFirstRunNotice: fixedBridgeMethod("accept_first_run_notice"),
+        archiveProjectForRules: fixedBridgeMethod("archive_project_for_rules"),
+        automaticRulesStatus: fixedBridgeMethod("automatic_rules_status"),
+        backfillProjectRule: fixedBridgeMethod("backfill_project_rule"),
+        backfillProjectRulesBatch: fixedBridgeMethod("backfill_project_rules_batch"),
+        clearAllLocalData: fixedBridgeMethod("clear_all_local_data"),
+        copyTimelineSession: fixedBridgeMethod("copy_timeline_session"),
+        createExcludedFolderRule: fixedBridgeMethod("create_excluded_folder_rule"),
+        createExcludedKeywordRule: fixedBridgeMethod("create_excluded_keyword_rule"),
+        createProjectFolderRule: fixedBridgeMethod("create_project_folder_rule"),
+        createProjectForRules: fixedBridgeMethod("create_project_for_rules"),
+        createProjectKeywordRule: fixedBridgeMethod("create_project_keyword_rule"),
+        deleteProjectFolderRule: fixedBridgeMethod("delete_project_folder_rule"),
+        deleteProjectForRules: fixedBridgeMethod("delete_project_for_rules"),
+        deleteProjectKeywordRule: fixedBridgeMethod("delete_project_keyword_rule"),
+        exportEncryptedBackup: fixedBridgeMethod("export_encrypted_backup"),
+        exportStatisticsCsv: fixedBridgeMethod("export_statistics_csv"),
+        getFirstRunNotice: fixedBridgeMethod("get_first_run_notice"),
+        getOverview: fixedBridgeMethod("get_overview"),
+        getProjectRules: fixedBridgeMethod("get_project_rules"),
+        getRecentActivities: fixedBridgeMethod("get_recent_activities"),
+        getRefreshState: fixedBridgeMethod("get_refresh_state"),
+        getSettingsPrivacyStatus: fixedBridgeMethod("get_settings_privacy_status"),
+        getStatisticsExportSummary: fixedBridgeMethod("get_statistics_export_summary"),
+        getStatus: fixedBridgeMethod("get_status"),
+        getTimeline: fixedBridgeMethod("get_timeline"),
+        getTimelineSessionActivitySummary: fixedBridgeMethod("get_timeline_session_activity_summary"),
+        hideTimelineSession: fixedBridgeMethod("hide_timeline_session"),
+        hideTimelineSessionActivity: fixedBridgeMethod("hide_timeline_session_activity"),
+        importEncryptedBackup: fixedBridgeMethod("import_encrypted_backup"),
+        listProjectsForTimeline: fixedBridgeMethod("list_projects_for_timeline"),
+        mergeTimelineSession: fixedBridgeMethod("merge_timeline_session"),
+        previewEncryptedBackupManifest: fixedBridgeMethod("preview_encrypted_backup_manifest"),
+        previewProjectRuleImpact: fixedBridgeMethod("preview_project_rule_impact"),
+        previewProjectRulesBatchImpact: fixedBridgeMethod("preview_project_rules_batch_impact"),
+        saveTimelineSessionEdit: fixedBridgeMethod("save_timeline_session_edit"),
+        setClipboardCaptureEnabled: fixedBridgeMethod("set_clipboard_capture_enabled"),
+        setExcludedRulesEnabled: fixedBridgeMethod("set_excluded_rules_enabled"),
+        setProjectEnabledForRules: fixedBridgeMethod("set_project_enabled_for_rules"),
+        setProjectRuleEnabled: fixedBridgeMethod("set_project_rule_enabled"),
+        setProjectRulesBatchEnabled: fixedBridgeMethod("set_project_rules_batch_enabled"),
+        splitTimelineSession: fixedBridgeMethod("split_timeline_session"),
+        togglePause: fixedBridgeMethod("toggle_pause"),
+        updateProjectFolderRule: fixedBridgeMethod("update_project_folder_rule"),
+        updateProjectForRules: fixedBridgeMethod("update_project_for_rules"),
+        updateProjectKeywordRule: fixedBridgeMethod("update_project_keyword_rule")
+    });
+
+    var runtimeState = App.liveRuntime || null;
+
+    function frozenRuntime(value) {
+        if (!value || typeof value !== "object") return null;
+        return Object.freeze(Object.assign({}, value));
+    }
+
+    var liveRuntimeStore = Object.freeze({
+        get: function () { return runtimeState; },
+        replace: function (value) {
+            runtimeState = frozenRuntime(value);
+            return runtimeState;
+        },
+        reset: function () {
+            runtimeState = null;
+            return null;
+        },
+        setScope: function (page, reportDate) {
+            var existing = runtimeState || {};
+            runtimeState = frozenRuntime(Object.assign({}, existing, {
+                page: String(page || App.currentPage || "overview"),
+                reportDate: App.runtimeReportDateForPage(
+                    page || App.currentPage || "overview",
+                    reportDate
+                )
+            }));
+            return runtimeState;
+        }
+    });
+    App.liveRuntimeStore = liveRuntimeStore;
+    Object.defineProperty(App, "liveRuntime", {
+        configurable: false,
+        enumerable: true,
+        get: function () { return liveRuntimeStore.get(); },
+        set: function (value) { liveRuntimeStore.replace(value); }
+    });
 
     function resetClientGeneration() {
         if (App.requestCoordinator) App.requestCoordinator.bumpDataEpoch();
@@ -18,7 +119,7 @@
         App.lastSessionDetailsViewModel = null;
         App.lastSessionActivitySummaryViewModel = null;
         App.lastRefreshState = null;
-        App.liveRuntime = null;
+        liveRuntimeStore.reset();
         App._monotonicRenderState = {};
         App.overviewRequestToken = (App.overviewRequestToken || 0) + 1;
         App.timelineRequestToken = (App.timelineRequestToken || 0) + 1;
@@ -40,7 +141,7 @@
 
     function refreshStatus() {
         var token = App.requestCoordinator.beginLatest("status", "current");
-        return App.callBridge("get_status").then(function (result) {
+        return App.bridge.getStatus().then(function (result) {
             if (!App.requestCoordinator.isCurrent(token)) return;
             var status = App.handleResult(result, function (msg) { throw new Error(msg); });
             App.showStatus(status);
@@ -63,7 +164,7 @@
 
     function refreshOverview() {
         var token = App.requestCoordinator.beginLatest("overview", "today");
-        return App.callBridge("get_overview").then(function (result) {
+        return App.bridge.getOverview().then(function (result) {
             if (!App.requestCoordinator.isCurrent(token)) return;
             var bundle = App.handleResult(result, function (msg) { throw new Error(msg); });
             if (!bundle || !App.acceptPagePayloadRuntime(bundle, "overview", bundle.date)) return;
@@ -95,17 +196,14 @@
     App.refreshOverview = refreshOverview;
 
     function refreshTimeline() {
-        return typeof App.refreshTimeline === "function"
-            ? App.refreshTimeline()
-            : Promise.resolve();
+        return typeof App.refreshTimeline === "function" ? App.refreshTimeline() : Promise.resolve();
     }
 
     function _runCurrentPageRefresh(state, options) {
         App.activePageRefreshInFlight = true;
         var statePromise = state && state.ok
             ? Promise.resolve(state)
-            : App.callBridge(
-                "get_refresh_state",
+            : App.bridge.getRefreshState(
                 App.currentPage === "timeline" ? App.timelineDate : null
             ).then(function (result) {
                 return App.handleResult(result, function () { return null; });
@@ -150,8 +248,7 @@
         return App.activePageRefreshPromise;
     }
     App.refreshCurrentPageData = refreshCurrentPageData;
-    function refreshAll() { return refreshCurrentPageData(); }
-    App.refreshAll = refreshAll;
+    App.refreshAll = function () { return refreshCurrentPageData(); };
 
     function fullReconcileCollectionViews(reason) {
         if (App.reconcileInFlight) return App.activePageRefreshPromise || Promise.resolve();
@@ -165,7 +262,7 @@
     App.fullReconcileCollectionViews = fullReconcileCollectionViews;
 
     function togglePause() {
-        App.callBridge("toggle_pause").then(function (result) {
+        App.bridge.togglePause().then(function (result) {
             var status = App.handleResult(result, function (msg) { App.showError(msg); });
             App.showStatus(status);
         }).catch(function () {
@@ -184,9 +281,7 @@
         if (navTarget) navTarget.classList.add("active");
         if (pageTarget) pageTarget.classList.add("active");
         App.currentPage = pageId;
-        if (typeof App.setLiveRuntimeScope === "function") {
-            App.setLiveRuntimeScope(pageId, pageId === "timeline" ? App.timelineDate : null);
-        }
+        liveRuntimeStore.setScope(pageId, pageId === "timeline" ? App.timelineDate : null);
         if (pageId === "timeline" && !App.timelineLoaded && !App.timelineLoading) {
             App.loadTimelineReport(App.timelineDate, { showLoading: true });
         }
@@ -288,7 +383,8 @@
 
     function refreshCurrentActivityFromState(state, options) {
         if (!state || !state.current_activity) return;
-        if (!App.liveRuntime || App.liveRuntime.liveRevision !== String(state.live_revision || "")) return;
+        var runtime = liveRuntimeStore.get();
+        if (!runtime || runtime.liveRevision !== String(state.live_revision || "")) return;
         options = options || {};
         updateCurrentActivityCacheFromRefreshState(state);
         if (options.forceRender !== true) return;
@@ -309,7 +405,7 @@
         if (App.refreshCheckInFlight) return;
         App.refreshCheckInFlight = true;
         var token = App.requestCoordinator.beginLatest("heartbeat", App.currentPage + "|" + (App.timelineDate || ""));
-        App.callBridge("get_refresh_state", App.currentPage === "timeline" ? App.timelineDate : null).then(function (result) {
+        App.bridge.getRefreshState(App.currentPage === "timeline" ? App.timelineDate : null).then(function (result) {
             if (!App.requestCoordinator.isCurrent(token)) return;
             var state = App.handleResult(result, function () { return null; });
             if (!state) return;
@@ -354,11 +450,11 @@
         initButtons();
         App.loadFirstRunNotice().then(function (noticeConfirmed) {
             if (!noticeConfirmed) return;
-            var preload = typeof App.loadProjects === "function"
-                ? App.loadProjects()
-                : Promise.resolve();
+            var preload = typeof App.loadProjects === "function" ? App.loadProjects() : Promise.resolve();
             return preload.then(function () {
-                return App.callBridge("get_refresh_state", App.currentPage === "timeline" ? App.timelineDate : null);
+                return App.bridge.getRefreshState(
+                    App.currentPage === "timeline" ? App.timelineDate : null
+                );
             }).then(function (result) {
                 var state = App.handleResult(result, function () { return null; });
                 if (state) App.acceptRefreshStateRuntime(state);
