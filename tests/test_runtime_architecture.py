@@ -11,10 +11,10 @@ from worktrace.collector.activity_session_recorder import (
     OPEN_ACTIVITY_CHECKPOINT_SECONDS,
 )
 from worktrace.runtime.app_runtime import AppRuntime
-from worktrace.services import settings_service
 from worktrace.services.runtime_activity_state_service import (
     clear_runtime_activity_state,
-    get_runtime_activity_snapshot,
+    publish_runtime_activity_snapshot,
+    sample_runtime_activity_state,
 )
 
 pytestmark = [
@@ -39,25 +39,30 @@ def test_duplicate_runtime_does_not_initialize_database(tmp_path, monkeypatch):
         lambda: False,
     )
     initialize = Mock()
-    monkeypatch.setattr("worktrace.runtime.app_runtime.db.initialize_database", initialize)
+    monkeypatch.setattr(
+        "worktrace.runtime.app_runtime.db.initialize_database",
+        initialize,
+    )
 
     runtime = AppRuntime(paths)
     assert runtime.initialize() is False
     initialize.assert_not_called()
-    assert runtime.owns_collector is False
+    assert runtime.owns_application_instance is False
 
 
-def test_snapshot_setting_is_process_local(temp_db):
+def test_runtime_snapshot_is_process_local_and_typed(temp_db):
     clear_runtime_activity_state("test_start")
-    settings_service.set_setting(
-        "current_activity_snapshot",
-        '{"status":"normal","elapsed_seconds":7}',
+    publish_runtime_activity_snapshot(
+        {"status": "normal", "elapsed_seconds": 7},
+        "test_publish",
     )
 
-    assert get_runtime_activity_snapshot() == {
+    sample = sample_runtime_activity_state()
+    assert sample.snapshot == {
         "status": "normal",
         "elapsed_seconds": 7,
     }
+    assert sample.revision > 0
     with db.get_connection() as conn:
         row = conn.execute(
             "SELECT value FROM settings WHERE key = 'current_activity_snapshot'"
@@ -65,14 +70,17 @@ def test_snapshot_setting_is_process_local(temp_db):
     assert row is None
 
 
-def test_runtime_snapshot_defaults_empty_and_preserves_exact_raw_value(temp_db):
+def test_runtime_sample_is_detached_from_published_mapping(temp_db):
     clear_runtime_activity_state("test_empty")
-    assert settings_service.get_setting("current_activity_snapshot") == ""
+    value = {"app": "Editor", "status": "normal"}
+    publish_runtime_activity_snapshot(value, "test_publish")
+    value["app"] = "Mutated"
 
-    raw = '{"app":"Editor", "status":"normal"}'
-    settings_service.set_setting("current_activity_snapshot", raw)
-    assert settings_service.get_setting("current_activity_snapshot") == raw
-    assert get_runtime_activity_snapshot() == {
+    first = sample_runtime_activity_state()
+    assert first.snapshot == {"app": "Editor", "status": "normal"}
+    assert first.snapshot is not None
+    first.snapshot["app"] = "Local mutation"
+    assert sample_runtime_activity_state().snapshot == {
         "app": "Editor",
         "status": "normal",
     }
@@ -111,7 +119,9 @@ def test_open_activity_progress_is_checkpointed(monkeypatch):
 
 def test_view_model_api_routes_to_page_owned_services():
     root = Path(__file__).resolve().parents[1]
-    source = (root / "worktrace/api/view_model_api.py").read_text(encoding="utf-8")
+    source = (root / "worktrace/api/view_model_api.py").read_text(
+        encoding="utf-8"
+    )
     assert "overview_view_model_service" in source
     assert "timeline_view_model_service" in source
     assert "session_detail_view_model_service" in source
