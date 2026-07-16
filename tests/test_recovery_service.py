@@ -2,10 +2,11 @@ import pytest
 
 pytestmark = [pytest.mark.collector_runtime, pytest.mark.integration, pytest.mark.db]
 
+from tests.support import activity_factory as activity_service
 from worktrace.collector.state_machine import CollectorStateMachine
 from worktrace.constants import STATUS_ERROR
 from worktrace.platforms.base import ActiveWindow
-from worktrace.services import activity_service, project_service, recovery_service, session_boundary_service, settings_service
+from worktrace.services import project_service, recovery_service, session_boundary_service, settings_service
 
 
 def test_recovery_closes_open_record_with_heartbeat(temp_db):
