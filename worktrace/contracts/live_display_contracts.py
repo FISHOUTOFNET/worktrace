@@ -27,6 +27,8 @@ DisplayBasePolicy = Literal[
     "suppressed",
     "persisted_extra",
 ]
+
+
 class DisplayProjectContract(TypedDict, total=False):
     id: int | None
     name: str
@@ -46,29 +48,27 @@ class ProjectTransitionContract(TypedDict, total=False):
 
 
 class ActivitySnapshotContract(TypedDict, total=False):
-    """Collector snapshot payload.
+    """Display-safe collector snapshot payload.
 
+    Raw window titles, filesystem paths and URI hosts are deliberately absent.
     ``candidate_project``, ``project_transition`` and
-    ``inferred_project_name`` are compatibility/candidate metadata only.
+    ``inferred_project_name`` are temporary compatibility metadata only.
     Display projection, revisions, structural signatures, and frontend
     continuity identities must use the official ``display_project`` instead.
     """
 
     app_name: str
     process_name: str
-    window_title: str
-    file_path_hint: str | None
     activity_display_name: str
     resource_kind: str
     resource_subtype: str
     resource_display_name: str
     resource_identity_key: str
-    resource_path_hint: str | None
-    resource_uri_host: str | None
     inferred_project_name: str
     status: str
     start_time: str
     elapsed_seconds: int
+    checkpoint_seconds: int
     extra_seconds: int
     persisted_activity_id: int | None
     is_persisted: bool
@@ -250,7 +250,7 @@ class TimelineSessionRowContract(RecentActivityRowContract, total=False):
     status: str
     event_count: int
     session_note: str
-    # Read-only scope for Timeline's right summary panel.  This is distinct
+    # Read-only scope for Timeline's right summary panel. This is distinct
     # from activity_ids, which remains the stable edit/override identity.
     summary_activity_ids: list[int]
 
