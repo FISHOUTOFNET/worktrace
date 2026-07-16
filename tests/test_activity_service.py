@@ -1,3 +1,5 @@
+import sqlite3
+
 import pytest
 
 from tests.support.db_helpers import assign_activity_project
@@ -19,15 +21,15 @@ def test_create_close_and_manual_updates(temp_db):
     assert row["assignment_is_manual"] == 1
 
 
-def test_low_level_create_seals_existing_open_record(temp_db):
+def test_low_level_create_rejects_second_open_record(temp_db):
     first = activity_service.create_activity(
         "A", "a.exe", "A", start_time="2026-06-18 09:00:00"
     )
-    second = activity_service.create_activity(
-        "B", "b.exe", "B", start_time="2026-06-18 09:10:00"
-    )
-    assert activity_service.get_activity(first)["end_time"] == "2026-06-18 09:10:00"
-    assert activity_service.get_activity(second)["end_time"] is None
+    with pytest.raises(sqlite3.IntegrityError):
+        activity_service.create_activity(
+            "B", "b.exe", "B", start_time="2026-06-18 09:10:00"
+        )
+    assert activity_service.get_activity(first)["end_time"] is None
 
 
 def test_activity_duration_writes_are_monotonic(temp_db):
