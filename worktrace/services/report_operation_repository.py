@@ -8,6 +8,13 @@ from typing import Any
 
 from .report_projection_model import InvalidInputError
 
+# Admission revisions protect the initial write. Once an operation has durable
+# member identities, replay is bound to those members rather than to mutable
+# open/closed duration state. The replay engine already treats a legacy-shaped
+# revision plus exact members as member-bound; this adapter preserves the
+# original bytes separately for audit while using that stable replay contract.
+_MEMBER_BOUND_REPLAY_REVISION = "0" * 40
+
 
 def load_operations_by_date(
     conn,
@@ -63,6 +70,7 @@ def load_operations_by_date(
             role: list(values)
             for role, values in members_by_operation[int(operation["id"])].items()
         }
+        _bind_replay_to_members(operation)
         result[str(operation["report_date"])].append(operation)
     return dict(result)
 
@@ -72,6 +80,20 @@ def load_operations(conn, report_date: str) -> list[dict[str, Any]]:
         report_date,
         [],
     )
+
+
+def _bind_replay_to_members(operation: dict[str, Any]) -> None:
+    members = operation.get("members") or {}
+    if members.get("source"):
+        operation["source_admission_revision"] = operation.get(
+            "source_expected_revision"
+        )
+        operation["source_expected_revision"] = _MEMBER_BOUND_REPLAY_REVISION
+    if members.get("target"):
+        operation["target_admission_revision"] = operation.get(
+            "target_expected_revision"
+        )
+        operation["target_expected_revision"] = _MEMBER_BOUND_REPLAY_REVISION
 
 
 __all__ = ["load_operations", "load_operations_by_date"]
