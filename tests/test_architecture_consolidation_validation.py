@@ -6,10 +6,10 @@ import pytest
 
 from worktrace import db
 from worktrace.services import (
-    overview_view_model_service,
     refresh_state_view_model_service,
     runtime_activity_state_service,
     timeline_service,
+    view_model_service,
 )
 
 pytestmark = [pytest.mark.db, pytest.mark.integration, pytest.mark.serial]
@@ -20,7 +20,7 @@ def test_page_and_heartbeat_use_one_revision_owner(temp_db):
         "architecture_validation"
     )
     today = timeline_service.get_default_report_date()
-    page = overview_view_model_service.get_overview_view_model(today)
+    page = view_model_service.get_overview_view_model(today)
     heartbeat = refresh_state_view_model_service.get_refresh_state_view_model(
         today
     )
@@ -69,3 +69,13 @@ def test_continuity_reads_typed_runtime_state_not_settings_json():
     assert "sample_runtime_activity_state" in source
     assert 'get_setting("current_activity_snapshot"' not in source
     assert "json.loads" not in source
+
+
+def test_page_wrapper_services_are_removed():
+    root = Path(__file__).resolve().parents[1]
+    for name in (
+        "overview_view_model_service.py",
+        "timeline_view_model_service.py",
+        "session_detail_view_model_service.py",
+    ):
+        assert not (root / "worktrace/services" / name).exists()
