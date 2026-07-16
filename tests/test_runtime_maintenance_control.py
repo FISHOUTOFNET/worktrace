@@ -12,7 +12,7 @@ from worktrace.platforms import windows_clipboard as clipboard_module
 from worktrace.platforms.base import ActiveWindow
 from worktrace.platforms.windows_clipboard import ClipboardMonitor
 from worktrace.security.kdf import KdfError, KdfParams, derive_backup_key
-from worktrace.services import settings_service
+from worktrace.services import runtime_activity_state_service, settings_service
 from worktrace.services.secure_backup_service import (
     SecureBackupError,
     SecureImportCoordinator,
@@ -26,7 +26,7 @@ pytestmark = [
 ]
 
 
-def test_pause_timeout_cancels_stale_command():
+def test_pause_timeout_reports_unknown_command_state():
     control = CollectorControl()
 
     result = control.request_pause(timeout_seconds=0)
@@ -35,6 +35,7 @@ def test_pause_timeout_cancels_stale_command():
         "ok": False,
         "pause_pending": False,
         "timed_out": True,
+        "command_state_unknown": True,
     }
     assert control.take_pause_request() is False
 
@@ -194,9 +195,9 @@ def test_maintenance_reset_failure_restores_intent_without_stale_snapshot(temp_d
     coordinator = SecureImportCoordinator()
     settings_service.set_setting("user_paused", "false")
     settings_service.set_setting("collector_status", "running")
-    settings_service.set_setting(
-        "current_activity_snapshot",
-        '{"persisted_activity_id":77}',
+    runtime_activity_state_service.publish_runtime_activity_snapshot(
+        {"persisted_activity_id": 77},
+        "maintenance_test",
     )
     coordinator.register_collector_pause_handler(
         lambda timeout_seconds=5.0: {"ok": True, "pause_pending": False}
@@ -212,7 +213,7 @@ def test_maintenance_reset_failure_restores_intent_without_stale_snapshot(temp_d
     assert coordinator.write_gate_active() is False
     assert settings_service.get_bool_setting("user_paused", True) is False
     assert settings_service.get_setting("collector_status", "") == "running"
-    assert settings_service.get_setting("current_activity_snapshot", "") == ""
+    assert runtime_activity_state_service.sample_runtime_activity_state().snapshot is None
 
 
 def _window() -> ActiveWindow:
