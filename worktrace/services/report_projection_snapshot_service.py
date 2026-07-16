@@ -8,8 +8,8 @@ from typing import Any, Iterator
 
 from ..constants import DEFAULT_UNRECORDED_GAP_BOUNDARY_SECONDS
 from ..db import get_connection
+from . import report_operation_repository
 from . import report_session_operation_engine as engine
-from . import report_session_operation_service
 from .report_fact_query_service import (
     boundary_times_for_rows,
     get_uncategorized_project_id,
@@ -125,19 +125,17 @@ def _build_snapshot(conn, start_date: str, end_date: str) -> ReportProjectionSna
     )
     base_sessions = list(base_projection.sessions)
 
+    operations_by_date = report_operation_repository.load_operations_by_date(
+        conn,
+        start_date,
+        end_date,
+    )
     dates = {
         str(session.get("report_date") or "")
         for session in base_sessions
         if start_date <= str(session.get("report_date") or "") <= end_date
     }
-    dates.update(
-        str(row["report_date"])
-        for row in conn.execute(
-            "SELECT DISTINCT report_date FROM report_session_operation "
-            "WHERE report_date BETWEEN ? AND ?",
-            (start_date, end_date),
-        ).fetchall()
-    )
+    dates.update(operations_by_date)
 
     final_sessions: list[dict[str, Any]] = []
     final_contributions: list[dict[str, Any]] = []
@@ -150,10 +148,7 @@ def _build_snapshot(conn, start_date: str, end_date: str) -> ReportProjectionSna
         ]
         replay = engine.replay_operations(
             date_base,
-            report_session_operation_service.load_operations(
-                report_date,
-                conn=conn,
-            ),
+            operations_by_date.get(report_date, []),
             project_states,
         )
         final_sessions.extend(
