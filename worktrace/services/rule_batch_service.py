@@ -35,11 +35,14 @@ def _normalize_rules(rules: Any) -> list[dict[str, Any]]:
             raise RuleBatchError("invalid_input")
         rule_type = item.get("rule_type")
         rule_id = item.get("rule_id")
-        if rule_type not in {"folder", "keyword"}:
+        if not isinstance(rule_type, str) or rule_type not in {
+            "folder",
+            "keyword",
+        }:
             raise RuleBatchError("invalid_input")
         if type(rule_id) is not int or rule_id <= 0:
             raise RuleBatchError("invalid_input")
-        key = (str(rule_type), int(rule_id))
+        key = (rule_type, int(rule_id))
         if key not in seen:
             seen.add(key)
             result.append({"rule_type": key[0], "rule_id": key[1]})
