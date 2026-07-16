@@ -1,0 +1,217 @@
+name: Consolidate page ViewModel ownership
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/consolidate-page-view-model-owner.yml
+
+permissions:
+  contents: write
+
+jobs:
+  consolidate:
+    if: github.event.pull_request.head.ref == 'agent/canonical-architecture-consolidation'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+          clean: true
+          show-progress: false
+      - name: Consolidate the single page payload owner
+        shell: python {0}
+        run: |
+          from pathlib import Path
+          import subprocess
+          import traceback
+
+          diagnostic = Path('diagnostics/page-view-model-consolidation-error.txt')
+
+          def replace_once(text: str, old: str, new: str, label: str) -> str:
+              count = text.count(old)
+              if count != 1:
+                  raise RuntimeError(f'{label}: expected one match, found {count}')
+              return text.replace(old, new, 1)
+
+          try:
+              path = Path('worktrace/services/view_model_service.py')
+              text = path.read_text(encoding='utf-8')
+              text = text.replace(
+                  'Assembles the page-level ViewModel for Overview / Recent / Timeline /\nDetails / Refresh-State.',
+                  'Assembles the page-level ViewModel for Overview / Recent / Timeline /\nDetails.',
+                  1,
+              )
+              text = replace_once(
+                  text,
+                  'from .activity_row_overlay import (\n',
+                  'from .page_view_model_common import enable_safe_open_edit\nfrom .activity_row_overlay import (\n',
+                  'edit capability import',
+              )
+              text = replace_once(
+                  text,
+                  'from .report_projection_identity import stable_json_hash\n',
+                  'from . import page_revision_service\nfrom .report_projection_identity import stable_json_hash\nfrom .report_revision_service import get_report_structure_revision\n',
+                  'revision imports',
+              )
+
+              revision_start = text.index('def _revision_fields_for_model(')
+              revision_end = text.index('def _live_identity_fields(', revision_start)
+              revision_replacement = '''def _revision_fields_for_model(
+    snapshot: dict[str, Any] | None,
+    model: dict[str, Any],
+    *,
+    today: str,
+    report_date: str,
+) -> dict[str, str]:
+    """Return the same revision tuple consumed by the heartbeat owner."""
+
+    del snapshot
+    live_clock = model.get("live_clock") or {}
+    current_activity = model.get("current_activity") or {}
+    live_revision = page_revision_service.live_revision(
+        current_activity,
+        live_clock,
+    )
+    structure_revision = get_report_structure_revision(report_date)
+    return {
+        "live_revision": live_revision,
+        "structure_revision": structure_revision,
+        "page_revision": stable_json_hash(
+            [
+                structure_revision,
+                live_revision if report_date == today else "",
+            ]
+        ),
+    }
+
+
+'''
+              text = text[:revision_start] + revision_replacement + text[revision_end:]
+
+              old_overview_owner = '''    project_count = len(project_service.list_active_projects())
+    from .report_projection_snapshot_service import build_visible_snapshot
+    from .report_status_policy import decide_report_status
+
+    overview_projection = build_visible_snapshot(scoped_today, scoped_today)
+    sessions = list(overview_projection.final_sessions)
+'''
+              new_overview_owner = '''    from .report_projection_snapshot_service import build_visible_snapshot
+    from .report_status_policy import decide_report_status
+
+    overview_projection = build_visible_snapshot(scoped_today, scoped_today)
+    sessions = list(overview_projection.final_sessions)
+    standalone_entries = [
+        entry
+        for entry in overview_projection.final_entries
+        if str(entry.get("row_kind") or "") == "standalone_status"
+        and not bool(entry.get("is_in_progress"))
+    ]
+    concrete_project_ids = {
+        int(row.get("report_project_id") or row.get("project_id") or 0)
+        for row in overview_projection.final_contributions
+        if bool(row.get("is_report_project"))
+        and int(row.get("report_project_id") or row.get("project_id") or 0) > 0
+    }
+    project_count = len(concrete_project_ids)
+'''
+              text = replace_once(
+                  text,
+                  old_overview_owner,
+                  new_overview_owner,
+                  'overview owner block',
+              )
+
+              old_totals = '''    uncategorized_seconds = sum(
+        int(r.get("duration_seconds") or 0)
+        for r in total_rows
+        if bool(r.get("is_uncategorized"))
+    )
+    active_elapsed = _current_elapsed_at_sample(live_clock)
+'''
+              new_totals = '''    uncategorized_seconds = sum(
+        int(r.get("duration_seconds") or 0)
+        for r in total_rows
+        if bool(r.get("is_uncategorized"))
+    )
+    standalone_total_seconds = sum(
+        int(entry.get("duration_seconds") or 0)
+        for entry in standalone_entries
+    )
+    today_total_seconds += standalone_total_seconds
+    active_elapsed = _current_elapsed_at_sample(live_clock)
+'''
+              text = replace_once(
+                  text,
+                  old_totals,
+                  new_totals,
+                  'overview standalone totals',
+              )
+
+              old_timeline_capabilities = '''    _apply_live_span_to_rows(sessions, report_model, row_kind=ROW_KIND_PROJECT_SESSION_ROW)
+    _set_summary_activity_ids(sessions)
+    # In-progress sessions that received no live overlay still need
+    # edit_disabled.
+    for row in sessions:
+        if row.get("is_in_progress") and not row.get("edit_disabled"):
+            row["edit_disabled"] = True
+            row["disable_reason"] = row.get("disable_reason") or "进行中记录暂不支持编辑"
+
+'''
+              new_timeline_capabilities = '''    _apply_live_span_to_rows(sessions, report_model, row_kind=ROW_KIND_PROJECT_SESSION_ROW)
+    _set_summary_activity_ids(sessions)
+    for row in sessions:
+        enable_safe_open_edit(row)
+
+'''
+              text = replace_once(
+                  text,
+                  old_timeline_capabilities,
+                  new_timeline_capabilities,
+                  'timeline capability owner',
+              )
+
+              refresh_start = text.index('\n# Refresh State ViewModel')
+              exports_start = text.index('\n__all__ = [', refresh_start)
+              text = text[:refresh_start] + text[exports_start:]
+              text = replace_once(
+                  text,
+                  '''__all__ = [
+    "get_overview_view_model",
+    "get_refresh_state_view_model",
+    "get_session_activity_summary_view_model",
+    "get_timeline_view_model",
+]
+''',
+                  '''__all__ = [
+    "get_overview_view_model",
+    "get_session_activity_summary_view_model",
+    "get_timeline_view_model",
+]
+''',
+                  'page owner exports',
+              )
+              path.write_text(text, encoding='utf-8', newline='\n')
+
+              Path('worktrace/services/overview_view_model_service.py').unlink()
+              Path('worktrace/services/timeline_view_model_service.py').unlink()
+              Path('worktrace/services/session_detail_view_model_service.py').unlink()
+              diagnostic.unlink(missing_ok=True)
+          except Exception:
+              failure = traceback.format_exc()
+              subprocess.run(['git', 'reset', '--hard', 'HEAD'], check=True)
+              diagnostic.parent.mkdir(exist_ok=True)
+              diagnostic.write_text(failure, encoding='utf-8')
+          Path('.github/workflows/consolidate-page-view-model-owner.yml').unlink(missing_ok=True)
+      - name: Commit consolidated page owner
+        shell: bash
+        run: |
+          git config user.name "worktrace-architecture-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git status --short
+          git commit -m "Consolidate page ViewModel ownership [skip ci]"
+          git pull --rebase origin "${{ github.event.pull_request.head.ref }}"
+          git push origin "HEAD:${{ github.event.pull_request.head.ref }}"
