@@ -167,7 +167,7 @@ def _build_report_structure_revision(
 
 
 def get_report_structure_revision(report_date: str, *, conn=None) -> str:
-    """Return a structural revision without rescanning on every heartbeat.
+    """Return the single structural revision used by pages and heartbeat.
 
     Transaction-bound callers receive an immediate hash of their uncommitted
     view. Ordinary refresh callers reuse a cached hash until a structural write
@@ -203,44 +203,6 @@ def get_report_structure_revision(report_date: str, *, conn=None) -> str:
     return value
 
 
-def snapshot_structure_revision(snapshot) -> str:
-    """Build the same semantic revision from an already-built snapshot."""
-
-    entries = []
-    for entry in snapshot.final_entries:
-        in_progress = bool(entry.get("is_in_progress"))
-        entries.append(
-            {
-                "key": str(entry.get("projection_instance_key") or ""),
-                "kind": str(entry.get("row_kind") or "project_session"),
-                "revision": (
-                    {
-                        "report_date": str(entry.get("report_date") or ""),
-                        "members": list(entry.get("member_slices") or []),
-                        "status": str(
-                            entry.get("status_code")
-                            or entry.get("status")
-                            or ""
-                        ),
-                        "project_id": int(entry.get("project_id") or 0),
-                    }
-                    if in_progress
-                    else str(entry.get("projection_revision") or "")
-                ),
-                "in_progress": in_progress,
-            }
-        )
-    return stable_json_hash(
-        {
-            "range": [snapshot.start_date, snapshot.end_date],
-            "entries": entries,
-            "diagnostics": [
-                item.to_dict() for item in snapshot.operation_diagnostics
-            ],
-        }
-    )
-
-
 def export_revision(date_from: str, date_to: str, records) -> str:
     """Revision of the exact closed, display-safe export record set."""
 
@@ -256,5 +218,4 @@ __all__ = [
     "clear_report_structure_revision_cache",
     "export_revision",
     "get_report_structure_revision",
-    "snapshot_structure_revision",
 ]
