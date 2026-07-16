@@ -5,6 +5,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 ACTIVITY_SERVICE = ROOT / "worktrace" / "services" / "activity_service.py"
+CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 
 TARGET_FUNCTIONS = frozenset(
     {
@@ -74,6 +75,26 @@ def clean_imports(source: str) -> str:
     return source
 
 
+def remove_temporary_ci_job() -> None:
+    source = CI_WORKFLOW.read_text(encoding="utf-8")
+    start_marker = "  activity-lifecycle-cutover:\n"
+    tests_marker = "  tests:\n"
+    start = source.find(start_marker)
+    end = source.find(tests_marker, start + len(start_marker))
+    if start < 0 or end < 0:
+        raise RuntimeError("temporary lifecycle cutover job was not found")
+    source = source[:start] + source[end:]
+    temporary_condition = (
+        "    if: github.event_name != 'pull_request' || "
+        "github.event.pull_request.head.ref != "
+        "'agent/canonical-architecture-consolidation'\n"
+    )
+    if temporary_condition not in source:
+        raise RuntimeError("temporary tests job condition was not found")
+    source = source.replace(temporary_condition, "", 1)
+    CI_WORKFLOW.write_text(source, encoding="utf-8")
+
+
 def main() -> int:
     source = ACTIVITY_SERVICE.read_text(encoding="utf-8")
     updated = clean_imports(remove_functions(source))
@@ -97,7 +118,9 @@ def main() -> int:
             "legacy functions remain after rewrite: " + ", ".join(sorted(remaining))
         )
     ACTIVITY_SERVICE.write_text(updated, encoding="utf-8")
+    remove_temporary_ci_job()
     print("Removed legacy activity lifecycle CRUD from activity_service.py")
+    print("Restored the standard CI job")
     return 0
 
 
