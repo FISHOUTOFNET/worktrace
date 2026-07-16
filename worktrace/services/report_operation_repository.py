@@ -1,4 +1,11 @@
-"""Bulk read repository for immutable report operations."""
+"""Bulk read repository for immutable report operations.
+
+Admission revisions protect the initial write. Once an operation has durable
+member identities, replay is bound to those members rather than mutable
+open/closed duration state. The replay engine treats a legacy-shaped revision
+plus exact members as member-bound; this adapter retains admission bytes for
+audit while using that stable replay contract.
+"""
 
 from __future__ import annotations
 
@@ -8,11 +15,6 @@ from typing import Any
 
 from .report_projection_model import InvalidInputError
 
-# Admission revisions protect the initial write. Once an operation has durable
-# member identities, replay is bound to those members rather than to mutable
-# open/closed duration state. The replay engine already treats a legacy-shaped
-# revision plus exact members as member-bound; this adapter preserves the
-# original bytes separately for audit while using that stable replay contract.
 _MEMBER_BOUND_REPLAY_REVISION = "0" * 40
 
 
