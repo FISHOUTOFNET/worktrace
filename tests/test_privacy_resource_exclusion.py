@@ -4,6 +4,7 @@ import pytest
 
 pytestmark = [pytest.mark.security_privacy, pytest.mark.integration, pytest.mark.db]
 
+from tests.support import activity_factory as activity_service
 from worktrace.constants import (
     EXCLUDED_APP_NAME,
     EXCLUDED_PROCESS_NAME,
@@ -11,7 +12,6 @@ from worktrace.constants import (
     PRIVACY_NOTICE_TEXT,
     STATUS_EXCLUDED,
 )
-from worktrace.services import activity_service
 from worktrace.services.resource_service import get_resource_for_activity
 
 
