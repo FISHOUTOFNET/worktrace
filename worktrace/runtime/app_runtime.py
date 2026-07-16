@@ -19,6 +19,10 @@ from ..collector.collector import CollectorControl, run_collector
 from ..collector.single_instance import acquire_single_instance, release_single_instance
 from ..services import activity_lifecycle_service, folder_index_service, recovery_service
 from ..services.folder_index_recovery_service import recover_interrupted_indexes
+from ..services.runtime_snapshot_barrier import (
+    clear_quiesce_handler,
+    register_quiesce_handler,
+)
 from ..services.secure_backup_service import (
     clear_collector_pause_handler,
     clear_collector_reset_handler,
@@ -84,12 +88,7 @@ class AppRuntime:
         self.owns_application_instance = bool(value)
 
     def initialize(self) -> bool:
-        """Acquire the app lease before opening the database.
-
-        Returns ``False`` when another WorkTrace process already owns the same
-        user-data directory. In that case no database initialization or recovery
-        is attempted.
-        """
+        """Acquire the app lease before opening the database."""
         with self._lifecycle_lock:
             if self._initialized:
                 return self.owns_application_instance
@@ -134,8 +133,6 @@ class AppRuntime:
             if self._shutdown or self.stop_event.is_set():
                 return {"ok": False, "error": "runtime_stopping"}
             if not self.owns_application_instance:
-                # Keep the established API error while ownership now represents
-                # the whole application rather than a collector-only lease.
                 return {"ok": False, "error": "collector_not_owned"}
             if _thread_reference_is_alive(self._collector_thread):
                 self._register_maintenance_handlers()
@@ -164,6 +161,7 @@ class AppRuntime:
     def _register_maintenance_handlers(self) -> None:
         register_collector_pause_handler(self.quiesce_collection_now)
         register_collector_reset_handler(self.reset_collection_runtime_now)
+        register_quiesce_handler(self.quiesce_collection_now)
 
     def pause_collection_now(self, timeout_seconds: float = 5.0) -> dict[str, object]:
         """Finalize the current activity and persist a user pause."""
@@ -228,6 +226,7 @@ class AppRuntime:
             self._shutdown = True
             clear_collector_pause_handler(self.quiesce_collection_now)
             clear_collector_reset_handler(self.reset_collection_runtime_now)
+            clear_quiesce_handler(self.quiesce_collection_now)
             self.set_clipboard_capture_enabled(False)
             self.stop_event.set()
             index_thread = self._index_thread
