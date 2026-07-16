@@ -1,4 +1,4 @@
-"""Settings, privacy, backup, and collector-status capability facade."""
+"""Named Settings, Privacy, and local-data capabilities for the UI."""
 
 from __future__ import annotations
 
@@ -7,9 +7,6 @@ from typing import Any
 
 from ..constants import PRIVACY_NOTICE_TEXT
 from ..services import export_service, privacy_gate_service
-from ..services.runtime_activity_state_service import (
-    clear_runtime_activity_state as _clear_runtime_activity_state,
-)
 from ..services.secure_backup_service import (
     BackupCorruptedError,
     BackupDecryptionError,
@@ -20,45 +17,10 @@ from ..services.secure_backup_service import (
 from ..services.settings_service import (
     get_bool_setting,
     get_int_setting,
-    get_list_setting,
     get_setting,
-    set_list_setting,
     set_setting,
 )
 from . import backup_api, view_model_api
-
-
-# Compatibility helpers retained for internal tests and composition code. They
-# are intentionally omitted from __all__; WebView capabilities use named APIs.
-def get_setting_value(key: str, default: str | None = None) -> str | None:
-    return get_setting(key, default)
-
-
-def set_setting_value(key: str, value: str) -> None:
-    set_setting(key, value)
-
-
-def get_bool_setting_value(key: str, default: bool = False) -> bool:
-    return get_bool_setting(key, default)
-
-
-def get_int_setting_value(key: str, default: int) -> int:
-    return get_int_setting(key, default)
-
-
-def get_list_setting_value(
-    key: str,
-    default: list[str] | None = None,
-) -> list[str]:
-    return get_list_setting(key, default)
-
-
-def set_list_setting_value(key: str, values: list[str]) -> None:
-    set_list_setting(key, values)
-
-
-def clear_runtime_activity_state(reason: str) -> None:
-    _clear_runtime_activity_state(reason)
 
 
 def first_run_notice_accepted() -> bool:
