@@ -5,9 +5,35 @@ from worktrace.db import get_connection
 from worktrace.resources.types import DetectedResource
 from worktrace.services import (
     activity_fact_repository,
-    activity_lifecycle_service,
     project_inference_service,
 )
+
+
+def _prepare(
+    *,
+    app_name: str,
+    process_name: str,
+    window_title: str,
+    start_time: str,
+    status: str,
+    source: str,
+    project_id: int | None,
+    file_path_hint: str | None,
+    resource: DetectedResource | None,
+):
+    return activity_fact_repository.prepare_activity(
+        start_time=start_time,
+        source=source,
+        payload={
+            "app_name": app_name,
+            "process_name": process_name,
+            "window_title": window_title,
+            "status": status,
+            "project_id": project_id,
+            "file_path_hint": file_path_hint,
+            "resource": resource,
+        },
+    )
 
 
 def create_open_activity(
@@ -24,18 +50,16 @@ def create_open_activity(
     resource: DetectedResource | None = None,
 ) -> int:
     del note
-    prepared = activity_fact_repository.prepare_activity(
+    prepared = _prepare(
+        app_name=app_name,
+        process_name=process_name,
+        window_title=window_title,
         start_time=start_time,
+        status=status,
         source=source,
-        payload={
-            "app_name": app_name,
-            "process_name": process_name,
-            "window_title": window_title,
-            "status": status,
-            "project_id": project_id,
-            "file_path_hint": file_path_hint,
-            "resource": resource,
-        },
+        project_id=project_id,
+        file_path_hint=file_path_hint,
+        resource=resource,
     )
     with get_connection() as conn:
         return activity_fact_repository.insert_open_activity(conn, prepared)
@@ -56,7 +80,10 @@ def create_closed_activity(
     note: str | None = None,
     resource: DetectedResource | None = None,
 ) -> int:
-    activity_id = create_open_activity(
+    """Insert a historical closed fact without running production inference."""
+
+    del note
+    prepared = _prepare(
         app_name=app_name,
         process_name=process_name,
         window_title=window_title,
@@ -65,10 +92,11 @@ def create_closed_activity(
         source=source,
         project_id=project_id,
         file_path_hint=file_path_hint,
-        note=note,
         resource=resource,
     )
-    activity_lifecycle_service.close_activity(activity_id, f"{day} {end}")
+    with get_connection() as conn:
+        activity_id = activity_fact_repository.insert_open_activity(conn, prepared)
+        activity_fact_repository.close_activity(conn, activity_id, f"{day} {end}")
     return activity_id
 
 
@@ -94,12 +122,18 @@ def create_cross_day_activity(
     window_title: str = "A.docx",
     project_id: int | None = None,
 ) -> int:
-    activity_id = create_open_activity(
+    prepared = _prepare(
         app_name=app_name,
         process_name=process_name,
         window_title=window_title,
         start_time=start_time,
+        status=STATUS_NORMAL,
+        source=SOURCE_AUTO,
         project_id=project_id,
+        file_path_hint=None,
+        resource=None,
     )
-    activity_lifecycle_service.close_activity(activity_id, end_time)
+    with get_connection() as conn:
+        activity_id = activity_fact_repository.insert_open_activity(conn, prepared)
+        activity_fact_repository.close_activity(conn, activity_id, end_time)
     return activity_id
