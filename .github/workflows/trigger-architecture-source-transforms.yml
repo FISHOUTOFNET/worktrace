@@ -1,0 +1,51 @@
+name: Trigger architecture source transforms
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/trigger-architecture-source-transforms.yml
+
+permissions:
+  contents: write
+
+jobs:
+  transform:
+    if: github.event.pull_request.head.ref == 'agent/canonical-architecture-consolidation'
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 10
+    steps:
+      - name: Check out PR head branch
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+          clean: true
+          show-progress: false
+
+      - name: Execute deterministic transform script
+        shell: python {0}
+        run: |
+          from pathlib import Path
+          import textwrap
+
+          source_path = Path('.github/workflows/apply-architecture-source-transforms.yml')
+          source = source_path.read_text(encoding='utf-8')
+          start_marker = '        run: |\n'
+          step_marker = '      - name: Apply deterministic source transforms\n'
+          step_start = source.index(step_marker)
+          script_start = source.index(start_marker, step_start) + len(start_marker)
+          script_end = source.index('\n      - name: Commit transformed sources', script_start)
+          script = textwrap.dedent(source[script_start:script_end])
+          exec(compile(script, str(source_path), 'exec'), {'__name__': '__main__'})
+          Path('.github/workflows/trigger-architecture-source-transforms.yml').unlink()
+
+      - name: Commit transformed sources
+        shell: pwsh
+        run: |
+          git config user.name "worktrace-architecture-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "Consolidate source ownership boundaries [skip ci]"
+          git push origin "HEAD:${{ github.event.pull_request.head.ref }}"
