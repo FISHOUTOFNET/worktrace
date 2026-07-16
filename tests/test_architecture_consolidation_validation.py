@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from worktrace import db
+from worktrace.api import view_model_api
 from worktrace.services import (
     refresh_state_view_model_service,
     runtime_activity_state_service,
@@ -26,6 +27,44 @@ def test_page_and_heartbeat_use_one_revision_owner(temp_db):
     )
     assert page["structure_revision"] == heartbeat["structure_revision"]
     assert page["page_revision"] == heartbeat["page_revision"]
+
+
+def test_session_summary_api_calls_keyword_only_service(monkeypatch):
+    captured: dict[str, object] = {}
+
+    def fake_summary(
+        *,
+        report_date: str | None = None,
+        projection_instance_key: str,
+        expected_projection_revision: str | None = None,
+    ) -> dict[str, object]:
+        captured.update(
+            {
+                "report_date": report_date,
+                "projection_instance_key": projection_instance_key,
+                "expected_projection_revision": expected_projection_revision,
+            }
+        )
+        return {"ok": True, "summary_rows": []}
+
+    monkeypatch.setattr(
+        view_model_service,
+        "get_session_activity_summary_view_model",
+        fake_summary,
+    )
+
+    result = view_model_api.get_session_activity_summary_view_model(
+        report_date="2026-07-16",
+        projection_instance_key="session:1",
+        expected_projection_revision="a" * 40,
+    )
+
+    assert result == {"ok": True, "summary_rows": []}
+    assert captured == {
+        "report_date": "2026-07-16",
+        "projection_instance_key": "session:1",
+        "expected_projection_revision": "a" * 40,
+    }
 
 
 def test_schema_trigger_surface_is_constraint_only(temp_db):
