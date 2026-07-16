@@ -38,64 +38,6 @@
     }
     App.invalidateProjectCatalog = invalidateProjectCatalog;
 
-    // One bridge wrapper owns cross-cutting frontend generation and project
-    // catalog invalidation. Individual page modules remain focused on rendering.
-    var rawCallBridge = App.callBridge;
-    if (typeof rawCallBridge === "function" && !App._hardeningBridgeInstalled) {
-        App._hardeningBridgeInstalled = true;
-        App.callBridge = function (method) {
-            var args = Array.prototype.slice.call(arguments, 1);
-            if (method === "save_timeline_session_edit"
-                && App.editingSession
-                && App.editingSession.can_edit_duration === false) {
-                args[5] = null;
-            }
-            var epoch = App.dataEpoch || 0;
-            return rawCallBridge.apply(App, [method].concat(args)).then(function (result) {
-                if ((method === "import_encrypted_backup" || method === "clear_all_local_data")
-                    && result && result.ok) {
-                    resetClientGeneration();
-                }
-                if (result && result.ok && (
-                    method.indexOf("project") >= 0
-                    || method.indexOf("rule") >= 0
-                ) && method !== "get_project_rules"
-                    && method !== "list_projects_for_timeline") {
-                    invalidateProjectCatalog();
-                }
-                // A response from a replaced database generation must never
-                // update a page, except for the replacement operation itself.
-                if (epoch !== (App.dataEpoch || 0)
-                    && method !== "import_encrypted_backup"
-                    && method !== "clear_all_local_data") {
-                    return { ok: false, stale_generation: true, error: "数据已更新" };
-                }
-                return result;
-            });
-        };
-    }
-
-    function enforceEditCapabilities() {
-        var session = App.editingSession;
-        if (!session) return;
-        var duration = document.getElementById("edit-duration-input");
-        var durationStatus = document.getElementById("edit-duration-status");
-        if (duration && session.can_edit_duration === false) {
-            duration.disabled = true;
-            if (durationStatus) durationStatus.textContent = "进行中活动暂不支持修改时长";
-        }
-    }
-
-    function installEditCapabilityObserver() {
-        var panel = document.getElementById("timeline-edit-panel");
-        if (!panel || typeof MutationObserver !== "function") return;
-        new MutationObserver(enforceEditCapabilities).observe(panel, {
-            attributes: true,
-            childList: true,
-            subtree: true
-        });
-    }
-
     function refreshStatus() {
         var token = App.requestCoordinator.beginLatest("status", "current");
         return App.callBridge("get_status").then(function (result) {
@@ -309,14 +251,13 @@
         bind("settings-backup-export-btn", "click", App.exportEncryptedBackup);
         bind("settings-backup-manifest-btn", "click", App.previewEncryptedBackupManifest);
         bind("settings-backup-import-btn", "click", App.importEncryptedBackup);
-        bind("settings-clear-local-data-btn", "click", App.clearAllLocalData);
+        bind("settings-clear-all-btn", "click", App.clearAllLocalData);
         if (App.initRulesPanelEvents) App.initRulesPanelEvents();
         bind("first-run-notice-accept-btn", "click", App.acceptFirstRunNotice);
         bind("first-run-notice-close-btn", "click", function () {
             if (App.firstRunNoticeViewingFromSettings) App.hideFirstRunNotice();
         });
         bind("settings-privacy-notice-btn", "click", App.openPrivacyNoticeFromSettings);
-        installEditCapabilityObserver();
     }
     App.initButtons = initButtons;
 
