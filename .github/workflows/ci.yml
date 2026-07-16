@@ -1,6 +1,8 @@
 name: CI
 
 on:
+  push:
+    branches: [agent/canonical-architecture-consolidation]
   pull_request:
   workflow_dispatch:
 
@@ -15,7 +17,7 @@ concurrency:
 jobs:
   project-transition-cutover:
     name: Remove legacy project transition mirrors
-    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.ref == 'agent/canonical-architecture-consolidation'
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch' || github.event.pull_request.head.ref == 'agent/canonical-architecture-consolidation'
     runs-on: [self-hosted, Windows, X64]
     timeout-minutes: 30
 
