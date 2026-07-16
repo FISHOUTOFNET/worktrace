@@ -120,7 +120,10 @@ def test_pause_resume_short_segments_are_persisted(temp_db):
     assert any(r["app_name"] == "Word" for r in normal)
     assert any(r["app_name"] == "Excel" for r in normal)
     snapshot = _snapshot()
-    assert snapshot["activity_display_name"] == "Sheet"
+    open_activity = activity_service.get_open_activity()
+    assert open_activity is not None
+    assert snapshot["persisted_activity_id"] == open_activity["id"]
+    assert snapshot["activity_display_name"] == "Excel"
     assert "window_title" not in snapshot
 
 
