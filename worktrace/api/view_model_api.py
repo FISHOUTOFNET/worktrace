@@ -27,9 +27,9 @@ def get_session_activity_summary_view_model(
 ) -> dict[str, Any]:
     with snapshot_read_scope():
         return view_model_service.get_session_activity_summary_view_model(
-            projection_instance_key,
-            report_date,
-            expected_projection_revision,
+            report_date=report_date,
+            projection_instance_key=projection_instance_key,
+            expected_projection_revision=expected_projection_revision,
         )
 
 
