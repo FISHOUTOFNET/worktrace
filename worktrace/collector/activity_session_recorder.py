@@ -13,6 +13,7 @@ from ..constants import (
 )
 from ..services import activity_service, project_service
 from ..services.activity_lifecycle_service import (
+    checkpoint_activity as lifecycle_checkpoint_activity,
     close_activity as lifecycle_close_activity,
     persist_midnight_anchor,
     persist_open_activity,
@@ -337,7 +338,7 @@ class ActivitySessionRecorder:
             < OPEN_ACTIVITY_CHECKPOINT_SECONDS
         ):
             return
-        activity_service.set_activity_duration(
+        lifecycle_checkpoint_activity(
             self.persisted_activity_id,
             elapsed,
         )
