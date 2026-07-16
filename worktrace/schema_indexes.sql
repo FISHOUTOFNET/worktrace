@@ -1,6 +1,31 @@
 CREATE INDEX IF NOT EXISTS idx_activity_time
 ON activity_log(start_time, end_time);
 
+CREATE TRIGGER IF NOT EXISTS close_existing_open_activity_before_insert
+BEFORE INSERT ON activity_log
+WHEN NEW.end_time IS NULL
+BEGIN
+    UPDATE activity_log
+    SET end_time = CASE
+            WHEN NEW.start_time >= start_time THEN NEW.start_time
+            ELSE start_time
+        END,
+        duration_seconds = MAX(
+            COALESCE(duration_seconds, 0),
+            MAX(
+                0,
+                CAST((
+                    julianday(CASE
+                        WHEN NEW.start_time >= start_time THEN NEW.start_time
+                        ELSE start_time
+                    END) - julianday(start_time)
+                ) * 86400 + 0.5 AS INTEGER)
+            )
+        ),
+        updated_at = NEW.created_at
+    WHERE end_time IS NULL;
+END;
+
 CREATE UNIQUE INDEX IF NOT EXISTS uq_activity_log_single_open
 ON activity_log((1))
 WHERE end_time IS NULL;
