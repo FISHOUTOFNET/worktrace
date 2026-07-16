@@ -24,7 +24,11 @@ import pytest
 
 from worktrace.api import statistics_api
 from worktrace.api.statistics_api import StatisticsSummaryError
-from worktrace.services import activity_service, project_service, settings_service
+from tests.support import activity_factory as activity_service
+from worktrace.services import (
+    project_service,
+    settings_service,
+)
 from worktrace.webview_ui.bridge import WebViewBridge
 
 pytestmark = [pytest.mark.db, pytest.mark.integration, pytest.mark.contract]

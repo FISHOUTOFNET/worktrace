@@ -7,7 +7,8 @@ import pytest
 
 from worktrace.api import timeline_api
 from worktrace.db import get_connection
-from worktrace.services import activity_service, project_service
+from tests.support import activity_factory as activity_service
+from worktrace.services import project_service
 from worktrace.services import report_session_operation_service as mutations
 from worktrace.services import secure_backup_service
 from worktrace.services.report_projection_identity import DURABLE_REVISION_PREFIX

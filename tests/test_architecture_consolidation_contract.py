@@ -7,9 +7,9 @@ import pytest
 
 from worktrace import db
 from worktrace.constants import SOURCE_AUTO, STATUS_PAUSED
+from tests.support import activity_factory as activity_service
 from worktrace.services import (
     activity_lifecycle_service,
-    activity_service,
     refresh_state_view_model_service,
     runtime_activity_state_service,
     timeline_service,

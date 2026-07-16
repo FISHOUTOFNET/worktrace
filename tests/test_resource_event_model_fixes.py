@@ -17,7 +17,14 @@ from worktrace.platforms.base import ActiveWindow
 from worktrace.resources.email_detector import EmailDetector
 from worktrace.resources.ide_detector import IdeDetector
 from worktrace.resources.types import DetectedResource
-from worktrace.services import activity_service, folder_rule_service, privacy_service, project_service, rule_service, settings_service
+from tests.support import activity_factory as activity_service
+from worktrace.services import (
+    folder_rule_service,
+    privacy_service,
+    project_service,
+    rule_service,
+    settings_service,
+)
 from worktrace.services.project_inference_service import (
     assign_project_for_activity,
     candidate_project_name_for_resource,

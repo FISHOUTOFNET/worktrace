@@ -15,7 +15,12 @@ import pytest
 
 from worktrace.constants import EXCLUDED_PROJECT, UNCATEGORIZED_PROJECT
 from worktrace.db import get_connection
-from worktrace.services import activity_service, folder_rule_service, project_service, rule_service
+from tests.support import activity_factory as activity_service
+from worktrace.services import (
+    folder_rule_service,
+    project_service,
+    rule_service,
+)
 
 pytestmark = [pytest.mark.db]
 

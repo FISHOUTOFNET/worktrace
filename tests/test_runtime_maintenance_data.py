@@ -6,9 +6,9 @@ from tests.support.activity_factory import create_closed_activity
 from tests.support.db_helpers import assign_activity_project, fetch_one
 
 from worktrace.platforms.base import ActiveWindow
+from tests.support import activity_factory as activity_service
 from worktrace.services import (
     activity_lifecycle_service,
-    activity_service,
     folder_index_service,
     folder_rule_service,
     privacy_service,

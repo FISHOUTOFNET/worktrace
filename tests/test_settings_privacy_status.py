@@ -1387,7 +1387,8 @@ def test_api_import_round_trip_smoke(temp_db, tmp_path) -> None:
     # import the file back through the WebView facade. Asserts the
     # success payload is narrow, the post-import state is paused, and
     # secure_import_in_progress ends at False.
-    from worktrace.services import activity_service, secure_backup_service
+    from tests.support import activity_factory as activity_service
+    from worktrace.services import secure_backup_service
     from worktrace.services.settings_service import (
         get_bool_setting,
         get_setting,
@@ -1731,7 +1732,7 @@ def test_api_clear_round_trip_smoke(temp_db) -> None:
     # No-mock round-trip: clear-all through the WebView facade must re-seed
     # system defaults, drop business data, leave the app paused, and not leak
     # internal info.
-    from worktrace.services import activity_service
+    from tests.support import activity_factory as activity_service
     from worktrace.services.settings_service import (
         get_bool_setting,
         get_setting,

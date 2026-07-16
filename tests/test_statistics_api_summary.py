@@ -28,7 +28,11 @@ from worktrace.api import statistics_api
 from worktrace.api.statistics_api import StatisticsSummaryError
 from worktrace.db import get_connection
 from worktrace.formatters import format_status_label
-from worktrace.services import activity_service, project_service, statistics_service
+from tests.support import activity_factory as activity_service
+from worktrace.services import (
+    project_service,
+    statistics_service,
+)
 
 pytestmark = [pytest.mark.db, pytest.mark.integration, pytest.mark.contract]
 

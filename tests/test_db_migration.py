@@ -325,7 +325,7 @@ def test_initialize_seeds_default_projects(temp_db):
 
 
 def test_repeated_initialize_does_not_error_or_destroy_data(temp_db):
-    from worktrace.services import activity_service
+    from tests.support import activity_factory as activity_service
 
     aid = activity_service.create_activity(
         "Edge",
@@ -351,7 +351,7 @@ def test_repeated_initialize_does_not_error_or_destroy_data(temp_db):
 
 
 def test_reset_database_clears_business_data_and_rebuilds_defaults(temp_db):
-    from worktrace.services import activity_service
+    from tests.support import activity_factory as activity_service
 
     aid = activity_service.create_activity(
         "Edge",

@@ -156,7 +156,7 @@ def test_operation_and_receipt_json_and_cardinality_constraints(temp_db):
 
 
 def test_reset_database_clears_current_schema_tables(temp_db):
-    from worktrace.services import activity_service
+    from tests.support import activity_factory as activity_service
 
     aid = activity_service.create_activity("Edge", "msedge.exe", "Search", start_time="2026-06-18 09:00:00")
     activity_service.finalize_created_activity(aid)

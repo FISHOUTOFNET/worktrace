@@ -788,7 +788,11 @@ def test_service_statistics_none_input_rejected(temp_db):
 def test_service_statistics_tie_breaker_stable(temp_db):
     """groups with equal duration must tie-break by display_name
     (casefold) so the order is stable across runs."""
-    from worktrace.services import activity_service, project_service, statistics_service
+    from tests.support import activity_factory as activity_service
+    from worktrace.services import (
+        project_service,
+        statistics_service,
+    )
     pid = project_service.create_project("Client")
     # Two apps with the same duration but different names. The tie-breaker
     # should sort by display_name casefold ascending.
@@ -818,7 +822,11 @@ def test_service_statistics_tie_breaker_stable(temp_db):
 
 def test_service_statistics_all_known_statuses_included(temp_db):
     """Central report status policy suppresses paused and unattributed idle/error."""
-    from worktrace.services import activity_service, project_service, statistics_service
+    from tests.support import activity_factory as activity_service
+    from worktrace.services import (
+        project_service,
+        statistics_service,
+    )
     pid = project_service.create_project("Client")
     for status in ("normal", "idle", "paused", "excluded", "error"):
         aid = activity_service.create_activity(

@@ -20,8 +20,8 @@ pytestmark = [pytest.mark.contract, pytest.mark.integration, pytest.mark.db, pyt
 from worktrace.api import rule_api
 from worktrace.constants import EXCLUDED_PROJECT
 from worktrace.db import get_connection, now_str
+from tests.support import activity_factory as activity_service
 from worktrace.services import (
-    activity_service,
     folder_rule_service,
     project_inference_service,
     project_service,

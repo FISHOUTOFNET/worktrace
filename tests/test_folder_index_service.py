@@ -5,8 +5,8 @@ import pytest
 from worktrace.db import get_connection
 from worktrace.platforms import windows_adapter
 from worktrace.platforms.base import ActiveWindow
+from tests.support import activity_factory as activity_service
 from worktrace.services import (
-    activity_service,
     folder_index_service,
     folder_rule_service,
     privacy_service,
