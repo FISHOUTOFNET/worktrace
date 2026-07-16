@@ -1,5 +1,4 @@
 // WorkTrace WebView frontend - keyword rule delete.
-
 (function () {
     "use strict";
     var App = window.WorkTraceApp = window.WorkTraceApp || {};
@@ -16,12 +15,9 @@
         var button = event.target && event.target.closest
             ? event.target.closest(".rules-keyword-delete-button")
             : null;
-        if (!button) return;
-        if (App.rulesDeletingRuleKey) return;
+        if (!button || App.rulesDeletingRuleKey) return;
         var kind = button.getAttribute("data-rule-kind");
-        if (kind !== "keyword") {
-            return;
-        }
+        if (kind !== "keyword") return;
         var rawId = button.getAttribute("data-rule-id");
         var ruleId = parseInt(rawId, 10);
         if (!rawId || String(ruleId) !== String(rawId).trim() || ruleId <= 0) {
@@ -73,8 +69,10 @@
         App.setRuleDeleting("keyword:" + ruleId);
         if (kind === "folder" && App.setFolderDeleting) App.setFolderDeleting("folder:" + ruleId);
         App.clearRulesError();
-        var method = kind === "folder" ? "delete_project_folder_rule" : "delete_project_keyword_rule";
-        App.callBridge(method, ruleId, applyToHistory).then(function (result) {
+        var request = kind === "folder"
+            ? App.bridge.deleteProjectFolderRule(ruleId, applyToHistory)
+            : App.bridge.deleteProjectKeywordRule(ruleId, applyToHistory);
+        request.then(function (result) {
             if (result && result.ok === false) {
                 App.showRulesError(result.error || "删除规则失败");
                 return;
@@ -100,5 +98,4 @@
         });
     }
     App.setRuleDeleting = setRuleDeleting;
-
 })();

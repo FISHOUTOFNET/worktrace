@@ -3,17 +3,13 @@
     "use strict";
     var App = window.WorkTraceApp = window.WorkTraceApp || {};
 
-    // timeline.js is loaded before this module and init.js is loaded after it.
-    // Install the shared catalog loader synchronously here so initial preload,
-    // Timeline selection, and rule mutations all observe the same in-flight
-    // Promise and database generation.
     function installProjectCatalogCoordinator() {
         App.loadProjects = function () {
             if (App.projectsCache) return Promise.resolve(App.projectsCache);
             if (App.projectsLoadPromise) return App.projectsLoadPromise;
             App.projectsLoading = true;
             var epoch = App.dataEpoch || 0;
-            var request = App.callBridge("list_projects_for_timeline").then(function (result) {
+            var request = App.bridge.listProjectsForTimeline().then(function (result) {
                 if (epoch !== (App.dataEpoch || 0)) return null;
                 if (result && result.ok !== false && result.projects) {
                     App.projectsCache = result.projects;
@@ -64,9 +60,7 @@
         App.projectsCache = null;
         App.projectsLoading = false;
         App.projectsLoadPromise = null;
-        return typeof App.loadProjects === "function"
-            ? App.loadProjects()
-            : Promise.resolve(null);
+        return typeof App.loadProjects === "function" ? App.loadProjects() : Promise.resolve(null);
     }
     App.refreshSharedProjectCatalog = refreshSharedProjectCatalog;
 
@@ -75,7 +69,7 @@
         var token = App.requestCoordinator.beginLatest("rules", "home");
         App.setRulesLoading(true);
         App.clearRulesError();
-        var request = App.callBridge("get_project_rules").then(function (result) {
+        var request = App.bridge.getProjectRules().then(function (result) {
             if (!App.requestCoordinator.isCurrent(token)) return null;
             if (result && result.ok === false) {
                 App.showRulesError("加载项目规则失败");
@@ -83,16 +77,9 @@
             }
             App.showProjectRules(result || { projects: [] });
             App.clearRulesError();
-            // The rules payload and Timeline project selector are separate
-            // read models. Refresh the shared catalog explicitly at the rules
-            // boundary instead of inferring mutations from bridge method names.
-            return refreshSharedProjectCatalog().then(function () {
-                return result;
-            });
+            return refreshSharedProjectCatalog().then(function () { return result; });
         }).catch(function () {
-            if (App.requestCoordinator.isCurrent(token)) {
-                App.showRulesError("加载项目规则失败");
-            }
+            if (App.requestCoordinator.isCurrent(token)) App.showRulesError("加载项目规则失败");
             return null;
         }).finally(function () {
             if (App.rulesLoadPromise === request) App.rulesLoadPromise = null;
@@ -103,7 +90,7 @@
     }
     App.loadProjectRules = loadProjectRules;
 
-    function _sortProjectsForRulesHome(projects) {
+    function sortProjectsForRulesHome(projects) {
         var list = (projects || []).slice();
         var mode = App.rulesSortMode || "last_used";
         list.sort(function (a, b) {
@@ -123,7 +110,7 @@
         });
         return list;
     }
-    App.sortProjectsForRulesHome = _sortProjectsForRulesHome;
+    App.sortProjectsForRulesHome = sortProjectsForRulesHome;
 
     function showProjectRules(data) {
         App.rulesLoaded = true;
@@ -132,7 +119,7 @@
         var empty = document.getElementById("rules-empty");
         if (App.refreshRulesPanelTargets) App.refreshRulesPanelTargets();
         if (!list || !empty) return;
-        var projects = _sortProjectsForRulesHome((data && data.projects) || []);
+        var projects = sortProjectsForRulesHome((data && data.projects) || []);
         if (!projects.length) {
             list.innerHTML = "";
             empty.hidden = false;
@@ -154,9 +141,7 @@
             App.loadProjectRules();
             return;
         }
-        var projects = _sortProjectsForRulesHome(
-            (App.lastProjectRulesData.projects || [])
-        );
+        var projects = sortProjectsForRulesHome(App.lastProjectRulesData.projects || []);
         if (!projects.length) return;
         list.innerHTML = projects.map(function (project) {
             return App.renderProjectRuleProject(project);

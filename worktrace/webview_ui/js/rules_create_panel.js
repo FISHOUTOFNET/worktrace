@@ -1,5 +1,4 @@
 // WorkTrace WebView frontend - unified Project Rules create/edit panel.
-
 (function () {
     "use strict";
     var App = window.WorkTraceApp = window.WorkTraceApp || {};
@@ -12,12 +11,8 @@
     App.rulesCreatingPanelRule = false;
 
     function initRulesPanelEvents() {
-        bindClick("rules-open-create-rule", function () {
-            openRulesPanel("rule", { ruleType: "folder" });
-        });
-        bindClick("rules-open-create-project", function () {
-            openRulesPanel("project", {});
-        });
+        bindClick("rules-open-create-rule", function () { openRulesPanel("rule", { ruleType: "folder" }); });
+        bindClick("rules-open-create-project", function () { openRulesPanel("project", {}); });
         bindClick("rules-create-panel-close", closeRulesPanel);
         bindClick("rules-panel-rule-tab", function () { setPanelMode("rule"); });
         bindClick("rules-panel-project-tab", function () { setPanelMode("project"); });
@@ -30,9 +25,7 @@
         if (panel && panel.getAttribute("data-rules-panel-bound") !== "1") {
             panel.setAttribute("data-rules-panel-bound", "1");
             panel.addEventListener("click", function (event) {
-                if (event.target && event.target.getAttribute("data-rules-panel-close") === "1") {
-                    closeRulesPanel();
-                }
+                if (event.target && event.target.getAttribute("data-rules-panel-close") === "1") closeRulesPanel();
             });
         }
         var languageSelect = document.getElementById("rules-panel-project-language");
@@ -66,8 +59,10 @@
         if (button.classList.contains("rules-project-edit-button")) {
             openProjectEdit(button);
         } else if (button.classList.contains("rules-project-add-rule-button")) {
-            var projectId = parsePositiveInt(button.getAttribute("data-project-id"));
-            openRulesPanel("rule", { projectId: projectId, ruleType: "folder" });
+            openRulesPanel("rule", {
+                projectId: parsePositiveInt(button.getAttribute("data-project-id")),
+                ruleType: "folder"
+            });
         } else if (button.classList.contains("rules-project-delete-button")) {
             deleteProject(button);
         }
@@ -86,7 +81,7 @@
     function deleteProject(button) {
         var projectId = parsePositiveInt(button.getAttribute("data-project-id"));
         if (!projectId || !window.confirm("确定删除项目吗？项目将不再显示，历史活动记录不会被删除。")) return;
-        App.callBridge("delete_project_for_rules", projectId).then(function (result) {
+        App.bridge.deleteProjectForRules(projectId).then(function (result) {
             if (result && result.ok === false) {
                 App.showRulesError(result.error || "删除项目失败");
                 return;
@@ -159,9 +154,7 @@
             option.textContent = App.safeText(projects[i].name, "未命名项目");
             select.appendChild(option);
         }
-        if (preferredProjectId) {
-            select.value = String(preferredProjectId);
-        }
+        if (preferredProjectId) select.value = String(preferredProjectId);
         select.disabled = !projects.length || App.rulesCreatingPanelRule;
     }
     App.refreshRulesPanelTargets = refreshRulesPanelTargets;
@@ -181,11 +174,12 @@
         App.rulesCreatingPanelProject = true;
         refreshPanelWriteState();
         clearPanelStatus();
-        var method = App.rulesPanelEditingProjectId ? "update_project_for_rules" : "create_project_for_rules";
-        var args = App.rulesPanelEditingProjectId
-            ? [method, App.rulesPanelEditingProjectId, name, description, language]
-            : [method, name, description, language];
-        App.callBridge.apply(App, args).then(function (result) {
+        var request = App.rulesPanelEditingProjectId
+            ? App.bridge.updateProjectForRules(
+                App.rulesPanelEditingProjectId, name, description, language
+            )
+            : App.bridge.createProjectForRules(name, description, language);
+        request.then(function (result) {
             if (result && result.ok === false) {
                 showPanelStatus(result.error || "保存项目失败", true);
                 return;
@@ -228,10 +222,10 @@
         App.rulesCreatingPanelRule = true;
         refreshPanelWriteState();
         clearPanelStatus();
-        var bridgePromise = isFolder
-            ? App.callBridge("create_project_folder_rule", projectId, target, recursiveEl ? !!recursiveEl.checked : true)
-            : App.callBridge("create_project_keyword_rule", projectId, target);
-        bridgePromise.then(function (result) {
+        var request = isFolder
+            ? App.bridge.createProjectFolderRule(projectId, target, recursiveEl ? !!recursiveEl.checked : true)
+            : App.bridge.createProjectKeywordRule(projectId, target);
+        request.then(function (result) {
             if (result && result.ok === false) {
                 showPanelStatus(result.error || "新增规则失败", true);
                 return null;
@@ -271,9 +265,7 @@
         var select = document.getElementById("rules-panel-project-language");
         var other = document.getElementById("rules-panel-project-language-other");
         if (!select) return "中文";
-        if (select.value === "其他") {
-            return other && other.value.trim() ? other.value.trim() : "中文";
-        }
+        if (select.value === "其他") return other && other.value.trim() ? other.value.trim() : "中文";
         return select.value || "中文";
     }
 
@@ -328,9 +320,7 @@
         el.className = "rules-panel-status" + (isError ? " is-error" : " is-success");
     }
 
-    function clearPanelStatus() {
-        showPanelStatus("", false);
-    }
+    function clearPanelStatus() { showPanelStatus("", false); }
 
     function findProject(projectId) {
         var projects = (App.lastProjectRulesData && App.lastProjectRulesData.projects) || [];
@@ -354,5 +344,4 @@
         var parsed = parseInt(value, 10);
         return parsed > 0 ? parsed : 0;
     }
-
 })();

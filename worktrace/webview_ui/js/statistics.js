@@ -69,8 +69,7 @@
         var token = App.requestCoordinator.beginLatest("statistics", key);
         setStatisticsLoading(true);
         App.clearStatisticsError();
-        App.statisticsLoadPromise = App.callBridge(
-            "get_statistics_export_summary",
+        App.statisticsLoadPromise = App.bridge.getStatisticsExportSummary(
             range.dateFrom,
             range.dateTo
         ).then(function (result) {
@@ -210,8 +209,7 @@
     App.setStatisticsExportSaving = setStatisticsExportSaving;
 
     function exportStatisticsCsv() {
-        if (App.statisticsExportSaving) return;
-        if (App.statisticsLoading) return;
+        if (App.statisticsExportSaving || App.statisticsLoading) return;
         var accepted = App.statisticsAcceptedPayload;
         if (!accepted || !accepted.exportRevision) {
             setStatisticsExportStatus("请先加载统计数据", "error");
@@ -224,7 +222,11 @@
         }
         setStatisticsExportSaving(true);
         setStatisticsExportStatus("正在导出…", "info");
-        App.callBridge("export_statistics_csv", accepted.dateFrom, accepted.dateTo, accepted.exportRevision).then(function (result) {
+        App.bridge.exportStatisticsCsv(
+            accepted.dateFrom,
+            accepted.dateTo,
+            accepted.exportRevision
+        ).then(function (result) {
             if (!result) {
                 setStatisticsExportStatus("导出失败", "error");
             } else if (result.cancelled) {
