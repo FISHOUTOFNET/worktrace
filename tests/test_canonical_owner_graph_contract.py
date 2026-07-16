@@ -60,6 +60,26 @@ def test_application_instance_lease_has_no_collector_alias():
     assert "owns_collector" not in functions
 
 
+def test_low_level_runtime_hooks_are_not_public_capabilities():
+    from worktrace.api import app_api
+
+    assert set(app_api.__all__).isdisjoint(
+        {
+            "get_runtime",
+            "set_runtime",
+            "start_collector",
+            "start_background_workers",
+        }
+    )
+
+
+def test_settings_api_does_not_export_raw_runtime_snapshot():
+    from worktrace.api import settings_api
+
+    assert "get_current_activity_snapshot" not in settings_api.__all__
+    assert not hasattr(settings_api, "get_current_activity_snapshot")
+
+
 def test_view_model_api_calls_keyword_only_summary_contract():
     tree = _module("worktrace/api/view_model_api.py")
     target = next(
