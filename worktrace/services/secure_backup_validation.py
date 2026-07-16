@@ -15,7 +15,12 @@ from ..constants import (
     STATUS_PAUSED,
     TIME_FORMAT,
 )
-from ..db import CURRENT_SCHEMA_VERSION, expected_schema_fingerprint, schema_fingerprint
+from ..db import (
+    CURRENT_SCHEMA_VERSION,
+    expected_schema_fingerprint,
+    read_internal_schema_sql,
+    schema_fingerprint,
+)
 
 _ALLOWED_ACTIVITY_STATUSES = {
     STATUS_NORMAL,
@@ -32,13 +37,18 @@ class BackupValidationError(ValueError):
 
 def validate_staging_database(conn: sqlite3.Connection) -> None:
     """Normalize restore-only runtime state, then validate all semantics."""
+
+    # The durable structural generation is installation-local technical state,
+    # not portable business data. Recreate it at the restore ingress before the
+    # canonical schema fingerprint is checked.
+    conn.executescript(read_internal_schema_sql())
     if int(conn.execute("PRAGMA user_version").fetchone()[0] or 0) != CURRENT_SCHEMA_VERSION:
         raise BackupValidationError("schema version")
     if schema_fingerprint(conn) != expected_schema_fingerprint():
         raise BackupValidationError("schema fingerprint")
 
     # An open row belongs to the exporting process generation and cannot remain
-    # open after a replace import.  Seal it at start + already-observed duration;
+    # open after a replace import. Seal it at start + already-observed duration;
     # this preserves recorded work without using the importing machine's clock.
     _seal_imported_open_activity_rows(conn)
 
