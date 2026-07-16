@@ -244,6 +244,38 @@ def close_all_open_activities(conn, end_time: str) -> list[int]:
     return closed
 
 
+def checkpoint_activity_duration(
+    conn,
+    activity_id: int,
+    duration_seconds: int,
+) -> bool:
+    """Persist a monotonic crash-recovery checkpoint for one open activity."""
+
+    row = conn.execute(
+        """
+        SELECT duration_seconds, end_time
+        FROM activity_log
+        WHERE id = ? AND is_deleted = 0
+        """,
+        (int(activity_id),),
+    ).fetchone()
+    if row is None or row["end_time"] is not None:
+        return False
+    duration = max(
+        int(row["duration_seconds"] or 0),
+        max(0, int(duration_seconds or 0)),
+    )
+    cursor = conn.execute(
+        """
+        UPDATE activity_log
+        SET duration_seconds = ?
+        WHERE id = ? AND end_time IS NULL AND is_deleted = 0
+        """,
+        (duration, int(activity_id)),
+    )
+    return cursor.rowcount == 1
+
+
 def _detect_resource(
     *,
     app_name: str,
@@ -279,6 +311,7 @@ def _duration_seconds(start_time: str, end_time: str) -> tuple[int, bool]:
 
 __all__ = [
     "PreparedActivity",
+    "checkpoint_activity_duration",
     "close_activity",
     "close_all_open_activities",
     "insert_open_activity",
