@@ -63,6 +63,21 @@ SHIPPING_METHODS = frozenset(
 )
 
 
+class _ShippingBridge:
+    """Read-only capability view passed to pywebview as ``js_api``."""
+
+    def __init__(self, owner: "WebViewBridge") -> None:
+        self._owner = owner
+
+    def __dir__(self) -> list[str]:
+        return sorted(SHIPPING_METHODS)
+
+    def __getattr__(self, name: str):
+        if name not in SHIPPING_METHODS:
+            raise AttributeError(name)
+        return getattr(self._owner, name)
+
+
 class WebViewBridge(
     BridgeDialogMixin,
     OverviewBridgeMixin,
@@ -71,12 +86,17 @@ class WebViewBridge(
     TimelineBridgeMixin,
     ProjectRulesBridgeMixin,
 ):
-    """Fixed set of named UI capabilities exposed through pywebview."""
+    """Internal bridge controller with a fixed shipping capability view."""
 
     def __init__(self) -> None:
         self._window: Any = None
+        self._shipping_api = _ShippingBridge(self)
 
-    def _set_window(self, window: Any) -> None:
+    @property
+    def shipping_api(self) -> _ShippingBridge:
+        return self._shipping_api
+
+    def set_window(self, window: Any) -> None:
         """Inject the already-created pywebview window for native dialogs."""
 
         self._window = window

@@ -66,9 +66,6 @@ def main() -> int:
     setup_logging(paths.log_path)
     logging.info("webview ui startup")
 
-    # Pre-flight checks do not open user data or construct a window. The app
-    # lease is still acquired before database initialization and before the
-    # WebView is created.
     if detect_webview2_runtime() == "missing":
         return _report_runtime_missing()
 
@@ -107,12 +104,12 @@ def main() -> int:
             window = webview.create_window(
                 title="WorkTrace",
                 url=str(index_path),
-                js_api=bridge,
+                js_api=bridge.shipping_api,
                 width=1080,
                 height=720,
                 min_size=(800, 540),
             )
-            bridge._set_window(window)
+            bridge.set_window(window)
             webview.start()
         except Exception:
             logging.exception("webview start failed")

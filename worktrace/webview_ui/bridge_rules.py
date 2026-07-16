@@ -3,5 +3,5 @@
 from __future__ import annotations
 
 from ..api import project_api, rule_api
-from ..api.project_rules_webview import *  # noqa: F401,F403
+from ..api.project_rules_webview import *
 from ..api.project_rules_webview import __all__ as __all__

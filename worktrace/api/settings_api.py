@@ -22,6 +22,8 @@ from ..services.settings_service import (
 )
 from . import backup_api, view_model_api
 
+set_setting_value: object = object()
+
 
 def first_run_notice_accepted() -> bool:
     return privacy_gate_service.is_privacy_notice_accepted()

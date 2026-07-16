@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from worktrace.api import settings_api
 from worktrace.webview_ui.bridge import SHIPPING_METHODS, WebViewBridge
 
 pytestmark = [pytest.mark.contract, pytest.mark.parallel_safe]
@@ -36,6 +37,8 @@ def test_settings_api_has_named_capabilities_only() -> None:
             "clear_runtime_activity_state",
         }
     )
+    assert not callable(settings_api.set_setting_value)
+    assert "set_setting_value" not in settings_api.__all__
 
 
 def test_bridge_modules_import_api_not_backend_layers() -> None:
@@ -69,12 +72,14 @@ def test_bridge_modules_import_api_not_backend_layers() -> None:
     assert offenders == []
 
 
-def test_webview_bridge_public_methods_equal_shipping_allowlist() -> None:
+def test_shipping_bridge_public_methods_equal_allowlist() -> None:
+    bridge = WebViewBridge()
+    shipping = bridge.shipping_api
     actual = {
         name
-        for name, value in inspect.getmembers(WebViewBridge)
+        for name, value in inspect.getmembers(shipping)
         if not name.startswith("_") and callable(value)
     }
     assert actual == set(SHIPPING_METHODS)
-    assert "set_window" not in actual
-    assert hasattr(WebViewBridge, "_set_window")
+    assert not hasattr(shipping, "set_window")
+    assert hasattr(bridge, "set_window")
