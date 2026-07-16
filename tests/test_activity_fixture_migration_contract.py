@@ -1,3 +1,10 @@
+"""Repository-wide contract for the physical activity lifecycle hard cutover.
+
+Tests construct durable facts through the test-only repository facade. Production
+lifecycle transitions are owned by ``activity_lifecycle_service``; the query/edit
+service must not retain compatibility CRUD entries.
+"""
+
 from __future__ import annotations
 
 import ast
