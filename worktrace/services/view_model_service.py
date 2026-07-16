@@ -1,7 +1,7 @@
 """Page ViewModel constructor — projects the unified Activity Display Model.
 
 Assembles the page-level ViewModel for Overview / Recent / Timeline /
-Details / Refresh-State. Owns NO live-display semantics: every live
+Details. Owns NO live-display semantics: every live
 semantic (live clock, display span identity, persisted-open overlay, project
 transition) is decided by
 :mod:`worktrace.services.activity_display_model_service`. This module only:
@@ -48,6 +48,7 @@ from . import (
 )
 from .activity_display_model_service import build_activity_display_model
 from .activity_display_projection import build_kpi_live_targets
+from .page_view_model_common import enable_safe_open_edit
 from .activity_row_overlay import (
     ROW_KIND_ACTIVITY_DETAIL_ROW,
     ROW_KIND_PROJECT_ACTIVITY_SUMMARY_ROW,
@@ -55,7 +56,9 @@ from .activity_row_overlay import (
     ROW_KIND_RECENT_PROJECT_SESSION_ROW,
     apply_live_span_to_row,
 )
+from . import page_revision_service
 from .report_projection_identity import stable_json_hash
+from .report_revision_service import get_report_structure_revision
 from .runtime_activity_state_service import sample_runtime_activity_state
 from .settings_service import get_bool_setting, get_int_setting, get_setting
 
@@ -170,25 +173,26 @@ def _revision_fields_for_model(
     today: str,
     report_date: str,
 ) -> dict[str, str]:
-    from .report_projection_snapshot_service import build_visible_snapshot
+    """Return the same revision tuple consumed by the heartbeat owner."""
 
+    del snapshot
     live_clock = model.get("live_clock") or {}
-    live_revision = stable_json_hash(
-        {
-            "key": live_clock.get("stable_live_key_hash") or live_clock.get("stable_live_key"),
-            "state": live_clock.get("live_state"),
-            "span": live_clock.get("display_span_id"),
-            "project_live": live_clock.get("is_project_duration_live"),
-        }
+    current_activity = model.get("current_activity") or {}
+    live_revision = page_revision_service.live_revision(
+        current_activity,
+        live_clock,
     )
-    report_revision = build_visible_snapshot(report_date, report_date).snapshot_revision
+    structure_revision = get_report_structure_revision(report_date)
     return {
         "live_revision": live_revision,
+        "structure_revision": structure_revision,
         "page_revision": stable_json_hash(
-            [report_revision, live_revision if report_date == today else ""]
+            [
+                structure_revision,
+                live_revision if report_date == today else "",
+            ]
         ),
     }
-
 
 def _live_identity_fields(model: dict[str, Any]) -> dict[str, Any]:
     live_clock = model.get("live_clock") or {}
@@ -286,12 +290,24 @@ def get_overview_view_model(today: str | None = None) -> dict[str, Any]:
         report_date=scoped_today,
     )
 
-    project_count = len(project_service.list_active_projects())
     from .report_projection_snapshot_service import build_visible_snapshot
     from .report_status_policy import decide_report_status
 
     overview_projection = build_visible_snapshot(scoped_today, scoped_today)
     sessions = list(overview_projection.final_sessions)
+    standalone_entries = [
+        entry
+        for entry in overview_projection.final_entries
+        if str(entry.get("row_kind") or "") == "standalone_status"
+        and not bool(entry.get("is_in_progress"))
+    ]
+    concrete_project_ids = {
+        int(row.get("report_project_id") or row.get("project_id") or 0)
+        for row in overview_projection.final_contributions
+        if bool(row.get("is_report_project"))
+        and int(row.get("report_project_id") or row.get("project_id") or 0) > 0
+    }
+    project_count = len(concrete_project_ids)
 
     recent_rows: list[dict[str, Any]] = []
     for session in sessions:
@@ -330,6 +346,11 @@ def get_overview_view_model(today: str | None = None) -> dict[str, Any]:
         for r in total_rows
         if bool(r.get("is_uncategorized"))
     )
+    standalone_total_seconds = sum(
+        int(entry.get("duration_seconds") or 0)
+        for entry in standalone_entries
+    )
+    today_total_seconds += standalone_total_seconds
     active_elapsed = _current_elapsed_at_sample(live_clock)
     live_projects = _clock_projects_live_duration(live_clock)
     today_total_base_seconds = (
@@ -618,12 +639,8 @@ def get_timeline_view_model(report_date: str | None = None) -> dict[str, Any]:
         sessions.append(row)
     _apply_live_span_to_rows(sessions, report_model, row_kind=ROW_KIND_PROJECT_SESSION_ROW)
     _set_summary_activity_ids(sessions)
-    # In-progress sessions that received no live overlay still need
-    # edit_disabled.
     for row in sessions:
-        if row.get("is_in_progress") and not row.get("edit_disabled"):
-            row["edit_disabled"] = True
-            row["disable_reason"] = row.get("disable_reason") or "进行中记录暂不支持编辑"
+        enable_safe_open_edit(row)
 
     display_total_seconds = sum(int(r.get("duration_seconds") or 0) for r in sessions)
     active_elapsed = _current_elapsed_at_sample(report_live_clock)
@@ -716,122 +733,8 @@ def get_session_activity_summary_view_model(
     }
 
 
-# Refresh State ViewModel
-
-
-def get_refresh_state_view_model(report_date: str | None = None) -> RefreshStateContract:
-    """Build the heartbeat / refresh-state ViewModel from a single display model.
-
-    Refresh revision, collector display status, live clock fields, stable
-    live identity, and report date scope are all derived from the unified
-    display model so the frontend heartbeat can update the live registry
-    without a full page-model refresh.
-
-    Single-sample contract: the ``current_activity_snapshot`` is read
-    EXACTLY ONCE in this function and the resulting ``snapshot`` is passed
-    to BOTH :func:`build_activity_display_model` (via ``snapshot=...``)
-    and the canonical report revision. This guarantees the returned
-    current activity identity,
-    ``live_clock``, ``current_activity``, and ``activity_display_model``
-    all originate from the same sample — no double-read race.
-    """
-    snapshot = _get_current_activity_snapshot()
-    collector_status = _get_collector_status()
-    collector_health_state = _get_collector_health_state()
-    collector_last_successful_observation_at = (
-        get_setting("collector_last_successful_observation_at", "") or ""
-    )
-    collector_consecutive_failures = get_int_setting("collector_consecutive_failures", 0)
-    user_paused = _is_user_paused()
-    paused = bool(user_paused) or collector_status == "paused"
-    today = timeline_service.get_default_report_date()
-    scoped_report_date = report_date or today
-
-    # Pass the already-read snapshot into the display model so it does
-    # NOT re-read the setting. The page revision and live clock
-    # share the same sample.
-    model = build_activity_display_model(
-        report_date=today,
-        today=today,
-        snapshot=snapshot,
-    )
-    live_clock = model.get("live_clock") or {}
-    current_activity = model.get("current_activity") or {}
-    display_span_id = str(live_clock.get("display_span_id") or "")
-
-    from .report_projection_snapshot_service import build_visible_snapshot
-
-    report_snapshot = build_visible_snapshot(scoped_report_date, scoped_report_date)
-    current_activity_key = str(current_activity.get("stable_live_key") or live_clock.get("stable_live_key") or "")
-    current_activity_status = str(current_activity.get("status") or live_clock.get("live_state") or "")
-    is_persisted = bool(current_activity.get("is_persisted"))
-    persisted_activity_id = int(current_activity.get("activity_id") or 0)
-    latest_activity_id = persisted_activity_id
-    live_revision = stable_json_hash(
-        {
-            "key": current_activity_key,
-            "status": current_activity_status,
-            "persisted_id": persisted_activity_id,
-            "display_span_id": display_span_id,
-        }
-    )
-    page_revision = stable_json_hash(
-        [report_snapshot.snapshot_revision, live_revision if scoped_report_date == today else ""]
-    )
-
-    if paused or collector_status == "paused":
-        status_display = "已暂停"
-    elif collector_status == "running":
-        if collector_health_state == "degraded":
-            status_display = "记录中，刚才采集短暂异常"
-        elif collector_health_state == "failing":
-            status_display = "采集可能中断，请重试"
-        else:
-            status_display = "记录中"
-    elif collector_status == "error":
-        status_display = "状态异常"
-    else:
-        status_display = "采集器未运行"
-
-    return {
-        "ok": True,
-        "collector_status": collector_status,
-        "collector_health_state": collector_health_state,
-        "collector_last_successful_observation_at": collector_last_successful_observation_at,
-        "collector_consecutive_failures": collector_consecutive_failures,
-        "paused": paused,
-        "status_display": status_display,
-        "current_activity_key": current_activity_key,
-        "current_activity_status": current_activity_status,
-        "is_persisted": is_persisted,
-        "persisted_activity_id": persisted_activity_id,
-        "live_revision": live_revision,
-        "page_revision": page_revision,
-        "today": today,
-        "report_date": scoped_report_date,
-        "latest_activity_id": latest_activity_id,
-        # Unified live clock (single source of truth for the frontend).
-        "live_clock": live_clock,
-        "display_span_id": display_span_id,
-        "activity_display_model": model,
-        "live_started_at_epoch_ms": int(live_clock.get("live_started_at_epoch_ms") or 0),
-        "carry_seconds": int(live_clock.get("carry_seconds") or 0),
-        "duration_seconds_at_sample": int(live_clock.get("duration_seconds_at_sample") or 0),
-        "stable_live_key": str(live_clock.get("stable_live_key") or ""),
-        "stable_live_key_hash": str(live_clock.get("stable_live_key_hash") or ""),
-        "live_state": str(live_clock.get("live_state") or ""),
-        "is_live": bool(live_clock.get("is_live")),
-        "is_project_duration_live": bool(live_clock.get("is_project_duration_live")),
-        "project_duration_live": bool(live_clock.get("project_duration_live", live_clock.get("is_project_duration_live"))),
-        "current_duration_live": bool(live_clock.get("current_duration_live")),
-        "current_activity": current_activity,
-        "sample_id": str(model.get("sample_id") or ""),
-    }
-
-
 __all__ = [
     "get_overview_view_model",
-    "get_refresh_state_view_model",
     "get_session_activity_summary_view_model",
     "get_timeline_view_model",
 ]
