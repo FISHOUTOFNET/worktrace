@@ -93,6 +93,9 @@ class SnapshotPublisher:
             "resource_subtype": resource_subtype,
             "resource_display_name": resource_display_name,
             "resource_identity_key": resource_identity_key,
+            # Temporary display-safe compatibility mirror. It contains only the
+            # formal project label and is removed with the transition model.
+            "inferred_project_name": display_label.name,
             "status": status,
             "start_time": start_time,
             "elapsed_seconds": elapsed,
