@@ -7,11 +7,11 @@ import sqlite3
 
 import pytest
 
+from tests.support import activity_factory as activity_service
 from worktrace.constants import SOURCE_AUTO, STATUS_NORMAL
 from worktrace.db import get_connection
 from worktrace.services import (
     activity_fact_repository,
-    activity_service,
     folder_index_service,
     folder_rule_service,
     history_mutation_job_service,
@@ -68,7 +68,7 @@ def test_open_fact_insert_rolls_back_as_one_unit(temp_db, monkeypatch):
         ).fetchone()["c"] == 0
 
 
-def test_lifecycle_service_is_the_only_open_row_transition_owner(temp_db):
+def test_open_row_invariant_and_lifecycle_transition_owner(temp_db):
     first = persist_open_activity(
         start_time="2026-07-16 09:00:00",
         source=SOURCE_AUTO,
@@ -79,7 +79,7 @@ def test_lifecycle_service_is_the_only_open_row_transition_owner(temp_db):
         activity_service.create_activity(
             "Word",
             "winword.exe",
-            "Low-level second open row",
+            "Fixture second open row",
             start_time="2026-07-16 09:01:00",
         )
     assert activity_service.get_activity(first)["end_time"] is None
