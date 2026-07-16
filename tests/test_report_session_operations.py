@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import pytest
 
+from tests.support import activity_factory as activity_service
 from worktrace.db import get_connection
 from worktrace.services import (
-    activity_service,
     project_activity_summary_service,
     project_service,
     report_session_operation_service,
