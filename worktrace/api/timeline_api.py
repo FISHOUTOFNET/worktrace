@@ -6,17 +6,10 @@ from typing import Any
 
 from ..services import (
     project_service,
-    report_session_edit_service,
     report_session_operation_service,
     timeline_service,
 )
 from ..services.activity_edit_policy import project_editability_code
-from ..services.live_time_service import (
-    snapshot_elapsed_seconds,
-    snapshot_extra_seconds,
-    snapshot_persisted_id,
-    snapshot_seconds_for_date_range,
-)
 
 NOT_PROJECT_ACTIVITY_CODE = "not_project_activity"
 TIMELINE_NOTE_MAX_LENGTH = 2000
@@ -44,7 +37,7 @@ def save_timeline_session_edit(
     adjusted_duration_seconds: int | None,
     note: str,
 ) -> dict[str, Any]:
-    result = report_session_edit_service.edit_session(
+    result = report_session_operation_service.edit_session(
         _validate_report_date(report_date),
         _validate_projection_instance_key(projection_instance_key),
         _validate_projection_revision(expected_projection_revision),
@@ -285,26 +278,6 @@ def list_selectable_projects() -> list[dict[str, Any]]:
     return project_service.list_selectable_projects()
 
 
-def get_snapshot_elapsed_seconds(snapshot: dict[str, Any] | None) -> int:
-    return snapshot_elapsed_seconds(snapshot)
-
-
-def get_snapshot_extra_seconds(snapshot: dict[str, Any] | None) -> int:
-    return snapshot_extra_seconds(snapshot)
-
-
-def get_snapshot_persisted_id(snapshot: dict[str, Any] | None) -> int | None:
-    return snapshot_persisted_id(snapshot)
-
-
-def get_snapshot_seconds_for_date_range(
-    snapshot: dict[str, Any] | None,
-    start_date: str,
-    end_date: str,
-) -> int:
-    return snapshot_seconds_for_date_range(snapshot, start_date, end_date)
-
-
 __all__ = [
     "TIMELINE_ADJUSTED_DURATION_MAX_SECONDS",
     "TIMELINE_NOTE_MAX_LENGTH",
@@ -312,10 +285,6 @@ __all__ = [
     "get_default_report_date",
     "get_project_sessions_by_date",
     "get_project_sessions_by_range",
-    "get_snapshot_elapsed_seconds",
-    "get_snapshot_extra_seconds",
-    "get_snapshot_persisted_id",
-    "get_snapshot_seconds_for_date_range",
     "hide_timeline_session",
     "hide_timeline_session_activity",
     "list_selectable_projects",
