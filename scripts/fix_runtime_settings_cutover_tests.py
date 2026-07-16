@@ -94,6 +94,13 @@ def main() -> int:
     replace_exact(webview, 'runtime_state_fixture.get_setting("pending_short_seconds") == "23"', 'runtime_state_fixture.get_setting("pending_short_seconds") == "0"')
     replace_exact(webview, 'runtime_state_fixture.get_setting("pending_short_seconds") == "29"', 'runtime_state_fixture.get_setting("pending_short_seconds") == "0"')
 
+    runtime_gate = ROOT / "tests" / "test_app_runtime_privacy_gate.py"
+    replace_exact(
+        runtime_gate,
+        'assert runtime_state_fixture.get_setting("pending_short_seconds") == "11"',
+        'assert runtime_state_fixture.get_setting("pending_short_seconds") == "0"',
+    )
+
     backup = ROOT / "tests" / "test_secure_backup_service.py"
     replace_exact(
         backup,
