@@ -31,7 +31,18 @@ jobs:
           python-version: "3.11"
 
       - name: Apply runtime settings cutover
-        run: python scripts/cutover_runtime_settings.py
+        id: cutover_apply
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "test-results" | Out-Null
+          & python scripts/cutover_runtime_settings.py *> "test-results/cutover-apply.log"
+          $applyExitCode = $LASTEXITCODE
+          Write-Host "runtime/settings cutover apply exit code: $applyExitCode"
+          if ($applyExitCode -ne 0) {
+            Get-Content -LiteralPath "test-results/cutover-apply.log" -Tail 200 |
+              ForEach-Object { Write-Host $_ }
+          }
+          exit $applyExitCode
 
       - name: Compile cutover tree
         run: python -m compileall -q worktrace tests
@@ -64,7 +75,7 @@ jobs:
           exit $pytestExitCode
 
       - name: Publish cutover diagnostics
-        if: failure() && steps.cutover_pytest.outcome == 'failure'
+        if: failure() && (steps.cutover_apply.outcome == 'failure' || steps.cutover_pytest.outcome == 'failure')
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path diagnostics | Out-Null
@@ -72,18 +83,29 @@ jobs:
           @(
             "run_id=$env:GITHUB_RUN_ID",
             "tested_head=${{ github.event.pull_request.head.sha }}",
+            "apply_outcome=${{ steps.cutover_apply.outcome }}",
+            "pytest_outcome=${{ steps.cutover_pytest.outcome }}",
             "",
             "=== RUNTIME_SETTINGS_CUTOVER_FAILURE_BEGIN ==="
           ) | Set-Content -LiteralPath $diagnosticPath -Encoding UTF8
 
-          $rawPath = "test-results/runtime-settings-diagnostics-raw.txt"
-          & python scripts/pytest_diagnostics.py `
-            --junit "test-results/pytest-junit.xml" `
-            --log "test-results/pytest.log" `
-            --summary "$env:GITHUB_STEP_SUMMARY" 2>&1 |
-              Tee-Object -FilePath $rawPath
-          Get-Content -LiteralPath $rawPath -Raw |
-            Add-Content -LiteralPath $diagnosticPath -Encoding UTF8
+          if ("${{ steps.cutover_apply.outcome }}" -eq "failure") {
+            if (Test-Path -LiteralPath "test-results/cutover-apply.log") {
+              Get-Content -LiteralPath "test-results/cutover-apply.log" -Tail 300 |
+                Add-Content -LiteralPath $diagnosticPath -Encoding UTF8
+            }
+          }
+          elseif ("${{ steps.cutover_pytest.outcome }}" -eq "failure") {
+            $rawPath = "test-results/runtime-settings-diagnostics-raw.txt"
+            & python scripts/pytest_diagnostics.py `
+              --junit "test-results/pytest-junit.xml" `
+              --log "test-results/pytest.log" `
+              --summary "$env:GITHUB_STEP_SUMMARY" 2>&1 |
+                Tee-Object -FilePath $rawPath
+            Get-Content -LiteralPath $rawPath -Raw |
+              Add-Content -LiteralPath $diagnosticPath -Encoding UTF8
+          }
+
           "=== RUNTIME_SETTINGS_CUTOVER_FAILURE_END ===" |
             Add-Content -LiteralPath $diagnosticPath -Encoding UTF8
 
