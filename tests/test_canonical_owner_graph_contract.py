@@ -80,6 +80,37 @@ def test_settings_api_does_not_export_raw_runtime_snapshot():
     assert not hasattr(settings_api, "get_current_activity_snapshot")
 
 
+def test_statistics_bridge_does_not_shape_domain_dtos():
+    tree = _module("worktrace/webview_ui/bridge_statistics.py")
+    imports = {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        for alias in node.names
+    }
+    assert "format_duration" not in imports
+    functions = {
+        node.name for node in tree.body if isinstance(node, ast.FunctionDef)
+    }
+    assert "_statistics_summary_payload" not in functions
+    assert "_group_payload" not in functions
+
+
+def test_runtime_snapshot_publisher_is_display_safe():
+    source = (
+        ROOT / "worktrace/collector/snapshot_publisher.py"
+    ).read_text(encoding="utf-8")
+    for forbidden in (
+        '"window_title":',
+        '"file_path_hint":',
+        '"resource_path_hint":',
+        '"resource_uri_host":',
+        "def read_raw",
+        "def restore_raw",
+    ):
+        assert forbidden not in source
+
+
 def test_view_model_api_calls_keyword_only_summary_contract():
     tree = _module("worktrace/api/view_model_api.py")
     target = next(
