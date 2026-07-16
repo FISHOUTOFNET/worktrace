@@ -108,6 +108,8 @@ class AppRuntime:
             return True
 
     def start_background_workers(self) -> bool:
+        """Start both derived-state workers and report complete readiness."""
+
         with self._lifecycle_lock:
             if (
                 not self.owns_application_instance
@@ -115,21 +117,25 @@ class AppRuntime:
                 or self.stop_event.is_set()
             ):
                 return False
-            started = False
-            if not _thread_reference_is_alive(self._index_thread):
+
+            index_ready = _thread_reference_is_alive(self._index_thread)
+            if not index_ready:
                 recover_interrupted_indexes()
                 self._index_thread = folder_index_service.start_folder_index_worker(
                     self.stop_event
                 )
-                started = self._index_thread is not None or started
-            if not _thread_reference_is_alive(self._history_thread):
+                index_ready = self._index_thread is not None
+
+            history_ready = _thread_reference_is_alive(self._history_thread)
+            if not history_ready:
                 self._history_thread = (
                     history_mutation_job_service.start_history_worker(
                         self.stop_event
                     )
                 )
-                started = self._history_thread is not None or started
-            return started
+                history_ready = self._history_thread is not None
+
+            return bool(index_ready and history_ready)
 
     def start_collector(self) -> dict[str, object]:
         with self._lifecycle_lock:
