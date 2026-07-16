@@ -1,8 +1,9 @@
+from tests.support import activity_factory as activity_service
 from tests.support.db_helpers import assign_activity_project
 import json
 from datetime import date
 
-from worktrace.services import activity_service, project_service, session_boundary_service, settings_service, statistics_service
+from worktrace.services import project_service, session_boundary_service, settings_service, statistics_service
 import pytest
 
 pytestmark = [pytest.mark.db]
@@ -38,8 +39,8 @@ def test_project_stats_count_context_assigned_short_gap(temp_db):
         "Word", "word.exe", "A1.docx", project_id=project_a, start_time="2026-06-18 09:00:00"
     )
     activity_service.finalize_created_activity(a1)
-    # create_activity no longer auto-closes old rows (lifecycle hard
-    # cutover); close the previous open activity before creating the next.
+    # Test fixtures construct each historical row explicitly; close the current
+    # fact before inserting the next one to preserve the open-row invariant.
     activity_service.close_all_open_rows("2026-06-18 09:05:00")
     b = activity_service.create_activity(
         "Word", "word.exe", "Unassigned.docx", start_time="2026-06-18 09:05:00"
@@ -65,8 +66,8 @@ def test_statistics_split_cross_midnight_projects_by_calendar_day(temp_db):
         "Word", "word.exe", "A1.docx", project_id=project_a, start_time="2026-06-18 23:50:00"
     )
     activity_service.finalize_created_activity(a1)
-    # create_activity no longer auto-closes old rows (lifecycle hard
-    # cutover); close the previous open activity before creating the next.
+    # Test fixtures construct each historical row explicitly; close the current
+    # fact before inserting the next one to preserve the open-row invariant.
     activity_service.close_all_open_rows("2026-06-19 00:10:00")
     a2 = activity_service.create_activity(
         "Word", "word.exe", "A2.docx", project_id=project_a, start_time="2026-06-19 00:10:00"
@@ -168,21 +169,19 @@ def _pending_persisted_open_snapshot(
 
 
 def test_statistics_export_excludes_in_progress_live_rows(temp_db):
-    """Section 四.4 / 六.4: Statistics / Export pages remain closed-only.
+    """Statistics / Export pages remain closed-only.
 
     The Statistics / Export preview is served by
     ``get_statistics_export_summary``, which filters out in-progress
-    rows (``closed_rows = [r for r in rows if not r.is_in_progress]``).
-    This must hold even when a persisted_open snapshot is active: the
-    open DB row must NOT contribute to the closed-only KPIs.
+    rows. This must hold even when a persisted_open snapshot is active: the
+    open DB row must not contribute to the closed-only KPIs.
 
-    Note: ``get_summary`` is a DIFFERENT function used by the Overview
-    KPI; it intentionally counts open DB rows. The closed-only contract
-    is owned by ``get_statistics_export_summary``.
+    ``get_summary`` is a different function used by the Overview KPI; it
+    intentionally counts open DB rows. The closed-only contract is owned by
+    ``get_statistics_export_summary``.
     """
     from datetime import datetime, timedelta
     from worktrace.constants import TIME_FORMAT
-    from worktrace.services import activity_service, project_service
 
     today = date.today().isoformat()
     project_b_id = project_service.create_project("ProjectB")
@@ -200,14 +199,11 @@ def test_statistics_export_excludes_in_progress_live_rows(temp_db):
     )
     settings_service.clear_settings_cache()
 
-    # The Statistics / Export closed-only preview excludes the
-    # in-progress open row entirely.
     export_summary = statistics_service.get_statistics_export_summary(today, today)
     assert export_summary["total_duration_seconds"] == 0, (
         "Statistics/Export closed-only preview must NOT count in-progress rows"
     )
     assert export_summary["activity_count"] == 0
-    # All by_* breakdowns are empty.
     assert export_summary["by_project"] == []
     assert export_summary["by_app"] == []
     assert export_summary["by_status"] == []
