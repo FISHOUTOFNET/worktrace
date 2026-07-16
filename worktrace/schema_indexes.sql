@@ -1,6 +1,10 @@
 CREATE INDEX IF NOT EXISTS idx_activity_time
 ON activity_log(start_time, end_time);
 
+CREATE UNIQUE INDEX IF NOT EXISTS uq_activity_log_single_open
+ON activity_log((1))
+WHERE end_time IS NULL;
+
 CREATE INDEX IF NOT EXISTS idx_session_boundary_time
 ON session_boundary(occurred_at);
 
@@ -16,14 +20,23 @@ ON folder_project_rule(project_id);
 CREATE INDEX IF NOT EXISTS idx_folder_rule_index_status
 ON folder_rule_index_state(status, refresh_requested);
 
+CREATE INDEX IF NOT EXISTS idx_folder_rule_index_generation
+ON folder_rule_index_state(active_generation, building_generation);
+
 CREATE INDEX IF NOT EXISTS idx_folder_rule_file_index_name
 ON folder_rule_file_index(normalized_file_name);
 
 CREATE INDEX IF NOT EXISTS idx_folder_rule_file_index_rule_name
-ON folder_rule_file_index(folder_rule_id, normalized_file_name);
+ON folder_rule_file_index(folder_rule_id, generation, normalized_file_name);
 
 CREATE INDEX IF NOT EXISTS idx_folder_rule_file_index_path
-ON folder_rule_file_index(normalized_path_key);
+ON folder_rule_file_index(generation, normalized_path_key);
+
+CREATE INDEX IF NOT EXISTS idx_history_mutation_job_status
+ON history_mutation_job(status, updated_at, id);
+
+CREATE INDEX IF NOT EXISTS idx_history_mutation_job_rule_lookup
+ON history_mutation_job_rule(rule_type, rule_id, job_id);
 
 CREATE INDEX IF NOT EXISTS idx_assignment_project
 ON activity_project_assignment(project_id);
