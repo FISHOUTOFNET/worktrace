@@ -10,10 +10,10 @@ from worktrace.constants import SOURCE_AUTO, STATUS_PAUSED
 from worktrace.services import (
     activity_lifecycle_service,
     activity_service,
-    overview_view_model_service,
     refresh_state_view_model_service,
     runtime_activity_state_service,
     timeline_service,
+    view_model_service,
 )
 
 pytestmark = [pytest.mark.db, pytest.mark.integration, pytest.mark.serial]
@@ -173,7 +173,7 @@ def test_page_and_heartbeat_share_structure_and_page_revision(temp_db):
     )
     today = timeline_service.get_default_report_date()
 
-    page = overview_view_model_service.get_overview_view_model(today)
+    page = view_model_service.get_overview_view_model(today)
     heartbeat = refresh_state_view_model_service.get_refresh_state_view_model(
         today
     )
