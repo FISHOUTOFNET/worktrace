@@ -1,8 +1,12 @@
+"""Activity queries and post-capture edits.
+
+Durable open-row lifecycle transitions are owned exclusively by
+``activity_lifecycle_service`` and ``activity_fact_repository``.
+"""
+
 from __future__ import annotations
 
-import logging
 import hashlib
-from datetime import datetime
 from typing import Any
 
 from ..constants import (
@@ -12,7 +16,6 @@ from ..constants import (
     STATUS_IDLE,
     STATUS_NORMAL,
     STATUS_PAUSED,
-    TIME_FORMAT,
     UNCATEGORIZED_PROJECT,
 )
 from ..db import dict_rows, get_connection, now_str
@@ -23,214 +26,7 @@ from ..resources.types import DetectedResource
 from .activity_edit_policy import is_project_editable_activity, require_project_editable_activity
 from .project_attribution_policy import official_project_fields
 from .project_service import get_or_create_uncategorized_project
-from .resource_service import attach_resource, create_or_update_activity_resource
-
-
-def _parse_time(value: str) -> datetime:
-    return datetime.strptime(value, TIME_FORMAT)
-
-
-def _duration_seconds(start_time: str, end_time: str) -> tuple[int, bool]:
-    seconds = int((_parse_time(end_time) - _parse_time(start_time)).total_seconds())
-    if seconds < 0:
-        return 0, True
-    return seconds, False
-
-
-def insert_activity_row(
-    app_name: str,
-    process_name: str,
-    window_title: str,
-    status: str = STATUS_NORMAL,
-    source: str = SOURCE_AUTO,
-    start_time: str | None = None,
-    project_id: int | None = None,
-    file_path_hint: str | None = None,
-    resource: DetectedResource | None = None,
-    **_ignored,
-) -> int:
-    """Low-level insert of a new open activity row.
-
-    This is a pure CRUD helper: it does NOT close pre-existing open rows
-    and does NOT run project inference / automatic rules. Production
-    open-row lifecycle must use ``activity_lifecycle_service`` (the
-    ActivityLifecycle Command Facade). Tests / fixtures may use this
-    helper to construct data directly.
-    """
-    ts = now_str()
-    start = start_time or ts
-    project = project_id if project_id is not None else get_or_create_uncategorized_project()
-    manual_assignment = bool(project_id is not None)
-    with get_connection() as conn:
-        cur = conn.execute(
-            """
-            INSERT INTO activity_log(
-                start_time, end_time, duration_seconds, app_name, process_name, window_title,
-                file_path_hint, status, source, is_deleted, is_hidden, created_at, updated_at
-            )
-            VALUES (?, NULL, NULL, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?)
-            """,
-            (
-                start,
-                app_name,
-                process_name,
-                window_title,
-                file_path_hint,
-                status,
-                source,
-                ts,
-                ts,
-            ),
-        )
-        activity_id = int(cur.lastrowid)
-        assignment_source = "manual" if manual_assignment else "uncategorized"
-        conn.execute(
-            """
-            INSERT INTO activity_project_assignment(
-                activity_id, project_id, confidence, source, is_manual, suggested_project_name,
-                source_rule_type, source_rule_id, created_at, updated_at
-            )
-            VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?)
-            ON CONFLICT(activity_id) DO NOTHING
-            """,
-            (
-                activity_id,
-                project,
-                100 if manual_assignment else 0,
-                assignment_source,
-                int(manual_assignment),
-                ts,
-                ts,
-            ),
-        )
-        _write_resource_in_conn(conn, activity_id, app_name, process_name, window_title, file_path_hint, status, resource, start)
-    return activity_id
-
-
-def close_activity_row(
-    activity_id: int,
-    end_time: str,
-    *,
-    duration_seconds: int | None = None,
-    status: str | None = None,
-) -> None:
-    """Low-level close of a single open activity row.
-
-    Pure CRUD: does NOT run project inference / automatic rules. Production
-    open-row lifecycle must use ``activity_lifecycle_service.close_activity``
-    which calls this helper and then finalizes. Tests / fixtures may use
-    this helper directly.
-    """
-    with get_connection() as conn:
-        _close_activity_in_conn(conn, activity_id, end_time, duration_seconds=duration_seconds, status=status)
-
-
-def close_all_open_rows(end_time: str | None = None) -> list[int]:
-    """Low-level close of every open activity row (``end_time IS NULL``).
-
-    Pure CRUD: does NOT run project inference / automatic rules. Returns
-    the list of closed activity ids so the caller (typically
-    ``activity_lifecycle_service``) can finalize them outside the
-    transaction. Production open-row lifecycle must use
-    ``activity_lifecycle_service.close_all_open_activities``.
-    """
-    end = end_time or now_str()
-    closed_ids: list[int] = []
-    with get_connection() as conn:
-        rows = conn.execute("SELECT id FROM activity_log WHERE end_time IS NULL ORDER BY id").fetchall()
-        for row in rows:
-            aid = int(row["id"])
-            _close_activity_in_conn(conn, aid, end)
-            closed_ids.append(aid)
-    return closed_ids
-
-
-def create_activity(
-    app_name: str,
-    process_name: str,
-    window_title: str,
-    status: str = STATUS_NORMAL,
-    source: str = SOURCE_AUTO,
-    start_time: str | None = None,
-    project_id: int | None = None,
-    file_path_hint: str | None = None,
-    resource: DetectedResource | None = None,
-    **_ignored,
-) -> int:
-    """Low-level insert of a new open activity row.
-
-    .. warning::
-
-        This is a **low-level CRUD helper**. It does NOT close pre-existing
-        open rows and does NOT run project inference / automatic rules.
-        Production open-row lifecycle must use
-        ``activity_lifecycle_service`` (the ActivityLifecycle Command
-        Facade). Tests / fixtures may use this helper to construct data
-        directly.
-
-    Equivalent to :func:`insert_activity_row`.
-    """
-    return insert_activity_row(
-        app_name=app_name,
-        process_name=process_name,
-        window_title=window_title,
-        status=status,
-        source=source,
-        start_time=start_time,
-        project_id=project_id,
-        file_path_hint=file_path_hint,
-        resource=resource,
-    )
-
-
-def _close_activity_in_conn(
-    conn,
-    activity_id: int,
-    end_time: str,
-    duration_seconds: int | None = None,
-    status: str | None = None,
-) -> None:
-    row = conn.execute(
-        "SELECT start_time, status, duration_seconds FROM activity_log WHERE id = ?",
-        (activity_id,),
-    ).fetchone()
-    if not row:
-        return
-    duration, is_error = _duration_seconds(row["start_time"], end_time)
-    existing = int(row["duration_seconds"] or 0)
-    if duration_seconds is not None:
-        duration = max(duration, int(duration_seconds or 0))
-    duration = max(existing, duration)
-    if status is None:
-        status = STATUS_ERROR if is_error else row["status"]
-    conn.execute(
-        """
-        UPDATE activity_log
-        SET end_time = ?, duration_seconds = ?, status = ?, updated_at = ?
-        WHERE id = ?
-        """,
-        (end_time, duration, status, now_str(), activity_id),
-    )
-
-
-def _write_resource_in_conn(
-    conn,
-    activity_id: int,
-    app_name: str,
-    process_name: str,
-    window_title: str,
-    file_path_hint: str | None,
-    status: str,
-    resource: DetectedResource | None,
-    start_time: str | None = None,
-) -> None:
-    # Excluded activities: let resource_service's anonymisation safety net
-    # handle them — never persist real resource metadata.
-    if resource is None and status != STATUS_EXCLUDED:
-        resource = _detect_resource_for_activity(
-            app_name, process_name, window_title, file_path_hint, status, start_time,
-        )
-    create_or_update_activity_resource(activity_id, resource, conn=conn)
+from .resource_service import attach_resource
 
 
 def _detect_resource_for_activity(
@@ -255,97 +51,6 @@ def _detect_resource_for_activity(
         activity_start_time=start_time,
     )
     return detect_resource(active_window)
-
-
-def close_activity(activity_id: int, end_time: str, duration_seconds: int | None = None) -> None:
-    """Low-level close of a single open activity row.
-
-    Pure CRUD: does NOT run project inference / automatic rules.
-    Production open-row lifecycle must use
-    ``activity_lifecycle_service.close_activity`` which calls this helper
-    and then finalizes. Tests / fixtures may use this helper directly.
-    """
-    close_activity_row(activity_id, end_time, duration_seconds=duration_seconds)
-
-
-def increment_activity_duration(activity_id: int, seconds: int) -> None:
-    """Increment an open activity row's ``duration_seconds``.
-
-    This write is a *natural growth* update on an open row — the
-    duration is derived from ``now - start_time`` and is NOT a
-    structural change. The ``updated_at`` column is therefore NOT
-    bumped, so the page revision (which excludes
-    ``updated_at`` from the per-row structural signature) does not
-    trigger a heavy refresh on every collector tick.
-    on every collector tick.
-
-    A subsequent structural write (close, project edit, time edit, etc.)
-    will refresh ``updated_at`` as usual.
-    """
-    seconds = max(0, int(seconds or 0))
-    if seconds <= 0:
-        return
-    with get_connection() as conn:
-        row = conn.execute(
-            "SELECT duration_seconds FROM activity_log WHERE id = ?",
-            (activity_id,),
-        ).fetchone()
-        if not row:
-            return
-        duration = int(row["duration_seconds"] or 0) + seconds
-        conn.execute(
-            """
-            UPDATE activity_log
-            SET duration_seconds = ?
-            WHERE id = ?
-            """,
-            (duration, activity_id),
-        )
-
-
-def set_activity_duration(activity_id: int, seconds: int) -> None:
-    """Set an open activity row's ``duration_seconds`` (monotonic max).
-
-    This write is a *natural growth* update on an open row — the
-    duration is derived from ``now - start_time`` and is NOT a
-    structural change. The ``updated_at`` column is therefore NOT
-    bumped, so the page revision (which excludes
-    ``updated_at`` from the per-row structural signature) does not
-    trigger a heavy refresh on every collector tick.
-    on every collector tick.
-
-    A subsequent structural write (close, project edit, time edit, etc.)
-    will refresh ``updated_at`` as usual.
-    """
-    seconds = max(0, int(seconds or 0))
-    with get_connection() as conn:
-        row = conn.execute(
-            "SELECT duration_seconds FROM activity_log WHERE id = ?",
-            (activity_id,),
-        ).fetchone()
-        if not row:
-            return
-        duration = max(int(row["duration_seconds"] or 0), seconds)
-        conn.execute(
-            """
-            UPDATE activity_log
-            SET duration_seconds = ?
-            WHERE id = ?
-            """,
-            (duration, activity_id),
-        )
-
-
-def reopen_activity(activity_id: int) -> None:
-    with get_connection() as conn:
-        conn.execute(
-            """
-            UPDATE activity_log
-            SET end_time = NULL, updated_at = ?
-            WHERE id = ? AND is_deleted = 0
-            """,
-            (now_str(), activity_id),
-        )
 
 
 def get_latest_closed_auto_normal_activity(after_time: str | None = None) -> dict | None:
@@ -714,36 +419,6 @@ def _sync_activity_resource_after_path_update(conn, activity_id: int, file_path_
 
 def update_project_editable_activities_project(activity_ids: list[int], project_id: int) -> None:
     raise ValueError("activity_level_project_edit_removed")
-
-
-def apply_midnight_anchor_assignment(activity_id: int, project_id: int) -> None:
-    ts = now_str()
-    with get_connection() as conn:
-        conn.execute(
-            """
-            INSERT INTO activity_project_assignment(
-                activity_id, project_id, confidence, source, is_manual, suggested_project_name,
-                source_rule_type, source_rule_id, created_at, updated_at
-            )
-            VALUES (?, ?, 90, 'midnight_anchor', 0, NULL, NULL, NULL, ?, ?)
-            ON CONFLICT(activity_id) DO UPDATE SET
-                project_id = excluded.project_id,
-                confidence = excluded.confidence,
-                source = excluded.source,
-                is_manual = 0,
-                suggested_project_name = NULL,
-                source_rule_type = NULL,
-                source_rule_id = NULL,
-                updated_at = excluded.updated_at
-            """,
-            (activity_id, project_id, ts, ts),
-        )
-
-
-def finalize_created_activity(activity_id: int) -> None:
-    from .project_inference_service import process_new_activity
-
-    process_new_activity(activity_id)
 
 
 def update_project_editable_activity_note(activity_id: int, note: str) -> None:
