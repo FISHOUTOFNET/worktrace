@@ -72,12 +72,16 @@ def alias_text(item: ast.alias) -> str:
     return item.name + (f" as {item.asname}" if item.asname else "")
 
 
-def render_import(indent: str, module: str, names: list[ast.alias]) -> str:
+def render_from_import(indent: str, module: str, names: list[ast.alias]) -> str:
     rendered = [alias_text(item) for item in names]
     if len(rendered) == 1:
         return f"{indent}from {module} import {rendered[0]}\n"
     body = "".join(f"{indent}    {name},\n" for name in rendered)
     return f"{indent}from {module} import (\n{body}{indent})\n"
+
+
+def render_plain_import(indent: str, names: list[ast.alias]) -> str:
+    return f"{indent}import {', '.join(alias_text(item) for item in names)}\n"
 
 
 def migrate(path: Path) -> bool:
@@ -96,13 +100,13 @@ def migrate(path: Path) -> bool:
     lines = source.splitlines(keepends=True)
     replacements: list[tuple[int, int, str]] = []
     for node in sorted(target_nodes, key=lambda item: item.lineno):
-        if not isinstance(node, ast.ImportFrom) or node.end_lineno is None:
-            raise RuntimeError(f"unsupported activity import in {path}:{node.lineno}")
+        if node.end_lineno is None:
+            raise RuntimeError(f"import has no end position in {path}:{node.lineno}")
         indent = lines[node.lineno - 1][
             : len(lines[node.lineno - 1]) - len(lines[node.lineno - 1].lstrip())
         ]
         replacement_parts: list[str] = []
-        if node.module == "worktrace.services":
+        if isinstance(node, ast.ImportFrom) and node.module == "worktrace.services":
             activity_items = [item for item in node.names if item.name == "activity_service"]
             remaining = [item for item in node.names if item.name != "activity_service"]
             for item in activity_items:
@@ -113,19 +117,52 @@ def migrate(path: Path) -> bool:
                     )
                     facade_aliases.add(local_name)
             if remaining:
-                replacement_parts.append(render_import(indent, node.module, remaining))
-        elif node.module == "worktrace.services.activity_service":
+                replacement_parts.append(
+                    render_from_import(indent, node.module, remaining)
+                )
+        elif (
+            isinstance(node, ast.ImportFrom)
+            and node.module == "worktrace.services.activity_service"
+        ):
             legacy_items = [item for item in node.names if item.name in LEGACY]
             remaining = [item for item in node.names if item.name not in LEGACY]
             if legacy_items:
                 replacement_parts.append(
-                    render_import(indent, "tests.support.activity_factory", legacy_items)
+                    render_from_import(
+                        indent,
+                        "tests.support.activity_factory",
+                        legacy_items,
+                    )
                 )
             if remaining:
-                replacement_parts.append(render_import(indent, node.module, remaining))
+                replacement_parts.append(
+                    render_from_import(indent, node.module, remaining)
+                )
+        elif isinstance(node, ast.Import):
+            activity_items = [
+                item
+                for item in node.names
+                if item.name == "worktrace.services.activity_service"
+            ]
+            remaining = [
+                item
+                for item in node.names
+                if item.name != "worktrace.services.activity_service"
+            ]
+            for item in activity_items:
+                local_name = item.asname or item.name.rsplit(".", 1)[-1]
+                if local_name not in facade_aliases:
+                    replacement_parts.append(
+                        f"{indent}from tests.support import activity_factory as {local_name}\n"
+                    )
+                    facade_aliases.add(local_name)
+            if remaining:
+                replacement_parts.append(render_plain_import(indent, remaining))
         else:
-            raise RuntimeError(f"unsupported activity import module in {path}:{node.lineno}")
-        replacements.append((node.lineno - 1, node.end_lineno, "".join(replacement_parts)))
+            raise RuntimeError(f"unsupported activity import in {path}:{node.lineno}")
+        replacements.append(
+            (node.lineno - 1, node.end_lineno, "".join(replacement_parts))
+        )
 
     for start, end, replacement in sorted(replacements, reverse=True):
         lines[start:end] = replacement.splitlines(keepends=True)
