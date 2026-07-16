@@ -84,6 +84,8 @@ ON history_mutation_job_rule(rule_type, rule_id, job_id);
 
 CREATE TRIGGER IF NOT EXISTS cleanup_history_jobs_after_project_reset
 AFTER DELETE ON project
+WHEN OLD.created_by = 'system'
+ AND OLD.name IN ('未归类', '已排除')
 BEGIN
     DELETE FROM history_mutation_job;
 END;
