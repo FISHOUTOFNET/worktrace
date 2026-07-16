@@ -2,9 +2,7 @@ name: CI
 
 on:
   pull_request:
-  push:
-    branches:
-      - agent/canonical-architecture-consolidation
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -20,7 +18,7 @@ concurrency:
 jobs:
   runtime-settings-cutover:
     name: Runtime settings hard cutover
-    if: github.event_name == 'push' || github.event.pull_request.head.ref == 'agent/canonical-architecture-consolidation'
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.ref == 'agent/canonical-architecture-consolidation'
     runs-on: [self-hosted, Windows, X64]
     timeout-minutes: 30
 
