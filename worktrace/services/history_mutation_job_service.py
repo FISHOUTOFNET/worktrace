@@ -13,6 +13,7 @@ from . import assignment_command_service, rule_planning_service as planner
 _BATCH_SIZE = 100
 _WORKER_IDLE_SECONDS = 2.0
 _WORKER_LOCK = threading.Lock()
+_JOB_EXECUTION_LOCK = threading.RLock()
 _WORKER_THREAD: threading.Thread | None = None
 
 
@@ -29,6 +30,7 @@ def submit_rule_job(
         raise ValueError("invalid_history_job_kind")
     if rule_type not in {"folder", "keyword"} or int(rule_id) <= 0:
         raise ValueError("not_found")
+
     with get_connection() as read_conn:
         rule = planner.resolve_rule(read_conn, rule_type, int(rule_id))
         if not rule:
@@ -38,10 +40,9 @@ def submit_rule_job(
                 raise ValueError("rule_disabled")
             if not planner.project_available(rule):
                 raise ValueError("project_not_available")
-            activities = planner.load_candidate_activities(read_conn)
             classified = planner.classify_activities(
                 read_conn,
-                activities,
+                planner.load_candidate_activities(read_conn),
                 rule,
                 rule_type,
             )
@@ -67,25 +68,23 @@ def submit_rule_job(
             or 0
         )
 
+    timestamp = now_str()
     payload = {
         "rule_type": rule_type,
         "rule_id": int(rule_id),
         "restore_enabled": bool(int(rule.get("enabled") or 0)),
         "estimated_count": estimated,
     }
-    timestamp = now_str()
     with get_connection() as conn:
         conn.execute("BEGIN IMMEDIATE")
         if kind in {"rule_remove", "rule_delete"}:
-            table = "folder_project_rule" if rule_type == "folder" else "project_rule"
-            clause = "" if rule_type == "folder" else " AND rule_type = 'keyword'"
+            table, extra = _rule_table(rule_type)
             cursor = conn.execute(
-                f"UPDATE {table} SET enabled = 0, updated_at = ? WHERE id = ?{clause}",
+                f"UPDATE {table} SET enabled = 0, updated_at = ? WHERE id = ?{extra}",
                 (timestamp, int(rule_id)),
             )
             if cursor.rowcount != 1:
                 raise ValueError("not_found")
-            # The disabled version is the stable version used by the job.
             rule_version = timestamp
         else:
             rule_version = str(rule.get("updated_at") or "")
@@ -116,6 +115,7 @@ def submit_rule_job(
             (job_id, rule_type, int(rule_id), rule_version),
         )
         conn.commit()
+
     _invalidate_rule_caches(rule_type)
     if estimated <= max(0, int(synchronous_limit)):
         run_job_to_completion(job_id)
@@ -128,7 +128,8 @@ def run_pending_jobs(limit: int = 1) -> int:
             int(row["id"])
             for row in conn.execute(
                 """
-                SELECT id FROM history_mutation_job
+                SELECT id
+                FROM history_mutation_job
                 WHERE status IN ('pending', 'running')
                 ORDER BY created_at, id
                 LIMIT ?
@@ -141,7 +142,10 @@ def run_pending_jobs(limit: int = 1) -> int:
     return len(ids)
 
 
-def run_job_to_completion(job_id: int, max_batches: int = 10000) -> dict[str, Any]:
+def run_job_to_completion(
+    job_id: int,
+    max_batches: int = 10000,
+) -> dict[str, Any]:
     for _ in range(max(1, int(max_batches))):
         result = run_job_batch(job_id)
         if result["status"] not in {"pending", "running"}:
@@ -150,34 +154,38 @@ def run_job_to_completion(job_id: int, max_batches: int = 10000) -> dict[str, An
 
 
 def run_job_batch(job_id: int, batch_size: int = _BATCH_SIZE) -> dict[str, Any]:
-    job = _load_job(job_id)
-    if job is None:
-        raise ValueError("history_job_not_found")
-    if job["status"] not in {"pending", "running"}:
+    """Run one bounded batch; progress and facts commit in one transaction."""
+
+    with _JOB_EXECUTION_LOCK:
+        job = _load_job(job_id)
+        if job is None:
+            raise ValueError("history_job_not_found")
+        if job["status"] not in {"pending", "running"}:
+            return job_result(job_id)
+        try:
+            if job["kind"] == "rule_backfill":
+                _run_backfill_batch(job, batch_size)
+            else:
+                _run_reinference_batch(job, batch_size)
+        except Exception as exc:
+            logging.exception("history mutation job failed id=%s", job_id)
+            with get_connection() as conn:
+                conn.execute(
+                    """
+                    UPDATE history_mutation_job
+                    SET status = 'failed', error_message = ?, updated_at = ?
+                    WHERE id = ? AND status IN ('pending', 'running')
+                    """,
+                    (str(exc)[:500], now_str(), int(job_id)),
+                )
         return job_result(job_id)
-    try:
-        if job["kind"] == "rule_backfill":
-            _run_backfill_batch(job, batch_size)
-        else:
-            _run_reinference_batch(job, batch_size)
-    except Exception as exc:
-        logging.exception("history mutation job failed id=%s", job_id)
-        with get_connection() as conn:
-            conn.execute(
-                """
-                UPDATE history_mutation_job
-                SET status = 'failed', error_message = ?, updated_at = ?
-                WHERE id = ?
-                """,
-                (str(exc)[:500], now_str(), int(job_id)),
-            )
-    return job_result(job_id)
 
 
 def job_result(job_id: int) -> dict[str, Any]:
     job = _load_job(job_id)
     if job is None:
         raise ValueError("history_job_not_found")
+    payload = _payload(job)
     return {
         "job_id": int(job["id"]),
         "status": str(job["status"]),
@@ -186,6 +194,7 @@ def job_result(job_id: int) -> dict[str, Any]:
         "matched_count": int(job["changed_count"] or 0),
         "skipped_count": int(job["skipped_count"] or 0),
         "processed_count": int(job["processed_count"] or 0),
+        "estimated_count": int(payload.get("estimated_count") or 0),
         "affected_dates": 0,
         "error": str(job["error_message"] or ""),
     }
@@ -212,10 +221,8 @@ def _worker_loop(stop_event: threading.Event) -> None:
         try:
             from .secure_backup_service import is_secure_import_in_progress
 
-            if not is_secure_import_in_progress():
-                processed = run_pending_jobs(limit=1)
-                if processed:
-                    continue
+            if not is_secure_import_in_progress() and run_pending_jobs(limit=1):
+                continue
         except Exception:
             logging.exception("history mutation worker error")
         stop_event.wait(_WORKER_IDLE_SECONDS)
@@ -230,8 +237,8 @@ def _run_backfill_batch(job: dict, batch_size: int) -> None:
         rule = planner.resolve_rule(read_conn, rule_type, rule_id)
         if not rule:
             raise ValueError("not_found")
-        expected = _job_rule_version(read_conn, int(job["id"]))
-        if str(rule.get("updated_at") or "") != expected:
+        expected_version = _job_rule_version(read_conn, int(job["id"]))
+        if str(rule.get("updated_at") or "") != expected_version:
             raise ValueError("rule_changed_during_history_job")
         activities = planner.load_candidate_activities(
             read_conn,
@@ -248,6 +255,7 @@ def _run_backfill_batch(job: dict, batch_size: int) -> None:
     if not activities:
         _complete_job(int(job["id"]))
         return
+
     source = "folder_rule" if rule_type == "folder" else "keyword_rule"
     confidence = (
         planner.FOLDER_RULE_CONFIDENCE
@@ -256,10 +264,14 @@ def _run_backfill_batch(job: dict, batch_size: int) -> None:
     )
     updates = list(classified.get("would_update") or [])
     last_id = max(int(item["id"]) for item in activities)
+    changed = 0
     with get_connection() as conn:
         conn.execute("BEGIN IMMEDIATE")
+        current = planner.resolve_rule(conn, rule_type, rule_id)
+        if not current or str(current.get("updated_at") or "") != expected_version:
+            raise ValueError("rule_changed_during_history_job")
         for activity in updates:
-            assignment_command_service.upsert_assignment(
+            if assignment_command_service.upsert_assignment(
                 conn,
                 activity_id=int(activity["id"]),
                 project_id=int(rule.get("project_id") or 0),
@@ -268,26 +280,20 @@ def _run_backfill_batch(job: dict, batch_size: int) -> None:
                 source_rule_type=rule_type,
                 source_rule_id=rule_id,
                 protect_manual=True,
-            )
-        completed = last_id >= int(job["cutoff_activity_id"] or 0)
-        conn.execute(
-            """
-            UPDATE history_mutation_job
-            SET status = ?, cursor_activity_id = ?,
-                processed_count = processed_count + ?,
-                changed_count = changed_count + ?,
-                skipped_count = skipped_count + ?, updated_at = ?
-            WHERE id = ?
-            """,
-            (
-                "completed" if completed else "running",
-                last_id,
-                len(activities),
-                len(updates),
-                max(0, len(activities) - len(updates)),
-                now_str(),
-                int(job["id"]),
-            ),
+            ):
+                changed += 1
+        completed = (
+            len(activities) < max(1, int(batch_size))
+            or last_id >= int(job["cutoff_activity_id"] or 0)
+        )
+        _advance_job(
+            conn,
+            job_id=int(job["id"]),
+            cursor=last_id,
+            processed=len(activities),
+            changed=changed,
+            skipped=max(0, len(activities) - changed),
+            completed=completed,
         )
         conn.commit()
 
@@ -296,8 +302,8 @@ def _run_reinference_batch(job: dict, batch_size: int) -> None:
     payload = _payload(job)
     rule_type = str(payload["rule_type"])
     rule_id = int(payload["rule_id"])
-    with get_connection() as conn:
-        rows = conn.execute(
+    with get_connection() as read_conn:
+        rows = read_conn.execute(
             """
             SELECT activity_id
             FROM activity_project_assignment
@@ -320,50 +326,93 @@ def _run_reinference_batch(job: dict, batch_size: int) -> None:
     if not rows:
         _finalize_reinference_job(job)
         return
-    from .project_inference_service import assign_project_for_activity
 
-    changed = 0
-    for row in rows:
-        assign_project_for_activity(int(row["activity_id"]))
-        changed += 1
-    last_id = int(rows[-1]["activity_id"])
+    from .project_inference_service import _assign_project_for_activity_in_transaction
+
+    activity_ids = [int(row["activity_id"]) for row in rows]
     with get_connection() as conn:
-        conn.execute(
-            """
-            UPDATE history_mutation_job
-            SET status = 'running', cursor_activity_id = ?,
-                processed_count = processed_count + ?,
-                changed_count = changed_count + ?, updated_at = ?
-            WHERE id = ?
-            """,
-            (last_id, len(rows), changed, now_str(), int(job["id"])),
+        conn.execute("BEGIN IMMEDIATE")
+        changed = 0
+        for activity_id in activity_ids:
+            _assign_project_for_activity_in_transaction(
+                conn,
+                activity_id,
+                exclude_rule=(rule_type, rule_id),
+            )
+            changed += 1
+        last_id = activity_ids[-1]
+        completed = (
+            len(activity_ids) < max(1, int(batch_size))
+            or last_id >= int(job["cutoff_activity_id"] or 0)
         )
+        _advance_job(
+            conn,
+            job_id=int(job["id"]),
+            cursor=last_id,
+            processed=len(activity_ids),
+            changed=changed,
+            skipped=0,
+            completed=False,
+        )
+        conn.commit()
+    if completed:
+        _finalize_reinference_job(_load_job(int(job["id"])) or job)
+
+
+def _advance_job(
+    conn,
+    *,
+    job_id: int,
+    cursor: int,
+    processed: int,
+    changed: int,
+    skipped: int,
+    completed: bool,
+) -> None:
+    conn.execute(
+        """
+        UPDATE history_mutation_job
+        SET status = ?, cursor_activity_id = ?,
+            processed_count = processed_count + ?,
+            changed_count = changed_count + ?,
+            skipped_count = skipped_count + ?,
+            error_message = NULL, updated_at = ?
+        WHERE id = ? AND status IN ('pending', 'running')
+        """,
+        (
+            "completed" if completed else "running",
+            int(cursor),
+            int(processed),
+            int(changed),
+            int(skipped),
+            now_str(),
+            int(job_id),
+        ),
+    )
 
 
 def _finalize_reinference_job(job: dict) -> None:
     payload = _payload(job)
     rule_type = str(payload["rule_type"])
     rule_id = int(payload["rule_id"])
+    table, extra = _rule_table(rule_type)
     with get_connection() as conn:
         conn.execute("BEGIN IMMEDIATE")
         if job["kind"] == "rule_delete":
-            table = "folder_project_rule" if rule_type == "folder" else "project_rule"
-            clause = "" if rule_type == "folder" else " AND rule_type = 'keyword'"
             conn.execute(
-                f"DELETE FROM {table} WHERE id = ?{clause}",
+                f"DELETE FROM {table} WHERE id = ?{extra}",
                 (rule_id,),
             )
         elif bool(payload.get("restore_enabled")):
-            table = "folder_project_rule" if rule_type == "folder" else "project_rule"
-            clause = "" if rule_type == "folder" else " AND rule_type = 'keyword'"
             conn.execute(
-                f"UPDATE {table} SET enabled = 1, updated_at = ? WHERE id = ?{clause}",
+                f"UPDATE {table} SET enabled = 1, updated_at = ? WHERE id = ?{extra}",
                 (now_str(), rule_id),
             )
         conn.execute(
             """
             UPDATE history_mutation_job
-            SET status = 'completed', updated_at = ? WHERE id = ?
+            SET status = 'completed', error_message = NULL, updated_at = ?
+            WHERE id = ? AND status IN ('pending', 'running')
             """,
             (now_str(), int(job["id"])),
         )
@@ -374,7 +423,11 @@ def _finalize_reinference_job(job: dict) -> None:
 def _complete_job(job_id: int) -> None:
     with get_connection() as conn:
         conn.execute(
-            "UPDATE history_mutation_job SET status = 'completed', updated_at = ? WHERE id = ?",
+            """
+            UPDATE history_mutation_job
+            SET status = 'completed', error_message = NULL, updated_at = ?
+            WHERE id = ? AND status IN ('pending', 'running')
+            """,
             (now_str(), int(job_id)),
         )
 
@@ -401,6 +454,12 @@ def _payload(job: dict) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError("invalid_history_job_payload")
     return value
+
+
+def _rule_table(rule_type: str) -> tuple[str, str]:
+    if rule_type == "folder":
+        return "folder_project_rule", ""
+    return "project_rule", " AND rule_type = 'keyword'"
 
 
 def _invalidate_rule_caches(rule_type: str) -> None:
