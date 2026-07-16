@@ -32,6 +32,27 @@ ON folder_rule_file_index(folder_rule_id, generation, normalized_file_name);
 CREATE INDEX IF NOT EXISTS idx_folder_rule_file_index_path
 ON folder_rule_file_index(generation, normalized_path_key);
 
+CREATE TRIGGER IF NOT EXISTS reset_empty_active_folder_generation
+AFTER DELETE ON folder_rule_file_index
+WHEN NOT EXISTS (
+        SELECT 1 FROM folder_rule_file_index remaining
+        WHERE remaining.folder_rule_id = OLD.folder_rule_id
+          AND remaining.generation = OLD.generation
+     )
+ AND EXISTS (
+        SELECT 1 FROM folder_rule_index_state state
+        WHERE state.folder_rule_id = OLD.folder_rule_id
+          AND state.active_generation = OLD.generation
+     )
+BEGIN
+    UPDATE folder_rule_index_state
+    SET status = 'pending', valid_from = NULL, active_generation = NULL,
+        building_generation = NULL, build_status = 'pending', last_error = NULL,
+        last_indexed_at = NULL, last_checked_at = NULL, file_count = 0,
+        error_message = NULL, refresh_requested = 1
+    WHERE folder_rule_id = OLD.folder_rule_id;
+END;
+
 CREATE INDEX IF NOT EXISTS idx_history_mutation_job_status
 ON history_mutation_job(status, updated_at, id);
 
