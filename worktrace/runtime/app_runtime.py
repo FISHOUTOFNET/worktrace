@@ -39,6 +39,7 @@ from ..services.secure_backup_service import (
     register_collector_reset_handler,
 )
 from ..services.settings_service import get_bool_setting, get_setting, set_setting
+from ..write_gate import DATABASE_WRITE_GATE
 
 if TYPE_CHECKING:
     class _Paths:
@@ -147,6 +148,7 @@ class AppRuntime:
         self._collector_thread: threading.Thread | None = None
         self._index_thread: threading.Thread | None = None
         self._history_thread: threading.Thread | None = None
+        self._registered_collector_thread_id: int | None = None
         self._initialized = False
         self._shutdown = False
 
@@ -301,6 +303,24 @@ class AppRuntime:
             degraded=degraded,
         )
 
+    def _register_collector_write_thread(self) -> None:
+        thread_id = getattr(self._collector_thread, "ident", None)
+        if thread_id is None:
+            return
+        normalized = int(thread_id)
+        if self._registered_collector_thread_id == normalized:
+            return
+        self._clear_collector_write_thread()
+        DATABASE_WRITE_GATE.register_maintenance_thread(normalized)
+        self._registered_collector_thread_id = normalized
+
+    def _clear_collector_write_thread(self) -> None:
+        thread_id = self._registered_collector_thread_id
+        if thread_id is None:
+            return
+        DATABASE_WRITE_GATE.unregister_maintenance_thread(thread_id)
+        self._registered_collector_thread_id = None
+
     def start_collector(
         self,
         *,
@@ -312,10 +332,12 @@ class AppRuntime:
             if not self.owns_application_instance:
                 return {"ok": False, "error": "collector_not_owned"}
             if _thread_reference_is_alive(self._collector_thread):
+                self._register_collector_write_thread()
                 self._register_maintenance_handlers()
                 return {"ok": True, "started": False, "already_running": True}
             if self._collector_thread is not None:
                 collector_health.record_health_code("thread_dead_replaced")
+                self._clear_collector_write_thread()
                 self._collector_thread = None
                 self.collector_control = CollectorControl()
 
@@ -337,12 +359,14 @@ class AppRuntime:
                 self._collector_thread.start()
             except Exception:
                 logging.exception("collector thread start failed")
+                self._clear_collector_write_thread()
                 self._collector_thread = None
                 return {"ok": False, "error": "collector_start_failed"}
 
         deadline = time.monotonic() + max(0.1, float(startup_timeout_seconds))
         while time.monotonic() < deadline:
             if ready_event.wait(timeout=0.05):
+                self._register_collector_write_thread()
                 self._register_maintenance_handlers()
                 return {"ok": True, "started": True, "already_running": False}
             if failed_event.is_set() or not _thread_reference_is_alive(
@@ -357,6 +381,7 @@ class AppRuntime:
             joiner = getattr(thread, "join", None)
             if joiner is not None:
                 joiner(timeout=1)
+        self._clear_collector_write_thread()
         self._collector_thread = None
         self.phase = RuntimePhase.FAILED
         return {"ok": False, "error": "collector_start_failed"}
@@ -464,6 +489,9 @@ class AppRuntime:
                     adapter_shutdown = True
                 if joiner is not None:
                     joiner(timeout=5)
+
+        if not _thread_reference_is_alive(self._collector_thread):
+            self._clear_collector_write_thread()
 
         for thread in (self._index_thread, self._history_thread):
             if thread:
