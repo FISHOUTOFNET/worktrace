@@ -14,13 +14,14 @@ from worktrace.services import (
     database_maintenance_service,
     folder_rule_service,
     privacy_gate_service,
+    overview_view_model_service,
     project_service,
     report_revision_service,
     report_session_edit_service,
+    report_session_operation_service,
     rule_batch_service,
     rule_service,
     statistics_service,
-    view_model_hardening_service,
 )
 from worktrace.services.report_projection_snapshot_service import build_visible_snapshot
 from worktrace.services.statistics_projection import build_statistics_projection
@@ -129,7 +130,7 @@ def test_project_and_app_counts_exclude_privacy_and_uncategorized_buckets(temp_d
 
 def test_overview_counts_standalone_excluded_without_showing_it_in_recent(temp_db):
     _activity("11:00:00", "11:05:00", status="excluded", app="Secret")
-    payload = view_model_hardening_service.get_overview_view_model(DATE)
+    payload = overview_view_model_service.get_overview_view_model(DATE)
     assert payload["today_total_seconds"] == 300
     assert all(
         str(row.get("row_kind") or "") != "standalone_status"
@@ -205,7 +206,7 @@ def test_open_session_no_op_rolls_back_manual_assignment(temp_db):
     source = build_visible_snapshot(DATE, DATE).final_sessions[0]
 
     with patch.object(
-        report_session_edit_service.operations,
+        report_session_operation_service,
         "_expected_effect",
         return_value=False,
     ):

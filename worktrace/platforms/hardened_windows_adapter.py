@@ -111,9 +111,4 @@ class WindowsAdapter:
         self._path_resolver.reset()
 
 
-# Compatibility import for external callers during the module rename.  The
-# runtime uses ``WindowsAdapter`` directly; no second implementation exists.
-HardenedWindowsAdapter = WindowsAdapter
-
-
 __all__ = ["WindowsAdapter"]

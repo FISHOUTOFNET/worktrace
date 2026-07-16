@@ -388,6 +388,7 @@ def apply_current_schema(conn: sqlite3.Connection) -> None:
 
     if version < MIN_SUPPORTED_SCHEMA_VERSION or version > CURRENT_SCHEMA_VERSION:
         raise ValueError("database_schema_incompatible")
+    migrated = False
     if version < CURRENT_SCHEMA_VERSION:
         _require_supported_source_schema(conn, version)
         version = migrate_schema(
@@ -395,13 +396,16 @@ def apply_current_schema(conn: sqlite3.Connection) -> None:
             current_version=version,
             target_version=CURRENT_SCHEMA_VERSION,
         )
+        migrated = True
     if version != CURRENT_SCHEMA_VERSION:
         raise ValueError("database_schema_incompatible")
 
-    # Index definitions and retired trigger removal are idempotent maintenance,
-    # not a schema-version migration.  Run them for every supported database so
-    # a v6 database created by an earlier build converges before fingerprinting.
-    ensure_current_indexes(conn)
+    # Same-version maintenance accepts only the explicitly retired triggers.
+    # Arbitrary malformed current-version schemas fail the fingerprint before
+    # index DDL can obscure the compatibility error.
+    drop_retired_schema_triggers(conn)
+    if migrated:
+        ensure_current_indexes(conn)
     _require_current_schema_fingerprint(conn)
     seed_defaults(conn)
 
@@ -560,11 +564,17 @@ def _database_has_user_tables(conn: sqlite3.Connection) -> bool:
     return row is not None
 
 
-def ensure_current_indexes(conn: sqlite3.Connection) -> None:
-    """Converge indexes and remove retired command-style triggers."""
+def drop_retired_schema_triggers(conn: sqlite3.Connection) -> None:
+    """Remove only the explicit legacy triggers accepted at this version."""
 
     for trigger_name in _RETIRED_SCHEMA_TRIGGERS:
         conn.execute(f'DROP TRIGGER IF EXISTS "{trigger_name}"')
+
+
+def ensure_current_indexes(conn: sqlite3.Connection) -> None:
+    """Install current indexes after trusted creation or migration."""
+
+    drop_retired_schema_triggers(conn)
     conn.executescript(read_schema_indexes_sql())
 
 

@@ -113,7 +113,7 @@ def test_same_version_schema_drift_fails_closed_before_seeding(tmp_path):
         conn.execute("CREATE TABLE project(id INTEGER PRIMARY KEY)")
         conn.execute(f"PRAGMA user_version = {db.CURRENT_SCHEMA_VERSION}")
 
-    with pytest.raises((ValueError, sqlite3.OperationalError)):
+    with pytest.raises(ValueError, match="database_schema_incompatible"):
         db.initialize_database(path)
 
     with sqlite3.connect(path) as conn:

@@ -28,7 +28,6 @@ Boundary:
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 from ..constants import UNCATEGORIZED_PROJECT
@@ -57,6 +56,7 @@ from .activity_row_overlay import (
     apply_live_span_to_row,
 )
 from .report_projection_identity import stable_json_hash
+from .runtime_activity_state_service import sample_runtime_activity_state
 from .settings_service import get_bool_setting, get_int_setting, get_setting
 
 # Maximum number of recent activities in the Overview VM.
@@ -67,14 +67,7 @@ _RECENT_LIMIT = 20
 
 
 def _get_current_activity_snapshot() -> ActivitySnapshotContract | None:
-    raw = get_setting("current_activity_snapshot", "") or ""
-    if not raw:
-        return None
-    try:
-        value = json.loads(raw)
-    except json.JSONDecodeError:
-        return None
-    return value if isinstance(value, dict) else None
+    return sample_runtime_activity_state().snapshot
 
 
 def _get_collector_status() -> str:
