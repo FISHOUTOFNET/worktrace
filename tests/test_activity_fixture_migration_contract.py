@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 import pytest
@@ -7,44 +8,78 @@ import pytest
 pytestmark = [pytest.mark.contract, pytest.mark.unit]
 
 
-MIGRATED_FILES = (
-    "test_activity_service.py",
-    "test_timeline_service.py",
-    "test_export_service.py",
-    "test_statistics_service.py",
-    "test_local_file_detector.py",
-    "test_activity_resource_service.py",
-    "test_continuity_gap_policy.py",
-    "test_recovery_service.py",
-    "test_clipboard_service.py",
-    "test_wps_resource_classification.py",
-    "test_project_inference_service.py",
-    "test_rule_service.py",
-    "test_folder_rule_service.py",
-    "test_export_resource_fields.py",
-    "test_project_inference_resource.py",
-    "test_overview_bundle_and_export_contract.py",
-    "test_privacy_resource_exclusion.py",
-    "test_projection_plain_dto_contract.py",
-    "test_report_structure_generation.py",
-    "test_report_session_operations.py",
-    "test_report_projection_cutover.py",
-    "test_rule_history_application_service.py",
-    "test_webview_bridge.py",
-    "test_timeline_api_editing.py",
-    "test_architecture_scalability_hardening.py",
+LEGACY_LIFECYCLE_METHODS = frozenset(
+    {
+        "insert_activity_row",
+        "close_activity_row",
+        "close_all_open_rows",
+        "create_activity",
+        "close_activity",
+        "increment_activity_duration",
+        "set_activity_duration",
+        "reopen_activity",
+        "finalize_created_activity",
+        "apply_midnight_anchor_assignment",
+    }
 )
 
 
-def test_migrated_activity_fact_tests_use_test_only_facade() -> None:
-    root = Path(__file__).resolve().parent
+def _legacy_references(path: Path) -> list[str]:
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    module_aliases: set[str] = set()
+    direct_aliases: dict[str, str] = {}
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            if node.module == "worktrace.services":
+                for item in node.names:
+                    if item.name == "activity_service":
+                        module_aliases.add(item.asname or item.name)
+            elif node.module == "worktrace.services.activity_service":
+                for item in node.names:
+                    if item.name in LEGACY_LIFECYCLE_METHODS:
+                        direct_aliases[item.asname or item.name] = item.name
+        elif isinstance(node, ast.Import):
+            for item in node.names:
+                if item.name == "worktrace.services.activity_service":
+                    module_aliases.add(item.asname or item.name.rsplit(".", 1)[-1])
+
+    references: set[tuple[int, str]] = set()
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Attribute)
+            and isinstance(node.value, ast.Name)
+            and node.value.id in module_aliases
+            and node.attr in LEGACY_LIFECYCLE_METHODS
+        ):
+            references.add((node.lineno, node.attr))
+        elif (
+            isinstance(node, ast.Name)
+            and isinstance(node.ctx, ast.Load)
+            and node.id in direct_aliases
+        ):
+            references.add((node.lineno, direct_aliases[node.id]))
+
+    return [
+        f"{path.as_posix()}:{line}: {method}"
+        for line, method in sorted(references)
+    ]
+
+
+def test_no_code_outside_activity_service_uses_legacy_lifecycle_methods() -> None:
+    project_root = Path(__file__).resolve().parents[1]
+    candidates = [
+        *sorted((project_root / "worktrace").rglob("*.py")),
+        *sorted((project_root / "tests").rglob("*.py")),
+    ]
+    excluded = {
+        project_root / "worktrace" / "services" / "activity_service.py",
+        Path(__file__).resolve(),
+    }
     violations: list[str] = []
-    for name in MIGRATED_FILES:
-        source = (root / name).read_text(encoding="utf-8")
-        if "from tests.support import activity_factory as activity_service" not in source:
-            violations.append(f"{name}: missing test activity facade import")
-        if "from worktrace.services import activity_service" in source:
-            violations.append(f"{name}: imports production activity_service")
-        if "activity_service," in source and "from worktrace.services import (" in source:
-            violations.append(f"{name}: imports production activity_service in grouped import")
-    assert violations == []
+    for path in candidates:
+        if path in excluded:
+            continue
+        violations.extend(_legacy_references(path))
+
+    assert not violations, "legacy activity lifecycle references remain:\n" + "\n".join(violations)
