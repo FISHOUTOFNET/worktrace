@@ -136,17 +136,13 @@ def close_activity_row(
             activity_id,
             end_time,
             duration_seconds=duration_seconds,
+            status=status,
         )
-        if status is not None:
-            conn.execute(
-                "UPDATE activity_log SET status = ?, updated_at = ? WHERE id = ?",
-                (status, now_str(), activity_id),
-            )
 
 
 def close_all_open_rows(end_time: str | None = None) -> list[int]:
     with get_connection() as conn:
-        return activity_fact_repository.close_open_activities(
+        return activity_fact_repository.close_all_open_activities(
             conn,
             end_time or now_str(),
         )
@@ -193,11 +189,27 @@ def finalize_created_activity(activity_id: int) -> None:
 
 
 def apply_midnight_anchor_assignment(activity_id: int, project_id: int) -> None:
+    timestamp = now_str()
     with get_connection() as conn:
-        activity_fact_repository.assign_midnight_anchor(
-            conn,
-            activity_id,
-            project_id,
+        conn.execute(
+            """
+            INSERT INTO activity_project_assignment(
+                activity_id, project_id, confidence, source, is_manual,
+                suggested_project_name, source_rule_type, source_rule_id,
+                created_at, updated_at
+            )
+            VALUES (?, ?, 90, 'midnight_anchor', 0, NULL, NULL, NULL, ?, ?)
+            ON CONFLICT(activity_id) DO UPDATE SET
+                project_id = excluded.project_id,
+                confidence = excluded.confidence,
+                source = excluded.source,
+                is_manual = 0,
+                suggested_project_name = NULL,
+                source_rule_type = NULL,
+                source_rule_id = NULL,
+                updated_at = excluded.updated_at
+            """,
+            (activity_id, project_id, timestamp, timestamp),
         )
 
 
