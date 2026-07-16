@@ -38,6 +38,12 @@ ON history_mutation_job(status, updated_at, id);
 CREATE INDEX IF NOT EXISTS idx_history_mutation_job_rule_lookup
 ON history_mutation_job_rule(rule_type, rule_id, job_id);
 
+CREATE TRIGGER IF NOT EXISTS cleanup_history_jobs_after_project_reset
+AFTER DELETE ON project
+BEGIN
+    DELETE FROM history_mutation_job;
+END;
+
 CREATE INDEX IF NOT EXISTS idx_assignment_project
 ON activity_project_assignment(project_id);
 
