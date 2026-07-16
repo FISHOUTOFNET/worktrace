@@ -4,7 +4,7 @@ import pytest
 
 from tests.support.db_helpers import assign_activity_project
 from worktrace.collector.state_machine import CollectorStateMachine
-from worktrace.constants import EXCLUDED_WINDOW_TITLE
+from worktrace.constants import EXCLUDED_APP_NAME, EXCLUDED_WINDOW_TITLE
 from worktrace.db import get_connection
 from worktrace.platforms.base import ActiveWindow, ClipboardTextEvent
 from worktrace.services import (
@@ -64,12 +64,16 @@ def test_excluded_transition_anonymizes_snapshot_title(temp_db):
     )
     snap = _snapshot()
     assert snap["status"] == "excluded"
-    assert snap["window_title"] == EXCLUDED_WINDOW_TITLE
-    assert "真实" not in snap["window_title"]
-    assert snap["file_path_hint"] is None
+    assert snap["activity_display_name"] == EXCLUDED_APP_NAME
+    assert snap["resource_kind"] == "system"
+    assert snap["resource_subtype"] == "excluded"
+    assert "真实" not in snap["activity_display_name"]
+    assert "window_title" not in snap
+    assert "file_path_hint" not in snap
     open_activity = activity_service.get_open_activity()
     assert open_activity is not None
     assert open_activity["status"] == "excluded"
+    assert open_activity["window_title"] == EXCLUDED_WINDOW_TITLE
 
 
 def test_switching_to_excluded_window_preserves_previous_normal_row(temp_db):
@@ -115,10 +119,12 @@ def test_pause_resume_short_segments_are_persisted(temp_db):
     normal = [r for r in rows if r["status"] == "normal"]
     assert any(r["app_name"] == "Word" for r in normal)
     assert any(r["app_name"] == "Excel" for r in normal)
-    assert _snapshot()["window_title"] == "Sheet"
+    snapshot = _snapshot()
+    assert snapshot["activity_display_name"] == "Sheet"
+    assert "window_title" not in snapshot
 
 
-def test_state_machine_writes_file_path_hint_to_snapshot(temp_db):
+def test_state_machine_keeps_file_path_out_of_snapshot_but_persists_fact(temp_db):
     machine = CollectorStateMachine()
     machine.transition_to(
         "recording",
@@ -130,7 +136,11 @@ def test_state_machine_writes_file_path_hint_to_snapshot(temp_db):
         ),
         at_time="2026-06-18 09:00:00",
     )
-    assert _snapshot()["file_path_hint"] == "D:\\CaseA\\Spec.docx"
+    snapshot = _snapshot()
+    open_activity = activity_service.get_open_activity()
+    assert "file_path_hint" not in snapshot
+    assert open_activity is not None
+    assert open_activity["file_path_hint"] == "D:\\CaseA\\Spec.docx"
 
 
 def test_current_activity_snapshot_uses_folder_rule_project_before_persistence(
@@ -156,7 +166,7 @@ def test_current_activity_snapshot_uses_folder_rule_project_before_persistence(
 
     snap = _snapshot()
     assert snap["is_persisted"] is True
-    assert snap["inferred_project_name"] == "21IP0300"
+    assert snap["display_project"]["name"] == "21IP0300"
 
 
 def test_state_machine_fills_missing_path_without_splitting(temp_db):
@@ -257,7 +267,7 @@ def test_state_machine_splits_when_both_paths_differ(temp_db):
     open_activity = activity_service.get_open_activity()
     assert open_activity is not None
     assert open_activity["file_path_hint"] == "D:\\CaseB\\Spec.docx"
-    assert _snapshot()["file_path_hint"] == "D:\\CaseB\\Spec.docx"
+    assert "file_path_hint" not in _snapshot()
 
 
 def test_midnight_split_restarts_with_persistent_temporary_anchor(temp_db):
