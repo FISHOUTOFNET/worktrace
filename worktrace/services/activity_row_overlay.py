@@ -63,11 +63,7 @@ def apply_live_span_to_row(
     first_activity_id = int(row.get("first_activity_id") or 0)
     open_activity_id = int(row.get("open_activity_id") or 0)
     activity_ids = row.get("activity_ids")
-    matches = (
-        row_id == anchor_id
-        or first_activity_id == anchor_id
-        or open_activity_id == anchor_id
-    )
+    matches = row_id == anchor_id or first_activity_id == anchor_id or open_activity_id == anchor_id
     if not matches and isinstance(activity_ids, list):
         matches = anchor_id in {int(aid) for aid in activity_ids if aid}
     if not matches:
@@ -81,12 +77,9 @@ def apply_live_span_to_row(
         or live_clock.get("current_elapsed_at_sample")
         or 0
     )
-    # Aggregate rows own their final display base.  The span/clock base is
-    # only a fallback.
     aggregate_base = _aggregate_base_for_live_row(row, span, live_clock, state, row_kind)
     if "raw_duration_seconds" not in row:
         row["raw_duration_seconds"] = int(row.get("duration_seconds") or 0)
-
     aggregate_duration = aggregate_base + current_live_seconds
 
     row["current_live_seconds_at_sample"] = int(current_live_seconds)
@@ -126,9 +119,6 @@ def apply_live_span_to_row(
             row["project_name"] = str(span.get("project_name") or UNCATEGORIZED_PROJECT)
             row["project_description"] = str(span.get("project_description") or "")
             row["display_project"] = span.get("display_project")
-            row["candidate_project"] = span.get("candidate_project")
-            row["project_transition"] = span.get("project_transition")
-            row["project_transition_pending"] = bool(span.get("project_transition_pending"))
             if not _copy_span_classification(row, span):
                 project_name_str = str(row.get("project_name") or "")
                 if project_name_str == UNCATEGORIZED_PROJECT:
@@ -154,16 +144,10 @@ def _live_clock_fields(live_clock: LiveClockContract) -> dict[str, Any]:
         "live_started_at_epoch_ms": int(live_clock.get("live_started_at_epoch_ms") or 0),
         "carry_seconds": int(live_clock.get("carry_seconds") or 0),
         "duration_semantic": str(live_clock.get("duration_semantic") or ""),
-        "current_live_seconds_at_sample": int(
-            live_clock.get("current_live_seconds_at_sample") or 0
-        ),
+        "current_live_seconds_at_sample": int(live_clock.get("current_live_seconds_at_sample") or 0),
         "current_live_base_seconds": int(live_clock.get("current_live_base_seconds") or 0),
-        "aggregate_duration_seconds_at_sample": int(
-            live_clock.get("aggregate_duration_seconds_at_sample") or 0
-        ),
-        "aggregate_display_base_seconds": int(
-            live_clock.get("aggregate_display_base_seconds") or 0
-        ),
+        "aggregate_duration_seconds_at_sample": int(live_clock.get("aggregate_duration_seconds_at_sample") or 0),
+        "aggregate_display_base_seconds": int(live_clock.get("aggregate_display_base_seconds") or 0),
         "display_base_seconds": int(live_clock.get("display_base_seconds") or 0),
         "duration_seconds_at_sample": int(live_clock.get("duration_seconds_at_sample") or 0),
         "active_elapsed_at_sample": int(live_clock.get("active_elapsed_at_sample") or 0),
@@ -198,27 +182,23 @@ def _static_base_for_live_row(
     live_clock: LiveClockContract,
     state: str,
 ) -> int:
+    del state
     anchor_id = int(span.get("anchor_activity_id") or 0)
-    snapshot_extra_base = int(
-        live_clock.get("display_base_seconds")
-        or span.get("display_base_seconds")
-        or 0
+    snapshot_base = int(
+        live_clock.get("display_base_seconds") or span.get("display_base_seconds") or 0
     )
     row_id = int(row.get("activity_id") or row.get("id") or 0)
     open_activity_id = int(row.get("open_activity_id") or 0)
     activity_ids = row.get("activity_ids")
-
     if row_id == anchor_id:
-        return snapshot_extra_base
+        return snapshot_base
     if open_activity_id == anchor_id and "closed_duration_seconds" in row:
-        return int(row.get("closed_duration_seconds") or 0) + snapshot_extra_base
+        return int(row.get("closed_duration_seconds") or 0) + snapshot_base
     if isinstance(activity_ids, list) and anchor_id in {int(aid) for aid in activity_ids if aid}:
-        # A session can omit open_activity_id after report projection.  Its
-        # closed base is still authoritative and avoids undercounting A+B+C.
         if "closed_duration_seconds" in row:
-            return int(row.get("closed_duration_seconds") or 0) + snapshot_extra_base
+            return int(row.get("closed_duration_seconds") or 0) + snapshot_base
         row["live_contract_reason"] = "missing_closed_static_base"
-    return snapshot_extra_base
+    return snapshot_base
 
 
 def _aggregate_base_for_live_row(
@@ -228,7 +208,6 @@ def _aggregate_base_for_live_row(
     state: str,
     row_kind: str,
 ) -> int:
-    """Resolve aggregate base at the concrete row, never at the anchor."""
     fallback = int(
         live_clock.get("aggregate_display_base_seconds")
         or live_clock.get("display_base_seconds")
@@ -262,7 +241,7 @@ def _copy_span_classification(row: dict[str, Any], span: DisplaySpanContract) ->
     row["is_classified"] = (
         bool(span_classified)
         if span_classified is not None
-        else (not bool(span_uncategorized))
+        else not bool(span_uncategorized)
     )
     return True
 
@@ -275,9 +254,13 @@ def _row_matches_span_resource(row: dict[str, Any], span: DisplaySpanContract) -
         value = str(row.get(field) or "").strip().lower()
         if value:
             return _identity_hash(value) == current_identity_hash
-    # Display/app fallbacks intentionally require both sides to be present;
-    # unknown identities must not make B absorb C.
-    for field in ("resource_display_name", "activity_display_name", "activity_name", "app_name", "process_name"):
+    for field in (
+        "resource_display_name",
+        "activity_display_name",
+        "activity_name",
+        "app_name",
+        "process_name",
+    ):
         value = str(row.get(field) or "").strip().lower()
         if value:
             return _identity_hash(value) == current_identity_hash

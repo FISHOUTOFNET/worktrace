@@ -9,11 +9,7 @@ from ..constants import (
 )
 from ..contracts.live_display_contracts import ActivitySnapshotContract
 from ..resources.types import DetectedResource
-from ..services.project_ownership_service import (
-    ProjectOwnershipState,
-    serialize_project_ownership,
-    uncategorized_label,
-)
+from ..services.project_ownership_service import ProjectOwnershipState, uncategorized_label
 from ..services.runtime_activity_state_service import (
     clear_runtime_activity_state,
     get_runtime_activity_snapshot,
@@ -35,7 +31,6 @@ class SnapshotPublisher:
         at_time: str,
         project_ownership_state: ProjectOwnershipState | None,
         persisted_activity_id: int | None,
-        checkpoint_seconds: int = 0,
     ) -> None:
         if payload is None or start_time is None:
             self.clear()
@@ -55,11 +50,7 @@ class SnapshotPublisher:
 
         activity_display_name = resource_display_name
         if not activity_display_name:
-            activity_display_name = (
-                payload.get("app_name")
-                or payload.get("process_name")
-                or ""
-            )
+            activity_display_name = payload.get("app_name") or payload.get("process_name") or ""
         status = payload.get("status") or STATUS_NORMAL
 
         ownership = project_ownership_state
@@ -69,21 +60,8 @@ class SnapshotPublisher:
             or ownership.display_project is None
         ):
             display_label = uncategorized_label()
-            candidate_label = uncategorized_label()
-            transition_dict = serialize_project_ownership(None)["project_transition"]
         else:
             display_label = ownership.display_project
-            candidate_label = ownership.candidate_project or uncategorized_label()
-            # Compatibility shape only. There is no pending confirmation window.
-            transition_dict = {
-                **ownership.project_transition.to_dict(),
-                "pending": False,
-                "started_at": "",
-                "elapsed_seconds": 0,
-                "threshold_seconds": 0,
-                "from_project_id": None,
-                "to_project_id": None,
-            }
 
         snapshot: ActivitySnapshotContract = {
             "app_name": payload.get("app_name") or "",
@@ -93,22 +71,12 @@ class SnapshotPublisher:
             "resource_subtype": resource_subtype,
             "resource_display_name": resource_display_name,
             "resource_identity_key": resource_identity_key,
-            # Temporary display-safe compatibility mirror. It contains only the
-            # formal project label and is removed with the transition model.
-            "inferred_project_name": display_label.name,
             "status": status,
             "start_time": start_time,
             "elapsed_seconds": elapsed,
-            "checkpoint_seconds": max(0, int(checkpoint_seconds)),
-            # Compatibility duration field remains zero until the transition
-            # model is removed from all readers.
-            "extra_seconds": 0,
             "persisted_activity_id": persisted_activity_id,
             "is_persisted": persisted_activity_id is not None,
             "display_project": display_label.to_dict(),
-            "candidate_project": candidate_label.to_dict(),
-            "project_transition": transition_dict,
-            "project_transition_pending": False,
         }
         publish_runtime_activity_snapshot(snapshot, "collector_snapshot_publish")
 

@@ -20,7 +20,6 @@ from ..services.activity_lifecycle_service import (
 )
 from ..services.project_ownership_service import (
     ProjectOwnershipState,
-    advance_ownership,
     begin_ownership_for_new_resource,
     candidate_project_for_activity,
     clear_ownership_state,
@@ -88,10 +87,6 @@ class ActivitySessionRecorder:
                 **{k: v for k, v in payload.items() if v is not None},
             }
             self.current_last_seen_time = at_time
-            self.project_ownership_state = advance_ownership(
-                self.project_ownership_state,
-                at_time,
-            )
             self._ensure_persisted(at_time)
             self._checkpoint_persisted_progress(at_time)
             self._publish_snapshot(at_time)
@@ -230,7 +225,7 @@ class ActivitySessionRecorder:
         self.persisted_activity_id = None
         self.persisted_checkpoint_seconds = 0
         self.checkpoint_on_next_observation = False
-        self._begin_project_ownership(payload, at_time)
+        self._begin_project_ownership(payload)
         if payload.get("status") == STATUS_NORMAL and midnight_project_id is not None:
             self._persist_midnight_anchor(midnight_project_id, at_time)
         else:
@@ -239,18 +234,14 @@ class ActivitySessionRecorder:
         # crash-recovery checkpoint rather than the live clock's source of truth.
         self._publish_snapshot(at_time)
 
-    def _begin_project_ownership(self, payload: dict, at_time: str) -> None:
+    def _begin_project_ownership(self, payload: dict) -> None:
         status = str(payload.get("status") or STATUS_NORMAL)
         if status in SYSTEM_STATUSES:
             self.project_ownership_state = clear_ownership_state()
             return
         resource = payload.get("resource")
         candidate = candidate_project_for_activity(payload, resource)
-        self.project_ownership_state = begin_ownership_for_new_resource(
-            self.project_ownership_state,
-            candidate,
-            at_time,
-        )
+        self.project_ownership_state = begin_ownership_for_new_resource(candidate)
 
     def _ensure_persisted(self, at_time: str) -> None:
         if (
@@ -360,7 +351,6 @@ class ActivitySessionRecorder:
             at_time=at_time,
             project_ownership_state=self.project_ownership_state,
             persisted_activity_id=self.persisted_activity_id,
-            checkpoint_seconds=self.persisted_checkpoint_seconds,
         )
         self.decision_trace_recorder.record(
             CollectorDecisionTrace(

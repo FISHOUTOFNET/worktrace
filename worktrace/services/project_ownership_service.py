@@ -1,15 +1,12 @@
-"""Project ownership state machine — display-safe project label contract."""
+"""Project ownership state — internal candidate and official display label."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from ..constants import UNCATEGORIZED_PROJECT
 from .project_attribution_policy import is_official_project_source
-
-
-# Dataclasses
 
 
 @dataclass(frozen=True)
@@ -17,9 +14,7 @@ class ProjectLabel:
     """Display-safe project label.
 
     ``id`` is ``None`` for suggested-project names and uncategorized
-    candidates (no concrete project row). ``source`` is one of:
-    ``manual`` / ``folder_rule`` /
-    ``keyword_rule`` / ``suggested_project_name`` / ``uncategorized``.
+    candidates. Only manual/folder/keyword sources are formal display projects.
     """
 
     name: str
@@ -54,57 +49,18 @@ class ProjectLabel:
 
 
 @dataclass(frozen=True)
-class ProjectTransition:
-    """Project ownership transition state.
-
-    The shape remains in snapshots for compatibility, but project display has
-    no confirmation window: an official candidate applies immediately and a
-    non-official candidate is not a formal display project.
-    """
-
-    pending: bool = False
-    started_at: str = ""
-    elapsed_seconds: int = 0
-    threshold_seconds: int = 0
-    from_project_id: int | None = None
-    to_project_id: int | None = None
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "pending": self.pending,
-            "started_at": self.started_at,
-            "elapsed_seconds": self.elapsed_seconds,
-            "threshold_seconds": self.threshold_seconds,
-            "from_project_id": self.from_project_id,
-            "to_project_id": self.to_project_id,
-        }
-
-
-@dataclass(frozen=True)
 class ProjectOwnershipState:
-    """Full ownership state held by ``ActivitySessionRecorder``."""
+    """Internal ownership state held by ``ActivitySessionRecorder``.
+
+    ``candidate_project`` remains internal inference state. Runtime snapshots and
+    page DTOs expose only ``display_project``.
+    """
 
     display_project: ProjectLabel | None = None
     candidate_project: ProjectLabel | None = None
-    project_transition: ProjectTransition = field(default_factory=ProjectTransition)
-    last_confirmed_project: ProjectLabel | None = None
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "display_project": self.display_project.to_dict() if self.display_project else None,
-            "candidate_project": self.candidate_project.to_dict() if self.candidate_project else None,
-            "project_transition": self.project_transition.to_dict(),
-            "last_confirmed_project": (
-                self.last_confirmed_project.to_dict() if self.last_confirmed_project else None
-            ),
-        }
-
-
-# Label helpers
 
 
 def uncategorized_label() -> ProjectLabel:
-    """Return the canonical uncategorized project label."""
     return ProjectLabel(
         name=UNCATEGORIZED_PROJECT,
         id=None,
@@ -116,11 +72,6 @@ def uncategorized_label() -> ProjectLabel:
 
 
 def labels_equal(a: ProjectLabel | None, b: ProjectLabel | None) -> bool:
-    """Return ``True`` when two labels refer to the same project.
-
-    Comparison is by concrete ``id`` when both have one, otherwise by
-    casefolded ``name``. Two uncategorized labels are always equal.
-    """
     if a is None and b is None:
         return True
     if a is None or b is None:
@@ -134,17 +85,10 @@ def candidate_project_for_activity(
     activity: dict | None,
     resource: Any = None,
 ) -> ProjectLabel:
-    """Compute the candidate project label for a new resource.
-
-    Reuses ``project_inference_service.candidate_project_label_for_activity``
-    so folder / keyword / suggested-project inference has a single
-    implementation. Returns the uncategorized label when inference
-    yields nothing (e.g. system status or empty activity).
-    """
     if activity is None:
         return uncategorized_label()
     status = str(activity.get("status") or "")
-    if status and status not in {"normal"}:
+    if status and status != "normal":
         return uncategorized_label()
     from .project_inference_service import candidate_project_label_for_activity
 
@@ -153,12 +97,10 @@ def candidate_project_for_activity(
 
 
 def _resource_dict(resource: Any) -> dict | None:
-    """Coerce a ``DetectedResource`` or dict into a plain resource dict."""
     if resource is None:
         return None
     if isinstance(resource, dict):
         return resource
-    # DetectedResource dataclass-like
     try:
         return {
             "resource_kind": resource.resource_kind,
@@ -176,126 +118,34 @@ def _resource_dict(resource: Any) -> dict | None:
         return None
 
 
-# State machine
-
-
 def _is_official_label(label: ProjectLabel | None) -> bool:
-    """True when the label's source is a user-confirmed (official) project.
-
-    Only official sources (manual / keyword_rule / folder_rule) may become
-    ``display_project`` or ``last_confirmed_project``. Suggested,
-    context-derived, and uncategorized labels are candidates / internal
-    only and must NOT surface as the formal project.
-    """
-    if label is None:
-        return False
-    return is_official_project_source(label.source)
+    return bool(label is not None and is_official_project_source(label.source))
 
 
-def begin_ownership_for_new_resource(
-    state: ProjectOwnershipState | None,
-    candidate: ProjectLabel,
-    at_time: str,
-    threshold_seconds: int = 0,
-) -> ProjectOwnershipState:
-    """Begin ownership for a brand-new resource signature.
+def begin_ownership_for_new_resource(candidate: ProjectLabel) -> ProjectOwnershipState:
+    """Assign the formal display project immediately for an official candidate."""
 
-    Called by ``ActivitySessionRecorder`` when the resource signature
-    changes (immediate resource switch). The candidate is computed from the
-    new resource and an official candidate becomes the display project
-    immediately.
-
-    Attribution contract: only official project labels
-    (``manual`` / ``keyword_rule`` / ``folder_rule``) may become
-    ``display_project`` or ``last_confirmed_project``. Non-official
-    candidates (suggested / context-derived / uncategorized) are stored
-    in ``candidate_project`` only and never confirmed.
-    """
-    # ``threshold_seconds`` is an ignored compatibility parameter. A project
-    # change must never hold or inherit a formal label while it waits.
-    no_transition = ProjectTransition(pending=False, threshold_seconds=0)
-    candidate_is_official = _is_official_label(candidate)
-    if candidate_is_official:
+    if _is_official_label(candidate):
         return ProjectOwnershipState(
             display_project=candidate,
             candidate_project=candidate,
-            project_transition=no_transition,
-            last_confirmed_project=candidate,
         )
-    # Suggested/context/uncategorized labels remain candidates only. Never
-    # inherit a prior official project into this resource's formal display.
     return ProjectOwnershipState(
         display_project=uncategorized_label(),
         candidate_project=candidate,
-        project_transition=no_transition,
-        last_confirmed_project=state.last_confirmed_project if state else None,
-    )
-
-
-def advance_ownership(
-    state: ProjectOwnershipState | None,
-    at_time: str,
-) -> ProjectOwnershipState | None:
-    """Return ownership unchanged with a non-pending transition.
-
-    Kept as the recorder-facing facade, but no elapsed-time confirmation or
-    inherited display project is permitted in production.
-    """
-    if state is None:
-        return None
-    return ProjectOwnershipState(
-        display_project=state.display_project,
-        candidate_project=state.candidate_project,
-        project_transition=ProjectTransition(),
-        last_confirmed_project=state.last_confirmed_project,
     )
 
 
 def clear_ownership_state() -> ProjectOwnershipState:
-    """Return a fresh empty ownership state.
-
-    Used at session boundaries (pause / stop / midnight split / recovery
-    / time jump) so the previous session's display project is NOT
-    inherited into the new session.
-    """
     return ProjectOwnershipState()
-
-
-def empty_state() -> ProjectOwnershipState:
-    """Alias for :func:`clear_ownership_state`."""
-    return ProjectOwnershipState()
-
-
-# Serialization
-
-
-def serialize_project_ownership(state: ProjectOwnershipState | None) -> dict[str, Any]:
-    """Serialize the ownership state into a display-safe JSON dict.
-
-    Returns a dict with ``display_project`` / ``candidate_project`` /
-    ``project_transition`` keys (each ``None`` / empty when the state
-    is empty). Safe to embed in the current-activity snapshot and
-    surface to the frontend via the live projection.
-    """
-    if state is None:
-        return {
-            "display_project": None,
-            "candidate_project": None,
-            "project_transition": ProjectTransition().to_dict(),
-        }
-    return state.to_dict()
 
 
 __all__ = [
     "ProjectLabel",
     "ProjectOwnershipState",
-    "ProjectTransition",
-    "advance_ownership",
     "begin_ownership_for_new_resource",
     "candidate_project_for_activity",
     "clear_ownership_state",
-    "empty_state",
     "labels_equal",
-    "serialize_project_ownership",
     "uncategorized_label",
 ]

@@ -107,14 +107,13 @@ class ActivitySnapshot(TypedDict, total=False):
     activity_display_name: str
     app_name: str
     process_name: str
-    inferred_project_name: str
     status: str
     start_time: str
     elapsed_seconds: int
-    extra_seconds: int
     is_persisted: bool
     persisted_activity_id: int
     resource_display_name: str
+    display_project: dict[str, Any]
 
 
 class SessionProjectPreview(TypedDict, total=False):
