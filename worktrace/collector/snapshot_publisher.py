@@ -6,7 +6,6 @@ from ..constants import (
     STATUS_IDLE,
     STATUS_NORMAL,
     STATUS_PAUSED,
-    UNCATEGORIZED_PROJECT,
 )
 from ..contracts.live_display_contracts import ActivitySnapshotContract
 from ..resources.types import DetectedResource
@@ -19,8 +18,6 @@ from ..services.runtime_activity_state_service import (
     clear_runtime_activity_state,
     get_runtime_activity_snapshot,
     publish_runtime_activity_snapshot,
-    read_runtime_activity_snapshot_raw,
-    restore_runtime_activity_snapshot,
 )
 from .transition_types import seconds_between
 
@@ -28,7 +25,7 @@ SYSTEM_STATUSES = {STATUS_IDLE, STATUS_PAUSED, STATUS_EXCLUDED, STATUS_ERROR}
 
 
 class SnapshotPublisher:
-    """Sole publisher of the process-local current-activity display sample."""
+    """Sole publisher of the process-local, display-safe activity sample."""
 
     def publish(
         self,
@@ -50,15 +47,11 @@ class SnapshotPublisher:
         resource_kind = ""
         resource_subtype = ""
         resource_identity_key = ""
-        resource_path_hint: str | None = None
-        resource_uri_host: str | None = None
         if isinstance(resource, DetectedResource):
             resource_display_name = resource.display_name
             resource_kind = resource.resource_kind
             resource_subtype = resource.resource_subtype
             resource_identity_key = resource.identity_key
-            resource_path_hint = resource.path_hint
-            resource_uri_host = resource.uri_host
 
         activity_display_name = resource_display_name
         if not activity_display_name:
@@ -92,33 +85,25 @@ class SnapshotPublisher:
                 "to_project_id": None,
             }
 
-        display_project_dict = display_label.to_dict()
-        candidate_project_dict = candidate_label.to_dict()
-        inferred_project_name = display_label.name or UNCATEGORIZED_PROJECT
-
         snapshot: ActivitySnapshotContract = {
             "app_name": payload.get("app_name") or "",
             "process_name": payload.get("process_name") or "",
-            "window_title": payload.get("window_title") or "",
-            "file_path_hint": payload.get("file_path_hint"),
             "activity_display_name": activity_display_name,
             "resource_kind": resource_kind,
             "resource_subtype": resource_subtype,
             "resource_display_name": resource_display_name,
             "resource_identity_key": resource_identity_key,
-            "resource_path_hint": resource_path_hint,
-            "resource_uri_host": resource_uri_host,
-            "inferred_project_name": inferred_project_name,
             "status": status,
             "start_time": start_time,
             "elapsed_seconds": elapsed,
             "checkpoint_seconds": max(0, int(checkpoint_seconds)),
-            # Compatibility fields remain display-only and are never persisted.
+            # Compatibility duration field remains zero until the transition
+            # model is removed from all readers.
             "extra_seconds": 0,
             "persisted_activity_id": persisted_activity_id,
             "is_persisted": persisted_activity_id is not None,
-            "display_project": display_project_dict,
-            "candidate_project": candidate_project_dict,
+            "display_project": display_label.to_dict(),
+            "candidate_project": candidate_label.to_dict(),
             "project_transition": transition_dict,
             "project_transition_pending": False,
         }
@@ -131,12 +116,6 @@ class SnapshotPublisher:
             clear_pending=False,
             clear_ownership=False,
         )
-
-    def restore_raw(self, value: str) -> None:
-        restore_runtime_activity_snapshot(value, "snapshot_publisher_restore")
-
-    def read_raw(self) -> str:
-        return read_runtime_activity_snapshot_raw()
 
     def read(self) -> ActivitySnapshotContract | None:
         value = get_runtime_activity_snapshot()
