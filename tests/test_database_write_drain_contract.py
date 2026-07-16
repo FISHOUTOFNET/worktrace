@@ -40,7 +40,7 @@ def test_secure_import_enters_draining_before_pause_and_exclusive_before_operati
     coordinator.register_collector_pause_handler(pause)
     coordinator.register_collector_reset_handler(reset)
 
-    with coordinator.acquire(reason="phase_contract") as guard:
+    with coordinator.acquire(reason="drain_contract") as guard:
         observed.append(
             ("operation", coordinator.phase(), DATABASE_WRITE_GATE.phase())
         )
