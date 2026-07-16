@@ -251,6 +251,7 @@
         bind("settings-backup-export-btn", "click", App.exportEncryptedBackup);
         bind("settings-backup-manifest-btn", "click", App.previewEncryptedBackupManifest);
         bind("settings-backup-import-btn", "click", App.importEncryptedBackup);
+        bind("settings-clear-local-data-btn", "click", App.clearAllLocalData);
         bind("settings-clear-all-btn", "click", App.clearAllLocalData);
         if (App.initRulesPanelEvents) App.initRulesPanelEvents();
         bind("first-run-notice-accept-btn", "click", App.acceptFirstRunNotice);
