@@ -63,12 +63,15 @@ def _legacy_references(path: Path) -> list[str]:
     return [f"line {line}: {method}" for line, method in sorted(references)]
 
 
-def _remaining_test_reference_groups() -> list[tuple[str, tuple[str, ...]]]:
+def _reference_groups(
+    root: Path,
+    *,
+    excluded: set[Path],
+) -> list[tuple[str, tuple[str, ...]]]:
     project_root = Path(__file__).resolve().parents[1]
-    tests_root = project_root / "tests"
     groups: list[tuple[str, tuple[str, ...]]] = []
-    for path in sorted(tests_root.rglob("*.py")):
-        if path == Path(__file__).resolve():
+    for path in sorted(root.rglob("*.py")):
+        if path in excluded:
             continue
         references = tuple(_legacy_references(path))
         if references:
@@ -76,14 +79,26 @@ def _remaining_test_reference_groups() -> list[tuple[str, tuple[str, ...]]]:
     return groups
 
 
-REMAINING_TEST_REFERENCE_GROUPS = _remaining_test_reference_groups()
-PARAMETERS = REMAINING_TEST_REFERENCE_GROUPS or [("no_remaining_test_references", ())]
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+TEST_REFERENCE_GROUPS = _reference_groups(
+    PROJECT_ROOT / "tests",
+    excluded={Path(__file__).resolve()},
+)
+PRODUCTION_REFERENCE_GROUPS = _reference_groups(
+    PROJECT_ROOT / "worktrace",
+    excluded={PROJECT_ROOT / "worktrace" / "services" / "activity_service.py"},
+)
+
+TEST_PARAMETERS = TEST_REFERENCE_GROUPS or [("no_remaining_test_references", ())]
+PRODUCTION_PARAMETERS = PRODUCTION_REFERENCE_GROUPS or [
+    ("no_remaining_production_references", ())
+]
 
 
 @pytest.mark.parametrize(
     ("relative_path", "references"),
-    PARAMETERS,
-    ids=[relative_path for relative_path, _references in PARAMETERS],
+    TEST_PARAMETERS,
+    ids=[relative_path for relative_path, _references in TEST_PARAMETERS],
 )
 def test_tests_use_test_only_activity_fact_facade(
     relative_path: str,
@@ -91,5 +106,20 @@ def test_tests_use_test_only_activity_fact_facade(
 ) -> None:
     assert not references, (
         f"{relative_path} still uses production activity lifecycle methods:\n"
+        + "\n".join(references)
+    )
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "references"),
+    PRODUCTION_PARAMETERS,
+    ids=[relative_path for relative_path, _references in PRODUCTION_PARAMETERS],
+)
+def test_production_uses_activity_lifecycle_owner(
+    relative_path: str,
+    references: tuple[str, ...],
+) -> None:
+    assert not references, (
+        f"{relative_path} still bypasses the activity lifecycle owner:\n"
         + "\n".join(references)
     )
