@@ -25,6 +25,12 @@ from .write_gate import DATABASE_WRITE_GATE
 
 CURRENT_SCHEMA_VERSION = 6
 
+_RETIRED_SCHEMA_TRIGGERS = (
+    "close_existing_open_activity_before_insert",
+    "reset_empty_active_folder_generation",
+    "normalize_pending_folder_generation",
+    "cleanup_history_jobs_after_project_reset",
+)
 _WRITE_TOKEN_RE = re.compile(
     r"\b(?:INSERT|UPDATE|DELETE|REPLACE|CREATE|DROP|ALTER|VACUUM|REINDEX|ATTACH|DETACH)\b",
     re.IGNORECASE,
@@ -144,7 +150,9 @@ def _classify_report_structure_sql(sql: str) -> int:
         return _REPORT_STRUCTURE_NONE
 
     if re.search(r"\bACTIVITY_LOG\b", upper):
-        if upper.startswith("UPDATE") and not _activity_log_update_changes_structure(text):
+        if upper.startswith("UPDATE") and not _activity_log_update_changes_structure(
+            text
+        ):
             return _REPORT_STRUCTURE_NONE
         return _REPORT_STRUCTURE_ALWAYS
 
@@ -240,7 +248,10 @@ class WorkTraceConnection(sqlite3.Connection):
         def tracked_parameters():
             nonlocal affects_structure
             for parameters in seq_of_parameters:
-                if not affects_structure and _parameters_affect_report_structure(parameters):
+                if (
+                    not affects_structure
+                    and _parameters_affect_report_structure(parameters)
+                ):
                     affects_structure = True
                 yield parameters
 
@@ -343,6 +354,7 @@ def get_connection() -> sqlite3.Connection:
 
 def apply_connection_pragmas(conn: sqlite3.Connection) -> None:
     """Apply connection-local settings without taking the database write gate."""
+
     conn.execute("PRAGMA busy_timeout = 5000;")
     conn.execute("PRAGMA foreign_keys = ON;")
 
@@ -383,9 +395,13 @@ def apply_current_schema(conn: sqlite3.Connection) -> None:
             current_version=version,
             target_version=CURRENT_SCHEMA_VERSION,
         )
-        ensure_current_indexes(conn)
     if version != CURRENT_SCHEMA_VERSION:
         raise ValueError("database_schema_incompatible")
+
+    # Index definitions and retired trigger removal are idempotent maintenance,
+    # not a schema-version migration.  Run them for every supported database so
+    # a v6 database created by an earlier build converges before fingerprinting.
+    ensure_current_indexes(conn)
     _require_current_schema_fingerprint(conn)
     seed_defaults(conn)
 
@@ -502,7 +518,10 @@ def seed_defaults(conn: sqlite3.Connection) -> None:
         )
     conn.execute(
         """
-        INSERT INTO project(name, description, language, is_archived, enabled, created_by, created_at, updated_at)
+        INSERT INTO project(
+            name, description, language, is_archived, enabled,
+            created_by, created_at, updated_at
+        )
         VALUES (?, '', '中文', 0, 1, 'system', ?, ?)
         ON CONFLICT(name) DO NOTHING
         """,
@@ -510,7 +529,10 @@ def seed_defaults(conn: sqlite3.Connection) -> None:
     )
     conn.execute(
         """
-        INSERT INTO project(name, description, language, is_archived, enabled, created_by, created_at, updated_at)
+        INSERT INTO project(
+            name, description, language, is_archived, enabled,
+            created_by, created_at, updated_at
+        )
         VALUES (?, '命中后匿名记录', '中文', 0, 0, 'system', ?, ?)
         ON CONFLICT(name) DO NOTHING
         """,
@@ -539,6 +561,10 @@ def _database_has_user_tables(conn: sqlite3.Connection) -> bool:
 
 
 def ensure_current_indexes(conn: sqlite3.Connection) -> None:
+    """Converge indexes and remove retired command-style triggers."""
+
+    for trigger_name in _RETIRED_SCHEMA_TRIGGERS:
+        conn.execute(f'DROP TRIGGER IF EXISTS "{trigger_name}"')
     conn.executescript(read_schema_indexes_sql())
 
 
