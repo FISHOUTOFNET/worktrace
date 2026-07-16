@@ -60,6 +60,16 @@
     }
     installTimelineProjectLoadGate();
 
+    function refreshSharedProjectCatalog() {
+        App.projectsCache = null;
+        App.projectsLoading = false;
+        App.projectsLoadPromise = null;
+        return typeof App.loadProjects === "function"
+            ? App.loadProjects()
+            : Promise.resolve(null);
+    }
+    App.refreshSharedProjectCatalog = refreshSharedProjectCatalog;
+
     function loadProjectRules() {
         if (App.rulesLoadPromise) return App.rulesLoadPromise;
         var token = App.requestCoordinator.beginLatest("rules", "home");
@@ -73,7 +83,12 @@
             }
             App.showProjectRules(result || { projects: [] });
             App.clearRulesError();
-            return result;
+            // The rules payload and Timeline project selector are separate
+            // read models. Refresh the shared catalog explicitly at the rules
+            // boundary instead of inferring mutations from bridge method names.
+            return refreshSharedProjectCatalog().then(function () {
+                return result;
+            });
         }).catch(function () {
             if (App.requestCoordinator.isCurrent(token)) {
                 App.showRulesError("加载项目规则失败");
