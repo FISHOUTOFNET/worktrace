@@ -2,8 +2,9 @@ import sqlite3
 
 import pytest
 
+from tests.support import activity_factory as activity_service
 from tests.support.db_helpers import assign_activity_project
-from worktrace.services import activity_service, project_service
+from worktrace.services import project_service
 
 pytestmark = [pytest.mark.db]
 
