@@ -4,8 +4,9 @@ import json
 
 import pytest
 
+from tests.support import activity_factory as activity_service
 from worktrace.db import get_connection
-from worktrace.services import activity_service, project_service
+from worktrace.services import project_service
 from worktrace.services import report_session_operation_service as mutations
 from worktrace.services.export_service import build_statistics_csv_rows
 from worktrace.services.project_activity_summary_service import get_projection_session_activity_summary
