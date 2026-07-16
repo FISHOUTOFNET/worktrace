@@ -15,6 +15,7 @@ from ..constants import (
 )
 from ..db import get_connection
 from .settings_service import get_int_setting, get_setting
+from .runtime_activity_state_service import sample_runtime_activity_state
 from .activity_status_policy import (
     does_status_require_boundary,
     is_project_attributable_status,
@@ -290,14 +291,9 @@ def _last_normal_activity_before(start_time: str) -> dict[str, Any] | None:
 
 
 def _current_snapshot() -> dict[str, Any] | None:
-    import json
+    """Read the process-local runtime sample from its sole owner."""
 
-    raw = get_setting("current_activity_snapshot", "") or ""
-    try:
-        value = json.loads(raw)
-    except (TypeError, ValueError):
-        return None
-    return value if isinstance(value, dict) else None
+    return sample_runtime_activity_state().snapshot
 
 
 def _resource_identity(value: dict[str, Any]) -> str:
