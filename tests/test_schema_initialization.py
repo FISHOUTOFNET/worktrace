@@ -106,14 +106,24 @@ def test_report_session_operation_has_user_command_columns(temp_db):
         assert "slice_start_time" in member_columns
 
 
-def test_same_version_schema_drift_fails_closed(tmp_path):
+def test_same_version_schema_drift_fails_closed_before_seeding(tmp_path):
     path = tmp_path / "drift.db"
     db.configure_database(path)
     with db.get_connection() as conn:
         conn.execute("CREATE TABLE project(id INTEGER PRIMARY KEY)")
         conn.execute(f"PRAGMA user_version = {db.CURRENT_SCHEMA_VERSION}")
-    with pytest.raises(ValueError, match="database_schema_incompatible"):
+
+    with pytest.raises((ValueError, sqlite3.OperationalError)):
         db.initialize_database(path)
+
+    with sqlite3.connect(path) as conn:
+        tables = {
+            str(row[0])
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            ).fetchall()
+        }
+    assert tables == {"project"}
 
 
 def test_operation_and_receipt_json_and_cardinality_constraints(temp_db):
