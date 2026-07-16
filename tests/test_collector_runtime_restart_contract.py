@@ -25,7 +25,14 @@ def test_start_collector_replaces_dead_thread_and_returns_structured_success(
     dead.join(timeout=1)
     runtime._collector_thread = dead
 
-    def fake_run_collector(_adapter, stop_event, _control):
+    def fake_run_collector(
+        _adapter,
+        stop_event,
+        _control,
+        startup_ready_event,
+        _startup_failed_event,
+    ):
+        startup_ready_event.set()
         stop_event.wait(1)
 
     monkeypatch.setattr(app_runtime, "run_collector", fake_run_collector)
