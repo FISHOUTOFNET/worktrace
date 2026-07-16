@@ -6,6 +6,7 @@ import pytest
 
 from tests.support.activity_factory import create_closed_activity
 from worktrace.db import get_connection, now_str
+from worktrace.services import settings_service
 from worktrace.services.page_read_context import (
     current_page_read_context,
     page_read_scope,
@@ -77,3 +78,27 @@ def test_page_revision_and_projection_share_one_read_transaction(temp_db):
         assert build_visible_snapshot(DATE, DATE) is snapshot_before
 
     assert get_report_structure_revision(DATE) != revision_before
+
+
+def test_page_settings_use_the_same_read_transaction(temp_db):
+    settings_service.set_setting("collector_health_state", "healthy")
+    writer_errors: list[BaseException] = []
+
+    with page_read_scope():
+        assert settings_service.get_setting("collector_health_state") == "healthy"
+
+        def update_setting() -> None:
+            try:
+                settings_service.set_setting("collector_health_state", "degraded")
+            except BaseException as exc:  # pragma: no cover - assertion reports it
+                writer_errors.append(exc)
+
+        writer = threading.Thread(target=update_setting)
+        writer.start()
+        writer.join(timeout=5)
+
+        assert not writer.is_alive()
+        assert writer_errors == []
+        assert settings_service.get_setting("collector_health_state") == "healthy"
+
+    assert settings_service.get_setting("collector_health_state") == "degraded"
