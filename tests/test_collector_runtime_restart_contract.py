@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from worktrace.collector import collector_health
 from worktrace.runtime import app_runtime
 from worktrace.runtime.app_runtime import AppRuntime
 from worktrace.services import settings_service
@@ -32,6 +33,7 @@ def test_start_collector_replaces_dead_thread_and_returns_structured_success(
         startup_ready_event,
         _startup_failed_event,
     ):
+        collector_health.record_collector_started()
         startup_ready_event.set()
         stop_event.wait(1)
 
