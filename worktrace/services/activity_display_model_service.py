@@ -1,16 +1,14 @@
 """Activity Display Model orchestration layer.
 
 This module remains the only service entry point that samples the current
-activity snapshot and decides the full live display model. Policy, live clock,
+activity state and decides the full live display model. Policy, live clock,
 span construction, and row overlay live in focused sibling modules.
 """
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
-from ..contracts.live_display_contracts import ActivitySnapshotContract
 from . import timeline_service
 from .activity_display_policy import (
     build_display_session_policy,
@@ -22,22 +20,17 @@ from .activity_display_span import (
     build_display_span,
     build_display_structural_signature,
 )
-from .activity_live_clock import build_project_live_clock, build_suppressed_live_clock
-from .live_display_service import build_current_activity_summary, classify_live_state
-from .settings_service import get_setting
+from .activity_live_clock import (
+    build_project_live_clock,
+    build_suppressed_live_clock,
+)
+from .live_display_service import (
+    build_current_activity_summary,
+    classify_live_state,
+)
+from .runtime_activity_state_service import sample_runtime_activity_state
 
 _UNSET = object()
-
-
-def _get_current_activity_snapshot() -> ActivitySnapshotContract | None:
-    raw = get_setting("current_activity_snapshot", "") or ""
-    if not raw:
-        return None
-    try:
-        value = json.loads(raw)
-    except json.JSONDecodeError:
-        return None
-    return value if isinstance(value, dict) else None
 
 
 def build_activity_display_model(
@@ -45,9 +38,10 @@ def build_activity_display_model(
     today: str | None = None,
     snapshot: Any = _UNSET,
 ) -> dict[str, Any]:
-    """Build the unified Activity Display Model from a single snapshot."""
+    """Build the unified Activity Display Model from one typed sample."""
+
     if snapshot is _UNSET:
-        snapshot = _get_current_activity_snapshot()
+        snapshot = sample_runtime_activity_state().snapshot
     today = today or timeline_service.get_default_report_date()
     report_date = report_date or today
     is_today = report_date == today
@@ -59,7 +53,11 @@ def build_activity_display_model(
     if not is_today:
         display_live_state = "none"
     else:
-        display_live_state = classify_display_live_state(snapshot, report_date, today)
+        display_live_state = classify_display_live_state(
+            snapshot,
+            report_date,
+            today,
+        )
 
     summary = build_current_activity_summary(
         snapshot,
