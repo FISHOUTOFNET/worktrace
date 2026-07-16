@@ -187,10 +187,15 @@ def test_shipping_windows_adapter_has_no_legacy_monkeypatch():
     source = (
         root / "worktrace/platforms/hardened_windows_adapter.py"
     ).read_text(encoding="utf-8")
+    maintenance_tests = (
+        root / "tests/test_runtime_maintenance_control.py"
+    ).read_text(encoding="utf-8")
     assert "legacy." not in source
     assert "_run_with_timeout =" not in source
     assert "WindowsPathResolver" in source
     assert "ClipboardMonitor" in source
+    assert "_ClipboardMonitor" not in maintenance_tests
+    assert "platforms.windows_clipboard import ClipboardMonitor" in maintenance_tests
 
 
 def test_frontend_does_not_replace_bridge_or_patch_edit_dom_after_render():
