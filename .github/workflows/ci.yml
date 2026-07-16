@@ -2,6 +2,9 @@ name: CI
 
 on:
   pull_request:
+  push:
+    branches:
+      - agent/canonical-architecture-consolidation
 
 permissions:
   contents: write
@@ -17,7 +20,7 @@ concurrency:
 jobs:
   runtime-settings-cutover:
     name: Runtime settings hard cutover
-    if: github.event.pull_request.head.ref == 'agent/canonical-architecture-consolidation'
+    if: github.event_name == 'push' || github.event.pull_request.head.ref == 'agent/canonical-architecture-consolidation'
     runs-on: [self-hosted, Windows, X64]
     timeout-minutes: 30
 
@@ -25,7 +28,7 @@ jobs:
       - name: Check out exact cutover revision
         uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           clean: true
           show-progress: false
 
@@ -94,7 +97,7 @@ jobs:
           $diagnosticPath = "diagnostics/runtime-settings-cutover-latest.txt"
           @(
             "run_id=$env:GITHUB_RUN_ID",
-            "tested_head=${{ github.event.pull_request.head.sha }}",
+            "tested_head=${{ github.event.pull_request.head.sha || github.sha }}",
             "apply_outcome=${{ steps.cutover_apply.outcome }}",
             "pytest_outcome=${{ steps.cutover_pytest.outcome }}",
             "",
