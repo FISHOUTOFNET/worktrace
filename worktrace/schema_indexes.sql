@@ -53,6 +53,29 @@ BEGIN
     WHERE folder_rule_id = OLD.folder_rule_id;
 END;
 
+CREATE TRIGGER IF NOT EXISTS normalize_pending_folder_generation
+AFTER UPDATE OF status ON folder_rule_index_state
+WHEN NEW.status = 'pending'
+ AND (
+        NEW.valid_from IS NOT NULL
+        OR NEW.active_generation IS NOT NULL
+        OR NEW.building_generation IS NOT NULL
+        OR NEW.build_status IS NOT 'pending'
+        OR NEW.last_error IS NOT NULL
+        OR NEW.last_indexed_at IS NOT NULL
+        OR NEW.last_checked_at IS NOT NULL
+        OR NEW.file_count <> 0
+        OR NEW.error_message IS NOT NULL
+     )
+BEGIN
+    UPDATE folder_rule_index_state
+    SET valid_from = NULL, active_generation = NULL,
+        building_generation = NULL, build_status = 'pending', last_error = NULL,
+        last_indexed_at = NULL, last_checked_at = NULL, file_count = 0,
+        error_message = NULL, refresh_requested = 1
+    WHERE folder_rule_id = NEW.folder_rule_id;
+END;
+
 CREATE INDEX IF NOT EXISTS idx_history_mutation_job_status
 ON history_mutation_job(status, updated_at, id);
 
