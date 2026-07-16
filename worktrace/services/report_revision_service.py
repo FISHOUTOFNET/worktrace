@@ -7,7 +7,6 @@ from datetime import date as date_type, timedelta
 from typing import Any
 
 from ..db import get_connection, get_db_key
-from ..report_structure_generation import current_generation
 from .page_read_context import current_page_read_context
 from .report_projection_identity import stable_json_hash
 
@@ -26,6 +25,19 @@ def clear_report_structure_revision_cache(database_key: str | None = None) -> No
         for cache_key in list(_STRUCTURE_REVISION_CACHE):
             if cache_key[0] == key:
                 _STRUCTURE_REVISION_CACHE.pop(cache_key, None)
+
+
+def _read_durable_generation(connection) -> int:
+    row = connection.execute(
+        """
+        SELECT generation
+        FROM report_structure_revision_state
+        WHERE singleton_id = 1
+        """
+    ).fetchone()
+    if row is None:
+        raise ValueError("database_schema_incompatible")
+    return int(row["generation"] or 0)
 
 
 def _build_report_structure_revision(
@@ -172,9 +184,8 @@ def get_report_structure_revision(report_date: str, *, conn=None) -> str:
 
     Transaction-bound callers receive an immediate hash of their uncommitted
     view. Page requests reuse the request-level read transaction. Ordinary
-    refresh callers reuse a cached hash until a structural write transaction
-    publishes a new generation. Natural open-row duration ticks do not publish
-    that generation.
+    refresh callers read the durable generation and revision from one SQLite
+    snapshot, so a committed structure and its cache key cannot diverge.
     """
 
     date_type.fromisoformat(report_date)
@@ -186,26 +197,27 @@ def get_report_structure_revision(report_date: str, *, conn=None) -> str:
         return _build_report_structure_revision(report_date, page_context.conn)
 
     database_key = get_db_key()
-    generation = current_generation(database_key)
     cache_key = (database_key, report_date)
-    with _STRUCTURE_CACHE_LOCK:
-        cached = _STRUCTURE_REVISION_CACHE.get(cache_key)
-    if cached is not None and cached[0] == generation:
-        return cached[1]
-
-    with get_connection() as own_conn:
-        own_conn.execute("BEGIN")
-        try:
-            value = _build_report_structure_revision(report_date, own_conn)
-            own_conn.commit()
-        except Exception:
-            own_conn.rollback()
-            raise
-
-    generation_after = current_generation(database_key)
-    if generation_after == generation:
+    own_conn = get_connection()
+    own_conn.execute("BEGIN")
+    try:
+        generation = _read_durable_generation(own_conn)
         with _STRUCTURE_CACHE_LOCK:
-            _STRUCTURE_REVISION_CACHE[cache_key] = (generation, value)
+            cached = _STRUCTURE_REVISION_CACHE.get(cache_key)
+        if cached is not None and cached[0] == generation:
+            own_conn.commit()
+            return cached[1]
+
+        value = _build_report_structure_revision(report_date, own_conn)
+        own_conn.commit()
+    except Exception:
+        own_conn.rollback()
+        raise
+    finally:
+        own_conn.close()
+
+    with _STRUCTURE_CACHE_LOCK:
+        _STRUCTURE_REVISION_CACHE[cache_key] = (generation, value)
     return value
 
 
