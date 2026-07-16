@@ -792,16 +792,10 @@ def test_service_statistics_tie_breaker_stable(temp_db):
     pid = project_service.create_project("Client")
     # Two apps with the same duration but different names. The tie-breaker
     # should sort by display_name casefold ascending.
-    activity_service.create_activity(
-        "Zebra", "zebra.exe", "Z1.docx", start_time="2026-06-25 09:00:00",
-        project_id=pid,
-    )
     aid1 = activity_service.create_activity(
         "Zebra", "zebra.exe", "Z1.docx", start_time="2026-06-25 09:00:00",
         project_id=pid,
     )
-    # Close the first (auto-closes any open), then create second.
-    # Actually create_activity auto-closes open ones. Let me finalize and close.
     activity_service.finalize_created_activity(aid1)
     activity_service.close_activity(aid1, "2026-06-25 09:30:00")
     aid2 = activity_service.create_activity(

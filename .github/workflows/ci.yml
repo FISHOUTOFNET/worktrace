@@ -45,19 +45,6 @@ jobs:
           clean: true
           show-progress: false
 
-      - name: Apply one-time architecture contract patch
-        if: github.event_name == 'pull_request'
-        shell: pwsh
-        run: |
-          git fetch origin agent/architecture-scalability-hardening
-          git checkout -B agent/architecture-scalability-hardening origin/agent/architecture-scalability-hardening
-          python scripts/apply_architecture_contract_patch.py
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -m "Align architecture contracts [skip ci]"
-          git push origin HEAD:agent/architecture-scalability-hardening
-
       - name: Set up Python
         uses: actions/setup-python@v6
         with:

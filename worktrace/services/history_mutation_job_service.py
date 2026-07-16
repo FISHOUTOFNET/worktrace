@@ -327,14 +327,14 @@ def _run_reinference_batch(job: dict, batch_size: int) -> None:
         _finalize_reinference_job(job)
         return
 
-    from .project_inference_service import _assign_project_for_activity_in_transaction
+    from .project_inference_service import assign_project_for_activity_in_transaction
 
     activity_ids = [int(row["activity_id"]) for row in rows]
     with get_connection() as conn:
         conn.execute("BEGIN IMMEDIATE")
         changed = 0
         for activity_id in activity_ids:
-            _assign_project_for_activity_in_transaction(
+            assign_project_for_activity_in_transaction(
                 conn,
                 activity_id,
                 exclude_rule=(rule_type, rule_id),

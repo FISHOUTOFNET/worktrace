@@ -118,6 +118,7 @@ class AppRuntime:
             ):
                 return False
 
+            started = False
             index_ready = _thread_reference_is_alive(self._index_thread)
             if not index_ready:
                 recover_interrupted_indexes()
@@ -125,6 +126,7 @@ class AppRuntime:
                     self.stop_event
                 )
                 index_ready = self._index_thread is not None
+                started = started or index_ready
 
             history_ready = _thread_reference_is_alive(self._history_thread)
             if not history_ready:
@@ -134,8 +136,9 @@ class AppRuntime:
                     )
                 )
                 history_ready = self._history_thread is not None
+                started = started or history_ready
 
-            return bool(index_ready and history_ready)
+            return bool(started and index_ready and history_ready)
 
     def start_collector(self) -> dict[str, object]:
         with self._lifecycle_lock:

@@ -123,7 +123,7 @@ def test_delete_keyword_rule_rolls_back_when_direct_reassignment_fails(
 
     monkeypatch.setattr(
         project_inference_service,
-        "_assign_project_for_activity_in_transaction",
+        "assign_project_for_activity_in_transaction",
         boom,
     )
 
