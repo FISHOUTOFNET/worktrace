@@ -861,7 +861,12 @@ def test_api_backfill_too_many_matches(temp_db):
             end_time=f"2026-06-18 {(i + 1) // 60:02d}:{(i + 1) % 60:02d}:00",
         )
     result = rule_api.backfill_project_rule("folder", rule_id)
-    assert result == {"ok": False, "error": "too_many_matches"}
+    assert result["ok"] is True
+    queued = result["result"]
+    assert queued["queued"] is True
+    assert queued["status"] == "pending"
+    assert queued["estimated_count"] == 101
+    assert queued["updated_count"] == 0
 
 
 # API layer: JSON serializable + no sensitive payload
@@ -922,7 +927,13 @@ def test_api_backfill_exception_collapse(temp_db, monkeypatch):
     def _boom(*args, **kwargs):
         raise RuntimeError("boom SELECT * FROM activity_log traceback C:\\Secret")
 
-    monkeypatch.setattr(rule_impact_service, "backfill_rule_impact", _boom)
+    from worktrace.services import history_mutation_job_service
+
+    monkeypatch.setattr(
+        history_mutation_job_service,
+        "submit_rule_job",
+        _boom,
+    )
     result = rule_api.backfill_project_rule("folder", rule_id)
     assert result == {"ok": False, "error": "operation_failed"}
     _assert_no_sensitive_tokens(result)

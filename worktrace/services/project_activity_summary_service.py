@@ -16,7 +16,7 @@ def build_activity_summary_rows(
     """Aggregate already-scoped report rows into activity summary rows."""
     groups: dict[str, dict[str, Any]] = {}
     for row in rows:
-        key = _activity_group_key(row)
+        key = activity_group_key(row)
         accounted_project_id = int(
             row.get("report_project_id")
             or row.get("project_id")
@@ -164,7 +164,8 @@ def _finalize_group(group: dict[str, Any], projection_revision: str) -> dict[str
     return group
 
 
-def _activity_group_key(row: dict) -> str:
+def activity_group_key(row: dict) -> str:
+    """Return the stable public grouping key used by summary and mutation paths."""
     return _activity_identity_part(row)
 
 
@@ -210,6 +211,7 @@ def _summary_id(
 
 
 __all__ = [
+    "activity_group_key",
     "build_activity_summary_rows",
     "get_projection_session_activity_summary",
 ]

@@ -236,8 +236,8 @@ def _member_slices_for_rows(rows: Sequence[Mapping]) -> list[dict]:
         report_date = str(row.get("report_date") or "")[:10]
         activity_id = int(row.get("id") or row.get("activity_id") or 0)
         slice_start = str(row.get("start_time") or "")
-        slice_end = str(row.get("end_time") or "")
-        if not report_date or activity_id <= 0 or not slice_start or not slice_end:
+        slice_end = str(row.get("end_time") or slice_start)
+        if not report_date or activity_id <= 0 or not slice_start:
             continue
         members.append(
             {
@@ -291,7 +291,7 @@ def _crosses_explicit_boundary(
     end = str(current.get("start_time") or "")
     if not start or not end or start > end:
         return False
-    return any(start <= str(boundary) <= end for boundary in boundary_times)
+    return any(start <= value <= end for value in boundary_times)
 
 
 def _has_unrecorded_gap(
@@ -299,18 +299,20 @@ def _has_unrecorded_gap(
     current: Mapping,
     threshold_seconds: int,
 ) -> bool:
-    previous_end = _parse(previous.get("end_time"))
-    current_start = _parse(current.get("start_time"))
+    previous_end = _parse_time(previous.get("end_time"))
+    current_start = _parse_time(current.get("start_time"))
     if previous_end is None or current_start is None:
         return False
-    gap_seconds = int((current_start - previous_end).total_seconds())
-    return gap_seconds > max(60, int(threshold_seconds))
+    gap = int((current_start - previous_end).total_seconds())
+    return gap > max(0, int(threshold_seconds))
 
 
-def _parse(value) -> datetime | None:
+def _parse_time(value: object) -> datetime | None:
+    if not value:
+        return None
     try:
-        return datetime.strptime(str(value or ""), TIME_FORMAT)
-    except (TypeError, ValueError):
+        return datetime.strptime(str(value), TIME_FORMAT)
+    except ValueError:
         return None
 
 

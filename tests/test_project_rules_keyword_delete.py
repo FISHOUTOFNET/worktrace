@@ -297,22 +297,23 @@ def test_delete_keyword_rule_does_not_change_activity_log_rows(temp_db):
 def test_delete_keyword_rule_does_not_change_activity_project_assignment_rows(temp_db):
     project = project_service.create_project("Client")
     rule_id = rule_service.create_rule("Spec", project)
-    activity_service.create_activity(
+    first_activity = activity_service.create_activity(
         "Word",
         "winword.exe",
         "Spec.docx",
         start_time="2026-06-18 09:00:00",
         project_id=project,
     )
-    activity_service.finalize_created_activity(
-        activity_service.create_activity(
-            "Word",
-            "winword.exe",
-            "Spec2.docx",
-            start_time="2026-06-18 10:00:00",
-            project_id=project,
-        )
+    activity_service.finalize_created_activity(first_activity)
+    activity_service.close_activity(first_activity, "2026-06-18 09:30:00")
+    second_activity = activity_service.create_activity(
+        "Word",
+        "winword.exe",
+        "Spec2.docx",
+        start_time="2026-06-18 10:00:00",
+        project_id=project,
     )
+    activity_service.finalize_created_activity(second_activity)
     before = _counts()
 
     result = rule_api.delete_project_keyword_rule(rule_id)

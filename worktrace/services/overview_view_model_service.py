@@ -55,6 +55,7 @@ def get_overview_view_model(today: str | None = None) -> dict[str, Any]:
         payload,
         report_date=scoped_today,
         today=scoped_today,
+        snapshot=snapshot,
     )
     return payload
 

@@ -1,24 +1,16 @@
 """ActivityLifecycle Command Facade contract tests.
 
-These tests verify the architecture invariants for the open-row state
-machine (see architecture.md §"Write side"):
+These tests verify the architecture invariants for the open-row state machine:
 
-- ``activity_lifecycle_service`` is the sole command owner for open-row
-  lifecycle transitions.
-- ``activity_service`` is a pure low-level CRUD helper: ``create_activity``
-  does NOT close pre-existing open rows and does NOT run project inference.
-  Production open-row lifecycle must use ``activity_lifecycle_service``.
-- ``start_activity`` closes pre-existing open rows, finalizes them via
-  the unified ``finalize_closed_activity_ids`` helper, then inserts the
-  new open row.
-- Manual assignments / ``manual_override`` are never overridden.
-- Clipboard binding is status-restricted to ``STATUS_NORMAL``; normal
-  collector activities have already been persisted immediately.
-- Midnight split / midnight-anchor persistence preserves the anchor
-  project assignment.
-- Recovery cross-midnight no longer retains a second unconverged
-  lifecycle path.
-- An inference failure on one row does not block the remaining rows.
+- ``activity_lifecycle_service`` owns open-row lifecycle transitions.
+- ``activity_service`` remains a low-level CRUD helper and does not run project
+  inference; the database seals the previous open row before a replacement.
+- ``start_activity`` closes and finalizes the prior row before inserting the
+  replacement.
+- Manual assignments are never overridden.
+- Clipboard binding is restricted to normal activity.
+- Midnight and recovery paths preserve project assignment.
+- An inference failure on one closed row does not block later rows.
 """
 
 from __future__ import annotations
@@ -58,46 +50,30 @@ from worktrace.services.project_inference_service import (
 pytestmark = [pytest.mark.db, pytest.mark.collector_runtime, pytest.mark.integration]
 
 
-# Fixtures
-
-
 @pytest.fixture()
 def temp_db_setup(temp_db):
-    """Common setup: clear settings cache + accept first-run notice."""
     settings_service.clear_settings_cache()
     settings_service.set_setting("first_run_notice_accepted", "true")
     settings_service.clear_settings_cache()
     return temp_db
 
 
-# start_activity closes old open rows + triggers inference
-
-
 def test_start_activity_finalizes_closed_rows_with_folder_rule(temp_db_setup):
-    """``start_activity`` closes pre-existing open rows and finalizes them
-    via the unified ``finalize_closed_activity_ids`` helper so project
-    inference / automatic rules converge on every closed row.
-
-    Setup: a folder rule that maps ``D:\\ProjA`` to a concrete project.
-    An open activity with ``file_path_hint`` under that folder is created
-    via the low-level ``create_activity`` helper. A subsequent
-    ``start_activity`` call closes the first row and finalizes it. The
-    first row's assignment must converge to the concrete project (not stay
-    ``uncategorized``).
-    """
     pid = project_service.create_project("ProjA")
     folder_rule_service.create_or_update_folder_rule("D:\\ProjA", pid)
 
-    # Create an open activity whose file_path_hint matches the folder rule.
     first = activity_service.create_activity(
-        "Word", "winword.exe", "Doc",
+        "Word",
+        "winword.exe",
+        "Doc",
         start_time="2026-07-01 09:00:00",
         file_path_hint="D:\\ProjA\\spec.docx",
     )
-    # The open row is uncategorized (process_new_activity skips in-progress).
-    assert activity_service.get_activity(first)["project_name"] == UNCATEGORIZED_PROJECT
+    assert (
+        activity_service.get_activity(first)["project_name"]
+        == UNCATEGORIZED_PROJECT
+    )
 
-    # start_activity closes the first row via the lifecycle facade.
     second = start_activity(
         start_time="2026-07-01 09:10:00",
         source=SOURCE_AUTO,
@@ -109,38 +85,29 @@ def test_start_activity_finalizes_closed_rows_with_folder_rule(temp_db_setup):
         },
     )
 
-    # The first row must now be closed.
     first_row = activity_service.get_activity(first)
     assert first_row["end_time"] == "2026-07-01 09:10:00"
-
-    # The first row's assignment must have converged to the concrete
-    # project via finalize_closed_activity_ids.
     assignment = get_assignment_for_activity(first)
     assert int(assignment["project_id"]) == pid
     assert assignment["source"] == "folder_rule"
-
-    # The second row is the current open row.
     assert activity_service.get_activity(second)["end_time"] is None
 
 
 def test_start_activity_finalizes_closed_rows_manual_not_overridden(temp_db_setup):
-    """Manual assignments must NOT be overridden by the close-finalize
-    inference. The ``process_new_activity`` guard skips manual rows."""
     manual_pid = project_service.create_project("ManualProj")
     auto_pid = project_service.create_project("AutoProj")
     folder_rule_service.create_or_update_folder_rule("D:\\AutoFolder", auto_pid)
 
-    # Create an open activity with a MANUAL project assignment.
     first = activity_service.create_activity(
-        "Word", "winword.exe", "Doc",
+        "Word",
+        "winword.exe",
+        "Doc",
         start_time="2026-07-01 09:00:00",
         file_path_hint="D:\\AutoFolder\\spec.docx",
         project_id=manual_pid,
     )
-    # The manual assignment is present.
     assert activity_service.get_activity(first)["project_name"] == "ManualProj"
 
-    # start_activity closes the first row via the lifecycle facade.
     start_activity(
         start_time="2026-07-01 09:10:00",
         source=SOURCE_AUTO,
@@ -152,32 +119,29 @@ def test_start_activity_finalizes_closed_rows_manual_not_overridden(temp_db_setu
         },
     )
 
-    # The manual assignment must NOT be overridden by the folder rule.
     assignment = get_assignment_for_activity(first)
     assert int(assignment["project_id"]) == manual_pid
     assert assignment["is_manual"] == 1
 
 
 def test_create_activity_no_open_rows_does_not_fail(temp_db_setup):
-    """When there are no open rows, create_activity must not fail."""
     aid = activity_service.create_activity(
-        "App", "app.exe", "Title",
+        "App",
+        "app.exe",
+        "Title",
         start_time="2026-07-01 09:00:00",
     )
     assert activity_service.get_activity(aid) is not None
 
 
-# lifecycle.close_activity triggers inference
-
-
 def test_lifecycle_close_activity_triggers_inference(temp_db_setup):
-    """``lifecycle_close_activity`` must route through the unified
-    close-finalize helper so project inference runs on the closed row."""
     pid = project_service.create_project("ProjB")
     folder_rule_service.create_or_update_folder_rule("D:\\ProjB", pid)
 
     aid = activity_service.create_activity(
-        "Word", "winword.exe", "Doc",
+        "Word",
+        "winword.exe",
+        "Doc",
         start_time="2026-07-01 09:00:00",
         file_path_hint="D:\\ProjB\\spec.docx",
     )
@@ -188,11 +152,7 @@ def test_lifecycle_close_activity_triggers_inference(temp_db_setup):
     assert assignment["source"] == "folder_rule"
 
 
-# lifecycle.persist_open_activity
-
-
 def test_persist_open_activity_syncs_open_row_project(temp_db_setup):
-    """Immediate persistence creates + finalizes + syncs the open row."""
     pid = project_service.create_project("ProjC")
     folder_rule_service.create_or_update_folder_rule("D:\\ProjC", pid)
 
@@ -210,18 +170,13 @@ def test_persist_open_activity_syncs_open_row_project(temp_db_setup):
     )
     assert aid is not None
 
-    # The open row's project must have converged to the concrete project.
     assignment = get_assignment_for_activity(aid)
     assert int(assignment["project_id"]) == pid
     assert assignment["source"] == "folder_rule"
-    # The row is still open.
     assert activity_service.get_activity(aid)["end_time"] is None
 
 
 def test_force_persist_open_activity_for_clipboard_creates_open_row(temp_db_setup):
-    """``force_persist_open_activity_for_clipboard`` must create an open
-    row when status is ``STATUS_NORMAL`` (the facade enforces this
-    internally)."""
     payload = {
         "app_name": "Word",
         "process_name": "winword.exe",
@@ -242,10 +197,6 @@ def test_force_persist_open_activity_for_clipboard_creates_open_row(temp_db_setu
 def test_force_persist_open_activity_for_clipboard_rejects_non_normal_status(
     temp_db_setup,
 ):
-    """``force_persist_open_activity_for_clipboard`` must reject any
-    payload whose status is not ``STATUS_NORMAL``. The caller cannot
-    bypass this gate even if it passes an idle / paused / excluded /
-    error status."""
     from worktrace.constants import STATUS_IDLE
 
     payload = {
@@ -262,12 +213,7 @@ def test_force_persist_open_activity_for_clipboard_rejects_non_normal_status(
     assert result is None
 
 
-# lifecycle.persist_midnight_anchor
-
-
 def test_persist_midnight_anchor_applies_midnight_anchor_assignment(temp_db_setup):
-    """``persist_midnight_anchor`` must create an open row and apply the
-    ``midnight_anchor`` assignment source (confidence 90)."""
     pid = project_service.create_project("ProjD")
     payload = {
         "app_name": "Word",
@@ -284,17 +230,10 @@ def test_persist_midnight_anchor_applies_midnight_anchor_assignment(temp_db_setu
     assignment = get_assignment_for_activity(aid)
     assert int(assignment["project_id"]) == pid
     assert assignment["source"] == "midnight_anchor"
-    # The row is still open.
     assert activity_service.get_activity(aid)["end_time"] is None
 
 
-# lifecycle.recover_cross_midnight_segment
-
-
 def test_recover_cross_midnight_segment_creates_and_closes(temp_db_setup):
-    """``recover_cross_midnight_segment`` must create + close a segment
-    with the midnight_anchor assignment when a concrete project_id is
-    provided."""
     pid = project_service.create_project("ProjE")
     payload = {
         "app_name": "Word",
@@ -318,17 +257,16 @@ def test_recover_cross_midnight_segment_creates_and_closes(temp_db_setup):
     assert assignment["source"] == "midnight_anchor"
 
 
-# Recovery cross-midnight convergence (no second lifecycle path)
-
-
 def test_recovery_cross_midnight_converges_project(temp_db_setup):
-    """Recovery cross-midnight must route through the lifecycle facade
-    so the recovered segments carry the midnight_anchor assignment
-    (no second unconverged lifecycle path)."""
     pid = project_service.create_project("ProjF")
-    settings_service.set_setting("last_collector_heartbeat", "2026-07-02 00:10:00")
+    settings_service.set_setting(
+        "last_collector_heartbeat",
+        "2026-07-02 00:10:00",
+    )
     aid = activity_service.create_activity(
-        "Word", "word.exe", "Doc",
+        "Word",
+        "word.exe",
+        "Doc",
         project_id=pid,
         start_time="2026-07-01 23:50:00",
     )
@@ -344,70 +282,58 @@ def test_recovery_cross_midnight_converges_project(temp_db_setup):
     assert rows[0]["start_time"] == "2026-07-02 00:00:00"
     assert rows[0]["end_time"] == "2026-07-02 00:10:00"
     assert rows[0]["project_id"] == pid
-    # The recovered segment must carry the midnight_anchor assignment.
     segment_assignment = get_assignment_for_activity(rows[0]["id"])
     assert segment_assignment["source"] == "midnight_anchor"
 
 
-# finalize_closed_activity_ids resilience
-
-
 def test_finalize_closed_activity_ids_empty_list_is_noop(temp_db_setup):
-    """An empty closed_ids list must be a safe no-op."""
     finalize_closed_activity_ids([])
     finalize_closed_activity_ids(None)  # type: ignore[arg-type]
 
 
-def test_finalize_closed_activity_ids_inference_failure_does_not_block(temp_db_setup, monkeypatch):
-    """An inference failure on one row must not block the remaining rows.
-
-    We monkeypatch ``process_new_activity`` to raise on the first call
-    and succeed on subsequent calls. Both rows must be finalized (the
-    second row must not be skipped)."""
+def test_finalize_closed_activity_ids_inference_failure_does_not_block(
+    temp_db_setup,
+    monkeypatch,
+):
     pid = project_service.create_project("ProjG")
     folder_rule_service.create_or_update_folder_rule("D:\\ProjG", pid)
 
     aid1 = activity_service.create_activity(
-        "Word", "winword.exe", "Doc1",
+        "Word",
+        "winword.exe",
+        "Doc1",
         start_time="2026-07-01 09:00:00",
         file_path_hint="D:\\ProjG\\a.docx",
     )
+    activity_service.close_activity_row(aid1, "2026-07-01 09:05:00")
     aid2 = activity_service.create_activity(
-        "Word", "winword.exe", "Doc2",
+        "Word",
+        "winword.exe",
+        "Doc2",
         start_time="2026-07-01 09:10:00",
         file_path_hint="D:\\ProjG\\b.docx",
     )
-    # Close both rows explicitly via the lifecycle facade (create_activity
-    # is now a pure low-level insert and does NOT close pre-existing rows).
-    lifecycle_close_activity(aid1, "2026-07-01 09:05:00")
-    lifecycle_close_activity(aid2, "2026-07-01 09:20:00")
-
-    # We verify that finalize_closed_activity_ids doesn't raise even
-    # if one row's inference fails.
+    activity_service.close_activity_row(aid2, "2026-07-01 09:20:00")
 
     call_count = [0]
-    original = activity_service.finalize_created_activity
 
     def flaky_process_new_activity(activity_id):
         call_count[0] += 1
         if call_count[0] == 1:
             raise RuntimeError("simulated inference failure")
-        # Subsequent calls: do nothing (the assignment is already set)
 
     import worktrace.services.project_inference_service as pis
 
-    original_pna = pis.process_new_activity
-    monkeypatch.setattr(pis, "process_new_activity", flaky_process_new_activity)
-
-    # Must not raise even though the first row's inference fails.
+    monkeypatch.setattr(
+        pis,
+        "process_new_activity",
+        flaky_process_new_activity,
+    )
     finalize_closed_activity_ids([aid1, aid2])
-
-    monkeypatch.setattr(pis, "process_new_activity", original_pna)
-    assert call_count[0] == 2  # Both rows were attempted
+    assert call_count[0] == 2
 
 
 def test_persist_open_activity_persists_without_elapsed_gate(temp_db_setup):
-    """The facade records a new raw activity at its start, with no gate."""
     payload = {
         "app_name": "Word",
         "process_name": "winword.exe",
@@ -423,3 +349,73 @@ def test_persist_open_activity_persists_without_elapsed_gate(temp_db_setup):
     assert row is not None
     assert row["start_time"] == "2026-07-01 09:00:00"
     assert row["end_time"] is None
+
+
+def test_sync_persisted_open_activity_project_skips_missing_row(temp_db_setup):
+    assert sync_persisted_open_activity_project(999999) == {}
+
+
+def test_start_activity_closes_prior_open_row_at_safe_time(temp_db_setup):
+    first = activity_service.create_activity(
+        "A",
+        "a.exe",
+        "A",
+        start_time="2026-07-01 09:00:00",
+    )
+    second = start_activity(
+        start_time="2026-07-01 09:05:00",
+        source=SOURCE_AUTO,
+        payload={
+            "app_name": "B",
+            "process_name": "b.exe",
+            "window_title": "B",
+            "status": STATUS_NORMAL,
+        },
+    )
+    assert activity_service.get_activity(first)["end_time"] == "2026-07-01 09:05:00"
+    assert activity_service.get_activity(second)["end_time"] is None
+
+
+def test_recovery_records_boundary_before_cross_midnight_segment(temp_db_setup):
+    settings_service.set_setting(
+        "last_collector_heartbeat",
+        "2026-07-02 00:10:00",
+    )
+    activity_service.create_activity(
+        "Word",
+        "word.exe",
+        "Doc",
+        start_time="2026-07-01 23:50:00",
+    )
+    recovery_service.recover_unclosed_records()
+    boundaries = session_boundary_service.list_boundaries(
+        "2026-07-01 23:00:00",
+        "2026-07-02 01:00:00",
+    )
+    assert any(
+        str(item.get("occurred_at") or "") == "2026-07-02 00:00:00"
+        for item in boundaries
+    )
+
+
+def test_recovery_clamps_future_heartbeat_to_now(temp_db_setup, monkeypatch):
+    now = datetime(2026, 7, 1, 10, 0, 0)
+    future = now + timedelta(hours=1)
+    settings_service.set_setting(
+        "last_collector_heartbeat",
+        future.strftime(TIME_FORMAT),
+    )
+    aid = activity_service.create_activity(
+        "Word",
+        "word.exe",
+        "Doc",
+        start_time="2026-07-01 09:50:00",
+    )
+    monkeypatch.setattr(
+        recovery_service,
+        "now_str",
+        lambda: now.strftime(TIME_FORMAT),
+    )
+    recovery_service.recover_unclosed_records()
+    row = activity_service.get_activity(aid)
+    assert row["end_time"] == now.strftime(TIME_FORMAT)

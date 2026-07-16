@@ -1,159 +1,152 @@
-"""Transactional history application, removal, and deletion for one rule."""
+"""Public rule-history commands backed by recoverable cursor jobs."""
 
 from __future__ import annotations
 
-from ..db import get_connection
-from . import rule_impact_service
-from .project_inference_service import (
-    _infer_project_resource_first,
-    _resource_for_activity,
-    _upsert_assignment,
-)
+import json
+
+from ..db import get_connection, now_str
+from . import history_mutation_job_service, rule_impact_service
 
 
 def apply_rule_to_history(rule_type: str, rule_id: int) -> dict:
-    return rule_impact_service.backfill_rule_impact(rule_type, rule_id)
+    return _submit("rule_backfill", rule_type, rule_id)
 
 
 def remove_rule_from_history(rule_type: str, rule_id: int) -> dict:
-    if rule_type not in {"folder", "keyword"} or type(rule_id) is not int or rule_id <= 0:
-        raise rule_impact_service.RuleImpactError(rule_impact_service.ERR_NOT_FOUND)
-    with get_connection() as conn:
-        result = _remove_rule_from_history_in_transaction(conn, rule_type, rule_id)
-    _invalidate_rule_delete_caches(result["affected_date_values"])
-    return _public_history_result(result)
+    return _submit("rule_remove", rule_type, rule_id)
 
 
 def delete_rule(rule_type: str, rule_id: int, apply_to_history: bool) -> dict:
-    """Delete a folder/keyword rule and optional history impact in one DB transaction."""
-    if rule_type not in {"folder", "keyword"} or type(rule_id) is not int or rule_id <= 0:
-        raise rule_impact_service.RuleImpactError(rule_impact_service.ERR_NOT_FOUND)
+    if (
+        rule_type not in {"folder", "keyword"}
+        or type(rule_id) is not int
+        or rule_id <= 0
+    ):
+        raise rule_impact_service.RuleImpactError(
+            rule_impact_service.ERR_NOT_FOUND
+        )
     if type(apply_to_history) is not bool:
-        raise rule_impact_service.RuleImpactError(rule_impact_service.ERR_OPERATION_FAILED)
-    history_result = {
+        raise rule_impact_service.RuleImpactError(
+            rule_impact_service.ERR_OPERATION_FAILED
+        )
+    if apply_to_history:
+        return _submit("rule_delete", rule_type, rule_id)
+
+    with get_connection() as conn:
+        table = "folder_project_rule" if rule_type == "folder" else "project_rule"
+        clause = "" if rule_type == "folder" else " AND rule_type = 'keyword'"
+        cursor = conn.execute(
+            f"DELETE FROM {table} WHERE id = ?{clause}",
+            (int(rule_id),),
+        )
+        if cursor.rowcount != 1:
+            raise rule_impact_service.RuleImpactError(
+                rule_impact_service.ERR_NOT_FOUND
+            )
+    _invalidate_caches(rule_type)
+    return {
         "updated_count": 0,
         "matched_count": 0,
         "skipped_count": 0,
-        "affected_date_values": [],
+        "affected_dates": 0,
+        "queued": False,
+        "status": "completed",
     }
+
+
+def _submit(kind: str, rule_type: str, rule_id: int) -> dict:
+    if (
+        rule_type not in {"folder", "keyword"}
+        or type(rule_id) is not int
+        or rule_id <= 0
+    ):
+        raise rule_impact_service.RuleImpactError(
+            rule_impact_service.ERR_NOT_FOUND
+        )
+    try:
+        result = history_mutation_job_service.submit_rule_job(
+            kind,
+            rule_type,
+            rule_id,
+        )
+        if str(result.get("status") or "") == "failed" and not bool(
+            result.get("queued")
+        ):
+            _rollback_failed_synchronous_job(int(result.get("job_id") or 0))
+            raise rule_impact_service.RuleImpactError(
+                rule_impact_service.ERR_OPERATION_FAILED
+            )
+        return result
+    except rule_impact_service.RuleImpactError:
+        raise
+    except ValueError as exc:
+        code = str(exc)
+        allowed = {
+            rule_impact_service.ERR_NOT_FOUND,
+            rule_impact_service.ERR_RULE_DISABLED,
+            rule_impact_service.ERR_PROJECT_NOT_AVAILABLE,
+        }
+        raise rule_impact_service.RuleImpactError(
+            code if code in allowed else rule_impact_service.ERR_OPERATION_FAILED
+        ) from exc
+
+
+def _rollback_failed_synchronous_job(job_id: int) -> None:
+    """Compensate a failed single-batch job before returning an API error."""
+
+    if job_id <= 0:
+        return
     with get_connection() as conn:
-        if _load_rule_for_delete(conn, rule_type, rule_id) is None:
-            raise rule_impact_service.RuleImpactError(rule_impact_service.ERR_NOT_FOUND)
-        if apply_to_history:
-            affected_rows = _load_assignments_for_rule(conn, rule_type, rule_id)
-        _delete_rule_in_transaction(conn, rule_type, rule_id)
-        if apply_to_history:
-            # The rule is absent in this transaction snapshot, so direct and
-            # context re-inference cannot accidentally select it again.
-            history_result = _reassign_deleted_rule_history(conn, affected_rows)
-    _invalidate_rule_delete_caches(history_result["affected_date_values"])
-    return _public_history_result(history_result)
-
-
-def _remove_rule_from_history_in_transaction(conn, rule_type: str, rule_id: int) -> dict:
-    rows = _load_assignments_for_rule(conn, rule_type, rule_id)
-    return _reassign_deleted_rule_history(conn, rows, exclude_rule=(rule_type, rule_id))
-
-
-def _load_assignments_for_rule(conn, rule_type: str, rule_id: int) -> list:
-    return conn.execute(
-        """
-        SELECT a.*
-        FROM activity_project_assignment apa
-        JOIN activity_log a ON a.id = apa.activity_id
-        WHERE apa.is_manual = 0
-          AND apa.source_rule_type = ?
-          AND apa.source_rule_id = ?
-        ORDER BY a.id
-        """,
-        (rule_type, rule_id),
-    ).fetchall()
-
-
-def _reassign_deleted_rule_history(conn, rows: list, exclude_rule=None) -> dict:
-    affected_dates: set[str] = set()
-    updated_count = 0
-    for row in rows:
-        activity = dict(row)
-        activity_id = int(activity["id"])
-        resource = _resource_for_activity(conn, activity_id, activity)
-        decision = _infer_project_resource_first(conn, activity, resource, exclude_rule=exclude_rule)
-        _upsert_assignment(
-            conn,
-            activity_id,
-            decision.project_id,
-            decision.source,
-            decision.confidence,
-            False,
-            decision.suggested_project_name,
-            decision.source_rule_type,
-            decision.source_rule_id,
-        )
-        affected_dates.update(_context_dates_for_activity(activity))
-        updated_count += 1
-    return {
-        "updated_count": updated_count,
-        "matched_count": updated_count,
-        "skipped_count": 0,
-        "affected_date_values": sorted(affected_dates),
-    }
-
-
-def _load_rule_for_delete(conn, rule_type: str, rule_id: int) -> dict | None:
-    if rule_type == "folder":
+        conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
-            "SELECT * FROM folder_project_rule WHERE id = ?",
-            (rule_id,),
+            "SELECT kind, payload_json, processed_count FROM history_mutation_job WHERE id = ? AND status = 'failed'",
+            (int(job_id),),
         ).fetchone()
-    else:
-        row = conn.execute(
-            "SELECT * FROM project_rule WHERE id = ? AND rule_type = 'keyword'",
-            (rule_id,),
-        ).fetchone()
-    return dict(row) if row else None
-
-
-def _delete_rule_in_transaction(conn, rule_type: str, rule_id: int) -> None:
-    if rule_type == "folder":
-        from .folder_index_service import delete_index_for_rule
-
-        delete_index_for_rule(rule_id, conn=conn)
-        cur = conn.execute("DELETE FROM folder_project_rule WHERE id = ?", (rule_id,))
-    else:
-        cur = conn.execute(
-            "DELETE FROM project_rule WHERE id = ? AND rule_type = 'keyword'",
-            (rule_id,),
+        if row is None:
+            conn.rollback()
+            return
+        if int(row["processed_count"] or 0) != 0:
+            conn.rollback()
+            return
+        payload = json.loads(str(row["payload_json"] or "{}"))
+        rule_type = str(payload.get("rule_type") or "")
+        rule_id = int(payload.get("rule_id") or 0)
+        if row["kind"] in {"rule_remove", "rule_delete"} and bool(
+            payload.get("restore_enabled")
+        ):
+            table = (
+                "folder_project_rule"
+                if rule_type == "folder"
+                else "project_rule"
+            )
+            clause = (
+                "" if rule_type == "folder" else " AND rule_type = 'keyword'"
+            )
+            conn.execute(
+                f"UPDATE {table} SET enabled = 1, updated_at = ? WHERE id = ?{clause}",
+                (now_str(), rule_id),
+            )
+        conn.execute(
+            "DELETE FROM history_mutation_job WHERE id = ?",
+            (int(job_id),),
         )
-    if cur.rowcount != 1:
-        raise rule_impact_service.RuleImpactError(rule_impact_service.ERR_NOT_FOUND)
+        conn.commit()
+    if rule_type in {"folder", "keyword"}:
+        _invalidate_caches(rule_type)
 
 
-def _context_dates_for_activity(activity: dict) -> set[str]:
-    values = {
-        str(activity.get("start_time") or "")[:10],
-        str(activity.get("end_time") or "")[:10],
-    }
-    return {value for value in values if value}
+def _invalidate_caches(rule_type: str) -> None:
+    if rule_type == "folder":
+        from .folder_rule_service import invalidate_folder_rule_cache
 
+        invalidate_folder_rule_cache()
+    else:
+        from .project_inference_service import invalidate_keyword_rule_cache
 
-def _invalidate_rule_delete_caches(affected_dates: list[str]) -> None:
-    from .folder_rule_service import invalidate_folder_rule_cache
+        invalidate_keyword_rule_cache()
     from .privacy_service import clear_exclude_rules_cache
-    from .project_inference_service import invalidate_keyword_rule_cache
 
-    invalidate_folder_rule_cache()
-    invalidate_keyword_rule_cache()
     clear_exclude_rules_cache()
-
-
-def _public_history_result(result: dict) -> dict:
-    affected_dates = list(result.get("affected_date_values") or [])
-    return {
-        "updated_count": int(result.get("updated_count") or 0),
-        "matched_count": int(result.get("matched_count") or 0),
-        "skipped_count": int(result.get("skipped_count") or 0),
-        "affected_dates": len(affected_dates),
-    }
 
 
 __all__ = ["apply_rule_to_history", "delete_rule", "remove_rule_from_history"]

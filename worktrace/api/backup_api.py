@@ -1,7 +1,7 @@
 """Encrypted backup facade for the UI.
 
-The secure backup service owns the complete replacement transaction, including
-preservation of installation-scoped privacy consent.
+The facade acquires a consistent runtime snapshot for export. Import remains
+owned by the secure backup service's destructive replacement coordinator.
 """
 
 from __future__ import annotations
@@ -9,6 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from ..services import secure_backup_service
+from ..services.runtime_snapshot_barrier import consistent_snapshot
 from ..services.secure_backup_service import (
     BackupCorruptedError,
     BackupDecryptionError,
@@ -21,7 +22,13 @@ from ..services.secure_backup_service import (
 
 
 def export_encrypted_backup(output_path: str | Path, passphrase: str) -> str:
-    return str(secure_backup_service.export_encrypted_backup(output_path, passphrase))
+    with consistent_snapshot():
+        return str(
+            secure_backup_service.export_encrypted_backup(
+                output_path,
+                passphrase,
+            )
+        )
 
 
 def import_encrypted_backup(

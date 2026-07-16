@@ -18,7 +18,6 @@ from worktrace.services.report_projection_snapshot_service import (
 from worktrace.services.settings_service import set_setting
 from worktrace.write_gate import DATABASE_WRITE_GATE
 
-
 DATE = "2026-07-02"
 pytestmark = [pytest.mark.db, pytest.mark.integration]
 
@@ -184,12 +183,19 @@ def test_secure_validation_rejects_semantically_invalid_activity_without_operati
     project_id = project_service.create_project("P")
     activity_id = _closed("09:00:00", "09:01:00", project_id)
     with get_connection() as conn:
-        conn.execute("UPDATE activity_log SET duration_seconds = 30 WHERE id = ?", (activity_id,))
+        conn.execute(
+            "UPDATE activity_log SET duration_seconds = 30 WHERE id = ?",
+            (activity_id,),
+        )
         with pytest.raises(secure_backup_service.BackupCorruptedError):
             secure_backup_service._validate_staging_database(conn)
 
 
-def test_secure_validation_rejects_versioned_revision_conflict(temp_db):
+def test_secure_validation_replays_member_bound_operation_after_admission_revision_changes(
+    temp_db,
+):
+    """Admission revisions are write guards, not long-term replay identity."""
+
     project_id = project_service.create_project("P")
     activity_id = _closed("09:00:00", "09:01:00", project_id)
     source = build_visible_snapshot(DATE, DATE).final_sessions[0]
@@ -204,17 +210,18 @@ def test_secure_validation_rejects_versioned_revision_conflict(temp_db):
             (
                 DATE,
                 str(source["projection_instance_key"]),
-                DURABLE_REVISION_PREFIX + "0" * (40 - len(DURABLE_REVISION_PREFIX)),
+                DURABLE_REVISION_PREFIX
+                + "0" * (40 - len(DURABLE_REVISION_PREFIX)),
                 '{"payload_version":4}',
             ),
         )
         conn.execute(
             """
             INSERT INTO report_session_operation_member(
-                operation_id, role, activity_id, report_date, slice_start_time, display_order
+                operation_id, role, activity_id, report_date,
+                slice_start_time, display_order
             ) VALUES (?, 'source', ?, ?, ?, 0)
             """,
             (int(cursor.lastrowid), activity_id, DATE, f"{DATE} 09:00:00"),
         )
-        with pytest.raises(secure_backup_service.BackupCorruptedError):
-            secure_backup_service._validate_staging_database(conn)
+        secure_backup_service._validate_staging_database(conn)

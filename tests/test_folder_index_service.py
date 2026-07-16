@@ -1,8 +1,10 @@
 from pathlib import Path
 
+import pytest
+
 from worktrace.db import get_connection
-from worktrace.platforms.base import ActiveWindow
 from worktrace.platforms import windows_adapter
+from worktrace.platforms.base import ActiveWindow
 from worktrace.services import (
     activity_service,
     folder_index_service,
@@ -11,7 +13,6 @@ from worktrace.services import (
     project_service,
 )
 from worktrace.services.project_inference_service import assign_project_for_activity
-import pytest
 
 pytestmark = [pytest.mark.db, pytest.mark.integration]
 
@@ -29,7 +30,10 @@ def _ready_index(rule_id: int, valid_from: str = "2026-06-18 00:00:00") -> None:
         )
 
 
-def test_folder_index_scans_all_extensions_and_casefolds_names(temp_db, tmp_path):
+def test_folder_index_scans_all_extensions_and_casefolds_names(
+    temp_db,
+    tmp_path,
+):
     project = project_service.create_project("Client")
     folder = tmp_path / "Client"
     sub = folder / "Sub"
@@ -64,12 +68,21 @@ def test_disabled_folder_rule_index_is_retained_but_not_used(temp_db, tmp_path):
 
     folder_rule_service.set_folder_rule_enabled(rule_id, False)
 
-    assert folder_index_service.lookup_indexed_paths_for_file_name("Spec.docx", "2026-06-18 09:00:00") == []
+    assert (
+        folder_index_service.lookup_indexed_paths_for_file_name(
+            "Spec.docx",
+            "2026-06-18 09:00:00",
+        )
+        == []
+    )
     with get_connection() as conn:
-        assert conn.execute(
-            "SELECT COUNT(*) AS c FROM folder_rule_file_index WHERE folder_rule_id = ?",
-            (rule_id,),
-        ).fetchone()["c"] == 1
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) AS c FROM folder_rule_file_index WHERE folder_rule_id = ?",
+                (rule_id,),
+            ).fetchone()["c"]
+            == 1
+        )
 
 
 def test_missing_indexed_path_marks_rule_stale(temp_db, tmp_path):
@@ -83,7 +96,13 @@ def test_missing_indexed_path_marks_rule_stale(temp_db, tmp_path):
 
     path.unlink()
 
-    assert folder_index_service.lookup_indexed_paths_for_file_name("Spec.docx", "2026-06-18 09:00:00") == []
+    assert (
+        folder_index_service.lookup_indexed_paths_for_file_name(
+            "Spec.docx",
+            "2026-06-18 09:00:00",
+        )
+        == []
+    )
     with get_connection() as conn:
         state = conn.execute(
             "SELECT status, refresh_requested FROM folder_rule_index_state WHERE folder_rule_id = ?",
@@ -93,7 +112,10 @@ def test_missing_indexed_path_marks_rule_stale(temp_db, tmp_path):
     assert state["refresh_requested"] == 1
 
 
-def test_title_only_activity_matches_indexed_folder_rule_for_any_extension(temp_db, tmp_path):
+def test_title_only_activity_matches_indexed_folder_rule_for_any_extension(
+    temp_db,
+    tmp_path,
+):
     project = project_service.create_project("Development")
     folder = tmp_path / "Repo"
     folder.mkdir()
@@ -153,25 +175,14 @@ def test_safe_backfill_uses_index_only_after_valid_from(temp_db, tmp_path):
         "report.docx - Word",
         start_time="2026-06-18 09:00:00",
     )
+    activity_service.close_activity_row(early, "2026-06-18 09:10:00")
     late = activity_service.create_activity(
         "Word",
         "winword.exe",
         "report.docx - Word",
         start_time="2026-06-18 11:00:00",
     )
-    # Close both via direct SQL (bypass close_activity's automatic-rule
-    # re-trigger) so backfill sees eligible closed-but-unassigned activities.
-    from worktrace.db import get_connection, now_str
-
-    with get_connection() as conn:
-        conn.execute(
-            "UPDATE activity_log SET end_time = ?, duration_seconds = ?, updated_at = ? WHERE id = ?",
-            ("2026-06-18 09:10:00", 600, now_str(), early),
-        )
-        conn.execute(
-            "UPDATE activity_log SET end_time = ?, duration_seconds = ?, updated_at = ? WHERE id = ?",
-            ("2026-06-18 11:10:00", 600, now_str(), late),
-        )
+    activity_service.close_activity_row(late, "2026-06-18 11:10:00")
 
     from worktrace.services import rule_impact_service
 
@@ -182,7 +193,11 @@ def test_safe_backfill_uses_index_only_after_valid_from(temp_db, tmp_path):
     assert activity_service.get_activity(late)["project_id"] == project
 
 
-def test_windows_adapter_uses_folder_index_after_open_files_miss(temp_db, tmp_path, monkeypatch):
+def test_windows_adapter_uses_folder_index_after_open_files_miss(
+    temp_db,
+    tmp_path,
+    monkeypatch,
+):
     project = project_service.create_project("Development")
     folder = tmp_path / "Repo"
     folder.mkdir()
@@ -191,9 +206,17 @@ def test_windows_adapter_uses_folder_index_after_open_files_miss(temp_db, tmp_pa
     rule_id = folder_rule_service.create_or_update_folder_rule(str(folder), project)
     _ready_index(rule_id)
     monkeypatch.setattr(windows_adapter, "_com_candidates", lambda _process_name: [])
-    monkeypatch.setattr(windows_adapter, "_get_process_open_file_paths", lambda _pid: [])
+    monkeypatch.setattr(
+        windows_adapter,
+        "_get_process_open_file_paths",
+        lambda _pid: [],
+    )
 
-    resolved = windows_adapter._resolve_active_file_path("Code.exe", "main.py - Visual Studio Code", 900001)
+    resolved = windows_adapter._resolve_active_file_path(
+        "Code.exe",
+        "main.py - Visual Studio Code",
+        900001,
+    )
 
     assert Path(resolved) == path
 
@@ -204,10 +227,12 @@ def test_indexed_exclude_folder_anonymizes_title_only_activity(temp_db, tmp_path
     folder = tmp_path / "Private"
     folder.mkdir()
     (folder / "secret.txt").write_text("secret", encoding="utf-8")
-    rule_id = folder_rule_service.create_or_update_folder_rule(str(folder), excluded_project)
+    rule_id = folder_rule_service.create_or_update_folder_rule(
+        str(folder),
+        excluded_project,
+    )
     _ready_index(rule_id)
 
     assert privacy_service.is_excluded(
         ActiveWindow("Editor", "editor.exe", "secret.txt - Editor")
     )
-

@@ -6,7 +6,10 @@ from typing import Any
 
 from ..constants import STATUS_NORMAL
 from . import page_revision_service
-from .report_revision_service import get_report_structure_revision
+from .report_revision_service import (
+    get_report_structure_revision,
+    snapshot_structure_revision,
+)
 
 
 def apply_structure_revision(
@@ -14,8 +17,15 @@ def apply_structure_revision(
     *,
     report_date: str,
     today: str,
+    snapshot=None,
 ) -> None:
-    payload["structure_revision"] = get_report_structure_revision(report_date)
+    """Attach one structure revision without rescanning a built snapshot."""
+
+    payload["structure_revision"] = (
+        snapshot_structure_revision(snapshot)
+        if snapshot is not None
+        else get_report_structure_revision(report_date)
+    )
     page_revision_service.apply_page_revision(
         payload,
         report_date=report_date,

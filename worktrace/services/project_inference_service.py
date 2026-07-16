@@ -85,7 +85,22 @@ def _enabled_keyword_rules(conn=None) -> list[dict]:
 
 def assign_project_for_activity(activity_id: int) -> dict:
     with get_connection() as conn:
-        return _assign_project_for_activity_in_transaction(conn, activity_id)
+        return assign_project_for_activity_in_transaction(conn, activity_id)
+
+
+def assign_project_for_activity_in_transaction(
+    conn,
+    activity_id: int,
+    *,
+    exclude_rule: tuple[str, int] | None = None,
+) -> dict:
+    """Assign one activity inside the caller-owned transaction."""
+
+    return _assign_project_for_activity_in_transaction(
+        conn,
+        activity_id,
+        exclude_rule=exclude_rule,
+    )
 
 
 def _assign_project_for_activity_in_transaction(

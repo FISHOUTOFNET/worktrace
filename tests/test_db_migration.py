@@ -19,10 +19,13 @@ EXPECTED_TABLES = {
     "folder_rule_index_state",
     "folder_rule_file_index",
     "project_rule",
+    "history_mutation_job",
+    "history_mutation_job_rule",
     "activity_project_assignment",
     "activity_clipboard_event",
     "report_session_operation",
     "report_session_operation_member",
+    "report_mutation_request",
     "activity_resource",
 }
 
@@ -63,6 +66,77 @@ def _get_tables(conn) -> set[str]:
     }
 
 
+def _create_v5_source_schema(conn) -> None:
+    """Create the real v5 structural boundary from the current schema text."""
+
+    conn.executescript(db.read_schema_sql())
+    conn.execute("DROP TABLE history_mutation_job_rule")
+    conn.execute("DROP TABLE history_mutation_job")
+
+    conn.execute(
+        "ALTER TABLE folder_rule_index_state RENAME TO folder_rule_index_state_v6"
+    )
+    conn.executescript(
+        """
+        CREATE TABLE folder_rule_index_state (
+            folder_rule_id INTEGER PRIMARY KEY,
+            status TEXT NOT NULL CHECK (
+                status IN ('pending', 'indexing', 'ready', 'stale', 'error')
+            ),
+            valid_from TEXT,
+            last_indexed_at TEXT,
+            last_checked_at TEXT,
+            file_count INTEGER NOT NULL DEFAULT 0,
+            error_message TEXT,
+            refresh_requested INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (folder_rule_id) REFERENCES folder_project_rule(id) ON DELETE CASCADE
+        );
+        INSERT INTO folder_rule_index_state(
+            folder_rule_id, status, valid_from, last_indexed_at,
+            last_checked_at, file_count, error_message, refresh_requested,
+            created_at, updated_at
+        )
+        SELECT folder_rule_id, status, valid_from, last_indexed_at,
+               last_checked_at, file_count, error_message, refresh_requested,
+               created_at, updated_at
+        FROM folder_rule_index_state_v6;
+        DROP TABLE folder_rule_index_state_v6;
+        """
+    )
+
+    conn.execute(
+        "ALTER TABLE folder_rule_file_index RENAME TO folder_rule_file_index_v6"
+    )
+    conn.executescript(
+        """
+        CREATE TABLE folder_rule_file_index (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            folder_rule_id INTEGER NOT NULL,
+            file_name TEXT NOT NULL,
+            normalized_file_name TEXT NOT NULL,
+            file_path TEXT NOT NULL,
+            normalized_path_key TEXT NOT NULL,
+            mtime REAL,
+            size INTEGER,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (folder_rule_id) REFERENCES folder_project_rule(id) ON DELETE CASCADE,
+            UNIQUE(folder_rule_id, normalized_path_key)
+        );
+        INSERT INTO folder_rule_file_index(
+            id, folder_rule_id, file_name, normalized_file_name, file_path,
+            normalized_path_key, mtime, size, created_at, updated_at
+        )
+        SELECT id, folder_rule_id, file_name, normalized_file_name, file_path,
+               normalized_path_key, mtime, size, created_at, updated_at
+        FROM folder_rule_file_index_v6;
+        DROP TABLE folder_rule_file_index_v6;
+        """
+    )
+
+
 def test_initialize_empty_database_sets_current_schema_version(tmp_path):
     from worktrace.db import CURRENT_SCHEMA_VERSION, get_connection, initialize_database
 
@@ -98,8 +172,7 @@ def test_initialize_database_migrates_v4_runtime_settings(tmp_path):
     db_path = str(tmp_path / "v4.db")
     db.configure_database(db_path)
     with db.get_connection() as conn:
-        conn.executescript(db.read_schema_sql())
-        conn.executescript(db.read_schema_indexes_sql())
+        _create_v5_source_schema(conn)
         conn.execute("PRAGMA user_version = 4")
         db.seed_defaults(conn)
         for key, value in (
@@ -116,12 +189,19 @@ def test_initialize_database_migrates_v4_runtime_settings(tmp_path):
     db.initialize_database(db_path)
 
     with db.get_connection() as conn:
-        assert int(conn.execute("PRAGMA user_version").fetchone()[0]) == 5
+        assert int(conn.execute("PRAGMA user_version").fetchone()[0]) == db.CURRENT_SCHEMA_VERSION
+        assert db.schema_fingerprint(conn) == db.expected_schema_fingerprint()
         keys = {
             str(row["key"])
             for row in conn.execute("SELECT key FROM settings").fetchall()
         }
+        state_columns = _get_columns(conn, "folder_rule_index_state")
+        index_columns = _get_columns(conn, "folder_rule_file_index")
     assert not (keys & REMOVED_RUNTIME_SETTINGS)
+    assert {"active_generation", "building_generation", "build_status"}.issubset(
+        state_columns
+    )
+    assert "generation" in index_columns
 
 
 def test_initialize_database_rejects_non_empty_old_database(tmp_path):
@@ -292,6 +372,8 @@ def test_reset_database_clears_business_data_and_rebuilds_defaults(temp_db):
         assert conn.execute("SELECT COUNT(*) AS c FROM folder_project_rule").fetchone()["c"] == 0
         assert conn.execute("SELECT COUNT(*) AS c FROM folder_rule_index_state").fetchone()["c"] == 0
         assert conn.execute("SELECT COUNT(*) AS c FROM folder_rule_file_index").fetchone()["c"] == 0
+        assert conn.execute("SELECT COUNT(*) AS c FROM history_mutation_job").fetchone()["c"] == 0
+        assert conn.execute("SELECT COUNT(*) AS c FROM history_mutation_job_rule").fetchone()["c"] == 0
         assert conn.execute("SELECT COUNT(*) AS c FROM project_rule").fetchone()["c"] == 0
         assert conn.execute("SELECT COUNT(*) AS c FROM activity_resource").fetchone()["c"] == 0
         uncategorized = conn.execute(
