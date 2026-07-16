@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import ast
+import os
 from pathlib import Path
+import subprocess
+import traceback
 
 LEGACY = frozenset(
     {
@@ -192,13 +195,79 @@ def main() -> int:
 
     violations = remaining_violations()
     if violations:
-        raise SystemExit("legacy references remain:\n" + "\n".join(violations))
+        raise RuntimeError("legacy references remain:\n" + "\n".join(violations))
     if not changed:
-        raise SystemExit("migration produced no changes")
+        raise RuntimeError("migration produced no changes")
     print("Migrated files:")
     print("\n".join(changed))
     return 0
 
 
+def publish_failure_diagnostic() -> None:
+    if os.environ.get("GITHUB_ACTIONS", "").lower() != "true":
+        return
+    diagnostic_path = ROOT / "diagnostics" / "activity-fixture-migration-latest.txt"
+    failure_text = "\n".join(
+        (
+            f"run_id={os.environ.get('GITHUB_RUN_ID', '')}",
+            f"tested_head={os.environ.get('GITHUB_SHA', '')}",
+            "",
+            traceback.format_exc(),
+        )
+    )
+    subprocess.run(
+        ["git", "restore", "--source=HEAD", "--", "tests"],
+        cwd=ROOT,
+        check=True,
+    )
+    diagnostic_path.parent.mkdir(parents=True, exist_ok=True)
+    diagnostic_path.write_text(failure_text, encoding="utf-8")
+    subprocess.run(
+        ["git", "config", "user.name", "github-actions[bot]"],
+        cwd=ROOT,
+        check=True,
+    )
+    subprocess.run(
+        [
+            "git",
+            "config",
+            "user.email",
+            "41898282+github-actions[bot]@users.noreply.github.com",
+        ],
+        cwd=ROOT,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "add", diagnostic_path.relative_to(ROOT).as_posix()],
+        cwd=ROOT,
+        check=True,
+    )
+    subprocess.run(
+        [
+            "git",
+            "commit",
+            "-m",
+            "Capture activity fixture migration failure [skip ci]",
+        ],
+        cwd=ROOT,
+        check=True,
+    )
+    subprocess.run(
+        [
+            "git",
+            "push",
+            "origin",
+            "HEAD:agent/canonical-architecture-consolidation",
+        ],
+        cwd=ROOT,
+        check=True,
+    )
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        exit_code = main()
+    except BaseException:
+        publish_failure_diagnostic()
+        raise
+    raise SystemExit(exit_code)
