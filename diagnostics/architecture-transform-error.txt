@@ -1,8 +1,31 @@
 Traceback (most recent call last):
-  File "C:\actions-runner\_work\_temp\fc7b580c-41c6-413a-a22a-e86182c4d4b7.py", line 15, in <module>
+  File "/home/runner/work/_temp/85714c53-6383-4a55-9331-f5968d153723.py", line 23, in <module>
     exec(compile(script, str(source_path), 'exec'), {'__name__': '__main__'})
-         ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File ".github\workflows\apply-architecture-source-transforms.yml", line 1
-    name: Apply architecture source transforms
-             ^
-IndentationError: unexpected indent
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ".github/workflows/apply-architecture-source-transforms.yml", line 26
+    
+    ^
+SyntaxError: invalid syntax. Perhaps you forgot a comma?
+
+
+EXTRACTED SCRIPT PREVIEW
+01: 'from pathlib import Path'
+02: ''
+03: 'def read(path: str) -> str:'
+04: '    return Path(path).read_text(encoding="utf-8")'
+05: ''
+06: 'def write(path: str, value: str) -> None:'
+07: '    Path(path).write_text(value, encoding="utf-8", newline="\\n")'
+08: ''
+09: 'def replace_once(path: str, old: str, new: str) -> None:'
+10: '    text = read(path)'
+11: '    count = text.count(old)'
+12: '    if count != 1:'
+13: '        raise RuntimeError(f"{path}: expected one match, found {count}: {old[:80]!r}")'
+14: '    write(path, text.replace(old, new, 1))'
+15: ''
+16: 'def replace_region(path: str, start_marker: str, end_marker: str, replacement: str) -> None:'
+17: '    text = read(path)'
+18: '    start = text.index(start_marker)'
+19: '    end = text.index(end_marker, start) + len(end_marker)'
+20: '    write(path, text[:start] + replacement + text[end:])'
