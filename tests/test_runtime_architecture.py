@@ -117,13 +117,14 @@ def test_open_activity_progress_is_checkpointed(monkeypatch):
     assert writes == [(41, OPEN_ACTIVITY_CHECKPOINT_SECONDS)]
 
 
-def test_view_model_api_routes_to_page_owned_services():
+def test_view_model_api_routes_to_one_page_payload_owner():
     root = Path(__file__).resolve().parents[1]
     source = (root / "worktrace/api/view_model_api.py").read_text(
         encoding="utf-8"
     )
-    assert "overview_view_model_service" in source
-    assert "timeline_view_model_service" in source
-    assert "session_detail_view_model_service" in source
+    assert "view_model_service" in source
     assert "refresh_state_view_model_service" in source
+    assert "overview_view_model_service" not in source
+    assert "timeline_view_model_service" not in source
+    assert "session_detail_view_model_service" not in source
     assert "view_model_hardening_service" not in source
