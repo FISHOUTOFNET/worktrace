@@ -4,13 +4,10 @@ from unittest.mock import patch
 
 import pytest
 
+from tests.support import activity_factory as activity_service
 from worktrace.db import get_connection, now_str
 from worktrace.resources.types import DetectedResource
-from worktrace.services import (
-    activity_service,
-    report_revision_service,
-    resource_service,
-)
+from worktrace.services import report_revision_service, resource_service
 from worktrace.services.settings_service import set_setting
 
 pytestmark = [pytest.mark.db, pytest.mark.integration, pytest.mark.contract]
