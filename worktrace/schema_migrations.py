@@ -154,7 +154,10 @@ def migrate_5_to_6(conn: sqlite3.Connection) -> None:
     )
     conn.execute("DROP TABLE folder_rule_file_index_v5")
 
-    conn.executescript(
+    # sqlite3.Connection.executescript() performs an implicit COMMIT and would
+    # destroy migrate_schema()'s savepoint. Keep every DDL statement inside the
+    # caller-controlled migration transaction.
+    conn.execute(
         """
         CREATE TABLE IF NOT EXISTS history_mutation_job (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -173,8 +176,11 @@ def migrate_5_to_6(conn: sqlite3.Connection) -> None:
             error_message TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
-        );
-
+        )
+        """
+    )
+    conn.execute(
+        """
         CREATE TABLE IF NOT EXISTS history_mutation_job_rule (
             job_id INTEGER NOT NULL,
             rule_type TEXT NOT NULL CHECK(rule_type IN ('folder', 'keyword')),
@@ -182,7 +188,7 @@ def migrate_5_to_6(conn: sqlite3.Connection) -> None:
             rule_version TEXT NOT NULL,
             PRIMARY KEY(job_id, rule_type, rule_id),
             FOREIGN KEY(job_id) REFERENCES history_mutation_job(id) ON DELETE CASCADE
-        );
+        )
         """
     )
 
