@@ -49,18 +49,24 @@ def create_closed_activity(
     app_name: str = "Word",
     process_name: str = "winword.exe",
     window_title: str = "A.docx",
+    status: str = STATUS_NORMAL,
+    source: str = SOURCE_AUTO,
     project_id: int | None = None,
     file_path_hint: str | None = None,
     note: str | None = None,
+    resource: DetectedResource | None = None,
 ) -> int:
     activity_id = create_open_activity(
         app_name=app_name,
         process_name=process_name,
         window_title=window_title,
         start_time=f"{day} {start}",
+        status=status,
+        source=source,
         project_id=project_id,
         file_path_hint=file_path_hint,
         note=note,
+        resource=resource,
     )
     activity_lifecycle_service.close_activity(activity_id, f"{day} {end}")
     return activity_id
