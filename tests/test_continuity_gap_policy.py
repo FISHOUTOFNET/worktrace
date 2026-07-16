@@ -1,7 +1,8 @@
 import pytest
 
+from tests.support import activity_factory as activity_service
 from worktrace.constants import STATUS_ERROR, STATUS_EXCLUDED, STATUS_IDLE, STATUS_NORMAL, STATUS_PAUSED
-from worktrace.services import activity_continuity_service, activity_service, settings_service
+from worktrace.services import activity_continuity_service, settings_service
 
 pytestmark = [pytest.mark.db, pytest.mark.unit]
 
