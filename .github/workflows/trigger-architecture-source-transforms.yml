@@ -12,7 +12,7 @@ permissions:
 jobs:
   transform:
     if: github.event.pull_request.head.ref == 'agent/canonical-architecture-consolidation'
-    runs-on: [self-hosted, Windows, X64]
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - name: Check out PR head branch
@@ -53,7 +53,7 @@ jobs:
           Path('.github/workflows/trigger-architecture-source-transforms.yml').unlink()
 
       - name: Commit transformed sources or diagnostics
-        shell: pwsh
+        shell: bash
         run: |
           git config user.name "worktrace-architecture-bot"
           git config user.email "actions@users.noreply.github.com"
