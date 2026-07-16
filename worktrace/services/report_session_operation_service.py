@@ -310,14 +310,63 @@ def _run_uow(
                 conn.commit()
                 return result
 
+            committed_candidate = candidate
+            committed_roles = roles
+            committed_source_key = source_instance_key
             if bool(source.get("is_in_progress")):
-                _persist_open_edit_assignment(
+                open_activity_id = _persist_open_edit_assignment(
                     conn,
                     source,
                     values.get("project_id"),
                 )
-            _insert_operation(conn, candidate)
-            _insert_members(conn, operation_id, roles)
+                current_snapshot = build_visible_snapshot(
+                    report_date,
+                    report_date,
+                    conn=conn,
+                )
+                current_source = _find_open_activity_entry(
+                    current_snapshot.final_sessions,
+                    open_activity_id,
+                )
+                if current_source is None or not bool(
+                    current_source.get("is_in_progress")
+                ):
+                    raise OperationNotAllowedError()
+                current_payload, current_roles, current_undo = _operation_input(
+                    conn,
+                    operation_type,
+                    current_source,
+                    None,
+                    values,
+                )
+                if "duration" in current_payload:
+                    raise OperationNotAllowedError()
+                committed_source_key = str(
+                    current_source.get("projection_instance_key") or ""
+                )
+                current_revision = str(
+                    current_source.get("projection_revision") or ""
+                )
+                if not committed_source_key or not current_revision:
+                    raise StaleSelectionError()
+                committed_roles = current_roles
+                committed_candidate = _candidate_operation(
+                    operation_id=operation_id,
+                    report_date=report_date,
+                    sequence=sequence,
+                    operation_type=operation_type,
+                    source_instance_key=committed_source_key,
+                    source_expected_revision=current_revision,
+                    target_instance_key=None,
+                    target_expected_revision=None,
+                    direction=None,
+                    undo_of_operation_id=current_undo,
+                    payload=current_payload,
+                    roles=current_roles,
+                )
+
+            _insert_operation(conn, committed_candidate)
+            _insert_members(conn, operation_id, committed_roles)
 
             after = build_visible_snapshot(report_date, report_date, conn=conn)
             applied = next(
@@ -329,7 +378,8 @@ def _run_uow(
                 None,
             )
             if applied is None or applied.state != APPLIED:
-                raise OperationNoEffectError()
+                reason = applied.reason if applied is not None else "missing_diagnostic"
+                raise OperationNoEffectError(reason)
             result = MutationResult(
                 request_id=request_id,
                 outcome_type="operation_committed",
@@ -338,7 +388,7 @@ def _run_uow(
                 selection_hint=_post_selection(
                     operation_type,
                     operation_id,
-                    source_instance_key,
+                    committed_source_key,
                     after.final_sessions,
                 ),
                 snapshot_revision=after.snapshot_revision,
@@ -555,12 +605,12 @@ def _persist_open_edit_assignment(
     conn,
     source: Mapping[str, Any],
     project_id: Any,
-) -> None:
-    if project_id is None:
-        return
+) -> int:
     activity_id = _open_activity_id(source)
     if activity_id <= 0:
         raise OperationNotAllowedError()
+    if project_id is None:
+        return activity_id
     if not assignment_command_service.upsert_assignment(
         conn,
         activity_id=activity_id,
@@ -570,6 +620,21 @@ def _persist_open_edit_assignment(
         is_manual=True,
     ):
         raise OperationNotAllowedError()
+    return activity_id
+
+
+def _find_open_activity_entry(
+    entries: Sequence[Mapping[str, Any]],
+    activity_id: int,
+) -> dict | None:
+    for entry in entries:
+        if int(entry.get("open_activity_id") or 0) == int(activity_id):
+            return dict(entry)
+        if int(activity_id) in {
+            int(value or 0) for value in entry.get("activity_ids") or []
+        }:
+            return dict(entry)
+    return None
 
 
 def _find_request(conn, request_id: str) -> dict[str, Any] | None:
