@@ -1,9 +1,9 @@
 """Process-level application runtime.
 
 Owns every long-lived runtime component: application instance lease, collector,
-folder-index worker, platform adapter, pause/reset command channel and startup
-recovery. A process that does not own the application lease never initializes
-or opens the database and never creates the WebView.
+folder-index and history workers, platform adapter, maintenance command channels,
+and startup recovery. A process without the application lease never opens the
+business database or creates the WebView.
 """
 
 from __future__ import annotations
@@ -17,7 +17,12 @@ from .. import db
 from ..collector import collector_health
 from ..collector.collector import CollectorControl, run_collector
 from ..collector.single_instance import acquire_single_instance, release_single_instance
-from ..services import activity_lifecycle_service, folder_index_service, recovery_service
+from ..services import (
+    activity_lifecycle_service,
+    folder_index_service,
+    history_mutation_job_service,
+    recovery_service,
+)
 from ..services.folder_index_recovery_service import recover_interrupted_indexes
 from ..services.runtime_snapshot_barrier import (
     clear_quiesce_handler,
@@ -32,8 +37,6 @@ from ..services.secure_backup_service import (
 from ..services.settings_service import get_bool_setting, get_setting, set_setting
 
 if TYPE_CHECKING:
-    from .. import config
-
     class _Paths:
         db_path: str
         log_path: str
@@ -42,7 +45,6 @@ if TYPE_CHECKING:
 
 
 def _choose_adapter():
-    """Return the platform adapter for the current OS."""
     if sys.platform.startswith("win"):
         from ..platforms.hardened_windows_adapter import HardenedWindowsAdapter
 
@@ -53,13 +55,10 @@ def _choose_adapter():
 
 
 def _thread_reference_is_alive(thread: Any | None) -> bool:
-    """Treat opaque worker handles as live while checking real threads exactly."""
     if thread is None:
         return False
     checker = getattr(thread, "is_alive", None)
-    if checker is None:
-        return True
-    return bool(checker())
+    return True if checker is None else bool(checker())
 
 
 class AppRuntime:
@@ -74,21 +73,19 @@ class AppRuntime:
         self._adapter = _choose_adapter()
         self._collector_thread: threading.Thread | None = None
         self._index_thread: threading.Thread | None = None
+        self._history_thread: threading.Thread | None = None
         self._initialized = False
         self._shutdown = False
 
     @property
     def owns_collector(self) -> bool:
-        """Compatibility alias: collector ownership equals app ownership."""
         return bool(self.owns_application_instance)
 
     @owns_collector.setter
     def owns_collector(self, value: bool) -> None:
-        """Compatibility setter for focused lifecycle tests and adapters."""
         self.owns_application_instance = bool(value)
 
     def initialize(self) -> bool:
-        """Acquire the app lease before opening the database."""
         with self._lifecycle_lock:
             if self._initialized:
                 return self.owns_application_instance
@@ -111,7 +108,6 @@ class AppRuntime:
             return True
 
     def start_background_workers(self) -> bool:
-        """Start the folder-index worker when lifecycle state permits."""
         with self._lifecycle_lock:
             if (
                 not self.owns_application_instance
@@ -119,16 +115,23 @@ class AppRuntime:
                 or self.stop_event.is_set()
             ):
                 return False
-            if _thread_reference_is_alive(self._index_thread):
-                return False
-            recover_interrupted_indexes()
-            self._index_thread = folder_index_service.start_folder_index_worker(
-                self.stop_event
-            )
-            return self._index_thread is not None
+            started = False
+            if not _thread_reference_is_alive(self._index_thread):
+                recover_interrupted_indexes()
+                self._index_thread = folder_index_service.start_folder_index_worker(
+                    self.stop_event
+                )
+                started = self._index_thread is not None or started
+            if not _thread_reference_is_alive(self._history_thread):
+                self._history_thread = (
+                    history_mutation_job_service.start_history_worker(
+                        self.stop_event
+                    )
+                )
+                started = self._history_thread is not None or started
+            return started
 
     def start_collector(self) -> dict[str, object]:
-        """Start the collector exactly once under the lifecycle lock."""
         with self._lifecycle_lock:
             if self._shutdown or self.stop_event.is_set():
                 return {"ok": False, "error": "runtime_stopping"}
@@ -164,7 +167,6 @@ class AppRuntime:
         register_quiesce_handler(self.quiesce_collection_now)
 
     def pause_collection_now(self, timeout_seconds: float = 5.0) -> dict[str, object]:
-        """Finalize the current activity and persist a user pause."""
         if not self.owns_application_instance or not _thread_reference_is_alive(
             self._collector_thread
         ):
@@ -175,7 +177,6 @@ class AppRuntime:
         self,
         timeout_seconds: float = 5.0,
     ) -> dict[str, object]:
-        """Pause writers for maintenance without changing exposed user intent."""
         prior_user_paused = get_bool_setting("user_paused", False)
         prior_collector_status = get_setting("collector_status", "stopped") or "stopped"
         result = self.pause_collection_now(timeout_seconds=timeout_seconds)
@@ -190,7 +191,6 @@ class AppRuntime:
     def reset_collection_runtime_now(
         self, timeout_seconds: float = 5.0
     ) -> dict[str, object]:
-        """Forget all collector/adapter identity before destructive DB work."""
         if not self.owns_application_instance or not _thread_reference_is_alive(
             self._collector_thread
         ):
@@ -207,19 +207,15 @@ class AppRuntime:
             resetter()
 
     def set_clipboard_capture_enabled(self, enabled: bool) -> bool:
-        """Apply the already-authorized clipboard-capture runtime state."""
-        effective = bool(enabled)
         setter = getattr(self._adapter, "set_clipboard_capture_enabled", None)
         if setter is not None:
-            setter(effective)
+            setter(bool(enabled))
         return True
 
     def request_shutdown(self) -> None:
-        """Signal the collector and index threads to stop."""
         self.stop_event.set()
 
     def shutdown(self) -> None:
-        """Stop writers before closing rows or releasing the application lease."""
         with self._lifecycle_lock:
             if self._shutdown:
                 return
@@ -229,10 +225,14 @@ class AppRuntime:
             clear_quiesce_handler(self.quiesce_collection_now)
             self.set_clipboard_capture_enabled(False)
             self.stop_event.set()
-            index_thread = self._index_thread
-            collector_thread = self._collector_thread
+            workers = [
+                self._index_thread,
+                self._history_thread,
+                self._collector_thread,
+            ]
 
         adapter_shutdown = False
+        collector_thread = self._collector_thread
         if collector_thread:
             joiner = getattr(collector_thread, "join", None)
             if joiner is not None:
@@ -245,14 +245,15 @@ class AppRuntime:
                 if joiner is not None:
                     joiner(timeout=5)
 
-        if index_thread:
-            joiner = getattr(index_thread, "join", None)
-            if joiner is not None:
-                joiner(timeout=5)
+        for thread in (self._index_thread, self._history_thread):
+            if thread:
+                joiner = getattr(thread, "join", None)
+                if joiner is not None:
+                    joiner(timeout=5)
 
-        writers_stopped = not _thread_reference_is_alive(
-            collector_thread
-        ) and not _thread_reference_is_alive(index_thread)
+        writers_stopped = not any(
+            _thread_reference_is_alive(thread) for thread in workers
+        )
         if self.owns_application_instance and writers_stopped:
             if self._initialized:
                 activity_lifecycle_service.close_all_open_activities()
