@@ -2,7 +2,8 @@
 
 The bridge validates transport shapes, calls API capabilities and maps stable
 error codes. Statistics aggregation and display DTO shaping remain behind the
-API boundary.
+API boundary. Unexpected failures are logged internally; no full traceback is
+returned to the WebView caller.
 """
 
 from __future__ import annotations
