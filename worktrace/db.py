@@ -207,13 +207,19 @@ class WorkTraceConnection(sqlite3.Connection):
 
         if not self._report_structure_dirty:
             return
-        super().execute(
-            """
-            UPDATE report_structure_revision_state
-            SET generation = generation + 1
-            WHERE singleton_id = 1
-            """
-        )
+        try:
+            super().execute(
+                """
+                UPDATE report_structure_revision_state
+                SET generation = generation + 1
+                WHERE singleton_id = 1
+                """
+            )
+        except sqlite3.OperationalError as exc:
+            # Supported pre-v7 schemas may be assembled and committed before
+            # migrate_schema() installs the internal revision table.
+            if "no such table" not in str(exc).lower():
+                raise
 
     def _publish_report_structure_generation(self) -> None:
         if not self._report_structure_dirty:
@@ -410,6 +416,7 @@ def apply_current_schema(conn: sqlite3.Connection) -> None:
         conn.executescript(read_internal_schema_sql())
         ensure_current_indexes(conn)
         conn.execute(f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION}")
+        ensure_report_structure_revision_state(conn)
         _require_current_schema_fingerprint(conn)
         seed_defaults(conn)
         return
@@ -435,6 +442,7 @@ def apply_current_schema(conn: sqlite3.Connection) -> None:
     if migrated:
         ensure_current_indexes(conn)
     _require_current_schema_fingerprint(conn)
+    ensure_report_structure_revision_state(conn)
     seed_defaults(conn)
 
 
@@ -514,8 +522,7 @@ def _require_current_schema_fingerprint(conn: sqlite3.Connection) -> None:
         raise ValueError("database_schema_incompatible")
 
 
-def seed_defaults(conn: sqlite3.Connection) -> None:
-    ts = now_str()
+def ensure_report_structure_revision_state(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
         INSERT INTO report_structure_revision_state(singleton_id, generation)
@@ -523,6 +530,10 @@ def seed_defaults(conn: sqlite3.Connection) -> None:
         ON CONFLICT(singleton_id) DO NOTHING
         """
     )
+
+
+def seed_defaults(conn: sqlite3.Connection) -> None:
+    ts = now_str()
     defaults = {
         "poll_interval_seconds": "1",
         "idle_threshold_seconds": str(DEFAULT_IDLE_THRESHOLD_SECONDS),
