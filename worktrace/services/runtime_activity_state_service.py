@@ -9,12 +9,14 @@ instances.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import dataclass
 import json
 import logging
 import threading
-from typing import Any, Mapping
+from typing import Any, Iterator, Mapping
 
 from ..db import get_db_key
 
@@ -36,6 +38,10 @@ _SNAPSHOTS: dict[str, dict[str, Any] | None] = {}
 _RAW_OVERRIDES: dict[str, str | None] = {}
 _REVISIONS: dict[str, int] = {}
 _LEGACY_COMPAT_VALUES: dict[tuple[str, str], str] = {}
+_BOUND_SAMPLE: ContextVar[tuple[str, RuntimeActivitySample] | None] = ContextVar(
+    "worktrace_bound_runtime_activity_sample",
+    default=None,
+)
 
 
 def _key(database_key: str | None = None) -> str:
@@ -46,6 +52,26 @@ def _bump_locked(database_key: str) -> int:
     revision = int(_REVISIONS.get(database_key, 0)) + 1
     _REVISIONS[database_key] = revision
     return revision
+
+
+@contextmanager
+def bind_runtime_activity_sample(
+    sample: RuntimeActivitySample,
+    *,
+    database_key: str | None = None,
+) -> Iterator[None]:
+    """Freeze one runtime sample for the duration of an explicit API request."""
+
+    key = _key(database_key)
+    detached = RuntimeActivitySample(
+        snapshot=deepcopy(sample.snapshot) if sample.snapshot is not None else None,
+        revision=int(sample.revision),
+    )
+    token = _BOUND_SAMPLE.set((key, detached))
+    try:
+        yield
+    finally:
+        _BOUND_SAMPLE.reset(token)
 
 
 def publish_runtime_activity_snapshot(
@@ -77,6 +103,13 @@ def sample_runtime_activity_state(
     """Return one atomic detached sample for a page/API request."""
 
     key = _key(database_key)
+    bound = _BOUND_SAMPLE.get()
+    if bound is not None and bound[0] == key:
+        sample = bound[1]
+        return RuntimeActivitySample(
+            snapshot=deepcopy(sample.snapshot) if sample.snapshot is not None else None,
+            revision=int(sample.revision),
+        )
     with _LOCK:
         snapshot = _SNAPSHOTS.get(key)
         return RuntimeActivitySample(
@@ -233,6 +266,7 @@ __all__ = [
     "PENDING_CARRY_PROVENANCE_KEY",
     "PENDING_SHORT_SECONDS_KEY",
     "RuntimeActivitySample",
+    "bind_runtime_activity_sample",
     "clear_runtime_activity_state",
     "get_legacy_runtime_setting",
     "get_runtime_activity_snapshot",
