@@ -4,7 +4,6 @@ on:
   push:
     branches: [main]
   pull_request:
-  create:
   workflow_dispatch:
     inputs:
       run_node_tests:
@@ -23,7 +22,6 @@ env:
   PYTHONIOENCODING: utf-8
 
 permissions:
-  actions: write
   contents: write
 
 # Each validation run is evidence for an exact PR head and must finish.
@@ -36,7 +34,6 @@ concurrency:
 jobs:
   tests:
     name: Windows tests (Python 3.11)
-    if: github.event_name != 'create'
     runs-on: windows-latest
     timeout-minutes: 30
 
@@ -302,66 +299,3 @@ jobs:
             dist/WorkTrace-Setup.exe
           if-no-files-found: error
           retention-days: 1
-
-
-  cleanup-obsolete-actions-history:
-    name: Cleanup obsolete Actions history
-    if: github.event_name == 'create' && github.event.ref_type == 'branch' && github.event.ref == 'actions-history-cleanup-trigger'
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-
-    steps:
-      - name: Delete completed runs from obsolete workflows
-        uses: actions/github-script@v8
-        with:
-          script: |
-            const { owner, repo } = context.repo;
-            const currentRunId = context.runId;
-            const runs = await github.paginate(
-              github.rest.actions.listWorkflowRunsForRepo,
-              { owner, repo, per_page: 100 }
-            );
-            const obsoleteRuns = runs.filter((run) =>
-              run.id !== currentRunId &&
-              run.status === 'completed' &&
-              run.path !== '.github/workflows/ci.yml'
-            );
-
-            core.info(`Found ${runs.length} total runs; deleting ${obsoleteRuns.length} completed obsolete-workflow runs.`);
-            const failures = [];
-            for (const run of obsoleteRuns) {
-              try {
-                await github.rest.actions.deleteWorkflowRun({
-                  owner,
-                  repo,
-                  run_id: run.id
-                });
-              }
-              catch (error) {
-                if (error.status !== 404) {
-                  failures.push(`${run.id}:${error.status || 'unknown'}`);
-                  core.warning(`Could not delete run ${run.id}: ${error.message}`);
-                }
-              }
-              await new Promise((resolve) => setTimeout(resolve, 100));
-            }
-
-            core.info(`Deleted ${obsoleteRuns.length - failures.length} obsolete workflow runs.`);
-            if (failures.length > 0) {
-              core.setFailed(`Failed to delete ${failures.length} runs: ${failures.join(', ')}`);
-              return;
-            }
-
-            try {
-              await github.rest.git.deleteRef({
-                owner,
-                repo,
-                ref: 'heads/actions-history-cleanup-trigger'
-              });
-              core.info('Deleted temporary trigger branch.');
-            }
-            catch (error) {
-              if (error.status !== 404) {
-                throw error;
-              }
-            }
