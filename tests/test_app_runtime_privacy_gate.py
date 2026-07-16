@@ -305,7 +305,7 @@ def test_privacy_gate_propagates_runtime_start_failure(monkeypatch):
     assert result["error"] == "collector_start_failed"
 
 
-def test_runtime_startup_orders_workers_before_collector(
+def test_runtime_startup_orders_collector_before_derived_workers(
     temp_db,
     tmp_path,
     monkeypatch,
@@ -334,7 +334,7 @@ def test_runtime_startup_orders_workers_before_collector(
         result = runtime.start_authorized_collection()
         assert result.ok is True
         assert result.degraded is False
-        assert order == ["retry", "workers", "collector"]
+        assert order == ["retry", "collector", "workers"]
     finally:
         runtime.shutdown()
 
