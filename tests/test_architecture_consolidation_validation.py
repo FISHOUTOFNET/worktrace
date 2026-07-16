@@ -59,3 +59,13 @@ def test_shipping_windows_adapter_has_no_global_legacy_patch():
     ).read_text(encoding="utf-8")
     assert "legacy." not in source
     assert "_run_with_timeout =" not in source
+
+
+def test_continuity_reads_typed_runtime_state_not_settings_json():
+    root = Path(__file__).resolve().parents[1]
+    source = (
+        root / "worktrace/services/activity_continuity_service.py"
+    ).read_text(encoding="utf-8")
+    assert "sample_runtime_activity_state" in source
+    assert 'get_setting("current_activity_snapshot"' not in source
+    assert "json.loads" not in source
