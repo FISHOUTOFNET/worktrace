@@ -8,7 +8,7 @@ import pytest
 
 from worktrace.webview_ui.bridge import SHIPPING_METHODS, WebViewBridge
 
-pytestmark = [pytest.mark.contract, pytest.mark.webview]
+pytestmark = [pytest.mark.contract, pytest.mark.parallel_safe]
 
 ROOT = Path(__file__).resolve().parents[1]
 
