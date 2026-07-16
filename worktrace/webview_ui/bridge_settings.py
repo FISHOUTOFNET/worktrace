@@ -1,7 +1,7 @@
 """Settings / Privacy bridge mixin.
 
-This module stays on the API side of the WebView boundary and never imports
-services, runtime internals, database code, or sensitive data structures.
+The bridge owns file-dialog interaction and transport error mapping. Privacy,
+collection startup and clipboard preference orchestration are API capabilities.
 """
 
 from __future__ import annotations
@@ -25,45 +25,8 @@ class SettingsBridgeMixin:
             return {"ok": False, "error": "加载隐私说明失败"}
 
     def accept_first_run_notice(self) -> dict[str, Any]:
-        """Accept the notice and report collector startup separately."""
         try:
-            result = settings_api.accept_first_run_notice_for_webview()
-            if not result.get("ok"):
-                return result
-            try:
-                start_result = app_api.start_collection_after_privacy_gate()
-            except Exception:
-                logger.exception(
-                    "webview bridge accept_first_run_notice: collector start raised"
-                )
-                start_result = {
-                    "ok": False,
-                    "error": "collector_start_failed",
-                }
-            if not start_result.get("ok"):
-                return {
-                    "ok": False,
-                    "accepted": True,
-                    "error": "隐私说明已确认，但记录功能未能启动，请点击恢复记录重试",
-                }
-
-            payload: dict[str, Any] = {
-                "ok": True,
-                "accepted": True,
-                "message": "已确认隐私说明",
-                "background_worker_degraded": bool(
-                    start_result.get("background_worker_degraded")
-                ),
-            }
-            try:
-                status_result = self.get_status()
-                if status_result.get("ok"):
-                    payload["status"] = status_result
-            except Exception:
-                logger.exception(
-                    "webview bridge accept_first_run_notice: status refresh failed"
-                )
-            return payload
+            return app_api.accept_privacy_notice_and_start()
         except Exception:
             logger.exception("webview bridge accept_first_run_notice failed")
             return {"ok": False, "error": "确认隐私说明失败"}
@@ -76,39 +39,11 @@ class SettingsBridgeMixin:
             return {"ok": False, "error": "加载设置状态失败"}
 
     def set_clipboard_capture_enabled(self, enabled) -> dict[str, Any]:
-        """Apply authorization/runtime first, then persist with compensation."""
-        if enabled is not True and enabled is not False:
-            return {"ok": False, "error": "请选择有效的剪贴板记录状态"}
-
         try:
-            previous = bool(settings_api.is_clipboard_capture_enabled())
+            return app_api.set_clipboard_capture_policy(enabled)
         except Exception:
-            logger.exception("clipboard preference read failed")
+            logger.exception("webview bridge set_clipboard_capture_enabled failed")
             return {"ok": False, "error": "设置剪贴板记录失败"}
-
-        try:
-            app_api.set_clipboard_capture_enabled(enabled)
-        except Exception:
-            logger.exception("clipboard authorization or runtime apply failed")
-            return {"ok": False, "error": "设置剪贴板记录失败"}
-
-        try:
-            result = settings_api.set_clipboard_capture_enabled_for_webview(enabled)
-        except Exception:
-            logger.exception("clipboard preference persistence failed")
-            try:
-                app_api.set_clipboard_capture_enabled(previous)
-            except Exception:
-                logger.exception("clipboard runtime compensation failed")
-            return {"ok": False, "error": "设置剪贴板记录失败"}
-
-        if not result.get("ok"):
-            try:
-                app_api.set_clipboard_capture_enabled(previous)
-            except Exception:
-                logger.exception("clipboard runtime compensation failed")
-            return result
-        return {"ok": True, "status": result["status"]}
 
     def export_encrypted_backup(
         self,
