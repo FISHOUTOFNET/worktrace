@@ -197,6 +197,29 @@ def set_clipboard_capture_policy(enabled: bool) -> dict[str, Any]:
     return {"ok": True, "status": result["status"]}
 
 
+def start_collector() -> dict[str, object]:
+    """Internal diagnostic hook; omitted from the WebView capability surface."""
+
+    if _runtime is not None:
+        return dict(_runtime.start_collector())
+    return {"ok": False, "error": "collector_start_failed"}
+
+
+def start_background_workers() -> dict[str, object]:
+    """Internal diagnostic hook; omitted from the WebView capability surface."""
+
+    if _runtime is None:
+        return {
+            "ready": False,
+            "index_ready": False,
+            "history_ready": False,
+            "index_started": False,
+            "history_started": False,
+            "error": "runtime_not_registered",
+        }
+    return _result_dict(_runtime.start_background_workers())
+
+
 def request_shutdown() -> None:
     if _runtime is not None:
         _runtime.request_shutdown()
