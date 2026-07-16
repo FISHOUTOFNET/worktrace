@@ -1,8 +1,7 @@
-"""Python bridge exposed to the WebView frontend via pywebview."""
+"""Python capability bridge exposed to the WebView frontend via pywebview."""
 
 from __future__ import annotations
 
-import logging
 from typing import Any
 
 from .bridge_dialogs import BridgeDialogMixin
@@ -12,7 +11,56 @@ from .bridge_settings import SettingsBridgeMixin
 from .bridge_statistics import StatisticsBridgeMixin
 from .bridge_timeline import TimelineBridgeMixin
 
-logger = logging.getLogger(__name__)
+SHIPPING_METHODS = frozenset(
+    {
+        "accept_first_run_notice",
+        "archive_project_for_rules",
+        "automatic_rules_status",
+        "backfill_project_rule",
+        "backfill_project_rules_batch",
+        "clear_all_local_data",
+        "copy_timeline_session",
+        "create_excluded_folder_rule",
+        "create_excluded_keyword_rule",
+        "create_project_folder_rule",
+        "create_project_for_rules",
+        "create_project_keyword_rule",
+        "delete_project_folder_rule",
+        "delete_project_for_rules",
+        "delete_project_keyword_rule",
+        "export_encrypted_backup",
+        "export_statistics_csv",
+        "get_first_run_notice",
+        "get_overview",
+        "get_project_rules",
+        "get_recent_activities",
+        "get_refresh_state",
+        "get_settings_privacy_status",
+        "get_statistics_export_summary",
+        "get_status",
+        "get_timeline",
+        "get_timeline_session_activity_summary",
+        "hide_timeline_session",
+        "hide_timeline_session_activity",
+        "import_encrypted_backup",
+        "list_projects_for_timeline",
+        "merge_timeline_session",
+        "preview_encrypted_backup_manifest",
+        "preview_project_rule_impact",
+        "preview_project_rules_batch_impact",
+        "save_timeline_session_edit",
+        "set_clipboard_capture_enabled",
+        "set_excluded_rules_enabled",
+        "set_project_enabled_for_rules",
+        "set_project_rule_enabled",
+        "set_project_rules_batch_enabled",
+        "split_timeline_session",
+        "toggle_pause",
+        "update_project_folder_rule",
+        "update_project_for_rules",
+        "update_project_keyword_rule",
+    }
+)
 
 
 class WebViewBridge(
@@ -23,31 +71,15 @@ class WebViewBridge(
     TimelineBridgeMixin,
     ProjectRulesBridgeMixin,
 ):
-    """Bridge object exposed to JS through pywebview's JS API.
-
-    Each method returns a plain dict (or list inside a dict) so pyweb view can
-    serialize it to JS. Errors never include tracebacks or sensitive fields.
-
-    Inherits from six mixins, each owning a page-level slice.
-    ``WebViewBridge`` itself only owns ``__init__`` and ``set_window``; every
-    public bridge method is inherited, including get_statistics_export_summary.
-    """
+    """Fixed set of named UI capabilities exposed through pywebview."""
 
     def __init__(self) -> None:
-        # The pywebview window is injected by webview_main.py after create_window so the bridge
-        # can open a native CSV save dialog. Stays None until set_window is called, so importing
-        # or unit-testing the bridge never starts the GUI.
         self._window: Any = None
 
-    def set_window(self, window: Any) -> None:
-        """Inject the pywebview window so the bridge can open native dialogs.
+    def _set_window(self, window: Any) -> None:
+        """Inject the already-created pywebview window for native dialogs."""
 
-        Called by ``worktrace.webview_main`` after ``webview.create_window``
-        returns. The bridge must not construct a window itself: that would
-        start the GUI on import / during tests. Until this is called the
-        CSV export save dialog is unavailable and returns a stable error.
-        """
         self._window = window
 
 
-__all__ = ["WebViewBridge"]
+__all__ = ["SHIPPING_METHODS", "WebViewBridge"]

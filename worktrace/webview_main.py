@@ -112,7 +112,7 @@ def main() -> int:
                 height=720,
                 min_size=(800, 540),
             )
-            bridge.set_window(window)
+            bridge._set_window(window)
             webview.start()
         except Exception:
             logging.exception("webview start failed")
