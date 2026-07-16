@@ -4,6 +4,7 @@ import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.db]
 
+from tests.support import activity_factory as activity_service
 from worktrace.platforms.base import ActiveWindow
 from worktrace.resources.detectors import (
     GenericAppDetector,
@@ -11,7 +12,7 @@ from worktrace.resources.detectors import (
     SystemDetector,
 )
 from worktrace.resources.local_file_detector import LocalFileDetector
-from worktrace.services import activity_service, folder_rule_service, project_service
+from worktrace.services import folder_rule_service, project_service
 from worktrace.services.project_inference_service import assign_project_for_activity
 
 
