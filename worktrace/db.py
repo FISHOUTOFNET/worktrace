@@ -23,7 +23,7 @@ from .report_structure_generation import bump_generation
 from .schema_migrations import MIN_SUPPORTED_SCHEMA_VERSION, migrate_schema
 from .write_gate import DATABASE_WRITE_GATE
 
-CURRENT_SCHEMA_VERSION = 5
+CURRENT_SCHEMA_VERSION = 6
 
 _WRITE_TOKEN_RE = re.compile(
     r"\b(?:INSERT|UPDATE|DELETE|REPLACE|CREATE|DROP|ALTER|VACUUM|REINDEX|ATTACH|DETACH)\b",
@@ -377,19 +377,47 @@ def apply_current_schema(conn: sqlite3.Connection) -> None:
     if version < MIN_SUPPORTED_SCHEMA_VERSION or version > CURRENT_SCHEMA_VERSION:
         raise ValueError("database_schema_incompatible")
     if version < CURRENT_SCHEMA_VERSION:
-        # The supported source schema must be structurally known before any
-        # data migration is allowed to run. v4 and v5 share the same table/index
-        # fingerprint; v5 only removes transient rows from settings.
-        _require_current_schema_fingerprint(conn)
+        _require_supported_source_schema(conn, version)
         version = migrate_schema(
             conn,
             current_version=version,
             target_version=CURRENT_SCHEMA_VERSION,
         )
+        ensure_current_indexes(conn)
     if version != CURRENT_SCHEMA_VERSION:
         raise ValueError("database_schema_incompatible")
     _require_current_schema_fingerprint(conn)
     seed_defaults(conn)
+
+
+def _require_supported_source_schema(
+    conn: sqlite3.Connection,
+    version: int,
+) -> None:
+    """Validate the stable v4/v5 structural boundary before migration."""
+
+    if version not in {4, 5}:
+        raise ValueError("database_schema_incompatible")
+    required = {
+        "project": {"id", "name", "is_deleted"},
+        "settings": {"key", "value"},
+        "activity_log": {"id", "start_time", "end_time", "duration_seconds"},
+        "folder_project_rule": {"id", "project_id"},
+        "folder_rule_index_state": {"folder_rule_id", "status", "valid_from"},
+        "folder_rule_file_index": {
+            "id",
+            "folder_rule_id",
+            "normalized_path_key",
+        },
+        "activity_project_assignment": {"activity_id", "project_id"},
+        "report_session_operation": {"id", "report_date", "sequence"},
+        "report_session_operation_member": {"operation_id", "activity_id"},
+        "report_mutation_request": {"request_id", "result_json"},
+        "activity_resource": {"activity_id", "identity_key"},
+    }
+    for table, columns in required.items():
+        if not columns.issubset(_table_columns(conn, table)):
+            raise ValueError("database_schema_incompatible")
 
 
 def schema_fingerprint(conn: sqlite3.Connection) -> str:
@@ -538,6 +566,8 @@ def drop_all_tables(conn: sqlite3.Connection) -> None:
         DROP TABLE IF EXISTS activity_resource;
         DROP TABLE IF EXISTS folder_rule_file_index;
         DROP TABLE IF EXISTS folder_rule_index_state;
+        DROP TABLE IF EXISTS history_mutation_job_rule;
+        DROP TABLE IF EXISTS history_mutation_job;
         DROP TABLE IF EXISTS report_session_operation_member;
         DROP TABLE IF EXISTS report_mutation_request;
         DROP TABLE IF EXISTS report_session_operation;
