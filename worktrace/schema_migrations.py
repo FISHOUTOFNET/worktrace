@@ -53,14 +53,71 @@ def migrate_5_to_6(conn: sqlite3.Connection) -> None:
         """
     )
 
-    conn.execute("ALTER TABLE folder_rule_index_state ADD COLUMN active_generation INTEGER")
-    conn.execute("ALTER TABLE folder_rule_index_state ADD COLUMN building_generation INTEGER")
+    # Rebuild both folder-index tables rather than appending columns. This keeps
+    # upgraded databases byte-for-byte structurally equivalent to fresh v6
+    # databases, which is required by WorkTrace's schema fingerprint contract.
     conn.execute(
-        "ALTER TABLE folder_rule_index_state ADD COLUMN build_status TEXT "
-        "CHECK(build_status IS NULL OR build_status IN "
-        "('pending', 'indexing', 'ready', 'stale', 'error'))"
+        "ALTER TABLE folder_rule_index_state RENAME TO folder_rule_index_state_v5"
     )
-    conn.execute("ALTER TABLE folder_rule_index_state ADD COLUMN last_error TEXT")
+    conn.execute(
+        """
+        CREATE TABLE folder_rule_index_state (
+            folder_rule_id INTEGER PRIMARY KEY,
+            status TEXT NOT NULL CHECK (
+                status IN ('pending', 'indexing', 'ready', 'stale', 'error')
+            ),
+            valid_from TEXT,
+            active_generation INTEGER,
+            building_generation INTEGER,
+            build_status TEXT CHECK (
+                build_status IS NULL OR build_status IN ('pending', 'indexing', 'ready', 'stale', 'error')
+            ),
+            last_error TEXT,
+            last_indexed_at TEXT,
+            last_checked_at TEXT,
+            file_count INTEGER NOT NULL DEFAULT 0,
+            error_message TEXT,
+            refresh_requested INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (folder_rule_id) REFERENCES folder_project_rule(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO folder_rule_index_state(
+            folder_rule_id, status, valid_from, active_generation,
+            building_generation, build_status, last_error, last_indexed_at,
+            last_checked_at, file_count, error_message, refresh_requested,
+            created_at, updated_at
+        )
+        SELECT
+            state.folder_rule_id,
+            CASE WHEN state.status = 'indexing' THEN 'pending' ELSE state.status END,
+            CASE WHEN state.status = 'indexing' THEN NULL ELSE state.valid_from END,
+            CASE
+                WHEN state.status IN ('ready', 'stale')
+                 AND EXISTS (
+                    SELECT 1 FROM folder_rule_file_index idx
+                    WHERE idx.folder_rule_id = state.folder_rule_id
+                 )
+                THEN 1 ELSE NULL
+            END,
+            NULL,
+            CASE WHEN state.status = 'indexing' THEN 'pending' ELSE state.status END,
+            state.error_message,
+            state.last_indexed_at,
+            state.last_checked_at,
+            CASE WHEN state.status = 'indexing' THEN 0 ELSE state.file_count END,
+            CASE WHEN state.status = 'indexing' THEN NULL ELSE state.error_message END,
+            CASE WHEN state.status = 'indexing' THEN 1 ELSE state.refresh_requested END,
+            state.created_at,
+            state.updated_at
+        FROM folder_rule_index_state_v5 state
+        """
+    )
+    conn.execute("DROP TABLE folder_rule_index_state_v5")
 
     conn.execute(
         "ALTER TABLE folder_rule_file_index RENAME TO folder_rule_file_index_v5"
@@ -96,19 +153,6 @@ def migrate_5_to_6(conn: sqlite3.Connection) -> None:
         """
     )
     conn.execute("DROP TABLE folder_rule_file_index_v5")
-    conn.execute(
-        """
-        UPDATE folder_rule_index_state
-        SET active_generation = CASE
-                WHEN EXISTS (
-                    SELECT 1 FROM folder_rule_file_index idx
-                    WHERE idx.folder_rule_id = folder_rule_index_state.folder_rule_id
-                ) THEN 1 ELSE NULL END,
-            building_generation = NULL,
-            build_status = status,
-            last_error = error_message
-        """
-    )
 
     conn.executescript(
         """
