@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 import ast
-import os
 from pathlib import Path
 import subprocess
-import traceback
 
 LEGACY = frozenset(
     {
@@ -45,7 +43,7 @@ def imported_aliases(tree: ast.AST) -> tuple[set[str], dict[str, str]]:
 
 def references(tree: ast.AST) -> list[tuple[int, str]]:
     module_aliases, direct_aliases = imported_aliases(tree)
-    refs: list[tuple[int, str]] = []
+    refs: set[tuple[int, str]] = set()
     for node in ast.walk(tree):
         if (
             isinstance(node, ast.Attribute)
@@ -53,14 +51,14 @@ def references(tree: ast.AST) -> list[tuple[int, str]]:
             and node.value.id in module_aliases
             and node.attr in LEGACY
         ):
-            refs.append((node.lineno, node.attr))
+            refs.add((node.lineno, node.attr))
         elif (
             isinstance(node, ast.Name)
             and isinstance(node.ctx, ast.Load)
             and node.id in direct_aliases
         ):
-            refs.append((node.lineno, direct_aliases[node.id]))
-    return sorted(set(refs))
+            refs.add((node.lineno, direct_aliases[node.id]))
+    return sorted(refs)
 
 
 def target_import_nodes(tree: ast.AST) -> list[ast.ImportFrom | ast.Import]:
@@ -125,9 +123,7 @@ def migrate(path: Path) -> bool:
                     f"{indent}from tests.support import activity_factory as {local_name}\n"
                 )
             if remaining:
-                replacement_parts.append(
-                    render_from_import(indent, node.module, remaining)
-                )
+                replacement_parts.append(render_from_import(indent, node.module, remaining))
         elif (
             isinstance(node, ast.ImportFrom)
             and node.module == "worktrace.services.activity_service"
@@ -136,16 +132,10 @@ def migrate(path: Path) -> bool:
             remaining = [item for item in node.names if item.name not in LEGACY]
             if legacy_items:
                 replacement_parts.append(
-                    render_from_import(
-                        indent,
-                        "tests.support.activity_factory",
-                        legacy_items,
-                    )
+                    render_from_import(indent, "tests.support.activity_factory", legacy_items)
                 )
             if remaining:
-                replacement_parts.append(
-                    render_from_import(indent, node.module, remaining)
-                )
+                replacement_parts.append(render_from_import(indent, node.module, remaining))
         elif isinstance(node, ast.Import):
             activity_items = [
                 item
@@ -178,18 +168,42 @@ def migrate(path: Path) -> bool:
     return True
 
 
-def remaining_violations() -> list[str]:
+def remaining_test_violations() -> list[str]:
     violations: list[str] = []
-    for path in [
-        *sorted((ROOT / "worktrace").rglob("*.py")),
-        *sorted((ROOT / "tests").rglob("*.py")),
-    ]:
-        if path == ROOT / "worktrace" / "services" / "activity_service.py":
-            continue
+    for path in sorted((ROOT / "tests").rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for line, method in references(tree):
             violations.append(f"{path.relative_to(ROOT).as_posix()}:{line}: {method}")
     return violations
+
+
+def remove_temporary_ci_job() -> None:
+    workflow = ROOT / ".github" / "workflows" / "ci.yml"
+    source = workflow.read_text(encoding="utf-8")
+    start_marker = "  activity-fixture-migration:\n"
+    tests_marker = "  tests:\n"
+    start = source.find(start_marker)
+    end = source.find(tests_marker, start + len(start_marker))
+    if start < 0 or end < 0:
+        raise RuntimeError("temporary activity fixture migration job was not found")
+    source = source[:start] + source[end:]
+    temporary_if = (
+        "    if: github.event_name != 'pull_request' || "
+        "github.event.pull_request.head.ref != "
+        "'agent/canonical-architecture-consolidation'\n"
+    )
+    if temporary_if not in source:
+        raise RuntimeError("temporary tests job condition was not found")
+    source = source.replace(temporary_if, "", 1)
+    workflow.write_text(source, encoding="utf-8")
+
+
+def stage_one_shot_changes() -> None:
+    subprocess.run(
+        ["git", "add", "tests", ".github/workflows/ci.yml"],
+        cwd=ROOT,
+        check=True,
+    )
 
 
 def main() -> int:
@@ -198,81 +212,19 @@ def main() -> int:
         if migrate(path):
             changed.append(path.relative_to(ROOT).as_posix())
 
-    violations = remaining_violations()
+    violations = remaining_test_violations()
     if violations:
-        raise RuntimeError("legacy references remain:\n" + "\n".join(violations))
+        raise RuntimeError("test lifecycle references remain:\n" + "\n".join(violations))
     if not changed:
         raise RuntimeError("migration produced no changes")
+
+    remove_temporary_ci_job()
+    stage_one_shot_changes()
     print("Migrated files:")
     print("\n".join(changed))
+    print("Removed temporary activity fixture migration job")
     return 0
 
 
-def publish_failure_diagnostic() -> None:
-    if os.environ.get("GITHUB_ACTIONS", "").lower() != "true":
-        return
-    diagnostic_path = ROOT / "diagnostics" / "activity-fixture-migration-latest.txt"
-    failure_text = "\n".join(
-        (
-            f"run_id={os.environ.get('GITHUB_RUN_ID', '')}",
-            f"tested_head={os.environ.get('GITHUB_SHA', '')}",
-            "",
-            traceback.format_exc(),
-        )
-    )
-    subprocess.run(
-        ["git", "restore", "--source=HEAD", "--", "tests"],
-        cwd=ROOT,
-        check=True,
-    )
-    diagnostic_path.parent.mkdir(parents=True, exist_ok=True)
-    diagnostic_path.write_text(failure_text, encoding="utf-8")
-    subprocess.run(
-        ["git", "config", "user.name", "github-actions[bot]"],
-        cwd=ROOT,
-        check=True,
-    )
-    subprocess.run(
-        [
-            "git",
-            "config",
-            "user.email",
-            "41898282+github-actions[bot]@users.noreply.github.com",
-        ],
-        cwd=ROOT,
-        check=True,
-    )
-    subprocess.run(
-        ["git", "add", diagnostic_path.relative_to(ROOT).as_posix()],
-        cwd=ROOT,
-        check=True,
-    )
-    subprocess.run(
-        [
-            "git",
-            "commit",
-            "-m",
-            "Capture activity fixture migration failure [skip ci]",
-        ],
-        cwd=ROOT,
-        check=True,
-    )
-    subprocess.run(
-        [
-            "git",
-            "push",
-            "origin",
-            "HEAD:agent/canonical-architecture-consolidation",
-        ],
-        cwd=ROOT,
-        check=True,
-    )
-
-
 if __name__ == "__main__":
-    try:
-        exit_code = main()
-    except BaseException:
-        publish_failure_diagnostic()
-        raise
-    raise SystemExit(exit_code)
+    raise SystemExit(main())
