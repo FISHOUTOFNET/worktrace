@@ -6,10 +6,11 @@ import tempfile
 import pytest
 from openpyxl import load_workbook
 
+from tests.support import activity_factory as activity_service
 from worktrace.constants import STATUS_ERROR, STATUS_EXCLUDED, STATUS_IDLE, STATUS_PAUSED
 from worktrace.db import get_connection, now_str
 from worktrace.exports.excel_exporter import export_excel_file
-from worktrace.services import activity_service, project_service
+from worktrace.services import project_service
 
 pytestmark = [pytest.mark.db, pytest.mark.contract]
 
