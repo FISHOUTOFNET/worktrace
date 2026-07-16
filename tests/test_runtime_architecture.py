@@ -93,7 +93,7 @@ def test_open_activity_progress_is_checkpointed(monkeypatch):
         lambda **kwargs: 41,
     )
     monkeypatch.setattr(
-        "worktrace.collector.activity_session_recorder.activity_service.set_activity_duration",
+        "worktrace.collector.activity_session_recorder.lifecycle_checkpoint_activity",
         lambda activity_id, seconds: writes.append((activity_id, seconds)),
     )
     recorder = ActivitySessionRecorder()
