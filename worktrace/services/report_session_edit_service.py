@@ -5,6 +5,10 @@ from __future__ import annotations
 from . import report_session_operation_service
 from .report_projection_model import MutationResult
 
+# Transitional test/extension compatibility. Production code must call the
+# public edit_session facade and must not import private UOW helpers.
+operations = report_session_operation_service
+
 
 def edit_session(
     report_date: str,
