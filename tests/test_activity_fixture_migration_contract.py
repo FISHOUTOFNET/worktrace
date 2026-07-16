@@ -60,13 +60,10 @@ def _legacy_references(path: Path) -> list[str]:
         ):
             references.add((node.lineno, direct_aliases[node.id]))
 
-    return [
-        f"{path.as_posix()}:{line}: {method}"
-        for line, method in sorted(references)
-    ]
+    return [f"line {line}: {method}" for line, method in sorted(references)]
 
 
-def test_no_code_outside_activity_service_uses_legacy_lifecycle_methods() -> None:
+def _remaining_reference_groups() -> list[tuple[str, tuple[str, ...]]]:
     project_root = Path(__file__).resolve().parents[1]
     candidates = [
         *sorted((project_root / "worktrace").rglob("*.py")),
@@ -76,10 +73,30 @@ def test_no_code_outside_activity_service_uses_legacy_lifecycle_methods() -> Non
         project_root / "worktrace" / "services" / "activity_service.py",
         Path(__file__).resolve(),
     }
-    violations: list[str] = []
+    groups: list[tuple[str, tuple[str, ...]]] = []
     for path in candidates:
         if path in excluded:
             continue
-        violations.extend(_legacy_references(path))
+        references = tuple(_legacy_references(path))
+        if references:
+            groups.append((path.relative_to(project_root).as_posix(), references))
+    return groups
 
-    assert not violations, "legacy activity lifecycle references remain:\n" + "\n".join(violations)
+
+REMAINING_REFERENCE_GROUPS = _remaining_reference_groups()
+PARAMETERS = REMAINING_REFERENCE_GROUPS or [("no_remaining_references", ())]
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "references"),
+    PARAMETERS,
+    ids=[relative_path for relative_path, _references in PARAMETERS],
+)
+def test_no_code_outside_activity_service_uses_legacy_lifecycle_methods(
+    relative_path: str,
+    references: tuple[str, ...],
+) -> None:
+    assert not references, (
+        f"{relative_path} still uses legacy activity lifecycle methods:\n"
+        + "\n".join(references)
+    )
