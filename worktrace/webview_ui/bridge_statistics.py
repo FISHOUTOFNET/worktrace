@@ -43,6 +43,7 @@ class StatisticsBridgeMixin:
     """Statistics / Export bridge methods."""
 
     def get_statistics_export_summary(self, date_from, date_to) -> dict[str, Any]:
+        """Reject non-string transport values, including bool, before the API."""
         try:
             if not isinstance(date_from, str) or not isinstance(date_to, str):
                 return {"ok": False, "error": "请选择有效日期", "summary": None}
