@@ -1,9 +1,9 @@
 name: Architecture contract patch
 
 on:
-  push:
+  pull_request:
     branches:
-      - agent/architecture-scalability-hardening
+      - main
     paths:
       - .github/workflows/architecture-contract-patch.yml
 
@@ -12,6 +12,7 @@ permissions:
 
 jobs:
   patch:
+    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -75,6 +76,72 @@ jobs:
                 started = started or history_ready
 
             return bool(started and index_ready and history_ready)
+''',
+          )
+
+          replace_once(
+              "worktrace/services/project_inference_service.py",
+              '''def assign_project_for_activity(activity_id: int) -> dict:
+    with get_connection() as conn:
+        return _assign_project_for_activity_in_transaction(conn, activity_id)
+
+
+def _assign_project_for_activity_in_transaction(
+''',
+              '''def assign_project_for_activity(activity_id: int) -> dict:
+    with get_connection() as conn:
+        return assign_project_for_activity_in_transaction(conn, activity_id)
+
+
+def assign_project_for_activity_in_transaction(
+    conn,
+    activity_id: int,
+    *,
+    exclude_rule: tuple[str, int] | None = None,
+) -> dict:
+    """Assign one activity inside the caller-owned transaction."""
+
+    return _assign_project_for_activity_in_transaction(
+        conn,
+        activity_id,
+        exclude_rule=exclude_rule,
+    )
+
+
+def _assign_project_for_activity_in_transaction(
+''',
+          )
+
+          replace_once(
+              "worktrace/services/history_mutation_job_service.py",
+              '''    from .project_inference_service import _assign_project_for_activity_in_transaction
+
+    activity_ids = [int(row["activity_id"]) for row in rows]
+''',
+              '''    from .project_inference_service import assign_project_for_activity_in_transaction
+
+    activity_ids = [int(row["activity_id"]) for row in rows]
+''',
+          )
+          replace_once(
+              "worktrace/services/history_mutation_job_service.py",
+              '''            _assign_project_for_activity_in_transaction(
+                conn,
+''',
+              '''            assign_project_for_activity_in_transaction(
+                conn,
+''',
+          )
+
+          replace_once(
+              "tests/test_rule_history_application_service.py",
+              '''        project_inference_service,
+        "_assign_project_for_activity_in_transaction",
+        boom,
+''',
+              '''        project_inference_service,
+        "assign_project_for_activity_in_transaction",
+        boom,
 ''',
           )
 
