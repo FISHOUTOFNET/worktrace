@@ -54,7 +54,12 @@ class CollectorControl:
             with self._lock:
                 self._pause_requested = False
                 self._refresh_wake_event_locked()
-            return {"ok": False, "pause_pending": False, "timed_out": True}
+            return {
+                "ok": False,
+                "pause_pending": False,
+                "timed_out": True,
+                "command_state_unknown": True,
+            }
         with self._lock:
             return dict(self._pause_result)
 
@@ -81,7 +86,12 @@ class CollectorControl:
             with self._lock:
                 self._reset_requested = False
                 self._refresh_wake_event_locked()
-            return {"ok": False, "reset_pending": False, "timed_out": True}
+            return {
+                "ok": False,
+                "reset_pending": False,
+                "timed_out": True,
+                "command_state_unknown": True,
+            }
         with self._lock:
             return dict(self._reset_result)
 
@@ -117,18 +127,39 @@ def run_collector(
     adapter: PlatformAdapter,
     stop_event: threading.Event,
     control: CollectorControl | None = None,
+    startup_ready_event: threading.Event | None = None,
+    startup_failed_event: threading.Event | None = None,
 ) -> None:
-    machine = CollectorStateMachine()
-    clock_tracker = ClockTracker()
-    last_loop_time: str | None = None
-    heartbeat_counter = 0
-    prune_counter = 0
-    fatal_stop = False
-    logging.info("collector start")
-    collector_health.record_collector_started(now_str())
-    _normalize_poll_interval_setting()
-    clipboard_service.prune_old_events()
-    next_poll_deadline = time.monotonic() + POLL_CADENCE_SECONDS
+    """Run the collector and publish an explicit initialization handshake.
+
+    ``startup_ready_event`` is set only after the state machine, clock tracker,
+    health state, fixed poll contract, and startup pruning have initialized.
+    ``startup_failed_event`` is set when that initialization fails before the
+    collector can enter its service loop.
+    """
+
+    try:
+        machine = CollectorStateMachine()
+        clock_tracker = ClockTracker()
+        last_loop_time: str | None = None
+        heartbeat_counter = 0
+        prune_counter = 0
+        fatal_stop = False
+        logging.info("collector start")
+        collector_health.record_collector_started(now_str())
+        _normalize_poll_interval_setting()
+        clipboard_service.prune_old_events()
+        next_poll_deadline = time.monotonic() + POLL_CADENCE_SECONDS
+    except Exception as exc:
+        collector_health.record_fatal_failure("startup", exc, now_str())
+        collector_health.record_collector_stopped(now_str())
+        if startup_failed_event is not None:
+            startup_failed_event.set()
+        logging.exception("collector startup initialization failed")
+        return
+
+    if startup_ready_event is not None:
+        startup_ready_event.set()
 
     while not stop_event.is_set():
         phase = "loop"
@@ -260,7 +291,6 @@ def run_collector(
                 try:
                     excluded = privacy_service.is_excluded(active_window)
                 except privacy_service.PrivacyResolutionPending:
-                    # An unresolved path is represented by an anonymous sample.
                     collector_health.record_health_code(
                         "privacy_resolution_pending",
                         observation_time,
@@ -272,7 +302,11 @@ def run_collector(
                     if excluded:
                         machine.transition_to("excluded", at_time=observation_time)
                     else:
-                        machine.transition_to("recording", active_window, at_time=observation_time)
+                        machine.transition_to(
+                            "recording",
+                            active_window,
+                            at_time=observation_time,
+                        )
                         for event in clipboard_events:
                             machine.record_clipboard_event(
                                 event,
