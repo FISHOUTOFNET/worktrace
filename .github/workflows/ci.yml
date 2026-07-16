@@ -35,8 +35,12 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path "test-results" | Out-Null
-          & python scripts/cutover_runtime_settings.py *> "test-results/cutover-apply.log"
+          & python scripts/fix_runtime_settings_cutover_escape.py *> "test-results/cutover-apply.log"
           $applyExitCode = $LASTEXITCODE
+          if ($applyExitCode -eq 0) {
+            & python scripts/cutover_runtime_settings.py *>> "test-results/cutover-apply.log"
+            $applyExitCode = $LASTEXITCODE
+          }
           Write-Host "runtime/settings cutover apply exit code: $applyExitCode"
           if ($applyExitCode -ne 0) {
             Get-Content -LiteralPath "test-results/cutover-apply.log" -Tail 200 |
@@ -122,7 +126,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           $parent = git rev-parse "$env:GITHUB_SHA^"
           git checkout $parent -- .github/workflows/ci.yml
-          git rm scripts/cutover_runtime_settings.py
+          git rm scripts/cutover_runtime_settings.py scripts/fix_runtime_settings_cutover_escape.py
           git add worktrace tests .github/workflows/ci.yml
           git commit -m "Separate runtime state from durable settings [skip ci]"
           git push origin "HEAD:agent/canonical-architecture-consolidation"
