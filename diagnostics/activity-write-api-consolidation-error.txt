@@ -1,0 +1,8 @@
+Traceback (most recent call last):
+  File "/home/runner/work/worktrace/worktrace/scripts/consolidate_activity_write_api.py", line 90, in <module>
+    main()
+  File "/home/runner/work/worktrace/worktrace/scripts/consolidate_activity_write_api.py", line 81, in main
+    remove_functions(Path("worktrace/services/activity_service.py"))
+  File "/home/runner/work/worktrace/worktrace/scripts/consolidate_activity_write_api.py", line 40, in remove_functions
+    raise RuntimeError(f"activity_service functions not found: {sorted(missing)}")
+RuntimeError: activity_service functions not found: ['close_all_open_activities']
