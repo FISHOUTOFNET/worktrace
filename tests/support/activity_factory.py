@@ -3,7 +3,11 @@ from __future__ import annotations
 from worktrace.constants import SOURCE_AUTO, STATUS_NORMAL
 from worktrace.db import get_connection
 from worktrace.resources.types import DetectedResource
-from worktrace.services import activity_service
+from worktrace.services import (
+    activity_fact_repository,
+    activity_lifecycle_service,
+    project_inference_service,
+)
 
 
 def create_open_activity(
@@ -19,17 +23,22 @@ def create_open_activity(
     note: str | None = None,
     resource: DetectedResource | None = None,
 ) -> int:
-    return activity_service.create_activity(
-        app_name,
-        process_name,
-        window_title,
+    del note
+    prepared = activity_fact_repository.prepare_activity(
         start_time=start_time,
-        status=status,
         source=source,
-        project_id=project_id,
-        file_path_hint=file_path_hint,
-        resource=resource,
+        payload={
+            "app_name": app_name,
+            "process_name": process_name,
+            "window_title": window_title,
+            "status": status,
+            "project_id": project_id,
+            "file_path_hint": file_path_hint,
+            "resource": resource,
+        },
     )
+    with get_connection() as conn:
+        return activity_fact_repository.insert_open_activity(conn, prepared)
 
 
 def create_closed_activity(
@@ -53,14 +62,13 @@ def create_closed_activity(
         file_path_hint=file_path_hint,
         note=note,
     )
-    activity_service.finalize_created_activity(activity_id)
-    activity_service.close_activity(activity_id, f"{day} {end}")
+    activity_lifecycle_service.close_activity(activity_id, f"{day} {end}")
     return activity_id
 
 
 def create_finalized_activity(**kwargs) -> int:
     activity_id = create_open_activity(**kwargs)
-    activity_service.finalize_created_activity(activity_id)
+    project_inference_service.process_new_activity(activity_id)
     return activity_id
 
 
@@ -87,6 +95,5 @@ def create_cross_day_activity(
         start_time=start_time,
         project_id=project_id,
     )
-    activity_service.finalize_created_activity(activity_id)
-    activity_service.close_activity(activity_id, end_time)
+    activity_lifecycle_service.close_activity(activity_id, end_time)
     return activity_id
