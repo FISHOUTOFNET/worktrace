@@ -65,6 +65,12 @@ CREATE TABLE IF NOT EXISTS folder_rule_index_state (
         status IN ('pending', 'indexing', 'ready', 'stale', 'error')
     ),
     valid_from TEXT,
+    active_generation INTEGER,
+    building_generation INTEGER,
+    build_status TEXT CHECK (
+        build_status IS NULL OR build_status IN ('pending', 'indexing', 'ready', 'stale', 'error')
+    ),
+    last_error TEXT,
     last_indexed_at TEXT,
     last_checked_at TEXT,
     file_count INTEGER NOT NULL DEFAULT 0,
@@ -78,6 +84,7 @@ CREATE TABLE IF NOT EXISTS folder_rule_index_state (
 CREATE TABLE IF NOT EXISTS folder_rule_file_index (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     folder_rule_id INTEGER NOT NULL,
+    generation INTEGER NOT NULL DEFAULT 1,
     file_name TEXT NOT NULL,
     normalized_file_name TEXT NOT NULL,
     file_path TEXT NOT NULL,
@@ -87,7 +94,7 @@ CREATE TABLE IF NOT EXISTS folder_rule_file_index (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     FOREIGN KEY (folder_rule_id) REFERENCES folder_project_rule(id) ON DELETE CASCADE,
-    UNIQUE(folder_rule_id, normalized_path_key)
+    UNIQUE(folder_rule_id, generation, normalized_path_key)
 );
 
 CREATE TABLE IF NOT EXISTS project_rule (
@@ -104,6 +111,34 @@ CREATE TABLE IF NOT EXISTS project_rule (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     FOREIGN KEY (project_id) REFERENCES project(id)
+);
+
+CREATE TABLE IF NOT EXISTS history_mutation_job (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL CHECK (
+        kind IN ('rule_backfill', 'rule_remove', 'rule_delete')
+    ),
+    status TEXT NOT NULL CHECK (
+        status IN ('pending', 'running', 'completed', 'failed', 'cancelled')
+    ),
+    payload_json TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(payload_json)),
+    cutoff_activity_id INTEGER NOT NULL DEFAULT 0,
+    cursor_activity_id INTEGER NOT NULL DEFAULT 0,
+    processed_count INTEGER NOT NULL DEFAULT 0,
+    changed_count INTEGER NOT NULL DEFAULT 0,
+    skipped_count INTEGER NOT NULL DEFAULT 0,
+    error_message TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS history_mutation_job_rule (
+    job_id INTEGER NOT NULL,
+    rule_type TEXT NOT NULL CHECK(rule_type IN ('folder', 'keyword')),
+    rule_id INTEGER NOT NULL,
+    rule_version TEXT NOT NULL,
+    PRIMARY KEY(job_id, rule_type, rule_id),
+    FOREIGN KEY(job_id) REFERENCES history_mutation_job(id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS activity_project_assignment (
