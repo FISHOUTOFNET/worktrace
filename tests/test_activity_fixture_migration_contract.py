@@ -80,13 +80,14 @@ def _reference_groups(
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+ACTIVITY_SERVICE_PATH = PROJECT_ROOT / "worktrace" / "services" / "activity_service.py"
 TEST_REFERENCE_GROUPS = _reference_groups(
     PROJECT_ROOT / "tests",
     excluded={Path(__file__).resolve()},
 )
 PRODUCTION_REFERENCE_GROUPS = _reference_groups(
     PROJECT_ROOT / "worktrace",
-    excluded={PROJECT_ROOT / "worktrace" / "services" / "activity_service.py"},
+    excluded={ACTIVITY_SERVICE_PATH},
 )
 
 TEST_PARAMETERS = TEST_REFERENCE_GROUPS or [("no_remaining_test_references", ())]
@@ -122,4 +123,20 @@ def test_production_uses_activity_lifecycle_owner(
     assert not references, (
         f"{relative_path} still bypasses the activity lifecycle owner:\n"
         + "\n".join(references)
+    )
+
+
+def test_activity_service_defines_no_legacy_lifecycle_crud() -> None:
+    tree = ast.parse(
+        ACTIVITY_SERVICE_PATH.read_text(encoding="utf-8"),
+        filename=str(ACTIVITY_SERVICE_PATH),
+    )
+    definitions = {
+        node.name
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    assert definitions.isdisjoint(LEGACY_LIFECYCLE_METHODS), (
+        "activity_service still defines legacy lifecycle CRUD: "
+        + ", ".join(sorted(definitions & LEGACY_LIFECYCLE_METHODS))
     )
