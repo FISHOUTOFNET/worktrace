@@ -42,6 +42,9 @@ def test_open_edit_replays_after_activity_closes(temp_db):
             "project_id": original_project,
         },
     )
+    # Canonical reporting intentionally suppresses zero-duration facts. Simulate
+    # the first durable Recorder checkpoint before editing the open interval.
+    activity_service.set_activity_duration(activity_id, 60)
     session = _session_for(activity_id)
     result = report_session_edit_service.edit_session(
         DATE,
