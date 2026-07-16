@@ -1,6 +1,0 @@
-Traceback (most recent call last):
-  File "/home/runner/work/worktrace/worktrace/scripts/cleanup_page_owner_references.py", line 71, in <module>
-    main()
-  File "/home/runner/work/worktrace/worktrace/scripts/cleanup_page_owner_references.py", line 62, in main
-    raise RuntimeError("legacy page owner references remain: " + ", ".join(offenders))
-RuntimeError: legacy page owner references remain: tests/test_runtime_architecture.py:overview_view_model_service, tests/test_runtime_architecture.py:timeline_view_model_service, tests/test_runtime_architecture.py:session_detail_view_model_service, tests/test_architecture_consolidation_validation.py:overview_view_model_service, tests/test_architecture_consolidation_validation.py:timeline_view_model_service, tests/test_architecture_consolidation_validation.py:session_detail_view_model_service
