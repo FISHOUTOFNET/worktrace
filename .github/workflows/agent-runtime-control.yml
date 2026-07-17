@@ -38,6 +38,7 @@ jobs:
           python .github/agent_fix_runtime_control_source.py
           python -c "from pathlib import Path; p=Path('.github/agent_apply_runtime_control.py'); s=p.read_text(encoding='utf-8'); old='    write(path, content[:start_index] + replacement + content[end_index:])'; new='    end_index += len(end)\n    write(path, content[:start_index] + replacement + content[end_index:])'; assert s.count(old) == 1, s.count(old); p.write_text(s.replace(old, new, 1), encoding='utf-8')"
           python .github/agent_apply_runtime_control.py *> stage.log
+          if ($LASTEXITCODE -eq 0) { python .github/agent_fix_runtime_control_output.py *>> stage.log }
           $code = $LASTEXITCODE
           Get-Content stage.log -Tail 240
           if ($code -ne 0) { exit $code }
@@ -84,7 +85,7 @@ jobs:
         if: steps.migrate.outcome == 'success' && steps.validate.outcome == 'success'
         shell: pwsh
         run: |
-          git rm .github/agent_apply_runtime_control.py .github/agent_fix_runtime_control_source.py .github/workflows/agent-runtime-control.yml
+          git rm .github/agent_apply_runtime_control.py .github/agent_fix_runtime_control_source.py .github/agent_fix_runtime_control_output.py .github/workflows/agent-runtime-control.yml
           git add -A
           git commit -m "Harden collector lifecycle and maintenance commands"
           git push origin HEAD:agent/canonical-architecture-consolidation
