@@ -106,11 +106,11 @@ class CollectorStateMachine:
             else ActivityEndReason.RESOURCE_SWITCH
         )
         if boundary_required and previous_status != status:
-            detached = self.recorder.stop_for_boundary(
+            prepared = self.recorder.stop_for_boundary(
                 transition_time,
                 end_reason,
             )
-            self._commit_boundary(transition_time, boundary_reason, detached)
+            self._commit_boundary(transition_time, boundary_reason, prepared)
         self.recorder.observe(
             payload,
             signature,
@@ -199,12 +199,12 @@ class CollectorStateMachine:
         self.active_signature = None
 
     def split_at_midnight(self, at_time: str) -> None:
-        prepared = self.recorder.prepare_midnight_split(at_time)
-        if prepared is None:
+        split = self.recorder.prepare_midnight_split(at_time)
+        if split is None:
             self._commit_boundary(at_time, "midnight", None)
             return
-        payload, signature, project_id, detached = prepared
-        self._commit_boundary(at_time, "midnight", detached)
+        payload, signature, project_id, prepared = split
+        self._commit_boundary(at_time, "midnight", prepared)
         self.recorder.resume_midnight_split(
             payload,
             signature,
@@ -235,28 +235,30 @@ class CollectorStateMachine:
         self.active_signature = None
 
     def _stop_recording_at_boundary(self, at_time: str, reason: str) -> None:
-        detached = self.recorder.stop_for_boundary(
+        prepared = self.recorder.stop_for_boundary(
             at_time,
             _end_reason_for_boundary(reason),
         )
-        self._commit_boundary(at_time, reason, detached)
+        self._commit_boundary(at_time, reason, prepared)
 
-    @staticmethod
     def _commit_boundary(
+        self,
         at_time: str,
         reason: str,
-        detached: BoundaryClose | None,
+        prepared: BoundaryClose | None,
     ) -> None:
         activity_id: int | None = None
         duration_seconds: int | None = None
-        if detached is not None:
-            activity_id, _end_time, duration_seconds = detached
+        if prepared is not None:
+            activity_id = prepared.activity_id
+            duration_seconds = prepared.duration_seconds
         activity_lifecycle_service.close_at_boundary(
             at_time,
             reason,
             current_activity_id=activity_id,
             current_duration_seconds=duration_seconds,
         )
+        self.recorder.finalize_prepared_close(prepared)
 
     def _current_activity_id_for_clipboard_event(
         self,
