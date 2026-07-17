@@ -76,14 +76,24 @@ def test_frontend_resources_do_not_persist_browser_state(filename: str) -> None:
 
 
 def test_frontend_modules_share_one_namespace_and_iife_boundary() -> None:
+    forbidden_patterns = (
+        r"\bimport\s+[\w{}\s,]+\s+from\s",
+        r"\bimport\s*\{",
+        r"\bimport\s+['\"]",
+        r"\bexport\s+default\b",
+        r"\bexport\s*\{",
+        r"\bexport\s+(?:const|let|var|function)\s+\w+",
+        r"\brequire\s*\(",
+    )
     for name in ALL_JS_FILES:
         source = read_js(name).strip()
         assert "var App = window.WorkTraceApp = window.WorkTraceApp || {};" in source
         assert "(function () {" in source[:400]
         assert source.endswith("})();")
-        assert not re.search(r"\bimport\s+.+\s+from\s", source)
-        assert not re.search(r"\bexport\s+(?:default|const|let|var|function|\{)", source)
-        assert not re.search(r"\brequire\s*\(", source)
+        for pattern in forbidden_patterns:
+            assert not re.search(pattern, source), (
+                "js/" + name + " must not use module-loader syntax: " + pattern
+            )
 
 
 def test_only_init_module_owns_pywebview_and_startup_wiring() -> None:
