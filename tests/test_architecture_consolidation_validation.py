@@ -59,7 +59,11 @@ def test_session_summary_api_calls_keyword_only_service(monkeypatch):
         expected_projection_revision="a" * 40,
     )
 
-    assert result == {"ok": True, "summary_rows": []}
+    assert result["ok"] is True
+    assert result["summary_rows"] == []
+    assert result["runtime"]["schema_version"] == 1
+    assert result["runtime"]["surface"] == "details"
+    assert result["runtime"]["scope_report_date"] == "2026-07-16"
     assert captured == {
         "report_date": "2026-07-16",
         "projection_instance_key": "session:1",
