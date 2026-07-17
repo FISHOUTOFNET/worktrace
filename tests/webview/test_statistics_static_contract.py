@@ -240,14 +240,20 @@ def test_statistics_navigation_and_buttons_use_named_capabilities() -> None:
         assert capability in buttons
 
 
-def test_statistics_styles_are_scoped() -> None:
+def test_statistics_styles_match_the_rendered_surface() -> None:
+    index = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    section = html_section_by_id(index, "page-statistics")
     styles = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
-    for selector in (
-        ".statistics-header",
-        ".statistics-loading",
-        ".statistics-error",
-        ".stats-summary",
-        ".stats-table",
-        ".stats-export-status",
+
+    for class_name in (
+        "stats-header",
+        "stats-loading",
+        "stats-summary-grid",
+        "stats-table",
+        "stats-export-status",
     ):
-        assert selector in styles
+        assert 'class="' + class_name in section or (" " + class_name) in section
+        assert "." + class_name in styles
+
+    assert 'id="statistics-error" class="error-banner"' in section
+    assert ".error-banner" in styles
