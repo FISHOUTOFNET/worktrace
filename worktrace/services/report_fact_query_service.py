@@ -4,14 +4,8 @@ from __future__ import annotations
 
 from datetime import date as date_type, datetime, time as datetime_time, timedelta
 
-from ..constants import (
-    DEFAULT_CONTEXT_CARRY_MINUTES,
-    STATUS_EXCLUDED,
-    TIME_FORMAT,
-    UNCATEGORIZED_PROJECT,
-)
+from ..constants import DEFAULT_CONTEXT_CARRY_MINUTES, TIME_FORMAT, UNCATEGORIZED_PROJECT
 from ..db import get_connection
-from ..platforms.base import ActiveWindow
 from . import clipboard_service, session_boundary_service
 from .context_service import ReportContextProjection
 from .project_attribution_policy import official_project_fields, report_project_fields
@@ -39,12 +33,7 @@ def load_report_activity_rows(
     *,
     conn=None,
 ) -> list[dict]:
-    """Load canonical facts without routing through a page adapter.
-
-    Activity, assignment, project and resource are loaded in one query. Clipboard
-    timestamps are loaded once for the complete activity set before contextual
-    attribution is calculated.
-    """
+    """Load canonical persisted facts without routing through a page adapter."""
 
     if conn is None:
         with get_connection() as read_conn:
@@ -173,28 +162,14 @@ def _attach_resource_fields(row: dict) -> None:
     path_hint = row.pop("joined_resource_path_hint", None)
     uri_host = row.pop("joined_resource_uri_host", None)
     if kind is None:
-        from ..resources.detectors import detect_resource
-        from ..resources.resource_builders import make_system_resource
-
-        if str(row.get("status") or "") == STATUS_EXCLUDED:
-            detected = make_system_resource(STATUS_EXCLUDED)
-        else:
-            detected = detect_resource(
-                ActiveWindow(
-                    app_name=str(row.get("app_name") or ""),
-                    process_name=str(row.get("process_name") or ""),
-                    window_title=str(row.get("window_title") or ""),
-                    file_path_hint=row.get("file_path_hint"),
-                    activity_start_time=str(row.get("start_time") or "") or None,
-                )
-            )
-        kind = detected.resource_kind
-        subtype = detected.resource_subtype
-        display_name = detected.display_name
-        identity_key = detected.identity_key
-        is_anchor = detected.is_anchor
-        path_hint = detected.path_hint
-        uri_host = detected.uri_host
+        activity_id = int(row.get("id") or 0)
+        kind = "unknown"
+        subtype = "unknown"
+        display_name = str(row.get("app_name") or row.get("process_name") or "未知")
+        identity_key = f"activity:{activity_id}"
+        is_anchor = False
+        path_hint = None
+        uri_host = None
     row.update(
         {
             "resource_kind": kind,
