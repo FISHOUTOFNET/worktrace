@@ -6,7 +6,10 @@ from datetime import datetime, time as datetime_time, timedelta
 from ..constants import STATUS_ERROR, STATUS_NORMAL, TIME_FORMAT
 from ..db import get_connection, now_str
 from . import project_service, session_boundary_service
-from .activity_fact_repair_service import repair_missing_activity_resources
+from .activity_fact_repair_service import (
+    get_activity_fact_repair_state,
+    repair_missing_activity_resources,
+)
 from .activity_lifecycle_service import (
     recover_close_activity,
     recover_cross_midnight_segment,
@@ -92,13 +95,17 @@ def recover_unclosed_records() -> None:
 
 
 def _repair_missing_resource_facts() -> None:
-    try:
-        repaired = repair_missing_activity_resources()
-    except Exception:
-        logging.exception("startup activity resource fact repair failed")
-        return
-    if repaired:
-        logging.info("startup repaired missing activity resources count=%s", repaired)
+    repaired = repair_missing_activity_resources()
+    state = get_activity_fact_repair_state()
+    logging.info(
+        "startup activity resource repair policy=%s status=%s repaired=%s "
+        "unknown=%s errors=%s",
+        state["policy_version"],
+        state["status"],
+        repaired,
+        state["unknown_count"],
+        state["error_count"],
+    )
 
 
 def _recover_cross_midnight_row(row, end_dt: datetime) -> str:

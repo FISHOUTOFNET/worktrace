@@ -1,5 +1,6 @@
 {
   "read_time_resource_detection": [],
+  "read_time_resource_identity_fallback": [],
   "live_project_database_fallback": [],
   "page_read_write_capability": [],
   "temporary_workflow_or_agent_helper": []

@@ -128,28 +128,19 @@ def attach_resource(
     if activity_id is None:
         return item
     resource = get_resource_for_activity(int(activity_id), conn=conn)
-    if resource is None:
-        item["resource_kind"] = "unknown"
-        item["resource_subtype"] = "unknown"
-        item["resource_display_name"] = (
-            item.get("app_name") or item.get("process_name") or "未知"
-        )
-        item["resource_identity_key"] = f"activity:{int(activity_id)}"
-        item["resource_is_anchor"] = False
-        item["resource_path_hint"] = None
-        item["resource_uri_host"] = None
-    else:
-        item["resource_kind"] = resource["resource_kind"]
-        item["resource_subtype"] = resource["resource_subtype"]
-        item["resource_display_name"] = resource["display_name"]
-        item["resource_identity_key"] = resource["identity_key"]
-        item["resource_is_anchor"] = bool(resource["is_anchor"])
-        item["resource_path_hint"] = resource.get("path_hint")
-        item["resource_uri_host"] = resource.get("uri_host")
+    if resource is None or not resource.get("identity_key"):
+        raise ValueError("data_repair_required")
+    item["resource_kind"] = resource["resource_kind"]
+    item["resource_subtype"] = resource["resource_subtype"]
+    item["resource_display_name"] = resource["display_name"]
+    item["resource_identity_key"] = resource["identity_key"]
+    item["resource_is_anchor"] = bool(resource["is_anchor"])
+    item["resource_path_hint"] = resource.get("path_hint")
+    item["resource_uri_host"] = resource.get("uri_host")
     item["activity_display_name"] = (
         item.get("resource_display_name") or item.get("app_name", "")
     )
-    item["activity_identity_key"] = item.get("resource_identity_key") or ""
+    item["activity_identity_key"] = item["resource_identity_key"]
     return item
 
 

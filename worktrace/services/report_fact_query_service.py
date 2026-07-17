@@ -161,15 +161,8 @@ def _attach_resource_fields(row: dict) -> None:
     is_anchor = row.pop("joined_resource_is_anchor", None)
     path_hint = row.pop("joined_resource_path_hint", None)
     uri_host = row.pop("joined_resource_uri_host", None)
-    if kind is None:
-        activity_id = int(row.get("id") or 0)
-        kind = "unknown"
-        subtype = "unknown"
-        display_name = str(row.get("app_name") or row.get("process_name") or "未知")
-        identity_key = f"activity:{activity_id}"
-        is_anchor = False
-        path_hint = None
-        uri_host = None
+    if kind is None or not identity_key:
+        raise ValueError("data_repair_required")
     row.update(
         {
             "resource_kind": kind,
@@ -180,7 +173,7 @@ def _attach_resource_fields(row: dict) -> None:
             "resource_path_hint": path_hint,
             "resource_uri_host": uri_host,
             "activity_display_name": display_name or row.get("app_name") or "",
-            "activity_identity_key": identity_key or "",
+            "activity_identity_key": identity_key,
         }
     )
 

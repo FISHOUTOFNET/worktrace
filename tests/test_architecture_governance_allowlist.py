@@ -47,6 +47,20 @@ def test_report_and_display_reads_do_not_detect_resources() -> None:
     assert offenders <= _allowlist()["read_time_resource_detection"]
 
 
+def test_read_paths_do_not_synthesize_resource_identity() -> None:
+    candidates = {
+        "worktrace/services/report_fact_query_service.py",
+        "worktrace/services/resource_service.py",
+    }
+    markers = ('f"activity:{', "f'activity:{")
+    offenders = {
+        relative
+        for relative in candidates
+        if any(marker in (ROOT / relative).read_text(encoding="utf-8") for marker in markers)
+    }
+    assert offenders <= _allowlist()["read_time_resource_identity_fallback"]
+
+
 def test_live_display_does_not_query_assignment_or_project_tables() -> None:
     candidates = {
         "worktrace/services/live_display_service.py",
