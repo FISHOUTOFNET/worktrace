@@ -11,11 +11,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ..constants import PRIVACY_NOTICE_VERSION
-from ..db import get_connection, now_str
+from ..db import now_str
 from .database_replacement_generation_service import publish_database_replacement
 from .settings_service import (
     SettingMutationClass,
-    clear_settings_cache,
     get_bool_setting,
     get_setting,
     set_settings,
@@ -82,9 +81,9 @@ def restore_installation_privacy_state(
 ) -> None:
     """Restore installation consent after replacing business data.
 
-    Replacement callers pass their transaction connection. In that path all
-    non-report generation namespaces are invalidated before the replacement
-    commits; report generation remains on the temporary connection classifier.
+    Replacement callers pass their active ``DomainUnitOfWork`` connection. All
+    affected generation namespaces are declared here and published atomically
+    only after that transaction commits.
     """
 
     values = {
@@ -110,8 +109,6 @@ def restore_installation_privacy_state(
             (key, value, timestamp),
         )
     publish_database_replacement(conn)
-    clear_settings_cache("first_run_notice_accepted")
-    clear_settings_cache("accepted_privacy_notice_version")
 
 
 __all__ = [
