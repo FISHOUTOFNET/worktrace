@@ -18,24 +18,14 @@ from ..contracts.live_display_contracts import (
     ActivitySnapshotContract,
     CurrentActivityContract,
 )
-from . import activity_service, timeline_service
-from .live_time_service import (
-    safe_int,
-    snapshot_elapsed_seconds,
-    snapshot_persisted_id,
-    snapshot_seconds_for_date_range,
-    snapshot_start_time,
-)
+from ..formatters import format_duration
+from . import timeline_service
+from .live_time_service import snapshot_elapsed_seconds, snapshot_persisted_id
 from .project_attribution_policy import is_official_project_source
-from .settings_service import get_setting
-
-_MAX_LIVE_DURATION_SECONDS = 36 * 60 * 60
 
 
 def _snapshot_status(snapshot: ActivitySnapshotContract | None) -> str:
-    if not snapshot:
-        return ""
-    return str(snapshot.get("status") or "")
+    return str(snapshot.get("status") or "") if snapshot else ""
 
 
 def classify_live_state(snapshot: ActivitySnapshotContract | None) -> str:
@@ -86,9 +76,7 @@ def _display_resource_name(snapshot: ActivitySnapshotContract | None) -> str:
 
 
 def _display_app_name(snapshot: ActivitySnapshotContract | None) -> str:
-    if not snapshot:
-        return ""
-    return str(snapshot.get("app_name") or "").strip()
+    return str(snapshot.get("app_name") or "").strip() if snapshot else ""
 
 
 def _snapshot_display_project_dict(
@@ -97,71 +85,30 @@ def _snapshot_display_project_dict(
     if not snapshot:
         return None
     value = snapshot.get("display_project")
-    return value if isinstance(value, dict) and value else None
+    return dict(value) if isinstance(value, dict) and value else None
 
 
-def _official_project_name_for_persisted_row(activity_id: int) -> str:
-    try:
-        from .project_inference_service import get_assignment_for_activity
-
-        assignment = get_assignment_for_activity(activity_id)
-    except Exception:
-        return ""
-    if not assignment:
-        return ""
-    source = str(assignment.get("source") or "").strip()
-    if not is_official_project_source(source):
-        return ""
-    project_id = assignment.get("project_id")
-    if project_id is None:
-        return ""
-    from ..db import get_connection
-
-    try:
-        with get_connection() as conn:
-            row = conn.execute(
-                "SELECT name FROM project WHERE id = ?", (int(project_id),)
-            ).fetchone()
-    except Exception:
-        return ""
-    name = str(row["name"]).strip() if row else ""
-    return name if name and name != UNCATEGORIZED_PROJECT else ""
+def _official_snapshot_project(
+    snapshot: ActivitySnapshotContract | None,
+) -> dict[str, Any] | None:
+    display_project = _snapshot_display_project_dict(snapshot)
+    if not display_project:
+        return None
+    source = str(display_project.get("source") or "")
+    name = str(display_project.get("name") or "").strip()
+    if not name or not is_official_project_source(source):
+        return None
+    return display_project
 
 
 def _display_project_name(snapshot: ActivitySnapshotContract | None) -> str:
-    if not snapshot:
-        return UNCATEGORIZED_PROJECT
-    display_project = _snapshot_display_project_dict(snapshot)
-    if display_project and is_official_project_source(
-        str(display_project.get("source") or "")
-    ):
-        name = str(display_project.get("name") or "").strip()
-        if name:
-            return name
-    persisted_id = snapshot_persisted_id(snapshot)
-    if persisted_id:
-        official = _official_project_name_for_persisted_row(int(persisted_id))
-        if official:
-            return official
-    return UNCATEGORIZED_PROJECT
+    official = _official_snapshot_project(snapshot)
+    return str(official.get("name")) if official else UNCATEGORIZED_PROJECT
 
 
 def _display_project_description(snapshot: ActivitySnapshotContract | None) -> str:
-    if not snapshot:
-        return ""
-    display_project = _snapshot_display_project_dict(snapshot)
-    if display_project and is_official_project_source(
-        str(display_project.get("source") or "")
-    ):
-        return str(display_project.get("description") or "")
-    project_name = _display_project_name(snapshot)
-    if project_name and project_name != UNCATEGORIZED_PROJECT:
-        from . import project_service
-
-        existing = project_service.get_project_by_name(project_name)
-        if existing:
-            return str(existing.get("description") or "")
-    return ""
+    official = _official_snapshot_project(snapshot)
+    return str(official.get("description") or "") if official else ""
 
 
 def _stable_live_key(snapshot: ActivitySnapshotContract | None) -> str:
@@ -214,6 +161,33 @@ def _live_display_key(snapshot: ActivitySnapshotContract | None) -> str:
     )
 
 
+def _uncategorized_display_project() -> dict[str, Any]:
+    return {
+        "id": None,
+        "name": UNCATEGORIZED_PROJECT,
+        "description": "",
+        "source": "uncategorized",
+        "is_uncategorized": True,
+        "is_suggested_project": False,
+    }
+
+
+def _formal_display_project(
+    snapshot: ActivitySnapshotContract | None,
+) -> dict[str, Any]:
+    official = _official_snapshot_project(snapshot)
+    if official is None:
+        return _uncategorized_display_project()
+    return {
+        "id": official.get("id"),
+        "name": str(official.get("name") or ""),
+        "description": str(official.get("description") or ""),
+        "source": str(official.get("source") or ""),
+        "is_uncategorized": False,
+        "is_suggested_project": False,
+    }
+
+
 def build_current_activity_summary(
     snapshot: ActivitySnapshotContract | None,
     report_date: str | None = None,
@@ -256,8 +230,9 @@ def build_current_activity_summary(
         report_date = today
     live_state = classify_live_state(snapshot)
     elapsed_seconds = _snapshot_total_seconds(snapshot)
-    project_name = _display_project_name(snapshot)
-    project_description = _display_project_description(snapshot)
+    display_project = _formal_display_project(snapshot)
+    project_name = str(display_project["name"])
+    project_description = str(display_project["description"])
     resource_name = _display_resource_name(snapshot)
     app_name = _display_app_name(snapshot)
     start_time = str(snapshot.get("start_time") or "")
@@ -266,19 +241,8 @@ def build_current_activity_summary(
     is_persisted = bool(snapshot.get("is_persisted"))
     persisted_id = snapshot_persisted_id(snapshot) or 0
     is_in_progress = live_state == "persisted_open"
-    is_uncategorized = not project_name or project_name == UNCATEGORIZED_PROJECT
-    carry_seconds = 0
-    display_seconds = elapsed_seconds
-    display_project = _snapshot_display_project_dict(snapshot) or {
-        "id": None,
-        "name": project_name,
-        "description": project_description,
-        "source": "uncategorized",
-        "is_uncategorized": is_uncategorized,
-        "is_suggested_project": False,
-    }
+    is_uncategorized = bool(display_project["is_uncategorized"])
     live_started_at_epoch_ms = _start_time_epoch_ms(snapshot)
-    from ..formatters import format_duration
 
     state_label = "进行中" if is_persisted else "活动状态异常"
     if status == STATUS_IDLE:
@@ -290,12 +254,14 @@ def build_current_activity_summary(
         state_label = "已排除"
     elif status == STATUS_ERROR:
         state_label = "异常"
-    display = f"{resource_name}｜{project_name}｜{format_duration(display_seconds)}｜{state_label}"
+    display = (
+        f"{resource_name}｜{project_name}｜{format_duration(elapsed_seconds)}｜{state_label}"
+    )
     project_id = display_project.get("id")
     return {
         "active": True,
         "display": display,
-        "elapsed_seconds": int(display_seconds),
+        "elapsed_seconds": int(elapsed_seconds),
         "resource_elapsed_seconds": int(snapshot_elapsed_seconds(snapshot)),
         "is_paused": bool(is_paused),
         "status": status,
@@ -310,15 +276,15 @@ def build_current_activity_summary(
         "stable_live_key": _stable_live_key(snapshot),
         "stable_live_key_hash": _stable_live_key_hash(snapshot),
         "live_started_at_epoch_ms": int(live_started_at_epoch_ms or 0),
-        "carry_seconds": int(carry_seconds),
+        "carry_seconds": 0,
         "resource_name": resource_name,
         "app_name": app_name,
         "start_time": start_time,
         "end_time": None,
         "activity_id": int(persisted_id or 0) or None,
         "source": "db" if is_in_progress else "none",
-        "is_uncategorized": bool(is_uncategorized),
-        "is_classified": not bool(is_uncategorized),
+        "is_uncategorized": is_uncategorized,
+        "is_classified": not is_uncategorized,
         "project_description": project_description,
         "display_project": display_project,
     }
@@ -327,39 +293,16 @@ def build_current_activity_summary(
 def _snapshot_display_project_fields(
     snapshot: ActivitySnapshotContract | None,
 ) -> dict[str, Any]:
-    project_name = _display_project_name(snapshot)
-    project_description = _display_project_description(snapshot)
-    is_uncategorized = not project_name or project_name == UNCATEGORIZED_PROJECT
-    snapshot_project = _snapshot_display_project_dict(snapshot)
-    display_project = snapshot_project or {
-        "id": None,
-        "name": project_name,
-        "description": project_description,
-        "source": "uncategorized",
-        "is_uncategorized": is_uncategorized,
-        "is_suggested_project": False,
-    }
+    display_project = _formal_display_project(snapshot)
     project_id = display_project.get("id")
-    if project_id is None and snapshot_project is None:
-        persisted_id = snapshot_persisted_id(snapshot) if snapshot else None
-        if persisted_id and _official_project_name_for_persisted_row(int(persisted_id)):
-            try:
-                from .project_inference_service import get_assignment_for_activity
-
-                assignment = get_assignment_for_activity(int(persisted_id))
-                if assignment and is_official_project_source(
-                    str(assignment.get("source") or "")
-                ):
-                    project_id = assignment.get("project_id")
-            except Exception:
-                project_id = None
+    is_uncategorized = bool(display_project["is_uncategorized"])
     return {
         "project_id": int(project_id) if project_id is not None else 0,
-        "project_name": project_name,
-        "project_description": project_description,
+        "project_name": str(display_project["name"]),
+        "project_description": str(display_project["description"]),
         "display_project": display_project,
-        "is_uncategorized": bool(is_uncategorized),
-        "is_classified": not bool(is_uncategorized),
+        "is_uncategorized": is_uncategorized,
+        "is_classified": not is_uncategorized,
         "status": _snapshot_status(snapshot),
         "start_time": str(snapshot.get("start_time") or "") if snapshot else "",
     }

@@ -40,7 +40,7 @@ def current_page_read_context() -> PageReadContext | None:
 
 @contextmanager
 def page_read_scope() -> Iterator[PageReadContext]:
-    """Bind a consistent read transaction and runtime sample to one request."""
+    """Bind a query-only SQLite snapshot and one runtime sample to a request."""
 
     existing = current_page_read_context()
     if existing is not None:
@@ -50,6 +50,7 @@ def page_read_scope() -> Iterator[PageReadContext]:
     database_key = get_db_key()
     runtime_sample = sample_runtime_activity_state(database_key=database_key)
     conn = get_connection()
+    conn.execute("PRAGMA query_only = ON")
     conn.execute("BEGIN")
     context = PageReadContext(
         conn=conn,
@@ -63,13 +64,12 @@ def page_read_scope() -> Iterator[PageReadContext]:
             database_key=database_key,
         ):
             yield context
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
     finally:
         _CURRENT_PAGE_READ_CONTEXT.reset(token)
-        conn.close()
+        try:
+            conn.rollback()
+        finally:
+            conn.close()
 
 
 __all__ = [

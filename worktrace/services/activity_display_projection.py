@@ -5,20 +5,42 @@ import json
 from typing import Any
 
 from ..constants import UNCATEGORIZED_PROJECT
-from . import project_service
-from .project_attribution_policy import official_project_fields
+from .project_attribution_policy import is_official_project_source
 
 
 def resolve_official_anchor_project(anchor: dict[str, Any] | None) -> dict[str, Any]:
-    uncategorized_id = project_service.get_or_create_uncategorized_project()
-    if not anchor:
-        return _anchor_project_from_official_fields(
-            official_project_fields({}, uncategorized_id)
-        )
-    row = _anchor_attribution_row(anchor)
-    return _anchor_project_from_official_fields(
-        official_project_fields(row, uncategorized_id)
+    """Project an anchor only from facts already attached by its repository."""
+
+    row = dict(anchor or {})
+    source = str(row.get("assignment_source") or "")
+    project_id = int(row.get("effective_project_id") or 0)
+    project_name = str(row.get("effective_project_name") or "").strip()
+    official = bool(
+        project_id > 0
+        and project_name
+        and is_official_project_source(source)
     )
+    if not official:
+        project_id = 0
+        project_name = UNCATEGORIZED_PROJECT
+    project_description = (
+        str(row.get("effective_project_description") or "") if official else ""
+    )
+    return {
+        "project_id": project_id,
+        "project_name": project_name,
+        "project_description": project_description,
+        "display_project": {
+            "id": project_id if official else None,
+            "name": project_name,
+            "description": project_description,
+            "source": source if official else "uncategorized",
+            "is_uncategorized": not official,
+            "is_suggested_project": False,
+        },
+        "is_uncategorized": not official,
+        "is_classified": official,
+    }
 
 
 def build_kpi_live_targets(
@@ -131,57 +153,6 @@ def build_revision_parts(
     return {
         "live_revision": _hash(live_clock_input),
         "page_revision": _hash([marker, display_projection_input]),
-    }
-
-
-def _anchor_attribution_row(anchor: dict[str, Any]) -> dict[str, Any]:
-    row = dict(anchor)
-    activity_id = int(row.get("id") or row.get("activity_id") or 0)
-    if not row.get("assignment_source") and activity_id > 0:
-        try:
-            from .project_inference_service import get_assignment_for_activity
-
-            assignment = get_assignment_for_activity(activity_id)
-        except Exception:
-            assignment = {}
-        if assignment:
-            row["assignment_source"] = assignment.get("source")
-            row["assignment_is_manual"] = assignment.get("is_manual")
-            row["suggested_project_name"] = assignment.get("suggested_project_name")
-            row["effective_project_id"] = assignment.get("project_id")
-    effective_project_id = int(row.get("effective_project_id") or 0)
-    if effective_project_id > 0 and not row.get("effective_project_name"):
-        try:
-            project = project_service.get_project(effective_project_id)
-        except Exception:
-            project = None
-        if project:
-            row["effective_project_name"] = project.get("name")
-            row["effective_project_description"] = project.get("description")
-    return row
-
-
-def _anchor_project_from_official_fields(official: dict[str, Any]) -> dict[str, Any]:
-    project_id = int(official.get("display_project_id") or 0)
-    project_name = str(official.get("display_project_name") or UNCATEGORIZED_PROJECT)
-    project_description = str(official.get("display_project_description") or "")
-    source = "uncategorized"
-    if project_id > 0 and bool(official.get("is_official_project")):
-        source = str(official.get("project_attribution_kind") or "official")
-    return {
-        "project_id": project_id if bool(official.get("is_official_project")) else 0,
-        "project_name": project_name,
-        "project_description": project_description,
-        "display_project": {
-            "id": project_id if bool(official.get("is_official_project")) else None,
-            "name": project_name,
-            "description": project_description,
-            "source": source,
-            "is_uncategorized": bool(official.get("is_uncategorized", True)),
-            "is_suggested_project": False,
-        },
-        "is_uncategorized": bool(official.get("is_uncategorized", True)),
-        "is_classified": bool(official.get("is_classified")),
     }
 
 
