@@ -1,11 +1,6 @@
 {
-  "read_time_resource_detection": [
-    "worktrace/services/report_fact_query_service.py"
-  ],
-  "live_project_database_fallback": [
-    "worktrace/services/live_display_service.py",
-    "worktrace/services/activity_display_projection.py"
-  ],
+  "read_time_resource_detection": [],
+  "live_project_database_fallback": [],
   "sql_text_mutation_classification": [
     "worktrace/db.py"
   ],
