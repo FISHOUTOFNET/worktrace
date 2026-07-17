@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import ntpath
 import re
-import time
 from dataclasses import dataclass
 
-from ..constants import RULE_CACHE_TTL_SECONDS, STATUS_NORMAL, UNCATEGORIZED_PROJECT
+from ..constants import STATUS_NORMAL, UNCATEGORIZED_PROJECT
 from ..data_generation_repository import DataGenerationNamespace
-from ..db import get_connection, get_db_path
+from ..db import get_connection, get_db_key
 from ..domain_unit_of_work import DomainUnitOfWork
+from ..generation_clock import generation
 from ..path_utils import has_auto_project_extension
 from . import (
     assignment_command_service,
@@ -31,8 +31,7 @@ GENERIC_FILE_PROJECT_NAMES = {
     "桌面",
     "文档",
 }
-_KEYWORD_RULE_CACHE_TTL_SECONDS = RULE_CACHE_TTL_SECONDS
-_KEYWORD_RULE_CACHE: dict[str, tuple[float, list[dict]]] = {}
+_KEYWORD_RULE_CACHE: dict[tuple[str, int], list[dict]] = {}
 
 
 @dataclass(frozen=True)
@@ -48,15 +47,15 @@ class ProjectAssignmentDecision:
 
 
 def invalidate_keyword_rule_cache() -> None:
-    _KEYWORD_RULE_CACHE.pop(str(get_db_path().resolve()), None)
+    """Test/reconfiguration hook; catalog writes invalidate by generation."""
+
+    database_key = get_db_key()
+    for cache_key in list(_KEYWORD_RULE_CACHE):
+        if cache_key[0] == database_key:
+            _KEYWORD_RULE_CACHE.pop(cache_key, None)
 
 
 def _enabled_keyword_rules(conn=None) -> list[dict]:
-    cache_key = str(get_db_path().resolve())
-    current = time.monotonic()
-    cached = _KEYWORD_RULE_CACHE.get(cache_key) if conn is None else None
-    if cached is not None and cached[0] >= current:
-        return [dict(row) for row in cached[1]]
     sql = """
         SELECT pr.id, pr.project_id, pr.pattern,
                p.name AS project_name, p.enabled AS project_enabled,
@@ -69,7 +68,15 @@ def _enabled_keyword_rules(conn=None) -> list[dict]:
           AND pr.created_by = 'user'
         ORDER BY pr.created_at, pr.id
     """
+    cache_key: tuple[str, int] | None = None
     if conn is None:
+        cache_key = (
+            get_db_key(),
+            generation(DataGenerationNamespace.CLASSIFICATION_CATALOG),
+        )
+        cached = _KEYWORD_RULE_CACHE.get(cache_key)
+        if cached is not None:
+            return [dict(row) for row in cached]
         with get_connection() as read_conn:
             rows = read_conn.execute(sql).fetchall()
     else:
@@ -90,11 +97,8 @@ def _enabled_keyword_rules(conn=None) -> list[dict]:
             }
         )
     ]
-    if conn is None:
-        _KEYWORD_RULE_CACHE[cache_key] = (
-            current + _KEYWORD_RULE_CACHE_TTL_SECONDS,
-            rules,
-        )
+    if cache_key is not None:
+        _KEYWORD_RULE_CACHE[cache_key] = rules
     return [dict(row) for row in rules]
 
 
