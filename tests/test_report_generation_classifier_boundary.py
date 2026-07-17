@@ -35,3 +35,10 @@ def test_classifier_tracks_structural_activity_and_report_setting_changes():
         "UPDATE settings SET value = ? WHERE key = ?",
         ("running", "collector_status"),
     ) is False
+
+
+def test_classifier_tracks_project_display_fact_changes():
+    assert sql_affects_report_structure(
+        "UPDATE project SET name = ?, updated_at = ? WHERE id = ?",
+        ("Renamed", "2026-07-17 12:00:00", 7),
+    ) is True
