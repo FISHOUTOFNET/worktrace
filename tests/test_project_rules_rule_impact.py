@@ -106,7 +106,7 @@ def test_preview_keyword_rule_reports_skip_classes(temp_db):
     eligible = _closed_activity(title="invoice.xlsx - Excel")
     manual = _closed_activity(title="invoice manual.xlsx - Excel")
     hidden = _closed_activity(title="invoice hidden.xlsx - Excel")
-    non_normal = _closed_activity(title="invoice idle", status="idle")
+    _closed_activity(title="invoice idle", status="idle")
     assign_activity_project(manual, project_id, manual=True)
     with get_connection() as conn:
         conn.execute(
@@ -180,7 +180,7 @@ def test_durable_folder_backfill_preserves_manual_assignment(temp_db):
     assert _assignment(manual)["is_manual"] == 1
 
 
-def test_preview_and_backfill_reject_cross_type_ids(temp_db):
+def test_rule_identity_is_composite_when_numeric_ids_overlap(temp_db):
     project_id = project_service.create_project("Client")
     keyword_id = rule_service.create_rule("token", project_id)
     folder_id = folder_rule_service.create_or_update_folder_rule(
@@ -188,22 +188,37 @@ def test_preview_and_backfill_reject_cross_type_ids(temp_db):
         project_id,
     )
 
-    assert rule_api.preview_project_rule_impact("folder", keyword_id) == {
-        "ok": False,
-        "error": "not_found",
-    }
-    assert rule_api.preview_project_rule_impact("keyword", folder_id) == {
-        "ok": False,
-        "error": "not_found",
-    }
-    assert rule_api.backfill_project_rule("folder", keyword_id) == {
-        "ok": False,
-        "error": "not_found",
-    }
-    assert rule_api.backfill_project_rule("keyword", folder_id) == {
-        "ok": False,
-        "error": "not_found",
-    }
+    keyword = rule_api.preview_project_rule_impact("keyword", keyword_id)
+    folder = rule_api.preview_project_rule_impact("folder", folder_id)
+
+    assert keyword["ok"] is True
+    assert keyword["impact"]["rule"]["kind"] == "keyword"
+    assert folder["ok"] is True
+    assert folder["impact"]["rule"]["kind"] == "folder"
+
+
+def test_preview_and_backfill_reject_missing_ids_per_rule_type(temp_db):
+    project_id = project_service.create_project("Client")
+    keyword_id = rule_service.create_rule("token", project_id)
+    folder_id = folder_rule_service.create_or_update_folder_rule(
+        r"D:\Client",
+        project_id,
+    )
+    missing_keyword_id = keyword_id + 1000
+    missing_folder_id = folder_id + 1000
+
+    for rule_type, missing_id in (
+        ("keyword", missing_keyword_id),
+        ("folder", missing_folder_id),
+    ):
+        assert rule_api.preview_project_rule_impact(rule_type, missing_id) == {
+            "ok": False,
+            "error": "not_found",
+        }
+        assert rule_api.backfill_project_rule(rule_type, missing_id) == {
+            "ok": False,
+            "error": "not_found",
+        }
 
 
 def test_rule_impact_api_validates_inputs(temp_db):
