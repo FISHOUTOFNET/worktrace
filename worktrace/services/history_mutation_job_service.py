@@ -82,9 +82,7 @@ def submit_rule_job(
         conn = uow.connection
         if kind in {"rule_remove", "rule_delete"}:
             if int(rule.get("enabled") or 0):
-                uow.add_effects(DataGenerationNamespace.CLASSIFICATION_CATALOG)
-                if str(rule.get("project_name") or "") == EXCLUDED_PROJECT:
-                    uow.add_effects(DataGenerationNamespace.PRIVACY_CATALOG)
+                _add_rule_catalog_effects(uow, rule)
             table, extra = _rule_table(rule_type)
             cursor = conn.execute(
                 f"UPDATE {table} SET enabled = 0, updated_at = ? WHERE id = ?{extra}",
@@ -101,8 +99,7 @@ def submit_rule_job(
                 kind, status, payload_json, cutoff_activity_id,
                 cursor_activity_id, processed_count, changed_count,
                 skipped_count, error_message, created_at, updated_at
-            )
-            VALUES (?, 'pending', ?, ?, 0, 0, 0, 0, NULL, ?, ?)
+            ) VALUES (?, 'pending', ?, ?, 0, 0, 0, 0, NULL, ?, ?)
             """,
             (
                 kind,
@@ -122,10 +119,49 @@ def submit_rule_job(
             (job_id, rule_type, int(rule_id), rule_version),
         )
 
-    _invalidate_rule_caches(rule_type)
     if estimated <= max(0, int(synchronous_limit)):
         run_job_to_completion(job_id)
     return job_result(job_id)
+
+
+def compensate_failed_synchronous_job(job_id: int) -> bool:
+    """Remove an unstarted failed job and restore its disabled source rule."""
+
+    if int(job_id) <= 0:
+        return False
+    compensated = False
+    with DomainUnitOfWork() as uow:
+        conn = uow.connection
+        row = conn.execute(
+            """
+            SELECT kind, payload_json, processed_count
+            FROM history_mutation_job
+            WHERE id = ? AND status = 'failed'
+            """,
+            (int(job_id),),
+        ).fetchone()
+        if row is None or int(row["processed_count"] or 0) != 0:
+            return False
+        payload = json.loads(str(row["payload_json"] or "{}"))
+        rule_type = str(payload.get("rule_type") or "")
+        rule_id = int(payload.get("rule_id") or 0)
+        if row["kind"] in {"rule_remove", "rule_delete"} and bool(
+            payload.get("restore_enabled")
+        ):
+            rule = planner.resolve_rule(conn, rule_type, rule_id)
+            if rule:
+                _add_rule_catalog_effects(uow, rule)
+            table, extra = _rule_table(rule_type)
+            conn.execute(
+                f"UPDATE {table} SET enabled = 1, updated_at = ? WHERE id = ?{extra}",
+                (now_str(), rule_id),
+            )
+        conn.execute(
+            "DELETE FROM history_mutation_job WHERE id = ?",
+            (int(job_id),),
+        )
+        compensated = True
+    return compensated
 
 
 def run_pending_jobs(limit: int = 1) -> int:
@@ -271,9 +307,7 @@ def _run_backfill_batch(job: dict, batch_size: int) -> None:
     updates = list(classified.get("would_update") or [])
     last_id = max(int(item["id"]) for item in activities)
     changed = 0
-    with DomainUnitOfWork(
-        (DataGenerationNamespace.REPORT_STRUCTURE,)
-    ) as uow:
+    with DomainUnitOfWork((DataGenerationNamespace.REPORT_STRUCTURE,)) as uow:
         conn = uow.connection
         current = planner.resolve_rule(conn, rule_type, rule_id)
         if not current or str(current.get("updated_at") or "") != expected_version:
@@ -337,18 +371,14 @@ def _run_reinference_batch(job: dict, batch_size: int) -> None:
     from .project_inference_service import assign_project_for_activity_in_transaction
 
     activity_ids = [int(row["activity_id"]) for row in rows]
-    with DomainUnitOfWork(
-        (DataGenerationNamespace.REPORT_STRUCTURE,)
-    ) as uow:
+    with DomainUnitOfWork((DataGenerationNamespace.REPORT_STRUCTURE,)) as uow:
         conn = uow.connection
-        changed = 0
         for activity_id in activity_ids:
             assign_project_for_activity_in_transaction(
                 conn,
                 activity_id,
                 exclude_rule=(rule_type, rule_id),
             )
-            changed += 1
         last_id = activity_ids[-1]
         completed = (
             len(activity_ids) < max(1, int(batch_size))
@@ -362,12 +392,10 @@ def _run_reinference_batch(job: dict, batch_size: int) -> None:
             job_id=int(job["id"]),
             cursor=last_id,
             processed=len(activity_ids),
-            changed=changed,
+            changed=len(activity_ids),
             skipped=0,
             completed=completed,
         )
-    if completed:
-        _invalidate_rule_caches(rule_type)
 
 
 def _advance_job(
@@ -404,7 +432,6 @@ def _advance_job(
 
 def _finalize_reinference_job(job: dict) -> None:
     payload = _payload(job)
-    rule_type = str(payload["rule_type"])
     with DomainUnitOfWork() as uow:
         conn = uow.connection
         _add_finalization_effects(uow, conn, job, payload)
@@ -417,7 +444,12 @@ def _finalize_reinference_job(job: dict) -> None:
             """,
             (now_str(), int(job["id"])),
         )
-    _invalidate_rule_caches(rule_type)
+
+
+def _add_rule_catalog_effects(uow: DomainUnitOfWork, rule: dict) -> None:
+    uow.add_effects(DataGenerationNamespace.CLASSIFICATION_CATALOG)
+    if str(rule.get("project_name") or "") == EXCLUDED_PROJECT:
+        uow.add_effects(DataGenerationNamespace.PRIVACY_CATALOG)
 
 
 def _add_finalization_effects(
@@ -436,9 +468,10 @@ def _add_finalization_effects(
         str(payload["rule_type"]),
         int(payload["rule_id"]),
     )
-    uow.add_effects(DataGenerationNamespace.CLASSIFICATION_CATALOG)
-    if rule and str(rule.get("project_name") or "") == EXCLUDED_PROJECT:
-        uow.add_effects(DataGenerationNamespace.PRIVACY_CATALOG)
+    if rule:
+        _add_rule_catalog_effects(uow, rule)
+    else:
+        uow.add_effects(DataGenerationNamespace.CLASSIFICATION_CATALOG)
 
 
 def _finalize_rule_in_transaction(conn, job: dict, payload: dict[str, Any]) -> None:
@@ -503,21 +536,8 @@ def _rule_table(rule_type: str) -> tuple[str, str]:
     return "project_rule", " AND rule_type = 'keyword'"
 
 
-def _invalidate_rule_caches(rule_type: str) -> None:
-    if rule_type == "folder":
-        from .folder_rule_service import invalidate_folder_rule_cache
-
-        invalidate_folder_rule_cache()
-    else:
-        from .project_inference_service import invalidate_keyword_rule_cache
-
-        invalidate_keyword_rule_cache()
-    from .privacy_service import clear_exclude_rules_cache
-
-    clear_exclude_rules_cache()
-
-
 __all__ = [
+    "compensate_failed_synchronous_job",
     "job_result",
     "run_job_batch",
     "run_job_to_completion",
