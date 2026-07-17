@@ -98,13 +98,14 @@ def test_missing_indexed_path_requires_explicit_stale_command(temp_db, tmp_path)
 
     path.unlink()
 
-    assert (
-        folder_index_query_service.lookup_indexed_paths_for_file_name(
-            "Spec.docx",
-            "2026-06-18 09:00:00",
-        )
-        == []
+    # Pure queries return the currently published durable snapshot. They do not
+    # consult the live filesystem or mutate index state on read.
+    matches = folder_index_query_service.lookup_indexed_paths_for_file_name(
+        "Spec.docx",
+        "2026-06-18 09:00:00",
     )
+    assert len(matches) == 1
+    assert Path(matches[0]["file_path"]).name == "Spec.docx"
     with get_connection() as conn:
         state = conn.execute(
             "SELECT status, refresh_requested FROM folder_rule_index_state WHERE folder_rule_id = ?",
