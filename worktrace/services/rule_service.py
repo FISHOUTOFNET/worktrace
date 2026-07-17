@@ -4,7 +4,7 @@ from ..constants import EXCLUDED_PROJECT
 from ..data_generation_repository import DataGenerationNamespace
 from ..db import dict_rows, get_connection, now_str
 from ..domain_unit_of_work import DomainUnitOfWork
-from .project_inference_service import assign_project_for_activity, invalidate_keyword_rule_cache
+from .project_inference_service import assign_project_for_activity
 
 
 def _catalog_uow() -> DomainUnitOfWork:
@@ -24,31 +24,24 @@ def _add_privacy_effect_for_project_id(
         uow.add_effects(DataGenerationNamespace.PRIVACY_CATALOG)
 
 
-def _invalidate_rule_caches() -> None:
-    invalidate_keyword_rule_cache()
-    from .privacy_service import clear_exclude_rules_cache
-
-    clear_exclude_rules_cache()
-
-
 def create_rule(keyword: str, project_id: int) -> int:
-    keyword = keyword.strip()
-    if not keyword:
+    cleaned = keyword.strip()
+    if not cleaned:
         raise ValueError("keyword is required")
-    ts = now_str()
+    timestamp = now_str()
     with _catalog_uow() as uow:
         conn = uow.connection
         _add_privacy_effect_for_project_id(uow, conn, project_id)
-        cur = conn.execute(
+        cursor = conn.execute(
             """
-            INSERT INTO project_rule(project_id, rule_type, pattern, enabled, created_by, created_at, updated_at)
-            VALUES (?, 'keyword', ?, 1, 'user', ?, ?)
+            INSERT INTO project_rule(
+                project_id, rule_type, pattern, enabled, created_by,
+                created_at, updated_at
+            ) VALUES (?, 'keyword', ?, 1, 'user', ?, ?)
             """,
-            (project_id, keyword, ts, ts),
+            (project_id, cleaned, timestamp, timestamp),
         )
-        rule_id = int(cur.lastrowid)
-    _invalidate_rule_caches()
-    return rule_id
+        return int(cursor.lastrowid)
 
 
 def list_rules(include_system: bool = False) -> list[dict]:
@@ -56,13 +49,8 @@ def list_rules(include_system: bool = False) -> list[dict]:
         rows = conn.execute(
             """
             SELECT
-                pr.id,
-                pr.pattern AS keyword,
-                pr.project_id,
-                pr.enabled,
-                pr.created_at,
-                pr.updated_at,
-                p.name AS project_name
+                pr.id, pr.pattern AS keyword, pr.project_id, pr.enabled,
+                pr.created_at, pr.updated_at, p.name AS project_name
             FROM project_rule pr
             LEFT JOIN project p ON p.id = pr.project_id
             WHERE pr.rule_type = 'keyword'
@@ -84,60 +72,59 @@ def set_rule_enabled(rule_id: int, enabled: bool) -> None:
         ).fetchone()
         if row is None or int(row["enabled"] or 0) == requested:
             return
-        _add_privacy_effect_for_project_id(
-            uow,
-            conn,
-            int(row["project_id"]),
-        )
+        _add_privacy_effect_for_project_id(uow, conn, int(row["project_id"]))
         conn.execute(
             "UPDATE project_rule SET enabled = ?, updated_at = ? WHERE id = ?",
             (requested, now_str(), rule_id),
         )
-    _invalidate_rule_caches()
 
 
 def update_rule(rule_id: int, keyword: str) -> None:
-    keyword = keyword.strip()
-    if not keyword:
+    cleaned = keyword.strip()
+    if not cleaned:
         raise ValueError("keyword is required")
     with _catalog_uow() as uow:
         conn = uow.connection
         row = conn.execute(
-            "SELECT project_id, pattern FROM project_rule "
-            "WHERE id = ? AND rule_type = 'keyword'",
+            """
+            SELECT project_id, pattern
+            FROM project_rule
+            WHERE id = ? AND rule_type = 'keyword'
+            """,
             (rule_id,),
         ).fetchone()
-        if row is None or str(row["pattern"] or "") == keyword:
+        if row is None or str(row["pattern"] or "") == cleaned:
             return
-        _add_privacy_effect_for_project_id(
-            uow,
-            conn,
-            int(row["project_id"]),
-        )
+        _add_privacy_effect_for_project_id(uow, conn, int(row["project_id"]))
         conn.execute(
-            "UPDATE project_rule SET pattern = ?, updated_at = ? "
-            "WHERE id = ? AND rule_type = 'keyword'",
-            (keyword, now_str(), rule_id),
+            """
+            UPDATE project_rule
+            SET pattern = ?, updated_at = ?
+            WHERE id = ? AND rule_type = 'keyword'
+            """,
+            (cleaned, now_str(), rule_id),
         )
-    _invalidate_rule_caches()
 
 
-def delete_rule(rule_id: int) -> None:
+def delete_rule(rule_id: int) -> bool:
     with _catalog_uow() as uow:
         conn = uow.connection
         row = conn.execute(
-            "SELECT project_id FROM project_rule WHERE id = ?",
+            """
+            SELECT project_id
+            FROM project_rule
+            WHERE id = ? AND rule_type = 'keyword'
+            """,
             (rule_id,),
         ).fetchone()
         if row is None:
-            return
-        _add_privacy_effect_for_project_id(
-            uow,
-            conn,
-            int(row["project_id"]),
+            return False
+        _add_privacy_effect_for_project_id(uow, conn, int(row["project_id"]))
+        cursor = conn.execute(
+            "DELETE FROM project_rule WHERE id = ? AND rule_type = 'keyword'",
+            (rule_id,),
         )
-        conn.execute("DELETE FROM project_rule WHERE id = ?", (rule_id,))
-    _invalidate_rule_caches()
+        return cursor.rowcount == 1
 
 
 def apply_rules_to_activity(activity_id: int) -> None:
