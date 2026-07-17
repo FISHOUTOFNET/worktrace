@@ -254,7 +254,11 @@ def test_collector_control_pause_finalizes_before_exposing_paused(monkeypatch):
     stop_event.set()
     thread.join(timeout=2)
 
-    assert result == {"ok": True, "pause_pending": False}
+    assert result["ok"] is True
+    assert result["pause_pending"] is False
+    assert result["command_state"] == "completed"
+    assert result["command_state_unknown"] is False
+    assert isinstance(result["command_id"], str) and result["command_id"]
     pause_index = calls.index("machine.pause")
     user_index = calls.index("set:user_paused:true")
     status_index = calls.index("set:collector_status:paused")
