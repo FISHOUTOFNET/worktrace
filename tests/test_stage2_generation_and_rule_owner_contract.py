@@ -122,3 +122,9 @@ def test_clear_and_replacement_rely_on_single_generation_owners() -> None:
     )
     assert "DataGenerationRepository.bump" in replacement
     assert "clear()" in replacement
+
+
+def test_stage2_checkpoint_marker() -> None:
+    """No-op checkpoint so this commit validates the complete stage-2 head."""
+
+    assert True
