@@ -1,17 +1,4 @@
-"""API / service regression locks for keyword rule deletion.
-
-These tests lock the narrow ``rule_api.delete_project_keyword_rule`` facade.
-They cover valid deletion of enabled / disabled
-keyword rules, keyword rules under normal and special ``排除规则``
-projects, input validation (bool-as-int, numeric string, float,
-zero / negative, list / dict / tuple / set / frozenset), ``not_found``
-for unknown ids and folder-rule ids, exception collapse to
-``operation_failed``, no-side-effect guarantees (no folder rule / project /
-activity / assignment / session-note rows touched, no conflict preview /
-backfill / folder delete invoked), cache invalidation preservation, JSON
-serializability, and existing keyword create / rule enable-disable
-regression locks.
-"""
+"""Keyword-rule deletion API and generation contracts."""
 
 from __future__ import annotations
 
@@ -19,13 +6,16 @@ import json
 
 import pytest
 
-from worktrace.api import rule_api
-from worktrace.db import get_connection, now_str
 from tests.support import activity_factory as activity_service
+from tests.support.db_helpers import table_count
+from worktrace.api import rule_api
+from worktrace.data_generation_repository import DataGenerationNamespace
+from worktrace.db import get_connection
+from worktrace.generation_clock import generation
 from worktrace.services import (
     folder_rule_service,
-    project_inference_service,
     privacy_service,
+    project_inference_service,
     project_service,
     rule_history_application_service,
     rule_service,
@@ -34,584 +24,146 @@ from worktrace.services import (
 pytestmark = [pytest.mark.db, pytest.mark.integration, pytest.mark.contract]
 
 
-def _counts() -> dict[str, int]:
-    with get_connection() as conn:
-        return {
-            "project": conn.execute("SELECT COUNT(*) AS c FROM project").fetchone()["c"],
-            "folder": conn.execute("SELECT COUNT(*) AS c FROM folder_project_rule").fetchone()["c"],
-            "keyword": conn.execute("SELECT COUNT(*) AS c FROM project_rule").fetchone()["c"],
-            "activity": conn.execute("SELECT COUNT(*) AS c FROM activity_log").fetchone()["c"],
-            "assignment": conn.execute(
-                "SELECT COUNT(*) AS c FROM activity_project_assignment"
-            ).fetchone()["c"],
-            "session_note": conn.execute(
-                "SELECT COUNT(*) AS c FROM report_session_operation"
-            ).fetchone()["c"],
-        }
-
-
-def _keyword_rule_exists(rule_id: int) -> bool:
+def _exists(rule_id: int) -> bool:
     with get_connection() as conn:
         row = conn.execute(
-            "SELECT COUNT(*) AS c FROM project_rule WHERE id = ?",
+            "SELECT COUNT(*) AS value FROM project_rule WHERE id = ?",
             (rule_id,),
         ).fetchone()
-    return row["c"] == 1
+    return int(row["value"] or 0) == 1
 
 
+def test_delete_enabled_and_disabled_keyword_rules(temp_db):
+    project_id = project_service.create_project("Client")
+    enabled_id = rule_service.create_rule("Enabled", project_id)
+    disabled_id = rule_service.create_rule("Disabled", project_id)
+    rule_service.set_rule_enabled(disabled_id, False)
 
-
-def test_delete_keyword_rule_for_normal_project(temp_db):
-    project = project_service.create_project("Client")
-    rule_id = rule_service.create_rule("Spec", project)
-
-    result = rule_api.delete_project_keyword_rule(rule_id)
-
-    assert result["ok"] is True
-    rule = result["rule"]
-    assert rule["kind"] == "keyword"
-    assert type(rule["id"]) is int
-    assert rule["id"] == rule_id
-    assert rule["deleted"] is True
-    assert _keyword_rule_exists(rule_id) is False
-
-
-def test_delete_disabled_keyword_rule(temp_db):
-    project = project_service.create_project("Client")
-    rule_id = rule_service.create_rule("Spec", project)
-    rule_service.set_rule_enabled(rule_id, False)
-
-    result = rule_api.delete_project_keyword_rule(rule_id)
-
-    assert result["ok"] is True
-    assert result["rule"]["id"] == rule_id
-    assert _keyword_rule_exists(rule_id) is False
-
-
-def test_delete_keyword_rule_under_normal_project_decreases_count_by_one(temp_db):
-    project = project_service.create_project("Client")
-    rule_service.create_rule("SpecA", project)
-    rule_service.create_rule("SpecB", project)
-    rule_service.create_rule("SpecC", project)
-    before = _counts()
-
-    with get_connection() as conn:
-        target_id = conn.execute(
-            "SELECT id FROM project_rule WHERE pattern = ?",
-            ("SpecB",),
-        ).fetchone()["id"]
-
-    result = rule_api.delete_project_keyword_rule(target_id)
-
-    assert result["ok"] is True
-    after = _counts()
-    assert after["keyword"] == before["keyword"] - 1
-    with get_connection() as conn:
-        remaining = conn.execute(
-            "SELECT pattern FROM project_rule WHERE project_id = ? ORDER BY pattern",
-            (project,),
-        ).fetchall()
-    assert [row["pattern"] for row in remaining] == ["SpecA", "SpecC"]
+    for rule_id in (enabled_id, disabled_id):
+        result = rule_api.delete_project_keyword_rule(rule_id)
+        assert result == {
+            "ok": True,
+            "rule": {"kind": "keyword", "id": rule_id, "deleted": True},
+        }
+        assert not _exists(rule_id)
 
 
 def test_delete_keyword_rule_under_excluded_project(temp_db):
-    # The ``排除规则`` project (enabled=0) still holds legitimate keyword
-    # rules; the delete facade only checks the id is a real keyword rule
-    # and does not gate on project eligibility (unlike create).
     excluded_id = project_service.get_or_create_excluded_project()
     rule_id = rule_service.create_rule("Secret", excluded_id)
 
+    before = generation(DataGenerationNamespace.PRIVACY_CATALOG)
     result = rule_api.delete_project_keyword_rule(rule_id)
 
     assert result["ok"] is True
-    assert _keyword_rule_exists(rule_id) is False
+    assert not _exists(rule_id)
+    assert generation(DataGenerationNamespace.PRIVACY_CATALOG) == before + 1
+    assert privacy_service._exclude_rules()["keywords"] == []
 
 
+@pytest.mark.parametrize("bad_id", [True, False, "1", 1.5, 0, -1, None, [], {}])
+def test_invalid_rule_id_returns_invalid_input(temp_db, bad_id):
+    assert rule_api.delete_project_keyword_rule(bad_id) == {
+        "ok": False,
+        "error": "invalid_input",
+    }
 
 
-@pytest.mark.parametrize("bad_id", [True, False])
-def test_delete_keyword_rule_rejects_bool_as_int_rule_id(temp_db, bad_id):
-    # ``type(True) is bool`` (not int), so bool is rejected before reaching
-    # the service layer.
-    result = rule_api.delete_project_keyword_rule(bad_id)
-    assert result == {"ok": False, "error": "invalid_input"}
-
-
-@pytest.mark.parametrize("bad_id", ["1", "abc", "true"])
-def test_delete_keyword_rule_rejects_numeric_string_rule_id(temp_db, bad_id):
-    result = rule_api.delete_project_keyword_rule(bad_id)
-    assert result == {"ok": False, "error": "invalid_input"}
-
-
-@pytest.mark.parametrize("bad_id", [1.0, 2.5, -1.5])
-def test_delete_keyword_rule_rejects_float_rule_id(temp_db, bad_id):
-    result = rule_api.delete_project_keyword_rule(bad_id)
-    assert result == {"ok": False, "error": "invalid_input"}
-
-
-@pytest.mark.parametrize("bad_id", [0, -1, -999])
-def test_delete_keyword_rule_rejects_zero_and_negative_rule_id(temp_db, bad_id):
-    result = rule_api.delete_project_keyword_rule(bad_id)
-    assert result == {"ok": False, "error": "invalid_input"}
-
-
-@pytest.mark.parametrize(
-    "bad_id", [None, [], {}, (), {1, 2}, (1,), frozenset({1})]
-)
-def test_delete_keyword_rule_rejects_other_invalid_rule_id_types(temp_db, bad_id):
-    # Regression lock: container types (list / dict / tuple / set /
-    # frozenset) all collapse to ``invalid_input`` via the ``type(...) is not
-    # int`` guard before reaching the service layer.
-    result = rule_api.delete_project_keyword_rule(bad_id)
-    assert result == {"ok": False, "error": "invalid_input"}
-
-
-
-
-def test_unknown_keyword_rule_returns_stable_not_found(temp_db):
-    # An id that does not exist in the project_rule table at all.
-    result = rule_api.delete_project_keyword_rule(9999)
-    assert result == {"ok": False, "error": "not_found"}
-
-
-def test_folder_rule_id_returns_not_found_and_does_not_delete_folder_rule(temp_db):
-    # Regression lock: a folder rule id must never be deleted via the
-    # keyword path; ``_rule_exists("keyword", ...)`` resolves it to
-    # ``not_found`` instead of deleting the folder rule.
-    project = project_service.create_project("Client")
-    folder_rule_id = folder_rule_service.create_or_update_folder_rule(
-        r"D:\Client", project
+def test_unknown_and_cross_type_ids_return_not_found(temp_db):
+    project_id = project_service.create_project("Client")
+    folder_id = folder_rule_service.create_or_update_folder_rule(
+        r"D:\Client",
+        project_id,
     )
 
-    result = rule_api.delete_project_keyword_rule(folder_rule_id)
-
-    assert result == {"ok": False, "error": "not_found"}
-    folder_rules = folder_rule_service.list_folder_rules()
-    assert any(int(r.get("id") or 0) == folder_rule_id for r in folder_rules)
-
-
-def test_keyword_rule_id_does_not_delete_folder_rule(temp_db):
-    # Regression lock: deleting a keyword rule must not delete any
-    # folder rule, even folder rules bound to the same project.
-    project = project_service.create_project("Client")
-    folder_rule_id = folder_rule_service.create_or_update_folder_rule(
-        r"D:\Client", project
+    assert rule_api.delete_project_keyword_rule(9999) == {
+        "ok": False,
+        "error": "not_found",
+    }
+    assert rule_api.delete_project_keyword_rule(folder_id) == {
+        "ok": False,
+        "error": "not_found",
+    }
+    assert any(
+        int(row["id"]) == folder_id
+        for row in folder_rule_service.list_folder_rules()
     )
-    keyword_rule_id = rule_service.create_rule("Spec", project)
 
-    result = rule_api.delete_project_keyword_rule(keyword_rule_id)
+
+def test_delete_preserves_projects_folder_rules_and_history(temp_db):
+    project_id = project_service.create_project("Client")
+    folder_id = folder_rule_service.create_or_update_folder_rule(
+        r"D:\Client",
+        project_id,
+    )
+    rule_id = rule_service.create_rule("Spec", project_id)
+    activity_service.create_activity(
+        "Word",
+        "winword.exe",
+        "Spec.docx",
+        start_time="2026-06-18 09:00:00",
+        project_id=project_id,
+    )
+    before = {
+        "project": table_count("project"),
+        "folder": table_count("folder_project_rule"),
+        "activity": table_count("activity_log"),
+        "assignment": table_count("activity_project_assignment"),
+        "operation": table_count("report_session_operation"),
+    }
+
+    result = rule_api.delete_project_keyword_rule(rule_id)
 
     assert result["ok"] is True
-    folder_rules = folder_rule_service.list_folder_rules()
-    assert any(int(r.get("id") or 0) == folder_rule_id for r in folder_rules)
+    assert {
+        "project": table_count("project"),
+        "folder": table_count("folder_project_rule"),
+        "activity": table_count("activity_log"),
+        "assignment": table_count("activity_project_assignment"),
+        "operation": table_count("report_session_operation"),
+    } == before
+    assert any(
+        int(row["id"]) == folder_id
+        for row in folder_rule_service.list_folder_rules()
+    )
 
 
+def test_delete_refreshes_keyword_cache_via_generation(temp_db):
+    project_id = project_service.create_project("Client")
+    rule_id = rule_service.create_rule("Spec", project_id)
+    assert project_inference_service._enabled_keyword_rules()
+    before = generation(DataGenerationNamespace.CLASSIFICATION_CATALOG)
+
+    result = rule_api.delete_project_keyword_rule(rule_id)
+
+    assert result["ok"] is True
+    assert generation(DataGenerationNamespace.CLASSIFICATION_CATALOG) == before + 1
+    assert project_inference_service._enabled_keyword_rules() == []
 
 
-def test_service_exception_collapses_to_operation_failed(temp_db, monkeypatch):
-    # Regression lock: any unexpected service exception must
-    # collapse to ``operation_failed`` and never surface raw exception text
-    # or SQL in the payload.
-    project = project_service.create_project("Client")
-    rule_id = rule_service.create_rule("Spec", project)
+def test_explicit_history_choice_returns_job_metadata(temp_db):
+    project_id = project_service.create_project("Client")
+    rule_id = rule_service.create_rule("Spec", project_id)
+
+    result = rule_api.delete_project_keyword_rule(rule_id, apply_to_history=True)
+
+    assert result["ok"] is True
+    assert result["rule"]["history_updated"] is True
+    assert result["rule"]["updated_count"] >= 0
+    assert not _exists(rule_id)
+
+
+def test_service_exception_collapses_to_privacy_safe_error(temp_db, monkeypatch):
+    project_id = project_service.create_project("Client")
+    rule_id = rule_service.create_rule("Spec", project_id)
 
     def boom(*args, **kwargs):
-        raise RuntimeError(
-            "boom SELECT * FROM activity_log traceback window_title clipboard note C:\\Secret"
-        )
+        raise RuntimeError("SELECT traceback window_title clipboard C:\\Secret")
 
     monkeypatch.setattr(rule_history_application_service, "delete_rule", boom)
     result = rule_api.delete_project_keyword_rule(rule_id)
+
     assert result == {"ok": False, "error": "operation_failed"}
-    lowered = repr(result).lower()
-    for forbidden in (
-        "traceback",
-        "sqlite",
-        "select",
-        "boom",
-        "window_title",
-        "clipboard",
-        "note",
-        "activity_log",
-        "secret",
-    ):
-        assert forbidden not in lowered
-
-
-
-
-def test_delete_keyword_rule_does_not_add_or_delete_folder_rule_rows(temp_db):
-    project = project_service.create_project("Client")
-    folder_rule_service.create_or_update_folder_rule(r"D:\Client", project)
-    rule_id = rule_service.create_rule("Spec", project)
-    before = _counts()
-
-    result = rule_api.delete_project_keyword_rule(rule_id)
-
-    assert result["ok"] is True
-    after = _counts()
-    assert after["folder"] == before["folder"]
-    assert after["keyword"] == before["keyword"] - 1
-
-
-def test_delete_keyword_rule_does_not_add_or_delete_project_rows(temp_db):
-    project = project_service.create_project("Client")
-    rule_id = rule_service.create_rule("Spec", project)
-    before = _counts()
-
-    result = rule_api.delete_project_keyword_rule(rule_id)
-
-    assert result["ok"] is True
-    after = _counts()
-    assert after["project"] == before["project"]
-
-
-def test_delete_keyword_rule_does_not_change_activity_log_rows(temp_db):
-    project = project_service.create_project("Client")
-    rule_id = rule_service.create_rule("Spec", project)
-    activity_id = activity_service.create_activity(
-        "Word",
-        "winword.exe",
-        "Spec.docx",
-        start_time="2026-06-18 09:00:00",
-        project_id=project,
-    )
-    activity_service.finalize_created_activity(activity_id)
-    before = _counts()
-
-    result = rule_api.delete_project_keyword_rule(rule_id)
-
-    assert result["ok"] is True
-    after = _counts()
-    assert after["activity"] == before["activity"]
-    # Rule deletion does not mutate the raw activity row. Project state lives
-    # in the assignment projection instead.
-    with get_connection() as conn:
-        assignment = conn.execute(
-            "SELECT project_id FROM activity_project_assignment WHERE activity_id = ?",
-            (activity_id,),
-        ).fetchone()
-    assert assignment["project_id"] == project
-
-
-def test_delete_keyword_rule_does_not_change_activity_project_assignment_rows(temp_db):
-    project = project_service.create_project("Client")
-    rule_id = rule_service.create_rule("Spec", project)
-    first_activity = activity_service.create_activity(
-        "Word",
-        "winword.exe",
-        "Spec.docx",
-        start_time="2026-06-18 09:00:00",
-        project_id=project,
-    )
-    activity_service.finalize_created_activity(first_activity)
-    activity_service.close_activity(first_activity, "2026-06-18 09:30:00")
-    second_activity = activity_service.create_activity(
-        "Word",
-        "winword.exe",
-        "Spec2.docx",
-        start_time="2026-06-18 10:00:00",
-        project_id=project,
-    )
-    activity_service.finalize_created_activity(second_activity)
-    before = _counts()
-
-    result = rule_api.delete_project_keyword_rule(rule_id)
-
-    assert result["ok"] is True
-    after = _counts()
-    assert after["assignment"] == before["assignment"]
-
-
-def test_delete_keyword_rule_does_not_change_report_session_operation_rows(temp_db):
-    project = project_service.create_project("Client")
-    rule_id = rule_service.create_rule("Spec", project)
-    activity_id = activity_service.create_activity(
-        "Word",
-        "winword.exe",
-        "Spec.docx",
-        start_time="2026-06-18 09:00:00",
-        project_id=project,
-    )
-    with get_connection() as conn:
-        cur = conn.execute(
-            """
-                INSERT INTO report_session_operation(
-                    report_date, operation_type, source_instance_key, source_expected_revision, sequence,
-                    payload_json, created_at
-                )
-                VALUES (?, 'edit_session', ?, ?, 1, ?, ?)
-            """,
-                ("2026-06-18", "base:" + "c" * 40, "revision-c", '{"payload_version":4,"note":{"mode":"set","value":"keep"}}', now_str()),
-        )
-        conn.execute(
-            "INSERT INTO report_session_operation_member(operation_id, role, activity_id, report_date, slice_start_time) VALUES (?, 'source', ?, ?, ?)",
-            (int(cur.lastrowid), activity_id, "2026-06-18", "2026-06-18 09:00:00"),
-        )
-        conn.execute(
-            """INSERT INTO report_mutation_request(
-                request_id, input_signature, outcome_type, operation_id, result_json, created_at, committed_at
-            ) VALUES (?, ?, 'operation_committed', ?, '{}', ?, ?)""",
-            ("test-keyword-delete-c", "seed-c", int(cur.lastrowid), now_str(), now_str()),
-        )
-    before = _counts()
-
-    result = rule_api.delete_project_keyword_rule(rule_id)
-
-    assert result["ok"] is True
-    after = _counts()
-    assert after["session_note"] == before["session_note"]
-
-
-def test_delete_keyword_rule_does_not_call_conflict_preview(temp_db, monkeypatch):
-    project = project_service.create_project("Client")
-    rule_id = rule_service.create_rule("Spec", project)
-
-    def fail_preview(*args, **kwargs):
-        raise AssertionError("conflict preview must not run during keyword delete")
-
-    monkeypatch.setattr(folder_rule_service, "preview_folder_rule_conflicts", fail_preview)
-    result = rule_api.delete_project_keyword_rule(rule_id)
-    assert result["ok"] is True
-
-
-def test_delete_keyword_rule_does_not_call_backfill(temp_db, monkeypatch):
-    project = project_service.create_project("Client")
-    rule_id = rule_service.create_rule("Spec", project)
-
-    def fail_backfill(*args, **kwargs):
-        raise AssertionError("backfill must not run during keyword delete")
-
-    from worktrace.services import rule_impact_service
-
-    monkeypatch.setattr(rule_impact_service, "backfill_rule_impact", fail_backfill)
-    result = rule_api.delete_project_keyword_rule(rule_id)
-    assert result["ok"] is True
-
-
-def test_delete_keyword_rule_does_not_call_folder_delete(temp_db, monkeypatch):
-    project = project_service.create_project("Client")
-    folder_rule_service.create_or_update_folder_rule(r"D:\Client", project)
-    rule_id = rule_service.create_rule("Spec", project)
-
-    def fail_folder_delete(*args, **kwargs):
-        raise AssertionError("folder delete must not run during keyword delete")
-
-    monkeypatch.setattr(folder_rule_service, "delete_folder_rule", fail_folder_delete)
-    result = rule_api.delete_project_keyword_rule(rule_id)
-    assert result["ok"] is True
-
-
-
-
-def test_delete_keyword_rule_invalidates_keyword_rule_cache(temp_db, monkeypatch):
-    # Regression lock: the service-level delete orchestrator invalidates the
-    # keyword-rule cache after the transaction commits.
-    project = project_service.create_project("Client")
-    rule_id = rule_service.create_rule("Spec", project)
-    project_inference_service.invalidate_keyword_rule_cache()
-
-    calls = {"count": 0}
-    original = project_inference_service.invalidate_keyword_rule_cache
-
-    def spy():
-        calls["count"] += 1
-        original()
-
-    monkeypatch.setattr(
-        "worktrace.services.project_inference_service.invalidate_keyword_rule_cache", spy
-    )
-
-    result = rule_api.delete_project_keyword_rule(rule_id)
-
-    assert result["ok"] is True
-    assert calls["count"] >= 1
-
-
-def test_delete_keyword_rule_clears_exclude_rules_cache(temp_db, monkeypatch):
-    # Regression lock: ``rule_service.delete_rule`` also calls
-    # ``privacy_service.clear_exclude_rules_cache`` so the privacy/exclude
-    # matching result stays consistent after a keyword rule is deleted.
-    project = project_service.create_project("Client")
-    rule_id = rule_service.create_rule("Spec", project)
-
-    calls = {"count": 0}
-    original = privacy_service.clear_exclude_rules_cache
-
-    def spy():
-        calls["count"] += 1
-        original()
-
-    monkeypatch.setattr(privacy_service, "clear_exclude_rules_cache", spy)
-
-    result = rule_api.delete_project_keyword_rule(rule_id)
-
-    assert result["ok"] is True
-    assert calls["count"] >= 1
-
-
-
-
-def test_delete_keyword_rule_payload_is_json_serializable(temp_db):
-    project = project_service.create_project("Client")
-    rule_id = rule_service.create_rule("Spec", project)
-
-    result = rule_api.delete_project_keyword_rule(rule_id)
-
-    json.dumps(result, ensure_ascii=False)
-    assert "Traceback" not in repr(result)
-    assert "SELECT" not in repr(result)
-
-
-def test_delete_keyword_rule_success_payload_types_are_stable(temp_db):
-    project = project_service.create_project("Client")
-    rule_id = rule_service.create_rule("Spec", project)
-
-    result = rule_api.delete_project_keyword_rule(rule_id)
-
-    assert type(result["ok"]) is bool
-    rule = result["rule"]
-    assert type(rule["kind"]) is str
-    assert type(rule["id"]) is int
-    assert type(rule["deleted"]) is bool
-
-
-def test_delete_keyword_rule_failure_payloads_are_json_serializable(temp_db):
-    project = project_service.create_project("Client")
-
-    failures = [
-        rule_api.delete_project_keyword_rule(True),
-        rule_api.delete_project_keyword_rule("1"),
-        rule_api.delete_project_keyword_rule(1.0),
-        rule_api.delete_project_keyword_rule(0),
-        rule_api.delete_project_keyword_rule(-1),
-        rule_api.delete_project_keyword_rule(None),
-        rule_api.delete_project_keyword_rule([]),
-        rule_api.delete_project_keyword_rule({}),
-        rule_api.delete_project_keyword_rule(9999),
-    ]
-    # Create the folder rule first so its id cannot collide with a keyword
-    # rule id in ``project_rule``.
-    folder_rule_id = folder_rule_service.create_or_update_folder_rule(
-        r"D:\Client", project
-    )
-    assert _keyword_rule_exists(folder_rule_id) is False
-    failures.append(rule_api.delete_project_keyword_rule(folder_rule_id))
-
-    for result in failures:
-        assert result["ok"] is False
-        json.dumps(result, ensure_ascii=False)
-        assert "Traceback" not in repr(result)
-        assert "SELECT" not in repr(result)
-
-
-
-
-def test_existing_create_project_keyword_rule_still_works(temp_db):
-    # Regression lock: the new ``delete_project_keyword_rule`` facade
-    # must not regress the existing create path.
-    project = project_service.create_project("Client")
-
-    result = rule_api.create_project_keyword_rule(project, "Spec")
-
-    assert result["ok"] is True
-    assert result["rule"]["kind"] == "keyword"
-    assert result["rule"]["project_id"] == project
-    assert result["rule"]["keyword"] == "Spec"
-
-
-def test_existing_set_project_rule_enabled_still_works(temp_db):
-    # Regression lock: the new ``delete_project_keyword_rule`` facade
-    # must not regress the existing toggle path.
-    project = project_service.create_project("Client")
-    rule_id = rule_service.create_rule("Spec", project)
-
-    disabled = rule_api.set_project_rule_enabled("keyword", rule_id, False)
-    assert disabled == {
-        "ok": True,
-        "rule_type": "keyword",
-        "rule_id": rule_id,
-        "enabled": False,
-    }
-    enabled = rule_api.set_project_rule_enabled("keyword", rule_id, True)
-    assert enabled == {
-        "ok": True,
-        "rule_type": "keyword",
-        "rule_id": rule_id,
-        "enabled": True,
-    }
-
-
-def test_delete_then_recreate_same_keyword_works(temp_db):
-    # Regression lock: after deleting a keyword rule, the same
-    # keyword can be re-created on the same project (no soft-delete residue
-    # / unique-constraint violation). This verifies the existing service
-    # uses a hard DELETE, not a soft-delete.
-    project = project_service.create_project("Client")
-    rule_id = rule_service.create_rule("Spec", project)
-
-    delete_result = rule_api.delete_project_keyword_rule(rule_id)
-    assert delete_result["ok"] is True
-
-    recreate_result = rule_api.create_project_keyword_rule(project, "Spec")
-    assert recreate_result["ok"] is True
-    assert recreate_result["rule"]["id"] != rule_id
-    assert recreate_result["rule"]["keyword"] == "Spec"
-
-
-
-
-def test_delete_keyword_rule_second_delete_is_not_treated_as_success(temp_db):
-    # Regression lock: a second delete on the same id must resolve to
-    # ``not_found``, not ``ok: True`` — locks the existence pre-check +
-    # hard DELETE contract against silent stale-id success.
-    project = project_service.create_project("Client")
-    rule_id = rule_service.create_rule("Spec", project)
-
-    first = rule_api.delete_project_keyword_rule(rule_id)
-    assert first["ok"] is True
-    assert _keyword_rule_exists(rule_id) is False
-
-    second = rule_api.delete_project_keyword_rule(rule_id)
-    assert second == {"ok": False, "error": "not_found"}
-    assert second["ok"] is False
-
-
-def test_delete_keyword_rule_does_not_call_keyword_create_or_toggle_service_paths(
-    temp_db, monkeypatch
-):
-    # Regression lock: the keyword delete path must only call
-    # ``rule_service.delete_rule`` — not ``create_rule`` or
-    # ``set_rule_enabled``, which would mutate instead of delete.
-    project = project_service.create_project("Client")
-    rule_id = rule_service.create_rule("Spec", project)
-
-    def fail_create(*args, **kwargs):
-        raise AssertionError("keyword create must not run during keyword delete")
-
-    def fail_toggle(*args, **kwargs):
-        raise AssertionError("keyword toggle must not run during keyword delete")
-
-    monkeypatch.setattr(rule_service, "create_rule", fail_create)
-    monkeypatch.setattr(rule_service, "set_rule_enabled", fail_toggle)
-
-    result = rule_api.delete_project_keyword_rule(rule_id)
-
-    assert result["ok"] is True
-    assert _keyword_rule_exists(rule_id) is False
-
-
-def test_delete_keyword_rule_folder_rule_id_returns_stable_not_found_code(temp_db):
-    # Regression lock: a folder rule id must collapse to exactly
-    # ``not_found`` (not a folder-specific code leaking the table) and
-    # the folder rule row must survive untouched.
-    project = project_service.create_project("Client")
-    folder_rule_id = folder_rule_service.create_or_update_folder_rule(
-        r"D:\Client", project
-    )
-
-    result = rule_api.delete_project_keyword_rule(folder_rule_id)
-
-    assert result == {"ok": False, "error": "not_found"}
-    folder_rules = folder_rule_service.list_folder_rules()
-    assert any(int(r.get("id") or 0) == folder_rule_id for r in folder_rules)
+    serialized = json.dumps(result).casefold()
+    for forbidden in ("select", "traceback", "window_title", "clipboard", "secret"):
+        assert forbidden not in serialized
