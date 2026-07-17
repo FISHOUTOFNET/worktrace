@@ -6,6 +6,10 @@ from datetime import datetime, time as datetime_time, timedelta
 from ..constants import STATUS_ERROR, STATUS_NORMAL, TIME_FORMAT
 from ..db import get_connection, now_str
 from . import project_service, session_boundary_service
+from .activity_fact_repair_service import (
+    get_activity_fact_repair_state,
+    repair_missing_activity_resources,
+)
 from .activity_lifecycle_service import (
     recover_close_activity,
     recover_cross_midnight_segment,
@@ -37,9 +41,6 @@ def recover_unclosed_records() -> None:
             """
         ).fetchall()
     for row in rows:
-        # A malformed or future heartbeat cannot be a durable recovery point.
-        # Close at the current startup boundary and mark the row as error rather
-        # than persisting a future interval.
         end_time = heartbeat if heartbeat_is_valid else fallback_now
         status = row["status"] if heartbeat_is_valid else STATUS_ERROR
         try:
@@ -71,9 +72,6 @@ def recover_unclosed_records() -> None:
                 row["id"],
             )
             continue
-        # Non-cross-midnight recovery routes through the lifecycle facade so
-        # the close-finalize helper converges project inference / automatic
-        # rules on the recovered row.
         recover_close_activity(
             int(row["id"]),
             end_time,
@@ -91,8 +89,23 @@ def recover_unclosed_records() -> None:
             recovered_boundary_at,
             "recovered",
         )
+    _repair_missing_resource_facts()
     record_restart_boundary_if_needed()
     clear_runtime_activity_state("recovery_startup_boundary")
+
+
+def _repair_missing_resource_facts() -> None:
+    repaired = repair_missing_activity_resources()
+    state = get_activity_fact_repair_state()
+    logging.info(
+        "startup activity resource repair policy=%s status=%s repaired=%s "
+        "unknown=%s errors=%s",
+        state["policy_version"],
+        state["status"],
+        repaired,
+        state["unknown_count"],
+        state["error_count"],
+    )
 
 
 def _recover_cross_midnight_row(row, end_dt: datetime) -> str:
@@ -109,8 +122,6 @@ def _recover_cross_midnight_row(row, end_dt: datetime) -> str:
         else None
     )
     original_id = int(row["id"])
-    # Close the first half at first_midnight via the lifecycle facade so the
-    # close-finalize helper converges project inference / automatic rules.
     recover_first_half_close(
         original_id,
         first_midnight_text,
@@ -127,10 +138,6 @@ def _recover_cross_midnight_row(row, end_dt: datetime) -> str:
             datetime_time.min,
         )
         current_end = min(end_dt, next_midnight)
-        # Create + close each cross-midnight segment via the lifecycle facade
-        # so the open-row state machine stays the single owner. The
-        # midnight_anchor assignment is applied inside the facade when status
-        # is NORMAL and a concrete project_id is available.
         payload = {
             "app_name": row["app_name"],
             "process_name": row["process_name"],

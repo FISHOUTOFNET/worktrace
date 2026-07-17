@@ -7,7 +7,10 @@ import logging
 import threading
 from typing import Any
 
+from ..constants import EXCLUDED_PROJECT
+from ..data_generation_repository import DataGenerationNamespace
 from ..db import get_connection, now_str
+from ..domain_unit_of_work import DomainUnitOfWork
 from . import assignment_command_service, rule_planning_service as planner
 
 _BATCH_SIZE = 100
@@ -75,9 +78,13 @@ def submit_rule_job(
         "restore_enabled": bool(int(rule.get("enabled") or 0)),
         "estimated_count": estimated,
     }
-    with get_connection() as conn:
-        conn.execute("BEGIN IMMEDIATE")
+    with DomainUnitOfWork() as uow:
+        conn = uow.connection
         if kind in {"rule_remove", "rule_delete"}:
+            if int(rule.get("enabled") or 0):
+                uow.add_effects(DataGenerationNamespace.CLASSIFICATION_CATALOG)
+                if str(rule.get("project_name") or "") == EXCLUDED_PROJECT:
+                    uow.add_effects(DataGenerationNamespace.PRIVACY_CATALOG)
             table, extra = _rule_table(rule_type)
             cursor = conn.execute(
                 f"UPDATE {table} SET enabled = 0, updated_at = ? WHERE id = ?{extra}",
@@ -114,7 +121,6 @@ def submit_rule_job(
             """,
             (job_id, rule_type, int(rule_id), rule_version),
         )
-        conn.commit()
 
     _invalidate_rule_caches(rule_type)
     if estimated <= max(0, int(synchronous_limit)):
@@ -169,8 +175,8 @@ def run_job_batch(job_id: int, batch_size: int = _BATCH_SIZE) -> dict[str, Any]:
                 _run_reinference_batch(job, batch_size)
         except Exception as exc:
             logging.exception("history mutation job failed id=%s", job_id)
-            with get_connection() as conn:
-                conn.execute(
+            with DomainUnitOfWork() as uow:
+                uow.connection.execute(
                     """
                     UPDATE history_mutation_job
                     SET status = 'failed', error_message = ?, updated_at = ?
@@ -265,8 +271,10 @@ def _run_backfill_batch(job: dict, batch_size: int) -> None:
     updates = list(classified.get("would_update") or [])
     last_id = max(int(item["id"]) for item in activities)
     changed = 0
-    with get_connection() as conn:
-        conn.execute("BEGIN IMMEDIATE")
+    with DomainUnitOfWork(
+        (DataGenerationNamespace.REPORT_STRUCTURE,)
+    ) as uow:
+        conn = uow.connection
         current = planner.resolve_rule(conn, rule_type, rule_id)
         if not current or str(current.get("updated_at") or "") != expected_version:
             raise ValueError("rule_changed_during_history_job")
@@ -295,7 +303,6 @@ def _run_backfill_batch(job: dict, batch_size: int) -> None:
             skipped=max(0, len(activities) - changed),
             completed=completed,
         )
-        conn.commit()
 
 
 def _run_reinference_batch(job: dict, batch_size: int) -> None:
@@ -330,8 +337,10 @@ def _run_reinference_batch(job: dict, batch_size: int) -> None:
     from .project_inference_service import assign_project_for_activity_in_transaction
 
     activity_ids = [int(row["activity_id"]) for row in rows]
-    with get_connection() as conn:
-        conn.execute("BEGIN IMMEDIATE")
+    with DomainUnitOfWork(
+        (DataGenerationNamespace.REPORT_STRUCTURE,)
+    ) as uow:
+        conn = uow.connection
         changed = 0
         for activity_id in activity_ids:
             assign_project_for_activity_in_transaction(
@@ -346,6 +355,7 @@ def _run_reinference_batch(job: dict, batch_size: int) -> None:
             or last_id >= int(job["cutoff_activity_id"] or 0)
         )
         if completed:
+            _add_finalization_effects(uow, conn, job, payload)
             _finalize_rule_in_transaction(conn, job, payload)
         _advance_job(
             conn,
@@ -356,7 +366,6 @@ def _run_reinference_batch(job: dict, batch_size: int) -> None:
             skipped=0,
             completed=completed,
         )
-        conn.commit()
     if completed:
         _invalidate_rule_caches(rule_type)
 
@@ -396,8 +405,9 @@ def _advance_job(
 def _finalize_reinference_job(job: dict) -> None:
     payload = _payload(job)
     rule_type = str(payload["rule_type"])
-    with get_connection() as conn:
-        conn.execute("BEGIN IMMEDIATE")
+    with DomainUnitOfWork() as uow:
+        conn = uow.connection
+        _add_finalization_effects(uow, conn, job, payload)
         _finalize_rule_in_transaction(conn, job, payload)
         conn.execute(
             """
@@ -407,8 +417,28 @@ def _finalize_reinference_job(job: dict) -> None:
             """,
             (now_str(), int(job["id"])),
         )
-        conn.commit()
     _invalidate_rule_caches(rule_type)
+
+
+def _add_finalization_effects(
+    uow: DomainUnitOfWork,
+    conn,
+    job: dict,
+    payload: dict[str, Any],
+) -> None:
+    changes_rule = job["kind"] == "rule_delete" or bool(
+        payload.get("restore_enabled")
+    )
+    if not changes_rule:
+        return
+    rule = planner.resolve_rule(
+        conn,
+        str(payload["rule_type"]),
+        int(payload["rule_id"]),
+    )
+    uow.add_effects(DataGenerationNamespace.CLASSIFICATION_CATALOG)
+    if rule and str(rule.get("project_name") or "") == EXCLUDED_PROJECT:
+        uow.add_effects(DataGenerationNamespace.PRIVACY_CATALOG)
 
 
 def _finalize_rule_in_transaction(conn, job: dict, payload: dict[str, Any]) -> None:
@@ -432,8 +462,8 @@ def _finalize_rule_in_transaction(conn, job: dict, payload: dict[str, Any]) -> N
 
 
 def _complete_job(job_id: int) -> None:
-    with get_connection() as conn:
-        conn.execute(
+    with DomainUnitOfWork() as uow:
+        uow.connection.execute(
             """
             UPDATE history_mutation_job
             SET status = 'completed', error_message = NULL, updated_at = ?

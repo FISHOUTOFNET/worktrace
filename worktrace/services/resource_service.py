@@ -3,7 +3,9 @@ from __future__ import annotations
 import sqlite3
 
 from ..constants import STATUS_EXCLUDED
+from ..data_generation_repository import DataGenerationNamespace
 from ..db import get_connection, now_str
+from ..domain_unit_of_work import DomainUnitOfWork
 from ..path_utils import normalize_path_key
 from ..resources.resource_builders import make_system_resource, parse_metadata_json
 from ..resources.resource_policy import safe_metadata_json
@@ -93,8 +95,10 @@ def create_or_update_activity_resource(
     if conn is not None:
         _upsert(conn)
     else:
-        with get_connection() as own_conn:
-            _upsert(own_conn)
+        with DomainUnitOfWork(
+            (DataGenerationNamespace.REPORT_STRUCTURE,)
+        ) as uow:
+            _upsert(uow.connection)
 
 
 def get_resource_for_activity(
@@ -121,43 +125,26 @@ def attach_resource(
     *,
     conn: sqlite3.Connection | None = None,
 ) -> dict:
-    """Attach resource-first display fields to an activity row."""
+    """Attach only persisted resource facts to an activity row."""
 
     item = dict(row)
     activity_id = item.get("id")
     if activity_id is None:
         return item
     resource = get_resource_for_activity(int(activity_id), conn=conn)
-    if resource is None:
-        from ..platforms.base import ActiveWindow
-        from ..resources.detectors import detect_resource
-
-        active_window = ActiveWindow(
-            app_name=item.get("app_name") or "",
-            process_name=item.get("process_name") or "",
-            window_title=item.get("window_title") or "",
-            file_path_hint=item.get("file_path_hint"),
-        )
-        detected = detect_resource(active_window)
-        item["resource_kind"] = detected.resource_kind
-        item["resource_subtype"] = detected.resource_subtype
-        item["resource_display_name"] = detected.display_name
-        item["resource_identity_key"] = detected.identity_key
-        item["resource_is_anchor"] = bool(detected.is_anchor)
-        item["resource_path_hint"] = detected.path_hint
-        item["resource_uri_host"] = detected.uri_host
-    else:
-        item["resource_kind"] = resource["resource_kind"]
-        item["resource_subtype"] = resource["resource_subtype"]
-        item["resource_display_name"] = resource["display_name"]
-        item["resource_identity_key"] = resource["identity_key"]
-        item["resource_is_anchor"] = bool(resource["is_anchor"])
-        item["resource_path_hint"] = resource.get("path_hint")
-        item["resource_uri_host"] = resource.get("uri_host")
+    if resource is None or not resource.get("identity_key"):
+        raise ValueError("data_repair_required")
+    item["resource_kind"] = resource["resource_kind"]
+    item["resource_subtype"] = resource["resource_subtype"]
+    item["resource_display_name"] = resource["display_name"]
+    item["resource_identity_key"] = resource["identity_key"]
+    item["resource_is_anchor"] = bool(resource["is_anchor"])
+    item["resource_path_hint"] = resource.get("path_hint")
+    item["resource_uri_host"] = resource.get("uri_host")
     item["activity_display_name"] = (
         item.get("resource_display_name") or item.get("app_name", "")
     )
-    item["activity_identity_key"] = item.get("resource_identity_key") or ""
+    item["activity_identity_key"] = item["resource_identity_key"]
     return item
 
 

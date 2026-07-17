@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import time
 
-from ..constants import RULE_CACHE_TTL_SECONDS
+from ..constants import EXCLUDED_PROJECT, RULE_CACHE_TTL_SECONDS
+from ..data_generation_repository import DataGenerationNamespace
 from ..db import dict_rows, get_connection, get_db_path, now_str
+from ..domain_unit_of_work import DomainUnitOfWork
 from ..path_utils import (
     is_path_under_folder,
     looks_like_anchor_file_path,
@@ -13,6 +15,23 @@ from ..path_utils import (
 
 _FOLDER_RULE_CACHE_TTL_SECONDS = RULE_CACHE_TTL_SECONDS
 _FOLDER_RULE_CACHE: dict[str, tuple[float, list[dict]]] = {}
+
+
+def _catalog_uow() -> DomainUnitOfWork:
+    return DomainUnitOfWork((DataGenerationNamespace.CLASSIFICATION_CATALOG,))
+
+
+def _add_privacy_effect_for_project_id(
+    uow: DomainUnitOfWork,
+    conn,
+    project_id: int,
+) -> None:
+    row = conn.execute(
+        "SELECT name FROM project WHERE id = ?",
+        (int(project_id),),
+    ).fetchone()
+    if row is not None and str(row["name"] or "") == EXCLUDED_PROJECT:
+        uow.add_effects(DataGenerationNamespace.PRIVACY_CATALOG)
 
 
 def invalidate_folder_rule_cache() -> None:
@@ -64,8 +83,25 @@ def create_or_update_folder_rule(folder_path: str, project_id: int, recursive: b
     key = normalize_folder_key(folder)
     if not key:
         raise ValueError("folder path is required")
+    requested_recursive = int(recursive)
     ts = now_str()
-    with get_connection() as conn:
+    changed = False
+    with _catalog_uow() as uow:
+        conn = uow.connection
+        existing = conn.execute(
+            "SELECT * FROM folder_project_rule WHERE normalized_folder_key = ?",
+            (key,),
+        ).fetchone()
+        if existing is not None:
+            rule_id = int(existing["id"])
+            if (
+                str(existing["folder_path"] or "") == folder
+                and int(existing["project_id"]) == int(project_id)
+                and int(existing["recursive"] or 0) == requested_recursive
+                and int(existing["enabled"] or 0) == 1
+            ):
+                return rule_id
+        _add_privacy_effect_for_project_id(uow, conn, project_id)
         cur = conn.execute(
             """
             INSERT INTO folder_project_rule(
@@ -79,45 +115,52 @@ def create_or_update_folder_rule(folder_path: str, project_id: int, recursive: b
                 enabled = 1,
                 updated_at = excluded.updated_at
             """,
-            (folder, key, project_id, int(recursive), ts, ts),
+            (folder, key, project_id, requested_recursive, ts, ts),
         )
         row = conn.execute(
             "SELECT id FROM folder_project_rule WHERE normalized_folder_key = ?",
             (key,),
         ).fetchone()
-    invalidate_folder_rule_cache()
-    from .privacy_service import clear_exclude_rules_cache
-    from .folder_index_service import request_rebuild_for_rule
+        rule_id = int(row["id"] if row else cur.lastrowid)
+        changed = True
+    if changed:
+        invalidate_folder_rule_cache()
+        from .privacy_service import clear_exclude_rules_cache
+        from .folder_index_service import request_rebuild_for_rule
 
-    clear_exclude_rules_cache()
-    rule_id = int(row["id"] if row else cur.lastrowid)
-    request_rebuild_for_rule(rule_id)
+        clear_exclude_rules_cache()
+        request_rebuild_for_rule(rule_id)
     return rule_id
 
 
 def update_folder_rule(rule_id: int, folder_path: str, recursive: bool = True) -> None:
-    """Update one existing folder rule's ``folder_path`` and ``recursive`` by id.
-
-    Unlike ``create_or_update_folder_rule``, this preserves the row's ``id``
-    even when the new ``folder_path`` produces a different
-    ``normalized_folder_key``. ``project_id`` and ``enabled`` are preserved
-    as-is; this function does not move a folder rule to a different project
-    and does not toggle its enabled state. The folder index for this rule is
-    rebuilt because the path may have changed.
-
-    Raises ``ValueError`` if ``folder_path`` is empty or ``rule_id`` does not
-    match any row. Raises ``sqlite3.IntegrityError`` (surfaced to the caller
-    as ``operation_failed`` by the API facade) if the new normalized key
-    already belongs to a different folder rule.
-    """
+    """Update one existing folder rule while preserving its row identity."""
     folder = (folder_path or "").strip()
     if not folder:
         raise ValueError("folder path is required")
     key = normalize_folder_key(folder)
     if not key:
         raise ValueError("folder path is required")
-    ts = now_str()
-    with get_connection() as conn:
+    requested_recursive = int(recursive)
+    with _catalog_uow() as uow:
+        conn = uow.connection
+        row = conn.execute(
+            "SELECT * FROM folder_project_rule WHERE id = ?",
+            (rule_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("folder rule not found")
+        if (
+            str(row["folder_path"] or "") == folder
+            and str(row["normalized_folder_key"] or "") == key
+            and int(row["recursive"] or 0) == requested_recursive
+        ):
+            return
+        _add_privacy_effect_for_project_id(
+            uow,
+            conn,
+            int(row["project_id"]),
+        )
         cur = conn.execute(
             """
             UPDATE folder_project_rule
@@ -127,7 +170,7 @@ def update_folder_rule(rule_id: int, folder_path: str, recursive: bool = True) -
                 updated_at = ?
             WHERE id = ?
             """,
-            (folder, key, int(recursive), ts, rule_id),
+            (folder, key, requested_recursive, now_str(), rule_id),
         )
         if cur.rowcount == 0:
             raise ValueError("folder rule not found")
@@ -140,7 +183,19 @@ def update_folder_rule(rule_id: int, folder_path: str, recursive: bool = True) -
 
 
 def delete_folder_rule(rule_id: int) -> None:
-    with get_connection() as conn:
+    with _catalog_uow() as uow:
+        conn = uow.connection
+        row = conn.execute(
+            "SELECT project_id FROM folder_project_rule WHERE id = ?",
+            (rule_id,),
+        ).fetchone()
+        if row is None:
+            return
+        _add_privacy_effect_for_project_id(
+            uow,
+            conn,
+            int(row["project_id"]),
+        )
         conn.execute("DELETE FROM folder_project_rule WHERE id = ?", (rule_id,))
     invalidate_folder_rule_cache()
     from .privacy_service import clear_exclude_rules_cache
@@ -151,10 +206,23 @@ def delete_folder_rule(rule_id: int) -> None:
 
 
 def set_folder_rule_enabled(rule_id: int, enabled: bool) -> None:
-    with get_connection() as conn:
+    requested = int(enabled)
+    with _catalog_uow() as uow:
+        conn = uow.connection
+        row = conn.execute(
+            "SELECT project_id, enabled FROM folder_project_rule WHERE id = ?",
+            (rule_id,),
+        ).fetchone()
+        if row is None or int(row["enabled"] or 0) == requested:
+            return
+        _add_privacy_effect_for_project_id(
+            uow,
+            conn,
+            int(row["project_id"]),
+        )
         conn.execute(
             "UPDATE folder_project_rule SET enabled = ?, updated_at = ? WHERE id = ?",
-            (int(enabled), now_str(), rule_id),
+            (requested, now_str(), rule_id),
         )
     invalidate_folder_rule_cache()
     from .privacy_service import clear_exclude_rules_cache
@@ -234,14 +302,10 @@ def preview_folder_rule_conflicts(folder_path: str, project_id: int) -> dict:
 
 
 def _activity_matches_folder(activity: dict, folder_path: str, recursive: bool = True, rule_id: int | None = None) -> bool:
-    # Resource-first: check both resource_path_hint and file_path_hint.
-    # A non-anchor resource may store a name-only path_hint (e.g. "floorplan.dwg")
-    # while file_path_hint holds the full drive path — check each independently.
     for key in ("resource_path_hint", "file_path_hint"):
         path_hint = str(activity.get(key) or "").strip()
         if path_hint and looks_like_anchor_file_path(path_hint):
             return is_path_under_folder(path_hint, folder_path, recursive)
-    # No concrete path: try folder index lookup.
     if rule_id is not None:
         from .folder_index_service import activity_matches_rule_by_index
 

@@ -7,7 +7,9 @@ import sqlite3
 from typing import Any, Mapping, Sequence
 
 from ..constants import STATUS_NORMAL
+from ..data_generation_repository import DataGenerationNamespace
 from ..db import get_connection, now_str
+from ..domain_unit_of_work import DomainUnitOfWork
 from . import (
     assignment_command_service,
     project_lifecycle_policy,
@@ -187,16 +189,16 @@ def _run_uow(
     }
     input_signature = stable_json_hash(intent)
 
-    with get_connection() as conn:
-        try:
-            conn.execute("BEGIN IMMEDIATE")
+    try:
+        with DomainUnitOfWork(
+            (DataGenerationNamespace.REPORT_STRUCTURE,)
+        ) as uow:
+            conn = uow.connection
             receipt = _find_request(conn, request_id)
             if receipt is not None:
                 if str(receipt["input_signature"]) != input_signature:
                     raise RequestIdConflictError()
-                result = _mutation_result_from_receipt(receipt)
-                conn.commit()
-                return result
+                return _mutation_result_from_receipt(receipt)
 
             from .report_projection_snapshot_service import build_visible_snapshot
 
@@ -307,7 +309,6 @@ def _run_uow(
                     message="操作未产生变化",
                 )
                 _insert_receipt(conn, request_id, input_signature, result)
-                conn.commit()
                 return result
 
             committed_candidate = candidate
@@ -394,16 +395,11 @@ def _run_uow(
                 snapshot_revision=after.snapshot_revision,
             )
             _insert_receipt(conn, request_id, input_signature, result)
-            conn.commit()
             return result
-        except sqlite3.OperationalError as exc:
-            conn.rollback()
-            if "locked" in str(exc).lower() or "busy" in str(exc).lower():
-                raise DatabaseBusyError() from exc
-            raise
-        except Exception:
-            conn.rollback()
-            raise
+    except sqlite3.OperationalError as exc:
+        if "locked" in str(exc).lower() or "busy" in str(exc).lower():
+            raise DatabaseBusyError() from exc
+        raise
 
 
 def _operation_input(

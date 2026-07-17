@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..constants import EXCLUDED_PROJECT
+from ..data_generation_repository import DataGenerationNamespace
 from ..db import get_connection, now_str
+from ..domain_unit_of_work import DomainUnitOfWork
 from . import assignment_command_service, folder_rule_service
 from . import rule_planning_service as planner
 
@@ -98,7 +101,7 @@ def preview_project_rules_batch_impact(rules: Any) -> dict[str, Any]:
 
 
 def backfill_project_rules_batch(rules: Any) -> dict[str, Any]:
-    """Plan with a read transaction, then apply only a bounded immutable set."""
+    """Plan outside the write lock, then revalidate and apply one bounded set."""
 
     normalized = _normalize_rules(rules)
     with get_connection() as read_conn:
@@ -107,48 +110,45 @@ def backfill_project_rules_batch(rules: Any) -> dict[str, Any]:
     if len(winners) > MAX_BATCH_BACKFILL_ACTIVITIES:
         raise RuleBatchError(ERR_TOO_MANY_MATCHES)
 
-    conn = get_connection()
     try:
-        conn.execute("BEGIN IMMEDIATE")
-        _revalidate_plan(conn, plan)
-        updated_by_rule = {
-            index: 0 for index in range(len(plan["resolved"]))
-        }
-        for activity_id, index in winners.items():
-            item = plan["resolved"][index]
-            entry = item["entry"]
-            rule = item["rule"]
-            source = (
-                "folder_rule"
-                if entry["rule_type"] == "folder"
-                else "keyword_rule"
-            )
-            confidence = (
-                planner.FOLDER_RULE_CONFIDENCE
-                if entry["rule_type"] == "folder"
-                else planner.KEYWORD_RULE_CONFIDENCE
-            )
-            if not assignment_command_service.upsert_assignment(
-                conn,
-                activity_id=int(activity_id),
-                project_id=int(rule.get("project_id") or 0),
-                confidence=confidence,
-                source=source,
-                source_rule_type=entry["rule_type"],
-                source_rule_id=int(rule.get("id") or 0),
-                protect_manual=True,
-            ):
-                raise RuleBatchError(ERR_OPERATION_FAILED)
-            updated_by_rule[index] += 1
-        conn.commit()
+        with DomainUnitOfWork(
+            (DataGenerationNamespace.REPORT_STRUCTURE,)
+        ) as uow:
+            conn = uow.connection
+            _revalidate_plan(conn, plan)
+            updated_by_rule = {
+                index: 0 for index in range(len(plan["resolved"]))
+            }
+            for activity_id, index in winners.items():
+                item = plan["resolved"][index]
+                entry = item["entry"]
+                rule = item["rule"]
+                source = (
+                    "folder_rule"
+                    if entry["rule_type"] == "folder"
+                    else "keyword_rule"
+                )
+                confidence = (
+                    planner.FOLDER_RULE_CONFIDENCE
+                    if entry["rule_type"] == "folder"
+                    else planner.KEYWORD_RULE_CONFIDENCE
+                )
+                if not assignment_command_service.upsert_assignment(
+                    conn,
+                    activity_id=int(activity_id),
+                    project_id=int(rule.get("project_id") or 0),
+                    confidence=confidence,
+                    source=source,
+                    source_rule_type=entry["rule_type"],
+                    source_rule_id=int(rule.get("id") or 0),
+                    protect_manual=True,
+                ):
+                    raise RuleBatchError(ERR_OPERATION_FAILED)
+                updated_by_rule[index] += 1
     except RuleBatchError:
-        conn.rollback()
         raise
     except Exception as exc:
-        conn.rollback()
         raise RuleBatchError(ERR_OPERATION_FAILED) from exc
-    finally:
-        conn.close()
 
     per_rule: list[dict[str, Any]] = []
     for index, item in enumerate(plan["resolved"]):
@@ -180,72 +180,77 @@ def set_project_rules_batch_enabled(rules: Any, enabled: Any) -> dict[str, Any]:
     normalized = _normalize_rules(rules)
     if type(enabled) is not bool:
         raise RuleBatchError("invalid_input")
-    conn = get_connection()
+    requested = int(enabled)
     has_folder = has_keyword = False
+    changed = False
     try:
-        conn.execute("BEGIN IMMEDIATE")
-        resolved: list[tuple[dict[str, Any], dict]] = []
-        for entry in normalized:
-            rule = planner.resolve_rule(
-                conn,
-                entry["rule_type"],
-                entry["rule_id"],
-            )
-            if not rule:
-                raise RuleBatchError(ERR_NOT_FOUND)
-            resolved.append((entry, rule))
-        timestamp = now_str()
-        for entry, _rule in resolved:
-            if entry["rule_type"] == "folder":
-                cursor = conn.execute(
-                    "UPDATE folder_project_rule SET enabled = ?, updated_at = ? WHERE id = ?",
-                    (int(enabled), timestamp, entry["rule_id"]),
+        with DomainUnitOfWork(
+            (DataGenerationNamespace.CLASSIFICATION_CATALOG,)
+        ) as uow:
+            conn = uow.connection
+            resolved: list[tuple[dict[str, Any], dict]] = []
+            for entry in normalized:
+                rule = planner.resolve_rule(
+                    conn,
+                    entry["rule_type"],
+                    entry["rule_id"],
                 )
-                has_folder = True
-            else:
-                cursor = conn.execute(
-                    "UPDATE project_rule SET enabled = ?, updated_at = ? "
-                    "WHERE id = ? AND rule_type = 'keyword'",
-                    (int(enabled), timestamp, entry["rule_id"]),
+                if not rule:
+                    raise RuleBatchError(ERR_NOT_FOUND)
+                resolved.append((entry, rule))
+            timestamp = now_str()
+            for entry, rule in resolved:
+                if int(rule.get("enabled") or 0) == requested:
+                    continue
+                if str(rule.get("project_name") or "") == EXCLUDED_PROJECT:
+                    uow.add_effects(DataGenerationNamespace.PRIVACY_CATALOG)
+                if entry["rule_type"] == "folder":
+                    cursor = conn.execute(
+                        "UPDATE folder_project_rule SET enabled = ?, updated_at = ? WHERE id = ?",
+                        (requested, timestamp, entry["rule_id"]),
+                    )
+                    has_folder = True
+                else:
+                    cursor = conn.execute(
+                        "UPDATE project_rule SET enabled = ?, updated_at = ? "
+                        "WHERE id = ? AND rule_type = 'keyword'",
+                        (requested, timestamp, entry["rule_id"]),
+                    )
+                    has_keyword = True
+                if cursor.rowcount != 1:
+                    raise RuleBatchError(ERR_OPERATION_FAILED)
+                changed = True
+            summaries = []
+            for entry, _rule in resolved:
+                current = planner.resolve_rule(
+                    conn,
+                    entry["rule_type"],
+                    entry["rule_id"],
                 )
-                has_keyword = True
-            if cursor.rowcount != 1:
-                raise RuleBatchError(ERR_OPERATION_FAILED)
-        summaries = []
-        for entry, _rule in resolved:
-            current = planner.resolve_rule(
-                conn,
-                entry["rule_type"],
-                entry["rule_id"],
-            )
-            if not current:
-                raise RuleBatchError(ERR_NOT_FOUND)
-            summary = planner.rule_summary(
-                current,
-                entry["rule_type"],
-                available=planner.project_available(current),
-            )
-            summary["enabled"] = bool(enabled)
-            summaries.append(summary)
-        conn.commit()
+                if not current:
+                    raise RuleBatchError(ERR_NOT_FOUND)
+                summary = planner.rule_summary(
+                    current,
+                    entry["rule_type"],
+                    available=planner.project_available(current),
+                )
+                summary["enabled"] = bool(enabled)
+                summaries.append(summary)
     except RuleBatchError:
-        conn.rollback()
         raise
     except Exception as exc:
-        conn.rollback()
         raise RuleBatchError(ERR_OPERATION_FAILED) from exc
-    finally:
-        conn.close()
 
-    if has_keyword:
-        from .project_inference_service import invalidate_keyword_rule_cache
+    if changed:
+        if has_keyword:
+            from .project_inference_service import invalidate_keyword_rule_cache
 
-        invalidate_keyword_rule_cache()
-    if has_folder:
-        folder_rule_service.invalidate_folder_rule_cache()
-    from .privacy_service import clear_exclude_rules_cache
+            invalidate_keyword_rule_cache()
+        if has_folder:
+            folder_rule_service.invalidate_folder_rule_cache()
+        from .privacy_service import clear_exclude_rules_cache
 
-    clear_exclude_rules_cache()
+        clear_exclude_rules_cache()
     return {"rules": summaries, "enabled": bool(enabled), "count": len(summaries)}
 
 

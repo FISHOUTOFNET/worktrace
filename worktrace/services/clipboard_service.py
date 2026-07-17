@@ -4,10 +4,16 @@ import hashlib
 from datetime import datetime, timedelta
 
 from ..constants import CLIPBOARD_RETENTION_DAYS, STATUS_NORMAL, TIME_FORMAT
+from ..data_generation_repository import DataGenerationNamespace
 from ..db import dict_rows, get_connection, now_str
+from ..domain_unit_of_work import DomainUnitOfWork
 from ..path_utils import normalize_path_key
 from ..platforms.base import ActiveWindow
 from .settings_service import get_bool_setting
+
+
+def _report_uow() -> DomainUnitOfWork:
+    return DomainUnitOfWork((DataGenerationNamespace.REPORT_STRUCTURE,))
 
 
 def is_capture_enabled() -> bool:
@@ -27,7 +33,8 @@ def record_clipboard_event(
     copied_time = copied_at or now_str()
     text_hash = _hash_text(copied_text)
     ts = now_str()
-    with get_connection() as conn:
+    with _report_uow() as uow:
+        conn = uow.connection
         # This transaction-local check is the final privacy gate. It rejects an
         # event that was already drained from the adapter when the user disabled
         # capture before persistence.
@@ -207,8 +214,8 @@ def prune_old_events(
     now: str | None = None,
 ) -> int:
     cutoff = _retention_cutoff(retention_days, now)
-    with get_connection() as conn:
-        cur = conn.execute(
+    with _report_uow() as uow:
+        cur = uow.connection.execute(
             "DELETE FROM activity_clipboard_event WHERE copied_at < ?",
             (cutoff,),
         )
