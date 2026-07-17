@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..domain_limits import ADJUSTED_DURATION_MAX_SECONDS, NOTE_MAX_LENGTH
 from ..services import (
     project_service,
     report_session_operation_service,
@@ -12,8 +13,8 @@ from ..services import (
 from ..services.activity_edit_policy import project_editability_code
 
 NOT_PROJECT_ACTIVITY_CODE = "not_project_activity"
-TIMELINE_NOTE_MAX_LENGTH = 2000
-TIMELINE_ADJUSTED_DURATION_MAX_SECONDS = 24 * 60 * 60
+TIMELINE_NOTE_MAX_LENGTH = NOTE_MAX_LENGTH
+TIMELINE_ADJUSTED_DURATION_MAX_SECONDS = ADJUSTED_DURATION_MAX_SECONDS
 
 
 def get_default_report_date() -> str:

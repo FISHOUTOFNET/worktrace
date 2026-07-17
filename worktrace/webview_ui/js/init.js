@@ -161,31 +161,50 @@ Object.defineProperty(App, "liveRuntime", {
     get: function () { return liveRuntimeStore.get(); }
 });
 
-function resetClientGeneration()
- {
-        if (App.requestCoordinator) App.requestCoordinator.bumpDataEpoch();
-        App.timelineLoaded = false;
-        App.statisticsLoaded = false;
-        App.rulesLoaded = false;
-        App.settingsLoaded = false;
-        App.currentSessions = [];
-        App.selectedProjectionInstanceKey = null;
-        App.selectedProjectionRevision = null;
-        App.editingSession = null;
-        App.lastTimelineData = null;
-        App.lastProjectRulesData = null;
-        App.lastSessionDetailsViewModel = null;
-        App.lastSessionActivitySummaryViewModel = null;
-        App.lastRefreshState = null;
-        liveRuntimeStore.reset();
-        App._monotonicRenderState = {};
-        App.overviewRequestToken = (App.overviewRequestToken || 0) + 1;
-        App.timelineRequestToken = (App.timelineRequestToken || 0) + 1;
-        App.statisticsRequestToken = (App.statisticsRequestToken || 0) + 1;
-        App.rulesRequestToken = (App.rulesRequestToken || 0) + 1;
-        App.settingsRequestToken = (App.settingsRequestToken || 0) + 1;
-    }
-    App.resetClientGeneration = resetClientGeneration;
+function resetClientGeneration(reason) {
+    if (App.requestCoordinator) App.requestCoordinator.bumpDataEpoch();
+    App.timelineLoaded = false;
+    App.statisticsLoaded = false;
+    App.rulesLoaded = false;
+    App.settingsLoaded = false;
+    App.currentSessions = [];
+    App.selectedProjectionInstanceKey = null;
+    App.selectedProjectionRevision = null;
+    App.editingSession = null;
+    App.detailsOwner = null;
+    App.timelineOwner = null;
+    App.mutationOwner = null;
+    App.mutationState = "idle";
+    App.detailsInFlight = {};
+    App.projectsCache = null;
+    App.projectsLoading = false;
+    App.projectsLoadPromise = null;
+    App.lastTimelineData = null;
+    App.lastProjectRulesData = null;
+    App.lastSessionDetailsViewModel = null;
+    App.lastSessionActivitySummaryViewModel = null;
+    App.lastRefreshState = null;
+    App.statisticsAcceptedPayload = null;
+    App.rulesLoadPromise = null;
+    App.activePageRefreshInFlight = false;
+    App.activePageRefreshPromise = null;
+    App.activePageRefreshPending = null;
+    App.reconcileInFlight = false;
+    App.liveClockContractRefreshRequested = false;
+    App.liveClockContractViolation = null;
+    App.firstRunNoticeLoaded = false;
+    App.firstRunNoticeLoading = false;
+    liveRuntimeStore.reset();
+    App._monotonicRenderState = {};
+    App.overviewRequestToken = (App.overviewRequestToken || 0) + 1;
+    App.timelineRequestToken = (App.timelineRequestToken || 0) + 1;
+    App.statisticsRequestToken = (App.statisticsRequestToken || 0) + 1;
+    App.rulesRequestToken = (App.rulesRequestToken || 0) + 1;
+    App.settingsRequestToken = (App.settingsRequestToken || 0) + 1;
+    App.lastClientGenerationResetReason = String(reason || "data_generation_changed");
+}
+App.resetClientGeneration = resetClientGeneration;
+
 
     function invalidateProjectCatalog() {
         App.projectsCache = null;

@@ -16,6 +16,7 @@ from ..constants import (
     TIME_FORMAT,
 )
 from ..db import CURRENT_SCHEMA_VERSION, expected_schema_fingerprint, schema_fingerprint
+from ..domain_limits import NOTE_MAX_LENGTH
 
 _ALLOWED_ACTIVITY_STATUSES = {
     STATUS_NORMAL,
@@ -215,8 +216,11 @@ def _validate_operation_payload(
             if not isinstance(note, dict) or set(note) - {"mode", "value"}:
                 raise BackupValidationError("note patch")
             if note.get("mode") == "set":
-                if not isinstance(note.get("value"), str):
+                note_value = note.get("value")
+                if not isinstance(note_value, str):
                     raise BackupValidationError("note value")
+                if len(note_value) > NOTE_MAX_LENGTH:
+                    raise BackupValidationError("note value length")
             elif note.get("mode") != "inherit":
                 raise BackupValidationError("note mode")
     elif operation_type == "hide_activity":

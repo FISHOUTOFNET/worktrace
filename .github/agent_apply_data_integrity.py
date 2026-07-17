@@ -168,16 +168,24 @@ def unify_frontend_generation_reset() -> None:
         "    App.resetFrontendAfterLocalDataReplacement = resetFrontendAfterLocalDataReplacement;\n",
         "",
     )
-    replace_once(
-        settings_path,
-        "            resetFrontendAfterLocalDataReplacement();\n",
+    settings_content = read(settings_path)
+    reset_call = "            resetFrontendAfterLocalDataReplacement();\n"
+    if settings_content.count(reset_call) != 2:
+        raise AssertionError(
+            f"{settings_path}: expected two replacement reset calls, "
+            f"found {settings_content.count(reset_call)}"
+        )
+    settings_content = settings_content.replace(
+        reset_call,
         '            App.resetClientGeneration("secure_import");\n',
+        1,
     )
-    replace_once(
-        settings_path,
-        "            resetFrontendAfterLocalDataReplacement();\n",
+    settings_content = settings_content.replace(
+        reset_call,
         '            App.resetClientGeneration("clear_all_local_data");\n',
+        1,
     )
+    write(settings_path, settings_content)
     replace_once(
         settings_path,
         '''            App.firstRunNoticeLoading = false;

@@ -283,20 +283,6 @@
     }
     App.previewEncryptedBackupManifest = previewEncryptedBackupManifest;
 
-    function resetFrontendAfterLocalDataReplacement() {
-        App.timelineLoaded = false;
-        App.statisticsLoaded = false;
-        App.rulesLoaded = false;
-        App.projectsCache = null;
-        App.currentSessions = [];
-        App.selectedSessionId = null;
-        App.editingSession = null;
-        App.lastTimelineData = null;
-        App.lastProjectRulesData = null;
-        if (App.liveRuntimeStore) App.liveRuntimeStore.reset();
-        if (App.requestCoordinator) App.requestCoordinator.bumpDataEpoch();
-    }
-    App.resetFrontendAfterLocalDataReplacement = resetFrontendAfterLocalDataReplacement;
 
     function importEncryptedBackup() {
         if (anySettingsOperationInProgress()) return;
@@ -323,7 +309,7 @@
                 message += "（已导入：" + tableCount + " 个数据组 / " + rowCount + " 条记录）";
             }
             setSettingsImportStatus(message);
-            resetFrontendAfterLocalDataReplacement();
+            App.resetClientGeneration("secure_import");
             renderBackupManifest(null, "");
             return loadSettingsPrivacyStatus().then(function () {
                 if (typeof App.refreshAll === "function") App.refreshAll();
@@ -355,7 +341,7 @@
             });
             if (!data) return;
             setSettingsClearStatus(data.message || "本地数据已清空");
-            resetFrontendAfterLocalDataReplacement();
+            App.resetClientGeneration("clear_all_local_data");
             renderBackupManifest(null, "");
             return loadSettingsPrivacyStatus().then(function () {
                 if (typeof App.refreshAll === "function") App.refreshAll();
@@ -437,12 +423,12 @@
         App.firstRunNoticeLoading = true;
         return App.bridge.getFirstRunNotice().then(function (result) {
             App.firstRunNoticeLoading = false;
-            App.firstRunNoticeLoaded = true;
             if (!result || result.ok === false) {
                 App.firstRunNoticeRequired = true;
                 showFirstRunNoticeBlockingError((result && result.error) || FIRST_RUN_NOTICE_LOAD_ERROR);
                 return false;
             }
+            App.firstRunNoticeLoaded = true;
             App.firstRunNoticeRequired = result.accepted === false;
             if (App.firstRunNoticeRequired) showFirstRunNotice(result, "gate");
             return true;

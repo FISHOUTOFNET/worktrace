@@ -200,11 +200,10 @@ def close_activity(
     ).fetchone()
     if row is None or row["end_time"] is not None:
         return False
-    safe_end = max(str(end_time or ""), str(row["start_time"] or ""))
-    duration, reversed_clock = _duration_seconds(
-        str(row["start_time"]),
-        safe_end,
-    )
+    start_time = str(row["start_time"] or "")
+    requested_end = str(end_time or start_time)
+    duration, reversed_clock = _duration_seconds(start_time, requested_end)
+    safe_end = start_time if reversed_clock else requested_end
     duration = max(duration, int(row["duration_seconds"] or 0))
     if duration_seconds is not None:
         duration = max(duration, max(0, int(duration_seconds)))
@@ -238,8 +237,7 @@ def close_all_open_activities(conn, end_time: str) -> list[int]:
     closed: list[int] = []
     for row in rows:
         activity_id = int(row["id"])
-        safe_end = max(str(end_time or ""), str(row["start_time"] or ""))
-        if close_activity(conn, activity_id, safe_end):
+        if close_activity(conn, activity_id, end_time):
             closed.append(activity_id)
     return closed
 
