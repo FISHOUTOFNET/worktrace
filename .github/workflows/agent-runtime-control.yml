@@ -61,7 +61,10 @@ jobs:
         if: steps.migrate.outcome == 'failure' || steps.validate.outcome == 'failure'
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force diagnostics | Out-Null
+          New-Item -ItemType Directory -Force diagnostics/generated | Out-Null
+          Copy-Item worktrace/runtime/app_runtime.py diagnostics/generated/app_runtime.py.txt
+          Copy-Item worktrace/collector/collector.py diagnostics/generated/collector.py.txt
+          Copy-Item worktrace/services/secure_backup_service.py diagnostics/generated/secure_backup_service.py.txt
           @(
             "kind=runtime_control",
             "run_id=$env:GITHUB_RUN_ID",
@@ -73,7 +76,7 @@ jobs:
             $(if (Test-Path validation.log) { Get-Content validation.log -Raw } else { "" })
           ) | Set-Content diagnostics/agent-runtime-control-latest.txt -Encoding UTF8
           git checkout -B agent/worktrace-agent-diagnostics
-          git add diagnostics/agent-runtime-control-latest.txt
+          git add diagnostics/agent-runtime-control-latest.txt diagnostics/generated
           git commit -m "Capture runtime control diagnostics"
           git push --force origin HEAD:agent/worktrace-agent-diagnostics
           exit 1
