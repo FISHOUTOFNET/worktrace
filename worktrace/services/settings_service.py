@@ -3,11 +3,17 @@
 from __future__ import annotations
 
 import time
+from contextlib import nullcontext
 
 from ..db import get_connection, get_db_path, now_str
+from ..mutation_effects import MutationEffect, mutation_effects
 
 _SETTING_CACHE_TTL_SECONDS = 2.0
 _SETTING_CACHE: dict[tuple[str, str], tuple[float, str | None]] = {}
+_STRUCTURAL_SETTING_KEYS = {
+    "context_carry_minutes",
+    "unrecorded_gap_boundary_seconds",
+}
 
 
 def clear_settings_cache(key: str | None = None) -> None:
@@ -23,9 +29,6 @@ def _settings_db_key() -> str:
 
 
 def _page_read_connection():
-    # Imported lazily so ordinary settings and startup paths do not depend on
-    # page-model modules. During a PageReadContext request this makes settings,
-    # canonical projection and structural revision observe one SQLite snapshot.
     from .page_read_context import current_page_read_context
 
     context = current_page_read_context()
@@ -60,15 +63,21 @@ def get_setting(key: str, default: str | None = None, *, conn=None) -> str | Non
 
 def set_setting(key: str, value: str) -> None:
     ts = now_str()
-    with get_connection() as conn:
-        conn.execute(
-            """
-            INSERT INTO settings(key, value, updated_at)
-            VALUES (?, ?, ?)
-            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
-            """,
-            (key, value, ts),
-        )
+    effect_scope = (
+        mutation_effects(MutationEffect.REPORT_STRUCTURE)
+        if key in _STRUCTURAL_SETTING_KEYS
+        else nullcontext()
+    )
+    with effect_scope:
+        with get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO settings(key, value, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+                """,
+                (key, value, ts),
+            )
     _SETTING_CACHE[(_settings_db_key(), key)] = (
         time.monotonic() + _SETTING_CACHE_TTL_SECONDS,
         value,
