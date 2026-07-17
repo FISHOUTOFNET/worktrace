@@ -1,0 +1,59 @@
+name: Trigger architecture repair stages
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/agent-trigger-architecture-fixes.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: agent/canonical-architecture-consolidation
+          fetch-depth: 0
+          clean: true
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - name: Configure repository
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git merge --no-ff origin/main -m "Sync main validation baseline [skip ci]"
+      - name: Extract and apply staged patch
+        shell: pwsh
+        run: |
+          $source = Get-Content -LiteralPath .github/workflows/agent-apply-architecture-fixes.yml -Raw
+          $match = [regex]::Match($source, "(?s)          @'\r?\n(.*?)\r?\n          '@ \| Set-Content -LiteralPath \.agent_apply\.py -Encoding UTF8")
+          if (-not $match.Success) { throw "Embedded architecture patch was not found" }
+          $lines = $match.Groups[1].Value -split "\r?\n" | ForEach-Object {
+            if ($_.StartsWith("          ")) { $_.Substring(10) } else { $_ }
+          }
+          [System.IO.File]::WriteAllLines((Join-Path $PWD ".agent_apply.py"), $lines, [System.Text.UTF8Encoding]::new($false))
+          python .agent_apply.py
+          Remove-Item .agent_apply.py
+      - name: Install dependencies
+        run: python -m pip install --disable-pip-version-check -q -r requirements.txt
+      - name: Validate phase
+        shell: pwsh
+        run: |
+          python -m compileall -q worktrace
+          python -m pytest -q tests/test_page_read_context_contract.py tests/test_bridge_capability_boundary.py tests/test_canonical_owner_graph_contract.py tests/test_architecture_consolidation_contract.py tests/test_webview_bridge.py tests/test_timeline_api_editing.py
+          node --test tests/webview/*.test.js
+      - name: Commit and push
+        shell: pwsh
+        run: |
+          git rm .github/workflows/agent-apply-architecture-fixes.yml .github/workflows/agent-trigger-architecture-fixes.yml
+          git add -A
+          git commit -m "Complete canonical runtime and fixed bridge cutover"
+          git push origin HEAD:agent/canonical-architecture-consolidation
