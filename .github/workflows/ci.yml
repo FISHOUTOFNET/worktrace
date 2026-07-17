@@ -6,6 +6,11 @@ on:
   pull_request:
   workflow_dispatch:
     inputs:
+      run_python312:
+        description: Run Python 3.12 compatibility tests
+        required: false
+        type: boolean
+        default: false
       run_node_tests:
         description: Run WebView Node tests
         required: false
@@ -22,10 +27,10 @@ env:
   PYTHONIOENCODING: utf-8
 
 permissions:
-  contents: write
+  contents: read
 
-# Each validation run is evidence for an exact PR head and must finish.
-# Compatibility inventory: python-version: ["3.11", "3.12"] (3.11 automatic; 3.12 manual).
+# Each validation run is evidence for the exact revision checked out by the job.
+# Compatibility inventory: Python 3.11 automatic; Python 3.12 manual.
 # Dependency contract remains equivalent to: pip install -r requirements.txt
 # Hosted execution replaced the retired selector: runs-on: [self-hosted, Windows, X64]
 concurrency:
@@ -45,6 +50,16 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           clean: true
           show-progress: false
+          persist-credentials: false
+
+      - name: Capture tested revision
+        id: revision
+        shell: pwsh
+        run: |
+          $testedSha = (git rev-parse HEAD).Trim()
+          "sha=$testedSha" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
+          "tested_sha=$testedSha" | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding UTF8
+          Write-Host "tested_sha=$testedSha"
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -111,7 +126,7 @@ jobs:
           $diagnosticPath = "diagnostics/pytest-hardening-latest.txt"
           @(
             "run_id=$env:GITHUB_RUN_ID",
-            "tested_head=$env:GITHUB_SHA",
+            "tested_head=${{ steps.revision.outputs.sha }}",
             "compile_outcome=${{ steps.compile.outcome }}",
             "pytest_outcome=${{ steps.pytest.outcome }}",
             ""
@@ -136,25 +151,9 @@ jobs:
               Add-Content -LiteralPath $diagnosticPath -Encoding UTF8
           }
 
-      - name: Publish diagnostics on isolated branch
-        if: failure() && (steps.compile.outcome == 'failure' || steps.pytest.outcome == 'failure') && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
-        shell: pwsh
-        run: |
-          $path = "diagnostics/pytest-hardening-latest.txt"
-          if (-not (Test-Path -LiteralPath $path)) {
-            Write-Warning "Compact diagnostics file is missing"
-            exit 0
-          }
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git checkout -B worktrace-ci-diagnostics
-          git add $path
-          git commit -m "Capture validation diagnostics for run $env:GITHUB_RUN_ID"
-          git push --force origin "HEAD:agent/worktrace-ci-diagnostics"
-
   python312-compat:
     name: Python 3.12 compatibility (manual)
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && inputs.run_python312
     runs-on: windows-latest
     timeout-minutes: 30
 
@@ -165,6 +164,14 @@ jobs:
           ref: ${{ github.sha }}
           clean: true
           show-progress: false
+          persist-credentials: false
+
+      - name: Capture tested revision
+        shell: pwsh
+        run: |
+          $testedSha = (git rev-parse HEAD).Trim()
+          "tested_sha=$testedSha" | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding UTF8
+          Write-Host "tested_sha=$testedSha"
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -234,6 +241,14 @@ jobs:
           ref: ${{ github.sha }}
           clean: true
           show-progress: false
+          persist-credentials: false
+
+      - name: Capture tested revision
+        shell: pwsh
+        run: |
+          $testedSha = (git rev-parse HEAD).Trim()
+          "tested_sha=$testedSha" | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding UTF8
+          Write-Host "tested_sha=$testedSha"
 
       - name: Set up Node
         uses: actions/setup-node@v6
@@ -256,6 +271,14 @@ jobs:
           ref: ${{ github.sha }}
           clean: true
           show-progress: false
+          persist-credentials: false
+
+      - name: Capture tested revision
+        shell: pwsh
+        run: |
+          $testedSha = (git rev-parse HEAD).Trim()
+          "tested_sha=$testedSha" | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding UTF8
+          Write-Host "tested_sha=$testedSha"
 
       - name: Set up Python
         uses: actions/setup-python@v6
