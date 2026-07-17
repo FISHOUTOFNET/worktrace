@@ -1,10 +1,9 @@
 """Explicit caller-owned SQLite transaction with atomic generation effects.
 
-The unit of work deliberately does not proxy modules, intercept nested commits,
-or infer domain effects from SQL text. Command owners use ``connection``
-directly. New owners call ``mark_changed`` after a semantic mutation; during the
-Stage 2 bulk migration, previously validated owners may use the bounded
-``total_changes`` fallback until the Stage 3 generation cutover.
+The unit of work does not proxy modules, intercept nested commits, or infer
+which namespaces a SQL statement affects. Command owners declare effects and
+may mark semantic changes explicitly. A bounded connection change count also
+covers approved low-level command helpers within the same transaction.
 """
 
 from __future__ import annotations
@@ -22,11 +21,9 @@ _CURRENT_UNIT_OF_WORK: ContextVar[DomainUnitOfWork | None] = ContextVar(
     default=None,
 )
 
-# Stage 2A still publishes report-structure changes through the connection SQL
-# classifier. During the owner migration the UoW publishes every other declared
-# namespace explicitly, while REPORT_STRUCTURE remains on that validated fallback.
-# Stage 3 removes this exclusion and the classifier in the same cutover.
-_TRANSITIONAL_CLASSIFIER_NAMESPACES = frozenset(
+# Report structure has a separate fallback publisher for repair and migration
+# paths. Other declared namespaces are published directly by this transaction.
+_FALLBACK_PUBLISHED_NAMESPACES = frozenset(
     {DataGenerationNamespace.REPORT_STRUCTURE}
 )
 
@@ -114,7 +111,7 @@ class DomainUnitOfWork:
             )
             if changed and self._effects:
                 explicit_effects = self._effects.difference(
-                    _TRANSITIONAL_CLASSIFIER_NAMESPACES
+                    _FALLBACK_PUBLISHED_NAMESPACES
                 )
                 if explicit_effects:
                     DataGenerationRepository.bump(connection, explicit_effects)
