@@ -93,16 +93,25 @@ def _select_cache_snapshot(database_key: str, current_generation: int) -> None:
 
 
 def clear_settings_cache(key: str | None = None) -> None:
-    """Test/reconfiguration hook; ordinary writes rely on generation change."""
+    """Test/maintenance hook; ordinary writes rely on generation change.
+
+    A full reset is also the post-commit handoff used by the exclusive encrypted
+    import path, whose low-level SQLite transaction cannot use ``DomainUnitOfWork``.
+    """
 
     global _SETTING_CACHE_DATABASE_KEY, _SETTING_CACHE_GENERATION
+    reset_generation_clock = key is None
     with _SETTING_CACHE_LOCK:
         if key is None:
             _SETTING_CACHE.clear()
             _SETTING_CACHE_DATABASE_KEY = None
             _SETTING_CACHE_GENERATION = None
-            return
-        _SETTING_CACHE.pop(str(key), None)
+        else:
+            _SETTING_CACHE.pop(str(key), None)
+    if reset_generation_clock:
+        from ..generation_clock import clear as clear_generation_clock
+
+        clear_generation_clock(get_db_key())
 
 
 def _page_read_connection():
@@ -126,8 +135,6 @@ def get_setting(key: str, default: str | None = None, *, conn=None) -> str | Non
     if effective_conn is not None:
         return _read_setting(effective_conn, key, default)
 
-    # Operational health/heartbeat values deliberately do not bump SETTINGS;
-    # bypass the catalog cache so high-frequency writes cannot become stale.
     if setting_mutation_class(key) is SettingMutationClass.OPERATIONAL:
         with get_connection() as own_conn:
             return _read_setting(own_conn, key, default)
