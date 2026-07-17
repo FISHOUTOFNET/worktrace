@@ -1,13 +1,14 @@
 """Pure read model for the durable folder-rule file index.
 
-This module never marks entries stale, requests rebuilds, or mutates index
-state. Runtime owners may explicitly schedule maintenance after inspecting a
-query result.
+This module reads only the active durable index generation. It never consults
+the live filesystem, marks entries stale, requests rebuilds, or mutates index
+state. Filesystem validation belongs to the maintenance worker so one published
+index generation always produces deterministic query results.
 """
 
 from __future__ import annotations
 
-import os
+import ntpath
 
 from ..constants import EXCLUDED_PROJECT
 from ..db import dict_rows, get_connection
@@ -26,7 +27,7 @@ def lookup_indexed_paths_for_file_name(
     include_excluded: bool = False,
     conn=None,
 ) -> list[dict]:
-    """Return existing, ready indexed paths without any maintenance writes."""
+    """Return rows from the currently published durable index snapshot."""
 
     normalized = _normalize_index_file_name(file_name)
     if not normalized:
@@ -68,7 +69,7 @@ def lookup_indexed_paths_for_file_name(
     results: dict[str, dict] = {}
     for row in rows:
         path = str(row.get("file_path") or "").strip()
-        if not path or not os.path.exists(path):
+        if not path:
             continue
         key = str(row.get("normalized_path_key") or normalize_path_key(path))
         results.setdefault(key, row)
@@ -171,7 +172,7 @@ def _activity_file_name(activity: dict) -> str | None:
         if not value:
             continue
         if key.endswith("path_hint"):
-            value = os.path.basename(value)
+            value = ntpath.basename(value)
         elif key == "window_title":
             value = extract_file_name_from_title(value) or ""
         normalized = _normalize_index_file_name(value)
