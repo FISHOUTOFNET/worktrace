@@ -5,7 +5,7 @@ import threading
 
 import pytest
 
-from worktrace.db import get_connection
+from worktrace.db import get_connection, infrastructure_write_scope
 from worktrace.services import project_service, settings_service
 from worktrace.services.database_maintenance_barrier import drain_existing_writers
 from worktrace.services.secure_backup_service import (
@@ -81,19 +81,20 @@ def test_sqlite_barrier_waits_for_preexisting_writer_before_exclusive(temp_db):
     committed = threading.Event()
 
     def existing_writer() -> None:
-        conn = get_connection()
-        try:
-            conn.execute("BEGIN IMMEDIATE")
-            conn.execute(
-                "UPDATE settings SET value = ? WHERE key = ?",
-                ("321", "idle_threshold_seconds"),
-            )
-            transaction_ready.set()
-            assert allow_commit.wait(timeout=5)
-            conn.commit()
-            committed.set()
-        finally:
-            conn.close()
+        with infrastructure_write_scope():
+            conn = get_connection()
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                conn.execute(
+                    "UPDATE settings SET value = ? WHERE key = ?",
+                    ("321", "idle_threshold_seconds"),
+                )
+                transaction_ready.set()
+                assert allow_commit.wait(timeout=5)
+                conn.commit()
+                committed.set()
+            finally:
+                conn.close()
 
     thread = threading.Thread(target=existing_writer, daemon=True)
     thread.start()

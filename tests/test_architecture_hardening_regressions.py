@@ -337,6 +337,33 @@ def test_statistics_bridge_separates_display_summary_and_export_ticket(temp_db):
     ):
         result = WebViewBridge().get_statistics_export_summary(DATE, DATE)
     assert set(result) == {"ok", "summary", "export_ticket"}
-    assert result["export_ticket"]["snapshot_revision"] == "export-ticket-revision"
-    assert result["export_ticket"]["available_formats"] == ["csv"]
-    assert "export_preview" not in result["summary"]
+    assert result["export_ticket"] == {
+        "date_from": DATE,
+        "date_to": DATE,
+        "revision": "export-ticket-revision",
+    }
+    serialized_summary = json.dumps(result["summary"], ensure_ascii=False)
+    assert "snapshot-internal" not in serialized_summary
+    assert "export-ticket-revision" not in serialized_summary
+
+
+def test_frontend_generation_and_coalescing_contracts_are_shipping():
+    root = Path(__file__).resolve().parents[1]
+    request_state = (
+        root / "worktrace/webview_ui/js/timeline_request_state.js"
+    ).read_text(encoding="utf-8")
+    init = (root / "worktrace/webview_ui/js/init.js").read_text(encoding="utf-8")
+    statistics = (root / "worktrace/webview_ui/js/statistics.js").read_text(
+        encoding="utf-8"
+    )
+    rules = (root / "worktrace/webview_ui/js/rules.js").read_text(encoding="utf-8")
+    assert "bumpDataEpoch" in request_state
+    assert "dataEpoch" in request_state
+    assert "activePageRefreshPending" in init
+    assert "resetClientGeneration" in init
+    assert "statisticsAcceptedPayload" in statistics
+    assert "statisticsLoadPromise" in statistics
+    assert "exportRevision" in statistics
+    assert "projectsLoadPromise" in rules
+    assert "data-project-load-gate" in rules
+    assert "stopImmediatePropagation" in rules
