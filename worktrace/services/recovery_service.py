@@ -3,17 +3,12 @@ from __future__ import annotations
 import logging
 from datetime import datetime, time as datetime_time, timedelta
 
-from ..constants import STATUS_ERROR, STATUS_NORMAL, TIME_FORMAT
+from ..constants import STATUS_ERROR, TIME_FORMAT
 from ..db import get_connection, now_str
-from . import project_service, session_boundary_service
+from . import activity_lifecycle_service, project_service, session_boundary_service
 from .activity_fact_repair_service import (
     get_activity_fact_repair_state,
     repair_missing_activity_resources,
-)
-from .activity_lifecycle_service import (
-    recover_close_activity,
-    recover_cross_midnight_segment,
-    recover_first_half_close,
 )
 from .runtime_activity_state_service import clear_runtime_activity_state
 from .settings_service import get_setting
@@ -29,7 +24,6 @@ def recover_unclosed_records() -> None:
         and fallback_dt is not None
         and heartbeat_dt <= fallback_dt
     )
-    recovered_boundary_at: str | None = None
     with get_connection() as conn:
         rows = conn.execute(
             """
@@ -40,6 +34,10 @@ def recover_unclosed_records() -> None:
             ORDER BY a.id
             """
         ).fetchall()
+
+    commands: list[dict] = []
+    boundaries: list[dict[str, str]] = []
+    recovered_at: list[str] = []
     for row in rows:
         end_time = heartbeat if heartbeat_is_valid else fallback_now
         status = row["status"] if heartbeat_is_valid else STATUS_ERROR
@@ -66,29 +64,40 @@ def recover_unclosed_records() -> None:
             and status != STATUS_ERROR
             and end_dt.date() > start_dt.date()
         ):
-            recovered_boundary_at = _recover_cross_midnight_row(row, end_dt)
+            row_commands, row_boundaries = _plan_cross_midnight_row(row, end_dt)
+            commands.extend(row_commands)
+            boundaries.extend(row_boundaries)
+            recovered_at.append(end_dt.strftime(TIME_FORMAT))
             logging.info(
-                "recovered cross-midnight unclosed record id=%s",
+                "planned cross-midnight recovery id=%s",
                 row["id"],
             )
             continue
-        recover_close_activity(
-            int(row["id"]),
-            end_time,
-            duration_seconds=duration,
-            status=status,
+        commands.append(
+            {
+                "kind": "close",
+                "activity_id": int(row["id"]),
+                "end_time": end_time,
+                "duration_seconds": duration,
+                "status": status,
+            }
         )
-        recovered_boundary_at = end_time
+        recovered_at.append(end_time)
         logging.info(
-            "recovered unclosed record id=%s status=%s",
+            "planned unclosed record recovery id=%s status=%s",
             row["id"],
             status,
         )
-    if recovered_boundary_at:
-        session_boundary_service.record_hard_boundary(
-            recovered_boundary_at,
-            "recovered",
+
+    if recovered_at:
+        boundaries.append(
+            {
+                "occurred_at": max(recovered_at),
+                "reason": "recovered",
+            }
         )
+    if commands or boundaries:
+        activity_lifecycle_service.recover_activity_batch(commands, boundaries)
     _repair_missing_resource_facts()
     record_restart_boundary_if_needed()
     clear_runtime_activity_state("recovery_startup_boundary")
@@ -108,61 +117,65 @@ def _repair_missing_resource_facts() -> None:
     )
 
 
-def _recover_cross_midnight_row(row, end_dt: datetime) -> str:
+def _plan_cross_midnight_row(
+    row,
+    end_dt: datetime,
+) -> tuple[list[dict], list[dict[str, str]]]:
     start_dt = datetime.strptime(row["start_time"], TIME_FORMAT)
     first_midnight = datetime.combine(
         start_dt.date() + timedelta(days=1),
         datetime_time.min,
     )
-    first_midnight_text = first_midnight.strftime(TIME_FORMAT)
     projected_project_id = row["assignment_project_id"]
     original_project_id = (
         projected_project_id
         if project_service.is_concrete_project_id(projected_project_id)
         else None
     )
-    original_id = int(row["id"])
-    recover_first_half_close(
-        original_id,
-        first_midnight_text,
-        duration_seconds=max(
-            0,
-            int((first_midnight - start_dt).total_seconds()),
-        ),
-    )
+    commands: list[dict] = [
+        {
+            "kind": "close",
+            "activity_id": int(row["id"]),
+            "end_time": first_midnight.strftime(TIME_FORMAT),
+            "duration_seconds": max(
+                0,
+                int((first_midnight - start_dt).total_seconds()),
+            ),
+            "status": row["status"],
+        }
+    ]
+    boundaries: list[dict[str, str]] = []
     current_start = first_midnight
-    last_activity_id: int | None = None
     while current_start < end_dt:
         next_midnight = datetime.combine(
             current_start.date() + timedelta(days=1),
             datetime_time.min,
         )
         current_end = min(end_dt, next_midnight)
-        payload = {
-            "app_name": row["app_name"],
-            "process_name": row["process_name"],
-            "window_title": row["window_title"],
-            "file_path_hint": row["file_path_hint"],
-        }
-        activity_id = recover_cross_midnight_segment(
-            start_time=current_start.strftime(TIME_FORMAT),
-            end_time=current_end.strftime(TIME_FORMAT),
-            source=row["source"],
-            status=row["status"],
-            payload=payload,
-            project_id=original_project_id,
+        commands.append(
+            {
+                "kind": "segment",
+                "start_time": current_start.strftime(TIME_FORMAT),
+                "end_time": current_end.strftime(TIME_FORMAT),
+                "source": row["source"],
+                "status": row["status"],
+                "payload": {
+                    "app_name": row["app_name"],
+                    "process_name": row["process_name"],
+                    "window_title": row["window_title"],
+                    "file_path_hint": row["file_path_hint"],
+                },
+                "project_id": original_project_id,
+            }
         )
-        session_boundary_service.record_hard_boundary(
-            current_start.strftime(TIME_FORMAT),
-            "midnight",
+        boundaries.append(
+            {
+                "occurred_at": current_start.strftime(TIME_FORMAT),
+                "reason": "midnight",
+            }
         )
-        last_activity_id = activity_id
         current_start = current_end
-    return (
-        end_dt.strftime(TIME_FORMAT)
-        if last_activity_id is not None
-        else first_midnight_text
-    )
+    return commands, boundaries
 
 
 def record_restart_boundary_if_needed() -> None:
@@ -222,15 +235,7 @@ def detect_time_jump(
 
 
 def mark_record_error(activity_id: int, reason: str) -> None:
-    with get_connection() as conn:
-        conn.execute(
-            """
-            UPDATE activity_log
-            SET status = ?, updated_at = ?
-            WHERE id = ?
-            """,
-            (STATUS_ERROR, now_str(), activity_id),
-        )
+    activity_lifecycle_service.mark_activity_error(int(activity_id))
     logging.warning(
         "marked activity id=%s error reason=%s",
         activity_id,
