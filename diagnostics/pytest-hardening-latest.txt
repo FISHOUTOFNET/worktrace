@@ -1,0 +1,113 @@
+run_id=29552286604
+tested_head=6caaea36007f18f2dcbfce74208d2e03bb2d79e6
+compile_outcome=success
+pytest_outcome=failure
+
+=== PYTEST_FAILURE_MANIFEST_BEGIN ===
+Total: 3005 | Passed: 2987 | Failed: 18 | Errors: 0 | Skipped: 0
+[1/18] tests.webview.test_frontend_global_boundaries::test_frontend_module_all_functions_still_defined | failure | tests\webview\test_frontend_global_boundaries.py:483 | AssertionError: frontend module split is missing function definitions: callBridge, refreshAll. These would cause ReferenceError at runtime. assert not ['callBridge', 'refreshAll']
+[2/18] tests.webview.test_project_rules_static_contract::test_project_rules_panel_create_backfill_contract_is_stable | failure | tests\webview\test_project_rules_static_contract.py:142 | assert 'callBridge("create_project_folder_rule"' in 'function savePanelRule() {\n if (App.rulesCreatingPanelRule) return;\n var projectSelect = document.get...ion () {\n App.rulesCreatingPanelRule = false;\n refreshPanelWriteState();\n }...
+[3/18] tests.webview.test_project_rules_static_contract::test_project_rules_sort_state_is_memory_only | failure | tests\webview\test_project_rules_static_contract.py:164 | assert 'function _sortProjectsForRulesHome' in '// WorkTrace WebView frontend - Project Rules core module.\n(function () {\n "use strict";\n var App = window.W...esDeletingFolderKey ? "正在删除..." : "删除";\n });\n }\n App.setFolderDeleting =...
+[4/18] tests.webview.test_settings_static_contract::test_settings_js_defines_load_settings_privacy_status | failure | tests\webview\test_settings_static_contract.py:193 | assert 'App.callBridge("get_settings_privacy_status")' in '// WorkTrace WebView frontend — Settings and Privacy capabilities.\n(function () {\n "use strict";\n var App = ...mSettings = true;\n });\n }\n App.openPrivacyNoticeFromSettings...
+[5/18] tests.webview.test_settings_static_contract::test_settings_js_only_calls_allowed_bridge_methods | failure | tests\webview\test_settings_static_contract.py:207 | assert 'App.callBridge("get_settings_privacy_status")' in '// WorkTrace WebView frontend — Settings and Privacy capabilities.\n(function () {\n "use strict";\n var App = ...mSettings = true;\n });\n }\n App.openPrivacyNoticeFromSettings...
+[6/18] tests.webview.test_settings_static_contract::test_settings_js_defines_backup_helpers | failure | tests\webview\test_settings_static_contract.py:528 | AssertionError: settings.js must define function: clearSettingsBackupStatus assert ('function ' + 'clearSettingsBackupStatus') in '// WorkTrace WebView frontend — Settings and Privacy capabilities.\n(function () {\n "use strict";\n var A...
+[7/18] tests.webview.test_settings_static_contract::test_settings_js_backup_does_not_persist_passphrase | failure | tests\webview\test_settings_static_contract.py:567 | AssertionError: assert 'var confirmPassphrase' in 'function exportEncryptedBackup() {\n if (anySettingsOperationInProgress()) return;\n var passInput = el...abled(anySettingsOperationInProgress());\n });\n }\n App.exportEncryptedBackup =...
+[8/18] tests.webview.test_settings_static_contract::test_settings_js_defines_import_and_clear_helpers | failure | tests\webview\test_settings_static_contract.py:705 | AssertionError: settings.js must define function: clearSettingsImportStatus assert ('function ' + 'clearSettingsImportStatus') in '// WorkTrace WebView frontend — Settings and Privacy capabilities.\n(function () {\n "use strict";\n var A...
+[9/18] tests.webview.test_settings_static_contract::test_settings_js_import_clear_uses_text_content | failure | tests\webview\test_settings_static_contract.py:772 | assert 'textContent' in 'function setSettingsImportStatus(text) { setStatusLine("settings-backup-import-status", text); }'
+[10/18] tests.webview.test_settings_static_contract::test_settings_js_reset_frontend_after_local_data_replacement | failure | tests\webview\test_settings_static_contract.py:781 | AssertionError: js must define resetFrontendAfterLocalDataReplacement
+[11/18] tests.webview.test_settings_static_contract::test_settings_js_import_clear_refresh_status_and_overview | failure | tests\webview\test_settings_static_contract.py:813 | AssertionError: importEncryptedBackup success path must call App.loadSettingsPrivacyStatus() assert 'App.loadSettingsPrivacyStatus()' in 'function importEncryptedBackup() {\n if (anySettingsOperationInProgress()) return;\n var passInput...
+[12/18] tests.webview.test_settings_static_contract::test_settings_js_render_first_run_notice_hides_close_in_gate_mode | failure | tests\webview\test_settings_static_contract.py:1111 | assert ('acceptBtn' in 'function renderFirstRunNotice(data, mode) {\n if (!data) return;\n var title = element("first-run-notic...= mode !== "view";\n setFirstRunNoticeError("");\n }\n App.renderFirstRunNotice = renderFirstRunNotice;\n')
+[13/18] tests.webview.test_settings_static_contract::test_settings_js_backup_controls_not_dependent_on_settingsLoaded | failure | tests\webview\test_settings_static_contract.py:1262 | assert 'var backupDisabled = !!disabled;' in 'function setSettingsBackupControlsDisabled(disabled) {\n [\n "settings-backup-export-btn",\n ...etDisabled(id, disabled); });\n }\n App.setSettingsBackupControlsDisabled = setSettingsBackupCo...
+[14/18] tests.webview.test_settings_static_contract::test_settings_js_danger_controls_not_dependent_on_settingsLoaded | failure | tests\webview\test_settings_static_contract.py:1289 | assert 'var dangerDisabled = !!disabled;' in 'function setSettingsDangerControlsDisabled(disabled) {\n setDisabled("settings-clear-confirm", disabled);\n ...r-local-data-btn", disabled);\n }\n App.setSettingsDangerControlsDisabled = setS...
+[15/18] tests.webview.test_statistics_static_contract::test_frontend_js_statistics_export_only_via_bridge | failure | tests\webview\test_statistics_static_contract.py:302 | AssertionError: frontend JS must call App.callBridge("export_statistics_csv", ...) for the CSV write; direct file writes are forbidden assert 'callBridge("export_statistics_csv"' in '// WorkTrace WebView frontend core module. Only commun...
+[16/18] tests.webview.test_statistics_static_contract::test_frontend_js_statistics_export_calls_bridge_export_statistics_csv | failure | tests\webview\test_statistics_static_contract.py:963 | AssertionError: frontend JS must call bridge export_statistics_csv for the CSV write assert 'callBridge("export_statistics_csv"' in '// WorkTrace WebView frontend core module. Only communicates with Python through the pywebview API bridg...
+[17/18] tests.webview.test_statistics_static_contract::test_frontend_js_statistics_export_saving_guard_present | failure | tests\webview\test_statistics_static_contract.py:984 | AssertionError: exportStatisticsCsv must guard against duplicate clicks assert 'if (App.statisticsExportSaving)' in 'function exportStatisticsCsv() {\n if (App.statisticsExportSaving || App.statisticsLoading) return;\n v...n setStatistic...
+[18/18] tests.webview.test_statistics_static_contract::test_frontend_js_statistics_load_and_export_use_independent_state | failure | tests\webview\test_statistics_static_contract.py:1277 | AssertionError: exportStatisticsCsv must guard against duplicate clicks via statisticsExportSaving, not statisticsLoading assert 'if (App.statisticsExportSaving)' in 'function exportStatisticsCsv() {\n if (App.statisticsExportSaving || A...
+=== PYTEST_FAILURE_MANIFEST_END ===
+=== PYTEST_FAILURE_DETAILS_BEGIN ===
+--- [1/18] tests.webview.test_frontend_global_boundaries::test_frontend_module_all_functions_still_defined ---
+tests\webview\test_frontend_global_boundaries.py:483: in test_frontend_module_all_functions_still_defined
+    assert not missing, (
+E   AssertionError: frontend module split is missing function definitions: callBridge, refreshAll. These would cause ReferenceError at runtime.
+E   assert not ['callBridge', 'refreshAll']
+--- [2/18] tests.webview.test_project_rules_static_contract::test_project_rules_panel_create_backfill_contract_is_stable ---
+tests\webview\test_project_rules_static_contract.py:142: in test_project_rules_panel_create_backfill_contract_is_stable
+    assert 'callBridge("create_project_folder_rule"' in body
+E   assert 'callBridge("create_project_folder_rule"' in 'function savePanelRule() {\n        if (App.rulesCreatingPanelRule) return;\n        var projectSelect = document.get...ion () {\n            App.rulesCreatingPanelRule = false;\n            refreshPanelWriteState();\n        });\n    }\n'
+--- [3/18] tests.webview.test_project_rules_static_contract::test_project_rules_sort_state_is_memory_only ---
+tests\webview\test_project_rules_static_contract.py:164: in test_project_rules_sort_state_is_memory_only
+    assert "function _sortProjectsForRulesHome" in source
+E   assert 'function _sortProjectsForRulesHome' in '// WorkTrace WebView frontend - Project Rules core module.\n(function () {\n    "use strict";\n    var App = window.W...esDeletingFolderKey ? "正在删除..." : "删除";\n        });\n    }\n    App.setFolderDeleting = setFolderDeleting;\n\n})();\n'
+--- [4/18] tests.webview.test_settings_static_contract::test_settings_js_defines_load_settings_privacy_status ---
+tests\webview\test_settings_static_contract.py:193: in test_settings_js_defines_load_settings_privacy_status
+    assert 'App.callBridge("get_settings_privacy_status")' in source
+E   assert 'App.callBridge("get_settings_privacy_status")' in '// WorkTrace WebView frontend — Settings and Privacy capabilities.\n(function () {\n    "use strict";\n    var App = ...mSettings = true;\n        });\n    }\n    App.openPrivacyNoticeFromSettings = openPrivacyNoticeFromSettings;\n})();\n'
+--- [5/18] tests.webview.test_settings_static_contract::test_settings_js_only_calls_allowed_bridge_methods ---
+tests\webview\test_settings_static_contract.py:207: in test_settings_js_only_calls_allowed_bridge_methods
+    assert 'App.callBridge("get_settings_privacy_status")' in source
+E   assert 'App.callBridge("get_settings_privacy_status")' in '// WorkTrace WebView frontend — Settings and Privacy capabilities.\n(function () {\n    "use strict";\n    var App = ...mSettings = true;\n        });\n    }\n    App.openPrivacyNoticeFromSettings = openPrivacyNoticeFromSettings;\n})();\n'
+--- [6/18] tests.webview.test_settings_static_contract::test_settings_js_defines_backup_helpers ---
+tests\webview\test_settings_static_contract.py:528: in test_settings_js_defines_backup_helpers
+    assert "function " + name in source, (
+E   AssertionError: settings.js must define function: clearSettingsBackupStatus
+E   assert ('function ' + 'clearSettingsBackupStatus') in '// WorkTrace WebView frontend — Settings and Privacy capabilities.\n(function () {\n    "use strict";\n    var App = ...mSettings = true;\n        });\n    }\n    App.openPrivacyNoticeFromSettings = openPrivacyNoticeFromSettings;\n})();\n'
+--- [7/18] tests.webview.test_settings_static_contract::test_settings_js_backup_does_not_persist_passphrase ---
+tests\webview\test_settings_static_contract.py:567: in test_settings_js_backup_does_not_persist_passphrase
+    assert "var confirmPassphrase" in body
+E   AssertionError: assert 'var confirmPassphrase' in 'function exportEncryptedBackup() {\n        if (anySettingsOperationInProgress()) return;\n        var passInput = el...abled(anySettingsOperationInProgress());\n        });\n    }\n    App.exportEncryptedBackup = exportEncryptedBackup;\n'
+--- [8/18] tests.webview.test_settings_static_contract::test_settings_js_defines_import_and_clear_helpers ---
+tests\webview\test_settings_static_contract.py:705: in test_settings_js_defines_import_and_clear_helpers
+    assert "function " + name in source, (
+E   AssertionError: settings.js must define function: clearSettingsImportStatus
+E   assert ('function ' + 'clearSettingsImportStatus') in '// WorkTrace WebView frontend — Settings and Privacy capabilities.\n(function () {\n    "use strict";\n    var App = ...mSettings = true;\n        });\n    }\n    App.openPrivacyNoticeFromSettings = openPrivacyNoticeFromSettings;\n})();\n'
+--- [9/18] tests.webview.test_settings_static_contract::test_settings_js_import_clear_uses_text_content ---
+tests\webview\test_settings_static_contract.py:772: in test_settings_js_import_clear_uses_text_content
+    assert "textContent" in body
+E   assert 'textContent' in 'function setSettingsImportStatus(text) { setStatusLine("settings-backup-import-status", text); }'
+--- [10/18] tests.webview.test_settings_static_contract::test_settings_js_reset_frontend_after_local_data_replacement ---
+tests\webview\test_settings_static_contract.py:781: in test_settings_js_reset_frontend_after_local_data_replacement
+    body = func_body(source, "resetFrontendAfterLocalDataReplacement")
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests\webview\static_helpers.py:146: in func_body
+    assert start != -1, "js must define " + name
+           ^^^^^^^^^^^
+E   AssertionError: js must define resetFrontendAfterLocalDataReplacement
+--- [11/18] tests.webview.test_settings_static_contract::test_settings_js_import_clear_refresh_status_and_overview ---
+tests\webview\test_settings_static_contract.py:813: in test_settings_js_import_clear_refresh_status_and_overview
+    assert "App.loadSettingsPrivacyStatus()" in body, (
+E   AssertionError: importEncryptedBackup success path must call App.loadSettingsPrivacyStatus()
+E   assert 'App.loadSettingsPrivacyStatus()' in 'function importEncryptedBackup() {\n        if (anySettingsOperationInProgress()) return;\n        var passInput = el...abled(anySettingsOperationInProgress());\n        });\n    }\n    App.importEncryptedBackup = importEncryptedBackup;\n'
+--- [12/18] tests.webview.test_settings_static_contract::test_settings_js_render_first_run_notice_hides_close_in_gate_mode ---
+tests\webview\test_settings_static_contract.py:1111: in test_settings_js_render_first_run_notice_hides_close_in_gate_mode
+    assert 'acceptBtn' in body and 'closeBtn' in body
+E   assert ('acceptBtn' in 'function renderFirstRunNotice(data, mode) {\n        if (!data) return;\n        var title = element("first-run-notic...= mode !== "view";\n        setFirstRunNoticeError("");\n    }\n    App.renderFirstRunNotice = renderFirstRunNotice;\n')
+--- [13/18] tests.webview.test_settings_static_contract::test_settings_js_backup_controls_not_dependent_on_settingsLoaded ---
+tests\webview\test_settings_static_contract.py:1262: in test_settings_js_backup_controls_not_dependent_on_settingsLoaded
+    assert "var backupDisabled = !!disabled;" in body
+E   assert 'var backupDisabled = !!disabled;' in 'function setSettingsBackupControlsDisabled(disabled) {\n        [\n            "settings-backup-export-btn",\n       ...etDisabled(id, disabled); });\n    }\n    App.setSettingsBackupControlsDisabled = setSettingsBackupControlsDisabled;\n'
+--- [14/18] tests.webview.test_settings_static_contract::test_settings_js_danger_controls_not_dependent_on_settingsLoaded ---
+tests\webview\test_settings_static_contract.py:1289: in test_settings_js_danger_controls_not_dependent_on_settingsLoaded
+    assert "var dangerDisabled = !!disabled;" in body
+E   assert 'var dangerDisabled = !!disabled;' in 'function setSettingsDangerControlsDisabled(disabled) {\n        setDisabled("settings-clear-confirm", disabled);\n   ...r-local-data-btn", disabled);\n    }\n    App.setSettingsDangerControlsDisabled = setSettingsDangerControlsDisabled;\n'
+--- [15/18] tests.webview.test_statistics_static_contract::test_frontend_js_statistics_export_only_via_bridge ---
+tests\webview\test_statistics_static_contract.py:302: in test_frontend_js_statistics_export_only_via_bridge
+    assert 'callBridge("export_statistics_csv"' in source, (
+E   AssertionError: frontend JS must call App.callBridge("export_statistics_csv", ...) for the CSV write; direct file writes are forbidden
+E   assert 'callBridge("export_statistics_csv"' in '// WorkTrace WebView frontend core module. Only communicates with Python through the pywebview API bridge.\n// Does n....readyState === "loading") document.addEventListener("DOMContentLoaded", onDomReady);\n    else onDomReady();\n})();\n'
+--- [16/18] tests.webview.test_statistics_static_contract::test_frontend_js_statistics_export_calls_bridge_export_statistics_csv ---
+tests\webview\test_statistics_static_contract.py:963: in test_frontend_js_statistics_export_calls_bridge_export_statistics_csv
+    assert 'callBridge("export_statistics_csv"' in source, (
+E   AssertionError: frontend JS must call bridge export_statistics_csv for the CSV write
+E   assert 'callBridge("export_statistics_csv"' in '// WorkTrace WebView frontend core module. Only communicates with Python through the pywebview API bridge.\n// Does n....readyState === "loading") document.addEventListener("DOMContentLoaded", onDomReady);\n    else onDomReady();\n})();\n'
+--- [17/18] tests.webview.test_statistics_static_contract::test_frontend_js_statistics_export_saving_guard_present ---
+tests\webview\test_statistics_static_contract.py:984: in test_frontend_js_statistics_export_saving_guard_present
+    assert "if (App.statisticsExportSaving)" in body, (
+E   AssertionError: exportStatisticsCsv must guard against duplicate clicks
+E   assert 'if (App.statisticsExportSaving)' in 'function exportStatisticsCsv() {\n        if (App.statisticsExportSaving || App.statisticsLoading) return;\n        v...n            setStatisticsExportSaving(false);\n        });\n    }\n    App.exportStatisticsCsv = exportStatisticsCsv;'
+--- [18/18] tests.webview.test_statistics_static_contract::test_frontend_js_statistics_load_and_export_use_independent_state ---
+tests\webview\test_statistics_static_contract.py:1277: in test_frontend_js_statistics_load_and_export_use_independent_state
+    assert "if (App.statisticsExportSaving)" in export_body, (
+E   AssertionError: exportStatisticsCsv must guard against duplicate clicks via statisticsExportSaving, not statisticsLoading
+E   assert 'if (App.statisticsExportSaving)' in 'function exportStatisticsCsv() {\n        if (App.statisticsExportSaving || App.statisticsLoading) return;\n        v...n            setStatisticsExportSaving(false);\n        });\n    }\n    App.exportStatisticsCsv = exportStatisticsCsv;'
+=== PYTEST_FAILURE_DETAILS_END ===
+
