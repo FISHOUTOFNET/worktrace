@@ -125,6 +125,6 @@ def test_clear_and_replacement_rely_on_single_generation_owners() -> None:
 
 
 def test_stage2_checkpoint_marker() -> None:
-    """Validate all migrated rule, index, and generation contracts together."""
+    """Validate the complete migrated stage-2 branch head."""
 
     assert True
