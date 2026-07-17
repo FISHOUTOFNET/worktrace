@@ -35,7 +35,8 @@ jobs:
         continue-on-error: true
         shell: pwsh
         run: |
-          python .github/agent_apply_stage6_contracts.py *> stage.log
+          python .github/agent_fix_stage6_boundary.py *> stage.log
+          if ($LASTEXITCODE -eq 0) { python .github/agent_apply_stage6_contracts.py *>> stage.log }
           $code = $LASTEXITCODE
           Get-Content stage.log -Tail 260
           if ($code -ne 0) { exit $code }
@@ -88,7 +89,7 @@ jobs:
         if: steps.migrate.outcome == 'success' && steps.validate.outcome == 'success'
         shell: pwsh
         run: |
-          git rm .github/agent_apply_stage6_contracts.py .github/workflows/agent-stage6-contracts.yml
+          git rm .github/agent_apply_stage6_contracts.py .github/agent_fix_stage6_boundary.py .github/workflows/agent-stage6-contracts.yml
           git add -A
           git commit -m "Close architecture contracts and repository hygiene"
           git push origin HEAD:agent/canonical-architecture-consolidation
