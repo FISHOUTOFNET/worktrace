@@ -40,8 +40,19 @@ jobs:
             if ($_.StartsWith("          ")) { $_.Substring(10) } else { $_ }
           }
           [System.IO.File]::WriteAllLines((Join-Path $PWD ".agent_apply.py"), $lines, [System.Text.UTF8Encoding]::new($false))
-          python .agent_apply.py
-          Remove-Item .agent_apply.py
+          python .agent_apply.py *> agent-apply.log
+          $applyExitCode = $LASTEXITCODE
+          Get-Content -LiteralPath agent-apply.log -Tail 160 | ForEach-Object { Write-Host $_ }
+          if ($applyExitCode -ne 0) {
+            New-Item -ItemType Directory -Force -Path diagnostics | Out-Null
+            Copy-Item agent-apply.log diagnostics/agent-apply-latest.txt
+            git checkout -B agent/worktrace-agent-diagnostics
+            git add diagnostics/agent-apply-latest.txt
+            git commit -m "Capture architecture repair diagnostics"
+            git push --force origin HEAD:agent/worktrace-agent-diagnostics
+            exit $applyExitCode
+          }
+          Remove-Item .agent_apply.py, agent-apply.log
       - name: Install dependencies
         run: python -m pip install --disable-pip-version-check -q -r requirements.txt
       - name: Validate phase
