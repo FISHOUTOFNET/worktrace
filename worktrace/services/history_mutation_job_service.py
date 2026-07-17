@@ -1,9 +1,9 @@
 """Recoverable, cursor-based history mutations for project rules.
 
 A job row is committed before any history scan begins. Single-rule jobs apply
-bounded cursor batches. Multi-rule jobs use a durable planning phase, retain at
-most the configured number of winners, and apply the final first-rule-wins plan
-in one transaction.
+bounded cursor batches. Multi-rule jobs use durable bounded planning, retain at
+most the configured number of winners, and apply the final ordered plan in one
+transaction. Rule catalog mutations are delegated to their canonical owner.
 """
 
 from __future__ import annotations
@@ -13,11 +13,14 @@ import logging
 import threading
 from typing import Any
 
-from ..constants import EXCLUDED_PROJECT
 from ..data_generation_repository import DataGenerationNamespace
 from ..db import get_connection, now_str
 from ..domain_unit_of_work import DomainUnitOfWork
-from . import assignment_command_service, rule_planning_service as planner
+from . import (
+    assignment_command_service,
+    rule_catalog_command_service as catalog,
+    rule_planning_service as planner,
+)
 
 _BATCH_SIZE = 100
 _BATCH_PLAN_SIZE = 101
@@ -69,27 +72,31 @@ def submit_rule_job(
         cutoff = _activity_cutoff(read_conn)
 
     timestamp = now_str()
+    restore_enabled = bool(int(rule.get("enabled") or 0))
     payload = {
         "rule_type": rule_type,
         "rule_id": int(rule_id),
-        "restore_enabled": bool(int(rule.get("enabled") or 0)),
+        "restore_enabled": restore_enabled,
         "estimated_count": estimated,
     }
     with DomainUnitOfWork() as uow:
         conn = uow.connection
-        if kind in {"rule_remove", "rule_delete"}:
-            if int(rule.get("enabled") or 0):
-                _add_rule_catalog_effects(uow, rule)
-            table, extra = _rule_table(rule_type)
-            cursor = conn.execute(
-                f"UPDATE {table} SET enabled = 0, updated_at = ? WHERE id = ?{extra}",
-                (timestamp, int(rule_id)),
-            )
-            if cursor.rowcount != 1:
+        if kind in {"rule_remove", "rule_delete"} and restore_enabled:
+            if not catalog.set_rule_enabled_in_transaction(
+                uow,
+                conn,
+                rule_type,
+                int(rule_id),
+                False,
+                timestamp=timestamp,
+            ):
                 raise ValueError("not_found")
             rule_version = timestamp
         else:
-            rule_version = str(rule.get("updated_at") or "")
+            current = planner.resolve_rule(conn, rule_type, int(rule_id))
+            if not current:
+                raise ValueError("not_found")
+            rule_version = str(current.get("updated_at") or "")
         job_id = _insert_job(
             conn,
             kind=kind,
@@ -140,7 +147,7 @@ def submit_rule_batch_job(
 
     payload: dict[str, Any] = {
         "mode": _BATCH_MODE,
-        "phase": "planning",
+        "plan_state": "planning",
         "rules": normalized,
         "max_updates": maximum,
         "winners": [],
@@ -179,7 +186,6 @@ def compensate_failed_synchronous_job(job_id: int) -> bool:
 
     if int(job_id) <= 0:
         return False
-    compensated = False
     with DomainUnitOfWork() as uow:
         conn = uow.connection
         row = conn.execute(
@@ -193,27 +199,26 @@ def compensate_failed_synchronous_job(job_id: int) -> bool:
         if row is None or int(row["processed_count"] or 0) != 0:
             return False
         payload = json.loads(str(row["payload_json"] or "{}"))
-        if payload.get("mode") == _BATCH_MODE:
+        if not isinstance(payload, dict) or payload.get("mode") == _BATCH_MODE:
             return False
         rule_type = str(payload.get("rule_type") or "")
         rule_id = int(payload.get("rule_id") or 0)
         if row["kind"] in {"rule_remove", "rule_delete"} and bool(
             payload.get("restore_enabled")
         ):
-            rule = planner.resolve_rule(conn, rule_type, rule_id)
-            if rule:
-                _add_rule_catalog_effects(uow, rule)
-            table, extra = _rule_table(rule_type)
-            conn.execute(
-                f"UPDATE {table} SET enabled = 1, updated_at = ? WHERE id = ?{extra}",
-                (now_str(), rule_id),
-            )
+            if not catalog.set_rule_enabled_in_transaction(
+                uow,
+                conn,
+                rule_type,
+                rule_id,
+                True,
+            ):
+                return False
         conn.execute(
             "DELETE FROM history_mutation_job WHERE id = ?",
             (int(job_id),),
         )
-        compensated = True
-    return compensated
+    return True
 
 
 def run_pending_jobs(limit: int = 1) -> int:
@@ -487,7 +492,17 @@ def _run_ordered_batch_plan(
             for entry, rule in zip(refs, resolved, strict=True)
         ]
     if not activities:
-        _apply_ordered_batch_plan(job, payload, refs, resolved, versions, winners, counts_list, collision_counts, 0, 0)
+        _apply_ordered_batch_plan(
+            job,
+            payload,
+            refs,
+            versions,
+            winners,
+            counts_list,
+            collision_counts,
+            0,
+            0,
+        )
         return
 
     for index, classified in enumerate(classified_list):
@@ -511,7 +526,6 @@ def _run_ordered_batch_plan(
             job,
             payload,
             refs,
-            resolved,
             versions,
             winners,
             counts_list,
@@ -521,12 +535,13 @@ def _run_ordered_batch_plan(
         )
         return
 
-    payload["winners"] = [[activity_id, index] for activity_id, index in sorted(winners.items())]
+    payload["winners"] = [
+        [activity_id, index] for activity_id, index in sorted(winners.items())
+    ]
     payload["rule_counts"] = counts_list
     payload["collision_counts"] = collision_counts
     with DomainUnitOfWork() as uow:
-        conn = uow.connection
-        conn.execute(
+        uow.connection.execute(
             """
             UPDATE history_mutation_job
             SET status = 'running', payload_json = ?, cursor_activity_id = ?,
@@ -548,7 +563,6 @@ def _apply_ordered_batch_plan(
     job: dict,
     payload: dict[str, Any],
     refs: list[dict[str, Any]],
-    resolved: list[dict[str, Any]],
     versions: dict[tuple[str, int], str],
     winners: dict[int, int],
     counts_list: list[dict[str, int]],
@@ -570,7 +584,7 @@ def _apply_ordered_batch_plan(
                 if rule_type == "folder"
                 else planner.KEYWORD_RULE_CONFIDENCE
             )
-            if assignment_command_service.upsert_assignment(
+            changed = assignment_command_service.upsert_assignment(
                 conn,
                 activity_id=int(activity_id),
                 project_id=int(rule.get("project_id") or 0),
@@ -579,9 +593,11 @@ def _apply_ordered_batch_plan(
                 source_rule_type=rule_type,
                 source_rule_id=int(entry["rule_id"]),
                 protect_manual=True,
-            ):
-                updated_by_rule[index] += 1
-        payload["phase"] = "completed"
+            )
+            if not changed:
+                raise ValueError("operation_failed")
+            updated_by_rule[index] += 1
+        payload["plan_state"] = "completed"
         payload["winners"] = [
             [activity_id, index] for activity_id, index in sorted(winners.items())
         ]
@@ -601,7 +617,7 @@ def _apply_ordered_batch_plan(
                 int(cursor),
                 int(processed),
                 sum(updated_by_rule),
-                max(0, len(winners) - sum(updated_by_rule)),
+                0,
                 now_str(),
                 int(job["id"]),
             ),
@@ -654,8 +670,7 @@ def _run_reinference_batch(job: dict, batch_size: int) -> None:
             job["cutoff_activity_id"] or 0
         )
         if completed:
-            _add_finalization_effects(uow, conn, job, payload)
-            _finalize_rule_in_transaction(conn, job, payload)
+            _finalize_rule_in_transaction(uow, conn, job, payload)
         _advance_job(
             conn,
             job_id=int(job["id"]),
@@ -703,8 +718,7 @@ def _finalize_reinference_job(job: dict) -> None:
     payload = _payload(job)
     with DomainUnitOfWork() as uow:
         conn = uow.connection
-        _add_finalization_effects(uow, conn, job, payload)
-        _finalize_rule_in_transaction(conn, job, payload)
+        _finalize_rule_in_transaction(uow, conn, job, payload)
         conn.execute(
             """
             UPDATE history_mutation_job
@@ -715,51 +729,34 @@ def _finalize_reinference_job(job: dict) -> None:
         )
 
 
-def _add_rule_catalog_effects(uow: DomainUnitOfWork, rule: dict) -> None:
-    uow.add_effects(DataGenerationNamespace.CLASSIFICATION_CATALOG)
-    if str(rule.get("project_name") or "") == EXCLUDED_PROJECT:
-        uow.add_effects(DataGenerationNamespace.PRIVACY_CATALOG)
-
-
-def _add_finalization_effects(
+def _finalize_rule_in_transaction(
     uow: DomainUnitOfWork,
     conn,
     job: dict,
     payload: dict[str, Any],
 ) -> None:
-    changes_rule = job["kind"] == "rule_delete" or bool(
-        payload.get("restore_enabled")
-    )
-    if not changes_rule:
-        return
-    rule = planner.resolve_rule(
-        conn,
-        str(payload["rule_type"]),
-        int(payload["rule_id"]),
-    )
-    if rule:
-        _add_rule_catalog_effects(uow, rule)
-    else:
-        uow.add_effects(DataGenerationNamespace.CLASSIFICATION_CATALOG)
-
-
-def _finalize_rule_in_transaction(conn, job: dict, payload: dict[str, Any]) -> None:
     rule_type = str(payload["rule_type"])
     rule_id = int(payload["rule_id"])
-    table, extra = _rule_table(rule_type)
     if job["kind"] == "rule_delete":
-        cursor = conn.execute(
-            f"DELETE FROM {table} WHERE id = ?{extra}",
-            (rule_id,),
-        )
-        if cursor.rowcount != 1:
+        if rule_type == "folder":
+            from .folder_index_service import delete_index_for_rule
+
+            delete_index_for_rule(rule_id, conn=conn)
+        if not catalog.delete_rule_in_transaction(
+            uow,
+            conn,
+            rule_type,
+            rule_id,
+        ):
             raise ValueError("rule_delete_failed")
     elif bool(payload.get("restore_enabled")):
-        cursor = conn.execute(
-            f"UPDATE {table} SET enabled = 1, updated_at = ? WHERE id = ?{extra}",
-            (now_str(), rule_id),
-        )
-        if cursor.rowcount != 1:
+        if not catalog.set_rule_enabled_in_transaction(
+            uow,
+            conn,
+            rule_type,
+            rule_id,
+            True,
+        ):
             raise ValueError("rule_restore_failed")
 
 
@@ -842,23 +839,11 @@ def _activity_cutoff(conn) -> int:
 
 
 def _normalize_rule_refs(rules: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    if not isinstance(rules, list) or not rules:
-        raise ValueError("invalid_input")
-    result: list[dict[str, Any]] = []
-    seen: set[tuple[str, int]] = set()
-    for entry in rules:
-        if not isinstance(entry, dict):
-            raise ValueError("invalid_input")
-        rule_type = entry.get("rule_type")
-        rule_id = entry.get("rule_id")
-        if rule_type not in {"folder", "keyword"} or type(rule_id) is not int or rule_id <= 0:
-            raise ValueError("invalid_input")
-        key = (str(rule_type), int(rule_id))
-        if key in seen:
-            continue
-        seen.add(key)
-        result.append({"rule_type": key[0], "rule_id": key[1]})
-    return result
+    refs = catalog.normalize_rule_refs(rules)
+    return [
+        {"rule_type": rule_type, "rule_id": rule_id}
+        for rule_type, rule_id in refs
+    ]
 
 
 def _resolve_job_rules(
@@ -943,12 +928,6 @@ def _payload(job: dict) -> dict[str, Any]:
 
 def _result_for_job(job_id: int, payload: dict[str, Any]) -> dict[str, Any]:
     return batch_job_result(job_id) if payload.get("mode") == _BATCH_MODE else job_result(job_id)
-
-
-def _rule_table(rule_type: str) -> tuple[str, str]:
-    if rule_type == "folder":
-        return "folder_project_rule", ""
-    return "project_rule", " AND rule_type = 'keyword'"
 
 
 __all__ = [
