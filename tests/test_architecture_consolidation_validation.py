@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.support.live_semantics_harness import LiveSemanticsHarness
 from worktrace import db
 from worktrace.api import view_model_api
 from worktrace.services import (
@@ -14,6 +15,20 @@ from worktrace.services import (
 )
 
 pytestmark = [pytest.mark.db, pytest.mark.integration, pytest.mark.serial]
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+WORKFLOW_ALLOWLIST = {"ci.yml"}
+FORBIDDEN_WORKFLOW_COMMANDS = (
+    "git push",
+    "git merge",
+    "git commit",
+    "git checkout -B",
+)
+FORBIDDEN_HELPER_PREFIXES = (
+    "agent_",
+    "apply_patch_",
+    "one_time_",
+)
 
 
 def test_page_and_heartbeat_use_one_revision_owner(temp_db):
@@ -86,8 +101,7 @@ def test_schema_trigger_surface_is_constraint_only(temp_db):
 
 
 def test_frontend_uses_explicit_bridge_and_settings_bindings():
-    root = Path(__file__).resolve().parents[1]
-    init_source = (root / "worktrace/webview_ui/js/init.js").read_text(
+    init_source = (REPO_ROOT / "worktrace/webview_ui/js/init.js").read_text(
         encoding="utf-8"
     )
     assert "App.callBridge =" not in init_source
@@ -96,18 +110,16 @@ def test_frontend_uses_explicit_bridge_and_settings_bindings():
 
 
 def test_shipping_windows_adapter_has_no_global_legacy_patch():
-    root = Path(__file__).resolve().parents[1]
     source = (
-        root / "worktrace/platforms/hardened_windows_adapter.py"
+        REPO_ROOT / "worktrace/platforms/hardened_windows_adapter.py"
     ).read_text(encoding="utf-8")
     assert "legacy." not in source
     assert "_run_with_timeout =" not in source
 
 
 def test_continuity_reads_typed_runtime_state_not_settings_json():
-    root = Path(__file__).resolve().parents[1]
     source = (
-        root / "worktrace/services/activity_continuity_service.py"
+        REPO_ROOT / "worktrace/services/activity_continuity_service.py"
     ).read_text(encoding="utf-8")
     assert "sample_runtime_activity_state" in source
     assert 'get_setting("current_activity_snapshot"' not in source
@@ -115,10 +127,68 @@ def test_continuity_reads_typed_runtime_state_not_settings_json():
 
 
 def test_page_wrapper_services_are_removed():
-    root = Path(__file__).resolve().parents[1]
     for name in (
         "overview_view_model_service.py",
         "timeline_view_model_service.py",
         "session_detail_view_model_service.py",
     ):
-        assert not (root / "worktrace/services" / name).exists()
+        assert not (REPO_ROOT / "worktrace/services" / name).exists()
+
+
+def test_standard_ci_is_the_only_read_only_workflow():
+    workflow_dir = REPO_ROOT / ".github" / "workflows"
+    workflows = sorted(
+        path
+        for pattern in ("*.yml", "*.yaml")
+        for path in workflow_dir.glob(pattern)
+    )
+    assert {path.name for path in workflows} == WORKFLOW_ALLOWLIST
+
+    github_dir = REPO_ROOT / ".github"
+    one_time_helpers = [
+        path.relative_to(REPO_ROOT).as_posix()
+        for path in github_dir.rglob("*.py")
+        if path.name.startswith(FORBIDDEN_HELPER_PREFIXES)
+    ]
+    assert not one_time_helpers, "one-time GitHub helpers remain: " + ", ".join(
+        one_time_helpers
+    )
+
+    for workflow in workflows:
+        source = workflow.read_text(encoding="utf-8")
+        lowered = source.lower()
+        for command in FORBIDDEN_WORKFLOW_COMMANDS:
+            assert command.lower() not in lowered, (
+                f"{workflow.name} must validate code, not run {command}"
+            )
+        assert "contents: write" not in lowered
+        assert "worktrace-ci-diagnostics" not in source
+        assert "github-actions[bot]" not in source
+        assert "agent/" not in source
+
+    ci_source = (workflow_dir / "ci.yml").read_text(encoding="utf-8")
+    checkout_count = ci_source.count("uses: actions/checkout@")
+    assert checkout_count == 4
+    assert ci_source.count("persist-credentials: false") == checkout_count
+    assert ci_source.count("git rev-parse HEAD") == checkout_count
+    assert ci_source.count("Capture tested revision") == checkout_count
+    assert "contents: read" in ci_source
+    assert "cancel-in-progress: false" in ci_source
+    assert "github.event.pull_request.head.sha || github.sha" in ci_source
+    assert "run_python312:" in ci_source
+    assert "inputs.run_python312" in ci_source
+
+
+def test_live_semantics_harness_recent_reuses_overview_projection(
+    temp_db,
+    monkeypatch,
+):
+    live = LiveSemanticsHarness(monkeypatch)
+    live.record("A", "09:00:00")
+
+    pages = live.pages()
+
+    assert pages["overview"]["ok"] is True
+    assert pages["recent"]["items"]
+    assert pages["recent"]["items"] == pages["overview"]["activities"]
+    assert pages["recent"]["runtime"] == pages["overview"]["runtime"]
