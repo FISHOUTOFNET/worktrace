@@ -1,16 +1,14 @@
 from __future__ import annotations
 
 from ..db import dict_rows, get_connection, now_str
+from ..mutation_effects import report_structure_mutation
 from .session_boundary_policy import validate_hard_boundary_reason
 
 
+@report_structure_mutation
 def record_boundary(occurred_at: str | None = None, reason: str = "unknown") -> None:
-    """Low-level test/data-repair helper.
+    """Low-level test/data-repair helper."""
 
-    Production runtime paths must call ``record_hard_boundary`` so hard
-    boundary reasons stay whitelisted and collector health cannot masquerade
-    as a session boundary.
-    """
     ts = now_str()
     at = occurred_at or ts
     with get_connection() as conn:
