@@ -4,6 +4,7 @@ import csv
 import logging
 import os
 from pathlib import Path
+from typing import Any
 
 from ..db import get_connection, now_str
 from ..exports.excel_exporter import export_excel_file
@@ -154,7 +155,12 @@ def export_all_local_data(path: str) -> str:
     return str(out)
 
 
-def clear_all_local_data(confirm: bool) -> None:
+def clear_all_local_data(
+    confirm: bool,
+    *,
+    pause_handler: Any | None = None,
+    reset_handler: Any | None = None,
+) -> None:
     if not confirm:
         raise ValueError("confirmation is required")
     from .database_maintenance_service import clear_all_live_data
@@ -164,12 +170,16 @@ def clear_all_local_data(confirm: bool) -> None:
     )
 
     try:
-        with SECURE_IMPORT_COORDINATOR.acquire(reason="clear_all") as guard:
+        with SECURE_IMPORT_COORDINATOR.acquire(
+            reason="clear_all",
+            pause_handler=pause_handler,
+            reset_handler=reset_handler,
+        ) as guard:
             clear_all_live_data()
+            _invalidate_clear_all_caches()
             guard.mark_succeeded()
     except BackupImportInProgressError as exc:
         raise ValueError("operation_in_progress") from exc
-    _invalidate_clear_all_caches()
     logging.info("all local data cleared at %s", now_str())
 
 
