@@ -38,7 +38,7 @@ def test_collector_startup_failure_is_not_reported_ready(temp_db, monkeypatch):
     result = runtime.start_collector(startup_timeout_seconds=0.2)
 
     assert result == {"ok": False, "error": "collector_start_failed"}
-    assert runtime.phase is RuntimePhase.FAILED
+    assert runtime.phase is RuntimePhase.RECOVERABLE_FAILURE
     assert runtime._collector_thread is None
 
 
@@ -59,8 +59,8 @@ def test_live_thread_without_ready_handshake_times_out_closed(temp_db, monkeypat
     result = runtime.start_collector(startup_timeout_seconds=0.1)
 
     assert result == {"ok": False, "error": "collector_start_failed"}
-    assert runtime.phase is RuntimePhase.FAILED
-    assert runtime.stop_event.is_set()
+    assert runtime.phase is RuntimePhase.RECOVERABLE_FAILURE
+    assert runtime.stop_event.is_set() is False
     assert runtime._collector_thread is None
 
 
@@ -96,7 +96,7 @@ def test_authorized_start_skips_derived_workers_when_collector_fails(
     assert result.folder_index_ready is False
     assert result.history_worker_ready is False
     assert result.error_code == "collector_start_failed"
-    assert runtime.phase is RuntimePhase.FAILED
+    assert runtime.phase is RuntimePhase.RECOVERABLE_FAILURE
 
 
 def test_derived_worker_failure_degrades_ready_collector(
