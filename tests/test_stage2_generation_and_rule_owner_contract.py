@@ -125,6 +125,6 @@ def test_clear_and_replacement_rely_on_single_generation_owners() -> None:
 
 
 def test_stage2_checkpoint_marker() -> None:
-    """Validate Stage 2 after privacy generation contract migration."""
+    """Validate Stage 2 after project-delete rollback contract migration."""
 
     assert True
