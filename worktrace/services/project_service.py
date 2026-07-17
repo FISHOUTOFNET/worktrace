@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from ..constants import EXCLUDED_PROJECT, UNCATEGORIZED_PROJECT
 from ..data_generation_repository import DataGenerationNamespace
-from ..db import dict_rows, get_connection, get_db_path, now_str
+from ..db import dict_rows, get_connection, now_str
 from ..domain_unit_of_work import DomainUnitOfWork
 from . import project_lifecycle_policy
-
-_UNCATEGORIZED_PROJECT_IDS: dict[str, int] = {}
-_EXCLUDED_PROJECT_IDS: dict[str, int] = {}
+from .system_project_service import (
+    ensure_system_projects,
+    require_excluded_project_id,
+    require_uncategorized_project_id,
+)
 
 
 def _catalog_uow(
@@ -30,8 +32,7 @@ def _add_privacy_effect_for_project(
 
 
 def invalidate_uncategorized_project_cache() -> None:
-    _UNCATEGORIZED_PROJECT_IDS.pop(str(get_db_path().resolve()), None)
-    _EXCLUDED_PROJECT_IDS.pop(str(get_db_path().resolve()), None)
+    """Compatibility test hook; system project IDs are no longer cached here."""
 
 
 def _normalize_project_language(language: str | None = None) -> str:
@@ -39,20 +40,32 @@ def _normalize_project_language(language: str | None = None) -> str:
     return cleaned or "中文"
 
 
-def create_project(name: str, description: str = "", language: str = "中文") -> int:
-    name = name.strip()
-    if not name:
+def create_project(
+    name: str,
+    description: str = "",
+    language: str = "中文",
+) -> int:
+    cleaned = name.strip()
+    if not cleaned:
         raise ValueError("project name is required")
-    ts = now_str()
+    timestamp = now_str()
     with _catalog_uow() as uow:
-        cur = uow.connection.execute(
+        cursor = uow.connection.execute(
             """
-            INSERT INTO project(name, description, language, is_archived, enabled, created_by, created_at, updated_at)
-            VALUES (?, ?, ?, 0, 1, 'user', ?, ?)
+            INSERT INTO project(
+                name, description, language, is_archived, enabled,
+                created_by, created_at, updated_at
+            ) VALUES (?, ?, ?, 0, 1, 'user', ?, ?)
             """,
-            (name, description, _normalize_project_language(language), ts, ts),
+            (
+                cleaned,
+                description,
+                _normalize_project_language(language),
+                timestamp,
+                timestamp,
+            ),
         )
-        return int(cur.lastrowid)
+        return int(cursor.lastrowid)
 
 
 def update_project(
@@ -119,7 +132,6 @@ def set_project_enabled(project_id: int, enabled: bool) -> None:
             "UPDATE project SET enabled = ?, updated_at = ? WHERE id = ?",
             (requested, now_str(), project_id),
         )
-    _invalidate_project_lifecycle_caches()
 
 
 def set_excluded_project_enabled(enabled: bool) -> int:
@@ -134,24 +146,31 @@ def set_excluded_project_enabled(enabled: bool) -> int:
         if row is not None and int(row["enabled"] or 0) == requested:
             return project_id
         conn.execute(
-            "UPDATE project SET enabled = ?, updated_at = ? WHERE id = ? AND name = ?",
+            """
+            UPDATE project
+            SET enabled = ?, updated_at = ?
+            WHERE id = ? AND name = ?
+            """,
             (requested, now_str(), project_id, EXCLUDED_PROJECT),
         )
-    from .privacy_service import clear_exclude_rules_cache
-
-    clear_exclude_rules_cache()
     return project_id
 
 
 def get_project(project_id: int) -> dict | None:
     with get_connection() as conn:
-        row = conn.execute("SELECT * FROM project WHERE id = ?", (project_id,)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM project WHERE id = ?",
+            (project_id,),
+        ).fetchone()
     return dict(row) if row else None
 
 
 def get_project_by_name(name: str) -> dict | None:
     with get_connection() as conn:
-        row = conn.execute("SELECT * FROM project WHERE name = ?", (name.strip(),)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM project WHERE name = ?",
+            (name.strip(),),
+        ).fetchone()
     return dict(row) if row else None
 
 
@@ -178,11 +197,7 @@ def list_active_projects() -> list[dict]:
 def list_user_projects() -> list[dict]:
     with get_connection() as conn:
         rows = conn.execute(
-            """
-            SELECT *
-            FROM project
-            ORDER BY name COLLATE NOCASE
-            """
+            "SELECT * FROM project ORDER BY name COLLATE NOCASE"
         ).fetchall()
     return [
         row
@@ -199,7 +214,8 @@ def list_selectable_projects() -> list[dict]:
             """
             SELECT *
             FROM project
-            ORDER BY CASE WHEN name = ? THEN 0 ELSE 1 END, name COLLATE NOCASE
+            ORDER BY CASE WHEN name = ? THEN 0 ELSE 1 END,
+                     name COLLATE NOCASE
             """,
             (UNCATEGORIZED_PROJECT,),
         ).fetchall()
@@ -213,11 +229,7 @@ def list_selectable_projects() -> list[dict]:
 def list_rule_target_projects() -> list[dict]:
     with get_connection() as conn:
         rows = conn.execute(
-            """
-            SELECT *
-            FROM project
-            ORDER BY name COLLATE NOCASE
-            """,
+            "SELECT * FROM project ORDER BY name COLLATE NOCASE"
         ).fetchall()
     return [
         row
@@ -232,39 +244,25 @@ def list_project_bindings(include_system_special: bool = True) -> list[dict]:
             """
             SELECT *
             FROM project
-            ORDER BY CASE WHEN name = ? THEN 0 ELSE 1 END, name COLLATE NOCASE
+            ORDER BY CASE WHEN name = ? THEN 0 ELSE 1 END,
+                     name COLLATE NOCASE
             """,
             (EXCLUDED_PROJECT,),
         ).fetchall()
-    projects = [
-        row
-        for row in dict_rows(rows)
-        if project_lifecycle_policy.project_visible_in_rules_page(
-            row, include_system_special=include_system_special
-        )
-    ]
-    with get_connection() as conn:
         last_used_rows = dict_rows(
             conn.execute(
                 """
-                SELECT
-                    apa.project_id AS project_id,
-                    MAX(COALESCE(al.end_time, al.start_time)) AS last_used_at
+                SELECT apa.project_id AS project_id,
+                       MAX(COALESCE(al.end_time, al.start_time)) AS last_used_at
                 FROM activity_log al
                 LEFT JOIN activity_project_assignment apa
-                    ON apa.activity_id = al.id
+                  ON apa.activity_id = al.id
                 WHERE al.is_deleted = 0
                   AND apa.project_id IS NOT NULL
                 GROUP BY apa.project_id
                 """
             ).fetchall()
         )
-    last_used_by_project = {
-        int(row["project_id"]): row.get("last_used_at")
-        for row in last_used_rows
-        if row.get("project_id") is not None
-    }
-    with get_connection() as conn:
         folder_rows = dict_rows(
             conn.execute(
                 """
@@ -278,8 +276,8 @@ def list_project_bindings(include_system_special: bool = True) -> list[dict]:
         keyword_rows = dict_rows(
             conn.execute(
                 """
-                SELECT pr.id, pr.pattern AS keyword, pr.project_id, pr.enabled,
-                       p.name AS project_name
+                SELECT pr.id, pr.pattern AS keyword, pr.project_id,
+                       pr.enabled, p.name AS project_name
                 FROM project_rule pr
                 LEFT JOIN project p ON p.id = pr.project_id
                 WHERE pr.rule_type = 'keyword'
@@ -287,6 +285,20 @@ def list_project_bindings(include_system_special: bool = True) -> list[dict]:
                 """
             ).fetchall()
         )
+
+    projects = [
+        row
+        for row in dict_rows(rows)
+        if project_lifecycle_policy.project_visible_in_rules_page(
+            row,
+            include_system_special=include_system_special,
+        )
+    ]
+    last_used_by_project = {
+        int(row["project_id"]): row.get("last_used_at")
+        for row in last_used_rows
+        if row.get("project_id") is not None
+    }
     by_project = {
         int(project["id"]): {
             **project,
@@ -322,7 +334,6 @@ def archive_project(project_id: int) -> None:
             "UPDATE project SET is_archived = 1, updated_at = ? WHERE id = ?",
             (now_str(), project_id),
         )
-    _invalidate_project_lifecycle_caches()
 
 
 def delete_project(project_id: int) -> None:
@@ -330,10 +341,14 @@ def delete_project(project_id: int) -> None:
 
 
 def soft_delete_project(project_id: int) -> None:
-    """Tombstone a project without deleting facts, assignments, rules, or overrides."""
+    """Tombstone a project without deleting facts, rules, or assignments."""
+
     with _catalog_uow() as uow:
         conn = uow.connection
-        row = conn.execute("SELECT * FROM project WHERE id = ?", (project_id,)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM project WHERE id = ?",
+            (project_id,),
+        ).fetchone()
         project = dict(row) if row else None
         if not project:
             raise ValueError("project not found")
@@ -341,89 +356,49 @@ def soft_delete_project(project_id: int) -> None:
             raise ValueError("system project cannot be deleted")
         if int(project.get("is_deleted") or 0) == 1:
             return
-        cur = conn.execute(
+        cursor = conn.execute(
             """
             UPDATE project
-            SET is_deleted = 1,
-                is_archived = 1,
-                enabled = 0,
+            SET is_deleted = 1, is_archived = 1, enabled = 0,
                 updated_at = ?
             WHERE id = ?
             """,
             (now_str(), project_id),
         )
-        if cur.rowcount != 1:
+        if cursor.rowcount != 1:
             raise ValueError("project not found")
-    _invalidate_project_lifecycle_caches()
-
-
-def _invalidate_project_lifecycle_caches() -> None:
-    from .folder_rule_service import invalidate_folder_rule_cache
-    from .privacy_service import clear_exclude_rules_cache
-    from .project_inference_service import invalidate_keyword_rule_cache
-
-    invalidate_folder_rule_cache()
-    invalidate_keyword_rule_cache()
-    clear_exclude_rules_cache()
 
 
 def get_or_create_uncategorized_project(*, conn=None) -> int:
-    cache_key = str(get_db_path().resolve())
-    cached = _UNCATEGORIZED_PROJECT_IDS.get(cache_key)
-    if cached is not None:
-        return cached
-    ts = now_str()
-    if conn is not None:
-        row = conn.execute("SELECT id FROM project WHERE name = ?", (UNCATEGORIZED_PROJECT,)).fetchone()
-        if row:
-            project_id = int(row["id"])
-            _UNCATEGORIZED_PROJECT_IDS[cache_key] = project_id
-            return project_id
-        cur = conn.execute(
-            """INSERT INTO project(name, description, language, is_archived, enabled, created_by, created_at, updated_at)
-               VALUES (?, '', '中文', 0, 1, 'system', ?, ?)""",
-            (UNCATEGORIZED_PROJECT, ts, ts),
-        )
-        project_id = int(cur.lastrowid)
-        _UNCATEGORIZED_PROJECT_IDS[cache_key] = project_id
-        return project_id
-    with get_connection() as read_conn:
-        row = read_conn.execute("SELECT id FROM project WHERE name = ?", (UNCATEGORIZED_PROJECT,)).fetchone()
-        if row:
-            project_id = int(row["id"])
-            _UNCATEGORIZED_PROJECT_IDS[cache_key] = project_id
-            return project_id
-        cur = read_conn.execute(
-            """
-            INSERT INTO project(name, description, language, is_archived, enabled, created_by, created_at, updated_at)
-            VALUES (?, '', '中文', 0, 1, 'system', ?, ?)
-            """,
-            (UNCATEGORIZED_PROJECT, ts, ts),
-        )
-        project_id = int(cur.lastrowid)
-        _UNCATEGORIZED_PROJECT_IDS[cache_key] = project_id
-        return project_id
+    """Explicit compatibility command; normal queries use require-only access."""
+
+    if conn is None:
+        return int(ensure_system_projects()["uncategorized"])
+    try:
+        return require_uncategorized_project_id(conn)
+    except ValueError as exc:
+        if str(exc) != "system_catalog_repair_required":
+            raise
+    timestamp = now_str()
+    cursor = conn.execute(
+        """
+        INSERT INTO project(
+            name, description, language, is_archived, enabled,
+            created_by, created_at, updated_at
+        ) VALUES (?, '', '中文', 0, 1, 'system', ?, ?)
+        """,
+        (UNCATEGORIZED_PROJECT, timestamp, timestamp),
+    )
+    return int(cursor.lastrowid)
 
 
 def get_or_create_excluded_project() -> int:
-    cache_key = str(get_db_path().resolve())
-    cached = _EXCLUDED_PROJECT_IDS.get(cache_key)
-    if cached is not None:
-        return cached
-    ts = now_str()
-    with get_connection() as conn:
-        row = conn.execute("SELECT id FROM project WHERE name = ?", (EXCLUDED_PROJECT,)).fetchone()
-        if row:
-            project_id = int(row["id"])
-            _EXCLUDED_PROJECT_IDS[cache_key] = project_id
-            return project_id
-        cur = conn.execute(
-            """
-            INSERT INTO project(name, description, language, is_archived, enabled, created_by, created_at, updated_at)
-            VALUES (?, '命中后匿名记录', '中文', 0, 0, 'system', ?, ?)
-            """,
-            (EXCLUDED_PROJECT, ts, ts),
-        )
-        project_id = int(cur.lastrowid)
-        _EXCLUDED_PROJECT_IDS[cache_key] = project_id
-        return project_id
+    """Explicit compatibility command for the privacy catalog owner."""
+
+    try:
+        with get_connection() as conn:
+            return require_excluded_project_id(conn)
+    except ValueError as exc:
+        if str(exc) != "system_catalog_repair_required":
+            raise
+    return int(ensure_system_projects()["excluded"])
