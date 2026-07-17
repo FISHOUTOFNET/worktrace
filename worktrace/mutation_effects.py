@@ -18,6 +18,7 @@ report_structure_mutation = domain_mutation(
 classification_catalog_mutation = domain_mutation(
     DataGenerationNamespace.REPORT_STRUCTURE,
     DataGenerationNamespace.CLASSIFICATION_CATALOG,
+    DataGenerationNamespace.PRIVACY_CATALOG,
 )
 settings_mutation = domain_mutation(
     DataGenerationNamespace.SETTINGS,

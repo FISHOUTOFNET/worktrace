@@ -1,21 +1,30 @@
-"""Durable application settings stored in SQLite."""
+"""Durable application settings with explicit generation effects."""
 
 from __future__ import annotations
 
 import time
 
+from ..data_generation_repository import DataGenerationNamespace
 from ..db import get_connection, get_db_path, now_str
+from ..mutation_effects import add_mutation_effects, settings_mutation
 
 _SETTING_CACHE_TTL_SECONDS = 2.0
 _SETTING_CACHE: dict[tuple[str, str], tuple[float, str | None]] = {}
+_STRUCTURAL_SETTING_KEYS = {
+    "context_carry_minutes",
+    "unrecorded_gap_boundary_seconds",
+}
+_PRIVACY_SETTING_KEYS = {
+    "clipboard_capture_enabled",
+    "first_run_notice_accepted",
+}
 
 
 def clear_settings_cache(key: str | None = None) -> None:
     if key is None:
         _SETTING_CACHE.clear()
         return
-    db_key = _settings_db_key()
-    _SETTING_CACHE.pop((db_key, key), None)
+    _SETTING_CACHE.pop((_settings_db_key(), key), None)
 
 
 def _settings_db_key() -> str:
@@ -23,9 +32,6 @@ def _settings_db_key() -> str:
 
 
 def _page_read_connection():
-    # Imported lazily so ordinary settings and startup paths do not depend on
-    # page-model modules. During a PageReadContext request this makes settings,
-    # canonical projection and structural revision observe one SQLite snapshot.
     from .page_read_context import current_page_read_context
 
     context = current_page_read_context()
@@ -47,7 +53,6 @@ def get_setting(key: str, default: str | None = None, *, conn=None) -> str | Non
     if cached is not None and cached[0] >= now:
         value = cached[1]
         return value if value is not None else default
-
     with get_connection() as own_conn:
         row = own_conn.execute(
             "SELECT value FROM settings WHERE key = ?",
@@ -58,21 +63,30 @@ def get_setting(key: str, default: str | None = None, *, conn=None) -> str | Non
     return value if value is not None else default
 
 
+@settings_mutation
 def set_setting(key: str, value: str) -> None:
-    ts = now_str()
     with get_connection() as conn:
+        row = conn.execute(
+            "SELECT value FROM settings WHERE key = ?",
+            (key,),
+        ).fetchone()
+        if row is not None and str(row["value"] or "") == str(value):
+            return
+        if key in _STRUCTURAL_SETTING_KEYS:
+            add_mutation_effects(DataGenerationNamespace.REPORT_STRUCTURE)
+        if key in _PRIVACY_SETTING_KEYS:
+            add_mutation_effects(DataGenerationNamespace.PRIVACY_CATALOG)
         conn.execute(
             """
             INSERT INTO settings(key, value, updated_at)
             VALUES (?, ?, ?)
-            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+            ON CONFLICT(key) DO UPDATE SET
+                value = excluded.value,
+                updated_at = excluded.updated_at
             """,
-            (key, value, ts),
+            (key, value, now_str()),
         )
-    _SETTING_CACHE[(_settings_db_key(), key)] = (
-        time.monotonic() + _SETTING_CACHE_TTL_SECONDS,
-        value,
-    )
+    clear_settings_cache(key)
 
 
 def get_bool_setting(key: str, default: bool = False, *, conn=None) -> bool:
