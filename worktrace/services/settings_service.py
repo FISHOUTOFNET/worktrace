@@ -94,15 +94,25 @@ def _page_read_connection():
     return context.conn if context is not None else None
 
 
+def _read_setting(connection, key: str, default: str | None) -> str | None:
+    row = connection.execute(
+        "SELECT value FROM settings WHERE key = ?",
+        (key,),
+    ).fetchone()
+    value = row["value"] if row else None
+    return value if value is not None else default
+
+
 def get_setting(key: str, default: str | None = None, *, conn=None) -> str | None:
     effective_conn = conn if conn is not None else _page_read_connection()
     if effective_conn is not None:
-        row = effective_conn.execute(
-            "SELECT value FROM settings WHERE key = ?",
-            (key,),
-        ).fetchone()
-        value = row["value"] if row else None
-        return value if value is not None else default
+        return _read_setting(effective_conn, key, default)
+
+    # Operational health/heartbeat values deliberately do not bump SETTINGS;
+    # bypass the catalog cache so high-frequency writes cannot become stale.
+    if setting_mutation_class(key) is SettingMutationClass.OPERATIONAL:
+        with get_connection() as own_conn:
+            return _read_setting(own_conn, key, default)
 
     current_generation = generation(DataGenerationNamespace.SETTINGS)
     cache_key = (get_db_key(), current_generation, str(key))
@@ -110,11 +120,7 @@ def get_setting(key: str, default: str | None = None, *, conn=None) -> str | Non
         value = _SETTING_CACHE[cache_key]
         return value if value is not None else default
     with get_connection() as own_conn:
-        row = own_conn.execute(
-            "SELECT value FROM settings WHERE key = ?",
-            (key,),
-        ).fetchone()
-    value = row["value"] if row else None
+        value = _read_setting(own_conn, key, None)
     _SETTING_CACHE[cache_key] = value
     return value if value is not None else default
 
