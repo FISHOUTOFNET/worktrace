@@ -12,6 +12,7 @@ from worktrace.collector.transition_types import ActivityEndReason
 from worktrace.data_generation_repository import DataGenerationNamespace
 from worktrace.services import (
     folder_rule_service,
+    privacy_service,
     project_inference_service,
     project_service,
     rule_service,
@@ -189,3 +190,22 @@ def test_rule_caches_replace_their_snapshot_instead_of_accumulating(temp_db):
     assert isinstance(folder_rule_service._FOLDER_RULE_CACHE, list)
     assert project_inference_service._KEYWORD_RULE_CACHE_GENERATION is not None
     assert folder_rule_service._FOLDER_RULE_CACHE_GENERATION is not None
+
+
+@pytest.mark.db
+@pytest.mark.integration
+@pytest.mark.contract
+def test_privacy_cache_replaces_its_snapshot_instead_of_accumulating(temp_db):
+    excluded_project_id = project_service.get_or_create_excluded_project()
+    project_service.set_project_enabled(excluded_project_id, True)
+    privacy_service.clear_exclude_rules_cache()
+
+    for index in range(4):
+        rule_service.create_rule(f"private-token-{index}", excluded_project_id)
+        snapshot = privacy_service._exclude_rules()
+        assert len(snapshot["keywords"]) == index + 1
+
+    assert isinstance(privacy_service._EXCLUDE_RULE_CACHE, dict)
+    assert set(privacy_service._EXCLUDE_RULE_CACHE) == {"keywords", "folders"}
+    assert privacy_service._EXCLUDE_RULE_CACHE_DATABASE_KEY is not None
+    assert privacy_service._EXCLUDE_RULE_CACHE_GENERATION is not None
