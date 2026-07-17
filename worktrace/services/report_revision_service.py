@@ -7,17 +7,17 @@ from datetime import date as date_type, timedelta
 from typing import Any
 
 from ..db import get_connection, get_db_key
-from ..report_structure_generation import current_generation
+from .page_read_context import current_page_read_context
 from .report_projection_identity import stable_json_hash
 
-_CACHE_LOCK = threading.Lock()
+_STRUCTURE_CACHE_LOCK = threading.Lock()
 _STRUCTURE_REVISION_CACHE: dict[tuple[str, str], tuple[int, str]] = {}
 
 
 def clear_report_structure_revision_cache(database_key: str | None = None) -> None:
     """Drop cached hashes, normally after tests or explicit DB reconfiguration."""
 
-    with _CACHE_LOCK:
+    with _STRUCTURE_CACHE_LOCK:
         if database_key is None:
             _STRUCTURE_REVISION_CACHE.clear()
             return
@@ -25,6 +25,19 @@ def clear_report_structure_revision_cache(database_key: str | None = None) -> No
         for cache_key in list(_STRUCTURE_REVISION_CACHE):
             if cache_key[0] == key:
                 _STRUCTURE_REVISION_CACHE.pop(cache_key, None)
+
+
+def _read_durable_generation(connection) -> int:
+    row = connection.execute(
+        """
+        SELECT generation
+        FROM report_structure_revision_state
+        WHERE singleton_id = 1
+        """
+    ).fetchone()
+    if row is None:
+        raise ValueError("database_schema_incompatible")
+    return int(row["generation"] or 0)
 
 
 def _build_report_structure_revision(
@@ -167,78 +180,45 @@ def _build_report_structure_revision(
 
 
 def get_report_structure_revision(report_date: str, *, conn=None) -> str:
-    """Return a structural revision without rescanning on every heartbeat.
+    """Return the single structural revision used by pages and heartbeat.
 
     Transaction-bound callers receive an immediate hash of their uncommitted
-    view. Ordinary refresh callers reuse a cached hash until a structural write
-    transaction publishes a new process-local generation. Natural open-row
-    duration ticks do not publish that generation.
+    view. Page requests reuse the request-level read transaction. Ordinary
+    refresh callers read the durable generation and revision from one SQLite
+    snapshot, so a committed structure and its cache key cannot diverge.
     """
 
     date_type.fromisoformat(report_date)
     if conn is not None:
         return _build_report_structure_revision(report_date, conn)
 
+    page_context = current_page_read_context()
+    if page_context is not None:
+        return _build_report_structure_revision(report_date, page_context.conn)
+
     database_key = get_db_key()
-    generation = current_generation(database_key)
     cache_key = (database_key, report_date)
-    with _CACHE_LOCK:
-        cached = _STRUCTURE_REVISION_CACHE.get(cache_key)
-    if cached is not None and cached[0] == generation:
-        return cached[1]
-
-    with get_connection() as own_conn:
-        own_conn.execute("BEGIN")
-        try:
-            value = _build_report_structure_revision(report_date, own_conn)
+    own_conn = get_connection()
+    own_conn.execute("BEGIN")
+    try:
+        generation = _read_durable_generation(own_conn)
+        with _STRUCTURE_CACHE_LOCK:
+            cached = _STRUCTURE_REVISION_CACHE.get(cache_key)
+        if cached is not None and cached[0] == generation:
             own_conn.commit()
-        except Exception:
-            own_conn.rollback()
-            raise
+            return cached[1]
 
-    generation_after = current_generation(database_key)
-    if generation_after == generation:
-        with _CACHE_LOCK:
-            _STRUCTURE_REVISION_CACHE[cache_key] = (generation, value)
+        value = _build_report_structure_revision(report_date, own_conn)
+        own_conn.commit()
+    except Exception:
+        own_conn.rollback()
+        raise
+    finally:
+        own_conn.close()
+
+    with _STRUCTURE_CACHE_LOCK:
+        _STRUCTURE_REVISION_CACHE[cache_key] = (generation, value)
     return value
-
-
-def snapshot_structure_revision(snapshot) -> str:
-    """Build the same semantic revision from an already-built snapshot."""
-
-    entries = []
-    for entry in snapshot.final_entries:
-        in_progress = bool(entry.get("is_in_progress"))
-        entries.append(
-            {
-                "key": str(entry.get("projection_instance_key") or ""),
-                "kind": str(entry.get("row_kind") or "project_session"),
-                "revision": (
-                    {
-                        "report_date": str(entry.get("report_date") or ""),
-                        "members": list(entry.get("member_slices") or []),
-                        "status": str(
-                            entry.get("status_code")
-                            or entry.get("status")
-                            or ""
-                        ),
-                        "project_id": int(entry.get("project_id") or 0),
-                    }
-                    if in_progress
-                    else str(entry.get("projection_revision") or "")
-                ),
-                "in_progress": in_progress,
-            }
-        )
-    return stable_json_hash(
-        {
-            "range": [snapshot.start_date, snapshot.end_date],
-            "entries": entries,
-            "diagnostics": [
-                item.to_dict() for item in snapshot.operation_diagnostics
-            ],
-        }
-    )
 
 
 def export_revision(date_from: str, date_to: str, records) -> str:
@@ -256,5 +236,4 @@ __all__ = [
     "clear_report_structure_revision_cache",
     "export_revision",
     "get_report_structure_revision",
-    "snapshot_structure_revision",
 ]

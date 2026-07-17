@@ -1,22 +1,24 @@
-"""privacy gate tests for the unified startup entry.
-
-These tests verify the folder index worker is NOT started during
-``AppRuntime.initialize()`` and is only started via the unified
-``app_api.start_collection_after_privacy_gate()`` entry, which enforces
-the first-run privacy notice in exactly one place. The worker probes
-local ``os.path.exists(file_path)`` paths for ready indexes, which is
-privacy-relevant local path probing; it must not start before the user
-has accepted the first-run privacy notice. The bridge /
-``webview_main`` MUST NOT duplicate the gate read or the start ordering:
-they route through the unified entry so the gate is enforced once.
-"""
+"""Privacy-gate and structured runtime startup contracts."""
 
 from __future__ import annotations
+from tests.support import runtime_state_fixture
 
 import threading
 from unittest.mock import patch
 
 import pytest
+
+from worktrace.collector.collector import run_collector
+from worktrace.runtime.app_runtime import (
+    AppRuntime,
+    RuntimeStartResult,
+    WorkerReadiness,
+)
+from worktrace.services import (
+    folder_index_service,
+    runtime_activity_state_service,
+    settings_service,
+)
 
 pytestmark = [
     pytest.mark.collector_runtime,
@@ -26,14 +28,8 @@ pytestmark = [
     pytest.mark.db,
 ]
 
-from worktrace.runtime.app_runtime import AppRuntime
-from worktrace.collector.collector import run_collector
-from worktrace.services import folder_index_service
-from worktrace.services import runtime_activity_state_service, settings_service
-
 
 def _make_paths(temp_db, tmp_path):
-    """Build a minimal paths object with ``db_path`` and ``log_path``."""
     return type(
         "P",
         (),
@@ -45,29 +41,44 @@ def _make_paths(temp_db, tmp_path):
 
 
 def _fake_thread():
-    """Return a fake thread object with a ``join`` method (for shutdown)."""
-    return type("T", (), {"join": lambda self, timeout=None: None})()
+    return type(
+        "T",
+        (),
+        {
+            "join": lambda self, timeout=None: None,
+            "is_alive": lambda self: True,
+        },
+    )()
 
 
-def test_initialize_does_not_start_folder_index_worker(temp_db, tmp_path, monkeypatch):
-    """``AppRuntime.initialize()`` must NOT call
-    ``folder_index_service.start_folder_index_worker``.
-
-    Privacy gate: ``initialize`` only does DB init, single-instance
-    lock, and recovery. The folder index worker is started separately via
-    ``start_background_workers()`` only after the first-run privacy notice
-    has been accepted.
-    """
-    # Mock single-instance so initialize() does not touch the OS mutex.
+def _initialize_owned_runtime(temp_db, tmp_path, monkeypatch) -> AppRuntime:
     monkeypatch.setattr(
-        "worktrace.runtime.app_runtime.acquire_single_instance", lambda: True
+        "worktrace.runtime.app_runtime.acquire_single_instance",
+        lambda: True,
     )
     monkeypatch.setattr(
-        "worktrace.runtime.app_runtime.release_single_instance", lambda: None
+        "worktrace.runtime.app_runtime.release_single_instance",
+        lambda: None,
     )
+    runtime = AppRuntime(_make_paths(temp_db, tmp_path))
+    runtime.initialize()
+    return runtime
 
-    paths = _make_paths(temp_db, tmp_path)
-    runtime = AppRuntime(paths)
+
+def test_initialize_does_not_start_folder_index_worker(
+    temp_db,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "worktrace.runtime.app_runtime.acquire_single_instance",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "worktrace.runtime.app_runtime.release_single_instance",
+        lambda: None,
+    )
+    runtime = AppRuntime(_make_paths(temp_db, tmp_path))
     try:
         with patch(
             "worktrace.services.folder_index_service.start_folder_index_worker"
@@ -78,350 +89,295 @@ def test_initialize_does_not_start_folder_index_worker(temp_db, tmp_path, monkey
         runtime.shutdown()
 
 
-def test_start_background_workers_returns_true_on_first_call(
-    temp_db, tmp_path, monkeypatch
+def test_start_background_workers_reports_first_start_and_existing_readiness(
+    temp_db,
+    tmp_path,
+    monkeypatch,
 ):
-    """``start_background_workers()`` returns ``True`` on first call when
-    ``owns_collector`` is True and the worker starts, and actually starts
-    the worker."""
-    monkeypatch.setattr(
-        "worktrace.runtime.app_runtime.acquire_single_instance", lambda: True
-    )
-    monkeypatch.setattr(
-        "worktrace.runtime.app_runtime.release_single_instance", lambda: None
-    )
+    start_calls = {"index": 0, "history": 0}
 
-    start_calls = {"count": 0}
+    def start_index(_stop_event):
+        start_calls["index"] += 1
+        return _fake_thread()
 
-    def _fake_start(stop_event):
-        start_calls["count"] += 1
+    def start_history(_stop_event):
+        start_calls["history"] += 1
         return _fake_thread()
 
     monkeypatch.setattr(
-        folder_index_service, "start_folder_index_worker", _fake_start
+        folder_index_service,
+        "start_folder_index_worker",
+        start_index,
     )
-
-    paths = _make_paths(temp_db, tmp_path)
-    runtime = AppRuntime(paths)
+    monkeypatch.setattr(
+        "worktrace.services.history_mutation_job_service.start_history_worker",
+        start_history,
+    )
+    runtime = _initialize_owned_runtime(temp_db, tmp_path, monkeypatch)
     try:
-        runtime.initialize()
-        result = runtime.start_background_workers()
-        assert result is True
-        assert start_calls["count"] == 1
-    finally:
-        runtime.shutdown()
-
-
-def test_start_background_workers_is_idempotent(temp_db, tmp_path, monkeypatch):
-    """``start_background_workers()`` is idempotent: second call returns
-    ``False`` and the worker is not started twice."""
-    monkeypatch.setattr(
-        "worktrace.runtime.app_runtime.acquire_single_instance", lambda: True
-    )
-    monkeypatch.setattr(
-        "worktrace.runtime.app_runtime.release_single_instance", lambda: None
-    )
-
-    start_calls = {"count": 0}
-
-    def _fake_start(stop_event):
-        start_calls["count"] += 1
-        return _fake_thread()
-
-    monkeypatch.setattr(
-        folder_index_service, "start_folder_index_worker", _fake_start
-    )
-
-    paths = _make_paths(temp_db, tmp_path)
-    runtime = AppRuntime(paths)
-    try:
-        runtime.initialize()
         first = runtime.start_background_workers()
         second = runtime.start_background_workers()
-        assert first is True
-        assert second is False
-        assert start_calls["count"] == 1
+
+        assert first == WorkerReadiness(
+            index_ready=True,
+            history_ready=True,
+            index_started=True,
+            history_started=True,
+            error=None,
+        )
+        assert second.ready is True
+        assert second.started_any is False
+        assert second.error is None
+        assert start_calls == {"index": 1, "history": 1}
     finally:
         runtime.shutdown()
 
 
-def test_start_background_workers_returns_false_when_not_owns_collector(
-    temp_db, tmp_path, monkeypatch
+def test_start_background_workers_reports_not_owned(
+    temp_db,
+    tmp_path,
+    monkeypatch,
 ):
-    """``start_background_workers()`` returns ``False`` when
-    ``not owns_collector`` (no-op). The worker is not started."""
-    # Mock acquire_single_instance to return False so owns_collector is False
-    # after initialize().
     monkeypatch.setattr(
-        "worktrace.runtime.app_runtime.acquire_single_instance", lambda: False
+        "worktrace.runtime.app_runtime.acquire_single_instance",
+        lambda: False,
     )
     monkeypatch.setattr(
-        "worktrace.runtime.app_runtime.release_single_instance", lambda: None
+        "worktrace.runtime.app_runtime.release_single_instance",
+        lambda: None,
     )
-
-    start_calls = {"count": 0}
-
-    def _fake_start(stop_event):
-        start_calls["count"] += 1
-        return _fake_thread()
-
-    monkeypatch.setattr(
-        folder_index_service, "start_folder_index_worker", _fake_start
-    )
-
-    paths = _make_paths(temp_db, tmp_path)
-    runtime = AppRuntime(paths)
+    runtime = AppRuntime(_make_paths(temp_db, tmp_path))
     try:
-        runtime.initialize()
-        assert runtime.owns_collector is False
+        assert runtime.initialize() is False
         result = runtime.start_background_workers()
-        assert result is False
-        assert start_calls["count"] == 0
+        assert result.ready is False
+        assert result.error == "runtime_not_owned"
     finally:
         runtime.shutdown()
 
 
-def test_start_background_workers_returns_false_when_worker_start_returns_none(
-    temp_db, tmp_path, monkeypatch
+def test_start_background_workers_reports_partial_failure(
+    temp_db,
+    tmp_path,
+    monkeypatch,
 ):
-    """``start_background_workers()`` returns ``False`` when
-    ``start_folder_index_worker`` returns ``None`` (worker failed to start)."""
     monkeypatch.setattr(
-        "worktrace.runtime.app_runtime.acquire_single_instance", lambda: True
+        folder_index_service,
+        "start_folder_index_worker",
+        lambda _stop_event: None,
     )
     monkeypatch.setattr(
-        "worktrace.runtime.app_runtime.release_single_instance", lambda: None
+        "worktrace.services.history_mutation_job_service.start_history_worker",
+        lambda _stop_event: _fake_thread(),
     )
-
-    monkeypatch.setattr(
-        folder_index_service, "start_folder_index_worker", lambda stop_event: None
-    )
-
-    paths = _make_paths(temp_db, tmp_path)
-    runtime = AppRuntime(paths)
+    runtime = _initialize_owned_runtime(temp_db, tmp_path, monkeypatch)
     try:
-        runtime.initialize()
         result = runtime.start_background_workers()
-        assert result is False
+        assert result.index_ready is False
+        assert result.history_ready is True
+        assert result.ready is False
+        assert result.error == "worker_start_failed"
     finally:
         runtime.shutdown()
 
 
-def test_app_api_start_background_workers_returns_false_when_no_runtime(monkeypatch):
-    """``app_api.start_background_workers()`` facade returns ``False`` when
-    no runtime is registered (before ``set_runtime``)."""
+def test_app_api_start_background_workers_has_explicit_no_runtime_result(
+    monkeypatch,
+):
     from worktrace.api import app_api
 
-    monkeypatch.setattr("worktrace.api.app_api._runtime", None)
-    assert app_api.start_background_workers() is False
+    monkeypatch.setattr(app_api, "_runtime", None)
+    assert app_api.start_background_workers() == {
+        "ready": False,
+        "index_ready": False,
+        "history_ready": False,
+        "index_started": False,
+        "history_started": False,
+        "error": "runtime_not_registered",
+    }
 
 
-def test_app_api_exports_start_background_workers():
-    """``app_api.__all__`` must export ``start_background_workers``."""
-    from worktrace.api import app_api
-
-    assert "start_background_workers" in app_api.__all__
-
-
-# Unified privacy-gate entry tests
-
-
-def _make_recording_runtime():
-    """Build a fake runtime whose ``start_*`` methods append to
-    ``calls`` so the fail-closed tests can verify the gate prevents the
-    runtime-level calls (not just the module-level facades)."""
+def _recording_runtime(result: RuntimeStartResult | None = None):
     calls: list[str] = []
 
-    def _bg(self):
-        calls.append("background_workers")
+    def start_authorized_collection(self):
+        calls.append("authorized_start")
+        return result or RuntimeStartResult(
+            ok=True,
+            collector_ready=True,
+            folder_index_ready=True,
+            history_worker_ready=True,
+        )
 
-    def _collector(self):
-        calls.append("collector")
-
-    runtime = type("R", (), {
-        "start_background_workers": _bg,
-        "start_collector": _collector,
-    })()
+    runtime = type(
+        "R",
+        (),
+        {"start_authorized_collection": start_authorized_collection},
+    )()
     return runtime, calls
 
 
-def test_start_collection_after_privacy_gate_fails_closed_when_notice_not_accepted(monkeypatch):
-    """When the first-run notice has NOT been accepted, the unified gate
-    must return ``ok=False`` and must NOT call ``runtime.start_background_workers``
-    or ``runtime.start_collector`` (verified on a real fake runtime so the
-    gate, not a None runtime, is what prevents the calls)."""
+def test_privacy_gate_fails_closed_without_touching_runtime(monkeypatch):
     from worktrace.api import app_api
 
-    fake_runtime, calls = _make_recording_runtime()
-    monkeypatch.setattr("worktrace.api.app_api._runtime", fake_runtime)
+    runtime, calls = _recording_runtime()
+    monkeypatch.setattr(app_api, "_runtime", runtime)
     monkeypatch.setattr(
-        "worktrace.services.privacy_gate_service.is_sensitive_runtime_allowed", lambda: False
+        "worktrace.services.privacy_gate_service.is_sensitive_runtime_allowed",
+        lambda: False,
     )
 
     result = app_api.start_collection_after_privacy_gate()
 
-    assert result["ok"] is False
-    assert result["error"] == "请先确认隐私说明"
+    assert result == {"ok": False, "error": "请先确认隐私说明"}
     assert calls == []
 
 
-def test_start_collection_after_privacy_gate_does_not_bypass_runtime_boundary(monkeypatch):
-    """The privacy gate must not start collection or clear live runtime
-    state before notice acceptance; after acceptance it preserves the
-    runtime-owned start ordering."""
+def test_privacy_gate_fails_closed_when_notice_read_raises(monkeypatch):
     from worktrace.api import app_api
 
-    fake_runtime, calls = _make_recording_runtime()
-    monkeypatch.setattr("worktrace.api.app_api._runtime", fake_runtime)
-    settings_service.set_setting("current_activity_snapshot", '{"active": true}')
-    settings_service.set_setting("pending_short_seconds", "7")
-    monkeypatch.setattr(
-        "worktrace.services.privacy_gate_service.is_sensitive_runtime_allowed", lambda: False
-    )
+    runtime, calls = _recording_runtime()
+    monkeypatch.setattr(app_api, "_runtime", runtime)
 
-    result = app_api.start_collection_after_privacy_gate()
-
-    assert result["ok"] is False
-    assert calls == []
-    assert settings_service.get_setting("current_activity_snapshot") == '{"active": true}'
-    assert settings_service.get_setting("pending_short_seconds") == "7"
-
-    monkeypatch.setattr(
-        "worktrace.services.privacy_gate_service.is_sensitive_runtime_allowed", lambda: True
-    )
-    result = app_api.start_collection_after_privacy_gate()
-
-    assert result["ok"] is True
-    assert calls == ["background_workers", "collector"]
-
-
-def test_start_collection_after_privacy_gate_fails_closed_when_notice_read_raises(monkeypatch):
-    """When ``first_run_notice_accepted`` raises, the unified gate must
-    fail closed and must NOT call ``runtime.start_background_workers`` or
-    ``runtime.start_collector``."""
-    from worktrace.api import app_api
-
-    fake_runtime, calls = _make_recording_runtime()
-    monkeypatch.setattr("worktrace.api.app_api._runtime", fake_runtime)
-
-    def _raise() -> bool:
+    def fail_read():
         raise RuntimeError("settings read failed")
 
-    monkeypatch.setattr("worktrace.services.privacy_gate_service.is_sensitive_runtime_allowed", _raise)
+    monkeypatch.setattr(
+        "worktrace.services.privacy_gate_service.is_sensitive_runtime_allowed",
+        fail_read,
+    )
+
+    result = app_api.start_collection_after_privacy_gate()
+
+    assert result == {"ok": False, "error": "请先确认隐私说明"}
+    assert calls == []
+
+
+def test_privacy_gate_delegates_complete_startup_to_runtime(monkeypatch):
+    from worktrace.api import app_api
+
+    runtime, calls = _recording_runtime(
+        RuntimeStartResult(
+            ok=True,
+            collector_ready=True,
+            folder_index_ready=False,
+            history_worker_ready=True,
+            already_running=False,
+            degraded=True,
+        )
+    )
+    monkeypatch.setattr(app_api, "_runtime", runtime)
+    monkeypatch.setattr(
+        "worktrace.services.privacy_gate_service.is_sensitive_runtime_allowed",
+        lambda: True,
+    )
+
+    result = app_api.start_collection_after_privacy_gate()
+
+    assert calls == ["authorized_start"]
+    assert result["ok"] is True
+    assert result["degraded"] is True
+    assert result["folder_index_ready"] is False
+    assert result["history_worker_ready"] is True
+
+
+def test_privacy_gate_propagates_runtime_start_failure(monkeypatch):
+    from worktrace.api import app_api
+
+    runtime, _calls = _recording_runtime(
+        RuntimeStartResult(
+            ok=False,
+            collector_ready=False,
+            folder_index_ready=True,
+            history_worker_ready=True,
+            degraded=True,
+            error_code="collector_start_failed",
+        )
+    )
+    monkeypatch.setattr(app_api, "_runtime", runtime)
+    monkeypatch.setattr(
+        "worktrace.services.privacy_gate_service.is_sensitive_runtime_allowed",
+        lambda: True,
+    )
 
     result = app_api.start_collection_after_privacy_gate()
 
     assert result["ok"] is False
-    assert result["error"] == "请先确认隐私说明"
-    assert calls == []
+    assert result["error"] == "collector_start_failed"
 
 
-def test_start_collection_after_privacy_gate_starts_workers_before_collector(monkeypatch):
-    """When the notice IS accepted, the unified gate must call
-    ``start_background_workers`` BEFORE ``start_collector`` so the folder
-    index is warm before the collector starts matching activities."""
-    from worktrace.api import app_api
-
-    fake_runtime = type(
-        "R",
-        (),
-        {
-            "start_background_workers": lambda self: order.append("background_workers"),
-            "start_collector": lambda self: order.append("collector"),
-        },
-    )()
-    monkeypatch.setattr("worktrace.api.app_api._runtime", fake_runtime)
-    monkeypatch.setattr(
-        "worktrace.services.privacy_gate_service.is_sensitive_runtime_allowed", lambda: True
-    )
-
+def test_runtime_startup_orders_collector_before_derived_workers(
+    temp_db,
+    tmp_path,
+    monkeypatch,
+):
+    runtime = _initialize_owned_runtime(temp_db, tmp_path, monkeypatch)
     order: list[str] = []
-    result = app_api.start_collection_after_privacy_gate()
-
-    assert result["ok"] is True
-    assert order == ["background_workers", "collector"]
-
-
-def test_start_collection_after_privacy_gate_returns_ok_on_success(monkeypatch):
-    """When the notice IS accepted and start succeeds, the gate returns
-    ``{"ok": True}``."""
-    from worktrace.api import app_api
-
-    fake_runtime = type(
-        "R",
-        (),
-        {
-            "start_background_workers": lambda self: True,
-            "start_collector": lambda self: None,
-        },
-    )()
-    monkeypatch.setattr("worktrace.api.app_api._runtime", fake_runtime)
     monkeypatch.setattr(
-        "worktrace.services.privacy_gate_service.is_sensitive_runtime_allowed", lambda: True
+        "worktrace.runtime.app_runtime.assignment_command_service.retry_pending_inference",
+        lambda _limit: order.append("retry"),
     )
-
-    result = app_api.start_collection_after_privacy_gate()
-
-    assert result["ok"] is True
-
-
-def test_start_collection_after_privacy_gate_returns_failure_when_collector_start_fails(monkeypatch):
-    """Background worker start failure is a warning, but collector start
-    failure must return ``ok=False`` so the UI cannot report success."""
-    from worktrace.api import app_api
-
-    fake_runtime = type(
-        "R",
-        (),
-        {
-            "start_background_workers": lambda self: (_ for _ in ()).throw(RuntimeError("bg failed")),
-            "start_collector": lambda self: (_ for _ in ()).throw(RuntimeError("collector failed")),
-        },
-    )()
-    monkeypatch.setattr("worktrace.api.app_api._runtime", fake_runtime)
     monkeypatch.setattr(
-        "worktrace.services.privacy_gate_service.is_sensitive_runtime_allowed", lambda: True
+        runtime,
+        "start_background_workers",
+        lambda: (
+            order.append("workers")
+            or WorkerReadiness(True, True, True, True)
+        ),
     )
+    monkeypatch.setattr(
+        runtime,
+        "start_collector",
+        lambda: order.append("collector")
+        or {"ok": True, "started": True, "already_running": False},
+    )
+    try:
+        result = runtime.start_authorized_collection()
+        assert result.ok is True
+        assert result.degraded is False
+        assert order == ["retry", "collector", "workers"]
+    finally:
+        runtime.shutdown()
 
-    result = app_api.start_collection_after_privacy_gate()
 
-    assert result == {"ok": False, "error": "collector_start_failed"}
-
-
-def test_startup_recovery_runtime_cleanup_is_single_owner(temp_db, tmp_path, monkeypatch):
-    """Startup recovery and transient cleanup are owned by AppRuntime after
-    acquiring the single-instance collector lock. Collector start must not
-    repeat recovery."""
+def test_startup_recovery_runtime_cleanup_is_single_owner(
+    temp_db,
+    tmp_path,
+    monkeypatch,
+):
     calls: list[str] = []
 
-    def _recover_once():
+    def recover_once():
         calls.append("runtime")
-        runtime_activity_state_service.clear_runtime_activity_state("test_startup")
+        runtime_activity_state_service.clear_runtime_activity_state(
+            "test_startup"
+        )
 
     monkeypatch.setattr(
-        "worktrace.runtime.app_runtime.acquire_single_instance", lambda: True
+        "worktrace.runtime.app_runtime.acquire_single_instance",
+        lambda: True,
     )
     monkeypatch.setattr(
-        "worktrace.runtime.app_runtime.release_single_instance", lambda: None
+        "worktrace.runtime.app_runtime.release_single_instance",
+        lambda: None,
     )
     monkeypatch.setattr(
         "worktrace.services.recovery_service.recover_unclosed_records",
-        _recover_once,
+        recover_once,
     )
     monkeypatch.setattr(
         "worktrace.collector.collector.clipboard_service.prune_old_events",
         lambda: None,
     )
 
-    settings_service.set_setting("current_activity_snapshot", '{"old": true}')
-    settings_service.set_setting("pending_short_seconds", "9")
-    paths = _make_paths(temp_db, tmp_path)
-    runtime = AppRuntime(paths)
+    runtime_state_fixture.set_setting("current_activity_snapshot", '{"old": true}')
+    runtime_state_fixture.set_setting("pending_short_seconds", "9")
+    runtime = AppRuntime(_make_paths(temp_db, tmp_path))
     try:
         runtime.initialize()
         assert calls == ["runtime"]
-        assert settings_service.get_setting("current_activity_snapshot") == ""
-        assert settings_service.get_setting("pending_short_seconds") == "0"
+        assert runtime_state_fixture.get_setting("current_activity_snapshot") == ""
+        assert runtime_state_fixture.get_setting("pending_short_seconds") == "0"
 
         stop_event = threading.Event()
         stop_event.set()
@@ -431,14 +387,17 @@ def test_startup_recovery_runtime_cleanup_is_single_owner(temp_db, tmp_path, mon
         runtime.shutdown()
 
 
-def test_non_owner_runtime_does_not_clear_owner_live_state(temp_db, tmp_path, monkeypatch):
-    """A UI-only process that fails the collector lock must not recover,
-    clear transient owner state, or close owner open rows during shutdown."""
+def test_non_owner_runtime_does_not_clear_owner_live_state(
+    temp_db,
+    tmp_path,
+    monkeypatch,
+):
     calls: list[str] = []
     close_calls: list[str] = []
 
     monkeypatch.setattr(
-        "worktrace.runtime.app_runtime.acquire_single_instance", lambda: False
+        "worktrace.runtime.app_runtime.acquire_single_instance",
+        lambda: False,
     )
     monkeypatch.setattr(
         "worktrace.runtime.app_runtime.release_single_instance",
@@ -453,16 +412,15 @@ def test_non_owner_runtime_does_not_clear_owner_live_state(temp_db, tmp_path, mo
         lambda *args, **kwargs: close_calls.append("close"),
     )
 
-    settings_service.set_setting("current_activity_snapshot", '{"owner": true}')
-    settings_service.set_setting("pending_short_seconds", "11")
-    paths = _make_paths(temp_db, tmp_path)
-    runtime = AppRuntime(paths)
+    runtime_state_fixture.set_setting("current_activity_snapshot", '{"owner": true}')
+    runtime_state_fixture.set_setting("pending_short_seconds", "11")
+    runtime = AppRuntime(_make_paths(temp_db, tmp_path))
 
     runtime.initialize()
     runtime.shutdown()
 
-    assert runtime.owns_collector is False
+    assert runtime.owns_application_instance is False
     assert calls == []
     assert close_calls == []
-    assert settings_service.get_setting("current_activity_snapshot") == '{"owner": true}'
-    assert settings_service.get_setting("pending_short_seconds") == "11"
+    assert runtime_state_fixture.get_setting("current_activity_snapshot") == '{"owner": true}'
+    assert runtime_state_fixture.get_setting("pending_short_seconds") == "0"

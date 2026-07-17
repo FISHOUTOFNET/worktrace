@@ -16,6 +16,7 @@ from ..constants import (
     TIME_FORMAT,
 )
 from ..db import CURRENT_SCHEMA_VERSION, expected_schema_fingerprint, schema_fingerprint
+from ..domain_limits import NOTE_MAX_LENGTH
 
 _ALLOWED_ACTIVITY_STATUSES = {
     STATUS_NORMAL,
@@ -32,13 +33,33 @@ class BackupValidationError(ValueError):
 
 def validate_staging_database(conn: sqlite3.Connection) -> None:
     """Normalize restore-only runtime state, then validate all semantics."""
+
+    # The durable structural generation is installation-local technical state,
+    # not portable business data. Recreate it at the restore ingress inside the
+    # caller's transaction; executescript() is intentionally avoided because it
+    # would commit before semantic validation finishes.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS report_structure_revision_state (
+            singleton_id INTEGER PRIMARY KEY CHECK(singleton_id = 1),
+            generation INTEGER NOT NULL CHECK(generation >= 0)
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO report_structure_revision_state(singleton_id, generation)
+        VALUES (1, 0)
+        ON CONFLICT(singleton_id) DO NOTHING
+        """
+    )
     if int(conn.execute("PRAGMA user_version").fetchone()[0] or 0) != CURRENT_SCHEMA_VERSION:
         raise BackupValidationError("schema version")
     if schema_fingerprint(conn) != expected_schema_fingerprint():
         raise BackupValidationError("schema fingerprint")
 
     # An open row belongs to the exporting process generation and cannot remain
-    # open after a replace import.  Seal it at start + already-observed duration;
+    # open after a replace import. Seal it at start + already-observed duration;
     # this preserves recorded work without using the importing machine's clock.
     _seal_imported_open_activity_rows(conn)
 
@@ -195,8 +216,11 @@ def _validate_operation_payload(
             if not isinstance(note, dict) or set(note) - {"mode", "value"}:
                 raise BackupValidationError("note patch")
             if note.get("mode") == "set":
-                if not isinstance(note.get("value"), str):
+                note_value = note.get("value")
+                if not isinstance(note_value, str):
                     raise BackupValidationError("note value")
+                if len(note_value) > NOTE_MAX_LENGTH:
+                    raise BackupValidationError("note value length")
             elif note.get("mode") != "inherit":
                 raise BackupValidationError("note mode")
     elif operation_type == "hide_activity":

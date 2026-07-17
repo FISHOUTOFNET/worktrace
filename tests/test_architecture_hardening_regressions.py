@@ -7,20 +7,20 @@ from unittest.mock import patch
 
 import pytest
 
+from tests.support.activity_factory import create_closed_activity, create_open_activity
 from worktrace.api import timeline_api
 from worktrace.db import get_connection, now_str
 from worktrace.services import (
-    activity_service,
     database_maintenance_service,
     folder_rule_service,
     privacy_gate_service,
     project_service,
     report_revision_service,
-    report_session_edit_service,
+    report_session_operation_service,
     rule_batch_service,
     rule_service,
     statistics_service,
-    view_model_hardening_service,
+    view_model_service,
 )
 from worktrace.services.report_projection_snapshot_service import build_visible_snapshot
 from worktrace.services.statistics_projection import build_statistics_projection
@@ -32,18 +32,24 @@ DATE = "2026-07-15"
 
 
 def _activity(start, end, *, project_id=None, status="normal", app="Word"):
-    activity_id = activity_service.create_activity(
-        app,
-        app.lower() + ".exe",
-        app,
-        project_id=project_id,
-        status=status,
-        start_time=f"{DATE} {start}",
+    common = {
+        "app_name": app,
+        "process_name": app.lower() + ".exe",
+        "window_title": app,
+        "project_id": project_id,
+        "status": status,
+    }
+    if end is None:
+        return create_open_activity(
+            start_time=f"{DATE} {start}",
+            **common,
+        )
+    return create_closed_activity(
+        day=DATE,
+        start=start,
+        end=end,
+        **common,
     )
-    activity_service.finalize_created_activity(activity_id)
-    if end is not None:
-        activity_service.close_activity(activity_id, f"{DATE} {end}")
-    return activity_id
 
 
 def test_clear_all_preserves_installation_privacy_but_pauses_sensitive_runtime(temp_db):
@@ -129,7 +135,7 @@ def test_project_and_app_counts_exclude_privacy_and_uncategorized_buckets(temp_d
 
 def test_overview_counts_standalone_excluded_without_showing_it_in_recent(temp_db):
     _activity("11:00:00", "11:05:00", status="excluded", app="Secret")
-    payload = view_model_hardening_service.get_overview_view_model(DATE)
+    payload = view_model_service.get_overview_view_model(DATE)
     assert payload["today_total_seconds"] == 300
     assert all(
         str(row.get("row_kind") or "") != "standalone_status"
@@ -205,11 +211,11 @@ def test_open_session_no_op_rolls_back_manual_assignment(temp_db):
     source = build_visible_snapshot(DATE, DATE).final_sessions[0]
 
     with patch.object(
-        report_session_edit_service.operations,
+        report_session_operation_service,
         "_expected_effect",
         return_value=False,
     ):
-        result = report_session_edit_service.edit_session(
+        result = report_session_operation_service.edit_session(
             DATE,
             source["projection_instance_key"],
             source["projection_revision"],
@@ -278,21 +284,23 @@ def test_rule_batch_applies_folder_and_keyword_in_one_transaction(temp_db):
     )
     keyword_rule_id = rule_service.create_rule("batch-keyword", keyword_project)
 
-    folder_activity = activity_service.create_activity(
-        "Word",
-        "winword.exe",
-        "Document.docx - Word",
-        start_time=f"{DATE} 14:00:00",
+    create_closed_activity(
+        day=DATE,
+        start="14:00:00",
+        end="14:10:00",
+        app_name="Word",
+        process_name="winword.exe",
+        window_title="Document.docx - Word",
         file_path_hint="D:\\BatchFolder\\Document.docx",
     )
-    activity_service.close_activity(folder_activity, f"{DATE} 14:10:00")
-    keyword_activity = activity_service.create_activity(
-        "Excel",
-        "excel.exe",
-        "batch-keyword.xlsx - Excel",
-        start_time=f"{DATE} 15:00:00",
+    create_closed_activity(
+        day=DATE,
+        start="15:00:00",
+        end="15:10:00",
+        app_name="Excel",
+        process_name="excel.exe",
+        window_title="batch-keyword.xlsx - Excel",
     )
-    activity_service.close_activity(keyword_activity, f"{DATE} 15:10:00")
 
     result = rule_batch_service.backfill_project_rules_batch(
         [

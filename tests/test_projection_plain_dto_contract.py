@@ -4,8 +4,9 @@ import json
 
 import pytest
 
+from tests.support import activity_factory as activity_service
 from worktrace.api import timeline_api
-from worktrace.services import activity_service, project_service
+from worktrace.services import project_service
 from worktrace.services import report_session_projection_service as projection_service
 
 

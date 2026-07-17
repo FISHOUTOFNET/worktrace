@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from datetime import date, datetime, time as datetime_time, timedelta
 
-from ..contracts.live_display_contracts import ActivitySnapshotContract
 from ..constants import TIME_FORMAT
+from ..contracts.live_display_contracts import ActivitySnapshotContract
 
 MAX_LIVE_DURATION_SECONDS = 36 * 60 * 60
 
@@ -12,27 +12,19 @@ def snapshot_elapsed_seconds(
     snapshot: ActivitySnapshotContract | None,
     now: datetime | None = None,
 ) -> int:
-    """Return the elapsed seconds stored in the collector snapshot.
+    """Return the elapsed seconds stored in the collector snapshot."""
 
-    ``now`` is accepted for compatibility but intentionally ignored. The UI
-    owns wall-clock projection; this helper returns the sampled backend value.
-    """
+    del now
     if not snapshot:
         return 0
     return safe_int(snapshot.get("elapsed_seconds"))
-
-
-def snapshot_extra_seconds(snapshot: ActivitySnapshotContract | None) -> int:
-    if not snapshot:
-        return 0
-    return safe_int(snapshot.get("extra_seconds"))
 
 
 def snapshot_total_seconds(
     snapshot: ActivitySnapshotContract | None,
     now: datetime | None = None,
 ) -> int:
-    return snapshot_elapsed_seconds(snapshot, now=now) + snapshot_extra_seconds(snapshot)
+    return snapshot_elapsed_seconds(snapshot, now=now)
 
 
 def snapshot_current_seconds(

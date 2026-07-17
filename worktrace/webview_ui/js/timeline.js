@@ -219,28 +219,28 @@
     }
     App.showTimeline = showTimeline;
 
-    function acceptTimelinePayload(data, date) {
-        if (!data || !data.ok) return false;
-        if (String(App.currentPage || "overview") !== "timeline") {
-            App.noteRejectedPagePayload(data, "timeline", date);
-            return false;
-        }
-        var expectedDate = App.runtimeReportDateForPage("timeline", date);
-        var payloadDate = App.payloadReportDate(data, "timeline", date);
-        if (expectedDate && payloadDate && expectedDate !== payloadDate) {
-            App.noteRejectedPagePayload(data, "timeline", date);
-            return false;
-        }
-        if (App.isPagePayloadCompatibleWithRuntime(data, "timeline", date)) {
-            App.acceptLiveRuntimePayload(data, "timeline", date, {
-                source: "page_model"
-            });
-        } else {
-            App.noteRejectedPagePayload(data, "timeline", date);
-        }
-        return true;
+function acceptTimelinePayload(data, date) {
+    if (!data || !data.ok) return false;
+    if (String(App.currentPage || "overview") !== "timeline") {
+        App.noteRejectedPagePayload(data, "timeline", date);
+        return false;
     }
-    App.acceptTimelinePayload = acceptTimelinePayload;
+    var expectedDate = App.runtimeReportDateForPage("timeline", date);
+    var payloadDate = App.payloadReportDate(data, "timeline", date);
+    if (expectedDate && payloadDate && expectedDate !== payloadDate) {
+        App.noteRejectedPagePayload(data, "timeline", date);
+        return false;
+    }
+    if (!App.isPagePayloadCompatibleWithRuntime(data, "timeline", date)) {
+        App.noteRejectedPagePayload(data, "timeline", date);
+        return false;
+    }
+    return App.acceptLiveRuntimePayload(data, "timeline", date, {
+        source: "page_model"
+    });
+}
+App.acceptTimelinePayload = acceptTimelinePayload;
+
 
     function acceptTimelineDetailsPayload(data, date) {
         var expectedDate = App.runtimeReportDateForPage("timeline", date);
@@ -316,7 +316,7 @@
             detailsHeader.textContent = "正在刷新项目活动耗时…";
         }
 
-        var request = App.callBridge("get_timeline_session_activity_summary", projectionInstanceKey || "", date, revision).then(function (result) {
+        var request = App.bridge.getTimelineSessionActivitySummary(projectionInstanceKey || "", date, revision).then(function (result) {
             if (!App.timelineRequestState.isCurrentDetailsOwner(owner)) return null;
             if (result && result.ok === false && result.error === "stale_selection" && !retriedStale) {
                 // The current owner asks for one Timeline refresh and then stops.
@@ -439,7 +439,7 @@
         for (var rb = 0; rb < removeButtons.length; rb++) {
             removeButtons[rb].addEventListener("click", function (event) {
                 event.stopPropagation();
-                App.runTimelineSessionOperation("hide_timeline_session_activity", { summaryId: this.getAttribute("data-summary-id") });
+                App.runTimelineSessionOperation("hideActivity", { summaryId: this.getAttribute("data-summary-id") });
             });
         }
         for (var si = 0; si < summaryContinuityKeys.length; si++) {
@@ -463,7 +463,7 @@
             return Promise.resolve(App.projectsCache);
         }
         App.projectsLoading = true;
-        return App.callBridge("list_projects_for_timeline").then(function (result) {
+        return App.bridge.listProjectsForTimeline().then(function (result) {
             App.projectsLoading = false;
             if (result && result.ok !== false && result.projects) {
                 App.projectsCache = result.projects;
@@ -502,9 +502,41 @@
             }
             select.appendChild(option);
         }
-        select.disabled = false;
+        applyEditCapabilities(App.editingSession);
     }
     App.renderProjectSelect = renderProjectSelect;
+
+    function canEditField(session, field) {
+        return !!session && session.edit_disabled !== true && session[field] !== false;
+    }
+
+    function hasEditableFields(session) {
+        return canEditField(session, "can_edit_project")
+            || canEditField(session, "can_edit_note")
+            || canEditField(session, "can_edit_duration");
+    }
+
+    function applyEditCapabilities(session) {
+        var projectAllowed = canEditField(session, "can_edit_project");
+        var noteAllowed = canEditField(session, "can_edit_note");
+        var durationAllowed = canEditField(session, "can_edit_duration");
+        var select = document.getElementById("edit-project-select");
+        var noteEl = document.getElementById("edit-note-text");
+        var durInput = document.getElementById("edit-duration-input");
+        var saveBtn = document.getElementById("edit-save-btn");
+        var cancelBtn = document.getElementById("edit-cancel-btn");
+        if (select) select.disabled = App.editSaving || !projectAllowed || !App.projectsCache;
+        if (noteEl) noteEl.disabled = App.editSaving || !noteAllowed;
+        if (durInput) durInput.disabled = App.editSaving || !durationAllowed;
+        if (cancelBtn) cancelBtn.disabled = App.editSaving || !session;
+        if (saveBtn) {
+            var noteLength = noteEl ? noteEl.value.length : 0;
+            saveBtn.disabled = App.editSaving
+                || !hasEditableFields(session)
+                || (noteAllowed && noteLength > 2000);
+        }
+    }
+    App.applyTimelineEditCapabilities = applyEditCapabilities;
 
     function populateEditPanel(session) {
         if (!session) {
@@ -541,7 +573,7 @@
                 : session.duration_seconds;
             var durMin = Math.round((parseInt(durSrc, 10) || 0) / 60);
             durInput.value = isNaN(durMin) ? "" : String(durMin);
-            durInput.disabled = false;
+            durInput.disabled = !canEditField(session, "can_edit_duration");
         }
         var durStatusEl = document.getElementById("edit-duration-status");
         if (durStatusEl) {
@@ -551,15 +583,16 @@
         var noteEl = document.getElementById("edit-note-text");
         if (noteEl) {
             noteEl.value = session.session_note || "";
-            noteEl.disabled = false;
+            noteEl.disabled = !canEditField(session, "can_edit_note");
         }
 
         // Enable save/cancel first, then updateNoteCount applies the over-limit disable.
         var saveBtn = document.getElementById("edit-save-btn");
         var cancelBtn = document.getElementById("edit-cancel-btn");
-        if (saveBtn) saveBtn.disabled = false;
+        if (saveBtn) saveBtn.disabled = !hasEditableFields(session);
         if (cancelBtn) cancelBtn.disabled = false;
         if (noteEl) updateNoteCount();
+        applyEditCapabilities(session);
 
         showEditStatus("", false);
     }
@@ -600,48 +633,43 @@
 
     function isEditDirty() {
         if (!App.editingSession) return false;
+        var session = App.editingSession;
         var noteEl = document.getElementById("edit-note-text");
         var select = document.getElementById("edit-project-select");
-        if (noteEl) {
-            var currentNote = noteEl.value || "";
-            var originalNote = App.editingSession.session_note || "";
-            if (currentNote !== originalNote) return true;
-        }
-        if (select && select.value) {
-            var currentProjectId = select.value;
-            var originalProjectId = String(App.editingSession.project_id || 0);
-            if (currentProjectId !== originalProjectId) return true;
-        }
-        // Duration override input: if minutes differ from the baseline, the panel is dirty.
         var durInput = document.getElementById("edit-duration-input");
-        if (durInput && !durInput.disabled) {
-            var durBaselineSrc = (App.editingSession.adjusted_duration_seconds != null)
-                ? App.editingSession.adjusted_duration_seconds
-                : App.editingSession.duration_seconds;
-            var durBaselineMin = Math.round((parseInt(durBaselineSrc, 10) || 0) / 60);
-            var durBaselineStr = isNaN(durBaselineMin) ? "" : String(durBaselineMin);
-            if ((durInput.value || "") !== durBaselineStr) return true;
+        if (canEditField(session, "can_edit_note") && noteEl) {
+            if (noteEl.value !== (session.session_note || "")) return true;
+        }
+        if (canEditField(session, "can_edit_project") && select && select.value) {
+            if (select.value !== String(session.project_id || "")) return true;
+        }
+        if (canEditField(session, "can_edit_duration") && durInput) {
+            var baselineSeconds = (session.adjusted_duration_seconds != null)
+                ? session.adjusted_duration_seconds
+                : session.duration_seconds;
+            var baselineMin = Math.round((parseInt(baselineSeconds, 10) || 0) / 60);
+            var baselineValue = isNaN(baselineMin) ? "" : String(baselineMin);
+            if ((durInput.value || "").trim() !== baselineValue) return true;
         }
         return false;
     }
     App.isEditDirty = isEditDirty;
 
     function updateNoteCount() {
-        var noteEl = document.getElementById("edit-note-text");
-        var countEl = document.getElementById("edit-note-count");
-        if (!noteEl || !countEl) return;
-        var len = (noteEl.value || "").length;
-        countEl.textContent = len + " / " + App.NOTE_MAX_LENGTH;
-        if (len > App.NOTE_MAX_LENGTH) {
-            countEl.classList.add("edit-note-count-over");
-        } else {
-            countEl.classList.remove("edit-note-count-over");
+        var textarea = document.getElementById("edit-note-text");
+        var counter = document.getElementById("edit-note-count");
+        var status = document.getElementById("edit-status");
+        if (!textarea || !counter) return;
+        var len = textarea.value.length;
+        counter.textContent = len + " / 2000";
+        counter.classList.toggle("over-limit", len > 2000);
+        if (len > 2000 && status) {
+            status.textContent = "备注不能超过 2000 个字符";
+            status.classList.add("error");
+        } else if (status && status.textContent === "备注不能超过 2000 个字符") {
+            showEditStatus("", false);
         }
-        // Disable save when the note is over the limit; only toggle when not actively saving.
-        var saveBtn = document.getElementById("edit-save-btn");
-        if (saveBtn && !App.editSaving && App.editingSession) {
-            saveBtn.disabled = len > App.NOTE_MAX_LENGTH;
-        }
+        applyEditCapabilities(App.editingSession);
     }
     App.updateNoteCount = updateNoteCount;
 
@@ -662,23 +690,20 @@
 
     function setEditSaving(saving) {
         App.editSaving = saving;
-        var saveBtn = document.getElementById("edit-save-btn");
-        var cancelBtn = document.getElementById("edit-cancel-btn");
-        var select = document.getElementById("edit-project-select");
-        var noteEl = document.getElementById("edit-note-text");
-        var durInput = document.getElementById("edit-duration-input");
-        if (saveBtn) {
-            saveBtn.disabled = saving;
-            saveBtn.textContent = saving ? "保存中…" : "保存";
+        if (saving) {
+            var saveBtn = document.getElementById("edit-save-btn");
+            var cancelBtn = document.getElementById("edit-cancel-btn");
+            var select = document.getElementById("edit-project-select");
+            var noteEl = document.getElementById("edit-note-text");
+            var durInput = document.getElementById("edit-duration-input");
+            if (saveBtn) saveBtn.disabled = true;
+            if (cancelBtn) cancelBtn.disabled = true;
+            if (select) select.disabled = true;
+            if (noteEl) noteEl.disabled = true;
+            if (durInput) durInput.disabled = true;
+            return;
         }
-        if (cancelBtn) cancelBtn.disabled = saving;
-        if (select) select.disabled = saving;
-        if (noteEl) noteEl.disabled = saving;
-        if (durInput) durInput.disabled = saving;
-        // When stopping a save, re-apply the note-length limit as a defensive guard.
-        if (!saving && App.editingSession) {
-            updateNoteCount();
-        }
+        applyEditCapabilities(App.editingSession);
     }
     App.setEditSaving = setEditSaving;
 
@@ -719,60 +744,76 @@
 
     function saveEdit() {
         if (!App.editingSession || App.editSaving) return;
-        var projectionInstanceKey = App.editingSession.projection_instance_key || App.selectedProjectionInstanceKey || "";
-        var projectionRevision = App.editingSession.projection_revision || App.selectedProjectionRevision || "";
-        if (!projectionInstanceKey || !projectionRevision) {
-            showEditStatus("无法保存：活动时段已变化，请刷新后重试", true);
+        var session = App.editingSession;
+        var canProject = canEditField(session, "can_edit_project");
+        var canNote = canEditField(session, "can_edit_note");
+        var canDuration = canEditField(session, "can_edit_duration");
+        if (!canProject && !canNote && !canDuration) {
+            showEditStatus(session.disable_reason || "当前时段不可编辑", true);
             return;
         }
         var select = document.getElementById("edit-project-select");
         var noteEl = document.getElementById("edit-note-text");
         if (!select || !noteEl) return;
 
-        var projectIdStr = select.value;
-        if (!projectIdStr) {
+        var projectionInstanceKey = session.projection_instance_key || App.selectedProjectionInstanceKey;
+        var projectionRevision = session.projection_revision || App.selectedProjectionRevision;
+        if (!projectionInstanceKey || !projectionRevision) {
+            showEditStatus("无法保存：时段版本无效，请刷新后重试", true);
+            return;
+        }
+
+        var originalProjectId = String(session.project_id || "");
+        var originalNote = session.session_note || "";
+        var projectIdStr = canProject ? select.value : originalProjectId;
+        var projectId = projectIdStr ? parseInt(projectIdStr, 10) : null;
+        if (canProject && (!projectId || projectId <= 0)) {
             showEditStatus("请选择项目", true);
             return;
         }
-        var projectId = parseInt(projectIdStr, 10);
-        if (!projectId || projectId <= 0) {
-            showEditStatus("请选择有效的项目", true);
+        var selectedProject = projectId ? findCachedProject(projectId) : null;
+        if (canProject && !selectedProject) {
+            showEditStatus("项目列表已过期，请刷新后重试", true);
             return;
         }
-        var note = noteEl.value || "";
-        if (note.length > App.NOTE_MAX_LENGTH) {
-            showEditStatus("备注过长", true);
+        if (canProject && !App.projectSelectableForEditing(selectedProject)) {
+            showEditStatus("所选项目当前不可编辑，请刷新后选择其他项目", true);
             return;
         }
 
-        // Determine what changed so we only call the bridges that are needed.
-        var originalProjectId = String(App.editingSession.project_id || 0);
-        var originalNote = App.editingSession.session_note || "";
-        var projectChanged = projectIdStr !== originalProjectId;
-        var noteChanged = note !== originalNote;
+        var note = canNote ? noteEl.value : originalNote;
+        if (canNote && note.length > 2000) {
+            showEditStatus("备注不能超过 2000 个字符", true);
+            return;
+        }
+        var projectChanged = canProject && projectIdStr !== originalProjectId;
+        var noteChanged = canNote && note !== originalNote;
 
-        // Duration override: empty input clears the override (null); non-empty is minutes → seconds.
-        var durInput = document.getElementById("edit-duration-input");
-        var durRawValue = durInput ? (durInput.value || "").trim() : "";
         var adjustedDurationSeconds = null;
-        if (durRawValue !== "") {
-            var durMinutes = parseInt(durRawValue, 10);
-            if (isNaN(durMinutes) || durMinutes < 0) {
-                showEditStatus("时长需为非负整数", true);
-                return;
+        var durationChanged = false;
+        var durInput = document.getElementById("edit-duration-input");
+        if (canDuration) {
+            var durRawValue = durInput ? (durInput.value || "").trim() : "";
+            if (durRawValue !== "") {
+                var durMinutes = parseInt(durRawValue, 10);
+                if (isNaN(durMinutes) || durMinutes < 0) {
+                    showEditStatus("时长需为非负整数", true);
+                    return;
+                }
+                adjustedDurationSeconds = durMinutes * 60;
             }
-            adjustedDurationSeconds = durMinutes * 60;
+            var durBaselineSrc = (session.adjusted_duration_seconds != null)
+                ? session.adjusted_duration_seconds
+                : session.duration_seconds;
+            var durBaselineMin = Math.round((parseInt(durBaselineSrc, 10) || 0) / 60);
+            var durBaselineStr = isNaN(durBaselineMin) ? "" : String(durBaselineMin);
+            durationChanged = durRawValue !== durBaselineStr;
+        } else if (session.has_duration_override === true) {
+            adjustedDurationSeconds = parseInt(session.adjusted_duration_seconds, 10);
+            if (isNaN(adjustedDurationSeconds)) adjustedDurationSeconds = null;
         }
-        // Duration is considered changed when the input differs from the baseline, matching isEditDirty.
-        var durBaselineSrc = (App.editingSession.adjusted_duration_seconds != null)
-            ? App.editingSession.adjusted_duration_seconds
-            : App.editingSession.duration_seconds;
-        var durBaselineMin = Math.round((parseInt(durBaselineSrc, 10) || 0) / 60);
-        var durBaselineStr = isNaN(durBaselineMin) ? "" : String(durBaselineMin);
-        var durationChanged = durRawValue !== durBaselineStr;
-        var noteOrDurationChanged = noteChanged || durationChanged;
 
-        if (!projectChanged && !noteOrDurationChanged) {
+        if (!projectChanged && !noteChanged && !durationChanged) {
             showEditStatus("没有需要保存的更改", false);
             return;
         }
@@ -787,8 +828,8 @@
 
         setEditSaving(true);
         showEditStatus("", false);
-
-        var overrideProjectId = (projectChanged || App.editingSession.has_project_override === true)
+        var overrideProjectId = canProject
+            && (projectChanged || session.has_project_override === true)
             ? projectId
             : null;
         var mutationOwner = App.timelineRequestState.nextMutationOwner(
@@ -807,9 +848,7 @@
             reportDate, projectionInstanceKey, projectionRevision, mutationOwner.requestId,
             overrideProjectId, adjustedDurationSeconds, note
         ];
-        App.callBridge(
-            "save_timeline_session_edit",
-            reportDate,
+        App.bridge.saveTimelineSessionEdit(reportDate,
             projectionInstanceKey,
             projectionRevision,
             mutationOwner.requestId,
@@ -819,7 +858,6 @@
         ).then(function (result) {
             if (!App.timelineRequestState.isCurrentMutationOwner(mutationOwner)) return;
             if (!result || result.ok === false) {
-                // Keep original data in the form; do not clear.
                 setEditSaving(false);
                 showEditStatus(result && result.message ? result.message : "保存失败", true);
                 App.timelineRequestState.releaseMutationOwner(mutationOwner, "confirmed_failure", result);
@@ -878,68 +916,79 @@
     }
     App.updateSessionActionButtons = updateSessionActionButtons;
 
-    function runTimelineSessionOperation(method, options) {
-        options = options || {};
-        var key = App.selectedProjectionInstanceKey;
-        var date = currentTimelineReportDate();
-        var revision = App.selectedProjectionRevision || "";
-        if (!key || !date) return Promise.resolve();
-        var mergeTarget = method === "merge_timeline_session"
-            ? findMergeTarget(key, options.direction)
-            : null;
-        if (method === "merge_timeline_session" && !mergeTarget) {
-            showEditStatus("只能合并相邻时段。", true);
-            return Promise.resolve();
-        }
-        var argsSignature = JSON.stringify([
-            options || {},
-            mergeTarget ? mergeTarget.projection_instance_key || "" : "",
-            mergeTarget ? mergeTarget.projection_revision || "" : ""
-        ]);
-        var owner = App.timelineRequestState.nextMutationOwner(method, date, key, revision, argsSignature);
-        if (!owner) {
-            blockDifferentMutationIntent();
-            return Promise.resolve();
-        }
-        var args;
-        if (method === "hide_timeline_session_activity") {
-            args = [date, key, options.summaryId || "", revision, owner.requestId];
-        } else if (method === "merge_timeline_session") {
-            args = [
-                date,
-                key,
-                options.direction,
-                revision,
-                owner.requestId,
-                mergeTarget.projection_instance_key || "",
-                mergeTarget.projection_revision || ""
-            ];
-        } else {
-            args = [date, key, revision, owner.requestId];
-        }
-        owner.payload = args.slice();
-        return App.callBridge.apply(null, [method].concat(args)).then(function (result) {
-            if (!App.timelineRequestState.isCurrentMutationOwner(owner)) return null;
-            var data = App.handleResult(result, function (message) {
-                showEditStatus(message || "操作失败，请刷新后重试。", true);
-            });
-            if (!data) {
-                App.timelineRequestState.releaseMutationOwner(owner, "confirmed_failure", result);
-                return;
-            }
-            App.timelineRequestState.transitionMutation(owner, "confirmed_success", result);
-            consumeMutationResult(result);
-            App.timelineRequestState.releaseMutationOwner(owner, "confirmed_success", result);
-            showEditStatus("操作成功", false);
-            return refreshAfterConfirmedMutation().catch(function () {
-                showEditStatus("操作已保存，但刷新失败", true);
-            });
-        }).catch(function () {
-            if (!App.timelineRequestState.isCurrentMutationOwner(owner)) return null;
-            markMutationUnknown(owner);
-        });
+var TIMELINE_OPERATIONS = Object.freeze({
+    hide: Object.freeze({ intent: "hide_timeline_session", invoke: function () { return App.bridge.hideTimelineSession.apply(null, arguments); } }),
+    hideActivity: Object.freeze({ intent: "hide_timeline_session_activity", invoke: function () { return App.bridge.hideTimelineSessionActivity.apply(null, arguments); } }),
+    merge: Object.freeze({ intent: "merge_timeline_session", invoke: function () { return App.bridge.mergeTimelineSession.apply(null, arguments); } }),
+    split: Object.freeze({ intent: "split_timeline_session", invoke: function () { return App.bridge.splitTimelineSession.apply(null, arguments); } }),
+    copy: Object.freeze({ intent: "copy_timeline_session", invoke: function () { return App.bridge.copyTimelineSession.apply(null, arguments); } })
+});
+
+function runTimelineSessionOperation(operationKey, options) {
+    options = options || {};
+    var operation = TIMELINE_OPERATIONS[operationKey];
+    if (!operation) return Promise.reject(new Error("unsupported_timeline_operation"));
+    var method = operation.intent;
+    var key = App.selectedProjectionInstanceKey;
+    var date = currentTimelineReportDate();
+    var revision = App.selectedProjectionRevision || "";
+    if (!key || !date) return Promise.resolve();
+    var mergeTarget = operationKey === "merge" ? findMergeTarget(key, options.direction) : null;
+    if (operationKey === "merge" && !mergeTarget) {
+        showEditStatus("只能合并相邻时段。", true);
+        return Promise.resolve();
     }
-    App.runTimelineSessionOperation = runTimelineSessionOperation;
+    var argsSignature = JSON.stringify([
+        options || {},
+        mergeTarget ? mergeTarget.projection_instance_key || "" : "",
+        mergeTarget ? mergeTarget.projection_revision || "" : ""
+    ]);
+    var owner = App.timelineRequestState.nextMutationOwner(method, date, key, revision, argsSignature);
+    if (!owner) {
+        blockDifferentMutationIntent();
+        return Promise.resolve();
+    }
+    var args;
+    if (operationKey === "hideActivity") {
+        args = [date, key, options.summaryId || "", revision, owner.requestId];
+    } else if (operationKey === "merge") {
+        args = [
+            date,
+            key,
+            options.direction,
+            revision,
+            owner.requestId,
+            mergeTarget.projection_instance_key || "",
+            mergeTarget.projection_revision || ""
+        ];
+    } else {
+        args = [date, key, revision, owner.requestId];
+    }
+    owner.payload = args.slice();
+    return operation.invoke.apply(null, args).then(function (result) {
+        if (!App.timelineRequestState.isCurrentMutationOwner(owner)) return null;
+        var data = App.handleResult(result, function (message) {
+            showEditStatus(message || "操作失败，请刷新后重试。", true);
+        });
+        if (!data) {
+            App.timelineRequestState.releaseMutationOwner(owner, "confirmed_failure", result);
+            return null;
+        }
+        App.timelineRequestState.transitionMutation(owner, "confirmed_success", result);
+        consumeMutationResult(result);
+        App.timelineRequestState.releaseMutationOwner(owner, "confirmed_success", result);
+        showEditStatus("操作成功", false);
+        return refreshAfterConfirmedMutation().catch(function () {
+            showEditStatus("操作已保存，但刷新失败", true);
+        });
+    }).catch(function () {
+        if (!App.timelineRequestState.isCurrentMutationOwner(owner)) return null;
+        markMutationUnknown(owner);
+        return null;
+    });
+}
+App.runTimelineSessionOperation = runTimelineSessionOperation;
+
 
     function findSessionByProjectionKey(projectionInstanceKey) {
         var sessions = App.currentSessions || [];
@@ -1018,7 +1067,7 @@
             App.clearTimelineError();
         }
         var token = ++App.timelineRequestToken;
-        return App.callBridge("get_timeline", date).then(function (result) {
+        return App.bridge.getTimeline(date).then(function (result) {
             if (token !== App.timelineRequestToken || App.timelineOwner !== timelineOwner) return;  // stale response
             var data = App.handleResult(result, function (msg) {
                 App.showTimelineError(msg || errorMessage);

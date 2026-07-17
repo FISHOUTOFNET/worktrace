@@ -26,7 +26,12 @@ from unittest.mock import patch
 import pytest
 
 from worktrace.db import get_connection
-from worktrace.services import activity_service, project_service, settings_service, timeline_service
+from tests.support import activity_factory as activity_service
+from worktrace.services import (
+    project_service,
+    settings_service,
+    timeline_service,
+)
 from worktrace.webview_ui.bridge import WebViewBridge
 
 pytestmark = [pytest.mark.db, pytest.mark.integration, pytest.mark.contract]

@@ -1,87 +1,32 @@
+"""Shipping Windows platform adapter.
+
+The adapter owns concrete path-resolution and clipboard components.  Importing
+this module has no side effects and does not modify legacy module globals.
+"""
+
 from __future__ import annotations
 
 import ctypes
-import logging
-import threading
-import time
-from collections import deque
 from ctypes import wintypes
-from datetime import datetime
-from typing import Callable
 
-from ..constants import TIME_FORMAT
-from ..resources.title_parsing import extract_file_name_from_title
-from . import windows_adapter as legacy
 from .base import ActiveWindow, ClipboardTextEvent
-
-_PATH_SUCCESS_TTL_SECONDS = 0.5
-_PATH_FAILURE_TTL_SECONDS = 0.75
-_MAX_PATH_CACHE = 256
-_MAX_CLIPBOARD_QUEUE = 100
-_RESOLVER_CAPACITY = 2
-_EXTRA_LOCAL_FILE_PROCESSES = {
-    "code.exe",
-    "devenv.exe",
-    "notepad++.exe",
-    "explorer.exe",
-    "sublime_text.exe",
-    "pycharm64.exe",
-    "idea64.exe",
-}
-
-_timeout_slots = threading.BoundedSemaphore(_RESOLVER_CAPACITY)
+from .windows_clipboard import ClipboardMonitor
+from .windows_path_resolver import (
+    WindowsPathResolver,
+    resolve_title_file_path,
+)
 
 
-def _bounded_run_with_timeout(func, timeout_seconds: float, *args):
-    """Bound abandoned blocking workers so repeated COM hangs stay bounded."""
-    if not _timeout_slots.acquire(blocking=False):
-        raise TimeoutError("blocking resolver capacity exhausted")
-    result_box: list = [None]
-    exc_box: list = [None]
-    done = threading.Event()
+class WindowsAdapter:
+    """Explicit, resettable owner of Windows collection resources."""
 
-    def worker() -> None:
-        try:
-            result_box[0] = func(*args)
-        except Exception as exc:  # pragma: no cover - forwarded below
-            exc_box[0] = exc
-        finally:
-            done.set()
-            _timeout_slots.release()
-
-    threading.Thread(target=worker, daemon=True).start()
-    if not done.wait(timeout_seconds):
-        raise TimeoutError(f"call timed out after {timeout_seconds:.1f}s")
-    if exc_box[0] is not None:
-        raise exc_box[0]
-    return result_box[0]
-
-
-legacy._run_with_timeout = _bounded_run_with_timeout
-
-
-def _privacy_path_required(process_name: str, title: str) -> bool:
-    if not extract_file_name_from_title(title):
-        return False
-    process_key = str(process_name or "").strip().casefold()
-    if process_key in _EXTRA_LOCAL_FILE_PROCESSES:
-        return True
-    return any(
-        legacy._process_matches_entry(process_name, entry)
-        for entry in legacy._all_com_catalog_entries()
-    )
-
-
-class HardenedWindowsAdapter:
-    """Shipping Windows adapter with explicit, resettable runtime lifecycle."""
-
-    def __init__(self) -> None:
-        self._path_lock = threading.Lock()
-        self._path_cache: dict[
-            tuple[int | None, int | None, str, str],
-            tuple[float, str | None],
-        ] = {}
-        self._clipboard = _ClipboardMonitor(self.get_active_window)
+    def __init__(
+        self,
+        *,
+        path_resolver: WindowsPathResolver | None = None,
+    ) -> None:
+        self._path_resolver = path_resolver or WindowsPathResolver()
+        self._clipboard = ClipboardMonitor(self.get_active_window)
 
     def get_active_window(self) -> ActiveWindow:
         import psutil
@@ -100,25 +45,18 @@ class HardenedWindowsAdapter:
         except psutil.Error:
             pass
 
-        requires_path = _privacy_path_required(process_name, title)
-        cache_key = (hwnd, pid, process_name, title)
-        file_path_hint = legacy._resolve_title_file_path(title)
+        requires_path = self._path_resolver.privacy_path_required(
+            process_name,
+            title,
+        )
+        file_path_hint = resolve_title_file_path(title)
         if not file_path_hint and requires_path:
-            file_path_hint = self._cached_path(cache_key)
-        if not file_path_hint and requires_path:
-            try:
-                file_path_hint = legacy._resolve_active_file_path(
-                    process_name,
-                    title,
-                    pid,
-                )
-            except Exception:
-                logging.debug(
-                    "synchronous active path resolution failed",
-                    exc_info=True,
-                )
-                file_path_hint = None
-            self._store_path(cache_key, file_path_hint)
+            file_path_hint = self._path_resolver.resolve(
+                (hwnd, pid, process_name, title),
+                process_name,
+                title,
+                pid,
+            )
 
         window_class = None
         try:
@@ -136,36 +74,6 @@ class HardenedWindowsAdapter:
             privacy_path_required=requires_path,
         )
 
-    def _cached_path(
-        self,
-        key: tuple[int | None, int | None, str, str],
-    ) -> str | None:
-        now = time.monotonic()
-        with self._path_lock:
-            entry = self._path_cache.get(key)
-            if entry is None:
-                return None
-            expires_at, value = entry
-            if expires_at <= now:
-                self._path_cache.pop(key, None)
-                return None
-            return value
-
-    def _store_path(
-        self,
-        key: tuple[int | None, int | None, str, str],
-        value: str | None,
-    ) -> None:
-        ttl = (
-            _PATH_SUCCESS_TTL_SECONDS
-            if value
-            else _PATH_FAILURE_TTL_SECONDS
-        )
-        with self._path_lock:
-            if len(self._path_cache) >= _MAX_PATH_CACHE:
-                self._path_cache.clear()
-            self._path_cache[key] = (time.monotonic() + ttl, value)
-
     def get_idle_seconds(self) -> int:
         class LASTINPUTINFO(ctypes.Structure):
             _fields_ = [
@@ -175,12 +83,16 @@ class HardenedWindowsAdapter:
 
         last_input = LASTINPUTINFO()
         last_input.cbSize = ctypes.sizeof(last_input)
-        if not ctypes.windll.user32.GetLastInputInfo(ctypes.byref(last_input)):
+        if not ctypes.windll.user32.GetLastInputInfo(
+            ctypes.byref(last_input)
+        ):
             return 0
         get_tick_count64 = ctypes.windll.kernel32.GetTickCount64
         get_tick_count64.restype = ctypes.c_ulonglong
         current_low = int(get_tick_count64()) & 0xFFFFFFFF
-        elapsed_ms = (current_low - int(last_input.dwTime)) & 0xFFFFFFFF
+        elapsed_ms = (
+            current_low - int(last_input.dwTime)
+        ) & 0xFFFFFFFF
         return max(0, elapsed_ms // 1000)
 
     def set_clipboard_capture_enabled(self, enabled: bool) -> None:
@@ -192,130 +104,11 @@ class HardenedWindowsAdapter:
     def reset_runtime_state(self) -> None:
         self._clipboard.set_enabled(False)
         self._clipboard.clear()
-        with self._path_lock:
-            self._path_cache.clear()
+        self._path_resolver.reset()
 
     def shutdown(self) -> None:
         self._clipboard.shutdown()
-        with self._path_lock:
-            self._path_cache.clear()
+        self._path_resolver.reset()
 
 
-class _ClipboardMonitor:
-    def __init__(
-        self,
-        source_window_provider: Callable[[], ActiveWindow] | None = None,
-    ) -> None:
-        self._events: deque[ClipboardTextEvent] = deque(
-            maxlen=_MAX_CLIPBOARD_QUEUE
-        )
-        self._lock = threading.Lock()
-        self._lifecycle_lock = threading.Lock()
-        self._enabled = False
-        self._thread: threading.Thread | None = None
-        self._stop_event = threading.Event()
-        self._last_sequence: int | None = None
-        self._generation = 0
-        self._source_window_provider = (
-            source_window_provider or legacy._get_foreground_active_window
-        )
-
-    def set_enabled(self, enabled: bool) -> None:
-        with self._lifecycle_lock:
-            requested = bool(enabled)
-            if requested == self._enabled:
-                if not requested:
-                    self._clear_locked()
-                return
-            self._generation += 1
-            self._enabled = requested
-            self._last_sequence = None
-            if not requested:
-                self._clear_locked()
-                return
-            if self._thread is None or not self._thread.is_alive():
-                self._stop_event.clear()
-                self._thread = threading.Thread(
-                    target=self._run,
-                    name="WorkTraceClipboardMonitor",
-                    daemon=True,
-                )
-                self._thread.start()
-
-    def drain(self) -> list[ClipboardTextEvent]:
-        with self._lifecycle_lock:
-            if not self._enabled:
-                self._clear_locked()
-                return []
-            with self._lock:
-                events = list(self._events)
-                self._events.clear()
-            return events
-
-    def clear(self) -> None:
-        with self._lifecycle_lock:
-            self._clear_locked()
-
-    def _clear_locked(self) -> None:
-        with self._lock:
-            self._events.clear()
-
-    def shutdown(self) -> None:
-        with self._lifecycle_lock:
-            self._generation += 1
-            self._enabled = False
-            self._last_sequence = None
-            self._stop_event.set()
-            self._clear_locked()
-            thread = self._thread
-        if thread is not None:
-            thread.join(timeout=2.0)
-
-    def _run(self) -> None:
-        while not self._stop_event.wait(0.25):
-            try:
-                with self._lifecycle_lock:
-                    if not self._enabled:
-                        continue
-                    sequence = legacy._clipboard_sequence_number()
-                    if sequence is None:
-                        continue
-                    if self._last_sequence is None:
-                        self._last_sequence = sequence
-                        continue
-                    if sequence == self._last_sequence:
-                        continue
-                    self._last_sequence = sequence
-                    self._capture_locked(sequence, self._generation)
-            except Exception:
-                logging.debug(
-                    "clipboard monitor loop failed",
-                    exc_info=True,
-                )
-
-    def _capture_locked(self, sequence: int, generation: int) -> None:
-        """Capture one event while holding the lifecycle serialization lock."""
-        if not self._enabled or generation != self._generation:
-            return
-        # Bind the source before reading text; switching windows after a copy
-        # must not relabel sensitive clipboard content as the next window.
-        source_window = self._source_window_provider()
-        text = legacy._read_clipboard_unicode_text()
-        if (
-            not text
-            or not self._enabled
-            or generation != self._generation
-        ):
-            return
-        event = ClipboardTextEvent(
-            text=text,
-            source_window=source_window,
-            copied_at=datetime.now().strftime(TIME_FORMAT),
-            sequence_number=sequence,
-        )
-        with self._lock:
-            if self._enabled and generation == self._generation:
-                self._events.append(event)
-
-
-__all__ = ["HardenedWindowsAdapter"]
+__all__ = ["WindowsAdapter"]

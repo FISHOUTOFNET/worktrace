@@ -29,6 +29,7 @@ def build_current_activity_display(
     summary: CurrentActivityContract,
     live_clock: LiveClockContract,
 ) -> CurrentActivityContract:
+    del anchor
     if not snapshot:
         return {
             "active": False,
@@ -59,16 +60,6 @@ def build_current_activity_display(
             "is_classified": False,
             "project_description": "",
             "display_project": None,
-            "candidate_project": None,
-            "project_transition": {
-                "pending": False,
-                "started_at": "",
-                "elapsed_seconds": 0,
-                "threshold_seconds": 0,
-                "from_project_id": None,
-                "to_project_id": None,
-            },
-            "project_transition_pending": False,
             "display_span_id": "",
             "live_clock": live_clock,
             "current_activity_display_span_id": "",
@@ -119,7 +110,7 @@ def build_current_activity_display(
     current_elapsed = int(snapshot_elapsed_seconds(snapshot))
     display["resource_elapsed_seconds"] = current_elapsed
     display["elapsed_seconds"] = current_elapsed
-    display["duration_seconds_at_sample"] = display["elapsed_seconds"]
+    display["duration_seconds_at_sample"] = current_elapsed
     display["current_live_seconds_at_sample"] = int(
         live_clock.get("current_live_seconds_at_sample")
         or live_clock.get("current_elapsed_at_sample")
@@ -127,8 +118,7 @@ def build_current_activity_display(
     )
     display["current_live_base_seconds"] = 0
     display["aggregate_duration_seconds_at_sample"] = int(
-        live_clock.get("aggregate_duration_seconds_at_sample")
-        or current_elapsed
+        live_clock.get("aggregate_duration_seconds_at_sample") or current_elapsed
     )
     display["aggregate_display_base_seconds"] = int(
         live_clock.get("aggregate_display_base_seconds")
@@ -192,9 +182,7 @@ def build_display_structural_signature(
 
 
 def source_for_state(state: str) -> str:
-    if state == "persisted_open":
-        return "db"
-    return "none"
+    return "db" if state == "persisted_open" else "none"
 
 
 def build_display_span(
@@ -206,7 +194,7 @@ def build_display_span(
     report_date: str,
     today: str,
 ) -> DisplaySpanContract:
-    anchor_id = 0
+    del anchor, summary, report_date, today
     activity_id = 0
     start_time = str(snapshot.get("start_time") or "") if snapshot else ""
     project_fields = _snapshot_display_project_fields(snapshot)
@@ -226,37 +214,19 @@ def build_display_span(
         or 0
     )
     policy = live_clock.get("display_policy") or {}
-    live_anchor_base_seconds = 0
 
     if display_live_state == "persisted_open":
         activity_id = int(snapshot_persisted_id(snapshot) or 0) if snapshot else 0
-        anchor_id = activity_id
         source = "db"
-        is_virtual = False
         is_persisted = True
-        project_name = project_fields["project_name"]
-        project_description = project_fields["project_description"]
-        project_id = project_fields["project_id"]
-        display_project = project_fields["display_project"]
-        candidate_project = project_fields["candidate_project"]
-        is_uncategorized = bool(project_fields["is_uncategorized"])
-        is_classified = bool(project_fields["is_classified"])
     else:
         source = "none"
-        is_virtual = False
         is_persisted = False
-        project_name = project_fields["project_name"]
-        project_description = project_fields["project_description"]
-        project_id = project_fields["project_id"]
-        display_project = project_fields["display_project"]
-        candidate_project = project_fields["candidate_project"]
-        is_uncategorized = bool(project_fields["is_uncategorized"])
-        is_classified = bool(project_fields["is_classified"])
 
     return {
         "display_span_id": live_clock.get("display_span_id") or "",
         "activity_id": int(activity_id),
-        "anchor_activity_id": int(anchor_id),
+        "anchor_activity_id": int(activity_id),
         "source": source,
         "live_state": display_live_state,
         "start_time": start_time,
@@ -271,12 +241,10 @@ def build_display_span(
         "aggregate_display_base_seconds": aggregate_base,
         "display_base_seconds": aggregate_base,
         "live_clock": live_clock,
-        "project_id": int(project_id),
-        "project_name": project_name,
-        "project_description": project_description,
+        "project_id": int(project_fields["project_id"]),
+        "project_name": project_fields["project_name"],
+        "project_description": project_fields["project_description"],
         "resource_name": _display_resource_name(snapshot) if snapshot else "",
-        # The raw resource identity is privacy-sensitive.  Overlay only needs
-        # equality, so expose a deterministic digest rather than the key.
         "resource_identity_hash": _resource_identity_hash(snapshot),
         "is_current": True,
         "is_live": bool(live_clock.get("is_live")),
@@ -288,7 +256,7 @@ def build_display_span(
         "base_policy": str(live_clock.get("base_policy") or ""),
         "status_only_reason": str(live_clock.get("status_only_reason") or ""),
         "base_policy_reason": str(live_clock.get("base_policy_reason") or ""),
-        "is_virtual": bool(is_virtual),
+        "is_virtual": False,
         "is_persisted": bool(is_persisted),
         "is_visible_in_current": True,
         "is_visible_in_recent": bool(policy.get("materialize_recent")),
@@ -298,14 +266,11 @@ def build_display_span(
         "exportable": False,
         "edit_disabled": True,
         "disable_reason": LIVE_EDIT_DISABLE_REASON,
-        "display_project": display_project,
-        "candidate_project": candidate_project,
-        "project_transition": project_fields["project_transition"],
-        "project_transition_pending": bool(project_fields["project_transition_pending"]),
-        "live_anchor_activity_id": int(anchor_id),
-        "live_anchor_base_seconds": int(live_anchor_base_seconds),
-        "is_uncategorized": bool(is_uncategorized),
-        "is_classified": bool(is_classified),
+        "display_project": project_fields["display_project"],
+        "live_anchor_activity_id": int(activity_id),
+        "live_anchor_base_seconds": 0,
+        "is_uncategorized": bool(project_fields["is_uncategorized"]),
+        "is_classified": bool(project_fields["is_classified"]),
     }
 
 

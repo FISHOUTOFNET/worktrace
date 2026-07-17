@@ -8,11 +8,11 @@ from worktrace.collector import activity_session_recorder as recorder_module
 from worktrace.collector.activity_session_recorder import ActivitySessionRecorder
 from worktrace.collector.clock_tracker import ClockTracker
 from worktrace.collector.collector import CollectorControl, _sleep_until_next_poll
-from worktrace.platforms import hardened_windows_adapter as adapter_module
+from worktrace.platforms import windows_clipboard as clipboard_module
 from worktrace.platforms.base import ActiveWindow
-from worktrace.platforms.hardened_windows_adapter import _ClipboardMonitor
+from worktrace.platforms.windows_clipboard import ClipboardMonitor
 from worktrace.security.kdf import KdfError, KdfParams, derive_backup_key
-from worktrace.services import settings_service
+from worktrace.services import runtime_activity_state_service, settings_service
 from worktrace.services.secure_backup_service import (
     SecureBackupError,
     SecureImportCoordinator,
@@ -26,17 +26,43 @@ pytestmark = [
 ]
 
 
-def test_pause_timeout_cancels_stale_command():
+def test_unclaimed_pause_timeout_is_cancelled():
     control = CollectorControl()
 
     result = control.request_pause(timeout_seconds=0)
 
-    assert result == {
-        "ok": False,
-        "pause_pending": False,
-        "timed_out": True,
-    }
-    assert control.take_pause_request() is False
+    assert result["ok"] is False
+    assert result["pause_pending"] is False
+    assert result["timed_out"] is True
+    assert result["command_state"] == "cancelled"
+    assert result["command_state_unknown"] is False
+    assert control.take_pause_request() is None
+
+
+def test_taken_pause_timeout_reports_unknown_and_late_completion_is_identified():
+    control = CollectorControl()
+    result_box: dict[str, dict] = {}
+    request = threading.Thread(
+        target=lambda: result_box.setdefault(
+            "result",
+            control.request_pause(timeout_seconds=0.05),
+        ),
+        daemon=True,
+    )
+    request.start()
+    assert control._wake_event.wait(timeout=1)
+    command_id = control.take_pause_request()
+    assert command_id is not None
+    request.join(timeout=1)
+
+    result = result_box["result"]
+    assert result["command_id"] == command_id
+    assert result["command_state"] == "unknown"
+    assert result["command_state_unknown"] is True
+    assert control.complete_pause(
+        command_id,
+        {"ok": True, "pause_pending": False},
+    ) is True
 
 
 def test_reset_command_is_acknowledged_once():
@@ -52,15 +78,22 @@ def test_reset_command_is_acknowledged_once():
 
     thread.start()
     assert control._wake_event.wait(timeout=1)
-    assert control.take_reset_request() is True
-    control.complete_reset({"ok": True, "reset_pending": False})
+    command_id = control.take_reset_request()
+    assert command_id is not None
+    assert control.complete_reset(
+        command_id,
+        {"ok": True, "reset_pending": False},
+    ) is True
     thread.join(timeout=2)
 
-    assert result_box["result"] == {"ok": True, "reset_pending": False}
-    assert control.take_reset_request() is False
+    assert result_box["result"]["ok"] is True
+    assert result_box["result"]["command_id"] == command_id
+    assert result_box["result"]["command_state"] == "completed"
+    assert control.take_reset_request() is None
 
 
 def test_long_poll_gap_rebases_instead_of_replaying_ticks():
+
     next_deadline = _sleep_until_next_poll(
         threading.Event(),
         None,
@@ -194,9 +227,9 @@ def test_maintenance_reset_failure_restores_intent_without_stale_snapshot(temp_d
     coordinator = SecureImportCoordinator()
     settings_service.set_setting("user_paused", "false")
     settings_service.set_setting("collector_status", "running")
-    settings_service.set_setting(
-        "current_activity_snapshot",
-        '{"persisted_activity_id":77}',
+    runtime_activity_state_service.publish_runtime_activity_snapshot(
+        {"persisted_activity_id": 77},
+        "maintenance_test",
     )
     coordinator.register_collector_pause_handler(
         lambda timeout_seconds=5.0: {"ok": True, "pause_pending": False}
@@ -212,11 +245,15 @@ def test_maintenance_reset_failure_restores_intent_without_stale_snapshot(temp_d
     assert coordinator.write_gate_active() is False
     assert settings_service.get_bool_setting("user_paused", True) is False
     assert settings_service.get_setting("collector_status", "") == "running"
-    assert settings_service.get_setting("current_activity_snapshot", "") == ""
+    assert runtime_activity_state_service.sample_runtime_activity_state().snapshot is None
+
+
+def _window() -> ActiveWindow:
+    return ActiveWindow("Word", "winword.exe", "Secret.docx")
 
 
 def test_clipboard_monitor_does_not_start_or_retain_while_disabled():
-    monitor = _ClipboardMonitor()
+    monitor = ClipboardMonitor(_window)
 
     monitor.set_enabled(False)
     assert monitor.drain() == []
@@ -235,21 +272,15 @@ def test_clipboard_disable_waits_for_inflight_capture_and_drops_generation(
         return "sensitive"
 
     monkeypatch.setattr(
-        adapter_module.legacy,
-        "_read_clipboard_unicode_text",
+        clipboard_module,
+        "read_clipboard_unicode_text",
         read_text,
     )
-    monitor = _ClipboardMonitor(
-        lambda: ActiveWindow("Word", "winword.exe", "Secret.docx")
-    )
+    monitor = ClipboardMonitor(_window)
     monitor.set_enabled(True)
     generation = monitor._generation
-    capture = threading.Thread(
-        target=lambda: monitor._capture_locked(7, generation),
-        daemon=True,
-    )
-    # `_capture_locked` requires the same serialization lock used by the real
-    # monitor loop.
+
+    # ``_capture_locked`` uses the same serialization lock as the real loop.
     def serialized_capture():
         with monitor._lifecycle_lock:
             monitor._capture_locked(7, generation)
@@ -271,6 +302,7 @@ def test_clipboard_disable_waits_for_inflight_capture_and_drops_generation(
 
     assert disabled.is_set()
     assert monitor.drain() == []
+    monitor.shutdown()
 
 
 def test_kdf_rejects_excessive_resource_parameters():
@@ -280,3 +312,24 @@ def test_kdf_rejects_excessive_resource_parameters():
             b"0" * 16,
             KdfParams(n=2**19, r=8, p=1),
         )
+
+def test_maintenance_unknown_command_state_remains_fail_closed(temp_db):
+    coordinator = SecureImportCoordinator()
+    settings_service.set_setting("user_paused", "false")
+    settings_service.set_setting("collector_status", "running")
+    coordinator.register_collector_pause_handler(
+        lambda timeout_seconds=5.0: {
+            "ok": False,
+            "pause_pending": False,
+            "command_state_unknown": True,
+            "command_state": "unknown",
+        }
+    )
+
+    with pytest.raises(SecureBackupError, match="pause_not_acknowledged"):
+        with coordinator.acquire(reason="unknown"):
+            pytest.fail("operation must not start")
+
+    assert coordinator.write_gate_active() is False
+    assert settings_service.get_bool_setting("user_paused", False) is True
+    assert settings_service.get_setting("collector_status", "") == "paused"

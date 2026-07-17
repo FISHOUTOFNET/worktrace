@@ -23,7 +23,10 @@ VALIDATION_PATH = REPO_ROOT / "docs" / "release-validation.md"
 CURRENT_STATE_PATH = REPO_ROOT / "docs" / "current-state.md"
 MIGRATION_PATH = REPO_ROOT / "docs" / "ui-webview-migration.md"
 AI_CONTEXT_PATH = REPO_ROOT / "docs" / "ai-context-guide.md"
-CI_PATH = REPO_ROOT / ".github" / "workflows" / "ci.yml"
+WORKFLOW_DIR = REPO_ROOT / ".github" / "workflows"
+CI_PATH = WORKFLOW_DIR / "ci.yml"
+ACCEPTANCE_PATH = WORKFLOW_DIR / "acceptance.yml"
+REUSABLE_VALIDATION_PATH = WORKFLOW_DIR / "_validation.yml"
 BUILD_DEP_CANDIDATES = [
     REPO_ROOT / "requirements-dev.txt",
     REPO_ROOT / "requirements-build.txt",
@@ -83,9 +86,10 @@ def test_release_checklist_exists():
     assert CHECKLIST_PATH.is_file(), "docs/release-checklist.md must exist"
 
 
-def test_release_validation_doc_and_ci_workflow_exist():
+def test_release_validation_doc_and_workflows_exist():
     assert VALIDATION_PATH.is_file(), "docs/release-validation.md must exist"
-    assert CI_PATH.is_file(), ".github/workflows/ci.yml must exist"
+    for path in (CI_PATH, ACCEPTANCE_PATH, REUSABLE_VALIDATION_PATH):
+        assert path.is_file(), f"expected permanent workflow: {path}"
 
 
 def test_readme_points_to_release_validation_doc():
@@ -109,21 +113,37 @@ def test_release_validation_contains_required_baseline_items(phrase):
     assert phrase in validation, f"release validation missing phrase: {phrase}"
 
 
-@pytest.mark.parametrize(
-    "phrase",
-    [
-        "runs-on: [self-hosted, Windows, X64]",
-        'python-version: ["3.11", "3.12"]',
-        "pip install -r requirements.txt",
-        "pytest",
+def test_ci_workflows_contain_required_release_smoke_steps():
+    standard = _read_text(CI_PATH)
+    acceptance = _read_text(ACCEPTANCE_PATH)
+    reusable = _read_text(REUSABLE_VALIDATION_PATH)
+
+    assert "pull_request:" in standard
+    assert "push:" in standard
+    assert "./.github/workflows/_validation.yml" in standard
+    assert "run_node_tests: false" in standard
+    assert "run_build_smoke: false" in standard
+
+    assert "ready_for_review" in acceptance
+    assert "synchronize" in acceptance
+    assert "github.event.pull_request.draft == false" in acceptance
+    assert "run_node_tests: true" in acceptance
+    assert "run_build_smoke: true" in acceptance
+
+    for phrase in (
+        'python-version: "3.11"',
+        "pip install --disable-pip-version-check -q -r requirements.txt",
+        "python -m pytest",
+        "node --test tests/webview/*.test.js",
         "python -m PyInstaller --noconfirm --clean WorkTrace.spec",
         r"scripts\build_windows_installer.ps1",
         "actions/upload-artifact@v4",
-    ],
-)
-def test_ci_workflow_contains_required_release_smoke_steps(phrase):
-    workflow = _read_text(CI_PATH)
-    assert phrase in workflow, f"CI workflow missing phrase: {phrase}"
+    ):
+        assert phrase in reusable, f"reusable validation missing phrase: {phrase}"
+
+    combined = "\n".join((standard, acceptance, reusable))
+    assert "3.12" not in combined
+    assert "run_python312" not in combined
 
 
 # release-checklist stub tests.

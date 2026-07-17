@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from worktrace.services import activity_service, project_service
+from tests.support import activity_factory as activity_service
+from worktrace.services import project_service
 from worktrace.webview_ui.bridge import WebViewBridge
 
 pytestmark = [pytest.mark.db, pytest.mark.integration]

@@ -55,6 +55,13 @@ FORBIDDEN_TEXT = (
     ),
 )
 
+# These are current domain identifiers, not historical delivery-stage labels.
+CURRENT_DOMAIN_IDENTIFIERS = (
+    "RuntimePhase",
+    "SecureImportPhase",
+    "WriteGatePhase",
+)
+
 ALLOWED_FILE_NAMES = {
     "test_code_comment_hygiene.py",
 }
@@ -81,13 +88,21 @@ def _read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="ignore")
 
 
+def _without_current_domain_identifiers(line: str) -> str:
+    normalized = line
+    for identifier in CURRENT_DOMAIN_IDENTIFIERS:
+        normalized = normalized.replace(identifier, "")
+    return normalized
+
+
 def test_code_comments_do_not_reintroduce_history_stage_residue() -> None:
     failures: list[str] = []
     for path in _iter_scan_files():
         rel = path.relative_to(REPO_ROOT)
         for lineno, line in enumerate(_read_text(path).splitlines(), start=1):
+            stage_scan_line = _without_current_domain_identifiers(line)
             for regex in FORBIDDEN_REGEXES:
-                if regex.search(line):
+                if regex.search(stage_scan_line):
                     failures.append(f"{rel}:{lineno}: {line.strip()}")
                     break
             else:

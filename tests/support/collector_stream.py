@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 
 from worktrace.collector.activity_session_recorder import ActivitySessionRecorder
 from worktrace.collector.decision_trace import InMemoryDecisionTraceRecorder
 from worktrace.collector.state_machine import CollectorStateMachine
 from worktrace.platforms.base import ActiveWindow
-from worktrace.services import activity_service, settings_service
+from worktrace.services import activity_service, runtime_activity_state_service
 
 
 @dataclass
@@ -72,9 +71,7 @@ class CollectorStream:
         return activity_service.get_activities_by_date(self.date)
 
     def snapshot(self) -> dict:
-        raw = settings_service.get_setting("current_activity_snapshot", "") or ""
-        if not raw:
-            return {}
-        value = json.loads(raw)
-        return value if isinstance(value, dict) else {}
-
+        return (
+            runtime_activity_state_service.sample_runtime_activity_state().snapshot
+            or {}
+        )

@@ -9,8 +9,8 @@ from worktrace.collector.collector import run_collector
 from worktrace.collector.state_machine import CollectorStateMachine
 from worktrace.constants import EXCLUDED_WINDOW_TITLE
 from worktrace.platforms.base import ActiveWindow
+from tests.support import activity_factory as activity_service
 from worktrace.services import (
-    activity_service,
     folder_rule_service,
     privacy_service,
     project_service,

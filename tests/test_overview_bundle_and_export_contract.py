@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from worktrace.services import activity_service, project_service
+from tests.support import activity_factory as activity_service
+from worktrace.services import project_service
 from worktrace.services.view_model_service import get_overview_view_model, get_timeline_view_model
 
 pytestmark = [pytest.mark.db, pytest.mark.integration]

@@ -1,12 +1,17 @@
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 
+from tests.support.activity_factory import create_open_activity
 from worktrace.collector.state_machine import CollectorStateMachine
 from worktrace.constants import STATUS_NORMAL
 from worktrace.platforms.base import ActiveWindow
-from worktrace.services import activity_service, settings_service, timeline_service
+from worktrace.services import (
+    activity_lifecycle_service,
+    activity_service,
+    runtime_activity_state_service,
+    timeline_service,
+)
 from worktrace.webview_ui.bridge import WebViewBridge
 
 
@@ -50,18 +55,21 @@ class LiveSemanticsHarness:
         return activity_service.get_activities_by_date(self.date)
 
     def snapshot(self) -> dict:
-        raw = settings_service.get_setting("current_activity_snapshot", "") or ""
-        if not raw:
-            return {}
-        value = json.loads(raw)
-        return value if isinstance(value, dict) else {}
+        return (
+            runtime_activity_state_service.sample_runtime_activity_state().snapshot
+            or {}
+        )
 
     def set_snapshot(self, snapshot: dict | None) -> None:
-        settings_service.set_setting(
-            "current_activity_snapshot",
-            json.dumps(snapshot) if snapshot else "",
-        )
-        settings_service.clear_settings_cache()
+        if snapshot:
+            runtime_activity_state_service.publish_runtime_activity_snapshot(
+                snapshot,
+                "live_semantics_harness",
+            )
+        else:
+            runtime_activity_state_service.clear_runtime_activity_state(
+                "live_semantics_harness",
+            )
 
     def normal_snapshot(
         self,
@@ -96,13 +104,17 @@ class LiveSemanticsHarness:
         end: str,
         seconds: int,
     ) -> int:
-        activity_id = activity_service.create_activity(
-            name,
-            f"{name.lower()}.exe",
-            name,
+        activity_id = create_open_activity(
+            app_name=name,
+            process_name=f"{name.lower()}.exe",
+            window_title=name,
             start_time=self.at(start),
         )
-        activity_service.close_activity(activity_id, self.at(end), seconds)
+        activity_lifecycle_service.close_activity(
+            activity_id,
+            self.at(end),
+            duration_seconds=seconds,
+        )
         return int(activity_id)
 
     def create_open_activity(
@@ -112,16 +124,17 @@ class LiveSemanticsHarness:
         start: str,
         seconds: int,
     ) -> int:
-        activity_id = activity_service.create_activity(
-            name,
-            f"{name.lower()}.exe",
-            name,
+        activity_id = create_open_activity(
+            app_name=name,
+            process_name=f"{name.lower()}.exe",
+            window_title=name,
             start_time=self.at(start),
         )
-        activity_service.set_activity_duration(activity_id, seconds)
+        activity_lifecycle_service.checkpoint_activity(activity_id, seconds)
         return int(activity_id)
 
     def pages(self, *, details_ids: list[int] | None = None, date: str | None = None) -> dict:
+        del details_ids
         report_date = date or self.date
         timeline = self.bridge.get_timeline(report_date)
         entries = timeline.get("entries") or []
@@ -133,9 +146,15 @@ class LiveSemanticsHarness:
                 report_date,
                 selected["projection_revision"],
             )
+        # Recent activity is a projection inside the canonical Overview bundle.
+        overview = self.bridge.get_overview()
         return {
-            "overview": self.bridge.get_overview(),
-            "recent": self.bridge.get_recent_activities(),
+            "overview": overview,
+            "recent": {
+                "ok": bool(overview.get("ok")),
+                "items": list(overview.get("activities") or []),
+                "runtime": dict(overview.get("runtime") or {}),
+            },
             "timeline": timeline,
             "details": details,
             "refresh": self.bridge.get_refresh_state(report_date),

@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import pytest
 
+from tests.support import activity_factory as activity_service
 from worktrace.constants import EXCLUDED_APP_NAME, EXCLUDED_PROCESS_NAME, EXCLUDED_WINDOW_TITLE, STATUS_EXCLUDED
 from worktrace.resources.types import DetectedResource
-from worktrace.services import activity_service
 from worktrace.services.resource_service import (
     attach_resource,
     create_or_update_activity_resource,

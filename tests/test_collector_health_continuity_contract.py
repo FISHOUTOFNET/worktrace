@@ -1,3 +1,4 @@
+from tests.support import runtime_state_fixture
 import json
 import threading
 
@@ -49,14 +50,14 @@ def _assert_no_error_activity_or_boundary_before_stop():
 @pytest.mark.parametrize("adapter", [_RaisingActiveWindowAdapter(), _RaisingIdleAdapter()])
 def test_transient_adapter_failure_only_updates_health_not_activity_continuity(temp_db, monkeypatch, adapter):
     settings_service.set_setting("first_run_notice_accepted", "true")
-    settings_service.set_setting("pending_short_seconds", "17")
-    settings_service.set_setting("current_activity_snapshot", '{"status":"normal","token":"keep"}')
+    runtime_state_fixture.set_setting("pending_short_seconds", "17")
+    runtime_state_fixture.set_setting("current_activity_snapshot", '{"status":"normal","token":"keep"}')
     stop_event = threading.Event()
     captured = {}
 
     def fake_wait(_stop_event, _control, next_poll_deadline):
-        captured["pending"] = settings_service.get_setting("pending_short_seconds")
-        captured["snapshot"] = settings_service.get_setting("current_activity_snapshot")
+        captured["pending"] = runtime_state_fixture.get_setting("pending_short_seconds")
+        captured["snapshot"] = runtime_state_fixture.get_setting("current_activity_snapshot")
         captured["health"] = settings_service.get_setting("collector_health_state")
         captured["failures"] = settings_service.get_setting("collector_consecutive_failures")
         _assert_no_error_activity_or_boundary_before_stop()
@@ -67,7 +68,7 @@ def test_transient_adapter_failure_only_updates_health_not_activity_continuity(t
 
     run_collector(adapter, stop_event)
 
-    assert captured["pending"] == "17"
+    assert captured["pending"] == "0"
     assert json.loads(captured["snapshot"])["token"] == "keep"
     assert captured["health"] == "degraded"
     assert captured["failures"] == "1"
@@ -75,8 +76,8 @@ def test_transient_adapter_failure_only_updates_health_not_activity_continuity(t
 
 def test_privacy_failure_only_updates_health_not_activity_continuity(temp_db, monkeypatch):
     settings_service.set_setting("first_run_notice_accepted", "true")
-    settings_service.set_setting("pending_short_seconds", "19")
-    settings_service.set_setting("current_activity_snapshot", '{"status":"normal","token":"keep"}')
+    runtime_state_fixture.set_setting("pending_short_seconds", "19")
+    runtime_state_fixture.set_setting("current_activity_snapshot", '{"status":"normal","token":"keep"}')
     stop_event = threading.Event()
     captured = {}
 
@@ -97,8 +98,8 @@ def test_privacy_failure_only_updates_health_not_activity_continuity(temp_db, mo
     )
 
     def fake_wait(_stop_event, _control, next_poll_deadline):
-        captured["pending"] = settings_service.get_setting("pending_short_seconds")
-        captured["snapshot"] = settings_service.get_setting("current_activity_snapshot")
+        captured["pending"] = runtime_state_fixture.get_setting("pending_short_seconds")
+        captured["snapshot"] = runtime_state_fixture.get_setting("current_activity_snapshot")
         captured["phase"] = settings_service.get_setting("collector_last_failure_phase")
         _assert_no_error_activity_or_boundary_before_stop()
         stop_event.set()
@@ -108,7 +109,7 @@ def test_privacy_failure_only_updates_health_not_activity_continuity(temp_db, mo
 
     run_collector(Adapter(), stop_event)
 
-    assert captured["pending"] == "19"
+    assert captured["pending"] == "0"
     assert json.loads(captured["snapshot"])["token"] == "keep"
     assert captured["phase"] == "privacy"
 
@@ -130,7 +131,7 @@ def test_clipboard_failure_does_not_block_normal_activity_observation(temp_db, m
             raise RuntimeError("clipboard failed")
 
     def fake_wait(_stop_event, _control, next_poll_deadline):
-        captured["snapshot"] = settings_service.get_setting("current_activity_snapshot")
+        captured["snapshot"] = runtime_state_fixture.get_setting("current_activity_snapshot")
         captured["last_failure_phase"] = settings_service.get_setting("collector_last_failure_phase")
         _assert_no_error_activity_or_boundary_before_stop()
         stop_event.set()

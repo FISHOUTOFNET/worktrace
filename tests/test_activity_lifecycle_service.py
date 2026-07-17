@@ -25,8 +25,8 @@ from worktrace.constants import (
     TIME_FORMAT,
     UNCATEGORIZED_PROJECT,
 )
+from tests.support import activity_factory as activity_service
 from worktrace.services import (
-    activity_service,
     folder_rule_service,
     project_service,
     recovery_service,

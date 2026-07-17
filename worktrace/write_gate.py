@@ -1,71 +1,144 @@
-"""Process-wide exclusion and generation tracking for live database writes."""
+"""Process-wide write draining, exclusion, and generation tracking."""
 
 from __future__ import annotations
 
 from contextlib import contextmanager
+from dataclasses import dataclass
+from enum import Enum
 import sqlite3
 import threading
 from typing import Iterator
 
 
+class WriteGatePhase(str, Enum):
+    OPEN = "open"
+    DRAINING = "draining"
+    EXCLUSIVE = "exclusive"
+
+
+@dataclass(frozen=True)
+class WriteDrainLease:
+    """Owner capability for promoting one drained window to exclusivity."""
+
+    _gate: "ProcessDatabaseWriteGate"
+    _owner_thread_id: int
+
+    def promote(self) -> None:
+        self._gate.promote_to_exclusive(self._owner_thread_id)
+
+
 class ProcessDatabaseWriteGate:
-    """Reject concurrent import writes and post-import stale write intents."""
+    """Reject new writes while SQLite drains, then grant one exclusive owner."""
 
     def __init__(self) -> None:
         self._lock = threading.RLock()
-        self._active = False
+        self._phase = WriteGatePhase.OPEN
         self._owner_thread_id: int | None = None
         self._generation = 0
         self._thread_state = threading.local()
+        self._maintenance_thread_ids: set[int] = set()
 
     def active(self) -> bool:
         with self._lock:
-            return self._active
+            return self._phase is not WriteGatePhase.OPEN
+
+    def phase(self) -> WriteGatePhase:
+        with self._lock:
+            return self._phase
 
     def generation(self) -> int:
         with self._lock:
             return self._generation
+
+    def register_maintenance_thread(self, thread_id: int | None) -> None:
+        if thread_id is None:
+            return
+        with self._lock:
+            self._maintenance_thread_ids.add(int(thread_id))
+
+    def unregister_maintenance_thread(self, thread_id: int | None) -> None:
+        if thread_id is None:
+            return
+        with self._lock:
+            self._maintenance_thread_ids.discard(int(thread_id))
 
     def note_current_thread_read(self) -> None:
         with self._lock:
             self._thread_state.observed_generation = self._generation
 
     def require_current_thread_allowed(self) -> None:
+        """Validate one write at statement admission time."""
+
         thread_id = threading.get_ident()
         with self._lock:
-            if self._active:
-                if self._owner_thread_id != thread_id:
+            if self._phase is WriteGatePhase.EXCLUSIVE:
+                if thread_id != self._owner_thread_id:
                     raise sqlite3.OperationalError("secure_import_in_progress")
                 self._thread_state.observed_generation = self._generation
                 return
-            observed = getattr(self._thread_state, "observed_generation", None)
+
+            if self._phase is WriteGatePhase.DRAINING:
+                if (
+                    thread_id != self._owner_thread_id
+                    and thread_id not in self._maintenance_thread_ids
+                ):
+                    raise sqlite3.OperationalError("secure_import_in_progress")
+                self._thread_state.observed_generation = self._generation
+                return
+
+            observed = getattr(
+                self._thread_state,
+                "observed_generation",
+                None,
+            )
             if observed is not None and int(observed) != self._generation:
                 raise sqlite3.OperationalError("database_generation_changed")
             self._thread_state.observed_generation = self._generation
 
-    @contextmanager
-    def acquire(self) -> Iterator[None]:
-        thread_id = threading.get_ident()
+    def promote_to_exclusive(self, owner_thread_id: int) -> None:
+        owner = int(owner_thread_id)
         with self._lock:
-            if self._active:
+            if (
+                self._phase is not WriteGatePhase.DRAINING
+                or self._owner_thread_id != owner
+            ):
+                raise sqlite3.OperationalError("write_gate_not_draining_owner")
+            self._phase = WriteGatePhase.EXCLUSIVE
+
+    @contextmanager
+    def draining(self) -> Iterator[WriteDrainLease]:
+        owner = threading.get_ident()
+        with self._lock:
+            if self._phase is not WriteGatePhase.OPEN:
                 raise sqlite3.OperationalError("secure_import_in_progress")
-            self._generation += 1
-            self._active = True
-            self._owner_thread_id = thread_id
+            self._phase = WriteGatePhase.DRAINING
+            self._owner_thread_id = owner
             self._thread_state.observed_generation = self._generation
+
         try:
-            yield
+            yield WriteDrainLease(self, owner)
         finally:
             with self._lock:
                 self._generation += 1
-                self._active = False
+                self._phase = WriteGatePhase.OPEN
                 self._owner_thread_id = None
-                # The owner performed or rolled back the replacement and is the
-                # only thread that can safely continue without a fresh read.
                 self._thread_state.observed_generation = self._generation
+
+    @contextmanager
+    def acquire(self) -> Iterator[None]:
+        """Compatibility facade for callers that need immediate exclusivity."""
+
+        with self.draining() as lease:
+            lease.promote()
+            yield
 
 
 DATABASE_WRITE_GATE = ProcessDatabaseWriteGate()
 
 
-__all__ = ["DATABASE_WRITE_GATE", "ProcessDatabaseWriteGate"]
+__all__ = [
+    "DATABASE_WRITE_GATE",
+    "ProcessDatabaseWriteGate",
+    "WriteDrainLease",
+    "WriteGatePhase",
+]

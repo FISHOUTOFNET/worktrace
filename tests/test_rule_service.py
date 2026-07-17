@@ -1,5 +1,6 @@
+from tests.support import activity_factory as activity_service
 from tests.support.db_helpers import assign_activity_project
-from worktrace.services import activity_service, project_service, rule_service
+from worktrace.services import project_service, rule_service
 from worktrace.db import get_connection
 import pytest
 

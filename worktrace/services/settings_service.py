@@ -1,27 +1,13 @@
+"""Durable application settings stored in SQLite."""
+
 from __future__ import annotations
 
 import time
 
 from ..db import get_connection, get_db_path, now_str
-from .runtime_activity_state_service import (
-    CURRENT_ACTIVITY_SNAPSHOT_KEY,
-    PENDING_CARRY_PROVENANCE_KEY,
-    PENDING_SHORT_SECONDS_KEY,
-    get_legacy_runtime_setting,
-    read_runtime_activity_snapshot_raw,
-    restore_runtime_activity_snapshot,
-    set_legacy_runtime_setting,
-)
 
 _SETTING_CACHE_TTL_SECONDS = 2.0
 _SETTING_CACHE: dict[tuple[str, str], tuple[float, str | None]] = {}
-_RUNTIME_ONLY_KEYS = frozenset(
-    {
-        CURRENT_ACTIVITY_SNAPSHOT_KEY,
-        PENDING_SHORT_SECONDS_KEY,
-        PENDING_CARRY_PROVENANCE_KEY,
-    }
-)
 
 
 def clear_settings_cache(key: str | None = None) -> None:
@@ -36,25 +22,23 @@ def _settings_db_key() -> str:
     return str(get_db_path().resolve())
 
 
-def _get_runtime_only_setting(key: str, default: str | None) -> str | None:
-    if key == CURRENT_ACTIVITY_SNAPSHOT_KEY:
-        value = read_runtime_activity_snapshot_raw(database_key=_settings_db_key())
-        return value if value != "" else (default if default is not None else "")
-    return get_legacy_runtime_setting(
-        key,
-        default,
-        database_key=_settings_db_key(),
-    )
+def _page_read_connection():
+    # Imported lazily so ordinary settings and startup paths do not depend on
+    # page-model modules. During a PageReadContext request this makes settings,
+    # canonical projection and structural revision observe one SQLite snapshot.
+    from .page_read_context import current_page_read_context
+
+    context = current_page_read_context()
+    return context.conn if context is not None else None
 
 
 def get_setting(key: str, default: str | None = None, *, conn=None) -> str | None:
-    # Runtime-only values intentionally bypass SQLite and the settings cache.
-    # ``conn`` is ignored for these keys because they are not transactional
-    # database facts.
-    if key in _RUNTIME_ONLY_KEYS:
-        return _get_runtime_only_setting(key, default)
-    if conn is not None:
-        row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+    effective_conn = conn if conn is not None else _page_read_connection()
+    if effective_conn is not None:
+        row = effective_conn.execute(
+            "SELECT value FROM settings WHERE key = ?",
+            (key,),
+        ).fetchone()
         value = row["value"] if row else None
         return value if value is not None else default
     cache_key = (_settings_db_key(), key)
@@ -64,28 +48,17 @@ def get_setting(key: str, default: str | None = None, *, conn=None) -> str | Non
         value = cached[1]
         return value if value is not None else default
 
-    with get_connection() as conn:
-        row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+    with get_connection() as own_conn:
+        row = own_conn.execute(
+            "SELECT value FROM settings WHERE key = ?",
+            (key,),
+        ).fetchone()
     value = row["value"] if row else None
     _SETTING_CACHE[cache_key] = (now + _SETTING_CACHE_TTL_SECONDS, value)
     return value if value is not None else default
 
 
 def set_setting(key: str, value: str) -> None:
-    if key in _RUNTIME_ONLY_KEYS:
-        if key == CURRENT_ACTIVITY_SNAPSHOT_KEY:
-            restore_runtime_activity_snapshot(
-                value,
-                "settings_compat_write",
-                database_key=_settings_db_key(),
-            )
-        else:
-            set_legacy_runtime_setting(
-                key,
-                value,
-                database_key=_settings_db_key(),
-            )
-        return
     ts = now_str()
     with get_connection() as conn:
         conn.execute(

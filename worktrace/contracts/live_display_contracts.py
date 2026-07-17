@@ -25,8 +25,10 @@ DisplaySessionKind = Literal[
 ]
 DisplayBasePolicy = Literal[
     "suppressed",
-    "persisted_extra",
+    "persisted_open",
 ]
+
+
 class DisplayProjectContract(TypedDict, total=False):
     id: int | None
     name: str
@@ -36,46 +38,28 @@ class DisplayProjectContract(TypedDict, total=False):
     is_suggested_project: bool
 
 
-class ProjectTransitionContract(TypedDict, total=False):
-    pending: bool
-    started_at: str
-    elapsed_seconds: int
-    threshold_seconds: int
-    from_project_id: int | None
-    to_project_id: int | None
-
-
 class ActivitySnapshotContract(TypedDict, total=False):
-    """Collector snapshot payload.
+    """Display-safe collector snapshot payload.
 
-    ``candidate_project``, ``project_transition`` and
-    ``inferred_project_name`` are compatibility/candidate metadata only.
-    Display projection, revisions, structural signatures, and frontend
-    continuity identities must use the official ``display_project`` instead.
+    Raw window titles, filesystem paths and URI hosts are deliberately absent.
+    The snapshot carries one formal project block: ``display_project``.
+    Candidate inference remains internal to the collector and never enters
+    page DTOs, revisions, structural signatures, or frontend identity.
     """
 
     app_name: str
     process_name: str
-    window_title: str
-    file_path_hint: str | None
     activity_display_name: str
     resource_kind: str
     resource_subtype: str
     resource_display_name: str
     resource_identity_key: str
-    resource_path_hint: str | None
-    resource_uri_host: str | None
-    inferred_project_name: str
     status: str
     start_time: str
     elapsed_seconds: int
-    extra_seconds: int
     persisted_activity_id: int | None
     is_persisted: bool
     display_project: DisplayProjectContract
-    candidate_project: DisplayProjectContract
-    project_transition: ProjectTransitionContract
-    project_transition_pending: bool
 
 
 class DisplaySessionPolicyContract(TypedDict, total=False):
@@ -163,9 +147,6 @@ class DisplaySpanContract(TypedDict, total=False):
     edit_disabled: bool
     disable_reason: str
     display_project: DisplayProjectContract
-    candidate_project: DisplayProjectContract
-    project_transition: ProjectTransitionContract
-    project_transition_pending: bool
     live_anchor_activity_id: int
     live_anchor_base_seconds: int
     is_uncategorized: bool
@@ -210,9 +191,6 @@ class CurrentActivityContract(TypedDict, total=False):
     aggregate_duration_seconds_at_sample: int
     aggregate_display_base_seconds: int
     display_project: DisplayProjectContract | None
-    candidate_project: DisplayProjectContract | None
-    project_transition: ProjectTransitionContract
-    project_transition_pending: bool
     is_uncategorized: bool
     is_classified: bool
 
@@ -250,7 +228,7 @@ class TimelineSessionRowContract(RecentActivityRowContract, total=False):
     status: str
     event_count: int
     session_note: str
-    # Read-only scope for Timeline's right summary panel.  This is distinct
+    # Read-only scope for Timeline's right summary panel. This is distinct
     # from activity_ids, which remains the stable edit/override identity.
     summary_activity_ids: list[int]
 

@@ -14,8 +14,8 @@ import pytest
 from worktrace.api import export_api, statistics_api
 from worktrace.api.export_api import StatisticsExportError
 from worktrace.db import get_connection
+from tests.support import activity_factory as activity_service
 from worktrace.services import (
-    activity_service,
     export_service,
     project_service,
     settings_service,

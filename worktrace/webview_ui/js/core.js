@@ -26,7 +26,6 @@
     // Canonical accepted live runtime. ``get_refresh_state`` is the only writer;
     // page payloads may render only after proving compatibility with this runtime.
     App.liveDisplayModel = null;
-    App.liveRuntime = null;
     App.liveClockContractViolation = null;
     App.liveClockContractRefreshRequested = false;
 
@@ -135,14 +134,6 @@
     ];
 
 
-    function callBridge(method) {
-        var args = Array.prototype.slice.call(arguments, 1);
-        if (typeof window.pywebview === "undefined" || !window.pywebview.api) {
-            return Promise.reject(new Error("bridge unavailable"));
-        }
-        return window.pywebview.api[method].apply(window.pywebview.api, args);
-    }
-    App.callBridge = callBridge;
 
 
     function showError(message) {
@@ -601,38 +592,38 @@
     }
     App.runtimeReportDateForPage = runtimeReportDateForPage;
 
-    function payloadReportDate(payload, page, fallbackDate) {
-        if (payload && (payload.report_date || payload.date)) {
-            return String(payload.report_date || payload.date);
-        }
-        return runtimeReportDateForPage(page, fallbackDate);
+function payloadReportDate(payload, page, fallbackDate) {
+    var envelope = payload && payload.runtime && typeof payload.runtime === "object"
+        ? payload.runtime
+        : payload;
+    if (envelope && (envelope.scope_report_date || envelope.report_date || envelope.date)) {
+        return String(envelope.scope_report_date || envelope.report_date || envelope.date);
     }
-    App.payloadReportDate = payloadReportDate;
+    return runtimeReportDateForPage(page, fallbackDate);
+}
+App.payloadReportDate = payloadReportDate;
 
-    function runtimeIdentityFromPayload(payload) {
-        payload = payload || {};
-        var clock = normalizeLiveClock(findClockInPayload(payload, false));
-        var current = payload.current_activity || {};
-        return {
-            liveClock: isActiveLiveTime(clock) ? clock : null,
-            displaySpanId: String(
-                payload.display_span_id
-                || (clock && clock.display_span_id)
-                || ""
-            ),
-            stableLiveKeyHash: String(
-                payload.stable_live_key_hash
-                || (clock && clock.stable_live_key_hash)
-                || ""
-            ),
-            liveRevision: String(payload.live_revision || ""),
-            pageRevision: String(payload.page_revision || ""),
-            sampleId: String(payload.sample_id || ""),
-            currentActivityDisplaySpanId: String(current.current_activity_display_span_id || ""),
-            currentResourceIdentityHash: String(current.current_resource_identity_hash || "")
-        };
-    }
-    App.runtimeIdentityFromPayload = runtimeIdentityFromPayload;
+
+function runtimeIdentityFromPayload(payload) {
+    payload = payload || {};
+    var envelope = payload.runtime && typeof payload.runtime === "object"
+        ? payload.runtime
+        : payload;
+    var clock = normalizeLiveClock(envelope.live_clock || findClockInPayload(payload, false));
+    var current = envelope.current_activity || payload.current_activity || {};
+    return {
+        liveClock: isActiveLiveTime(clock) ? clock : null,
+        displaySpanId: String(envelope.display_span_id || (clock && clock.display_span_id) || ""),
+        stableLiveKeyHash: String(envelope.stable_live_key_hash || (clock && clock.stable_live_key_hash) || ""),
+        liveRevision: String(envelope.live_revision || ""),
+        pageRevision: String(envelope.page_revision || ""),
+        sampleId: String(envelope.sample_id || ""),
+        currentActivityDisplaySpanId: String(envelope.current_activity_display_span_id || current.current_activity_display_span_id || ""),
+        currentResourceIdentityHash: String(envelope.current_resource_identity_hash || current.current_resource_identity_hash || "")
+    };
+}
+App.runtimeIdentityFromPayload = runtimeIdentityFromPayload;
+
 
     function runtimeVisualContinuityKey(runtime) {
         if (!runtime) return "";
@@ -647,51 +638,24 @@
     App.runtimeVisualContinuityKey = runtimeVisualContinuityKey;
     App.runtimeContinuityKey = runtimeVisualContinuityKey;
 
-    function acceptLiveRuntimePayload(payload, page, reportDate, options) {
-        if (!payload || !payload.ok) return false;
-        options = options || {};
-        var runtimePage = String(page || App.currentPage || "overview");
-        var runtimeDate = payloadReportDate(payload, runtimePage, reportDate);
-        var identity = runtimeIdentityFromPayload(payload);
-        var previous = App.liveRuntime || null;
-        var previousKey = runtimeVisualContinuityKey(previous);
-        var incomingClock = identity.liveClock;
-        var previousClock = previous && previous.liveClock;
-        if (options.source === "details_model"
-            && incomingClock
-            && previousClock
-            && !sameLiveContinuity(previousClock, incomingClock)) {
-            return false;
-        }
-        if (incomingClock && previousClock && sameLiveContinuity(previousClock, incomingClock)) {
-            incomingClock = rebaseIncomingClockWithoutRollback(
-                previousClock,
-                incomingClock,
-                tickerNowEpochMs()
-            );
-        }
-        App.liveRuntime = {
-            page: runtimePage,
-            reportDate: runtimeDate,
-            liveClock: incomingClock,
-            displaySpanId: identity.displaySpanId,
-            stableLiveKeyHash: identity.stableLiveKeyHash,
-            liveRevision: identity.liveRevision,
-            pageRevision: identity.pageRevision,
-            sampleId: identity.sampleId,
-            currentActivityDisplaySpanId: identity.currentActivityDisplaySpanId,
-            currentResourceIdentityHash: identity.currentResourceIdentityHash
-        };
-        App.liveDisplayModel = payload.activity_display_model || null;
-        if (previousKey && previousKey !== runtimeVisualContinuityKey(App.liveRuntime)) {
-            App._monotonicRenderState = {};
-        }
-        if (options.source === "refresh_state") {
-            App.lastRefreshState = payload;
-        }
-        return true;
+function acceptLiveRuntimePayload(payload, page, reportDate, options) {
+    if (!payload || !payload.ok || !App.liveRuntimeStore) return false;
+    options = options || {};
+    var runtimePage = String(page || App.currentPage || "overview");
+    var runtimeDate = payloadReportDate(payload, runtimePage, reportDate);
+    var previous = App.liveRuntimeStore.get();
+    var previousKey = runtimeVisualContinuityKey(previous);
+    var accepted = App.liveRuntimeStore.acceptEnvelope(payload, runtimePage, runtimeDate);
+    if (!accepted) return false;
+    App.liveDisplayModel = payload.activity_display_model || null;
+    if (previousKey && previousKey !== runtimeVisualContinuityKey(accepted)) {
+        App._monotonicRenderState = {};
     }
-    App.acceptLiveRuntimePayload = acceptLiveRuntimePayload;
+    if (options.source === "refresh_state") App.lastRefreshState = payload;
+    return true;
+}
+App.acceptLiveRuntimePayload = acceptLiveRuntimePayload;
+
 
     function acceptRefreshStateRuntime(state) {
         if (!state || !state.ok) return false;
@@ -714,86 +678,64 @@
     }
     App.acceptPagePayloadRuntime = acceptPagePayloadRuntime;
 
-    function setLiveRuntimeScope(page, reportDate) {
-        var existing = App.liveRuntime || {};
-        App.liveRuntime = {
-            page: String(page || App.currentPage || "overview"),
-            reportDate: runtimeReportDateForPage(page || App.currentPage || "overview", reportDate),
-            liveClock: existing.liveClock || null,
-            displaySpanId: existing.displaySpanId || "",
-            stableLiveKeyHash: existing.stableLiveKeyHash || "",
-            liveRevision: existing.liveRevision || "",
-            pageRevision: existing.pageRevision || "",
-            sampleId: existing.sampleId || "",
-            currentActivityDisplaySpanId: existing.currentActivityDisplaySpanId || "",
-            currentResourceIdentityHash: existing.currentResourceIdentityHash || ""
-        };
-    }
-    App.setLiveRuntimeScope = setLiveRuntimeScope;
+function setLiveRuntimeScope(page, reportDate) {
+    if (App.liveRuntimeStore) App.liveRuntimeStore.setScope(page, reportDate);
+}
+App.setLiveRuntimeScope = setLiveRuntimeScope;
 
-    function getActiveLiveClock() {
-        var runtime = App.liveRuntime || null;
-        if (!runtime || runtime.page !== (App.currentPage || "overview")) return null;
-        return runtime.liveClock || null;
-    }
-    App.getActiveLiveClock = getActiveLiveClock;
 
-    function isPagePayloadCompatibleWithRuntime(payload, page, reportDate) {
-        if (!payload || !payload.ok) return false;
-        var expectedPage = String(page || App.currentPage || "overview");
-        var expectedDate = payloadReportDate(payload, expectedPage, reportDate);
-        if (expectedPage !== String(App.currentPage || "overview")) return false;
-        if (expectedPage === "timeline") {
-            var currentDate = runtimeReportDateForPage("timeline", reportDate);
-            if (expectedDate && currentDate && expectedDate !== currentDate) return false;
-        } else if (expectedDate && expectedDate !== App.localTodayStr()) {
-            return false;
-        }
-        var currentRuntime = App.liveRuntime || null;
-        var currentClock = currentRuntime && currentRuntime.liveClock;
-        var incomingIdentity = runtimeIdentityFromPayload(payload);
-        var incomingClock = incomingIdentity.liveClock;
-        var currentActivity = payload.current_activity || {};
-        if (isActiveLiveTime(currentClock) && incomingClock && !sameLiveContinuity(currentClock, incomingClock)) {
-            return false;
-        }
-        if (
-            isActiveLiveTime(currentClock)
-            && !incomingClock
-            && (currentActivity.active === true || currentActivity.is_active === true)
-        ) {
-            return false;
-        }
-        if (
-            currentRuntime
-            && currentRuntime.currentActivityDisplaySpanId
-            && incomingIdentity.currentActivityDisplaySpanId
-            && currentRuntime.currentActivityDisplaySpanId !== incomingIdentity.currentActivityDisplaySpanId
-        ) {
-            return false;
-        }
-        if (
-            currentRuntime
-            && currentRuntime.currentResourceIdentityHash
-            && incomingIdentity.currentResourceIdentityHash
-            && currentRuntime.currentResourceIdentityHash !== incomingIdentity.currentResourceIdentityHash
-        ) {
-            return false;
-        }
-        return true;
-    }
-    App.isPagePayloadCompatibleWithRuntime = isPagePayloadCompatibleWithRuntime;
+function getActiveLiveClock() {
+    var runtime = App.liveRuntimeStore ? App.liveRuntimeStore.get() : null;
+    if (!runtime || runtime.page !== (App.currentPage || "overview")) return null;
+    return runtime.liveClock || null;
+}
+App.getActiveLiveClock = getActiveLiveClock;
 
-    function noteRejectedPagePayload(payload, page, reportDate) {
-        App.liveClockContractRefreshRequested = true;
-        App.liveClockContractViolation = {
-            spanId: payload && payload.display_span_id ? String(payload.display_span_id) : "",
-            page: String(page || App.currentPage || "overview"),
-            reason: "page_payload_runtime_mismatch",
-            reportDate: reportDate || (payload && (payload.report_date || payload.date)) || ""
-        };
+
+function isPagePayloadCompatibleWithRuntime(payload, page, reportDate) {
+    if (!payload || !payload.ok || !payload.runtime) return false;
+    var expectedPage = String(page || App.currentPage || "overview");
+    var expectedDate = payloadReportDate(payload, expectedPage, reportDate);
+    if (expectedPage !== String(App.currentPage || "overview")) return false;
+    if (expectedPage === "timeline") {
+        var currentDate = runtimeReportDateForPage("timeline", reportDate);
+        if (expectedDate && currentDate && expectedDate !== currentDate) return false;
+        if (expectedDate && expectedDate !== App.localTodayStr()) return true;
+    } else if (expectedDate && expectedDate !== App.localTodayStr()) {
+        return false;
     }
-    App.noteRejectedPagePayload = noteRejectedPagePayload;
+    var currentRuntime = App.liveRuntimeStore ? App.liveRuntimeStore.get() : null;
+    var currentClock = currentRuntime && currentRuntime.liveClock;
+    var incomingIdentity = runtimeIdentityFromPayload(payload);
+    var incomingClock = incomingIdentity.liveClock;
+    var envelope = payload.runtime || {};
+    var currentActivity = envelope.current_activity || payload.current_activity || {};
+    if (isActiveLiveTime(currentClock) && incomingClock && !sameLiveContinuity(currentClock, incomingClock)) return false;
+    if (isActiveLiveTime(currentClock) && !incomingClock
+        && (currentActivity.active === true || currentActivity.is_active === true)) return false;
+    if (currentRuntime && currentRuntime.currentActivityDisplaySpanId
+        && incomingIdentity.currentActivityDisplaySpanId
+        && currentRuntime.currentActivityDisplaySpanId !== incomingIdentity.currentActivityDisplaySpanId) return false;
+    if (currentRuntime && currentRuntime.currentResourceIdentityHash
+        && incomingIdentity.currentResourceIdentityHash
+        && currentRuntime.currentResourceIdentityHash !== incomingIdentity.currentResourceIdentityHash) return false;
+    return true;
+}
+App.isPagePayloadCompatibleWithRuntime = isPagePayloadCompatibleWithRuntime;
+
+
+function noteRejectedPagePayload(payload, page, reportDate) {
+    var envelope = payload && payload.runtime ? payload.runtime : (payload || {});
+    App.liveClockContractRefreshRequested = true;
+    App.liveClockContractViolation = {
+        spanId: envelope.display_span_id ? String(envelope.display_span_id) : "",
+        page: String(page || App.currentPage || "overview"),
+        reason: "page_payload_runtime_mismatch",
+        reportDate: reportDate || envelope.scope_report_date || payloadReportDate(payload, page, reportDate) || ""
+    };
+}
+App.noteRejectedPagePayload = noteRejectedPagePayload;
+
 
     // SINGLE SOURCE OF TRUTH for live-row continuity keys. Uses ``stable_live_key_hash`` so the key
     // survives persisted-open refreshes.

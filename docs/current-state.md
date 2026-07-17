@@ -105,8 +105,8 @@ and all-or-nothing inside one `BEGIN IMMEDIATE` transaction.
 
 ```text
 WebView -> bridge -> worktrace.api -> worktrace.services
-  view_model_hardening_service (cross-surface metrics / structure revision adapter)
-    view_model_service (page projection/materialization owner)
+  overview/timeline/session_detail_view_model_service (page DTO owners)
+    view_model_service (shared page projection components)
       activity_display_model_service (live display semantics owner)
   report_projection_snapshot_service (canonical report query)
   report_revision_service (structure/export revision semantics)
@@ -125,9 +125,8 @@ by the DOM-only local ticker and do not request a full page reload.
 - Canonical report facts are built only by
   `report_projection_snapshot_service`; Statistics, export, Overview, Timeline,
   and Details do not create competing report attribution models.
-- `view_model_service` remains the page projection/materialization owner.
-  `view_model_hardening_service` only corrects cross-surface metric/revision
-  semantics and safe open-edit capability flags.
+- Page-specific ViewModel services own their public DTOs and share the same
+  structural revision and canonical projection snapshot contracts.
 - All Timeline writes remain ledger operations with idempotent request receipts.
 - Automatic and batch assignment commands share
   `assignment_command_service`; transient inference failures are marked using

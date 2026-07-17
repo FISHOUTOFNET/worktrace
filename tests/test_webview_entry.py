@@ -220,7 +220,7 @@ def test_overview_bridge_methods_return_json_serializable_no_traceback(temp_db):
 
     settings_service.clear_settings_cache()
     bridge = WebViewBridge()
-    for method_name in ("get_status", "toggle_pause", "get_overview", "get_recent_activities"):
+    for method_name in ("get_status", "toggle_pause", "get_overview"):
         method = getattr(bridge, method_name)
         result = method()
         assert isinstance(result, dict), f"{method_name} must return a dict"

@@ -11,6 +11,7 @@ import threading
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from enum import Enum
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -34,10 +35,8 @@ from ..security.backup_format import (
 )
 from ..write_gate import DATABASE_WRITE_GATE
 from . import privacy_gate_service
-from .runtime_activity_state_service import (
-    clear_runtime_activity_state,
-    restore_runtime_activity_snapshot,
-)
+from .database_maintenance_barrier import drain_existing_writers
+from .runtime_activity_state_service import clear_runtime_activity_state
 from .secure_backup_validation import BackupValidationError, validate_staging_database
 from .settings_service import (
     clear_settings_cache,
@@ -97,9 +96,6 @@ _DELETE_ORDER: tuple[str, ...] = (
     "settings",
     "project",
 )
-_UNSAFE_SNAPSHOT_IDENTITY_KEYS = frozenset(
-    {"id", "activity_id", "open_activity_id", "persisted_activity_id"}
-)
 
 
 class SecureBackupError(Exception):
@@ -155,19 +151,25 @@ class _ImportGuardState:
     prior_user_paused: bool
     prior_collector_status: str
     succeeded: bool = False
+    fail_closed: bool = False
 
     def mark_succeeded(self) -> None:
         self.succeeded = True
 
 
+class SecureImportPhase(str, Enum):
+    IDLE = "idle"
+    DRAINING = "draining"
+    EXCLUSIVE = "exclusive"
+
+
 class SecureImportCoordinator:
-    """Single owner for pause, reset, write gate and destructive replacement."""
+    """Single owner for DRAINING, pause/reset, and exclusive replacement."""
 
     def __init__(self) -> None:
         self._maintenance_lock = threading.Lock()
         self._state_lock = threading.Lock()
-        self._maintenance_active = False
-        self._write_gate = False
+        self._phase = SecureImportPhase.IDLE
         self._pause_handler: Any = None
         self._reset_handler: Any = None
 
@@ -189,13 +191,33 @@ class SecureImportCoordinator:
             if handler is None or self._reset_handler == handler:
                 self._reset_handler = None
 
+    def phase(self) -> SecureImportPhase:
+        with self._state_lock:
+            return self._phase
+
     def write_gate_active(self) -> bool:
         with self._state_lock:
             return (
-                self._maintenance_active
-                or self._write_gate
+                self._phase is not SecureImportPhase.IDLE
                 or DATABASE_WRITE_GATE.active()
             )
+
+    def _require_command_ack(
+        self,
+        result: dict[str, Any],
+        *,
+        kind: str,
+        state: _ImportGuardState,
+        reason: str,
+    ) -> None:
+        if bool(result.get("ok")):
+            return
+        if bool(result.get("command_state_unknown")):
+            state.fail_closed = True
+            set_setting("user_paused", "true")
+            set_setting("collector_status", "paused")
+            clear_runtime_activity_state(f"{reason}_{kind}_state_unknown")
+        raise SecureBackupError(f"collector_{kind}_not_acknowledged")
 
     @contextmanager
     def acquire(
@@ -209,72 +231,75 @@ class SecureImportCoordinator:
                 "another destructive operation is already in progress"
             )
 
-        with self._state_lock:
-            self._maintenance_active = True
-            pause_handler = self._pause_handler
-            reset_handler = self._reset_handler
-
-        prior_user_paused = get_bool_setting("user_paused", False)
-        prior_collector_status = (
-            get_setting("collector_status", "stopped") or "stopped"
-        )
-        prior_snapshot = get_setting("current_activity_snapshot", "") or ""
-        state = _ImportGuardState(
-            prior_user_paused=prior_user_paused,
-            prior_collector_status=prior_collector_status,
-        )
         try:
-            if pause_handler is not None:
-                result = pause_handler(timeout_seconds=5.0)
-                if not bool(result.get("ok")):
-                    raise SecureBackupError("collector_pause_not_acknowledged")
-            if reset_handler is not None:
-                result = reset_handler(timeout_seconds=5.0)
-                if not bool(result.get("ok")):
-                    raise SecureBackupError("collector_reset_not_acknowledged")
+            with self._state_lock:
+                pause_handler = self._pause_handler
+                reset_handler = self._reset_handler
 
-            set_setting("user_paused", "true")
-            set_setting("collector_status", "paused")
-            clear_runtime_activity_state(f"{reason}_guard_enter")
-
-            with DATABASE_WRITE_GATE.acquire():
+            with DATABASE_WRITE_GATE.draining() as lease:
                 with self._state_lock:
-                    self._write_gate = True
+                    self._phase = SecureImportPhase.DRAINING
+
+                prior_user_paused = get_bool_setting("user_paused", False)
+                prior_collector_status = (
+                    get_setting("collector_status", "stopped") or "stopped"
+                )
+                state = _ImportGuardState(
+                    prior_user_paused=prior_user_paused,
+                    prior_collector_status=prior_collector_status,
+                )
+
                 try:
+                    if pause_handler is not None:
+                        result = pause_handler(timeout_seconds=5.0)
+                        self._require_command_ack(
+                            result,
+                            kind="pause",
+                            state=state,
+                            reason=reason,
+                        )
+                    if reset_handler is not None:
+                        result = reset_handler(timeout_seconds=5.0)
+                        self._require_command_ack(
+                            result,
+                            kind="reset",
+                            state=state,
+                            reason=reason,
+                        )
+
+                    set_setting("user_paused", "true")
+                    set_setting("collector_status", "paused")
+                    clear_runtime_activity_state(f"{reason}_guard_enter")
+
+                    drain_existing_writers()
+                    lease.promote()
+                    with self._state_lock:
+                        self._phase = SecureImportPhase.EXCLUSIVE
+
                     yield state
                     state.succeeded = True
-                finally:
-                    with self._state_lock:
-                        self._write_gate = False
-
-            clear_runtime_activity_state(f"{reason}_success")
-            logging.info(
-                "runtime maintenance completed reason=%s paused=true",
-                reason,
-            )
-        except Exception as exc:
-            if not state.succeeded:
-                set_setting(
-                    "user_paused",
-                    "true" if prior_user_paused else "false",
-                )
-                set_setting("collector_status", prior_collector_status)
-                clear_runtime_activity_state(f"{reason}_rollback")
-                if _snapshot_is_safe_to_restore(prior_snapshot):
-                    restore_runtime_activity_snapshot(
-                        prior_snapshot,
-                        f"{reason}_rollback",
+                    clear_runtime_activity_state(f"{reason}_success")
+                    logging.info(
+                        "runtime maintenance completed reason=%s paused=true",
+                        reason,
                     )
-            logging.warning(
-                "runtime maintenance failed reason=%s exc_type=%s",
-                reason,
-                type(exc).__name__,
-            )
-            raise
+                except Exception as exc:
+                    if not state.succeeded and not state.fail_closed:
+                        set_setting(
+                            "user_paused",
+                            "true" if prior_user_paused else "false",
+                        )
+                        set_setting("collector_status", prior_collector_status)
+                        clear_runtime_activity_state(f"{reason}_rollback")
+                    logging.warning(
+                        "runtime maintenance failed reason=%s exc_type=%s",
+                        reason,
+                        type(exc).__name__,
+                    )
+                    raise
         finally:
             with self._state_lock:
-                self._write_gate = False
-                self._maintenance_active = False
+                self._phase = SecureImportPhase.IDLE
             clear_settings_cache()
             self._maintenance_lock.release()
 
@@ -370,28 +395,6 @@ def _require_bounded_backup_file(path: Path) -> None:
         raise BackupCorruptedError("backup file is invalid or corrupted") from exc
     if size <= 0 or size > MAX_BACKUP_FILE_BYTES:
         raise BackupCorruptedError("backup file is invalid or corrupted")
-
-
-def _snapshot_is_safe_to_restore(snapshot: str) -> bool:
-    if not snapshot:
-        return False
-    try:
-        value = json.loads(snapshot)
-    except (TypeError, json.JSONDecodeError):
-        return False
-    return not _contains_persisted_identity(value)
-
-
-def _contains_persisted_identity(value: Any) -> bool:
-    if isinstance(value, dict):
-        if bool(value.get("is_persisted")):
-            return True
-        if any(key in value for key in _UNSAFE_SNAPSHOT_IDENTITY_KEYS):
-            return True
-        return any(_contains_persisted_identity(item) for item in value.values())
-    if isinstance(value, list):
-        return any(_contains_persisted_identity(item) for item in value)
-    return False
 
 
 def _build_export_payload() -> bytes:
@@ -683,6 +686,7 @@ __all__ = [
     "MIGRATABLE_SETTINGS",
     "SECURE_IMPORT_COORDINATOR",
     "SecureImportCoordinator",
+    "SecureImportPhase",
     "SecureBackupError",
     "export_encrypted_backup",
     "import_encrypted_backup",

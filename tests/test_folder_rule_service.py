@@ -1,7 +1,7 @@
+from tests.support import activity_factory as activity_service
 from tests.support.db_helpers import assign_activity_project
 from worktrace.db import get_connection
 from worktrace.services import (
-    activity_service,
     folder_rule_service,
     project_service,
     rule_service,
@@ -76,13 +76,7 @@ def test_folder_rule_wins_over_keyword_rule_and_source_is_persisted(temp_db):
 
 
 def test_backfill_safe_does_not_overwrite_manual_override(temp_db):
-    """Backfill via the safe path skips manual_override activities.
-
-    The removed ``folder_rule_service.backfill_folder_rule`` entry was
-    removed; the safe path lives in ``rule_impact_service``. This test
-    keeps coverage of the manual-override skip behavior at the folder
-    backfill level by exercising the new safe path.
-    """
+    """Backfill via the safe path skips manual_override activities."""
     from worktrace.db import get_connection, now_str
     from worktrace.services import rule_impact_service
 
@@ -91,9 +85,8 @@ def test_backfill_safe_does_not_overwrite_manual_override(temp_db):
     rule_id = folder_rule_service.create_or_update_folder_rule("D:\\CaseA", folder_project)
     aid = _activity_with_path("D:\\CaseA\\Manual.docx", "Manual.docx - Word")
     assign_activity_project(aid, manual_project, manual=True)
-    # Close via direct SQL (bypass close_activity's automatic rule
-    # re-trigger) so the activity is classified as manual_skipped rather
-    # than in_progress_skipped.
+    # Close directly so this fixture stays manual and backfill classifies it as
+    # manual_skipped instead of re-running the production close inference.
     with get_connection() as conn:
         conn.execute(
             "UPDATE activity_log SET end_time = ?, duration_seconds = ?, updated_at = ? WHERE id = ?",
@@ -113,8 +106,7 @@ def test_backfill_safe_updates_eligible_activity(temp_db):
     folder_project = project_service.create_project("Folder")
     rule_id = folder_rule_service.create_or_update_folder_rule("D:\\CaseA", folder_project)
     aid = _activity_with_path("D:\\CaseA\\Eligible.docx", "Eligible.docx - Word")
-    # Close via direct SQL to bypass close_activity's automatic rule
-    # re-trigger so backfill sees a closed-but-unassigned eligible activity.
+    # Close directly so backfill sees a closed but still-unassigned fixture.
     with get_connection() as conn:
         conn.execute(
             "UPDATE activity_log SET end_time = ?, duration_seconds = ?, updated_at = ? WHERE id = ?",

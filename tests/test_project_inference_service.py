@@ -1,8 +1,8 @@
 import pytest
 
+from tests.support import activity_factory as activity_service
 from tests.support.db_helpers import assign_activity_project
 from worktrace.services import (
-    activity_service,
     folder_rule_service,
     project_inference_service,
     project_service,

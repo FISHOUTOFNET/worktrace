@@ -1,4 +1,5 @@
 from __future__ import annotations
+from tests.support import runtime_state_fixture
 
 import json
 
@@ -39,7 +40,7 @@ def test_stream_open_row_is_the_only_live_display_target(stream):
 def test_decision_trace_is_privacy_safe(stream):
     sensitive_title = "Sensitive Window Title 7Q2"
     sensitive_path = "C:\\Users\\Alice\\Secret\\plan.docx"
-    settings_service.set_setting("current_activity_snapshot", json.dumps({"window_title": sensitive_title, "file_path_hint": sensitive_path, "clipboard": "copied secret"}))
+    runtime_state_fixture.set_setting("current_activity_snapshot", json.dumps({"window_title": sensitive_title, "file_path_hint": sensitive_path, "clipboard": "copied secret"}))
     stream.start(sensitive_title, at=0).same(sensitive_title, at=30).stop(at=40)
     serialized = json.dumps([trace.to_dict() for trace in stream.trace.traces], ensure_ascii=False, sort_keys=True)
     for secret in (sensitive_title, sensitive_path, "copied secret", "SELECT ", "Traceback"):

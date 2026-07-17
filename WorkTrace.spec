@@ -7,6 +7,8 @@ root = Path(SPECPATH)
 
 datas = [
     (str(root / 'worktrace' / 'schema.sql'), 'worktrace'),
+    (str(root / 'worktrace' / 'schema_internal.sql'), 'worktrace'),
+    (str(root / 'worktrace' / 'schema_indexes.sql'), 'worktrace'),
     (str(root / 'worktrace' / 'platforms' / 'open_files_helper.py'), 'worktrace/platforms'),
     (str(root / 'worktrace' / 'webview_ui' / 'index.html'), 'worktrace/webview_ui'),
     (str(root / 'worktrace' / 'webview_ui' / 'styles.css'), 'worktrace/webview_ui'),

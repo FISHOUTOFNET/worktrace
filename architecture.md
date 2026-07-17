@@ -86,12 +86,17 @@ pause/import/privacy/idle control. `ResourceIdentityResolver` owns
 ActiveWindow-to-resource identity, signatures, path supplement, same-resource
 checks, and privacy-safe identity. `CollectorStateMachine` owns transition and
 hard-boundary decisions only. `ActivitySessionRecorder` coordinates current
-session state, lifecycle commands, project ownership, and
-snapshot publication.
+session state, lifecycle commands, project ownership, and snapshot publication.
 
-`SnapshotPublisher` is the sole
-`current_activity_snapshot` construction/publication owner; runtime cleanup
-remains the transient-state clearing owner.
+`SnapshotPublisher` is the sole process-local activity snapshot construction
+and publication owner; runtime cleanup remains the transient-state clearing
+owner. The public snapshot carries only display-safe resource identity,
+`status`, `start_time`, sampled `elapsed_seconds`, persisted-row identity, and
+one formal `display_project` block. Candidate project inference remains inside
+`ProjectOwnershipState`; it never enters Snapshot, ViewModel, API, revision, or
+frontend identity. Crash-recovery checkpoint progress remains
+`ActivitySessionRecorder.persisted_checkpoint_seconds` and the open SQLite row;
+it is not a display field.
 
 The collector is a fact collector, not a noise filter. Every normal activity,
 including a five-second first activity, gets its own raw `activity_log` row.
@@ -99,11 +104,11 @@ There is no collector merge, drop, borrowed anchor, or reopen-anchor path.
 Report projection and view models may aggregate or suppress short raw rows for
 human-facing reports, but they never mutate the raw rows.
 
-`worktrace.collector.decision_trace` provides privacy-safe diagnostic
-records for collector decisions. The default recorder is no-op; tests may
-inject an in-memory recorder. Decision traces are not written to the DB, are
-not exposed to WebView, do not contain raw window titles, paths, clipboard
-text, SQL, or tracebacks, and never participate in collector decisions.
+`worktrace.collector.decision_trace` provides privacy-safe diagnostic records
+for collector decisions. The default recorder is no-op; tests may inject an
+in-memory recorder. Decision traces are not written to the DB, are not exposed
+to WebView, do not contain raw window titles, paths, clipboard text, SQL, or
+tracebacks, and never participate in collector decisions.
 
 Collector continuity has three separate fact streams:
 
@@ -131,15 +136,15 @@ activity, pending, snapshot, boundary, or health state.
 
 ## Activity Display Model Boundary
 
-`activity_display_model_service` remains the sole orchestration entry point
-for live display semantics. Its internals are split by responsibility:
+`activity_display_model_service` remains the sole orchestration entry point for
+live display semantics. Its internals are split by responsibility:
 
 - `activity_display_policy` decides display policy, status-only handling, and
   surface materialization flags.
 - `activity_live_clock` builds the single backend live clock consumed by the
   frontend runtime.
-- `activity_display_span` builds current activity display fields, display
-  span identity, and display structural signatures.
+- `activity_display_span` builds current activity display fields, display span
+  identity, and display structural signatures.
 - `activity_row_overlay` overlays a display span onto DB-backed row payloads.
 
 Together, the Activity Display Model modules decide:
@@ -154,8 +159,8 @@ Together, the Activity Display Model modules decide:
 
 They never write the DB. They build display-safe JSON payloads only.
 
-`worktrace.contracts.live_display_contracts` contains internal `TypedDict`
-and `Literal` contracts for these plain dict payloads. They are development
+`worktrace.contracts.live_display_contracts` contains internal `TypedDict` and
+`Literal` contracts for these plain dict payloads. They are development
 contracts, not a published API and not a runtime validation layer.
 
 `live_display_service` is not the page live-display model owner. It provides
@@ -195,7 +200,7 @@ such as live state handoff or page structure changes, flow through
 ## DB / Report Boundary
 
 `timeline_service`, `statistics_service`, and `export_service` are DB/report
-layers. They must not read `current_activity_snapshot`, import
+layers. They must not read the process-local activity snapshot, import
 `activity_display_model_service`, or invoke live projection helpers. Report
 outputs are based on persisted DB rows, not frontend live runtime state.
 

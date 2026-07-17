@@ -1,9 +1,10 @@
+from tests.support import runtime_state_fixture
 from pathlib import Path
 
 from openpyxl import load_workbook
 
+from tests.support import activity_factory as activity_service
 from worktrace.services import (
-    activity_service,
     database_maintenance_service,
     export_service,
 )
@@ -101,9 +102,8 @@ def test_clear_all_confirm_false_does_not_reset_db(temp_db) -> None:
         pass
     else:
         raise AssertionError("clear_all_local_data(confirm=False) must raise")
-    from worktrace.services import activity_service as act_svc
 
-    activities = act_svc.get_activities_by_range(
+    activities = activity_service.get_activities_by_range(
         "2026-06-18", "2026-06-18"
     )
     assert any(a["id"] == aid for a in activities)
@@ -113,18 +113,17 @@ def test_clear_all_success_sets_pause_guard_and_clears_after(temp_db) -> None:
     _seed_business_data()
     set_setting("user_paused", "false")
     set_setting("collector_status", "running")
-    set_setting("current_activity_snapshot", '{"app":"Word"}')
-    set_setting("pending_short_seconds", "12")
+    runtime_state_fixture.set_setting("current_activity_snapshot", '{"app":"Word"}')
+    runtime_state_fixture.set_setting("pending_short_seconds", "12")
 
     export_service.clear_all_local_data(confirm=True)
 
     assert get_bool_setting("user_paused", False) is True
     assert get_setting("collector_status", "") == "paused"
-    assert (get_setting("current_activity_snapshot", "") or "") == ""
-    assert get_setting("pending_short_seconds", "") == "0"
-    from worktrace.services import activity_service as act_svc
+    assert (runtime_state_fixture.get_setting("current_activity_snapshot", "") or "") == ""
+    assert runtime_state_fixture.get_setting("pending_short_seconds", "") == "0"
 
-    activities = act_svc.get_activities_by_range(
+    activities = activity_service.get_activities_by_range(
         "2026-06-18", "2026-06-18"
     )
     assert activities == []
@@ -151,9 +150,8 @@ def test_clear_all_rejects_when_secure_import_in_progress(temp_db) -> None:
         with pytest.raises(ValueError):
             export_service.clear_all_local_data(confirm=True)
         guard.mark_succeeded()
-    from worktrace.services import activity_service as act_svc
 
-    activities = act_svc.get_activities_by_range(
+    activities = activity_service.get_activities_by_range(
         "2026-06-18", "2026-06-18"
     )
     assert any(a["id"] == aid for a in activities)
@@ -168,8 +166,8 @@ def test_clear_all_failure_restores_prior_state_and_clears_guard(
     aid = _seed_business_data()
     set_setting("user_paused", "false")
     set_setting("collector_status", "running")
-    set_setting("current_activity_snapshot", '{"persisted_activity_id":77}')
-    set_setting("pending_short_seconds", "12")
+    runtime_state_fixture.set_setting("current_activity_snapshot", '{"persisted_activity_id":77}')
+    runtime_state_fixture.set_setting("pending_short_seconds", "12")
 
     def _boom() -> None:
         raise RuntimeError("clear_all_live_data boom")
@@ -186,8 +184,8 @@ def test_clear_all_failure_restores_prior_state_and_clears_guard(
     assert secure_backup_service.is_secure_import_in_progress() is False
     assert get_bool_setting("user_paused", False) is False
     assert get_setting("collector_status", "") == "running"
-    assert (get_setting("current_activity_snapshot", "") or "") == ""
-    assert get_setting("pending_short_seconds", "") == "0"
+    assert (runtime_state_fixture.get_setting("current_activity_snapshot", "") or "") == ""
+    assert runtime_state_fixture.get_setting("pending_short_seconds", "") == "0"
     activities = activity_service.get_activities_by_range(
         "2026-06-18", "2026-06-18"
     )
@@ -197,21 +195,20 @@ def test_clear_all_failure_restores_prior_state_and_clears_guard(
 def test_clear_all_guard_clears_runtime_pending_on_boundary(temp_db) -> None:
     from worktrace.services.secure_backup_service import SECURE_IMPORT_COORDINATOR
 
-    set_setting("pending_short_seconds", "12")
-    set_setting("current_activity_snapshot", '{"status":"normal"}')
+    runtime_state_fixture.set_setting("pending_short_seconds", "12")
+    runtime_state_fixture.set_setting("current_activity_snapshot", '{"status":"normal"}')
 
     with SECURE_IMPORT_COORDINATOR.acquire(reason="clear_all_test") as guard:
-        assert get_setting("pending_short_seconds", "") == "0"
-        assert get_setting("current_activity_snapshot", "") == ""
+        assert runtime_state_fixture.get_setting("pending_short_seconds", "") == "0"
+        assert runtime_state_fixture.get_setting("current_activity_snapshot", "") == ""
         guard.mark_succeeded()
 
 
 def test_clear_all_success_invalidates_context_recompute_cache(temp_db) -> None:
     _seed_business_data()
     export_service.clear_all_local_data(confirm=True)
-    from worktrace.services import activity_service as act_svc
 
-    activities = act_svc.get_activities_by_range(
+    activities = activity_service.get_activities_by_range(
         "2026-06-18", "2026-06-18"
     )
     assert activities == []
@@ -232,8 +229,8 @@ def test_clear_all_guard_exposes_safe_state_during_database_clear(
         )
         captured["user_paused"] = get_bool_setting("user_paused", False)
         captured["collector_status"] = get_setting("collector_status", "")
-        captured["snapshot"] = get_setting("current_activity_snapshot", "")
-        captured["pending"] = get_setting("pending_short_seconds", "")
+        captured["snapshot"] = runtime_state_fixture.get_setting("current_activity_snapshot", "")
+        captured["pending"] = runtime_state_fixture.get_setting("pending_short_seconds", "")
         real_clear()
 
     monkeypatch.setattr(
@@ -243,8 +240,8 @@ def test_clear_all_guard_exposes_safe_state_during_database_clear(
     )
     set_setting("user_paused", "false")
     set_setting("collector_status", "running")
-    set_setting("current_activity_snapshot", '{"status":"normal"}')
-    set_setting("pending_short_seconds", "12")
+    runtime_state_fixture.set_setting("current_activity_snapshot", '{"status":"normal"}')
+    runtime_state_fixture.set_setting("pending_short_seconds", "12")
 
     export_service.clear_all_local_data(confirm=True)
 

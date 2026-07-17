@@ -11,7 +11,6 @@ from ..contracts.live_display_contracts import (
 )
 from ..formatters import format_status_label
 from .live_display_service import classify_live_state
-from .live_time_service import snapshot_extra_seconds
 
 
 @dataclass(frozen=True)
@@ -116,6 +115,7 @@ def build_display_session_policy(
     display_live_state: str,
     summary: CurrentActivityContract,
 ) -> DisplaySessionPolicy:
+    del anchor
     if not snapshot:
         return DisplaySessionPolicy(
             display_session_kind="none",
@@ -170,8 +170,8 @@ def build_display_session_policy(
     if display_live_state == "persisted_open":
         return DisplaySessionPolicy(
             display_session_kind="persisted_open",
-            base_policy="persisted_extra",
-            aggregate_base_seconds=snapshot_extra_seconds(snapshot),
+            base_policy="persisted_open",
+            aggregate_base_seconds=0,
             current_base_seconds=0,
             project_duration_live=True,
             current_duration_live=live_started_at > 0,
@@ -179,7 +179,7 @@ def build_display_session_policy(
             materialize_timeline=True,
             materialize_details=True,
             status_only_reason="",
-            base_policy_reason="persisted_open_extra",
+            base_policy_reason="persisted_open_current_elapsed",
         )
 
     return DisplaySessionPolicy(

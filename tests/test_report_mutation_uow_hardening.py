@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import pytest
 
+from tests.support.activity_factory import create_closed_activity
 from worktrace.db import get_connection
 from worktrace.services import (
     activity_lifecycle_service,
-    activity_service,
     project_service,
     report_revision_service,
-    report_session_edit_service,
+    report_session_operation_service,
     timeline_service,
 )
 from worktrace.services.report_projection_snapshot_service import build_visible_snapshot
@@ -44,9 +44,9 @@ def test_open_edit_replays_after_activity_closes(temp_db):
     )
     # Canonical reporting intentionally suppresses zero-duration facts. Simulate
     # the first durable Recorder checkpoint before editing the open interval.
-    activity_service.set_activity_duration(activity_id, 60)
+    activity_lifecycle_service.checkpoint_activity(activity_id, 60)
     session = _session_for(activity_id)
-    result = report_session_edit_service.edit_session(
+    result = report_session_operation_service.edit_session(
         DATE,
         session["projection_instance_key"],
         session["projection_revision"],
@@ -88,19 +88,20 @@ def test_open_edit_replays_after_activity_closes(temp_db):
 
 def test_no_effect_edit_writes_receipt_without_structure_change(temp_db):
     project_id = project_service.create_project("No-op project")
-    activity_id = activity_service.create_activity(
-        "Excel",
-        "excel.exe",
-        "No-op.xlsx",
+    activity_id = create_closed_activity(
+        day=DATE,
+        start="10:00:00",
+        end="10:10:00",
+        app_name="Excel",
+        process_name="excel.exe",
+        window_title="No-op.xlsx",
         project_id=project_id,
-        start_time=f"{DATE} 10:00:00",
     )
-    activity_service.close_activity(activity_id, f"{DATE} 10:10:00")
     session = _session_for(activity_id)
 
     report_revision_service.clear_report_structure_revision_cache()
     before_revision = report_revision_service.get_report_structure_revision(DATE)
-    result = report_session_edit_service.edit_session(
+    result = report_session_operation_service.edit_session(
         DATE,
         session["projection_instance_key"],
         session["projection_revision"],

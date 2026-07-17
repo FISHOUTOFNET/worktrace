@@ -6,20 +6,18 @@ from typing import Any
 
 from ..constants import UNCATEGORIZED_PROJECT
 from . import project_service
-from .project_attribution_policy import candidate_project_fields, official_project_fields
+from .project_attribution_policy import official_project_fields
 
 
 def resolve_official_anchor_project(anchor: dict[str, Any] | None) -> dict[str, Any]:
     uncategorized_id = project_service.get_or_create_uncategorized_project()
     if not anchor:
         return _anchor_project_from_official_fields(
-            official_project_fields({}, uncategorized_id),
-            candidate_project_fields({}, uncategorized_id),
+            official_project_fields({}, uncategorized_id)
         )
     row = _anchor_attribution_row(anchor)
     return _anchor_project_from_official_fields(
-        official_project_fields(row, uncategorized_id),
-        candidate_project_fields(row, uncategorized_id),
+        official_project_fields(row, uncategorized_id)
     )
 
 
@@ -112,8 +110,6 @@ def build_revision_parts(
         "today": today,
         "report_date": report_date,
     }
-    # Live elapsed/base counters are ticker data, not structure. Including
-    # them here would force a bridge refresh for every snapshot sample.
     display_policy = live_clock.get("display_policy") or {}
     display_projection_input = {
         "display_structural_signature": str(model.get("display_structural_signature") or ""),
@@ -132,11 +128,9 @@ def build_revision_parts(
             current_activity.get("display_project")
         ),
     }
-    live_revision = _hash(live_clock_input)
-    page_revision = _hash([marker, display_projection_input])
     return {
-        "live_revision": live_revision,
-        "page_revision": page_revision,
+        "live_revision": _hash(live_clock_input),
+        "page_revision": _hash([marker, display_projection_input]),
     }
 
 
@@ -167,10 +161,7 @@ def _anchor_attribution_row(anchor: dict[str, Any]) -> dict[str, Any]:
     return row
 
 
-def _anchor_project_from_official_fields(
-    official: dict[str, Any],
-    candidate: dict[str, Any],
-) -> dict[str, Any]:
+def _anchor_project_from_official_fields(official: dict[str, Any]) -> dict[str, Any]:
     project_id = int(official.get("display_project_id") or 0)
     project_name = str(official.get("display_project_name") or UNCATEGORIZED_PROJECT)
     project_description = str(official.get("display_project_description") or "")
@@ -189,13 +180,12 @@ def _anchor_project_from_official_fields(
             "is_uncategorized": bool(official.get("is_uncategorized", True)),
             "is_suggested_project": False,
         },
-        "candidate_project": candidate,
         "is_uncategorized": bool(official.get("is_uncategorized", True)),
         "is_classified": bool(official.get("is_classified")),
     }
 
 
-def _hash(value: dict[str, Any]) -> str:
+def _hash(value: Any) -> str:
     return hashlib.sha1(
         json.dumps(value, sort_keys=True, ensure_ascii=True).encode("utf-8")
     ).hexdigest()

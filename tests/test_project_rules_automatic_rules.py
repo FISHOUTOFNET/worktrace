@@ -11,9 +11,9 @@ import pytest
 
 from worktrace.api import rule_api
 from worktrace.db import get_connection, now_str
+from tests.support import activity_factory as activity_service
 from worktrace.services import (
     activity_lifecycle_service,
-    activity_service,
     folder_rule_service,
     project_inference_service,
     project_service,

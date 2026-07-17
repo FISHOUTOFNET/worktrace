@@ -18,8 +18,7 @@ def current_activity_snapshot(
     status: str = STATUS_NORMAL,
     is_persisted: bool = False,
     persisted_activity_id: int = 0,
-    inferred_project_name: str = "TestProject",
-    extra_seconds: int = 0,
+    project_name: str = "TestProject",
     start_time: str | None = None,
     app_name: str = "AppA",
     process_name: str = "AppA.exe",
@@ -28,17 +27,24 @@ def current_activity_snapshot(
     if start_time is None:
         start = datetime.now() - timedelta(seconds=elapsed_seconds)
         start_time = start.strftime(TIME_FORMAT)
+    is_uncategorized = project_name in {"", "未归类"}
     return {
         "app_name": app_name,
         "process_name": process_name,
         "window_title": window_title,
-        "inferred_project_name": inferred_project_name,
         "start_time": start_time,
         "elapsed_seconds": elapsed_seconds,
-        "extra_seconds": extra_seconds,
         "status": status,
         "is_persisted": is_persisted,
         "persisted_activity_id": persisted_activity_id,
+        "display_project": {
+            "id": None,
+            "name": project_name,
+            "description": "",
+            "source": "uncategorized" if is_uncategorized else "keyword_rule",
+            "is_uncategorized": is_uncategorized,
+            "is_suggested_project": False,
+        },
     }
 
 

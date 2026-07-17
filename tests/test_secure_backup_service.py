@@ -4,6 +4,7 @@ Includes import guard, DB safety, and logging hygiene tests.
 """
 
 from __future__ import annotations
+from tests.support import runtime_state_fixture
 
 import json
 import logging
@@ -305,8 +306,8 @@ def test_export_payload_excludes_keyring(temp_db):
 def test_export_payload_excludes_runtime_state_settings(temp_db):
     from worktrace.services.settings_service import set_setting
 
-    set_setting("current_activity_snapshot", '{"app":"runtime-state-marker"}')
-    set_setting("pending_short_seconds", "12")
+    runtime_state_fixture.set_setting("current_activity_snapshot", '{"app":"runtime-state-marker"}')
+    runtime_state_fixture.set_setting("pending_short_seconds", "12")
     set_setting("collector_status", "running")
 
     payload = secure_backup_service._build_export_payload()
@@ -324,12 +325,12 @@ def test_export_payload_excludes_runtime_state_settings(temp_db):
 
 def test_secure_import_guard_clears_runtime_pending_on_boundary(temp_db):
     _reset_guard_and_pause_state()
-    set_setting("current_activity_snapshot", '{"status":"normal"}')
-    set_setting("pending_short_seconds", "12")
+    runtime_state_fixture.set_setting("current_activity_snapshot", '{"status":"normal"}')
+    runtime_state_fixture.set_setting("pending_short_seconds", "12")
 
     with secure_backup_service.SECURE_IMPORT_COORDINATOR.acquire():
-        assert get_setting("current_activity_snapshot", "") == ""
-        assert get_setting("pending_short_seconds", "") == "0"
+        assert runtime_state_fixture.get_setting("current_activity_snapshot", "") == ""
+        assert runtime_state_fixture.get_setting("pending_short_seconds", "") == "0"
 
 
 def test_export_payload_is_valid_utf8_json(temp_db):
@@ -728,7 +729,7 @@ def _reset_guard_and_pause_state() -> None:
     """Clear the import guard and pause/status settings to a clean baseline."""
     set_setting("user_paused", "false")
     set_setting("collector_status", "stopped")
-    set_setting("current_activity_snapshot", "")
+    runtime_state_fixture.set_setting("current_activity_snapshot", "")
 
 
 def _make_backup(tmp_path: Path, passphrase: str = "correct-passphrase") -> Path:
@@ -761,7 +762,7 @@ def test_import_sets_secure_import_in_progress_during_replacement(temp_db, tmp_p
         captured["guard_during_replace"] = secure_backup_service.is_secure_import_in_progress()
         captured["user_paused_during_replace"] = get_bool_setting("user_paused", False)
         captured["collector_status_during_replace"] = get_setting("collector_status", "")
-        captured["snapshot_during_replace"] = get_setting("current_activity_snapshot", "")
+        captured["snapshot_during_replace"] = runtime_state_fixture.get_setting("current_activity_snapshot", "")
         return original_replace(data)
 
     monkeypatch.setattr(secure_backup_service, "_replace_import", spy_replace)
@@ -803,12 +804,12 @@ def test_import_success_leaves_user_paused_and_collector_status_paused(temp_db, 
     assert get_setting("collector_status", "") == "paused"
 
 
-def test_wrong_passphrase_restores_prior_pause_status(temp_db, tmp_path):
+def test_wrong_passphrase_restores_pause_status_but_clears_live_snapshot(temp_db, tmp_path):
     out = _make_backup(tmp_path)
     # Set a distinctive prior state.
     set_setting("user_paused", "false")
     set_setting("collector_status", "running")
-    set_setting("current_activity_snapshot", '{"app":"prior-snapshot-marker"}')
+    runtime_state_fixture.set_setting("current_activity_snapshot", '{"app":"prior-snapshot-marker"}')
 
     with pytest.raises(BackupDecryptionError):
         secure_backup_service.import_encrypted_backup(out, "wrong-passphrase")
@@ -816,15 +817,15 @@ def test_wrong_passphrase_restores_prior_pause_status(temp_db, tmp_path):
     assert secure_backup_service.is_secure_import_in_progress() is False
     assert get_bool_setting("user_paused", False) is False
     assert get_setting("collector_status", "") == "running"
-    assert get_setting("current_activity_snapshot", "") == '{"app":"prior-snapshot-marker"}'
+    assert runtime_state_fixture.get_setting("current_activity_snapshot", "") == ""
 
 
-def test_corrupted_backup_restores_prior_pause_status(temp_db, tmp_path):
+def test_corrupted_backup_restores_pause_status_but_clears_live_snapshot(temp_db, tmp_path):
     out = _make_backup(tmp_path)
     _corrupt_backup(out)
     set_setting("user_paused", "true")
     set_setting("collector_status", "stopped")
-    set_setting("current_activity_snapshot", '{"app":"corrupt-prior-marker"}')
+    runtime_state_fixture.set_setting("current_activity_snapshot", '{"app":"corrupt-prior-marker"}')
 
     with pytest.raises((BackupCorruptedError, BackupDecryptionError)):
         secure_backup_service.import_encrypted_backup(out, "correct-passphrase")
@@ -832,7 +833,7 @@ def test_corrupted_backup_restores_prior_pause_status(temp_db, tmp_path):
     assert secure_backup_service.is_secure_import_in_progress() is False
     assert get_bool_setting("user_paused", False) is True
     assert get_setting("collector_status", "") == "stopped"
-    assert get_setting("current_activity_snapshot", "") == '{"app":"corrupt-prior-marker"}'
+    assert runtime_state_fixture.get_setting("current_activity_snapshot", "") == ""
 
 
 def test_existing_secure_import_in_progress_rejects_new_import(temp_db, tmp_path):
@@ -850,15 +851,15 @@ def test_existing_secure_import_in_progress_rejects_new_import(temp_db, tmp_path
 def test_current_activity_snapshot_cleared_during_import(temp_db, tmp_path, monkeypatch):
     out = _make_backup(tmp_path)
     _reset_guard_and_pause_state()
-    set_setting("current_activity_snapshot", '{"app":"snapshot-before-import"}')
-    set_setting("pending_short_seconds", "12")
+    runtime_state_fixture.set_setting("current_activity_snapshot", '{"app":"snapshot-before-import"}')
+    runtime_state_fixture.set_setting("pending_short_seconds", "12")
 
     captured = {}
     original_replace = secure_backup_service._replace_import
 
     def spy_replace(data):
-        captured["snapshot_during"] = get_setting("current_activity_snapshot", "")
-        captured["pending_during"] = get_setting("pending_short_seconds", "")
+        captured["snapshot_during"] = runtime_state_fixture.get_setting("current_activity_snapshot", "")
+        captured["pending_during"] = runtime_state_fixture.get_setting("pending_short_seconds", "")
         return original_replace(data)
 
     monkeypatch.setattr(secure_backup_service, "_replace_import", spy_replace)
@@ -921,11 +922,11 @@ def test_after_rollback_import_guard_cleared(temp_db, tmp_path, monkeypatch):
     assert secure_backup_service.is_secure_import_in_progress() is False
 
 
-def test_after_rollback_previous_pause_status_restored(temp_db, tmp_path, monkeypatch):
+def test_after_rollback_pause_status_restored_but_live_snapshot_cleared(temp_db, tmp_path, monkeypatch):
     out = _make_backup(tmp_path)
     set_setting("user_paused", "false")
     set_setting("collector_status", "running")
-    set_setting("current_activity_snapshot", '{"app":"rollback-prior-marker"}')
+    runtime_state_fixture.set_setting("current_activity_snapshot", '{"app":"rollback-prior-marker"}')
 
     def failing_replace(data):
         raise sqlite3.OperationalError("simulated DB failure during replace")
@@ -937,7 +938,7 @@ def test_after_rollback_previous_pause_status_restored(temp_db, tmp_path, monkey
 
     assert get_bool_setting("user_paused", False) is False
     assert get_setting("collector_status", "") == "running"
-    assert get_setting("current_activity_snapshot", "") == '{"app":"rollback-prior-marker"}'
+    assert runtime_state_fixture.get_setting("current_activity_snapshot", "") == ""
 
 
 

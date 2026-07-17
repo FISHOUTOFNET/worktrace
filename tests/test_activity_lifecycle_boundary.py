@@ -1,284 +1,161 @@
-"""Static boundary tests for the ActivityLifecycle Command Facade architecture.
-
-These tests enforce the architecture invariants established by the
-ActivityLifecycle hard cutover (see architecture.md §"Write side"):
-
-- ``activity_lifecycle_service`` is the sole production command owner for
-  open-row lifecycle transitions (start / persist / close / close-all /
-  midnight / recovery).
-- ``activity_service`` is a pure low-level CRUD helper: it must NOT import
-  ``activity_lifecycle_service`` and its low-level lifecycle helpers
-  (``create_activity`` / ``close_activity``) must NOT be called from
-  production paths for open-row lifecycle.
-- Production callers (collector / state_machine / runtime / recovery) must
-  NOT use direct SQL ``UPDATE activity_log SET end_time`` to close open rows;
-  they must route through ``activity_lifecycle_service``.
-- ``activity_lifecycle_service`` must NOT delegate close-finalize to the
-  old ``activity_service.close_activity()`` method; it owns the close +
-  finalize itself.
-- ``recovery_service`` must NOT close open rows via direct SQL; it must
-  delegate to the lifecycle recovery helpers.
-
-These are static source-level checks so they run without a database and
-guard against architectural regression.
-"""
+"""Static contracts for the single-owned activity lifecycle write boundary."""
 
 from __future__ import annotations
 
+import ast
 import re
 from pathlib import Path
 
 import pytest
 
+pytestmark = [pytest.mark.contract, pytest.mark.unit]
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
-SERVICES_DIR = REPO_ROOT / "worktrace" / "services"
-COLLECTOR_DIR = REPO_ROOT / "worktrace" / "collector"
-RUNTIME_DIR = REPO_ROOT / "worktrace" / "runtime"
+WORKTRACE_DIR = REPO_ROOT / "worktrace"
+SERVICES_DIR = WORKTRACE_DIR / "services"
+COLLECTOR_DIR = WORKTRACE_DIR / "collector"
+RUNTIME_DIR = WORKTRACE_DIR / "runtime"
+
+LEGACY_WRITE_ENTRIES = frozenset(
+    {
+        "insert_activity_row",
+        "close_activity_row",
+        "close_all_open_rows",
+        "create_activity",
+        "close_activity",
+        "increment_activity_duration",
+        "set_activity_duration",
+        "reopen_activity",
+        "finalize_created_activity",
+        "apply_midnight_anchor_assignment",
+    }
+)
 
 
 def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-# activity_service must not import activity_lifecycle_service
+def _top_level_functions(path: Path) -> set[str]:
+    tree = ast.parse(_read(path), filename=str(path))
+    return {
+        node.name
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
 
 
-def test_activity_service_does_not_import_activity_lifecycle_service() -> None:
-    """``activity_service`` is a low-level CRUD helper. It must NOT import
-    ``activity_lifecycle_service`` — that would re-create the circular /
-    layered coupling the hard cutover removed. The lifecycle facade depends
-    on the CRUD helper, never the reverse."""
-    source = _read(SERVICES_DIR / "activity_service.py")
+def test_activity_service_is_query_and_post_capture_edit_only() -> None:
+    path = SERVICES_DIR / "activity_service.py"
+    source = _read(path)
+    definitions = _top_level_functions(path)
+
+    assert definitions.isdisjoint(LEGACY_WRITE_ENTRIES), (
+        "activity_service must not define lifecycle write entries: "
+        + ", ".join(sorted(definitions & LEGACY_WRITE_ENTRIES))
+    )
     for forbidden in (
         "import activity_lifecycle_service",
         "from .activity_lifecycle_service import",
         "from worktrace.services.activity_lifecycle_service import",
     ):
-        assert forbidden not in source, (
-            "activity_service.py must not import activity_lifecycle_service; "
-            "it is a low-level CRUD helper, not a lifecycle owner. Found: "
-            + forbidden
-        )
+        assert forbidden not in source
 
 
-# activity_lifecycle_service must not delegate close-finalize to old methods
-
-
-def test_activity_lifecycle_service_does_not_call_old_lifecycle_close_methods() -> None:
-    """``activity_lifecycle_service`` must own close + finalize itself. It
-    must NOT delegate the close-finalize step to the old
-    ``activity_service.close_activity()`` /
-    ``activity_service.create_activity()`` methods — those are low-level
-    CRUD helpers that no longer carry lifecycle semantics.
-
-    The facade IS allowed to call low-level helpers
-    (``close_all_open_rows`` / ``close_activity_row`` /
-    ``insert_activity_row`` / ``finalize_created_activity`` /
-    ``apply_midnight_anchor_assignment``) because those are pure CRUD
-    writes with no lifecycle semantics."""
+def test_lifecycle_service_owns_repository_backed_transitions() -> None:
     source = _read(SERVICES_DIR / "activity_lifecycle_service.py")
-    for forbidden in (
-        "activity_service.close_activity(",
-        "activity_service.create_activity(",
+
+    assert "activity_fact_repository" in source
+    for required in (
+        "activity_fact_repository.close_all_open_activities",
+        "activity_fact_repository.insert_open_activity",
+        "activity_fact_repository.close_activity",
+        "activity_fact_repository.checkpoint_activity_duration",
     ):
-        assert forbidden not in source, (
-            "activity_lifecycle_service.py must not delegate to the old "
-            "lifecycle method " + forbidden + "; it must own close + "
-            "finalize itself via low-level helpers."
-        )
+        assert required in source
+    for forbidden in (
+        "activity_service.create_activity(",
+        "activity_service.close_activity(",
+        "activity_service.close_activity_row(",
+        "activity_service.close_all_open_rows(",
+        "activity_service.insert_activity_row(",
+    ):
+        assert forbidden not in source
 
 
-# collector / state_machine must route close-all through the lifecycle facade
-
-
-def test_state_machine_routes_close_all_through_lifecycle_facade() -> None:
-    """``collector/state_machine.py`` stopped / paused / time_jump paths
-    must use ``activity_lifecycle_service.close_all_open_activities(...)``
-    to close open rows. ``activity_service`` low-level helpers must NOT be
-    called directly for close-all."""
+def test_collector_state_machine_routes_close_all_through_lifecycle() -> None:
     source = _read(COLLECTOR_DIR / "state_machine.py")
-    # The state machine must route close-all through the lifecycle facade.
-    assert "activity_lifecycle_service.close_all_open_activities" in source, (
-        "state_machine.py must call activity_lifecycle_service.close_all_open_activities "
-        "for stopped / paused / time_jump close-all"
-    )
+    assert "activity_lifecycle_service.close_all_open_activities" in source
 
 
-# runtime / app_runtime must route close-all through the lifecycle facade
-
-
-def test_app_runtime_routes_close_all_through_lifecycle_facade() -> None:
-    """``runtime/app_runtime.py`` shutdown must use
-    ``activity_lifecycle_service.close_all_open_activities(...)`` to close
-    open rows. The runtime should not import ``activity_service`` just for
-    close-all."""
+def test_runtime_routes_shutdown_close_all_through_lifecycle() -> None:
     source = _read(RUNTIME_DIR / "app_runtime.py")
-    # The runtime must route shutdown close-all through the lifecycle facade.
-    assert "activity_lifecycle_service.close_all_open_activities" in source, (
-        "app_runtime.py must call activity_lifecycle_service.close_all_open_activities "
-        "for shutdown close-all"
-    )
+    assert "activity_lifecycle_service.close_all_open_activities" in source
 
 
-def test_recovery_service_does_not_direct_sql_close_open_row() -> None:
-    """``recovery_service.py`` non-cross-midnight recovery must NOT close
-    open rows via direct SQL ``UPDATE activity_log SET end_time``. It must
-    delegate to ``activity_lifecycle_service.recover_close_activity`` (or
-    the cross-midnight helpers) so the close + finalize is owned by the
-    lifecycle facade.
-
-    This static check scans for the direct-SQL close pattern. The recovery
-    service IS allowed to READ open rows and compute durations / cross-
-    midnight splits; only the actual close write must go through the
-    lifecycle facade."""
+def test_recovery_routes_closes_through_lifecycle() -> None:
     source = _read(SERVICES_DIR / "recovery_service.py")
-    # The direct-SQL close pattern: UPDATE activity_log SET end_time
-    # (with optional whitespace / case variation).
-    pattern = re.compile(
+    direct_close = re.compile(
         r"UPDATE\s+activity_log\s+SET\s+end_time",
         re.IGNORECASE,
     )
-    assert pattern.search(source) is None, (
-        "recovery_service.py must not close open rows via direct SQL "
-        "'UPDATE activity_log SET end_time'; use "
-        "activity_lifecycle_service.recover_close_activity instead"
-    )
-    assert "recover_close_activity" in source, (
-        "recovery_service.py must import recover_close_activity from "
-        "activity_lifecycle_service for the non-cross-midnight path"
-    )
+    assert direct_close.search(source) is None
+    assert "recover_close_activity" in source
+    assert "activity_service.close_activity(" not in source
 
 
-def test_recovery_service_does_not_call_old_close_entries() -> None:
-    """``recovery_service.py`` must not call the old
-    ``activity_service.close_activity()`` for recovery close. It must use
-    the lifecycle recovery helpers."""
-    source = _read(SERVICES_DIR / "recovery_service.py")
-    for forbidden in (
-        "activity_service.close_activity(",
-    ):
-        assert forbidden not in source, (
-            "recovery_service.py must not call " + forbidden + "; use "
-            "activity_lifecycle_service recovery helpers instead"
-        )
+def _legacy_activity_service_calls(path: Path) -> list[str]:
+    tree = ast.parse(_read(path), filename=str(path))
+    aliases: set[str] = set()
+    direct_aliases: dict[str, str] = {}
 
-
-# activity_service low-level helpers must not carry finalize semantics
-
-
-def test_activity_service_close_methods_do_not_call_finalize() -> None:
-    """The ``activity_service.close_activity()`` method is a low-level CRUD
-    helper for tests / fixtures. It must NOT call
-    ``finalize_closed_activity_ids`` or
-    ``project_inference_service.process_new_activity`` — those lifecycle
-    semantics live only in the lifecycle facade now.
-
-    Note: the function docstrings may *mention* ``activity_lifecycle_service``
-    as a reference (telling developers which facade to use instead); that is
-    a docstring reference, not an actual call. The import-level boundary is
-    enforced by ``test_activity_service_does_not_import_activity_lifecycle_service``.
-    This test checks for actual finalize / inference *calls*."""
-    source = _read(SERVICES_DIR / "activity_service.py")
-    for func_name in ("close_activity",):
-        pos = source.find("def " + func_name + "(")
-        if pos == -1:
-            continue  # function may have been removed entirely — that's fine
-        next_def = source.find("\ndef ", pos + 1)
-        body = source[pos:next_def if next_def != -1 else len(source)]
-        for forbidden in (
-            "finalize_closed_activity_ids",
-            "process_new_activity",
-        ):
-            assert forbidden not in body, (
-                func_name + " must not call " + forbidden + "; "
-                "close-finalize semantics live only in activity_lifecycle_service"
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            if node.module == "worktrace.services":
+                aliases.update(
+                    item.asname or item.name
+                    for item in node.names
+                    if item.name == "activity_service"
+                )
+            elif node.module == "worktrace.services.activity_service":
+                for item in node.names:
+                    if item.name in LEGACY_WRITE_ENTRIES:
+                        direct_aliases[item.asname or item.name] = item.name
+        elif isinstance(node, ast.Import):
+            aliases.update(
+                item.asname or item.name.rsplit(".", 1)[-1]
+                for item in node.names
+                if item.name == "worktrace.services.activity_service"
             )
 
+    calls: set[tuple[int, str]] = set()
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Attribute)
+            and isinstance(node.value, ast.Name)
+            and node.value.id in aliases
+            and node.attr in LEGACY_WRITE_ENTRIES
+        ):
+            calls.add((node.lineno, node.attr))
+        elif (
+            isinstance(node, ast.Name)
+            and isinstance(node.ctx, ast.Load)
+            and node.id in direct_aliases
+        ):
+            calls.add((node.lineno, direct_aliases[node.id]))
 
-def test_activity_service_create_activity_does_not_close_old_rows() -> None:
-    """``activity_service.create_activity()`` is a pure low-level insert.
-    It must NOT close pre-existing open rows — that is the responsibility
-    of ``activity_lifecycle_service.start_activity``."""
-    source = _read(SERVICES_DIR / "activity_service.py")
-    pos = source.find("def create_activity(")
-    assert pos != -1, "activity_service must define create_activity"
-    next_def = source.find("\ndef ", pos + 1)
-    body = source[pos:next_def if next_def != -1 else len(source)]
-    for forbidden in (
-        "close_all_open_rows",
-        "close_activity_row",
-        "finalize_closed_activity_ids",
-    ):
-        assert forbidden not in body, (
-            "create_activity must not call " + forbidden + "; it is a pure "
-            "low-level insert. Closing pre-existing open rows is the job "
-            "of activity_lifecycle_service.start_activity"
-        )
+    return [f"{path.relative_to(REPO_ROOT)}:{line}: {name}" for line, name in sorted(calls)]
 
 
-# Section 五: production-wide static CRUD boundary scan.
-# Production code under ``worktrace/`` (excluding ``activity_service.py``
-# and ``activity_lifecycle_service.py``) must NOT directly call the
-# forbidden low-level CRUD helpers — route through the lifecycle facade.
-
-
-_FORBIDDEN_CRUD_CALLS = (
-    "activity_service.create_activity(",
-    "activity_service.close_activity(",
-    "activity_service.close_activity_row(",
-    "activity_service.close_all_open_rows(",
-    "activity_service.insert_activity_row(",
-)
-
-_EXCLUDED_FILES = {
-    "activity_service.py",
-    "activity_lifecycle_service.py",
-}
-
-
-def _iter_production_python_files() -> list[Path]:
-    """Yield all ``.py`` files under ``worktrace/`` except the excluded
-    CRUD helper / lifecycle facade files."""
-    worktrace_dir = REPO_ROOT / "worktrace"
-    result: list[Path] = []
-    for path in worktrace_dir.rglob("*.py"):
-        if path.name in _EXCLUDED_FILES:
-            continue
-        result.append(path)
-    return result
-
-
-def test_production_code_does_not_call_forbidden_crud_helpers() -> None:
-    """Section 五: scan all production ``.py`` files under ``worktrace/``
-    (excluding ``activity_service.py`` and ``activity_lifecycle_service.py``)
-    for direct calls to the forbidden low-level CRUD helpers.
-
-    Forbidden patterns::
-
-        activity_service.create_activity(
-        activity_service.close_activity(
-        activity_service.close_activity_row(
-        activity_service.close_all_open_rows(
-        activity_service.insert_activity_row(
-
-    Production callers must route through ``activity_lifecycle_service``
-    (the ActivityLifecycle Command Facade). Tests / fixtures under
-    ``tests/`` are NOT scanned — they are allowed to use the CRUD helpers
-    to construct data directly.
-    """
+def test_production_has_no_legacy_activity_service_write_calls() -> None:
+    excluded = {
+        SERVICES_DIR / "activity_service.py",
+        SERVICES_DIR / "activity_lifecycle_service.py",
+    }
     violations: list[str] = []
-    for path in _iter_production_python_files():
-        try:
-            source = _read(path)
-        except (OSError, UnicodeDecodeError):
+    for path in sorted(WORKTRACE_DIR.rglob("*.py")):
+        if path in excluded:
             continue
-        for forbidden in _FORBIDDEN_CRUD_CALLS:
-            if forbidden in source:
-                rel = path.relative_to(REPO_ROOT)
-                violations.append(f"{rel}: found '{forbidden}'")
-    assert not violations, (
-        "Production code must NOT call low-level activity_service CRUD "
-        "helpers directly; route through activity_lifecycle_service "
-        "(the ActivityLifecycle Command Facade). Found violations:\n  "
-        + "\n  ".join(violations)
-    )
+        violations.extend(_legacy_activity_service_calls(path))
+
+    assert not violations, "legacy activity write calls remain:\n" + "\n".join(violations)
