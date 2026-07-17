@@ -71,13 +71,13 @@ def _assignment(activity_id: int) -> dict:
 
 def test_preview_folder_rule_is_read_only_and_display_safe(temp_db):
     project_id = project_service.create_project("Folder Project")
-    rule_id = folder_rule_service.create_or_update_folder_rule(
-        r"D:\CaseA",
-        project_id,
-    )
     activity_id = _closed_activity(
         title=r"C:\Secret\clipboard SELECT",
         path=r"D:\CaseA\Doc.docx",
+    )
+    rule_id = folder_rule_service.create_or_update_folder_rule(
+        r"D:\CaseA",
+        project_id,
     )
 
     before = _assignment(activity_id)
@@ -85,15 +85,14 @@ def test_preview_folder_rule_is_read_only_and_display_safe(temp_db):
     after = _assignment(activity_id)
 
     assert before == after
-    assert result["rule"] == {
-        "kind": "folder",
-        "id": rule_id,
-        "enabled": True,
-        "project_id": project_id,
-        "project_name": "Folder Project",
-        "target": r"D:\CaseA",
-        "project_available": True,
-    }
+    assert result["rule"]["kind"] == "folder"
+    assert result["rule"]["id"] == rule_id
+    assert result["rule"]["enabled"] is True
+    assert result["rule"]["project_id"] == project_id
+    assert result["rule"]["project_name"] == "Folder Project"
+    assert result["rule"]["target"] == r"D:\CaseA"
+    assert result["rule"]["project_available"] is True
+    assert result["rule"]["version"]
     assert result["counts"]["matched_count"] == 1
     assert result["counts"]["would_update_count"] == 1
     assert result["samples"][0]["activity_id"] == activity_id
@@ -104,7 +103,6 @@ def test_preview_folder_rule_is_read_only_and_display_safe(temp_db):
 
 def test_preview_keyword_rule_reports_skip_classes(temp_db):
     project_id = project_service.create_project("Keyword Project")
-    rule_id = rule_service.create_rule("invoice", project_id)
     eligible = _closed_activity(title="invoice.xlsx - Excel")
     manual = _closed_activity(title="invoice manual.xlsx - Excel")
     hidden = _closed_activity(title="invoice hidden.xlsx - Excel")
@@ -115,10 +113,12 @@ def test_preview_keyword_rule_reports_skip_classes(temp_db):
             "UPDATE activity_log SET is_hidden = 1 WHERE id = ?",
             (hidden,),
         )
+    rule_id = rule_service.create_rule("invoice", project_id)
 
     result = rule_impact_service.preview_rule_impact("keyword", rule_id)
 
     assert result["rule"]["target"] == "invoice"
+    assert result["rule"]["version"]
     assert result["counts"]["matched_count"] == 1
     assert result["counts"]["would_update_count"] == 1
     assert result["counts"]["manual_skipped_count"] == 1
@@ -129,8 +129,8 @@ def test_preview_keyword_rule_reports_skip_classes(temp_db):
 
 def test_disabled_rule_preview_is_zero_and_does_not_write(temp_db):
     project_id = project_service.create_project("Disabled")
-    rule_id = rule_service.create_rule("disabled-token", project_id)
     activity_id = _closed_activity(title="disabled-token.docx - Word")
+    rule_id = rule_service.create_rule("disabled-token", project_id)
     rule_service.set_rule_enabled(rule_id, False)
 
     result = rule_impact_service.preview_rule_impact("keyword", rule_id)
@@ -143,8 +143,8 @@ def test_disabled_rule_preview_is_zero_and_does_not_write(temp_db):
 
 def test_durable_keyword_backfill_records_exact_rule_origin(temp_db):
     project_id = project_service.create_project("Client")
-    rule_id = rule_service.create_rule("spec", project_id)
     activity_id = _closed_activity(title="spec document.docx - Word")
+    rule_id = rule_service.create_rule("spec", project_id)
 
     result = rule_api.backfill_project_rule("keyword", rule_id)
 
@@ -163,13 +163,13 @@ def test_durable_keyword_backfill_records_exact_rule_origin(temp_db):
 def test_durable_folder_backfill_preserves_manual_assignment(temp_db):
     target_project = project_service.create_project("Target")
     manual_project = project_service.create_project("Manual")
+    eligible = _closed_activity(path=r"D:\Matter\eligible.docx")
+    manual = _closed_activity(path=r"D:\Matter\manual.docx")
+    assign_activity_project(manual, manual_project, manual=True)
     rule_id = folder_rule_service.create_or_update_folder_rule(
         r"D:\Matter",
         target_project,
     )
-    eligible = _closed_activity(path=r"D:\Matter\eligible.docx")
-    manual = _closed_activity(path=r"D:\Matter\manual.docx")
-    assign_activity_project(manual, manual_project, manual=True)
 
     result = rule_api.backfill_project_rule("folder", rule_id)
 
