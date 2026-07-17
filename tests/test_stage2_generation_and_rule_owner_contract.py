@@ -102,16 +102,17 @@ def test_project_catalog_has_no_cross_service_cache_fanout() -> None:
     assert "clear_exclude_rules_cache" not in source
 
 
-def test_clear_and_replacement_rely_on_generations() -> None:
+def test_clear_and_replacement_rely_on_single_generation_owners() -> None:
     maintenance = _source("worktrace/services/database_maintenance_service.py")
-    for namespace in (
-        "REPORT_STRUCTURE",
-        "CLASSIFICATION_CATALOG",
-        "SETTINGS",
-        "PRIVACY_CATALOG",
-        "DATABASE_REPLACEMENT",
+    assert "DataGenerationNamespace.REPORT_STRUCTURE" in maintenance
+    for duplicate in (
+        "DataGenerationNamespace.CLASSIFICATION_CATALOG",
+        "DataGenerationNamespace.SETTINGS",
+        "DataGenerationNamespace.PRIVACY_CATALOG",
+        "DataGenerationNamespace.DATABASE_REPLACEMENT",
     ):
-        assert f"DataGenerationNamespace.{namespace}" in maintenance
+        assert duplicate not in maintenance
+    assert "privacy_gate_service.restore_installation_privacy_state" in maintenance
     export = _source("worktrace/services/export_service.py")
     assert "_invalidate_clear_all_caches" not in export
     assert "invalidate_folder_rule_cache" not in export
