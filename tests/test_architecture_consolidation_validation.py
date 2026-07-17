@@ -17,7 +17,7 @@ from worktrace.services import (
 pytestmark = [pytest.mark.db, pytest.mark.integration, pytest.mark.serial]
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-WORKFLOW_ALLOWLIST = {"ci.yml"}
+WORKFLOW_ALLOWLIST = {"_validation.yml", "acceptance.yml", "ci.yml"}
 FORBIDDEN_WORKFLOW_COMMANDS = (
     "git push",
     "git merge",
@@ -135,7 +135,7 @@ def test_page_wrapper_services_are_removed():
         assert not (REPO_ROOT / "worktrace/services" / name).exists()
 
 
-def test_standard_ci_is_the_only_read_only_workflow():
+def test_permanent_ci_and_acceptance_workflows_are_read_only():
     workflow_dir = REPO_ROOT / ".github" / "workflows"
     workflows = sorted(
         path
@@ -154,8 +154,10 @@ def test_standard_ci_is_the_only_read_only_workflow():
         one_time_helpers
     )
 
+    combined_source = ""
     for workflow in workflows:
         source = workflow.read_text(encoding="utf-8")
+        combined_source += "\n" + source
         lowered = source.lower()
         for command in FORBIDDEN_WORKFLOW_COMMANDS:
             assert command.lower() not in lowered, (
@@ -165,18 +167,40 @@ def test_standard_ci_is_the_only_read_only_workflow():
         assert "worktrace-ci-diagnostics" not in source
         assert "github-actions[bot]" not in source
         assert "agent/" not in source
+        assert "contents: read" in source
+
+    assert "3.12" not in combined_source
+    assert "run_python312" not in combined_source
+
+    reusable_source = (workflow_dir / "_validation.yml").read_text(encoding="utf-8")
+    checkout_count = reusable_source.count("uses: actions/checkout@")
+    assert checkout_count == 3
+    assert reusable_source.count("persist-credentials: false") == checkout_count
+    assert reusable_source.count("git rev-parse HEAD") == checkout_count
+    assert reusable_source.count("Capture tested revision") == checkout_count
+    assert "workflow_call:" in reusable_source
+    assert 'python-version: "3.11"' in reusable_source
+    assert "node --test tests/webview/*.test.js" in reusable_source
+    assert "python -m PyInstaller --noconfirm --clean WorkTrace.spec" in reusable_source
+    assert "scripts\\build_windows_installer.ps1" in reusable_source
 
     ci_source = (workflow_dir / "ci.yml").read_text(encoding="utf-8")
-    checkout_count = ci_source.count("uses: actions/checkout@")
-    assert checkout_count == 4
-    assert ci_source.count("persist-credentials: false") == checkout_count
-    assert ci_source.count("git rev-parse HEAD") == checkout_count
-    assert ci_source.count("Capture tested revision") == checkout_count
-    assert "contents: read" in ci_source
-    assert "cancel-in-progress: false" in ci_source
+    assert "pull_request:" in ci_source
+    assert "push:" in ci_source
+    assert "./.github/workflows/_validation.yml" in ci_source
     assert "github.event.pull_request.head.sha || github.sha" in ci_source
-    assert "run_python312:" in ci_source
-    assert "inputs.run_python312" in ci_source
+    assert "run_node_tests: false" in ci_source
+    assert "run_build_smoke: false" in ci_source
+    assert "cancel-in-progress: false" in ci_source
+
+    acceptance_source = (workflow_dir / "acceptance.yml").read_text(encoding="utf-8")
+    for event_type in ("ready_for_review", "synchronize", "reopened"):
+        assert event_type in acceptance_source
+    assert "github.event.pull_request.draft == false" in acceptance_source
+    assert "github.event.pull_request.head.sha" in acceptance_source
+    assert "run_node_tests: true" in acceptance_source
+    assert "run_build_smoke: true" in acceptance_source
+    assert "cancel-in-progress: false" in acceptance_source
 
 
 def test_live_semantics_harness_recent_reuses_overview_projection(
