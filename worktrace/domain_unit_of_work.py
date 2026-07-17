@@ -21,8 +21,6 @@ _CURRENT_UNIT_OF_WORK: ContextVar[DomainUnitOfWork | None] = ContextVar(
     default=None,
 )
 
-# Report structure has a separate fallback publisher for repair and migration
-# paths. Other declared namespaces are published directly by this transaction.
 _FALLBACK_PUBLISHED_NAMESPACES = frozenset(
     {DataGenerationNamespace.REPORT_STRUCTURE}
 )
@@ -109,13 +107,19 @@ class DomainUnitOfWork:
                 self._changed
                 or int(connection.total_changes) > self._initial_total_changes
             )
+            committed_effects: tuple[DataGenerationNamespace, ...] = ()
             if changed and self._effects:
                 explicit_effects = self._effects.difference(
                     _FALLBACK_PUBLISHED_NAMESPACES
                 )
                 if explicit_effects:
                     DataGenerationRepository.bump(connection, explicit_effects)
+                committed_effects = tuple(self._effects)
             connection.commit()
+            if committed_effects:
+                from .generation_clock import publish_committed
+
+                publish_committed(connection, committed_effects)
             return False
         except Exception:
             connection.rollback()
