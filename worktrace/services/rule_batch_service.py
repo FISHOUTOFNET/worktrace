@@ -4,11 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..constants import EXCLUDED_PROJECT
-from ..data_generation_repository import DataGenerationNamespace
-from ..db import get_connection, now_str
-from ..domain_unit_of_work import DomainUnitOfWork
-from . import folder_rule_service
+from ..db import get_connection
 from . import rule_planning_service as planner
 
 MAX_BATCH_PROJECT_RULES = 20
@@ -137,48 +133,13 @@ def set_project_rules_batch_enabled(rules: Any, enabled: Any) -> dict[str, Any]:
     normalized = _normalize_rules(rules)
     if type(enabled) is not bool:
         raise RuleBatchError("invalid_input")
-    requested = int(enabled)
-    has_folder = has_keyword = False
-    changed = False
+    from .rule_catalog_command_service import set_rules_enabled
+
     try:
-        with DomainUnitOfWork(
-            (DataGenerationNamespace.CLASSIFICATION_CATALOG,)
-        ) as uow:
-            conn = uow.connection
-            resolved: list[tuple[dict[str, Any], dict]] = []
+        set_rules_enabled(normalized, bool(enabled))
+        summaries: list[dict[str, Any]] = []
+        with get_connection() as conn:
             for entry in normalized:
-                rule = planner.resolve_rule(
-                    conn,
-                    entry["rule_type"],
-                    entry["rule_id"],
-                )
-                if not rule:
-                    raise RuleBatchError(ERR_NOT_FOUND)
-                resolved.append((entry, rule))
-            timestamp = now_str()
-            for entry, rule in resolved:
-                if int(rule.get("enabled") or 0) == requested:
-                    continue
-                if str(rule.get("project_name") or "") == EXCLUDED_PROJECT:
-                    uow.add_effects(DataGenerationNamespace.PRIVACY_CATALOG)
-                if entry["rule_type"] == "folder":
-                    cursor = conn.execute(
-                        "UPDATE folder_project_rule SET enabled = ?, updated_at = ? WHERE id = ?",
-                        (requested, timestamp, entry["rule_id"]),
-                    )
-                    has_folder = True
-                else:
-                    cursor = conn.execute(
-                        "UPDATE project_rule SET enabled = ?, updated_at = ? "
-                        "WHERE id = ? AND rule_type = 'keyword'",
-                        (requested, timestamp, entry["rule_id"]),
-                    )
-                    has_keyword = True
-                if cursor.rowcount != 1:
-                    raise RuleBatchError(ERR_OPERATION_FAILED)
-                changed = True
-            summaries = []
-            for entry, _rule in resolved:
                 current = planner.resolve_rule(
                     conn,
                     entry["rule_type"],
@@ -195,19 +156,13 @@ def set_project_rules_batch_enabled(rules: Any, enabled: Any) -> dict[str, Any]:
                 summaries.append(summary)
     except RuleBatchError:
         raise
+    except ValueError as exc:
+        code = str(exc)
+        raise RuleBatchError(
+            code if code in {ERR_NOT_FOUND, ERR_OPERATION_FAILED} else ERR_OPERATION_FAILED
+        ) from exc
     except Exception as exc:
         raise RuleBatchError(ERR_OPERATION_FAILED) from exc
-
-    if changed:
-        if has_keyword:
-            from .project_inference_service import invalidate_keyword_rule_cache
-
-            invalidate_keyword_rule_cache()
-        if has_folder:
-            folder_rule_service.invalidate_folder_rule_cache()
-        from .privacy_service import clear_exclude_rules_cache
-
-        clear_exclude_rules_cache()
     return {"rules": summaries, "enabled": bool(enabled), "count": len(summaries)}
 
 
