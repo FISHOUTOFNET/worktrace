@@ -16,15 +16,23 @@ from ..services.secure_backup_service import (
     ImportResult,
     SecureBackupError,
 )
+from ..services.settings_service import get_setting
+
+
+def _inactive_runtime_quiesce(timeout_seconds: float = 5.0) -> dict[str, Any]:
+    if (get_setting("collector_status", "stopped") or "stopped") == "running":
+        return {"ok": False, "error": "runtime_quiesce_capability_required"}
+    return {"ok": True, "collector_active": False}
 
 
 def export_encrypted_backup(
     output_path: str | Path,
     passphrase: str,
     *,
-    quiesce_handler: Any,
+    quiesce_handler: Any | None = None,
 ) -> str:
-    with consistent_snapshot(quiesce_handler):
+    handler = quiesce_handler or _inactive_runtime_quiesce
+    with consistent_snapshot(handler):
         return str(
             secure_backup_service.export_encrypted_backup(
                 output_path,
