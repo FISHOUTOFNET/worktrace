@@ -41,8 +41,16 @@ def _activity(start, end, *, project_id=None, status="normal", app="Word"):
         "status": status,
     }
     if end is None:
-        return create_open_activity(start_time=f"{DATE} {start}", **common)
-    return create_closed_activity(day=DATE, start=start, end=end, **common)
+        return create_open_activity(
+            start_time=f"{DATE} {start}",
+            **common,
+        )
+    return create_closed_activity(
+        day=DATE,
+        start=start,
+        end=end,
+        **common,
+    )
 
 
 def test_clear_all_preserves_installation_privacy_but_pauses_sensitive_runtime(temp_db):
@@ -158,7 +166,8 @@ def test_persisted_open_session_allows_project_and_note_but_not_duration(temp_db
     assert updated["session_note"] == "open memo"
     with get_connection() as conn:
         assignment = conn.execute(
-            "SELECT project_id, source, is_manual FROM activity_project_assignment WHERE activity_id = ?",
+            "SELECT project_id, source, is_manual "
+            "FROM activity_project_assignment WHERE activity_id = ?",
             (open_id,),
         ).fetchone()
     assert assignment is not None
@@ -182,6 +191,7 @@ def test_persisted_open_session_project_only_edit_is_effective(temp_db):
     second_project = project_service.create_project("ProjectOnlyB")
     _activity("10:00:00", None, project_id=first_project)
     source = build_visible_snapshot(DATE, DATE).final_sessions[0]
+
     result = timeline_api.save_timeline_session_edit(
         DATE,
         source["projection_instance_key"],
@@ -191,6 +201,7 @@ def test_persisted_open_session_project_only_edit_is_effective(temp_db):
         None,
         "",
     )
+
     assert result["ok"] is True
     updated = build_visible_snapshot(DATE, DATE).final_sessions[0]
     assert int(updated["project_id"]) == second_project
@@ -201,6 +212,7 @@ def test_open_session_no_op_rolls_back_manual_assignment(temp_db):
     second_project = project_service.create_project("RollbackB")
     open_id = _activity("11:00:00", None, project_id=first_project)
     source = build_visible_snapshot(DATE, DATE).final_sessions[0]
+
     with patch.object(
         report_session_operation_service,
         "_expected_effect",
@@ -215,10 +227,12 @@ def test_open_session_no_op_rolls_back_manual_assignment(temp_db):
             adjusted_duration_seconds=None,
             note="forced no-op",
         )
+
     assert result.outcome_type == "no_op"
     with get_connection() as conn:
         assignment = conn.execute(
-            "SELECT project_id, source, is_manual FROM activity_project_assignment WHERE activity_id = ?",
+            "SELECT project_id, source, is_manual "
+            "FROM activity_project_assignment WHERE activity_id = ?",
             (open_id,),
         ).fetchone()
     assert assignment is not None
@@ -231,6 +245,7 @@ def test_rule_batch_refreshes_generation_before_write_lock(temp_db):
     activity_id = _activity("13:00:00", "13:10:00")
     project_id = project_service.create_project("GenerationTarget")
     rule_id = rule_service.create_rule("Word", project_id)
+
     DATABASE_WRITE_GATE.note_current_thread_read()
     thread_errors: list[BaseException] = []
 
@@ -238,7 +253,7 @@ def test_rule_batch_refreshes_generation_before_write_lock(temp_db):
         try:
             with DATABASE_WRITE_GATE.acquire():
                 pass
-        except BaseException as exc:  # pragma: no cover
+        except BaseException as exc:  # pragma: no cover - assertion reports it
             thread_errors.append(exc)
 
     thread = threading.Thread(target=rotate_generation)
@@ -246,29 +261,130 @@ def test_rule_batch_refreshes_generation_before_write_lock(temp_db):
     thread.join(timeout=5)
     assert not thread.is_alive()
     assert thread_errors == []
-    result = rule_batch_service.preview_rules_batch_impact(
-        [{"kind": "keyword", "id": rule_id}]
+
+    result = rule_batch_service.backfill_project_rules_batch(
+        [{"rule_type": "keyword", "rule_id": rule_id}]
     )
-    assert result["matched_activity_ids"] == [activity_id]
+    assert result["counts"]["updated_count"] == 1
+    with get_connection() as conn:
+        assignment = conn.execute(
+            "SELECT project_id, source, is_manual "
+            "FROM activity_project_assignment WHERE activity_id = ?",
+            (activity_id,),
+        ).fetchone()
+    assert assignment is not None
+    assert int(assignment["project_id"]) == project_id
+    assert assignment["source"] == "keyword_rule"
+    assert int(assignment["is_manual"]) == 0
 
 
-def test_folder_rule_preview_uses_persisted_resource_path(temp_db, tmp_path: Path):
-    project_id = project_service.create_project("FolderTarget")
-    folder = tmp_path / "Matter"
-    folder.mkdir()
-    file_path = folder / "brief.docx"
-    file_path.write_text("x", encoding="utf-8")
-    _activity("14:00:00", "14:10:00")
-    rule_id = folder_rule_service.create_or_update_folder_rule(str(folder), project_id)
-    preview = rule_batch_service.preview_rules_batch_impact(
-        [{"kind": "folder", "id": rule_id}]
+def test_rule_batch_applies_folder_and_keyword_in_one_transaction(temp_db):
+    folder_project = project_service.create_project("FolderTarget")
+    keyword_project = project_service.create_project("KeywordTarget")
+    folder_rule_id = folder_rule_service.create_or_update_folder_rule(
+        "D:\\BatchFolder",
+        folder_project,
     )
-    assert isinstance(preview["matched_activity_ids"], list)
+    keyword_rule_id = rule_service.create_rule("batch-keyword", keyword_project)
+
+    create_closed_activity(
+        day=DATE,
+        start="14:00:00",
+        end="14:10:00",
+        app_name="Word",
+        process_name="winword.exe",
+        window_title="Document.docx - Word",
+        file_path_hint="D:\\BatchFolder\\Document.docx",
+    )
+    create_closed_activity(
+        day=DATE,
+        start="15:00:00",
+        end="15:10:00",
+        app_name="Excel",
+        process_name="excel.exe",
+        window_title="batch-keyword.xlsx - Excel",
+    )
+
+    result = rule_batch_service.backfill_project_rules_batch(
+        [
+            {"rule_type": "folder", "rule_id": folder_rule_id},
+            {"rule_type": "keyword", "rule_id": keyword_rule_id},
+        ]
+    )
+    assert result["counts"]["updated_count"] == 2
 
 
-def test_bridge_shipping_surface_stays_fixed(temp_db):
-    bridge = WebViewBridge()
-    shipping = bridge.shipping_api
-    assert not hasattr(shipping, "set_window")
-    assert not hasattr(shipping, "application_control")
-    assert json.dumps(bridge.get_status(), ensure_ascii=False)
+def test_runtime_and_backup_facades_have_single_owners():
+    root = Path(__file__).resolve().parents[1]
+    runtime = (root / "worktrace/runtime/app_runtime.py").read_text(encoding="utf-8")
+    backup_api = (root / "worktrace/api/backup_api.py").read_text(encoding="utf-8")
+    assert "privacy_gate_service" not in runtime
+    assert "capture_installation_privacy_state" not in backup_api
+    assert "restore_installation_privacy_state" not in backup_api
+
+
+def test_statistics_bridge_separates_display_summary_and_export_ticket(temp_db):
+    summary = {
+        "date_from": DATE,
+        "date_to": DATE,
+        "snapshot_revision": "snapshot-internal",
+        "export_revision": "export-ticket-revision",
+        "total_duration_seconds": 60,
+        "project_duration_seconds": 60,
+        "activity_count": 1,
+        "session_count": 1,
+        "export_row_count": 1,
+        "project_count": 1,
+        "app_count": 1,
+        "by_project": [],
+        "by_app": [],
+        "by_status": [],
+        "export_preview": {
+            "date_from": DATE,
+            "date_to": DATE,
+            "snapshot_revision": "snapshot-internal",
+            "export_revision": "export-ticket-revision",
+            "included_activity_count": 1,
+            "session_count": 1,
+            "export_row_count": 1,
+            "included_duration_seconds": 60,
+            "available_formats": ["csv"],
+            "export_actions_enabled": True,
+        },
+    }
+    with patch(
+        "worktrace.webview_ui.bridge_statistics.statistics_api.get_statistics_export_summary",
+        return_value=summary,
+    ):
+        result = WebViewBridge().get_statistics_export_summary(DATE, DATE)
+    assert set(result) == {"ok", "summary", "export_ticket"}
+    assert result["export_ticket"] == {
+        "date_from": DATE,
+        "date_to": DATE,
+        "revision": "export-ticket-revision",
+    }
+    serialized_summary = json.dumps(result["summary"], ensure_ascii=False)
+    assert "snapshot-internal" not in serialized_summary
+    assert "export-ticket-revision" not in serialized_summary
+
+
+def test_frontend_generation_and_coalescing_contracts_are_shipping():
+    root = Path(__file__).resolve().parents[1]
+    request_state = (
+        root / "worktrace/webview_ui/js/timeline_request_state.js"
+    ).read_text(encoding="utf-8")
+    init = (root / "worktrace/webview_ui/js/init.js").read_text(encoding="utf-8")
+    statistics = (root / "worktrace/webview_ui/js/statistics.js").read_text(
+        encoding="utf-8"
+    )
+    rules = (root / "worktrace/webview_ui/js/rules.js").read_text(encoding="utf-8")
+    assert "bumpDataEpoch" in request_state
+    assert "dataEpoch" in request_state
+    assert "activePageRefreshPending" in init
+    assert "resetClientGeneration" in init
+    assert "statisticsAcceptedPayload" in statistics
+    assert "statisticsLoadPromise" in statistics
+    assert "exportRevision" in statistics
+    assert "projectsLoadPromise" in rules
+    assert "data-project-load-gate" in rules
+    assert "stopImmediatePropagation" in rules
