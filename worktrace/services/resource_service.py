@@ -4,12 +4,14 @@ import sqlite3
 
 from ..constants import STATUS_EXCLUDED
 from ..db import get_connection, now_str
+from ..mutation_effects import report_structure_mutation
 from ..path_utils import normalize_path_key
 from ..resources.resource_builders import make_system_resource, parse_metadata_json
 from ..resources.resource_policy import safe_metadata_json
 from ..resources.types import DetectedResource
 
 
+@report_structure_mutation
 def create_or_update_activity_resource(
     activity_id: int,
     resource: DetectedResource,
