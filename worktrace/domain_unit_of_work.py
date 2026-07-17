@@ -1,8 +1,10 @@
 """Explicit caller-owned SQLite transaction with atomic generation effects.
 
 The unit of work deliberately does not proxy modules, intercept nested commits,
-or infer domain effects from SQL. Command owners use ``connection`` directly and
-call ``mark_changed`` only after a durable business fact actually changes.
+or infer domain effects from SQL text. Command owners use ``connection``
+directly. New owners call ``mark_changed`` after a semantic mutation; during the
+Stage 2 bulk migration, previously validated owners may use the bounded
+``total_changes`` fallback until the Stage 3 generation cutover.
 """
 
 from __future__ import annotations
@@ -46,6 +48,7 @@ class DomainUnitOfWork:
         self._root: DomainUnitOfWork | None = None
         self._connection = None
         self._token: Token[DomainUnitOfWork | None] | None = None
+        self._initial_total_changes = 0
         self._changed = False
         self._rollback_only = False
 
@@ -61,7 +64,13 @@ class DomainUnitOfWork:
 
     @property
     def changed(self) -> bool:
-        return bool(self._owner()._changed)
+        owner = self._owner()
+        if owner._connection is None:
+            return bool(owner._changed)
+        return bool(
+            owner._changed
+            or int(owner._connection.total_changes) > owner._initial_total_changes
+        )
 
     def add_effects(self, *effects: DataGenerationNamespace | str) -> None:
         self._owner()._effects.update(_namespace(effect) for effect in effects)
@@ -84,6 +93,7 @@ class DomainUnitOfWork:
 
         self._connection = get_connection()
         self._connection.execute("BEGIN IMMEDIATE")
+        self._initial_total_changes = int(self._connection.total_changes)
         self._token = _CURRENT_UNIT_OF_WORK.set(self)
         return self
 
@@ -98,7 +108,11 @@ class DomainUnitOfWork:
             if exc_type is not None or self._rollback_only:
                 connection.rollback()
                 return False
-            if self._changed and self._effects:
+            changed = bool(
+                self._changed
+                or int(connection.total_changes) > self._initial_total_changes
+            )
+            if changed and self._effects:
                 explicit_effects = self._effects.difference(
                     _TRANSITIONAL_CLASSIFIER_NAMESPACES
                 )
