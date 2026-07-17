@@ -102,6 +102,7 @@ class DomainUnitOfWork:
         connection = self.connection
         committed = False
         committed_effects: tuple[DataGenerationNamespace, ...] = ()
+        committed_values: dict[DataGenerationNamespace, int] = {}
         try:
             if exc_type is not None or self._rollback_only:
                 connection.rollback()
@@ -117,13 +118,24 @@ class DomainUnitOfWork:
                 if explicit_effects:
                     DataGenerationRepository.bump(connection, explicit_effects)
                 committed_effects = tuple(self._effects)
+                committed_values = DataGenerationRepository.get_many(
+                    connection,
+                    committed_effects,
+                )
             connection.commit()
             committed = True
             if committed_effects:
                 try:
-                    from .generation_clock import publish_committed
+                    from .db import get_db_key
+                    from .generation_clock import (
+                        publish_committed,
+                        publish_replacement_committed,
+                    )
 
-                    publish_committed(connection, committed_effects)
+                    if DataGenerationNamespace.DATABASE_REPLACEMENT in committed_effects:
+                        publish_replacement_committed(get_db_key(), committed_values)
+                    else:
+                        publish_committed(connection, committed_effects)
                 except Exception:
                     # The durable transaction is already committed. A failed
                     # process-local publication must degrade to a cache miss,
