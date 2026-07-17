@@ -9,9 +9,6 @@ from ..data_generation_repository import (
     DataGenerationRepository,
 )
 
-# REPORT_STRUCTURE is still published by the validated connection classifier.
-# The remaining namespaces have no SQL fallback and must be invalidated explicitly
-# inside the replacement transaction.
 _REPLACEMENT_NAMESPACES = (
     DataGenerationNamespace.CLASSIFICATION_CATALOG,
     DataGenerationNamespace.SETTINGS,
