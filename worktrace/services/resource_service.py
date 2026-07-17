@@ -121,7 +121,7 @@ def attach_resource(
     *,
     conn: sqlite3.Connection | None = None,
 ) -> dict:
-    """Attach resource-first display fields to an activity row."""
+    """Attach only persisted resource facts to an activity row."""
 
     item = dict(row)
     activity_id = item.get("id")
@@ -129,23 +129,15 @@ def attach_resource(
         return item
     resource = get_resource_for_activity(int(activity_id), conn=conn)
     if resource is None:
-        from ..platforms.base import ActiveWindow
-        from ..resources.detectors import detect_resource
-
-        active_window = ActiveWindow(
-            app_name=item.get("app_name") or "",
-            process_name=item.get("process_name") or "",
-            window_title=item.get("window_title") or "",
-            file_path_hint=item.get("file_path_hint"),
+        item["resource_kind"] = "unknown"
+        item["resource_subtype"] = "unknown"
+        item["resource_display_name"] = (
+            item.get("app_name") or item.get("process_name") or "未知"
         )
-        detected = detect_resource(active_window)
-        item["resource_kind"] = detected.resource_kind
-        item["resource_subtype"] = detected.resource_subtype
-        item["resource_display_name"] = detected.display_name
-        item["resource_identity_key"] = detected.identity_key
-        item["resource_is_anchor"] = bool(detected.is_anchor)
-        item["resource_path_hint"] = detected.path_hint
-        item["resource_uri_host"] = detected.uri_host
+        item["resource_identity_key"] = f"activity:{int(activity_id)}"
+        item["resource_is_anchor"] = False
+        item["resource_path_hint"] = None
+        item["resource_uri_host"] = None
     else:
         item["resource_kind"] = resource["resource_kind"]
         item["resource_subtype"] = resource["resource_subtype"]
