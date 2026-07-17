@@ -152,7 +152,7 @@ class LiveSemanticsHarness:
             "overview": overview,
             "recent": {
                 "ok": bool(overview.get("ok")),
-                "items": list(overview.get("recent_activities") or []),
+                "items": list(overview.get("activities") or []),
                 "runtime": dict(overview.get("runtime") or {}),
             },
             "timeline": timeline,
