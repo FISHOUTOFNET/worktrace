@@ -176,6 +176,8 @@ def set_settings(
                 (key, value, timestamp),
             )
             changed_keys.append(key)
+        if changed_keys:
+            uow.mark_changed()
 
     for key in changed_keys:
         clear_settings_cache(key)
