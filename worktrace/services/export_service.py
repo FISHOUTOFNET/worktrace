@@ -54,13 +54,7 @@ def write_statistics_csv(
     output_path,
     expected_snapshot_revision: str | None = None,
 ) -> dict:
-    """Write the exact accepted closed-record projection to CSV.
-
-    New clients send ``export_revision``. During the cutover, existing callers
-    may still send the full canonical ``snapshot_revision``; both represent an
-    accepted read of the same range, while only the export revision is stable
-    across natural growth of an open activity.
-    """
+    """Write the exact accepted closed-record projection to CSV."""
 
     statistics_service.validate_statistics_date_range(date_from, date_to)
     path = Path(output_path)
@@ -127,14 +121,14 @@ def export_all_local_data(path: str) -> str:
 
     out = Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)
-    wb = Workbook()
-    default = wb.active
-    wb.remove(default)
+    workbook = Workbook()
+    default = workbook.active
+    workbook.remove(default)
     with get_connection() as conn:
         conn.execute("BEGIN")
         try:
             for table in _local_data_export_tables():
-                ws = wb.create_sheet(table)
+                worksheet = workbook.create_sheet(table)
                 rows = conn.execute(f"SELECT * FROM {table}").fetchall()
                 columns = [
                     item["name"]
@@ -142,14 +136,14 @@ def export_all_local_data(path: str) -> str:
                         f"PRAGMA table_info({table})"
                     ).fetchall()
                 ]
-                ws.append(columns)
+                worksheet.append(columns)
                 for row in rows:
-                    ws.append([row[col] for col in columns])
+                    worksheet.append([row[column] for column in columns])
             conn.commit()
         except Exception:
             conn.rollback()
             raise
-    wb.save(out)
+    workbook.save(out)
     logging.info("all local data export success")
     return str(out)
 
@@ -169,19 +163,4 @@ def clear_all_local_data(confirm: bool) -> None:
             guard.mark_succeeded()
     except BackupImportInProgressError as exc:
         raise ValueError("operation_in_progress") from exc
-    _invalidate_clear_all_caches()
     logging.info("all local data cleared at %s", now_str())
-
-
-def _invalidate_clear_all_caches() -> None:
-    from .folder_rule_service import invalidate_folder_rule_cache
-    from .privacy_service import clear_exclude_rules_cache
-    from .project_inference_service import invalidate_keyword_rule_cache
-    from .project_service import invalidate_uncategorized_project_cache
-    from .settings_service import clear_settings_cache
-
-    clear_settings_cache()
-    clear_exclude_rules_cache()
-    invalidate_uncategorized_project_cache()
-    invalidate_folder_rule_cache()
-    invalidate_keyword_rule_cache()
