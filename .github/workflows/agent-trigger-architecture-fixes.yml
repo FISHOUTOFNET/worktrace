@@ -38,56 +38,53 @@ jobs:
             $source = Get-Content -LiteralPath .github/workflows/agent-apply-architecture-fixes.yml -Raw
             $match = [regex]::Match($source, "(?s)          @'\r?\n(.*?)\r?\n          '@ \| Set-Content -LiteralPath \.agent_apply\.py -Encoding UTF8")
             if (-not $match.Success) { throw "Embedded architecture patch was not found" }
-            [string[]]$lines = $match.Groups[1].Value -split "\r?\n" | ForEach-Object {
+            $lines = $match.Groups[1].Value -split "\r?\n" | ForEach-Object {
               if ($_.StartsWith("          ")) { $_.Substring(10) } else { $_ }
             }
-
-            $fragileStart = -1
-            $fragileEnd = -1
-            for ($i = 0; $i -lt $lines.Length; $i++) {
-              if ($lines[$i].Trim() -ne "replace_once(") { continue }
-              $windowEnd = [Math]::Min($lines.Length - 1, $i + 30)
-              $window = ($lines[$i..$windowEnd] -join "`n")
-              if ($window.Contains("'worktrace/webview_ui/js/init.js'") -and $window.Contains("timeline-hide-session")) {
-                $fragileStart = $i
-                for ($j = $i + 1; $j -lt $lines.Length; $j++) {
-                  if ($lines[$j] -eq ")") { $fragileEnd = $j; break }
-                }
-                break
-              }
-            }
-            if ($fragileStart -lt 0 -or $fragileEnd -lt $fragileStart) {
-              throw "Fragile timeline action replacement was not found"
-            }
-            $prefix = if ($fragileStart -gt 0) { $lines[0..($fragileStart - 1)] } else { @() }
-            $suffix = if ($fragileEnd + 1 -lt $lines.Length) { $lines[($fragileEnd + 1)..($lines.Length - 1)] } else { @() }
-            [string[]]$lines = @($prefix + "# Timeline action keys are patched after the structural script." + $suffix)
-            [System.IO.File]::WriteAllLines((Join-Path $PWD ".agent_apply.py"), $lines, [System.Text.UTF8Encoding]::new($false))
+            $patchScript = $lines -join "`n"
+            $helperStart = $patchScript.IndexOf("def replace_once(", [System.StringComparison]::Ordinal)
+            $helperEnd = $patchScript.IndexOf("def replace_between(", $helperStart, [System.StringComparison]::Ordinal)
+            if ($helperStart -lt 0 -or $helperEnd -lt 0) { throw "Replacement helper boundaries were not found" }
+            $helper = @(
+              "def replace_once(path: str, old: str, new: str) -> None:",
+              "    text = read(path)",
+              "    count = text.count(old)",
+              "    if count == 0 and path == 'worktrace/webview_ui/js/init.js' and 'timeline-hide-session' in old:",
+              "        mappings = [",
+              "            ('[\"timeline-hide-session\", \"hide_timeline_session\"]', '[\"timeline-hide-session\", \"hide\"]'),",
+              "            ('[\"timeline-merge-previous\", \"merge_timeline_session\", \"previous\"]', '[\"timeline-merge-previous\", \"merge\", \"previous\"]'),",
+              "            ('[\"timeline-merge-next\", \"merge_timeline_session\", \"next\"]', '[\"timeline-merge-next\", \"merge\", \"next\"]'),",
+              "            ('[\"timeline-split-session\", \"split_timeline_session\"]', '[\"timeline-split-session\", \"split\"]'),",
+              "            ('[\"timeline-copy-session\", \"copy_timeline_session\"]', '[\"timeline-copy-session\", \"copy\"]'),",
+              "        ]",
+              "        for source, target in mappings:",
+              "            source_count = text.count(source)",
+              "            if source_count != 1:",
+              "                raise AssertionError(f'{path}: expected one timeline mapping, found {source_count}: {source!r}')",
+              "            text = text.replace(source, target, 1)",
+              "        write(path, text)",
+              "        return",
+              "    if count != 1:",
+              "        raise AssertionError(f'{path}: expected one replacement, found {count}: {old[:80]!r}')",
+              "    write(path, text.replace(old, new, 1))",
+              "",
+              ""
+            ) -join "`n"
+            $patchScript = $patchScript.Substring(0, $helperStart) + $helper + $patchScript.Substring($helperEnd)
+            [System.IO.File]::WriteAllText((Join-Path $PWD ".agent_apply.py"), $patchScript, [System.Text.UTF8Encoding]::new($false))
 
             python .agent_apply.py *> agent-apply.log
             $applyExitCode = $LASTEXITCODE
             if ($applyExitCode -ne 0) { throw "architecture patch exited with code $applyExitCode" }
-
-            $initPath = "worktrace/webview_ui/js/init.js"
-            $init = Get-Content -LiteralPath $initPath -Raw
-            $mappings = @(
-              @('["timeline-hide-session", "hide_timeline_session"]', '["timeline-hide-session", "hide"]'),
-              @('["timeline-merge-previous", "merge_timeline_session", "previous"]', '["timeline-merge-previous", "merge", "previous"]'),
-              @('["timeline-merge-next", "merge_timeline_session", "next"]', '["timeline-merge-next", "merge", "next"]'),
-              @('["timeline-split-session", "split_timeline_session"]', '["timeline-split-session", "split"]'),
-              @('["timeline-copy-session", "copy_timeline_session"]', '["timeline-copy-session", "copy"]')
-            )
-            foreach ($mapping in $mappings) {
-              $count = ([regex]::Matches($init, [regex]::Escape($mapping[0]))).Count
-              if ($count -ne 1) { throw "Expected one timeline action mapping, found $count: $($mapping[0])" }
-              $init = $init.Replace($mapping[0], $mapping[1])
-            }
-            [System.IO.File]::WriteAllText((Join-Path $PWD $initPath), $init, [System.Text.UTF8Encoding]::new($false))
             Remove-Item .agent_apply.py, agent-apply.log
           }
           catch {
             New-Item -ItemType Directory -Force -Path diagnostics | Out-Null
             @(
+              "run_id=$env:GITHUB_RUN_ID",
+              "head=$env:GITHUB_SHA",
+              "captured_at=$([DateTime]::UtcNow.ToString('o'))",
+              "",
               $_.Exception.ToString(),
               "",
               $(if (Test-Path agent-apply.log) { Get-Content agent-apply.log -Raw } else { "" })
