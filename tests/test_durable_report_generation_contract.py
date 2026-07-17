@@ -4,6 +4,7 @@ import pytest
 
 from tests.support.activity_factory import create_open_activity
 from worktrace.db import get_connection, now_str
+from worktrace.mutation_effects import MutationEffect, mutation_effects
 from worktrace.services import activity_lifecycle_service
 
 pytestmark = [pytest.mark.db, pytest.mark.integration, pytest.mark.serial]
@@ -28,10 +29,11 @@ def test_structure_generation_is_durable_and_ignores_duration_checkpoint(temp_db
     assert activity_lifecycle_service.checkpoint_activity(activity_id, 30) is True
     assert _generation() == after_insert
 
-    with get_connection() as conn:
-        conn.execute(
-            "UPDATE activity_log SET status = ?, updated_at = ? WHERE id = ?",
-            ("idle", now_str(), activity_id),
-        )
+    with mutation_effects(MutationEffect.REPORT_STRUCTURE):
+        with get_connection() as conn:
+            conn.execute(
+                "UPDATE activity_log SET status = ?, updated_at = ? WHERE id = ?",
+                ("idle", now_str(), activity_id),
+            )
 
     assert _generation() > after_insert
