@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..domain_limits import ADJUSTED_DURATION_MAX_SECONDS, NOTE_MAX_LENGTH
+from ..mutation_effects import report_structure_mutation
 from ..services import (
     project_service,
     report_session_operation_service,
@@ -29,6 +30,7 @@ def get_project_sessions_by_range(start_date: str, end_date: str) -> list[dict[s
     return timeline_service.get_project_sessions_by_range(start_date, end_date)
 
 
+@report_structure_mutation
 def save_timeline_session_edit(
     report_date: str,
     projection_instance_key: str,
@@ -52,6 +54,7 @@ def save_timeline_session_edit(
     return _operation_result(result)
 
 
+@report_structure_mutation
 def hide_timeline_session(
     report_date: str,
     projection_instance_key: str,
@@ -68,6 +71,7 @@ def hide_timeline_session(
     )
 
 
+@report_structure_mutation
 def merge_timeline_session(
     report_date: str,
     projection_instance_key: str,
@@ -98,6 +102,7 @@ def merge_timeline_session(
     )
 
 
+@report_structure_mutation
 def split_timeline_session(
     report_date: str,
     projection_instance_key: str,
@@ -114,6 +119,7 @@ def split_timeline_session(
     )
 
 
+@report_structure_mutation
 def copy_timeline_session(
     report_date: str,
     projection_instance_key: str,
@@ -130,6 +136,7 @@ def copy_timeline_session(
     )
 
 
+@report_structure_mutation
 def hide_timeline_session_activity(
     report_date: str,
     projection_instance_key: str,
