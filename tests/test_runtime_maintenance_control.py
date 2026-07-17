@@ -28,9 +28,7 @@ pytestmark = [
 
 def test_unclaimed_pause_timeout_is_cancelled():
     control = CollectorControl()
-
     result = control.request_pause(timeout_seconds=0)
-
     assert result["ok"] is False
     assert result["pause_pending"] is False
     assert result["timed_out"] is True
@@ -54,7 +52,6 @@ def test_taken_pause_timeout_reports_unknown_and_late_completion_is_identified()
     command_id = control.take_pause_request()
     assert command_id is not None
     request.join(timeout=1)
-
     result = result_box["result"]
     assert result["command_id"] == command_id
     assert result["command_state"] == "unknown"
@@ -75,7 +72,6 @@ def test_reset_command_is_acknowledged_once():
         ),
         daemon=True,
     )
-
     thread.start()
     assert control._wake_event.wait(timeout=1)
     command_id = control.take_reset_request()
@@ -85,7 +81,6 @@ def test_reset_command_is_acknowledged_once():
         {"ok": True, "reset_pending": False},
     ) is True
     thread.join(timeout=2)
-
     assert result_box["result"]["ok"] is True
     assert result_box["result"]["command_id"] == command_id
     assert result_box["result"]["command_state"] == "completed"
@@ -93,7 +88,6 @@ def test_reset_command_is_acknowledged_once():
 
 
 def test_long_poll_gap_rebases_instead_of_replaying_ticks():
-
     next_deadline = _sleep_until_next_poll(
         threading.Event(),
         None,
@@ -101,7 +95,6 @@ def test_long_poll_gap_rebases_instead_of_replaying_ticks():
         monotonic_func=lambda: 28_800.0,
         wait_func=lambda *_args: pytest.fail("must not wait after long gap"),
     )
-
     assert next_deadline == pytest.approx(28_801.0)
 
 
@@ -113,14 +106,12 @@ def test_clock_tracker_detects_collector_stall():
         clock_jump_threshold_seconds=300,
         stall_threshold_seconds=180,
     ) is None
-
     event = tracker.observe(
         "2026-07-15 09:10:00",
         700.0,
         clock_jump_threshold_seconds=300,
         stall_threshold_seconds=180,
     )
-
     assert event is not None
     assert event.reason == "collector_stall"
     assert event.safe_end_time == "2026-07-15 09:00:00"
@@ -134,14 +125,12 @@ def test_clock_tracker_detects_backward_wall_clock_jump():
         clock_jump_threshold_seconds=300,
         stall_threshold_seconds=180,
     )
-
     event = tracker.observe(
         "2026-07-15 09:00:00",
         101.0,
         clock_jump_threshold_seconds=300,
         stall_threshold_seconds=180,
     )
-
     assert event is not None
     assert event.reason == "clock_jump_backward"
     assert event.safe_end_time == "2026-07-15 09:00:00"
@@ -155,14 +144,12 @@ def test_clock_tracker_detects_forward_wall_clock_jump():
         clock_jump_threshold_seconds=300,
         stall_threshold_seconds=180,
     )
-
     event = tracker.observe(
         "2026-07-15 12:00:00",
         101.0,
         clock_jump_threshold_seconds=300,
         stall_threshold_seconds=180,
     )
-
     assert event is not None
     assert event.reason == "clock_jump_forward"
     assert event.safe_end_time == "2026-07-15 10:00:01"
@@ -186,9 +173,7 @@ def test_recorder_generation_reset_forgets_old_activity_id(monkeypatch):
     recorder.current_start_time = "2026-07-15 09:00:00"
     recorder.current_last_seen_time = "2026-07-15 09:01:00"
     recorder.persisted_activity_id = 77
-
     recorder.clear_runtime_state("database_generation_changed")
-
     assert recorder.current_payload is None
     assert recorder.current_signature is None
     assert recorder.current_start_time is None
@@ -211,10 +196,11 @@ def test_maintenance_coordinator_pauses_and_resets_before_operation(temp_db):
         calls.append("reset")
         return {"ok": True, "reset_pending": False}
 
-    coordinator.register_collector_pause_handler(pause)
-    coordinator.register_collector_reset_handler(reset)
-
-    with coordinator.acquire(reason="test") as guard:
+    with coordinator.acquire(
+        reason="test",
+        pause_handler=pause,
+        reset_handler=reset,
+    ) as guard:
         assert coordinator.write_gate_active() is True
         calls.append("operation")
         guard.mark_succeeded()
@@ -231,15 +217,15 @@ def test_maintenance_reset_failure_restores_intent_without_stale_snapshot(temp_d
         {"persisted_activity_id": 77},
         "maintenance_test",
     )
-    coordinator.register_collector_pause_handler(
-        lambda timeout_seconds=5.0: {"ok": True, "pause_pending": False}
-    )
-    coordinator.register_collector_reset_handler(
-        lambda timeout_seconds=5.0: {"ok": False, "reset_pending": False}
-    )
+    pause = lambda timeout_seconds=5.0: {"ok": True, "pause_pending": False}
+    reset = lambda timeout_seconds=5.0: {"ok": False, "reset_pending": False}
 
     with pytest.raises(SecureBackupError, match="reset_not_acknowledged"):
-        with coordinator.acquire(reason="failure"):
+        with coordinator.acquire(
+            reason="failure",
+            pause_handler=pause,
+            reset_handler=reset,
+        ):
             pytest.fail("operation must not start")
 
     assert coordinator.write_gate_active() is False
@@ -254,15 +240,12 @@ def _window() -> ActiveWindow:
 
 def test_clipboard_monitor_does_not_start_or_retain_while_disabled():
     monitor = ClipboardMonitor(_window)
-
     monitor.set_enabled(False)
     assert monitor.drain() == []
     assert monitor._thread is None
 
 
-def test_clipboard_disable_waits_for_inflight_capture_and_drops_generation(
-    monkeypatch,
-):
+def test_clipboard_disable_waits_for_inflight_capture_and_drops_generation(monkeypatch):
     read_started = threading.Event()
     allow_read = threading.Event()
 
@@ -280,7 +263,6 @@ def test_clipboard_disable_waits_for_inflight_capture_and_drops_generation(
     monitor.set_enabled(True)
     generation = monitor._generation
 
-    # ``_capture_locked`` uses the same serialization lock as the real loop.
     def serialized_capture():
         with monitor._lifecycle_lock:
             monitor._capture_locked(7, generation)
@@ -288,7 +270,6 @@ def test_clipboard_disable_waits_for_inflight_capture_and_drops_generation(
     capture = threading.Thread(target=serialized_capture, daemon=True)
     capture.start()
     assert read_started.wait(timeout=1)
-
     disabled = threading.Event()
     disable_thread = threading.Thread(
         target=lambda: (monitor.set_enabled(False), disabled.set()),
@@ -299,7 +280,6 @@ def test_clipboard_disable_waits_for_inflight_capture_and_drops_generation(
     allow_read.set()
     capture.join(timeout=2)
     disable_thread.join(timeout=2)
-
     assert disabled.is_set()
     assert monitor.drain() == []
     monitor.shutdown()
@@ -313,21 +293,20 @@ def test_kdf_rejects_excessive_resource_parameters():
             KdfParams(n=2**19, r=8, p=1),
         )
 
+
 def test_maintenance_unknown_command_state_remains_fail_closed(temp_db):
     coordinator = SecureImportCoordinator()
     settings_service.set_setting("user_paused", "false")
     settings_service.set_setting("collector_status", "running")
-    coordinator.register_collector_pause_handler(
-        lambda timeout_seconds=5.0: {
-            "ok": False,
-            "pause_pending": False,
-            "command_state_unknown": True,
-            "command_state": "unknown",
-        }
-    )
+    pause = lambda timeout_seconds=5.0: {
+        "ok": False,
+        "pause_pending": False,
+        "command_state_unknown": True,
+        "command_state": "unknown",
+    }
 
     with pytest.raises(SecureBackupError, match="pause_not_acknowledged"):
-        with coordinator.acquire(reason="unknown"):
+        with coordinator.acquire(reason="unknown", pause_handler=pause):
             pytest.fail("operation must not start")
 
     assert coordinator.write_gate_active() is False
