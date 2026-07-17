@@ -16,11 +16,10 @@ from ..services import (
     activity_lifecycle_service,
     clipboard_service,
     privacy_service,
-    session_boundary_service,
 )
 from ..services.activity_status_policy import does_status_require_boundary
 from ..services.privacy_anonymization_service import anonymize_activity
-from .activity_session_recorder import ActivitySessionRecorder
+from .activity_session_recorder import ActivitySessionRecorder, BoundaryClose
 from .resource_identity_resolver import (
     DEFAULT_RESOURCE_IDENTITY_RESOLVER,
     ResourceIdentityResolver,
@@ -77,9 +76,6 @@ class CollectorStateMachine:
             active_window,
         )
         if redact_current and self.recorder.persisted_activity_id is not None:
-            # A path discovered after persistence belongs to the same logical
-            # resource and is now known to be excluded. Redact that resource's
-            # own history, never the previous unrelated foreground window.
             anonymize_activity(self.recorder.persisted_activity_id)
         if status == STATUS_EXCLUDED:
             state = "excluded"
@@ -109,19 +105,18 @@ class CollectorStateMachine:
             if boundary_required
             else ActivityEndReason.RESOURCE_SWITCH
         )
+        if boundary_required and previous_status != status:
+            detached = self.recorder.stop_for_boundary(
+                transition_time,
+                end_reason,
+            )
+            self._commit_boundary(transition_time, boundary_reason, detached)
         self.recorder.observe(
             payload,
             signature,
             transition_time,
             end_reason=end_reason,
         )
-        if boundary_required:
-            self.recorder.clear_short_buffers()
-            if previous_status != status:
-                session_boundary_service.record_hard_boundary(
-                    transition_time,
-                    boundary_reason,
-                )
         self.state = state
         self.active_signature = signature
         if status == STATUS_EXCLUDED:
@@ -165,8 +160,6 @@ class CollectorStateMachine:
             if privacy_service.is_excluded(event.source_window):
                 return None
         except privacy_service.PrivacyResolutionPending:
-            # A clipboard source whose path cannot be resolved safely is not a
-            # permissible persistence target. Dropping the event is fail-closed.
             return None
         copied_at = event.copied_at or at_time or now_str()
         activity_id = self._current_activity_id_for_clipboard_event(
@@ -191,12 +184,12 @@ class CollectorStateMachine:
     def reset_for_time_jump(self, at_time: str | None = None) -> None:
         transition_time = at_time or now_str()
         self._stop_recording_at_boundary(transition_time, "sleep_resume")
-        activity_lifecycle_service.close_all_open_activities(transition_time)
         self.state = "stopped"
         self.active_signature = None
 
     def reset_runtime_state(self, reason: str = "runtime_reset") -> None:
         """Seal the old generation, then forget every process-local identity."""
+
         if self.recorder.current_payload is not None:
             self.stop(now_str(), reason="secure_import")
         else:
@@ -206,18 +199,24 @@ class CollectorStateMachine:
         self.active_signature = None
 
     def split_at_midnight(self, at_time: str) -> None:
-        if self.recorder.split_at_midnight(at_time):
-            session_boundary_service.record_hard_boundary(at_time, "midnight")
-            self.active_signature = self.recorder.current_signature
-        else:
-            self.recorder.clear_short_buffers()
-            session_boundary_service.record_hard_boundary(at_time, "midnight")
+        prepared = self.recorder.prepare_midnight_split(at_time)
+        if prepared is None:
+            self._commit_boundary(at_time, "midnight", None)
+            return
+        payload, signature, project_id, detached = prepared
+        self._commit_boundary(at_time, "midnight", detached)
+        self.recorder.resume_midnight_split(
+            payload,
+            signature,
+            project_id,
+            at_time,
+        )
+        self.active_signature = self.recorder.current_signature
 
     def pause(self, at_time: str | None = None) -> None:
         transition_time = at_time or now_str()
         if self.state != "paused" or self.recorder.current_payload is not None:
             self._stop_recording_at_boundary(transition_time, "paused")
-            activity_lifecycle_service.close_all_open_activities(transition_time)
             payload = self.resolver.payload_for(STATUS_PAUSED, None)
             signature = self.resolver.signature_for_payload(payload)
             self.recorder.observe(
@@ -232,14 +231,32 @@ class CollectorStateMachine:
     def stop(self, at_time: str | None = None, reason: str = "user_stop") -> None:
         transition_time = at_time or now_str()
         self._stop_recording_at_boundary(transition_time, reason)
-        activity_lifecycle_service.close_all_open_activities(transition_time)
         self.state = "stopped"
         self.active_signature = None
 
     def _stop_recording_at_boundary(self, at_time: str, reason: str) -> None:
-        self.recorder.stop(at_time, reason=_end_reason_for_boundary(reason))
-        self.recorder.clear_short_buffers()
-        session_boundary_service.record_hard_boundary(at_time, reason)
+        detached = self.recorder.stop_for_boundary(
+            at_time,
+            _end_reason_for_boundary(reason),
+        )
+        self._commit_boundary(at_time, reason, detached)
+
+    @staticmethod
+    def _commit_boundary(
+        at_time: str,
+        reason: str,
+        detached: BoundaryClose | None,
+    ) -> None:
+        activity_id: int | None = None
+        duration_seconds: int | None = None
+        if detached is not None:
+            activity_id, _end_time, duration_seconds = detached
+        activity_lifecycle_service.close_at_boundary(
+            at_time,
+            reason,
+            current_activity_id=activity_id,
+            current_duration_seconds=duration_seconds,
+        )
 
     def _current_activity_id_for_clipboard_event(
         self,
