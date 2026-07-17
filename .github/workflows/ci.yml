@@ -119,6 +119,7 @@ jobs:
           exit $pytestExitCode
 
       - name: Publish validation diagnostics
+        id: diagnostics
         if: failure() && (steps.compile.outcome == 'failure' || steps.pytest.outcome == 'failure')
         shell: pwsh
         run: |
@@ -150,6 +151,14 @@ jobs:
             Get-Content -LiteralPath $rawPath -Raw |
               Add-Content -LiteralPath $diagnosticPath -Encoding UTF8
           }
+
+      - name: "Failure summary (${{ steps.diagnostics.outputs.problem_count }}): ${{ steps.diagnostics.outputs.first_failure }}"
+        if: failure() && steps.diagnostics.outputs.first_failure != ''
+        shell: pwsh
+        run: |
+          Write-Host "failure_count=${{ steps.diagnostics.outputs.problem_count }}"
+          Write-Host "first_failure=${{ steps.diagnostics.outputs.first_failure }}"
+          Write-Host "first_location=${{ steps.diagnostics.outputs.first_location }}"
 
   python312-compat:
     name: Python 3.12 compatibility (manual)
