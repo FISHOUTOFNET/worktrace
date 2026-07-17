@@ -5,8 +5,8 @@ import pytest
 from tests.support import activity_factory as activity_service
 from worktrace.api import rule_api
 from worktrace.db import get_connection
-from worktrace.platforms import windows_adapter
 from worktrace.platforms.base import ActiveWindow
+from worktrace.platforms.windows_adapter import CanonicalWindowsPathResolver
 from worktrace.services import (
     folder_index_query_service,
     folder_index_service,
@@ -98,8 +98,6 @@ def test_missing_indexed_path_requires_explicit_stale_command(temp_db, tmp_path)
 
     path.unlink()
 
-    # Pure queries return the currently published durable snapshot. They do not
-    # consult the live filesystem or mutate index state on read.
     matches = folder_index_query_service.lookup_indexed_paths_for_file_name(
         "Spec.docx",
         "2026-06-18 09:00:00",
@@ -203,10 +201,9 @@ def test_safe_backfill_uses_index_only_after_valid_from(temp_db, tmp_path):
     assert activity_service.get_activity(late)["project_id"] == project
 
 
-def test_windows_adapter_uses_folder_index_after_open_files_miss(
+def test_windows_resolver_uses_pure_folder_index_after_live_sources_miss(
     temp_db,
     tmp_path,
-    monkeypatch,
 ):
     project = project_service.create_project("Development")
     folder = tmp_path / "Repo"
@@ -215,14 +212,14 @@ def test_windows_adapter_uses_folder_index_after_open_files_miss(
     path.write_text("print(1)", encoding="utf-8")
     rule_id = folder_rule_service.create_or_update_folder_rule(str(folder), project)
     _ready_index(rule_id)
-    monkeypatch.setattr(windows_adapter, "_com_candidates", lambda _process_name: [])
-    monkeypatch.setattr(
-        windows_adapter,
-        "_get_process_open_file_paths",
-        lambda _pid: [],
+    resolver = CanonicalWindowsPathResolver(
+        com_paths=lambda _process_name: [],
+        open_file_paths=lambda _pid: [],
+        cache_seconds=0,
     )
 
-    resolved = windows_adapter._resolve_active_file_path(
+    resolved = resolver.resolve(
+        (10, 900001, "Code.exe", "main.py - Visual Studio Code"),
         "Code.exe",
         "main.py - Visual Studio Code",
         900001,
