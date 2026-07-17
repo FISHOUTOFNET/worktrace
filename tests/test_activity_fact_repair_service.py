@@ -117,6 +117,30 @@ def test_detector_failure_persists_explicit_unknown_fact(temp_db, monkeypatch):
     assert resource["source"] == f"repair_v{repair_service.REPAIR_POLICY_VERSION}_unknown"
 
 
+def test_empty_detector_identity_is_persisted_as_unknown(temp_db, monkeypatch):
+    activity_id = _closed_activity()
+    _delete_resource(activity_id)
+
+    monkeypatch.setattr(
+        repair_service,
+        "detect_resource",
+        lambda _window: _resource("", "Broken identity"),
+    )
+
+    assert repair_service.repair_missing_activity_resources(batch_size=1) == 1
+
+    state = repair_service.require_activity_fact_repair_complete()
+    assert state["unknown_count"] == 1
+    assert state["error_count"] == 1
+    with get_connection() as conn:
+        resource = conn.execute(
+            "SELECT * FROM activity_resource WHERE activity_id = ?",
+            (activity_id,),
+        ).fetchone()
+    assert resource["resource_kind"] == "unknown"
+    assert resource["identity_key"] == f"activity:{activity_id}"
+
+
 def test_detector_changes_do_not_change_repaired_history(temp_db, monkeypatch):
     activity_id = _closed_activity()
     _delete_resource(activity_id)

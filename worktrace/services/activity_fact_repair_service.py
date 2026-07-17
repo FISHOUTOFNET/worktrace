@@ -81,7 +81,7 @@ def repair_missing_activity_resources(batch_size: int = DEFAULT_BATCH_SIZE) -> i
     """Persist all missing resource facts under a versioned, resumable policy."""
 
     size = max(1, int(batch_size))
-    first_missing_id = _first_missing_activity_id()
+    first_missing_id = _first_unrepaired_activity_id()
     try:
         state = get_activity_fact_repair_state()
     except ValueError:
@@ -114,7 +114,7 @@ def repair_missing_activity_resources(batch_size: int = DEFAULT_BATCH_SIZE) -> i
                 size,
             )
             if not rows:
-                remaining_id = _first_missing_activity_id()
+                remaining_id = _first_unrepaired_activity_id()
                 if (
                     remaining_id is not None
                     and remaining_id <= int(state["cursor_activity_id"])
@@ -179,7 +179,7 @@ def require_activity_fact_repair_complete() -> dict[str, Any]:
     """Fail closed while durable resource facts or their repair state are incomplete."""
 
     state = get_activity_fact_repair_state()
-    if state["status"] != "completed" or _first_missing_activity_id() is not None:
+    if state["status"] != "completed" or _first_unrepaired_activity_id() is not None:
         raise ValueError("data_repair_required")
     return state
 
@@ -207,7 +207,7 @@ def _write_state(conn, state: dict[str, Any]) -> None:
     )
 
 
-def _first_missing_activity_id() -> int | None:
+def _first_unrepaired_activity_id() -> int | None:
     with get_connection() as conn:
         row = conn.execute(
             """
@@ -215,6 +215,7 @@ def _first_missing_activity_id() -> int | None:
             FROM activity_log a
             LEFT JOIN activity_resource ar ON ar.activity_id = a.id
             WHERE ar.activity_id IS NULL
+               OR TRIM(COALESCE(ar.identity_key, '')) = ''
             """
         ).fetchone()
     if row is None or row["activity_id"] is None:
@@ -230,7 +231,7 @@ def _load_missing_rows_after(cursor_activity_id: int, limit: int) -> list[dict[s
                    a.file_path_hint, a.start_time, a.status
             FROM activity_log a
             LEFT JOIN activity_resource ar ON ar.activity_id = a.id
-            WHERE ar.activity_id IS NULL
+            WHERE (ar.activity_id IS NULL OR TRIM(COALESCE(ar.identity_key, '')) = '')
               AND a.id > ?
             ORDER BY a.id
             LIMIT ?
@@ -250,18 +251,23 @@ def _resource_for_row(row: dict[str, Any]) -> tuple[DetectedResource, bool]:
     if status in {STATUS_IDLE, STATUS_PAUSED, STATUS_ERROR}:
         return make_system_resource(status, app_name, process_name, window_title), False
     try:
-        return (
-            detect_resource(
-                ActiveWindow(
-                    app_name=app_name,
-                    process_name=process_name,
-                    window_title=window_title,
-                    file_path_hint=row.get("file_path_hint"),
-                    activity_start_time=str(row.get("start_time") or "") or None,
-                )
-            ),
-            False,
+        resource = detect_resource(
+            ActiveWindow(
+                app_name=app_name,
+                process_name=process_name,
+                window_title=window_title,
+                file_path_hint=row.get("file_path_hint"),
+                activity_start_time=str(row.get("start_time") or "") or None,
+            )
         )
+        if not str(resource.identity_key or "").strip():
+            logging.warning(
+                "activity resource repair produced empty identity activity_id=%s policy=%s",
+                int(row.get("id") or 0),
+                REPAIR_POLICY_VERSION,
+            )
+            return _unknown_resource(row), True
+        return resource, False
     except Exception:
         logging.exception(
             "activity resource repair detection failed activity_id=%s policy=%s",
