@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ntpath
 import re
+import threading
 from dataclasses import dataclass
 
 from ..constants import STATUS_NORMAL, UNCATEGORIZED_PROJECT
@@ -13,7 +14,7 @@ from ..path_utils import has_auto_project_extension
 from . import (
     assignment_command_service,
     clipboard_service,
-    folder_index_service,
+    folder_index_query_service,
     folder_rule_service,
     project_lifecycle_policy,
 )
@@ -31,7 +32,10 @@ GENERIC_FILE_PROJECT_NAMES = {
     "桌面",
     "文档",
 }
-_KEYWORD_RULE_CACHE: dict[tuple[str, int], list[dict]] = {}
+_KEYWORD_RULE_CACHE_LOCK = threading.RLock()
+_KEYWORD_RULE_CACHE_DATABASE_KEY: str | None = None
+_KEYWORD_RULE_CACHE_GENERATION: int | None = None
+_KEYWORD_RULE_CACHE: list[dict] | None = None
 
 
 @dataclass(frozen=True)
@@ -49,14 +53,18 @@ class ProjectAssignmentDecision:
 def invalidate_keyword_rule_cache() -> None:
     """Test/reconfiguration hook; catalog writes invalidate by generation."""
 
-    database_key = get_db_key()
-    for cache_key in list(_KEYWORD_RULE_CACHE):
-        if cache_key[0] == database_key:
-            _KEYWORD_RULE_CACHE.pop(cache_key, None)
+    global _KEYWORD_RULE_CACHE_DATABASE_KEY
+    global _KEYWORD_RULE_CACHE_GENERATION
+    global _KEYWORD_RULE_CACHE
+    with _KEYWORD_RULE_CACHE_LOCK:
+        _KEYWORD_RULE_CACHE_DATABASE_KEY = None
+        _KEYWORD_RULE_CACHE_GENERATION = None
+        _KEYWORD_RULE_CACHE = None
 
 
-def _enabled_keyword_rules(conn=None) -> list[dict]:
-    sql = """
+def _load_enabled_keyword_rules(conn) -> list[dict]:
+    rows = conn.execute(
+        """
         SELECT pr.id, pr.project_id, pr.pattern,
                p.name AS project_name, p.enabled AS project_enabled,
                p.is_archived AS project_is_archived,
@@ -67,21 +75,9 @@ def _enabled_keyword_rules(conn=None) -> list[dict]:
           AND pr.rule_type = 'keyword'
           AND pr.created_by = 'user'
         ORDER BY pr.created_at, pr.id
-    """
-    cache_key: tuple[str, int] | None = None
-    if conn is None:
-        cache_key = (
-            get_db_key(),
-            generation(DataGenerationNamespace.CLASSIFICATION_CATALOG),
-        )
-        cached = _KEYWORD_RULE_CACHE.get(cache_key)
-        if cached is not None:
-            return [dict(row) for row in cached]
-        with get_connection() as read_conn:
-            rows = read_conn.execute(sql).fetchall()
-    else:
-        rows = conn.execute(sql).fetchall()
-    rules = [
+        """
+    ).fetchall()
+    return [
         {
             "id": int(row["id"]),
             "project_id": int(row["project_id"]),
@@ -97,9 +93,34 @@ def _enabled_keyword_rules(conn=None) -> list[dict]:
             }
         )
     ]
-    if cache_key is not None:
-        _KEYWORD_RULE_CACHE[cache_key] = rules
-    return [dict(row) for row in rules]
+
+
+def _enabled_keyword_rules(conn=None) -> list[dict]:
+    if conn is not None:
+        return [dict(row) for row in _load_enabled_keyword_rules(conn)]
+
+    global _KEYWORD_RULE_CACHE_DATABASE_KEY
+    global _KEYWORD_RULE_CACHE_GENERATION
+    global _KEYWORD_RULE_CACHE
+    while True:
+        database_key = get_db_key()
+        current_generation = generation(DataGenerationNamespace.CLASSIFICATION_CATALOG)
+        with _KEYWORD_RULE_CACHE_LOCK:
+            if (
+                _KEYWORD_RULE_CACHE_DATABASE_KEY == database_key
+                and _KEYWORD_RULE_CACHE_GENERATION == current_generation
+                and _KEYWORD_RULE_CACHE is not None
+            ):
+                return [dict(row) for row in _KEYWORD_RULE_CACHE]
+        with get_connection() as read_conn:
+            rules = _load_enabled_keyword_rules(read_conn)
+        if generation(DataGenerationNamespace.CLASSIFICATION_CATALOG) != current_generation:
+            continue
+        with _KEYWORD_RULE_CACHE_LOCK:
+            _KEYWORD_RULE_CACHE_DATABASE_KEY = database_key
+            _KEYWORD_RULE_CACHE_GENERATION = current_generation
+            _KEYWORD_RULE_CACHE = [dict(row) for row in rules]
+        return [dict(row) for row in rules]
 
 
 def assign_project_for_activity(activity_id: int) -> dict:
@@ -310,13 +331,13 @@ def candidate_project_name_for_resource(resource: dict) -> str | None:
         return None
 
     if path_hint:
-        parent_dir = ntpath.dirname(path_hint.rstrip("\\/"))
+        parent_dir = ntpath.dirname(path_hint.rstrip("\/"))
         if parent_dir and (
             has_auto_project_extension(path_hint)
             or (resource_kind == "ide_file" and resource_subtype == "code_file")
         ):
             candidate = _clean_project_candidate(
-                ntpath.basename(parent_dir.rstrip("\\/"))
+                ntpath.basename(parent_dir.rstrip("\/"))
             )
             if candidate and candidate.casefold() not in GENERIC_FILE_PROJECT_NAMES:
                 return candidate
@@ -345,7 +366,7 @@ def _infer_project_resource_first(
     if path_hint:
         for target in (
             path_hint,
-            ntpath.dirname(path_hint.rstrip("\\/")),
+            ntpath.dirname(path_hint.rstrip("\/")),
         ):
             if not target:
                 continue
@@ -364,7 +385,7 @@ def _infer_project_resource_first(
                 )
 
     if not path_hint and is_anchor and display_name:
-        rule = folder_index_service.find_matching_folder_rule_for_file_name(
+        rule = folder_index_query_service.find_matching_folder_rule_for_file_name(
             display_name,
             str(activity.get("start_time") or "") or None,
             conn=conn,
