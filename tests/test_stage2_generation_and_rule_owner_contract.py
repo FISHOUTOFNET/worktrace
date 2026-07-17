@@ -61,6 +61,8 @@ def test_catalog_caches_retain_only_one_generation_snapshot() -> None:
     assert "dict[tuple[str, int]" not in folders
     assert "_KEYWORD_RULE_CACHE_GENERATION" in keywords
     assert "dict[tuple[str, int]" not in keywords
+    assert "_EXCLUDE_RULE_CACHE_GENERATION" in privacy
+    assert "dict[tuple[str, int]" not in privacy
     assert "SettingMutationClass.OPERATIONAL" in settings
 
 
