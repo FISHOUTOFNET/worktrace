@@ -1,4 +1,4 @@
-"""Application-control capability boundary for the UI."""
+"""Application-control capabilities for the UI composition root."""
 
 from __future__ import annotations
 
@@ -6,26 +6,10 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from ..services import privacy_gate_service
-from ..services.runtime_activity_state_service import record_runtime_boundary
 from . import settings_api
 
 if TYPE_CHECKING:
     from ..runtime.app_runtime import AppRuntime
-
-_runtime: "AppRuntime | None" = None
-
-
-def set_runtime(runtime: "AppRuntime | None") -> None:
-    """Composition-root hook; not part of the WebView capability surface."""
-
-    global _runtime
-    _runtime = runtime
-
-
-def get_runtime() -> "AppRuntime | None":
-    """Test/diagnostic hook; intentionally omitted from ``__all__``."""
-
-    return _runtime
 
 
 def _result_dict(result: Any) -> dict[str, Any]:
@@ -71,8 +55,10 @@ def get_collection_status() -> dict[str, Any]:
     }
 
 
-def start_collection_after_privacy_gate() -> dict[str, Any]:
-    """Authorize once, then delegate the complete startup to ``AppRuntime``."""
+def start_collection_after_privacy_gate(
+    runtime: "AppRuntime | None",
+) -> dict[str, Any]:
+    """Authorize once, then delegate complete startup to the injected runtime."""
 
     try:
         allowed = privacy_gate_service.is_sensitive_runtime_allowed()
@@ -81,25 +67,24 @@ def start_collection_after_privacy_gate() -> dict[str, Any]:
         allowed = False
     if not allowed:
         return {"ok": False, "error": "请先确认隐私说明"}
-    if _runtime is None:
-        return {"ok": False, "error": "collector_start_failed"}
-
+    if runtime is None:
+        return {"ok": False, "error": "runtime_not_available"}
     try:
-        return _result_dict(_runtime.start_authorized_collection())
+        return _result_dict(runtime.start_authorized_collection())
     except Exception:
-        logging.exception(
-            "app_api.start_collection_after_privacy_gate: runtime startup failed"
-        )
+        logging.exception("application control runtime startup failed")
         return {"ok": False, "error": "collector_start_failed"}
 
 
-def accept_privacy_notice_and_start() -> dict[str, Any]:
-    """Accept installation consent and start the authorized runtime atomically."""
+def accept_privacy_notice_and_start(
+    runtime: "AppRuntime | None",
+) -> dict[str, Any]:
+    """Accept installation consent and start the injected runtime."""
 
     result = settings_api.accept_first_run_notice_for_webview()
     if not result.get("ok"):
         return result
-    start_result = start_collection_after_privacy_gate()
+    start_result = start_collection_after_privacy_gate(runtime)
     if not start_result.get("ok"):
         return {
             "ok": False,
@@ -121,59 +106,60 @@ def accept_privacy_notice_and_start() -> dict[str, Any]:
     return payload
 
 
-def pause_collection_now() -> dict[str, Any]:
+def pause_collection_now(runtime: "AppRuntime | None") -> dict[str, Any]:
+    """Pause only through the runtime command/acknowledgement channel."""
+
+    if runtime is None:
+        return {"ok": False, "error": "runtime_not_available"}
     try:
-        if _runtime is not None:
-            return dict(_runtime.pause_collection_now())
-        settings_api.set_user_paused(True)
-        record_runtime_boundary("pause_fallback")
-        return {"ok": False, "pause_pending": True}
+        result = dict(runtime.pause_collection_now())
     except Exception:
-        logging.exception("app_api.pause_collection_now failed")
-        try:
-            settings_api.set_user_paused(True)
-            record_runtime_boundary("pause_fallback")
-        except Exception:
-            logging.exception("app_api.pause_collection_now fallback failed")
-        return {"ok": False, "pause_pending": True}
+        logging.exception("application control pause failed")
+        return {"ok": False, "error": "collector_pause_failed"}
+    if not result.get("ok"):
+        return result
+    return result
 
 
-def toggle_collection() -> dict[str, Any]:
-    """Toggle start/pause without duplicating lifecycle rules in the bridge."""
-
+def toggle_collection(runtime: "AppRuntime | None") -> dict[str, Any]:
     status = get_collection_status()
     raw_status = str(status.get("status") or "")
     if bool(status.get("paused")) or raw_status != "running":
-        result = start_collection_after_privacy_gate()
+        result = start_collection_after_privacy_gate(runtime)
         if not result.get("ok"):
             return result
         settings_api.set_user_paused(False)
     else:
-        result = pause_collection_now()
+        result = pause_collection_now(runtime)
         if not result.get("ok"):
             return result
     return get_collection_status()
 
 
-def set_clipboard_capture_enabled(enabled: bool) -> None:
-    """Authorize and apply a live clipboard runtime state when one exists."""
-
-    if enabled and _runtime is not None:
+def set_clipboard_capture_enabled(
+    runtime: "AppRuntime | None",
+    enabled: bool,
+) -> None:
+    if runtime is None:
+        raise RuntimeError("runtime_not_available")
+    if enabled:
         privacy_gate_service.require_sensitive_runtime_allowed()
-    if _runtime is not None:
-        applied = _runtime.set_clipboard_capture_enabled(bool(enabled))
-        if not applied:
-            raise RuntimeError("clipboard_runtime_rejected")
+    applied = runtime.set_clipboard_capture_enabled(bool(enabled))
+    if not applied:
+        raise RuntimeError("clipboard_runtime_rejected")
 
 
-def set_clipboard_capture_policy(enabled: bool) -> dict[str, Any]:
+def set_clipboard_capture_policy(
+    runtime: "AppRuntime | None",
+    enabled: bool,
+) -> dict[str, Any]:
     """Apply runtime authorization, persist preference, and compensate failures."""
 
     if enabled is not True and enabled is not False:
         return {"ok": False, "error": "请选择有效的剪贴板记录状态"}
     previous = bool(settings_api.is_clipboard_capture_enabled())
     try:
-        set_clipboard_capture_enabled(enabled)
+        set_clipboard_capture_enabled(runtime, enabled)
     except Exception:
         logging.exception("clipboard authorization or runtime apply failed")
         return {"ok": False, "error": "设置剪贴板记录失败"}
@@ -183,53 +169,58 @@ def set_clipboard_capture_policy(enabled: bool) -> dict[str, Any]:
     except Exception:
         logging.exception("clipboard preference persistence failed")
         try:
-            set_clipboard_capture_enabled(previous)
+            set_clipboard_capture_enabled(runtime, previous)
         except Exception:
             logging.exception("clipboard runtime compensation failed")
         return {"ok": False, "error": "设置剪贴板记录失败"}
 
     if not result.get("ok"):
         try:
-            set_clipboard_capture_enabled(previous)
+            set_clipboard_capture_enabled(runtime, previous)
         except Exception:
             logging.exception("clipboard runtime compensation failed")
         return result
     return {"ok": True, "status": result["status"]}
 
 
-def start_collector() -> dict[str, object]:
-    """Internal diagnostic hook; omitted from the WebView capability surface."""
+class ApplicationControl:
+    """Explicit runtime-bound application capability object."""
 
-    if _runtime is not None:
-        return dict(_runtime.start_collector())
-    return {"ok": False, "error": "collector_start_failed"}
+    def __init__(self, runtime: "AppRuntime | None") -> None:
+        self._runtime = runtime
 
+    @property
+    def runtime(self) -> "AppRuntime | None":
+        return self._runtime
 
-def start_background_workers() -> dict[str, object]:
-    """Internal diagnostic hook; omitted from the WebView capability surface."""
+    def get_collection_status(self) -> dict[str, Any]:
+        return get_collection_status()
 
-    if _runtime is None:
-        return {
-            "ready": False,
-            "index_ready": False,
-            "history_ready": False,
-            "index_started": False,
-            "history_started": False,
-            "error": "runtime_not_registered",
-        }
-    return _result_dict(_runtime.start_background_workers())
+    def start_collection_after_privacy_gate(self) -> dict[str, Any]:
+        return start_collection_after_privacy_gate(self._runtime)
 
+    def accept_privacy_notice_and_start(self) -> dict[str, Any]:
+        return accept_privacy_notice_and_start(self._runtime)
 
-def request_shutdown() -> None:
-    if _runtime is not None:
-        _runtime.request_shutdown()
+    def pause_collection_now(self) -> dict[str, Any]:
+        return pause_collection_now(self._runtime)
+
+    def toggle_collection(self) -> dict[str, Any]:
+        return toggle_collection(self._runtime)
+
+    def set_clipboard_capture_policy(self, enabled: bool) -> dict[str, Any]:
+        return set_clipboard_capture_policy(self._runtime, enabled)
+
+    def request_shutdown(self) -> None:
+        if self._runtime is not None:
+            self._runtime.request_shutdown()
 
 
 __all__ = [
+    "ApplicationControl",
     "accept_privacy_notice_and_start",
     "get_collection_status",
     "pause_collection_now",
-    "request_shutdown",
     "set_clipboard_capture_policy",
     "start_collection_after_privacy_gate",
     "toggle_collection",
