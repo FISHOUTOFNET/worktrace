@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import json
 import re
 from pathlib import Path
 
@@ -15,6 +16,9 @@ WORKTRACE_DIR = REPO_ROOT / "worktrace"
 SERVICES_DIR = WORKTRACE_DIR / "services"
 COLLECTOR_DIR = WORKTRACE_DIR / "collector"
 RUNTIME_DIR = WORKTRACE_DIR / "runtime"
+OWNER_REGISTRY = json.loads(
+    (REPO_ROOT / "domain_mutation_owners.json").read_text(encoding="utf-8")
+)
 
 LEGACY_WRITE_ENTRIES = frozenset(
     {
@@ -34,6 +38,16 @@ LEGACY_WRITE_ENTRIES = frozenset(
 
 def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
+
+
+def _service_source(relative: str) -> str:
+    facade = f"worktrace/services/{relative}"
+    source = _read(REPO_ROOT / facade)
+    metadata = OWNER_REGISTRY["facades"].get(facade) or {}
+    core = metadata.get("core")
+    if core:
+        source += "\n" + _read(REPO_ROOT / core)
+    return source
 
 
 def _top_level_functions(path: Path) -> set[str]:
@@ -94,7 +108,7 @@ def test_runtime_routes_shutdown_close_all_through_lifecycle() -> None:
 
 
 def test_recovery_routes_closes_through_lifecycle() -> None:
-    source = _read(SERVICES_DIR / "recovery_service.py")
+    source = _service_source("recovery_service.py")
     direct_close = re.compile(
         r"UPDATE\s+activity_log\s+SET\s+end_time",
         re.IGNORECASE,
@@ -150,6 +164,7 @@ def _legacy_activity_service_calls(path: Path) -> list[str]:
 def test_production_has_no_legacy_activity_service_write_calls() -> None:
     excluded = {
         SERVICES_DIR / "activity_service.py",
+        SERVICES_DIR / "activity_service_core.py",
         SERVICES_DIR / "activity_lifecycle_service.py",
     }
     violations: list[str] = []

@@ -89,14 +89,12 @@ def _collect(root: ET.Element, *, detail_limit: int) -> tuple[int, int, list[Pro
     testcases = [element for element in root.iter() if _local_name(element.tag) == "testcase"]
     skipped = 0
     problems: list[Problem] = []
-
     for testcase in testcases:
         if any(_local_name(child.tag) == "skipped" for child in testcase):
             skipped += 1
         problem = _problem_child(testcase)
         if problem is None:
             continue
-
         kind = _local_name(problem.tag)
         raw_details = problem.text or ""
         raw_message = problem.attrib.get("message", "") or raw_details
@@ -109,7 +107,6 @@ def _collect(root: ET.Element, *, detail_limit: int) -> tuple[int, int, list[Pro
                 details=_bounded_details(raw_details or raw_message, limit=detail_limit),
             )
         )
-
     return len(testcases), skipped, problems
 
 
@@ -127,15 +124,26 @@ def _append_summary(path: Path | None, lines: Iterable[str]) -> None:
             stream.write("\n")
 
 
+def _failure_scope(problems: list[Problem]) -> str:
+    modules: list[str] = []
+    for problem in problems:
+        module = problem.test_id.split("::", 1)[0].removeprefix("tests.")
+        if module not in modules:
+            modules.append(module)
+    return ",".join(modules)
+
+
 def _append_github_outputs(problems: list[Problem]) -> None:
     output_path = os.environ.get("GITHUB_OUTPUT", "").strip()
     if not output_path:
         return
     first_failure = problems[0].test_id if problems else ""
+    if problems:
+        first_failure += f" | modules={_failure_scope(problems)}"
     first_location = problems[0].location if problems else ""
     with Path(output_path).open("a", encoding="utf-8", newline="\n") as stream:
         stream.write(f"problem_count={len(problems)}\n")
-        stream.write(f"first_failure={_single_line(first_failure, limit=160)}\n")
+        stream.write(f"first_failure={_single_line(first_failure, limit=230)}\n")
         stream.write(f"first_location={_single_line(first_location, limit=120)}\n")
 
 
@@ -147,7 +155,6 @@ def _emit_manifest(total: int, skipped: int, problems: list[Problem]) -> list[st
         f"Total: {total} | Passed: {passed} | Failed: {failures} | "
         f"Errors: {errors} | Skipped: {skipped}"
     )
-
     print(MANIFEST_BEGIN)
     print(counts)
     problem_count = len(problems)
@@ -157,13 +164,11 @@ def _emit_manifest(total: int, skipped: int, problems: list[Problem]) -> list[st
             f"{problem.location} | {problem.message}"
         )
     print(MANIFEST_END)
-
     print(DETAILS_BEGIN)
     for index, problem in enumerate(problems, start=1):
         print(f"--- [{index}/{problem_count}] {problem.test_id} ---")
         print(problem.details)
     print(DETAILS_END)
-
     summary_lines = [
         "## Pytest failure diagnostics",
         "",
@@ -190,11 +195,7 @@ def _emit_manifest(total: int, skipped: int, problems: list[Problem]) -> list[st
 
 
 def _workflow_warning(message: str) -> None:
-    escaped = (
-        message.replace("%", "%25")
-        .replace("\r", "%0D")
-        .replace("\n", "%0A")
-    )
+    escaped = message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
     print(f"::warning title=Pytest diagnostics unavailable::{escaped}")
 
 
@@ -230,7 +231,6 @@ def _parse_args() -> argparse.Namespace:
 def main() -> int:
     _configure_utf8()
     args = _parse_args()
-
     if not args.junit.is_file():
         summary = _emit_fallback(
             args.log,
@@ -240,7 +240,6 @@ def main() -> int:
         _append_github_outputs([])
         _append_summary(args.summary, summary)
         return 0
-
     try:
         root = ET.parse(args.junit).getroot()
         total, skipped, problems = _collect(root, detail_limit=max(200, args.detail_chars))
@@ -253,7 +252,6 @@ def main() -> int:
         _append_github_outputs([])
         _append_summary(args.summary, summary)
         return 0
-
     if not problems:
         summary = _emit_fallback(
             args.log,
@@ -263,7 +261,6 @@ def main() -> int:
         _append_github_outputs([])
         _append_summary(args.summary, summary)
         return 0
-
     _append_github_outputs(problems)
     _append_summary(args.summary, _emit_manifest(total, skipped, problems))
     return 0
