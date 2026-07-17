@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import os
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ..constants import PRIVACY_NOTICE_TEXT
-from ..services import export_service, privacy_gate_service
+from ..services import export_service, privacy_gate_service, secure_backup_service
 from ..services.secure_backup_service import (
     BackupCorruptedError,
     BackupDecryptionError,
@@ -20,7 +20,10 @@ from ..services.settings_service import (
     get_setting,
     set_setting,
 )
-from . import backup_api, view_model_api
+from . import view_model_api
+
+if TYPE_CHECKING:
+    from ..runtime.maintenance_coordinator import RuntimeMaintenanceCoordinator
 
 set_setting_value: object = object()
 
@@ -85,9 +88,16 @@ def clear_all_local_data(confirm: bool) -> None:
     export_service.clear_all_local_data(confirm=confirm)
 
 
-def get_settings_privacy_status() -> dict[str, Any]:
+def get_settings_privacy_status(
+    maintenance: "RuntimeMaintenanceCoordinator | None" = None,
+) -> dict[str, Any]:
     try:
         notice_accepted = first_run_notice_accepted()
+        import_active = (
+            maintenance.is_secure_import_in_progress()
+            if maintenance is not None
+            else secure_backup_service.is_secure_import_in_progress()
+        )
         return {
             "ok": True,
             "status": {
@@ -95,9 +105,7 @@ def get_settings_privacy_status() -> dict[str, Any]:
                 "storage_model": "local_only",
                 "clipboard_capture_enabled": is_clipboard_capture_enabled(),
                 "export_path_configured": bool(get_export_path()),
-                "secure_import_in_progress": bool(
-                    backup_api.is_secure_import_in_progress()
-                ),
+                "secure_import_in_progress": bool(import_active),
                 "encrypted_backup": {
                     "supported": True,
                     "export_available_in_webview": True,
@@ -122,6 +130,8 @@ def export_encrypted_backup_for_webview(
     output_path: str,
     passphrase: str,
     confirm_passphrase: str,
+    *,
+    maintenance: "RuntimeMaintenanceCoordinator | None" = None,
 ) -> dict[str, Any]:
     if not isinstance(output_path, str) or not output_path.strip():
         return {"ok": False, "error": "请选择有效的备份保存位置"}
@@ -133,7 +143,12 @@ def export_encrypted_backup_for_webview(
     if not normalized_path.lower().endswith(".wtbackup"):
         normalized_path += ".wtbackup"
     try:
-        backup_api.export_encrypted_backup(normalized_path, passphrase)
+        if maintenance is not None:
+            maintenance.export_encrypted_backup(normalized_path, passphrase)
+        elif get_collector_status() != "running":
+            secure_backup_service.export_encrypted_backup(normalized_path, passphrase)
+        else:
+            raise RuntimeError("runtime_maintenance_capability_required")
     except Exception:
         return {"ok": False, "error": "导出加密备份失败"}
     return {
@@ -145,6 +160,8 @@ def export_encrypted_backup_for_webview(
 
 def preview_encrypted_backup_manifest_for_webview(
     input_path: str,
+    *,
+    maintenance: "RuntimeMaintenanceCoordinator | None" = None,
 ) -> dict[str, Any]:
     if (
         not isinstance(input_path, str)
@@ -153,7 +170,11 @@ def preview_encrypted_backup_manifest_for_webview(
     ):
         return {"ok": False, "error": "请选择有效的加密备份文件"}
     try:
-        info = backup_api.parse_encrypted_backup_manifest(input_path)
+        info = (
+            maintenance.parse_encrypted_backup_manifest(input_path)
+            if maintenance is not None
+            else secure_backup_service.parse_encrypted_backup_manifest(input_path)
+        )
     except Exception:
         return {"ok": False, "error": "读取备份清单失败"}
     return {
@@ -174,6 +195,8 @@ def import_encrypted_backup_for_webview(
     input_path: str,
     passphrase: str,
     confirm_text: str,
+    *,
+    maintenance: "RuntimeMaintenanceCoordinator | None" = None,
 ) -> dict[str, Any]:
     if (
         not isinstance(input_path, str)
@@ -186,10 +209,18 @@ def import_encrypted_backup_for_webview(
     if not isinstance(confirm_text, str) or confirm_text.strip() != "导入并替换":
         return {"ok": False, "error": "请输入确认文字：导入并替换"}
     try:
-        result = backup_api.import_encrypted_backup(
-            input_path,
-            passphrase,
-            mode="replace",
+        result = (
+            maintenance.import_encrypted_backup(
+                input_path,
+                passphrase,
+                mode="replace",
+            )
+            if maintenance is not None
+            else secure_backup_service.import_encrypted_backup(
+                input_path,
+                passphrase,
+                mode="replace",
+            )
         )
     except BackupImportInProgressError:
         return {"ok": False, "error": "已有加密备份导入正在进行"}
