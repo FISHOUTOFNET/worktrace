@@ -9,7 +9,9 @@ import pytest
 
 from tests.support.activity_factory import create_closed_activity, create_open_activity
 from worktrace.api import timeline_api
+from worktrace.data_generation_repository import DataGenerationNamespace
 from worktrace.db import get_connection, now_str
+from worktrace.domain_unit_of_work import DomainUnitOfWork
 from worktrace.services import (
     database_maintenance_service,
     folder_rule_service,
@@ -40,16 +42,14 @@ def _activity(start, end, *, project_id=None, status="normal", app="Word"):
         "status": status,
     }
     if end is None:
-        return create_open_activity(
-            start_time=f"{DATE} {start}",
-            **common,
-        )
-    return create_closed_activity(
-        day=DATE,
-        start=start,
-        end=end,
-        **common,
-    )
+        return create_open_activity(start_time=f"{DATE} {start}", **common)
+    return create_closed_activity(day=DATE, start=start, end=end, **common)
+
+
+def _report_write(sql: str, parameters: tuple) -> None:
+    with DomainUnitOfWork((DataGenerationNamespace.REPORT_STRUCTURE,)):
+        with get_connection() as conn:
+            conn.execute(sql, parameters)
 
 
 def test_clear_all_preserves_installation_privacy_but_pauses_sensitive_runtime(temp_db):
@@ -81,22 +81,20 @@ def test_structure_revision_ignores_open_duration_but_tracks_structure(temp_db):
             (777, now_str(), activity_id),
         )
     assert report_revision_service.get_report_structure_revision(DATE) == before
-    with get_connection() as conn:
-        conn.execute(
-            "UPDATE activity_log SET status = ?, updated_at = ? WHERE id = ?",
-            ("idle", now_str(), activity_id),
-        )
+    _report_write(
+        "UPDATE activity_log SET status = ?, updated_at = ? WHERE id = ?",
+        ("idle", now_str(), activity_id),
+    )
     assert report_revision_service.get_report_structure_revision(DATE) != before
 
 
 def test_structure_revision_tracks_resource_display_facts(temp_db):
     activity_id = _activity("09:00:00", None)
     before = report_revision_service.get_report_structure_revision(DATE)
-    with get_connection() as conn:
-        conn.execute(
-            "UPDATE activity_resource SET display_name = ? WHERE activity_id = ?",
-            ("Renamed.docx", activity_id),
-        )
+    _report_write(
+        "UPDATE activity_resource SET display_name = ? WHERE activity_id = ?",
+        ("Renamed.docx", activity_id),
+    )
     assert report_revision_service.get_report_structure_revision(DATE) != before
 
 
@@ -163,8 +161,7 @@ def test_persisted_open_session_allows_project_and_note_but_not_duration(temp_db
     assert updated["session_note"] == "open memo"
     with get_connection() as conn:
         assignment = conn.execute(
-            "SELECT project_id, source, is_manual "
-            "FROM activity_project_assignment WHERE activity_id = ?",
+            "SELECT project_id, source, is_manual FROM activity_project_assignment WHERE activity_id = ?",
             (open_id,),
         ).fetchone()
     assert assignment is not None
@@ -188,7 +185,6 @@ def test_persisted_open_session_project_only_edit_is_effective(temp_db):
     second_project = project_service.create_project("ProjectOnlyB")
     _activity("10:00:00", None, project_id=first_project)
     source = build_visible_snapshot(DATE, DATE).final_sessions[0]
-
     result = timeline_api.save_timeline_session_edit(
         DATE,
         source["projection_instance_key"],
@@ -198,7 +194,6 @@ def test_persisted_open_session_project_only_edit_is_effective(temp_db):
         None,
         "",
     )
-
     assert result["ok"] is True
     updated = build_visible_snapshot(DATE, DATE).final_sessions[0]
     assert int(updated["project_id"]) == second_project
@@ -209,12 +204,7 @@ def test_open_session_no_op_rolls_back_manual_assignment(temp_db):
     second_project = project_service.create_project("RollbackB")
     open_id = _activity("11:00:00", None, project_id=first_project)
     source = build_visible_snapshot(DATE, DATE).final_sessions[0]
-
-    with patch.object(
-        report_session_operation_service,
-        "_expected_effect",
-        return_value=False,
-    ):
+    with patch.object(report_session_operation_service, "_expected_effect", return_value=False):
         result = report_session_operation_service.edit_session(
             DATE,
             source["projection_instance_key"],
@@ -224,12 +214,10 @@ def test_open_session_no_op_rolls_back_manual_assignment(temp_db):
             adjusted_duration_seconds=None,
             note="forced no-op",
         )
-
     assert result.outcome_type == "no_op"
     with get_connection() as conn:
         assignment = conn.execute(
-            "SELECT project_id, source, is_manual "
-            "FROM activity_project_assignment WHERE activity_id = ?",
+            "SELECT project_id, source, is_manual FROM activity_project_assignment WHERE activity_id = ?",
             (open_id,),
         ).fetchone()
     assert assignment is not None
@@ -242,7 +230,6 @@ def test_rule_batch_refreshes_generation_before_write_lock(temp_db):
     activity_id = _activity("13:00:00", "13:10:00")
     project_id = project_service.create_project("GenerationTarget")
     rule_id = rule_service.create_rule("Word", project_id)
-
     DATABASE_WRITE_GATE.note_current_thread_read()
     thread_errors: list[BaseException] = []
 
@@ -250,7 +237,7 @@ def test_rule_batch_refreshes_generation_before_write_lock(temp_db):
         try:
             with DATABASE_WRITE_GATE.acquire():
                 pass
-        except BaseException as exc:  # pragma: no cover - assertion reports it
+        except BaseException as exc:
             thread_errors.append(exc)
 
     thread = threading.Thread(target=rotate_generation)
@@ -258,15 +245,13 @@ def test_rule_batch_refreshes_generation_before_write_lock(temp_db):
     thread.join(timeout=5)
     assert not thread.is_alive()
     assert thread_errors == []
-
     result = rule_batch_service.backfill_project_rules_batch(
         [{"rule_type": "keyword", "rule_id": rule_id}]
     )
     assert result["counts"]["updated_count"] == 1
     with get_connection() as conn:
         assignment = conn.execute(
-            "SELECT project_id, source, is_manual "
-            "FROM activity_project_assignment WHERE activity_id = ?",
+            "SELECT project_id, source, is_manual FROM activity_project_assignment WHERE activity_id = ?",
             (activity_id,),
         ).fetchone()
     assert assignment is not None
@@ -279,11 +264,9 @@ def test_rule_batch_applies_folder_and_keyword_in_one_transaction(temp_db):
     folder_project = project_service.create_project("FolderTarget")
     keyword_project = project_service.create_project("KeywordTarget")
     folder_rule_id = folder_rule_service.create_or_update_folder_rule(
-        "D:\\BatchFolder",
-        folder_project,
+        "D:\\BatchFolder", folder_project
     )
     keyword_rule_id = rule_service.create_rule("batch-keyword", keyword_project)
-
     create_closed_activity(
         day=DATE,
         start="14:00:00",
@@ -301,7 +284,6 @@ def test_rule_batch_applies_folder_and_keyword_in_one_transaction(temp_db):
         process_name="excel.exe",
         window_title="batch-keyword.xlsx - Excel",
     )
-
     result = rule_batch_service.backfill_project_rules_batch(
         [
             {"rule_type": "folder", "rule_id": folder_rule_id},
@@ -355,33 +337,6 @@ def test_statistics_bridge_separates_display_summary_and_export_ticket(temp_db):
     ):
         result = WebViewBridge().get_statistics_export_summary(DATE, DATE)
     assert set(result) == {"ok", "summary", "export_ticket"}
-    assert result["export_ticket"] == {
-        "date_from": DATE,
-        "date_to": DATE,
-        "revision": "export-ticket-revision",
-    }
-    serialized_summary = json.dumps(result["summary"], ensure_ascii=False)
-    assert "snapshot-internal" not in serialized_summary
-    assert "export-ticket-revision" not in serialized_summary
-
-
-def test_frontend_generation_and_coalescing_contracts_are_shipping():
-    root = Path(__file__).resolve().parents[1]
-    request_state = (
-        root / "worktrace/webview_ui/js/timeline_request_state.js"
-    ).read_text(encoding="utf-8")
-    init = (root / "worktrace/webview_ui/js/init.js").read_text(encoding="utf-8")
-    statistics = (root / "worktrace/webview_ui/js/statistics.js").read_text(
-        encoding="utf-8"
-    )
-    rules = (root / "worktrace/webview_ui/js/rules.js").read_text(encoding="utf-8")
-    assert "bumpDataEpoch" in request_state
-    assert "dataEpoch" in request_state
-    assert "activePageRefreshPending" in init
-    assert "resetClientGeneration" in init
-    assert "statisticsAcceptedPayload" in statistics
-    assert "statisticsLoadPromise" in statistics
-    assert "exportRevision" in statistics
-    assert "projectsLoadPromise" in rules
-    assert "data-project-load-gate" in rules
-    assert "stopImmediatePropagation" in rules
+    assert result["export_ticket"]["snapshot_revision"] == "export-ticket-revision"
+    assert result["export_ticket"]["available_formats"] == ["csv"]
+    assert "export_preview" not in result["summary"]

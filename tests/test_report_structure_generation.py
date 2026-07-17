@@ -5,7 +5,9 @@ from unittest.mock import patch
 import pytest
 
 from tests.support import activity_factory as activity_service
+from worktrace.data_generation_repository import DataGenerationNamespace
 from worktrace.db import get_connection, now_str
+from worktrace.domain_unit_of_work import DomainUnitOfWork
 from worktrace.resources.types import DetectedResource
 from worktrace.services import report_revision_service, resource_service
 from worktrace.services.settings_service import set_setting
@@ -22,6 +24,12 @@ def _open_activity() -> int:
         start_time=f"{DATE} 09:00:00",
         file_path_hint="D:\\Generation\\Generation.docx",
     )
+
+
+def _structural_update(sql: str, parameters: tuple) -> None:
+    with DomainUnitOfWork((DataGenerationNamespace.REPORT_STRUCTURE,)):
+        with get_connection() as conn:
+            conn.execute(sql, parameters)
 
 
 def test_heartbeat_revision_reuses_hash_until_structural_commit(temp_db):
@@ -47,24 +55,21 @@ def test_heartbeat_revision_reuses_hash_until_structural_commit(temp_db):
         assert report_revision_service.get_report_structure_revision(DATE) == first
         assert build.call_count == 1
 
-        conn = get_connection()
-        try:
-            conn.execute("BEGIN IMMEDIATE")
-            conn.execute(
-                "UPDATE activity_log SET status = ?, updated_at = ? WHERE id = ?",
-                ("idle", now_str(), activity_id),
-            )
-            conn.rollback()
-        finally:
-            conn.close()
+        with pytest.raises(RuntimeError, match="rollback marker"):
+            with DomainUnitOfWork((DataGenerationNamespace.REPORT_STRUCTURE,)):
+                with get_connection() as conn:
+                    conn.execute(
+                        "UPDATE activity_log SET status = ?, updated_at = ? WHERE id = ?",
+                        ("idle", now_str(), activity_id),
+                    )
+                raise RuntimeError("rollback marker")
         assert report_revision_service.get_report_structure_revision(DATE) == first
         assert build.call_count == 1
 
-        with get_connection() as conn:
-            conn.execute(
-                "UPDATE activity_log SET status = ?, updated_at = ? WHERE id = ?",
-                ("idle", now_str(), activity_id),
-            )
+        _structural_update(
+            "UPDATE activity_log SET status = ?, updated_at = ? WHERE id = ?",
+            ("idle", now_str(), activity_id),
+        )
         changed = report_revision_service.get_report_structure_revision(DATE)
         assert changed != first
         assert build.call_count == 2
@@ -74,9 +79,7 @@ def test_structural_setting_commit_invalidates_cached_revision(temp_db):
     _open_activity()
     report_revision_service.clear_report_structure_revision_cache()
     first = report_revision_service.get_report_structure_revision(DATE)
-
     set_setting("context_carry_minutes", "7")
-
     second = report_revision_service.get_report_structure_revision(DATE)
     assert second != first
 
