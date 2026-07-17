@@ -4,6 +4,7 @@ import time
 
 from ..constants import RULE_CACHE_TTL_SECONDS
 from ..db import dict_rows, get_connection, get_db_path, now_str
+from ..mutation_effects import report_structure_mutation
 from ..path_utils import (
     is_path_under_folder,
     looks_like_anchor_file_path,
@@ -57,6 +58,7 @@ def _enabled_folder_rules(conn=None) -> list[dict]:
     return [dict(row) for row in rules]
 
 
+@report_structure_mutation
 def create_or_update_folder_rule(folder_path: str, project_id: int, recursive: bool = True) -> int:
     folder = (folder_path or "").strip()
     if not folder:
@@ -95,21 +97,8 @@ def create_or_update_folder_rule(folder_path: str, project_id: int, recursive: b
     return rule_id
 
 
+@report_structure_mutation
 def update_folder_rule(rule_id: int, folder_path: str, recursive: bool = True) -> None:
-    """Update one existing folder rule's ``folder_path`` and ``recursive`` by id.
-
-    Unlike ``create_or_update_folder_rule``, this preserves the row's ``id``
-    even when the new ``folder_path`` produces a different
-    ``normalized_folder_key``. ``project_id`` and ``enabled`` are preserved
-    as-is; this function does not move a folder rule to a different project
-    and does not toggle its enabled state. The folder index for this rule is
-    rebuilt because the path may have changed.
-
-    Raises ``ValueError`` if ``folder_path`` is empty or ``rule_id`` does not
-    match any row. Raises ``sqlite3.IntegrityError`` (surfaced to the caller
-    as ``operation_failed`` by the API facade) if the new normalized key
-    already belongs to a different folder rule.
-    """
     folder = (folder_path or "").strip()
     if not folder:
         raise ValueError("folder path is required")
@@ -121,10 +110,7 @@ def update_folder_rule(rule_id: int, folder_path: str, recursive: bool = True) -
         cur = conn.execute(
             """
             UPDATE folder_project_rule
-            SET folder_path = ?,
-                normalized_folder_key = ?,
-                recursive = ?,
-                updated_at = ?
+            SET folder_path = ?, normalized_folder_key = ?, recursive = ?, updated_at = ?
             WHERE id = ?
             """,
             (folder, key, int(recursive), ts, rule_id),
@@ -139,6 +125,7 @@ def update_folder_rule(rule_id: int, folder_path: str, recursive: bool = True) -
     request_rebuild_for_rule(rule_id)
 
 
+@report_structure_mutation
 def delete_folder_rule(rule_id: int) -> None:
     with get_connection() as conn:
         conn.execute("DELETE FROM folder_project_rule WHERE id = ?", (rule_id,))
@@ -150,6 +137,7 @@ def delete_folder_rule(rule_id: int) -> None:
     delete_index_for_rule(rule_id)
 
 
+@report_structure_mutation
 def set_folder_rule_enabled(rule_id: int, enabled: bool) -> None:
     with get_connection() as conn:
         conn.execute(
@@ -194,19 +182,16 @@ def preview_folder_rule_conflicts(folder_path: str, project_id: int) -> dict:
     with get_connection() as conn:
         activity_rows = dict_rows(conn.execute(
             """
-            SELECT
-                a.*,
-                apa.project_id AS effective_project_id,
-                COALESCE(apa.is_manual, 0) AS is_manual,
-                ar.path_hint AS resource_path_hint,
-                ar.is_anchor AS resource_is_anchor
+            SELECT a.*, apa.project_id AS effective_project_id,
+                   COALESCE(apa.is_manual, 0) AS is_manual,
+                   ar.path_hint AS resource_path_hint,
+                   ar.is_anchor AS resource_is_anchor
             FROM activity_log a
             LEFT JOIN activity_project_assignment apa ON apa.activity_id = a.id
             LEFT JOIN activity_resource ar ON ar.activity_id = a.id
             WHERE a.is_deleted = 0
             """
         ).fetchall())
-
         rules = dict_rows(conn.execute("SELECT * FROM folder_project_rule").fetchall())
     child_count = sum(
         1
@@ -234,14 +219,10 @@ def preview_folder_rule_conflicts(folder_path: str, project_id: int) -> dict:
 
 
 def _activity_matches_folder(activity: dict, folder_path: str, recursive: bool = True, rule_id: int | None = None) -> bool:
-    # Resource-first: check both resource_path_hint and file_path_hint.
-    # A non-anchor resource may store a name-only path_hint (e.g. "floorplan.dwg")
-    # while file_path_hint holds the full drive path — check each independently.
     for key in ("resource_path_hint", "file_path_hint"):
         path_hint = str(activity.get(key) or "").strip()
         if path_hint and looks_like_anchor_file_path(path_hint):
             return is_path_under_folder(path_hint, folder_path, recursive)
-    # No concrete path: try folder index lookup.
     if rule_id is not None:
         from .folder_index_service import activity_matches_rule_by_index
 
