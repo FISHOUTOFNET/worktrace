@@ -8,6 +8,7 @@ covers approved low-level command helpers within the same transaction.
 
 from __future__ import annotations
 
+import logging
 from contextvars import ContextVar, Token
 from typing import Iterable
 
@@ -99,6 +100,8 @@ class DomainUnitOfWork:
             return False
 
         connection = self.connection
+        committed = False
+        committed_effects: tuple[DataGenerationNamespace, ...] = ()
         try:
             if exc_type is not None or self._rollback_only:
                 connection.rollback()
@@ -107,7 +110,6 @@ class DomainUnitOfWork:
                 self._changed
                 or int(connection.total_changes) > self._initial_total_changes
             )
-            committed_effects: tuple[DataGenerationNamespace, ...] = ()
             if changed and self._effects:
                 explicit_effects = self._effects.difference(
                     _FALLBACK_PUBLISHED_NAMESPACES
@@ -116,13 +118,24 @@ class DomainUnitOfWork:
                     DataGenerationRepository.bump(connection, explicit_effects)
                 committed_effects = tuple(self._effects)
             connection.commit()
+            committed = True
             if committed_effects:
-                from .generation_clock import publish_committed
+                try:
+                    from .generation_clock import publish_committed
 
-                publish_committed(connection, committed_effects)
+                    publish_committed(connection, committed_effects)
+                except Exception:
+                    # The durable transaction is already committed. A failed
+                    # process-local publication must degrade to a cache miss,
+                    # never misreport the command itself as failed.
+                    logging.exception("generation clock publication failed")
+                    from .generation_clock import clear
+
+                    clear()
             return False
         except Exception:
-            connection.rollback()
+            if not committed:
+                connection.rollback()
             raise
         finally:
             if self._token is not None:
