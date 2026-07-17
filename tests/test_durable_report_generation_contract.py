@@ -36,4 +36,4 @@ def test_structure_generation_is_durable_and_ignores_duration_checkpoint(temp_db
                 ("idle", now_str(), activity_id),
             )
 
-    assert _generation() > after_insert
+    assert _generation() == after_insert + 1
