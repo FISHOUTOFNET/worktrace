@@ -23,11 +23,13 @@ def test_production_runtime_has_no_callback_registry_or_global_runtime() -> None
     barrier = (ROOT / "worktrace/services/runtime_snapshot_barrier.py").read_text(
         encoding="utf-8"
     )
+    bridge = (ROOT / "worktrace/webview_ui/bridge.py").read_text(encoding="utf-8")
     assert "_runtime:" not in app_api
     assert "def set_runtime(" not in app_api
     assert "register_collector_pause_handler" not in runtime + backup
     assert "register_collector_reset_handler" not in runtime + backup
     assert "register_quiesce_handler" not in runtime + barrier
+    assert "from ..runtime" not in bridge
 
 
 def test_application_control_without_runtime_fails_without_fake_pause(temp_db):
