@@ -5,10 +5,12 @@ from __future__ import annotations
 import logging
 
 from ..db import get_connection, now_str
+from ..mutation_effects import report_structure_mutation
 
 INFERENCE_RETRY_CONFIDENCE = -1
 
 
+@report_structure_mutation
 def upsert_assignment(
     conn,
     *,
@@ -22,12 +24,7 @@ def upsert_assignment(
     source_rule_id: int | None = None,
     protect_manual: bool = False,
 ) -> bool:
-    """Write one assignment using explicit ownership checks.
-
-    Batch callers already hold ``BEGIN IMMEDIATE``. Reading ownership before
-    UPDATE is therefore deterministic and avoids SQLite UPSERT ``rowcount``
-    differences across Python/SQLite builds.
-    """
+    """Write one assignment using explicit ownership checks."""
 
     activity_id = int(activity_id)
     if source not in {"folder_rule", "keyword_rule"}:
