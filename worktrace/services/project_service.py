@@ -1,11 +1,32 @@
 from __future__ import annotations
 
 from ..constants import EXCLUDED_PROJECT, UNCATEGORIZED_PROJECT
+from ..data_generation_repository import DataGenerationNamespace
 from ..db import dict_rows, get_connection, get_db_path, now_str
+from ..domain_unit_of_work import DomainUnitOfWork
 from . import project_lifecycle_policy
 
 _UNCATEGORIZED_PROJECT_IDS: dict[str, int] = {}
 _EXCLUDED_PROJECT_IDS: dict[str, int] = {}
+
+
+def _catalog_uow(
+    *extra_effects: DataGenerationNamespace,
+) -> DomainUnitOfWork:
+    return DomainUnitOfWork(
+        (
+            DataGenerationNamespace.CLASSIFICATION_CATALOG,
+            *extra_effects,
+        )
+    )
+
+
+def _add_privacy_effect_for_project(
+    uow: DomainUnitOfWork,
+    project: dict | None,
+) -> None:
+    if project and str(project.get("name") or "") == EXCLUDED_PROJECT:
+        uow.add_effects(DataGenerationNamespace.PRIVACY_CATALOG)
 
 
 def invalidate_uncategorized_project_cache() -> None:
@@ -23,8 +44,8 @@ def create_project(name: str, description: str = "", language: str = "中文") -
     if not name:
         raise ValueError("project name is required")
     ts = now_str()
-    with get_connection() as conn:
-        cur = conn.execute(
+    with _catalog_uow() as uow:
+        cur = uow.connection.execute(
             """
             INSERT INTO project(name, description, language, is_archived, enabled, created_by, created_at, updated_at)
             VALUES (?, ?, ?, 0, 1, 'user', ?, ?)
@@ -40,15 +61,28 @@ def update_project(
     description: str = "",
     language: str = "中文",
 ) -> None:
-    project = get_project(project_id)
-    if not project:
-        raise ValueError("project not found")
-    if project.get("created_by") == "system":
-        raise ValueError("system project cannot be edited")
     cleaned = name.strip()
     if not cleaned:
         raise ValueError("project name is required")
-    with get_connection() as conn:
+    normalized_description = description.strip()
+    normalized_language = _normalize_project_language(language)
+    with _catalog_uow() as uow:
+        conn = uow.connection
+        row = conn.execute(
+            "SELECT * FROM project WHERE id = ?",
+            (project_id,),
+        ).fetchone()
+        project = dict(row) if row else None
+        if not project:
+            raise ValueError("project not found")
+        if project.get("created_by") == "system":
+            raise ValueError("system project cannot be edited")
+        if (
+            str(project.get("name") or "") == cleaned
+            and str(project.get("description") or "") == normalized_description
+            and str(project.get("language") or "") == normalized_language
+        ):
+            return
         conn.execute(
             """
             UPDATE project
@@ -57,8 +91,8 @@ def update_project(
             """,
             (
                 cleaned,
-                description.strip(),
-                _normalize_project_language(language),
+                normalized_description,
+                normalized_language,
                 now_str(),
                 project_id,
             ),
@@ -66,31 +100,42 @@ def update_project(
 
 
 def set_project_enabled(project_id: int, enabled: bool) -> None:
-    project = get_project(project_id)
-    if not project:
-        raise ValueError("project not found")
-    if project.get("name") == UNCATEGORIZED_PROJECT:
-        raise ValueError("uncategorized project cannot be disabled")
-    with get_connection() as conn:
+    requested = int(enabled)
+    with _catalog_uow() as uow:
+        conn = uow.connection
+        row = conn.execute(
+            "SELECT * FROM project WHERE id = ?",
+            (project_id,),
+        ).fetchone()
+        project = dict(row) if row else None
+        if not project:
+            raise ValueError("project not found")
+        if project.get("name") == UNCATEGORIZED_PROJECT:
+            raise ValueError("uncategorized project cannot be disabled")
+        if int(project.get("enabled") or 0) == requested:
+            return
+        _add_privacy_effect_for_project(uow, project)
         conn.execute(
             "UPDATE project SET enabled = ?, updated_at = ? WHERE id = ?",
-            (int(enabled), now_str(), project_id),
+            (requested, now_str(), project_id),
         )
-    from .folder_rule_service import invalidate_folder_rule_cache
-    from .privacy_service import clear_exclude_rules_cache
-    from .project_inference_service import invalidate_keyword_rule_cache
-
-    invalidate_folder_rule_cache()
-    invalidate_keyword_rule_cache()
-    clear_exclude_rules_cache()
+    _invalidate_project_lifecycle_caches()
 
 
 def set_excluded_project_enabled(enabled: bool) -> int:
     project_id = get_or_create_excluded_project()
-    with get_connection() as conn:
+    requested = int(enabled)
+    with _catalog_uow(DataGenerationNamespace.PRIVACY_CATALOG) as uow:
+        conn = uow.connection
+        row = conn.execute(
+            "SELECT enabled FROM project WHERE id = ? AND name = ?",
+            (project_id, EXCLUDED_PROJECT),
+        ).fetchone()
+        if row is not None and int(row["enabled"] or 0) == requested:
+            return project_id
         conn.execute(
             "UPDATE project SET enabled = ?, updated_at = ? WHERE id = ? AND name = ?",
-            (int(enabled), now_str(), project_id, EXCLUDED_PROJECT),
+            (requested, now_str(), project_id, EXCLUDED_PROJECT),
         )
     from .privacy_service import clear_exclude_rules_cache
 
@@ -263,7 +308,16 @@ def list_project_bindings(include_system_special: bool = True) -> list[dict]:
 
 
 def archive_project(project_id: int) -> None:
-    with get_connection() as conn:
+    with _catalog_uow() as uow:
+        conn = uow.connection
+        row = conn.execute(
+            "SELECT * FROM project WHERE id = ?",
+            (project_id,),
+        ).fetchone()
+        project = dict(row) if row else None
+        if not project or int(project.get("is_archived") or 0) == 1:
+            return
+        _add_privacy_effect_for_project(uow, project)
         conn.execute(
             "UPDATE project SET is_archived = 1, updated_at = ? WHERE id = ?",
             (now_str(), project_id),
@@ -277,13 +331,16 @@ def delete_project(project_id: int) -> None:
 
 def soft_delete_project(project_id: int) -> None:
     """Tombstone a project without deleting facts, assignments, rules, or overrides."""
-    with get_connection() as conn:
+    with _catalog_uow() as uow:
+        conn = uow.connection
         row = conn.execute("SELECT * FROM project WHERE id = ?", (project_id,)).fetchone()
         project = dict(row) if row else None
         if not project:
             raise ValueError("project not found")
         if project_lifecycle_policy.project_is_system_or_special(project):
             raise ValueError("system project cannot be deleted")
+        if int(project.get("is_deleted") or 0) == 1:
+            return
         cur = conn.execute(
             """
             UPDATE project

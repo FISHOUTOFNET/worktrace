@@ -12,7 +12,13 @@ from dataclasses import dataclass
 
 from ..constants import PRIVACY_NOTICE_VERSION
 from ..db import get_connection, now_str
-from .settings_service import clear_settings_cache, get_bool_setting, get_setting, set_setting
+from .settings_service import (
+    SettingMutationClass,
+    clear_settings_cache,
+    get_bool_setting,
+    get_setting,
+    set_settings,
+)
 
 
 class PrivacyGateRequiredError(PermissionError):
@@ -30,13 +36,6 @@ def accepted_privacy_notice_version(*, conn=None) -> str:
 
 
 def is_privacy_notice_accepted(*, conn=None) -> bool:
-    """Return whether this installation accepted the current notice version.
-
-    The legacy boolean predates versioned consent and therefore represents only
-    version 1. Once the substantive notice version is incremented, installations
-    without an explicit matching version must pass through the gate again.
-    """
-
     version = accepted_privacy_notice_version(conn=conn)
     if version:
         return version == PRIVACY_NOTICE_VERSION
@@ -45,10 +44,13 @@ def is_privacy_notice_accepted(*, conn=None) -> bool:
 
 
 def accept_privacy_notice() -> None:
-    set_setting("first_run_notice_accepted", "true")
-    set_setting("accepted_privacy_notice_version", PRIVACY_NOTICE_VERSION)
-    clear_settings_cache("first_run_notice_accepted")
-    clear_settings_cache("accepted_privacy_notice_version")
+    set_settings(
+        {
+            "first_run_notice_accepted": "true",
+            "accepted_privacy_notice_version": PRIVACY_NOTICE_VERSION,
+        },
+        mutation_class=SettingMutationClass.PRIVACY,
+    )
 
 
 def is_sensitive_runtime_allowed() -> bool:
@@ -79,31 +81,28 @@ def restore_installation_privacy_state(
 ) -> None:
     """Restore installation consent after replacing business data."""
 
-    def _restore(connection) -> None:
-        timestamp = now_str()
-        values = {
-            "first_run_notice_accepted": (
-                "true" if state.legacy_accepted else "false"
-            ),
-            "accepted_privacy_notice_version": state.accepted_version,
-        }
-        for key, value in values.items():
-            connection.execute(
-                """
-                INSERT INTO settings(key, value, updated_at)
-                VALUES (?, ?, ?)
-                ON CONFLICT(key) DO UPDATE SET
-                    value = excluded.value,
-                    updated_at = excluded.updated_at
-                """,
-                (key, value, timestamp),
-            )
-
-    if conn is not None:
-        _restore(conn)
+    values = {
+        "first_run_notice_accepted": (
+            "true" if state.legacy_accepted else "false"
+        ),
+        "accepted_privacy_notice_version": state.accepted_version,
+    }
+    if conn is None:
+        set_settings(values, mutation_class=SettingMutationClass.PRIVACY)
         return
-    with get_connection() as own_conn:
-        _restore(own_conn)
+
+    timestamp = now_str()
+    for key, value in values.items():
+        conn.execute(
+            """
+            INSERT INTO settings(key, value, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET
+                value = excluded.value,
+                updated_at = excluded.updated_at
+            """,
+            (key, value, timestamp),
+        )
     clear_settings_cache("first_run_notice_accepted")
     clear_settings_cache("accepted_privacy_notice_version")
 

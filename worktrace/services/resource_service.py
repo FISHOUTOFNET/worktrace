@@ -3,7 +3,9 @@ from __future__ import annotations
 import sqlite3
 
 from ..constants import STATUS_EXCLUDED
+from ..data_generation_repository import DataGenerationNamespace
 from ..db import get_connection, now_str
+from ..domain_unit_of_work import DomainUnitOfWork
 from ..path_utils import normalize_path_key
 from ..resources.resource_builders import make_system_resource, parse_metadata_json
 from ..resources.resource_policy import safe_metadata_json
@@ -93,8 +95,10 @@ def create_or_update_activity_resource(
     if conn is not None:
         _upsert(conn)
     else:
-        with get_connection() as own_conn:
-            _upsert(own_conn)
+        with DomainUnitOfWork(
+            (DataGenerationNamespace.REPORT_STRUCTURE,)
+        ) as uow:
+            _upsert(uow.connection)
 
 
 def get_resource_for_activity(

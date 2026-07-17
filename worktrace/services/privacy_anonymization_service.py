@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from ..constants import STATUS_EXCLUDED
-from ..db import get_connection, now_str
+from ..data_generation_repository import DataGenerationNamespace
+from ..domain_unit_of_work import DomainUnitOfWork
+from ..db import now_str
 from ..platforms.base import ActiveWindow
 from ..resources.resource_builders import make_system_resource
 from . import activity_service, privacy_service
@@ -27,7 +29,7 @@ def update_path_or_anonymize(activity_id: int, file_path_hint: str) -> bool:
     """Persist a safe path, or atomically redact the activity if it is excluded.
 
     Returns ``True`` when the activity was converted to the anonymous excluded
-    representation.  Privacy evaluation occurs before the path is written.
+    representation. Privacy evaluation occurs before the path is written.
     Exceptions intentionally propagate so the collector fails closed.
     """
     if not (file_path_hint or "").strip():
@@ -41,7 +43,10 @@ def update_path_or_anonymize(activity_id: int, file_path_hint: str) -> bool:
 
 def anonymize_activity(activity_id: int) -> None:
     payload = privacy_service.make_excluded_activity_payload()
-    with get_connection() as conn:
+    with DomainUnitOfWork(
+        (DataGenerationNamespace.REPORT_STRUCTURE,)
+    ) as uow:
+        conn = uow.connection
         row = conn.execute(
             "SELECT id FROM activity_log WHERE id = ?",
             (int(activity_id),),
