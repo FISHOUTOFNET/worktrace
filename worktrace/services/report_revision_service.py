@@ -6,6 +6,10 @@ import threading
 from datetime import date as date_type, timedelta
 from typing import Any
 
+from ..data_generation_repository import (
+    DataGenerationNamespace,
+    DataGenerationRepository,
+)
 from ..db import get_connection, get_db_key
 from .page_read_context import current_page_read_context
 from .report_projection_identity import stable_json_hash
@@ -28,16 +32,10 @@ def clear_report_structure_revision_cache(database_key: str | None = None) -> No
 
 
 def _read_durable_generation(connection) -> int:
-    row = connection.execute(
-        """
-        SELECT generation
-        FROM report_structure_revision_state
-        WHERE singleton_id = 1
-        """
-    ).fetchone()
-    if row is None:
-        raise ValueError("database_schema_incompatible")
-    return int(row["generation"] or 0)
+    return DataGenerationRepository.get(
+        connection,
+        DataGenerationNamespace.REPORT_STRUCTURE,
+    )
 
 
 def _build_report_structure_revision(

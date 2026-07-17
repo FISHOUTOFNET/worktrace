@@ -213,10 +213,46 @@ def migrate_6_to_7(conn: sqlite3.Connection) -> None:
     )
 
 
+def migrate_7_to_8(conn: sqlite3.Connection) -> None:
+    """Replace the report-only revision row with named durable generations."""
+
+    old_row = conn.execute(
+        """
+        SELECT generation
+        FROM report_structure_revision_state
+        WHERE singleton_id = 1
+        """
+    ).fetchone()
+    report_generation = int(old_row[0] if old_row is not None else 0)
+    if report_generation < 0:
+        raise ValueError("database_schema_incompatible")
+
+    conn.execute(
+        """
+        CREATE TABLE data_generation_state (
+            namespace TEXT PRIMARY KEY CHECK(length(trim(namespace)) > 0),
+            generation INTEGER NOT NULL CHECK(generation >= 0)
+        )
+        """
+    )
+    conn.executemany(
+        "INSERT INTO data_generation_state(namespace, generation) VALUES (?, ?)",
+        [
+            ("report_structure", report_generation),
+            ("classification_catalog", 0),
+            ("settings", 0),
+            ("privacy_catalog", 0),
+            ("database_replacement", 0),
+        ],
+    )
+    conn.execute("DROP TABLE report_structure_revision_state")
+
+
 MIGRATIONS: dict[int, Migration] = {
     4: migrate_4_to_5,
     5: migrate_5_to_6,
     6: migrate_6_to_7,
+    7: migrate_7_to_8,
 }
 
 
@@ -256,5 +292,6 @@ __all__ = [
     "migrate_4_to_5",
     "migrate_5_to_6",
     "migrate_6_to_7",
+    "migrate_7_to_8",
     "migrate_schema",
 ]

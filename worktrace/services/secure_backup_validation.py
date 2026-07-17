@@ -15,6 +15,7 @@ from ..constants import (
     STATUS_PAUSED,
     TIME_FORMAT,
 )
+from ..data_generation_repository import DataGenerationRepository
 from ..db import CURRENT_SCHEMA_VERSION, expected_schema_fingerprint, schema_fingerprint
 from ..domain_limits import NOTE_MAX_LENGTH
 
@@ -34,25 +35,18 @@ class BackupValidationError(ValueError):
 def validate_staging_database(conn: sqlite3.Connection) -> None:
     """Normalize restore-only runtime state, then validate all semantics."""
 
-    # The durable structural generation is installation-local technical state,
-    # not portable business data. Recreate it at the restore ingress inside the
-    # caller's transaction; executescript() is intentionally avoided because it
-    # would commit before semantic validation finishes.
+    # Durable generations are installation-local technical state, not portable
+    # business data. Recreate and reset them at restore ingress inside the
+    # caller's transaction before checking the canonical schema fingerprint.
     conn.execute(
         """
-        CREATE TABLE IF NOT EXISTS report_structure_revision_state (
-            singleton_id INTEGER PRIMARY KEY CHECK(singleton_id = 1),
+        CREATE TABLE IF NOT EXISTS data_generation_state (
+            namespace TEXT PRIMARY KEY CHECK(length(trim(namespace)) > 0),
             generation INTEGER NOT NULL CHECK(generation >= 0)
         )
         """
     )
-    conn.execute(
-        """
-        INSERT INTO report_structure_revision_state(singleton_id, generation)
-        VALUES (1, 0)
-        ON CONFLICT(singleton_id) DO NOTHING
-        """
-    )
+    DataGenerationRepository.reset_all(conn)
     if int(conn.execute("PRAGMA user_version").fetchone()[0] or 0) != CURRENT_SCHEMA_VERSION:
         raise BackupValidationError("schema version")
     if schema_fingerprint(conn) != expected_schema_fingerprint():

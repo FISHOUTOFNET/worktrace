@@ -3,6 +3,10 @@ from __future__ import annotations
 import pytest
 
 from tests.support.activity_factory import create_open_activity
+from worktrace.data_generation_repository import (
+    DataGenerationNamespace,
+    DataGenerationRepository,
+)
 from worktrace.db import get_connection, now_str
 from worktrace.services import activity_lifecycle_service
 
@@ -11,11 +15,10 @@ pytestmark = [pytest.mark.db, pytest.mark.integration, pytest.mark.serial]
 
 def _generation() -> int:
     with get_connection() as conn:
-        row = conn.execute(
-            "SELECT generation FROM report_structure_revision_state WHERE singleton_id = 1"
-        ).fetchone()
-    assert row is not None
-    return int(row["generation"])
+        return DataGenerationRepository.get(
+            conn,
+            DataGenerationNamespace.REPORT_STRUCTURE,
+        )
 
 
 def test_structure_generation_is_durable_and_ignores_duration_checkpoint(temp_db):
