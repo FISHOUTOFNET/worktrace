@@ -1,13 +1,15 @@
 """Privacy-gate and structured runtime startup contracts."""
 
 from __future__ import annotations
-from tests.support import runtime_state_fixture
 
 import threading
 from unittest.mock import patch
 
 import pytest
 
+from tests.support import runtime_state_fixture
+from worktrace.api import app_api
+from worktrace.api.app_api import ApplicationControl
 from worktrace.collector.collector import run_collector
 from worktrace.runtime.app_runtime import (
     AppRuntime,
@@ -17,7 +19,6 @@ from worktrace.runtime.app_runtime import (
 from worktrace.services import (
     folder_index_service,
     runtime_activity_state_service,
-    settings_service,
 )
 
 pytestmark = [
@@ -181,19 +182,14 @@ def test_start_background_workers_reports_partial_failure(
         runtime.shutdown()
 
 
-def test_app_api_start_background_workers_has_explicit_no_runtime_result(
-    monkeypatch,
-):
-    from worktrace.api import app_api
-
-    monkeypatch.setattr(app_api, "_runtime", None)
-    assert app_api.start_background_workers() == {
-        "ready": False,
-        "index_ready": False,
-        "history_ready": False,
-        "index_started": False,
-        "history_started": False,
-        "error": "runtime_not_registered",
+def test_application_control_has_explicit_no_runtime_result(monkeypatch):
+    monkeypatch.setattr(
+        "worktrace.services.privacy_gate_service.is_sensitive_runtime_allowed",
+        lambda: True,
+    )
+    assert ApplicationControl(None).start_collection_after_privacy_gate() == {
+        "ok": False,
+        "error": "runtime_not_available",
     }
 
 
@@ -218,26 +214,20 @@ def _recording_runtime(result: RuntimeStartResult | None = None):
 
 
 def test_privacy_gate_fails_closed_without_touching_runtime(monkeypatch):
-    from worktrace.api import app_api
-
     runtime, calls = _recording_runtime()
-    monkeypatch.setattr(app_api, "_runtime", runtime)
     monkeypatch.setattr(
         "worktrace.services.privacy_gate_service.is_sensitive_runtime_allowed",
         lambda: False,
     )
 
-    result = app_api.start_collection_after_privacy_gate()
+    result = app_api.start_collection_after_privacy_gate(runtime)
 
     assert result == {"ok": False, "error": "请先确认隐私说明"}
     assert calls == []
 
 
 def test_privacy_gate_fails_closed_when_notice_read_raises(monkeypatch):
-    from worktrace.api import app_api
-
     runtime, calls = _recording_runtime()
-    monkeypatch.setattr(app_api, "_runtime", runtime)
 
     def fail_read():
         raise RuntimeError("settings read failed")
@@ -247,15 +237,13 @@ def test_privacy_gate_fails_closed_when_notice_read_raises(monkeypatch):
         fail_read,
     )
 
-    result = app_api.start_collection_after_privacy_gate()
+    result = app_api.start_collection_after_privacy_gate(runtime)
 
     assert result == {"ok": False, "error": "请先确认隐私说明"}
     assert calls == []
 
 
 def test_privacy_gate_delegates_complete_startup_to_runtime(monkeypatch):
-    from worktrace.api import app_api
-
     runtime, calls = _recording_runtime(
         RuntimeStartResult(
             ok=True,
@@ -266,13 +254,12 @@ def test_privacy_gate_delegates_complete_startup_to_runtime(monkeypatch):
             degraded=True,
         )
     )
-    monkeypatch.setattr(app_api, "_runtime", runtime)
     monkeypatch.setattr(
         "worktrace.services.privacy_gate_service.is_sensitive_runtime_allowed",
         lambda: True,
     )
 
-    result = app_api.start_collection_after_privacy_gate()
+    result = app_api.start_collection_after_privacy_gate(runtime)
 
     assert calls == ["authorized_start"]
     assert result["ok"] is True
@@ -282,8 +269,6 @@ def test_privacy_gate_delegates_complete_startup_to_runtime(monkeypatch):
 
 
 def test_privacy_gate_propagates_runtime_start_failure(monkeypatch):
-    from worktrace.api import app_api
-
     runtime, _calls = _recording_runtime(
         RuntimeStartResult(
             ok=False,
@@ -294,13 +279,12 @@ def test_privacy_gate_propagates_runtime_start_failure(monkeypatch):
             error_code="collector_start_failed",
         )
     )
-    monkeypatch.setattr(app_api, "_runtime", runtime)
     monkeypatch.setattr(
         "worktrace.services.privacy_gate_service.is_sensitive_runtime_allowed",
         lambda: True,
     )
 
-    result = app_api.start_collection_after_privacy_gate()
+    result = app_api.start_collection_after_privacy_gate(runtime)
 
     assert result["ok"] is False
     assert result["error"] == "collector_start_failed"
