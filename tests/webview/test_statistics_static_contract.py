@@ -145,7 +145,7 @@ def test_statistics_export_uses_accepted_payload_and_independent_guards() -> Non
     core = read_js("core.js")
     assert "App.statisticsLoading" in core
     assert "App.statisticsExportSaving" in core
-    assert "App.statisticsAcceptedPayload" in core
+    assert "App.statisticsAcceptedPayload = null" in read_js("init.js")
 
 
 def test_statistics_loading_and_saving_cross_disable_controls() -> None:
