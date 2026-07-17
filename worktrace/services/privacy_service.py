@@ -1,16 +1,15 @@
 from __future__ import annotations
 
-import time
-
 from ..constants import (
     EXCLUDED_APP_NAME,
     EXCLUDED_PROCESS_NAME,
     EXCLUDED_PROJECT,
     EXCLUDED_WINDOW_TITLE,
-    RULE_CACHE_TTL_SECONDS,
     STATUS_EXCLUDED,
 )
-from ..db import dict_rows, get_connection, get_db_path
+from ..data_generation_repository import DataGenerationNamespace
+from ..db import dict_rows, get_connection, get_db_key
+from ..generation_clock import generation
 from ..path_utils import (
     is_path_under_folder,
     normalize_folder_key,
@@ -19,8 +18,7 @@ from ..path_utils import (
 from ..platforms.base import ActiveWindow
 from ..resources.title_parsing import extract_file_name_from_title
 
-_EXCLUDE_RULE_CACHE_TTL_SECONDS = RULE_CACHE_TTL_SECONDS
-_EXCLUDE_RULE_CACHE: dict[str, tuple[float, dict[str, list[dict]]]] = {}
+_EXCLUDE_RULE_CACHE: dict[tuple[str, int], dict[str, list[dict]]] = {}
 
 
 class PrivacyResolutionPending(RuntimeError):
@@ -28,11 +26,17 @@ class PrivacyResolutionPending(RuntimeError):
 
 
 def clear_exclude_rules_cache() -> None:
-    _EXCLUDE_RULE_CACHE.pop(str(get_db_path().resolve()), None)
+    """Test/reconfiguration hook; privacy writes invalidate by generation."""
+
+    database_key = get_db_key()
+    for cache_key in list(_EXCLUDE_RULE_CACHE):
+        if cache_key[0] == database_key:
+            _EXCLUDE_RULE_CACHE.pop(cache_key, None)
 
 
 def is_excluded(active_window: ActiveWindow) -> bool:
     """Evaluate exclusions; unresolved local-file privacy decisions fail closed."""
+
     haystack = " ".join(
         [
             active_window.app_name,
@@ -58,6 +62,7 @@ def is_excluded(active_window: ActiveWindow) -> bool:
     path = resolve_unique_path_from_title(
         active_window.window_title,
         include_excluded=True,
+        schedule_refresh_on_miss=True,
     )
     if path:
         return _matches_exclude_folder(path)
@@ -68,6 +73,7 @@ def is_excluded(active_window: ActiveWindow) -> bool:
 
 def is_resource_excluded(resource) -> bool:
     """Return True if a DetectedResource (or dict) should be excluded."""
+
     if resource is None:
         return False
     if isinstance(resource, dict):
@@ -116,13 +122,15 @@ def make_excluded_activity_payload() -> dict:
 
 
 def _exclude_rules() -> dict[str, list[dict]]:
-    cache_key = str(get_db_path().resolve())
-    now = time.monotonic()
+    cache_key = (
+        get_db_key(),
+        generation(DataGenerationNamespace.PRIVACY_CATALOG),
+    )
     cached = _EXCLUDE_RULE_CACHE.get(cache_key)
-    if cached is not None and cached[0] >= now:
+    if cached is not None:
         return {
             key: [dict(row) for row in rows]
-            for key, rows in cached[1].items()
+            for key, rows in cached.items()
         }
     with get_connection() as conn:
         project = conn.execute(
@@ -135,42 +143,36 @@ def _exclude_rules() -> dict[str, list[dict]]:
         ).fetchone()
         if not project or not int(project["enabled"] or 0):
             result = {"keywords": [], "folders": []}
-            _EXCLUDE_RULE_CACHE[cache_key] = (
-                now + _EXCLUDE_RULE_CACHE_TTL_SECONDS,
-                result,
-            )
-            return result
-        project_id = int(project["id"])
-        keywords = dict_rows(
-            conn.execute(
-                """
-                SELECT pattern AS keyword
-                FROM project_rule
-                WHERE project_id = ?
-                  AND rule_type = 'keyword'
-                  AND enabled = 1
-                ORDER BY created_at, id
-                """,
-                (project_id,),
-            ).fetchall()
-        )
-        folders = dict_rows(
-            conn.execute(
-                """
-                SELECT folder_path, normalized_folder_key, recursive
-                FROM folder_project_rule
-                WHERE project_id = ?
-                  AND enabled = 1
-                ORDER BY length(normalized_folder_key) DESC, id DESC
-                """,
-                (project_id,),
-            ).fetchall()
-        )
-    result = {"keywords": keywords, "folders": folders}
-    _EXCLUDE_RULE_CACHE[cache_key] = (
-        now + _EXCLUDE_RULE_CACHE_TTL_SECONDS,
-        result,
-    )
+        else:
+            project_id = int(project["id"])
+            result = {
+                "keywords": dict_rows(
+                    conn.execute(
+                        """
+                        SELECT pattern AS keyword
+                        FROM project_rule
+                        WHERE project_id = ?
+                          AND rule_type = 'keyword'
+                          AND enabled = 1
+                        ORDER BY created_at, id
+                        """,
+                        (project_id,),
+                    ).fetchall()
+                ),
+                "folders": dict_rows(
+                    conn.execute(
+                        """
+                        SELECT folder_path, normalized_folder_key, recursive
+                        FROM folder_project_rule
+                        WHERE project_id = ?
+                          AND enabled = 1
+                        ORDER BY length(normalized_folder_key) DESC, id DESC
+                        """,
+                        (project_id,),
+                    ).fetchall()
+                ),
+            }
+    _EXCLUDE_RULE_CACHE[cache_key] = result
     return {
         key: [dict(row) for row in rows]
         for key, rows in result.items()
