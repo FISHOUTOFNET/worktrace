@@ -20,6 +20,20 @@ _CURRENT_UNIT_OF_WORK: ContextVar[DomainUnitOfWork | None] = ContextVar(
     default=None,
 )
 
+# Stage 2A still publishes report-structure changes through the connection SQL
+# classifier. During the owner migration the UoW publishes every other declared
+# namespace explicitly, while REPORT_STRUCTURE remains on that validated fallback.
+# Stage 3 removes this exclusion and the classifier in the same cutover.
+_TRANSITIONAL_CLASSIFIER_NAMESPACES = frozenset(
+    {DataGenerationNamespace.REPORT_STRUCTURE}
+)
+
+
+def _namespace(value: DataGenerationNamespace | str) -> DataGenerationNamespace:
+    if isinstance(value, DataGenerationNamespace):
+        return value
+    return DataGenerationNamespace(str(value))
+
 
 class DomainUnitOfWork:
     """Own one root transaction and publish declared effects exactly once."""
@@ -28,48 +42,42 @@ class DomainUnitOfWork:
         self,
         effects: Iterable[DataGenerationNamespace | str] = (),
     ) -> None:
-        self._effects = {
-            DataGenerationNamespace(str(effect))
-            for effect in effects
-        }
-        self._parent: DomainUnitOfWork | None = None
+        self._effects = {_namespace(effect) for effect in effects}
+        self._root: DomainUnitOfWork | None = None
         self._connection = None
         self._token: Token[DomainUnitOfWork | None] | None = None
         self._changed = False
         self._rollback_only = False
 
+    def _owner(self) -> DomainUnitOfWork:
+        return self._root or self
+
     @property
     def connection(self):
-        owner = self._parent or self
+        owner = self._owner()
         if owner._connection is None:
             raise RuntimeError("domain_unit_of_work_not_active")
         return owner._connection
 
     @property
     def changed(self) -> bool:
-        owner = self._parent or self
-        return bool(owner._changed)
+        return bool(self._owner()._changed)
 
     def add_effects(self, *effects: DataGenerationNamespace | str) -> None:
-        owner = self._parent or self
-        owner._effects.update(
-            DataGenerationNamespace(str(effect))
-            for effect in effects
-        )
+        self._owner()._effects.update(_namespace(effect) for effect in effects)
 
     def mark_changed(self) -> None:
-        owner = self._parent or self
-        owner._changed = True
+        self._owner()._changed = True
 
     def mark_rollback_only(self) -> None:
-        owner = self._parent or self
-        owner._rollback_only = True
+        self._owner()._rollback_only = True
 
     def __enter__(self) -> DomainUnitOfWork:
         current = _CURRENT_UNIT_OF_WORK.get()
         if current is not None:
-            self._parent = current
-            current.add_effects(*self._effects)
+            root = current._owner()
+            self._root = root
+            root.add_effects(*self._effects)
             return self
 
         from .db import get_connection
@@ -80,9 +88,9 @@ class DomainUnitOfWork:
         return self
 
     def __exit__(self, exc_type, exc_value, traceback) -> bool:
-        if self._parent is not None:
+        if self._root is not None:
             if exc_type is not None:
-                self._parent.mark_rollback_only()
+                self._root.mark_rollback_only()
             return False
 
         connection = self.connection
@@ -91,12 +99,11 @@ class DomainUnitOfWork:
                 connection.rollback()
                 return False
             if self._changed and self._effects:
-                DataGenerationRepository.bump(connection, self._effects)
-                # Stage 2A still contains the report-only SQL classifier. An
-                # explicitly owned transaction has already published its effects,
-                # so prevent that transitional fallback from double-incrementing.
-                if hasattr(connection, "_report_structure_dirty"):
-                    connection._report_structure_dirty = False
+                explicit_effects = self._effects.difference(
+                    _TRANSITIONAL_CLASSIFIER_NAMESPACES
+                )
+                if explicit_effects:
+                    DataGenerationRepository.bump(connection, explicit_effects)
             connection.commit()
             return False
         except Exception:
@@ -110,7 +117,8 @@ class DomainUnitOfWork:
 
 
 def current_domain_unit_of_work() -> DomainUnitOfWork | None:
-    return _CURRENT_UNIT_OF_WORK.get()
+    current = _CURRENT_UNIT_OF_WORK.get()
+    return current._owner() if current is not None else None
 
 
 __all__ = ["DomainUnitOfWork", "current_domain_unit_of_work"]
