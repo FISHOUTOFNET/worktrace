@@ -45,6 +45,22 @@ function harness() {
     },
   };
   vm.createContext(context);
+  const bridgeCall = (method) => (...args) => {
+    const handler = context.window.WorkTraceApp.callBridge;
+    if (typeof handler !== "function") return Promise.reject(new Error(`missing bridge handler: ${method}`));
+    return handler(method, ...args);
+  };
+  context.window.WorkTraceApp.bridge = {
+    getTimeline: bridgeCall("get_timeline"),
+    getTimelineSessionActivitySummary: bridgeCall("get_timeline_session_activity_summary"),
+    listProjectsForTimeline: bridgeCall("list_projects_for_timeline"),
+    saveTimelineSessionEdit: bridgeCall("save_timeline_session_edit"),
+    hideTimelineSession: bridgeCall("hide_timeline_session"),
+    hideTimelineSessionActivity: bridgeCall("hide_timeline_session_activity"),
+    mergeTimelineSession: bridgeCall("merge_timeline_session"),
+    splitTimelineSession: bridgeCall("split_timeline_session"),
+    copyTimelineSession: bridgeCall("copy_timeline_session"),
+  };
   for (const file of ["timeline_request_state.js", "timeline.js"]) {
     vm.runInContext(
       fs.readFileSync(path.join(__dirname, "../../worktrace/webview_ui/js", file), "utf8"),
@@ -77,13 +93,13 @@ test("bridge rejection becomes unknown and retry reuses the exact request id", a
   }); };
   App.loadTimelineReport = () => Promise.resolve();
 
-  const pending = App.runTimelineSessionOperation("copy_timeline_session");
+  const pending = App.runTimelineSessionOperation("copy");
   first.reject(new Error("bridge disconnected"));
   await pending;
   assert.equal(App.mutationOwner.state, "unknown");
   const requestId = calls[0][4];
 
-  await App.runTimelineSessionOperation("copy_timeline_session");
+  await App.runTimelineSessionOperation("copy");
   assert.equal(calls[1][4], requestId);
   assert.equal(App.mutationOwner, null);
   assert.equal(App.selectedProjectionInstanceKey, "copy:7");
@@ -94,8 +110,8 @@ test("different intent is explicitly blocked while pending", async () => {
   const { App, element } = harness();
   const request = deferred();
   App.callBridge = () => request.promise;
-  const pending = App.runTimelineSessionOperation("copy_timeline_session");
-  await App.runTimelineSessionOperation("hide_timeline_session");
+  const pending = App.runTimelineSessionOperation("copy");
+  await App.runTimelineSessionOperation("hide");
   assert.match(element("edit-status").textContent, /已有操作结果尚未确认/);
   assert.equal(App.mutationOwner.method, "copy_timeline_session");
   request.resolve({ ok: false, error: "operation_not_allowed", message: "不允许执行该操作" });
@@ -110,7 +126,7 @@ test("confirmed failure releases mutation owner and displays message, not code",
     error: "revision_conflict",
     message: "活动时段已变化",
   });
-  await App.runTimelineSessionOperation("hide_timeline_session");
+  await App.runTimelineSessionOperation("hide");
   assert.equal(App.mutationOwner, null);
   assert.equal(element("edit-status").textContent, "活动时段已变化");
 });
@@ -128,7 +144,7 @@ test("confirmed success consumes selection hint before authoritative refresh", a
     selectionAtRefresh = [App.selectedProjectionInstanceKey, App.selectedProjectionRevision];
     return Promise.resolve();
   };
-  await App.runTimelineSessionOperation("copy_timeline_session");
+  await App.runTimelineSessionOperation("copy");
   assert.deepEqual(selectionAtRefresh, ["merge:9", "merge-rev"]);
   assert.equal(App.lastMutationSnapshotRevision, "snapshot-merge");
   assert.equal(App.lastMutationOutcomeType, "operation_committed");
@@ -143,15 +159,15 @@ test("confirmed mutation plus refresh failure is not reported as operation failu
     selection_hint: { projection_instance_key: "copy:5", projection_revision: "copy-rev" },
   });
   App.loadTimelineReport = () => Promise.reject(new Error("refresh unavailable"));
-  await App.runTimelineSessionOperation("copy_timeline_session");
+  await App.runTimelineSessionOperation("copy");
   assert.equal(App.mutationOwner, null);
   assert.equal(element("edit-status").textContent, "操作已保存，但刷新失败");
 });
 
 test("copy and merge bind the authoritative returned entry", async () => {
   for (const scenario of [
-    ["copy_timeline_session", {}, "copy:12"],
-    ["merge_timeline_session", { direction: "next" }, "merge:13"],
+    ["copy", {}, "copy:12"],
+    ["merge", { direction: "next" }, "merge:13"],
   ]) {
     const { App } = harness();
     App.currentSessions.push({ projection_instance_key: "base:b", projection_revision: "rev-b" });
@@ -169,7 +185,7 @@ test("copy and merge bind the authoritative returned entry", async () => {
 });
 
 test("hide and split clear selection when the authoritative hint is null", async () => {
-  for (const method of ["hide_timeline_session", "split_timeline_session"]) {
+  for (const method of ["hide", "split"]) {
     const { App } = harness();
     App.callBridge = () => Promise.resolve({
       ok: true,

@@ -33,7 +33,6 @@ SHIPPING_METHODS = frozenset(
         "get_first_run_notice",
         "get_overview",
         "get_project_rules",
-        "get_recent_activities",
         "get_refresh_state",
         "get_settings_privacy_status",
         "get_statistics_export_summary",

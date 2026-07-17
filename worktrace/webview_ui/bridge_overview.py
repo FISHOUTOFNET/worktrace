@@ -39,21 +39,6 @@ class OverviewBridgeMixin:
             logger.exception("webview bridge get_overview failed")
             return dict(_GENERIC_ERROR)
 
-    def get_recent_activities(self) -> dict[str, Any]:
-        try:
-            vm = view_model_api.get_overview_view_model()
-            return {
-                "ok": True,
-                "activities": vm.get("activities", []),
-                "live_clock": vm.get("live_clock", {}),
-                "display_span_id": vm.get("display_span_id", ""),
-                "activity_display_model": vm.get("activity_display_model", {}),
-                "sample_id": vm.get("sample_id", ""),
-            }
-        except Exception:
-            logger.exception("webview bridge get_recent_activities failed")
-            return dict(_GENERIC_ERROR)
-
     def get_refresh_state(self, report_date=None) -> dict[str, Any]:
         try:
             return view_model_api.get_refresh_state_view_model(report_date)

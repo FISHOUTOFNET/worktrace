@@ -219,28 +219,28 @@
     }
     App.showTimeline = showTimeline;
 
-    function acceptTimelinePayload(data, date) {
-        if (!data || !data.ok) return false;
-        if (String(App.currentPage || "overview") !== "timeline") {
-            App.noteRejectedPagePayload(data, "timeline", date);
-            return false;
-        }
-        var expectedDate = App.runtimeReportDateForPage("timeline", date);
-        var payloadDate = App.payloadReportDate(data, "timeline", date);
-        if (expectedDate && payloadDate && expectedDate !== payloadDate) {
-            App.noteRejectedPagePayload(data, "timeline", date);
-            return false;
-        }
-        if (App.isPagePayloadCompatibleWithRuntime(data, "timeline", date)) {
-            App.acceptLiveRuntimePayload(data, "timeline", date, {
-                source: "page_model"
-            });
-        } else {
-            App.noteRejectedPagePayload(data, "timeline", date);
-        }
-        return true;
+function acceptTimelinePayload(data, date) {
+    if (!data || !data.ok) return false;
+    if (String(App.currentPage || "overview") !== "timeline") {
+        App.noteRejectedPagePayload(data, "timeline", date);
+        return false;
     }
-    App.acceptTimelinePayload = acceptTimelinePayload;
+    var expectedDate = App.runtimeReportDateForPage("timeline", date);
+    var payloadDate = App.payloadReportDate(data, "timeline", date);
+    if (expectedDate && payloadDate && expectedDate !== payloadDate) {
+        App.noteRejectedPagePayload(data, "timeline", date);
+        return false;
+    }
+    if (!App.isPagePayloadCompatibleWithRuntime(data, "timeline", date)) {
+        App.noteRejectedPagePayload(data, "timeline", date);
+        return false;
+    }
+    return App.acceptLiveRuntimePayload(data, "timeline", date, {
+        source: "page_model"
+    });
+}
+App.acceptTimelinePayload = acceptTimelinePayload;
+
 
     function acceptTimelineDetailsPayload(data, date) {
         var expectedDate = App.runtimeReportDateForPage("timeline", date);
@@ -316,7 +316,7 @@
             detailsHeader.textContent = "正在刷新项目活动耗时…";
         }
 
-        var request = App.callBridge("get_timeline_session_activity_summary", projectionInstanceKey || "", date, revision).then(function (result) {
+        var request = App.bridge.getTimelineSessionActivitySummary(projectionInstanceKey || "", date, revision).then(function (result) {
             if (!App.timelineRequestState.isCurrentDetailsOwner(owner)) return null;
             if (result && result.ok === false && result.error === "stale_selection" && !retriedStale) {
                 // The current owner asks for one Timeline refresh and then stops.
@@ -439,7 +439,7 @@
         for (var rb = 0; rb < removeButtons.length; rb++) {
             removeButtons[rb].addEventListener("click", function (event) {
                 event.stopPropagation();
-                App.runTimelineSessionOperation("hide_timeline_session_activity", { summaryId: this.getAttribute("data-summary-id") });
+                App.runTimelineSessionOperation("hideActivity", { summaryId: this.getAttribute("data-summary-id") });
             });
         }
         for (var si = 0; si < summaryContinuityKeys.length; si++) {
@@ -463,7 +463,7 @@
             return Promise.resolve(App.projectsCache);
         }
         App.projectsLoading = true;
-        return App.callBridge("list_projects_for_timeline").then(function (result) {
+        return App.bridge.listProjectsForTimeline().then(function (result) {
             App.projectsLoading = false;
             if (result && result.ok !== false && result.projects) {
                 App.projectsCache = result.projects;
@@ -848,9 +848,7 @@
             reportDate, projectionInstanceKey, projectionRevision, mutationOwner.requestId,
             overrideProjectId, adjustedDurationSeconds, note
         ];
-        App.callBridge(
-            "save_timeline_session_edit",
-            reportDate,
+        App.bridge.saveTimelineSessionEdit(reportDate,
             projectionInstanceKey,
             projectionRevision,
             mutationOwner.requestId,
@@ -918,68 +916,79 @@
     }
     App.updateSessionActionButtons = updateSessionActionButtons;
 
-    function runTimelineSessionOperation(method, options) {
-        options = options || {};
-        var key = App.selectedProjectionInstanceKey;
-        var date = currentTimelineReportDate();
-        var revision = App.selectedProjectionRevision || "";
-        if (!key || !date) return Promise.resolve();
-        var mergeTarget = method === "merge_timeline_session"
-            ? findMergeTarget(key, options.direction)
-            : null;
-        if (method === "merge_timeline_session" && !mergeTarget) {
-            showEditStatus("只能合并相邻时段。", true);
-            return Promise.resolve();
-        }
-        var argsSignature = JSON.stringify([
-            options || {},
-            mergeTarget ? mergeTarget.projection_instance_key || "" : "",
-            mergeTarget ? mergeTarget.projection_revision || "" : ""
-        ]);
-        var owner = App.timelineRequestState.nextMutationOwner(method, date, key, revision, argsSignature);
-        if (!owner) {
-            blockDifferentMutationIntent();
-            return Promise.resolve();
-        }
-        var args;
-        if (method === "hide_timeline_session_activity") {
-            args = [date, key, options.summaryId || "", revision, owner.requestId];
-        } else if (method === "merge_timeline_session") {
-            args = [
-                date,
-                key,
-                options.direction,
-                revision,
-                owner.requestId,
-                mergeTarget.projection_instance_key || "",
-                mergeTarget.projection_revision || ""
-            ];
-        } else {
-            args = [date, key, revision, owner.requestId];
-        }
-        owner.payload = args.slice();
-        return App.callBridge.apply(null, [method].concat(args)).then(function (result) {
-            if (!App.timelineRequestState.isCurrentMutationOwner(owner)) return null;
-            var data = App.handleResult(result, function (message) {
-                showEditStatus(message || "操作失败，请刷新后重试。", true);
-            });
-            if (!data) {
-                App.timelineRequestState.releaseMutationOwner(owner, "confirmed_failure", result);
-                return;
-            }
-            App.timelineRequestState.transitionMutation(owner, "confirmed_success", result);
-            consumeMutationResult(result);
-            App.timelineRequestState.releaseMutationOwner(owner, "confirmed_success", result);
-            showEditStatus("操作成功", false);
-            return refreshAfterConfirmedMutation().catch(function () {
-                showEditStatus("操作已保存，但刷新失败", true);
-            });
-        }).catch(function () {
-            if (!App.timelineRequestState.isCurrentMutationOwner(owner)) return null;
-            markMutationUnknown(owner);
-        });
+var TIMELINE_OPERATIONS = Object.freeze({
+    hide: Object.freeze({ intent: "hide_timeline_session", invoke: function () { return App.bridge.hideTimelineSession.apply(null, arguments); } }),
+    hideActivity: Object.freeze({ intent: "hide_timeline_session_activity", invoke: function () { return App.bridge.hideTimelineSessionActivity.apply(null, arguments); } }),
+    merge: Object.freeze({ intent: "merge_timeline_session", invoke: function () { return App.bridge.mergeTimelineSession.apply(null, arguments); } }),
+    split: Object.freeze({ intent: "split_timeline_session", invoke: function () { return App.bridge.splitTimelineSession.apply(null, arguments); } }),
+    copy: Object.freeze({ intent: "copy_timeline_session", invoke: function () { return App.bridge.copyTimelineSession.apply(null, arguments); } })
+});
+
+function runTimelineSessionOperation(operationKey, options) {
+    options = options || {};
+    var operation = TIMELINE_OPERATIONS[operationKey];
+    if (!operation) return Promise.reject(new Error("unsupported_timeline_operation"));
+    var method = operation.intent;
+    var key = App.selectedProjectionInstanceKey;
+    var date = currentTimelineReportDate();
+    var revision = App.selectedProjectionRevision || "";
+    if (!key || !date) return Promise.resolve();
+    var mergeTarget = operationKey === "merge" ? findMergeTarget(key, options.direction) : null;
+    if (operationKey === "merge" && !mergeTarget) {
+        showEditStatus("只能合并相邻时段。", true);
+        return Promise.resolve();
     }
-    App.runTimelineSessionOperation = runTimelineSessionOperation;
+    var argsSignature = JSON.stringify([
+        options || {},
+        mergeTarget ? mergeTarget.projection_instance_key || "" : "",
+        mergeTarget ? mergeTarget.projection_revision || "" : ""
+    ]);
+    var owner = App.timelineRequestState.nextMutationOwner(method, date, key, revision, argsSignature);
+    if (!owner) {
+        blockDifferentMutationIntent();
+        return Promise.resolve();
+    }
+    var args;
+    if (operationKey === "hideActivity") {
+        args = [date, key, options.summaryId || "", revision, owner.requestId];
+    } else if (operationKey === "merge") {
+        args = [
+            date,
+            key,
+            options.direction,
+            revision,
+            owner.requestId,
+            mergeTarget.projection_instance_key || "",
+            mergeTarget.projection_revision || ""
+        ];
+    } else {
+        args = [date, key, revision, owner.requestId];
+    }
+    owner.payload = args.slice();
+    return operation.invoke.apply(null, args).then(function (result) {
+        if (!App.timelineRequestState.isCurrentMutationOwner(owner)) return null;
+        var data = App.handleResult(result, function (message) {
+            showEditStatus(message || "操作失败，请刷新后重试。", true);
+        });
+        if (!data) {
+            App.timelineRequestState.releaseMutationOwner(owner, "confirmed_failure", result);
+            return null;
+        }
+        App.timelineRequestState.transitionMutation(owner, "confirmed_success", result);
+        consumeMutationResult(result);
+        App.timelineRequestState.releaseMutationOwner(owner, "confirmed_success", result);
+        showEditStatus("操作成功", false);
+        return refreshAfterConfirmedMutation().catch(function () {
+            showEditStatus("操作已保存，但刷新失败", true);
+        });
+    }).catch(function () {
+        if (!App.timelineRequestState.isCurrentMutationOwner(owner)) return null;
+        markMutationUnknown(owner);
+        return null;
+    });
+}
+App.runTimelineSessionOperation = runTimelineSessionOperation;
+
 
     function findSessionByProjectionKey(projectionInstanceKey) {
         var sessions = App.currentSessions || [];
@@ -1058,7 +1067,7 @@
             App.clearTimelineError();
         }
         var token = ++App.timelineRequestToken;
-        return App.callBridge("get_timeline", date).then(function (result) {
+        return App.bridge.getTimeline(date).then(function (result) {
             if (token !== App.timelineRequestToken || App.timelineOwner !== timelineOwner) return;  // stale response
             var data = App.handleResult(result, function (msg) {
                 App.showTimelineError(msg || errorMessage);

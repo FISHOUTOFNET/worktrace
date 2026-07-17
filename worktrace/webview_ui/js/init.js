@@ -39,7 +39,6 @@
         getFirstRunNotice: fixedBridgeMethod("get_first_run_notice"),
         getOverview: fixedBridgeMethod("get_overview"),
         getProjectRules: fixedBridgeMethod("get_project_rules"),
-        getRecentActivities: fixedBridgeMethod("get_recent_activities"),
         getRefreshState: fixedBridgeMethod("get_refresh_state"),
         getSettingsPrivacyStatus: fixedBridgeMethod("get_settings_privacy_status"),
         getStatisticsExportSummary: fixedBridgeMethod("get_statistics_export_summary"),
@@ -67,44 +66,103 @@
         updateProjectKeywordRule: fixedBridgeMethod("update_project_keyword_rule")
     });
 
-    var runtimeState = App.liveRuntime || null;
+var runtimeState = null;
 
-    function frozenRuntime(value) {
-        if (!value || typeof value !== "object") return null;
-        return Object.freeze(Object.assign({}, value));
+function frozenRuntime(value) {
+    if (!value || typeof value !== "object") return null;
+    var copy = Object.assign({}, value);
+    if (copy.liveClock && typeof copy.liveClock === "object") {
+        copy.liveClock = Object.freeze(Object.assign({}, copy.liveClock));
     }
+    if (copy.currentActivity && typeof copy.currentActivity === "object") {
+        copy.currentActivity = Object.freeze(Object.assign({}, copy.currentActivity));
+    }
+    return Object.freeze(copy);
+}
 
-    var liveRuntimeStore = Object.freeze({
-        get: function () { return runtimeState; },
-        replace: function (value) {
-            runtimeState = frozenRuntime(value);
-            return runtimeState;
-        },
-        reset: function () {
-            runtimeState = null;
-            return null;
-        },
-        setScope: function (page, reportDate) {
-            var existing = runtimeState || {};
-            runtimeState = frozenRuntime(Object.assign({}, existing, {
-                page: String(page || App.currentPage || "overview"),
-                reportDate: App.runtimeReportDateForPage(
-                    page || App.currentPage || "overview",
-                    reportDate
-                )
-            }));
-            return runtimeState;
+function runtimeEnvelope(value) {
+    if (!value || typeof value !== "object") return null;
+    return value.runtime && typeof value.runtime === "object" ? value.runtime : value;
+}
+
+function normalizeRuntimeEnvelope(value, page, reportDate) {
+    var envelope = runtimeEnvelope(value);
+    if (!envelope || Number(envelope.schema_version || 0) !== 1) return null;
+    var scopeDate = String(
+        envelope.scope_report_date
+        || reportDate
+        || App.runtimeReportDateForPage(page || App.currentPage || "overview", reportDate)
+        || ""
+    );
+    var liveDate = String(envelope.live_report_date || scopeDate || "");
+    var liveClock = App.normalizeLiveClock
+        ? App.normalizeLiveClock(envelope.live_clock || null)
+        : (envelope.live_clock || null);
+    if (scopeDate && liveDate && scopeDate !== liveDate) liveClock = null;
+    return {
+        schemaVersion: 1,
+        surface: String(envelope.surface || page || App.currentPage || "overview"),
+        page: String(page || App.currentPage || envelope.surface || "overview"),
+        reportDate: scopeDate,
+        liveReportDate: liveDate,
+        liveClock: liveClock,
+        displaySpanId: String(envelope.display_span_id || (liveClock && liveClock.display_span_id) || ""),
+        stableLiveKeyHash: String(envelope.stable_live_key_hash || (liveClock && liveClock.stable_live_key_hash) || ""),
+        liveRevision: String(envelope.live_revision || ""),
+        structureRevision: String(envelope.structure_revision || ""),
+        pageRevision: String(envelope.page_revision || ""),
+        sampleId: String(envelope.sample_id || ""),
+        currentActivityDisplaySpanId: String(envelope.current_activity_display_span_id || ""),
+        currentResourceIdentityHash: String(envelope.current_resource_identity_hash || ""),
+        currentActivity: envelope.current_activity || {}
+    };
+}
+
+var liveRuntimeStore = Object.freeze({
+    get: function () { return runtimeState; },
+    acceptEnvelope: function (value, page, reportDate) {
+        var next = normalizeRuntimeEnvelope(value, page, reportDate);
+        if (!next) return null;
+        var previous = runtimeState;
+        if (previous && previous.liveClock && next.liveClock
+            && App.sameLiveContinuity
+            && App.sameLiveContinuity(previous.liveClock, next.liveClock)
+            && App.rebaseIncomingClockWithoutRollback) {
+            next.liveClock = App.rebaseIncomingClockWithoutRollback(
+                previous.liveClock,
+                next.liveClock,
+                Date.now()
+            );
         }
-    });
-    App.liveRuntimeStore = liveRuntimeStore;
-    Object.defineProperty(App, "liveRuntime", {
-        configurable: false,
-        enumerable: true,
-        get: function () { return liveRuntimeStore.get(); },
-        set: function (value) { liveRuntimeStore.replace(value); }
-    });
+        runtimeState = frozenRuntime(next);
+        return runtimeState;
+    },
+    reset: function () {
+        runtimeState = null;
+        return null;
+    },
+    setScope: function (page, reportDate) {
+        var existing = runtimeState;
+        if (!existing) return null;
+        runtimeState = frozenRuntime(Object.assign({}, existing, {
+            page: String(page || App.currentPage || "overview"),
+            reportDate: App.runtimeReportDateForPage(
+                page || App.currentPage || "overview",
+                reportDate
+            )
+        }));
+        return runtimeState;
+    }
+});
+App.liveRuntimeStore = liveRuntimeStore;
+Object.defineProperty(App, "liveRuntime", {
+    configurable: false,
+    enumerable: true,
+    get: function () { return liveRuntimeStore.get(); }
+});
 
-    function resetClientGeneration() {
+function resetClientGeneration()
+ {
         if (App.requestCoordinator) App.requestCoordinator.bumpDataEpoch();
         App.timelineLoaded = false;
         App.statisticsLoaded = false;
@@ -326,11 +384,11 @@
         bind("edit-save-btn", "click", App.saveEdit);
         bind("edit-cancel-btn", "click", App.cancelEdit);
         [
-            ["timeline-hide-session", "hide_timeline_session"],
-            ["timeline-merge-previous", "merge_timeline_session", "previous"],
-            ["timeline-merge-next", "merge_timeline_session", "next"],
-            ["timeline-split-session", "split_timeline_session"],
-            ["timeline-copy-session", "copy_timeline_session"]
+            ["timeline-hide-session", "hide"],
+            ["timeline-merge-previous", "merge", "previous"],
+            ["timeline-merge-next", "merge", "next"],
+            ["timeline-split-session", "split"],
+            ["timeline-copy-session", "copy"]
         ].forEach(function (action) {
             bind(action[0], "click", function () {
                 App.runTimelineSessionOperation(action[1], action[2] ? { direction: action[2] } : undefined);
