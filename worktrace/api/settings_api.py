@@ -6,21 +6,21 @@ import os
 from typing import TYPE_CHECKING, Any
 
 from ..constants import PRIVACY_NOTICE_TEXT
-from ..services import export_service, privacy_gate_service, secure_backup_service
-from ..services.secure_backup_service import (
-    BackupCorruptedError,
-    BackupDecryptionError,
-    BackupImportInProgressError,
-    BackupVersionNotSupportedError,
-    SecureBackupError,
-)
+from ..services import export_service, privacy_gate_service
 from ..services.settings_service import (
     get_bool_setting,
     get_int_setting,
     get_setting,
     set_setting,
 )
-from . import view_model_api
+from . import backup_api, view_model_api
+from .backup_api import (
+    BackupCorruptedError,
+    BackupDecryptionError,
+    BackupImportInProgressError,
+    BackupVersionNotSupportedError,
+    SecureBackupError,
+)
 
 if TYPE_CHECKING:
     from ..runtime.maintenance_coordinator import RuntimeMaintenanceCoordinator
@@ -96,7 +96,7 @@ def get_settings_privacy_status(
         import_active = (
             maintenance.is_secure_import_in_progress()
             if maintenance is not None
-            else secure_backup_service.is_secure_import_in_progress()
+            else backup_api.is_secure_import_in_progress()
         )
         return {
             "ok": True,
@@ -126,6 +126,12 @@ def get_settings_privacy_status(
         return {"ok": False, "error": "加载设置状态失败"}
 
 
+def _stopped_runtime_quiesce(timeout_seconds: float = 5.0) -> dict[str, Any]:
+    if get_collector_status() == "running":
+        return {"ok": False, "error": "runtime_maintenance_capability_required"}
+    return {"ok": True, "collector_active": False}
+
+
 def export_encrypted_backup_for_webview(
     output_path: str,
     passphrase: str,
@@ -145,10 +151,12 @@ def export_encrypted_backup_for_webview(
     try:
         if maintenance is not None:
             maintenance.export_encrypted_backup(normalized_path, passphrase)
-        elif get_collector_status() != "running":
-            secure_backup_service.export_encrypted_backup(normalized_path, passphrase)
         else:
-            raise RuntimeError("runtime_maintenance_capability_required")
+            backup_api.export_encrypted_backup(
+                normalized_path,
+                passphrase,
+                quiesce_handler=_stopped_runtime_quiesce,
+            )
     except Exception:
         return {"ok": False, "error": "导出加密备份失败"}
     return {
@@ -173,7 +181,7 @@ def preview_encrypted_backup_manifest_for_webview(
         info = (
             maintenance.parse_encrypted_backup_manifest(input_path)
             if maintenance is not None
-            else secure_backup_service.parse_encrypted_backup_manifest(input_path)
+            else backup_api.parse_encrypted_backup_manifest(input_path)
         )
     except Exception:
         return {"ok": False, "error": "读取备份清单失败"}
@@ -216,7 +224,7 @@ def import_encrypted_backup_for_webview(
                 mode="replace",
             )
             if maintenance is not None
-            else secure_backup_service.import_encrypted_backup(
+            else backup_api.import_encrypted_backup(
                 input_path,
                 passphrase,
                 mode="replace",
