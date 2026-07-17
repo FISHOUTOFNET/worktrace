@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from ..db import get_connection
-from .activity_continuity_service import is_normal_project_status
+from .activity_status_policy import is_project_attributable_status
 
 
 def is_project_editable_activity(row: dict | None) -> bool:
@@ -10,7 +10,7 @@ def is_project_editable_activity(row: dict | None) -> bool:
         and int(row.get("is_deleted") or 0) == 0
         and int(row.get("is_hidden") or 0) == 0
         and row.get("end_time") is not None
-        and is_normal_project_status(str(row.get("status") or ""))
+        and is_project_attributable_status(str(row.get("status") or ""))
     )
 
 
@@ -23,7 +23,7 @@ def project_editability_code(row: dict | None) -> str:
         return "activity_hidden"
     if row.get("end_time") is None:
         return "activity_in_progress"
-    if not is_normal_project_status(str(row.get("status") or "")):
+    if not is_project_attributable_status(str(row.get("status") or "")):
         return "activity_not_project_activity"
     return ""
 
