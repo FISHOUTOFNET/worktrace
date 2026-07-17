@@ -17,6 +17,32 @@ from .resource_service import create_or_update_activity_resource
 
 logger = logging.getLogger(__name__)
 
+_ACTIVITY_REVISION_FIELDS = (
+    "id",
+    "app_name",
+    "process_name",
+    "window_title",
+    "status",
+    "start_time",
+    "file_path_hint",
+    "updated_at",
+)
+_RESOURCE_REVISION_FIELDS = (
+    "resource_kind",
+    "resource_subtype",
+    "display_name",
+    "identity_key",
+    "is_anchor",
+    "path_hint",
+    "updated_at",
+)
+
+
+def _revision(row: dict | None, fields: tuple[str, ...]) -> tuple | None:
+    if row is None:
+        return None
+    return tuple(row.get(field) for field in fields)
+
 
 def _detect_resource(activity: dict, file_path_hint: str) -> DetectedResource:
     status = str(activity.get("status") or "")
@@ -92,8 +118,22 @@ def _upgrade_path_identity(
     )
 
 
+def _finalize_pending_inference(activity_id: int) -> None:
+    """Run post-commit derivation without changing the main command result."""
+
+    try:
+        from .project_inference_service import assign_project_for_activity
+
+        assign_project_for_activity(int(activity_id))
+    except Exception:
+        # The durable path/resource facts and their retry marker already
+        # committed. The opportunity worker can retry without the caller being
+        # told that the main command failed.
+        logger.exception("path-update inference failed for activity_id=%s", activity_id)
+
+
 def update_activity_file_path_hint(activity_id: int, file_path_hint: str) -> bool:
-    """Atomically update path and resource facts, then retry project derivation."""
+    """Atomically update path/resource facts and persist pending derivation."""
 
     cleaned = str(file_path_hint or "").strip()
     if not cleaned:
@@ -102,7 +142,7 @@ def update_activity_file_path_hint(activity_id: int, file_path_hint: str) -> boo
         row = read_conn.execute(
             """
             SELECT id, app_name, process_name, window_title, status, start_time,
-                   file_path_hint
+                   file_path_hint, updated_at
             FROM activity_log
             WHERE id = ? AND is_deleted = 0
             """,
@@ -117,6 +157,8 @@ def update_activity_file_path_hint(activity_id: int, file_path_hint: str) -> boo
         ).fetchone()
         existing = dict(existing_row) if existing_row else None
 
+    expected_activity_revision = _revision(activity, _ACTIVITY_REVISION_FIELDS)
+    expected_resource_revision = _revision(existing, _RESOURCE_REVISION_FIELDS)
     status = str(activity.get("status") or "")
     effective_path = None if status == STATUS_EXCLUDED else cleaned
     resource = _detect_resource(activity, cleaned)
@@ -125,14 +167,30 @@ def update_activity_file_path_hint(activity_id: int, file_path_hint: str) -> boo
 
     with DomainUnitOfWork((DataGenerationNamespace.REPORT_STRUCTURE,)) as uow:
         conn = uow.connection
-        current = conn.execute(
-            "SELECT status, file_path_hint FROM activity_log WHERE id = ? AND is_deleted = 0",
+        current_row = conn.execute(
+            """
+            SELECT id, app_name, process_name, window_title, status, start_time,
+                   file_path_hint, updated_at
+            FROM activity_log
+            WHERE id = ? AND is_deleted = 0
+            """,
             (int(activity_id),),
         ).fetchone()
-        if current is None:
+        if current_row is None:
             return False
-        if str(current["status"] or "") != status:
+        current = dict(current_row)
+        current_resource_row = conn.execute(
+            "SELECT * FROM activity_resource WHERE activity_id = ?",
+            (int(activity_id),),
+        ).fetchone()
+        current_resource = dict(current_resource_row) if current_resource_row else None
+        if (
+            _revision(current, _ACTIVITY_REVISION_FIELDS) != expected_activity_revision
+            or _revision(current_resource, _RESOURCE_REVISION_FIELDS)
+            != expected_resource_revision
+        ):
             raise ValueError("activity_changed_during_path_update")
+
         conn.execute(
             """
             UPDATE activity_log
@@ -144,15 +202,17 @@ def update_activity_file_path_hint(activity_id: int, file_path_hint: str) -> boo
         )
         create_or_update_activity_resource(int(activity_id), resource, conn=conn)
 
-    try:
-        from .project_inference_service import assign_project_for_activity
+        from .assignment_command_service import mark_inference_retry
+        from .system_project_service import require_uncategorized_project_id
 
-        assign_project_for_activity(int(activity_id))
-    except Exception:
-        logger.exception("path-update inference failed for activity_id=%s", activity_id)
-        from .assignment_command_service import mark_inference_retry_with_uow
+        mark_inference_retry(
+            conn,
+            int(activity_id),
+            require_uncategorized_project_id(conn),
+        )
+        uow.mark_changed()
 
-        mark_inference_retry_with_uow(int(activity_id))
+    _finalize_pending_inference(int(activity_id))
     return True
 
 
