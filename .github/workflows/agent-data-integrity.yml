@@ -35,6 +35,7 @@ jobs:
         continue-on-error: true
         shell: pwsh
         run: |
+          python .github/agent_fix_data_integrity_source.py
           python .github/agent_apply_data_integrity.py *> stage.log
           $code = $LASTEXITCODE
           Get-Content stage.log -Tail 240
@@ -82,7 +83,7 @@ jobs:
         if: steps.migrate.outcome == 'success' && steps.validate.outcome == 'success'
         shell: pwsh
         run: |
-          git rm .github/agent_apply_data_integrity.py .github/workflows/agent-data-integrity.yml
+          git rm .github/agent_apply_data_integrity.py .github/agent_fix_data_integrity_source.py .github/workflows/agent-data-integrity.yml
           git add -A
           git commit -m "Unify data replacement and domain validation"
           git push origin HEAD:agent/canonical-architecture-consolidation
