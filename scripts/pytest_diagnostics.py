@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import sys
 import xml.etree.ElementTree as ET
@@ -126,6 +127,18 @@ def _append_summary(path: Path | None, lines: Iterable[str]) -> None:
             stream.write("\n")
 
 
+def _append_github_outputs(problems: list[Problem]) -> None:
+    output_path = os.environ.get("GITHUB_OUTPUT", "").strip()
+    if not output_path:
+        return
+    first_failure = problems[0].test_id if problems else ""
+    first_location = problems[0].location if problems else ""
+    with Path(output_path).open("a", encoding="utf-8", newline="\n") as stream:
+        stream.write(f"problem_count={len(problems)}\n")
+        stream.write(f"first_failure={_single_line(first_failure, limit=160)}\n")
+        stream.write(f"first_location={_single_line(first_location, limit=120)}\n")
+
+
 def _emit_manifest(total: int, skipped: int, problems: list[Problem]) -> list[str]:
     failures = sum(problem.kind == "failure" for problem in problems)
     errors = sum(problem.kind == "error" for problem in problems)
@@ -224,6 +237,7 @@ def main() -> int:
             tail_lines=max(1, args.fallback_tail_lines),
             reason="JUnit report was not generated.",
         )
+        _append_github_outputs([])
         _append_summary(args.summary, summary)
         return 0
 
@@ -236,6 +250,7 @@ def main() -> int:
             tail_lines=max(1, args.fallback_tail_lines),
             reason=f"Could not parse pytest JUnit: {exc}",
         )
+        _append_github_outputs([])
         _append_summary(args.summary, summary)
         return 0
 
@@ -245,9 +260,11 @@ def main() -> int:
             tail_lines=max(1, args.fallback_tail_lines),
             reason="Pytest failed but the JUnit report contains no failure or error cases.",
         )
+        _append_github_outputs([])
         _append_summary(args.summary, summary)
         return 0
 
+    _append_github_outputs(problems)
     _append_summary(args.summary, _emit_manifest(total, skipped, problems))
     return 0
 
