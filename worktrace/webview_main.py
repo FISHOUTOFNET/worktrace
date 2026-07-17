@@ -8,8 +8,9 @@ from pathlib import Path
 from typing import Any
 
 from . import config
-from .api import app_api
+from .api.app_api import ApplicationControl
 from .runtime.app_runtime import AppRuntime
+from .runtime.maintenance_coordinator import RuntimeMaintenanceCoordinator
 from .webview_ui.bridge import WebViewBridge
 from .webview_ui.runtime_check import (
     detect_webview2_runtime,
@@ -28,6 +29,7 @@ def setup_logging(log_path) -> None:
 
 def resource_path(relative: str) -> Path:
     """Resolve a bundled WebView resource for source and frozen builds."""
+
     base = getattr(sys, "_MEIPASS", None)
     if base:
         return Path(base) / "worktrace" / "webview_ui" / relative
@@ -68,7 +70,6 @@ def main() -> int:
 
     if detect_webview2_runtime() == "missing":
         return _report_runtime_missing()
-
     try:
         webview = _check_pywebview_available()
     except RuntimeError as exc:
@@ -79,11 +80,12 @@ def main() -> int:
     initialized = runtime.initialize()
     if initialized is False:
         return _report_already_running()
-    app_api.set_runtime(runtime)
+    application_control = ApplicationControl(runtime)
+    maintenance = RuntimeMaintenanceCoordinator(runtime)
 
     try:
         try:
-            startup_result = app_api.start_collection_after_privacy_gate()
+            startup_result = application_control.start_collection_after_privacy_gate()
             if not startup_result.get("ok"):
                 logging.error(
                     "collector startup rejected error=%s",
@@ -93,11 +95,11 @@ def main() -> int:
                 logging.warning("collector started with background worker degradation")
         except Exception:
             logging.exception(
-                "webview startup: start_collection_after_privacy_gate raised; "
+                "webview startup: authorized collection raised; "
                 "user can retry via sidebar toggle"
             )
 
-        bridge = WebViewBridge()
+        bridge = WebViewBridge(application_control, maintenance)
         index_path = resource_path("index.html")
 
         try:
