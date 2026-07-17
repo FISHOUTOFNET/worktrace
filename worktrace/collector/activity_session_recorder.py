@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import TypeAlias
 
 from ..constants import (
     SOURCE_AUTO,
@@ -40,6 +41,8 @@ from .transition_types import ActivityEndReason, ActivitySignature, seconds_betw
 
 SYSTEM_STATUSES = {STATUS_IDLE, STATUS_PAUSED, STATUS_EXCLUDED, STATUS_ERROR}
 OPEN_ACTIVITY_CHECKPOINT_SECONDS = 30
+BoundaryClose: TypeAlias = tuple[int | None, str, int]
+MidnightSplit: TypeAlias = tuple[dict, ActivitySignature, int | None, BoundaryClose | None]
 
 
 @dataclass
@@ -84,7 +87,7 @@ class ActivitySessionRecorder:
         if same_signature:
             self.current_payload = {
                 **self.current_payload,
-                **{k: v for k, v in payload.items() if v is not None},
+                **{key: value for key, value in payload.items() if value is not None},
             }
             self.current_last_seen_time = at_time
             self._ensure_persisted(at_time)
@@ -113,22 +116,21 @@ class ActivitySessionRecorder:
             persisted_before=persisted_before,
         )
 
-    def finish_current_activity(
+    def _detach_current_activity(
         self,
         at_time: str,
         reason: ActivityEndReason,
-    ) -> None:
+    ) -> BoundaryClose | None:
+        """Seal process-local state and return the durable close command inputs."""
+
         if self.current_payload is None or self.current_start_time is None:
             self.clear_snapshot()
-            return
-
-        # Never persist a reversed wall-clock interval. A backward system clock
-        # jump closes at the last safe wall time while keeping the monotonic/max
-        # duration already stored on the row.
+            return None
         end_time = max(str(at_time), str(self.current_start_time))
         elapsed = seconds_between(self.current_start_time, end_time)
         status = str(self.current_payload.get("status") or "")
         self._ensure_persisted(end_time)
+        activity_id = self.persisted_activity_id
         self.decision_trace_recorder.record(
             CollectorDecisionTrace(
                 observed_at=end_time,
@@ -136,18 +138,11 @@ class ActivitySessionRecorder:
                 status=status,
                 end_reason=str(reason.value),
                 elapsed_seconds=elapsed,
-                persisted_activity_id_before=self.persisted_activity_id,
-                persisted_activity_id_after=self.persisted_activity_id,
+                persisted_activity_id_before=activity_id,
+                persisted_activity_id_after=activity_id,
                 snapshot_action="close_persisted",
             )
         )
-        if self.persisted_activity_id is not None:
-            lifecycle_close_activity(
-                self.persisted_activity_id,
-                end_time,
-                duration_seconds=elapsed,
-            )
-
         self.current_payload = None
         self.current_signature = None
         self.current_start_time = None
@@ -156,6 +151,23 @@ class ActivitySessionRecorder:
         self.persisted_checkpoint_seconds = 0
         self.checkpoint_on_next_observation = False
         self.clear_snapshot()
+        return activity_id, end_time, elapsed
+
+    def finish_current_activity(
+        self,
+        at_time: str,
+        reason: ActivityEndReason,
+    ) -> None:
+        detached = self._detach_current_activity(at_time, reason)
+        if detached is None:
+            return
+        activity_id, end_time, elapsed = detached
+        if activity_id is not None:
+            lifecycle_close_activity(
+                activity_id,
+                end_time,
+                duration_seconds=elapsed,
+            )
 
     def stop(
         self,
@@ -165,32 +177,65 @@ class ActivitySessionRecorder:
         self.finish_current_activity(at_time, reason)
         self.project_ownership_state = clear_ownership_state()
 
-    def split_at_midnight(self, at_time: str) -> bool:
+    def stop_for_boundary(
+        self,
+        at_time: str,
+        reason: ActivityEndReason,
+    ) -> BoundaryClose | None:
+        """Detach the active row so lifecycle can close it with the boundary."""
+
+        detached = self._detach_current_activity(at_time, reason)
+        self.project_ownership_state = clear_ownership_state()
+        return detached
+
+    def prepare_midnight_split(self, at_time: str) -> MidnightSplit | None:
         if self.current_payload is None or self.current_start_time is None:
-            self.clear_short_buffers()
             self.clear_snapshot()
-            return False
+            return None
         payload = dict(self.current_payload)
         signature = self.current_signature or self.resolver.signature_for_payload(payload)
         project_id = self._current_concrete_project_id()
-        self.stop(at_time, reason=ActivityEndReason.MIDNIGHT_BOUNDARY)
-        self.clear_short_buffers()
+        detached = self.stop_for_boundary(at_time, ActivityEndReason.MIDNIGHT_BOUNDARY)
+        return payload, signature, project_id, detached
+
+    def resume_midnight_split(
+        self,
+        payload: dict,
+        signature: ActivitySignature,
+        project_id: int | None,
+        at_time: str,
+    ) -> None:
         self._start(
             payload,
             signature,
             at_time,
             midnight_project_id=project_id,
         )
-        return True
 
-    def clear_short_buffers(self) -> None:
-        """Compatibility no-op; short-activity buffering no longer exists."""
+    def split_at_midnight(self, at_time: str) -> bool:
+        """Compatibility entrypoint; state_machine owns the atomic boundary path."""
+
+        prepared = self.prepare_midnight_split(at_time)
+        if prepared is None:
+            return False
+        payload, signature, project_id, detached = prepared
+        if detached is not None:
+            activity_id, end_time, elapsed = detached
+            if activity_id is not None:
+                lifecycle_close_activity(
+                    activity_id,
+                    end_time,
+                    duration_seconds=elapsed,
+                )
+        self.resume_midnight_split(payload, signature, project_id, at_time)
+        return True
 
     def clear_snapshot(self) -> None:
         self.snapshot_publisher.clear("recorder_snapshot_clear")
 
     def clear_runtime_state(self, reason: str) -> None:
         """Forget every process-local identity without writing to the database."""
+
         self.current_payload = None
         self.current_signature = None
         self.current_start_time = None
@@ -204,8 +249,6 @@ class ActivitySessionRecorder:
 
     def ensure_persisted_for_clipboard(self, at_time: str) -> int | None:
         self._ensure_persisted(at_time)
-        # A clipboard event is a durable child fact and therefore checkpoints
-        # the parent activity at the event time even inside the 30-second window.
         self._checkpoint_persisted_progress(at_time, force=True)
         self._publish_snapshot(at_time)
         return self.persisted_activity_id
@@ -230,8 +273,6 @@ class ActivitySessionRecorder:
             self._persist_midnight_anchor(midnight_project_id, at_time)
         else:
             self._ensure_persisted(at_time)
-        # The open row is created immediately, but its duration is a low-frequency
-        # crash-recovery checkpoint rather than the live clock's source of truth.
         self._publish_snapshot(at_time)
 
     def _begin_project_ownership(self, payload: dict) -> None:
@@ -296,8 +337,6 @@ class ActivitySessionRecorder:
         )
         self.persisted_activity_id = activity_id
         self.persisted_checkpoint_seconds = 0
-        # Preserve an exact post-midnight recovery point on the first sample;
-        # this is at most one extra write per day, not per heartbeat.
         self.checkpoint_on_next_observation = True
         self._publish_snapshot(at_time)
 
@@ -329,20 +368,12 @@ class ActivitySessionRecorder:
             < OPEN_ACTIVITY_CHECKPOINT_SECONDS
         ):
             return
-        lifecycle_checkpoint_activity(
-            self.persisted_activity_id,
-            elapsed,
-        )
+        lifecycle_checkpoint_activity(self.persisted_activity_id, elapsed)
         self.persisted_checkpoint_seconds = max(
             int(self.persisted_checkpoint_seconds),
             int(elapsed),
         )
         self.checkpoint_on_next_observation = False
-
-    # Compatibility alias for focused tests and older callers. Production
-    # observations use the throttled checkpoint method above.
-    def _update_persisted_progress(self, at_time: str) -> None:
-        self._checkpoint_persisted_progress(at_time)
 
     def _publish_snapshot(self, at_time: str) -> None:
         self.snapshot_publisher.publish(
