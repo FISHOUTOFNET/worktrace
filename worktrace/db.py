@@ -8,7 +8,7 @@ import sqlite3
 from functools import lru_cache
 from importlib import resources
 from pathlib import Path
-from typing import Iterable, Mapping
+from typing import Iterable
 
 from . import config
 from .constants import (
@@ -19,9 +19,12 @@ from .constants import (
     TIME_FORMAT,
     UNCATEGORIZED_PROJECT,
 )
-from .data_generation_repository import (
-    DataGenerationNamespace,
-    DataGenerationRepository,
+from .data_generation_repository import DataGenerationRepository
+from .report_generation_classifier import (
+    ReportStructureSqlClassification,
+    classify_report_structure_sql,
+    parameters_affect_report_structure,
+    sql_affects_report_structure,
 )
 from .schema_migrations import MIN_SUPPORTED_SCHEMA_VERSION, migrate_schema
 from .write_gate import DATABASE_WRITE_GATE
@@ -45,27 +48,6 @@ _DB_MUTATING_PRAGMAS = {
     "PAGE_SIZE",
     "USER_VERSION",
 }
-_REPORT_STRUCTURE_TABLES = {
-    "ACTIVITY_LOG",
-    "ACTIVITY_PROJECT_ASSIGNMENT",
-    "ACTIVITY_RESOURCE",
-    "ACTIVITY_CLIPBOARD_EVENT",
-    "SESSION_BOUNDARY",
-    "REPORT_SESSION_OPERATION",
-    "REPORT_SESSION_OPERATION_MEMBER",
-    "PROJECT",
-}
-_REPORT_STRUCTURE_SETTINGS = {
-    "context_carry_minutes",
-    "unrecorded_gap_boundary_seconds",
-}
-_REPORT_STRUCTURE_NONE = 0
-_REPORT_STRUCTURE_ALWAYS = 1
-_REPORT_STRUCTURE_SETTINGS_PARAMETERS = 2
-_ACTIVITY_LOG_UPDATE_RE = re.compile(
-    r"\bUPDATE\s+(?:[A-Z0-9_]+\.)?ACTIVITY_LOG\s+SET\s+(.*?)(?:\s+WHERE\s+|$)",
-    re.IGNORECASE | re.DOTALL,
-)
 
 
 def _pragma_name(upper_sql: str) -> str:
@@ -101,88 +83,8 @@ def _sql_records_business_read(sql: str) -> bool:
     )
 
 
-def _parameter_values(parameters):
-    if isinstance(parameters, Mapping):
-        return parameters.values()
-    if isinstance(parameters, (tuple, list)):
-        return parameters
-    return ()
-
-
-def _parameters_affect_report_structure(parameters) -> bool:
-    found_string = False
-    for value in _parameter_values(parameters):
-        if not isinstance(value, str):
-            continue
-        found_string = True
-        if value in _REPORT_STRUCTURE_SETTINGS:
-            return True
-    return not found_string
-
-
-def _activity_log_update_changes_structure(sql: str) -> bool:
-    match = _ACTIVITY_LOG_UPDATE_RE.search(sql)
-    if match is None:
-        return True
-    columns: set[str] = set()
-    for assignment in match.group(1).split(","):
-        left = assignment.split("=", 1)[0].strip().rsplit(".", 1)[-1]
-        left = left.strip('"`[] ').upper()
-        if left:
-            columns.add(left)
-    if not columns:
-        return True
-    return not columns.issubset({"DURATION_SECONDS", "UPDATED_AT"})
-
-
-@lru_cache(maxsize=1024)
-def _classify_report_structure_sql(sql: str) -> int:
-    """Classify one SQL template once; parameters are handled separately."""
-
-    text = str(sql or "").strip()
-    if not text or not _WRITE_TOKEN_RE.search(text):
-        return _REPORT_STRUCTURE_NONE
-    upper = " ".join(text.upper().split())
-
-    if upper.startswith(("CREATE ", "DROP ", "ALTER ")):
-        if "SETTINGS" in upper or any(
-            re.search(rf"\b{table}\b", upper)
-            for table in _REPORT_STRUCTURE_TABLES
-        ):
-            return _REPORT_STRUCTURE_ALWAYS
-        return _REPORT_STRUCTURE_NONE
-
-    if re.search(r"\bACTIVITY_LOG\b", upper):
-        if upper.startswith("UPDATE") and not _activity_log_update_changes_structure(
-            text
-        ):
-            return _REPORT_STRUCTURE_NONE
-        return _REPORT_STRUCTURE_ALWAYS
-
-    if re.search(r"\bSETTINGS\b", upper):
-        if upper.startswith("DELETE"):
-            return _REPORT_STRUCTURE_ALWAYS
-        return _REPORT_STRUCTURE_SETTINGS_PARAMETERS
-
-    if any(
-        re.search(rf"\b{table}\b", upper)
-        for table in _REPORT_STRUCTURE_TABLES
-    ):
-        return _REPORT_STRUCTURE_ALWAYS
-    return _REPORT_STRUCTURE_NONE
-
-
-def _sql_affects_report_structure(sql: str, parameters=()) -> bool:
-    classification = _classify_report_structure_sql(str(sql))
-    if classification == _REPORT_STRUCTURE_ALWAYS:
-        return True
-    if classification == _REPORT_STRUCTURE_SETTINGS_PARAMETERS:
-        return _parameters_affect_report_structure(parameters)
-    return False
-
-
 class WorkTraceConnection(sqlite3.Connection):
-    """SQLite connection enforcing write exclusion and structural generations."""
+    """SQLite connection enforcing write exclusion and fallback invalidation."""
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
@@ -201,22 +103,20 @@ class WorkTraceConnection(sqlite3.Connection):
     ) -> None:
         if rowcount == 0 or self._report_structure_dirty:
             return
-        if _sql_affects_report_structure(sql, parameters):
+        if sql_affects_report_structure(sql, parameters):
             self._report_structure_dirty = True
 
     def _persist_report_structure_generation(self) -> None:
-        """Increment the durable generation inside the pending write transaction."""
-
         if not self._report_structure_dirty:
             return
         try:
+            from .data_generation_repository import DataGenerationNamespace
+
             DataGenerationRepository.bump(
                 self,
                 (DataGenerationNamespace.REPORT_STRUCTURE,),
             )
         except sqlite3.OperationalError as exc:
-            # Supported pre-v8 schemas may be assembled and committed before
-            # migrate_schema() installs the namespace table.
             if "no such table" not in str(exc).lower():
                 raise
 
@@ -243,11 +143,11 @@ class WorkTraceConnection(sqlite3.Connection):
         if self._report_structure_dirty:
             return super().executemany(sql, seq_of_parameters)
 
-        classification = _classify_report_structure_sql(text)
-        if classification == _REPORT_STRUCTURE_NONE:
+        classification = classify_report_structure_sql(text)
+        if classification is ReportStructureSqlClassification.NONE:
             return super().executemany(sql, seq_of_parameters)
 
-        if classification == _REPORT_STRUCTURE_ALWAYS:
+        if classification is ReportStructureSqlClassification.ALWAYS:
             cursor = super().executemany(sql, seq_of_parameters)
             if cursor.rowcount != 0:
                 self._report_structure_dirty = True
@@ -260,7 +160,7 @@ class WorkTraceConnection(sqlite3.Connection):
             for parameters in seq_of_parameters:
                 if (
                     not affects_structure
-                    and _parameters_affect_report_structure(parameters)
+                    and parameters_affect_report_structure(parameters)
                 ):
                     affects_structure = True
                 yield parameters
@@ -421,9 +321,6 @@ def apply_current_schema(conn: sqlite3.Connection) -> None:
     if version != CURRENT_SCHEMA_VERSION:
         raise ValueError("database_schema_incompatible")
 
-    # Same-version maintenance accepts only the explicitly retired triggers.
-    # Arbitrary malformed current-version schemas fail the fingerprint before
-    # index DDL can obscure the compatibility error.
     drop_retired_schema_triggers(conn)
     if migrated:
         ensure_current_indexes(conn)
