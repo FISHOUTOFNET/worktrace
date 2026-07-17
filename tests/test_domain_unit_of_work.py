@@ -75,11 +75,12 @@ def test_non_report_effect_is_published_explicitly(temp_db):
         uow.connection.execute(
             """
             INSERT INTO settings(key, value, updated_at)
-            VALUES ('ui_refresh_seconds', '77', '2026-07-17 10:30:00')
+            VALUES (?, ?, ?)
             ON CONFLICT(key) DO UPDATE SET
                 value = excluded.value,
                 updated_at = excluded.updated_at
-            """
+            """,
+            ("ui_refresh_seconds", "77", "2026-07-17 10:30:00"),
         )
         uow.mark_changed()
 
