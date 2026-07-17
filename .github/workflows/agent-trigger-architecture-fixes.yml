@@ -33,51 +33,72 @@ jobs:
       - name: Extract and apply staged patch
         shell: pwsh
         run: |
-          $source = Get-Content -LiteralPath .github/workflows/agent-apply-architecture-fixes.yml -Raw
-          $match = [regex]::Match($source, "(?s)          @'\r?\n(.*?)\r?\n          '@ \| Set-Content -LiteralPath \.agent_apply\.py -Encoding UTF8")
-          if (-not $match.Success) { throw "Embedded architecture patch was not found" }
-          $lines = $match.Groups[1].Value -split "\r?\n" | ForEach-Object {
-            if ($_.StartsWith("          ")) { $_.Substring(10) } else { $_ }
+          $ErrorActionPreference = "Stop"
+          try {
+            $source = Get-Content -LiteralPath .github/workflows/agent-apply-architecture-fixes.yml -Raw
+            $match = [regex]::Match($source, "(?s)          @'\r?\n(.*?)\r?\n          '@ \| Set-Content -LiteralPath \.agent_apply\.py -Encoding UTF8")
+            if (-not $match.Success) { throw "Embedded architecture patch was not found" }
+            [string[]]$lines = $match.Groups[1].Value -split "\r?\n" | ForEach-Object {
+              if ($_.StartsWith("          ")) { $_.Substring(10) } else { $_ }
+            }
+
+            $fragileStart = -1
+            $fragileEnd = -1
+            for ($i = 0; $i -lt $lines.Length; $i++) {
+              if ($lines[$i].Trim() -ne "replace_once(") { continue }
+              $windowEnd = [Math]::Min($lines.Length - 1, $i + 30)
+              $window = ($lines[$i..$windowEnd] -join "`n")
+              if ($window.Contains("'worktrace/webview_ui/js/init.js'") -and $window.Contains("timeline-hide-session")) {
+                $fragileStart = $i
+                for ($j = $i + 1; $j -lt $lines.Length; $j++) {
+                  if ($lines[$j] -eq ")") { $fragileEnd = $j; break }
+                }
+                break
+              }
+            }
+            if ($fragileStart -lt 0 -or $fragileEnd -lt $fragileStart) {
+              throw "Fragile timeline action replacement was not found"
+            }
+            $prefix = if ($fragileStart -gt 0) { $lines[0..($fragileStart - 1)] } else { @() }
+            $suffix = if ($fragileEnd + 1 -lt $lines.Length) { $lines[($fragileEnd + 1)..($lines.Length - 1)] } else { @() }
+            [string[]]$lines = @($prefix + "# Timeline action keys are patched after the structural script." + $suffix)
+            [System.IO.File]::WriteAllLines((Join-Path $PWD ".agent_apply.py"), $lines, [System.Text.UTF8Encoding]::new($false))
+
+            python .agent_apply.py *> agent-apply.log
+            $applyExitCode = $LASTEXITCODE
+            if ($applyExitCode -ne 0) { throw "architecture patch exited with code $applyExitCode" }
+
+            $initPath = "worktrace/webview_ui/js/init.js"
+            $init = Get-Content -LiteralPath $initPath -Raw
+            $mappings = @(
+              @('["timeline-hide-session", "hide_timeline_session"]', '["timeline-hide-session", "hide"]'),
+              @('["timeline-merge-previous", "merge_timeline_session", "previous"]', '["timeline-merge-previous", "merge", "previous"]'),
+              @('["timeline-merge-next", "merge_timeline_session", "next"]', '["timeline-merge-next", "merge", "next"]'),
+              @('["timeline-split-session", "split_timeline_session"]', '["timeline-split-session", "split"]'),
+              @('["timeline-copy-session", "copy_timeline_session"]', '["timeline-copy-session", "copy"]')
+            )
+            foreach ($mapping in $mappings) {
+              $count = ([regex]::Matches($init, [regex]::Escape($mapping[0]))).Count
+              if ($count -ne 1) { throw "Expected one timeline action mapping, found $count: $($mapping[0])" }
+              $init = $init.Replace($mapping[0], $mapping[1])
+            }
+            [System.IO.File]::WriteAllText((Join-Path $PWD $initPath), $init, [System.Text.UTF8Encoding]::new($false))
+            Remove-Item .agent_apply.py, agent-apply.log
           }
-          [System.IO.File]::WriteAllLines((Join-Path $PWD ".agent_apply.py"), $lines, [System.Text.UTF8Encoding]::new($false))
-
-          $initPath = "worktrace/webview_ui/js/init.js"
-          $init = (Get-Content -LiteralPath $initPath -Raw) -replace "`r`n", "`n"
-          $startMarker = "        [`n            [`"timeline-hide-session`", `"hide_timeline_session`"],"
-          $endMarker = "        bind(`"edit-note-text`", `"input`", App.updateNoteCount);"
-          $blockStart = $init.IndexOf($startMarker, [System.StringComparison]::Ordinal)
-          $blockEnd = $init.IndexOf($endMarker, $blockStart, [System.StringComparison]::Ordinal)
-          if ($blockStart -lt 0 -or $blockEnd -lt 0) { throw "Timeline action block was not found" }
-          $normalizedBlock = @(
-            "        [",
-            "        [`"timeline-hide-session`", `"hide_timeline_session`"],",
-            "        [`"timeline-merge-previous`", `"merge_timeline_session`", `"previous`"],",
-            "        [`"timeline-merge-next`", `"merge_timeline_session`", `"next`"],",
-            "        [`"timeline-split-session`", `"split_timeline_session`"],",
-            "        [`"timeline-copy-session`", `"copy_timeline_session`"]",
-            "        ].forEach(function (action) {",
-            "        bind(action[0], `"click`", function () {",
-            "        App.runTimelineSessionOperation(action[1], action[2] ? { direction: action[2] } : undefined);",
-            "        });",
-            "        });",
-            ""
-          ) -join "`n"
-          $init = $init.Substring(0, $blockStart) + $normalizedBlock + $init.Substring($blockEnd)
-          [System.IO.File]::WriteAllText((Join-Path $PWD $initPath), $init, [System.Text.UTF8Encoding]::new($false))
-
-          python .agent_apply.py *> agent-apply.log
-          $applyExitCode = $LASTEXITCODE
-          Get-Content -LiteralPath agent-apply.log -Tail 160 | ForEach-Object { Write-Host $_ }
-          if ($applyExitCode -ne 0) {
+          catch {
             New-Item -ItemType Directory -Force -Path diagnostics | Out-Null
-            Copy-Item agent-apply.log diagnostics/agent-apply-latest.txt
+            @(
+              $_.Exception.ToString(),
+              "",
+              $(if (Test-Path agent-apply.log) { Get-Content agent-apply.log -Raw } else { "" })
+            ) | Set-Content -LiteralPath diagnostics/agent-apply-latest.txt -Encoding UTF8
+            Get-Content -LiteralPath diagnostics/agent-apply-latest.txt -Tail 160 | ForEach-Object { Write-Host $_ }
             git checkout -B agent/worktrace-agent-diagnostics
             git add diagnostics/agent-apply-latest.txt
             git commit -m "Capture architecture repair diagnostics"
             git push --force origin HEAD:agent/worktrace-agent-diagnostics
-            exit $applyExitCode
+            exit 1
           }
-          Remove-Item .agent_apply.py, agent-apply.log
       - name: Install dependencies
         run: python -m pip install --disable-pip-version-check -q -r requirements.txt
       - name: Validate phase
