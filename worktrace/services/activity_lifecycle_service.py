@@ -10,11 +10,11 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from ..constants import STATUS_NORMAL, UNCATEGORIZED_PROJECT
+from ..constants import STATUS_NORMAL
 from ..data_generation_repository import DataGenerationNamespace
-from ..db import get_connection, now_str
+from ..db import now_str
 from ..domain_unit_of_work import DomainUnitOfWork
-from . import activity_fact_repository
+from . import activity_fact_repository, session_boundary_service
 
 
 def _report_uow() -> DomainUnitOfWork:
@@ -23,17 +23,9 @@ def _report_uow() -> DomainUnitOfWork:
 
 def _mark_inference_retry_safely(activity_id: int) -> None:
     try:
-        from .assignment_command_service import mark_inference_retry
+        from .assignment_command_service import mark_inference_retry_with_uow
 
-        with _report_uow() as uow:
-            row = uow.connection.execute(
-                "SELECT id FROM project WHERE name = ?",
-                (UNCATEGORIZED_PROJECT,),
-            ).fetchone()
-            if row is None:
-                return
-            mark_inference_retry(uow.connection, activity_id, int(row["id"]))
-            uow.mark_changed()
+        mark_inference_retry_with_uow(int(activity_id))
     except Exception:
         logging.exception(
             "close-finalize inference retry marker failed for activity_id=%s",
@@ -83,7 +75,10 @@ def start_activity(*, start_time: str, source: str, payload: dict[str, Any]) -> 
 
 
 def persist_open_activity(
-    *, start_time: str, source: str, payload: dict[str, Any]
+    *,
+    start_time: str,
+    source: str,
+    payload: dict[str, Any],
 ) -> int:
     """Create one open fact and return its id immediately after commit."""
 
@@ -103,7 +98,10 @@ def persist_open_activity(
 
 
 def force_persist_open_activity_for_clipboard(
-    *, start_time: str, source: str, payload: dict[str, Any]
+    *,
+    start_time: str,
+    source: str,
+    payload: dict[str, Any],
 ) -> int | None:
     if payload.get("status") != STATUS_NORMAL:
         return None
@@ -156,6 +154,38 @@ def close_all_open_activities(end_time: str | None = None) -> list[int]:
         )
         if closed_ids:
             uow.mark_changed()
+    finalize_closed_activity_ids(closed_ids)
+    return closed_ids
+
+
+def close_at_boundary(
+    occurred_at: str,
+    reason: str,
+    *,
+    current_activity_id: int | None = None,
+    current_duration_seconds: int | None = None,
+) -> list[int]:
+    """Atomically close all open rows and persist one hard-boundary fact."""
+
+    requested_at = str(occurred_at or now_str())
+    closed_ids: list[int] = []
+    with _report_uow() as uow:
+        conn = uow.connection
+        if current_activity_id is not None and activity_fact_repository.close_activity(
+            conn,
+            int(current_activity_id),
+            requested_at,
+            duration_seconds=current_duration_seconds,
+        ):
+            closed_ids.append(int(current_activity_id))
+        for activity_id in activity_fact_repository.close_all_open_activities(
+            conn,
+            requested_at,
+        ):
+            if activity_id not in closed_ids:
+                closed_ids.append(activity_id)
+        session_boundary_service.insert_boundary(conn, requested_at, reason)
+        uow.mark_changed()
     finalize_closed_activity_ids(closed_ids)
     return closed_ids
 
@@ -281,6 +311,7 @@ __all__ = [
     "checkpoint_activity",
     "close_activity",
     "close_all_open_activities",
+    "close_at_boundary",
     "finalize_closed_activity_ids",
     "force_persist_open_activity_for_clipboard",
     "persist_midnight_anchor",
