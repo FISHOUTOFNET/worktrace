@@ -12,8 +12,8 @@ replacements = {
             assert "function invokeBridge" in source
             all_decls = re.findall(r'\\n    function \\w+\\s*\\(', source)
 ''',
-    r'''                source = "\n".join(path.read_text(encoding="utf-8") for path in packaged)
-''': r'''                source = "\\n".join(path.read_text(encoding="utf-8") for path in packaged)
+    r'''                source = "\n".join(sources.values())
+''': r'''                source = "\\n".join(sources.values())
 ''',
 }
 for old, new in replacements.items():
