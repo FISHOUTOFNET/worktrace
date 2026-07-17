@@ -86,6 +86,63 @@ def test_rule_impact_is_preview_only() -> None:
     assert "rule_planning_service" in source
 
 
+def test_batch_service_has_no_mutation_or_cache_owner() -> None:
+    source = _source("worktrace/services/rule_batch_service.py")
+    for forbidden in (
+        "DomainUnitOfWork",
+        "activity_project_assignment",
+        "UPDATE project_rule",
+        "UPDATE folder_project_rule",
+        "invalidate_keyword_rule_cache",
+        "invalidate_folder_rule_cache",
+        "clear_exclude_rules_cache",
+    ):
+        assert forbidden not in source
+    assert "submit_rule_batch_job" in source
+    assert "set_rules_enabled" in source
+
+
+def test_rule_facades_delegate_all_catalog_writes() -> None:
+    keyword = _source("worktrace/services/rule_service.py")
+    folder = _source("worktrace/services/folder_rule_service.py")
+    owner = _source("worktrace/services/rule_catalog_command_service.py")
+    for facade in (keyword, folder):
+        assert "DomainUnitOfWork" not in facade
+        assert "UPDATE project_rule" not in facade
+        assert "UPDATE folder_project_rule" not in facade
+        assert "DELETE FROM project_rule" not in facade
+        assert "DELETE FROM folder_project_rule" not in facade
+    assert "create_keyword_rule" in owner
+    assert "create_or_update_folder_rule" in owner
+    assert "set_rules_enabled" in owner
+    assert "delete_rule_in_transaction" in owner
+
+
+def test_history_jobs_are_durable_before_candidate_scans() -> None:
+    source = _source("worktrace/services/history_mutation_job_service.py")
+    single_start = source.index("def submit_rule_job(")
+    batch_start = source.index("def submit_rule_batch_job(")
+    compensation_start = source.index("def compensate_failed_synchronous_job(")
+    single_body = source[single_start:batch_start]
+    batch_body = source[batch_start:compensation_start]
+    assert "planner.load_candidate_activities" not in single_body
+    assert "planner.classify_activities" not in single_body
+    assert "planner.load_candidate_activities" not in batch_body
+    assert "planner.classify_activities" not in batch_body
+    assert "run_job_batch(job_id" in single_body
+    assert "run_job_batch(job_id" in batch_body
+
+
+def test_recovery_service_only_plans_lifecycle_commands() -> None:
+    recovery = _source("worktrace/services/recovery_service.py")
+    lifecycle = _source("worktrace/services/activity_lifecycle_service.py")
+    assert "UPDATE activity_log" not in recovery
+    assert "recover_activity_batch(commands, boundaries)" in recovery
+    assert "mark_activity_error" in recovery
+    assert "def recover_activity_batch(" in lifecycle
+    assert "session_boundary_service.insert_boundary" in lifecycle
+
+
 def test_folder_index_read_model_is_deterministic_and_side_effect_free() -> None:
     source = _source("worktrace/services/folder_index_query_service.py")
     for forbidden in (
@@ -100,10 +157,12 @@ def test_folder_index_read_model_is_deterministic_and_side_effect_free() -> None
     ):
         assert forbidden not in source
     inference = _source("worktrace/services/project_inference_service.py")
+    planning = _source("worktrace/services/rule_planning_service.py")
+    resources = _source("worktrace/resources/resource_helpers.py")
     assert "folder_index_query_service" in inference
+    assert "folder_index_query_service" in planning
+    assert "folder_index_query_service" in resources
     assert "folder_index_service.find_matching_folder_rule_for_file_name" not in inference
-    privacy = _source("worktrace/services/privacy_service.py")
-    assert "folder_index_query_service" in privacy
 
 
 def test_project_catalog_has_no_cross_service_cache_fanout() -> None:
