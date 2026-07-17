@@ -43,26 +43,26 @@ jobs:
 
           $patchScript = Get-Content -LiteralPath .agent_apply.py -Raw
           $fragilePattern = "(?s)replace_once\(\r?\n    'worktrace/webview_ui/js/init\.js',\r?\n    '''        \[.*?\r?\n\)\r?\n\r?\ntimeline_path ="
-          $robustReplacement = @'
-replace_between(
-    'worktrace/webview_ui/js/init.js',
-    '        [\n            ["timeline-hide-session", "hide_timeline_session"],',
-    '        });',
-    '''        [
-            ["timeline-hide-session", "hide"],
-            ["timeline-merge-previous", "merge", "previous"],
-            ["timeline-merge-next", "merge", "next"],
-            ["timeline-split-session", "split"],
-            ["timeline-copy-session", "copy"]
-        ].forEach(function (action) {
-            bind(action[0], "click", function () {
-                App.runTimelineSessionOperation(action[1], action[2] ? { direction: action[2] } : undefined);
-            });
-        });'''
-)
-
-timeline_path =
-'@
+          $robustReplacement = @(
+            "replace_between(",
+            "    'worktrace/webview_ui/js/init.js',",
+            "    '        [\n            [\"timeline-hide-session\", \"hide_timeline_session\"],',",
+            "    '        });',",
+            "    '''        [",
+            "            [\"timeline-hide-session\", \"hide\"],",
+            "            [\"timeline-merge-previous\", \"merge\", \"previous\"],",
+            "            [\"timeline-merge-next\", \"merge\", \"next\"],",
+            "            [\"timeline-split-session\", \"split\"],",
+            "            [\"timeline-copy-session\", \"copy\"]",
+            "        ].forEach(function (action) {",
+            "            bind(action[0], \"click\", function () {",
+            "                App.runTimelineSessionOperation(action[1], action[2] ? { direction: action[2] } : undefined);",
+            "            });",
+            "        });'''",
+            ")",
+            "",
+            "timeline_path ="
+          ) -join "`n"
           $patchedScript = [regex]::Replace($patchScript, $fragilePattern, $robustReplacement, 1)
           if ($patchedScript -eq $patchScript) { throw "Fragile init action patch was not found" }
           [System.IO.File]::WriteAllText((Join-Path $PWD ".agent_apply.py"), $patchedScript, [System.Text.UTF8Encoding]::new($false))
