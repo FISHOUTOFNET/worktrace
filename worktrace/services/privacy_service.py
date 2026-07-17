@@ -57,15 +57,20 @@ def is_excluded(active_window: ActiveWindow) -> bool:
     if not file_name:
         return False
 
-    from .folder_index_service import resolve_unique_path_from_title
+    from .folder_index_query_service import resolve_unique_path_from_title
 
     path = resolve_unique_path_from_title(
         active_window.window_title,
         include_excluded=True,
-        schedule_refresh_on_miss=True,
     )
     if path:
         return _matches_exclude_folder(path)
+
+    # Privacy is a runtime command owner: it may explicitly request maintenance
+    # after the pure lookup, while report/preview callers remain read-only.
+    from .folder_index_service import request_refresh_for_enabled_rules
+
+    request_refresh_for_enabled_rules(include_excluded=True)
     if active_window.privacy_path_required:
         raise PrivacyResolutionPending("privacy_path_unresolved")
     return False
