@@ -20,6 +20,10 @@ classification_catalog_mutation = domain_mutation(
     DataGenerationNamespace.CLASSIFICATION_CATALOG,
     DataGenerationNamespace.PRIVACY_CATALOG,
 )
+classification_index_mutation = domain_mutation(
+    DataGenerationNamespace.CLASSIFICATION_CATALOG,
+    DataGenerationNamespace.PRIVACY_CATALOG,
+)
 settings_mutation = domain_mutation(
     DataGenerationNamespace.SETTINGS,
 )
@@ -47,6 +51,7 @@ __all__ = [
     "MutationEffect",
     "add_mutation_effects",
     "classification_catalog_mutation",
+    "classification_index_mutation",
     "current_domain_unit_of_work",
     "database_replacement_mutation",
     "domain_mutation",
