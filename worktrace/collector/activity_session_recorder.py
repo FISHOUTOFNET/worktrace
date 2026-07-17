@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TypeAlias
+from typing import Iterator, TypeAlias
 
 from ..constants import (
     SOURCE_AUTO,
@@ -41,8 +41,35 @@ from .transition_types import ActivityEndReason, ActivitySignature, seconds_betw
 
 SYSTEM_STATUSES = {STATUS_IDLE, STATUS_PAUSED, STATUS_EXCLUDED, STATUS_ERROR}
 OPEN_ACTIVITY_CHECKPOINT_SECONDS = 30
-BoundaryClose: TypeAlias = tuple[int | None, str, int]
-MidnightSplit: TypeAlias = tuple[dict, ActivitySignature, int | None, BoundaryClose | None]
+
+
+@dataclass(frozen=True)
+class PreparedActivityClose:
+    """Immutable durable close command prepared from one recorder session."""
+
+    session_serial: int
+    activity_id: int | None
+    end_time: str
+    duration_seconds: int
+    reason: ActivityEndReason
+    status: str
+    previous_signature_hash: str
+
+    def __iter__(self) -> Iterator[int | str | None]:
+        """Preserve tuple unpacking while callers migrate to named fields."""
+
+        yield self.activity_id
+        yield self.end_time
+        yield self.duration_seconds
+
+
+BoundaryClose: TypeAlias = PreparedActivityClose
+MidnightSplit: TypeAlias = tuple[
+    dict,
+    ActivitySignature,
+    int | None,
+    PreparedActivityClose | None,
+]
 
 
 @dataclass
@@ -60,6 +87,7 @@ class ActivitySessionRecorder:
     decision_trace_recorder: DecisionTraceRecorder = field(
         default=NULL_DECISION_TRACE_RECORDER
     )
+    _session_serial: int = field(default=0, init=False, repr=False)
 
     def observe(
         self,
@@ -116,30 +144,48 @@ class ActivitySessionRecorder:
             persisted_before=persisted_before,
         )
 
-    def _detach_current_activity(
+    def prepare_current_activity_close(
         self,
         at_time: str,
         reason: ActivityEndReason,
-    ) -> BoundaryClose | None:
-        """Seal process-local state and return the durable close command inputs."""
+    ) -> PreparedActivityClose | None:
+        """Prepare durable close inputs without changing process-local state."""
 
         if self.current_payload is None or self.current_start_time is None:
             self.clear_snapshot()
             return None
         end_time = max(str(at_time), str(self.current_start_time))
         elapsed = seconds_between(self.current_start_time, end_time)
-        status = str(self.current_payload.get("status") or "")
         self._ensure_persisted(end_time)
-        activity_id = self.persisted_activity_id
+        return PreparedActivityClose(
+            session_serial=self._session_serial,
+            activity_id=self.persisted_activity_id,
+            end_time=end_time,
+            duration_seconds=elapsed,
+            reason=reason,
+            status=str(self.current_payload.get("status") or ""),
+            previous_signature_hash=signature_hash(self.current_signature),
+        )
+
+    def finalize_prepared_close(
+        self,
+        prepared: PreparedActivityClose | None,
+    ) -> bool:
+        """Clear runtime state only after the corresponding command committed."""
+
+        if prepared is None:
+            return False
+        if prepared.session_serial != self._session_serial:
+            return False
         self.decision_trace_recorder.record(
             CollectorDecisionTrace(
-                observed_at=end_time,
-                previous_signature_hash=signature_hash(self.current_signature),
-                status=status,
-                end_reason=str(reason.value),
-                elapsed_seconds=elapsed,
-                persisted_activity_id_before=activity_id,
-                persisted_activity_id_after=activity_id,
+                observed_at=prepared.end_time,
+                previous_signature_hash=prepared.previous_signature_hash,
+                status=prepared.status,
+                end_reason=str(prepared.reason.value),
+                elapsed_seconds=prepared.duration_seconds,
+                persisted_activity_id_before=prepared.activity_id,
+                persisted_activity_id_after=prepared.activity_id,
                 snapshot_action="close_persisted",
             )
         )
@@ -150,24 +196,26 @@ class ActivitySessionRecorder:
         self.persisted_activity_id = None
         self.persisted_checkpoint_seconds = 0
         self.checkpoint_on_next_observation = False
+        self.project_ownership_state = clear_ownership_state()
+        self._session_serial += 1
         self.clear_snapshot()
-        return activity_id, end_time, elapsed
+        return True
 
     def finish_current_activity(
         self,
         at_time: str,
         reason: ActivityEndReason,
     ) -> None:
-        detached = self._detach_current_activity(at_time, reason)
-        if detached is None:
+        prepared = self.prepare_current_activity_close(at_time, reason)
+        if prepared is None:
             return
-        activity_id, end_time, elapsed = detached
-        if activity_id is not None:
+        if prepared.activity_id is not None:
             lifecycle_close_activity(
-                activity_id,
-                end_time,
-                duration_seconds=elapsed,
+                prepared.activity_id,
+                prepared.end_time,
+                duration_seconds=prepared.duration_seconds,
             )
+        self.finalize_prepared_close(prepared)
 
     def stop(
         self,
@@ -175,18 +223,15 @@ class ActivitySessionRecorder:
         reason: ActivityEndReason = ActivityEndReason.STOP_BOUNDARY,
     ) -> None:
         self.finish_current_activity(at_time, reason)
-        self.project_ownership_state = clear_ownership_state()
 
     def stop_for_boundary(
         self,
         at_time: str,
         reason: ActivityEndReason,
-    ) -> BoundaryClose | None:
-        """Detach the active row so lifecycle can close it with the boundary."""
+    ) -> PreparedActivityClose | None:
+        """Prepare a close command for the atomic lifecycle boundary owner."""
 
-        detached = self._detach_current_activity(at_time, reason)
-        self.project_ownership_state = clear_ownership_state()
-        return detached
+        return self.prepare_current_activity_close(at_time, reason)
 
     def prepare_midnight_split(self, at_time: str) -> MidnightSplit | None:
         if self.current_payload is None or self.current_start_time is None:
@@ -195,8 +240,8 @@ class ActivitySessionRecorder:
         payload = dict(self.current_payload)
         signature = self.current_signature or self.resolver.signature_for_payload(payload)
         project_id = self._current_concrete_project_id()
-        detached = self.stop_for_boundary(at_time, ActivityEndReason.MIDNIGHT_BOUNDARY)
-        return payload, signature, project_id, detached
+        prepared = self.stop_for_boundary(at_time, ActivityEndReason.MIDNIGHT_BOUNDARY)
+        return payload, signature, project_id, prepared
 
     def resume_midnight_split(
         self,
@@ -215,18 +260,17 @@ class ActivitySessionRecorder:
     def split_at_midnight(self, at_time: str) -> bool:
         """Compatibility entrypoint; state_machine owns the atomic boundary path."""
 
-        prepared = self.prepare_midnight_split(at_time)
-        if prepared is None:
+        split = self.prepare_midnight_split(at_time)
+        if split is None:
             return False
-        payload, signature, project_id, detached = prepared
-        if detached is not None:
-            activity_id, end_time, elapsed = detached
-            if activity_id is not None:
-                lifecycle_close_activity(
-                    activity_id,
-                    end_time,
-                    duration_seconds=elapsed,
-                )
+        payload, signature, project_id, prepared = split
+        if prepared is not None and prepared.activity_id is not None:
+            lifecycle_close_activity(
+                prepared.activity_id,
+                prepared.end_time,
+                duration_seconds=prepared.duration_seconds,
+            )
+        self.finalize_prepared_close(prepared)
         self.resume_midnight_split(payload, signature, project_id, at_time)
         return True
 
@@ -244,6 +288,7 @@ class ActivitySessionRecorder:
         self.persisted_checkpoint_seconds = 0
         self.checkpoint_on_next_observation = False
         self.project_ownership_state = clear_ownership_state()
+        self._session_serial += 1
         self.clear_snapshot()
         clear_runtime_activity_state(reason)
 
@@ -261,6 +306,7 @@ class ActivitySessionRecorder:
         *,
         midnight_project_id: int | None = None,
     ) -> None:
+        self._session_serial += 1
         self.current_payload = dict(payload)
         self.current_signature = signature
         self.current_start_time = at_time
