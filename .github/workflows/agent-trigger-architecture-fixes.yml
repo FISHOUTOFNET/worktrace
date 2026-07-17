@@ -39,38 +39,31 @@ jobs:
           $lines = $match.Groups[1].Value -split "\r?\n" | ForEach-Object {
             if ($_.StartsWith("          ")) { $_.Substring(10) } else { $_ }
           }
-          $patchScript = ($lines -join "`n")
+          [System.IO.File]::WriteAllLines((Join-Path $PWD ".agent_apply.py"), $lines, [System.Text.UTF8Encoding]::new($false))
 
-          $needle = "replace_once(`n    'worktrace/webview_ui/js/init.js',`n    '''        ["
-          $fragileStart = $patchScript.IndexOf($needle, [System.StringComparison]::Ordinal)
-          $timelineStart = if ($fragileStart -ge 0) {
-            $patchScript.IndexOf("timeline_path =", $fragileStart, [System.StringComparison]::Ordinal)
-          } else { -1 }
-          if ($fragileStart -lt 0 -or $timelineStart -lt 0) {
-            throw "Fragile init action patch boundaries were not found"
-          }
-          $robustReplacement = @(
-            "replace_between(",
-            "    'worktrace/webview_ui/js/init.js',",
-            "    '        [\n            [\"timeline-hide-session\", \"hide_timeline_session\"],',",
-            "    '        });',",
-            "    '''        [",
-            "            [\"timeline-hide-session\", \"hide\"],",
-            "            [\"timeline-merge-previous\", \"merge\", \"previous\"],",
-            "            [\"timeline-merge-next\", \"merge\", \"next\"],",
-            "            [\"timeline-split-session\", \"split\"],",
-            "            [\"timeline-copy-session\", \"copy\"]",
+          $initPath = "worktrace/webview_ui/js/init.js"
+          $init = (Get-Content -LiteralPath $initPath -Raw) -replace "`r`n", "`n"
+          $startMarker = "        [`n            [`"timeline-hide-session`", `"hide_timeline_session`"],"
+          $endMarker = "        bind(`"edit-note-text`", `"input`", App.updateNoteCount);"
+          $blockStart = $init.IndexOf($startMarker, [System.StringComparison]::Ordinal)
+          $blockEnd = $init.IndexOf($endMarker, $blockStart, [System.StringComparison]::Ordinal)
+          if ($blockStart -lt 0 -or $blockEnd -lt 0) { throw "Timeline action block was not found" }
+          $normalizedBlock = @(
+            "        [",
+            "        [`"timeline-hide-session`", `"hide_timeline_session`"],",
+            "        [`"timeline-merge-previous`", `"merge_timeline_session`", `"previous`"],",
+            "        [`"timeline-merge-next`", `"merge_timeline_session`", `"next`"],",
+            "        [`"timeline-split-session`", `"split_timeline_session`"],",
+            "        [`"timeline-copy-session`", `"copy_timeline_session`"]",
             "        ].forEach(function (action) {",
-            "            bind(action[0], \"click\", function () {",
-            "                App.runTimelineSessionOperation(action[1], action[2] ? { direction: action[2] } : undefined);",
-            "            });",
-            "        });'''",
-            ")",
-            "",
+            "        bind(action[0], `"click`", function () {",
+            "        App.runTimelineSessionOperation(action[1], action[2] ? { direction: action[2] } : undefined);",
+            "        });",
+            "        });",
             ""
           ) -join "`n"
-          $patchScript = $patchScript.Substring(0, $fragileStart) + $robustReplacement + $patchScript.Substring($timelineStart)
-          [System.IO.File]::WriteAllText((Join-Path $PWD ".agent_apply.py"), $patchScript, [System.Text.UTF8Encoding]::new($false))
+          $init = $init.Substring(0, $blockStart) + $normalizedBlock + $init.Substring($blockEnd)
+          [System.IO.File]::WriteAllText((Join-Path $PWD $initPath), $init, [System.Text.UTF8Encoding]::new($false))
 
           python .agent_apply.py *> agent-apply.log
           $applyExitCode = $LASTEXITCODE
