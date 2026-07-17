@@ -1,17 +1,16 @@
-"""Durable settings with explicit mutation classes and generation effects."""
+"""Durable settings with explicit mutation classes and generation-keyed cache."""
 
 from __future__ import annotations
 
-import time
 from enum import StrEnum
 from typing import Mapping
 
 from ..data_generation_repository import DataGenerationNamespace
-from ..db import get_connection, get_db_path, now_str
+from ..db import get_connection, get_db_key, now_str
 from ..domain_unit_of_work import DomainUnitOfWork
+from ..generation_clock import generation
 
-_SETTING_CACHE_TTL_SECONDS = 2.0
-_SETTING_CACHE: dict[tuple[str, str], tuple[float, str | None]] = {}
+_SETTING_CACHE: dict[tuple[str, int, str], str | None] = {}
 
 
 class SettingMutationClass(StrEnum):
@@ -78,14 +77,14 @@ def _effects_for_classification(
 
 
 def clear_settings_cache(key: str | None = None) -> None:
-    if key is None:
-        _SETTING_CACHE.clear()
-        return
-    _SETTING_CACHE.pop((_settings_db_key(), key), None)
+    """Test/reconfiguration hook; ordinary writes rely on generation change."""
 
-
-def _settings_db_key() -> str:
-    return str(get_db_path().resolve())
+    database_key = get_db_key()
+    for cache_key in list(_SETTING_CACHE):
+        if cache_key[0] != database_key:
+            continue
+        if key is None or cache_key[2] == key:
+            _SETTING_CACHE.pop(cache_key, None)
 
 
 def _page_read_connection():
@@ -104,11 +103,11 @@ def get_setting(key: str, default: str | None = None, *, conn=None) -> str | Non
         ).fetchone()
         value = row["value"] if row else None
         return value if value is not None else default
-    cache_key = (_settings_db_key(), key)
-    now = time.monotonic()
-    cached = _SETTING_CACHE.get(cache_key)
-    if cached is not None and cached[0] >= now:
-        value = cached[1]
+
+    current_generation = generation(DataGenerationNamespace.SETTINGS)
+    cache_key = (get_db_key(), current_generation, str(key))
+    if cache_key in _SETTING_CACHE:
+        value = _SETTING_CACHE[cache_key]
         return value if value is not None else default
     with get_connection() as own_conn:
         row = own_conn.execute(
@@ -116,7 +115,7 @@ def get_setting(key: str, default: str | None = None, *, conn=None) -> str | Non
             (key,),
         ).fetchone()
     value = row["value"] if row else None
-    _SETTING_CACHE[cache_key] = (now + _SETTING_CACHE_TTL_SECONDS, value)
+    _SETTING_CACHE[cache_key] = value
     return value if value is not None else default
 
 
@@ -154,10 +153,10 @@ def set_settings(
     for classification in classifications.values():
         effects.update(_effects_for_classification(classification))
 
-    changed_keys: list[str] = []
     with DomainUnitOfWork(effects) as uow:
         conn = uow.connection
         timestamp = now_str()
+        changed = False
         for key, value in normalized.items():
             row = conn.execute(
                 "SELECT value FROM settings WHERE key = ?",
@@ -175,12 +174,9 @@ def set_settings(
                 """,
                 (key, value, timestamp),
             )
-            changed_keys.append(key)
-        if changed_keys:
+            changed = True
+        if changed:
             uow.mark_changed()
-
-    for key in changed_keys:
-        clear_settings_cache(key)
 
 
 def get_bool_setting(key: str, default: bool = False, *, conn=None) -> bool:
