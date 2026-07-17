@@ -93,15 +93,16 @@ def test_runtime_routes_shutdown_close_all_through_lifecycle() -> None:
     assert "activity_lifecycle_service.close_all_open_activities" in source
 
 
-def test_recovery_routes_closes_through_lifecycle() -> None:
+def test_recovery_routes_activity_and_boundary_facts_through_one_lifecycle_owner() -> None:
     source = _read(SERVICES_DIR / "recovery_service.py")
     direct_close = re.compile(
         r"UPDATE\s+activity_log\s+SET\s+end_time",
         re.IGNORECASE,
     )
     assert direct_close.search(source) is None
-    assert "recover_close_activity" in source
+    assert "activity_lifecycle_service.recover_activity_batch(commands, boundaries)" in source
     assert "activity_service.close_activity(" not in source
+    assert "session_boundary_service.insert_boundary" not in source
 
 
 def _legacy_activity_service_calls(path: Path) -> list[str]:
