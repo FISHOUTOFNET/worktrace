@@ -146,6 +146,7 @@ class LiveSemanticsHarness:
                 report_date,
                 selected["projection_revision"],
             )
+        # Recent activity is a projection inside the canonical Overview bundle.
         overview = self.bridge.get_overview()
         return {
             "overview": overview,
