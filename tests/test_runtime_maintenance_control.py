@@ -26,18 +26,43 @@ pytestmark = [
 ]
 
 
-def test_pause_timeout_reports_unknown_command_state():
+def test_unclaimed_pause_timeout_is_cancelled():
     control = CollectorControl()
 
     result = control.request_pause(timeout_seconds=0)
 
-    assert result == {
-        "ok": False,
-        "pause_pending": False,
-        "timed_out": True,
-        "command_state_unknown": True,
-    }
-    assert control.take_pause_request() is False
+    assert result["ok"] is False
+    assert result["pause_pending"] is False
+    assert result["timed_out"] is True
+    assert result["command_state"] == "cancelled"
+    assert result["command_state_unknown"] is False
+    assert control.take_pause_request() is None
+
+
+def test_taken_pause_timeout_reports_unknown_and_late_completion_is_identified():
+    control = CollectorControl()
+    result_box: dict[str, dict] = {}
+    request = threading.Thread(
+        target=lambda: result_box.setdefault(
+            "result",
+            control.request_pause(timeout_seconds=0.05),
+        ),
+        daemon=True,
+    )
+    request.start()
+    assert control._wake_event.wait(timeout=1)
+    command_id = control.take_pause_request()
+    assert command_id is not None
+    request.join(timeout=1)
+
+    result = result_box["result"]
+    assert result["command_id"] == command_id
+    assert result["command_state"] == "unknown"
+    assert result["command_state_unknown"] is True
+    assert control.complete_pause(
+        command_id,
+        {"ok": True, "pause_pending": False},
+    ) is True
 
 
 def test_reset_command_is_acknowledged_once():
@@ -53,15 +78,22 @@ def test_reset_command_is_acknowledged_once():
 
     thread.start()
     assert control._wake_event.wait(timeout=1)
-    assert control.take_reset_request() is True
-    control.complete_reset({"ok": True, "reset_pending": False})
+    command_id = control.take_reset_request()
+    assert command_id is not None
+    assert control.complete_reset(
+        command_id,
+        {"ok": True, "reset_pending": False},
+    ) is True
     thread.join(timeout=2)
 
-    assert result_box["result"] == {"ok": True, "reset_pending": False}
-    assert control.take_reset_request() is False
+    assert result_box["result"]["ok"] is True
+    assert result_box["result"]["command_id"] == command_id
+    assert result_box["result"]["command_state"] == "completed"
+    assert control.take_reset_request() is None
 
 
 def test_long_poll_gap_rebases_instead_of_replaying_ticks():
+
     next_deadline = _sleep_until_next_poll(
         threading.Event(),
         None,
@@ -280,3 +312,24 @@ def test_kdf_rejects_excessive_resource_parameters():
             b"0" * 16,
             KdfParams(n=2**19, r=8, p=1),
         )
+
+def test_maintenance_unknown_command_state_remains_fail_closed(temp_db):
+    coordinator = SecureImportCoordinator()
+    settings_service.set_setting("user_paused", "false")
+    settings_service.set_setting("collector_status", "running")
+    coordinator.register_collector_pause_handler(
+        lambda timeout_seconds=5.0: {
+            "ok": False,
+            "pause_pending": False,
+            "command_state_unknown": True,
+            "command_state": "unknown",
+        }
+    )
+
+    with pytest.raises(SecureBackupError, match="pause_not_acknowledged"):
+        with coordinator.acquire(reason="unknown"):
+            pytest.fail("operation must not start")
+
+    assert coordinator.write_gate_active() is False
+    assert settings_service.get_bool_setting("user_paused", False) is True
+    assert settings_service.get_setting("collector_status", "") == "paused"

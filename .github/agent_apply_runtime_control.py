@@ -30,6 +30,7 @@ def replace_between(path: str, start: str, end: str, replacement: str) -> None:
     end_index = content.find(end, start_index)
     if end_index < 0:
         raise AssertionError(f"{path}: end marker missing: {end!r}")
+    end_index += len(end)
     write(path, content[:start_index] + replacement + content[end_index:])
 
 

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass, field
+from enum import Enum
 import threading
 import time
+import uuid
 from datetime import datetime, time as datetime_time
 from typing import Any, Callable
 
@@ -25,91 +28,143 @@ from .state_machine import CollectorStateMachine
 POLL_CADENCE_SECONDS = 1.0
 
 
+class CollectorCommandState(str, Enum):
+    PENDING = "pending"
+    TAKEN = "taken"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+    UNKNOWN = "unknown"
+
+
+@dataclass
+class _CollectorCommand:
+    command_id: str
+    kind: str
+    state: CollectorCommandState = CollectorCommandState.PENDING
+    done_event: threading.Event = field(default_factory=threading.Event)
+    result: dict[str, Any] = field(default_factory=dict)
+
+
 class CollectorControl:
-    """Small cancellable command channel owned by the runtime."""
+    """Cancellable command channel with identity and an explicit terminal state."""
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._wake_event = threading.Event()
-        self._pause_requested = False
-        self._pause_done = threading.Event()
-        self._pause_result: dict[str, Any] = {
-            "ok": False,
-            "pause_pending": False,
-        }
-        self._reset_requested = False
-        self._reset_done = threading.Event()
-        self._reset_result: dict[str, Any] = {
-            "ok": False,
-            "reset_pending": False,
-        }
+        self._commands: dict[str, _CollectorCommand] = {}
+        self._pending_ids: dict[str, str] = {}
 
     def request_pause(self, timeout_seconds: float = 5.0) -> dict[str, Any]:
-        with self._lock:
-            self._pause_requested = True
-            self._pause_done.clear()
-            self._pause_result = {"ok": False, "pause_pending": True}
-            self._wake_event.set()
-        if not self._pause_done.wait(timeout_seconds):
-            with self._lock:
-                self._pause_requested = False
-                self._refresh_wake_event_locked()
-            return {
-                "ok": False,
-                "pause_pending": False,
-                "timed_out": True,
-                "command_state_unknown": True,
-            }
-        with self._lock:
-            return dict(self._pause_result)
+        return self._request("pause", timeout_seconds)
 
-    def take_pause_request(self) -> bool:
-        with self._lock:
-            if not self._pause_requested:
-                return False
-            self._pause_requested = False
-            self._refresh_wake_event_locked()
-            return True
+    def take_pause_request(self) -> str | None:
+        return self._take("pause")
 
-    def complete_pause(self, result: dict[str, Any]) -> None:
-        with self._lock:
-            self._pause_result = dict(result)
-            self._pause_done.set()
+    def complete_pause(self, command_id: str, result: dict[str, Any]) -> bool:
+        return self._complete(command_id, "pause", result)
 
     def request_reset(self, timeout_seconds: float = 5.0) -> dict[str, Any]:
+        return self._request("reset", timeout_seconds)
+
+    def take_reset_request(self) -> str | None:
+        return self._take("reset")
+
+    def complete_reset(self, command_id: str, result: dict[str, Any]) -> bool:
+        return self._complete(command_id, "reset", result)
+
+    def _request(self, kind: str, timeout_seconds: float) -> dict[str, Any]:
+        command = _CollectorCommand(
+            command_id=uuid.uuid4().hex,
+            kind=kind,
+            result={"ok": False, f"{kind}_pending": True},
+        )
         with self._lock:
-            self._reset_requested = True
-            self._reset_done.clear()
-            self._reset_result = {"ok": False, "reset_pending": True}
+            previous_id = self._pending_ids.get(kind)
+            if previous_id:
+                previous = self._commands.get(previous_id)
+                if previous is not None and previous.state is CollectorCommandState.PENDING:
+                    return {
+                        "ok": False,
+                        f"{kind}_pending": True,
+                        "error": "command_already_pending",
+                        "command_id": previous.command_id,
+                        "command_state": previous.state.value,
+                        "command_state_unknown": False,
+                    }
+            self._commands[command.command_id] = command
+            self._pending_ids[kind] = command.command_id
             self._wake_event.set()
-        if not self._reset_done.wait(timeout_seconds):
+
+        if command.done_event.wait(max(0.0, float(timeout_seconds))):
             with self._lock:
-                self._reset_requested = False
+                return dict(command.result)
+
+        with self._lock:
+            if command.state is CollectorCommandState.COMPLETED:
+                return dict(command.result)
+            if command.state is CollectorCommandState.PENDING:
+                command.state = CollectorCommandState.CANCELLED
+                self._pending_ids.pop(kind, None)
                 self._refresh_wake_event_locked()
+                return {
+                    "ok": False,
+                    f"{kind}_pending": False,
+                    "timed_out": True,
+                    "command_id": command.command_id,
+                    "command_state": command.state.value,
+                    "command_state_unknown": False,
+                }
+            if command.state is CollectorCommandState.TAKEN:
+                command.state = CollectorCommandState.UNKNOWN
             return {
                 "ok": False,
-                "reset_pending": False,
+                f"{kind}_pending": False,
                 "timed_out": True,
-                "command_state_unknown": True,
+                "command_id": command.command_id,
+                "command_state": command.state.value,
+                "command_state_unknown": command.state is CollectorCommandState.UNKNOWN,
             }
-        with self._lock:
-            return dict(self._reset_result)
 
-    def take_reset_request(self) -> bool:
+    def _take(self, kind: str) -> str | None:
         with self._lock:
-            if not self._reset_requested:
-                return False
-            self._reset_requested = False
+            command_id = self._pending_ids.get(kind)
+            command = self._commands.get(command_id or "")
+            if command is None or command.state is not CollectorCommandState.PENDING:
+                self._pending_ids.pop(kind, None)
+                self._refresh_wake_event_locked()
+                return None
+            command.state = CollectorCommandState.TAKEN
+            self._pending_ids.pop(kind, None)
             self._refresh_wake_event_locked()
+            return command.command_id
+
+    def _complete(
+        self,
+        command_id: str,
+        kind: str,
+        result: dict[str, Any],
+    ) -> bool:
+        with self._lock:
+            command = self._commands.get(str(command_id or ""))
+            if command is None or command.kind != kind:
+                return False
+            if command.state not in {
+                CollectorCommandState.TAKEN,
+                CollectorCommandState.UNKNOWN,
+            }:
+                return False
+            command.state = CollectorCommandState.COMPLETED
+            command.result = {
+                **dict(result),
+                "command_id": command.command_id,
+                "command_state": command.state.value,
+                "command_state_unknown": False,
+            }
+            command.done_event.set()
             return True
 
-    def complete_reset(self, result: dict[str, Any]) -> None:
-        with self._lock:
-            self._reset_result = dict(result)
-            self._reset_done.set()
-
     def _refresh_wake_event_locked(self) -> None:
-        if self._pause_requested or self._reset_requested:
+        if self._pending_ids:
             self._wake_event.set()
         else:
             self._wake_event.clear()
@@ -197,10 +252,14 @@ def run_collector(
                 clipboard_service.prune_old_events()
                 prune_counter = 0
 
-            if control is not None and control.take_reset_request():
+            reset_command_id = control.take_reset_request() if control is not None else None
+            if reset_command_id is not None:
                 _set_clipboard_capture_enabled(adapter, False)
                 machine.reset_runtime_state("database_generation_changed")
-                control.complete_reset({"ok": True, "reset_pending": False})
+                control.complete_reset(
+                    reset_command_id,
+                    {"ok": True, "reset_pending": False},
+                )
                 next_poll_deadline = _sleep_until_next_poll(
                     stop_event,
                     control,
@@ -221,14 +280,18 @@ def run_collector(
                 heartbeat_counter = 0
 
             phase = "gate_check"
-            if control is not None and control.take_pause_request():
+            pause_command_id = control.take_pause_request() if control is not None else None
+            if pause_command_id is not None:
                 _set_clipboard_capture_enabled(adapter, False)
                 _pause_machine_then_expose(
                     machine,
                     now,
                     set_user_paused=True,
                 )
-                control.complete_pause({"ok": True, "pause_pending": False})
+                control.complete_pause(
+                    pause_command_id,
+                    {"ok": True, "pause_pending": False},
+                )
                 next_poll_deadline = _sleep_until_next_poll(
                     stop_event,
                     control,

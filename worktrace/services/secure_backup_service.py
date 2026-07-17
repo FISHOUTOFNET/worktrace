@@ -151,6 +151,7 @@ class _ImportGuardState:
     prior_user_paused: bool
     prior_collector_status: str
     succeeded: bool = False
+    fail_closed: bool = False
 
     def mark_succeeded(self) -> None:
         self.succeeded = True
@@ -201,6 +202,23 @@ class SecureImportCoordinator:
                 or DATABASE_WRITE_GATE.active()
             )
 
+    def _require_command_ack(
+        self,
+        result: dict[str, Any],
+        *,
+        kind: str,
+        state: _ImportGuardState,
+        reason: str,
+    ) -> None:
+        if bool(result.get("ok")):
+            return
+        if bool(result.get("command_state_unknown")):
+            state.fail_closed = True
+            set_setting("user_paused", "true")
+            set_setting("collector_status", "paused")
+            clear_runtime_activity_state(f"{reason}_{kind}_state_unknown")
+        raise SecureBackupError(f"collector_{kind}_not_acknowledged")
+
     @contextmanager
     def acquire(
         self,
@@ -234,16 +252,20 @@ class SecureImportCoordinator:
                 try:
                     if pause_handler is not None:
                         result = pause_handler(timeout_seconds=5.0)
-                        if not bool(result.get("ok")):
-                            raise SecureBackupError(
-                                "collector_pause_not_acknowledged"
-                            )
+                        self._require_command_ack(
+                            result,
+                            kind="pause",
+                            state=state,
+                            reason=reason,
+                        )
                     if reset_handler is not None:
                         result = reset_handler(timeout_seconds=5.0)
-                        if not bool(result.get("ok")):
-                            raise SecureBackupError(
-                                "collector_reset_not_acknowledged"
-                            )
+                        self._require_command_ack(
+                            result,
+                            kind="reset",
+                            state=state,
+                            reason=reason,
+                        )
 
                     set_setting("user_paused", "true")
                     set_setting("collector_status", "paused")
@@ -262,7 +284,7 @@ class SecureImportCoordinator:
                         reason,
                     )
                 except Exception as exc:
-                    if not state.succeeded:
+                    if not state.succeeded and not state.fail_closed:
                         set_setting(
                             "user_paused",
                             "true" if prior_user_paused else "false",

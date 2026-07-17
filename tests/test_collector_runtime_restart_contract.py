@@ -59,7 +59,7 @@ def test_start_collector_replaces_dead_thread_and_returns_structured_success(
             == "healthy"
         )
     finally:
-        runtime.stop_event.set()
+        runtime.request_shutdown()
         runtime._collector_thread.join(timeout=2)
 
 
@@ -80,3 +80,45 @@ def test_start_collector_reports_not_owned_and_stopping(temp_db):
         "ok": False,
         "error": "runtime_stopping",
     }
+
+def test_collector_start_failure_is_retryable_without_stopping_runtime(
+    temp_db,
+    monkeypatch,
+):
+    runtime = AppRuntime(SimpleNamespace(db_path="", log_path=""), adapter=object())
+    runtime.owns_application_instance = True
+    attempts = {"count": 0}
+
+    def fake_run_collector(
+        _adapter,
+        stop_event,
+        _control,
+        startup_ready_event,
+        startup_failed_event,
+    ):
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            startup_failed_event.set()
+            return
+        startup_ready_event.set()
+        stop_event.wait(2)
+
+    monkeypatch.setattr(app_runtime, "run_collector", fake_run_collector)
+
+    first = runtime.start_collector(startup_timeout_seconds=0.2)
+    assert first == {"ok": False, "error": "collector_start_failed"}
+    assert runtime.stop_event.is_set() is False
+    assert runtime.phase is app_runtime.RuntimePhase.RECOVERABLE_FAILURE
+
+    second = runtime.start_collector(startup_timeout_seconds=0.5)
+    try:
+        assert second == {
+            "ok": True,
+            "started": True,
+            "already_running": False,
+        }
+        assert attempts["count"] == 2
+    finally:
+        runtime.request_shutdown()
+        assert runtime._collector_thread is not None
+        runtime._collector_thread.join(timeout=2)
