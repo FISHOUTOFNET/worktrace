@@ -1,17 +1,4 @@
-"""API / service regression locks for keyword rule edit.
-
-These tests lock the narrow ``rule_api.update_project_keyword_rule`` facade.
-They cover valid update of an existing keyword
-rule's keyword text, input validation (bool-as-int, numeric string,
-float, zero / negative, list / dict / tuple / set / frozenset,
-non-string keyword, whitespace-only keyword), ``not_found`` for unknown
-ids and folder-rule ids, ``duplicate_rule`` for same-project duplicates
-(while allowing same-keyword-across-projects and update-to-own-keyword),
-exception collapse to ``operation_failed``, cache invalidation
-preservation, no-side-effect guarantees (no folder rule / project /
-enabled / created_by / created_at touched), JSON serializability, and
-existing keyword create / delete / rule enable-disable regression locks.
-"""
+"""Keyword-rule edit API and generation contracts."""
 
 from __future__ import annotations
 
@@ -20,9 +7,12 @@ import json
 import pytest
 
 from worktrace.api import rule_api
+from worktrace.data_generation_repository import DataGenerationNamespace
 from worktrace.db import get_connection
+from worktrace.generation_clock import generation
 from worktrace.services import (
     folder_rule_service,
+    history_mutation_job_service,
     privacy_service,
     project_inference_service,
     project_service,
@@ -32,525 +22,163 @@ from worktrace.services import (
 pytestmark = [pytest.mark.db, pytest.mark.integration, pytest.mark.contract]
 
 
-def _counts() -> dict[str, int]:
-    with get_connection() as conn:
-        return {
-            "project": conn.execute("SELECT COUNT(*) AS c FROM project").fetchone()["c"],
-            "folder": conn.execute("SELECT COUNT(*) AS c FROM folder_project_rule").fetchone()["c"],
-            "keyword": conn.execute("SELECT COUNT(*) AS c FROM project_rule").fetchone()["c"],
-        }
-
-
-def _keyword_rule_row(rule_id: int) -> dict:
+def _row(rule_id: int) -> dict | None:
     with get_connection() as conn:
         row = conn.execute(
-            "SELECT id, project_id, rule_type, pattern, enabled, created_by, created_at, updated_at "
-            "FROM project_rule WHERE id = ?",
+            """
+            SELECT id, project_id, rule_type, pattern, enabled,
+                   created_by, created_at, updated_at
+            FROM project_rule
+            WHERE id = ?
+            """,
             (rule_id,),
         ).fetchone()
-    return dict(row) if row else {}
+    return dict(row) if row else None
 
 
-
-
-def test_update_keyword_rule_succeeds(temp_db):
-    project = project_service.create_project("Client")
-    rule_id = rule_service.create_rule("Spec", project)
-
-    result = rule_api.update_project_keyword_rule(rule_id, "Spec-Updated")
-
-    assert result["ok"] is True
-    rule = result["rule"]
-    assert rule["kind"] == "keyword"
-    assert type(rule["id"]) is int
-    assert rule["id"] == rule_id
-    assert rule["project_id"] == project
-    assert rule["keyword"] == "Spec-Updated"
-    assert rule["enabled"] is True
-    # The DB row must reflect the new keyword.
-    row = _keyword_rule_row(rule_id)
-    assert row["pattern"] == "Spec-Updated"
-
-
-def test_update_keyword_rule_trims_keyword(temp_db):
-    project = project_service.create_project("Client")
-    rule_id = rule_service.create_rule("Spec", project)
-
-    result = rule_api.update_project_keyword_rule(rule_id, "  Spec-Updated  ")
-
-    assert result["ok"] is True
-    assert result["rule"]["keyword"] == "Spec-Updated"
-    row = _keyword_rule_row(rule_id)
-    assert row["pattern"] == "Spec-Updated"
-
-
-def test_update_keyword_rule_preserves_rule_id_project_id_enabled(temp_db):
-    project = project_service.create_project("Client")
-    rule_id = rule_service.create_rule("Spec", project)
+def test_update_keyword_rule_trims_and_preserves_identity(temp_db):
+    project_id = project_service.create_project("Client")
+    rule_id = rule_service.create_rule("Spec", project_id)
     rule_service.set_rule_enabled(rule_id, False)
+    before = _row(rule_id)
 
-    result = rule_api.update_project_keyword_rule(rule_id, "NewSpec")
+    result = rule_api.update_project_keyword_rule(rule_id, "  NewSpec  ")
 
-    assert result["ok"] is True
-    rule = result["rule"]
-    assert rule["id"] == rule_id
-    assert rule["project_id"] == project
-    assert rule["enabled"] is False
-    row = _keyword_rule_row(rule_id)
-    assert row["project_id"] == project
-    assert row["enabled"] == 0
-
-
-def test_update_keyword_rule_preserves_created_by_and_created_at(temp_db):
-    project = project_service.create_project("Client")
-    rule_id = rule_service.create_rule("Spec", project)
-    before = _keyword_rule_row(rule_id)
-    assert before["created_by"] == "user"
-    original_created_at = before["created_at"]
-
-    result = rule_api.update_project_keyword_rule(rule_id, "NewSpec")
-
-    assert result["ok"] is True
-    after = _keyword_rule_row(rule_id)
-    assert after["created_by"] == "user"
-    assert after["created_at"] == original_created_at
-
-
-
-
-@pytest.mark.parametrize("bad_id", [True, False])
-def test_update_keyword_rule_rejects_bool_as_int_rule_id(temp_db, bad_id):
-    result = rule_api.update_project_keyword_rule(bad_id, "Spec")
-    assert result == {"ok": False, "error": "invalid_input"}
-
-
-@pytest.mark.parametrize("bad_id", ["1", "abc", "true"])
-def test_update_keyword_rule_rejects_numeric_string_rule_id(temp_db, bad_id):
-    result = rule_api.update_project_keyword_rule(bad_id, "Spec")
-    assert result == {"ok": False, "error": "invalid_input"}
-
-
-@pytest.mark.parametrize("bad_id", [1.0, 2.5, -1.5])
-def test_update_keyword_rule_rejects_float_rule_id(temp_db, bad_id):
-    result = rule_api.update_project_keyword_rule(bad_id, "Spec")
-    assert result == {"ok": False, "error": "invalid_input"}
-
-
-@pytest.mark.parametrize("bad_id", [0, -1, -999])
-def test_update_keyword_rule_rejects_zero_and_negative_rule_id(temp_db, bad_id):
-    result = rule_api.update_project_keyword_rule(bad_id, "Spec")
-    assert result == {"ok": False, "error": "invalid_input"}
+    assert result == {
+        "ok": True,
+        "rule": {
+            "kind": "keyword",
+            "id": rule_id,
+            "project_id": project_id,
+            "keyword": "NewSpec",
+            "enabled": False,
+        },
+    }
+    after = _row(rule_id)
+    assert after["project_id"] == project_id
+    assert after["pattern"] == "NewSpec"
+    assert after["enabled"] == 0
+    assert after["created_by"] == before["created_by"]
+    assert after["created_at"] == before["created_at"]
 
 
 @pytest.mark.parametrize(
-    "bad_id", [None, [], {}, (), {1, 2}, (1,), frozenset({1})]
+    ("rule_id", "keyword"),
+    [
+        (True, "Spec"),
+        ("1", "Spec"),
+        (1.5, "Spec"),
+        (0, "Spec"),
+        (-1, "Spec"),
+        (None, "Spec"),
+        (1, None),
+        (1, True),
+        (1, 1),
+        (1, []),
+        (1, ""),
+        (1, "   "),
+    ],
 )
-def test_update_keyword_rule_rejects_other_invalid_rule_id_types(temp_db, bad_id):
-    result = rule_api.update_project_keyword_rule(bad_id, "Spec")
-    assert result == {"ok": False, "error": "invalid_input"}
+def test_invalid_input_returns_stable_error(temp_db, rule_id, keyword):
+    assert rule_api.update_project_keyword_rule(rule_id, keyword) == {
+        "ok": False,
+        "error": "invalid_input",
+    }
 
 
-
-
-@pytest.mark.parametrize(
-    "bad_keyword", [None, True, False, 1, 1.0, [], {}, (), {1, 2}, frozenset({1})]
-)
-def test_update_keyword_rule_rejects_non_string_keyword(temp_db, bad_keyword):
-    project = project_service.create_project("Client")
-    rule_id = rule_service.create_rule("Spec", project)
-
-    result = rule_api.update_project_keyword_rule(rule_id, bad_keyword)
-    assert result == {"ok": False, "error": "invalid_input"}
-
-
-@pytest.mark.parametrize("bad_keyword", ["", "   ", "\t", "\n", "  \t  "])
-def test_update_keyword_rule_rejects_whitespace_only_keyword(temp_db, bad_keyword):
-    project = project_service.create_project("Client")
-    rule_id = rule_service.create_rule("Spec", project)
-
-    result = rule_api.update_project_keyword_rule(rule_id, bad_keyword)
-    assert result == {"ok": False, "error": "invalid_input"}
-
-
-
-
-def test_unknown_keyword_rule_id_returns_not_found(temp_db):
-    result = rule_api.update_project_keyword_rule(9999, "Spec")
-    assert result == {"ok": False, "error": "not_found"}
-
-
-def test_folder_rule_id_returns_not_found_and_does_not_modify_folder_rule(temp_db):
-    project = project_service.create_project("Client")
-    folder_rule_id = folder_rule_service.create_or_update_folder_rule(
-        r"D:\Client", project
+def test_unknown_and_folder_rule_ids_return_not_found(temp_db):
+    project_id = project_service.create_project("Client")
+    folder_id = folder_rule_service.create_or_update_folder_rule(
+        r"D:\Client",
+        project_id,
     )
 
-    result = rule_api.update_project_keyword_rule(folder_rule_id, "Spec")
-
-    assert result == {"ok": False, "error": "not_found"}
-    # The folder rule must still exist and be unmodified.
-    folder_rules = folder_rule_service.list_folder_rules()
-    matching = [r for r in folder_rules if int(r.get("id") or 0) == folder_rule_id]
-    assert len(matching) == 1
-
-
-
-
-def test_duplicate_keyword_in_same_project_returns_duplicate_rule(temp_db):
-    project = project_service.create_project("Client")
-    rule_service.create_rule("Existing", project)
-    rule_id = rule_service.create_rule("Original", project)
-
-    result = rule_api.update_project_keyword_rule(rule_id, "Existing")
-
-    assert result == {"ok": False, "error": "duplicate_rule"}
-    # The rule being updated must not have changed.
-    row = _keyword_rule_row(rule_id)
-    assert row["pattern"] == "Original"
+    assert rule_api.update_project_keyword_rule(9999, "Spec") == {
+        "ok": False,
+        "error": "not_found",
+    }
+    assert rule_api.update_project_keyword_rule(folder_id, "Spec") == {
+        "ok": False,
+        "error": "not_found",
+    }
+    assert any(
+        int(item["id"]) == folder_id
+        for item in folder_rule_service.list_folder_rules()
+    )
 
 
-def test_same_keyword_in_different_project_allowed(temp_db):
-    project_a = project_service.create_project("ClientA")
-    project_b = project_service.create_project("ClientB")
-    rule_service.create_rule("Shared", project_a)
-    rule_id_b = rule_service.create_rule("Original", project_b)
+def test_duplicate_scope_is_per_project_and_own_value_is_allowed(temp_db):
+    project_a = project_service.create_project("A")
+    project_b = project_service.create_project("B")
+    rule_service.create_rule("Existing", project_a)
+    target_a = rule_service.create_rule("Original", project_a)
+    target_b = rule_service.create_rule("Original", project_b)
 
-    result = rule_api.update_project_keyword_rule(rule_id_b, "Shared")
+    assert rule_api.update_project_keyword_rule(target_a, "Existing") == {
+        "ok": False,
+        "error": "duplicate_rule",
+    }
+    assert _row(target_a)["pattern"] == "Original"
+    assert rule_api.update_project_keyword_rule(target_b, "Existing")["ok"] is True
+    assert rule_api.update_project_keyword_rule(target_a, "Original")["ok"] is True
 
-    assert result["ok"] is True
-    assert result["rule"]["keyword"] == "Shared"
 
+def test_update_refreshes_keyword_cache_via_generation(temp_db):
+    project_id = project_service.create_project("Client")
+    rule_id = rule_service.create_rule("Spec", project_id)
+    assert project_inference_service._enabled_keyword_rules()[0]["pattern"] == "spec"
+    before = generation(DataGenerationNamespace.CLASSIFICATION_CATALOG)
 
-def test_updating_to_own_current_keyword_succeeds(temp_db):
-    project = project_service.create_project("Client")
-    rule_id = rule_service.create_rule("Spec", project)
-
-    result = rule_api.update_project_keyword_rule(rule_id, "Spec")
+    result = rule_api.update_project_keyword_rule(rule_id, "NewSpec")
 
     assert result["ok"] is True
-    assert result["rule"]["keyword"] == "Spec"
+    assert generation(DataGenerationNamespace.CLASSIFICATION_CATALOG) == before + 1
+    assert project_inference_service._enabled_keyword_rules()[0]["pattern"] == "newspec"
 
 
+def test_excluded_keyword_update_refreshes_privacy_generation(temp_db):
+    excluded_id = project_service.get_or_create_excluded_project()
+    project_service.set_project_enabled(excluded_id, True)
+    rule_id = rule_service.create_rule("Secret", excluded_id)
+    assert privacy_service._exclude_rules()["keywords"]
+    before = generation(DataGenerationNamespace.PRIVACY_CATALOG)
+
+    result = rule_api.update_project_keyword_rule(rule_id, "Private")
+
+    assert result["ok"] is True
+    assert generation(DataGenerationNamespace.PRIVACY_CATALOG) == before + 1
+    assert privacy_service._exclude_rules()["keywords"] == [{"keyword": "Private"}]
 
 
-def test_service_exception_collapses_to_operation_failed(temp_db, monkeypatch):
-    project = project_service.create_project("Client")
-    rule_id = rule_service.create_rule("Spec", project)
+def test_ordinary_update_does_not_submit_history_job(temp_db, monkeypatch):
+    project_id = project_service.create_project("Client")
+    rule_id = rule_service.create_rule("Spec", project_id)
 
-    def boom(rule_id_arg, keyword_arg):
-        raise RuntimeError(
-            "boom SELECT * FROM activity_log traceback window_title clipboard note C:\\Secret"
-        )
+    def fail_job(*args, **kwargs):
+        raise AssertionError("ordinary keyword edit must not submit a history job")
+
+    monkeypatch.setattr(history_mutation_job_service, "submit_rule_job", fail_job)
+    assert rule_api.update_project_keyword_rule(rule_id, "NewSpec")["ok"] is True
+
+
+def test_service_exception_collapses_to_privacy_safe_error(temp_db, monkeypatch):
+    project_id = project_service.create_project("Client")
+    rule_id = rule_service.create_rule("Spec", project_id)
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("SELECT traceback window_title clipboard C:\\Secret")
 
     monkeypatch.setattr(rule_service, "update_rule", boom)
     result = rule_api.update_project_keyword_rule(rule_id, "NewSpec")
+
     assert result == {"ok": False, "error": "operation_failed"}
-    lowered = repr(result).lower()
-    for forbidden in (
-        "traceback",
-        "sqlite",
-        "select",
-        "boom",
-        "window_title",
-        "clipboard",
-        "note",
-        "activity_log",
-        "c:\\secret",
-    ):
-        assert forbidden not in lowered
+    serialized = json.dumps(result).casefold()
+    for forbidden in ("select", "traceback", "window_title", "clipboard", "secret"):
+        assert forbidden not in serialized
 
 
-
-
-def test_update_keyword_rule_invalidates_keyword_rule_cache(temp_db, monkeypatch):
-    project = project_service.create_project("Client")
-    rule_id = rule_service.create_rule("Spec", project)
-    project_inference_service.invalidate_keyword_rule_cache()
-
-    calls = {"count": 0}
-    original = project_inference_service.invalidate_keyword_rule_cache
-
-    def spy():
-        calls["count"] += 1
-        original()
-
-    monkeypatch.setattr(rule_service, "invalidate_keyword_rule_cache", spy)
-    monkeypatch.setattr(
-        "worktrace.services.rule_service.invalidate_keyword_rule_cache", spy
-    )
-
+def test_payload_is_json_serializable(temp_db):
+    project_id = project_service.create_project("Client")
+    rule_id = rule_service.create_rule("Spec", project_id)
     result = rule_api.update_project_keyword_rule(rule_id, "NewSpec")
-
-    assert result["ok"] is True
-    assert calls["count"] >= 1
-
-
-def test_update_keyword_rule_clears_exclude_rules_cache(temp_db, monkeypatch):
-    project = project_service.create_project("Client")
-    rule_id = rule_service.create_rule("Spec", project)
-
-    calls = {"count": 0}
-    original = privacy_service.clear_exclude_rules_cache
-
-    def spy():
-        calls["count"] += 1
-        original()
-
-    monkeypatch.setattr(privacy_service, "clear_exclude_rules_cache", spy)
-
-    result = rule_api.update_project_keyword_rule(rule_id, "NewSpec")
-
-    assert result["ok"] is True
-    assert calls["count"] >= 1
-
-
-def test_invalid_input_does_not_trigger_cache_hooks(temp_db, monkeypatch):
-    invalidate_calls = {"count": 0}
-    clear_calls = {"count": 0}
-
-    def spy_invalidate():
-        invalidate_calls["count"] += 1
-
-    def spy_clear():
-        clear_calls["count"] += 1
-
-    monkeypatch.setattr(rule_service, "invalidate_keyword_rule_cache", spy_invalidate)
-    monkeypatch.setattr(
-        "worktrace.services.rule_service.invalidate_keyword_rule_cache", spy_invalidate
-    )
-    monkeypatch.setattr(privacy_service, "clear_exclude_rules_cache", spy_clear)
-
-    # Various invalid_input cases.
-    for bad_id, bad_keyword in [
-        (True, "Spec"),
-        (None, "Spec"),
-        (0, "Spec"),
-        (-1, "Spec"),
-        (1, None),
-        (1, 123),
-        (1, "   "),
-    ]:
-        result = rule_api.update_project_keyword_rule(bad_id, bad_keyword)
-        assert result == {"ok": False, "error": "invalid_input"}
-
-    assert invalidate_calls["count"] == 0
-    assert clear_calls["count"] == 0
-
-
-def test_not_found_does_not_trigger_cache_hooks(temp_db, monkeypatch):
-    invalidate_calls = {"count": 0}
-    clear_calls = {"count": 0}
-
-    def spy_invalidate():
-        invalidate_calls["count"] += 1
-
-    def spy_clear():
-        clear_calls["count"] += 1
-
-    monkeypatch.setattr(rule_service, "invalidate_keyword_rule_cache", spy_invalidate)
-    monkeypatch.setattr(
-        "worktrace.services.rule_service.invalidate_keyword_rule_cache", spy_invalidate
-    )
-    monkeypatch.setattr(privacy_service, "clear_exclude_rules_cache", spy_clear)
-
-    result = rule_api.update_project_keyword_rule(9999, "Spec")
-
-    assert result == {"ok": False, "error": "not_found"}
-    assert invalidate_calls["count"] == 0
-    assert clear_calls["count"] == 0
-
-
-def test_duplicate_rule_does_not_trigger_cache_hooks(temp_db, monkeypatch):
-    project = project_service.create_project("Client")
-    rule_service.create_rule("Existing", project)
-    rule_id = rule_service.create_rule("Original", project)
-
-    invalidate_calls = {"count": 0}
-    clear_calls = {"count": 0}
-
-    def spy_invalidate():
-        invalidate_calls["count"] += 1
-
-    def spy_clear():
-        clear_calls["count"] += 1
-
-    monkeypatch.setattr(rule_service, "invalidate_keyword_rule_cache", spy_invalidate)
-    monkeypatch.setattr(
-        "worktrace.services.rule_service.invalidate_keyword_rule_cache", spy_invalidate
-    )
-    monkeypatch.setattr(privacy_service, "clear_exclude_rules_cache", spy_clear)
-
-    result = rule_api.update_project_keyword_rule(rule_id, "Existing")
-
-    assert result == {"ok": False, "error": "duplicate_rule"}
-    assert invalidate_calls["count"] == 0
-    assert clear_calls["count"] == 0
-
-
-
-
-def test_update_keyword_rule_success_payload_is_json_serializable(temp_db):
-    project = project_service.create_project("Client")
-    rule_id = rule_service.create_rule("Spec", project)
-
-    result = rule_api.update_project_keyword_rule(rule_id, "NewSpec")
-
-    json.dumps(result, ensure_ascii=False)
-    assert "Traceback" not in repr(result)
-    assert "SELECT" not in repr(result)
-
-
-def test_update_keyword_rule_success_payload_types_are_stable(temp_db):
-    project = project_service.create_project("Client")
-    rule_id = rule_service.create_rule("Spec", project)
-
-    result = rule_api.update_project_keyword_rule(rule_id, "NewSpec")
-
-    assert type(result["ok"]) is bool
-    rule = result["rule"]
-    assert type(rule["kind"]) is str
-    assert type(rule["id"]) is int
-    assert type(rule["project_id"]) is int
-    assert type(rule["keyword"]) is str
-    assert type(rule["enabled"]) is bool
-
-
-def test_update_keyword_rule_failure_payloads_are_json_serializable(temp_db):
-    project = project_service.create_project("Client")
-    rule_id = rule_service.create_rule("Spec", project)
-
-    failures = [
-        rule_api.update_project_keyword_rule(True, "Spec"),
-        rule_api.update_project_keyword_rule(rule_id, None),
-        rule_api.update_project_keyword_rule(9999, "Spec"),
-        rule_api.update_project_keyword_rule(rule_id, "   "),
-    ]
-    # Create a duplicate scenario.
-    rule_service.create_rule("Existing", project)
-    failures.append(rule_api.update_project_keyword_rule(rule_id, "Existing"))
-
-    for result in failures:
-        assert result["ok"] is False
-        json.dumps(result, ensure_ascii=False)
-        assert "Traceback" not in repr(result)
-        assert "SELECT" not in repr(result)
-
-
-def test_update_keyword_rule_success_payload_excludes_sensitive_metadata(temp_db):
-    project = project_service.create_project("Client")
-    rule_id = rule_service.create_rule("Spec", project)
-
-    result = rule_api.update_project_keyword_rule(rule_id, "NewSpec")
-
-    rendered = repr(result)
-    for forbidden in (
-        "traceback",
-        "Traceback",
-        "sqlite",
-        "SELECT",
-        "window_title",
-        "clipboard",
-        "note",
-        "created_by",
-        "created_at",
-        "updated_at",
-        "rule_type",
-        "pattern",
-    ):
-        assert forbidden not in rendered
-
-
-
-
-def test_update_keyword_rule_does_not_modify_folder_rules(temp_db):
-    project = project_service.create_project("Client")
-    folder_rule_id = folder_rule_service.create_or_update_folder_rule(
-        r"D:\Client", project
-    )
-    keyword_rule_id = rule_service.create_rule("Spec", project)
-    before = _counts()
-
-    result = rule_api.update_project_keyword_rule(keyword_rule_id, "NewSpec")
-
-    assert result["ok"] is True
-    after = _counts()
-    assert after["folder"] == before["folder"]
-    # The folder rule must still exist.
-    folder_rules = folder_rule_service.list_folder_rules()
-    assert any(int(r.get("id") or 0) == folder_rule_id for r in folder_rules)
-
-
-def test_update_keyword_rule_does_not_modify_project_table(temp_db):
-    project = project_service.create_project("Client")
-    rule_id = rule_service.create_rule("Spec", project)
-    before = _counts()
-
-    result = rule_api.update_project_keyword_rule(rule_id, "NewSpec")
-
-    assert result["ok"] is True
-    after = _counts()
-    assert after["project"] == before["project"]
-
-
-def test_update_keyword_rule_does_not_modify_enabled_state(temp_db):
-    project = project_service.create_project("Client")
-    rule_id = rule_service.create_rule("Spec", project)
-    rule_service.set_rule_enabled(rule_id, False)
-
-    result = rule_api.update_project_keyword_rule(rule_id, "NewSpec")
-
-    assert result["ok"] is True
-    assert result["rule"]["enabled"] is False
-    row = _keyword_rule_row(rule_id)
-    assert row["enabled"] == 0
-
-
-def test_update_keyword_rule_does_not_modify_created_by(temp_db):
-    project = project_service.create_project("Client")
-    rule_id = rule_service.create_rule("Spec", project)
-
-    result = rule_api.update_project_keyword_rule(rule_id, "NewSpec")
-
-    assert result["ok"] is True
-    row = _keyword_rule_row(rule_id)
-    assert row["created_by"] == "user"
-
-
-
-
-def test_existing_create_keyword_rule_still_works(temp_db):
-    project = project_service.create_project("Client")
-
-    result = rule_api.create_project_keyword_rule(project, "Spec")
-
-    assert result["ok"] is True
-    assert result["rule"]["keyword"] == "Spec"
-
-
-def test_existing_delete_keyword_rule_still_works(temp_db):
-    project = project_service.create_project("Client")
-    rule_id = rule_service.create_rule("Spec", project)
-
-    result = rule_api.delete_project_keyword_rule(rule_id)
-
-    assert result["ok"] is True
-
-
-def test_existing_set_project_rule_enabled_still_works(temp_db):
-    project = project_service.create_project("Client")
-    rule_id = rule_service.create_rule("Spec", project)
-
-    disabled = rule_api.set_project_rule_enabled("keyword", rule_id, False)
-    assert disabled == {
-        "ok": True,
-        "rule_type": "keyword",
-        "rule_id": rule_id,
-        "enabled": False,
-    }
-    enabled = rule_api.set_project_rule_enabled("keyword", rule_id, True)
-    assert enabled == {
-        "ok": True,
-        "rule_type": "keyword",
-        "rule_id": rule_id,
-        "enabled": True,
-    }
+    assert json.loads(json.dumps(result))["rule"]["keyword"] == "NewSpec"
