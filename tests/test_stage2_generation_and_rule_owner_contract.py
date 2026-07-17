@@ -125,6 +125,6 @@ def test_clear_and_replacement_rely_on_single_generation_owners() -> None:
 
 
 def test_stage2_checkpoint_marker() -> None:
-    """Validate Stage 2 after project-delete rollback contract migration."""
+    """Validate the final Stage 2 owner and generation checkpoint."""
 
     assert True
