@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from ..api.app_api import ApplicationControl
 from .bridge_dialogs import BridgeDialogMixin
@@ -11,9 +11,6 @@ from .bridge_rules import ProjectRulesBridgeMixin
 from .bridge_settings import SettingsBridgeMixin
 from .bridge_statistics import StatisticsBridgeMixin
 from .bridge_timeline import TimelineBridgeMixin
-
-if TYPE_CHECKING:
-    from ..runtime.maintenance_coordinator import RuntimeMaintenanceCoordinator
 
 SHIPPING_METHODS = frozenset(
     {
@@ -94,7 +91,7 @@ class WebViewBridge(
     def __init__(
         self,
         application_control: ApplicationControl | None = None,
-        maintenance: "RuntimeMaintenanceCoordinator | None" = None,
+        maintenance: Any | None = None,
     ) -> None:
         self._window: Any = None
         self.application_control = application_control or ApplicationControl(None)
