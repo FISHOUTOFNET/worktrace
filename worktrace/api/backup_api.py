@@ -1,12 +1,9 @@
-"""Encrypted backup facade for the UI.
-
-The facade acquires a consistent runtime snapshot for export. Import remains
-owned by the secure backup service's destructive replacement coordinator.
-"""
+"""Encrypted backup facade with explicit runtime capabilities."""
 
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from ..services import secure_backup_service
 from ..services.runtime_snapshot_barrier import consistent_snapshot
@@ -21,8 +18,13 @@ from ..services.secure_backup_service import (
 )
 
 
-def export_encrypted_backup(output_path: str | Path, passphrase: str) -> str:
-    with consistent_snapshot():
+def export_encrypted_backup(
+    output_path: str | Path,
+    passphrase: str,
+    *,
+    quiesce_handler: Any,
+) -> str:
+    with consistent_snapshot(quiesce_handler):
         return str(
             secure_backup_service.export_encrypted_backup(
                 output_path,
@@ -35,8 +37,17 @@ def import_encrypted_backup(
     input_path: str | Path,
     passphrase: str,
     mode: str = "replace",
+    *,
+    pause_handler: Any | None = None,
+    reset_handler: Any | None = None,
 ) -> ImportResult:
-    return secure_backup_service.import_encrypted_backup(input_path, passphrase, mode)
+    return secure_backup_service.import_encrypted_backup(
+        input_path,
+        passphrase,
+        mode,
+        pause_handler=pause_handler,
+        reset_handler=reset_handler,
+    )
 
 
 def parse_encrypted_backup_manifest(input_path: str | Path) -> BackupManifestInfo:
