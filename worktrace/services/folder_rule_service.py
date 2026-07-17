@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+
 from ..constants import EXCLUDED_PROJECT
 from ..data_generation_repository import DataGenerationNamespace
 from ..db import dict_rows, get_connection, get_db_key, now_str
@@ -12,7 +14,10 @@ from ..path_utils import (
     normalize_path_key,
 )
 
-_FOLDER_RULE_CACHE: dict[tuple[str, int], list[dict]] = {}
+_FOLDER_RULE_CACHE_LOCK = threading.RLock()
+_FOLDER_RULE_CACHE_DATABASE_KEY: str | None = None
+_FOLDER_RULE_CACHE_GENERATION: int | None = None
+_FOLDER_RULE_CACHE: list[dict] | None = None
 
 
 def _catalog_uow() -> DomainUnitOfWork:
@@ -35,37 +40,29 @@ def _add_privacy_effect_for_project_id(
 def invalidate_folder_rule_cache() -> None:
     """Test/reconfiguration hook; catalog writes invalidate by generation."""
 
-    database_key = get_db_key()
-    for cache_key in list(_FOLDER_RULE_CACHE):
-        if cache_key[0] == database_key:
-            _FOLDER_RULE_CACHE.pop(cache_key, None)
+    global _FOLDER_RULE_CACHE_DATABASE_KEY
+    global _FOLDER_RULE_CACHE_GENERATION
+    global _FOLDER_RULE_CACHE
+    with _FOLDER_RULE_CACHE_LOCK:
+        _FOLDER_RULE_CACHE_DATABASE_KEY = None
+        _FOLDER_RULE_CACHE_GENERATION = None
+        _FOLDER_RULE_CACHE = None
 
 
-def _enabled_folder_rules(conn=None) -> list[dict]:
-    sql = """
+def _load_enabled_folder_rules(conn) -> list[dict]:
+    rows = conn.execute(
+        """
         SELECT fpr.*, p.name AS project_name, p.enabled AS project_enabled,
                p.is_archived AS project_is_archived,
                p.is_deleted AS project_is_deleted
         FROM folder_project_rule fpr
         LEFT JOIN project p ON p.id = fpr.project_id
         WHERE fpr.enabled = 1
-    """
-    cache_key: tuple[str, int] | None = None
-    if conn is None:
-        cache_key = (
-            get_db_key(),
-            generation(DataGenerationNamespace.CLASSIFICATION_CATALOG),
-        )
-        cached = _FOLDER_RULE_CACHE.get(cache_key)
-        if cached is not None:
-            return [dict(row) for row in cached]
-        with get_connection() as read_conn:
-            rows = read_conn.execute(sql).fetchall()
-    else:
-        rows = conn.execute(sql).fetchall()
+        """
+    ).fetchall()
     from . import project_lifecycle_policy
 
-    rules = [
+    return [
         row
         for row in dict_rows(rows)
         if project_lifecycle_policy.project_available_for_inference(
@@ -77,9 +74,34 @@ def _enabled_folder_rules(conn=None) -> list[dict]:
             }
         )
     ]
-    if cache_key is not None:
-        _FOLDER_RULE_CACHE[cache_key] = rules
-    return [dict(row) for row in rules]
+
+
+def _enabled_folder_rules(conn=None) -> list[dict]:
+    if conn is not None:
+        return [dict(row) for row in _load_enabled_folder_rules(conn)]
+
+    global _FOLDER_RULE_CACHE_DATABASE_KEY
+    global _FOLDER_RULE_CACHE_GENERATION
+    global _FOLDER_RULE_CACHE
+    while True:
+        database_key = get_db_key()
+        current_generation = generation(DataGenerationNamespace.CLASSIFICATION_CATALOG)
+        with _FOLDER_RULE_CACHE_LOCK:
+            if (
+                _FOLDER_RULE_CACHE_DATABASE_KEY == database_key
+                and _FOLDER_RULE_CACHE_GENERATION == current_generation
+                and _FOLDER_RULE_CACHE is not None
+            ):
+                return [dict(row) for row in _FOLDER_RULE_CACHE]
+        with get_connection() as read_conn:
+            rules = _load_enabled_folder_rules(read_conn)
+        if generation(DataGenerationNamespace.CLASSIFICATION_CATALOG) != current_generation:
+            continue
+        with _FOLDER_RULE_CACHE_LOCK:
+            _FOLDER_RULE_CACHE_DATABASE_KEY = database_key
+            _FOLDER_RULE_CACHE_GENERATION = current_generation
+            _FOLDER_RULE_CACHE = [dict(row) for row in rules]
+        return [dict(row) for row in rules]
 
 
 def create_or_update_folder_rule(
@@ -336,7 +358,7 @@ def _activity_matches_folder(
         if path_hint and looks_like_anchor_file_path(path_hint):
             return is_path_under_folder(path_hint, folder_path, recursive)
     if rule_id is not None:
-        from .folder_index_service import activity_matches_rule_by_index
+        from .folder_index_query_service import activity_matches_rule_by_index
 
         return activity_matches_rule_by_index(activity, rule_id)
     return False
