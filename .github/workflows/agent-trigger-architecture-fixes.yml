@@ -36,6 +36,7 @@ jobs:
         continue-on-error: true
         run: |
           python .github/agent_apply_runtime_bridge.py *> agent-apply.log
+          if ($LASTEXITCODE -eq 0) { python .github/agent_fix_runtime_bridge_tests.py *>> agent-apply.log }
           $code = $LASTEXITCODE
           Get-Content -LiteralPath agent-apply.log -Tail 200 | ForEach-Object { Write-Host $_ }
           if ($code -ne 0) { exit $code }
@@ -98,7 +99,7 @@ jobs:
         if: steps.migrate.outcome == 'success' && steps.validate.outcome == 'success'
         shell: pwsh
         run: |
-          git rm .github/workflows/agent-apply-architecture-fixes.yml .github/workflows/agent-trigger-architecture-fixes.yml .github/agent_apply_runtime_bridge.py
+          git rm .github/workflows/agent-apply-architecture-fixes.yml .github/workflows/agent-trigger-architecture-fixes.yml .github/agent_apply_runtime_bridge.py .github/agent_fix_runtime_bridge_tests.py
           git add -A
           git commit -m "Complete canonical runtime and fixed bridge cutover"
           git push origin HEAD:agent/canonical-architecture-consolidation
