@@ -21,11 +21,13 @@ from ..db import (
     expected_schema_fingerprint,
     get_connection,
     now_str,
+    read_internal_schema_sql,
     read_schema_indexes_sql,
     read_schema_sql,
     schema_fingerprint,
     seed_defaults,
 )
+from ..mutation_effects import MutationEffect, mutation_effects
 from ..security.backup_format import (
     BackupFormatError,
     BackupManifest,
@@ -164,32 +166,12 @@ class SecureImportPhase(str, Enum):
 
 
 class SecureImportCoordinator:
-    """Single owner for DRAINING, pause/reset, and exclusive replacement."""
+    """Own one destructive-maintenance lease without storing runtime callbacks."""
 
     def __init__(self) -> None:
         self._maintenance_lock = threading.Lock()
         self._state_lock = threading.Lock()
         self._phase = SecureImportPhase.IDLE
-        self._pause_handler: Any = None
-        self._reset_handler: Any = None
-
-    def register_collector_pause_handler(self, handler: Any) -> None:
-        with self._state_lock:
-            self._pause_handler = handler
-
-    def clear_collector_pause_handler(self, handler: Any | None = None) -> None:
-        with self._state_lock:
-            if handler is None or self._pause_handler == handler:
-                self._pause_handler = None
-
-    def register_collector_reset_handler(self, handler: Any) -> None:
-        with self._state_lock:
-            self._reset_handler = handler
-
-    def clear_collector_reset_handler(self, handler: Any | None = None) -> None:
-        with self._state_lock:
-            if handler is None or self._reset_handler == handler:
-                self._reset_handler = None
 
     def phase(self) -> SecureImportPhase:
         with self._state_lock:
@@ -223,6 +205,8 @@ class SecureImportCoordinator:
     def acquire(
         self,
         *,
+        pause_handler: Any | None = None,
+        reset_handler: Any | None = None,
         reason: str = "secure_import",
     ) -> Iterator[_ImportGuardState]:
         if not self._maintenance_lock.acquire(blocking=False):
@@ -232,10 +216,6 @@ class SecureImportCoordinator:
             )
 
         try:
-            with self._state_lock:
-                pause_handler = self._pause_handler
-                reset_handler = self._reset_handler
-
             with DATABASE_WRITE_GATE.draining() as lease:
                 with self._state_lock:
                     self._phase = SecureImportPhase.DRAINING
@@ -251,26 +231,28 @@ class SecureImportCoordinator:
 
                 try:
                     if pause_handler is not None:
-                        result = pause_handler(timeout_seconds=5.0)
                         self._require_command_ack(
-                            result,
+                            pause_handler(timeout_seconds=5.0),
                             kind="pause",
                             state=state,
                             reason=reason,
                         )
+                    elif prior_collector_status == "running":
+                        raise SecureBackupError("collector_pause_capability_required")
+
                     if reset_handler is not None:
-                        result = reset_handler(timeout_seconds=5.0)
                         self._require_command_ack(
-                            result,
+                            reset_handler(timeout_seconds=5.0),
                             kind="reset",
                             state=state,
                             reason=reason,
                         )
+                    elif prior_collector_status == "running":
+                        raise SecureBackupError("collector_reset_capability_required")
 
                     set_setting("user_paused", "true")
                     set_setting("collector_status", "paused")
                     clear_runtime_activity_state(f"{reason}_guard_enter")
-
                     drain_existing_writers()
                     lease.promote()
                     with self._state_lock:
@@ -307,22 +289,6 @@ class SecureImportCoordinator:
 SECURE_IMPORT_COORDINATOR = SecureImportCoordinator()
 
 
-def register_collector_pause_handler(handler: Any) -> None:
-    SECURE_IMPORT_COORDINATOR.register_collector_pause_handler(handler)
-
-
-def clear_collector_pause_handler(handler: Any | None = None) -> None:
-    SECURE_IMPORT_COORDINATOR.clear_collector_pause_handler(handler)
-
-
-def register_collector_reset_handler(handler: Any) -> None:
-    SECURE_IMPORT_COORDINATOR.register_collector_reset_handler(handler)
-
-
-def clear_collector_reset_handler(handler: Any | None = None) -> None:
-    SECURE_IMPORT_COORDINATOR.clear_collector_reset_handler(handler)
-
-
 def is_secure_import_in_progress() -> bool:
     return SECURE_IMPORT_COORDINATOR.write_gate_active()
 
@@ -343,6 +309,9 @@ def import_encrypted_backup(
     input_path: str | Path,
     passphrase: str,
     mode: str = "replace",
+    *,
+    pause_handler: Any | None = None,
+    reset_handler: Any | None = None,
 ) -> ImportResult:
     if not passphrase:
         raise SecureBackupError("passphrase is required")
@@ -351,20 +320,22 @@ def import_encrypted_backup(
 
     input_file = Path(input_path)
     _require_bounded_backup_file(input_file)
-    with SECURE_IMPORT_COORDINATOR.acquire(reason="secure_import") as guard:
+    with SECURE_IMPORT_COORDINATOR.acquire(
+        reason="secure_import",
+        pause_handler=pause_handler,
+        reset_handler=reset_handler,
+    ) as guard:
         blob = input_file.read_bytes()
         payload = _read_and_decrypt(blob, passphrase)
         data = _parse_and_validate_payload(payload)
-        imported_counts = _replace_import(data)
+        with mutation_effects(
+            MutationEffect.DATABASE_REPLACEMENT,
+            MutationEffect.REPORT_STRUCTURE,
+        ):
+            imported_counts = _replace_import(data)
+        _invalidate_caches()
         guard.mark_succeeded()
 
-    try:
-        _invalidate_caches()
-    except Exception as exc:
-        logging.warning(
-            "encrypted backup cache invalidation failed exc_type=%s",
-            type(exc).__name__,
-        )
     logging.info(
         "encrypted backup import success mode=%s tables=%d",
         mode,
@@ -486,6 +457,7 @@ def _replace_import(data: dict[str, Any]) -> dict[str, int]:
         staging.execute("PRAGMA foreign_keys = ON")
         try:
             staging.executescript(read_schema_sql())
+            staging.executescript(read_internal_schema_sql())
             staging.executescript(read_schema_indexes_sql())
             staging.execute(f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION}")
             imported = _load_import_tables(staging, data["tables"])
@@ -691,9 +663,5 @@ __all__ = [
     "export_encrypted_backup",
     "import_encrypted_backup",
     "is_secure_import_in_progress",
-    "register_collector_pause_handler",
-    "clear_collector_pause_handler",
-    "register_collector_reset_handler",
-    "clear_collector_reset_handler",
     "parse_encrypted_backup_manifest",
 ]
