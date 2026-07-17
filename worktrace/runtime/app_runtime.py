@@ -28,16 +28,6 @@ from ..services import (
     recovery_service,
 )
 from ..services.folder_index_recovery_service import recover_interrupted_indexes
-from ..services.runtime_snapshot_barrier import (
-    clear_quiesce_handler,
-    register_quiesce_handler,
-)
-from ..services.secure_backup_service import (
-    clear_collector_pause_handler,
-    clear_collector_reset_handler,
-    register_collector_pause_handler,
-    register_collector_reset_handler,
-)
 from ..services.runtime_activity_state_service import clear_runtime_activity_state
 from ..services.settings_service import get_bool_setting, get_setting, set_setting
 from ..write_gate import DATABASE_WRITE_GATE
@@ -342,7 +332,6 @@ class AppRuntime:
                 if self._collector_stop_event is not None and self._collector_stop_event.is_set():
                     return {"ok": False, "error": "collector_stopping"}
                 self._register_collector_write_thread()
-                self._register_maintenance_handlers()
                 return {"ok": True, "started": False, "already_running": True}
             if self._collector_thread is not None:
                 collector_health.record_health_code("thread_dead_replaced")
@@ -400,7 +389,6 @@ class AppRuntime:
                     attempt_stop_event.set()
                     return {"ok": False, "error": "collector_attempt_superseded"}
                 self._register_collector_write_thread()
-                self._register_maintenance_handlers()
                 return {"ok": True, "started": True, "already_running": False}
 
         collector_health.record_health_code("collector_startup_not_ready")
@@ -420,11 +408,6 @@ class AppRuntime:
                 self.collector_control = CollectorControl()
                 self.phase = RuntimePhase.RECOVERABLE_FAILURE
         return {"ok": False, "error": "collector_start_failed"}
-
-    def _register_maintenance_handlers(self) -> None:
-        register_collector_pause_handler(self.quiesce_collection_now)
-        register_collector_reset_handler(self.reset_collection_runtime_now)
-        register_quiesce_handler(self.quiesce_collection_now)
 
     def pause_collection_now(
         self,
@@ -511,9 +494,6 @@ class AppRuntime:
                 return
             self._shutdown = True
             self.phase = RuntimePhase.STOPPING
-            clear_collector_pause_handler(self.quiesce_collection_now)
-            clear_collector_reset_handler(self.reset_collection_runtime_now)
-            clear_quiesce_handler(self.quiesce_collection_now)
             self.set_clipboard_capture_enabled(False)
             self.stop_event.set()
             if self._collector_stop_event is not None:
