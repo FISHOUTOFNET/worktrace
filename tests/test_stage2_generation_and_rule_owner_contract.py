@@ -5,7 +5,12 @@ from pathlib import Path
 
 import pytest
 
-pytestmark = [pytest.mark.unit, pytest.mark.contract, pytest.mark.parallel_safe]
+pytestmark = [
+    pytest.mark.unit,
+    pytest.mark.db,
+    pytest.mark.contract,
+    pytest.mark.parallel_safe,
+]
 
 ROOT = Path(__file__).resolve().parents[1]
 
