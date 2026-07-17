@@ -37,10 +37,11 @@ def test_secure_import_enters_draining_before_pause_and_exclusive_before_operati
         observed.append(("reset", coordinator.phase(), DATABASE_WRITE_GATE.phase()))
         return {"ok": True, "reset_pending": False}
 
-    coordinator.register_collector_pause_handler(pause)
-    coordinator.register_collector_reset_handler(reset)
-
-    with coordinator.acquire(reason="drain_contract") as guard:
+    with coordinator.acquire(
+        reason="drain_contract",
+        pause_handler=pause,
+        reset_handler=reset,
+    ) as guard:
         observed.append(
             ("operation", coordinator.phase(), DATABASE_WRITE_GATE.phase())
         )
@@ -116,15 +117,15 @@ def test_failed_reset_releases_coordinator_and_process_gate(temp_db):
     coordinator = SecureImportCoordinator()
     settings_service.set_setting("user_paused", "false")
     settings_service.set_setting("collector_status", "running")
-    coordinator.register_collector_pause_handler(
-        lambda timeout_seconds=5.0: {"ok": True, "pause_pending": False}
-    )
-    coordinator.register_collector_reset_handler(
-        lambda timeout_seconds=5.0: {"ok": False, "reset_pending": False}
-    )
+    pause = lambda timeout_seconds=5.0: {"ok": True, "pause_pending": False}
+    reset = lambda timeout_seconds=5.0: {"ok": False, "reset_pending": False}
 
     with pytest.raises(SecureBackupError, match="reset_not_acknowledged"):
-        with coordinator.acquire(reason="failure_contract"):
+        with coordinator.acquire(
+            reason="failure_contract",
+            pause_handler=pause,
+            reset_handler=reset,
+        ):
             pytest.fail("exclusive operation must not begin")
 
     assert coordinator.phase() is SecureImportPhase.IDLE
