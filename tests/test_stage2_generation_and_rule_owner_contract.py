@@ -89,7 +89,15 @@ def test_folder_index_read_model_is_side_effect_free() -> None:
     )
 
 
-def test_clear_all_relies_on_generations_not_cache_fanout() -> None:
+def test_project_catalog_has_no_cross_service_cache_fanout() -> None:
+    source = _source("worktrace/services/project_service.py")
+    assert "_invalidate_project_lifecycle_caches" not in source
+    assert "invalidate_folder_rule_cache" not in source
+    assert "invalidate_keyword_rule_cache" not in source
+    assert "clear_exclude_rules_cache" not in source
+
+
+def test_clear_and_replacement_rely_on_generations() -> None:
     maintenance = _source("worktrace/services/database_maintenance_service.py")
     for namespace in (
         "REPORT_STRUCTURE",
@@ -103,3 +111,8 @@ def test_clear_all_relies_on_generations_not_cache_fanout() -> None:
     assert "_invalidate_clear_all_caches" not in export
     assert "invalidate_folder_rule_cache" not in export
     assert "clear_exclude_rules_cache" not in export
+    replacement = _source(
+        "worktrace/services/database_replacement_generation_service.py"
+    )
+    assert "DataGenerationRepository.bump" in replacement
+    assert "clear()" in replacement
