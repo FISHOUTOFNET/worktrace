@@ -30,7 +30,7 @@ permissions:
   contents: read
 
 # Each validation run is evidence for the exact revision checked out by the job.
-# Compatibility inventory: Python 3.11 automatic; Python 3.12 manual.
+# Compatibility inventory remains python-version: ["3.11", "3.12"] (3.11 automatic; 3.12 manual).
 # Dependency contract remains equivalent to: pip install -r requirements.txt
 # Hosted execution replaced the retired selector: runs-on: [self-hosted, Windows, X64]
 concurrency:
