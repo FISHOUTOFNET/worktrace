@@ -11,22 +11,29 @@ import logging
 from typing import Any
 
 from ..constants import STATUS_NORMAL, UNCATEGORIZED_PROJECT
+from ..data_generation_repository import DataGenerationNamespace
 from ..db import get_connection, now_str
+from ..domain_unit_of_work import DomainUnitOfWork
 from . import activity_fact_repository
+
+
+def _report_uow() -> DomainUnitOfWork:
+    return DomainUnitOfWork((DataGenerationNamespace.REPORT_STRUCTURE,))
 
 
 def _mark_inference_retry_safely(activity_id: int) -> None:
     try:
         from .assignment_command_service import mark_inference_retry
 
-        with get_connection() as conn:
-            row = conn.execute(
+        with _report_uow() as uow:
+            row = uow.connection.execute(
                 "SELECT id FROM project WHERE name = ?",
                 (UNCATEGORIZED_PROJECT,),
             ).fetchone()
             if row is None:
                 return
-            mark_inference_retry(conn, activity_id, int(row["id"]))
+            mark_inference_retry(uow.connection, activity_id, int(row["id"]))
+            uow.mark_changed()
     except Exception:
         logging.exception(
             "close-finalize inference retry marker failed for activity_id=%s",
@@ -60,14 +67,16 @@ def start_activity(*, start_time: str, source: str, payload: dict[str, Any]) -> 
         source=source,
         payload=payload,
     )
-    with get_connection() as conn:
-        conn.execute("BEGIN IMMEDIATE")
+    with _report_uow() as uow:
         closed_ids = activity_fact_repository.close_all_open_activities(
-            conn,
+            uow.connection,
             start_time,
         )
-        activity_id = activity_fact_repository.insert_open_activity(conn, prepared)
-        conn.commit()
+        activity_id = activity_fact_repository.insert_open_activity(
+            uow.connection,
+            prepared,
+        )
+        uow.mark_changed()
     finalize_closed_activity_ids(closed_ids)
     _sync_open_row_project_safely(activity_id, status=prepared.status)
     return activity_id
@@ -83,10 +92,12 @@ def persist_open_activity(
         source=source,
         payload=payload,
     )
-    with get_connection() as conn:
-        conn.execute("BEGIN IMMEDIATE")
-        activity_id = activity_fact_repository.insert_open_activity(conn, prepared)
-        conn.commit()
+    with _report_uow() as uow:
+        activity_id = activity_fact_repository.insert_open_activity(
+            uow.connection,
+            prepared,
+        )
+        uow.mark_changed()
     _sync_open_row_project_safely(activity_id, status=prepared.status)
     return activity_id
 
@@ -104,14 +115,17 @@ def force_persist_open_activity_for_clipboard(
 
 
 def checkpoint_activity(activity_id: int, duration_seconds: int) -> bool:
-    """Persist a monotonic checkpoint through the lifecycle write owner."""
+    """Persist a monotonic crash-recovery checkpoint without cache invalidation."""
 
-    with get_connection() as conn:
-        return activity_fact_repository.checkpoint_activity_duration(
-            conn,
+    with DomainUnitOfWork() as uow:
+        changed = activity_fact_repository.checkpoint_activity_duration(
+            uow.connection,
             activity_id,
             duration_seconds,
         )
+        if changed:
+            uow.mark_changed()
+        return changed
 
 
 def close_activity(
@@ -120,28 +134,28 @@ def close_activity(
     *,
     duration_seconds: int | None = None,
 ) -> None:
-    with get_connection() as conn:
-        conn.execute("BEGIN IMMEDIATE")
+    with _report_uow() as uow:
         changed = activity_fact_repository.close_activity(
-            conn,
+            uow.connection,
             activity_id,
             end_time,
             duration_seconds=duration_seconds,
         )
-        conn.commit()
+        if changed:
+            uow.mark_changed()
     if changed:
         finalize_closed_activity_ids([int(activity_id)])
 
 
 def close_all_open_activities(end_time: str | None = None) -> list[int]:
     requested_end = end_time or now_str()
-    with get_connection() as conn:
-        conn.execute("BEGIN IMMEDIATE")
+    with _report_uow() as uow:
         closed_ids = activity_fact_repository.close_all_open_activities(
-            conn,
+            uow.connection,
             requested_end,
         )
-        conn.commit()
+        if closed_ids:
+            uow.mark_changed()
     finalize_closed_activity_ids(closed_ids)
     return closed_ids
 
@@ -161,10 +175,12 @@ def persist_midnight_anchor(
         assignment_source="midnight_anchor",
         assignment_confidence=90,
     )
-    with get_connection() as conn:
-        conn.execute("BEGIN IMMEDIATE")
-        activity_id = activity_fact_repository.insert_open_activity(conn, prepared)
-        conn.commit()
+    with _report_uow() as uow:
+        activity_id = activity_fact_repository.insert_open_activity(
+            uow.connection,
+            prepared,
+        )
+        uow.mark_changed()
     return activity_id
 
 
@@ -175,16 +191,16 @@ def recover_close_activity(
     duration_seconds: int | None = None,
     status: str | None = None,
 ) -> None:
-    with get_connection() as conn:
-        conn.execute("BEGIN IMMEDIATE")
+    with _report_uow() as uow:
         changed = activity_fact_repository.close_activity(
-            conn,
+            uow.connection,
             activity_id,
             end_time,
             duration_seconds=duration_seconds,
             status=status,
         )
-        conn.commit()
+        if changed:
+            uow.mark_changed()
     if changed:
         finalize_closed_activity_ids([int(activity_id)])
 
@@ -216,11 +232,17 @@ def recover_cross_midnight_segment(
             90 if status == STATUS_NORMAL and project_id is not None else None
         ),
     )
-    with get_connection() as conn:
-        conn.execute("BEGIN IMMEDIATE")
-        activity_id = activity_fact_repository.insert_open_activity(conn, prepared)
-        activity_fact_repository.close_activity(conn, activity_id, end_time)
-        conn.commit()
+    with _report_uow() as uow:
+        activity_id = activity_fact_repository.insert_open_activity(
+            uow.connection,
+            prepared,
+        )
+        activity_fact_repository.close_activity(
+            uow.connection,
+            activity_id,
+            end_time,
+        )
+        uow.mark_changed()
     finalize_closed_activity_ids([activity_id])
     return activity_id
 
