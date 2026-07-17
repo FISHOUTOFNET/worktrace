@@ -14,14 +14,7 @@ from worktrace import db
 
 
 class _FastTestScrypt:
-    """Deterministic KDF stand-in for backup service orchestration tests.
-
-    The production KDF implementation and its resource parameters remain covered
-    by the dedicated backup-format tests. Service integration tests exercise the
-    manifest, authenticated encryption, wrong-passphrase, corruption, import,
-    and replacement contracts without repeatedly paying the production scrypt
-    work factor.
-    """
+    """Deterministic KDF stand-in for backup service orchestration tests."""
 
     def __init__(self, *, salt: bytes, length: int, n: int, r: int, p: int) -> None:
         self._salt = bytes(salt)
@@ -63,13 +56,20 @@ def temp_db(tmp_path: Path, _initialized_db_template: Path) -> Path:
 
 
 @pytest.fixture(autouse=True)
+def _allow_explicit_test_fixture_writes() -> Iterator[None]:
+    """Tests may assemble fixtures directly; production commands remain UoW-owned."""
+
+    with db.infrastructure_write_scope():
+        yield
+
+
+@pytest.fixture(autouse=True)
 def _accelerate_backup_service_kdf(request: pytest.FixtureRequest) -> Iterator[None]:
     """Keep service integration tests focused on backup orchestration semantics."""
 
     if Path(str(request.node.fspath)).name != "test_secure_backup_service.py":
         yield
         return
-
     from worktrace.security import kdf
 
     patcher = pytest.MonkeyPatch()

@@ -1,0 +1,30 @@
+{
+  "facades": {
+    "worktrace/services/activity_lifecycle_service.py": {"core": null, "markers": ["DomainUnitOfWork"]},
+    "worktrace/services/activity_service.py": {"core": "worktrace/services/activity_service_core.py", "markers": ["report_structure_mutation"]},
+    "worktrace/services/resource_service.py": {"core": "worktrace/services/resource_service_core.py", "markers": ["report_structure_mutation"]},
+    "worktrace/services/clipboard_service.py": {"core": "worktrace/services/clipboard_service_core.py", "markers": ["report_structure_mutation"]},
+    "worktrace/services/session_boundary_service.py": {"core": "worktrace/services/session_boundary_service_core.py", "markers": ["report_structure_mutation"]},
+    "worktrace/services/privacy_anonymization_service.py": {"core": "worktrace/services/privacy_anonymization_service_core.py", "markers": ["report_structure_mutation"]},
+    "worktrace/services/report_session_operation_service.py": {"core": "worktrace/services/report_session_operation_service_core.py", "markers": ["report_structure_mutation"]},
+    "worktrace/services/project_inference_service.py": {"core": "worktrace/services/project_inference_service_core.py", "markers": ["report_structure_mutation"]},
+    "worktrace/services/project_service.py": {"core": "worktrace/services/project_service_core.py", "markers": ["classification_catalog_mutation"]},
+    "worktrace/services/folder_rule_service.py": {"core": "worktrace/services/folder_rule_service_core.py", "markers": ["classification_catalog_mutation"]},
+    "worktrace/services/rule_service.py": {"core": "worktrace/services/rule_service_core.py", "markers": ["classification_catalog_mutation"]},
+    "worktrace/services/rule_batch_service.py": {"core": "worktrace/services/rule_batch_service_core.py", "markers": ["classification_catalog_mutation", "report_structure_mutation"]},
+    "worktrace/services/history_mutation_job_service.py": {"core": "worktrace/services/history_mutation_job_service_core.py", "markers": ["classification_catalog_mutation", "report_structure_mutation"]},
+    "worktrace/services/settings_service.py": {"core": null, "markers": ["settings_mutation"]},
+    "worktrace/services/privacy_gate_service.py": {"core": "worktrace/services/privacy_gate_service_core.py", "markers": ["privacy_settings_mutation"]},
+    "worktrace/services/database_maintenance_service.py": {"core": "worktrace/services/database_maintenance_service_core.py", "markers": ["database_replacement_mutation"]},
+    "worktrace/services/secure_backup_service.py": {"core": "worktrace/services/secure_backup_service_core.py", "markers": ["DataGenerationRepository.bump"]},
+    "worktrace/services/recovery_service.py": {"core": "worktrace/services/recovery_service_core.py", "markers": ["report_structure_mutation"]},
+    "worktrace/services/activity_fact_repair_service.py": {"core": "worktrace/services/activity_fact_repair_service_core.py", "markers": ["infrastructure_write_scope"]},
+    "worktrace/services/folder_index_service.py": {"core": "worktrace/services/folder_index_service_core.py", "markers": ["infrastructure_write_scope", "classification_index_mutation"]},
+    "worktrace/services/folder_index_recovery_service.py": {"core": "worktrace/services/folder_index_recovery_service_core.py", "markers": ["infrastructure_write_scope"]}
+  },
+  "low_level_repositories": [
+    "worktrace/services/activity_fact_repository.py",
+    "worktrace/services/assignment_command_service.py",
+    "worktrace/services/report_operation_repository.py"
+  ]
+}

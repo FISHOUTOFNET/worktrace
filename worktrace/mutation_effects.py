@@ -27,6 +27,10 @@ classification_index_mutation = domain_mutation(
 settings_mutation = domain_mutation(
     DataGenerationNamespace.SETTINGS,
 )
+privacy_settings_mutation = domain_mutation(
+    DataGenerationNamespace.SETTINGS,
+    DataGenerationNamespace.PRIVACY_CATALOG,
+)
 privacy_catalog_mutation = domain_mutation(
     DataGenerationNamespace.PRIVACY_CATALOG,
 )
@@ -56,6 +60,7 @@ __all__ = [
     "database_replacement_mutation",
     "domain_mutation",
     "privacy_catalog_mutation",
+    "privacy_settings_mutation",
     "report_structure_mutation",
     "settings_mutation",
     "transactional_write",
