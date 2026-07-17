@@ -21,6 +21,7 @@ from ..constants import (
     UNCATEGORIZED_PROJECT,
 )
 from ..db import now_str
+from ..mutation_effects import report_structure_mutation
 from ..platforms.base import ActiveWindow
 from ..resources.resource_builders import make_system_resource
 from ..resources.types import DetectedResource
@@ -110,6 +111,7 @@ def prepare_activity(
     )
 
 
+@report_structure_mutation
 def insert_open_activity(conn, prepared: PreparedActivity) -> int:
     """Insert activity, assignment, resource and zero-second checkpoint atomically."""
 
@@ -180,6 +182,7 @@ def insert_open_activity(conn, prepared: PreparedActivity) -> int:
     return activity_id
 
 
+@report_structure_mutation
 def close_activity(
     conn,
     activity_id: int,
