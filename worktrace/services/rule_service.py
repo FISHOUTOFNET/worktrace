@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from ..db import dict_rows, get_connection, now_str
+from ..mutation_effects import report_structure_mutation
 from .project_inference_service import assign_project_for_activity, invalidate_keyword_rule_cache
 
 
+@report_structure_mutation
 def create_rule(keyword: str, project_id: int) -> int:
     keyword = keyword.strip()
     if not keyword:
@@ -29,14 +31,8 @@ def list_rules(include_system: bool = False) -> list[dict]:
     with get_connection() as conn:
         rows = conn.execute(
             """
-            SELECT
-                pr.id,
-                pr.pattern AS keyword,
-                pr.project_id,
-                pr.enabled,
-                pr.created_at,
-                pr.updated_at,
-                p.name AS project_name
+            SELECT pr.id, pr.pattern AS keyword, pr.project_id, pr.enabled,
+                   pr.created_at, pr.updated_at, p.name AS project_name
             FROM project_rule pr
             LEFT JOIN project p ON p.id = pr.project_id
             WHERE pr.rule_type = 'keyword'
@@ -48,6 +44,7 @@ def list_rules(include_system: bool = False) -> list[dict]:
     return dict_rows(rows)
 
 
+@report_structure_mutation
 def set_rule_enabled(rule_id: int, enabled: bool) -> None:
     with get_connection() as conn:
         conn.execute(
@@ -60,6 +57,7 @@ def set_rule_enabled(rule_id: int, enabled: bool) -> None:
     clear_exclude_rules_cache()
 
 
+@report_structure_mutation
 def update_rule(rule_id: int, keyword: str) -> None:
     keyword = keyword.strip()
     if not keyword:
@@ -76,6 +74,7 @@ def update_rule(rule_id: int, keyword: str) -> None:
     clear_exclude_rules_cache()
 
 
+@report_structure_mutation
 def delete_rule(rule_id: int) -> None:
     with get_connection() as conn:
         conn.execute("DELETE FROM project_rule WHERE id = ?", (rule_id,))
