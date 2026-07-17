@@ -39,10 +39,16 @@ jobs:
           $lines = $match.Groups[1].Value -split "\r?\n" | ForEach-Object {
             if ($_.StartsWith("          ")) { $_.Substring(10) } else { $_ }
           }
-          [System.IO.File]::WriteAllLines((Join-Path $PWD ".agent_apply.py"), $lines, [System.Text.UTF8Encoding]::new($false))
+          $patchScript = ($lines -join "`n")
 
-          $patchScript = Get-Content -LiteralPath .agent_apply.py -Raw
-          $fragilePattern = "(?s)replace_once\(\r?\n    'worktrace/webview_ui/js/init\.js',\r?\n    '''        \[.*?\r?\n\)\r?\n\r?\ntimeline_path ="
+          $needle = "replace_once(`n    'worktrace/webview_ui/js/init.js',`n    '''        ["
+          $fragileStart = $patchScript.IndexOf($needle, [System.StringComparison]::Ordinal)
+          $timelineStart = if ($fragileStart -ge 0) {
+            $patchScript.IndexOf("timeline_path =", $fragileStart, [System.StringComparison]::Ordinal)
+          } else { -1 }
+          if ($fragileStart -lt 0 -or $timelineStart -lt 0) {
+            throw "Fragile init action patch boundaries were not found"
+          }
           $robustReplacement = @(
             "replace_between(",
             "    'worktrace/webview_ui/js/init.js',",
@@ -61,11 +67,10 @@ jobs:
             "        });'''",
             ")",
             "",
-            "timeline_path ="
+            ""
           ) -join "`n"
-          $patchedScript = [regex]::Replace($patchScript, $fragilePattern, $robustReplacement, 1)
-          if ($patchedScript -eq $patchScript) { throw "Fragile init action patch was not found" }
-          [System.IO.File]::WriteAllText((Join-Path $PWD ".agent_apply.py"), $patchedScript, [System.Text.UTF8Encoding]::new($false))
+          $patchScript = $patchScript.Substring(0, $fragileStart) + $robustReplacement + $patchScript.Substring($timelineStart)
+          [System.IO.File]::WriteAllText((Join-Path $PWD ".agent_apply.py"), $patchScript, [System.Text.UTF8Encoding]::new($false))
 
           python .agent_apply.py *> agent-apply.log
           $applyExitCode = $LASTEXITCODE
