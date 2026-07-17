@@ -146,9 +146,14 @@ class LiveSemanticsHarness:
                 report_date,
                 selected["projection_revision"],
             )
+        overview = self.bridge.get_overview()
         return {
-            "overview": self.bridge.get_overview(),
-            "recent": self.bridge.get_recent_activities(),
+            "overview": overview,
+            "recent": {
+                "ok": bool(overview.get("ok")),
+                "items": list(overview.get("recent_activities") or []),
+                "runtime": dict(overview.get("runtime") or {}),
+            },
             "timeline": timeline,
             "details": details,
             "refresh": self.bridge.get_refresh_state(report_date),
