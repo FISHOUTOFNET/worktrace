@@ -10,37 +10,24 @@ from ..write_gate import DATABASE_WRITE_GATE
 from .database_maintenance_barrier import drain_existing_writers
 
 _LOCK = threading.Lock()
-_STATE_LOCK = threading.Lock()
-_QUIESCE_HANDLER: Any = None
-
-
-def register_quiesce_handler(handler: Any) -> None:
-    global _QUIESCE_HANDLER
-    with _STATE_LOCK:
-        _QUIESCE_HANDLER = handler
-
-
-def clear_quiesce_handler(handler: Any | None = None) -> None:
-    global _QUIESCE_HANDLER
-    with _STATE_LOCK:
-        if handler is None or _QUIESCE_HANDLER == handler:
-            _QUIESCE_HANDLER = None
 
 
 @contextmanager
-def consistent_snapshot(timeout_seconds: float = 5.0) -> Iterator[None]:
-    """Drain ordinary writes, quiesce Collector, then hold exclusive read scope."""
+def consistent_snapshot(
+    quiesce_handler: Any,
+    timeout_seconds: float = 5.0,
+) -> Iterator[None]:
+    """Drain writes, explicitly quiesce Collector, then hold exclusive read scope."""
 
+    if quiesce_handler is None:
+        raise RuntimeError("runtime_quiesce_capability_required")
     if not _LOCK.acquire(blocking=False):
         raise RuntimeError("snapshot_maintenance_in_progress")
     try:
         with DATABASE_WRITE_GATE.draining() as lease:
-            with _STATE_LOCK:
-                handler = _QUIESCE_HANDLER
-            if handler is not None:
-                result = handler(timeout_seconds=timeout_seconds)
-                if not bool(result.get("ok")):
-                    raise RuntimeError("collector_quiesce_not_acknowledged")
+            result = quiesce_handler(timeout_seconds=timeout_seconds)
+            if not bool(result.get("ok")):
+                raise RuntimeError("collector_quiesce_not_acknowledged")
             drain_existing_writers()
             lease.promote()
             yield
@@ -48,8 +35,4 @@ def consistent_snapshot(timeout_seconds: float = 5.0) -> Iterator[None]:
         _LOCK.release()
 
 
-__all__ = [
-    "clear_quiesce_handler",
-    "consistent_snapshot",
-    "register_quiesce_handler",
-]
+__all__ = ["consistent_snapshot"]
