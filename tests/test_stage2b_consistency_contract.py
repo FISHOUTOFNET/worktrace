@@ -90,6 +90,27 @@ def test_boundary_failure_keeps_recorder_state(monkeypatch):
 
 @pytest.mark.unit
 @pytest.mark.contract
+def test_stale_prepared_close_cannot_clear_a_new_session():
+    recorder = _active_recorder()
+    prepared = recorder.prepare_current_activity_close(
+        "2026-07-18 09:02:00",
+        ActivityEndReason.RESOURCE_SWITCH,
+    )
+    assert prepared is not None
+
+    recorder._session_serial += 1
+    recorder.current_payload = {"status": "normal", "window_title": "New.docx"}
+    recorder.current_signature = ("normal", "word", "new.docx")
+    recorder.current_start_time = "2026-07-18 09:03:00"
+    recorder.persisted_activity_id = 99
+
+    assert recorder.finalize_prepared_close(prepared) is False
+    assert recorder.current_payload["window_title"] == "New.docx"
+    assert recorder.persisted_activity_id == 99
+
+
+@pytest.mark.unit
+@pytest.mark.contract
 def test_generation_load_cannot_overwrite_newer_publication(monkeypatch):
     namespace = DataGenerationNamespace.SETTINGS
     generation_clock.clear()
