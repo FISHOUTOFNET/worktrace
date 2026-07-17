@@ -12,6 +12,7 @@ from dataclasses import dataclass
 
 from ..constants import PRIVACY_NOTICE_VERSION
 from ..db import get_connection, now_str
+from .database_replacement_generation_service import publish_database_replacement
 from .settings_service import (
     SettingMutationClass,
     clear_settings_cache,
@@ -79,7 +80,12 @@ def restore_installation_privacy_state(
     *,
     conn=None,
 ) -> None:
-    """Restore installation consent after replacing business data."""
+    """Restore installation consent after replacing business data.
+
+    Replacement callers pass their transaction connection. In that path all
+    non-report generation namespaces are invalidated before the replacement
+    commits; report generation remains on the temporary connection classifier.
+    """
 
     values = {
         "first_run_notice_accepted": (
@@ -103,6 +109,7 @@ def restore_installation_privacy_state(
             """,
             (key, value, timestamp),
         )
+    publish_database_replacement(conn)
     clear_settings_cache("first_run_notice_accepted")
     clear_settings_cache("accepted_privacy_notice_version")
 
