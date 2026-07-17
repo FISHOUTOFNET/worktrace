@@ -19,6 +19,11 @@ _REPLACEMENT_NAMESPACES = (
 
 def publish_database_replacement(conn: sqlite3.Connection) -> None:
     DataGenerationRepository.bump(conn, _REPLACEMENT_NAMESPACES)
+    # Replacement runs may swap the file beneath the same process. Forget all
+    # process-local counters now; the next read reloads the committed database.
+    from ..generation_clock import clear
+
+    clear()
 
 
 __all__ = ["publish_database_replacement"]
