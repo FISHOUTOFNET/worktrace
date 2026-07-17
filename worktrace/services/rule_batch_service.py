@@ -1,4 +1,4 @@
-"""Selected-rule planning outside write locks and bounded application."""
+"""Selected-rule validation, preview and command delegation."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from ..constants import EXCLUDED_PROJECT
 from ..data_generation_repository import DataGenerationNamespace
 from ..db import get_connection, now_str
 from ..domain_unit_of_work import DomainUnitOfWork
-from . import assignment_command_service, folder_rule_service
+from . import folder_rule_service
 from . import rule_planning_service as planner
 
 MAX_BATCH_PROJECT_RULES = 20
@@ -101,79 +101,36 @@ def preview_project_rules_batch_impact(rules: Any) -> dict[str, Any]:
 
 
 def backfill_project_rules_batch(rules: Any) -> dict[str, Any]:
-    """Plan outside the write lock, then revalidate and apply one bounded set."""
+    """Submit one durable ordered history job; this facade never writes facts."""
 
     normalized = _normalize_rules(rules)
-    with get_connection() as read_conn:
-        plan = _build_plan(read_conn, normalized, require_applicable=True)
-    winners = dict(plan["winners"])
-    if len(winners) > MAX_BATCH_BACKFILL_ACTIVITIES:
-        raise RuleBatchError(ERR_TOO_MANY_MATCHES)
+    from . import history_mutation_job_service
 
     try:
-        with DomainUnitOfWork(
-            (DataGenerationNamespace.REPORT_STRUCTURE,)
-        ) as uow:
-            conn = uow.connection
-            _revalidate_plan(conn, plan)
-            updated_by_rule = {
-                index: 0 for index in range(len(plan["resolved"]))
-            }
-            for activity_id, index in winners.items():
-                item = plan["resolved"][index]
-                entry = item["entry"]
-                rule = item["rule"]
-                source = (
-                    "folder_rule"
-                    if entry["rule_type"] == "folder"
-                    else "keyword_rule"
-                )
-                confidence = (
-                    planner.FOLDER_RULE_CONFIDENCE
-                    if entry["rule_type"] == "folder"
-                    else planner.KEYWORD_RULE_CONFIDENCE
-                )
-                if not assignment_command_service.upsert_assignment(
-                    conn,
-                    activity_id=int(activity_id),
-                    project_id=int(rule.get("project_id") or 0),
-                    confidence=confidence,
-                    source=source,
-                    source_rule_type=entry["rule_type"],
-                    source_rule_id=int(rule.get("id") or 0),
-                    protect_manual=True,
-                ):
-                    raise RuleBatchError(ERR_OPERATION_FAILED)
-                updated_by_rule[index] += 1
-    except RuleBatchError:
-        raise
-    except Exception as exc:
-        raise RuleBatchError(ERR_OPERATION_FAILED) from exc
-
-    per_rule: list[dict[str, Any]] = []
-    for index, item in enumerate(plan["resolved"]):
-        counts = _public_counts(item["classified"])
-        counts["updated_count"] = updated_by_rule[index]
-        counts["collision_skipped_count"] = int(
-            plan["collision_counts"].get(index) or 0
+        result = history_mutation_job_service.submit_rule_batch_job(
+            normalized,
+            max_updates=MAX_BATCH_BACKFILL_ACTIVITIES,
+            synchronous_scan_limit=MAX_BATCH_BACKFILL_ACTIVITIES + 1,
         )
-        per_rule.append(
-            {
-                "rule": planner.rule_summary(
-                    item["rule"],
-                    item["entry"]["rule_type"],
-                    available=True,
-                ),
-                "counts": counts,
-            }
-        )
-    aggregate = dict(plan["aggregate"])
-    aggregate["updated_count"] = sum(updated_by_rule.values())
-    return {
-        "rules": per_rule,
-        "counts": aggregate,
-        "too_many_matches": False,
-    }
+    except ValueError as exc:
+        code = str(exc)
+        allowed = {
+            ERR_NOT_FOUND,
+            ERR_RULE_DISABLED,
+            ERR_PROJECT_NOT_AVAILABLE,
+            ERR_TOO_MANY_MATCHES,
+        }
+        raise RuleBatchError(code if code in allowed else ERR_OPERATION_FAILED) from exc
+    error = str(result.get("error") or "")
+    if error:
+        allowed = {
+            ERR_NOT_FOUND,
+            ERR_RULE_DISABLED,
+            ERR_PROJECT_NOT_AVAILABLE,
+            ERR_TOO_MANY_MATCHES,
+        }
+        raise RuleBatchError(error if error in allowed else ERR_OPERATION_FAILED)
+    return result
 
 
 def set_project_rules_batch_enabled(rules: Any, enabled: Any) -> dict[str, Any]:
@@ -315,26 +272,6 @@ def _build_plan(
         "collision_counts": collision_counts,
         "aggregate": aggregate,
     }
-
-
-def _revalidate_plan(conn, plan: dict[str, Any]) -> None:
-    for item in plan["resolved"]:
-        entry = item["entry"]
-        current = planner.resolve_rule(
-            conn,
-            entry["rule_type"],
-            entry["rule_id"],
-        )
-        if not current:
-            raise RuleBatchError(ERR_NOT_FOUND)
-        if str(current.get("updated_at") or "") != str(
-            item["rule"].get("updated_at") or ""
-        ):
-            raise RuleBatchError(ERR_OPERATION_FAILED)
-        if not int(current.get("enabled") or 0):
-            raise RuleBatchError(ERR_RULE_DISABLED)
-        if not planner.project_available(current):
-            raise RuleBatchError(ERR_PROJECT_NOT_AVAILABLE)
 
 
 def _public_counts(classified: dict[str, Any]) -> dict[str, int]:
