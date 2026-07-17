@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 import threading
 
 import pytest
@@ -43,6 +44,15 @@ def test_page_scope_freezes_runtime_sample_and_snapshot_cache(temp_db):
         assert build_visible_snapshot(DATE, DATE) is first_snapshot
 
     assert sample_runtime_activity_state().snapshot["app_name"] == "B"
+
+
+def test_page_scope_connection_rejects_writes(temp_db):
+    with page_read_scope() as context:
+        with pytest.raises(sqlite3.OperationalError, match="readonly"):
+            context.conn.execute(
+                "UPDATE settings SET value = value WHERE key = ?",
+                ("collector_status",),
+            )
 
 
 def test_page_revision_and_projection_share_one_read_transaction(temp_db):
