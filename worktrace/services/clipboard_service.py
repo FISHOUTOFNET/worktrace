@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 
 from ..constants import CLIPBOARD_RETENTION_DAYS, STATUS_NORMAL, TIME_FORMAT
 from ..db import dict_rows, get_connection, now_str
+from ..mutation_effects import report_structure_mutation
 from ..path_utils import normalize_path_key
 from ..platforms.base import ActiveWindow
 from .settings_service import get_bool_setting
@@ -14,6 +15,7 @@ def is_capture_enabled() -> bool:
     return get_bool_setting("clipboard_capture_enabled", False)
 
 
+@report_structure_mutation
 def record_clipboard_event(
     activity_id: int,
     text: str,
@@ -28,9 +30,6 @@ def record_clipboard_event(
     text_hash = _hash_text(copied_text)
     ts = now_str()
     with get_connection() as conn:
-        # This transaction-local check is the final privacy gate. It rejects an
-        # event that was already drained from the adapter when the user disabled
-        # capture before persistence.
         if not _capture_enabled_in_transaction(conn):
             return None
         activity = conn.execute(
@@ -202,6 +201,7 @@ def list_file_text_mappings(start_time: str, end_time: str) -> list[dict]:
     return dict_rows(rows)
 
 
+@report_structure_mutation
 def prune_old_events(
     retention_days: int = CLIPBOARD_RETENTION_DAYS,
     now: str | None = None,
