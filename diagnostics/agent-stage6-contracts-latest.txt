@@ -1,0 +1,930 @@
+kind=stage6_contracts
+run_id=29551884957
+actual_head=2be9176b6bfc64ec6b24edd7f279bca8d8a30035
+captured_at=2026-07-17T03:17:25.8426855Z
+migration=success
+validation=failure
+
+
+== inventory ==
+Inventory check errors: none
+Inventory check warnings:
+  - 149 estimated tests are unmarked; marker coverage is intentionally incremental in this phase.
+
+== compile ==
+
+== pytest ==
+........................................................................ [  2%]
+........................................................................ [  4%]
+........................................................................ [  7%]
+........................................................................ [  9%]
+...........FF........................................................... [ 11%]
+........................................................................ [ 14%]
+........................................................................ [ 16%]
+........................................................................ [ 19%]
+........................................................................ [ 21%]
+........................................................................ [ 23%]
+........................................................................ [ 26%]
+........................................................................ [ 28%]
+........................................................................ [ 31%]
+........................................................................ [ 33%]
+........................................................................ [ 35%]
+........................................................................ [ 38%]
+........................................................................ [ 40%]
+........................................................................ [ 43%]
+........................................................................ [ 45%]
+........................................................................ [ 47%]
+........................................................................ [ 50%]
+........................................................................ [ 52%]
+........................................................................ [ 55%]
+........................................................................ [ 57%]
+........................................................................ [ 59%]
+........................................................................ [ 62%]
+........................................................................ [ 64%]
+...........................................FFFF.F.FF.FFF.....FFF......FF [ 67%]
+FFFF.....FFF...FFFFFFF......FFFFFFFF......FFFFFF.F..FFFFFFFFFFFFF....... [ 69%]
+........................................................F............FFF [ 71%]
+........................................................................ [ 74%]
+........................................................................ [ 76%]
+........................................................................ [ 79%]
+........................................................................ [ 81%]
+........................................................................ [ 83%]
+........................................................................ [ 86%]
+........................................................................ [ 88%]
+........................................................................ [ 90%]
+........................................................................ [ 93%]
+........................................................................ [ 95%]
+........................................................................ [ 98%]
+.......................................................                  [100%]
+================================== FAILURES ===================================
+______ test_excel_sessions_sheet_omits_activity_resource_detail_columns _______
+tests\test_export_resource_fields.py:68: in test_excel_sessions_sheet_omits_activity_resource_detail_columns
+    _insert_closed_activity(
+tests\test_export_resource_fields.py:29: in _insert_closed_activity
+    aid = activity_service.create_activity(
+E   TypeError: create_activity() got an unexpected keyword argument 'manual_override'
+___________ test_excel_sessions_status_and_project_display_contract ___________
+tests\test_export_resource_fields.py:101: in test_excel_sessions_status_and_project_display_contract
+    _insert_closed_activity(
+tests\test_export_resource_fields.py:29: in _insert_closed_activity
+    aid = activity_service.create_activity(
+E   TypeError: create_activity() got an unexpected keyword argument 'manual_override'
+__________ test_service_summary_valid_range_returns_aggregated_data ___________
+tests\test_statistics_api_summary.py:98: in test_service_summary_valid_range_returns_aggregated_data
+    _seed_closed_activity(
+tests\test_statistics_api_summary.py:79: in _seed_closed_activity
+    aid = activity_service.create_activity(
+tests\support\activity_factory.py:98: in create_activity
+    return create_open_activity(
+tests\support\activity_factory.py:77: in create_open_activity
+    conn.execute(
+worktrace\db.py:238: in execute
+    cursor = super().execute(sql, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   sqlite3.OperationalError: no such column: note
+______________ test_service_summary_by_project_groups_correctly _______________
+tests\test_statistics_api_summary.py:129: in test_service_summary_by_project_groups_correctly
+    _seed_closed_activity(
+tests\test_statistics_api_summary.py:79: in _seed_closed_activity
+    aid = activity_service.create_activity(
+tests\support\activity_factory.py:98: in create_activity
+    return create_open_activity(
+tests\support\activity_factory.py:77: in create_open_activity
+    conn.execute(
+worktrace\db.py:238: in execute
+    cursor = super().execute(sql, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   sqlite3.OperationalError: no such column: note
+________________ test_service_summary_by_app_groups_correctly _________________
+tests\test_statistics_api_summary.py:157: in test_service_summary_by_app_groups_correctly
+    _seed_closed_activity(
+tests\test_statistics_api_summary.py:79: in _seed_closed_activity
+    aid = activity_service.create_activity(
+tests\support\activity_factory.py:98: in create_activity
+    return create_open_activity(
+tests\support\activity_factory.py:77: in create_open_activity
+    conn.execute(
+worktrace\db.py:238: in execute
+    cursor = super().execute(sql, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   sqlite3.OperationalError: no such column: note
+_______________ test_service_summary_by_status_groups_correctly _______________
+tests\test_statistics_api_summary.py:176: in test_service_summary_by_status_groups_correctly
+    _seed_closed_activity(
+tests\test_statistics_api_summary.py:79: in _seed_closed_activity
+    aid = activity_service.create_activity(
+tests\support\activity_factory.py:98: in create_activity
+    return create_open_activity(
+tests\support\activity_factory.py:77: in create_open_activity
+    conn.execute(
+worktrace\db.py:238: in execute
+    cursor = super().execute(sql, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   sqlite3.OperationalError: no such column: note
+_____ test_service_summary_project_stats_only_include_normal_status_rows ______
+tests\test_statistics_api_summary.py:201: in test_service_summary_project_stats_only_include_normal_status_rows
+    _seed_closed_activity(
+tests\test_statistics_api_summary.py:79: in _seed_closed_activity
+    aid = activity_service.create_activity(
+tests\support\activity_factory.py:98: in create_activity
+    return create_open_activity(
+tests\support\activity_factory.py:77: in create_open_activity
+    conn.execute(
+worktrace\db.py:238: in execute
+    cursor = super().execute(sql, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   sqlite3.OperationalError: no such column: note
+_______________ test_service_summary_excludes_hidden_activities _______________
+tests\test_statistics_api_summary.py:250: in test_service_summary_excludes_hidden_activities
+    aid = _seed_closed_activity(
+tests\test_statistics_api_summary.py:79: in _seed_closed_activity
+    aid = activity_service.create_activity(
+tests\support\activity_factory.py:98: in create_activity
+    return create_open_activity(
+tests\support\activity_factory.py:77: in create_open_activity
+    conn.execute(
+worktrace\db.py:238: in execute
+    cursor = super().execute(sql, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   sqlite3.OperationalError: no such column: note
+______________ test_service_summary_excludes_deleted_activities _______________
+tests\test_statistics_api_summary.py:264: in test_service_summary_excludes_deleted_activities
+    aid = _seed_closed_activity(
+tests\test_statistics_api_summary.py:79: in _seed_closed_activity
+    aid = activity_service.create_activity(
+tests\support\activity_factory.py:98: in create_activity
+    return create_open_activity(
+tests\support\activity_factory.py:77: in create_open_activity
+    conn.execute(
+worktrace\db.py:238: in execute
+    cursor = super().execute(sql, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   sqlite3.OperationalError: no such column: note
+________________ test_service_summary_export_preview_read_only ________________
+tests\test_statistics_api_summary.py:293: in test_service_summary_export_preview_read_only
+    _seed_closed_activity(day="2026-06-25")
+tests\test_statistics_api_summary.py:79: in _seed_closed_activity
+    aid = activity_service.create_activity(
+tests\support\activity_factory.py:98: in create_activity
+    return create_open_activity(
+tests\support\activity_factory.py:77: in create_open_activity
+    conn.execute(
+worktrace\db.py:238: in execute
+    cursor = super().execute(sql, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   sqlite3.OperationalError: no such column: note
+_____________________ test_service_summary_no_raw_db_rows _____________________
+tests\test_statistics_api_summary.py:309: in test_service_summary_no_raw_db_rows
+    _seed_closed_activity(
+tests\test_statistics_api_summary.py:79: in _seed_closed_activity
+    aid = activity_service.create_activity(
+tests\support\activity_factory.py:98: in create_activity
+    return create_open_activity(
+tests\support\activity_factory.py:77: in create_open_activity
+    conn.execute(
+worktrace\db.py:238: in execute
+    cursor = super().execute(sql, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   sqlite3.OperationalError: no such column: note
+____________________ test_service_summary_multi_day_range _____________________
+tests\test_statistics_api_summary.py:329: in test_service_summary_multi_day_range
+    _seed_closed_activity(
+tests\test_statistics_api_summary.py:79: in _seed_closed_activity
+    aid = activity_service.create_activity(
+tests\support\activity_factory.py:98: in create_activity
+    return create_open_activity(
+tests\support\activity_factory.py:77: in create_open_activity
+    conn.execute(
+worktrace\db.py:238: in execute
+    cursor = super().execute(sql, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   sqlite3.OperationalError: no such column: note
+___________________ test_service_summary_does_not_write_db ____________________
+tests\test_statistics_api_summary.py:402: in test_service_summary_does_not_write_db
+    _seed_closed_activity(day="2026-06-25", project_id=pid)
+tests\test_statistics_api_summary.py:79: in _seed_closed_activity
+    aid = activity_service.create_activity(
+tests\support\activity_factory.py:98: in create_activity
+    return create_open_activity(
+tests\support\activity_factory.py:77: in create_open_activity
+    conn.execute(
+worktrace\db.py:238: in execute
+    cursor = super().execute(sql, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   sqlite3.OperationalError: no such column: note
+_______________ test_service_summary_does_not_update_updated_at _______________
+tests\test_statistics_api_summary.py:420: in test_service_summary_does_not_update_updated_at
+    aid = _seed_closed_activity(day="2026-06-25", project_id=pid)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests\test_statistics_api_summary.py:79: in _seed_closed_activity
+    aid = activity_service.create_activity(
+tests\support\activity_factory.py:98: in create_activity
+    return create_open_activity(
+tests\support\activity_factory.py:77: in create_open_activity
+    conn.execute(
+worktrace\db.py:238: in execute
+    cursor = super().execute(sql, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   sqlite3.OperationalError: no such column: note
+________________ test_api_summary_valid_range_returns_summary _________________
+tests\test_statistics_api_summary.py:437: in test_api_summary_valid_range_returns_summary
+    _seed_closed_activity(day="2026-06-25", project_id=pid)
+tests\test_statistics_api_summary.py:79: in _seed_closed_activity
+    aid = activity_service.create_activity(
+tests\support\activity_factory.py:98: in create_activity
+    return create_open_activity(
+tests\support\activity_factory.py:77: in create_open_activity
+    conn.execute(
+worktrace\db.py:238: in execute
+    cursor = super().execute(sql, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   sqlite3.OperationalError: no such column: note
+_______________ test_build_csv_rows_returns_display_safe_dicts ________________
+tests\test_statistics_csv_export.py:115: in test_build_csv_rows_returns_display_safe_dicts
+    _seed_closed_activity(
+tests\test_statistics_csv_export.py:89: in _seed_closed_activity
+    aid = activity_service.create_activity(
+tests\support\activity_factory.py:98: in create_activity
+    return create_open_activity(
+tests\support\activity_factory.py:77: in create_open_activity
+    conn.execute(
+worktrace\db.py:238: in execute
+    cursor = super().execute(sql, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   sqlite3.OperationalError: no such column: note
+__________________ test_build_csv_rows_excludes_in_progress ___________________
+tests\test_statistics_csv_export.py:155: in test_build_csv_rows_excludes_in_progress
+    aid = activity_service.create_activity(
+tests\support\activity_factory.py:98: in create_activity
+    return create_open_activity(
+tests\support\activity_factory.py:77: in create_open_activity
+    conn.execute(
+worktrace\db.py:238: in execute
+    cursor = super().execute(sql, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   sqlite3.OperationalError: no such column: note
+_____________________ test_build_csv_rows_excludes_hidden _____________________
+tests\test_statistics_csv_export.py:169: in test_build_csv_rows_excludes_hidden
+    aid = _seed_closed_activity(day="2026-06-25")
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests\test_statistics_csv_export.py:89: in _seed_closed_activity
+    aid = activity_service.create_activity(
+tests\support\activity_factory.py:98: in create_activity
+    return create_open_activity(
+tests\support\activity_factory.py:77: in create_open_activity
+    conn.execute(
+worktrace\db.py:238: in execute
+    cursor = super().execute(sql, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   sqlite3.OperationalError: no such column: note
+____________________ test_build_csv_rows_excludes_deleted _____________________
+tests\test_statistics_csv_export.py:178: in test_build_csv_rows_excludes_deleted
+    aid = _seed_closed_activity(day="2026-06-25")
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests\test_statistics_csv_export.py:89: in _seed_closed_activity
+    aid = activity_service.create_activity(
+tests\support\activity_factory.py:98: in create_activity
+    return create_open_activity(
+tests\support\activity_factory.py:77: in create_open_activity
+    conn.execute(
+worktrace\db.py:238: in execute
+    cursor = super().execute(sql, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   sqlite3.OperationalError: no such column: note
+__________________ test_build_csv_rows_all_statuses_exported __________________
+tests\test_statistics_csv_export.py:196: in test_build_csv_rows_all_statuses_exported
+    _seed_closed_activity(
+tests\test_statistics_csv_export.py:89: in _seed_closed_activity
+    aid = activity_service.create_activity(
+tests\support\activity_factory.py:98: in create_activity
+    return create_open_activity(
+tests\support\activity_factory.py:77: in create_open_activity
+    conn.execute(
+worktrace\db.py:238: in execute
+    cursor = super().execute(sql, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   sqlite3.OperationalError: no such column: note
+_____________________ test_build_csv_rows_multi_day_range _____________________
+tests\test_statistics_csv_export.py:219: in test_build_csv_rows_multi_day_range
+    _seed_closed_activity(
+tests\test_statistics_csv_export.py:89: in _seed_closed_activity
+    aid = activity_service.create_activity(
+tests\support\activity_factory.py:98: in create_activity
+    return create_open_activity(
+tests\support\activity_factory.py:77: in create_open_activity
+    conn.execute(
+worktrace\db.py:238: in execute
+    cursor = super().execute(sql, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   sqlite3.OperationalError: no such column: note
+________________ test_write_csv_success_creates_utf8_bom_file _________________
+tests\test_statistics_csv_export.py:268: in test_write_csv_success_creates_utf8_bom_file
+    _seed_closed_activity(
+tests\test_statistics_csv_export.py:89: in _seed_closed_activity
+    aid = activity_service.create_activity(
+tests\support\activity_factory.py:98: in create_activity
+    return create_open_activity(
+tests\support\activity_factory.py:77: in create_open_activity
+    conn.execute(
+worktrace\db.py:238: in execute
+    cursor = super().execute(sql, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   sqlite3.OperationalError: no such column: note
+__________________ test_write_csv_auto_appends_csv_extension __________________
+tests\test_statistics_csv_export.py:295: in test_write_csv_auto_appends_csv_extension
+    _seed_closed_activity(day="2026-06-25")
+tests\test_statistics_csv_export.py:89: in _seed_closed_activity
+    aid = activity_service.create_activity(
+tests\support\activity_factory.py:98: in create_activity
+    return create_open_activity(
+tests\support\activity_factory.py:77: in create_open_activity
+    conn.execute(
+worktrace\db.py:238: in execute
+    cursor = super().execute(sql, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   sqlite3.OperationalError: no such column: note
+__________________ test_write_csv_replaces_non_csv_extension __________________
+tests\test_statistics_csv_export.py:304: in test_write_csv_replaces_non_csv_extension
+    _seed_closed_activity(day="2026-06-25")
+tests\test_statistics_csv_export.py:89: in _seed_closed_activity
+    aid = activity_service.create_activity(
+tests\support\activity_factory.py:98: in create_activity
+    return create_open_activity(
+tests\support\activity_factory.py:77: in create_open_activity
+    conn.execute(
+worktrace\db.py:238: in execute
+    cursor = super().execute(sql, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   sqlite3.OperationalError: no such column: note
+_________________ test_write_csv_propagates_permission_error __________________
+tests\test_statistics_csv_export.py:337: in test_write_csv_propagates_permission_error
+    _seed_closed_activity(day="2026-06-25")
+tests\test_statistics_csv_export.py:89: in _seed_closed_activity
+    aid = activity_service.create_activity(
+tests\support\activity_factory.py:98: in create_activity
+    return create_open_activity(
+tests\support\activity_factory.py:77: in create_open_activity
+    conn.execute(
+worktrace\db.py:238: in execute
+    cursor = super().execute(sql, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   sqlite3.OperationalError: no such column: note
+______________________ test_write_csv_propagates_oserror ______________________
+tests\test_statistics_csv_export.py:356: in test_write_csv_propagates_oserror
+    _seed_closed_activity(day="2026-06-25")
+tests\test_statistics_csv_export.py:89: in _seed_closed_activity
+    aid = activity_service.create_activity(
+tests\support\activity_factory.py:98: in create_activity
+    return create_open_activity(
+tests\support\activity_factory.py:77: in create_open_activity
+    conn.execute(
+worktrace\db.py:238: in execute
+    cursor = super().execute(sql, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   sqlite3.OperationalError: no such column: note
+_________________________ test_write_csv_no_db_write __________________________
+tests\test_statistics_csv_export.py:374: in test_write_csv_no_db_write
+    aid = _seed_closed_activity(day="2026-06-25")
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests\test_statistics_csv_export.py:89: in _seed_closed_activity
+    aid = activity_service.create_activity(
+tests\support\activity_factory.py:98: in create_activity
+    return create_open_activity(
+tests\support\activity_factory.py:77: in create_open_activity
+    conn.execute(
+worktrace\db.py:238: in execute
+    cursor = super().execute(sql, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   sqlite3.OperationalError: no such column: note
+______________ test_write_csv_no_resource_or_assignment_mutation ______________
+tests\test_statistics_csv_export.py:402: in test_write_csv_no_resource_or_assignment_mutation
+    _seed_closed_activity(day="2026-06-25", project_id=pid)
+tests\test_statistics_csv_export.py:89: in _seed_closed_activity
+    aid = activity_service.create_activity(
+tests\support\activity_factory.py:98: in create_activity
+    return create_open_activity(
+tests\support\activity_factory.py:77: in create_open_activity
+    conn.execute(
+worktrace\db.py:238: in execute
+    cursor = super().execute(sql, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   sqlite3.OperationalError: no such column: note
+______________ test_write_csv_no_raw_sensitive_fields_in_output _______________
+tests\test_statistics_csv_export.py:433: in test_write_csv_no_raw_sensitive_fields_in_output
+    _seed_closed_activity(
+tests\test_statistics_csv_export.py:89: in _seed_closed_activity
+    aid = activity_service.create_activity(
+tests\support\activity_factory.py:98: in create_activity
+    return create_open_activity(
+tests\support\activity_factory.py:77: in create_open_activity
+    conn.execute(
+worktrace\db.py:238: in execute
+    cursor = super().execute(sql, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   sqlite3.OperationalError: no such column: note
+__________________ test_write_csv_escapes_formula_injection ___________________
+tests\test_statistics_csv_export.py:458: in test_write_csv_escapes_formula_injection
+    aid = activity_service.create_activity(
+tests\support\activity_factory.py:98: in create_activity
+    return create_open_activity(
+tests\support\activity_factory.py:77: in create_open_activity
+    conn.execute(
+worktrace\db.py:238: in execute
+    cursor = super().execute(sql, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   sqlite3.OperationalError: no such column: note
+___________________ test_api_export_success_returns_payload ___________________
+tests\test_statistics_csv_export.py:499: in test_api_export_success_returns_payload
+    _seed_closed_activity(day="2026-06-25")
+tests\test_statistics_csv_export.py:89: in _seed_closed_activity
+    aid = activity_service.create_activity(
+tests\support\activity_factory.py:98: in create_activity
+    return create_open_activity(
+tests\support\activity_factory.py:77: in create_open_activity
+    conn.execute(
+worktrace\db.py:238: in execute
+    cursor = super().execute(sql, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   sqlite3.OperationalError: no such column: note
+_____________________ test_api_export_invalid_path_raises _____________________
+tests\test_statistics_csv_export.py:552: in test_api_export_invalid_path_raises
+    _seed_closed_activity(day="2026-06-25")
+tests\test_statistics_csv_export.py:89: in _seed_closed_activity
+    aid = activity_service.create_activity(
+tests\support\activity_factory.py:98: in create_activity
+    return create_open_activity(
+tests\support\activity_factory.py:77: in create_open_activity
+    conn.execute(
+worktrace\db.py:238: in execute
+    cursor = super().execute(sql, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   sqlite3.OperationalError: no such column: note
+_____________ test_api_export_missing_parent_raises_invalid_path ______________
+tests\test_statistics_csv_export.py:561: in test_api_export_missing_parent_raises_invalid_path
+    _seed_closed_activity(day="2026-06-25")
+tests\test_statistics_csv_export.py:89: in _seed_closed_activity
+    aid = activity_service.create_activity(
+tests\support\activity_factory.py:98: in create_activity
+    return create_open_activity(
+tests\support\activity_factory.py:77: in create_open_activity
+    conn.execute(
+worktrace\db.py:238: in execute
+    cursor = super().execute(sql, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   sqlite3.OperationalError: no such column: note
+____________ test_api_export_permission_denied_maps_to_stable_code ____________
+tests\test_statistics_csv_export.py:569: in test_api_export_permission_denied_maps_to_stable_code
+    _seed_closed_activity(day="2026-06-25")
+tests\test_statistics_csv_export.py:89: in _seed_closed_activity
+    aid = activity_service.create_activity(
+tests\support\activity_factory.py:98: in create_activity
+    return create_open_activity(
+tests\support\activity_factory.py:77: in create_open_activity
+    conn.execute(
+worktrace\db.py:238: in execute
+    cursor = super().execute(sql, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   sqlite3.OperationalError: no such column: note
+__________________ test_api_export_oserror_maps_to_file_busy __________________
+tests\test_statistics_csv_export.py:583: in test_api_export_oserror_maps_to_file_busy
+    _seed_closed_activity(day="2026-06-25")
+tests\test_statistics_csv_export.py:89: in _seed_closed_activity
+    aid = activity_service.create_activity(
+tests\support\activity_factory.py:98: in create_activity
+    return create_open_activity(
+tests\support\activity_factory.py:77: in create_open_activity
+    conn.execute(
+worktrace\db.py:238: in execute
+    cursor = super().execute(sql, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   sqlite3.OperationalError: no such column: note
+_________ test_api_export_unknown_exception_maps_to_operation_failed __________
+tests\test_statistics_csv_export.py:597: in test_api_export_unknown_exception_maps_to_operation_failed
+    _seed_closed_activity(day="2026-06-25")
+tests\test_statistics_csv_export.py:89: in _seed_closed_activity
+    aid = activity_service.create_activity(
+tests\support\activity_factory.py:98: in create_activity
+    return create_open_activity(
+tests\support\activity_factory.py:77: in create_open_activity
+    conn.execute(
+worktrace\db.py:238: in execute
+    cursor = super().execute(sql, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   sqlite3.OperationalError: no such column: note
+_____________ test_api_export_error_message_never_leaks_internals _____________
+tests\test_statistics_csv_export.py:613: in test_api_export_error_message_never_leaks_internals
+    _seed_closed_activity(
+tests\test_statistics_csv_export.py:89: in _seed_closed_activity
+    aid = activity_service.create_activity(
+tests\support\activity_factory.py:98: in create_activity
+    return create_open_activity(
+tests\support\activity_factory.py:77: in create_open_activity
+    conn.execute(
+worktrace\db.py:238: in execute
+    cursor = super().execute(sql, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   sqlite3.OperationalError: no such column: note
+______________ test_bridge_export_success_returns_basename_only _______________
+tests\test_statistics_csv_export.py:673: in test_bridge_export_success_returns_basename_only
+    _seed_closed_activity(
+tests\test_statistics_csv_export.py:89: in _seed_closed_activity
+    aid = activity_service.create_activity(
+tests\support\activity_factory.py:98: in create_activity
+    return create_open_activity(
+tests\support\activity_factory.py:77: in create_open_activity
+    conn.execute(
+worktrace\db.py:238: in execute
+    cursor = super().execute(sql, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   sqlite3.OperationalError: no such column: note
+_________________ test_bridge_export_cancel_does_not_call_api _________________
+tests\test_statistics_csv_export.py:698: in test_bridge_export_cancel_does_not_call_api
+    _seed_closed_activity(day="2026-06-25")
+tests\test_statistics_csv_export.py:89: in _seed_closed_activity
+    aid = activity_service.create_activity(
+tests\support\activity_factory.py:98: in create_activity
+    return create_open_activity(
+tests\support\activity_factory.py:77: in create_open_activity
+    conn.execute(
+worktrace\db.py:238: in execute
+    cursor = super().execute(sql, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   sqlite3.OperationalError: no such column: note
+____________ test_bridge_export_permission_denied_returns_chinese _____________
+tests\test_statistics_csv_export.py:766: in test_bridge_export_permission_denied_returns_chinese
+    _seed_closed_activity(day="2026-06-25")
+tests\test_statistics_csv_export.py:89: in _seed_closed_activity
+    aid = activity_service.create_activity(
+tests\support\activity_factory.py:98: in create_activity
+    return create_open_activity(
+tests\support\activity_factory.py:77: in create_open_activity
+    conn.execute(
+worktrace\db.py:238: in execute
+    cursor = super().execute(sql, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   sqlite3.OperationalError: no such column: note
+________________ test_bridge_export_file_busy_returns_chinese _________________
+tests\test_statistics_csv_export.py:780: in test_bridge_export_file_busy_returns_chinese
+    _seed_closed_activity(day="2026-06-25")
+tests\test_statistics_csv_export.py:89: in _seed_closed_activity
+    aid = activity_service.create_activity(
+tests\support\activity_factory.py:98: in create_activity
+    return create_open_activity(
+tests\support\activity_factory.py:77: in create_open_activity
+    conn.execute(
+worktrace\db.py:238: in execute
+    cursor = super().execute(sql, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   sqlite3.OperationalError: no such column: note
+_______________ test_bridge_export_invalid_path_returns_chinese _______________
+tests\test_statistics_csv_export.py:793: in test_bridge_export_invalid_path_returns_chinese
+    _seed_closed_activity(day="2026-06-25")
+tests\test_statistics_csv_export.py:89: in _seed_closed_activity
+    aid = activity_service.create_activity(
+tests\support\activity_factory.py:98: in create_activity
+    return create_open_activity(
+tests\support\activity_factory.py:77: in create_open_activity
+    conn.execute(
+worktrace\db.py:238: in execute
+    cursor = super().execute(sql, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   sqlite3.OperationalError: no such column: note
+__________ test_bridge_export_unknown_exception_collapses_to_chinese __________
+tests\test_statistics_csv_export.py:803: in test_bridge_export_unknown_exception_collapses_to_chinese
+    _seed_closed_activity(day="2026-06-25")
+tests\test_statistics_csv_export.py:89: in _seed_closed_activity
+    aid = activity_service.create_activity(
+tests\support\activity_factory.py:98: in create_activity
+    return create_open_activity(
+tests\support\activity_factory.py:77: in create_open_activity
+    conn.execute(
+worktrace\db.py:238: in execute
+    cursor = super().execute(sql, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   sqlite3.OperationalError: no such column: note
+____________ test_bridge_export_no_window_returns_operation_failed ____________
+tests\test_statistics_csv_export.py:828: in test_bridge_export_no_window_returns_operation_failed
+    _seed_closed_activity(day="2026-06-25")
+tests\test_statistics_csv_export.py:89: in _seed_closed_activity
+    aid = activity_service.create_activity(
+tests\support\activity_factory.py:98: in create_activity
+    return create_open_activity(
+tests\support\activity_factory.py:77: in create_open_activity
+    conn.execute(
+worktrace\db.py:238: in execute
+    cursor = super().execute(sql, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   sqlite3.OperationalError: no such column: note
+_____________ test_bridge_export_payload_never_contains_full_path _____________
+tests\test_statistics_csv_export.py:838: in test_bridge_export_payload_never_contains_full_path
+    _seed_closed_activity(day="2026-06-25")
+tests\test_statistics_csv_export.py:89: in _seed_closed_activity
+    aid = activity_service.create_activity(
+tests\support\activity_factory.py:98: in create_activity
+    return create_open_activity(
+tests\support\activity_factory.py:77: in create_open_activity
+    conn.execute(
+worktrace\db.py:238: in execute
+    cursor = super().execute(sql, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   sqlite3.OperationalError: no such column: note
+_________ test_bridge_get_statistics_export_summary_remains_read_only _________
+tests\test_statistics_csv_export.py:904: in test_bridge_get_statistics_export_summary_remains_read_only
+    _seed_closed_activity(day="2026-06-25")
+tests\test_statistics_csv_export.py:89: in _seed_closed_activity
+    aid = activity_service.create_activity(
+tests\support\activity_factory.py:98: in create_activity
+    return create_open_activity(
+tests\support\activity_factory.py:77: in create_open_activity
+    conn.execute(
+worktrace\db.py:238: in execute
+    cursor = super().execute(sql, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   sqlite3.OperationalError: no such column: note
+_______________ test_bridge_export_dialog_returns_single_string _______________
+tests\test_statistics_csv_export.py:978: in test_bridge_export_dialog_returns_single_string
+    _seed_closed_activity(day="2026-06-25")
+tests\test_statistics_csv_export.py:89: in _seed_closed_activity
+    aid = activity_service.create_activity(
+tests\support\activity_factory.py:98: in create_activity
+    return create_open_activity(
+tests\support\activity_factory.py:77: in create_open_activity
+    conn.execute(
+worktrace\db.py:238: in execute
+    cursor = super().execute(sql, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   sqlite3.OperationalError: no such column: note
+________________ test_bridge_export_dialog_returns_empty_tuple ________________
+tests\test_statistics_csv_export.py:991: in test_bridge_export_dialog_returns_empty_tuple
+    _seed_closed_activity(day="2026-06-25")
+tests\test_statistics_csv_export.py:89: in _seed_closed_activity
+    aid = activity_service.create_activity(
+tests\support\activity_factory.py:98: in create_activity
+    return create_open_activity(
+tests\support\activity_factory.py:77: in create_open_activity
+    conn.execute(
+worktrace\db.py:238: in execute
+    cursor = super().execute(sql, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   sqlite3.OperationalError: no such column: note
+________________ test_bridge_export_dialog_returns_empty_list _________________
+tests\test_statistics_csv_export.py:1008: in test_bridge_export_dialog_returns_empty_list
+    _seed_closed_activity(day="2026-06-25")
+tests\test_statistics_csv_export.py:89: in _seed_closed_activity
+    aid = activity_service.create_activity(
+tests\support\activity_factory.py:98: in create_activity
+    return create_open_activity(
+tests\support\activity_factory.py:77: in create_open_activity
+    conn.execute(
+worktrace\db.py:238: in execute
+    cursor = super().execute(sql, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   sqlite3.OperationalError: no such column: note
+______________ test_bridge_export_dialog_returns_list_with_path _______________
+tests\test_statistics_csv_export.py:1025: in test_bridge_export_dialog_returns_list_with_path
+    _seed_closed_activity(day="2026-06-25")
+tests\test_statistics_csv_export.py:89: in _seed_closed_activity
+    aid = activity_service.create_activity(
+tests\support\activity_factory.py:98: in create_activity
+    return create_open_activity(
+tests\support\activity_factory.py:77: in create_open_activity
+    conn.execute(
+worktrace\db.py:238: in execute
+    cursor = super().execute(sql, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   sqlite3.OperationalError: no such column: note
+_________________ test_bridge_export_dialog_raises_exception __________________
+tests\test_statistics_csv_export.py:1037: in test_bridge_export_dialog_raises_exception
+    _seed_closed_activity(day="2026-06-25")
+tests\test_statistics_csv_export.py:89: in _seed_closed_activity
+    aid = activity_service.create_activity(
+tests\support\activity_factory.py:98: in create_activity
+    return create_open_activity(
+tests\support\activity_factory.py:77: in create_open_activity
+    conn.execute(
+worktrace\db.py:238: in execute
+    cursor = super().execute(sql, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   sqlite3.OperationalError: no such column: note
+___________ test_bridge_export_dialog_missing_file_dialog_constant ____________
+tests\test_statistics_csv_export.py:1057: in test_bridge_export_dialog_missing_file_dialog_constant
+    _seed_closed_activity(day="2026-06-25")
+tests\test_statistics_csv_export.py:89: in _seed_closed_activity
+    aid = activity_service.create_activity(
+tests\support\activity_factory.py:98: in create_activity
+    return create_open_activity(
+tests\support\activity_factory.py:77: in create_open_activity
+    conn.execute(
+worktrace\db.py:238: in execute
+    cursor = super().execute(sql, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   sqlite3.OperationalError: no such column: note
+_________ test_bridge_export_dialog_file_dialog_without_save_constant _________
+tests\test_statistics_csv_export.py:1078: in test_bridge_export_dialog_file_dialog_without_save_constant
+    _seed_closed_activity(day="2026-06-25")
+tests\test_statistics_csv_export.py:89: in _seed_closed_activity
+    aid = activity_service.create_activity(
+tests\support\activity_factory.py:98: in create_activity
+    return create_open_activity(
+tests\support\activity_factory.py:77: in create_open_activity
+    conn.execute(
+worktrace\db.py:238: in execute
+    cursor = super().execute(sql, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   sqlite3.OperationalError: no such column: note
+_______ test_bridge_export_dialog_uses_deprecated_save_dialog_fallback ________
+tests\test_statistics_csv_export.py:1101: in test_bridge_export_dialog_uses_deprecated_save_dialog_fallback
+    _seed_closed_activity(day="2026-06-25")
+tests\test_statistics_csv_export.py:89: in _seed_closed_activity
+    aid = activity_service.create_activity(
+tests\support\activity_factory.py:98: in create_activity
+    return create_open_activity(
+tests\support\activity_factory.py:77: in create_open_activity
+    conn.execute(
+worktrace\db.py:238: in execute
+    cursor = super().execute(sql, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   sqlite3.OperationalError: no such column: note
+______________ test_write_csv_preserves_uppercase_csv_extension _______________
+tests\test_statistics_csv_export.py:1123: in test_write_csv_preserves_uppercase_csv_extension
+    _seed_closed_activity(day="2026-06-25")
+tests\test_statistics_csv_export.py:89: in _seed_closed_activity
+    aid = activity_service.create_activity(
+tests\support\activity_factory.py:98: in create_activity
+    return create_open_activity(
+tests\support\activity_factory.py:77: in create_open_activity
+    conn.execute(
+worktrace\db.py:238: in execute
+    cursor = super().execute(sql, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   sqlite3.OperationalError: no such column: note
+______________ test_write_csv_preserves_mixed_case_csv_extension ______________
+tests\test_statistics_csv_export.py:1135: in test_write_csv_preserves_mixed_case_csv_extension
+    _seed_closed_activity(day="2026-06-25")
+tests\test_statistics_csv_export.py:89: in _seed_closed_activity
+    aid = activity_service.create_activity(
+tests\support\activity_factory.py:98: in create_activity
+    return create_open_activity(
+tests\support\activity_factory.py:77: in create_open_activity
+    conn.execute(
+worktrace\db.py:238: in execute
+    cursor = super().execute(sql, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   sqlite3.OperationalError: no such column: note
+______________ test_write_csv_preserves_lowercase_csv_extension _______________
+tests\test_statistics_csv_export.py:1145: in test_write_csv_preserves_lowercase_csv_extension
+    _seed_closed_activity(day="2026-06-25")
+tests\test_statistics_csv_export.py:89: in _seed_closed_activity
+    aid = activity_service.create_activity(
+tests\support\activity_factory.py:98: in create_activity
+    return create_open_activity(
+tests\support\activity_factory.py:77: in create_open_activity
+    conn.execute(
+worktrace\db.py:238: in execute
+    cursor = super().execute(sql, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   sqlite3.OperationalError: no such column: note
+___________________ test_api_export_uppercase_csv_extension ___________________
+tests\test_statistics_csv_export.py:1155: in test_api_export_uppercase_csv_extension
+    _seed_closed_activity(day="2026-06-25")
+tests\test_statistics_csv_export.py:89: in _seed_closed_activity
+    aid = activity_service.create_activity(
+tests\support\activity_factory.py:98: in create_activity
+    return create_open_activity(
+tests\support\activity_factory.py:77: in create_open_activity
+    conn.execute(
+worktrace\db.py:238: in execute
+    cursor = super().execute(sql, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   sqlite3.OperationalError: no such column: note
+____________________ test_write_csv_chinese_and_space_path ____________________
+tests\test_statistics_csv_export.py:1166: in test_write_csv_chinese_and_space_path
+    _seed_closed_activity(day="2026-06-25")
+tests\test_statistics_csv_export.py:89: in _seed_closed_activity
+    aid = activity_service.create_activity(
+tests\support\activity_factory.py:98: in create_activity
+    return create_open_activity(
+tests\support\activity_factory.py:77: in create_open_activity
+    conn.execute(
+worktrace\db.py:238: in execute
+    cursor = super().execute(sql, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   sqlite3.OperationalError: no such column: note
+___________________ test_bridge_statistics_summary_success ____________________
+tests\test_webview_bridge_statistics.py:99: in test_bridge_statistics_summary_success
+    _seed_closed_activity(day="2026-06-25", project_id=pid, app="Word")
+tests\test_webview_bridge_statistics.py:81: in _seed_closed_activity
+    aid = activity_service.create_activity(
+tests\support\activity_factory.py:98: in create_activity
+    return create_open_activity(
+tests\support\activity_factory.py:77: in create_open_activity
+    conn.execute(
+worktrace\db.py:238: in execute
+    cursor = super().execute(sql, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   sqlite3.OperationalError: no such column: note
+________________ test_bridge_statistics_summary_no_raw_fields _________________
+tests\test_webview_bridge_statistics.py:293: in test_bridge_statistics_summary_no_raw_fields
+    _seed_closed_activity(
+tests\test_webview_bridge_statistics.py:81: in _seed_closed_activity
+    aid = activity_service.create_activity(
+tests\support\activity_factory.py:98: in create_activity
+    return create_open_activity(
+tests\support\activity_factory.py:77: in create_open_activity
+    conn.execute(
+worktrace\db.py:238: in execute
+    cursor = super().execute(sql, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   sqlite3.OperationalError: no such column: note
+____________ test_bridge_statistics_summary_display_safe_keys_only ____________
+tests\test_webview_bridge_statistics.py:318: in test_bridge_statistics_summary_display_safe_keys_only
+    _seed_closed_activity(day="2026-06-25", project_id=pid)
+tests\test_webview_bridge_statistics.py:81: in _seed_closed_activity
+    aid = activity_service.create_activity(
+tests\support\activity_factory.py:98: in create_activity
+    return create_open_activity(
+tests\support\activity_factory.py:77: in create_open_activity
+    conn.execute(
+worktrace\db.py:238: in execute
+    cursor = super().execute(sql, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   sqlite3.OperationalError: no such column: note
+______________ test_bridge_statistics_summary_does_not_write_db _______________
+tests\test_webview_bridge_statistics.py:378: in test_bridge_statistics_summary_does_not_write_db
+    _seed_closed_activity(day="2026-06-25", project_id=pid)
+tests\test_webview_bridge_statistics.py:81: in _seed_closed_activity
+    aid = activity_service.create_activity(
+tests\support\activity_factory.py:98: in create_activity
+    return create_open_activity(
+tests\support\activity_factory.py:77: in create_open_activity
+    conn.execute(
+worktrace\db.py:238: in execute
+    cursor = super().execute(sql, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   sqlite3.OperationalError: no such column: note
+=========================== short test summary info ===========================
+FAILED tests/test_export_resource_fields.py::test_excel_sessions_sheet_omits_activity_resource_detail_columns - TypeError: create_activity() got an unexpected keyword argument 'manual_override'
+FAILED tests/test_export_resource_fields.py::test_excel_sessions_status_and_project_display_contract - TypeError: create_activity() got an unexpected keyword argument 'manual_override'
+FAILED tests/test_statistics_api_summary.py::test_service_summary_valid_range_returns_aggregated_data - sqlite3.OperationalError: no such column: note
+FAILED tests/test_statistics_api_summary.py::test_service_summary_by_project_groups_correctly - sqlite3.OperationalError: no such column: note
+FAILED tests/test_statistics_api_summary.py::test_service_summary_by_app_groups_correctly - sqlite3.OperationalError: no such column: note
+FAILED tests/test_statistics_api_summary.py::test_service_summary_by_status_groups_correctly - sqlite3.OperationalError: no such column: note
+FAILED tests/test_statistics_api_summary.py::test_service_summary_project_stats_only_include_normal_status_rows - sqlite3.OperationalError: no such column: note
+FAILED tests/test_statistics_api_summary.py::test_service_summary_excludes_hidden_activities - sqlite3.OperationalError: no such column: note
+FAILED tests/test_statistics_api_summary.py::test_service_summary_excludes_deleted_activities - sqlite3.OperationalError: no such column: note
+FAILED tests/test_statistics_api_summary.py::test_service_summary_export_preview_read_only - sqlite3.OperationalError: no such column: note
+FAILED tests/test_statistics_api_summary.py::test_service_summary_no_raw_db_rows - sqlite3.OperationalError: no such column: note
+FAILED tests/test_statistics_api_summary.py::test_service_summary_multi_day_range - sqlite3.OperationalError: no such column: note
+FAILED tests/test_statistics_api_summary.py::test_service_summary_does_not_write_db - sqlite3.OperationalError: no such column: note
+FAILED tests/test_statistics_api_summary.py::test_service_summary_does_not_update_updated_at - sqlite3.OperationalError: no such column: note
+FAILED tests/test_statistics_api_summary.py::test_api_summary_valid_range_returns_summary - sqlite3.OperationalError: no such column: note
+FAILED tests/test_statistics_csv_export.py::test_build_csv_rows_returns_display_safe_dicts - sqlite3.OperationalError: no such column: note
+FAILED tests/test_statistics_csv_export.py::test_build_csv_rows_excludes_in_progress - sqlite3.OperationalError: no such column: note
+FAILED tests/test_statistics_csv_export.py::test_build_csv_rows_excludes_hidden - sqlite3.OperationalError: no such column: note
+FAILED tests/test_statistics_csv_export.py::test_build_csv_rows_excludes_deleted - sqlite3.OperationalError: no such column: note
+FAILED tests/test_statistics_csv_export.py::test_build_csv_rows_all_statuses_exported - sqlite3.OperationalError: no such column: note
+FAILED tests/test_statistics_csv_export.py::test_build_csv_rows_multi_day_range - sqlite3.OperationalError: no such column: note
+FAILED tests/test_statistics_csv_export.py::test_write_csv_success_creates_utf8_bom_file - sqlite3.OperationalError: no such column: note
+FAILED tests/test_statistics_csv_export.py::test_write_csv_auto_appends_csv_extension - sqlite3.OperationalError: no such column: note
+FAILED tests/test_statistics_csv_export.py::test_write_csv_replaces_non_csv_extension - sqlite3.OperationalError: no such column: note
+FAILED tests/test_statistics_csv_export.py::test_write_csv_propagates_permission_error - sqlite3.OperationalError: no such column: note
+FAILED tests/test_statistics_csv_export.py::test_write_csv_propagates_oserror - sqlite3.OperationalError: no such column: note
+FAILED tests/test_statistics_csv_export.py::test_write_csv_no_db_write - sqlite3.OperationalError: no such column: note
+FAILED tests/test_statistics_csv_export.py::test_write_csv_no_resource_or_assignment_mutation - sqlite3.OperationalError: no such column: note
+FAILED tests/test_statistics_csv_export.py::test_write_csv_no_raw_sensitive_fields_in_output - sqlite3.OperationalError: no such column: note
+FAILED tests/test_statistics_csv_export.py::test_write_csv_escapes_formula_injection - sqlite3.OperationalError: no such column: note
+FAILED tests/test_statistics_csv_export.py::test_api_export_success_returns_payload - sqlite3.OperationalError: no such column: note
+FAILED tests/test_statistics_csv_export.py::test_api_export_invalid_path_raises - sqlite3.OperationalError: no such column: note
+FAILED tests/test_statistics_csv_export.py::test_api_export_missing_parent_raises_invalid_path - sqlite3.OperationalError: no such column: note
+FAILED tests/test_statistics_csv_export.py::test_api_export_permission_denied_maps_to_stable_code - sqlite3.OperationalError: no such column: note
+FAILED tests/test_statistics_csv_export.py::test_api_export_oserror_maps_to_file_busy - sqlite3.OperationalError: no such column: note
+FAILED tests/test_statistics_csv_export.py::test_api_export_unknown_exception_maps_to_operation_failed - sqlite3.OperationalError: no such column: note
+FAILED tests/test_statistics_csv_export.py::test_api_export_error_message_never_leaks_internals - sqlite3.OperationalError: no such column: note
+FAILED tests/test_statistics_csv_export.py::test_bridge_export_success_returns_basename_only - sqlite3.OperationalError: no such column: note
+FAILED tests/test_statistics_csv_export.py::test_bridge_export_cancel_does_not_call_api - sqlite3.OperationalError: no such column: note
+FAILED tests/test_statistics_csv_export.py::test_bridge_export_permission_denied_returns_chinese - sqlite3.OperationalError: no such column: note
+FAILED tests/test_statistics_csv_export.py::test_bridge_export_file_busy_returns_chinese - sqlite3.OperationalError: no such column: note
+FAILED tests/test_statistics_csv_export.py::test_bridge_export_invalid_path_returns_chinese - sqlite3.OperationalError: no such column: note
+FAILED tests/test_statistics_csv_export.py::test_bridge_export_unknown_exception_collapses_to_chinese - sqlite3.OperationalError: no such column: note
+FAILED tests/test_statistics_csv_export.py::test_bridge_export_no_window_returns_operation_failed - sqlite3.OperationalError: no such column: note
+FAILED tests/test_statistics_csv_export.py::test_bridge_export_payload_never_contains_full_path - sqlite3.OperationalError: no such column: note
+FAILED tests/test_statistics_csv_export.py::test_bridge_get_statistics_export_summary_remains_read_only - sqlite3.OperationalError: no such column: note
+FAILED tests/test_statistics_csv_export.py::test_bridge_export_dialog_returns_single_string - sqlite3.OperationalError: no such column: note
+FAILED tests/test_statistics_csv_export.py::test_bridge_export_dialog_returns_empty_tuple - sqlite3.OperationalError: no such column: note
+FAILED tests/test_statistics_csv_export.py::test_bridge_export_dialog_returns_empty_list - sqlite3.OperationalError: no such column: note
+FAILED tests/test_statistics_csv_export.py::test_bridge_export_dialog_returns_list_with_path - sqlite3.OperationalError: no such column: note
+FAILED tests/test_statistics_csv_export.py::test_bridge_export_dialog_raises_exception - sqlite3.OperationalError: no such column: note
+FAILED tests/test_statistics_csv_export.py::test_bridge_export_dialog_missing_file_dialog_constant - sqlite3.OperationalError: no such column: note
+FAILED tests/test_statistics_csv_export.py::test_bridge_export_dialog_file_dialog_without_save_constant - sqlite3.OperationalError: no such column: note
+FAILED tests/test_statistics_csv_export.py::test_bridge_export_dialog_uses_deprecated_save_dialog_fallback - sqlite3.OperationalError: no such column: note
+FAILED tests/test_statistics_csv_export.py::test_write_csv_preserves_uppercase_csv_extension - sqlite3.OperationalError: no such column: note
+FAILED tests/test_statistics_csv_export.py::test_write_csv_preserves_mixed_case_csv_extension - sqlite3.OperationalError: no such column: note
+FAILED tests/test_statistics_csv_export.py::test_write_csv_preserves_lowercase_csv_extension - sqlite3.OperationalError: no such column: note
+FAILED tests/test_statistics_csv_export.py::test_api_export_uppercase_csv_extension - sqlite3.OperationalError: no such column: note
+FAILED tests/test_statistics_csv_export.py::test_write_csv_chinese_and_space_path - sqlite3.OperationalError: no such column: note
+FAILED tests/test_webview_bridge_statistics.py::test_bridge_statistics_summary_success - sqlite3.OperationalError: no such column: note
+FAILED tests/test_webview_bridge_statistics.py::test_bridge_statistics_summary_no_raw_fields - sqlite3.OperationalError: no such column: note
+FAILED tests/test_webview_bridge_statistics.py::test_bridge_statistics_summary_display_safe_keys_only - sqlite3.OperationalError: no such column: note
+FAILED tests/test_webview_bridge_statistics.py::test_bridge_statistics_summary_does_not_write_db - sqlite3.OperationalError: no such column: note
+63 failed, 2944 passed in 161.42s (0:02:41)
+
