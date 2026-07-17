@@ -139,9 +139,9 @@ def test_project_rules_show_does_not_bind_removed_home_actions():
 def test_project_rules_panel_create_backfill_contract_is_stable():
     source = read_rules_module_js()
     body = func_body(source, "savePanelRule")
-    assert 'callBridge("create_project_folder_rule"' in body
-    assert 'callBridge("create_project_keyword_rule"' in body
-    assert 'callBridge("backfill_project_rule"' in source
+    assert "App.bridge.createProjectFolderRule" in body
+    assert "App.bridge.createProjectKeywordRule" in body
+    assert "App.backfillCreatedRule" in body
     assert "规则已新增，但应用到历史记录失败" in body
     assert "同时应用到历史记录（推荐）" in _rules_section()
     assert ".catch(function ()" in body
@@ -161,7 +161,7 @@ def test_project_rules_sort_state_is_memory_only():
     assert 'App.rulesSortMode = "last_used"' in read_js("core.js")
     assert "localStorage" not in source
     assert "sessionStorage" not in source
-    assert "function _sortProjectsForRulesHome" in source
+    assert "function sortProjectsForRulesHome" in source
 
 
 def test_project_rules_frontend_resources_keep_local_boundaries():
