@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from ..db import infrastructure_write_scope
+from ..service_facade import bind_core_facade
 from . import folder_index_recovery_service_core as _core
 
 for _name in dir(_core):
@@ -18,3 +19,4 @@ def recover_interrupted_indexes() -> int:
 
 
 _core.recover_interrupted_indexes = recover_interrupted_indexes
+bind_core_facade(__name__, _core)

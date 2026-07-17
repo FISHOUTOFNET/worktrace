@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from ..mutation_effects import classification_catalog_mutation
+from ..service_facade import bind_core_facade
 from . import project_service_core as _core
 
 for _name in dir(_core):
@@ -31,3 +32,4 @@ _core.set_project_enabled = set_project_enabled
 _core.set_excluded_project_enabled = set_excluded_project_enabled
 _core.archive_project = archive_project
 _core.soft_delete_project = soft_delete_project
+bind_core_facade(__name__, _core)

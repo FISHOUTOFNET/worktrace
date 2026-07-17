@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from ..constants import UNCATEGORIZED_PROJECT
 from ..mutation_effects import report_structure_mutation
+from ..service_facade import bind_core_facade
 from . import project_inference_service_core as _core
 
 for _name in dir(_core):
@@ -39,3 +40,4 @@ assign_project_for_activity = report_structure_mutation(
 _core.assign_project_for_activity = assign_project_for_activity
 _core._get_uncategorized_project_id = _require_uncategorized_project_id
 _core._resource_for_activity = _require_persisted_resource
+bind_core_facade(__name__, _core)

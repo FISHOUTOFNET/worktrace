@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from ..mutation_effects import report_structure_mutation
+from ..service_facade import bind_core_facade
 from . import privacy_anonymization_service_core as _core
 
 for _name in dir(_core):
@@ -16,3 +17,4 @@ anonymize_activity = report_structure_mutation(_core.anonymize_activity)
 
 _core.update_path_or_anonymize = update_path_or_anonymize
 _core.anonymize_activity = anonymize_activity
+bind_core_facade(__name__, _core)

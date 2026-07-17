@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from ..mutation_effects import privacy_settings_mutation
+from ..service_facade import bind_core_facade
 from . import privacy_gate_service_core as _core
 
 for _name in dir(_core):
@@ -27,3 +28,4 @@ def restore_installation_privacy_state(state, *, conn=None) -> None:
 
 _core.accept_privacy_notice = accept_privacy_notice
 _core.restore_installation_privacy_state = restore_installation_privacy_state
+bind_core_facade(__name__, _core)

@@ -6,6 +6,7 @@ from ..mutation_effects import (
     classification_catalog_mutation,
     report_structure_mutation,
 )
+from ..service_facade import bind_core_facade
 from . import rule_batch_service_core as _core
 
 for _name in dir(_core):
@@ -21,3 +22,4 @@ set_project_rules_batch_enabled = classification_catalog_mutation(
 
 _core.backfill_project_rules_batch = backfill_project_rules_batch
 _core.set_project_rules_batch_enabled = set_project_rules_batch_enabled
+bind_core_facade(__name__, _core)

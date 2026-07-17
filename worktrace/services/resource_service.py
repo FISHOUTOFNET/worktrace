@@ -6,6 +6,7 @@ import sqlite3
 
 from ..mutation_effects import report_structure_mutation
 from ..resources.types import DetectedResource
+from ..service_facade import bind_core_facade
 from . import resource_service_core as _core
 
 for _name in dir(_core):
@@ -32,3 +33,7 @@ def create_or_update_activity_resource(
         _create_or_update_impl(activity_id, resource, conn=conn)
         return
     _create_or_update_owned(activity_id, resource)
+
+
+_core.create_or_update_activity_resource = create_or_update_activity_resource
+bind_core_facade(__name__, _core)

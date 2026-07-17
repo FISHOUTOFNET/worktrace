@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from ..mutation_effects import report_structure_mutation
+from ..service_facade import bind_core_facade
 from . import report_session_operation_service_core as _core
 
 for _name in dir(_core):
@@ -22,3 +23,4 @@ _core.merge_session = merge_session
 _core.split_session = split_session
 _core.copy_session = copy_session
 _core.hide_session_activity = hide_session_activity
+bind_core_facade(__name__, _core)

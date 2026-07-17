@@ -6,6 +6,7 @@ from ..mutation_effects import (
     classification_catalog_mutation,
     report_structure_mutation,
 )
+from ..service_facade import bind_core_facade
 from . import history_mutation_job_service_core as _core
 
 for _name in dir(_core):
@@ -17,3 +18,4 @@ run_job_batch = report_structure_mutation(_core.run_job_batch)
 
 _core.submit_rule_job = submit_rule_job
 _core.run_job_batch = run_job_batch
+bind_core_facade(__name__, _core)

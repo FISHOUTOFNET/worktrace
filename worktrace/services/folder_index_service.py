@@ -6,6 +6,7 @@ from functools import wraps
 
 from ..db import infrastructure_write_scope
 from ..mutation_effects import classification_index_mutation
+from ..service_facade import bind_core_facade
 from . import folder_index_service_core as _core
 
 for _name in dir(_core):
@@ -40,3 +41,4 @@ for _name in (
 
 _activate_generation = classification_index_mutation(_core._activate_generation)
 _core._activate_generation = _activate_generation
+bind_core_facade(__name__, _core)

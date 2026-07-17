@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from ..mutation_effects import report_structure_mutation
+from ..service_facade import bind_core_facade
 from . import recovery_service_core as _core
 
 for _name in dir(_core):
@@ -11,3 +12,4 @@ for _name in dir(_core):
 
 mark_record_error = report_structure_mutation(_core.mark_record_error)
 _core.mark_record_error = mark_record_error
+bind_core_facade(__name__, _core)

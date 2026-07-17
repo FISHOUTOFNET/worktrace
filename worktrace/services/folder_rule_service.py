@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from ..mutation_effects import classification_catalog_mutation
+from ..service_facade import bind_core_facade
 from . import folder_rule_service_core as _core
 
 for _name in dir(_core):
@@ -22,3 +23,4 @@ _core.create_or_update_folder_rule = create_or_update_folder_rule
 _core.update_folder_rule = update_folder_rule
 _core.delete_folder_rule = delete_folder_rule
 _core.set_folder_rule_enabled = set_folder_rule_enabled
+bind_core_facade(__name__, _core)
