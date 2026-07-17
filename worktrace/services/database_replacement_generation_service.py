@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import sqlite3
 
-from ..data_generation_repository import DataGenerationNamespace
+from ..data_generation_repository import (
+    DataGenerationNamespace,
+    DataGenerationRepository,
+)
 from ..domain_unit_of_work import current_domain_unit_of_work
 
 _REPLACEMENT_NAMESPACES = (
@@ -16,19 +19,21 @@ _REPLACEMENT_NAMESPACES = (
 
 
 def publish_database_replacement(conn: sqlite3.Connection) -> None:
-    """Attach replacement effects to the active caller-owned unit of work.
+    """Declare replacement generations without touching process-local caches.
 
-    The generation clock is published by ``DomainUnitOfWork`` only after the
-    replacement transaction commits. Calling this function outside the active
-    replacement UoW is a programming error because pre-commit cache reset would
-    reopen the stale-generation race this boundary exists to prevent.
+    Normal replacement commands attach effects to the active ``DomainUnitOfWork``
+    and receive atomic post-commit publication there. The encrypted-import path
+    owns a lower-level exclusive SQLite transaction; for that path this helper
+    only bumps durable values. Its maintenance coordinator clears the process
+    clock after the connection context has committed.
     """
 
     uow = current_domain_unit_of_work()
-    if uow is None or uow.connection is not conn:
-        raise RuntimeError("database_replacement_requires_active_uow")
-    uow.add_effects(*_REPLACEMENT_NAMESPACES)
-    uow.mark_changed()
+    if uow is not None and uow.connection is conn:
+        uow.add_effects(*_REPLACEMENT_NAMESPACES)
+        uow.mark_changed()
+        return
+    DataGenerationRepository.bump(conn, _REPLACEMENT_NAMESPACES)
 
 
 __all__ = ["publish_database_replacement"]
