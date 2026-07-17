@@ -1,0 +1,33 @@
+{
+  "read_time_resource_detection": [
+    "worktrace/services/report_fact_query_service.py"
+  ],
+  "live_project_database_fallback": [
+    "worktrace/services/live_display_service.py",
+    "worktrace/services/activity_display_projection.py"
+  ],
+  "sql_text_mutation_classification": [
+    "worktrace/db.py"
+  ],
+  "runtime_payload_fallback": [
+    "worktrace/webview_ui/js/init.js"
+  ],
+  "runtime_global_registration": [
+    "worktrace/api/app_api.py",
+    "worktrace/services/runtime_snapshot_barrier.py",
+    "worktrace/services/secure_backup_service.py"
+  ],
+  "cross_module_private_import": [
+    "worktrace/services/activity_live_clock.py",
+    "worktrace/services/activity_display_span.py"
+  ],
+  "duplicate_live_contract_fields": [
+    "worktrace/contracts/live_display_contracts.py",
+    "worktrace/services/activity_display_projection.py",
+    "worktrace/services/activity_display_span.py",
+    "worktrace/services/activity_live_clock.py",
+    "worktrace/services/activity_row_overlay.py",
+    "worktrace/services/refresh_state_view_model_service.py",
+    "worktrace/services/view_model_service.py"
+  ]
+}
