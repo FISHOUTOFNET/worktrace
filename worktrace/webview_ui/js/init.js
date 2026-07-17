@@ -66,145 +66,149 @@
         updateProjectKeywordRule: fixedBridgeMethod("update_project_keyword_rule")
     });
 
-var runtimeState = null;
+    var runtimeState = null;
 
-function frozenRuntime(value) {
-    if (!value || typeof value !== "object") return null;
-    var copy = Object.assign({}, value);
-    if (copy.liveClock && typeof copy.liveClock === "object") {
-        copy.liveClock = Object.freeze(Object.assign({}, copy.liveClock));
-    }
-    if (copy.currentActivity && typeof copy.currentActivity === "object") {
-        copy.currentActivity = Object.freeze(Object.assign({}, copy.currentActivity));
-    }
-    return Object.freeze(copy);
-}
-
-function runtimeEnvelope(value) {
-    if (!value || typeof value !== "object") return null;
-    return value.runtime && typeof value.runtime === "object" ? value.runtime : value;
-}
-
-function normalizeRuntimeEnvelope(value, page, reportDate) {
-    var envelope = runtimeEnvelope(value);
-    if (!envelope || Number(envelope.schema_version || 0) !== 1) return null;
-    var scopeDate = String(
-        envelope.scope_report_date
-        || reportDate
-        || App.runtimeReportDateForPage(page || App.currentPage || "overview", reportDate)
-        || ""
-    );
-    var liveDate = String(envelope.live_report_date || scopeDate || "");
-    var liveClock = App.normalizeLiveClock
-        ? App.normalizeLiveClock(envelope.live_clock || null)
-        : (envelope.live_clock || null);
-    if (scopeDate && liveDate && scopeDate !== liveDate) liveClock = null;
-    return {
-        schemaVersion: 1,
-        surface: String(envelope.surface || page || App.currentPage || "overview"),
-        page: String(page || App.currentPage || envelope.surface || "overview"),
-        reportDate: scopeDate,
-        liveReportDate: liveDate,
-        liveClock: liveClock,
-        displaySpanId: String(envelope.display_span_id || (liveClock && liveClock.display_span_id) || ""),
-        stableLiveKeyHash: String(envelope.stable_live_key_hash || (liveClock && liveClock.stable_live_key_hash) || ""),
-        liveRevision: String(envelope.live_revision || ""),
-        structureRevision: String(envelope.structure_revision || ""),
-        pageRevision: String(envelope.page_revision || ""),
-        sampleId: String(envelope.sample_id || ""),
-        currentActivityDisplaySpanId: String(envelope.current_activity_display_span_id || ""),
-        currentResourceIdentityHash: String(envelope.current_resource_identity_hash || ""),
-        currentActivity: envelope.current_activity || {}
-    };
-}
-
-var liveRuntimeStore = Object.freeze({
-    get: function () { return runtimeState; },
-    acceptEnvelope: function (value, page, reportDate) {
-        var next = normalizeRuntimeEnvelope(value, page, reportDate);
-        if (!next) return null;
-        var previous = runtimeState;
-        if (previous && previous.liveClock && next.liveClock
-            && App.sameLiveContinuity
-            && App.sameLiveContinuity(previous.liveClock, next.liveClock)
-            && App.rebaseIncomingClockWithoutRollback) {
-            next.liveClock = App.rebaseIncomingClockWithoutRollback(
-                previous.liveClock,
-                next.liveClock,
-                Date.now()
-            );
+    function frozenRuntime(value) {
+        if (!value || typeof value !== "object") return null;
+        var copy = Object.assign({}, value);
+        if (copy.liveClock && typeof copy.liveClock === "object") {
+            copy.liveClock = Object.freeze(Object.assign({}, copy.liveClock));
         }
-        runtimeState = frozenRuntime(next);
-        return runtimeState;
-    },
-    reset: function () {
-        runtimeState = null;
-        return null;
-    },
-    setScope: function (page, reportDate) {
-        var existing = runtimeState;
-        if (!existing) return null;
-        runtimeState = frozenRuntime(Object.assign({}, existing, {
-            page: String(page || App.currentPage || "overview"),
-            reportDate: App.runtimeReportDateForPage(
-                page || App.currentPage || "overview",
-                reportDate
-            )
-        }));
-        return runtimeState;
+        if (copy.currentActivity && typeof copy.currentActivity === "object") {
+            copy.currentActivity = Object.freeze(Object.assign({}, copy.currentActivity));
+        }
+        return Object.freeze(copy);
     }
-});
-App.liveRuntimeStore = liveRuntimeStore;
-Object.defineProperty(App, "liveRuntime", {
-    configurable: false,
-    enumerable: true,
-    get: function () { return liveRuntimeStore.get(); }
-});
 
-function resetClientGeneration(reason) {
-    if (App.requestCoordinator) App.requestCoordinator.bumpDataEpoch();
-    App.timelineLoaded = false;
-    App.statisticsLoaded = false;
-    App.rulesLoaded = false;
-    App.settingsLoaded = false;
-    App.currentSessions = [];
-    App.selectedProjectionInstanceKey = null;
-    App.selectedProjectionRevision = null;
-    App.editingSession = null;
-    App.detailsOwner = null;
-    App.timelineOwner = null;
-    App.mutationOwner = null;
-    App.mutationState = "idle";
-    App.detailsInFlight = {};
-    App.projectsCache = null;
-    App.projectsLoading = false;
-    App.projectsLoadPromise = null;
-    App.lastTimelineData = null;
-    App.lastProjectRulesData = null;
-    App.lastSessionDetailsViewModel = null;
-    App.lastSessionActivitySummaryViewModel = null;
-    App.lastRefreshState = null;
-    App.statisticsAcceptedPayload = null;
-    App.rulesLoadPromise = null;
-    App.activePageRefreshInFlight = false;
-    App.activePageRefreshPromise = null;
-    App.activePageRefreshPending = null;
-    App.reconcileInFlight = false;
-    App.liveClockContractRefreshRequested = false;
-    App.liveClockContractViolation = null;
-    App.firstRunNoticeLoaded = false;
-    App.firstRunNoticeLoading = false;
-    liveRuntimeStore.reset();
-    App._monotonicRenderState = {};
-    App.overviewRequestToken = (App.overviewRequestToken || 0) + 1;
-    App.timelineRequestToken = (App.timelineRequestToken || 0) + 1;
-    App.statisticsRequestToken = (App.statisticsRequestToken || 0) + 1;
-    App.rulesRequestToken = (App.rulesRequestToken || 0) + 1;
-    App.settingsRequestToken = (App.settingsRequestToken || 0) + 1;
-    App.lastClientGenerationResetReason = String(reason || "data_generation_changed");
-}
-App.resetClientGeneration = resetClientGeneration;
+    function runtimeEnvelope(value) {
+        if (!value || typeof value !== "object") return null;
+        return value.runtime && typeof value.runtime === "object" ? value.runtime : null;
+    }
 
+    function normalizeRuntimeEnvelope(value, page, reportDate) {
+        var envelope = runtimeEnvelope(value);
+        if (!envelope || Number(envelope.schema_version || 0) !== 1) return null;
+        var surface = String(envelope.surface || "");
+        var expectedPage = String(page || App.currentPage || "overview");
+        if (!surface || (surface !== expectedPage && surface !== "refresh" && surface !== "details")) return null;
+        var scopeDate = String(envelope.scope_report_date || "");
+        var liveDate = String(envelope.live_report_date || "");
+        if (!scopeDate || !liveDate) return null;
+        if (reportDate && scopeDate !== String(reportDate)) return null;
+        var liveClock = App.normalizeLiveClock
+            ? App.normalizeLiveClock(envelope.live_clock || null)
+            : (envelope.live_clock || null);
+        if (scopeDate !== liveDate) liveClock = null;
+        return {
+            schemaVersion: 1,
+            surface: surface,
+            page: expectedPage,
+            reportDate: scopeDate,
+            liveReportDate: liveDate,
+            liveClock: liveClock,
+            displaySpanId: String(envelope.display_span_id || ""),
+            stableLiveKeyHash: String(envelope.stable_live_key_hash || ""),
+            liveRevision: String(envelope.live_revision || ""),
+            structureRevision: String(envelope.structure_revision || ""),
+            pageRevision: String(envelope.page_revision || ""),
+            sampleId: String(envelope.sample_id || ""),
+            currentActivityDisplaySpanId: String(envelope.current_activity_display_span_id || ""),
+            currentResourceIdentityHash: String(envelope.current_resource_identity_hash || ""),
+            currentActivity: envelope.current_activity && typeof envelope.current_activity === "object"
+                ? envelope.current_activity
+                : {},
+            collectorStatus: String(envelope.collector_status || ""),
+            paused: envelope.paused === true,
+            statusDisplay: String(envelope.status_display || "")
+        };
+    }
+
+    var liveRuntimeStore = Object.freeze({
+        get: function () { return runtimeState; },
+        acceptEnvelope: function (value, page, reportDate) {
+            var next = normalizeRuntimeEnvelope(value, page, reportDate);
+            if (!next) return null;
+            var previous = runtimeState;
+            if (previous && previous.liveClock && next.liveClock
+                && App.sameLiveContinuity
+                && App.sameLiveContinuity(previous.liveClock, next.liveClock)
+                && App.rebaseIncomingClockWithoutRollback) {
+                next.liveClock = App.rebaseIncomingClockWithoutRollback(
+                    previous.liveClock,
+                    next.liveClock,
+                    Date.now()
+                );
+            }
+            runtimeState = frozenRuntime(next);
+            return runtimeState;
+        },
+        reset: function () {
+            runtimeState = null;
+            return null;
+        },
+        setScope: function (page, reportDate) {
+            var existing = runtimeState;
+            if (!existing) return null;
+            runtimeState = frozenRuntime(Object.assign({}, existing, {
+                page: String(page || App.currentPage || "overview"),
+                reportDate: App.runtimeReportDateForPage(
+                    page || App.currentPage || "overview",
+                    reportDate
+                )
+            }));
+            return runtimeState;
+        }
+    });
+    App.liveRuntimeStore = liveRuntimeStore;
+    Object.defineProperty(App, "liveRuntime", {
+        configurable: false,
+        enumerable: true,
+        get: function () { return liveRuntimeStore.get(); }
+    });
+
+    function resetClientGeneration(reason) {
+        if (App.requestCoordinator) App.requestCoordinator.bumpDataEpoch();
+        App.timelineLoaded = false;
+        App.statisticsLoaded = false;
+        App.rulesLoaded = false;
+        App.settingsLoaded = false;
+        App.currentSessions = [];
+        App.selectedProjectionInstanceKey = null;
+        App.selectedProjectionRevision = null;
+        App.editingSession = null;
+        App.detailsOwner = null;
+        App.timelineOwner = null;
+        App.mutationOwner = null;
+        App.mutationState = "idle";
+        App.detailsInFlight = {};
+        App.projectsCache = null;
+        App.projectsLoading = false;
+        App.projectsLoadPromise = null;
+        App.lastTimelineData = null;
+        App.lastProjectRulesData = null;
+        App.lastSessionDetailsViewModel = null;
+        App.lastSessionActivitySummaryViewModel = null;
+        App.lastRefreshState = null;
+        App.statisticsAcceptedPayload = null;
+        App.rulesLoadPromise = null;
+        App.activePageRefreshInFlight = false;
+        App.activePageRefreshPromise = null;
+        App.activePageRefreshPending = null;
+        App.reconcileInFlight = false;
+        App.liveClockContractRefreshRequested = false;
+        App.liveClockContractViolation = null;
+        App.firstRunNoticeLoaded = false;
+        App.firstRunNoticeLoading = false;
+        liveRuntimeStore.reset();
+        App._monotonicRenderState = {};
+        App.overviewRequestToken = (App.overviewRequestToken || 0) + 1;
+        App.timelineRequestToken = (App.timelineRequestToken || 0) + 1;
+        App.statisticsRequestToken = (App.statisticsRequestToken || 0) + 1;
+        App.rulesRequestToken = (App.rulesRequestToken || 0) + 1;
+        App.settingsRequestToken = (App.settingsRequestToken || 0) + 1;
+        App.lastClientGenerationResetReason = String(reason || "data_generation_changed");
+    }
+    App.resetClientGeneration = resetClientGeneration;
 
     function invalidateProjectCatalog() {
         App.projectsCache = null;
@@ -229,11 +233,13 @@ App.resetClientGeneration = resetClientGeneration;
 
     function refreshStatusFromRefreshState(state) {
         if (!state || !state.ok) return refreshStatus();
+        var envelope = runtimeEnvelope(state);
+        if (!envelope) return refreshStatus();
         App.showStatus({
             ok: true,
-            status: state.collector_status,
-            paused: !!state.paused,
-            display: state.status_display || ""
+            status: envelope.collector_status,
+            paused: envelope.paused === true,
+            display: envelope.status_display || ""
         });
         return Promise.resolve();
     }
@@ -245,26 +251,28 @@ App.resetClientGeneration = resetClientGeneration;
             if (!App.requestCoordinator.isCurrent(token)) return;
             var bundle = App.handleResult(result, function (msg) { throw new Error(msg); });
             if (!bundle || !App.acceptPagePayloadRuntime(bundle, "overview", bundle.date)) return;
+            var runtime = liveRuntimeStore.get();
+            if (!runtime) return;
             var overview = bundle.overview || {};
             overview.date = bundle.date || overview.date;
-            overview.current_activity = bundle.current_activity || overview.current_activity;
-            overview.live_clock = bundle.live_clock || overview.live_clock;
-            overview.activity_display_model = bundle.activity_display_model || overview.activity_display_model;
-            overview.display_span_id = bundle.display_span_id || overview.display_span_id;
-            overview.sample_id = bundle.sample_id || overview.sample_id;
+            overview.current_activity = runtime.currentActivity;
+            overview.live_clock = runtime.liveClock;
+            overview.display_span_id = runtime.displaySpanId;
+            overview.sample_id = runtime.sampleId;
             overview.kpi_live_base = bundle.kpi_live_base || overview.kpi_live_base;
             overview.kpi_live_targets = bundle.kpi_live_targets || overview.kpi_live_targets;
             if (overview.today_total_seconds === undefined) overview.today_total_seconds = bundle.today_total_seconds || 0;
             if (overview.classified_seconds === undefined) overview.classified_seconds = bundle.classified_seconds || 0;
             if (overview.uncategorized_seconds === undefined) overview.uncategorized_seconds = bundle.uncategorized_seconds || 0;
-            if (overview.current_activity_elapsed_seconds === undefined) overview.current_activity_elapsed_seconds = bundle.current_activity_elapsed_seconds || 0;
+            if (overview.current_activity_elapsed_seconds === undefined) {
+                overview.current_activity_elapsed_seconds = runtime.currentActivity.elapsed_seconds || 0;
+            }
             App.showOverview(overview);
             App.showRecent({
                 activities: bundle.activities || [],
-                live_clock: bundle.live_clock || null,
-                activity_display_model: bundle.activity_display_model || null,
-                display_span_id: bundle.display_span_id || "",
-                sample_id: bundle.sample_id || ""
+                live_clock: runtime.liveClock,
+                display_span_id: runtime.displaySpanId,
+                sample_id: runtime.sampleId
             });
         }).catch(function () {
             if (App.requestCoordinator.isCurrent(token)) App.showError("刷新失败");
@@ -434,34 +442,42 @@ App.resetClientGeneration = resetClientGeneration;
     }
     App.initButtons = initButtons;
 
+    function envelopeFromState(state) {
+        return runtimeEnvelope(state);
+    }
+
     function updateCurrentActivityCacheFromRefreshState(state) {
-        if (!state) return;
+        var envelope = envelopeFromState(state);
+        if (!envelope) return;
+        var current = envelope.current_activity || {};
         if (App.currentPage === "overview") {
             if (!App.lastOverviewSnapshot) App.lastOverviewSnapshot = {};
-            App.lastOverviewSnapshot.current_activity = state.current_activity || {};
+            App.lastOverviewSnapshot.current_activity = current;
         } else if (App.currentPage === "timeline") {
             if (!App.lastTimelineData) App.lastTimelineData = {};
-            App.lastTimelineData.current_activity = state.current_activity || {};
+            App.lastTimelineData.current_activity = current;
         }
     }
 
     function currentActivityRenderIdentity(state) {
-        var current = (state && state.current_activity) || {};
+        var envelope = envelopeFromState(state) || {};
+        var current = envelope.current_activity || {};
         return [
             current.active === true ? "active" : "inactive",
             current.current_duration_live === true ? "live" : "static",
             String(current.live_state || ""),
-            String(current.display_span_id || ""),
-            String(current.current_activity_display_span_id || ""),
-            String(current.current_resource_identity_hash || ""),
-            String(current.stable_live_key_hash || "")
+            String(envelope.display_span_id || ""),
+            String(envelope.current_activity_display_span_id || ""),
+            String(envelope.current_resource_identity_hash || ""),
+            String(envelope.stable_live_key_hash || "")
         ].join("|");
     }
 
     function refreshCurrentActivityFromState(state, options) {
-        if (!state || !state.current_activity) return;
+        var envelope = envelopeFromState(state);
+        if (!envelope) return;
         var runtime = liveRuntimeStore.get();
-        if (!runtime || runtime.liveRevision !== String(state.live_revision || "")) return;
+        if (!runtime || runtime.liveRevision !== String(envelope.live_revision || "")) return;
         options = options || {};
         updateCurrentActivityCacheFromRefreshState(state);
         if (options.forceRender !== true) return;
@@ -470,7 +486,7 @@ App.resetClientGeneration = resetClientGeneration;
             : App.currentPage === "timeline"
             ? document.getElementById("timeline-current")
             : null;
-        if (element) App.renderCurrentActivityElement(element, state.current_activity || {}, App.currentPage);
+        if (element) App.renderCurrentActivityElement(element, envelope.current_activity || {}, App.currentPage);
     }
     App.refreshCurrentActivityFromState = refreshCurrentActivityFromState;
     App.refreshTimelineCurrentActivityFromState = function (state) {
@@ -485,12 +501,14 @@ App.resetClientGeneration = resetClientGeneration;
         App.bridge.getRefreshState(App.currentPage === "timeline" ? App.timelineDate : null).then(function (result) {
             if (!App.requestCoordinator.isCurrent(token)) return;
             var state = App.handleResult(result, function () { return null; });
-            if (!state) return;
+            var envelope = envelopeFromState(state);
+            if (!state || !envelope) return;
             var previousState = App.lastRefreshState;
-            var prevPageRevision = previousState && previousState.page_revision;
-            var isFirstCheck = prevPageRevision === null || prevPageRevision === undefined;
-            var liveStateChanged = isFirstCheck || (previousState && previousState.live_revision) !== state.live_revision;
-            var pageStructureChanged = isFirstCheck || prevPageRevision !== state.page_revision;
+            var previousEnvelope = envelopeFromState(previousState) || {};
+            var prevPageRevision = previousEnvelope.page_revision;
+            var isFirstCheck = prevPageRevision === null || prevPageRevision === undefined || prevPageRevision === "";
+            var liveStateChanged = isFirstCheck || previousEnvelope.live_revision !== envelope.live_revision;
+            var pageStructureChanged = isFirstCheck || prevPageRevision !== envelope.page_revision;
             var currentActivityIdentityChanged = currentActivityRenderIdentity(previousState) !== currentActivityRenderIdentity(state);
             var renderCurrent = liveStateChanged || pageStructureChanged || currentActivityIdentityChanged || App.liveClockContractRefreshRequested;
             if (!App.acceptRefreshStateRuntime(state)) return;
