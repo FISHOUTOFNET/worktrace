@@ -5,11 +5,7 @@
   "runtime_payload_fallback": [
     "worktrace/webview_ui/js/init.js"
   ],
-  "runtime_global_registration": [
-    "worktrace/api/app_api.py",
-    "worktrace/services/runtime_snapshot_barrier.py",
-    "worktrace/services/secure_backup_service.py"
-  ],
+  "runtime_global_registration": [],
   "cross_module_private_import": [
     "worktrace/services/activity_live_clock.py",
     "worktrace/services/activity_display_span.py"
