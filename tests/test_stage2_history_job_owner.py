@@ -99,3 +99,17 @@ def test_batch_scan_failure_keeps_a_durable_failed_job(temp_db, monkeypatch):
     assert result["queued"] is False
     assert result["error"] == "planned_scan_failure"
     assert _job_count() == 1
+
+
+def test_history_job_owner_delegates_rule_catalog_dml():
+    text = open(history_mutation_job_service.__file__, encoding="utf-8").read()
+    for forbidden in (
+        "UPDATE project_rule",
+        "UPDATE folder_project_rule",
+        "DELETE FROM project_rule",
+        "DELETE FROM folder_project_rule",
+    ):
+        assert forbidden not in text
+    assert "rule_catalog_command_service as catalog" in text
+    assert "catalog.set_rule_enabled_in_transaction" in text
+    assert "catalog.delete_rule_in_transaction" in text
