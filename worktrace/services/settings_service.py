@@ -1,7 +1,8 @@
-"""Durable settings with explicit mutation classes and generation-keyed cache."""
+"""Durable settings with explicit mutation classes and one-version cache."""
 
 from __future__ import annotations
 
+import threading
 from enum import StrEnum
 from typing import Mapping
 
@@ -10,7 +11,10 @@ from ..db import get_connection, get_db_key, now_str
 from ..domain_unit_of_work import DomainUnitOfWork
 from ..generation_clock import generation
 
-_SETTING_CACHE: dict[tuple[str, int, str], str | None] = {}
+_SETTING_CACHE_LOCK = threading.RLock()
+_SETTING_CACHE_DATABASE_KEY: str | None = None
+_SETTING_CACHE_GENERATION: int | None = None
+_SETTING_CACHE: dict[str, str | None] = {}
 
 
 class SettingMutationClass(StrEnum):
@@ -76,15 +80,29 @@ def _effects_for_classification(
     return (DataGenerationNamespace.SETTINGS,)
 
 
+def _select_cache_snapshot(database_key: str, current_generation: int) -> None:
+    global _SETTING_CACHE_DATABASE_KEY, _SETTING_CACHE_GENERATION
+    if (
+        _SETTING_CACHE_DATABASE_KEY == database_key
+        and _SETTING_CACHE_GENERATION == int(current_generation)
+    ):
+        return
+    _SETTING_CACHE.clear()
+    _SETTING_CACHE_DATABASE_KEY = database_key
+    _SETTING_CACHE_GENERATION = int(current_generation)
+
+
 def clear_settings_cache(key: str | None = None) -> None:
     """Test/reconfiguration hook; ordinary writes rely on generation change."""
 
-    database_key = get_db_key()
-    for cache_key in list(_SETTING_CACHE):
-        if cache_key[0] != database_key:
-            continue
-        if key is None or cache_key[2] == key:
-            _SETTING_CACHE.pop(cache_key, None)
+    global _SETTING_CACHE_DATABASE_KEY, _SETTING_CACHE_GENERATION
+    with _SETTING_CACHE_LOCK:
+        if key is None:
+            _SETTING_CACHE.clear()
+            _SETTING_CACHE_DATABASE_KEY = None
+            _SETTING_CACHE_GENERATION = None
+            return
+        _SETTING_CACHE.pop(str(key), None)
 
 
 def _page_read_connection():
@@ -114,15 +132,23 @@ def get_setting(key: str, default: str | None = None, *, conn=None) -> str | Non
         with get_connection() as own_conn:
             return _read_setting(own_conn, key, default)
 
-    current_generation = generation(DataGenerationNamespace.SETTINGS)
-    cache_key = (get_db_key(), current_generation, str(key))
-    if cache_key in _SETTING_CACHE:
-        value = _SETTING_CACHE[cache_key]
+    normalized_key = str(key)
+    while True:
+        database_key = get_db_key()
+        current_generation = generation(DataGenerationNamespace.SETTINGS)
+        with _SETTING_CACHE_LOCK:
+            _select_cache_snapshot(database_key, current_generation)
+            if normalized_key in _SETTING_CACHE:
+                value = _SETTING_CACHE[normalized_key]
+                return value if value is not None else default
+        with get_connection() as own_conn:
+            value = _read_setting(own_conn, normalized_key, None)
+        if generation(DataGenerationNamespace.SETTINGS) != current_generation:
+            continue
+        with _SETTING_CACHE_LOCK:
+            _select_cache_snapshot(database_key, current_generation)
+            _SETTING_CACHE[normalized_key] = value
         return value if value is not None else default
-    with get_connection() as own_conn:
-        value = _read_setting(own_conn, key, None)
-    _SETTING_CACHE[cache_key] = value
-    return value if value is not None else default
 
 
 def set_setting(
