@@ -1,15 +1,11 @@
-"""Settings / Privacy bridge mixin.
-
-The bridge owns file-dialog interaction and transport error mapping. Privacy,
-collection startup and clipboard preference orchestration are API capabilities.
-"""
+"""Settings / Privacy bridge mixin."""
 
 from __future__ import annotations
 
 import logging
 from typing import Any
 
-from ..api import app_api, settings_api
+from ..api import settings_api
 
 logger = logging.getLogger(__name__)
 
@@ -26,21 +22,21 @@ class SettingsBridgeMixin:
 
     def accept_first_run_notice(self) -> dict[str, Any]:
         try:
-            return app_api.accept_privacy_notice_and_start()
+            return self.application_control.accept_privacy_notice_and_start()
         except Exception:
             logger.exception("webview bridge accept_first_run_notice failed")
             return {"ok": False, "error": "确认隐私说明失败"}
 
     def get_settings_privacy_status(self) -> dict[str, Any]:
         try:
-            return settings_api.get_settings_privacy_status()
+            return settings_api.get_settings_privacy_status(self.maintenance)
         except Exception:
             logger.exception("webview bridge get_settings_privacy_status failed")
             return {"ok": False, "error": "加载设置状态失败"}
 
     def set_clipboard_capture_enabled(self, enabled) -> dict[str, Any]:
         try:
-            return app_api.set_clipboard_capture_policy(enabled)
+            return self.application_control.set_clipboard_capture_policy(enabled)
         except Exception:
             logger.exception("webview bridge set_clipboard_capture_enabled failed")
             return {"ok": False, "error": "设置剪贴板记录失败"}
@@ -58,6 +54,7 @@ class SettingsBridgeMixin:
                 output_path,
                 passphrase,
                 confirm_passphrase,
+                maintenance=self.maintenance,
             )
             if result.get("ok"):
                 return {
@@ -79,7 +76,8 @@ class SettingsBridgeMixin:
             if input_path is None:
                 return {"ok": False, "error": "已取消读取备份清单"}
             result = settings_api.preview_encrypted_backup_manifest_for_webview(
-                input_path
+                input_path,
+                maintenance=self.maintenance,
             )
             if result.get("ok"):
                 return {
@@ -108,6 +106,7 @@ class SettingsBridgeMixin:
                 input_path,
                 passphrase,
                 confirm_text,
+                maintenance=self.maintenance,
             )
             if result.get("ok"):
                 return {
