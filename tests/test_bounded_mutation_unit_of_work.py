@@ -137,14 +137,19 @@ def test_history_batch_commits_assignment_and_cursor_with_one_report_generation(
     assert int(job["changed_count"]) == 1
 
 
-def test_bounded_services_have_no_manual_transaction_control():
+def test_bounded_mutation_owner_has_uow_and_facade_does_not():
     root = Path(__file__).resolve().parents[1]
-    for relative in (
-        "worktrace/services/rule_batch_service.py",
-        "worktrace/services/history_mutation_job_service.py",
-    ):
-        source = root.joinpath(relative).read_text(encoding="utf-8")
-        assert "DomainUnitOfWork" in source
+    owner = root.joinpath(
+        "worktrace/services/history_mutation_job_service.py"
+    ).read_text(encoding="utf-8")
+    facade = root.joinpath(
+        "worktrace/services/rule_batch_service.py"
+    ).read_text(encoding="utf-8")
+
+    assert "DomainUnitOfWork" in owner
+    assert "DomainUnitOfWork" not in facade
+    assert "submit_rule_batch_job" in facade
+    for source in (owner, facade):
         assert "BEGIN IMMEDIATE" not in source
         assert ".commit()" not in source
         assert ".rollback()" not in source
