@@ -57,11 +57,15 @@ def test_live_project_database_fallback_does_not_expand() -> None:
     assert offenders <= _allowlist()["live_project_database_fallback"]
 
 
-def test_sql_text_mutation_classification_does_not_expand() -> None:
+def test_sql_text_mutation_classification_is_absent() -> None:
     markers = {
-        "_statement_affects_report_structure",
-        "_setting_write_affects_report_structure",
-        "REPORT_STRUCTURE_TABLES",
+        "_REPORT_STRUCTURE_TABLES",
+        "_REPORT_STRUCTURE_SETTINGS",
+        "_classify_report_structure_sql",
+        "_sql_affects_report_structure",
+        "_activity_log_update_changes_structure",
+        "_parameters_affect_report_structure",
+        "report_structure_generation",
     }
     offenders = {
         _relative(path)
@@ -69,6 +73,14 @@ def test_sql_text_mutation_classification_does_not_expand() -> None:
         if any(marker in path.read_text(encoding="utf-8") for marker in markers)
     }
     assert offenders <= _allowlist()["sql_text_mutation_classification"]
+
+
+def test_mutation_effects_are_declared_outside_database_infrastructure() -> None:
+    db_source = (ROOT / "worktrace/db.py").read_text(encoding="utf-8")
+    assert "current_mutation_effects" in db_source
+    assert "MutationEffect.REPORT_STRUCTURE" in db_source
+    assert "ACTIVITY_LOG" not in db_source[:9000]
+    assert "PROJECT_RULE" not in db_source[:9000]
 
 
 def test_runtime_payload_fallback_does_not_expand() -> None:
