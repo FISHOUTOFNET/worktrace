@@ -47,17 +47,12 @@ def _apply_post_clear_settings(conn) -> None:
 
 
 def clear_all_live_data() -> None:
-    """Delete live rows atomically and publish every affected generation."""
+    """Delete live rows atomically and publish every affected generation once."""
 
-    with DomainUnitOfWork(
-        (
-            DataGenerationNamespace.REPORT_STRUCTURE,
-            DataGenerationNamespace.CLASSIFICATION_CATALOG,
-            DataGenerationNamespace.SETTINGS,
-            DataGenerationNamespace.PRIVACY_CATALOG,
-            DataGenerationNamespace.DATABASE_REPLACEMENT,
-        )
-    ) as uow:
+    # REPORT_STRUCTURE is owned by the command UoW. The remaining catalog,
+    # settings, privacy, and replacement generations are published exactly once
+    # by restore_installation_privacy_state -> publish_database_replacement.
+    with DomainUnitOfWork((DataGenerationNamespace.REPORT_STRUCTURE,)) as uow:
         conn = uow.connection
         privacy_state = privacy_gate_service.capture_installation_privacy_state(
             conn=conn
