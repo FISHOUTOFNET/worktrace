@@ -3,6 +3,10 @@ from __future__ import annotations
 import runpy
 from pathlib import Path
 
+import pytest
+
+pytestmark = [pytest.mark.unit, pytest.mark.contract]
+
 _STATE = runpy.run_path(
     str(Path(__file__).with_name("_architecture_owner_governance_base.py"))
 )
@@ -45,8 +49,18 @@ def _dynamic_dml(path):
 
 
 _STATE["_dynamic_dml"] = _dynamic_dml
-pytestmark = _STATE["pytestmark"]
 
 for _name, _value in _STATE.items():
     if _name.startswith("test_"):
         globals()[_name] = _value
+
+
+def test_historical_migration_owner_is_lifecycle_scoped() -> None:
+    assert all(
+        "worktrace/schema_migrations_history.py" in owners
+        for owners in _owners.values()
+    )
+    assert _owners["activity_inference_job"] >= {
+        "worktrace/services/activity_inference_job_repository.py",
+        "worktrace/schema_migrations.py",
+    }
