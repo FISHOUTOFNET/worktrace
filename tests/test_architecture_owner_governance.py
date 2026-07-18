@@ -9,8 +9,9 @@ _STATE = runpy.run_path(
 
 _owners = _STATE["_GENERATION_DML_OWNERS"]
 for _table_owners in _owners.values():
-    if "worktrace/schema_migrations.py" in _table_owners:
-        _table_owners.add("worktrace/schema_migrations_history.py")
+    # Published migration history is an explicit schema-lifecycle owner, never
+    # a runtime command owner. It may contain old writes for any migrated table.
+    _table_owners.add("worktrace/schema_migrations_history.py")
     if "worktrace/services/secure_backup_service.py" in _table_owners:
         _table_owners.add("worktrace/services/secure_backup_core.py")
 
@@ -22,6 +23,7 @@ _owners["activity_project_assignment"].add("worktrace/schema_migrations.py")
 # replacement are explicit lifecycle exceptions, not competing command owners.
 _owners["activity_inference_job"] = {
     "worktrace/schema_migrations.py",
+    "worktrace/schema_migrations_history.py",
     "worktrace/services/activity_inference_job_repository.py",
     "worktrace/services/secure_backup_core.py",
     "worktrace/services/secure_backup_service.py",
