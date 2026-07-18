@@ -225,40 +225,11 @@ def process_new_activity(activity_id: int) -> dict:
 
 
 def retry_pending_inference(limit: int = 100) -> int:
-    """Retry bounded durable markers through the inference orchestrator."""
+    """Consume durable inference jobs through the canonical bounded worker."""
 
-    with get_connection() as conn:
-        rows = conn.execute(
-            """
-            SELECT a.id
-            FROM activity_log a
-            JOIN activity_project_assignment apa ON apa.activity_id = a.id
-            WHERE a.end_time IS NOT NULL
-              AND a.status = 'normal'
-              AND a.is_hidden = 0
-              AND a.is_deleted = 0
-              AND apa.is_manual = 0
-              AND apa.source = 'uncategorized'
-              AND apa.confidence = ?
-            ORDER BY a.id
-            LIMIT ?
-            """,
-            (
-                assignment_command_service.INFERENCE_RETRY_CONFIDENCE,
-                max(0, int(limit)),
-            ),
-        ).fetchall()
-    updated = 0
-    for row in rows:
-        try:
-            result = assign_project_for_activity(int(row["id"]))
-            if int(result.get("confidence") or 0) != (
-                assignment_command_service.INFERENCE_RETRY_CONFIDENCE
-            ):
-                updated += 1
-        except Exception:
-            logging.exception("assignment inference retry failed for activity %s", row["id"])
-    return updated
+    from .activity_inference_job_service import process_pending_inference_jobs
+
+    return process_pending_inference_jobs(limit=max(0, int(limit)))
 
 
 _OPEN_ROW_UNCLASSIFIED_SOURCES = {"uncategorized", "suggested_project_name"}
@@ -351,13 +322,13 @@ def candidate_project_name_for_resource(resource: dict) -> str | None:
         return None
 
     if path_hint:
-        parent_dir = ntpath.dirname(path_hint.rstrip("\\/"))
+        parent_dir = ntpath.dirname(path_hint.rstrip("\/"))
         if parent_dir and (
             has_auto_project_extension(path_hint)
             or (resource_kind == "ide_file" and resource_subtype == "code_file")
         ):
             candidate = _clean_project_candidate(
-                ntpath.basename(parent_dir.rstrip("\\/"))
+                ntpath.basename(parent_dir.rstrip("\/"))
             )
             if candidate and candidate.casefold() not in GENERIC_FILE_PROJECT_NAMES:
                 return candidate
@@ -386,7 +357,7 @@ def _infer_project_resource_first(
     if path_hint:
         for target in (
             path_hint,
-                ntpath.dirname(path_hint.rstrip("\\/")),
+            ntpath.dirname(path_hint.rstrip("\/")),
         ):
             if not target:
                 continue
