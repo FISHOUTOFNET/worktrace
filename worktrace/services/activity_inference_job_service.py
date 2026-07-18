@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import logging
 import threading
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
+from typing import Any
 
 from ..data_generation_repository import DataGenerationNamespace
 from ..db import get_connection, now_str
 from ..domain_unit_of_work import DomainUnitOfWork
 from . import activity_inference_job_repository as jobs
-from . import project_inference_service
+
+InferenceCommand = Callable[[Any, int], dict]
 
 _EXECUTION_LOCK = threading.RLock()
 
@@ -26,6 +28,7 @@ def recover_interrupted_inference_jobs() -> int:
 
 
 def process_pending_inference_jobs(
+    infer_activity: InferenceCommand,
     limit: int = 100,
     *,
     activity_ids: Iterable[int] | None = None,
@@ -53,12 +56,14 @@ def process_pending_inference_jobs(
                     uow.mark_changed()
         recover_interrupted_inference_jobs()
         return _process_pending_inference_jobs_locked(
+            infer_activity,
             normalized_limit,
             activity_ids=requested_ids,
         )
 
 
 def _process_pending_inference_jobs_locked(
+    infer_activity: InferenceCommand,
     limit: int,
     *,
     activity_ids: Iterable[int] | None,
@@ -98,10 +103,7 @@ def _process_pending_inference_jobs_locked(
                     uow.mark_changed()
                     completed += 1
                     continue
-                project_inference_service.assign_project_for_activity_in_transaction(
-                    conn,
-                    activity_id,
-                )
+                infer_activity(conn, activity_id)
                 if not jobs.delete_completed_job(conn, activity_id):
                     raise RuntimeError("inference_job_completion_lost")
                 uow.mark_changed()
@@ -134,6 +136,7 @@ def _record_failure_safely(activity_id: int, exc: BaseException) -> None:
 
 
 __all__ = [
+    "InferenceCommand",
     "process_pending_inference_jobs",
     "recover_interrupted_inference_jobs",
 ]
