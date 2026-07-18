@@ -13,21 +13,17 @@ _STATE = runpy.run_path(
 
 _owners = _STATE["_GENERATION_DML_OWNERS"]
 for _table_owners in _owners.values():
-    # Published migration history is an explicit schema-lifecycle owner, never
-    # a runtime command owner. It may contain old writes for any migrated table.
-    _table_owners.add("worktrace/schema_migrations_history.py")
     if "worktrace/services/secure_backup_service.py" in _table_owners:
         _table_owners.add("worktrace/services/secure_backup_core.py")
 
-# v10-to-v11 is the one published migration that removes the legacy assignment
-# sentinel. Runtime assignment writes remain owned only by the command service.
+# The current migration removes the legacy assignment sentinel. Runtime
+# assignment writes remain owned only by the command service.
 _owners["activity_project_assignment"].add("worktrace/schema_migrations.py")
 
 # The repository is the sole runtime DML owner. Schema migration, whole-database
 # maintenance, and secure replacement are explicit lifecycle exceptions.
 _owners["activity_inference_job"] = {
     "worktrace/schema_migrations.py",
-    "worktrace/schema_migrations_history.py",
     "worktrace/services/activity_inference_job_repository.py",
     "worktrace/services/database_maintenance_service.py",
     "worktrace/services/secure_backup_core.py",
@@ -95,11 +91,7 @@ def test_generation_backed_dml_stays_with_canonical_command_owners(
     assert offender is None, offender
 
 
-def test_historical_migration_owner_is_lifecycle_scoped() -> None:
-    assert all(
-        "worktrace/schema_migrations_history.py" in owners
-        for owners in _owners.values()
-    )
+def test_inference_job_owners_are_lifecycle_scoped() -> None:
     assert _owners["activity_inference_job"] >= {
         "worktrace/services/activity_inference_job_repository.py",
         "worktrace/services/database_maintenance_service.py",
