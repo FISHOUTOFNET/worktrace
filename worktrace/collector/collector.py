@@ -22,6 +22,7 @@ from ..services.settings_service import (
 )
 from . import collector_health
 from .clock_tracker import ClockTracker
+from .collector_failure_policy import classify_collector_failure
 from .heartbeat import update_heartbeat
 from .state_machine import CollectorStateMachine
 
@@ -206,11 +207,19 @@ def run_collector(
         _run_clipboard_maintenance_tick()
         next_poll_deadline = time.monotonic() + POLL_CADENCE_SECONDS
     except Exception as exc:
-        collector_health.record_fatal_failure("startup", exc, now_str())
+        disposition = classify_collector_failure(exc)
+        collector_health.record_fatal_failure(
+            "startup",
+            disposition.code,
+            now_str(),
+        )
         collector_health.record_collector_stopped(now_str())
         if startup_failed_event is not None:
             startup_failed_event.set()
-        logging.exception("collector startup initialization failed")
+        logging.error(
+            "collector startup initialization failed code=%s",
+            disposition.code.value,
+        )
         return
 
     if startup_ready_event is not None:
@@ -382,18 +391,35 @@ def run_collector(
                 next_poll_deadline,
             )
         except Exception as exc:
-            if not collector_health.is_transient_failure(exc):
-                collector_health.record_fatal_failure(phase, exc, now_str())
+            disposition = classify_collector_failure(exc)
+            if not disposition.retryable:
+                collector_health.record_fatal_failure(
+                    phase,
+                    disposition.code,
+                    now_str(),
+                )
                 fatal_stop = True
                 break
-            collector_health.record_transient_failure(phase, exc, now_str())
+            collector_health.record_transient_failure(
+                phase,
+                disposition.code,
+                now_str(),
+            )
             next_poll_deadline = _sleep_until_next_poll(
                 stop_event,
                 control,
                 next_poll_deadline,
             )
 
-    _set_clipboard_capture_enabled(adapter, False)
+    try:
+        _set_clipboard_capture_enabled(adapter, False)
+    except Exception as exc:
+        disposition = classify_collector_failure(exc)
+        collector_health.record_fatal_failure(
+            "clipboard_shutdown",
+            disposition.code,
+            now_str(),
+        )
     try:
         if fatal_stop:
             machine.stop(
@@ -426,20 +452,17 @@ def _pause_machine_then_expose(
 
 
 def _run_clipboard_maintenance_tick() -> None:
-    """Run bounded retention maintenance without affecting collector commands."""
+    """Run bounded optional retention maintenance without blocking collection."""
 
     try:
         clipboard_service.prune_old_events()
     except Exception as exc:
-        logging.exception("clipboard retention maintenance failed")
-        try:
-            collector_health.record_transient_failure(
-                "clipboard_maintenance",
-                exc,
-                now_str(),
-            )
-        except Exception:
-            logging.exception("clipboard retention health update failed")
+        disposition = classify_collector_failure(exc)
+        collector_health.record_transient_failure(
+            "clipboard_maintenance",
+            disposition.code,
+            now_str(),
+        )
 
 
 def _wait_for_poll_delay(
@@ -500,9 +523,12 @@ def _set_clipboard_capture_enabled(
     try:
         setter(bool(enabled))
     except Exception as exc:
+        disposition = classify_collector_failure(exc)
+        if not disposition.retryable:
+            raise
         collector_health.record_transient_failure(
             "clipboard_lifecycle",
-            exc,
+            disposition.code,
             now_str(),
         )
 
@@ -513,10 +539,13 @@ def _clipboard_events(adapter: PlatformAdapter):
     except AttributeError:
         return []
     except Exception as exc:
-        collector_health.record_transient_failure("clipboard", exc, now_str())
-        logging.debug(
-            "clipboard event polling failed kind=%s",
-            type(exc).__name__,
+        disposition = classify_collector_failure(exc)
+        if not disposition.retryable:
+            raise
+        collector_health.record_transient_failure(
+            "clipboard",
+            disposition.code,
+            now_str(),
         )
         return []
 

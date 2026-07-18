@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import importlib
 import logging
+import re
 import threading
 from dataclasses import dataclass
 from datetime import datetime
@@ -9,6 +9,7 @@ from datetime import datetime
 from ..constants import TIME_FORMAT
 from ..db import get_db_path, now_str
 from ..services.settings_service import get_int_setting, get_setting, set_settings
+from .collector_failure_policy import CollectorFailureCode
 
 HEALTH_HEALTHY = "healthy"
 HEALTH_DEGRADED = "degraded"
@@ -17,8 +18,8 @@ HEALTH_STOPPED = "stopped"
 
 _FAILING_THRESHOLD = 3
 _SUCCESS_PERSIST_INTERVAL_SECONDS = 30
-_DB_ERROR = importlib.import_module("s" + "qlite3").DatabaseError
 _STATE_LOCK = threading.RLock()
+_SAFE_CODE_PATTERN = re.compile(r"[^a-z0-9_]+")
 
 
 @dataclass
@@ -127,10 +128,11 @@ def record_successful_observation(at_time: str | None = None) -> None:
 
 def record_transient_failure(
     phase: str,
-    exc: BaseException,
+    code: CollectorFailureCode | str,
     at_time: str | None = None,
 ) -> None:
     at = at_time or now_str()
+    safe_code = _safe_failure_code(code)
     state = _runtime_state()
     with _STATE_LOCK:
         state.failures += 1
@@ -148,23 +150,24 @@ def record_transient_failure(
             "collector_last_failure_at": at,
             "collector_consecutive_failures": str(failures),
             "collector_last_failure_phase": _safe_phase(phase),
-            "collector_last_failure_kind": type(exc).__name__,
+            "collector_last_failure_kind": safe_code,
         }
     )
     logging.warning(
-        "collector transient failure phase=%s kind=%s consecutive=%s",
+        "collector transient failure phase=%s code=%s consecutive=%s",
         _safe_phase(phase),
-        type(exc).__name__,
+        safe_code,
         failures,
     )
 
 
 def record_fatal_failure(
     phase: str,
-    exc: BaseException,
+    code: CollectorFailureCode | str,
     at_time: str | None = None,
 ) -> None:
     at = at_time or now_str()
+    safe_code = _safe_failure_code(code)
     state = _runtime_state()
     with _STATE_LOCK:
         state.health_state = HEALTH_STOPPED
@@ -174,13 +177,13 @@ def record_fatal_failure(
             "collector_health_state": HEALTH_STOPPED,
             "collector_last_failure_at": at,
             "collector_last_failure_phase": _safe_phase(phase),
-            "collector_last_failure_kind": type(exc).__name__,
+            "collector_last_failure_kind": safe_code,
         }
     )
     logging.error(
-        "collector fatal failure phase=%s kind=%s",
+        "collector fatal failure phase=%s code=%s",
         _safe_phase(phase),
-        type(exc).__name__,
+        safe_code,
     )
 
 
@@ -207,6 +210,7 @@ def reset_collector_failures() -> None:
 
 def record_health_code(code: str, at_time: str | None = None) -> None:
     at = at_time or now_str()
+    safe_code = _safe_failure_code(code)
     state = _runtime_state()
     with _STATE_LOCK:
         state.last_failure_at = at
@@ -214,44 +218,22 @@ def record_health_code(code: str, at_time: str | None = None) -> None:
         {
             "collector_last_failure_at": at,
             "collector_last_failure_phase": "runtime",
-            "collector_last_failure_kind": str(code or "runtime_event"),
+            "collector_last_failure_kind": safe_code,
         }
     )
-    logging.info("collector health code=%s", str(code or "runtime_event"))
-
-
-def is_transient_failure(exc: BaseException) -> bool:
-    """Retry environmental contention, but stop on corruption/programming faults."""
-    if isinstance(
-        exc,
-        (
-            SystemExit,
-            KeyboardInterrupt,
-            MemoryError,
-            AssertionError,
-            TypeError,
-            AttributeError,
-            KeyError,
-        ),
-    ):
-        return False
-    if isinstance(exc, _DB_ERROR):
-        message = str(exc).lower()
-        return any(
-            token in message
-            for token in (
-                "locked",
-                "busy",
-                "secure_import_in_progress",
-                "database_generation_changed",
-            )
-        )
-    return True
+    logging.info("collector health code=%s", safe_code)
 
 
 def _safe_phase(phase: str) -> str:
-    value = str(phase or "unknown").strip()
-    return value if value else "unknown"
+    value = str(phase or "unknown").strip().lower()
+    normalized = _SAFE_CODE_PATTERN.sub("_", value).strip("_")
+    return (normalized or "unknown")[:64]
+
+
+def _safe_failure_code(code: CollectorFailureCode | str) -> str:
+    value = code.value if isinstance(code, CollectorFailureCode) else str(code or "")
+    normalized = _SAFE_CODE_PATTERN.sub("_", value.strip().lower()).strip("_")
+    return (normalized or CollectorFailureCode.UNEXPECTED_FAILURE.value)[:64]
 
 
 def format_time(value: datetime | str | None = None) -> str:
@@ -266,7 +248,6 @@ __all__ = [
     "HEALTH_HEALTHY",
     "HEALTH_STOPPED",
     "format_time",
-    "is_transient_failure",
     "record_collector_started",
     "record_collector_stopped",
     "record_fatal_failure",

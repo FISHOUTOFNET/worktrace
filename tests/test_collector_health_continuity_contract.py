@@ -6,6 +6,10 @@ import pytest
 
 from worktrace.collector import collector as collector_mod
 from worktrace.collector.collector import run_collector
+from worktrace.collector.collector_failure_policy import (
+    CollectorFailureCode,
+    TransientCollectorError,
+)
 from worktrace.constants import STATUS_ERROR
 from worktrace.db import get_connection
 from worktrace.platforms.base import ActiveWindow
@@ -14,9 +18,15 @@ from worktrace.services import privacy_gate_service, settings_service
 pytestmark = [pytest.mark.db, pytest.mark.collector_runtime, pytest.mark.contract]
 
 
+def _transient_adapter_failure() -> TransientCollectorError:
+    return TransientCollectorError(
+        CollectorFailureCode.ADAPTER_TEMPORARILY_UNAVAILABLE
+    )
+
+
 class _RaisingActiveWindowAdapter:
     def get_active_window(self):
-        raise RuntimeError("active window failed")
+        raise _transient_adapter_failure()
 
     def get_idle_seconds(self):
         return 0
@@ -30,7 +40,7 @@ class _RaisingIdleAdapter:
         return ActiveWindow("Word", "word.exe", "Doc")
 
     def get_idle_seconds(self):
-        raise RuntimeError("idle failed")
+        raise _transient_adapter_failure()
 
     def get_clipboard_events(self):
         return []
@@ -94,7 +104,7 @@ def test_privacy_failure_only_updates_health_not_activity_continuity(temp_db, mo
     monkeypatch.setattr(
         collector_mod.privacy_service,
         "is_excluded",
-        lambda _window: (_ for _ in ()).throw(RuntimeError("privacy failed")),
+        lambda _window: (_ for _ in ()).throw(_transient_adapter_failure()),
     )
 
     def fake_wait(_stop_event, _control, next_poll_deadline):
@@ -128,7 +138,7 @@ def test_clipboard_failure_does_not_block_normal_activity_observation(temp_db, m
             return 0
 
         def get_clipboard_events(self):
-            raise RuntimeError("clipboard failed")
+            raise _transient_adapter_failure()
 
     def fake_wait(_stop_event, _control, next_poll_deadline):
         captured["snapshot"] = runtime_state_fixture.get_setting("current_activity_snapshot")
