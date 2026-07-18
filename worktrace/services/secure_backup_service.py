@@ -1,328 +1,500 @@
-"""Encrypted backup facade with an explicit payload compatibility matrix.
-
-The stable encryption, staging, replacement and maintenance implementation lives
-in ``secure_backup_core``. This facade owns portable payload versions and
-normalizes supported legacy payloads before they enter that core.
-"""
-
+"""Current-format encrypted backup and secure replace-import owner."""
 from __future__ import annotations
 
 import json
+import logging
+import os
 import sqlite3
-from datetime import datetime
-from functools import lru_cache
+import tempfile
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
-from ..constants import TIME_FORMAT
-from . import secure_backup_core as _core
+from ..constants import APP_VERSION
+from ..db import (
+    CURRENT_SCHEMA_VERSION,
+    expected_schema_fingerprint,
+    get_connection,
+    get_db_key,
+    now_str,
+    read_internal_schema_sql,
+    read_schema_indexes_sql,
+    read_schema_sql,
+    schema_fingerprint,
+    seed_defaults,
+)
+from ..generation_clock import clear as clear_generation_clock
+from ..generation_clock import publish_replacement_committed
+from ..security.backup_format import (
+    BackupFormatError,
+    BackupManifest,
+    create_encrypted_backup,
+    decrypt_encrypted_backup,
+    parse_backup_manifest,
+)
+from . import database_maintenance_service
+from .database_replacement_generation_service import (
+    capture_replacement_generation_floor,
+    publish_database_replacement,
+)
+from .secure_backup_validation import BackupValidationError, validate_staging_database
 
-PAYLOAD_FORMAT = _core.PAYLOAD_FORMAT
+PAYLOAD_FORMAT = "worktrace-local-data"
 PAYLOAD_VERSION = 5
-SCHEMA_VERSION = str(_core.CURRENT_SCHEMA_VERSION)
-BACKUP_FILE_SUFFIX = _core.BACKUP_FILE_SUFFIX
-MAX_BACKUP_FILE_BYTES = _core.MAX_BACKUP_FILE_BYTES
-MAX_BACKUP_PAYLOAD_BYTES = _core.MAX_BACKUP_PAYLOAD_BYTES
-MIGRATABLE_SETTINGS = _core.MIGRATABLE_SETTINGS
-EXCLUDED_TABLES = _core.EXCLUDED_TABLES
+SCHEMA_VERSION = str(CURRENT_SCHEMA_VERSION)
+BACKUP_FILE_SUFFIX = ".wtbackup"
+MAX_BACKUP_FILE_BYTES = 512 * 1024 * 1024
+MAX_BACKUP_PAYLOAD_BYTES = 384 * 1024 * 1024
 
-_V4_EXPORT_TABLES: tuple[str, ...] = tuple(_core.EXPORT_TABLES)
-EXPORT_TABLES: tuple[str, ...] = (*_V4_EXPORT_TABLES, "activity_inference_job")
-_V4_SCHEMA8_FINGERPRINT = _core._LEGACY_BACKUP_SCHEMA_FINGERPRINTS["8"]
-_JOB_INDEX_SQL = """CREATE INDEX IF NOT EXISTS idx_activity_inference_job_runnable
-ON activity_inference_job(status, next_attempt_at, activity_id);
-
-"""
-_LEGACY_V10_INTERNAL_SCHEMA_SQL = """CREATE TABLE IF NOT EXISTS data_generation_state (
-    namespace TEXT PRIMARY KEY CHECK(length(trim(namespace)) > 0),
-    generation INTEGER NOT NULL CHECK(generation >= 0)
-);
-
-INSERT INTO data_generation_state(namespace, generation)
-VALUES
-    ('report_structure', 0),
-    ('classification_catalog', 0),
-    ('settings', 0),
-    ('privacy_catalog', 0),
-    ('database_replacement', 0)
-ON CONFLICT(namespace) DO NOTHING;
-
-CREATE TABLE IF NOT EXISTS activity_resource_repair_job (
-    singleton_id INTEGER PRIMARY KEY CHECK(singleton_id = 1),
-    policy_version INTEGER NOT NULL CHECK(policy_version > 0),
-    status TEXT NOT NULL CHECK(status IN ('pending', 'running', 'completed', 'failed')),
-    cursor_activity_id INTEGER NOT NULL DEFAULT 0 CHECK(cursor_activity_id >= 0),
-    processed_count INTEGER NOT NULL DEFAULT 0 CHECK(processed_count >= 0),
-    repaired_count INTEGER NOT NULL DEFAULT 0 CHECK(repaired_count >= 0),
-    failed_count INTEGER NOT NULL DEFAULT 0 CHECK(failed_count >= 0),
-    unknown_count INTEGER NOT NULL DEFAULT 0 CHECK(unknown_count >= 0),
-    last_error TEXT NOT NULL DEFAULT '',
-    started_at TEXT NOT NULL DEFAULT '',
-    completed_at TEXT NOT NULL DEFAULT '',
-    updated_at TEXT NOT NULL DEFAULT ''
-);
-"""
-_ALLOWED_JOB_REASONS = {"closed_activity", "legacy_retry"}
-_ALLOWED_JOB_STATUSES = {"pending", "failed"}
-_ALLOWED_JOB_ERROR_CODES = {
-    "data_repair_required",
-    "database_busy",
-    "database_generation_changed",
-    "secure_import_in_progress",
-    "unexpected_failure",
-}
-
-_core.PAYLOAD_VERSION = PAYLOAD_VERSION
-_core.SCHEMA_VERSION = SCHEMA_VERSION
-_core.EXPORT_TABLES = EXPORT_TABLES
-_core._DELETE_ORDER = (
+EXPORT_TABLES: tuple[str, ...] = (
+    "project",
+    "settings",
+    "session_boundary",
+    "activity_log",
+    "folder_project_rule",
+    "project_rule",
+    "folder_rule_index_state",
+    "activity_project_assignment",
+    "activity_clipboard_event",
+    "report_session_operation",
+    "report_session_operation_member",
+    "report_mutation_request",
+    "activity_resource",
     "activity_inference_job",
-    *_core._DELETE_ORDER,
+)
+EXCLUDED_TABLES: frozenset[str] = frozenset(
+    {
+        "folder_rule_file_index",
+        "history_mutation_job",
+        "history_mutation_job_rule",
+        "data_generation_state",
+        "activity_resource_repair_job",
+    }
+)
+MIGRATABLE_SETTINGS: frozenset[str] = frozenset(
+    {
+        "poll_interval_seconds",
+        "idle_threshold_seconds",
+        "ui_refresh_seconds",
+        "context_carry_minutes",
+        "unrecorded_gap_boundary_seconds",
+        "clipboard_capture_enabled",
+        "collector_stall_threshold_seconds",
+        "clock_jump_threshold_seconds",
+    }
+)
+_DELETE_ORDER: tuple[str, ...] = (
+    "activity_inference_job",
+    "activity_resource",
+    "report_session_operation_member",
+    "report_mutation_request",
+    "report_session_operation",
+    "activity_clipboard_event",
+    "activity_project_assignment",
+    "folder_rule_file_index",
+    "folder_rule_index_state",
+    "project_rule",
+    "folder_project_rule",
+    "activity_log",
+    "session_boundary",
+    "settings",
+    "project",
 )
 
 
-@lru_cache(maxsize=1)
-def _legacy_v10_schema_fingerprint() -> str:
-    reference = sqlite3.connect(":memory:")
-    reference.row_factory = sqlite3.Row
-    try:
-        reference.executescript(_core.read_schema_sql())
-        reference.executescript(_LEGACY_V10_INTERNAL_SCHEMA_SQL)
-        reference.executescript(
-            _core.read_schema_indexes_sql().replace(_JOB_INDEX_SQL, "")
+class SecureBackupError(Exception):
+    """Base error for encrypted backup operations."""
+
+
+class BackupDecryptionError(SecureBackupError):
+    """Could not decrypt the backup or the passphrase was wrong."""
+
+
+class BackupCorruptedError(SecureBackupError):
+    """The backup is malformed or violates current schema semantics."""
+
+
+class BackupVersionNotSupportedError(SecureBackupError):
+    """The payload or schema version is not supported by this build."""
+
+
+class BackupImportInProgressError(SecureBackupError):
+    """Another destructive maintenance operation is already in progress."""
+
+
+@dataclass(frozen=True)
+class BackupManifestInfo:
+    version: int
+    app_version: str
+    created_at: str
+    kdf_algorithm: str
+    payload_format: str
+    payload_alg: str
+
+    @classmethod
+    def from_manifest(cls, manifest: BackupManifest) -> "BackupManifestInfo":
+        return cls(
+            version=manifest.version,
+            app_version=manifest.app_version,
+            created_at=manifest.created_at,
+            kdf_algorithm=manifest.kdf.algorithm,
+            payload_format=manifest.payload_format,
+            payload_alg=manifest.payload_alg,
         )
-        return _core.schema_fingerprint(reference)
+
+
+@dataclass(frozen=True)
+class ImportResult:
+    mode: str
+    imported_tables: dict[str, int] = field(default_factory=dict)
+    folder_index_reset: bool = False
+
+
+def is_secure_import_in_progress() -> bool:
+    return database_maintenance_service.is_maintenance_in_progress()
+
+
+def export_encrypted_backup(output_path: str | Path, passphrase: str) -> Path:
+    if not passphrase:
+        raise SecureBackupError("passphrase is required")
+    out = Path(output_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    payload = _build_export_payload()
+    blob = create_encrypted_backup(payload, passphrase, APP_VERSION)
+    _atomic_write_bytes(out, blob)
+    logging.info("encrypted backup export success suffix=%s", BACKUP_FILE_SUFFIX)
+    return out
+
+
+def import_encrypted_backup(
+    input_path: str | Path,
+    passphrase: str,
+    mode: str = "replace",
+) -> ImportResult:
+    if not passphrase:
+        raise SecureBackupError("passphrase is required")
+    if mode != "replace":
+        raise SecureBackupError(f"unsupported import mode: {mode}")
+
+    input_file = Path(input_path)
+    _require_bounded_backup_file(input_file)
+    try:
+        with database_maintenance_service.maintenance_operation(
+            reason="secure_import"
+        ) as state:
+            blob = input_file.read_bytes()
+            payload = _read_and_decrypt(blob, passphrase)
+            data = _parse_and_validate_payload(payload)
+            imported_counts = _replace_import(data)
+            state.mark_succeeded()
+    except database_maintenance_service.MaintenanceInProgressError as exc:
+        raise BackupImportInProgressError(
+            "another destructive operation is already in progress"
+        ) from exc
+
+    logging.info(
+        "encrypted backup import success mode=%s tables=%d",
+        mode,
+        len(imported_counts),
+    )
+    return ImportResult(
+        mode=mode,
+        imported_tables=imported_counts,
+        folder_index_reset=True,
+    )
+
+
+def parse_encrypted_backup_manifest(input_path: str | Path) -> BackupManifestInfo:
+    input_file = Path(input_path)
+    _require_bounded_backup_file(input_file)
+    try:
+        manifest = parse_backup_manifest(input_file.read_bytes())
+    except BackupFormatError as exc:
+        raise _classify_format_error(exc) from exc
+    return BackupManifestInfo.from_manifest(manifest)
+
+
+def _require_bounded_backup_file(path: Path) -> None:
+    try:
+        size = path.stat().st_size
+    except OSError as exc:
+        raise BackupCorruptedError("backup file is invalid or corrupted") from exc
+    if size <= 0 or size > MAX_BACKUP_FILE_BYTES:
+        raise BackupCorruptedError("backup file is invalid or corrupted")
+
+
+def _build_export_payload() -> bytes:
+    tables: dict[str, list[dict[str, Any]]] = {}
+    conn = get_connection()
+    try:
+        conn.execute("BEGIN")
+        current_fingerprint = schema_fingerprint(conn)
+        if current_fingerprint != expected_schema_fingerprint():
+            raise SecureBackupError("database_schema_incompatible")
+        for table in EXPORT_TABLES:
+            rows = conn.execute(f"SELECT * FROM {table}").fetchall()
+            if table == "settings":
+                tables[table] = [
+                    dict(row) for row in rows if row["key"] in MIGRATABLE_SETTINGS
+                ]
+            else:
+                tables[table] = [dict(row) for row in rows]
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     finally:
-        reference.close()
+        conn.close()
+
+    payload = json.dumps(
+        {
+            "format": PAYLOAD_FORMAT,
+            "version": PAYLOAD_VERSION,
+            "created_at": _utc_now(),
+            "app_version": APP_VERSION,
+            "schema_version": SCHEMA_VERSION,
+            "schema_fingerprint": current_fingerprint,
+            "tables": tables,
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    if len(payload) > MAX_BACKUP_PAYLOAD_BYTES:
+        raise SecureBackupError("backup payload exceeds supported size")
+    return payload
 
 
 def _parse_and_validate_payload(payload: bytes) -> dict[str, Any]:
     if len(payload) > MAX_BACKUP_PAYLOAD_BYTES:
-        raise _core.BackupCorruptedError("backup file is invalid or corrupted")
+        raise BackupCorruptedError("backup file is invalid or corrupted")
     try:
         data = json.loads(payload.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise _core.BackupCorruptedError(
-            "backup file is invalid or corrupted"
-        ) from exc
-    if not isinstance(data, dict) or data.get("format") != PAYLOAD_FORMAT:
-        raise _core.BackupCorruptedError("backup file is invalid or corrupted")
-
-    version = data.get("version")
-    schema_version = str(data.get("schema_version") or "")
-    fingerprint = str(data.get("schema_fingerprint") or "")
-    matrix: dict[tuple[object, str], tuple[str, tuple[str, ...]]] = {
-        (5, SCHEMA_VERSION): (_core.expected_schema_fingerprint(), EXPORT_TABLES),
-        (4, "10"): (_legacy_v10_schema_fingerprint(), _V4_EXPORT_TABLES),
-        (4, "8"): (_V4_SCHEMA8_FINGERPRINT, _V4_EXPORT_TABLES),
-    }
-    contract = matrix.get((version, schema_version))
-    if contract is None:
-        raise _core.BackupVersionNotSupportedError(
-            "backup version is not supported"
+        logging.warning(
+            "encrypted backup payload json parse failed: %s",
+            type(exc).__name__,
         )
-    required_fingerprint, required_tables = contract
-    if fingerprint != required_fingerprint:
-        raise _core.BackupCorruptedError("backup file is invalid or corrupted")
-
+        raise BackupCorruptedError("backup file is invalid or corrupted") from exc
+    if not isinstance(data, dict) or data.get("format") != PAYLOAD_FORMAT:
+        raise BackupCorruptedError("backup file is invalid or corrupted")
+    if data.get("version") != PAYLOAD_VERSION:
+        raise BackupVersionNotSupportedError("backup version is not supported")
+    if str(data.get("schema_version") or "") != SCHEMA_VERSION:
+        raise BackupVersionNotSupportedError("backup version is not supported")
+    if str(data.get("schema_fingerprint") or "") != expected_schema_fingerprint():
+        raise BackupCorruptedError("backup file is invalid or corrupted")
     tables = data.get("tables")
-    if not isinstance(tables, dict) or set(tables) != set(required_tables):
-        raise _core.BackupCorruptedError("backup file is invalid or corrupted")
+    if not isinstance(tables, dict) or set(tables) != set(EXPORT_TABLES):
+        raise BackupCorruptedError("backup file is invalid or corrupted")
     for rows in tables.values():
         if not isinstance(rows, list) or any(
             not isinstance(row, dict) for row in rows
         ):
-            raise _core.BackupCorruptedError("backup file is invalid or corrupted")
-
-    if version == 5:
-        return data
-    return _normalize_v4_payload(data)
+            raise BackupCorruptedError("backup file is invalid or corrupted")
+    return data
 
 
-def _normalize_v4_payload(data: dict[str, Any]) -> dict[str, Any]:
-    tables = {
-        str(name): [dict(row) for row in rows]
-        for name, rows in dict(data["tables"]).items()
-    }
-    activities = {
-        int(row["id"]): row
-        for row in tables["activity_log"]
-        if row.get("id") is not None
-    }
-    jobs: list[dict[str, Any]] = []
-    seen: set[int] = set()
-    for assignment in tables["activity_project_assignment"]:
+def _replace_import(data: dict[str, Any]) -> dict[str, int]:
+    """Stage and validate current data, then replace live contents atomically."""
+
+    staging_path: str | None = None
+    try:
+        fd, staging_path = tempfile.mkstemp(
+            prefix="worktrace-import-",
+            suffix=".sqlite",
+        )
+        os.close(fd)
+        staging = sqlite3.connect(staging_path)
+        staging.row_factory = sqlite3.Row
+        staging.execute("PRAGMA foreign_keys = ON")
         try:
-            activity_id = int(assignment["activity_id"])
-            confidence = int(assignment.get("confidence") or 0)
-        except (KeyError, TypeError, ValueError) as exc:
-            raise _core.BackupCorruptedError(
-                "backup file is invalid or corrupted"
-            ) from exc
-        if confidence != -1:
-            continue
-        activity = activities.get(activity_id)
-        eligible = _legacy_retry_eligible(activity, assignment)
-        if not int(assignment.get("is_manual") or 0):
-            assignment["confidence"] = 0
-        if not eligible or activity_id in seen:
-            continue
-        timestamp = str(
-            activity.get("updated_at")
-            or activity.get("end_time")
-            or activity.get("created_at")
-            or ""
-        )
-        jobs.append(
-            {
-                "activity_id": activity_id,
-                "reason": "legacy_retry",
-                "status": "pending",
-                "attempt_count": 0,
-                "next_attempt_at": None,
-                "last_error_code": None,
-                "created_at": timestamp,
-                "updated_at": timestamp,
-            }
-        )
-        seen.add(activity_id)
-    tables["activity_inference_job"] = jobs
-    normalized = dict(data)
-    normalized["version"] = PAYLOAD_VERSION
-    normalized["schema_version"] = SCHEMA_VERSION
-    normalized["schema_fingerprint"] = _core.expected_schema_fingerprint()
-    normalized["tables"] = tables
-    return normalized
+            staging.executescript(read_schema_sql())
+            staging.executescript(read_internal_schema_sql())
+            staging.executescript(read_schema_indexes_sql())
+            staging.execute(f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION}")
+            imported = _load_import_tables(staging, data["tables"])
+            seed_defaults(staging)
+            _reset_derived_folder_index(staging)
+            _validate_staging_database(staging)
+            staging.commit()
+        except Exception:
+            staging.rollback()
+            raise
+        finally:
+            staging.close()
+
+        replacement_values = None
+        with get_connection() as live:
+            live.execute("BEGIN IMMEDIATE")
+            replacement_floor = capture_replacement_generation_floor(live)
+            _delete_all_rows(live)
+            live.execute("DELETE FROM activity_resource_repair_job")
+            live.execute("DELETE FROM history_mutation_job_rule")
+            live.execute("DELETE FROM history_mutation_job")
+            source = sqlite3.connect(staging_path)
+            source.row_factory = sqlite3.Row
+            try:
+                for table in EXPORT_TABLES:
+                    _insert_rows(
+                        live,
+                        table,
+                        [
+                            dict(row)
+                            for row in source.execute(f"SELECT * FROM {table}")
+                        ],
+                    )
+            finally:
+                source.close()
+            seed_defaults(live)
+            _reset_derived_folder_index(live)
+            timestamp = now_str()
+            for key, value in (
+                ("user_paused", "true"),
+                ("collector_status", "paused"),
+                ("clipboard_capture_enabled", "false"),
+            ):
+                live.execute(
+                    "UPDATE settings SET value = ?, updated_at = ? WHERE key = ?",
+                    (value, timestamp, key),
+                )
+            _validate_staging_database(live)
+            replacement_values = publish_database_replacement(
+                live,
+                minimum_values=replacement_floor,
+            )
+            live.commit()
+        if replacement_values is None:
+            raise RuntimeError("database_replacement_generation_missing")
+        database_key = get_db_key()
+        try:
+            publish_replacement_committed(database_key, replacement_values)
+        except Exception:
+            logging.exception("database replacement generation publication failed")
+            clear_generation_clock(database_key)
+        return imported
+    except BackupCorruptedError:
+        raise
+    except BackupValidationError as exc:
+        raise BackupCorruptedError("backup file is invalid or corrupted") from exc
+    except (sqlite3.DatabaseError, ValueError, KeyError, TypeError) as exc:
+        raise BackupCorruptedError("backup file is invalid or corrupted") from exc
+    finally:
+        if staging_path:
+            try:
+                os.unlink(staging_path)
+            except FileNotFoundError:
+                pass
 
 
-def _legacy_retry_eligible(
-    activity: dict[str, Any] | None,
-    assignment: dict[str, Any],
-) -> bool:
-    if activity is None:
-        return False
-    return bool(
-        activity.get("end_time") is not None
-        and str(activity.get("status") or "") == "normal"
-        and not int(activity.get("is_hidden") or 0)
-        and not int(activity.get("is_deleted") or 0)
-        and not int(assignment.get("is_manual") or 0)
-        and str(assignment.get("source") or "") == "uncategorized"
+def _load_import_tables(
+    conn: sqlite3.Connection,
+    tables: dict[str, Any],
+) -> dict[str, int]:
+    imported: dict[str, int] = {}
+    for table in EXPORT_TABLES:
+        rows = tables.get(table, [])
+        if table == "settings":
+            rows = [row for row in rows if row.get("key") in MIGRATABLE_SETTINGS]
+        imported[table] = _insert_rows(conn, table, rows)
+    return imported
+
+
+def _reset_derived_folder_index(conn: sqlite3.Connection) -> None:
+    conn.execute("DELETE FROM folder_rule_file_index")
+    conn.execute(
+        """
+        UPDATE folder_rule_index_state
+        SET status = 'pending', valid_from = NULL,
+            active_generation = NULL, building_generation = NULL,
+            build_status = NULL, last_error = NULL,
+            last_indexed_at = NULL, last_checked_at = NULL,
+            file_count = 0, error_message = NULL,
+            refresh_requested = 1, updated_at = ?
+        """,
+        (now_str(),),
     )
 
 
-def _validate_staging_database_with_jobs(conn: sqlite3.Connection) -> None:
-    _ORIGINAL_STAGING_VALIDATOR(conn)
-    if conn.execute(
-        """
-        SELECT 1
-        FROM activity_project_assignment
-        WHERE is_manual = 0 AND confidence < 0
-        LIMIT 1
-        """
-    ).fetchone():
-        raise _core.BackupValidationError("legacy inference sentinel")
-    rows = conn.execute(
-        """
-        SELECT job.*, activity.end_time, activity.status AS activity_status,
-               activity.is_hidden, activity.is_deleted,
-               assignment.is_manual, assignment.source AS assignment_source
-        FROM activity_inference_job job
-        JOIN activity_log activity ON activity.id = job.activity_id
-        LEFT JOIN activity_project_assignment assignment
-          ON assignment.activity_id = job.activity_id
-        ORDER BY job.activity_id
-        """
-    ).fetchall()
-    for row in rows:
-        if str(row["reason"] or "") not in _ALLOWED_JOB_REASONS:
-            raise _core.BackupValidationError("inference job reason")
-        status = str(row["status"] or "")
-        if status not in _ALLOWED_JOB_STATUSES:
-            raise _core.BackupValidationError("inference job status")
-        attempts = int(row["attempt_count"] or 0)
-        if attempts < 0:
-            raise _core.BackupValidationError("inference job attempts")
-        error_code = row["last_error_code"]
-        if error_code is not None and str(error_code) not in _ALLOWED_JOB_ERROR_CODES:
-            raise _core.BackupValidationError("inference job error")
-        if status == "failed" and (attempts <= 0 or error_code is None):
-            raise _core.BackupValidationError("inference job failed state")
-        for key in ("created_at", "updated_at"):
-            _require_timestamp(row[key])
-        if row["next_attempt_at"] is not None:
-            _require_timestamp(row["next_attempt_at"])
-        if (
-            row["end_time"] is None
-            or str(row["activity_status"] or "") != "normal"
-            or int(row["is_hidden"] or 0)
-            or int(row["is_deleted"] or 0)
-            or int(row["is_manual"] or 0)
-            or str(row["assignment_source"] or "") == "midnight_anchor"
-        ):
-            raise _core.BackupValidationError("inference job activity")
-
-
-def _require_timestamp(value: object) -> None:
+def _validate_staging_database(conn: sqlite3.Connection) -> None:
     try:
-        datetime.strptime(str(value or ""), TIME_FORMAT)
-    except (TypeError, ValueError) as exc:
-        raise _core.BackupValidationError("inference job timestamp") from exc
+        validate_staging_database(conn)
+    except BackupValidationError as exc:
+        raise BackupCorruptedError("backup file is invalid or corrupted") from exc
 
 
-_ORIGINAL_STAGING_VALIDATOR = _core.validate_staging_database
-_build_export_payload = _core._build_export_payload
-_replace_import = _core._replace_import
+def _delete_all_rows(conn: sqlite3.Connection) -> None:
+    for table in _DELETE_ORDER:
+        conn.execute(f"DELETE FROM {table}")
 
 
-def _synchronize_core_hooks() -> None:
-    """Keep canonical test/diagnostic injection points authoritative."""
-
-    _core._build_export_payload = _build_export_payload
-    _core._parse_and_validate_payload = _parse_and_validate_payload
-    _core._replace_import = _replace_import
-    _core.validate_staging_database = _validate_staging_database_with_jobs
-
-
-SecureBackupError = _core.SecureBackupError
-BackupDecryptionError = _core.BackupDecryptionError
-BackupCorruptedError = _core.BackupCorruptedError
-BackupVersionNotSupportedError = _core.BackupVersionNotSupportedError
-BackupImportInProgressError = _core.BackupImportInProgressError
-BackupManifestInfo = _core.BackupManifestInfo
-ImportResult = _core.ImportResult
-SecureImportPhase = _core.SecureImportPhase
-SecureImportCoordinator = _core.SecureImportCoordinator
-SECURE_IMPORT_COORDINATOR = _core.SECURE_IMPORT_COORDINATOR
-
-
-def export_encrypted_backup(output_path, passphrase: str):
-    _synchronize_core_hooks()
-    return _core.export_encrypted_backup(output_path, passphrase)
+def _insert_rows(
+    conn: sqlite3.Connection,
+    table: str,
+    rows: list[dict[str, Any]],
+) -> int:
+    if not rows:
+        return 0
+    schema_columns = _table_columns(conn, table)
+    if not schema_columns:
+        raise BackupCorruptedError("backup file is invalid or corrupted")
+    expected = set(schema_columns)
+    col_clause = ", ".join(f'"{column}"' for column in schema_columns)
+    placeholders = ", ".join("?" for _ in schema_columns)
+    sql = f"INSERT INTO {table} ({col_clause}) VALUES ({placeholders})"
+    inserted = 0
+    for row in rows:
+        if set(row) != expected:
+            raise BackupCorruptedError("backup file is invalid or corrupted")
+        conn.execute(sql, [row.get(column) for column in schema_columns])
+        inserted += 1
+    return inserted
 
 
-def import_encrypted_backup(input_path, passphrase: str, mode: str = "replace"):
-    _synchronize_core_hooks()
-    return _core.import_encrypted_backup(input_path, passphrase, mode)
+def _table_columns(conn: sqlite3.Connection, table: str) -> list[str]:
+    return [
+        str(row["name"])
+        for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+    ]
 
 
-def parse_encrypted_backup_manifest(input_path):
-    return _core.parse_encrypted_backup_manifest(input_path)
+def _read_and_decrypt(blob: bytes, passphrase: str) -> bytes:
+    try:
+        parse_backup_manifest(blob)
+    except BackupFormatError as exc:
+        raise _classify_format_error(exc) from exc
+    try:
+        payload = decrypt_encrypted_backup(blob, passphrase)
+    except BackupFormatError as exc:
+        logging.warning(
+            "encrypted backup decrypt failed: %s",
+            type(exc).__name__,
+        )
+        raise BackupDecryptionError(
+            "could not decrypt backup or wrong passphrase"
+        ) from exc
+    if len(payload) > MAX_BACKUP_PAYLOAD_BYTES:
+        raise BackupCorruptedError("backup file is invalid or corrupted")
+    return payload
 
 
-def is_secure_import_in_progress() -> bool:
-    return _core.is_secure_import_in_progress()
+def _classify_format_error(exc: BackupFormatError) -> SecureBackupError:
+    if "version" in str(exc).lower():
+        return BackupVersionNotSupportedError("backup version is not supported")
+    return BackupCorruptedError("backup file is invalid or corrupted")
 
 
-register_collector_pause_handler = _core.register_collector_pause_handler
-clear_collector_pause_handler = _core.clear_collector_pause_handler
-register_collector_reset_handler = _core.register_collector_reset_handler
-clear_collector_reset_handler = _core.clear_collector_reset_handler
-
-_synchronize_core_hooks()
+def _atomic_write_bytes(path: Path, data: bytes) -> None:
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_bytes(data)
+    os.replace(tmp, path)
 
 
-def __getattr__(name: str):
-    return getattr(_core, name)
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace(
+        "+00:00",
+        "Z",
+    )
 
 
 __all__ = [
@@ -338,16 +510,12 @@ __all__ = [
     "EXPORT_TABLES",
     "ImportResult",
     "MIGRATABLE_SETTINGS",
-    "SECURE_IMPORT_COORDINATOR",
-    "SecureImportCoordinator",
-    "SecureImportPhase",
+    "PAYLOAD_FORMAT",
+    "PAYLOAD_VERSION",
+    "SCHEMA_VERSION",
     "SecureBackupError",
     "export_encrypted_backup",
     "import_encrypted_backup",
     "is_secure_import_in_progress",
-    "register_collector_pause_handler",
-    "clear_collector_pause_handler",
-    "register_collector_reset_handler",
-    "clear_collector_reset_handler",
     "parse_encrypted_backup_manifest",
 ]
