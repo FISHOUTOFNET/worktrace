@@ -81,15 +81,9 @@ def record_clipboard_event(
             ),
         )
         event_id = int(cur.lastrowid)
-        from .assignment_command_service import mark_inference_retry
-        from .system_project_service import require_uncategorized_project_id
-
-        mark_inference_retry(
-            conn,
-            int(activity_id),
-            require_uncategorized_project_id(conn),
-        )
         uow.mark_changed()
+    # Open rows are refreshed immediately. If this derivation fails, the normal
+    # close transaction will durably enqueue the final nonmanual activity facts.
     _attempt_clipboard_inference(int(activity_id))
     return event_id
 
@@ -162,7 +156,7 @@ def _attempt_clipboard_inference(activity_id: int) -> None:
         project_inference_service.assign_project_for_activity(activity_id)
     except Exception:
         logging.exception(
-            "clipboard inference failed; durable retry retained for activity_id=%s",
+            "clipboard inference failed; close-time durable retry will converge activity_id=%s",
             activity_id,
         )
 
