@@ -4,9 +4,15 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from tests import secure_backup_service_contracts as _contracts
 
-pytestmark = _contracts.pytestmark
+pytestmark = [
+    pytest.mark.security_privacy,
+    pytest.mark.integration,
+    pytest.mark.db,
+]
 
 # Retain the established encryption, replacement, rollback, privacy, and API
 # contracts. Only tests whose published payload semantics changed in v5 are
