@@ -33,7 +33,7 @@ def process_pending_inference_jobs(
     *,
     activity_ids: Iterable[int] | None = None,
 ) -> int:
-    """Consume a bounded job set; assignment and job deletion commit together."""
+    """Consume a bounded job set; assignment and completion commit together."""
 
     normalized_limit = max(0, int(limit))
     if normalized_limit == 0:
@@ -104,8 +104,9 @@ def _process_pending_inference_jobs_locked(
                     completed += 1
                     continue
                 infer_activity(conn, activity_id)
-                if not jobs.delete_completed_job(conn, activity_id):
-                    raise RuntimeError("inference_job_completion_lost")
+                # The assignment command owns completion so direct per-activity
+                # inference and the batch worker share one atomic boundary.
+                jobs.delete_completed_job(conn, activity_id)
                 uow.mark_changed()
                 completed += 1
         except Exception as exc:
