@@ -35,7 +35,6 @@ EXPECTED_DEFAULT_SETTINGS = {
     "collector_status",
     "last_collector_heartbeat",
     "last_shutdown_at",
-    "first_run_notice_accepted",
     "export_path",
     "ui_refresh_seconds",
     "user_paused",

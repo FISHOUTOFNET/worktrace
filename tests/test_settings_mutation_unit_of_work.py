@@ -53,16 +53,14 @@ def test_report_setting_publishes_settings_and_report_once(temp_db):
     assert after[DataGenerationNamespace.CLASSIFICATION_CATALOG] == before[DataGenerationNamespace.CLASSIFICATION_CATALOG]
 
 
-def test_privacy_acceptance_is_one_settings_and_privacy_transaction(temp_db):
+def test_installation_privacy_acceptance_does_not_mutate_business_generations(temp_db):
     before = _all_generations()
 
     privacy_gate_service.accept_privacy_notice()
 
     after = _all_generations()
     assert privacy_gate_service.is_privacy_notice_accepted() is True
-    assert after[DataGenerationNamespace.SETTINGS] == before[DataGenerationNamespace.SETTINGS] + 1
-    assert after[DataGenerationNamespace.PRIVACY_CATALOG] == before[DataGenerationNamespace.PRIVACY_CATALOG] + 1
-    assert after[DataGenerationNamespace.REPORT_STRUCTURE] == before[DataGenerationNamespace.REPORT_STRUCTURE]
+    assert after == before
 
 
 def test_setting_semantic_no_op_publishes_nothing(temp_db):

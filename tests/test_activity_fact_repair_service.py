@@ -106,7 +106,7 @@ def test_detector_failure_persists_explicit_unknown_fact(temp_db, monkeypatch):
 
     state = repair_service.require_activity_fact_repair_complete()
     assert state["unknown_count"] == 1
-    assert state["error_count"] == 1
+    assert state["failed_count"] == 1
     with get_connection() as conn:
         resource = conn.execute(
             "SELECT * FROM activity_resource WHERE activity_id = ?",
@@ -131,7 +131,7 @@ def test_empty_detector_identity_is_persisted_as_unknown(temp_db, monkeypatch):
 
     state = repair_service.require_activity_fact_repair_complete()
     assert state["unknown_count"] == 1
-    assert state["error_count"] == 1
+    assert state["failed_count"] == 1
     with get_connection() as conn:
         resource = conn.execute(
             "SELECT * FROM activity_resource WHERE activity_id = ?",

@@ -12,7 +12,7 @@ from typing import Any, Callable
 from ..constants import DEFAULT_IDLE_THRESHOLD_SECONDS, TIME_FORMAT
 from ..db import now_str
 from ..platforms.base import PlatformAdapter
-from ..services import clipboard_service, privacy_service
+from ..services import clipboard_service, privacy_gate_service, privacy_service
 from ..services.secure_backup_service import is_secure_import_in_progress
 from ..services.settings_service import (
     get_bool_setting,
@@ -299,7 +299,7 @@ def run_collector(
                 last_loop_time = now
                 continue
 
-            if not get_bool_setting("first_run_notice_accepted", False):
+            if not privacy_gate_service.is_privacy_notice_accepted():
                 _set_clipboard_capture_enabled(adapter, False)
                 _pause_machine_then_expose(machine, now)
                 next_poll_deadline = _sleep_until_next_poll(

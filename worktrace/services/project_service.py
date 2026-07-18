@@ -18,6 +18,7 @@ def _catalog_uow(
     return DomainUnitOfWork(
         (
             DataGenerationNamespace.CLASSIFICATION_CATALOG,
+            DataGenerationNamespace.REPORT_STRUCTURE,
             *extra_effects,
         )
     )

@@ -113,7 +113,7 @@ def _repair_missing_resource_facts() -> None:
         state["status"],
         repaired,
         state["unknown_count"],
-        state["error_count"],
+        state["failed_count"],
     )
 
 

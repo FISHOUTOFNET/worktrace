@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any
 
 from ..constants import STATUS_ERROR, STATUS_EXCLUDED, STATUS_IDLE, STATUS_PAUSED
+from ..data_generation_repository import DataGenerationNamespace
 from ..db import get_connection, now_str
+from ..domain_unit_of_work import DomainUnitOfWork
 from ..platforms.base import ActiveWindow
 from ..resources.detectors import detect_resource
 from ..resources.resource_builders import make_system_resource
@@ -16,7 +17,6 @@ from .resource_service import create_or_update_activity_resource
 
 DEFAULT_BATCH_SIZE = 200
 REPAIR_POLICY_VERSION = 1
-REPAIR_STATE_KEY = "maintenance.activity_resource_repair.v1"
 _VALID_STATUSES = {"pending", "running", "completed", "failed"}
 
 
@@ -25,10 +25,10 @@ def _default_state() -> dict[str, Any]:
         "policy_version": REPAIR_POLICY_VERSION,
         "status": "pending",
         "cursor_activity_id": 0,
-        "scanned_count": 0,
+        "processed_count": 0,
         "repaired_count": 0,
         "unknown_count": 0,
-        "error_count": 0,
+        "failed_count": 0,
         "last_error": "",
         "started_at": "",
         "completed_at": "",
@@ -43,35 +43,28 @@ def get_activity_fact_repair_state(*, conn=None) -> dict[str, Any]:
         with get_connection() as read_conn:
             return get_activity_fact_repair_state(conn=read_conn)
     row = conn.execute(
-        "SELECT value FROM settings WHERE key = ?",
-        (REPAIR_STATE_KEY,),
+        "SELECT * FROM activity_resource_repair_job WHERE singleton_id = 1",
     ).fetchone()
     if row is None:
         return _default_state()
-    try:
-        raw = json.loads(str(row["value"] or ""))
-    except (TypeError, ValueError, json.JSONDecodeError) as exc:
-        raise ValueError("data_repair_state_invalid") from exc
-    if not isinstance(raw, dict):
-        raise ValueError("data_repair_state_invalid")
-    if int(raw.get("policy_version") or 0) != REPAIR_POLICY_VERSION:
+    if int(row["policy_version"] or 0) != REPAIR_POLICY_VERSION:
         return _default_state()
-    status = str(raw.get("status") or "")
+    status = str(row["status"] or "")
     if status not in _VALID_STATUSES:
         raise ValueError("data_repair_state_invalid")
     state = _default_state()
     state.update(
         {
             "status": status,
-            "cursor_activity_id": max(0, int(raw.get("cursor_activity_id") or 0)),
-            "scanned_count": max(0, int(raw.get("scanned_count") or 0)),
-            "repaired_count": max(0, int(raw.get("repaired_count") or 0)),
-            "unknown_count": max(0, int(raw.get("unknown_count") or 0)),
-            "error_count": max(0, int(raw.get("error_count") or 0)),
-            "last_error": str(raw.get("last_error") or ""),
-            "started_at": str(raw.get("started_at") or ""),
-            "completed_at": str(raw.get("completed_at") or ""),
-            "updated_at": str(raw.get("updated_at") or ""),
+            "cursor_activity_id": max(0, int(row["cursor_activity_id"] or 0)),
+            "processed_count": max(0, int(row["processed_count"] or 0)),
+            "repaired_count": max(0, int(row["repaired_count"] or 0)),
+            "unknown_count": max(0, int(row["unknown_count"] or 0)),
+            "failed_count": max(0, int(row["failed_count"] or 0)),
+            "last_error": str(row["last_error"] or ""),
+            "started_at": str(row["started_at"] or ""),
+            "completed_at": str(row["completed_at"] or ""),
+            "updated_at": str(row["updated_at"] or ""),
         }
     )
     return state
@@ -144,19 +137,23 @@ def repair_missing_activity_resources(batch_size: int = DEFAULT_BATCH_SIZE) -> i
                     )
                 )
 
-            with get_connection() as conn:
+            with DomainUnitOfWork(
+                (DataGenerationNamespace.REPORT_STRUCTURE,)
+            ) as uow:
+                conn = uow.connection
                 for activity_id, resource, _is_unknown, _failed in prepared:
                     create_or_update_activity_resource(activity_id, resource, conn=conn)
                 state["cursor_activity_id"] = int(prepared[-1][0])
-                state["scanned_count"] = int(state["scanned_count"]) + len(prepared)
+                state["processed_count"] = int(state["processed_count"]) + len(prepared)
                 state["repaired_count"] = int(state["repaired_count"]) + len(prepared)
                 state["unknown_count"] = int(state["unknown_count"]) + sum(
                     1 for _activity_id, _resource, is_unknown, _failed in prepared if is_unknown
                 )
-                state["error_count"] = int(state["error_count"]) + sum(
+                state["failed_count"] = int(state["failed_count"]) + sum(
                     1 for _activity_id, _resource, _is_unknown, failed in prepared if failed
                 )
                 _write_state(conn, state)
+                uow.mark_changed()
 
             logging.info(
                 "activity resource repair committed policy=%s batch=%s total=%s cursor=%s",
@@ -185,23 +182,44 @@ def require_activity_fact_repair_complete() -> dict[str, Any]:
 
 
 def _persist_state(state: dict[str, Any]) -> None:
-    with get_connection() as conn:
-        _write_state(conn, state)
+    with DomainUnitOfWork() as uow:
+        _write_state(uow.connection, state)
+        uow.mark_changed()
 
 
 def _write_state(conn, state: dict[str, Any]) -> None:
     state["updated_at"] = now_str()
     conn.execute(
         """
-        INSERT INTO settings(key, value, updated_at)
-        VALUES (?, ?, ?)
-        ON CONFLICT(key) DO UPDATE SET
-            value = excluded.value,
+        INSERT INTO activity_resource_repair_job(
+            singleton_id, policy_version, status, cursor_activity_id,
+            processed_count, repaired_count, failed_count, unknown_count,
+            last_error, started_at, completed_at, updated_at
+        ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(singleton_id) DO UPDATE SET
+            policy_version = excluded.policy_version,
+            status = excluded.status,
+            cursor_activity_id = excluded.cursor_activity_id,
+            processed_count = excluded.processed_count,
+            repaired_count = excluded.repaired_count,
+            failed_count = excluded.failed_count,
+            unknown_count = excluded.unknown_count,
+            last_error = excluded.last_error,
+            started_at = excluded.started_at,
+            completed_at = excluded.completed_at,
             updated_at = excluded.updated_at
         """,
         (
-            REPAIR_STATE_KEY,
-            json.dumps(state, ensure_ascii=True, sort_keys=True, separators=(",", ":")),
+            REPAIR_POLICY_VERSION,
+            state["status"],
+            int(state["cursor_activity_id"]),
+            int(state["processed_count"]),
+            int(state["repaired_count"]),
+            int(state["failed_count"]),
+            int(state["unknown_count"]),
+            str(state["last_error"]),
+            str(state["started_at"]),
+            str(state["completed_at"]),
             state["updated_at"],
         ),
     )
@@ -299,7 +317,6 @@ def _unknown_resource(row: dict[str, Any]) -> DetectedResource:
 __all__ = [
     "DEFAULT_BATCH_SIZE",
     "REPAIR_POLICY_VERSION",
-    "REPAIR_STATE_KEY",
     "get_activity_fact_repair_state",
     "repair_missing_activity_resources",
     "require_activity_fact_repair_complete",

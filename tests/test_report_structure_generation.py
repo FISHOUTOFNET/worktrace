@@ -6,6 +6,7 @@ import pytest
 
 from tests.support import activity_factory as activity_service
 from worktrace.db import get_connection, now_str
+from worktrace.report_generation_classifier import report_structure_classifier_scope
 from worktrace.resources.types import DetectedResource
 from worktrace.services import report_revision_service, resource_service
 from worktrace.services.settings_service import set_setting
@@ -47,24 +48,26 @@ def test_heartbeat_revision_reuses_hash_until_structural_commit(temp_db):
         assert report_revision_service.get_report_structure_revision(DATE) == first
         assert build.call_count == 1
 
-        conn = get_connection()
-        try:
-            conn.execute("BEGIN IMMEDIATE")
-            conn.execute(
-                "UPDATE activity_log SET status = ?, updated_at = ? WHERE id = ?",
-                ("idle", now_str(), activity_id),
-            )
-            conn.rollback()
-        finally:
-            conn.close()
+        with report_structure_classifier_scope():
+            conn = get_connection()
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                conn.execute(
+                    "UPDATE activity_log SET status = ?, updated_at = ? WHERE id = ?",
+                    ("idle", now_str(), activity_id),
+                )
+                conn.rollback()
+            finally:
+                conn.close()
         assert report_revision_service.get_report_structure_revision(DATE) == first
         assert build.call_count == 1
 
-        with get_connection() as conn:
-            conn.execute(
-                "UPDATE activity_log SET status = ?, updated_at = ? WHERE id = ?",
-                ("idle", now_str(), activity_id),
-            )
+        with report_structure_classifier_scope():
+            with get_connection() as conn:
+                conn.execute(
+                    "UPDATE activity_log SET status = ?, updated_at = ? WHERE id = ?",
+                    ("idle", now_str(), activity_id),
+                )
         changed = report_revision_service.get_report_structure_revision(DATE)
         assert changed != first
         assert build.call_count == 2

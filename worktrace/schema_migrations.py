@@ -6,6 +6,7 @@ workers start and must be deterministic.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from collections.abc import Callable
 
@@ -248,11 +249,74 @@ def migrate_7_to_8(conn: sqlite3.Connection) -> None:
     conn.execute("DROP TABLE report_structure_revision_state")
 
 
+def migrate_8_to_9(conn: sqlite3.Connection) -> None:
+    """Move activity-resource repair progress out of business settings."""
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS activity_resource_repair_job (
+            singleton_id INTEGER PRIMARY KEY CHECK(singleton_id = 1),
+            policy_version INTEGER NOT NULL CHECK(policy_version > 0),
+            status TEXT NOT NULL CHECK(status IN ('pending', 'running', 'completed', 'failed')),
+            cursor_activity_id INTEGER NOT NULL DEFAULT 0 CHECK(cursor_activity_id >= 0),
+            processed_count INTEGER NOT NULL DEFAULT 0 CHECK(processed_count >= 0),
+            repaired_count INTEGER NOT NULL DEFAULT 0 CHECK(repaired_count >= 0),
+            failed_count INTEGER NOT NULL DEFAULT 0 CHECK(failed_count >= 0),
+            unknown_count INTEGER NOT NULL DEFAULT 0 CHECK(unknown_count >= 0),
+            last_error TEXT NOT NULL DEFAULT '',
+            started_at TEXT NOT NULL DEFAULT '',
+            completed_at TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL DEFAULT ''
+        )
+        """
+    )
+    row = conn.execute(
+        "SELECT value FROM settings WHERE key = ?",
+        ("maintenance.activity_resource_repair.v1",),
+    ).fetchone()
+    if row is not None:
+        try:
+            raw = json.loads(str(row[0] or ""))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            raw = None
+        if isinstance(raw, dict) and int(raw.get("policy_version") or 0) == 1:
+            status = str(raw.get("status") or "pending")
+            if status not in {"pending", "running", "completed", "failed"}:
+                status = "pending"
+            conn.execute(
+                """
+                INSERT INTO activity_resource_repair_job(
+                    singleton_id, policy_version, status, cursor_activity_id,
+                    processed_count, repaired_count, failed_count, unknown_count,
+                    last_error, started_at, completed_at, updated_at
+                ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    1,
+                    status,
+                    max(0, int(raw.get("cursor_activity_id") or 0)),
+                    max(0, int(raw.get("scanned_count") or 0)),
+                    max(0, int(raw.get("repaired_count") or 0)),
+                    max(0, int(raw.get("error_count") or 0)),
+                    max(0, int(raw.get("unknown_count") or 0)),
+                    str(raw.get("last_error") or ""),
+                    str(raw.get("started_at") or ""),
+                    str(raw.get("completed_at") or ""),
+                    str(raw.get("updated_at") or ""),
+                ),
+            )
+        conn.execute(
+            "DELETE FROM settings WHERE key = ?",
+            ("maintenance.activity_resource_repair.v1",),
+        )
+
+
 MIGRATIONS: dict[int, Migration] = {
     4: migrate_4_to_5,
     5: migrate_5_to_6,
     6: migrate_6_to_7,
     7: migrate_7_to_8,
+    8: migrate_8_to_9,
 }
 
 
@@ -293,5 +357,6 @@ __all__ = [
     "migrate_5_to_6",
     "migrate_6_to_7",
     "migrate_7_to_8",
+    "migrate_8_to_9",
     "migrate_schema",
 ]

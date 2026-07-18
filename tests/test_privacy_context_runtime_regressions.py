@@ -11,6 +11,7 @@ from worktrace.constants import EXCLUDED_WINDOW_TITLE
 from worktrace.platforms.base import ActiveWindow
 from tests.support import activity_factory as activity_service
 from worktrace.services import (
+    privacy_gate_service,
     folder_rule_service,
     privacy_service,
     project_service,
@@ -44,7 +45,7 @@ def test_collector_turns_unresolved_privacy_observation_into_excluded_row(
     temp_db,
     monkeypatch,
 ):
-    settings_service.set_setting("first_run_notice_accepted", "true")
+    privacy_gate_service.accept_privacy_notice()
     settings_service.set_setting("user_paused", "false")
     stop = threading.Event()
 

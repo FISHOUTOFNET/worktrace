@@ -30,8 +30,6 @@ _REPORT_SETTING_KEYS = {
 }
 _PRIVACY_SETTING_KEYS = {
     "clipboard_capture_enabled",
-    "first_run_notice_accepted",
-    "accepted_privacy_notice_version",
 }
 _OPERATIONAL_SETTING_KEYS = {
     "collector_status",

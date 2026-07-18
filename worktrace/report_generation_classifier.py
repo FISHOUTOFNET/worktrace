@@ -10,9 +10,16 @@ from owning report policy.
 from __future__ import annotations
 
 import re
+from contextlib import contextmanager
+from contextvars import ContextVar
 from enum import IntEnum
 from functools import lru_cache
 from typing import Mapping
+
+_CLASSIFIER_SCOPE_DEPTH: ContextVar[int] = ContextVar(
+    "worktrace_report_structure_classifier_scope_depth",
+    default=0,
+)
 
 _WRITE_TOKEN_RE = re.compile(
     r"\b(?:INSERT|UPDATE|DELETE|REPLACE|CREATE|DROP|ALTER|VACUUM|REINDEX|ATTACH|DETACH)\b",
@@ -42,6 +49,21 @@ class ReportStructureSqlClassification(IntEnum):
     NONE = 0
     ALWAYS = 1
     SETTINGS_PARAMETERS = 2
+
+
+@contextmanager
+def report_structure_classifier_scope():
+    """Authorize SQL classification for migration, repair, or replacement code."""
+
+    token = _CLASSIFIER_SCOPE_DEPTH.set(_CLASSIFIER_SCOPE_DEPTH.get() + 1)
+    try:
+        yield
+    finally:
+        _CLASSIFIER_SCOPE_DEPTH.reset(token)
+
+
+def report_structure_classifier_enabled() -> bool:
+    return _CLASSIFIER_SCOPE_DEPTH.get() > 0
 
 
 def _parameter_values(parameters):
@@ -126,5 +148,7 @@ __all__ = [
     "ReportStructureSqlClassification",
     "classify_report_structure_sql",
     "parameters_affect_report_structure",
+    "report_structure_classifier_enabled",
+    "report_structure_classifier_scope",
     "sql_affects_report_structure",
 ]

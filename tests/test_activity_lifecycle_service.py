@@ -29,6 +29,7 @@ from tests.support import activity_factory as activity_service
 from worktrace.db import get_connection
 from worktrace.services import (
     folder_rule_service,
+    privacy_gate_service,
     project_service,
     recovery_service,
     session_boundary_service,
@@ -55,7 +56,7 @@ pytestmark = [pytest.mark.db, pytest.mark.collector_runtime, pytest.mark.integra
 @pytest.fixture()
 def temp_db_setup(temp_db):
     settings_service.clear_settings_cache()
-    settings_service.set_setting("first_run_notice_accepted", "true")
+    privacy_gate_service.accept_privacy_notice()
     settings_service.clear_settings_cache()
     return temp_db
 

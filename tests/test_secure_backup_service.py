@@ -498,6 +498,29 @@ def test_unsupported_version_fails(temp_db, tmp_path):
         secure_backup_service.import_encrypted_backup(out, "passphrase")
 
 
+def test_published_v8_backup_remains_importable(temp_db, tmp_path):
+    _seed_test_data()
+    payload = json.loads(secure_backup_service._build_export_payload().decode("utf-8"))
+    payload["schema_version"] = "8"
+    payload["schema_fingerprint"] = (
+        "3fd5ae980749886a04f7f9170669a606fa80d6b554924d0ad29b457b0c51deac"
+    )
+    out = tmp_path / "published-v8.wtbackup"
+    out.write_bytes(
+        create_encrypted_backup(
+            json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode(
+                "utf-8"
+            ),
+            "passphrase",
+            "legacy-test",
+        )
+    )
+
+    result = secure_backup_service.import_encrypted_backup(out, "passphrase")
+
+    assert result.mode == "replace"
+
+
 def test_import_failure_does_not_change_current_database(temp_db, tmp_path):
     _seed_test_data()
     out = tmp_path / "safe.wtbackup"
@@ -544,6 +567,18 @@ def test_replace_import_restores_all_tables(temp_db, tmp_path):
         "activity_resource",
     ]:
         assert counts_after[table] == counts_before[table], f"row count mismatch for {table}"
+
+
+def test_successful_import_refreshes_generation_backed_settings_cache(temp_db, tmp_path):
+    set_setting("ui_refresh_seconds", "11")
+    out = tmp_path / "cache-refresh.wtbackup"
+    secure_backup_service.export_encrypted_backup(out, "passphrase")
+    set_setting("ui_refresh_seconds", "22")
+    assert get_setting("ui_refresh_seconds") == "22"
+
+    secure_backup_service.import_encrypted_backup(out, "passphrase", mode="replace")
+
+    assert get_setting("ui_refresh_seconds") == "11"
 
 
 def test_replace_import_restores_distinctive_data(temp_db, tmp_path):

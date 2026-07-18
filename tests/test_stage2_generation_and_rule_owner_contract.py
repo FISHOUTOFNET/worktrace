@@ -175,7 +175,7 @@ def test_project_catalog_has_no_cross_service_cache_fanout() -> None:
 
 def test_clear_and_replacement_publish_through_transaction_owners() -> None:
     maintenance = _source("worktrace/services/database_maintenance_service.py")
-    assert "DataGenerationNamespace.REPORT_STRUCTURE" in maintenance
+    assert "publish_database_replacement(conn)" in maintenance
     for duplicate in (
         "DataGenerationNamespace.CLASSIFICATION_CATALOG",
         "DataGenerationNamespace.SETTINGS",
@@ -183,7 +183,8 @@ def test_clear_and_replacement_publish_through_transaction_owners() -> None:
         "DataGenerationNamespace.DATABASE_REPLACEMENT",
     ):
         assert duplicate not in maintenance
-    assert "privacy_gate_service.restore_installation_privacy_state" in maintenance
+    assert "publish_database_replacement(conn)" in maintenance
+    assert "privacy_gate_service" not in maintenance
 
     replacement = _source(
         "worktrace/services/database_replacement_generation_service.py"
