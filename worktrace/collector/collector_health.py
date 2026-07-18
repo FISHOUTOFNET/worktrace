@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import importlib
 import logging
+import sqlite3
 import threading
 from dataclasses import dataclass
 from datetime import datetime
@@ -17,8 +17,11 @@ HEALTH_STOPPED = "stopped"
 
 _FAILING_THRESHOLD = 3
 _SUCCESS_PERSIST_INTERVAL_SECONDS = 30
-_DB_ERROR = importlib.import_module("s" + "qlite3").DatabaseError
 _STATE_LOCK = threading.RLock()
+
+
+class TransientCollectorError(RuntimeError):
+    """Explicit adapter or runtime signal that retrying the loop is safe."""
 
 
 @dataclass
@@ -221,21 +224,18 @@ def record_health_code(code: str, at_time: str | None = None) -> None:
 
 
 def is_transient_failure(exc: BaseException) -> bool:
-    """Retry environmental contention, but stop on corruption/programming faults."""
-    if isinstance(
-        exc,
-        (
-            SystemExit,
-            KeyboardInterrupt,
-            MemoryError,
-            AssertionError,
-            TypeError,
-            AttributeError,
-            KeyError,
-        ),
-    ):
-        return False
-    if isinstance(exc, _DB_ERROR):
+    """Return true only for failures explicitly proven safe to retry.
+
+    Unknown exceptions are programming or contract failures by default. This
+    prevents deterministic ``ValueError``/``RuntimeError``/``IndexError`` defects
+    from being converted into an endless degraded Collector loop.
+    """
+
+    if isinstance(exc, TransientCollectorError):
+        return True
+    if isinstance(exc, TimeoutError):
+        return True
+    if isinstance(exc, sqlite3.DatabaseError):
         message = str(exc).lower()
         return any(
             token in message
@@ -246,7 +246,7 @@ def is_transient_failure(exc: BaseException) -> bool:
                 "database_generation_changed",
             )
         )
-    return True
+    return False
 
 
 def _safe_phase(phase: str) -> str:
@@ -265,6 +265,7 @@ __all__ = [
     "HEALTH_FAILING",
     "HEALTH_HEALTHY",
     "HEALTH_STOPPED",
+    "TransientCollectorError",
     "format_time",
     "is_transient_failure",
     "record_collector_started",
