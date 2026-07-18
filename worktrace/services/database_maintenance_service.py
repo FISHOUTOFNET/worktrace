@@ -47,7 +47,7 @@ def _apply_post_clear_settings(conn) -> None:
 
 
 def clear_all_live_data() -> None:
-    """Delete live rows atomically and publish every affected generation once."""
+    """Delete live rows and derived obligations in one replacement transaction."""
 
     with DomainUnitOfWork() as uow:
         conn = uow.connection
