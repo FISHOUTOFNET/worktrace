@@ -141,6 +141,19 @@ CREATE TABLE IF NOT EXISTS history_mutation_job_rule (
     FOREIGN KEY(job_id) REFERENCES history_mutation_job(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS activity_inference_job (
+    activity_id INTEGER PRIMARY KEY,
+    status TEXT NOT NULL CHECK (
+        status IN ('pending', 'running', 'failed')
+    ),
+    attempt_count INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count >= 0),
+    next_attempt_at TEXT,
+    last_error_code TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY(activity_id) REFERENCES activity_log(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS activity_project_assignment (
     activity_id INTEGER PRIMARY KEY,
     project_id INTEGER,
