@@ -55,6 +55,45 @@ for _name, _value in _STATE.items():
         globals()[_name] = _value
 
 
+def _generation_owner_offenders() -> list[str | None]:
+    offenders: list[str] = []
+    covered: set[str] = set()
+    for path in _STATE["_python_files"]():
+        relative = path.relative_to(_STATE["ROOT"]).as_posix()
+        for line, operation, table in _STATE["_literal_dml"](path):
+            owners = _owners.get(table)
+            if owners is None:
+                continue
+            covered.add(table)
+            if relative not in owners:
+                offenders.append(f"{relative}:{line}:{operation}:{table}")
+        for line, operation, tables in _dynamic_dml(path):
+            if not tables:
+                offenders.append(f"{relative}:{line}:{operation}:dynamic")
+                continue
+            for table in tables:
+                covered.add(table)
+                if relative not in _owners[table]:
+                    offenders.append(f"{relative}:{line}:{operation}:{table}")
+    for table in sorted(set(_owners) - covered):
+        offenders.append(f"missing:{table}")
+    return sorted(set(offenders)) or [None]
+
+
+_OWNER_OFFENDERS = _generation_owner_offenders()
+
+
+@pytest.mark.parametrize(
+    "offender",
+    _OWNER_OFFENDERS,
+    ids=lambda value: "clean" if value is None else str(value),
+)
+def test_generation_backed_dml_stays_with_canonical_command_owners(
+    offender: str | None,
+) -> None:
+    assert offender is None, offender
+
+
 def test_historical_migration_owner_is_lifecycle_scoped() -> None:
     assert all(
         "worktrace/schema_migrations_history.py" in owners
