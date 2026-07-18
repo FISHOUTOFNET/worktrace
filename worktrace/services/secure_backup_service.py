@@ -160,9 +160,11 @@ def _normalize_v4_payload(data: dict[str, Any]) -> dict[str, Any]:
             ) from exc
         if confidence != -1:
             continue
-        assignment["confidence"] = 0
         activity = activities.get(activity_id)
-        if not _legacy_retry_eligible(activity, assignment) or activity_id in seen:
+        eligible = _legacy_retry_eligible(activity, assignment)
+        if not int(assignment.get("is_manual") or 0):
+            assignment["confidence"] = 0
+        if not eligible or activity_id in seen:
             continue
         timestamp = str(
             activity.get("updated_at")
@@ -185,6 +187,9 @@ def _normalize_v4_payload(data: dict[str, Any]) -> dict[str, Any]:
         seen.add(activity_id)
     tables["activity_inference_job"] = jobs
     normalized = dict(data)
+    normalized["version"] = PAYLOAD_VERSION
+    normalized["schema_version"] = SCHEMA_VERSION
+    normalized["schema_fingerprint"] = _core.expected_schema_fingerprint()
     normalized["tables"] = tables
     return normalized
 
@@ -208,7 +213,12 @@ def _legacy_retry_eligible(
 def _validate_staging_database_with_jobs(conn: sqlite3.Connection) -> None:
     _ORIGINAL_STAGING_VALIDATOR(conn)
     if conn.execute(
-        "SELECT 1 FROM activity_project_assignment WHERE confidence < 0 LIMIT 1"
+        """
+        SELECT 1
+        FROM activity_project_assignment
+        WHERE is_manual = 0 AND confidence < 0
+        LIMIT 1
+        """
     ).fetchone():
         raise _core.BackupValidationError("legacy inference sentinel")
     rows = conn.execute(
@@ -260,8 +270,18 @@ def _require_timestamp(value: object) -> None:
 
 
 _ORIGINAL_STAGING_VALIDATOR = _core.validate_staging_database
-_core.validate_staging_database = _validate_staging_database_with_jobs
-_core._parse_and_validate_payload = _parse_and_validate_payload
+_build_export_payload = _core._build_export_payload
+_replace_import = _core._replace_import
+
+
+def _synchronize_core_hooks() -> None:
+    """Keep canonical test/diagnostic injection points authoritative."""
+
+    _core._build_export_payload = _build_export_payload
+    _core._parse_and_validate_payload = _parse_and_validate_payload
+    _core._replace_import = _replace_import
+    _core.validate_staging_database = _validate_staging_database_with_jobs
+
 
 SecureBackupError = _core.SecureBackupError
 BackupDecryptionError = _core.BackupDecryptionError
@@ -274,14 +294,31 @@ SecureImportPhase = _core.SecureImportPhase
 SecureImportCoordinator = _core.SecureImportCoordinator
 SECURE_IMPORT_COORDINATOR = _core.SECURE_IMPORT_COORDINATOR
 
-export_encrypted_backup = _core.export_encrypted_backup
-import_encrypted_backup = _core.import_encrypted_backup
-parse_encrypted_backup_manifest = _core.parse_encrypted_backup_manifest
-is_secure_import_in_progress = _core.is_secure_import_in_progress
+
+def export_encrypted_backup(output_path, passphrase: str):
+    _synchronize_core_hooks()
+    return _core.export_encrypted_backup(output_path, passphrase)
+
+
+def import_encrypted_backup(input_path, passphrase: str, mode: str = "replace"):
+    _synchronize_core_hooks()
+    return _core.import_encrypted_backup(input_path, passphrase, mode)
+
+
+def parse_encrypted_backup_manifest(input_path):
+    return _core.parse_encrypted_backup_manifest(input_path)
+
+
+def is_secure_import_in_progress() -> bool:
+    return _core.is_secure_import_in_progress()
+
+
 register_collector_pause_handler = _core.register_collector_pause_handler
 clear_collector_pause_handler = _core.clear_collector_pause_handler
 register_collector_reset_handler = _core.register_collector_reset_handler
 clear_collector_reset_handler = _core.clear_collector_reset_handler
+
+_synchronize_core_hooks()
 
 
 def __getattr__(name: str):
