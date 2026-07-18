@@ -104,6 +104,7 @@ def process_pending_inference_jobs(
 
 def start_inference_worker(
     stop_event: threading.Event,
+    infer_activity: InferenceCommand,
     *,
     batch_size: int = 50,
     poll_seconds: float = 1.0,
@@ -112,7 +113,12 @@ def start_inference_worker(
 
     thread = threading.Thread(
         target=_worker_loop,
-        args=(stop_event, max(1, int(batch_size)), max(0.1, float(poll_seconds))),
+        args=(
+            stop_event,
+            infer_activity,
+            max(1, int(batch_size)),
+            max(0.1, float(poll_seconds)),
+        ),
         name="WorkTraceInferenceWorker",
         daemon=True,
     )
@@ -122,15 +128,14 @@ def start_inference_worker(
 
 def _worker_loop(
     stop_event: threading.Event,
+    infer_activity: InferenceCommand,
     batch_size: int,
     poll_seconds: float,
 ) -> None:
-    from .project_inference_service import assign_project_for_activity_in_transaction
-
     while not stop_event.is_set():
         try:
             processed = process_pending_inference_jobs(
-                assign_project_for_activity_in_transaction,
+                infer_activity,
                 limit=batch_size,
             )
         except Exception:
