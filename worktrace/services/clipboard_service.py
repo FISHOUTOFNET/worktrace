@@ -9,7 +9,7 @@ from ..data_generation_repository import DataGenerationNamespace
 from ..db import now_str
 from ..domain_unit_of_work import DomainUnitOfWork
 from ..platforms.base import ActiveWindow
-from . import project_inference_service
+from . import activity_inference_job_repository, project_inference_service
 from .settings_service import get_bool_setting
 
 
@@ -81,9 +81,13 @@ def record_clipboard_event(
             ),
         )
         event_id = int(cur.lastrowid)
+        activity_inference_job_repository.enqueue_closed_activity_ids(
+            conn,
+            [int(activity_id)],
+        )
         uow.mark_changed()
-    # Open rows are refreshed immediately. If this derivation fails, the normal
-    # close transaction will durably enqueue the final nonmanual activity facts.
+    # Closed rows now have a durable job. Open rows are refreshed immediately
+    # and will be scheduled by their eventual close transaction if this fails.
     _attempt_clipboard_inference(int(activity_id))
     return event_id
 
@@ -153,10 +157,13 @@ def _find_duplicate_event(
 
 def _attempt_clipboard_inference(activity_id: int) -> None:
     try:
-        project_inference_service.assign_project_for_activity(activity_id)
+        from .activity_inference_job_service import process_pending_inference_jobs
+
+        if process_pending_inference_jobs(limit=1, activity_ids=[activity_id]) == 0:
+            project_inference_service.assign_project_for_activity(activity_id)
     except Exception:
         logging.exception(
-            "clipboard inference failed; close-time durable retry will converge activity_id=%s",
+            "clipboard inference failed; durable close-time retry retained for activity_id=%s",
             activity_id,
         )
 
