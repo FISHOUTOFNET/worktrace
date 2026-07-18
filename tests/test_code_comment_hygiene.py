@@ -57,6 +57,7 @@ FORBIDDEN_TEXT = (
 # These are current domain identifiers, not historical delivery-stage labels.
 CURRENT_DOMAIN_IDENTIFIERS = (
     "RuntimePhase",
+    "MaintenancePhase",
     "SecureImportPhase",
     "WriteGatePhase",
 )
