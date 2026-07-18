@@ -1,16 +1,14 @@
-"""ActivityLifecycle Command Facade contract tests.
+"""Activity lifecycle command boundary contract tests.
 
-These tests verify the architecture invariants for the open-row state machine:
+These tests verify the open-row state machine and durable inference handoff:
 
-- ``activity_lifecycle_service`` owns open-row lifecycle transitions.
-- ``activity_service`` remains a low-level CRUD helper and does not run project
-  inference; the database seals the previous open row before a replacement.
-- ``start_activity`` closes and finalizes the prior row before inserting the
-  replacement.
-- Manual assignments are never overridden.
-- Clipboard binding is restricted to normal activity.
-- Midnight and recovery paths preserve project assignment.
-- An inference failure on one closed row does not block later rows.
+- ``activity_lifecycle_service`` owns open-row lifecycle transitions;
+- activity closure and inference-job creation commit together;
+- post-commit convergence enters the outbox worker rather than calling the
+  assignment command directly;
+- manual and midnight-anchor assignments are never overridden;
+- clipboard binding is restricted to normal activity;
+- one failed inference job does not block later jobs.
 """
 
 from __future__ import annotations
@@ -28,6 +26,7 @@ from worktrace.constants import (
 from tests.support import activity_factory as activity_service
 from worktrace.db import get_connection
 from worktrace.services import (
+    activity_inference_job_repository,
     folder_rule_service,
     privacy_gate_service,
     project_service,
@@ -294,7 +293,7 @@ def test_finalize_closed_activity_ids_empty_list_is_noop(temp_db_setup):
     finalize_closed_activity_ids(None)  # type: ignore[arg-type]
 
 
-def test_finalize_closed_activity_ids_inference_failure_does_not_block(
+def test_finalize_closed_activity_ids_failure_does_not_block_later_job(
     temp_db_setup,
     monkeypatch,
 ):
@@ -318,22 +317,44 @@ def test_finalize_closed_activity_ids_inference_failure_does_not_block(
     )
     activity_service.close_activity_row(aid2, "2026-07-01 09:20:00")
 
-    call_count = [0]
-
-    def flaky_process_new_activity(activity_id):
-        call_count[0] += 1
-        if call_count[0] == 1:
-            raise RuntimeError("simulated inference failure")
+    with get_connection() as conn:
+        activity_inference_job_repository.enqueue_closed_activity_ids(
+            conn,
+            [aid1, aid2],
+            at_time="2026-07-01 09:21:00",
+        )
 
     import worktrace.services.project_inference_service as pis
 
+    original = pis.assign_project_for_activity_in_transaction
+    calls: list[int] = []
+
+    def flaky_inference(conn, activity_id):
+        calls.append(int(activity_id))
+        if int(activity_id) == aid1:
+            raise RuntimeError("simulated inference failure")
+        return original(conn, activity_id)
+
     monkeypatch.setattr(
         pis,
-        "process_new_activity",
-        flaky_process_new_activity,
+        "assign_project_for_activity_in_transaction",
+        flaky_inference,
     )
     finalize_closed_activity_ids([aid1, aid2])
-    assert call_count[0] == 2
+
+    with get_connection() as conn:
+        failed_job = conn.execute(
+            "SELECT attempt_count FROM activity_inference_job WHERE activity_id = ?",
+            (aid1,),
+        ).fetchone()
+        completed_job = conn.execute(
+            "SELECT 1 FROM activity_inference_job WHERE activity_id = ?",
+            (aid2,),
+        ).fetchone()
+    assert calls == [aid1, aid2]
+    assert failed_job["attempt_count"] == 1
+    assert completed_job is None
+    assert int(get_assignment_for_activity(aid2)["project_id"]) == pid
 
 
 def test_pause_collection_closes_open_row_and_is_idempotent(temp_db_setup):
@@ -374,7 +395,7 @@ def test_pause_collection_closes_open_row_and_is_idempotent(temp_db_setup):
     assert open_count == 0
 
 
-def test_persist_open_activity_persists_without_elapsed_gate(temp_db_setup):
+def test_persist_open_activity_persists_without_elapsed_time(temp_db_setup):
     payload = {
         "app_name": "Word",
         "process_name": "winword.exe",
