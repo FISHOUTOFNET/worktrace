@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import logging
 import ntpath
 import re
 import threading
-from collections.abc import Iterable
 from dataclasses import dataclass
 
 from ..constants import STATUS_NORMAL, UNCATEGORIZED_PROJECT
@@ -206,45 +204,6 @@ def _assign_project_for_activity_in_transaction(
         source_rule_id=decision.source_rule_id,
     )
     return _assignment_dict(conn, activity_id), changed
-
-
-def process_new_activity(activity_id: int) -> dict:
-    """Apply automatic rules only to closed, visible, durable activities."""
-
-    with get_connection() as conn:
-        activity = conn.execute(
-            "SELECT is_hidden, is_deleted, end_time FROM activity_log WHERE id = ?",
-            (int(activity_id),),
-        ).fetchone()
-        if activity is None:
-            raise ValueError(f"activity not found: {activity_id}")
-        if int(activity["is_hidden"] or 0) or int(activity["is_deleted"] or 0):
-            return _assignment_dict(conn, activity_id)
-        if activity["end_time"] is None:
-            return _assignment_dict(conn, activity_id)
-    return assign_project_for_activity(activity_id)
-
-
-def process_pending_inference_jobs(
-    limit: int = 100,
-    *,
-    activity_ids: Iterable[int] | None = None,
-) -> int:
-    """Consume durable jobs through the acyclic bounded worker boundary."""
-
-    from .activity_inference_job_service import process_pending_inference_jobs as consume
-
-    return consume(
-        assign_project_for_activity_in_transaction,
-        limit=max(0, int(limit)),
-        activity_ids=activity_ids,
-    )
-
-
-def retry_pending_inference(limit: int = 100) -> int:
-    """Consume a bounded set of durable inference jobs."""
-
-    return process_pending_inference_jobs(limit=max(0, int(limit)))
 
 
 _OPEN_ROW_UNCLASSIFIED_SOURCES = {"uncategorized", "suggested_project_name"}
@@ -570,8 +529,5 @@ __all__ = [
     "get_assignment_for_activity",
     "invalidate_keyword_rule_cache",
     "keyword_pattern_matches",
-    "process_new_activity",
-    "process_pending_inference_jobs",
-    "retry_pending_inference",
     "sync_persisted_open_activity_project",
 ]
