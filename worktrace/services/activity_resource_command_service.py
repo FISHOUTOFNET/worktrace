@@ -13,10 +13,15 @@ from ..path_utils import looks_like_local_file_path, normalize_path_key
 from ..platforms.base import ActiveWindow
 from ..resources.resource_builders import make_system_resource
 from ..resources.types import DetectedResource
+from . import (
+    activity_inference_job_repository,
+    privacy_service,
+    project_inference_service,
+)
 from .resource_service import create_or_update_activity_resource
-from . import privacy_service
 
 logger = logging.getLogger(__name__)
+
 
 def _detect_resource(activity: dict, file_path_hint: str) -> DetectedResource:
     status = str(activity.get("status") or "")
@@ -96,13 +101,14 @@ def _finalize_pending_inference(activity_id: int) -> None:
     """Run post-commit derivation without changing the main command result."""
 
     try:
-        from .project_inference_service import assign_project_for_activity
-
-        assign_project_for_activity(int(activity_id))
+        # Closed rows have a durable job; open rows can still refresh immediately
+        # and will be scheduled by their eventual close transaction.
+        if project_inference_service.process_pending_inference_jobs(
+            limit=1,
+            activity_ids=[activity_id],
+        ) == 0:
+            project_inference_service.assign_project_for_activity(int(activity_id))
     except Exception:
-        # The durable path/resource facts and their retry marker already
-        # committed. The opportunity worker can retry without the caller being
-        # told that the main command failed.
         logger.exception("path-update inference failed for activity_id=%s", activity_id)
 
 
@@ -121,7 +127,7 @@ def _persist_activity_path(
         current_row = conn.execute(
             """
             SELECT id, app_name, process_name, window_title, status, start_time,
-                   file_path_hint, updated_at
+                   end_time, file_path_hint, updated_at
             FROM activity_log
             WHERE id = ? AND is_deleted = 0
             """,
@@ -200,13 +206,9 @@ def _persist_activity_path(
         create_or_update_activity_resource(int(activity_id), resource, conn=conn)
 
         if not excluded:
-            from .assignment_command_service import mark_inference_retry
-            from .system_project_service import require_uncategorized_project_id
-
-            mark_inference_retry(
+            activity_inference_job_repository.enqueue_closed_activity_ids(
                 conn,
-                int(activity_id),
-                require_uncategorized_project_id(conn),
+                [int(activity_id)],
             )
         uow.mark_changed()
 
