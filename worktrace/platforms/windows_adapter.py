@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ctypes
+import logging
 from ctypes import wintypes
 
 from .base import ActiveWindow, ClipboardTextEvent
@@ -52,7 +53,7 @@ class WindowsAdapter:
         try:
             window_class = win32gui.GetClassName(hwnd) or None
         except Exception:
-            pass
+            logging.debug("active window class lookup failed", exc_info=True)
         return ActiveWindow(
             app_name=app_name,
             process_name=process_name,

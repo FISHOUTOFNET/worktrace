@@ -400,7 +400,7 @@ def _uninitialize_com() -> None:
 
         pythoncom.CoUninitialize()
     except Exception:
-        pass
+        logging.debug("COM CoUninitialize failed", exc_info=True)
 
 
 def _get_com_file_path_threadsafe(
