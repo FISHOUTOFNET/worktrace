@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from worktrace.db import get_connection
+from worktrace.db import CURRENT_SCHEMA_VERSION, get_connection
 from worktrace.services import (
     activity_inference_job_repository as jobs,
     activity_inference_job_service as worker,
@@ -41,6 +41,28 @@ def _insert_closed_activity(conn, *, status: str = "normal") -> int:
         (activity_id, f"app:{activity_id}", timestamp, timestamp),
     )
     return activity_id
+
+
+def test_schema_v11_has_minimal_outbox_shape(temp_db):
+    with get_connection() as conn:
+        version = int(conn.execute("PRAGMA user_version").fetchone()[0])
+        columns = {
+            str(row["name"])
+            for row in conn.execute(
+                "PRAGMA table_info(activity_inference_job)"
+            ).fetchall()
+        }
+    assert CURRENT_SCHEMA_VERSION == 11
+    assert version == 11
+    assert columns == {
+        "activity_id",
+        "reason",
+        "attempt_count",
+        "available_at",
+        "last_error_code",
+        "created_at",
+        "updated_at",
+    }
 
 
 def test_enqueue_resets_backoff_and_preserves_created_at(temp_db):
