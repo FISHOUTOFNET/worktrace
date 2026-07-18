@@ -13,9 +13,9 @@ from worktrace.collector import collector_health
 from worktrace.db import get_connection
 from worktrace.schema_migrations import migrate_10_to_11
 from worktrace.services import (
-    activity_inference_job_service,
     activity_lifecycle_service,
     assignment_command_service,
+    project_inference_service,
     project_service,
 )
 
@@ -43,13 +43,13 @@ def test_close_commit_keeps_inference_job_when_immediate_consumer_fails(
         source="auto",
         payload=_payload(),
     )
-    original = activity_inference_job_service.process_pending_inference_jobs
+    original = project_inference_service.process_pending_inference_jobs
 
     def fail_after_commit(*_args, **_kwargs):
         raise RuntimeError("simulated_process_exit")
 
     monkeypatch.setattr(
-        activity_inference_job_service,
+        project_inference_service,
         "process_pending_inference_jobs",
         fail_after_commit,
     )
@@ -71,7 +71,7 @@ def test_close_commit_keeps_inference_job_when_immediate_consumer_fails(
     assert dict(job) == {"status": "pending", "attempt_count": 0}
 
     monkeypatch.setattr(
-        activity_inference_job_service,
+        project_inference_service,
         "process_pending_inference_jobs",
         original,
     )
@@ -104,7 +104,7 @@ def test_manual_assignment_is_not_scheduled_for_inference(temp_db, monkeypatch):
         is_manual=True,
     )
     monkeypatch.setattr(
-        activity_inference_job_service,
+        project_inference_service,
         "process_pending_inference_jobs",
         lambda *_args, **_kwargs: 0,
     )
