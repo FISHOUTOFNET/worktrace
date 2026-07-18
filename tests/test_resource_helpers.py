@@ -12,7 +12,6 @@ from worktrace.resources.resource_helpers import (
     normalize_file_name,
     normalize_for_key,
     resolve_file_candidate,
-    resolve_unique_indexed_path_from_title,
 )
 
 
@@ -105,17 +104,3 @@ def test_resolve_file_candidate_returns_none_when_nothing_found():
         window_title="没有文件的标题",
     )
     assert resolve_file_candidate(aw, allowed_extensions=frozenset({".docx"})) is None
-
-
-# resolve_unique_indexed_path_from_title: folder index failure safety
-
-
-def test_resolve_unique_indexed_path_returns_none_when_index_unavailable():
-    # No database initialized; folder index lookup should fail safely.
-    assert resolve_unique_indexed_path_from_title("合同.docx - Word") is None
-
-
-def test_resolve_unique_indexed_path_returns_none_for_empty_title():
-    assert resolve_unique_indexed_path_from_title(None) is None
-    assert resolve_unique_indexed_path_from_title("") is None
-    assert resolve_unique_indexed_path_from_title("   ") is None

@@ -1,8 +1,8 @@
 """Shared helpers for resource detectors.
 
-Consolidates title/file-name parsing, identity-key construction, and folder
-index lookups so that individual detectors (Office/WPS, LocalFile, IDE, Email,
-Browser) no longer each carry their own copy of these utilities.
+Consolidates title/file-name parsing and identity-key construction so that
+individual detectors (Office/WPS, LocalFile, IDE, Email, Browser) no longer
+each carry their own copy of these utilities.
 
 Title/file-name extraction (``extract_file_name_from_title``,
 ``normalize_file_name``, ``extract_anchor_file_name``) continues to live in
@@ -12,7 +12,6 @@ import surface.
 
 from __future__ import annotations
 
-import logging
 import ntpath
 import re
 
@@ -34,7 +33,6 @@ __all__ = [
     "extract_file_name_from_title",
     "normalize_file_name",
     "normalize_for_key",
-    "resolve_unique_indexed_path_from_title",
     "resolve_file_candidate",
     "build_path_or_name_identity",
     "display_name_from_path_or_name",
@@ -50,29 +48,6 @@ def normalize_for_key(value: str) -> str:
     return value.strip("-") or "unknown"
 
 
-def resolve_unique_indexed_path_from_title(
-    window_title: str | None,
-    *,
-    include_excluded: bool = True,
-    activity_start_time: str | None = None,
-) -> str | None:
-    """Resolve one path from the published folder-index snapshot."""
-
-    if not (window_title or "").strip():
-        return None
-    try:
-        from ..services.folder_index_query_service import resolve_unique_path_from_title
-
-        return resolve_unique_path_from_title(
-            window_title,
-            include_excluded=include_excluded,
-            activity_start_time=activity_start_time,
-        )
-    except Exception:
-        logging.debug("folder index lookup failed for title", exc_info=True)
-        return None
-
-
 def resolve_file_candidate(
     active_window: ActiveWindow,
     allowed_extensions: frozenset[str] | set[str] | None = None,
@@ -80,7 +55,6 @@ def resolve_file_candidate(
     prefer_hint: bool = True,
     allow_title_path: bool = True,
     allow_title_file: bool = True,
-    use_folder_index: bool = True,
 ) -> str | None:
     """Resolve a file path or bare file name for a detector."""
 
@@ -105,15 +79,6 @@ def resolve_file_candidate(
                     return file_name
             else:
                 return file_name
-
-    if use_folder_index:
-        indexed = resolve_unique_indexed_path_from_title(
-            title,
-            include_excluded=True,
-            activity_start_time=active_window.activity_start_time,
-        )
-        if indexed:
-            return indexed
 
     return None
 

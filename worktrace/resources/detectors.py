@@ -80,7 +80,6 @@ class FallbackFileDetector:
             prefer_hint=True,
             allow_title_path=True,
             allow_title_file=True,
-            use_folder_index=False,
         )
         if file_path is None:
             return None

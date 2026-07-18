@@ -95,3 +95,21 @@ def test_explicit_history_rule_may_select_any_actual_candidate() -> None:
     assert policy.rule_is_candidate(1, candidates) is True
     assert policy.rule_is_candidate(2, candidates) is True
     assert policy.rule_is_candidate(999, candidates) is False
+
+
+def test_explicit_history_rule_rejects_stale_path_for_same_rule_id() -> None:
+    candidate = {
+        **_rule(7, "D:\\Current", 10),
+        "file_path": "D:\\Retired\\brief.docx",
+    }
+
+    assert policy.rule_is_candidate(7, [candidate]) is False
+
+
+def test_explicit_history_rule_accepts_current_path_for_same_rule_id() -> None:
+    candidate = {
+        **_rule(7, "D:\\Current", 10),
+        "file_path": "D:\\Current\\brief.docx",
+    }
+
+    assert policy.rule_is_candidate(7, [candidate]) is True

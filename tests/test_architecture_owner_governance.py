@@ -152,6 +152,39 @@ def _tree(path: Path) -> ast.Module:
     return ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
 
 
+def test_platforms_and_resources_do_not_import_services_or_database() -> None:
+    violations: list[str] = []
+    for package in ("platforms", "resources"):
+        for path in sorted((PRODUCTION / package).glob("*.py")):
+            for node in ast.walk(_tree(path)):
+                if isinstance(node, ast.Import):
+                    forbidden = [
+                        alias.name
+                        for alias in node.names
+                        if alias.name == "worktrace.db"
+                        or alias.name.startswith("worktrace.services")
+                    ]
+                elif isinstance(node, ast.ImportFrom):
+                    module = node.module or ""
+                    absolute_forbidden = (
+                        module == "worktrace.db"
+                        or module.startswith("worktrace.services")
+                    )
+                    relative_forbidden = node.level == 2 and (
+                        module == "services"
+                        or module.startswith("services.")
+                        or (not module and any(alias.name == "db" for alias in node.names))
+                    )
+                    forbidden = [module] if absolute_forbidden or relative_forbidden else []
+                else:
+                    continue
+                if forbidden:
+                    violations.append(
+                        f"{path.relative_to(ROOT).as_posix()}:{node.lineno}"
+                    )
+    assert violations == []
+
+
 def _call_name(call: ast.Call) -> str:
     target = call.func
     if isinstance(target, ast.Name):

@@ -69,7 +69,7 @@ def lookup_indexed_paths_for_file_name(
     results: dict[str, dict] = {}
     for row in rows:
         path = str(row.get("file_path") or "").strip()
-        if not path:
+        if not path or not folder_rule_matching_policy.target_matches_rule(path, row):
             continue
         key = str(row.get("normalized_path_key") or normalize_path_key(path))
         results.setdefault(key, row)

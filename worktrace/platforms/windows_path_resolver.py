@@ -259,7 +259,7 @@ class WindowsPathResolver:
         fallback = self._resolve_open_file_path(pid, window_title)
         if fallback:
             return fallback
-        return _resolve_indexed_file_path(window_title)
+        return None
 
     def _run_with_timeout(self, func, timeout_seconds: float, *args):
         if not self._slots.acquire(blocking=False):
@@ -453,22 +453,6 @@ def _is_valid_com_path(path: str | None, window_title: str | None) -> bool:
     return bool(
         title_file and title_file.casefold() == file_name.casefold()
     )
-
-
-def _resolve_indexed_file_path(window_title: str | None) -> str | None:
-    try:
-        from ..services.folder_index_query_service import resolve_unique_path_from_title
-
-        return resolve_unique_path_from_title(
-            window_title,
-            include_excluded=True,
-        )
-    except Exception:
-        logging.debug(
-            "active file path folder index lookup failed",
-            exc_info=True,
-        )
-        return None
 
 
 def _get_process_open_file_paths(pid: int) -> list[str]:

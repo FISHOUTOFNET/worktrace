@@ -81,6 +81,10 @@ def rule_is_candidate(
     return any(
         int(candidate.get("id") or candidate.get("folder_rule_id") or 0)
         == requested
+        and target_matches_rule(
+            str(candidate.get("file_path") or ""),
+            candidate,
+        )
         for candidate in candidates
     )
 

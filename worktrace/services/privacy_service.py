@@ -55,29 +55,35 @@ def is_excluded(active_window: ActiveWindow, *, conn=None) -> bool:
     ).casefold()
     if _matches_exclude_keyword(haystack, conn=conn):
         return True
-    if _matches_exclude_folder(active_window.file_path_hint, conn=conn):
-        return True
+    authoritative_path = str(active_window.file_path_hint or "").strip()
+    if authoritative_path:
+        return _matches_exclude_folder(authoritative_path, conn=conn)
 
     folder_rules = _exclude_rules(conn=conn)["folders"]
     if not folder_rules:
         return False
     file_name = extract_file_name_from_title(active_window.window_title)
-    if not file_name:
-        return False
+    if file_name:
+        from .folder_index_query_service import lookup_indexed_paths_for_file_name
 
-    from .folder_index_query_service import resolve_unique_path_from_title
-
-    path = resolve_unique_path_from_title(
-        active_window.window_title,
-        include_excluded=True,
-        conn=conn,
-    )
-    if path:
-        return _matches_exclude_folder(path, conn=conn)
+        candidates = lookup_indexed_paths_for_file_name(
+            file_name,
+            active_window.activity_start_time,
+            include_excluded=True,
+            conn=conn,
+        )
+        if any(
+            _matches_exclude_folder(
+                str(candidate.get("file_path") or ""),
+                conn=conn,
+            )
+            for candidate in candidates
+        ):
+            return True
 
     # Privacy is a runtime command owner: it may explicitly request maintenance
     # after the pure lookup, while report/preview callers remain read-only.
-    if conn is None:
+    if active_window.privacy_path_required and conn is None:
         from .folder_index_service import request_refresh_for_enabled_rules
 
         request_refresh_for_enabled_rules(include_excluded=True)

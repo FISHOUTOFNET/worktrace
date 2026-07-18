@@ -51,7 +51,6 @@ class LocalFileDetector:
             prefer_hint=True,
             allow_title_path=True,
             allow_title_file=True,
-            use_folder_index=True,
         )
         if file_path is None:
             return None
