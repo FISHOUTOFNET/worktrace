@@ -28,17 +28,10 @@ from .report_generation_classifier import (
     report_structure_classifier_scope,
     sql_affects_report_structure,
 )
-from .schema_migrations import MIN_SUPPORTED_SCHEMA_VERSION, migrate_schema
 from .write_gate import DATABASE_WRITE_GATE
 
 CURRENT_SCHEMA_VERSION = 11
 
-_RETIRED_SCHEMA_TRIGGERS = (
-    "close_existing_open_activity_before_insert",
-    "reset_empty_active_folder_generation",
-    "normalize_pending_folder_generation",
-    "cleanup_history_jobs_after_project_reset",
-)
 _WRITE_TOKEN_RE = re.compile(
     r"\b(?:INSERT|UPDATE|DELETE|REPLACE|CREATE|DROP|ALTER|VACUUM|REINDEX|ATTACH|DETACH)\b",
     re.IGNORECASE,
@@ -308,9 +301,6 @@ def initialize_database(path: str | Path | None = None) -> None:
         ensure_wal(conn)
         with report_structure_classifier_scope():
             apply_current_schema(conn)
-        from .services.installation_metadata_store import migrate_legacy_privacy_state
-
-        migrate_legacy_privacy_state(conn)
     logging.info("database initialized")
 
 
@@ -327,61 +317,12 @@ def apply_current_schema(conn: sqlite3.Connection) -> None:
         seed_defaults(conn)
         return
 
-    if version < MIN_SUPPORTED_SCHEMA_VERSION or version > CURRENT_SCHEMA_VERSION:
-        raise ValueError("database_schema_incompatible")
-    migrated = False
-    if version < CURRENT_SCHEMA_VERSION:
-        _require_supported_source_schema(conn, version)
-        version = migrate_schema(
-            conn,
-            current_version=version,
-            target_version=CURRENT_SCHEMA_VERSION,
-        )
-        migrated = True
     if version != CURRENT_SCHEMA_VERSION:
         raise ValueError("database_schema_incompatible")
 
-    drop_retired_schema_triggers(conn)
-    if migrated:
-        ensure_current_indexes(conn)
     _require_current_schema_fingerprint(conn)
     ensure_data_generation_state(conn)
     seed_defaults(conn)
-
-
-def _require_supported_source_schema(
-    conn: sqlite3.Connection,
-    version: int,
-) -> None:
-    """Validate a supported structural boundary before migration."""
-
-    if version not in {4, 5, 6, 7, 8, 9, 10}:
-        raise ValueError("database_schema_incompatible")
-    required = {
-        "project": {"id", "name", "is_deleted"},
-        "settings": {"key", "value"},
-        "activity_log": {"id", "start_time", "end_time", "duration_seconds"},
-        "folder_project_rule": {"id", "project_id"},
-        "folder_rule_index_state": {"folder_rule_id", "status", "valid_from"},
-        "folder_rule_file_index": {
-            "id",
-            "folder_rule_id",
-            "normalized_path_key",
-        },
-        "activity_project_assignment": {"activity_id", "project_id"},
-        "report_session_operation": {"id", "report_date", "sequence"},
-        "report_session_operation_member": {"operation_id", "activity_id"},
-        "report_mutation_request": {"request_id", "result_json"},
-        "activity_resource": {"activity_id", "identity_key"},
-    }
-    if version == 7:
-        required["report_structure_revision_state"] = {
-            "singleton_id",
-            "generation",
-        }
-    for table, columns in required.items():
-        if not columns.issubset(_table_columns(conn, table)):
-            raise ValueError("database_schema_incompatible")
 
 
 def schema_fingerprint(conn: sqlite3.Connection) -> str:
@@ -513,17 +454,9 @@ def _database_has_user_tables(conn: sqlite3.Connection) -> bool:
     return row is not None
 
 
-def drop_retired_schema_triggers(conn: sqlite3.Connection) -> None:
-    """Remove only the explicit legacy triggers accepted at this version."""
-
-    for trigger_name in _RETIRED_SCHEMA_TRIGGERS:
-        conn.execute(f'DROP TRIGGER IF EXISTS "{trigger_name}"')
-
-
 def ensure_current_indexes(conn: sqlite3.Connection) -> None:
-    """Install current indexes after trusted creation or migration."""
+    """Install the indexes declared by the current schema contract."""
 
-    drop_retired_schema_triggers(conn)
     conn.executescript(read_schema_indexes_sql())
 
 
