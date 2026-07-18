@@ -161,6 +161,7 @@ def test_clipboard_inference_failure_retains_durable_job(temp_db):
         start_time="2026-06-18 09:00:00",
     )
     activity_service.finalize_created_activity(activity)
+    activity_service.close_activity(activity, "2026-06-18 09:00:04")
 
     with patch(
         "worktrace.services.activity_inference_job_service.process_pending_inference_jobs",
