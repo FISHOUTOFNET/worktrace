@@ -7,6 +7,7 @@ from typing import Any
 
 from ..platforms.windows_adapter import WindowsAdapter  # canonical production adapter
 from ..services import activity_inference_job_service, project_inference_service
+from . import app_runtime_core as _core
 from .app_runtime_core import (
     AppRuntime as _CoreAppRuntime,
     RuntimePhase,
@@ -15,13 +16,40 @@ from .app_runtime_core import (
     _thread_reference_is_alive,
 )
 
+# Keep the canonical module as the composition/test injection boundary while the
+# stable implementation remains temporarily isolated for the staged cutover.
+acquire_single_instance = _core.acquire_single_instance
+release_single_instance = _core.release_single_instance
+run_collector = _core.run_collector
+
+
+def _synchronize_core_hooks() -> None:
+    _core.acquire_single_instance = acquire_single_instance
+    _core.release_single_instance = release_single_instance
+    _core.run_collector = run_collector
+
 
 class AppRuntime(_CoreAppRuntime):
     """Extend the stable runtime core with one durable-inference worker owner."""
 
     def __init__(self, paths: Any, adapter: Any | None = None) -> None:
+        _synchronize_core_hooks()
         super().__init__(paths, adapter=adapter)
         self._inference_thread = None
+
+    def initialize(self) -> bool:
+        _synchronize_core_hooks()
+        return super().initialize()
+
+    def start_collector(
+        self,
+        *,
+        startup_timeout_seconds: float = 5.0,
+    ) -> dict[str, object]:
+        _synchronize_core_hooks()
+        return super().start_collector(
+            startup_timeout_seconds=startup_timeout_seconds
+        )
 
     def start_background_workers(self) -> WorkerReadiness:
         readiness = super().start_background_workers()
@@ -140,6 +168,7 @@ class AppRuntime(_CoreAppRuntime):
                 joiner(timeout=5)
             if _thread_reference_is_alive(inference_thread):
                 logging.error("inference worker did not stop before runtime shutdown")
+        _synchronize_core_hooks()
         super().shutdown()
 
 
