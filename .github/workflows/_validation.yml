@@ -138,15 +138,31 @@ jobs:
           Write-Host "first_location=${{ steps.diagnostics.outputs.first_location }}"
 
   python_failure_manifest:
-    name: Complete Python failure manifest
+    name: Python failure manifest ${{ matrix.label }}
     needs: python311
     if: ${{ always() && needs.python311.result == 'failure' }}
     runs-on: windows-latest
     timeout-minutes: 3
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: 1-7
+            start: 1
+            end: 7
+          - label: 8-14
+            start: 8
+            end: 14
+          - label: 15-21
+            start: 15
+            end: 21
+          - label: 22-28
+            start: 22
+            end: 28
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Publish every failure node
+      - name: Publish bounded failure nodes
         shell: pwsh
         run: |
           $jobs = gh api "/repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID/jobs?per_page=100" | ConvertFrom-Json
@@ -157,18 +173,39 @@ jobs:
           $start = [Array]::IndexOf($lines, '=== PYTEST_FAILURE_MANIFEST_BEGIN ===')
           $end = [Array]::IndexOf($lines, '=== PYTEST_FAILURE_MANIFEST_END ===')
           if ($start -lt 0 -or $end -le $start) { throw 'pytest_failure_manifest_not_found' }
-          $lines[$start..$end] | ForEach-Object { Write-Host $_ }
+          $lines[($start + 1)..($end - 1)] | ForEach-Object {
+            if ($_ -match '^\[(\d+)/\d+\]') {
+              $index = [int]$Matches[1]
+              if ($index -ge ${{ matrix.start }} -and $index -le ${{ matrix.end }}) { Write-Host $_ }
+            }
+          }
 
   python_failure_details:
-    name: Complete Python failure details
+    name: Python failure details ${{ matrix.label }}
     needs: python311
     if: ${{ always() && needs.python311.result == 'failure' }}
     runs-on: windows-latest
     timeout-minutes: 3
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: 1-7
+            start: 1
+            end: 7
+          - label: 8-14
+            start: 8
+            end: 14
+          - label: 15-21
+            start: 15
+            end: 21
+          - label: 22-28
+            start: 22
+            end: 28
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Publish every failure detail
+      - name: Publish bounded failure details
         shell: pwsh
         run: |
           $jobs = gh api "/repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID/jobs?per_page=100" | ConvertFrom-Json
@@ -180,11 +217,13 @@ jobs:
           $end = [Array]::IndexOf($lines, '=== PYTEST_FAILURE_DETAILS_END ===')
           if ($start -lt 0 -or $end -le $start) { throw 'pytest_failure_details_not_found' }
           $section = $lines[($start + 1)..($end - 1)] -join "`n"
-          $pattern = '(?ms)^--- \[(?<position>\d+/\d+)\] (?<node>.+?) ---\n(?<detail>.*?)(?=^--- \[|\z)'
+          $pattern = '(?ms)^--- \[(?<position>\d+)/\d+\] (?<node>.+?) ---\n(?<detail>.*?)(?=^--- \[|\z)'
           foreach ($match in [regex]::Matches($section, $pattern)) {
+            $index = [int]$match.Groups['position'].Value
+            if ($index -lt ${{ matrix.start }} -or $index -gt ${{ matrix.end }}) { continue }
             $detail = [regex]::Replace($match.Groups['detail'].Value, '\s+', ' ').Trim()
-            if ($detail.Length -gt 1000) { $detail = $detail.Substring(0, 997) + '...' }
-            Write-Host "[$($match.Groups['position'].Value)] $($match.Groups['node'].Value) | $detail"
+            if ($detail.Length -gt 650) { $detail = $detail.Substring(0, 647) + '...' }
+            Write-Host "[$index] $($match.Groups['node'].Value) | $detail"
           }
 
   node:
