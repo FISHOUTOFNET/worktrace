@@ -47,7 +47,11 @@ def _python_files(root: Path) -> list[Path]:
 
 
 def test_retired_owner_files_are_absent() -> None:
-    assert [path.relative_to(ROOT).as_posix() for path in RETIRED_FILES if path.exists()] == []
+    assert [
+        path.relative_to(ROOT).as_posix()
+        for path in RETIRED_FILES
+        if path.exists()
+    ] == []
 
 
 def test_retired_inference_and_hook_symbols_are_absent_from_production() -> None:
@@ -75,6 +79,16 @@ def test_inference_job_runtime_dml_has_only_canonical_owners() -> None:
             offenders.append(relative)
     assert covered == _INFERENCE_JOB_DML_OWNERS
     assert offenders == []
+
+
+def test_current_schema_declares_inference_job_and_index_directly() -> None:
+    schema = (PRODUCTION / "schema_internal.sql").read_text(encoding="utf-8")
+    indexes = (PRODUCTION / "schema_indexes.sql").read_text(encoding="utf-8")
+    assert "CREATE TABLE IF NOT EXISTS activity_inference_job" in schema
+    assert "reason TEXT NOT NULL CHECK(reason = 'closed_activity')" in schema
+    assert "status TEXT NOT NULL CHECK(status IN ('pending', 'failed'))" in schema
+    assert "activity_inference_job" in indexes
+    assert "legacy_retry" not in schema
 
 
 def test_runtime_and_backup_have_single_lifecycle_owners() -> None:
