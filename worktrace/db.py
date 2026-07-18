@@ -31,7 +31,7 @@ from .report_generation_classifier import (
 from .schema_migrations import MIN_SUPPORTED_SCHEMA_VERSION, migrate_schema
 from .write_gate import DATABASE_WRITE_GATE
 
-CURRENT_SCHEMA_VERSION = 10
+CURRENT_SCHEMA_VERSION = 11
 
 _RETIRED_SCHEMA_TRIGGERS = (
     "close_existing_open_activity_before_insert",
@@ -355,7 +355,7 @@ def _require_supported_source_schema(
 ) -> None:
     """Validate a supported structural boundary before migration."""
 
-    if version not in {4, 5, 6, 7, 8, 9}:
+    if version not in {4, 5, 6, 7, 8, 9, 10}:
         raise ValueError("database_schema_incompatible")
     required = {
         "project": {"id", "name", "is_deleted"},
@@ -410,6 +410,35 @@ def schema_fingerprint(conn: sqlite3.Connection) -> str:
             separators=(",", ":"),
         ).encode("utf-8")
     ).hexdigest()
+
+
+def _database_has_user_tables(conn: sqlite3.Connection) -> bool:
+    return bool(
+        conn.execute(
+            """
+            SELECT 1
+            FROM sqlite_master
+            WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+            LIMIT 1
+            """
+        ).fetchone()
+    )
+
+
+def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
+    return {
+        str(row[1])
+        for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+    }
+
+
+def drop_retired_schema_triggers(conn: sqlite3.Connection) -> None:
+    for trigger_name in _RETIRED_SCHEMA_TRIGGERS:
+        conn.execute(f"DROP TRIGGER IF EXISTS {trigger_name}")
+
+
+def ensure_current_indexes(conn: sqlite3.Connection) -> None:
+    conn.executescript(read_schema_indexes_sql())
 
 
 @lru_cache(maxsize=1)
@@ -485,87 +514,8 @@ def seed_defaults(conn: sqlite3.Connection) -> None:
             name, description, language, is_archived, enabled,
             created_by, created_at, updated_at
         )
-        VALUES (?, '命中后匿名记录', '中文', 0, 0, 'system', ?, ?)
+        VALUES (?, '', '中文', 0, 1, 'system', ?, ?)
         ON CONFLICT(name) DO NOTHING
         """,
         (EXCLUDED_PROJECT, ts, ts),
-    )
-
-
-def reset_database() -> None:
-    with get_connection() as conn:
-        ensure_wal(conn)
-        with report_structure_classifier_scope():
-            drop_all_tables(conn)
-            apply_current_schema(conn)
-
-
-def _database_has_user_tables(conn: sqlite3.Connection) -> bool:
-    row = conn.execute(
-        """
-        SELECT 1
-        FROM sqlite_master
-        WHERE type = 'table'
-          AND name NOT LIKE 'sqlite_%'
-        LIMIT 1
-        """
-    ).fetchone()
-    return row is not None
-
-
-def drop_retired_schema_triggers(conn: sqlite3.Connection) -> None:
-    """Remove only the explicit legacy triggers accepted at this version."""
-
-    for trigger_name in _RETIRED_SCHEMA_TRIGGERS:
-        conn.execute(f'DROP TRIGGER IF EXISTS "{trigger_name}"')
-
-
-def ensure_current_indexes(conn: sqlite3.Connection) -> None:
-    """Install current indexes after trusted creation or migration."""
-
-    drop_retired_schema_triggers(conn)
-    conn.executescript(read_schema_indexes_sql())
-
-
-def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
-    return bool(
-        conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
-            (name,),
-        ).fetchone()
-    )
-
-
-def _table_columns(conn: sqlite3.Connection, name: str) -> set[str]:
-    if not _table_exists(conn, name):
-        return set()
-    return {
-        str(row["name"])
-        for row in conn.execute(f"PRAGMA table_info({name})").fetchall()
-    }
-
-
-def drop_all_tables(conn: sqlite3.Connection) -> None:
-    conn.executescript(
-        """
-        DROP TABLE IF EXISTS activity_resource;
-        DROP TABLE IF EXISTS folder_rule_file_index;
-        DROP TABLE IF EXISTS folder_rule_index_state;
-        DROP TABLE IF EXISTS history_mutation_job_rule;
-        DROP TABLE IF EXISTS history_mutation_job;
-        DROP TABLE IF EXISTS report_session_operation_member;
-        DROP TABLE IF EXISTS report_mutation_request;
-        DROP TABLE IF EXISTS report_session_operation;
-        DROP TABLE IF EXISTS activity_clipboard_event;
-        DROP TABLE IF EXISTS activity_project_assignment;
-        DROP TABLE IF EXISTS activity_log;
-        DROP TABLE IF EXISTS session_boundary;
-        DROP TABLE IF EXISTS folder_project_rule;
-        DROP TABLE IF EXISTS project_rule;
-        DROP TABLE IF EXISTS project;
-        DROP TABLE IF EXISTS settings;
-        DROP TABLE IF EXISTS report_structure_revision_state;
-        DROP TABLE IF EXISTS data_generation_state;
-        DROP TABLE IF EXISTS activity_resource_repair_job;
-        """
     )
