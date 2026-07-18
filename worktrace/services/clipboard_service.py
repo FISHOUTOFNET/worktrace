@@ -36,9 +36,6 @@ def record_clipboard_event(
     ts = now_str()
     with _report_uow() as uow:
         conn = uow.connection
-        # This transaction-local check is the final privacy gate. It rejects an
-        # event that was already drained from the adapter when the user disabled
-        # capture before persistence.
         if not _capture_enabled_in_transaction(conn):
             return None
         activity = conn.execute(
@@ -84,10 +81,9 @@ def record_clipboard_event(
         activity_inference_job_repository.enqueue_closed_activity_ids(
             conn,
             [int(activity_id)],
+            reason=activity_inference_job_repository.REASON_FACTS_CHANGED,
         )
         uow.mark_changed()
-    # Closed rows now have a durable job. Open rows are refreshed immediately
-    # and will be scheduled by their eventual close transaction if this fails.
     _attempt_clipboard_inference(int(activity_id))
     return event_id
 
@@ -157,14 +153,10 @@ def _find_duplicate_event(
 
 def _attempt_clipboard_inference(activity_id: int) -> None:
     try:
-        if project_inference_service.process_pending_inference_jobs(
-            limit=1,
-            activity_ids=[activity_id],
-        ) == 0:
-            project_inference_service.assign_project_for_activity(activity_id)
+        project_inference_service.process_new_activity(int(activity_id))
     except Exception:
         logging.exception(
-            "clipboard inference failed; durable close-time retry retained for activity_id=%s",
+            "clipboard inference failed; durable close-time job retained for activity_id=%s",
             activity_id,
         )
 
