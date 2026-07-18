@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS activity_resource_repair_job (
 
 CREATE TABLE IF NOT EXISTS activity_inference_job (
     activity_id INTEGER PRIMARY KEY,
-    reason TEXT NOT NULL CHECK(reason IN ('closed_activity', 'legacy_retry')),
+    reason TEXT NOT NULL CHECK(reason = 'closed_activity'),
     status TEXT NOT NULL CHECK(status IN ('pending', 'failed')),
     attempt_count INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count >= 0),
     next_attempt_at TEXT,
