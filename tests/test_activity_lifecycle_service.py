@@ -291,7 +291,7 @@ def test_recovery_cross_midnight_converges_project(temp_db_setup):
 
 def test_finalize_closed_activity_ids_empty_list_is_noop(temp_db_setup):
     finalize_closed_activity_ids([])
-    finalize_closed_activity_ids(None)  # type: ignore[arg-type]
+    finalize_closed_activity_ids(None)
 
 
 def test_finalize_closed_activity_ids_inference_failure_does_not_block(
@@ -318,22 +318,47 @@ def test_finalize_closed_activity_ids_inference_failure_does_not_block(
     )
     activity_service.close_activity_row(aid2, "2026-07-01 09:20:00")
 
-    call_count = [0]
-
-    def flaky_process_new_activity(activity_id):
-        call_count[0] += 1
-        if call_count[0] == 1:
-            raise RuntimeError("simulated inference failure")
-
     import worktrace.services.project_inference_service as pis
+
+    original = pis.assign_project_for_activity_in_transaction
+    calls: list[int] = []
+
+    def flaky_assign(conn, activity_id, **kwargs):
+        calls.append(int(activity_id))
+        if int(activity_id) == aid1:
+            raise RuntimeError("simulated inference failure")
+        return original(conn, activity_id, **kwargs)
 
     monkeypatch.setattr(
         pis,
-        "process_new_activity",
-        flaky_process_new_activity,
+        "assign_project_for_activity_in_transaction",
+        flaky_assign,
     )
     finalize_closed_activity_ids([aid1, aid2])
-    assert call_count[0] == 2
+
+    with get_connection() as conn:
+        failed_job = conn.execute(
+            """
+            SELECT status, attempt_count, last_error_code
+            FROM activity_inference_job
+            WHERE activity_id = ?
+            """,
+            (aid1,),
+        ).fetchone()
+        completed_job = conn.execute(
+            "SELECT 1 FROM activity_inference_job WHERE activity_id = ?",
+            (aid2,),
+        ).fetchone()
+    assert calls == [aid1, aid2]
+    assert dict(failed_job) == {
+        "status": "failed",
+        "attempt_count": 1,
+        "last_error_code": "RuntimeError",
+    }
+    assert completed_job is None
+    assignment = get_assignment_for_activity(aid2)
+    assert int(assignment["project_id"]) == pid
+    assert assignment["source"] == "folder_rule"
 
 
 def test_pause_collection_closes_open_row_and_is_idempotent(temp_db_setup):
@@ -374,77 +399,82 @@ def test_pause_collection_closes_open_row_and_is_idempotent(temp_db_setup):
     assert open_count == 0
 
 
-def test_persist_open_activity_persists_without_elapsed_gate(temp_db_setup):
-    payload = {
-        "app_name": "Word",
-        "process_name": "winword.exe",
-        "window_title": "Doc",
-        "status": STATUS_NORMAL,
-    }
+def test_pause_collection_rolls_back_activity_boundary_and_settings_together(
+    temp_db_setup,
+    monkeypatch,
+):
     activity_id = persist_open_activity(
-        start_time="2026-07-01 09:00:00",
-        source=SOURCE_AUTO,
-        payload=payload,
-    )
-    row = activity_service.get_activity(activity_id)
-    assert row is not None
-    assert row["start_time"] == "2026-07-01 09:00:00"
-    assert row["end_time"] is None
-
-
-def test_sync_persisted_open_activity_project_skips_missing_row(temp_db_setup):
-    assert sync_persisted_open_activity_project(999999) == {}
-
-
-def test_start_activity_closes_prior_open_row_at_safe_time(temp_db_setup):
-    first = activity_service.create_activity(
-        "A",
-        "a.exe",
-        "A",
-        start_time="2026-07-01 09:00:00",
-    )
-    second = start_activity(
-        start_time="2026-07-01 09:05:00",
+        start_time="2026-06-18 09:00:00",
         source=SOURCE_AUTO,
         payload={
-            "app_name": "B",
-            "process_name": "b.exe",
-            "window_title": "B",
+            "app_name": "Edge",
+            "process_name": "msedge.exe",
+            "window_title": "Research",
             "status": STATUS_NORMAL,
         },
     )
-    assert activity_service.get_activity(first)["end_time"] == "2026-07-01 09:05:00"
-    assert activity_service.get_activity(second)["end_time"] is None
+    before_paused = settings_service.get_setting("user_paused", "false")
+    before_status = settings_service.get_setting("collector_status", "stopped")
 
+    def fail_boundary(_conn, _occurred_at, _reason):
+        raise RuntimeError("boundary insert failed")
 
-def test_recovery_records_boundary_before_cross_midnight_segment(temp_db_setup):
-    settings_service.set_setting(
-        "last_collector_heartbeat",
-        "2026-07-02 00:10:00",
+    monkeypatch.setattr(
+        session_boundary_service,
+        "insert_boundary",
+        fail_boundary,
     )
-    activity_service.create_activity(
+
+    with pytest.raises(RuntimeError, match="boundary insert failed"):
+        pause_collection(
+            "2026-06-18 09:05:00",
+            reason="pause_fallback",
+        )
+
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT end_time FROM activity_log WHERE id = ?", (activity_id,)
+        ).fetchone()
+        boundary_count = conn.execute(
+            "SELECT COUNT(*) AS c FROM session_boundary"
+        ).fetchone()["c"]
+    assert row["end_time"] is None
+    assert boundary_count == 0
+    assert settings_service.get_setting("user_paused", "false") == before_paused
+    assert settings_service.get_setting("collector_status", "stopped") == before_status
+
+
+def test_sync_persisted_open_activity_project_is_idempotent_after_rule_match(
+    temp_db_setup,
+):
+    pid = project_service.create_project("ProjH")
+    folder_rule_service.create_or_update_folder_rule("D:\\ProjH", pid)
+    aid = activity_service.create_activity(
         "Word",
-        "word.exe",
+        "winword.exe",
         "Doc",
-        start_time="2026-07-01 23:50:00",
-    )
-    recovery_service.recover_unclosed_records()
-    boundaries = session_boundary_service.list_boundaries(
-        "2026-07-01 23:00:00",
-        "2026-07-02 01:00:00",
-    )
-    assert any(
-        str(item.get("occurred_at") or "") == "2026-07-02 00:00:00"
-        for item in boundaries
+        start_time="2026-07-01 09:00:00",
+        file_path_hint="D:\\ProjH\\spec.docx",
     )
 
+    first = sync_persisted_open_activity_project(aid)
+    second = sync_persisted_open_activity_project(aid)
 
-def test_recovery_clamps_future_heartbeat_to_now(temp_db_setup, monkeypatch):
-    now = datetime(2026, 7, 1, 10, 0, 0)
-    future = now + timedelta(hours=1)
+    assert int(first["project_id"]) == pid
+    assert int(second["project_id"]) == pid
+    assert first["source"] == "folder_rule"
+    assert second["source"] == "folder_rule"
+
+
+def test_recovery_closes_open_activity_at_fresh_heartbeat_not_now(
+    temp_db_setup,
+    monkeypatch,
+):
+    now = datetime.strptime("2026-07-01 10:00:00", TIME_FORMAT)
+    heartbeat = now - timedelta(seconds=30)
     settings_service.set_setting(
         "last_collector_heartbeat",
-        future.strftime(TIME_FORMAT),
+        heartbeat.strftime(TIME_FORMAT),
     )
     aid = activity_service.create_activity(
         "Word",
@@ -452,11 +482,41 @@ def test_recovery_clamps_future_heartbeat_to_now(temp_db_setup, monkeypatch):
         "Doc",
         start_time="2026-07-01 09:50:00",
     )
-    monkeypatch.setattr(
-        recovery_service,
-        "now_str",
-        lambda: now.strftime(TIME_FORMAT),
-    )
+    monkeypatch.setattr(recovery_service, "now_str", lambda: now.strftime(TIME_FORMAT))
+
     recovery_service.recover_unclosed_records()
+
     row = activity_service.get_activity(aid)
-    assert row["end_time"] == now.strftime(TIME_FORMAT)
+    assert row["end_time"] == heartbeat.strftime(TIME_FORMAT)
+    assert row["duration_seconds"] == 570
+
+
+def test_recovery_closes_open_activity_at_stale_heartbeat_boundary(
+    temp_db_setup,
+    monkeypatch,
+):
+    now = datetime.strptime("2026-07-01 10:00:00", TIME_FORMAT)
+    heartbeat = now - timedelta(minutes=20)
+    settings_service.set_setting(
+        "last_collector_heartbeat",
+        heartbeat.strftime(TIME_FORMAT),
+    )
+    aid = activity_service.create_activity(
+        "Word",
+        "word.exe",
+        "Doc",
+        start_time="2026-07-01 09:30:00",
+    )
+    monkeypatch.setattr(recovery_service, "now_str", lambda: now.strftime(TIME_FORMAT))
+
+    recovery_service.recover_unclosed_records()
+
+    row = activity_service.get_activity(aid)
+    assert row["end_time"] == heartbeat.strftime(TIME_FORMAT)
+    assert row["duration_seconds"] == 600
+    with get_connection() as conn:
+        boundary = conn.execute(
+            "SELECT occurred_at, reason FROM session_boundary ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+    assert boundary["occurred_at"] == heartbeat.strftime(TIME_FORMAT)
+    assert boundary["reason"] == "recovery_stale_heartbeat"
