@@ -108,11 +108,15 @@ def test_job_repository_requires_closed_enum_boundaries():
 
 def test_job_schema_has_no_running_or_recovery_state():
     schema = (ROOT / "worktrace/schema_internal.sql").read_text(encoding="utf-8")
+    job_schema = schema.split(
+        "CREATE TABLE IF NOT EXISTS activity_inference_job",
+        1,
+    )[1]
     repository = (
         ROOT / "worktrace/services/activity_inference_job_repository.py"
     ).read_text(encoding="utf-8")
-    assert "status IN ('pending', 'failed')" in schema
-    assert "'running'" not in schema
+    assert "status TEXT NOT NULL CHECK(status IN ('pending', 'failed'))" in job_schema
+    assert "'running'" not in job_schema
     assert "recover_interrupted" not in repository
     assert "EXECUTION_LOCK" not in repository
 
