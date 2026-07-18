@@ -38,6 +38,10 @@ def test_governance_allowlist_paths_exist() -> None:
             assert (ROOT / relative).is_file(), relative
 
 
+def test_governance_allowlist_remains_empty() -> None:
+    assert all(not paths for paths in _allowlist().values())
+
+
 def test_report_and_display_reads_do_not_detect_resources() -> None:
     offenders = {
         path

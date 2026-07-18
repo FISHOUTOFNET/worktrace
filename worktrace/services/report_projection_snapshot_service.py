@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-from contextlib import contextmanager
-from typing import Any, Iterator
+from typing import Any
 
 from ..constants import DEFAULT_UNRECORDED_GAP_BOUNDARY_SECONDS
 from ..db import get_connection
 from . import project_lifecycle_policy, report_operation_repository
 from . import report_session_operation_engine as engine
-from .page_read_context import current_page_read_context, page_read_scope
+from .page_read_context import current_page_read_context
 from .report_fact_query_service import (
     boundary_times_for_rows,
     get_uncategorized_project_id,
@@ -33,14 +32,6 @@ from .report_session_projection_service import (
 )
 from .report_status_policy import STANDALONE_STATUS, SUPPRESSED, decide_report_status
 from .settings_service import get_int_setting
-
-
-@contextmanager
-def snapshot_read_scope() -> Iterator[None]:
-    """Compatibility name for the request-level page read scope."""
-
-    with page_read_scope():
-        yield
 
 
 def build_visible_snapshot(
@@ -376,5 +367,4 @@ __all__ = [
     "get_report_sessions_for_operations",
     "get_visible_report_sessions_by_date",
     "get_visible_report_sessions_for_operations_by_date",
-    "snapshot_read_scope",
 ]

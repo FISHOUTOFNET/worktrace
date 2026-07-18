@@ -14,8 +14,8 @@ from worktrace.services import secure_backup_service
 from worktrace.services.report_projection_identity import DURABLE_REVISION_PREFIX
 from worktrace.services.report_projection_snapshot_service import (
     build_visible_snapshot,
-    snapshot_read_scope,
 )
+from worktrace.services.page_read_context import page_read_scope
 from worktrace.services.settings_service import set_setting
 from worktrace.write_gate import DATABASE_WRITE_GATE
 
@@ -65,7 +65,7 @@ def test_committed_edit_survives_project_presentation_changes(temp_db):
     assert after_rename.operation_diagnostics[0].state == "applied"
 
 
-def test_snapshot_read_scope_builds_one_snapshot_per_range(temp_db, monkeypatch):
+def test_page_read_scope_builds_one_snapshot_per_range(temp_db, monkeypatch):
     project_id = project_service.create_project("P")
     _closed("09:00:00", "09:01:00", project_id)
     from worktrace.services import report_projection_snapshot_service as snapshots
@@ -79,7 +79,7 @@ def test_snapshot_read_scope_builds_one_snapshot_per_range(temp_db, monkeypatch)
         return original(conn, start_date, end_date)
 
     monkeypatch.setattr(snapshots, "_build_snapshot", counted)
-    with snapshot_read_scope():
+    with page_read_scope():
         first = snapshots.build_visible_snapshot(DATE, DATE)
         second = snapshots.build_visible_snapshot(DATE, DATE)
     assert first is second
@@ -127,7 +127,8 @@ def test_global_write_gate_blocks_service_writes_from_other_threads(temp_db):
         except sqlite3.OperationalError as exc:
             outcome.append(str(exc))
 
-    with DATABASE_WRITE_GATE.acquire():
+    with DATABASE_WRITE_GATE.draining() as lease:
+        lease.promote()
         thread = threading.Thread(target=writer)
         thread.start()
         thread.join(timeout=5)
@@ -157,8 +158,8 @@ def test_database_generation_rejects_stale_background_results_until_fresh_read(t
     thread = threading.Thread(target=stale_worker)
     thread.start()
     assert read_complete.wait(timeout=5)
-    with DATABASE_WRITE_GATE.acquire():
-        pass
+    with DATABASE_WRITE_GATE.draining() as lease:
+        lease.promote()
     replacement_complete.set()
     thread.join(timeout=5)
 

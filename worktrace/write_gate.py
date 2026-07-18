@@ -124,15 +124,6 @@ class ProcessDatabaseWriteGate:
                 self._owner_thread_id = None
                 self._thread_state.observed_generation = self._generation
 
-    @contextmanager
-    def acquire(self) -> Iterator[None]:
-        """Compatibility facade for callers that need immediate exclusivity."""
-
-        with self.draining() as lease:
-            lease.promote()
-            yield
-
-
 DATABASE_WRITE_GATE = ProcessDatabaseWriteGate()
 
 

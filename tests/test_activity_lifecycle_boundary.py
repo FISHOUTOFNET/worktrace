@@ -88,6 +88,26 @@ def test_collector_state_machine_routes_close_all_through_lifecycle() -> None:
     assert "activity_lifecycle_service.close_all_open_activities" in source
 
 
+def test_recorder_has_no_public_midnight_split_compatibility_entrypoint() -> None:
+    tree = ast.parse(
+        _read(COLLECTOR_DIR / "activity_session_recorder.py"),
+        filename="activity_session_recorder.py",
+    )
+    recorder = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef)
+        and node.name == "ActivitySessionRecorder"
+    )
+    methods = {
+        node.name
+        for node in recorder.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    assert "split_at_midnight" not in methods
+    assert {"prepare_midnight_split", "resume_midnight_split"} <= methods
+
+
 def test_runtime_routes_shutdown_close_all_through_lifecycle() -> None:
     source = _read(RUNTIME_DIR / "app_runtime.py")
     assert "activity_lifecycle_service.close_all_open_activities" in source

@@ -30,11 +30,12 @@ def publish_database_replacement(
 ) -> dict[DataGenerationNamespace, int] | None:
     """Declare replacement generations without touching process-local caches.
 
-    Normal replacement commands attach effects to the active ``DomainUnitOfWork``
-    and receive atomic post-commit publication there. The encrypted-import path
-    owns a lower-level exclusive SQLite transaction; for that path this helper
-    only bumps durable values. Its maintenance coordinator clears the process
-    clock after the connection context has committed.
+    The normal ``DomainUnitOfWork`` path records effects here and publishes them
+    after its transaction commits. Encrypted import instead writes durable
+    replacement generations inside its exclusive transaction, commits, and then
+    publishes the exact committed values to the process clock. Only a failure
+    of that post-commit publication clears the process clock, so later reads
+    reload the already durable values.
     """
 
     uow = current_domain_unit_of_work()

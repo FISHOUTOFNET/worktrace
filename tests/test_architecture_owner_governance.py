@@ -536,13 +536,81 @@ def test_project_rules_webview_ownership_is_explicit() -> None:
         if isinstance(node, ast.ImportFrom)
     }
     assert presenter_imports == {(0, "__future__"), (0, "typing")}
+    forbidden_io_names = {"open", "get_" + "connection", "execute", "commit"}
     forbidden_calls = {
         _call_name(node)
         for node in ast.walk(_tree(presenter_path))
         if isinstance(node, ast.Call)
-        and _call_name(node) in {"open", "get_connection", "execute", "commit"}
+        and _call_name(node) in forbidden_io_names
     }
     assert forbidden_calls == set()
+
+
+def test_retired_compatibility_methods_do_not_reappear() -> None:
+    recorder_tree = _tree(
+        PRODUCTION / "collector" / "activity_session_recorder.py"
+    )
+    recorder = next(
+        node
+        for node in recorder_tree.body
+        if isinstance(node, ast.ClassDef)
+        and node.name == "ActivitySessionRecorder"
+    )
+    recorder_methods = {
+        node.name
+        for node in recorder.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    assert "split_at_midnight" not in recorder_methods
+
+    gate_tree = _tree(PRODUCTION / "write_gate.py")
+    gate = next(
+        node
+        for node in gate_tree.body
+        if isinstance(node, ast.ClassDef)
+        and node.name == "ProcessDatabaseWriteGate"
+    )
+    gate_methods = {
+        node.name
+        for node in gate.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    assert "acquire" not in gate_methods
+    assert {"draining", "promote_to_exclusive"} <= gate_methods
+
+    snapshot_definitions = {
+        node.name
+        for node in _tree(
+            PRODUCTION / "services" / "report_projection_snapshot_service.py"
+        ).body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    assert "snapshot_read_scope" not in snapshot_definitions
+
+
+def test_folder_index_and_privacy_evidence_contracts_are_canonical() -> None:
+    query_tree = _tree(
+        PRODUCTION / "services" / "folder_index_query_service.py"
+    )
+    lookup = next(
+        node
+        for node in query_tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "lookup_indexed_paths_for_file_name"
+    )
+    calls = {
+        _call_name(node)
+        for node in ast.walk(lookup)
+        if isinstance(node, ast.Call)
+    }
+    assert "target_matches_rule" in calls
+
+    privacy_source = (
+        PRODUCTION / "services" / "privacy_service.py"
+    ).read_text(encoding="utf-8")
+    assert "lookup_indexed_paths_for_file_name" in privacy_source
+    assert "resolve_unique_path_from_title" not in privacy_source
+    assert "PrivacyResolutionPending(\"privacy_path_unresolved\")" in privacy_source
 
 
 def test_clipboard_maintenance_failure_is_best_effort(monkeypatch) -> None:

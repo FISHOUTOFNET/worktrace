@@ -161,7 +161,7 @@ def test_folder_index_read_model_is_deterministic_and_side_effect_free() -> None
     resources = _source("worktrace/resources/resource_helpers.py")
     assert "folder_index_query_service" in inference
     assert "folder_index_query_service" in planning
-    assert "folder_index_query_service" in resources
+    assert "folder_index_query_service" not in resources
     assert "folder_index_service.find_matching_folder_rule_for_file_name" not in inference
 
 
@@ -196,3 +196,25 @@ def test_clear_and_replacement_publish_through_transaction_owners() -> None:
 
     gate = _source("worktrace/services/privacy_gate_service.py")
     assert "clear_settings_cache" not in gate
+
+
+def test_database_replacement_generation_docstring_matches_commit_protocol() -> None:
+    path = ROOT / "worktrace/services/database_replacement_generation_service.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    function = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "publish_database_replacement"
+    )
+    docstring = " ".join((ast.get_docstring(function) or "").split())
+    for required in (
+        "DomainUnitOfWork",
+        "after its transaction commits",
+        "writes durable replacement generations",
+        "exact committed values",
+        "Only a failure",
+        "clears the process clock",
+        "reload the already durable values",
+    ):
+        assert required in docstring

@@ -257,23 +257,6 @@ class ActivitySessionRecorder:
             midnight_project_id=project_id,
         )
 
-    def split_at_midnight(self, at_time: str) -> bool:
-        """Compatibility entrypoint; state_machine owns the atomic boundary path."""
-
-        split = self.prepare_midnight_split(at_time)
-        if split is None:
-            return False
-        payload, signature, project_id, prepared = split
-        if prepared is not None and prepared.activity_id is not None:
-            lifecycle_close_activity(
-                prepared.activity_id,
-                prepared.end_time,
-                duration_seconds=prepared.duration_seconds,
-            )
-        self.finalize_prepared_close(prepared)
-        self.resume_midnight_split(payload, signature, project_id, at_time)
-        return True
-
     def clear_snapshot(self) -> None:
         self.snapshot_publisher.clear("recorder_snapshot_clear")
 

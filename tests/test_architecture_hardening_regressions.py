@@ -249,8 +249,8 @@ def test_rule_batch_refreshes_generation_before_write_lock(temp_db):
 
     def rotate_generation() -> None:
         try:
-            with DATABASE_WRITE_GATE.acquire():
-                pass
+            with DATABASE_WRITE_GATE.draining() as lease:
+                lease.promote()
         except BaseException as exc:  # pragma: no cover - assertion reports it
             thread_errors.append(exc)
 
