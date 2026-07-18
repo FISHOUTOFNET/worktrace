@@ -1,3 +1,5 @@
+"""Contracts for durable inference scheduling and explicit Collector retries."""
+
 from __future__ import annotations
 
 import ast
