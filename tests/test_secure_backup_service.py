@@ -31,6 +31,7 @@ def test_export_payload_contains_required_tables(temp_db, tmp_path):
     assert data["version"] == 5
     assert data["schema_version"] == "11"
     tables = data["tables"]
+    assert set(tables) == set(_contracts.secure_backup_service.EXPORT_TABLES)
     for required in [
         "project",
         "activity_log",
