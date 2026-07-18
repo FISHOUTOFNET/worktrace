@@ -20,6 +20,16 @@ class CollectorFailureCode(str, Enum):
     UNEXPECTED_FAILURE = "unexpected_failure"
 
 
+RETRYABLE_COLLECTOR_FAILURE_CODES = frozenset(
+    {
+        CollectorFailureCode.ADAPTER_TEMPORARILY_UNAVAILABLE,
+        CollectorFailureCode.DATABASE_BUSY,
+        CollectorFailureCode.SECURE_IMPORT_IN_PROGRESS,
+        CollectorFailureCode.DATABASE_GENERATION_CHANGED,
+    }
+)
+
+
 @dataclass(frozen=True)
 class CollectorFailureDisposition:
     code: CollectorFailureCode
@@ -30,12 +40,7 @@ class TransientCollectorError(RuntimeError):
     """Explicitly declare a bounded infrastructure failure as retryable."""
 
     def __init__(self, code: CollectorFailureCode) -> None:
-        if code not in {
-            CollectorFailureCode.ADAPTER_TEMPORARILY_UNAVAILABLE,
-            CollectorFailureCode.DATABASE_BUSY,
-            CollectorFailureCode.SECURE_IMPORT_IN_PROGRESS,
-            CollectorFailureCode.DATABASE_GENERATION_CHANGED,
-        }:
+        if code not in RETRYABLE_COLLECTOR_FAILURE_CODES:
             raise ValueError("collector_failure_code_not_retryable")
         self.code = code
         super().__init__(code.value)
@@ -84,6 +89,7 @@ def classify_collector_failure(exc: BaseException) -> CollectorFailureDispositio
 __all__ = [
     "CollectorFailureCode",
     "CollectorFailureDisposition",
+    "RETRYABLE_COLLECTOR_FAILURE_CODES",
     "TransientCollectorError",
     "classify_collector_failure",
 ]
