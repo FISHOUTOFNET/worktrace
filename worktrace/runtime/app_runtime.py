@@ -22,9 +22,9 @@ from ..collector.collector import CollectorControl, run_collector
 from ..collector.single_instance import acquire_single_instance, release_single_instance
 from ..services import (
     activity_lifecycle_service,
-    assignment_command_service,
     folder_index_service,
     history_mutation_job_service,
+    project_inference_service,
     recovery_service,
 )
 from ..services.runtime_snapshot_barrier import (
@@ -258,7 +258,7 @@ class AppRuntime:
 
         retry_degraded = False
         try:
-            assignment_command_service.retry_pending_inference(100)
+            project_inference_service.retry_pending_inference(100)
         except Exception:
             retry_degraded = True
             logging.exception("pending assignment inference retry failed")

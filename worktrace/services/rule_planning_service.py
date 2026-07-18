@@ -7,7 +7,11 @@ from typing import Any, Iterable
 from ..constants import STATUS_NORMAL
 from ..formatters import format_safe_display_name
 from ..path_utils import is_path_under_folder, looks_like_anchor_file_path
-from . import folder_index_query_service, project_lifecycle_policy
+from . import (
+    folder_index_query_service,
+    folder_rule_matching_policy,
+    project_lifecycle_policy,
+)
 from .project_inference_service import keyword_pattern_matches
 
 FOLDER_RULE_CONFIDENCE = 85
@@ -197,9 +201,9 @@ def activity_matches_rule(
             include_excluded=False,
             conn=conn,
         )
-        return any(
-            int(item.get("folder_rule_id") or 0) == int(rule.get("id") or 0)
-            for item in candidates
+        return folder_rule_matching_policy.rule_is_candidate(
+            int(rule.get("id") or 0),
+            candidates,
         )
     pattern = str(rule.get("pattern") or "").strip().casefold()
     if not pattern:

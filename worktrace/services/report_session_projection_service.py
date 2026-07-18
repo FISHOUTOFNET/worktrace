@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 
 from ..constants import EXCLUDED_APP_NAME, STATUS_EXCLUDED, UNCATEGORIZED_PROJECT
-from . import project_lifecycle_policy
 from .report_projection_identity import (
     base_projection_key,
     member_identity_key,
@@ -19,69 +18,6 @@ class BaseProjectionResult:
     """Detached base sessions ready for operation replay."""
 
     sessions: tuple[dict[str, Any], ...]
-
-
-def get_report_sessions_by_date(
-    date: str,
-) -> list[dict]:
-    return get_report_sessions_by_range(date, date)
-
-
-def get_visible_report_sessions_by_date(date: str) -> list[dict]:
-    """The sole UI/report projection scope: hidden raw activity is excluded."""
-    return get_report_sessions_by_date(date)
-
-
-def get_visible_report_sessions_for_operations_by_date(date: str) -> list[dict]:
-    """Visible canonical sessions for resolvers and contribution consumers."""
-    return get_report_sessions_for_operations(date, date)
-
-
-def get_report_sessions_by_range(
-    start_date: str,
-    end_date: str,
-) -> list[dict]:
-    return [
-        public_session_dto(session)
-        for session in get_report_sessions_for_operations(start_date, end_date)
-    ]
-
-
-def _mutable_record(value: Mapping[str, Any]) -> dict[str, Any]:
-    """Thaw one canonical record into a detached plain-data adapter value."""
-    result = thaw_value(value)
-    if not isinstance(result, dict):
-        raise TypeError("canonical record must thaw to dict")
-    return result
-
-
-def get_report_sessions_for_operations(
-    start_date: str,
-    end_date: str,
-) -> list[dict]:
-    """Build detached mutable copies of final canonical sessions."""
-    from .report_projection_snapshot_service import build_visible_snapshot
-
-    projected = [
-        _mutable_record(session)
-        for session in build_visible_snapshot(start_date, end_date).final_sessions
-        if project_lifecycle_policy.final_session_is_reportable(session)
-    ]
-    for session in projected:
-        _attach_detail_revision(session)
-    return projected
-
-
-def get_projected_activity_contributions_by_range(
-    start_date: str,
-    end_date: str,
-) -> list[dict]:
-    from .report_projection_snapshot_service import build_visible_snapshot
-
-    return [
-        _mutable_record(item)
-        for item in build_visible_snapshot(start_date, end_date).final_contributions
-    ]
 
 
 def build_base_projection(
@@ -342,11 +278,5 @@ __all__ = [
     "BaseProjectionResult",
     "build_base_projection",
     "display_safe_contribution",
-    "get_projected_activity_contributions_by_range",
-    "get_report_sessions_by_date",
-    "get_report_sessions_by_range",
-    "get_report_sessions_for_operations",
-    "get_visible_report_sessions_by_date",
-    "get_visible_report_sessions_for_operations_by_date",
     "public_session_dto",
 ]

@@ -622,7 +622,12 @@ def test_set_project_rule_enabled_never_calls_create_edit_delete_or_project_togg
         "delete_folder_rule",
         "preview_folder_rule_conflicts",
     ):
-        monkeypatch.setattr(bridge_rules_module.rule_api, name, make_forbidden(name))
+        monkeypatch.setattr(
+            bridge_rules_module.rule_api,
+            name,
+            make_forbidden(name),
+            raising=False,
+        )
     monkeypatch.setattr(
         bridge_rules_module.rule_history_api,
         "backfill_project_rule",
@@ -1205,7 +1210,12 @@ def test_create_project_keyword_rule_never_calls_other_project_rules_write_apis(
         "delete_folder_rule",
         "preview_folder_rule_conflicts",
     ):
-        monkeypatch.setattr(bridge_rules_module.rule_api, name, make_forbidden(name))
+        monkeypatch.setattr(
+            bridge_rules_module.rule_api,
+            name,
+            make_forbidden(name),
+            raising=False,
+        )
     monkeypatch.setattr(
         bridge_rules_module.rule_history_api,
         "backfill_project_rule",
@@ -1638,7 +1648,12 @@ def test_delete_project_keyword_rule_never_calls_other_project_rules_write_apis(
         "delete_folder_rule",
         "preview_folder_rule_conflicts",
     ):
-        monkeypatch.setattr(bridge_rules_module.rule_api, name, make_forbidden(name))
+        monkeypatch.setattr(
+            bridge_rules_module.rule_api,
+            name,
+            make_forbidden(name),
+            raising=False,
+        )
     monkeypatch.setattr(
         bridge_rules_module.rule_history_api,
         "backfill_project_rule",
@@ -3615,7 +3630,12 @@ def test_create_project_for_rules_does_not_call_keyword_or_folder_apis(monkeypat
         "delete_project_folder_rule",
         "set_project_rule_enabled",
     ):
-        monkeypatch.setattr(bridge_rules_module.rule_api, name, make_forbidden(name))
+        monkeypatch.setattr(
+            bridge_rules_module.rule_api,
+            name,
+            make_forbidden(name),
+            raising=False,
+        )
 
     monkeypatch.setattr(
         bridge_rules_module.project_api,
@@ -3771,7 +3791,12 @@ def test_update_project_for_rules_does_not_call_keyword_or_folder_apis(monkeypat
         "delete_project_folder_rule",
         "set_project_rule_enabled",
     ):
-        monkeypatch.setattr(bridge_rules_module.rule_api, name, make_forbidden(name))
+        monkeypatch.setattr(
+            bridge_rules_module.rule_api,
+            name,
+            make_forbidden(name),
+            raising=False,
+        )
 
     monkeypatch.setattr(
         bridge_rules_module.project_api,
@@ -3903,7 +3928,12 @@ def test_set_project_enabled_for_rules_does_not_call_keyword_or_folder_apis(
         "delete_project_folder_rule",
         "set_project_rule_enabled",
     ):
-        monkeypatch.setattr(bridge_rules_module.rule_api, name, make_forbidden(name))
+        monkeypatch.setattr(
+            bridge_rules_module.rule_api,
+            name,
+            make_forbidden(name),
+            raising=False,
+        )
 
     monkeypatch.setattr(
         bridge_rules_module.project_api,
@@ -4024,7 +4054,12 @@ def test_archive_project_for_rules_does_not_call_keyword_or_folder_apis(monkeypa
         "delete_project_folder_rule",
         "set_project_rule_enabled",
     ):
-        monkeypatch.setattr(bridge_rules_module.rule_api, name, make_forbidden(name))
+        monkeypatch.setattr(
+            bridge_rules_module.rule_api,
+            name,
+            make_forbidden(name),
+            raising=False,
+        )
 
     monkeypatch.setattr(
         bridge_rules_module.project_api,
@@ -4048,7 +4083,13 @@ def test_lifecycle_methods_never_call_delete_project(monkeypatch):
         forbidden_calls.append("delete_project")
         raise AssertionError("delete_project must not be called by lifecycle path")
 
-    monkeypatch.setattr(bridge_rules_module.project_api, "delete_project", _fail)
+    assert not hasattr(bridge_rules_module.project_api, "delete_project")
+    monkeypatch.setattr(
+        bridge_rules_module.project_api,
+        "delete_project",
+        _fail,
+        raising=False,
+    )
 
     monkeypatch.setattr(
         bridge_rules_module.project_api,
@@ -4646,7 +4687,12 @@ def test_preview_and_backfill_do_not_cross_call_other_project_rules_apis(monkeyp
         "delete_folder_rule",
         "preview_folder_rule_conflicts",
     ):
-        monkeypatch.setattr(bridge_rules_module.rule_api, name, make_forbidden(name))
+        monkeypatch.setattr(
+            bridge_rules_module.rule_api,
+            name,
+            make_forbidden(name),
+            raising=False,
+        )
 
     for name in (
         "create_project",
@@ -5286,7 +5332,12 @@ def test_batch_bridge_methods_do_not_cross_call_other_apis(monkeypatch):
         "delete_folder_rule",
         "preview_folder_rule_conflicts",
     ):
-        monkeypatch.setattr(bridge_rules_module.rule_api, name, make_forbidden(name))
+        monkeypatch.setattr(
+            bridge_rules_module.rule_api,
+            name,
+            make_forbidden(name),
+            raising=False,
+        )
     for name in ("preview_project_rule_impact", "backfill_project_rule"):
         monkeypatch.setattr(
             bridge_rules_module.rule_history_api,

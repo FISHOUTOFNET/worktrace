@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import ntpath
 import re
 import threading
@@ -13,7 +14,7 @@ from ..generation_clock import generation
 from ..path_utils import has_auto_project_extension
 from . import (
     assignment_command_service,
-    clipboard_service,
+    clipboard_fact_query_service,
     folder_index_query_service,
     folder_rule_service,
     project_lifecycle_policy,
@@ -223,6 +224,43 @@ def process_new_activity(activity_id: int) -> dict:
     return assign_project_for_activity(activity_id)
 
 
+def retry_pending_inference(limit: int = 100) -> int:
+    """Retry bounded durable markers through the inference orchestrator."""
+
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT a.id
+            FROM activity_log a
+            JOIN activity_project_assignment apa ON apa.activity_id = a.id
+            WHERE a.end_time IS NOT NULL
+              AND a.status = 'normal'
+              AND a.is_hidden = 0
+              AND a.is_deleted = 0
+              AND apa.is_manual = 0
+              AND apa.source = 'uncategorized'
+              AND apa.confidence = ?
+            ORDER BY a.id
+            LIMIT ?
+            """,
+            (
+                assignment_command_service.INFERENCE_RETRY_CONFIDENCE,
+                max(0, int(limit)),
+            ),
+        ).fetchall()
+    updated = 0
+    for row in rows:
+        try:
+            result = assign_project_for_activity(int(row["id"]))
+            if int(result.get("confidence") or 0) != (
+                assignment_command_service.INFERENCE_RETRY_CONFIDENCE
+            ):
+                updated += 1
+        except Exception:
+            logging.exception("assignment inference retry failed for activity %s", row["id"])
+    return updated
+
+
 _OPEN_ROW_UNCLASSIFIED_SOURCES = {"uncategorized", "suggested_project_name"}
 
 
@@ -384,7 +422,7 @@ def _infer_project_resource_first(
     clipboard_text = ""
     activity_id = activity.get("id")
     if activity_id:
-        clipboard_text = clipboard_service.clipboard_text_for_activity(
+        clipboard_text = clipboard_fact_query_service.clipboard_text_for_activity(
             conn,
             int(activity_id),
         )
@@ -547,5 +585,6 @@ __all__ = [
     "invalidate_keyword_rule_cache",
     "keyword_pattern_matches",
     "process_new_activity",
+    "retry_pending_inference",
     "sync_persisted_open_activity_project",
 ]

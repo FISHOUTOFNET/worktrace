@@ -14,6 +14,7 @@ from ..db import now_str
 from ..platforms.base import ActiveWindow, ClipboardTextEvent
 from ..services import (
     activity_lifecycle_service,
+    clipboard_fact_query_service,
     clipboard_service,
     privacy_service,
 )
@@ -167,7 +168,7 @@ class CollectorStateMachine:
             copied_at,
         )
         if activity_id is None:
-            activity_id = clipboard_service.find_activity_for_clipboard_event(
+            activity_id = clipboard_fact_query_service.find_activity_for_clipboard_event(
                 event.source_window,
                 copied_at,
             )
