@@ -6,7 +6,11 @@ from pathlib import Path
 
 import pytest
 
-pytestmark = [pytest.mark.unit, pytest.mark.contract]
+pytestmark = [
+    pytest.mark.unit,
+    pytest.mark.contract,
+    pytest.mark.collector_runtime,
+]
 
 ROOT = Path(__file__).resolve().parents[1]
 PRODUCTION = ROOT / "worktrace"
