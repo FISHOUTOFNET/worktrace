@@ -26,6 +26,7 @@ from worktrace.constants import (
     UNCATEGORIZED_PROJECT,
 )
 from tests.support import activity_factory as activity_service
+from worktrace.db import get_connection
 from worktrace.services import (
     folder_rule_service,
     project_service,
@@ -39,6 +40,7 @@ from worktrace.services.activity_lifecycle_service import (
     force_persist_open_activity_for_clipboard,
     persist_midnight_anchor,
     persist_open_activity,
+    pause_collection,
     recover_cross_midnight_segment,
     start_activity,
 )
@@ -331,6 +333,44 @@ def test_finalize_closed_activity_ids_inference_failure_does_not_block(
     )
     finalize_closed_activity_ids([aid1, aid2])
     assert call_count[0] == 2
+
+
+def test_pause_collection_closes_open_row_and_is_idempotent(temp_db_setup):
+    activity_id = persist_open_activity(
+        start_time="2026-06-18 09:00:00",
+        source=SOURCE_AUTO,
+        payload={
+            "app_name": "Edge",
+            "process_name": "msedge.exe",
+            "window_title": "Research",
+            "status": STATUS_NORMAL,
+        },
+    )
+
+    first = pause_collection(
+        "2026-06-18 09:05:00",
+        reason="pause_fallback",
+    )
+    second = pause_collection(
+        "2026-06-18 09:06:00",
+        reason="pause_fallback",
+    )
+
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT end_time FROM activity_log WHERE id = ?", (activity_id,)
+        ).fetchone()
+        boundaries = conn.execute(
+            "SELECT reason FROM session_boundary ORDER BY id"
+        ).fetchall()
+        open_count = conn.execute(
+            "SELECT COUNT(*) AS c FROM activity_log WHERE end_time IS NULL"
+        ).fetchone()["c"]
+    assert first == [activity_id]
+    assert second == []
+    assert row["end_time"] == "2026-06-18 09:05:00"
+    assert [item["reason"] for item in boundaries] == ["pause_fallback"]
+    assert open_count == 0
 
 
 def test_persist_open_activity_persists_without_elapsed_gate(temp_db_setup):

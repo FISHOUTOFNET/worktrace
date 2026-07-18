@@ -5,8 +5,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
-from ..services import privacy_gate_service
-from ..services.runtime_activity_state_service import record_runtime_boundary
+from ..services import activity_lifecycle_service, privacy_gate_service
 from . import settings_api
 
 if TYPE_CHECKING:
@@ -124,15 +123,16 @@ def accept_privacy_notice_and_start() -> dict[str, Any]:
 def pause_collection_now() -> dict[str, Any]:
     try:
         if _runtime is not None:
-            return dict(_runtime.pause_collection_now())
-        settings_api.set_user_paused(True)
-        record_runtime_boundary("pause_fallback")
+            result = dict(_runtime.pause_collection_now())
+            if not bool(result.get("collector_active", True)):
+                activity_lifecycle_service.pause_collection(reason="pause_fallback")
+            return result
+        activity_lifecycle_service.pause_collection(reason="pause_fallback")
         return {"ok": False, "pause_pending": True}
     except Exception:
         logging.exception("app_api.pause_collection_now failed")
         try:
-            settings_api.set_user_paused(True)
-            record_runtime_boundary("pause_fallback")
+            activity_lifecycle_service.pause_collection(reason="pause_fallback")
         except Exception:
             logging.exception("app_api.pause_collection_now fallback failed")
         return {"ok": False, "pause_pending": True}

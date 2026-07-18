@@ -216,16 +216,22 @@ class CollectorStateMachine:
     def pause(self, at_time: str | None = None) -> None:
         transition_time = at_time or now_str()
         if self.state != "paused" or self.recorder.current_payload is not None:
-            self._stop_recording_at_boundary(transition_time, "paused")
-            payload = self.resolver.payload_for(STATUS_PAUSED, None)
-            signature = self.resolver.signature_for_payload(payload)
-            self.recorder.observe(
-                payload,
-                signature,
+            prepared = self.recorder.stop_for_boundary(
                 transition_time,
-                end_reason=ActivityEndReason.PAUSE_BOUNDARY,
+                ActivityEndReason.PAUSE_BOUNDARY,
             )
-            self.active_signature = signature
+            activity_lifecycle_service.pause_collection(
+                transition_time,
+                reason="user_pause",
+                current_activity_id=(
+                    prepared.activity_id if prepared is not None else None
+                ),
+                current_duration_seconds=(
+                    prepared.duration_seconds if prepared is not None else None
+                ),
+            )
+            self.recorder.finalize_prepared_close(prepared)
+            self.active_signature = None
         self.state = "paused"
 
     def stop(self, at_time: str | None = None, reason: str = "user_stop") -> None:

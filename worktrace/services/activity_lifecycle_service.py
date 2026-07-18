@@ -182,6 +182,77 @@ def close_at_boundary(
     return closed_ids
 
 
+def pause_collection(
+    occurred_at: str | None = None,
+    *,
+    reason: str = "user_pause",
+    current_activity_id: int | None = None,
+    current_duration_seconds: int | None = None,
+) -> list[int]:
+    """Atomically seal activity facts, record the pause, and persist pause state."""
+
+    requested_at = str(occurred_at or now_str())
+    closed_ids: list[int] = []
+    with _report_uow() as uow:
+        conn = uow.connection
+        if current_activity_id is not None and activity_fact_repository.close_activity(
+            conn,
+            int(current_activity_id),
+            requested_at,
+            duration_seconds=current_duration_seconds,
+        ):
+            closed_ids.append(int(current_activity_id))
+        for activity_id in activity_fact_repository.close_all_open_activities(
+            conn,
+            requested_at,
+        ):
+            if activity_id not in closed_ids:
+                closed_ids.append(activity_id)
+
+        paused_row = conn.execute(
+            "SELECT value FROM settings WHERE key = 'user_paused'"
+        ).fetchone()
+        already_paused = bool(
+            paused_row
+            and str(paused_row["value"] or "").strip().casefold() == "true"
+        )
+        changed = bool(closed_ids)
+        if closed_ids or not already_paused:
+            session_boundary_service.insert_boundary(conn, requested_at, reason)
+            changed = True
+
+        timestamp = now_str()
+        for key, value in (
+            ("user_paused", "true"),
+            ("collector_status", "paused"),
+        ):
+            existing = conn.execute(
+                "SELECT value FROM settings WHERE key = ?",
+                (key,),
+            ).fetchone()
+            if existing is not None and str(existing["value"] or "") == value:
+                continue
+            conn.execute(
+                """
+                INSERT INTO settings(key, value, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET
+                    value = excluded.value,
+                    updated_at = excluded.updated_at
+                """,
+                (key, value, timestamp),
+            )
+            changed = True
+        if changed:
+            uow.mark_changed()
+
+    finalize_closed_activity_ids(closed_ids)
+    from .runtime_activity_state_service import clear_runtime_activity_state
+
+    clear_runtime_activity_state(reason)
+    return closed_ids
+
+
 def persist_midnight_anchor(
     *,
     start_time: str,
@@ -381,6 +452,7 @@ __all__ = [
     "mark_activity_error",
     "persist_midnight_anchor",
     "persist_open_activity",
+    "pause_collection",
     "recover_activity_batch",
     "recover_close_activity",
     "recover_cross_midnight_segment",

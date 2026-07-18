@@ -121,7 +121,7 @@ class RuntimeStartResult:
 
 def _choose_adapter():
     if sys.platform.startswith("win"):
-        from ..platforms.hardened_windows_adapter import WindowsAdapter
+        from ..platforms.windows_adapter import WindowsAdapter
 
         return WindowsAdapter()
     from ..platforms.fake_adapter import FakeAdapter

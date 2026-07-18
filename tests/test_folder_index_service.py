@@ -6,7 +6,7 @@ from tests.support import activity_factory as activity_service
 from worktrace.api import rule_api
 from worktrace.db import get_connection
 from worktrace.platforms.base import ActiveWindow
-from worktrace.platforms.windows_adapter import CanonicalWindowsPathResolver
+from worktrace.platforms.windows_path_resolver import WindowsPathResolver
 from worktrace.services import (
     folder_index_query_service,
     folder_index_service,
@@ -212,11 +212,7 @@ def test_windows_resolver_uses_pure_folder_index_after_live_sources_miss(
     path.write_text("print(1)", encoding="utf-8")
     rule_id = folder_rule_service.create_or_update_folder_rule(str(folder), project)
     _ready_index(rule_id)
-    resolver = CanonicalWindowsPathResolver(
-        com_paths=lambda _process_name: [],
-        open_file_paths=lambda _pid: [],
-        cache_seconds=0,
-    )
+    resolver = WindowsPathResolver()
 
     resolved = resolver.resolve(
         (10, 900001, "Code.exe", "main.py - Visual Studio Code"),

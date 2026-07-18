@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 from datetime import datetime, timedelta
 
 from ..constants import CLIPBOARD_RETENTION_DAYS, STATUS_NORMAL, TIME_FORMAT
@@ -80,8 +81,16 @@ def record_clipboard_event(
             ),
         )
         event_id = int(cur.lastrowid)
-    _after_clipboard_change(int(activity_id), copied_time)
-    prune_old_events()
+        from .assignment_command_service import mark_inference_retry
+        from .system_project_service import require_uncategorized_project_id
+
+        mark_inference_retry(
+            conn,
+            int(activity_id),
+            require_uncategorized_project_id(conn),
+        )
+        uow.mark_changed()
+    _attempt_clipboard_inference(int(activity_id))
     return event_id
 
 
@@ -258,13 +267,16 @@ def _find_duplicate_event(
     return int(row["id"]) if row else None
 
 
-def _after_clipboard_change(activity_id: int, copied_at: str) -> None:
+def _attempt_clipboard_inference(activity_id: int) -> None:
     try:
         from .project_inference_service import assign_project_for_activity
 
         assign_project_for_activity(activity_id)
     except Exception:
-        pass
+        logging.exception(
+            "clipboard inference failed; durable retry retained for activity_id=%s",
+            activity_id,
+        )
 
 
 def _hash_text(text: str) -> str:
