@@ -11,7 +11,12 @@ from worktrace.collector.collector_failure_policy import (
     classify_collector_failure,
 )
 
-pytestmark = [pytest.mark.unit, pytest.mark.contract, pytest.mark.collector_runtime]
+pytestmark = [
+    pytest.mark.unit,
+    pytest.mark.db,
+    pytest.mark.contract,
+    pytest.mark.collector_runtime,
+]
 
 ROOT = Path(__file__).resolve().parents[1]
 
