@@ -27,6 +27,49 @@ from worktrace.services import (
 pytestmark = [pytest.mark.db, pytest.mark.integration, pytest.mark.contract]
 
 
+def test_project_bindings_include_domain_owned_lifecycle_capabilities(temp_db):
+    user_project = project_service.create_project("Capability Project")
+    excluded_project = system_project_service.require_excluded_project_id()
+
+    bindings = {
+        int(project["id"]): project
+        for project in project_service.list_project_bindings()
+    }
+
+    assert {
+        key: bindings[user_project][key]
+        for key in (
+            "is_system",
+            "is_excluded",
+            "editable",
+            "can_toggle",
+            "can_archive",
+        )
+    } == {
+        "is_system": False,
+        "is_excluded": False,
+        "editable": True,
+        "can_toggle": True,
+        "can_archive": True,
+    }
+    assert {
+        key: bindings[excluded_project][key]
+        for key in (
+            "is_system",
+            "is_excluded",
+            "editable",
+            "can_toggle",
+            "can_archive",
+        )
+    } == {
+        "is_system": True,
+        "is_excluded": True,
+        "editable": False,
+        "can_toggle": False,
+        "can_archive": False,
+    }
+
+
 def _row(project_id: int) -> dict | None:
     with get_connection() as conn:
         row = conn.execute(

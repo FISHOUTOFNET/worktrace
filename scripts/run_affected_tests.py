@@ -265,6 +265,7 @@ RULES: list[dict] = [
         "id": "C5. Project Rules bridge",
         "triggers": [
             "worktrace/webview_ui/bridge_rules.py",
+            "worktrace/webview_ui/project_rules_presenter.py",
         ],
         "tests": [
             "tests/test_webview_project_rules_bridge.py",

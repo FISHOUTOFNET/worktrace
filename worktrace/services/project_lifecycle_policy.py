@@ -27,6 +27,20 @@ def project_is_system_or_special(project: dict[str, Any] | None) -> bool:
     )
 
 
+def project_rules_capabilities(project: dict[str, Any] | None) -> dict[str, bool]:
+    """Return neutral Project Rules lifecycle capabilities for presentation."""
+
+    is_system = project_is_system_or_special(project)
+    is_excluded = bool(project and project.get("name") == EXCLUDED_PROJECT)
+    return {
+        "is_system": is_system,
+        "is_excluded": is_excluded,
+        "editable": not is_system,
+        "can_toggle": not is_system,
+        "can_archive": not is_system,
+    }
+
+
 def project_available_for_rules(project: dict[str, Any] | None) -> bool:
     return bool(
         project

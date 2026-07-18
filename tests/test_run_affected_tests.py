@@ -404,6 +404,18 @@ def test_bridge_rules_py_selects_project_rules_bridge_tests_only(runner):
     assert sel.smoke_commands == []
 
 
+def test_project_rules_presenter_selects_project_rules_bridge_tests(runner):
+    sel = runner.select_targets(
+        ["worktrace/webview_ui/project_rules_presenter.py"]
+    )
+    for expected in [
+        "tests/test_webview_project_rules_bridge.py",
+        "tests/test_project_rules_rule_impact.py",
+        "tests/test_ui_backend_boundary.py",
+    ]:
+        assert expected in sel.pytest_targets, f"missing {expected}"
+
+
 # C6 (the modular split). New split modules -> Project Rules static contract + smoke
 
 

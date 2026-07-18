@@ -472,17 +472,26 @@ def test_database_replacement_does_not_enumerate_cache_fanout() -> None:
 
 
 def test_project_rules_layering_and_capabilities_remain_acyclic() -> None:
-    for path in (
-        PRODUCTION / "api" / "project_api.py",
-        PRODUCTION / "api" / "rule_api.py",
-        PRODUCTION / "api" / "rule_history_api.py",
-    ):
-        modules = {
-            node.module or ""
-            for node in ast.walk(_tree(path))
-            if isinstance(node, ast.ImportFrom)
-        }
-        assert not any("webview" in module for module in modules)
+    api_root = PRODUCTION / "api"
+    bridge_classes: list[str] = []
+    webview_imports: list[str] = []
+    ui_error_maps: list[str] = []
+    for path in sorted(api_root.glob("*.py")):
+        for node in ast.walk(_tree(path)):
+            if isinstance(node, ast.ClassDef) and "Bridge" in node.name:
+                bridge_classes.append(f"{path.name}:{node.name}")
+            if isinstance(node, ast.ImportFrom) and "webview" in (node.module or ""):
+                webview_imports.append(f"{path.name}:{node.lineno}")
+            if isinstance(node, (ast.Assign, ast.AnnAssign)):
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                if any(
+                    isinstance(target, ast.Name) and target.id.endswith("_MESSAGES")
+                    for target in targets
+                ):
+                    ui_error_maps.append(f"{path.name}:{node.lineno}")
+    assert bridge_classes == []
+    assert webview_imports == []
+    assert ui_error_maps == []
     for path in sorted((PRODUCTION / "services").rglob("*.py")):
         modules = {
             node.module or ""
@@ -490,6 +499,50 @@ def test_project_rules_layering_and_capabilities_remain_acyclic() -> None:
             if isinstance(node, ast.ImportFrom)
         }
         assert not any(module.endswith("api") or ".api" in module for module in modules)
+
+
+def test_project_rules_webview_ownership_is_explicit() -> None:
+    old_owner = PRODUCTION / "api" / "project_rules_webview.py"
+    bridge_path = PRODUCTION / "webview_ui" / "bridge_rules.py"
+    presenter_path = PRODUCTION / "webview_ui" / "project_rules_presenter.py"
+    assert not old_owner.exists()
+    assert bridge_path.exists()
+    assert presenter_path.exists()
+
+    wildcard_imports: list[str] = []
+    for path in sorted((PRODUCTION / "webview_ui").glob("bridge*.py")):
+        for node in ast.walk(_tree(path)):
+            if isinstance(node, ast.ImportFrom) and any(
+                alias.name == "*" for alias in node.names
+            ):
+                wildcard_imports.append(f"{path.name}:{node.lineno}")
+    assert wildcard_imports == []
+
+    bridge_imports = {
+        (node.level, node.module or "")
+        for node in ast.walk(_tree(bridge_path))
+        if isinstance(node, ast.ImportFrom)
+    }
+    assert bridge_imports == {
+        (0, "__future__"),
+        (0, "typing"),
+        (2, "api"),
+        (1, "project_rules_presenter"),
+    }
+
+    presenter_imports = {
+        (node.level, node.module or "")
+        for node in ast.walk(_tree(presenter_path))
+        if isinstance(node, ast.ImportFrom)
+    }
+    assert presenter_imports == {(0, "__future__"), (0, "typing")}
+    forbidden_calls = {
+        _call_name(node)
+        for node in ast.walk(_tree(presenter_path))
+        if isinstance(node, ast.Call)
+        and _call_name(node) in {"open", "get_connection", "execute", "commit"}
+    }
+    assert forbidden_calls == set()
 
 
 def test_clipboard_maintenance_failure_is_best_effort(monkeypatch) -> None:

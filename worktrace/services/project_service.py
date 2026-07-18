@@ -294,6 +294,7 @@ def list_project_bindings(include_system_special: bool = True) -> list[dict]:
     by_project = {
         int(project["id"]): {
             **project,
+            **project_lifecycle_policy.project_rules_capabilities(project),
             "last_used_at": last_used_by_project.get(int(project["id"])),
             "folder_rules": [],
             "keyword_rules": [],
