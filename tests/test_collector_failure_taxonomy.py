@@ -75,3 +75,5 @@ def test_collector_health_never_receives_or_classifies_raw_failures():
     assert "classify_collector_failure" not in health_source
     assert "classify_collector_failure" in collector_source
     assert "is_transient_failure" not in collector_source
+    assert "logging.exception" not in collector_source
+    assert "type(exc).__name__" not in collector_source
