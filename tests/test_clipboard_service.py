@@ -119,7 +119,7 @@ def test_clipboard_event_deduplicates_sequence_number(temp_db):
     assert count == 1
 
 
-def test_clipboard_fact_and_retry_marker_roll_back_together(temp_db):
+def test_clipboard_fact_and_inference_job_roll_back_together(temp_db):
     _enable_capture()
     activity = activity_service.create_activity(
         "Edge",
@@ -130,9 +130,9 @@ def test_clipboard_fact_and_retry_marker_roll_back_together(temp_db):
     activity_service.finalize_created_activity(activity)
 
     with patch(
-        "worktrace.services.assignment_command_service.mark_inference_retry",
-        side_effect=RuntimeError("marker failed"),
-    ), pytest.raises(RuntimeError, match="marker failed"):
+        "worktrace.services.activity_inference_job_repository.enqueue_closed_activity_ids",
+        side_effect=RuntimeError("job enqueue failed"),
+    ), pytest.raises(RuntimeError, match="job enqueue failed"):
         clipboard_service.record_clipboard_event(
             activity,
             "transactional text",
@@ -145,10 +145,14 @@ def test_clipboard_fact_and_retry_marker_roll_back_together(temp_db):
         count = conn.execute(
             "SELECT COUNT(*) AS c FROM activity_clipboard_event"
         ).fetchone()["c"]
+        jobs = conn.execute(
+            "SELECT COUNT(*) AS c FROM activity_inference_job"
+        ).fetchone()["c"]
     assert count == 0
+    assert jobs == 0
 
 
-def test_clipboard_inference_failure_retains_durable_retry(temp_db):
+def test_clipboard_inference_failure_retains_durable_job(temp_db):
     _enable_capture()
     activity = activity_service.create_activity(
         "Edge",
@@ -159,7 +163,7 @@ def test_clipboard_inference_failure_retains_durable_retry(temp_db):
     activity_service.finalize_created_activity(activity)
 
     with patch(
-        "worktrace.services.project_inference_service.assign_project_for_activity",
+        "worktrace.services.activity_inference_job_service.process_pending_inference_jobs",
         side_effect=RuntimeError("inference unavailable"),
     ):
         event_id = clipboard_service.record_clipboard_event(
@@ -171,12 +175,12 @@ def test_clipboard_inference_failure_retains_durable_retry(temp_db):
         )
 
     with get_connection() as conn:
-        marker = conn.execute(
-            "SELECT source, confidence FROM activity_project_assignment WHERE activity_id = ?",
+        job = conn.execute(
+            "SELECT status, attempt_count FROM activity_inference_job WHERE activity_id = ?",
             (activity,),
         ).fetchone()
     assert event_id is not None
-    assert (marker["source"], marker["confidence"]) == ("uncategorized", -1)
+    assert dict(job) == {"status": "pending", "attempt_count": 0}
 
 
 def test_clipboard_command_does_not_run_retention_maintenance(temp_db):
