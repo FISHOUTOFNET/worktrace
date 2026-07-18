@@ -14,6 +14,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Standard validation keeps full failure diagnostics observable through bounded log partitions.
   validate:
     name: Standard validation
     uses: ./.github/workflows/_validation.yml
