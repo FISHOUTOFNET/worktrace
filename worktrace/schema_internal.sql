@@ -43,3 +43,6 @@ CREATE TABLE IF NOT EXISTS activity_inference_job (
     updated_at TEXT NOT NULL,
     FOREIGN KEY(activity_id) REFERENCES activity_log(id) ON DELETE CASCADE
 );
+
+CREATE INDEX IF NOT EXISTS idx_activity_inference_job_due
+ON activity_inference_job(available_at, activity_id);
