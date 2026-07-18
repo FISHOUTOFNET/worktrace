@@ -179,7 +179,7 @@ def test_manual_and_midnight_assignments_are_not_enqueued(temp_db):
         ) == 0
 
 
-def test_outbox_has_no_claim_state_or_global_execution_lock():
+def test_outbox_has_no_claim_state_or_cross_table_write_owner():
     repository_source = (
         ROOT / "worktrace/services/activity_inference_job_repository.py"
     ).read_text(encoding="utf-8")
@@ -189,10 +189,15 @@ def test_outbox_has_no_claim_state_or_global_execution_lock():
     assignment_source = (
         ROOT / "worktrace/services/assignment_command_service.py"
     ).read_text(encoding="utf-8")
+    migration_source = (ROOT / "worktrace/schema_migrations.py").read_text(
+        encoding="utf-8"
+    )
     assert "_EXECUTION_LOCK" not in worker_source
     assert "recover_interrupted" not in worker_source
     assert "mark_running" not in repository_source
     assert "status TEXT" not in repository_source
+    assert "UPDATE activity_project_assignment" not in repository_source
+    assert "UPDATE activity_project_assignment" not in migration_source
     assert "activity_inference_job_repository" not in assignment_source
     assert "INFERENCE_RETRY_CONFIDENCE" not in assignment_source
 
