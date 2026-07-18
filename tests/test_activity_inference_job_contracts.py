@@ -131,6 +131,12 @@ def test_v10_migration_seeds_only_eligible_closed_rows(temp_db):
         source="auto",
         payload=_payload("Eligible.docx"),
     )
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE activity_log SET end_time = '2026-07-18 11:05:00' WHERE id = ?",
+            (eligible,),
+        )
+
     manual = activity_lifecycle_service.persist_open_activity(
         start_time="2026-07-18 11:10:00",
         source="auto",
@@ -145,10 +151,6 @@ def test_v10_migration_seeds_only_eligible_closed_rows(temp_db):
         is_manual=True,
     )
     with get_connection() as conn:
-        conn.execute(
-            "UPDATE activity_log SET end_time = '2026-07-18 11:05:00' WHERE id = ?",
-            (eligible,),
-        )
         conn.execute(
             "UPDATE activity_log SET end_time = '2026-07-18 11:15:00' WHERE id = ?",
             (manual,),
