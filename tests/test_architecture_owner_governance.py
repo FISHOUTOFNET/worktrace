@@ -114,6 +114,12 @@ def test_runtime_and_backup_have_single_lifecycle_owners() -> None:
     assert "__getattr__" not in backup
 
 
+def test_app_runtime_has_exactly_one_inference_worker_start_site() -> None:
+    runtime = (PRODUCTION / "runtime" / "app_runtime.py").read_text(encoding="utf-8")
+    assert runtime.count("activity_inference_job_service.start_inference_worker(") == 1
+    assert "process_pending_inference_jobs(" not in runtime
+
+
 def test_non_windows_production_adapter_fails_closed() -> None:
     source = (PRODUCTION / "runtime" / "app_runtime.py").read_text(encoding="utf-8")
     assert "raise RuntimeError(\"unsupported_platform\")" in source
