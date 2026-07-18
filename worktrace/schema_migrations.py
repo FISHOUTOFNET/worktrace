@@ -316,7 +316,7 @@ def migrate_9_to_10(conn: sqlite3.Connection) -> None:
 
 
 def migrate_10_to_11(conn: sqlite3.Connection) -> None:
-    """Create the minimal outbox and migrate only unresolved legacy semantics."""
+    """Create the minimal outbox and seed only unresolved legacy semantics."""
 
     conn.execute(
         """
@@ -363,16 +363,6 @@ def migrate_10_to_11(conn: sqlite3.Connection) -> None:
           )
         """,
         (now, now, now),
-    )
-    conn.execute(
-        """
-        UPDATE activity_project_assignment
-        SET confidence = 0, updated_at = ?
-        WHERE is_manual = 0
-          AND source = 'uncategorized'
-          AND confidence = -1
-        """,
-        (now,),
     )
 
 
