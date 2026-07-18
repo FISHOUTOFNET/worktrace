@@ -5,7 +5,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from ..services import activity_inference_job_service
+from ..platforms.windows_adapter import WindowsAdapter  # canonical production adapter
+from ..services import activity_inference_job_service, project_inference_service
 from .app_runtime_core import (
     AppRuntime as _CoreAppRuntime,
     RuntimePhase,
@@ -36,7 +37,8 @@ class AppRuntime(_CoreAppRuntime):
                 try:
                     self._inference_thread = (
                         activity_inference_job_service.start_inference_worker(
-                            self.stop_event
+                            self.stop_event,
+                            project_inference_service.assign_project_for_activity_in_transaction,
                         )
                     )
                     inference_ready = _thread_reference_is_alive(
