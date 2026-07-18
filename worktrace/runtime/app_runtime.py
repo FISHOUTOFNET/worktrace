@@ -8,7 +8,7 @@ never opens the business database or creates the WebView.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 import logging
 import sys
@@ -71,8 +71,8 @@ class WorkerReadiness:
     index_started: bool = False
     history_started: bool = False
     error: str | None = None
-    inference_ready: bool = True
-    inference_started: bool = False
+    inference_ready: bool = field(default=True, compare=False, repr=False)
+    inference_started: bool = field(default=False, compare=False, repr=False)
 
     @property
     def ready(self) -> bool:
@@ -283,6 +283,13 @@ class AppRuntime:
                 )
             self.phase = RuntimePhase.STARTING
 
+        retry_degraded = False
+        try:
+            project_inference_service.retry_pending_inference(1)
+        except Exception:
+            retry_degraded = True
+            logging.exception("bounded pending inference convergence failed")
+
         try:
             collector_result = self.start_collector()
         except Exception:
@@ -319,7 +326,7 @@ class AppRuntime:
                 inference_ready=False,
             )
 
-        degraded = bool(not workers.ready)
+        degraded = bool(retry_degraded or not workers.ready)
         self.phase = RuntimePhase.DEGRADED if degraded else RuntimePhase.RUNNING
         return RuntimeStartResult(
             ok=True,
