@@ -23,12 +23,13 @@ for _table_owners in _owners.values():
 # sentinel. Runtime assignment writes remain owned only by the command service.
 _owners["activity_project_assignment"].add("worktrace/schema_migrations.py")
 
-# The repository is the sole runtime DML owner. Schema migration and secure
-# replacement are explicit lifecycle exceptions, not competing command owners.
+# The repository is the sole runtime DML owner. Schema migration, whole-database
+# maintenance, and secure replacement are explicit lifecycle exceptions.
 _owners["activity_inference_job"] = {
     "worktrace/schema_migrations.py",
     "worktrace/schema_migrations_history.py",
     "worktrace/services/activity_inference_job_repository.py",
+    "worktrace/services/database_maintenance_service.py",
     "worktrace/services/secure_backup_core.py",
     "worktrace/services/secure_backup_service.py",
 }
@@ -101,5 +102,6 @@ def test_historical_migration_owner_is_lifecycle_scoped() -> None:
     )
     assert _owners["activity_inference_job"] >= {
         "worktrace/services/activity_inference_job_repository.py",
+        "worktrace/services/database_maintenance_service.py",
         "worktrace/schema_migrations.py",
     }
