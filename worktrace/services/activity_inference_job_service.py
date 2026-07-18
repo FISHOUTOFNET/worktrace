@@ -35,11 +35,26 @@ def process_pending_inference_jobs(
     normalized_limit = max(0, int(limit))
     if normalized_limit == 0:
         return 0
+    requested_ids = (
+        sorted({int(activity_id) for activity_id in activity_ids})
+        if activity_ids is not None
+        else None
+    )
+    if requested_ids == []:
+        return 0
     with _EXECUTION_LOCK:
+        if requested_ids is not None:
+            with DomainUnitOfWork() as uow:
+                inserted = jobs.enqueue_closed_activity_ids(
+                    uow.connection,
+                    requested_ids,
+                )
+                if inserted:
+                    uow.mark_changed()
         recover_interrupted_inference_jobs()
         return _process_pending_inference_jobs_locked(
             normalized_limit,
-            activity_ids=activity_ids,
+            activity_ids=requested_ids,
         )
 
 
