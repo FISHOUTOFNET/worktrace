@@ -78,6 +78,11 @@ _GENERATION_DML_OWNERS = {
         "worktrace/services/database_maintenance_service.py",
         "worktrace/services/privacy_anonymization_service.py",
     },
+    "activity_inference_job": {
+        "worktrace/schema_migrations.py",
+        "worktrace/services/activity_inference_job_repository.py",
+        "worktrace/services/database_maintenance_service.py",
+    },
     "session_boundary": {
         "worktrace/services/database_maintenance_service.py",
         "worktrace/services/session_boundary_service.py",
@@ -610,7 +615,7 @@ def test_folder_index_and_privacy_evidence_contracts_are_canonical() -> None:
     ).read_text(encoding="utf-8")
     assert "lookup_indexed_paths_for_file_name" in privacy_source
     assert "resolve_unique_path_from_title" not in privacy_source
-    assert "PrivacyResolutionPending(\"privacy_path_unresolved\")" in privacy_source
+    assert 'PrivacyResolutionPending("privacy_path_unresolved")' in privacy_source
 
 
 def test_clipboard_maintenance_failure_is_best_effort(monkeypatch) -> None:
