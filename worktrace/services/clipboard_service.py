@@ -157,9 +157,10 @@ def _find_duplicate_event(
 
 def _attempt_clipboard_inference(activity_id: int) -> None:
     try:
-        from .activity_inference_job_service import process_pending_inference_jobs
-
-        if process_pending_inference_jobs(limit=1, activity_ids=[activity_id]) == 0:
+        if project_inference_service.process_pending_inference_jobs(
+            limit=1,
+            activity_ids=[activity_id],
+        ) == 0:
             project_inference_service.assign_project_for_activity(activity_id)
     except Exception:
         logging.exception(
