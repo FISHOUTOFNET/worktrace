@@ -184,3 +184,4 @@ def test_runtime_starts_collector_before_optional_inference_worker():
 def test_phase_2_published_versions_are_explicit():
     assert db.CURRENT_SCHEMA_VERSION == 11
     assert secure_backup_service.PAYLOAD_VERSION == 5
+    assert secure_backup_service.EXPORT_TABLES[-1] == "activity_inference_job"
