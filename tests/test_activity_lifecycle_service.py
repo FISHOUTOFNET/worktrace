@@ -56,6 +56,12 @@ def _consume(*activity_ids: int) -> int:
     )
 
 
+def _assert_provisional_uncategorized(activity_id: int, target_project_id: int) -> None:
+    assignment = project_inference_service.get_assignment_for_activity(activity_id)
+    assert assignment["source"] == "uncategorized"
+    assert int(assignment["project_id"]) != int(target_project_id)
+
+
 def test_start_activity_closes_prior_row_and_enqueues_in_same_command(temp_db_setup):
     project_id = project_service.create_project("ProjA")
     folder_rule_service.create_or_update_folder_rule("D:\\ProjA", project_id)
@@ -82,7 +88,7 @@ def test_start_activity_closes_prior_row_and_enqueues_in_same_command(temp_db_se
     assert activity_service.get_activity(second)["end_time"] is None
     assert _job(first)["status"] == "pending"
     assert _job(second) is None
-    assert project_inference_service.get_assignment_for_activity(first) == {}
+    _assert_provisional_uncategorized(first, project_id)
 
     assert _consume(first) == 1
     assignment = project_inference_service.get_assignment_for_activity(first)
@@ -105,7 +111,7 @@ def test_close_activity_enqueues_without_immediate_consumer(temp_db_setup):
     close_activity(activity_id, "2026-07-01 09:30:00")
 
     assert _job(activity_id)["reason"] == "closed_activity"
-    assert project_inference_service.get_assignment_for_activity(activity_id) == {}
+    _assert_provisional_uncategorized(activity_id, project_id)
     _consume(activity_id)
     assignment = project_inference_service.get_assignment_for_activity(activity_id)
     assert int(assignment["project_id"]) == project_id
