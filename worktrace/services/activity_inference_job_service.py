@@ -1,4 +1,8 @@
-"""Bounded consumer for durable closed-activity inference obligations."""
+"""Bounded consumer for durable closed-activity inference obligations.
+
+The worker is the only completion owner: assignment writes and job deletion
+share one root UoW, while failures roll back and update backoff separately.
+"""
 
 from __future__ import annotations
 
