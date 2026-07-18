@@ -4,6 +4,7 @@ import logging
 import ntpath
 import re
 import threading
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 from ..constants import STATUS_NORMAL, UNCATEGORIZED_PROJECT
@@ -224,10 +225,24 @@ def process_new_activity(activity_id: int) -> dict:
     return assign_project_for_activity(activity_id)
 
 
-def retry_pending_inference(limit: int = 100) -> int:
-    """Consume durable inference jobs through the canonical bounded worker."""
+def process_pending_inference_jobs(
+    limit: int = 100,
+    *,
+    activity_ids: Iterable[int] | None = None,
+) -> int:
+    """Consume durable jobs through the acyclic bounded worker boundary."""
 
-    from .activity_inference_job_service import process_pending_inference_jobs
+    from .activity_inference_job_service import process_pending_inference_jobs as consume
+
+    return consume(
+        assign_project_for_activity_in_transaction,
+        limit=max(0, int(limit)),
+        activity_ids=activity_ids,
+    )
+
+
+def retry_pending_inference(limit: int = 100) -> int:
+    """Consume a bounded set of durable inference jobs."""
 
     return process_pending_inference_jobs(limit=max(0, int(limit)))
 
@@ -322,13 +337,13 @@ def candidate_project_name_for_resource(resource: dict) -> str | None:
         return None
 
     if path_hint:
-        parent_dir = ntpath.dirname(path_hint.rstrip("\/"))
+        parent_dir = ntpath.dirname(path_hint.rstrip("\\/"))
         if parent_dir and (
             has_auto_project_extension(path_hint)
             or (resource_kind == "ide_file" and resource_subtype == "code_file")
         ):
             candidate = _clean_project_candidate(
-                ntpath.basename(parent_dir.rstrip("\/"))
+                ntpath.basename(parent_dir.rstrip("\\/"))
             )
             if candidate and candidate.casefold() not in GENERIC_FILE_PROJECT_NAMES:
                 return candidate
@@ -357,7 +372,7 @@ def _infer_project_resource_first(
     if path_hint:
         for target in (
             path_hint,
-            ntpath.dirname(path_hint.rstrip("\/")),
+            ntpath.dirname(path_hint.rstrip("\\/")),
         ):
             if not target:
                 continue
@@ -556,6 +571,7 @@ __all__ = [
     "invalidate_keyword_rule_cache",
     "keyword_pattern_matches",
     "process_new_activity",
+    "process_pending_inference_jobs",
     "retry_pending_inference",
     "sync_persisted_open_activity_project",
 ]
