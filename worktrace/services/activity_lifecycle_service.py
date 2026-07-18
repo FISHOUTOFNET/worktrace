@@ -33,12 +33,12 @@ def _enqueue_closed_inference_jobs(conn, closed_ids: list[int]) -> int:
     )
 
 
-def finalize_closed_activity_ids(closed_ids: list[int]) -> None:
+def finalize_closed_activity_ids(closed_ids: list[int] | None) -> None:
     """Best-effort immediate consumption of already-durable inference jobs."""
 
-    normalized = sorted({int(activity_id) for activity_id in closed_ids})
-    if not normalized:
+    if not closed_ids:
         return
+    normalized = sorted({int(activity_id) for activity_id in closed_ids})
     from .activity_inference_job_service import process_pending_inference_jobs
 
     try:
