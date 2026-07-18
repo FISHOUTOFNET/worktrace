@@ -19,6 +19,7 @@ on:
         default: false
 
 permissions:
+  actions: read
   contents: read
 
 env:
@@ -30,11 +31,6 @@ jobs:
     name: Python 3.11 full suite
     runs-on: windows-latest
     timeout-minutes: 30
-    outputs:
-      problem_count: ${{ steps.diagnostics.outputs.problem_count }}
-      first_failure: ${{ steps.diagnostics.outputs.first_failure }}
-      first_location: ${{ steps.diagnostics.outputs.first_location }}
-      diagnostics_b64: ${{ steps.diagnostics.outputs.diagnostics_b64 }}
 
     steps:
       - name: Check out exact revision
@@ -144,20 +140,52 @@ jobs:
   python_failure_manifest:
     name: Complete Python failure manifest
     needs: python311
-    if: ${{ always() && needs.python311.result == 'failure' && needs.python311.outputs.diagnostics_b64 != '' }}
+    if: ${{ always() && needs.python311.result == 'failure' }}
     runs-on: windows-latest
-    timeout-minutes: 2
+    timeout-minutes: 3
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Publish complete manifest and details
+      - name: Publish every failure node
         shell: pwsh
-        env:
-          DIAGNOSTICS_B64: ${{ needs.python311.outputs.diagnostics_b64 }}
         run: |
-          $utf8 = [System.Text.UTF8Encoding]::new($false)
-          [Console]::OutputEncoding = $utf8
-          $bytes = [Convert]::FromBase64String($env:DIAGNOSTICS_B64)
-          $report = [Text.Encoding]::UTF8.GetString($bytes)
-          Write-Host $report
+          $jobs = gh api "/repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID/jobs?per_page=100" | ConvertFrom-Json
+          $job = $jobs.jobs | Where-Object { $_.name -like '*Python 3.11 full suite' } | Select-Object -First 1
+          if ($null -eq $job) { throw 'python_validation_job_not_found' }
+          gh api "/repos/$env:GITHUB_REPOSITORY/actions/jobs/$($job.id)/logs" | Set-Content python-job.log -Encoding UTF8
+          $lines = Get-Content python-job.log | ForEach-Object { $_ -replace '^\d{4}-\d{2}-\d{2}T\S+Z\s+', '' }
+          $start = [Array]::IndexOf($lines, '=== PYTEST_FAILURE_MANIFEST_BEGIN ===')
+          $end = [Array]::IndexOf($lines, '=== PYTEST_FAILURE_MANIFEST_END ===')
+          if ($start -lt 0 -or $end -le $start) { throw 'pytest_failure_manifest_not_found' }
+          $lines[$start..$end] | ForEach-Object { Write-Host $_ }
+
+  python_failure_details:
+    name: Complete Python failure details
+    needs: python311
+    if: ${{ always() && needs.python311.result == 'failure' }}
+    runs-on: windows-latest
+    timeout-minutes: 3
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Publish every failure detail
+        shell: pwsh
+        run: |
+          $jobs = gh api "/repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID/jobs?per_page=100" | ConvertFrom-Json
+          $job = $jobs.jobs | Where-Object { $_.name -like '*Python 3.11 full suite' } | Select-Object -First 1
+          if ($null -eq $job) { throw 'python_validation_job_not_found' }
+          gh api "/repos/$env:GITHUB_REPOSITORY/actions/jobs/$($job.id)/logs" | Set-Content python-job.log -Encoding UTF8
+          $lines = Get-Content python-job.log | ForEach-Object { $_ -replace '^\d{4}-\d{2}-\d{2}T\S+Z\s+', '' }
+          $start = [Array]::IndexOf($lines, '=== PYTEST_FAILURE_DETAILS_BEGIN ===')
+          $end = [Array]::IndexOf($lines, '=== PYTEST_FAILURE_DETAILS_END ===')
+          if ($start -lt 0 -or $end -le $start) { throw 'pytest_failure_details_not_found' }
+          $section = $lines[($start + 1)..($end - 1)] -join "`n"
+          $pattern = '(?ms)^--- \[(?<position>\d+/\d+)\] (?<node>.+?) ---\n(?<detail>.*?)(?=^--- \[|\z)'
+          foreach ($match in [regex]::Matches($section, $pattern)) {
+            $detail = [regex]::Replace($match.Groups['detail'].Value, '\s+', ' ').Trim()
+            if ($detail.Length -gt 1000) { $detail = $detail.Substring(0, 997) + '...' }
+            Write-Host "[$($match.Groups['position'].Value)] $($match.Groups['node'].Value) | $detail"
+          }
 
   node:
     name: WebView Node behavior tests
