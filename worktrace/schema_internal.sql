@@ -26,3 +26,16 @@ CREATE TABLE IF NOT EXISTS activity_resource_repair_job (
     completed_at TEXT NOT NULL DEFAULT '',
     updated_at TEXT NOT NULL DEFAULT ''
 );
+
+CREATE TABLE IF NOT EXISTS activity_inference_job (
+    activity_id INTEGER PRIMARY KEY,
+    reason TEXT NOT NULL CHECK(
+        reason IN ('finalize', 'facts_changed', 'migration_repair', 'import_repair')
+    ),
+    attempt_count INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count >= 0),
+    available_at TEXT NOT NULL,
+    last_error_code TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY(activity_id) REFERENCES activity_log(id) ON DELETE CASCADE
+);
