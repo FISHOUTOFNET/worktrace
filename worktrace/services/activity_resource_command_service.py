@@ -127,7 +127,6 @@ def _persist_activity_path(
         if current_row is None:
             return False, False
         activity = dict(current_row)
-        activity_closed = activity.get("end_time") is not None
         current_resource_row = conn.execute(
             "SELECT * FROM activity_resource WHERE activity_id = ?",
             (int(activity_id),),
@@ -143,7 +142,22 @@ def _persist_activity_path(
             ),
             conn=conn,
         )
-        status = str(activity.get("status") or "")
+        # Privacy evaluation may execute policy callbacks that change this row.
+        # Re-read the authoritative status before any path or resource write.
+        latest_row = conn.execute(
+            """
+            SELECT status, end_time
+            FROM activity_log
+            WHERE id = ? AND is_deleted = 0
+            """,
+            (int(activity_id),),
+        ).fetchone()
+        if latest_row is None:
+            return False, False
+        activity["status"] = latest_row["status"]
+        activity["end_time"] = latest_row["end_time"]
+        activity_closed = latest_row["end_time"] is not None
+        status = str(latest_row["status"] or "")
         excluded = excluded or status == STATUS_EXCLUDED
         if excluded:
             payload = privacy_service.make_excluded_activity_payload()
