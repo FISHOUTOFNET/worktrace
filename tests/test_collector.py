@@ -18,7 +18,7 @@ from worktrace.collector.collector import (
 )
 from worktrace.platforms.base import ActiveWindow
 from worktrace.platforms.fake_adapter import FakeAdapter
-from worktrace.services import activity_service, settings_service
+from worktrace.services import activity_service, privacy_gate_service, settings_service
 
 
 def _stop_after_poll(monkeypatch, stop_event):
@@ -30,7 +30,7 @@ def _stop_after_poll(monkeypatch, stop_event):
 
 
 def test_collector_loop_with_fake_adapter(temp_db, monkeypatch):
-    settings_service.set_setting("first_run_notice_accepted", "true")
+    privacy_gate_service.accept_privacy_notice()
     settings_service.set_setting("poll_interval_seconds", "1")
     settings_service.set_setting("idle_threshold_seconds", "60")
     adapter = FakeAdapter(
@@ -188,7 +188,7 @@ def test_collector_pause_does_not_poll_active_window(temp_db, monkeypatch):
         def get_idle_seconds(self):
             raise AssertionError("idle state should not be polled while paused")
 
-    settings_service.set_setting("first_run_notice_accepted", "true")
+    privacy_gate_service.accept_privacy_notice()
     settings_service.set_setting("user_paused", "true")
     settings_service.set_setting("poll_interval_seconds", "1")
     runtime_state_fixture.set_setting("current_activity_snapshot", '{"status":"normal"}')
@@ -206,7 +206,7 @@ def test_collector_pause_does_not_poll_active_window(temp_db, monkeypatch):
     assert runtime_state_fixture.get_setting("current_activity_snapshot", "") == ""
 
 
-def test_collector_control_pause_finalizes_before_exposing_paused(monkeypatch):
+def test_collector_control_pause_completes_lifecycle_before_ack(monkeypatch):
     from worktrace.collector import collector as collector_mod
 
     calls: list[str] = []
@@ -225,18 +225,18 @@ def test_collector_control_pause_finalizes_before_exposing_paused(monkeypatch):
         def get_idle_seconds(self):
             raise AssertionError("idle state should not be polled")
 
-    def fake_set_setting(key, value):
-        if key in ("user_paused", "collector_status"):
-            calls.append(f"set:{key}:{value}")
-
     monkeypatch.setattr(collector_mod, "CollectorStateMachine", lambda: FakeMachine())
-    monkeypatch.setattr(collector_mod, "set_setting", fake_set_setting)
     monkeypatch.setattr(collector_mod, "get_setting", lambda key, default=None: default or "1")
     monkeypatch.setattr(collector_mod, "get_int_setting", lambda key, default=1: 1)
     monkeypatch.setattr(
         collector_mod,
         "get_bool_setting",
-        lambda key, default=False: True if key == "first_run_notice_accepted" else False,
+        lambda key, default=False: False,
+    )
+    monkeypatch.setattr(
+        collector_mod.privacy_gate_service,
+        "is_privacy_notice_accepted",
+        lambda: True,
     )
     monkeypatch.setattr(collector_mod.clipboard_service, "prune_old_events", lambda: None)
     monkeypatch.setattr(collector_mod, "update_heartbeat", lambda status: calls.append("heartbeat:" + status))
@@ -260,12 +260,11 @@ def test_collector_control_pause_finalizes_before_exposing_paused(monkeypatch):
     assert result["command_state_unknown"] is False
     assert isinstance(result["command_id"], str) and result["command_id"]
     pause_index = calls.index("machine.pause")
-    user_index = calls.index("set:user_paused:true")
-    status_index = calls.index("set:collector_status:paused")
-    assert pause_index < user_index < status_index
+    heartbeat_index = calls.index("heartbeat:paused")
+    assert pause_index < heartbeat_index
 
 
-def test_collector_paused_branches_pause_before_status(monkeypatch):
+def test_collector_paused_branch_delegates_to_lifecycle_machine(monkeypatch):
     from worktrace.collector import collector as collector_mod
 
     calls: list[str] = []
@@ -275,12 +274,9 @@ def test_collector_paused_branches_pause_before_status(monkeypatch):
             calls.append("machine.pause")
 
     monkeypatch.setattr(collector_mod, "update_heartbeat", lambda status: None)
-    monkeypatch.setattr(collector_mod, "set_setting", lambda key, value: calls.append(f"set:{key}:{value}"))
-
     collector_mod._pause_machine_then_expose(FakeMachine(), "2026-07-05 10:00:00")
 
-    assert calls[0] == "machine.pause"
-    assert calls[1] == "set:collector_status:paused"
+    assert calls == ["machine.pause"]
 
 
 def test_collector_skips_active_window_when_import_guard_active(temp_db, monkeypatch):
@@ -294,7 +290,7 @@ def test_collector_skips_active_window_when_import_guard_active(temp_db, monkeyp
         def get_idle_seconds(self):
             raise AssertionError("idle state should not be polled during secure import")
 
-    settings_service.set_setting("first_run_notice_accepted", "true")
+    privacy_gate_service.accept_privacy_notice()
     settings_service.set_setting("user_paused", "false")
     monkeypatch.setattr(collector_mod, "is_secure_import_in_progress", lambda: True)
     settings_service.set_setting("poll_interval_seconds", "1")
@@ -313,7 +309,7 @@ def test_collector_skips_active_window_when_import_guard_active(temp_db, monkeyp
 
 
 def test_no_new_activity_during_import_guard(temp_db, monkeypatch):
-    settings_service.set_setting("first_run_notice_accepted", "true")
+    privacy_gate_service.accept_privacy_notice()
     settings_service.set_setting("user_paused", "false")
     monkeypatch.setattr(collector_mod, "is_secure_import_in_progress", lambda: True)
     settings_service.set_setting("poll_interval_seconds", "1")
@@ -337,7 +333,7 @@ def test_no_new_activity_during_import_guard(temp_db, monkeypatch):
 def test_no_real_title_path_stored_during_import_guard(temp_db, monkeypatch):
     from worktrace.db import get_connection
 
-    settings_service.set_setting("first_run_notice_accepted", "true")
+    privacy_gate_service.accept_privacy_notice()
     settings_service.set_setting("user_paused", "false")
     monkeypatch.setattr(collector_mod, "is_secure_import_in_progress", lambda: True)
     settings_service.set_setting("poll_interval_seconds", "1")

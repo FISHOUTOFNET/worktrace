@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from . import project_service
+from ..constants import EXCLUDED_PROJECT, UNCATEGORIZED_PROJECT
 
 
 @dataclass(frozen=True)
@@ -45,7 +45,7 @@ def snapshot_from_activity_row(row: dict | None) -> ActivityProjectSnapshot:
     display_project_name = project_name
     display_project_description = project_description
     is_suggested = False
-    is_uncategorized = project_service.is_uncategorized_project_name(project_name)
+    is_uncategorized = project_name == UNCATEGORIZED_PROJECT
     if assignment_source == "suggested_project_name" and suggested_project_name:
         display_project_id = None
         display_project_name = suggested_project_name
@@ -54,10 +54,10 @@ def snapshot_from_activity_row(row: dict | None) -> ActivityProjectSnapshot:
         is_uncategorized = False
     elif project_id is None and not project_name:
         display_project_id = None
-        display_project_name = project_service.UNCATEGORIZED_PROJECT
+        display_project_name = UNCATEGORIZED_PROJECT
         display_project_description = ""
         is_uncategorized = True
-    elif not project_service.is_project_displayable(
+    elif not _is_project_displayable(
         project_id,
         project_name,
         project_enabled,
@@ -65,7 +65,7 @@ def snapshot_from_activity_row(row: dict | None) -> ActivityProjectSnapshot:
         project_is_deleted,
     ):
         display_project_id = None
-        display_project_name = project_service.UNCATEGORIZED_PROJECT
+        display_project_name = UNCATEGORIZED_PROJECT
         display_project_description = ""
         is_uncategorized = True
 
@@ -113,6 +113,23 @@ def _int_or_none(value) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _is_project_displayable(
+    project_id: int | None,
+    project_name: str,
+    project_enabled: bool | None,
+    project_is_archived: bool,
+    project_is_deleted: bool,
+) -> bool:
+    return bool(
+        project_id is not None
+        and project_name
+        and project_name != EXCLUDED_PROJECT
+        and project_enabled is not False
+        and not project_is_archived
+        and not project_is_deleted
+    )
 
 
 def _bool_or_none(value) -> bool | None:

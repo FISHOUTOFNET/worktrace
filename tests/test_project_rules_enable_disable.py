@@ -4,6 +4,8 @@ import json
 
 import pytest
 
+from worktrace.services import system_project_service
+
 from tests.support import activity_factory as activity_service
 from worktrace.api import rule_api
 from worktrace.constants import EXCLUDED_PROJECT
@@ -175,7 +177,7 @@ def test_toggle_invalidates_rule_caches_via_catalog_generation(temp_db):
 
 
 def test_excluded_rule_toggle_invalidates_privacy_generation(temp_db):
-    excluded_id = project_service.get_or_create_excluded_project()
+    excluded_id = system_project_service.require_excluded_project_id()
     project_service.set_project_enabled(excluded_id, True)
     keyword_id = rule_service.create_rule("Secret", excluded_id)
     folder_id = folder_rule_service.create_or_update_folder_rule(

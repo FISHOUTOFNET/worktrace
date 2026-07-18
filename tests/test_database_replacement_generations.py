@@ -11,6 +11,7 @@ from worktrace.services import (
     database_maintenance_service,
     privacy_gate_service,
     project_service,
+    settings_service,
 )
 
 pytestmark = [pytest.mark.db, pytest.mark.integration, pytest.mark.contract]
@@ -39,6 +40,15 @@ def test_clear_all_invalidates_every_generation_once(temp_db):
     assert privacy_gate_service.is_privacy_notice_accepted() is True
 
 
+def test_clear_all_refreshes_generation_backed_settings_cache(temp_db):
+    settings_service.set_setting("ui_refresh_seconds", "77")
+    assert settings_service.get_setting("ui_refresh_seconds") == "77"
+
+    database_maintenance_service.clear_all_live_data()
+
+    assert settings_service.get_setting("ui_refresh_seconds") == "10"
+
+
 def test_replacement_generation_failure_rolls_back_data_and_generations(
     temp_db,
     monkeypatch,
@@ -46,14 +56,14 @@ def test_replacement_generation_failure_rolls_back_data_and_generations(
     privacy_gate_service.accept_privacy_notice()
     project_id = project_service.create_project("Must Survive")
     before = _generations()
-    original = privacy_gate_service.publish_database_replacement
+    original = database_maintenance_service.publish_database_replacement
 
     def fail_after_generation_write(conn):
         original(conn)
         raise RuntimeError("generation_publish_failed")
 
     monkeypatch.setattr(
-        privacy_gate_service,
+        database_maintenance_service,
         "publish_database_replacement",
         fail_after_generation_write,
     )

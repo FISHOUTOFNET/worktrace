@@ -47,7 +47,7 @@ def read_clipboard_unicode_text() -> str | None:
             try:
                 win32clipboard.CloseClipboard()
             except Exception:
-                pass
+                logging.debug("clipboard close failed", exc_info=True)
 
 
 class ClipboardMonitor:

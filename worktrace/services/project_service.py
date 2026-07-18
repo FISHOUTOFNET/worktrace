@@ -6,9 +6,7 @@ from ..db import dict_rows, get_connection, now_str
 from ..domain_unit_of_work import DomainUnitOfWork
 from . import project_lifecycle_policy
 from .system_project_service import (
-    ensure_system_projects,
     require_excluded_project_id,
-    require_uncategorized_project_id,
 )
 
 
@@ -18,6 +16,7 @@ def _catalog_uow(
     return DomainUnitOfWork(
         (
             DataGenerationNamespace.CLASSIFICATION_CATALOG,
+            DataGenerationNamespace.REPORT_STRUCTURE,
             *extra_effects,
         )
     )
@@ -29,10 +28,6 @@ def _add_privacy_effect_for_project(
 ) -> None:
     if project and str(project.get("name") or "") == EXCLUDED_PROJECT:
         uow.add_effects(DataGenerationNamespace.PRIVACY_CATALOG)
-
-
-def invalidate_uncategorized_project_cache() -> None:
-    """Compatibility test hook; system project IDs are no longer cached here."""
 
 
 def _normalize_project_language(language: str | None = None) -> str:
@@ -48,6 +43,8 @@ def create_project(
     cleaned = name.strip()
     if not cleaned:
         raise ValueError("project name is required")
+    if project_lifecycle_policy.project_name_is_reserved(cleaned):
+        raise ValueError("reserved_project_name")
     timestamp = now_str()
     with _catalog_uow() as uow:
         cursor = uow.connection.execute(
@@ -77,6 +74,8 @@ def update_project(
     cleaned = name.strip()
     if not cleaned:
         raise ValueError("project name is required")
+    if project_lifecycle_policy.project_name_is_reserved(cleaned):
+        raise ValueError("reserved_project_name")
     normalized_description = description.strip()
     normalized_language = _normalize_project_language(language)
     with _catalog_uow() as uow:
@@ -135,7 +134,7 @@ def set_project_enabled(project_id: int, enabled: bool) -> None:
 
 
 def set_excluded_project_enabled(enabled: bool) -> int:
-    project_id = get_or_create_excluded_project()
+    project_id = require_excluded_project_id()
     requested = int(enabled)
     with _catalog_uow(DataGenerationNamespace.PRIVACY_CATALOG) as uow:
         conn = uow.connection
@@ -181,13 +180,6 @@ def is_concrete_project_id(project_id: int | None) -> bool:
     if not project:
         return False
     return project.get("name") not in {UNCATEGORIZED_PROJECT, EXCLUDED_PROJECT}
-
-
-def get_or_create_project(name: str) -> int:
-    existing = get_project_by_name(name)
-    if existing:
-        return int(existing["id"])
-    return create_project(name)
 
 
 def list_active_projects() -> list[dict]:
@@ -367,38 +359,3 @@ def soft_delete_project(project_id: int) -> None:
         )
         if cursor.rowcount != 1:
             raise ValueError("project not found")
-
-
-def get_or_create_uncategorized_project(*, conn=None) -> int:
-    """Explicit compatibility command; normal queries use require-only access."""
-
-    if conn is None:
-        return int(ensure_system_projects()["uncategorized"])
-    try:
-        return require_uncategorized_project_id(conn)
-    except ValueError as exc:
-        if str(exc) != "system_catalog_repair_required":
-            raise
-    timestamp = now_str()
-    cursor = conn.execute(
-        """
-        INSERT INTO project(
-            name, description, language, is_archived, enabled,
-            created_by, created_at, updated_at
-        ) VALUES (?, '', '中文', 0, 1, 'system', ?, ?)
-        """,
-        (UNCATEGORIZED_PROJECT, timestamp, timestamp),
-    )
-    return int(cursor.lastrowid)
-
-
-def get_or_create_excluded_project() -> int:
-    """Explicit compatibility command for the privacy catalog owner."""
-
-    try:
-        with get_connection() as conn:
-            return require_excluded_project_id(conn)
-    except ValueError as exc:
-        if str(exc) != "system_catalog_repair_required":
-            raise
-    return int(ensure_system_projects()["excluded"])

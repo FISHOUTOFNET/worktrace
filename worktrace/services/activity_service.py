@@ -7,7 +7,6 @@ mutations are delegated to ``activity_resource_command_service``.
 
 from __future__ import annotations
 
-import hashlib
 from typing import Any
 
 from ..constants import (
@@ -114,99 +113,7 @@ def get_activities_by_date(date: str) -> list[dict]:
     return get_activities_by_range(date, date)
 
 
-def get_activity_structure_marker_by_date(date: str) -> dict:
-    """Return the legacy structural marker without attaching resource facts."""
-
-    start = f"{date} 00:00:00"
-    end = f"{date} 23:59:59"
-    with get_connection() as conn:
-        row = conn.execute(
-            """
-            SELECT
-                COUNT(*) AS row_count,
-                SUM(CASE WHEN is_deleted = 0 THEN 1 ELSE 0 END) AS visible_row_count,
-                COALESCE(MAX(id), 0) AS max_id,
-                COALESCE(MAX(CASE WHEN end_time IS NOT NULL THEN updated_at ELSE '' END), '') AS closed_max_updated_at,
-                COALESCE(MAX(updated_at), '') AS max_updated_at,
-                SUM(CASE WHEN end_time IS NULL AND is_deleted = 0 THEN 1 ELSE 0 END) AS open_row_count,
-                COALESCE(MAX(CASE WHEN end_time IS NULL AND is_deleted = 0 THEN id ELSE 0 END), 0) AS open_max_id,
-                COALESCE(MAX(CASE WHEN end_time IS NULL AND is_deleted = 0 THEN updated_at ELSE '' END), '') AS open_max_updated_at,
-                COALESCE(MAX(CASE WHEN end_time IS NULL AND is_deleted = 0 THEN COALESCE(end_time, '') ELSE '' END), '') AS open_end_time_presence,
-                SUM(CASE WHEN is_hidden != 0 THEN 1 ELSE 0 END) AS hidden_count,
-                SUM(CASE WHEN is_deleted != 0 THEN 1 ELSE 0 END) AS deleted_count
-            FROM activity_log
-            WHERE start_time BETWEEN ? AND ?
-            """,
-            (start, end),
-        ).fetchone()
-        signature_row = conn.execute(
-            """
-            SELECT COALESCE(GROUP_CONCAT(sig, '#'), '') AS structural_signature
-            FROM (
-                SELECT
-                    id || '|' || COALESCE(start_time, '') || '|' ||
-                    CASE WHEN end_time IS NULL THEN '1' ELSE '0' END || '|' ||
-                    COALESCE(end_time, '') || '|' || COALESCE(status, '') || '|' ||
-                    COALESCE(assignment_project_id, 0) || '|' ||
-                    COALESCE(assignment_source, '') || '|' ||
-                    COALESCE(assignment_is_manual, 0) || '|' ||
-                    COALESCE(assignment_updated_at, '') || '|' ||
-                    COALESCE(source, '') || '|' || COALESCE(is_deleted, 0) || '|' ||
-                    COALESCE(is_hidden, 0) AS sig
-                FROM (
-                    SELECT
-                        a.id, a.start_time, a.end_time, a.status, a.source,
-                        a.is_deleted, a.is_hidden,
-                        apa.project_id AS assignment_project_id,
-                        apa.source AS assignment_source,
-                        apa.is_manual AS assignment_is_manual,
-                        apa.updated_at AS assignment_updated_at
-                    FROM activity_log a
-                    LEFT JOIN activity_project_assignment apa ON apa.activity_id = a.id
-                    WHERE a.start_time BETWEEN ? AND ?
-                    ORDER BY a.id
-                )
-            )
-            """,
-            (start, end),
-        ).fetchone()
-    if row is None:
-        return {
-            "row_count": 0,
-            "visible_row_count": 0,
-            "max_id": 0,
-            "closed_max_updated_at": "",
-            "max_updated_at": "",
-            "open_row_count": 0,
-            "open_max_id": 0,
-            "open_max_updated_at": "",
-            "open_end_time_presence": "",
-            "hidden_count": 0,
-            "deleted_count": 0,
-            "structural_signature": "",
-        }
-    return {
-        "row_count": int(row["row_count"] or 0),
-        "visible_row_count": int(row["visible_row_count"] or 0),
-        "max_id": int(row["max_id"] or 0),
-        "closed_max_updated_at": str(row["closed_max_updated_at"] or ""),
-        "max_updated_at": str(row["max_updated_at"] or ""),
-        "open_row_count": int(row["open_row_count"] or 0),
-        "open_max_id": int(row["open_max_id"] or 0),
-        "open_max_updated_at": str(row["open_max_updated_at"] or ""),
-        "open_end_time_presence": str(row["open_end_time_presence"] or ""),
-        "hidden_count": int(row["hidden_count"] or 0),
-        "deleted_count": int(row["deleted_count"] or 0),
-        "structural_signature": hashlib.sha1(
-            str(
-                signature_row["structural_signature"] if signature_row else ""
-            ).encode("utf-8")
-        ).hexdigest(),
-    }
-
-
 def _attach_attribution_fields(row: dict, uncategorized_id: int) -> dict:
-    row["raw_project_id_deprecated"] = row.get("project_id")
     if row.get("effective_project_id") is not None:
         row["project_id"] = int(row.get("effective_project_id") or 0)
         row["project_name"] = row.get("effective_project_name") or UNCATEGORIZED_PROJECT
@@ -267,26 +174,3 @@ def update_activity_file_path_hint(activity_id: int, file_path_hint: str) -> Non
     from .activity_resource_command_service import update_activity_file_path_hint as command
 
     command(int(activity_id), file_path_hint)
-
-
-def _sync_activity_resource_after_path_update(
-    conn,
-    activity_id: int,
-    file_path_hint: str,
-) -> None:
-    """Transitional private wrapper; the command owner controls its own UoW."""
-
-    from .activity_resource_command_service import update_activity_file_path_hint as command
-
-    command(int(activity_id), file_path_hint)
-
-
-def update_project_editable_activities_project(
-    activity_ids: list[int],
-    project_id: int,
-) -> None:
-    raise ValueError("activity_level_project_edit_removed")
-
-
-def update_project_editable_activity_note(activity_id: int, note: str) -> None:
-    raise ValueError("activity_level_note_edit_removed")

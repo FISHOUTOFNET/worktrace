@@ -35,6 +35,7 @@ ERROR_PROJECT_NOT_FOUND = "project_not_found"
 ERROR_DUPLICATE_RULE = "duplicate_rule"
 ERROR_DUPLICATE_PROJECT = "duplicate_project"
 ERROR_SYSTEM_PROJECT = "system_project"
+ERROR_SYSTEM_CATALOG_UNAVAILABLE = "system_catalog_unavailable"
 ERROR_OPERATION_FAILED = "operation_failed"
 ERROR_RULE_DISABLED = "rule_disabled"
 ERROR_PROJECT_NOT_AVAILABLE = "project_not_available"
@@ -125,6 +126,7 @@ __all__ = [
     "ERROR_PROJECT_NOT_FOUND",
     "ERROR_RULE_DISABLED",
     "ERROR_SYSTEM_PROJECT",
+    "ERROR_SYSTEM_CATALOG_UNAVAILABLE",
     "ERROR_TOO_MANY_MATCHES",
     "ERROR_TOO_MANY_RULES",
     "fail_payload",

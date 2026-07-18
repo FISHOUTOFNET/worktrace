@@ -6,6 +6,8 @@ import json
 
 import pytest
 
+from worktrace.services import system_project_service
+
 from tests.support import activity_factory as activity_service
 from tests.support.db_helpers import table_count
 from worktrace.api import rule_api
@@ -65,7 +67,7 @@ def test_create_keyword_rule_for_normal_project(temp_db):
 @pytest.mark.parametrize("state", ["excluded", "archived", "disabled"])
 def test_unavailable_project_is_rejected(temp_db, state):
     if state == "excluded":
-        project_id = project_service.get_or_create_excluded_project()
+        project_id = system_project_service.require_excluded_project_id()
     else:
         project_id = project_service.create_project(state.title())
         if state == "archived":

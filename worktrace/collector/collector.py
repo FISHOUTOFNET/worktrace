@@ -12,7 +12,7 @@ from typing import Any, Callable
 from ..constants import DEFAULT_IDLE_THRESHOLD_SECONDS, TIME_FORMAT
 from ..db import now_str
 from ..platforms.base import PlatformAdapter
-from ..services import clipboard_service, privacy_service
+from ..services import clipboard_service, privacy_gate_service, privacy_service
 from ..services.secure_backup_service import is_secure_import_in_progress
 from ..services.settings_service import (
     get_bool_setting,
@@ -203,7 +203,7 @@ def run_collector(
         logging.info("collector start")
         collector_health.record_collector_started(now_str())
         _normalize_poll_interval_setting()
-        clipboard_service.prune_old_events()
+        _run_clipboard_maintenance_tick()
         next_poll_deadline = time.monotonic() + POLL_CADENCE_SECONDS
     except Exception as exc:
         collector_health.record_fatal_failure("startup", exc, now_str())
@@ -249,7 +249,7 @@ def run_collector(
             maintenance_active = is_secure_import_in_progress()
             prune_counter += 1
             if prune_counter >= 20 and not maintenance_active:
-                clipboard_service.prune_old_events()
+                _run_clipboard_maintenance_tick()
                 prune_counter = 0
 
             reset_command_id = control.take_reset_request() if control is not None else None
@@ -286,7 +286,6 @@ def run_collector(
                 _pause_machine_then_expose(
                     machine,
                     now,
-                    set_user_paused=True,
                 )
                 control.complete_pause(
                     pause_command_id,
@@ -300,7 +299,7 @@ def run_collector(
                 last_loop_time = now
                 continue
 
-            if not get_bool_setting("first_run_notice_accepted", False):
+            if not privacy_gate_service.is_privacy_notice_accepted():
                 _set_clipboard_capture_enabled(adapter, False)
                 _pause_machine_then_expose(machine, now)
                 next_poll_deadline = _sleep_until_next_poll(
@@ -421,14 +420,26 @@ def _normalize_poll_interval_setting() -> None:
 def _pause_machine_then_expose(
     machine: CollectorStateMachine,
     at_time: str,
-    *,
-    set_user_paused: bool = False,
 ) -> None:
     machine.pause(at_time=at_time)
-    if set_user_paused:
-        set_setting("user_paused", "true")
-    set_setting("collector_status", "paused")
     update_heartbeat("paused")
+
+
+def _run_clipboard_maintenance_tick() -> None:
+    """Run bounded retention maintenance without affecting collector commands."""
+
+    try:
+        clipboard_service.prune_old_events()
+    except Exception as exc:
+        logging.exception("clipboard retention maintenance failed")
+        try:
+            collector_health.record_transient_failure(
+                "clipboard_maintenance",
+                exc,
+                now_str(),
+            )
+        except Exception:
+            logging.exception("clipboard retention health update failed")
 
 
 def _wait_for_poll_delay(

@@ -75,32 +75,7 @@ def fetch_report_activities_for_dates(
     )
 
 
-def get_activity_structure_markers(
-    dates: Iterable[str],
-    *,
-    conn=None,
-) -> dict[str, str]:
-    normalized = sorted({str(value) for value in dates if value})
-    if not normalized:
-        return {}
-    placeholders = ",".join("?" for _ in normalized)
-    sql = (
-        "SELECT date, structure_marker FROM daily_report_marker "
-        f"WHERE date IN ({placeholders})"
-    )
-    if conn is None:
-        with get_connection() as own_conn:
-            rows = own_conn.execute(sql, normalized).fetchall()
-    else:
-        rows = conn.execute(sql, normalized).fetchall()
-    return {
-        str(row["date"]): str(row["structure_marker"] or "")
-        for row in rows
-    }
-
-
 __all__ = [
     "fetch_report_activities_between",
     "fetch_report_activities_for_dates",
-    "get_activity_structure_markers",
 ]

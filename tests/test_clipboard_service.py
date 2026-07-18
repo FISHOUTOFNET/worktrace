@@ -1,4 +1,5 @@
 import pytest
+from unittest.mock import patch
 
 from tests.support import activity_factory as activity_service
 from worktrace.db import get_connection
@@ -115,6 +116,93 @@ def test_clipboard_event_deduplicates_sequence_number(temp_db):
         ).fetchone()["c"]
     assert second == first
     assert count == 1
+
+
+def test_clipboard_fact_and_retry_marker_roll_back_together(temp_db):
+    _enable_capture()
+    activity = activity_service.create_activity(
+        "Edge",
+        "msedge.exe",
+        "Research",
+        start_time="2026-06-18 09:00:00",
+    )
+    activity_service.finalize_created_activity(activity)
+
+    with patch(
+        "worktrace.services.assignment_command_service.mark_inference_retry",
+        side_effect=RuntimeError("marker failed"),
+    ), pytest.raises(RuntimeError, match="marker failed"):
+        clipboard_service.record_clipboard_event(
+            activity,
+            "transactional text",
+            ActiveWindow("Edge", "msedge.exe", "Research"),
+            copied_at="2026-06-18 09:00:05",
+            sequence_number=202,
+        )
+
+    with get_connection() as conn:
+        count = conn.execute(
+            "SELECT COUNT(*) AS c FROM activity_clipboard_event"
+        ).fetchone()["c"]
+    assert count == 0
+
+
+def test_clipboard_inference_failure_retains_durable_retry(temp_db):
+    _enable_capture()
+    activity = activity_service.create_activity(
+        "Edge",
+        "msedge.exe",
+        "Research",
+        start_time="2026-06-18 09:00:00",
+    )
+    activity_service.finalize_created_activity(activity)
+
+    with patch(
+        "worktrace.services.project_inference_service.assign_project_for_activity",
+        side_effect=RuntimeError("inference unavailable"),
+    ):
+        event_id = clipboard_service.record_clipboard_event(
+            activity,
+            "retry me",
+            ActiveWindow("Edge", "msedge.exe", "Research"),
+            copied_at="2026-06-18 09:00:05",
+            sequence_number=203,
+        )
+
+    with get_connection() as conn:
+        marker = conn.execute(
+            "SELECT source, confidence FROM activity_project_assignment WHERE activity_id = ?",
+            (activity,),
+        ).fetchone()
+    assert event_id is not None
+    assert (marker["source"], marker["confidence"]) == ("uncategorized", -1)
+
+
+def test_clipboard_command_does_not_run_retention_maintenance(temp_db):
+    _enable_capture()
+    activity = activity_service.create_activity(
+        "Edge",
+        "msedge.exe",
+        "Research",
+        start_time="2026-06-18 09:00:00",
+    )
+    activity_service.finalize_created_activity(activity)
+
+    with patch.object(
+        clipboard_service,
+        "prune_old_events",
+        side_effect=RuntimeError("maintenance unavailable"),
+    ) as prune:
+        event_id = clipboard_service.record_clipboard_event(
+            activity,
+            "main command succeeds",
+            ActiveWindow("Edge", "msedge.exe", "Research"),
+            copied_at="2026-06-18 09:00:05",
+            sequence_number=204,
+        )
+
+    assert event_id is not None
+    prune.assert_not_called()
 
 
 def test_clipboard_retention_keeps_only_last_month(temp_db):

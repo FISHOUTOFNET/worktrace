@@ -9,7 +9,7 @@ from worktrace.collector.collector import run_collector
 from worktrace.constants import STATUS_ERROR
 from worktrace.db import get_connection
 from worktrace.platforms.base import ActiveWindow
-from worktrace.services import settings_service
+from worktrace.services import privacy_gate_service, settings_service
 
 pytestmark = [pytest.mark.db, pytest.mark.collector_runtime, pytest.mark.contract]
 
@@ -49,7 +49,7 @@ def _assert_no_error_activity_or_boundary_before_stop():
 
 @pytest.mark.parametrize("adapter", [_RaisingActiveWindowAdapter(), _RaisingIdleAdapter()])
 def test_transient_adapter_failure_only_updates_health_not_activity_continuity(temp_db, monkeypatch, adapter):
-    settings_service.set_setting("first_run_notice_accepted", "true")
+    privacy_gate_service.accept_privacy_notice()
     runtime_state_fixture.set_setting("pending_short_seconds", "17")
     runtime_state_fixture.set_setting("current_activity_snapshot", '{"status":"normal","token":"keep"}')
     stop_event = threading.Event()
@@ -75,7 +75,7 @@ def test_transient_adapter_failure_only_updates_health_not_activity_continuity(t
 
 
 def test_privacy_failure_only_updates_health_not_activity_continuity(temp_db, monkeypatch):
-    settings_service.set_setting("first_run_notice_accepted", "true")
+    privacy_gate_service.accept_privacy_notice()
     runtime_state_fixture.set_setting("pending_short_seconds", "19")
     runtime_state_fixture.set_setting("current_activity_snapshot", '{"status":"normal","token":"keep"}')
     stop_event = threading.Event()
@@ -115,7 +115,7 @@ def test_privacy_failure_only_updates_health_not_activity_continuity(temp_db, mo
 
 
 def test_clipboard_failure_does_not_block_normal_activity_observation(temp_db, monkeypatch):
-    settings_service.set_setting("first_run_notice_accepted", "true")
+    privacy_gate_service.accept_privacy_notice()
     settings_service.set_setting("clipboard_capture_enabled", "true")
     stop_event = threading.Event()
     captured = {}
@@ -147,7 +147,7 @@ def test_clipboard_failure_does_not_block_normal_activity_observation(temp_db, m
 
 
 def test_consecutive_transient_failures_reach_failing_without_activity_error(temp_db, monkeypatch):
-    settings_service.set_setting("first_run_notice_accepted", "true")
+    privacy_gate_service.accept_privacy_notice()
     stop_event = threading.Event()
     attempts = {"count": 0}
     captured = {}

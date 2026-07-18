@@ -24,12 +24,14 @@ from .report_generation_classifier import (
     ReportStructureSqlClassification,
     classify_report_structure_sql,
     parameters_affect_report_structure,
+    report_structure_classifier_enabled,
+    report_structure_classifier_scope,
     sql_affects_report_structure,
 )
 from .schema_migrations import MIN_SUPPORTED_SCHEMA_VERSION, migrate_schema
 from .write_gate import DATABASE_WRITE_GATE
 
-CURRENT_SCHEMA_VERSION = 8
+CURRENT_SCHEMA_VERSION = 10
 
 _RETIRED_SCHEMA_TRIGGERS = (
     "close_existing_open_activity_before_insert",
@@ -94,6 +96,14 @@ class WorkTraceConnection(sqlite3.Connection):
         if _sql_requires_write_gate(sql):
             DATABASE_WRITE_GATE.require_current_thread_allowed()
 
+    def _report_classifier_active(self) -> bool:
+        if not report_structure_classifier_enabled():
+            return False
+        from .domain_unit_of_work import current_domain_unit_of_work
+
+        uow = current_domain_unit_of_work()
+        return uow is None or uow.connection is not self
+
     def _mark_report_structure_dirty(
         self,
         sql: str,
@@ -101,7 +111,11 @@ class WorkTraceConnection(sqlite3.Connection):
         *,
         rowcount: int | None = None,
     ) -> None:
-        if rowcount == 0 or self._report_structure_dirty:
+        if (
+            rowcount == 0
+            or self._report_structure_dirty
+            or not self._report_classifier_active()
+        ):
             return
         if sql_affects_report_structure(sql, parameters):
             self._report_structure_dirty = True
@@ -140,6 +154,8 @@ class WorkTraceConnection(sqlite3.Connection):
     def executemany(self, sql, seq_of_parameters, /):  # type: ignore[override]
         text = str(sql)
         self._require_write_allowed(text)
+        if not self._report_classifier_active():
+            return super().executemany(sql, seq_of_parameters)
         if self._report_structure_dirty:
             return super().executemany(sql, seq_of_parameters)
 
@@ -290,7 +306,11 @@ def initialize_database(path: str | Path | None = None) -> None:
     configure_database(path)
     with get_connection() as conn:
         ensure_wal(conn)
-        apply_current_schema(conn)
+        with report_structure_classifier_scope():
+            apply_current_schema(conn)
+        from .services.installation_metadata_store import migrate_legacy_privacy_state
+
+        migrate_legacy_privacy_state(conn)
     logging.info("database initialized")
 
 
@@ -335,7 +355,7 @@ def _require_supported_source_schema(
 ) -> None:
     """Validate a supported structural boundary before migration."""
 
-    if version not in {4, 5, 6, 7}:
+    if version not in {4, 5, 6, 7, 8, 9}:
         raise ValueError("database_schema_incompatible")
     required = {
         "project": {"id", "name", "is_deleted"},
@@ -430,7 +450,6 @@ def seed_defaults(conn: sqlite3.Connection) -> None:
         "clock_jump_threshold_seconds": "300",
         "last_collector_heartbeat": "",
         "last_shutdown_at": "",
-        "first_run_notice_accepted": "false",
         "export_path": str(config.get_default_export_dir().resolve()),
         "ui_refresh_seconds": "10",
         "user_paused": "false",
@@ -476,8 +495,9 @@ def seed_defaults(conn: sqlite3.Connection) -> None:
 def reset_database() -> None:
     with get_connection() as conn:
         ensure_wal(conn)
-        drop_all_tables(conn)
-        apply_current_schema(conn)
+        with report_structure_classifier_scope():
+            drop_all_tables(conn)
+            apply_current_schema(conn)
 
 
 def _database_has_user_tables(conn: sqlite3.Connection) -> bool:
@@ -546,5 +566,6 @@ def drop_all_tables(conn: sqlite3.Connection) -> None:
         DROP TABLE IF EXISTS settings;
         DROP TABLE IF EXISTS report_structure_revision_state;
         DROP TABLE IF EXISTS data_generation_state;
+        DROP TABLE IF EXISTS activity_resource_repair_job;
         """
     )

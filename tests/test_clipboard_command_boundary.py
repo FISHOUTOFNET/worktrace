@@ -6,6 +6,7 @@ import pytest
 
 from worktrace.api import app_api, settings_api
 from worktrace.services import privacy_gate_service
+from worktrace.services.installation_metadata_store import set_privacy_notice_version
 from worktrace.services.settings_service import set_setting
 from worktrace.webview_ui.bridge import WebViewBridge
 
@@ -35,8 +36,7 @@ def _restore_runtime():
 def test_live_runtime_enable_requires_privacy_before_persistence(temp_db):
     events: list[tuple[str, bool]] = []
     app_api.set_runtime(_ClipboardRuntime(events))
-    set_setting("first_run_notice_accepted", "false")
-    set_setting("accepted_privacy_notice_version", "")
+    set_privacy_notice_version("")
 
     with patch.object(
         settings_api,

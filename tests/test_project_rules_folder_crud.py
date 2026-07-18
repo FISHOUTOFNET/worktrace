@@ -6,6 +6,8 @@ import json
 
 import pytest
 
+from worktrace.services import system_project_service
+
 from tests.support.db_helpers import table_count
 from worktrace.api import rule_api
 from worktrace.data_generation_repository import DataGenerationNamespace
@@ -97,7 +99,7 @@ def test_create_same_normalized_path_updates_existing_row(temp_db):
 @pytest.mark.parametrize("state", ["excluded", "archived", "disabled"])
 def test_create_rejects_unavailable_project(temp_db, state):
     if state == "excluded":
-        project_id = project_service.get_or_create_excluded_project()
+        project_id = system_project_service.require_excluded_project_id()
     else:
         project_id = project_service.create_project(state.title())
         if state == "archived":

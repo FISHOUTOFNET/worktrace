@@ -4,7 +4,7 @@ import pytest
 
 from tests.support import activity_factory as activity_service
 from tests.support.db_helpers import assign_activity_project
-from worktrace.api import rule_api
+from worktrace.api import rule_history_api as rule_api
 from worktrace.data_generation_repository import DataGenerationNamespace
 from worktrace.db import get_connection, now_str
 from worktrace.generation_clock import generation

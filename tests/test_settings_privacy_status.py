@@ -39,6 +39,7 @@ from worktrace.api.settings_api import (
     set_clipboard_capture_enabled_for_webview,
 )
 from worktrace.services import privacy_gate_service
+from worktrace.services.installation_metadata_store import set_privacy_notice_version
 from worktrace.services.secure_backup_service import (
     BackupCorruptedError,
     BackupDecryptionError,
@@ -49,6 +50,10 @@ from worktrace.services.secure_backup_service import (
 )
 from worktrace.services.settings_service import set_setting
 from worktrace.webview_ui.bridge import WebViewBridge
+
+
+def _set_notice_accepted(accepted: bool) -> None:
+    set_privacy_notice_version("1" if accepted else "")
 
 
 # Distinctive sensitive markers used to verify the payload never echoes
@@ -1879,8 +1884,7 @@ def test_bridge_clear_does_not_call_backup_actions_directly(temp_db) -> None:
 
 
 def test_api_first_run_notice_default_is_false_for_new_db(temp_db) -> None:
-    # A brand-new database seeds first_run_notice_accepted="false"; the
-    # facade must report accepted=False.
+    # A brand-new installation has no accepted notice version.
     result = get_first_run_notice_for_webview()
     assert result.get("ok") is True
     assert result["accepted"] is False
@@ -1915,15 +1919,15 @@ def test_api_first_run_notice_highlights_match_expected_notice(temp_db) -> None:
 
 
 def test_api_first_run_notice_reflects_accepted_state(temp_db) -> None:
-    set_setting("first_run_notice_accepted", "false")
+    _set_notice_accepted(False)
     assert get_first_run_notice_for_webview()["accepted"] is False
 
-    set_setting("first_run_notice_accepted", "true")
+    _set_notice_accepted(True)
     assert get_first_run_notice_for_webview()["accepted"] is True
 
 
 def test_api_first_run_notice_payload_is_json_serializable(temp_db) -> None:
-    set_setting("first_run_notice_accepted", "true")
+    _set_notice_accepted(True)
     result = get_first_run_notice_for_webview()
     serialized = json.dumps(result, ensure_ascii=False)
     parsed = json.loads(serialized)
@@ -1982,7 +1986,7 @@ def test_api_first_run_notice_success_path_returns_full_notice_text(temp_db) -> 
     # return the full notice body (title / highlights / notice_text)
     # so the frontend can always render the privacy notice text.
     for accepted_value in ("false", "true"):
-        set_setting("first_run_notice_accepted", accepted_value)
+        _set_notice_accepted(accepted_value == "true")
         result = get_first_run_notice_for_webview()
         assert result.get("ok") is True
         assert result["accepted"] is (accepted_value == "true")
@@ -2012,7 +2016,7 @@ def test_api_first_run_notice_does_not_call_write_actions(temp_db) -> None:
 
 
 def test_api_accept_first_run_notice_writes_accepted_true(temp_db) -> None:
-    set_setting("first_run_notice_accepted", "false")
+    _set_notice_accepted(False)
     assert get_first_run_notice_for_webview()["accepted"] is False
     result = accept_first_run_notice_for_webview()
     assert result == {"ok": True, "accepted": True, "message": "已确认隐私说明"}
@@ -2022,7 +2026,7 @@ def test_api_accept_first_run_notice_writes_accepted_true(temp_db) -> None:
 
 
 def test_api_accept_first_run_notice_consistent_with_status_read(temp_db) -> None:
-    set_setting("first_run_notice_accepted", "false")
+    _set_notice_accepted(False)
     accept_first_run_notice_for_webview()
     # Both the notice facade and the status facade must see accepted=True
     # in the same process after accept (cache invalidation).
@@ -2032,7 +2036,7 @@ def test_api_accept_first_run_notice_consistent_with_status_read(temp_db) -> Non
 
 
 def test_api_accept_first_run_notice_is_idempotent(temp_db) -> None:
-    set_setting("first_run_notice_accepted", "true")
+    _set_notice_accepted(True)
     result = accept_first_run_notice_for_webview()
     assert result == {"ok": True, "accepted": True, "message": "已确认隐私说明"}
     # A second call still succeeds.
@@ -2084,7 +2088,7 @@ def test_api_accept_first_run_notice_does_not_call_set_setting_value(temp_db) ->
 
 
 def test_api_status_first_run_notice_subdict_is_display_safe(temp_db) -> None:
-    set_setting("first_run_notice_accepted", "false")
+    _set_notice_accepted(False)
     status = get_settings_privacy_status()["status"]
     sub = status["first_run_notice"]
     assert isinstance(sub, dict)
@@ -2093,7 +2097,7 @@ def test_api_status_first_run_notice_subdict_is_display_safe(temp_db) -> None:
     assert sub["view_available_in_webview"] is True
     assert sub["accept_required"] is True
 
-    set_setting("first_run_notice_accepted", "true")
+    _set_notice_accepted(True)
     status = get_settings_privacy_status()["status"]
     sub = status["first_run_notice"]
     assert sub["accepted"] is True
@@ -2154,7 +2158,7 @@ def test_bridge_get_first_run_notice_exception_collapses(temp_db) -> None:
 
 def test_bridge_accept_first_run_notice_calls_collector_on_success(temp_db) -> None:
     bridge = WebViewBridge()
-    set_setting("first_run_notice_accepted", "false")
+    _set_notice_accepted(False)
     # The bridge routes startup through the unified privacy-gate entry;
     # the gate, start ordering, and fail-closed payload are owned there.
     with patch(
@@ -2198,7 +2202,7 @@ def test_bridge_accept_first_run_notice_exception_collapses(temp_db) -> None:
 def test_bridge_accept_first_run_notice_payload_does_not_leak(temp_db) -> None:
     bridge = WebViewBridge()
     set_setting("export_path", SENSITIVE_EXPORT_PATH)
-    set_setting("first_run_notice_accepted", "false")
+    _set_notice_accepted(False)
     result = bridge.accept_first_run_notice()
     serialized = json.dumps(result, ensure_ascii=False)
     for token in (
@@ -2230,7 +2234,7 @@ def test_bridge_accept_first_run_notice_does_not_call_backup_or_set_setting(temp
 
 def test_bridge_toggle_pause_does_not_start_collector_when_notice_unaccepted(temp_db) -> None:
     bridge = WebViewBridge()
-    set_setting("first_run_notice_accepted", "false")
+    _set_notice_accepted(False)
     with patch("worktrace.api.app_api.start_collector") as mock_start:
         result = bridge.toggle_pause()
     mock_start.assert_not_called()
@@ -2239,7 +2243,7 @@ def test_bridge_toggle_pause_does_not_start_collector_when_notice_unaccepted(tem
 
 def test_bridge_toggle_pause_does_not_mutate_pause_state_when_notice_unaccepted(temp_db) -> None:
     bridge = WebViewBridge()
-    set_setting("first_run_notice_accepted", "false")
+    _set_notice_accepted(False)
     set_setting("user_paused", "false")
     set_setting("collector_status", "stopped")
     bridge.toggle_pause()
@@ -2266,7 +2270,7 @@ def test_bridge_toggle_pause_fail_closed_on_notice_read_exception(temp_db) -> No
 
 def test_bridge_toggle_pause_works_after_notice_accepted(temp_db) -> None:
     bridge = WebViewBridge()
-    set_setting("first_run_notice_accepted", "true")
+    _set_notice_accepted(True)
     set_setting("user_paused", "true")
     set_setting("collector_status", "paused")
     # The bridge routes startup through the unified privacy-gate entry;

@@ -6,6 +6,8 @@ import json
 
 import pytest
 
+from worktrace.services import system_project_service
+
 from tests.support import activity_factory as activity_service
 from tests.support.db_helpers import table_count
 from worktrace.api import project_api, rule_api
@@ -98,13 +100,18 @@ def test_create_rejects_invalid_inputs(temp_db, name, description, language):
 
 def test_create_rejects_duplicates_and_reserved_system_names(temp_db):
     project_api.create_project_for_rules("Client", "")
-    project_service.get_or_create_uncategorized_project()
-    project_service.get_or_create_excluded_project()
+    system_project_service.require_uncategorized_project_id()
+    system_project_service.require_excluded_project_id()
 
-    for name in ("Client", "  Client  ", UNCATEGORIZED_PROJECT, EXCLUDED_PROJECT):
+    for name in ("Client", "  Client  "):
         assert project_api.create_project_for_rules(name, "") == {
             "ok": False,
             "error": "duplicate_project",
+        }
+    for name in (UNCATEGORIZED_PROJECT, EXCLUDED_PROJECT):
+        assert project_api.create_project_for_rules(name, "") == {
+            "ok": False,
+            "error": "system_project",
         }
 
 
@@ -165,8 +172,8 @@ def test_update_rejects_duplicate_other_project(temp_db):
 
 def test_system_projects_cannot_be_updated_toggled_or_archived(temp_db):
     for project_id in (
-        project_service.get_or_create_uncategorized_project(),
-        project_service.get_or_create_excluded_project(),
+        system_project_service.require_uncategorized_project_id(),
+        system_project_service.require_excluded_project_id(),
     ):
         assert project_api.update_project_for_rules(project_id, "Renamed", "") == {
             "ok": False,
@@ -217,7 +224,7 @@ def test_project_state_refreshes_rule_caches_via_generation(temp_db):
 
 
 def test_excluded_project_toggle_publishes_privacy_generation(temp_db):
-    excluded_id = project_service.get_or_create_excluded_project()
+    excluded_id = system_project_service.require_excluded_project_id()
     rule_service.create_rule("Secret", excluded_id)
     before = generation(DataGenerationNamespace.PRIVACY_CATALOG)
 

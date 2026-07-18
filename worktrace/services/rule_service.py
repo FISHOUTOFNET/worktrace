@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from ..db import dict_rows, get_connection
-from .project_inference_service import assign_project_for_activity
 
 
 def create_rule(keyword: str, project_id: int) -> int:
@@ -44,22 +43,3 @@ def delete_rule(rule_id: int) -> bool:
     from .rule_catalog_command_service import delete_keyword_rule
 
     return delete_keyword_rule(rule_id)
-
-
-def apply_rules_to_activity(activity_id: int) -> None:
-    assign_project_for_activity(activity_id)
-
-
-def apply_rules_to_unclassified() -> None:
-    with get_connection() as conn:
-        rows = conn.execute(
-            """
-            SELECT a.id
-            FROM activity_log a
-            LEFT JOIN activity_project_assignment apa ON apa.activity_id = a.id
-            WHERE a.is_deleted = 0
-              AND COALESCE(apa.is_manual, 0) = 0
-            """
-        ).fetchall()
-    for row in rows:
-        apply_rules_to_activity(int(row["id"]))

@@ -5,20 +5,18 @@ from __future__ import annotations
 import sqlite3
 
 from ..data_generation_repository import (
+    ALL_DATA_GENERATION_NAMESPACES,
     DataGenerationNamespace,
     DataGenerationRepository,
 )
 from ..domain_unit_of_work import current_domain_unit_of_work
 
-_REPLACEMENT_NAMESPACES = (
-    DataGenerationNamespace.CLASSIFICATION_CATALOG,
-    DataGenerationNamespace.SETTINGS,
-    DataGenerationNamespace.PRIVACY_CATALOG,
-    DataGenerationNamespace.DATABASE_REPLACEMENT,
-)
+_REPLACEMENT_NAMESPACES = ALL_DATA_GENERATION_NAMESPACES
 
 
-def publish_database_replacement(conn: sqlite3.Connection) -> None:
+def publish_database_replacement(
+    conn: sqlite3.Connection,
+) -> dict[DataGenerationNamespace, int] | None:
     """Declare replacement generations without touching process-local caches.
 
     Normal replacement commands attach effects to the active ``DomainUnitOfWork``
@@ -32,8 +30,9 @@ def publish_database_replacement(conn: sqlite3.Connection) -> None:
     if uow is not None and uow.connection is conn:
         uow.add_effects(*_REPLACEMENT_NAMESPACES)
         uow.mark_changed()
-        return
+        return None
     DataGenerationRepository.bump(conn, _REPLACEMENT_NAMESPACES)
+    return DataGenerationRepository.get_many(conn, _REPLACEMENT_NAMESPACES)
 
 
 __all__ = ["publish_database_replacement"]

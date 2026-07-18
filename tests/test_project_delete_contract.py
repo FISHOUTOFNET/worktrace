@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import pytest
 
+from worktrace.services import system_project_service
+
 from tests.support.activity_factory import create_closed_activity
 from tests.support.db_helpers import assign_activity_project, fetch_one, table_count
 from worktrace.api import project_api
@@ -102,9 +104,9 @@ def test_delete_project_rejects_invalid_ids_without_side_effects(temp_db, bad_id
 @pytest.mark.parametrize("name", [UNCATEGORIZED_PROJECT, EXCLUDED_PROJECT])
 def test_delete_project_rejects_system_special_projects(temp_db, name):
     project_id = (
-        project_service.get_or_create_uncategorized_project()
+        system_project_service.require_uncategorized_project_id()
         if name == UNCATEGORIZED_PROJECT
-        else project_service.get_or_create_excluded_project()
+        else system_project_service.require_excluded_project_id()
     )
     result = project_api.delete_project_for_rules(project_id)
     assert result == {"ok": False, "error": "system_project"}

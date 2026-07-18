@@ -4,73 +4,11 @@ from __future__ import annotations
 
 import ctypes
 import logging
-import time
 from ctypes import wintypes
 
-from ..resources.title_parsing import extract_file_name_from_title
-from ..services.folder_index_query_service import resolve_unique_path_from_title
 from .base import ActiveWindow, ClipboardTextEvent
 from .windows_clipboard import ClipboardMonitor
-from .windows_path_resolver import (
-    WindowsPathResolver,
-    _match_open_file_path,
-    resolve_title_file_path,
-)
-
-
-class CanonicalWindowsPathResolver(WindowsPathResolver):
-    """Path resolver whose folder-index dependency is a deterministic read model."""
-
-    def resolve(
-        self,
-        window_key: tuple,
-        process_name: str,
-        title: str,
-        pid: int,
-    ) -> str | None:
-        current = time.monotonic()
-        cached = self._cache.get(window_key)
-        if cached and current - cached[0] < self._cache_seconds:
-            return cached[1]
-        negative_until = self._negative_cache.get(window_key)
-        if negative_until and current < negative_until:
-            return None
-
-        title_path = resolve_title_file_path(title)
-        if title_path:
-            self._remember(window_key, title_path, current)
-            return title_path
-
-        title_file = extract_file_name_from_title(title)
-        result: str | None = None
-        try:
-            result = self._run_with_timeout(
-                lambda: _match_open_file_path(
-                    title_file or "",
-                    self._com_paths(process_name),
-                ),
-                self._com_timeout_seconds,
-            )
-        except Exception:
-            logging.debug("COM path resolver failed", exc_info=True)
-        if not result and title_file:
-            try:
-                result = self._run_with_timeout(
-                    lambda: _match_open_file_path(
-                        title_file,
-                        self._get_process_open_file_paths(pid),
-                    ),
-                    self._process_timeout_seconds,
-                )
-            except Exception:
-                logging.debug("open-file path resolver failed", exc_info=True)
-        if not result and title_file:
-            result = resolve_unique_path_from_title(
-                title,
-                include_excluded=True,
-            )
-        self._remember(window_key, result, current)
-        return result
+from .windows_path_resolver import WindowsPathResolver, resolve_title_file_path
 
 
 class WindowsAdapter:
@@ -81,7 +19,7 @@ class WindowsAdapter:
         *,
         path_resolver: WindowsPathResolver | None = None,
     ) -> None:
-        self._path_resolver = path_resolver or CanonicalWindowsPathResolver()
+        self._path_resolver = path_resolver or WindowsPathResolver()
         self._clipboard = ClipboardMonitor(self.get_active_window)
 
     def get_active_window(self) -> ActiveWindow:
@@ -115,7 +53,7 @@ class WindowsAdapter:
         try:
             window_class = win32gui.GetClassName(hwnd) or None
         except Exception:
-            pass
+            logging.debug("active window class lookup failed", exc_info=True)
         return ActiveWindow(
             app_name=app_name,
             process_name=process_name,
@@ -160,4 +98,4 @@ class WindowsAdapter:
         self._path_resolver.reset()
 
 
-__all__ = ["CanonicalWindowsPathResolver", "WindowsAdapter"]
+__all__ = ["WindowsAdapter"]

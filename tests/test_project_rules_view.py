@@ -13,6 +13,8 @@ through the ``*_for_rules`` API facades).
 
 import pytest
 
+from worktrace.services import system_project_service
+
 from worktrace.constants import EXCLUDED_PROJECT, UNCATEGORIZED_PROJECT
 from worktrace.db import get_connection
 from tests.support import activity_factory as activity_service
@@ -28,7 +30,7 @@ pytestmark = [pytest.mark.db]
 def test_project_bindings_readonly_returns_grouped_user_and_excluded_projects(temp_db):
     user_project = project_service.create_project("Client")
     other_project = project_service.create_project("Other")
-    excluded_project = project_service.get_or_create_excluded_project()
+    excluded_project = system_project_service.require_excluded_project_id()
     folder_rule_service.create_or_update_folder_rule(r"D:\Client", user_project)
     rule_service.create_rule("Spec", user_project)
     folder_rule_service.create_or_update_folder_rule(r"D:\Private", excluded_project)
@@ -96,8 +98,8 @@ def test_project_can_be_edited_and_disabled(temp_db):
 
 
 def test_system_projects_are_protected_from_editing_and_uncategorized_disable(temp_db):
-    uncategorized_id = project_service.get_or_create_uncategorized_project()
-    excluded_id = project_service.get_or_create_excluded_project()
+    uncategorized_id = system_project_service.require_uncategorized_project_id()
+    excluded_id = system_project_service.require_excluded_project_id()
 
     with pytest.raises(ValueError):
         project_service.update_project(excluded_id, "Nope")

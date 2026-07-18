@@ -12,6 +12,7 @@ from worktrace.constants import SOURCE_AUTO, STATUS_NORMAL
 from worktrace.db import get_connection
 from worktrace.services import (
     activity_fact_repository,
+    folder_index_query_service,
     folder_index_service,
     folder_rule_service,
     history_mutation_job_service,
@@ -114,7 +115,7 @@ def test_failed_folder_generation_preserves_previous_active_index(
     )
     assert folder_index_service.rebuild_folder_index(rule_id)
 
-    before = folder_index_service.lookup_indexed_paths_for_file_name("brief.docx")
+    before = folder_index_query_service.lookup_indexed_paths_for_file_name("brief.docx")
     assert [Path(row["file_path"]) for row in before] == [indexed_file]
     with get_connection() as conn:
         active_before = int(
@@ -131,7 +132,7 @@ def test_failed_folder_generation_preserves_previous_active_index(
     monkeypatch.setattr(folder_index_service, "_iter_files", broken_scan)
     assert folder_index_service.rebuild_folder_index(rule_id) is False
 
-    after = folder_index_service.lookup_indexed_paths_for_file_name("brief.docx")
+    after = folder_index_query_service.lookup_indexed_paths_for_file_name("brief.docx")
     assert [Path(row["file_path"]) for row in after] == [indexed_file]
     with get_connection() as conn:
         state = conn.execute(

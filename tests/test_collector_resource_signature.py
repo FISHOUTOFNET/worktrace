@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import pytest
 
+from worktrace.services import system_project_service
+
 pytestmark = [pytest.mark.collector_runtime, pytest.mark.integration, pytest.mark.db, pytest.mark.security_privacy]
 
 from worktrace.collector.state_machine import CollectorStateMachine
@@ -14,7 +16,7 @@ from worktrace.services.resource_service import get_resource_for_activity
 
 def _enable_excluded_project_with_keyword(keyword: str) -> int:
     """Enable the 排除规则 project and add a keyword rule. Returns the project id."""
-    excluded_project = project_service.get_or_create_excluded_project()
+    excluded_project = system_project_service.require_excluded_project_id()
     project_service.set_project_enabled(excluded_project, True)
     rule_service.create_rule(keyword, excluded_project)
     return excluded_project

@@ -22,11 +22,8 @@ from ._write_contract import (
     ERROR_INVALID_INPUT,
     ERROR_NOT_FOUND,
     ERROR_OPERATION_FAILED,
-    ERROR_PROJECT_NOT_AVAILABLE,
     ERROR_PROJECT_NOT_FOUND,
-    ERROR_RULE_DISABLED,
-    ERROR_TOO_MANY_MATCHES,
-    ERROR_TOO_MANY_RULES,
+    ERROR_SYSTEM_CATALOG_UNAVAILABLE,
     fail_payload,
     ok_payload,
     valid_bool,
@@ -34,6 +31,10 @@ from ._write_contract import (
     valid_nonempty_str,
 )
 from ..services import folder_rule_service, project_service, rule_impact_service, rule_service
+from ..services.system_project_service import (
+    SystemProjectCatalogUnavailableError,
+    require_excluded_project_id,
+)
 
 _APPLY_TO_HISTORY_UNSET = object()
 
@@ -337,121 +338,6 @@ def delete_project_folder_rule(rule_id: Any, apply_to_history: Any = _APPLY_TO_H
 
 
 
-def preview_project_rule_impact(rule_type: Any, rule_id: Any) -> dict[str, Any]:
-    """Preview the impact of applying one existing folder / keyword rule."""
-
-    if not isinstance(rule_type, str) or rule_type not in {"folder", "keyword"}:
-        return fail_payload(ERROR_INVALID_INPUT)
-    if not valid_int(rule_id):
-        return fail_payload(ERROR_INVALID_INPUT)
-    try:
-        from ..services import rule_impact_service
-
-        impact = rule_impact_service.preview_rule_impact(rule_type, rule_id)
-        return ok_payload(impact=impact)
-    except rule_impact_service.RuleImpactError as exc:
-        return fail_payload(exc.code)
-    except Exception:
-        return fail_payload(ERROR_OPERATION_FAILED)
-
-
-def backfill_project_rule(rule_type: Any, rule_id: Any) -> dict[str, Any]:
-    """Apply one existing enabled folder / keyword rule to eligible history."""
-
-    if not isinstance(rule_type, str) or rule_type not in {"folder", "keyword"}:
-        return fail_payload(ERROR_INVALID_INPUT)
-    if not valid_int(rule_id):
-        return fail_payload(ERROR_INVALID_INPUT)
-    try:
-        from ..services import rule_history_application_service, rule_impact_service
-
-        result = rule_history_application_service.apply_rule_to_history(rule_type, rule_id)
-        return ok_payload(result=result)
-    except rule_impact_service.RuleImpactError as exc:
-        return fail_payload(exc.code)
-    except Exception:
-        return fail_payload(ERROR_OPERATION_FAILED)
-
-
-# ``file_path_hint`` / ``path_hint`` / clipboard / note / SQL / traceback
-
-
-def preview_project_rules_batch_impact(rules: Any) -> dict[str, Any]:
-    """Read-only aggregate impact preview across the selected rules."""
-
-    if not isinstance(rules, list):
-        return fail_payload(ERROR_INVALID_INPUT)
-    try:
-        from ..services import rule_batch_service
-
-        impact = rule_batch_service.preview_project_rules_batch_impact(rules)
-        return ok_payload(impact=impact)
-    except rule_batch_service.RuleBatchError as exc:
-        return fail_payload(exc.code)
-    except Exception:
-        return fail_payload(ERROR_OPERATION_FAILED)
-
-
-def backfill_project_rules_batch(rules: Any) -> dict[str, Any]:
-    """Apply the selected enabled rules to eligible history in one batch."""
-
-    if not isinstance(rules, list):
-        return fail_payload(ERROR_INVALID_INPUT)
-    try:
-        from ..services import rule_batch_service
-
-        result = rule_batch_service.backfill_project_rules_batch(rules)
-        return ok_payload(result=result)
-    except rule_batch_service.RuleBatchError as exc:
-        return fail_payload(exc.code)
-    except Exception:
-        return fail_payload(ERROR_OPERATION_FAILED)
-
-
-def set_project_rules_batch_enabled(rules: Any, enabled: Any) -> dict[str, Any]:
-    """Enable or disable every selected rule in one all-or-nothing batch."""
-
-    if not isinstance(rules, list):
-        return fail_payload(ERROR_INVALID_INPUT)
-    if not valid_bool(enabled):
-        return fail_payload(ERROR_INVALID_INPUT)
-    try:
-        from ..services import rule_batch_service
-
-        result = rule_batch_service.set_project_rules_batch_enabled(rules, enabled)
-        return ok_payload(result=result)
-    except rule_batch_service.RuleBatchError as exc:
-        return fail_payload(exc.code)
-    except Exception:
-        return fail_payload(ERROR_OPERATION_FAILED)
-
-
-def automatic_rules_status() -> dict[str, Any]:
-    """Return a display-safe status payload for the automatic-rules engine.
-
-    Narrow WebView-facing facade. The Project Rules page uses this to
-    render a status note explaining that enabled folder / keyword rules
-    are automatically applied to future eligible closed activities. The
-    payload is intentionally narrow: it only carries boolean / string
-    fields the frontend needs. It never exposes raw rule rows, project
-    rows, window titles, file paths, notes, clipboard text, SQL, or
-    tracebacks.
-
-    Always succeeds — ``rule_automation_service`` is a thin documented
-    facade over the existing inference path and performs no DB access. Any
-    unexpected exception collapses to ``operation_failed``.
-    """
-
-    try:
-        from ..services import rule_automation_service
-
-        status = rule_automation_service.automatic_rules_status()
-        return ok_payload(status=status)
-    except Exception:
-        return fail_payload(ERROR_OPERATION_FAILED)
-
-
-
 def create_keyword_rule(keyword: str, project_id: int) -> int:
     return rule_service.create_rule(keyword, project_id)
 
@@ -489,7 +375,7 @@ def create_excluded_keyword_rule_for_webview(keyword: Any) -> dict[str, Any]:
     if trimmed is None:
         return fail_payload(ERROR_INVALID_INPUT)
     try:
-        excluded_project_id = int(project_service.get_or_create_excluded_project())
+        excluded_project_id = require_excluded_project_id()
         for row in rule_service.list_rules(include_system=True):
             if (
                 int(row.get("project_id") or 0) == excluded_project_id
@@ -506,6 +392,8 @@ def create_excluded_keyword_rule_for_webview(keyword: Any) -> dict[str, Any]:
                 "enabled": True,
             }
         )
+    except SystemProjectCatalogUnavailableError:
+        return fail_payload(ERROR_SYSTEM_CATALOG_UNAVAILABLE)
     except ProjectRuleWriteError as exc:
         return fail_payload(exc.code)
     except Exception:
@@ -522,7 +410,7 @@ def create_excluded_folder_rule_for_webview(
     if not valid_bool(recursive):
         return fail_payload(ERROR_INVALID_INPUT)
     try:
-        excluded_project_id = int(project_service.get_or_create_excluded_project())
+        excluded_project_id = require_excluded_project_id()
         rule_id = folder_rule_service.create_or_update_folder_rule(
             trimmed, excluded_project_id, recursive=recursive
         )
@@ -536,6 +424,8 @@ def create_excluded_folder_rule_for_webview(
                 "enabled": True,
             }
         )
+    except SystemProjectCatalogUnavailableError:
+        return fail_payload(ERROR_SYSTEM_CATALOG_UNAVAILABLE)
     except ProjectRuleWriteError as exc:
         return fail_payload(exc.code)
     except Exception:
@@ -543,9 +433,6 @@ def create_excluded_folder_rule_for_webview(
 
 
 __all__ = [
-    "automatic_rules_status",
-    "backfill_project_rule",
-    "backfill_project_rules_batch",
     "create_excluded_folder_rule_for_webview",
     "create_excluded_keyword_rule_for_webview",
     "create_keyword_rule",
@@ -558,10 +445,7 @@ __all__ = [
     "delete_project_keyword_rule",
     "ProjectRuleWriteError",
     "preview_folder_rule_conflicts",
-    "preview_project_rule_impact",
-    "preview_project_rules_batch_impact",
     "set_project_rule_enabled",
-    "set_project_rules_batch_enabled",
     "set_folder_rule_enabled",
     "set_keyword_rule_enabled",
     "update_project_folder_rule",

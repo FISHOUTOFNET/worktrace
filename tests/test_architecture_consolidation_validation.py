@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 import pytest
@@ -95,6 +96,8 @@ def test_schema_trigger_surface_is_constraint_only(temp_db):
             ).fetchall()
         }
     assert names == {
+        "project_reserved_name_insert",
+        "project_reserved_name_update",
         "validate_report_split_operation",
         "validate_report_operation_receipt_members",
     }
@@ -109,21 +112,41 @@ def test_frontend_uses_explicit_bridge_and_settings_bindings():
     assert 'bind("settings-clear-local-data-btn", "click", App.clearAllLocalData)' in init_source
 
 
-def test_shipping_windows_adapter_has_no_global_legacy_patch():
-    source = (
-        REPO_ROOT / "worktrace/platforms/hardened_windows_adapter.py"
-    ).read_text(encoding="utf-8")
-    assert "legacy." not in source
-    assert "_run_with_timeout =" not in source
+def test_composition_root_imports_canonical_windows_adapter():
+    tree = ast.parse(
+        (REPO_ROOT / "worktrace/runtime/app_runtime.py").read_text(encoding="utf-8")
+    )
+    imports = {
+        (node.module, alias.name)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        for alias in node.names
+    }
+    assert ("platforms.windows_adapter", "WindowsAdapter") in imports
+    assert all("hardened_windows_adapter" not in str(module) for module, _ in imports)
+    assert not (REPO_ROOT / "worktrace/platforms/hardened_windows_adapter.py").exists()
 
 
 def test_continuity_reads_typed_runtime_state_not_settings_json():
-    source = (
-        REPO_ROOT / "worktrace/services/activity_continuity_service.py"
-    ).read_text(encoding="utf-8")
-    assert "sample_runtime_activity_state" in source
-    assert 'get_setting("current_activity_snapshot"' not in source
-    assert "json.loads" not in source
+    tree = ast.parse(
+        (REPO_ROOT / "worktrace/services/page_read_context.py").read_text(
+            encoding="utf-8"
+        )
+    )
+    imports = {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "runtime_activity_state_service"
+        for alias in node.names
+    }
+    assert "sample_runtime_activity_state" in imports
+    assert not any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "get_setting"
+        for node in ast.walk(tree)
+    )
 
 
 def test_page_wrapper_services_are_removed():

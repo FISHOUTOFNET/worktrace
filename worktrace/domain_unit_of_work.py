@@ -22,11 +22,6 @@ _CURRENT_UNIT_OF_WORK: ContextVar[DomainUnitOfWork | None] = ContextVar(
     default=None,
 )
 
-_FALLBACK_PUBLISHED_NAMESPACES = frozenset(
-    {DataGenerationNamespace.REPORT_STRUCTURE}
-)
-
-
 def _namespace(value: DataGenerationNamespace | str) -> DataGenerationNamespace:
     if isinstance(value, DataGenerationNamespace):
         return value
@@ -112,11 +107,7 @@ class DomainUnitOfWork:
                 or int(connection.total_changes) > self._initial_total_changes
             )
             if changed and self._effects:
-                explicit_effects = self._effects.difference(
-                    _FALLBACK_PUBLISHED_NAMESPACES
-                )
-                if explicit_effects:
-                    DataGenerationRepository.bump(connection, explicit_effects)
+                DataGenerationRepository.bump(connection, self._effects)
                 committed_effects = tuple(self._effects)
                 committed_values = DataGenerationRepository.get_many(
                     connection,

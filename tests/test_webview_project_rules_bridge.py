@@ -621,9 +621,13 @@ def test_set_project_rule_enabled_never_calls_create_edit_delete_or_project_togg
         "delete_keyword_rule",
         "delete_folder_rule",
         "preview_folder_rule_conflicts",
-        "backfill_project_rule",
     ):
         monkeypatch.setattr(bridge_rules_module.rule_api, name, make_forbidden(name))
+    monkeypatch.setattr(
+        bridge_rules_module.rule_history_api,
+        "backfill_project_rule",
+        make_forbidden("backfill_project_rule"),
+    )
 
     forbidden_project_calls: list[str] = []
 
@@ -1200,9 +1204,13 @@ def test_create_project_keyword_rule_never_calls_other_project_rules_write_apis(
         "delete_keyword_rule",
         "delete_folder_rule",
         "preview_folder_rule_conflicts",
-        "backfill_project_rule",
     ):
         monkeypatch.setattr(bridge_rules_module.rule_api, name, make_forbidden(name))
+    monkeypatch.setattr(
+        bridge_rules_module.rule_history_api,
+        "backfill_project_rule",
+        make_forbidden("backfill_project_rule"),
+    )
 
     forbidden_project_calls: list[str] = []
 
@@ -1629,9 +1637,13 @@ def test_delete_project_keyword_rule_never_calls_other_project_rules_write_apis(
         "delete_keyword_rule",
         "delete_folder_rule",
         "preview_folder_rule_conflicts",
-        "backfill_project_rule",
     ):
         monkeypatch.setattr(bridge_rules_module.rule_api, name, make_forbidden(name))
+    monkeypatch.setattr(
+        bridge_rules_module.rule_history_api,
+        "backfill_project_rule",
+        make_forbidden("backfill_project_rule"),
+    )
 
     forbidden_project_calls: list[str] = []
 
@@ -4218,7 +4230,7 @@ def test_preview_project_rule_impact_success_returns_narrow_impact_payload(monke
     # ``{"ok": True, "impact": {...}}``. The bridge must project the API
     # result to a narrow ``impact`` key and never echo the full API dict.
     monkeypatch.setattr(
-        bridge_rules_module.rule_api,
+        bridge_rules_module.rule_history_api,
         "preview_project_rule_impact",
         lambda rule_type, rule_id: {
             "ok": True,
@@ -4288,7 +4300,7 @@ def test_preview_project_rule_impact_invalid_rule_type_does_not_call_api(monkeyp
         calls.append(args)
         raise AssertionError("preview API must not be called for invalid rule_type")
 
-    monkeypatch.setattr(bridge_rules_module.rule_api, "preview_project_rule_impact", _fail)
+    monkeypatch.setattr(bridge_rules_module.rule_history_api, "preview_project_rule_impact", _fail)
 
     for bad_type in (None, 123, True, False, [], {}, "invalid", "Folder", "KEYWORD", ""):
         result = WebViewBridge().preview_project_rule_impact(bad_type, 10)
@@ -4307,7 +4319,7 @@ def test_preview_project_rule_impact_invalid_rule_id_does_not_call_api(monkeypat
         calls.append(args)
         raise AssertionError("preview API must not be called for invalid rule_id")
 
-    monkeypatch.setattr(bridge_rules_module.rule_api, "preview_project_rule_impact", _fail)
+    monkeypatch.setattr(bridge_rules_module.rule_history_api, "preview_project_rule_impact", _fail)
 
     for bad_id in (True, False, 0, -1, -100, "10", 10.0, None, [], {}):
         result = WebViewBridge().preview_project_rule_impact("folder", bad_id)
@@ -4319,7 +4331,7 @@ def test_preview_project_rule_impact_invalid_rule_id_does_not_call_api(monkeypat
 
 def test_preview_project_rule_impact_not_found_maps_to_chinese_message(monkeypatch):
     monkeypatch.setattr(
-        bridge_rules_module.rule_api,
+        bridge_rules_module.rule_history_api,
         "preview_project_rule_impact",
         lambda rule_type, rule_id: {
             "ok": False,
@@ -4337,7 +4349,7 @@ def test_preview_project_rule_impact_not_found_maps_to_chinese_message(monkeypat
 
 def test_preview_project_rule_impact_operation_failed_maps_to_chinese_message(monkeypatch):
     monkeypatch.setattr(
-        bridge_rules_module.rule_api,
+        bridge_rules_module.rule_history_api,
         "preview_project_rule_impact",
         lambda rule_type, rule_id: {
             "ok": False,
@@ -4358,7 +4370,7 @@ def test_preview_project_rule_impact_unknown_error_code_collapses_to_generic_mes
     # Regression lock: unknown error codes must collapse to the
     # generic preview failure message so internal details are never surfaced.
     monkeypatch.setattr(
-        bridge_rules_module.rule_api,
+        bridge_rules_module.rule_history_api,
         "preview_project_rule_impact",
         lambda rule_type, rule_id: {
             "ok": False,
@@ -4382,7 +4394,7 @@ def test_preview_project_rule_impact_unknown_exception_collapses_to_generic_mess
     def _raise(*args, **kwargs):
         raise RuntimeError("C:\\Secret window_title clipboard note SELECT * FROM")
 
-    monkeypatch.setattr(bridge_rules_module.rule_api, "preview_project_rule_impact", _raise)
+    monkeypatch.setattr(bridge_rules_module.rule_history_api, "preview_project_rule_impact", _raise)
 
     result = WebViewBridge().preview_project_rule_impact("folder", 10)
 
@@ -4395,7 +4407,7 @@ def test_backfill_project_rule_success_returns_narrow_result_payload(monkeypatch
     # ``{"ok": True, "result": {...}}``. The bridge must project the API
     # result to a narrow ``result`` key and never echo the full API dict.
     monkeypatch.setattr(
-        bridge_rules_module.rule_api,
+        bridge_rules_module.rule_history_api,
         "backfill_project_rule",
         lambda rule_type, rule_id: {
             "ok": True,
@@ -4447,7 +4459,7 @@ def test_backfill_project_rule_invalid_rule_type_does_not_call_api(monkeypatch):
         calls.append(args)
         raise AssertionError("backfill API must not be called for invalid rule_type")
 
-    monkeypatch.setattr(bridge_rules_module.rule_api, "backfill_project_rule", _fail)
+    monkeypatch.setattr(bridge_rules_module.rule_history_api, "backfill_project_rule", _fail)
 
     for bad_type in (None, 123, True, False, [], {}, "invalid", "Folder", ""):
         result = WebViewBridge().backfill_project_rule(bad_type, 10)
@@ -4464,7 +4476,7 @@ def test_backfill_project_rule_invalid_rule_id_does_not_call_api(monkeypatch):
         calls.append(args)
         raise AssertionError("backfill API must not be called for invalid rule_id")
 
-    monkeypatch.setattr(bridge_rules_module.rule_api, "backfill_project_rule", _fail)
+    monkeypatch.setattr(bridge_rules_module.rule_history_api, "backfill_project_rule", _fail)
 
     for bad_id in (True, False, 0, -1, "10", 10.0, None, [], {}):
         result = WebViewBridge().backfill_project_rule("keyword", bad_id)
@@ -4476,7 +4488,7 @@ def test_backfill_project_rule_invalid_rule_id_does_not_call_api(monkeypatch):
 
 def test_backfill_project_rule_not_found_maps_to_chinese_message(monkeypatch):
     monkeypatch.setattr(
-        bridge_rules_module.rule_api,
+        bridge_rules_module.rule_history_api,
         "backfill_project_rule",
         lambda rule_type, rule_id: {
             "ok": False,
@@ -4494,7 +4506,7 @@ def test_backfill_project_rule_not_found_maps_to_chinese_message(monkeypatch):
 
 def test_backfill_project_rule_rule_disabled_maps_to_chinese_message(monkeypatch):
     monkeypatch.setattr(
-        bridge_rules_module.rule_api,
+        bridge_rules_module.rule_history_api,
         "backfill_project_rule",
         lambda rule_type, rule_id: {
             "ok": False,
@@ -4513,7 +4525,7 @@ def test_backfill_project_rule_rule_disabled_maps_to_chinese_message(monkeypatch
 
 def test_backfill_project_rule_project_not_available_maps_to_chinese_message(monkeypatch):
     monkeypatch.setattr(
-        bridge_rules_module.rule_api,
+        bridge_rules_module.rule_history_api,
         "backfill_project_rule",
         lambda rule_type, rule_id: {
             "ok": False,
@@ -4532,7 +4544,7 @@ def test_backfill_project_rule_project_not_available_maps_to_chinese_message(mon
 
 def test_backfill_project_rule_too_many_matches_maps_to_chinese_message(monkeypatch):
     monkeypatch.setattr(
-        bridge_rules_module.rule_api,
+        bridge_rules_module.rule_history_api,
         "backfill_project_rule",
         lambda rule_type, rule_id: {
             "ok": False,
@@ -4551,7 +4563,7 @@ def test_backfill_project_rule_too_many_matches_maps_to_chinese_message(monkeypa
 
 def test_backfill_project_rule_operation_failed_maps_to_chinese_message(monkeypatch):
     monkeypatch.setattr(
-        bridge_rules_module.rule_api,
+        bridge_rules_module.rule_history_api,
         "backfill_project_rule",
         lambda rule_type, rule_id: {
             "ok": False,
@@ -4570,7 +4582,7 @@ def test_backfill_project_rule_operation_failed_maps_to_chinese_message(monkeypa
 
 def test_backfill_project_rule_unknown_error_code_collapses_to_generic_message(monkeypatch):
     monkeypatch.setattr(
-        bridge_rules_module.rule_api,
+        bridge_rules_module.rule_history_api,
         "backfill_project_rule",
         lambda rule_type, rule_id: {
             "ok": False,
@@ -4591,7 +4603,7 @@ def test_backfill_project_rule_unknown_exception_collapses_to_generic_message(mo
     def _raise(*args, **kwargs):
         raise RuntimeError("C:\\Secret window_title clipboard note UPDATE activity_log")
 
-    monkeypatch.setattr(bridge_rules_module.rule_api, "backfill_project_rule", _raise)
+    monkeypatch.setattr(bridge_rules_module.rule_history_api, "backfill_project_rule", _raise)
 
     result = WebViewBridge().backfill_project_rule("folder", 10)
 
@@ -4605,12 +4617,12 @@ def test_preview_and_backfill_do_not_cross_call_other_project_rules_apis(monkeyp
     # Project Rules write APIs (project enable/disable, project / rule
     # create / edit / delete, toggle, lifecycle).
     monkeypatch.setattr(
-        bridge_rules_module.rule_api,
+        bridge_rules_module.rule_history_api,
         "preview_project_rule_impact",
         lambda rule_type, rule_id: {"ok": True, "impact": {"rule": {}, "counts": {}, "samples": []}},
     )
     monkeypatch.setattr(
-        bridge_rules_module.rule_api,
+        bridge_rules_module.rule_history_api,
         "backfill_project_rule",
         lambda rule_type, rule_id: {"ok": True, "result": {"updated_count": 0}},
     )
@@ -4659,7 +4671,7 @@ def test_preview_and_backfill_payloads_are_json_serializable(monkeypatch):
     # Regression lock: all bridge payloads must be JSON-serializable
     # so the WebView bridge can pass them to JS.
     monkeypatch.setattr(
-        bridge_rules_module.rule_api,
+        bridge_rules_module.rule_history_api,
         "preview_project_rule_impact",
         lambda rule_type, rule_id: {
             "ok": True,
@@ -4674,7 +4686,7 @@ def test_preview_and_backfill_payloads_are_json_serializable(monkeypatch):
         },
     )
     monkeypatch.setattr(
-        bridge_rules_module.rule_api,
+        bridge_rules_module.rule_history_api,
         "backfill_project_rule",
         lambda rule_type, rule_id: {
             "ok": True,
@@ -4733,7 +4745,7 @@ def test_preview_project_rules_batch_impact_success_returns_narrow_payload(monke
     # ``{"ok": True, "impact": {...}}``. The bridge must project the API
     # result to a narrow ``impact`` key and never echo extra API fields.
     monkeypatch.setattr(
-        bridge_rules_module.rule_api,
+        bridge_rules_module.rule_history_api,
         "preview_project_rules_batch_impact",
         lambda rules: {
             "ok": True,
@@ -4794,7 +4806,7 @@ def test_preview_project_rules_batch_impact_invalid_input_does_not_call_api(monk
         raise AssertionError("batch preview API must not be called for invalid input")
 
     monkeypatch.setattr(
-        bridge_rules_module.rule_api, "preview_project_rules_batch_impact", _fail
+        bridge_rules_module.rule_history_api, "preview_project_rules_batch_impact", _fail
     )
 
     bad_inputs = [
@@ -4820,7 +4832,7 @@ def test_preview_project_rules_batch_impact_invalid_input_does_not_call_api(monk
 
 def test_preview_project_rules_batch_impact_not_found_maps_to_chinese(monkeypatch):
     monkeypatch.setattr(
-        bridge_rules_module.rule_api,
+        bridge_rules_module.rule_history_api,
         "preview_project_rules_batch_impact",
         lambda rules: {
             "ok": False,
@@ -4840,7 +4852,7 @@ def test_preview_project_rules_batch_impact_not_found_maps_to_chinese(monkeypatc
 
 def test_preview_project_rules_batch_impact_too_many_rules_maps_to_chinese(monkeypatch):
     monkeypatch.setattr(
-        bridge_rules_module.rule_api,
+        bridge_rules_module.rule_history_api,
         "preview_project_rules_batch_impact",
         lambda rules: {"ok": False, "error": "too_many_rules"},
     )
@@ -4854,7 +4866,7 @@ def test_preview_project_rules_batch_impact_too_many_rules_maps_to_chinese(monke
 
 def test_preview_project_rules_batch_impact_operation_failed_maps_to_chinese(monkeypatch):
     monkeypatch.setattr(
-        bridge_rules_module.rule_api,
+        bridge_rules_module.rule_history_api,
         "preview_project_rules_batch_impact",
         lambda rules: {"ok": False, "error": "operation_failed"},
     )
@@ -4868,7 +4880,7 @@ def test_preview_project_rules_batch_impact_operation_failed_maps_to_chinese(mon
 
 def test_preview_project_rules_batch_impact_unknown_error_code_collapses(monkeypatch):
     monkeypatch.setattr(
-        bridge_rules_module.rule_api,
+        bridge_rules_module.rule_history_api,
         "preview_project_rules_batch_impact",
         lambda rules: {"ok": False, "error": "some_new_unknown_code"},
     )
@@ -4885,7 +4897,7 @@ def test_preview_project_rules_batch_impact_exception_collapses(monkeypatch):
         raise RuntimeError("C:\\Secret window_title clipboard note SELECT * FROM")
 
     monkeypatch.setattr(
-        bridge_rules_module.rule_api, "preview_project_rules_batch_impact", _raise
+        bridge_rules_module.rule_history_api, "preview_project_rules_batch_impact", _raise
     )
 
     result = WebViewBridge().preview_project_rules_batch_impact(
@@ -4898,7 +4910,7 @@ def test_preview_project_rules_batch_impact_exception_collapses(monkeypatch):
 
 def test_backfill_project_rules_batch_success_returns_narrow_payload(monkeypatch):
     monkeypatch.setattr(
-        bridge_rules_module.rule_api,
+        bridge_rules_module.rule_history_api,
         "backfill_project_rules_batch",
         lambda rules: {
             "ok": True,
@@ -4939,7 +4951,7 @@ def test_backfill_project_rules_batch_invalid_input_does_not_call_api(monkeypatc
         raise AssertionError("batch apply API must not be called for invalid input")
 
     monkeypatch.setattr(
-        bridge_rules_module.rule_api, "backfill_project_rules_batch", _fail
+        bridge_rules_module.rule_history_api, "backfill_project_rules_batch", _fail
     )
 
     for bad in ("not a list", [], [None], [{"rule_type": "folder", "rule_id": True}]):
@@ -4950,7 +4962,7 @@ def test_backfill_project_rules_batch_invalid_input_does_not_call_api(monkeypatc
 
 def test_backfill_project_rules_batch_not_found_maps_to_chinese(monkeypatch):
     monkeypatch.setattr(
-        bridge_rules_module.rule_api,
+        bridge_rules_module.rule_history_api,
         "backfill_project_rules_batch",
         lambda rules: {"ok": False, "error": "not_found"},
     )
@@ -4964,7 +4976,7 @@ def test_backfill_project_rules_batch_not_found_maps_to_chinese(monkeypatch):
 
 def test_backfill_project_rules_batch_too_many_rules_maps_to_chinese(monkeypatch):
     monkeypatch.setattr(
-        bridge_rules_module.rule_api,
+        bridge_rules_module.rule_history_api,
         "backfill_project_rules_batch",
         lambda rules: {"ok": False, "error": "too_many_rules"},
     )
@@ -4978,7 +4990,7 @@ def test_backfill_project_rules_batch_too_many_rules_maps_to_chinese(monkeypatch
 
 def test_backfill_project_rules_batch_rule_disabled_maps_to_chinese(monkeypatch):
     monkeypatch.setattr(
-        bridge_rules_module.rule_api,
+        bridge_rules_module.rule_history_api,
         "backfill_project_rules_batch",
         lambda rules: {"ok": False, "error": "rule_disabled"},
     )
@@ -4992,7 +5004,7 @@ def test_backfill_project_rules_batch_rule_disabled_maps_to_chinese(monkeypatch)
 
 def test_backfill_project_rules_batch_project_not_available_maps_to_chinese(monkeypatch):
     monkeypatch.setattr(
-        bridge_rules_module.rule_api,
+        bridge_rules_module.rule_history_api,
         "backfill_project_rules_batch",
         lambda rules: {"ok": False, "error": "project_not_available"},
     )
@@ -5006,7 +5018,7 @@ def test_backfill_project_rules_batch_project_not_available_maps_to_chinese(monk
 
 def test_backfill_project_rules_batch_too_many_matches_maps_to_chinese(monkeypatch):
     monkeypatch.setattr(
-        bridge_rules_module.rule_api,
+        bridge_rules_module.rule_history_api,
         "backfill_project_rules_batch",
         lambda rules: {"ok": False, "error": "too_many_matches"},
     )
@@ -5020,7 +5032,7 @@ def test_backfill_project_rules_batch_too_many_matches_maps_to_chinese(monkeypat
 
 def test_backfill_project_rules_batch_operation_failed_maps_to_chinese(monkeypatch):
     monkeypatch.setattr(
-        bridge_rules_module.rule_api,
+        bridge_rules_module.rule_history_api,
         "backfill_project_rules_batch",
         lambda rules: {"ok": False, "error": "operation_failed"},
     )
@@ -5034,7 +5046,7 @@ def test_backfill_project_rules_batch_operation_failed_maps_to_chinese(monkeypat
 
 def test_backfill_project_rules_batch_unknown_error_code_collapses(monkeypatch):
     monkeypatch.setattr(
-        bridge_rules_module.rule_api,
+        bridge_rules_module.rule_history_api,
         "backfill_project_rules_batch",
         lambda rules: {"ok": False, "error": "some_new_unknown_code"},
     )
@@ -5051,7 +5063,7 @@ def test_backfill_project_rules_batch_exception_collapses(monkeypatch):
         raise RuntimeError("C:\\Secret window_title clipboard note SELECT * FROM")
 
     monkeypatch.setattr(
-        bridge_rules_module.rule_api, "backfill_project_rules_batch", _raise
+        bridge_rules_module.rule_history_api, "backfill_project_rules_batch", _raise
     )
 
     result = WebViewBridge().backfill_project_rules_batch(
@@ -5064,7 +5076,7 @@ def test_backfill_project_rules_batch_exception_collapses(monkeypatch):
 
 def test_set_project_rules_batch_enabled_success_returns_narrow_payload(monkeypatch):
     monkeypatch.setattr(
-        bridge_rules_module.rule_api,
+        bridge_rules_module.rule_history_api,
         "set_project_rules_batch_enabled",
         lambda rules, enabled: {
             "ok": True,
@@ -5103,7 +5115,7 @@ def test_set_project_rules_batch_enabled_invalid_input_does_not_call_api(monkeyp
         raise AssertionError("batch toggle API must not be called for invalid input")
 
     monkeypatch.setattr(
-        bridge_rules_module.rule_api, "set_project_rules_batch_enabled", _fail
+        bridge_rules_module.rule_history_api, "set_project_rules_batch_enabled", _fail
     )
 
     # Invalid rules
@@ -5120,7 +5132,7 @@ def test_set_project_rules_batch_enabled_invalid_input_does_not_call_api(monkeyp
 
 def test_set_project_rules_batch_enabled_not_found_maps_to_chinese(monkeypatch):
     monkeypatch.setattr(
-        bridge_rules_module.rule_api,
+        bridge_rules_module.rule_history_api,
         "set_project_rules_batch_enabled",
         lambda rules, enabled: {"ok": False, "error": "not_found"},
     )
@@ -5134,7 +5146,7 @@ def test_set_project_rules_batch_enabled_not_found_maps_to_chinese(monkeypatch):
 
 def test_set_project_rules_batch_enabled_too_many_rules_maps_to_chinese(monkeypatch):
     monkeypatch.setattr(
-        bridge_rules_module.rule_api,
+        bridge_rules_module.rule_history_api,
         "set_project_rules_batch_enabled",
         lambda rules, enabled: {"ok": False, "error": "too_many_rules"},
     )
@@ -5148,7 +5160,7 @@ def test_set_project_rules_batch_enabled_too_many_rules_maps_to_chinese(monkeypa
 
 def test_set_project_rules_batch_enabled_operation_failed_maps_to_chinese(monkeypatch):
     monkeypatch.setattr(
-        bridge_rules_module.rule_api,
+        bridge_rules_module.rule_history_api,
         "set_project_rules_batch_enabled",
         lambda rules, enabled: {"ok": False, "error": "operation_failed"},
     )
@@ -5162,7 +5174,7 @@ def test_set_project_rules_batch_enabled_operation_failed_maps_to_chinese(monkey
 
 def test_set_project_rules_batch_enabled_unknown_error_code_collapses(monkeypatch):
     monkeypatch.setattr(
-        bridge_rules_module.rule_api,
+        bridge_rules_module.rule_history_api,
         "set_project_rules_batch_enabled",
         lambda rules, enabled: {"ok": False, "error": "some_new_unknown_code"},
     )
@@ -5179,7 +5191,7 @@ def test_set_project_rules_batch_enabled_exception_collapses(monkeypatch):
         raise RuntimeError("C:\\Secret window_title clipboard note SELECT * FROM")
 
     monkeypatch.setattr(
-        bridge_rules_module.rule_api, "set_project_rules_batch_enabled", _raise
+        bridge_rules_module.rule_history_api, "set_project_rules_batch_enabled", _raise
     )
 
     result = WebViewBridge().set_project_rules_batch_enabled(
@@ -5192,7 +5204,7 @@ def test_set_project_rules_batch_enabled_exception_collapses(monkeypatch):
 
 def test_automatic_rules_status_success_returns_narrow_payload(monkeypatch):
     monkeypatch.setattr(
-        bridge_rules_module.rule_api,
+        bridge_rules_module.rule_history_api,
         "automatic_rules_status",
         lambda: {
             "ok": True,
@@ -5223,7 +5235,7 @@ def test_automatic_rules_status_exception_collapses(monkeypatch):
     def _raise(*args, **kwargs):
         raise RuntimeError("C:\\Secret window_title clipboard note SELECT * FROM")
 
-    monkeypatch.setattr(bridge_rules_module.rule_api, "automatic_rules_status", _raise)
+    monkeypatch.setattr(bridge_rules_module.rule_history_api, "automatic_rules_status", _raise)
 
     result = WebViewBridge().automatic_rules_status()
 
@@ -5235,22 +5247,22 @@ def test_batch_bridge_methods_do_not_cross_call_other_apis(monkeypatch):
     # Regression lock: each batch bridge method must only call its
     # own API facade. They must not invoke other Project Rules APIs.
     monkeypatch.setattr(
-        bridge_rules_module.rule_api,
+        bridge_rules_module.rule_history_api,
         "preview_project_rules_batch_impact",
         lambda rules: {"ok": True, "impact": {"rules": [], "counts": {}, "samples": []}},
     )
     monkeypatch.setattr(
-        bridge_rules_module.rule_api,
+        bridge_rules_module.rule_history_api,
         "backfill_project_rules_batch",
         lambda rules: {"ok": True, "result": {"rules": [], "counts": {"updated_count": 0}}},
     )
     monkeypatch.setattr(
-        bridge_rules_module.rule_api,
+        bridge_rules_module.rule_history_api,
         "set_project_rules_batch_enabled",
         lambda rules, enabled: {"ok": True, "result": {"rules": [], "enabled": True, "count": 0}},
     )
     monkeypatch.setattr(
-        bridge_rules_module.rule_api,
+        bridge_rules_module.rule_history_api,
         "automatic_rules_status",
         lambda: {"ok": True, "status": {"supported": True}},
     )
@@ -5273,10 +5285,14 @@ def test_batch_bridge_methods_do_not_cross_call_other_apis(monkeypatch):
         "delete_keyword_rule",
         "delete_folder_rule",
         "preview_folder_rule_conflicts",
-        "preview_project_rule_impact",
-        "backfill_project_rule",
     ):
         monkeypatch.setattr(bridge_rules_module.rule_api, name, make_forbidden(name))
+    for name in ("preview_project_rule_impact", "backfill_project_rule"):
+        monkeypatch.setattr(
+            bridge_rules_module.rule_history_api,
+            name,
+            make_forbidden(name),
+        )
 
     valid_rules = [{"rule_type": "folder", "rule_id": 1}]
     assert WebViewBridge().preview_project_rules_batch_impact(valid_rules)["ok"] is True
@@ -5288,22 +5304,22 @@ def test_batch_bridge_methods_do_not_cross_call_other_apis(monkeypatch):
 
 def test_batch_bridge_payloads_are_json_serializable(monkeypatch):
     monkeypatch.setattr(
-        bridge_rules_module.rule_api,
+        bridge_rules_module.rule_history_api,
         "preview_project_rules_batch_impact",
         lambda rules: {"ok": True, "impact": {"rules": [], "counts": {}, "samples": []}},
     )
     monkeypatch.setattr(
-        bridge_rules_module.rule_api,
+        bridge_rules_module.rule_history_api,
         "backfill_project_rules_batch",
         lambda rules: {"ok": True, "result": {"rules": [], "counts": {"updated_count": 0}}},
     )
     monkeypatch.setattr(
-        bridge_rules_module.rule_api,
+        bridge_rules_module.rule_history_api,
         "set_project_rules_batch_enabled",
         lambda rules, enabled: {"ok": True, "result": {"rules": [], "enabled": True, "count": 0}},
     )
     monkeypatch.setattr(
-        bridge_rules_module.rule_api,
+        bridge_rules_module.rule_history_api,
         "automatic_rules_status",
         lambda: {"ok": True, "status": {"supported": True}},
     )

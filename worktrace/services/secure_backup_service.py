@@ -20,8 +20,10 @@ from ..db import (
     CURRENT_SCHEMA_VERSION,
     expected_schema_fingerprint,
     get_connection,
+    get_db_key,
     now_str,
     read_schema_indexes_sql,
+    read_internal_schema_sql,
     read_schema_sql,
     schema_fingerprint,
     seed_defaults,
@@ -34,20 +36,19 @@ from ..security.backup_format import (
     parse_backup_manifest,
 )
 from ..write_gate import DATABASE_WRITE_GATE
-from . import privacy_gate_service
 from .database_maintenance_barrier import drain_existing_writers
+from .database_replacement_generation_service import publish_database_replacement
+from ..generation_clock import publish_replacement_committed
 from .runtime_activity_state_service import clear_runtime_activity_state
 from .secure_backup_validation import BackupValidationError, validate_staging_database
-from .settings_service import (
-    clear_settings_cache,
-    get_bool_setting,
-    get_setting,
-    set_setting,
-)
+from .settings_service import get_bool_setting, get_setting, set_setting
 
 PAYLOAD_FORMAT = "worktrace-local-data"
 PAYLOAD_VERSION = 4
 SCHEMA_VERSION = str(CURRENT_SCHEMA_VERSION)
+_LEGACY_BACKUP_SCHEMA_FINGERPRINTS = {
+    "8": "3fd5ae980749886a04f7f9170669a606fa80d6b554924d0ad29b457b0c51deac",
+}
 BACKUP_FILE_SUFFIX = ".wtbackup"
 MAX_BACKUP_FILE_BYTES = 512 * 1024 * 1024
 MAX_BACKUP_PAYLOAD_BYTES = 384 * 1024 * 1024
@@ -300,7 +301,6 @@ class SecureImportCoordinator:
         finally:
             with self._state_lock:
                 self._phase = SecureImportPhase.IDLE
-            clear_settings_cache()
             self._maintenance_lock.release()
 
 
@@ -358,13 +358,6 @@ def import_encrypted_backup(
         imported_counts = _replace_import(data)
         guard.mark_succeeded()
 
-    try:
-        _invalidate_caches()
-    except Exception as exc:
-        logging.warning(
-            "encrypted backup cache invalidation failed exc_type=%s",
-            type(exc).__name__,
-        )
     logging.info(
         "encrypted backup import success mode=%s tables=%d",
         mode,
@@ -453,12 +446,19 @@ def _parse_and_validate_payload(payload: bytes) -> dict[str, Any]:
         raise BackupCorruptedError("backup file is invalid or corrupted") from exc
     if not isinstance(data, dict) or data.get("format") != PAYLOAD_FORMAT:
         raise BackupCorruptedError("backup file is invalid or corrupted")
-    if (
-        data.get("version") != PAYLOAD_VERSION
-        or str(data.get("schema_version") or "") != SCHEMA_VERSION
-    ):
+    schema_version = str(data.get("schema_version") or "")
+    schema_fingerprint_value = str(data.get("schema_fingerprint") or "")
+    if data.get("version") != PAYLOAD_VERSION or schema_version not in {
+        SCHEMA_VERSION,
+        *_LEGACY_BACKUP_SCHEMA_FINGERPRINTS,
+    }:
         raise BackupVersionNotSupportedError("backup version is not supported")
-    if data.get("schema_fingerprint") != expected_schema_fingerprint():
+    required_fingerprint = (
+        expected_schema_fingerprint()
+        if schema_version == SCHEMA_VERSION
+        else _LEGACY_BACKUP_SCHEMA_FINGERPRINTS[schema_version]
+    )
+    if schema_fingerprint_value != required_fingerprint:
         raise BackupCorruptedError("backup file is invalid or corrupted")
     tables = data.get("tables")
     if not isinstance(tables, dict) or set(tables) != set(EXPORT_TABLES):
@@ -472,7 +472,7 @@ def _parse_and_validate_payload(payload: bytes) -> dict[str, Any]:
 
 
 def _replace_import(data: dict[str, Any]) -> dict[str, int]:
-    """Replace business data and restore installation consent atomically."""
+    """Replace business data and publish one durable invalidation protocol."""
 
     staging_path: str | None = None
     try:
@@ -486,6 +486,7 @@ def _replace_import(data: dict[str, Any]) -> dict[str, int]:
         staging.execute("PRAGMA foreign_keys = ON")
         try:
             staging.executescript(read_schema_sql())
+            staging.executescript(read_internal_schema_sql())
             staging.executescript(read_schema_indexes_sql())
             staging.execute(f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION}")
             imported = _load_import_tables(staging, data["tables"])
@@ -499,12 +500,11 @@ def _replace_import(data: dict[str, Any]) -> dict[str, int]:
         finally:
             staging.close()
 
+        replacement_values = None
         with get_connection() as live:
             live.execute("BEGIN IMMEDIATE")
-            privacy_state = privacy_gate_service.capture_installation_privacy_state(
-                conn=live
-            )
             _delete_all_rows(live)
+            live.execute("DELETE FROM activity_resource_repair_job")
             source = sqlite3.connect(staging_path)
             source.row_factory = sqlite3.Row
             try:
@@ -520,10 +520,6 @@ def _replace_import(data: dict[str, Any]) -> dict[str, int]:
             finally:
                 source.close()
             seed_defaults(live)
-            privacy_gate_service.restore_installation_privacy_state(
-                privacy_state,
-                conn=live,
-            )
             _reset_derived_folder_index(live)
             timestamp = now_str()
             for key, value in (
@@ -535,7 +531,11 @@ def _replace_import(data: dict[str, Any]) -> dict[str, int]:
                     "UPDATE settings SET value = ?, updated_at = ? WHERE key = ?",
                     (value, timestamp, key),
                 )
+            replacement_values = publish_database_replacement(live)
             _validate_staging_database(live)
+        if replacement_values is None:
+            raise RuntimeError("database_replacement_generation_missing")
+        publish_replacement_committed(get_db_key(), replacement_values)
         return imported
     except BackupCorruptedError:
         raise
@@ -643,19 +643,6 @@ def _classify_format_error(exc: BackupFormatError) -> SecureBackupError:
     if "version" in str(exc).lower():
         return BackupVersionNotSupportedError("backup version is not supported")
     return BackupCorruptedError("backup file is invalid or corrupted")
-
-
-def _invalidate_caches() -> None:
-    from .folder_rule_service import invalidate_folder_rule_cache
-    from .privacy_service import clear_exclude_rules_cache
-    from .project_inference_service import invalidate_keyword_rule_cache
-    from .project_service import invalidate_uncategorized_project_cache
-
-    clear_settings_cache()
-    clear_exclude_rules_cache()
-    invalidate_uncategorized_project_cache()
-    invalidate_folder_rule_cache()
-    invalidate_keyword_rule_cache()
 
 
 def _atomic_write_bytes(path: Path, data: bytes) -> None:

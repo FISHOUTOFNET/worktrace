@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import asdict, dataclass
-from typing import Any
+from typing import Any, Protocol
 
 from ..contracts.live_display_contracts import CollectorDecisionTraceContract
 from .transition_types import ActivitySignature
@@ -30,17 +30,17 @@ class CollectorDecisionTrace:
         return payload
 
 
-class DecisionTraceRecorder:
+class DecisionTraceRecorder(Protocol):
     def record(self, trace: CollectorDecisionTrace) -> None:
-        raise NotImplementedError
+        ...
 
 
-class NullDecisionTraceRecorder(DecisionTraceRecorder):
+class NullDecisionTraceRecorder:
     def record(self, trace: CollectorDecisionTrace) -> None:
         return None
 
 
-class InMemoryDecisionTraceRecorder(DecisionTraceRecorder):
+class InMemoryDecisionTraceRecorder:
     def __init__(self) -> None:
         self.traces: list[CollectorDecisionTrace] = []
 

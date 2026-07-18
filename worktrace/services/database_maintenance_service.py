@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from ..data_generation_repository import DataGenerationNamespace
 from ..db import now_str, seed_defaults
 from ..domain_unit_of_work import DomainUnitOfWork
-from . import privacy_gate_service
+from .database_replacement_generation_service import publish_database_replacement
 
 _DELETE_ORDER: tuple[str, ...] = (
     "activity_resource",
@@ -49,23 +48,14 @@ def _apply_post_clear_settings(conn) -> None:
 def clear_all_live_data() -> None:
     """Delete live rows atomically and publish every affected generation once."""
 
-    # REPORT_STRUCTURE is owned by the command UoW. The remaining catalog,
-    # settings, privacy, and replacement generations are published exactly once
-    # by restore_installation_privacy_state -> publish_database_replacement.
-    with DomainUnitOfWork((DataGenerationNamespace.REPORT_STRUCTURE,)) as uow:
+    with DomainUnitOfWork() as uow:
         conn = uow.connection
-        privacy_state = privacy_gate_service.capture_installation_privacy_state(
-            conn=conn
-        )
         for table in _DELETE_ORDER:
             conn.execute(f"DELETE FROM {table}")
+        conn.execute("DELETE FROM activity_resource_repair_job")
         seed_defaults(conn)
-        privacy_gate_service.restore_installation_privacy_state(
-            privacy_state,
-            conn=conn,
-        )
         _apply_post_clear_settings(conn)
-        uow.mark_changed()
+        publish_database_replacement(conn)
 
 
 __all__ = ["clear_all_live_data"]

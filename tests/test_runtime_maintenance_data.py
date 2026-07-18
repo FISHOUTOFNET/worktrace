@@ -9,14 +9,12 @@ from worktrace.platforms.base import ActiveWindow
 from tests.support import activity_factory as activity_service
 from worktrace.services import (
     activity_lifecycle_service,
+    folder_index_query_service,
     folder_index_service,
     folder_rule_service,
     privacy_service,
     project_service,
     timeline_service,
-)
-from worktrace.services.folder_index_recovery_service import (
-    recover_interrupted_indexes,
 )
 from worktrace.services.privacy_anonymization_service import anonymize_activity
 from worktrace.services.privacy_service import PrivacyResolutionPending
@@ -48,7 +46,7 @@ def test_interrupted_folder_index_returns_to_pending(temp_db):
             (rule_id,),
         )
 
-    assert recover_interrupted_indexes() == 1
+    assert folder_index_service.recover_interrupted_indexes() == 1
     row = fetch_one(
         "SELECT * FROM folder_rule_index_state WHERE folder_rule_id = ?",
         (rule_id,),
@@ -69,7 +67,7 @@ def test_unresolved_file_path_fails_closed_when_exclusion_folder_exists(
         excluded_id,
     )
     monkeypatch.setattr(
-        folder_index_service,
+        folder_index_query_service,
         "resolve_unique_path_from_title",
         lambda *_args, **_kwargs: None,
     )

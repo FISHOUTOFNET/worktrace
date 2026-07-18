@@ -31,15 +31,6 @@ def record_boundary(occurred_at: str | None = None, reason: str = "unknown") -> 
         uow.mark_changed()
 
 
-def record_hard_boundary(
-    occurred_at: str | None = None,
-    reason: str = "unknown",
-) -> None:
-    """Compatibility command; runtime lifecycle uses ``close_at_boundary``."""
-
-    record_boundary(occurred_at, reason)
-
-
 def latest_boundary_time() -> str | None:
     with get_connection() as conn:
         row = conn.execute(
@@ -100,5 +91,4 @@ __all__ = [
     "latest_boundary_time",
     "list_boundaries",
     "record_boundary",
-    "record_hard_boundary",
 ]

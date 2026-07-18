@@ -19,6 +19,8 @@ from worktrace.services import (
 pytestmark = [pytest.mark.db, pytest.mark.integration, pytest.mark.serial]
 
 _ALLOWED_SCHEMA_TRIGGERS = {
+    "project_reserved_name_insert",
+    "project_reserved_name_update",
     "validate_report_split_operation",
     "validate_report_operation_receipt_members",
 }
@@ -182,18 +184,17 @@ def test_page_and_heartbeat_share_structure_and_page_revision(temp_db):
     assert page["page_revision"] == heartbeat["page_revision"]
 
 
-def test_shipping_windows_adapter_has_no_legacy_monkeypatch():
+def test_shipping_windows_adapter_has_one_canonical_module():
     root = Path(__file__).resolve().parents[1]
-    source = (
-        root / "worktrace/platforms/hardened_windows_adapter.py"
-    ).read_text(encoding="utf-8")
+    source = (root / "worktrace/platforms/windows_adapter.py").read_text(
+        encoding="utf-8"
+    )
     maintenance_tests = (
         root / "tests/test_runtime_maintenance_control.py"
     ).read_text(encoding="utf-8")
     assert "legacy." not in source
     assert "_run_with_timeout =" not in source
-    assert "WindowsPathResolver" in source
-    assert "ClipboardMonitor" in source
+    assert not (root / "worktrace/platforms/hardened_windows_adapter.py").exists()
     assert "_ClipboardMonitor" not in maintenance_tests
     assert "platforms.windows_clipboard import ClipboardMonitor" in maintenance_tests
 

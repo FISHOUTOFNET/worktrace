@@ -400,7 +400,7 @@ def _uninitialize_com() -> None:
 
         pythoncom.CoUninitialize()
     except Exception:
-        pass
+        logging.debug("COM CoUninitialize failed", exc_info=True)
 
 
 def _get_com_file_path_threadsafe(
@@ -457,7 +457,7 @@ def _is_valid_com_path(path: str | None, window_title: str | None) -> bool:
 
 def _resolve_indexed_file_path(window_title: str | None) -> str | None:
     try:
-        from ..services.folder_index_service import resolve_unique_path_from_title
+        from ..services.folder_index_query_service import resolve_unique_path_from_title
 
         return resolve_unique_path_from_title(
             window_title,

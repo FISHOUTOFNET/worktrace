@@ -8,16 +8,10 @@ can observe window, filesystem, or clipboard data must consult this service.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 from ..constants import PRIVACY_NOTICE_VERSION
-from ..db import now_str
-from .database_replacement_generation_service import publish_database_replacement
-from .settings_service import (
-    SettingMutationClass,
-    get_bool_setting,
-    get_setting,
-    set_settings,
+from .installation_metadata_store import (
+    get_privacy_notice_version,
+    set_privacy_notice_version,
 )
 
 
@@ -25,32 +19,16 @@ class PrivacyGateRequiredError(PermissionError):
     """Raised when a sensitive runtime operation is attempted before consent."""
 
 
-@dataclass(frozen=True)
-class InstallationPrivacyState:
-    legacy_accepted: bool
-    accepted_version: str
+def accepted_privacy_notice_version() -> str:
+    return get_privacy_notice_version()
 
 
-def accepted_privacy_notice_version(*, conn=None) -> str:
-    return str(get_setting("accepted_privacy_notice_version", "", conn=conn) or "")
-
-
-def is_privacy_notice_accepted(*, conn=None) -> bool:
-    version = accepted_privacy_notice_version(conn=conn)
-    if version:
-        return version == PRIVACY_NOTICE_VERSION
-    legacy = get_bool_setting("first_run_notice_accepted", False, conn=conn)
-    return bool(legacy and PRIVACY_NOTICE_VERSION == "1")
+def is_privacy_notice_accepted() -> bool:
+    return accepted_privacy_notice_version() == PRIVACY_NOTICE_VERSION
 
 
 def accept_privacy_notice() -> None:
-    set_settings(
-        {
-            "first_run_notice_accepted": "true",
-            "accepted_privacy_notice_version": PRIVACY_NOTICE_VERSION,
-        },
-        mutation_class=SettingMutationClass.PRIVACY,
-    )
+    set_privacy_notice_version(PRIVACY_NOTICE_VERSION)
 
 
 def is_sensitive_runtime_allowed() -> bool:
@@ -65,60 +43,11 @@ def require_sensitive_runtime_allowed() -> None:
         raise PrivacyGateRequiredError("privacy_notice_required")
 
 
-def capture_installation_privacy_state(*, conn=None) -> InstallationPrivacyState:
-    return InstallationPrivacyState(
-        legacy_accepted=get_bool_setting(
-            "first_run_notice_accepted", False, conn=conn
-        ),
-        accepted_version=accepted_privacy_notice_version(conn=conn),
-    )
-
-
-def restore_installation_privacy_state(
-    state: InstallationPrivacyState,
-    *,
-    conn=None,
-) -> None:
-    """Restore installation consent after replacing business data.
-
-    Replacement callers pass their active ``DomainUnitOfWork`` connection. All
-    affected generation namespaces are declared here and published atomically
-    only after that transaction commits.
-    """
-
-    values = {
-        "first_run_notice_accepted": (
-            "true" if state.legacy_accepted else "false"
-        ),
-        "accepted_privacy_notice_version": state.accepted_version,
-    }
-    if conn is None:
-        set_settings(values, mutation_class=SettingMutationClass.PRIVACY)
-        return
-
-    timestamp = now_str()
-    for key, value in values.items():
-        conn.execute(
-            """
-            INSERT INTO settings(key, value, updated_at)
-            VALUES (?, ?, ?)
-            ON CONFLICT(key) DO UPDATE SET
-                value = excluded.value,
-                updated_at = excluded.updated_at
-            """,
-            (key, value, timestamp),
-        )
-    publish_database_replacement(conn)
-
-
 __all__ = [
-    "InstallationPrivacyState",
     "PrivacyGateRequiredError",
     "accept_privacy_notice",
     "accepted_privacy_notice_version",
-    "capture_installation_privacy_state",
     "is_privacy_notice_accepted",
     "is_sensitive_runtime_allowed",
     "require_sensitive_runtime_allowed",
-    "restore_installation_privacy_state",
 ]
