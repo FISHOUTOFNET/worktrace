@@ -1,83 +1,310 @@
-"""Current encrypted-backup contracts plus retained cross-version coverage."""
-
+"""Direct contracts for current-format encrypted backup and replace import."""
 from __future__ import annotations
 
 import json
+import sqlite3
+from pathlib import Path
 
 import pytest
 
-from tests import secure_backup_service_contracts as _contracts
+from worktrace import db
+from worktrace.security.backup_format import (
+    MAGIC,
+    create_encrypted_backup,
+    decrypt_encrypted_backup,
+)
+from worktrace.services import secure_backup_service
+from worktrace.services.secure_backup_service import (
+    BackupCorruptedError,
+    BackupDecryptionError,
+    BackupImportInProgressError,
+    BackupVersionNotSupportedError,
+    SecureBackupError,
+)
+from worktrace.services.settings_service import get_bool_setting, get_setting, set_setting
 
 pytestmark = [
     pytest.mark.security_privacy,
     pytest.mark.integration,
     pytest.mark.db,
+    pytest.mark.contract,
 ]
 
-# Retain the established encryption, replacement, rollback, privacy, and API
-# contracts. Only tests whose published payload semantics changed in v5 are
-# replaced below.
-for _name in dir(_contracts):
-    if _name.startswith("test_"):
-        globals()[_name] = getattr(_contracts, _name)
+PASSPHRASE = "current-format-passphrase"
+PROJECT_NAME = "Backup Current Project"
 
 
-def test_export_payload_contains_required_tables(temp_db, tmp_path):
-    _contracts._seed_test_data()
-    payload = _contracts.secure_backup_service._build_export_payload()
-    data = json.loads(payload.decode("utf-8"))
+def _seed_current_data() -> tuple[int, int]:
+    timestamp = db.now_str()
+    with db.get_connection() as conn:
+        project_id = int(
+            conn.execute(
+                """
+                INSERT INTO project(
+                    name, description, language, is_archived, is_deleted,
+                    enabled, created_by, created_at, updated_at
+                ) VALUES (?, '', '中文', 0, 0, 1, 'user', ?, ?)
+                """,
+                (PROJECT_NAME, timestamp, timestamp),
+            ).lastrowid
+        )
+        activity_ids: list[int] = []
+        for index in range(2):
+            activity_id = int(
+                conn.execute(
+                    """
+                    INSERT INTO activity_log(
+                        start_time, end_time, duration_seconds, app_name,
+                        process_name, window_title, file_path_hint, status,
+                        source, is_deleted, is_hidden, created_at, updated_at
+                    ) VALUES (?, ?, 60, 'Word', 'winword.exe', ?, ?, 'normal',
+                              'auto', 0, 0, ?, ?)
+                    """,
+                    (
+                        f"2026-07-18 10:0{index}:00",
+                        f"2026-07-18 10:0{index + 1}:00",
+                        f"Matter {index}.docx",
+                        f"C:\\Matter\\Matter {index}.docx",
+                        timestamp,
+                        timestamp,
+                    ),
+                ).lastrowid
+            )
+            activity_ids.append(activity_id)
+            conn.execute(
+                """
+                INSERT INTO activity_resource(
+                    activity_id, resource_kind, resource_subtype, display_name,
+                    identity_key, is_anchor, confidence, source, app_name,
+                    process_name, window_title, path_hint, uri_scheme, uri_host,
+                    uri_hint, metadata_json, created_at, updated_at
+                ) VALUES (?, 'office_document', 'word', ?, ?, 1, 100,
+                          'detector', 'Word', 'winword.exe', ?, ?, NULL, NULL,
+                          NULL, '{}', ?, ?)
+                """,
+                (
+                    activity_id,
+                    f"Matter {index}.docx",
+                    f"office_file:c:/matter/matter {index}.docx",
+                    f"Matter {index}.docx",
+                    f"C:\\Matter\\Matter {index}.docx",
+                    timestamp,
+                    timestamp,
+                ),
+            )
+        conn.execute(
+            """
+            INSERT INTO activity_inference_job(
+                activity_id, reason, status, attempt_count, next_attempt_at,
+                last_error_code, created_at, updated_at
+            ) VALUES (?, 'closed_activity', 'pending', 0, NULL, NULL, ?, ?)
+            """,
+            (activity_ids[0], timestamp, timestamp),
+        )
+        conn.execute(
+            """
+            INSERT INTO activity_inference_job(
+                activity_id, reason, status, attempt_count, next_attempt_at,
+                last_error_code, created_at, updated_at
+            ) VALUES (?, 'closed_activity', 'failed', 3, ?,
+                      'database_busy', ?, ?)
+            """,
+            (
+                activity_ids[1],
+                "2026-07-18 11:00:00",
+                timestamp,
+                timestamp,
+            ),
+        )
+    return activity_ids[0], activity_ids[1]
 
+
+def _write_payload(tmp_path: Path, data: dict, name: str) -> Path:
+    path = tmp_path / name
+    path.write_bytes(
+        create_encrypted_backup(
+            json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode(
+                "utf-8"
+            ),
+            PASSPHRASE,
+            "test",
+        )
+    )
+    return path
+
+
+def test_export_payload_is_exact_current_contract(temp_db):
+    _seed_current_data()
+    data = json.loads(secure_backup_service._build_export_payload())
     assert data["format"] == "worktrace-local-data"
     assert data["version"] == 5
     assert data["schema_version"] == "11"
-    tables = data["tables"]
-    assert set(tables) == set(_contracts.secure_backup_service.EXPORT_TABLES)
-    for required in [
-        "project",
-        "activity_log",
-        "settings",
-        "session_boundary",
-        "folder_project_rule",
-        "folder_rule_index_state",
-        "project_rule",
-        "activity_project_assignment",
-        "activity_clipboard_event",
-        "report_session_operation",
-        "report_mutation_request",
-        "report_session_operation_member",
-        "activity_resource",
-        "activity_inference_job",
-    ]:
-        assert required in tables, f"missing table {required} in payload"
+    assert data["schema_fingerprint"] == db.expected_schema_fingerprint()
+    assert set(data["tables"]) == set(secure_backup_service.EXPORT_TABLES)
+    assert "activity_inference_job" in data["tables"]
+    assert "folder_rule_file_index" not in data["tables"]
+    assert "history_mutation_job" not in data["tables"]
 
 
-def test_published_v8_backup_remains_importable(temp_db, tmp_path):
-    _contracts._seed_test_data()
-    payload = json.loads(
-        _contracts.secure_backup_service._build_export_payload().decode("utf-8")
-    )
-    payload["version"] = 4
-    payload["schema_version"] = "8"
-    payload["schema_fingerprint"] = (
-        "3fd5ae980749886a04f7f9170669a606fa80d6b554924d0ad29b457b0c51deac"
-    )
-    payload["tables"].pop("activity_inference_job", None)
-    out = tmp_path / "published-v8.wtbackup"
-    out.write_bytes(
-        _contracts.create_encrypted_backup(
-            json.dumps(
-                payload,
-                ensure_ascii=False,
-                separators=(",", ":"),
-            ).encode("utf-8"),
-            "passphrase",
-            "legacy-test",
-        )
-    )
+def test_current_v5_round_trip_restores_pending_and_failed_jobs(temp_db, tmp_path):
+    pending_id, failed_id = _seed_current_data()
+    out = tmp_path / "round-trip.wtbackup"
+    secure_backup_service.export_encrypted_backup(out, PASSPHRASE)
 
-    result = _contracts.secure_backup_service.import_encrypted_backup(
-        out,
-        "passphrase",
-    )
+    db.reset_database()
+    secure_backup_service.import_encrypted_backup(out, PASSPHRASE)
 
-    assert result.mode == "replace"
+    with db.get_connection() as conn:
+        project = conn.execute(
+            "SELECT 1 FROM project WHERE name = ?",
+            (PROJECT_NAME,),
+        ).fetchone()
+        jobs = {
+            int(row["activity_id"]): dict(row)
+            for row in conn.execute(
+                "SELECT * FROM activity_inference_job ORDER BY activity_id"
+            ).fetchall()
+        }
+    assert project is not None
+    assert jobs[pending_id]["status"] == "pending"
+    assert jobs[pending_id]["attempt_count"] == 0
+    assert jobs[failed_id]["status"] == "failed"
+    assert jobs[failed_id]["attempt_count"] == 3
+    assert jobs[failed_id]["last_error_code"] == "database_busy"
+
+
+def test_non_current_payload_version_is_explicitly_rejected(temp_db, tmp_path):
+    data = json.loads(secure_backup_service._build_export_payload())
+    data["version"] = 4
+    path = _write_payload(tmp_path, data, "payload-v4.wtbackup")
+    with pytest.raises(BackupVersionNotSupportedError):
+        secure_backup_service.import_encrypted_backup(path, PASSPHRASE)
+
+
+def test_non_current_schema_version_is_explicitly_rejected(temp_db, tmp_path):
+    data = json.loads(secure_backup_service._build_export_payload())
+    data["schema_version"] = "10"
+    path = _write_payload(tmp_path, data, "schema-v10.wtbackup")
+    with pytest.raises(BackupVersionNotSupportedError):
+        secure_backup_service.import_encrypted_backup(path, PASSPHRASE)
+
+
+def test_current_schema_wrong_fingerprint_is_corruption(temp_db, tmp_path):
+    data = json.loads(secure_backup_service._build_export_payload())
+    data["schema_fingerprint"] = "0" * 64
+    path = _write_payload(tmp_path, data, "bad-fingerprint.wtbackup")
+    with pytest.raises(BackupCorruptedError):
+        secure_backup_service.import_encrypted_backup(path, PASSPHRASE)
+
+
+def test_encrypted_export_contains_no_plaintext_business_data(temp_db, tmp_path):
+    _seed_current_data()
+    out = tmp_path / "encrypted.wtbackup"
+    secure_backup_service.export_encrypted_backup(out, PASSPHRASE)
+    blob = out.read_bytes()
+    assert blob.startswith(MAGIC + b"\n")
+    assert PROJECT_NAME.encode("utf-8") not in blob
+    payload = json.loads(decrypt_encrypted_backup(blob, PASSPHRASE))
+    assert any(row["name"] == PROJECT_NAME for row in payload["tables"]["project"])
+
+
+def test_wrong_passphrase_and_corruption_do_not_change_live_database(
+    temp_db,
+    tmp_path,
+):
+    _seed_current_data()
+    out = tmp_path / "safe.wtbackup"
+    secure_backup_service.export_encrypted_backup(out, PASSPHRASE)
+    with db.get_connection() as conn:
+        before = conn.execute("SELECT COUNT(*) FROM activity_log").fetchone()[0]
+
+    with pytest.raises(BackupDecryptionError):
+        secure_backup_service.import_encrypted_backup(out, "wrong-passphrase")
+    with db.get_connection() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM activity_log").fetchone()[0] == before
+
+    blob = bytearray(out.read_bytes())
+    blob[-5] ^= 0xFF
+    out.write_bytes(bytes(blob))
+    with pytest.raises((BackupCorruptedError, BackupDecryptionError)):
+        secure_backup_service.import_encrypted_backup(out, PASSPHRASE)
+    with db.get_connection() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM activity_log").fetchone()[0] == before
+
+
+def test_replace_failure_rolls_back_and_restores_prior_pause_state(
+    temp_db,
+    tmp_path,
+    monkeypatch,
+):
+    _seed_current_data()
+    out = tmp_path / "rollback.wtbackup"
+    secure_backup_service.export_encrypted_backup(out, PASSPHRASE)
+    set_setting("user_paused", "false")
+    set_setting("collector_status", "running")
+    with db.get_connection() as conn:
+        before = conn.execute("SELECT COUNT(*) FROM activity_log").fetchone()[0]
+
+    def fail(_data):
+        raise sqlite3.OperationalError("simulated replace failure")
+
+    monkeypatch.setattr(secure_backup_service, "_replace_import", fail)
+    with pytest.raises(sqlite3.OperationalError):
+        secure_backup_service.import_encrypted_backup(out, PASSPHRASE)
+
+    assert secure_backup_service.is_secure_import_in_progress() is False
+    assert get_bool_setting("user_paused", True) is False
+    assert get_setting("collector_status") == "running"
+    with db.get_connection() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM activity_log").fetchone()[0] == before
+
+
+def test_secure_import_uses_shared_maintenance_gate(temp_db, tmp_path):
+    _seed_current_data()
+    out = tmp_path / "maintenance.wtbackup"
+    secure_backup_service.export_encrypted_backup(out, PASSPHRASE)
+    secure_backup_service.import_encrypted_backup(out, PASSPHRASE)
+    assert secure_backup_service.is_secure_import_in_progress() is False
+    assert get_bool_setting("user_paused", False) is True
+    assert get_setting("collector_status") == "paused"
+
+
+def test_concurrent_maintenance_rejects_import(temp_db, tmp_path):
+    from worktrace.services import database_maintenance_service
+
+    _seed_current_data()
+    out = tmp_path / "busy.wtbackup"
+    secure_backup_service.export_encrypted_backup(out, PASSPHRASE)
+    with database_maintenance_service.maintenance_operation(reason="test") as state:
+        with pytest.raises(BackupImportInProgressError):
+            secure_backup_service.import_encrypted_backup(out, PASSPHRASE)
+        state.mark_succeeded()
+
+
+def test_file_and_payload_size_limits_fail_closed(temp_db, tmp_path, monkeypatch):
+    path = tmp_path / "oversize.wtbackup"
+    path.write_bytes(b"x" * 10)
+    monkeypatch.setattr(secure_backup_service, "MAX_BACKUP_FILE_BYTES", 5)
+    with pytest.raises(BackupCorruptedError):
+        secure_backup_service.import_encrypted_backup(path, PASSPHRASE)
+
+    monkeypatch.setattr(secure_backup_service, "MAX_BACKUP_PAYLOAD_BYTES", 5)
+    with pytest.raises(SecureBackupError):
+        secure_backup_service._build_export_payload()
+
+
+def test_manifest_parse_requires_no_passphrase(temp_db, tmp_path):
+    out = tmp_path / "manifest.wtbackup"
+    secure_backup_service.export_encrypted_backup(out, PASSPHRASE)
+    info = secure_backup_service.parse_encrypted_backup_manifest(out)
+    assert info.payload_format == "wtenc1"
+    assert info.app_version
+
+
+def test_empty_passphrase_and_non_replace_mode_are_rejected(temp_db, tmp_path):
+    with pytest.raises(SecureBackupError):
+        secure_backup_service.export_encrypted_backup(tmp_path / "x.wtbackup", "")
+    out = tmp_path / "mode.wtbackup"
+    secure_backup_service.export_encrypted_backup(out, PASSPHRASE)
+    with pytest.raises(SecureBackupError):
+        secure_backup_service.import_encrypted_backup(out, PASSPHRASE, mode="merge")
