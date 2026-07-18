@@ -1,3 +1,5 @@
+"""Durable inference scheduling, migration, and backup compatibility contracts."""
+
 from __future__ import annotations
 
 import json
