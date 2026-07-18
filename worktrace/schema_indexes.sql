@@ -38,6 +38,9 @@ ON history_mutation_job(status, updated_at, id);
 CREATE INDEX IF NOT EXISTS idx_history_mutation_job_rule_lookup
 ON history_mutation_job_rule(rule_type, rule_id, job_id);
 
+CREATE INDEX IF NOT EXISTS idx_activity_inference_job_due
+ON activity_inference_job(available_at, activity_id);
+
 CREATE INDEX IF NOT EXISTS idx_assignment_project
 ON activity_project_assignment(project_id);
 
