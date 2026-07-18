@@ -26,7 +26,7 @@ def enqueue_closed_activity_ids(
     conn,
     activity_ids: Iterable[int],
     *,
-    reason: str,
+    reason: str = REASON_FINALIZE,
     at_time: str | None = None,
 ) -> int:
     """Upsert one current derivation obligation per eligible closed activity."""
