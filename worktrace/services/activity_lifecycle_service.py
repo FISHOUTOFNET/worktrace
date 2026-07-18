@@ -38,19 +38,16 @@ def finalize_closed_activity_ids(closed_ids: list[int] | None) -> None:
 
     if not closed_ids:
         return
-    normalized = sorted({int(activity_id) for activity_id in closed_ids})
-    from .project_inference_service import process_pending_inference_jobs
+    from .project_inference_service import process_new_activity
 
-    try:
-        process_pending_inference_jobs(
-            limit=len(normalized),
-            activity_ids=normalized,
-        )
-    except Exception:
-        logging.exception(
-            "close-finalize inference worker failed for activity_ids=%s",
-            normalized,
-        )
+    for activity_id in sorted({int(value) for value in closed_ids}):
+        try:
+            process_new_activity(activity_id)
+        except Exception:
+            logging.exception(
+                "close-finalize inference failed for activity_id=%s",
+                activity_id,
+            )
 
 
 def start_activity(*, start_time: str, source: str, payload: dict[str, Any]) -> int:
