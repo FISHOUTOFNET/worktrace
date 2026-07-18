@@ -126,11 +126,11 @@ class DatabaseMaintenanceCoordinator:
             with DATABASE_WRITE_GATE.draining() as lease:
                 with self._state_lock:
                     self._phase = MaintenancePhase.DRAINING
-                prior_user_paused = get_bool_setting("user_paused", False)
-                prior_collector_status = get_setting("collector_status", "stopped") or "stopped"
                 state = MaintenanceState(
-                    prior_user_paused=prior_user_paused,
-                    prior_collector_status=prior_collector_status,
+                    prior_user_paused=get_bool_setting("user_paused", False),
+                    prior_collector_status=(
+                        get_setting("collector_status", "stopped") or "stopped"
+                    ),
                 )
                 try:
                     if pause_handler is not None:
@@ -147,8 +147,10 @@ class DatabaseMaintenanceCoordinator:
                             reason=reason,
                             state=state,
                         )
-                    set_setting("user_paused", "true")
-                    set_setting("collector_status", "paused")
+                    # Maintenance ownership is represented by the process gate and
+                    # explicit phase. Normal settings are changed only by the
+                    # successful destructive transaction, avoiding out-of-band
+                    # generation bumps and rollback compensation writes.
                     clear_runtime_activity_state(f"{reason}_guard_enter")
                     drain_existing_writers()
                     lease.promote()
@@ -158,12 +160,7 @@ class DatabaseMaintenanceCoordinator:
                     state.succeeded = True
                     clear_runtime_activity_state(f"{reason}_success")
                 except Exception:
-                    if not state.succeeded and not state.fail_closed:
-                        set_setting(
-                            "user_paused",
-                            "true" if prior_user_paused else "false",
-                        )
-                        set_setting("collector_status", prior_collector_status)
+                    if not state.fail_closed:
                         clear_runtime_activity_state(f"{reason}_rollback")
                     logging.exception("database maintenance failed reason=%s", reason)
                     raise
