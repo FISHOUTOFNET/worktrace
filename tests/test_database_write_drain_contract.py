@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 import threading
+from pathlib import Path
 
 import pytest
 
@@ -131,3 +132,13 @@ def test_failed_reset_releases_coordinator_and_process_gate(temp_db):
     assert DATABASE_WRITE_GATE.phase() is WriteGatePhase.OPEN
     assert settings_service.get_bool_setting("user_paused", True) is False
     assert settings_service.get_setting("collector_status", "") == "running"
+
+
+def test_secure_backup_exposes_no_second_maintenance_coordinator() -> None:
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "worktrace/services/secure_backup_service.py"
+    ).read_text(encoding="utf-8")
+    assert "SecureImportCoordinator" not in source
+    assert "DatabaseMaintenanceCoordinator" not in source
+    assert "database_maintenance_service.maintenance_operation" in source
