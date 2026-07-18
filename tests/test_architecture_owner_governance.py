@@ -29,21 +29,19 @@ RETIRED_FILES = {
     PRODUCTION / "services" / "secure_backup_core.py",
 }
 DYNAMIC_TEST_PATTERNS = (
-    "runpy.run_path(",
-    "globals()[name] = test",
-    "globals()[_name] =",
-    "for _name in dir(_contracts)",
+    "runpy." + "run_path(",
+    "globals()[name]" + " = test",
+    "globals()[_name]" + " =",
+    "for _name in " + "dir(_contracts)",
 )
 _DML_PATTERN = re.compile(
     r"\b(?:INSERT(?:\s+OR\s+\w+)?\s+INTO|REPLACE\s+INTO|UPDATE|DELETE\s+FROM)"
     r"\s+activity_inference_job\b",
     re.IGNORECASE,
 )
-_INFERENCE_JOB_DML_OWNERS = {
-    "worktrace/services/activity_inference_job_repository.py",
-    "worktrace/services/database_maintenance_service.py",
-    "worktrace/services/secure_backup_service.py",
-}
+_INFERENCE_JOB_RUNTIME_DML_OWNER = (
+    "worktrace/services/activity_inference_job_repository.py"
+)
 
 
 def _python_files(root: Path) -> list[Path]:
@@ -70,19 +68,27 @@ def test_retired_inference_and_hook_symbols_are_absent_from_production() -> None
     assert offenders == []
 
 
-def test_inference_job_runtime_dml_has_only_canonical_owners() -> None:
-    offenders: list[str] = []
+def test_inference_job_runtime_dml_has_one_canonical_owner() -> None:
     covered: set[str] = set()
     for path in _python_files(PRODUCTION):
         relative = path.relative_to(ROOT).as_posix()
         source = path.read_text(encoding="utf-8")
-        if not _DML_PATTERN.search(source):
-            continue
-        covered.add(relative)
-        if relative not in _INFERENCE_JOB_DML_OWNERS:
-            offenders.append(relative)
-    assert covered == _INFERENCE_JOB_DML_OWNERS
-    assert offenders == []
+        if _DML_PATTERN.search(source):
+            covered.add(relative)
+    assert covered == {_INFERENCE_JOB_RUNTIME_DML_OWNER}
+
+
+def test_destructive_owners_reference_inference_jobs_only_in_explicit_table_sets() -> None:
+    maintenance = (
+        PRODUCTION / "services" / "database_maintenance_service.py"
+    ).read_text(encoding="utf-8")
+    backup = (
+        PRODUCTION / "services" / "secure_backup_service.py"
+    ).read_text(encoding="utf-8")
+    assert '"activity_inference_job",' in maintenance
+    assert '"activity_inference_job",' in backup
+    assert not _DML_PATTERN.search(maintenance)
+    assert not _DML_PATTERN.search(backup)
 
 
 def test_current_schema_declares_inference_job_and_index_directly() -> None:
@@ -129,6 +135,8 @@ def test_non_windows_production_adapter_fails_closed() -> None:
 def test_dynamic_test_forwarding_is_absent() -> None:
     offenders: list[str] = []
     for path in _python_files(TESTS):
+        if path == Path(__file__).resolve():
+            continue
         source = path.read_text(encoding="utf-8")
         for pattern in DYNAMIC_TEST_PATTERNS:
             if pattern in source:
