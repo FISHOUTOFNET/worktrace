@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import re
 from pathlib import Path
+from typing import Iterable
 
 import pytest
 
@@ -29,6 +30,119 @@ _BANNED_FUNCTION_DEFINITIONS = {
     "update_project_editable_activity_note",
 }
 
+_GENERATION_DML_OWNERS = {
+    "settings": {
+        "worktrace/db.py",
+        "worktrace/schema_migrations.py",
+        "worktrace/services/database_maintenance_service.py",
+        "worktrace/services/installation_metadata_store.py",
+        "worktrace/services/secure_backup_service.py",
+        "worktrace/services/settings_service.py",
+    },
+    "project": {
+        "worktrace/db.py",
+        "worktrace/schema_migrations.py",
+        "worktrace/services/database_maintenance_service.py",
+        "worktrace/services/project_service.py",
+        "worktrace/services/system_project_service.py",
+    },
+    "project_rule": {
+        "worktrace/services/database_maintenance_service.py",
+        "worktrace/services/rule_catalog_command_service.py",
+    },
+    "folder_project_rule": {
+        "worktrace/services/database_maintenance_service.py",
+        "worktrace/services/rule_catalog_command_service.py",
+    },
+    "activity_log": {
+        "worktrace/schema_migrations.py",
+        "worktrace/services/activity_fact_repository.py",
+        "worktrace/services/activity_lifecycle_service.py",
+        "worktrace/services/activity_resource_command_service.py",
+        "worktrace/services/database_maintenance_service.py",
+        "worktrace/services/privacy_anonymization_service.py",
+        "worktrace/services/secure_backup_validation.py",
+    },
+    "activity_project_assignment": {
+        "worktrace/services/activity_fact_repository.py",
+        "worktrace/services/assignment_command_service.py",
+        "worktrace/services/database_maintenance_service.py",
+    },
+    "activity_resource": {
+        "worktrace/services/database_maintenance_service.py",
+        "worktrace/services/resource_service.py",
+    },
+    "activity_clipboard_event": {
+        "worktrace/services/activity_resource_command_service.py",
+        "worktrace/services/clipboard_service.py",
+        "worktrace/services/database_maintenance_service.py",
+        "worktrace/services/privacy_anonymization_service.py",
+    },
+    "session_boundary": {
+        "worktrace/services/database_maintenance_service.py",
+        "worktrace/services/session_boundary_service.py",
+    },
+    "report_session_operation": {
+        "worktrace/services/database_maintenance_service.py",
+        "worktrace/services/report_session_operation_service.py",
+    },
+    "report_session_operation_member": {
+        "worktrace/services/database_maintenance_service.py",
+        "worktrace/services/report_session_operation_service.py",
+    },
+    "report_mutation_request": {
+        "worktrace/services/database_maintenance_service.py",
+        "worktrace/services/report_session_operation_service.py",
+    },
+    "history_mutation_job": {
+        "worktrace/services/history_mutation_job_service.py",
+    },
+}
+
+# Secure import mutates only its isolated staging database before atomic
+# replacement, so it is the single database-replacement exception for these
+# business tables rather than a second live command owner.
+for _replacement_table in set(_GENERATION_DML_OWNERS) - {"history_mutation_job"}:
+    _GENERATION_DML_OWNERS[_replacement_table].add(
+        "worktrace/services/secure_backup_service.py"
+    )
+
+_DML_PATTERN = re.compile(
+    r"\b(INSERT(?:\s+OR\s+\w+)?\s+INTO|REPLACE\s+INTO|UPDATE|DELETE\s+FROM)"
+    r"\s+([a-z_][a-z0-9_]*)",
+    re.IGNORECASE,
+)
+
+_PROJECT_API_EXPORTS = {
+    "archive_project_for_rules",
+    "create_project_for_rules",
+    "delete_project_for_rules",
+    "get_project",
+    "get_project_by_name",
+    "list_active_projects",
+    "list_project_bindings",
+    "list_rule_target_projects",
+    "list_selectable_projects",
+    "list_user_projects",
+    "set_excluded_rules_enabled",
+    "set_project_enabled_for_rules",
+    "update_project_for_rules",
+}
+
+_RULE_API_EXPORTS = {
+    "ProjectRuleWriteError",
+    "create_excluded_folder_rule_for_webview",
+    "create_excluded_keyword_rule_for_webview",
+    "create_project_folder_rule",
+    "create_project_keyword_rule",
+    "delete_project_folder_rule",
+    "delete_project_keyword_rule",
+    "preview_folder_rule_conflicts",
+    "set_project_rule_enabled",
+    "update_project_folder_rule",
+    "update_project_keyword_rule",
+}
+
 
 def _python_files() -> list[Path]:
     return sorted(PRODUCTION.rglob("*.py"))
@@ -45,6 +159,132 @@ def _call_name(call: ast.Call) -> str:
     if isinstance(target, ast.Attribute):
         return target.attr
     return ""
+
+
+def _service_dependency_graph() -> dict[str, set[str]]:
+    services = PRODUCTION / "services"
+    modules = {path.stem for path in services.glob("*.py")}
+    graph = {module: set() for module in modules}
+    for path in sorted(services.glob("*.py")):
+        source = path.stem
+        for node in ast.walk(_tree(path)):
+            targets: Iterable[str] = ()
+            if isinstance(node, ast.Import):
+                targets = (
+                    alias.name.removeprefix("worktrace.services.").split(".")[0]
+                    for alias in node.names
+                    if alias.name.startswith("worktrace.services.")
+                )
+            elif isinstance(node, ast.ImportFrom):
+                module = node.module or ""
+                if node.level == 1 and module:
+                    targets = (module.split(".")[0],)
+                elif node.level == 1:
+                    targets = (alias.name.split(".")[0] for alias in node.names)
+                elif module == "worktrace.services":
+                    targets = (alias.name.split(".")[0] for alias in node.names)
+                elif module.startswith("worktrace.services."):
+                    targets = (
+                        module.removeprefix("worktrace.services.").split(".")[0],
+                    )
+            graph[source].update(
+                target for target in targets if target in modules and target != source
+            )
+    return graph
+
+
+def _strongly_connected_components(
+    graph: dict[str, set[str]],
+) -> list[set[str]]:
+    index = 0
+    indexes: dict[str, int] = {}
+    lowlinks: dict[str, int] = {}
+    stack: list[str] = []
+    stacked: set[str] = set()
+    result: list[set[str]] = []
+
+    def visit(node: str) -> None:
+        nonlocal index
+        indexes[node] = index
+        lowlinks[node] = index
+        index += 1
+        stack.append(node)
+        stacked.add(node)
+        for target in graph[node]:
+            if target not in indexes:
+                visit(target)
+                lowlinks[node] = min(lowlinks[node], lowlinks[target])
+            elif target in stacked:
+                lowlinks[node] = min(lowlinks[node], indexes[target])
+        if lowlinks[node] != indexes[node]:
+            return
+        component: set[str] = set()
+        while stack:
+            target = stack.pop()
+            stacked.remove(target)
+            component.add(target)
+            if target == node:
+                break
+        result.append(component)
+
+    for node in graph:
+        if node not in indexes:
+            visit(node)
+    return result
+
+
+def _literal_dml(path: Path) -> list[tuple[int, str, str]]:
+    statements: list[tuple[int, str, str]] = []
+    for node in ast.walk(_tree(path)):
+        if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
+            continue
+        for match in _DML_PATTERN.finditer(node.value):
+            operation = match.group(1).upper().replace("\n", " ")
+            statements.append((node.lineno, operation, match.group(2).lower()))
+    return statements
+
+
+def _dynamic_dml(path: Path) -> list[tuple[int, str, set[str]]]:
+    """Resolve the deliberately narrow dynamic-table write boundaries."""
+
+    relative = path.relative_to(ROOT).as_posix()
+    statements: list[tuple[int, str, set[str]]] = []
+    for node in ast.walk(_tree(path)):
+        if not isinstance(node, ast.JoinedStr):
+            continue
+        prefix = "".join(
+            value.value
+            for value in node.values
+            if isinstance(value, ast.Constant) and isinstance(value.value, str)
+        ).strip()
+        if _DML_PATTERN.search(prefix):
+            continue
+        operation = re.match(r"^(UPDATE|DELETE\s+FROM)\b", prefix, re.IGNORECASE)
+        if operation is None:
+            continue
+        tables: set[str] = set()
+        if relative == "worktrace/services/rule_catalog_command_service.py":
+            tables = {"project_rule", "folder_project_rule"}
+        elif relative == "worktrace/services/database_maintenance_service.py":
+            tables = set(_GENERATION_DML_OWNERS) - {"history_mutation_job"}
+        elif relative == "worktrace/services/secure_backup_service.py":
+            tables = set(_GENERATION_DML_OWNERS) - {"history_mutation_job"}
+        statements.append((node.lineno, operation.group(1).upper(), tables))
+    return statements
+
+
+def _static_all(path: Path) -> set[str]:
+    for node in _tree(path).body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if not any(
+            isinstance(target, ast.Name) and target.id == "__all__"
+            for target in node.targets
+        ):
+            continue
+        value = ast.literal_eval(node.value)
+        return {str(item) for item in value}
+    raise AssertionError(f"missing static __all__: {path.relative_to(ROOT).as_posix()}")
 
 
 def test_composition_root_imports_only_canonical_windows_adapter() -> None:
@@ -234,3 +474,96 @@ def test_clipboard_maintenance_failure_is_best_effort(monkeypatch) -> None:
 
     assert collector_module._run_clipboard_maintenance_tick() is None
     assert failures == ["clipboard_maintenance"]
+
+
+def test_service_dependency_graph_is_acyclic_including_local_imports() -> None:
+    graph = _service_dependency_graph()
+    cycles = [
+        sorted(component)
+        for component in _strongly_connected_components(graph)
+        if len(component) > 1
+    ]
+    assert cycles == [], f"service dependency cycles: {cycles}"
+
+
+def test_generation_backed_dml_stays_with_canonical_command_owners() -> None:
+    offenders: list[str] = []
+    covered: set[str] = set()
+    for path in _python_files():
+        relative = path.relative_to(ROOT).as_posix()
+        for line, operation, table in _literal_dml(path):
+            owners = _GENERATION_DML_OWNERS.get(table)
+            if owners is None:
+                continue
+            covered.add(table)
+            if relative not in owners:
+                offenders.append(f"{relative}:{line}: {operation} {table}")
+        for line, operation, tables in _dynamic_dml(path):
+            if not tables:
+                offenders.append(f"{relative}:{line}: {operation} <dynamic-table>")
+                continue
+            for table in tables:
+                covered.add(table)
+                if relative not in _GENERATION_DML_OWNERS[table]:
+                    offenders.append(f"{relative}:{line}: {operation} {table}")
+    assert covered == set(_GENERATION_DML_OWNERS), (
+        "generation-backed tables missing from DML scan: "
+        f"{sorted(set(_GENERATION_DML_OWNERS) - covered)}"
+    )
+    assert offenders == [], "non-canonical DML owners:\n" + "\n".join(offenders)
+
+
+def test_public_project_and_rule_exports_are_validated_capabilities() -> None:
+    assert _static_all(PRODUCTION / "api" / "project_api.py") == _PROJECT_API_EXPORTS
+    assert _static_all(PRODUCTION / "api" / "rule_api.py") == _RULE_API_EXPORTS
+
+
+def test_folder_matching_has_one_pure_canonical_policy() -> None:
+    policy_path = PRODUCTION / "services" / "folder_rule_matching_policy.py"
+    policy_tree = _tree(policy_path)
+    imported_modules = {
+        node.module or ""
+        for node in ast.walk(policy_tree)
+        if isinstance(node, ast.ImportFrom)
+    }
+    assert not any(
+        module.endswith("db") or module.endswith("services")
+        for module in imported_modules
+    )
+    for name in (
+        "folder_rule_service.py",
+        "folder_index_query_service.py",
+        "rule_planning_service.py",
+    ):
+        source = (PRODUCTION / "services" / name).read_text(encoding="utf-8")
+        assert "folder_rule_matching_policy" in source, name
+    query = (PRODUCTION / "services" / "folder_index_query_service.py").read_text(
+        encoding="utf-8"
+    )
+    service = (PRODUCTION / "services" / "folder_rule_service.py").read_text(
+        encoding="utf-8"
+    )
+    assert "folder_rule_service" not in query
+    assert "folder_index_query_service" not in service
+
+
+def test_clipboard_fact_queries_are_separate_from_command_owner() -> None:
+    command_path = PRODUCTION / "services" / "clipboard_service.py"
+    query_path = PRODUCTION / "services" / "clipboard_fact_query_service.py"
+    command_functions = {
+        node.name
+        for node in _tree(command_path).body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    assert not command_functions & {
+        "clipboard_text_for_activity",
+        "clipboard_times_for_activity_ids",
+        "find_activity_for_clipboard_event",
+        "list_file_text_mappings",
+    }
+    inference = (
+        PRODUCTION / "services" / "project_inference_service.py"
+    ).read_text(encoding="utf-8")
+    assert "clipboard_fact_query_service" in inference
+    assert "clipboard_service" not in inference
+    assert _literal_dml(query_path) == []
