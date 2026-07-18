@@ -55,6 +55,15 @@ def classify_collector_failure(exc: BaseException) -> CollectorFailureDispositio
                 True,
             )
         message = str(exc).strip().lower()
+        if message in {
+            "database is locked",
+            "database table is locked",
+            "database is busy",
+        }:
+            return CollectorFailureDisposition(
+                CollectorFailureCode.DATABASE_BUSY,
+                True,
+            )
         if message == CollectorFailureCode.SECURE_IMPORT_IN_PROGRESS.value:
             return CollectorFailureDisposition(
                 CollectorFailureCode.SECURE_IMPORT_IN_PROGRESS,
