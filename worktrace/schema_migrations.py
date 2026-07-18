@@ -54,6 +54,9 @@ def migrate_5_to_6(conn: sqlite3.Connection) -> None:
         """
     )
 
+    # Rebuild both folder-index tables rather than appending columns. This keeps
+    # upgraded databases byte-for-byte structurally equivalent to fresh v6
+    # databases, which is required by WorkTrace's schema fingerprint contract.
     conn.execute(
         "ALTER TABLE folder_rule_index_state RENAME TO folder_rule_index_state_v5"
     )
@@ -68,9 +71,7 @@ def migrate_5_to_6(conn: sqlite3.Connection) -> None:
             active_generation INTEGER,
             building_generation INTEGER,
             build_status TEXT CHECK (
-                build_status IS NULL OR build_status IN (
-                    'pending', 'indexing', 'ready', 'stale', 'error'
-                )
+                build_status IS NULL OR build_status IN ('pending', 'indexing', 'ready', 'stale', 'error')
             ),
             last_error TEXT,
             last_indexed_at TEXT,
@@ -80,8 +81,7 @@ def migrate_5_to_6(conn: sqlite3.Connection) -> None:
             refresh_requested INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
-            FOREIGN KEY (folder_rule_id)
-                REFERENCES folder_project_rule(id) ON DELETE CASCADE
+            FOREIGN KEY (folder_rule_id) REFERENCES folder_project_rule(id) ON DELETE CASCADE
         )
         """
     )
@@ -137,8 +137,7 @@ def migrate_5_to_6(conn: sqlite3.Connection) -> None:
             size INTEGER,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
-            FOREIGN KEY (folder_rule_id)
-                REFERENCES folder_project_rule(id) ON DELETE CASCADE,
+            FOREIGN KEY (folder_rule_id) REFERENCES folder_project_rule(id) ON DELETE CASCADE,
             UNIQUE(folder_rule_id, generation, normalized_path_key)
         )
         """
@@ -258,9 +257,7 @@ def migrate_8_to_9(conn: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS activity_resource_repair_job (
             singleton_id INTEGER PRIMARY KEY CHECK(singleton_id = 1),
             policy_version INTEGER NOT NULL CHECK(policy_version > 0),
-            status TEXT NOT NULL CHECK(
-                status IN ('pending', 'running', 'completed', 'failed')
-            ),
+            status TEXT NOT NULL CHECK(status IN ('pending', 'running', 'completed', 'failed')),
             cursor_activity_id INTEGER NOT NULL DEFAULT 0 CHECK(cursor_activity_id >= 0),
             processed_count INTEGER NOT NULL DEFAULT 0 CHECK(processed_count >= 0),
             repaired_count INTEGER NOT NULL DEFAULT 0 CHECK(repaired_count >= 0),
@@ -327,70 +324,6 @@ def migrate_9_to_10(conn: sqlite3.Connection) -> None:
     )
 
 
-def migrate_10_to_11(conn: sqlite3.Connection) -> None:
-    """Replace assignment sentinels with durable inference obligations."""
-
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS activity_inference_job (
-            activity_id INTEGER PRIMARY KEY,
-            reason TEXT NOT NULL CHECK(
-                reason IN ('closed_activity', 'legacy_retry')
-            ),
-            status TEXT NOT NULL CHECK(status IN ('pending', 'failed')),
-            attempt_count INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count >= 0),
-            next_attempt_at TEXT,
-            last_error_code TEXT CHECK(
-                last_error_code IS NULL OR last_error_code IN (
-                    'data_repair_required',
-                    'database_busy',
-                    'database_generation_changed',
-                    'secure_import_in_progress',
-                    'unexpected_failure'
-                )
-            ),
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            FOREIGN KEY(activity_id) REFERENCES activity_log(id) ON DELETE CASCADE
-        )
-        """
-    )
-    timestamp = str(
-        conn.execute("SELECT datetime('now', 'localtime')").fetchone()[0]
-    )
-    conn.execute(
-        """
-        INSERT OR IGNORE INTO activity_inference_job(
-            activity_id, reason, status, attempt_count, next_attempt_at,
-            last_error_code, created_at, updated_at
-        )
-        SELECT
-            activity.id, 'legacy_retry', 'pending', 0, NULL, NULL, ?, ?
-        FROM activity_log activity
-        JOIN activity_project_assignment assignment
-          ON assignment.activity_id = activity.id
-        WHERE activity.end_time IS NOT NULL
-          AND activity.status = 'normal'
-          AND activity.is_hidden = 0
-          AND activity.is_deleted = 0
-          AND assignment.is_manual = 0
-          AND assignment.source = 'uncategorized'
-          AND assignment.confidence = -1
-        """,
-        (timestamp, timestamp),
-    )
-    conn.execute(
-        """
-        UPDATE activity_project_assignment
-        SET confidence = 0, updated_at = ?
-        WHERE is_manual = 0
-          AND source = 'uncategorized'
-          AND confidence = -1
-        """,
-        (timestamp,),
-    )
-
-
 MIGRATIONS: dict[int, Migration] = {
     4: migrate_4_to_5,
     5: migrate_5_to_6,
@@ -398,7 +331,6 @@ MIGRATIONS: dict[int, Migration] = {
     7: migrate_7_to_8,
     8: migrate_8_to_9,
     9: migrate_9_to_10,
-    10: migrate_10_to_11,
 }
 
 
@@ -441,6 +373,5 @@ __all__ = [
     "migrate_7_to_8",
     "migrate_8_to_9",
     "migrate_9_to_10",
-    "migrate_10_to_11",
     "migrate_schema",
 ]
