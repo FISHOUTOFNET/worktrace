@@ -26,3 +26,23 @@ CREATE TABLE IF NOT EXISTS activity_resource_repair_job (
     completed_at TEXT NOT NULL DEFAULT '',
     updated_at TEXT NOT NULL DEFAULT ''
 );
+
+CREATE TABLE IF NOT EXISTS activity_inference_job (
+    activity_id INTEGER PRIMARY KEY,
+    reason TEXT NOT NULL CHECK(reason IN ('closed_activity', 'legacy_retry')),
+    status TEXT NOT NULL CHECK(status IN ('pending', 'failed')),
+    attempt_count INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count >= 0),
+    next_attempt_at TEXT,
+    last_error_code TEXT CHECK(
+        last_error_code IS NULL OR last_error_code IN (
+            'data_repair_required',
+            'database_busy',
+            'database_generation_changed',
+            'secure_import_in_progress',
+            'unexpected_failure'
+        )
+    ),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY(activity_id) REFERENCES activity_log(id) ON DELETE CASCADE
+);
