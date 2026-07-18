@@ -11,7 +11,12 @@ from worktrace.services import activity_inference_job_repository as jobs
 from worktrace.services import secure_backup_service
 from worktrace.schema_migrations import migrate_10_to_11
 
-pytestmark = [pytest.mark.unit, pytest.mark.contract]
+pytestmark = [
+    pytest.mark.unit,
+    pytest.mark.db,
+    pytest.mark.contract,
+    pytest.mark.collector_runtime,
+]
 
 ROOT = Path(__file__).resolve().parents[1]
 
