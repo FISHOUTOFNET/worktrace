@@ -6,7 +6,11 @@ import logging
 from typing import Any
 
 from ..platforms.windows_adapter import WindowsAdapter  # canonical production adapter
-from ..services import activity_inference_job_service, project_inference_service
+from ..services import (
+    activity_inference_job_service,
+    activity_lifecycle_service,
+    project_inference_service,
+)
 from . import app_runtime_core as _core
 from .app_runtime_core import (
     AppRuntime as _CoreAppRuntime,
@@ -27,6 +31,9 @@ def _synchronize_core_hooks() -> None:
     _core.acquire_single_instance = acquire_single_instance
     _core.release_single_instance = release_single_instance
     _core.run_collector = run_collector
+    _core.activity_lifecycle_service.close_all_open_activities = (
+        activity_lifecycle_service.close_all_open_activities
+    )
 
 
 class AppRuntime(_CoreAppRuntime):
