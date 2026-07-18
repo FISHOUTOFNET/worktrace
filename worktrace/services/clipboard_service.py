@@ -1,3 +1,5 @@
+"""Clipboard fact commands with durable closed-activity inference scheduling."""
+
 from __future__ import annotations
 
 import hashlib
