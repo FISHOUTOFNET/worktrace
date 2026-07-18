@@ -1,8 +1,8 @@
 """Activity lifecycle command boundary.
 
 Every durable lifecycle transition is committed in one SQLite transaction.
-Project inference remains a post-commit, retryable derivation and can never
-prevent the caller from receiving an already-created activity id.
+Eligible closed activities receive a durable inference job in that same
+transaction; post-commit processing is only a latency optimization.
 """
 
 from __future__ import annotations
@@ -14,7 +14,11 @@ from ..constants import STATUS_ERROR, STATUS_NORMAL
 from ..data_generation_repository import DataGenerationNamespace
 from ..db import now_str
 from ..domain_unit_of_work import DomainUnitOfWork
-from . import activity_fact_repository, session_boundary_service
+from . import (
+    activity_fact_repository,
+    activity_inference_job_repository,
+    session_boundary_service,
+)
 from .settings_service import set_settings_in_transaction
 
 
@@ -22,26 +26,21 @@ def _report_uow() -> DomainUnitOfWork:
     return DomainUnitOfWork((DataGenerationNamespace.REPORT_STRUCTURE,))
 
 
-def _mark_inference_retry_safely(activity_id: int) -> None:
-    try:
-        from .assignment_command_service import mark_inference_retry_with_uow
-
-        mark_inference_retry_with_uow(int(activity_id))
-    except Exception:
-        logging.exception(
-            "close-finalize inference retry marker failed for activity_id=%s",
-            activity_id,
-        )
+def _enqueue_closed_inference_jobs(conn, closed_ids: list[int]) -> int:
+    return activity_inference_job_repository.enqueue_closed_activity_ids(
+        conn,
+        closed_ids,
+    )
 
 
-def finalize_closed_activity_ids(closed_ids: list[int]) -> None:
-    """Run project inference after the close transaction has committed."""
+def finalize_closed_activity_ids(closed_ids: list[int] | None) -> None:
+    """Best-effort immediate consumption of already-durable inference jobs."""
 
     if not closed_ids:
         return
     from .project_inference_service import process_new_activity
 
-    for activity_id in closed_ids:
+    for activity_id in sorted({int(value) for value in closed_ids}):
         try:
             process_new_activity(activity_id)
         except Exception:
@@ -49,7 +48,6 @@ def finalize_closed_activity_ids(closed_ids: list[int]) -> None:
                 "close-finalize inference failed for activity_id=%s",
                 activity_id,
             )
-            _mark_inference_retry_safely(activity_id)
 
 
 def start_activity(*, start_time: str, source: str, payload: dict[str, Any]) -> int:
@@ -59,14 +57,16 @@ def start_activity(*, start_time: str, source: str, payload: dict[str, Any]) -> 
         payload=payload,
     )
     with _report_uow() as uow:
+        conn = uow.connection
         closed_ids = activity_fact_repository.close_all_open_activities(
-            uow.connection,
+            conn,
             start_time,
         )
         activity_id = activity_fact_repository.insert_open_activity(
-            uow.connection,
+            conn,
             prepared,
         )
+        _enqueue_closed_inference_jobs(conn, closed_ids)
         uow.mark_changed()
     finalize_closed_activity_ids(closed_ids)
     _sync_open_row_project_safely(activity_id, status=prepared.status)
@@ -128,13 +128,15 @@ def close_activity(
     duration_seconds: int | None = None,
 ) -> None:
     with _report_uow() as uow:
+        conn = uow.connection
         changed = activity_fact_repository.close_activity(
-            uow.connection,
+            conn,
             activity_id,
             end_time,
             duration_seconds=duration_seconds,
         )
         if changed:
+            _enqueue_closed_inference_jobs(conn, [int(activity_id)])
             uow.mark_changed()
     if changed:
         finalize_closed_activity_ids([int(activity_id)])
@@ -143,11 +145,13 @@ def close_activity(
 def close_all_open_activities(end_time: str | None = None) -> list[int]:
     requested_end = end_time or now_str()
     with _report_uow() as uow:
+        conn = uow.connection
         closed_ids = activity_fact_repository.close_all_open_activities(
-            uow.connection,
+            conn,
             requested_end,
         )
         if closed_ids:
+            _enqueue_closed_inference_jobs(conn, closed_ids)
             uow.mark_changed()
     finalize_closed_activity_ids(closed_ids)
     return closed_ids
@@ -177,6 +181,7 @@ def close_at_boundary(
         ):
             if activity_id not in closed_ids:
                 closed_ids.append(activity_id)
+        _enqueue_closed_inference_jobs(conn, closed_ids)
         session_boundary_service.insert_boundary(conn, requested_at, reason)
         uow.mark_changed()
     finalize_closed_activity_ids(closed_ids)
@@ -210,6 +215,7 @@ def pause_collection(
             if activity_id not in closed_ids:
                 closed_ids.append(activity_id)
 
+        _enqueue_closed_inference_jobs(conn, closed_ids)
         paused_row = conn.execute(
             "SELECT value FROM settings WHERE key = 'user_paused'"
         ).fetchone()
@@ -322,6 +328,7 @@ def recover_activity_batch(
             created_ids.append(activity_id)
             closed_ids.append(activity_id)
             changed = True
+        _enqueue_closed_inference_jobs(conn, closed_ids)
         for boundary in boundaries:
             session_boundary_service.insert_boundary(
                 conn,
