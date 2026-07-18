@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from collections.abc import Iterable
 
 from ..data_generation_repository import DataGenerationNamespace
@@ -10,6 +11,8 @@ from ..db import get_connection, now_str
 from ..domain_unit_of_work import DomainUnitOfWork
 from . import activity_inference_job_repository as jobs
 from . import project_inference_service
+
+_EXECUTION_LOCK = threading.RLock()
 
 
 def recover_interrupted_inference_jobs() -> int:
@@ -32,10 +35,23 @@ def process_pending_inference_jobs(
     normalized_limit = max(0, int(limit))
     if normalized_limit == 0:
         return 0
+    with _EXECUTION_LOCK:
+        recover_interrupted_inference_jobs()
+        return _process_pending_inference_jobs_locked(
+            normalized_limit,
+            activity_ids=activity_ids,
+        )
+
+
+def _process_pending_inference_jobs_locked(
+    limit: int,
+    *,
+    activity_ids: Iterable[int] | None,
+) -> int:
     with get_connection() as conn:
         runnable_ids = jobs.list_runnable_activity_ids(
             conn,
-            limit=normalized_limit,
+            limit=limit,
             activity_ids=activity_ids,
         )
 
