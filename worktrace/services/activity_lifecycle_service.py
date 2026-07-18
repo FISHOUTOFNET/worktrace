@@ -39,7 +39,7 @@ def finalize_closed_activity_ids(closed_ids: list[int]) -> None:
     normalized = sorted({int(activity_id) for activity_id in closed_ids})
     if not normalized:
         return
-    from .project_inference_service import process_pending_inference_jobs
+    from .activity_inference_job_service import process_pending_inference_jobs
 
     try:
         process_pending_inference_jobs(
