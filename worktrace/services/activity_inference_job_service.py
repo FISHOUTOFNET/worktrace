@@ -12,6 +12,7 @@ from ..data_generation_repository import DataGenerationNamespace
 from ..db import get_connection, now_str
 from ..domain_unit_of_work import DomainUnitOfWork
 from . import activity_inference_job_repository as jobs
+from .activity_inference_policy import is_closed_activity_inference_eligible
 
 InferenceCommand = Callable[[Any, int], dict]
 
@@ -34,9 +35,6 @@ def process_pending_inference_jobs(
     )
     if requested_ids == []:
         return 0
-    if requested_ids is not None:
-        with DomainUnitOfWork() as uow:
-            jobs.enqueue_closed_activity_ids(uow.connection, requested_ids)
 
     with get_connection() as conn:
         runnable = jobs.list_runnable_jobs(
@@ -58,28 +56,13 @@ def process_pending_inference_jobs(
                 )
                 if not current:
                     continue
-                activity = conn.execute(
-                    """
-                    SELECT activity.end_time, activity.status,
-                           activity.is_hidden, activity.is_deleted,
-                           assignment.is_manual, assignment.source
-                    FROM activity_log activity
-                    LEFT JOIN activity_project_assignment assignment
-                      ON assignment.activity_id = activity.id
-                    WHERE activity.id = ?
-                    """,
-                    (activity_id,),
-                ).fetchone()
-                eligible = bool(
-                    activity is not None
-                    and activity["end_time"] is not None
-                    and str(activity["status"] or "") == "normal"
-                    and not int(activity["is_hidden"] or 0)
-                    and not int(activity["is_deleted"] or 0)
-                    and not int(activity["is_manual"] or 0)
-                    and str(activity["source"] or "") != "midnight_anchor"
+                state = jobs.read_activity_and_assignment(conn, activity_id)
+                assignment = (
+                    None
+                    if state is None or state["assignment_activity_id"] is None
+                    else state
                 )
-                if not eligible:
+                if not is_closed_activity_inference_eligible(state, assignment):
                     jobs.delete_job(conn, activity_id)
                     completed += 1
                     continue
@@ -93,7 +76,7 @@ def process_pending_inference_jobs(
                 completed += 1
         except Exception as exc:
             code = _classify_failure(exc)
-            logging.error(
+            logging.exception(
                 "activity inference job failed activity_id=%s code=%s",
                 activity_id,
                 code.value,
@@ -139,7 +122,7 @@ def _worker_loop(
                 limit=batch_size,
             )
         except Exception:
-            logging.error("activity inference worker iteration failed")
+            logging.exception("activity inference worker iteration failed")
             processed = 0
         if processed >= batch_size:
             continue
@@ -191,7 +174,7 @@ def _record_failure_safely(
                 at_time=now_str(),
             )
     except Exception:
-        logging.error(
+        logging.exception(
             "activity inference failure state could not be persisted activity_id=%s",
             activity_id,
         )
