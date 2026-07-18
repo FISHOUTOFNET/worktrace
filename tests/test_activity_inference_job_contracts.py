@@ -209,3 +209,11 @@ def test_inference_job_has_one_live_dml_owner():
         "worktrace/schema_migrations.py",
         "worktrace/services/activity_inference_job_repository.py",
     }
+
+
+def test_inference_worker_depends_on_callback_not_project_service():
+    source = (
+        ROOT / "worktrace/services/activity_inference_job_service.py"
+    ).read_text(encoding="utf-8")
+    assert "project_inference_service" not in source
+    assert "infer_activity(conn, activity_id)" in source
