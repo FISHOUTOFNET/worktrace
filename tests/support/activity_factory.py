@@ -1,9 +1,8 @@
 """Test-only activity fact construction and production-query facade.
 
 Tests may create durable activity facts directly through the repository without
-invoking production lifecycle inference. Read methods not defined here are
-forwarded to the production activity query service so existing tests can migrate
-by changing only their import boundary.
+invoking production lifecycle commands. Explicit finalization uses the same
+repository and consumer boundaries as production closed-activity inference.
 """
 
 from __future__ import annotations
@@ -15,6 +14,8 @@ from worktrace.db import get_connection, now_str
 from worktrace.resources.types import DetectedResource
 from worktrace.services import (
     activity_fact_repository,
+    activity_inference_job_repository,
+    activity_inference_job_service,
     activity_service as _activity_queries,
     project_inference_service,
 )
@@ -185,7 +186,18 @@ def reopen_activity(activity_id: int) -> None:
 
 
 def finalize_created_activity(activity_id: int) -> None:
-    project_inference_service.process_new_activity(activity_id)
+    """Schedule and synchronously consume one eligible test activity."""
+
+    with get_connection() as conn:
+        activity_inference_job_repository.enqueue_closed_activity_ids(
+            conn,
+            [int(activity_id)],
+        )
+    activity_inference_job_service.process_pending_inference_jobs(
+        project_inference_service.assign_project_for_activity_in_transaction,
+        limit=1,
+        activity_ids=[int(activity_id)],
+    )
 
 
 def apply_midnight_anchor_assignment(activity_id: int, project_id: int) -> None:
@@ -257,7 +269,10 @@ def create_finalized_activity(**kwargs: Any) -> int:
 def create_soft_deleted_activity(**kwargs: Any) -> int:
     activity_id = create_closed_activity(**kwargs)
     with get_connection() as conn:
-        conn.execute("UPDATE activity_log SET is_deleted = 1 WHERE id = ?", (activity_id,))
+        conn.execute(
+            "UPDATE activity_log SET is_deleted = 1 WHERE id = ?",
+            (activity_id,),
+        )
     return activity_id
 
 
