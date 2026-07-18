@@ -97,3 +97,7 @@ def test_inference_job_owners_are_lifecycle_scoped() -> None:
         "worktrace/services/database_maintenance_service.py",
         "worktrace/schema_migrations.py",
     }
+    assert not (
+        Path(__file__).resolve().parents[1]
+        / "worktrace/schema_migrations_history.py"
+    ).exists()
