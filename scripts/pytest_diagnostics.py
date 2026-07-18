@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import os
 import re
 import sys
@@ -127,26 +128,58 @@ def _append_summary(path: Path | None, lines: Iterable[str]) -> None:
             stream.write("\n")
 
 
-def _append_github_outputs(problems: list[Problem]) -> None:
+def _counts(total: int, skipped: int, problems: list[Problem]) -> str:
+    failures = sum(problem.kind == "failure" for problem in problems)
+    errors = sum(problem.kind == "error" for problem in problems)
+    passed = max(0, total - skipped - failures - errors)
+    return (
+        f"Total: {total} | Passed: {passed} | Failed: {failures} | "
+        f"Errors: {errors} | Skipped: {skipped}"
+    )
+
+
+def _compact_cross_job_report(
+    total: int,
+    skipped: int,
+    problems: list[Problem],
+) -> str:
+    lines = [MANIFEST_BEGIN, _counts(total, skipped, problems)]
+    problem_count = len(problems)
+    for index, problem in enumerate(problems, start=1):
+        lines.append(
+            f"[{index}/{problem_count}] {problem.test_id} | {problem.kind} | "
+            f"{problem.location} | {problem.message}"
+        )
+    lines.extend((MANIFEST_END, DETAILS_BEGIN))
+    for index, problem in enumerate(problems, start=1):
+        lines.append(
+            f"[{index}/{problem_count}] {problem.test_id} | "
+            f"{_single_line(problem.details, limit=1000)}"
+        )
+    lines.append(DETAILS_END)
+    return "\n".join(lines)
+
+
+def _append_github_outputs(
+    problems: list[Problem],
+    *,
+    cross_job_report: str = "",
+) -> None:
     output_path = os.environ.get("GITHUB_OUTPUT", "").strip()
     if not output_path:
         return
     first_failure = problems[0].test_id if problems else ""
     first_location = problems[0].location if problems else ""
+    report_b64 = base64.b64encode(cross_job_report.encode("utf-8")).decode("ascii")
     with Path(output_path).open("a", encoding="utf-8", newline="\n") as stream:
         stream.write(f"problem_count={len(problems)}\n")
         stream.write(f"first_failure={_single_line(first_failure, limit=160)}\n")
         stream.write(f"first_location={_single_line(first_location, limit=120)}\n")
+        stream.write(f"diagnostics_b64={report_b64}\n")
 
 
 def _emit_manifest(total: int, skipped: int, problems: list[Problem]) -> list[str]:
-    failures = sum(problem.kind == "failure" for problem in problems)
-    errors = sum(problem.kind == "error" for problem in problems)
-    passed = max(0, total - skipped - failures - errors)
-    counts = (
-        f"Total: {total} | Passed: {passed} | Failed: {failures} | "
-        f"Errors: {errors} | Skipped: {skipped}"
-    )
+    counts = _counts(total, skipped, problems)
 
     print(MANIFEST_BEGIN)
     print(counts)
@@ -264,7 +297,8 @@ def main() -> int:
         _append_summary(args.summary, summary)
         return 0
 
-    _append_github_outputs(problems)
+    report = _compact_cross_job_report(total, skipped, problems)
+    _append_github_outputs(problems, cross_job_report=report)
     _append_summary(args.summary, _emit_manifest(total, skipped, problems))
     return 0
 
