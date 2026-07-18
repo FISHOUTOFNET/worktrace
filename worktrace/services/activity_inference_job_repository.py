@@ -1,6 +1,6 @@
 """Durable scheduling state for closed-activity project inference.
 
-This module is the sole DML owner for ``activity_inference_job``.  Activity
+This module is the sole DML owner for ``activity_inference_job``. Activity
 facts and their inference jobs are created in the same caller-owned transaction;
 consumers may fail or the process may exit without losing the derivation request.
 """
@@ -17,8 +17,6 @@ JOB_PENDING = "pending"
 JOB_RUNNING = "running"
 JOB_FAILED = "failed"
 
-_ELIGIBLE_ASSIGNMENT_SOURCES = ("uncategorized", "suggested_project_name")
-
 
 def enqueue_closed_activity_ids(
     conn,
@@ -26,10 +24,11 @@ def enqueue_closed_activity_ids(
     *,
     at_time: str | None = None,
 ) -> int:
-    """Insert missing jobs for eligible closed activities.
+    """Insert missing jobs for every eligible closed nonmanual activity.
 
-    Eligibility is evaluated from durable facts inside the caller's transaction.
-    Manual and midnight-anchor assignments are never scheduled for inference.
+    A closed normal activity is always re-evaluated from its final durable facts,
+    even if an earlier open-row inference selected a rule. Manual and midnight
+    anchor assignments are authoritative and are never scheduled.
     """
 
     ids = sorted({int(activity_id) for activity_id in activity_ids})
@@ -57,17 +56,11 @@ def enqueue_closed_activity_ids(
                 assignment.activity_id IS NULL
                 OR (
                     assignment.is_manual = 0
-                    AND assignment.source IN (?, ?)
+                    AND assignment.source <> 'midnight_anchor'
                 )
           )
         """,
-        (
-            JOB_PENDING,
-            at,
-            at,
-            *ids,
-            *_ELIGIBLE_ASSIGNMENT_SOURCES,
-        ),
+        (JOB_PENDING, at, at, *ids),
     )
     return max(0, int(cursor.rowcount or 0))
 
@@ -92,12 +85,11 @@ def seed_missing_jobs(conn, *, at_time: str | None = None) -> int:
                 assignment.activity_id IS NULL
                 OR (
                     assignment.is_manual = 0
-                    AND assignment.source IN (?, ?)
+                    AND assignment.source <> 'midnight_anchor'
                 )
           )
         ORDER BY activity.id
-        """,
-        _ELIGIBLE_ASSIGNMENT_SOURCES,
+        """
     ).fetchall()
     return enqueue_closed_activity_ids(
         conn,
