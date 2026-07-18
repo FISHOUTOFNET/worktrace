@@ -5,6 +5,7 @@ from __future__ import annotations
 from ..data_generation_repository import DataGenerationNamespace
 from ..db import now_str
 from ..domain_unit_of_work import DomainUnitOfWork
+from . import activity_inference_job_repository
 
 
 def _normalized_rule_identity(
@@ -15,6 +16,10 @@ def _normalized_rule_identity(
     if source not in {"folder_rule", "keyword_rule"}:
         return None, None
     return source_rule_type, int(source_rule_id) if source_rule_id is not None else None
+
+
+def _complete_pending_inference(conn, activity_id: int) -> None:
+    activity_inference_job_repository.delete_completed_job(conn, int(activity_id))
 
 
 def upsert_assignment(
@@ -30,7 +35,7 @@ def upsert_assignment(
     source_rule_id: int | None = None,
     protect_manual: bool = False,
 ) -> bool:
-    """Persist one assignment and report whether its durable value changed."""
+    """Persist one assignment and complete any pending derivation atomically."""
 
     activity_id = int(activity_id)
     source_rule_type, source_rule_id = _normalized_rule_identity(
@@ -58,6 +63,7 @@ def upsert_assignment(
     ).fetchone()
     if existing is not None:
         if protect_manual and int(existing["is_manual"] or 0):
+            _complete_pending_inference(conn, activity_id)
             return False
         current = (
             int(existing["project_id"]) if existing["project_id"] is not None else None,
@@ -71,6 +77,7 @@ def upsert_assignment(
             else None,
         )
         if current == desired:
+            _complete_pending_inference(conn, activity_id)
             return False
         conn.execute(
             """
@@ -82,6 +89,7 @@ def upsert_assignment(
             """,
             (*desired, now_str(), activity_id),
         )
+        _complete_pending_inference(conn, activity_id)
         return True
 
     timestamp = now_str()
@@ -95,6 +103,7 @@ def upsert_assignment(
         """,
         (activity_id, *desired, timestamp, timestamp),
     )
+    _complete_pending_inference(conn, activity_id)
     return True
 
 
