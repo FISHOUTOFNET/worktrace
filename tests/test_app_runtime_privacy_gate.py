@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from tests import app_runtime_privacy_gate_contracts as _contracts
@@ -12,6 +14,7 @@ pytestmark = [
     pytest.mark.security_privacy,
     pytest.mark.serial,
     pytest.mark.db,
+    pytest.mark.contract,
 ]
 
 for _name in dir(_contracts):
@@ -52,3 +55,11 @@ def test_runtime_startup_orders_collector_before_derived_workers(
         assert order == ["collector", "workers"]
     finally:
         runtime.shutdown()
+
+
+def test_runtime_keeps_shutdown_lifecycle_owner_canonical():
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "worktrace/runtime/app_runtime.py"
+    ).read_text(encoding="utf-8")
+    assert "activity_lifecycle_service.close_all_open_activities" in source
