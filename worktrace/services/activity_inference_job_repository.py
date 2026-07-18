@@ -13,11 +13,11 @@ from typing import Iterable
 
 from ..constants import TIME_FORMAT
 from ..db import now_str
+from .activity_inference_policy import is_closed_activity_inference_eligible
 
 
 class InferenceJobReason(str, Enum):
     CLOSED_ACTIVITY = "closed_activity"
-    LEGACY_RETRY = "legacy_retry"
 
 
 class InferenceJobStatus(str, Enum):
@@ -40,48 +40,69 @@ def enqueue_closed_activity_ids(
     reason: InferenceJobReason = InferenceJobReason.CLOSED_ACTIVITY,
     at_time: str | None = None,
 ) -> int:
-    """Insert missing jobs for eligible closed nonmanual activities."""
+    """Insert missing jobs for activities accepted by the canonical policy."""
 
-    if not isinstance(reason, InferenceJobReason):
+    if reason is not InferenceJobReason.CLOSED_ACTIVITY:
         raise TypeError("inference_job_reason_required")
     ids = sorted({int(activity_id) for activity_id in activity_ids})
     if not ids:
         return 0
-    at = str(at_time or now_str())
     placeholders = ",".join("?" for _ in ids)
-    cursor = conn.execute(
+    rows = conn.execute(
         f"""
-        INSERT OR IGNORE INTO activity_inference_job(
-            activity_id, reason, status, attempt_count, next_attempt_at,
-            last_error_code, created_at, updated_at
-        )
-        SELECT
-            activity.id, ?, ?, 0, NULL, NULL, ?, ?
+        SELECT activity.id,
+               activity.end_time,
+               activity.status,
+               activity.is_hidden,
+               activity.is_deleted,
+               assignment.activity_id AS assignment_activity_id,
+               assignment.is_manual,
+               assignment.source
         FROM activity_log activity
         LEFT JOIN activity_project_assignment assignment
           ON assignment.activity_id = activity.id
         WHERE activity.id IN ({placeholders})
-          AND activity.end_time IS NOT NULL
-          AND activity.status = 'normal'
-          AND activity.is_hidden = 0
-          AND activity.is_deleted = 0
-          AND (
-                assignment.activity_id IS NULL
-                OR (
-                    assignment.is_manual = 0
-                    AND assignment.source <> 'midnight_anchor'
-                )
-          )
+        ORDER BY activity.id
         """,
-        (
-            reason.value,
-            InferenceJobStatus.PENDING.value,
-            at,
-            at,
-            *ids,
-        ),
+        tuple(ids),
+    ).fetchall()
+    eligible_ids = [
+        int(row["id"])
+        for row in rows
+        if is_closed_activity_inference_eligible(
+            row,
+            None if row["assignment_activity_id"] is None else row,
+        )
+    ]
+    if not eligible_ids:
+        return 0
+
+    at = str(at_time or now_str())
+    before = int(
+        conn.execute("SELECT COUNT(*) FROM activity_inference_job").fetchone()[0]
     )
-    return max(0, int(cursor.rowcount or 0))
+    conn.executemany(
+        """
+        INSERT OR IGNORE INTO activity_inference_job(
+            activity_id, reason, status, attempt_count, next_attempt_at,
+            last_error_code, created_at, updated_at
+        ) VALUES (?, ?, ?, 0, NULL, NULL, ?, ?)
+        """,
+        [
+            (
+                activity_id,
+                reason.value,
+                InferenceJobStatus.PENDING.value,
+                at,
+                at,
+            )
+            for activity_id in eligible_ids
+        ],
+    )
+    after = int(
+        conn.execute("SELECT COUNT(*) FROM activity_inference_job").fetchone()[0]
+    )
+    return max(0, after - before)
 
 
 def list_runnable_jobs(
@@ -130,6 +151,28 @@ def list_runnable_jobs(
         tuple(parameters),
     ).fetchall()
     return [dict(row) for row in rows]
+
+
+def read_activity_and_assignment(conn, activity_id: int):
+    """Read the facts required by the canonical eligibility policy."""
+
+    return conn.execute(
+        """
+        SELECT activity.id,
+               activity.end_time,
+               activity.status,
+               activity.is_hidden,
+               activity.is_deleted,
+               assignment.activity_id AS assignment_activity_id,
+               assignment.is_manual,
+               assignment.source
+        FROM activity_log activity
+        LEFT JOIN activity_project_assignment assignment
+          ON assignment.activity_id = activity.id
+        WHERE activity.id = ?
+        """,
+        (int(activity_id),),
+    ).fetchone()
 
 
 def delete_job(conn, activity_id: int) -> bool:
@@ -192,5 +235,6 @@ __all__ = [
     "delete_job",
     "enqueue_closed_activity_ids",
     "list_runnable_jobs",
+    "read_activity_and_assignment",
     "record_failure",
 ]
