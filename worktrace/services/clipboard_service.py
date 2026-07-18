@@ -152,6 +152,8 @@ def _find_duplicate_event(
 
 
 def _attempt_clipboard_inference(activity_id: int) -> None:
+    """Converge an open row immediately or consume its closed-row outbox job."""
+
     try:
         project_inference_service.process_pending_inference_jobs(
             limit=1,
@@ -160,6 +162,16 @@ def _attempt_clipboard_inference(activity_id: int) -> None:
     except Exception:
         logging.exception(
             "clipboard inference failed; durable job retained for activity_id=%s",
+            activity_id,
+        )
+        return
+    try:
+        project_inference_service.sync_persisted_open_activity_project(
+            int(activity_id)
+        )
+    except Exception:
+        logging.exception(
+            "clipboard open-row inference failed for activity_id=%s",
             activity_id,
         )
 
