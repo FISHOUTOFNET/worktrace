@@ -5,6 +5,8 @@ from contextlib import contextmanager
 
 import pytest
 
+from worktrace.services import system_project_service
+
 from worktrace import generation_clock
 from worktrace.collector.activity_session_recorder import ActivitySessionRecorder
 from worktrace.collector.state_machine import CollectorStateMachine
@@ -196,7 +198,7 @@ def test_rule_caches_replace_their_snapshot_instead_of_accumulating(temp_db):
 @pytest.mark.integration
 @pytest.mark.contract
 def test_privacy_cache_replaces_its_snapshot_instead_of_accumulating(temp_db):
-    excluded_project_id = project_service.get_or_create_excluded_project()
+    excluded_project_id = system_project_service.require_excluded_project_id()
     project_service.set_project_enabled(excluded_project_id, True)
     privacy_service.clear_exclude_rules_cache()
 

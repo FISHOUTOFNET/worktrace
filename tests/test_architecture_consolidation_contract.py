@@ -19,6 +19,8 @@ from worktrace.services import (
 pytestmark = [pytest.mark.db, pytest.mark.integration, pytest.mark.serial]
 
 _ALLOWED_SCHEMA_TRIGGERS = {
+    "project_reserved_name_insert",
+    "project_reserved_name_update",
     "validate_report_split_operation",
     "validate_report_operation_receipt_members",
 }

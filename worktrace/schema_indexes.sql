@@ -68,6 +68,20 @@ ON report_session_operation_member(operation_id, role);
 CREATE INDEX IF NOT EXISTS idx_project_rule_pattern
 ON project_rule(pattern);
 
+CREATE TRIGGER IF NOT EXISTS project_reserved_name_insert
+BEFORE INSERT ON project
+WHEN NEW.name IN ('未归类', '排除规则') AND NEW.created_by <> 'system'
+BEGIN
+    SELECT RAISE(ABORT, 'reserved_project_name');
+END;
+
+CREATE TRIGGER IF NOT EXISTS project_reserved_name_update
+BEFORE UPDATE OF name, created_by ON project
+WHEN NEW.name IN ('未归类', '排除规则') AND NEW.created_by <> 'system'
+BEGIN
+    SELECT RAISE(ABORT, 'reserved_project_name');
+END;
+
 CREATE INDEX IF NOT EXISTS idx_clipboard_event_activity
 ON activity_clipboard_event(activity_id);
 

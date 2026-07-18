@@ -167,6 +167,47 @@ def test_current_schema_initialization_is_idempotent(tmp_path):
         conn.close()
 
 
+def test_v9_upgrade_normalizes_reserved_project_ownership_and_installs_constraints(
+    tmp_path,
+):
+    db_path = str(tmp_path / "v9-reserved-project.db")
+    db.configure_database(db_path)
+    with db.get_connection() as conn:
+        conn.executescript(db.read_schema_sql())
+        conn.executescript(db.read_internal_schema_sql())
+        db.seed_defaults(conn)
+        conn.execute(
+            "UPDATE project SET created_by = 'user' WHERE name IN (?, ?)",
+            (UNCATEGORIZED_PROJECT, EXCLUDED_PROJECT),
+        )
+        conn.execute("PRAGMA user_version = 9")
+
+    db.initialize_database(db_path)
+
+    with db.get_connection() as conn:
+        owners = {
+            row["name"]: row["created_by"]
+            for row in conn.execute(
+                "SELECT name, created_by FROM project WHERE name IN (?, ?)",
+                (UNCATEGORIZED_PROJECT, EXCLUDED_PROJECT),
+            ).fetchall()
+        }
+        trigger_names = {
+            row["name"]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'trigger'"
+            ).fetchall()
+        }
+    assert owners == {
+        UNCATEGORIZED_PROJECT: "system",
+        EXCLUDED_PROJECT: "system",
+    }
+    assert {
+        "project_reserved_name_insert",
+        "project_reserved_name_update",
+    }.issubset(trigger_names)
+
+
 def test_initialize_database_migrates_v4_runtime_settings(tmp_path):
     db_path = str(tmp_path / "v4.db")
     db.configure_database(db_path)

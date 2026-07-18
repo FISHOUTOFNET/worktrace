@@ -13,7 +13,7 @@ from worktrace.services.session_boundary_policy import (
 
 def test_allowed_hard_boundary_reasons_are_whitelisted(temp_db):
     for reason in ALLOWED_HARD_BOUNDARY_REASONS:
-        session_boundary_service.record_hard_boundary("2026-06-18 09:00:00", reason)
+        session_boundary_service.record_boundary("2026-06-18 09:00:00", reason)
 
 
 def test_legacy_boundary_reasons_are_normalized():
@@ -25,7 +25,7 @@ def test_legacy_boundary_reasons_are_normalized():
 def test_transient_reasons_cannot_be_written_as_hard_boundaries(temp_db):
     for reason in FORBIDDEN_TRANSIENT_REASONS:
         with pytest.raises(ValueError):
-            session_boundary_service.record_hard_boundary("2026-06-18 09:00:00", reason)
+            session_boundary_service.record_boundary("2026-06-18 09:00:00", reason)
 
 
 def test_unknown_reason_is_rejected():

@@ -9,7 +9,7 @@ from pathlib import Path
 from ..constants import EXCLUDED_PROJECT
 from ..db import dict_rows, get_connection, get_db_path, now_str
 from ..path_utils import normalize_path_key
-from ..resources.title_parsing import extract_file_name_from_title, normalize_file_name
+from ..resources.title_parsing import normalize_file_name
 
 INDEX_STATUS_PENDING = "pending"
 INDEX_STATUS_INDEXING = "indexing"
@@ -128,6 +128,50 @@ def ensure_index_states_for_folder_rules() -> None:
         )
 
 
+def recover_interrupted_indexes() -> int:
+    """Discard incomplete staging generations under the index maintenance owner."""
+
+    timestamp = now_str()
+    with get_connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        states = conn.execute(
+            """
+            SELECT folder_rule_id, active_generation, building_generation
+            FROM folder_rule_index_state
+            WHERE building_generation IS NOT NULL
+               OR build_status = 'indexing'
+               OR status = 'indexing'
+            """
+        ).fetchall()
+        for state in states:
+            building = int(state["building_generation"] or 0)
+            if building > 0:
+                conn.execute(
+                    """
+                    DELETE FROM folder_rule_file_index
+                    WHERE folder_rule_id = ? AND generation = ?
+                    """,
+                    (int(state["folder_rule_id"]), building),
+                )
+            conn.execute(
+                """
+                UPDATE folder_rule_index_state
+                SET status = CASE
+                        WHEN active_generation IS NULL THEN 'pending'
+                        ELSE 'ready' END,
+                    building_generation = NULL,
+                    build_status = 'pending',
+                    refresh_requested = 1,
+                    last_error = NULL,
+                    error_message = NULL,
+                    updated_at = ?
+                WHERE folder_rule_id = ?
+                """,
+                (timestamp, int(state["folder_rule_id"])),
+            )
+        return len(states)
+
+
 def rebuild_folder_index(
     rule_id: int,
     stop_event: threading.Event | None = None,
@@ -188,148 +232,6 @@ def validate_ready_indexes(stop_event: threading.Event | None = None) -> None:
         if stop_event is not None and stop_event.is_set():
             return
         _validate_rule_index(int(state["folder_rule_id"]), stop_event)
-
-
-def lookup_indexed_paths_for_file_name(
-    file_name: str | None,
-    activity_start_time: str | None = None,
-    *,
-    include_excluded: bool = False,
-    request_refresh_on_miss: bool = True,
-    conn=None,
-) -> list[dict]:
-    normalized = _normalize_index_file_name(file_name)
-    if not normalized:
-        return []
-    project_clause = "" if include_excluded else "AND p.name <> ?"
-    time_clause = "AND state.valid_from <= ?" if activity_start_time else ""
-    params: list[object] = [normalized]
-    if not include_excluded:
-        params.append(EXCLUDED_PROJECT)
-    if activity_start_time:
-        params.append(activity_start_time)
-    sql = f"""
-        SELECT idx.folder_rule_id, idx.file_name, idx.file_path,
-               idx.normalized_path_key, state.valid_from, state.active_generation,
-               fpr.folder_path, fpr.recursive, fpr.project_id,
-               p.name AS project_name
-        FROM folder_rule_file_index idx
-        JOIN folder_rule_index_state state
-          ON state.folder_rule_id = idx.folder_rule_id
-         AND state.active_generation = idx.generation
-        JOIN folder_project_rule fpr ON fpr.id = idx.folder_rule_id
-        JOIN project p ON p.id = fpr.project_id
-        WHERE idx.normalized_file_name = ?
-          AND state.active_generation IS NOT NULL
-          AND state.valid_from IS NOT NULL
-          AND fpr.enabled = 1
-          AND p.enabled = 1
-          AND COALESCE(p.is_archived, 0) = 0
-          AND COALESCE(p.is_deleted, 0) = 0
-          {project_clause}
-          {time_clause}
-        ORDER BY length(fpr.normalized_folder_key) DESC, idx.id ASC
-    """
-    if conn is None:
-        with get_connection() as read_conn:
-            rows = dict_rows(read_conn.execute(sql, params).fetchall())
-    else:
-        rows = dict_rows(conn.execute(sql, params).fetchall())
-    results: dict[str, dict] = {}
-    stale_rule_ids: set[int] = set()
-    for row in rows:
-        path = str(row.get("file_path") or "").strip()
-        key = str(row.get("normalized_path_key") or normalize_path_key(path))
-        if not path or not os.path.exists(path):
-            stale_rule_ids.add(int(row["folder_rule_id"]))
-            continue
-        results.setdefault(key, row)
-    if conn is None:
-        for stale_rule_id in stale_rule_ids:
-            mark_index_stale(
-                stale_rule_id,
-                "indexed file path no longer exists",
-            )
-        if not results and not stale_rule_ids and request_refresh_on_miss:
-            request_refresh_for_enabled_rules(include_excluded=include_excluded)
-    return list(results.values())
-
-
-def resolve_unique_path_from_title(
-    window_title: str | None,
-    activity_start_time: str | None = None,
-    *,
-    include_excluded: bool = True,
-) -> str | None:
-    file_name = extract_file_name_from_title(window_title)
-    if not file_name:
-        return None
-    candidates = lookup_indexed_paths_for_file_name(
-        file_name,
-        activity_start_time,
-        include_excluded=include_excluded,
-    )
-    if len(candidates) != 1:
-        return None
-    return str(candidates[0]["file_path"])
-
-
-def find_matching_folder_rule_for_file_name(
-    file_name: str | None,
-    activity_start_time: str | None = None,
-    *,
-    conn=None,
-) -> dict | None:
-    candidates = lookup_indexed_paths_for_file_name(
-        file_name,
-        activity_start_time,
-        include_excluded=False,
-        request_refresh_on_miss=conn is None,
-        conn=conn,
-    )
-    if not candidates:
-        return None
-    from . import folder_rule_service
-
-    matched: dict[int, dict] = {}
-    for candidate in candidates:
-        rule = folder_rule_service.find_matching_folder_rule(
-            str(candidate.get("file_path") or ""),
-            conn=conn,
-        )
-        if rule:
-            matched[int(rule["project_id"])] = rule
-    if len(matched) != 1:
-        return None
-    return dict(next(iter(matched.values())))
-
-
-def activity_matches_rule_by_index(activity: dict, rule_id: int) -> bool:
-    file_name = _activity_file_name(activity)
-    if not file_name:
-        return False
-    candidates = lookup_indexed_paths_for_file_name(
-        file_name,
-        str(activity.get("start_time") or "") or None,
-        include_excluded=False,
-    )
-    if not candidates:
-        return False
-    from . import folder_rule_service
-
-    project_ids: set[int] = set()
-    for candidate in candidates:
-        rule = folder_rule_service.find_matching_folder_rule(
-            str(candidate.get("file_path") or "")
-        )
-        if rule:
-            project_ids.add(int(rule["project_id"]))
-    if len(project_ids) > 1:
-        return False
-    return any(
-        int(candidate["folder_rule_id"]) == int(rule_id)
-        for candidate in candidates
-    )
 
 
 def mark_index_stale(rule_id: int, reason: str = "") -> None:
@@ -729,18 +631,6 @@ def _validate_rule_index(
             """,
             (timestamp, timestamp, int(rule_id)),
         )
-
-
-def _activity_file_name(activity: dict) -> str | None:
-    for value in (
-        activity.get("resource_display_name"),
-        activity.get("activity_display_name"),
-        activity.get("window_title"),
-    ):
-        file_name = extract_file_name_from_title(str(value or ""))
-        if file_name:
-            return file_name
-    return None
 
 
 def _normalize_index_file_name(file_name: str | None) -> str:

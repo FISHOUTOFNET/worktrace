@@ -1,6 +1,6 @@
 from tests.support import activity_factory as activity_service
 from tests.support.db_helpers import assign_activity_project
-from worktrace.services import project_service, rule_service
+from worktrace.services import project_inference_service, project_service, rule_service
 from worktrace.db import get_connection
 import pytest
 
@@ -22,7 +22,7 @@ def test_rule_auto_classification(temp_db):
     aid = activity_service.create_activity(
         "Word", "winword.exe", "Architecture Spec.docx", start_time="2026-06-18 09:00:00"
     )
-    rule_service.apply_rules_to_activity(aid)
+    project_inference_service.assign_project_for_activity(aid)
     row = activity_service.get_activity(aid)
     assert row["project_id"] == pid
     assert row["assignment_source"] == "keyword_rule"
@@ -36,7 +36,7 @@ def test_manual_override_prevents_rule_overwrite(temp_db):
         "Word", "winword.exe", "Spec", start_time="2026-06-18 09:00:00"
     )
     assign_activity_project(aid, manual_project, manual=True)
-    rule_service.apply_rules_to_activity(aid)
+    project_inference_service.assign_project_for_activity(aid)
     row = activity_service.get_activity(aid)
     assert row["project_id"] == manual_project
     assert row["assignment_is_manual"] == 1

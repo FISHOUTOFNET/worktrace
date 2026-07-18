@@ -77,8 +77,8 @@ def test_keyword_rules_match_activity_text(temp_db):
         "Dashboard",
         start_time="2026-06-18 09:10:00",
     )
-    rule_service.apply_rules_to_activity(anchor)
-    rule_service.apply_rules_to_activity(auxiliary)
+    assign_project_for_activity(anchor)
+    assign_project_for_activity(auxiliary)
     assert activity_service.get_activity(anchor)["project_id"] == pid
     assert activity_service.get_activity(auxiliary)["project_id"] == pid
 

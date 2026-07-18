@@ -26,7 +26,8 @@ def test_activity_service_has_no_legacy_user_edit_write_entries():
         "def update_activity_note",
     ):
         assert symbol not in source
-    assert "def update_project_editable_activity_note" in source
+    assert "def update_project_editable_activity_note" not in source
+    assert "def update_project_editable_activities_project" not in source
 
 
 def test_timeline_api_does_not_export_legacy_wrappers():

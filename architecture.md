@@ -46,10 +46,20 @@ logging, initialize `AppRuntime`, register it with `app_api`, start the
 privacy-gated runtime entry, run the WebView loop, and call
 `runtime.shutdown()` when the WebView loop exits.
 
+The composition root imports `platforms.windows_adapter.WindowsAdapter`
+directly. That module is the only Windows adapter implementation and there is
+no compatibility adapter or alias entry.
+
 ## Startup And Privacy Gate
 
 The first-run privacy notice gate is fail-closed. The collector and
 folder-index worker must not start before the notice is accepted.
+
+Privacy-notice acceptance is installation metadata, not business data. Its
+only durable owner is `installation_metadata_store` in the separate
+`installation_metadata.db`. Database replacement, clear-all, and backup import
+do not capture, restore, export, or replace installation consent. Startup
+performs the one-time migration from legacy settings keys.
 
 `app_api.start_collection_after_privacy_gate()` is the unified startup entry
 for background workers and collector startup. It owns the first-run notice
@@ -74,6 +84,12 @@ the next boundary. Callers do not decide whether an observed activity is
 Clipboard force-persist goes through
 `activity_lifecycle_service.force_persist_open_activity_for_clipboard()` and is
 restricted to `STATUS_NORMAL` inside the facade.
+
+Clipboard facts and their inference retry marker commit in one UoW. Immediate
+inference after commit may fail without changing the clipboard command result;
+the durable marker remains for retry. Retention pruning runs only in the
+collector's bounded maintenance tick and is never part of clipboard command
+success.
 
 Post-close project inference is centralized through
 `finalize_closed_activity_ids()` so closed-row convergence is consistent across
@@ -120,8 +136,14 @@ Collector continuity has three separate fact streams:
   short resets, snapshot clears, open-activity closes, or project attribution
   changes.
 - Activity status is not a session boundary. Hard boundaries are written only
-  through `session_boundary_service.record_hard_boundary()` with a whitelisted
+  through `session_boundary_service.insert_boundary()` inside a lifecycle UoW,
+  or the explicit `record_boundary()` repair command, with a whitelisted
   reason from `session_boundary_policy`.
+
+Normal and fallback pause share `activity_lifecycle_service.pause_collection`.
+It closes any open row, records the hard boundary, updates paused/collector
+state in one UoW, and clears runtime activity state after commit. Repeated pause
+is idempotent.
 
 Hard boundary reasons are intentionally narrow: user pause, pause fallback,
 user stop, shutdown, restart, recovered startup data, sleep/resume, midnight,
@@ -198,6 +220,39 @@ such as live state handoff or page structure changes, flow through
 `refresh_revision` / `live_state_revision` / `page_structure_revision`.
 
 ## DB / Report Boundary
+
+`DomainUnitOfWork` is the generation-effect owner for normal business
+commands, including `REPORT_STRUCTURE`. The connection-level SQL classifier is
+disabled by default and may run only inside the explicit migration, repair, or
+database-replacement capability scope. A UoW using the same connection wins,
+so one transaction cannot double-bump. Duration-only open-row checkpoints are
+not structural effects.
+
+Database replacement publishes every durable generation in its replacement
+transaction, then atomically publishes the committed database key/generation
+set to the process clock. Caches key themselves by database identity and
+generation; import and clear-all do not enumerate cache-clearing fanout.
+
+Restartable activity-resource repair progress is operational state owned by
+the dedicated `activity_resource_repair_job` table. It is not a settings JSON
+blob and is excluded from business backup/export.
+
+`folder_index_query_service` is the only production folder-index query owner.
+Queries use indexed SQLite facts only and never check the filesystem, mark
+stale, request refresh, or write. Scanning, validation, stale transitions,
+refresh requests, and interrupted-build recovery belong to
+`folder_index_service` maintenance commands and its existing bounded worker.
+
+System-project reads use `system_project_service.require_*` and never repair.
+Missing mandatory rows return the stable `system_catalog_unavailable` API
+error. Initialization, migrations, and `ensure_system_projects()` are the only
+catalog repair boundaries. Reserved names are protected both by project
+lifecycle validation and database triggers.
+
+Project Rules API responsibilities are split into `project_api` (project
+lifecycle), `rule_api` (rule CRUD), and `rule_history_api` (history, batch, and
+automation status). The WebView bridge depends only on these APIs and owns
+display-safe payload/error translation; services never import the API layer.
 
 `timeline_service`, `statistics_service`, and `export_service` are DB/report
 layers. They must not read the process-local activity snapshot, import

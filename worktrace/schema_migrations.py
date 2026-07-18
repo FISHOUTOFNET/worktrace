@@ -311,12 +311,26 @@ def migrate_8_to_9(conn: sqlite3.Connection) -> None:
         )
 
 
+def migrate_9_to_10(conn: sqlite3.Connection) -> None:
+    """Normalize legacy reserved rows before database ownership constraints."""
+
+    conn.execute(
+        """
+        UPDATE project
+        SET created_by = 'system', updated_at = datetime('now', 'localtime')
+        WHERE name IN ('未归类', '排除规则')
+          AND created_by <> 'system'
+        """
+    )
+
+
 MIGRATIONS: dict[int, Migration] = {
     4: migrate_4_to_5,
     5: migrate_5_to_6,
     6: migrate_6_to_7,
     7: migrate_7_to_8,
     8: migrate_8_to_9,
+    9: migrate_9_to_10,
 }
 
 
@@ -358,5 +372,6 @@ __all__ = [
     "migrate_6_to_7",
     "migrate_7_to_8",
     "migrate_8_to_9",
+    "migrate_9_to_10",
     "migrate_schema",
 ]

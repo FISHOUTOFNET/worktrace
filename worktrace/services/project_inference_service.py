@@ -206,24 +206,6 @@ def _assign_project_for_activity_in_transaction(
     return _assignment_dict(conn, activity_id), changed
 
 
-def backfill_missing_assignments() -> None:
-    with get_connection() as conn:
-        rows = conn.execute(
-            """
-            SELECT id
-            FROM activity_log
-            WHERE is_deleted = 0
-              AND NOT EXISTS (
-                  SELECT 1 FROM activity_project_assignment apa
-                  WHERE apa.activity_id = activity_log.id
-              )
-            ORDER BY id
-            """
-        ).fetchall()
-    for row in rows:
-        assign_project_for_activity(int(row["id"]))
-
-
 def process_new_activity(activity_id: int) -> dict:
     """Apply automatic rules only to closed, visible, durable activities."""
 
@@ -331,13 +313,13 @@ def candidate_project_name_for_resource(resource: dict) -> str | None:
         return None
 
     if path_hint:
-        parent_dir = ntpath.dirname(path_hint.rstrip("\/"))
+        parent_dir = ntpath.dirname(path_hint.rstrip("\\/"))
         if parent_dir and (
             has_auto_project_extension(path_hint)
             or (resource_kind == "ide_file" and resource_subtype == "code_file")
         ):
             candidate = _clean_project_candidate(
-                ntpath.basename(parent_dir.rstrip("\/"))
+                ntpath.basename(parent_dir.rstrip("\\/"))
             )
             if candidate and candidate.casefold() not in GENERIC_FILE_PROJECT_NAMES:
                 return candidate
@@ -366,7 +348,7 @@ def _infer_project_resource_first(
     if path_hint:
         for target in (
             path_hint,
-            ntpath.dirname(path_hint.rstrip("\/")),
+                ntpath.dirname(path_hint.rstrip("\\/")),
         ):
             if not target:
                 continue
@@ -558,7 +540,6 @@ __all__ = [
     "ProjectAssignmentDecision",
     "assign_project_for_activity",
     "assign_project_for_activity_in_transaction",
-    "backfill_missing_assignments",
     "candidate_project_label_for_activity",
     "candidate_project_name_for_activity",
     "candidate_project_name_for_resource",

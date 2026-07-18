@@ -23,6 +23,7 @@ from ._write_contract import (
     ERROR_INVALID_INPUT,
     ERROR_NOT_FOUND,
     ERROR_OPERATION_FAILED,
+    ERROR_SYSTEM_CATALOG_UNAVAILABLE,
     ERROR_SYSTEM_PROJECT,
     fail_payload,
     ok_payload,
@@ -32,6 +33,7 @@ from ._write_contract import (
     valid_str,
 )
 from ..services import project_lifecycle_policy, project_service
+from ..services.system_project_service import SystemProjectCatalogUnavailableError
 
 
 def list_project_bindings() -> list[dict[str, Any]]:
@@ -146,6 +148,8 @@ def create_project_for_rules(
     if cleaned_language is None:
         return fail_payload(ERROR_INVALID_INPUT)
     trimmed_description = description.strip()
+    if project_lifecycle_policy.project_name_is_reserved(trimmed_name):
+        return fail_payload(ERROR_SYSTEM_PROJECT)
     try:
         # Conservative duplicate check: reject if another project already
         # has the same trimmed name. This catches the common case before
@@ -188,6 +192,8 @@ def update_project_for_rules(
     if cleaned_language is None:
         return fail_payload(ERROR_INVALID_INPUT)
     trimmed_description = description.strip()
+    if project_lifecycle_policy.project_name_is_reserved(trimmed_name):
+        return fail_payload(ERROR_SYSTEM_PROJECT)
     try:
         project = project_service.get_project(project_id)
         if not project:
@@ -247,6 +253,8 @@ def set_excluded_rules_enabled(enabled: Any) -> dict[str, Any]:
         if not payload:
             return fail_payload(ERROR_OPERATION_FAILED)
         return ok_payload(project=payload)
+    except SystemProjectCatalogUnavailableError:
+        return fail_payload(ERROR_SYSTEM_CATALOG_UNAVAILABLE)
     except Exception:
         return fail_payload(ERROR_OPERATION_FAILED)
 

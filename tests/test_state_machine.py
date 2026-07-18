@@ -3,6 +3,8 @@ import json
 
 import pytest
 
+from worktrace.services import system_project_service
+
 from tests.support.db_helpers import assign_activity_project
 from worktrace.collector.state_machine import CollectorStateMachine
 from worktrace.constants import EXCLUDED_APP_NAME, EXCLUDED_WINDOW_TITLE
@@ -25,7 +27,7 @@ pytestmark = [
 
 
 def _enable_excluded_project_with_keyword(keyword: str) -> int:
-    excluded_project = project_service.get_or_create_excluded_project()
+    excluded_project = system_project_service.require_excluded_project_id()
     project_service.set_project_enabled(excluded_project, True)
     rule_service.create_rule(keyword, excluded_project)
     return excluded_project

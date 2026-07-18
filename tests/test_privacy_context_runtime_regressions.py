@@ -5,6 +5,8 @@ from datetime import date
 
 import pytest
 
+from worktrace.services import system_project_service
+
 from worktrace.collector.collector import run_collector
 from worktrace.collector.state_machine import CollectorStateMachine
 from worktrace.constants import EXCLUDED_WINDOW_TITLE
@@ -75,7 +77,7 @@ def test_collector_turns_unresolved_privacy_observation_into_excluded_row(
 
 
 def test_same_resource_late_excluded_path_redacts_its_existing_row(temp_db):
-    excluded_id = project_service.get_or_create_excluded_project()
+    excluded_id = system_project_service.require_excluded_project_id()
     project_service.set_project_enabled(excluded_id, True)
     folder_rule_service.create_or_update_folder_rule(
         "D:\\Private",

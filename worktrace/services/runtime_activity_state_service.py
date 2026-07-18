@@ -139,29 +139,11 @@ def clear_runtime_activity_state(
     )
 
 
-def record_runtime_boundary(
-    reason: str,
-    *,
-    clear_snapshot: bool = True,
-) -> None:
-    """Record a durable hard boundary and clear the process-local sample."""
-
-    from . import session_boundary_service
-
-    session_boundary_service.record_hard_boundary(reason=reason)
-    clear_runtime_activity_state(
-        reason,
-        clear_snapshot=clear_snapshot,
-        clear_ownership=True,
-    )
-
-
 __all__ = [
     "RuntimeActivitySample",
     "bind_runtime_activity_sample",
     "clear_runtime_activity_state",
     "get_runtime_activity_snapshot",
     "publish_runtime_activity_snapshot",
-    "record_runtime_boundary",
     "sample_runtime_activity_state",
 ]

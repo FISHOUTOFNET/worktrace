@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from worktrace.api import rule_api
+from worktrace.api import rule_history_api as rule_api
 from worktrace.db import get_connection, now_str
 from tests.support import activity_factory as activity_service
 from worktrace.services import (

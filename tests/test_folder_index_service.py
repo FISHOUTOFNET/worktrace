@@ -2,8 +2,10 @@ from pathlib import Path
 
 import pytest
 
+from worktrace.services import system_project_service
+
 from tests.support import activity_factory as activity_service
-from worktrace.api import rule_api
+from worktrace.api import rule_history_api as rule_api
 from worktrace.db import get_connection
 from worktrace.platforms.base import ActiveWindow
 from worktrace.platforms.windows_path_resolver import WindowsPathResolver
@@ -121,6 +123,33 @@ def test_missing_indexed_path_requires_explicit_stale_command(temp_db, tmp_path)
     assert state["refresh_requested"] == 1
 
 
+def test_folder_index_query_never_writes_or_checks_the_filesystem(temp_db, tmp_path):
+    project = project_service.create_project("Read Only Index")
+    folder = tmp_path / "ReadOnly"
+    folder.mkdir()
+    path = folder / "Gone.docx"
+    path.write_text("doc", encoding="utf-8")
+    rule_id = folder_rule_service.create_or_update_folder_rule(str(folder), project)
+    _ready_index(rule_id)
+    path.unlink()
+
+    with get_connection() as conn:
+        statements: list[str] = []
+        before_changes = conn.total_changes
+        conn.set_trace_callback(statements.append)
+        matches = folder_index_query_service.lookup_indexed_paths_for_file_name(
+            "Gone.docx",
+            "2026-06-18 09:00:00",
+            conn=conn,
+        )
+        conn.set_trace_callback(None)
+        assert conn.total_changes == before_changes
+
+    assert len(matches) == 1
+    assert statements
+    assert all(statement.lstrip().upper().startswith("SELECT") for statement in statements)
+
+
 def test_title_only_activity_matches_indexed_folder_rule_for_any_extension(
     temp_db,
     tmp_path,
@@ -225,7 +254,7 @@ def test_windows_resolver_uses_pure_folder_index_after_live_sources_miss(
 
 
 def test_indexed_exclude_folder_anonymizes_title_only_activity(temp_db, tmp_path):
-    excluded_project = project_service.get_or_create_excluded_project()
+    excluded_project = system_project_service.require_excluded_project_id()
     project_service.set_project_enabled(excluded_project, True)
     folder = tmp_path / "Private"
     folder.mkdir()

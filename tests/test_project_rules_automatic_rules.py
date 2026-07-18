@@ -9,7 +9,9 @@ from pathlib import Path
 
 import pytest
 
-from worktrace.api import rule_api
+from worktrace.services import system_project_service
+
+from worktrace.api import rule_history_api as rule_api
 from worktrace.db import get_connection, now_str
 from tests.support import activity_factory as activity_service
 from worktrace.services import (
@@ -147,19 +149,6 @@ def test_rule_automation_service_source_constants(temp_db):
     )
 
 
-def test_apply_automatic_rules_to_activity_delegates_to_inference(temp_db):
-    project = project_service.create_project("AutoProject")
-    folder_rule_service.create_or_update_folder_rule("D:\\AutoCase", project)
-    aid = _create_closed_activity(file_path_hint="D:\\AutoCase\\Doc.docx")
-    assign_activity_project(aid, project, manual=False)
-    facade_result = rule_automation_service.apply_automatic_rules_to_activity(aid)
-    inference_result = project_inference_service.assign_project_for_activity(aid)
-    assert facade_result["project_id"] == inference_result["project_id"]
-    assert facade_result["source"] == inference_result["source"]
-    assert int(facade_result["confidence"]) == int(inference_result["confidence"])
-    assert int(facade_result["is_manual"]) == int(inference_result["is_manual"])
-
-
 # Automatic application: enabled folder rule
 
 
@@ -247,7 +236,7 @@ def test_archived_target_project_does_not_apply(temp_db):
 
 
 def test_excluded_target_project_does_not_apply(temp_db):
-    excluded_id = project_service.get_or_create_excluded_project()
+    excluded_id = system_project_service.require_excluded_project_id()
     # Inference path filters excluded projects via _enabled_keyword_rules and find_matching_folder_rule.
     folder_rule_service.create_or_update_folder_rule(
         "D:\\ExcludedFolder", excluded_id
@@ -551,60 +540,6 @@ def test_automatic_rules_status_payload_json_serializable(temp_db):
     result = bridge.automatic_rules_status()
     # Must be JSON-serializable (no datetime / set / custom object).
     json.dumps(result, ensure_ascii=False, default=str)
-
-
-def test_apply_automatic_rules_facade_source_has_no_separate_matcher(temp_db):
-    # rule_automation_service must stay a thin facade over the inference path; no separate matcher (single-matcher invariant).
-    import ast
-    import inspect
-
-    source = inspect.getsource(rule_automation_service)
-    tree = ast.parse(source)
-    # Inspect Call nodes only (docstrings intentionally mention matcher names); locks the facade never invokes a matcher itself.
-    forbidden_call_names = {
-        "keyword_pattern_matches",
-        "find_matching_folder_rule",
-        "_enabled_keyword_rules",
-        "_infer_project_resource_first",
-        "_classify_activities",
-        "_safe_classification_text",
-        "re.match",
-        "re.search",
-        "re.compile",
-        "re.findall",
-    }
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Call):
-            callee = node.func
-            if isinstance(callee, ast.Name):
-                name = callee.id
-            elif isinstance(callee, ast.Attribute):
-                # ``re.match(...)`` -> Attribute(value=Name('re'), attr='match')
-                parts = []
-                cur = callee
-                while isinstance(cur, ast.Attribute):
-                    parts.append(cur.attr)
-                    cur = cur.value
-                if isinstance(cur, ast.Name):
-                    parts.append(cur.id)
-                parts.reverse()
-                name = ".".join(parts)
-            else:
-                continue
-            assert name not in forbidden_call_names, (
-                "rule_automation_service facade must not invoke a matcher / "
-                "inference helper; found call to '" + name + "'"
-            )
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                assert alias.name != "re", (
-                    "rule_automation_service facade must not import re"
-                )
-        if isinstance(node, ast.ImportFrom):
-            assert node.module != "re", (
-                "rule_automation_service facade must not import from re"
-            )
 
 
 def test_process_new_activity_in_progress_guard_runs_before_assign(

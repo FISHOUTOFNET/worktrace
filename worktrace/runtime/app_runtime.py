@@ -27,7 +27,6 @@ from ..services import (
     history_mutation_job_service,
     recovery_service,
 )
-from ..services.folder_index_recovery_service import recover_interrupted_indexes
 from ..services.runtime_snapshot_barrier import (
     clear_quiesce_handler,
     register_quiesce_handler,
@@ -194,7 +193,7 @@ class AppRuntime:
             index_started = False
             if not index_ready:
                 try:
-                    recover_interrupted_indexes()
+                    folder_index_service.recover_interrupted_indexes()
                     folder_index_service.ensure_index_states_for_folder_rules()
                     folder_index_service.validate_ready_indexes(self.stop_event)
                     self._index_thread = (

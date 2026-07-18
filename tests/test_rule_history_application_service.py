@@ -7,7 +7,7 @@ from datetime import datetime
 import pytest
 
 from tests.support import activity_factory as activity_service
-from worktrace.api import rule_api
+from worktrace.api import rule_api, rule_history_api
 from worktrace.db import get_connection, now_str
 from worktrace.services import (
     folder_rule_service,
@@ -58,7 +58,7 @@ def test_future_inference_and_history_apply_record_exact_keyword_origin(temp_db)
         "source_rule_id": rule_id,
     }
 
-    result = rule_api.backfill_project_rule("keyword", rule_id)
+    result = rule_history_api.backfill_project_rule("keyword", rule_id)
     assert result["ok"] is True
 
 

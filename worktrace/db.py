@@ -31,7 +31,7 @@ from .report_generation_classifier import (
 from .schema_migrations import MIN_SUPPORTED_SCHEMA_VERSION, migrate_schema
 from .write_gate import DATABASE_WRITE_GATE
 
-CURRENT_SCHEMA_VERSION = 9
+CURRENT_SCHEMA_VERSION = 10
 
 _RETIRED_SCHEMA_TRIGGERS = (
     "close_existing_open_activity_before_insert",
@@ -355,7 +355,7 @@ def _require_supported_source_schema(
 ) -> None:
     """Validate a supported structural boundary before migration."""
 
-    if version not in {4, 5, 6, 7, 8}:
+    if version not in {4, 5, 6, 7, 8, 9}:
         raise ValueError("database_schema_incompatible")
     required = {
         "project": {"id", "name", "is_deleted"},

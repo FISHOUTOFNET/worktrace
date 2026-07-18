@@ -4,6 +4,12 @@ from typing import Any
 
 from ..constants import EXCLUDED_PROJECT, UNCATEGORIZED_PROJECT
 
+RESERVED_PROJECT_NAMES = frozenset({UNCATEGORIZED_PROJECT, EXCLUDED_PROJECT})
+
+
+def project_name_is_reserved(name: str | None) -> bool:
+    return str(name or "").strip() in RESERVED_PROJECT_NAMES
+
 
 def project_is_deleted(project: dict[str, Any] | None) -> bool:
     return bool(project and int(project.get("is_deleted") or 0))
@@ -16,10 +22,9 @@ def project_is_archived(project: dict[str, Any] | None) -> bool:
 def project_is_system_or_special(project: dict[str, Any] | None) -> bool:
     if not project:
         return False
-    return project.get("created_by") == "system" or project.get("name") in {
-        UNCATEGORIZED_PROJECT,
-        EXCLUDED_PROJECT,
-    }
+    return project.get("created_by") == "system" or project_name_is_reserved(
+        project.get("name")
+    )
 
 
 def project_available_for_rules(project: dict[str, Any] | None) -> bool:

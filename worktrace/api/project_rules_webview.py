@@ -23,7 +23,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from ..api import project_api, rule_api
+from ..api import project_api, rule_api, rule_history_api
 from ..constants import EXCLUDED_PROJECT, UNCATEGORIZED_PROJECT
 
 logger = logging.getLogger(__name__)
@@ -89,6 +89,7 @@ _PROJECT_RULE_FOLDER_DELETE_MESSAGES = {
 # fallback message so a create failure never echoes an update-focused message.
 _PROJECT_LIFECYCLE_CREATE_MESSAGES = {
     "invalid_input": "操作无效",
+    "system_project": "不能使用系统保留名称",
     "duplicate_project": "项目名称已存在",
     "operation_failed": "新增项目失败",
 }
@@ -105,6 +106,7 @@ _PROJECT_LIFECYCLE_TOGGLE_MESSAGES = {
     "invalid_input": "操作无效",
     "not_found": "项目不存在",
     "system_project": "系统项目不能修改",
+    "system_catalog_unavailable": "系统项目不可用，请运行恢复",
     "operation_failed": "更新项目状态失败",
 }
 
@@ -173,11 +175,13 @@ _PROJECT_RULE_BATCH_TOGGLE_MESSAGES = {
 _EXCLUDED_KEYWORD_RULE_CREATE_MESSAGES = {
     "invalid_input": "操作无效",
     "duplicate_rule": "关键词规则已存在",
+    "system_catalog_unavailable": "系统项目不可用，请运行恢复",
     "operation_failed": "新增排除关键词规则失败",
 }
 
 _EXCLUDED_FOLDER_RULE_CREATE_MESSAGES = {
     "invalid_input": "操作无效",
+    "system_catalog_unavailable": "系统项目不可用，请运行恢复",
     "operation_failed": "新增排除文件夹规则失败",
 }
 
@@ -673,7 +677,7 @@ class ProjectRulesBridgeMixin:
         creation entry: it does NOT accept any ``project_id`` from the
         caller, so the frontend cannot inject an arbitrary project_id.
         The API facade internally resolves the ``EXCLUDED_PROJECT``
-        project_id via ``get_or_create_excluded_project``. Strict bridge
+        project_id via the require-only system catalog query. Strict bridge
         validation rejects non-string ``keyword`` and whitespace-only
         ``keyword`` before calling
         ``rule_api.create_excluded_keyword_rule_for_webview``. The bridge
@@ -719,7 +723,7 @@ class ProjectRulesBridgeMixin:
         creation entry: it does NOT accept any ``project_id`` from the
         caller, so the frontend cannot inject an arbitrary project_id.
         The API facade internally resolves the ``EXCLUDED_PROJECT``
-        project_id via ``get_or_create_excluded_project``. Strict bridge
+        project_id via the require-only system catalog query. Strict bridge
         validation rejects non-string ``folder_path``, whitespace-only
         ``folder_path``, and non-bool ``recursive`` before calling
         ``rule_api.create_excluded_folder_rule_for_webview``. The bridge
@@ -1128,7 +1132,7 @@ class ProjectRulesBridgeMixin:
         Read path only. Strict bridge validation rejects non-string
         ``rule_type``, unknown rule types, bool-as-int ``rule_id``,
         non-int ``rule_id``, and non-positive ids before calling
-        ``rule_api.preview_project_rule_impact``. The bridge never exposes
+        ``rule_history_api.preview_project_rule_impact``. The bridge never exposes
         raw exceptions, tracebacks, SQL, paths, window titles, clipboard, or
         notes in the payload.
 
@@ -1146,7 +1150,7 @@ class ProjectRulesBridgeMixin:
                 return {"ok": False, "error": "操作无效"}
             if type(rule_id) is not int or rule_id <= 0:
                 return {"ok": False, "error": "操作无效"}
-            result = rule_api.preview_project_rule_impact(rule_type, rule_id)
+            result = rule_history_api.preview_project_rule_impact(rule_type, rule_id)
             if result.get("ok") is True:
                 return {"ok": True, "impact": result.get("impact") or {}}
             code = str(result.get("error") or "operation_failed")
@@ -1166,7 +1170,7 @@ class ProjectRulesBridgeMixin:
         Write path only. Strict bridge validation rejects non-string
         ``rule_type``, unknown rule types, bool-as-int ``rule_id``,
         non-int ``rule_id``, and non-positive ids before calling
-        ``rule_api.backfill_project_rule``. The bridge never exposes raw
+        ``rule_history_api.backfill_project_rule``. The bridge never exposes raw
         exceptions, tracebacks, SQL, paths, window titles, clipboard, or notes
         in the payload.
 
@@ -1183,7 +1187,7 @@ class ProjectRulesBridgeMixin:
                 return {"ok": False, "error": "操作无效"}
             if type(rule_id) is not int or rule_id <= 0:
                 return {"ok": False, "error": "操作无效"}
-            result = rule_api.backfill_project_rule(rule_type, rule_id)
+            result = rule_history_api.backfill_project_rule(rule_type, rule_id)
             if result.get("ok") is True:
                 return {"ok": True, "result": result.get("result") or {}}
             code = str(result.get("error") or "operation_failed")
@@ -1230,7 +1234,7 @@ class ProjectRulesBridgeMixin:
         Read path only. Strict bridge validation rejects non-list
         ``rules``, empty lists, non-dict items, unknown rule types, and
         bool-as-int / non-int / non-positive ``rule_id`` values before
-        calling ``rule_api.preview_project_rules_batch_impact``. The bridge
+        calling ``rule_history_api.preview_project_rules_batch_impact``. The bridge
         never exposes raw exceptions, tracebacks, SQL, paths, window titles,
         clipboard, or notes in the payload.
 
@@ -1245,7 +1249,7 @@ class ProjectRulesBridgeMixin:
             invalid = self._validate_batch_rules(rules)
             if invalid is not None:
                 return {"ok": False, "error": "操作无效"}
-            result = rule_api.preview_project_rules_batch_impact(rules)
+            result = rule_history_api.preview_project_rules_batch_impact(rules)
             if result.get("ok") is True:
                 return {"ok": True, "impact": result.get("impact") or {}}
             code = str(result.get("error") or "operation_failed")
@@ -1267,7 +1271,7 @@ class ProjectRulesBridgeMixin:
         Write path only. Strict bridge validation rejects non-list
         ``rules``, empty lists, non-dict items, unknown rule types, and
         bool-as-int / non-int / non-positive ``rule_id`` values before
-        calling ``rule_api.backfill_project_rules_batch``. The bridge never
+        calling ``rule_history_api.backfill_project_rules_batch``. The bridge never
         exposes raw exceptions, tracebacks, SQL, paths, window titles,
         clipboard, or notes in the payload.
 
@@ -1285,7 +1289,7 @@ class ProjectRulesBridgeMixin:
             invalid = self._validate_batch_rules(rules)
             if invalid is not None:
                 return {"ok": False, "error": "操作无效"}
-            result = rule_api.backfill_project_rules_batch(rules)
+            result = rule_history_api.backfill_project_rules_batch(rules)
             if result.get("ok") is True:
                 return {"ok": True, "result": result.get("result") or {}}
             code = str(result.get("error") or "operation_failed")
@@ -1308,7 +1312,7 @@ class ProjectRulesBridgeMixin:
         ``rules``, empty lists, non-dict items, unknown rule types,
         bool-as-int / non-int / non-positive ``rule_id`` values, and
         non-bool ``enabled`` before calling
-        ``rule_api.set_project_rules_batch_enabled``. The bridge never
+        ``rule_history_api.set_project_rules_batch_enabled``. The bridge never
         exposes raw exceptions, tracebacks, SQL, paths, window titles,
         clipboard, or notes in the payload.
 
@@ -1327,7 +1331,7 @@ class ProjectRulesBridgeMixin:
                 return {"ok": False, "error": "操作无效"}
             if type(enabled) is not bool:
                 return {"ok": False, "error": "操作无效"}
-            result = rule_api.set_project_rules_batch_enabled(rules, enabled)
+            result = rule_history_api.set_project_rules_batch_enabled(rules, enabled)
             if result.get("ok") is True:
                 return {"ok": True, "result": result.get("result") or {}}
             code = str(result.get("error") or "operation_failed")
@@ -1362,7 +1366,7 @@ class ProjectRulesBridgeMixin:
         """
 
         try:
-            result = rule_api.automatic_rules_status()
+            result = rule_history_api.automatic_rules_status()
             if result.get("ok") is True:
                 return {"ok": True, "status": result.get("status") or {}}
             # ``automatic_rules_status`` always returns ok unless something

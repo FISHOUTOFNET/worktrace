@@ -96,6 +96,8 @@ def test_schema_trigger_surface_is_constraint_only(temp_db):
             ).fetchall()
         }
     assert names == {
+        "project_reserved_name_insert",
+        "project_reserved_name_update",
         "validate_report_split_operation",
         "validate_report_operation_receipt_members",
     }

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from ..constants import EXCLUDED_PROJECT, UNCATEGORIZED_PROJECT
 from ..data_generation_repository import DataGenerationNamespace
-from ..db import now_str
+from ..db import get_connection, now_str
 from ..domain_unit_of_work import DomainUnitOfWork
 
 _SYSTEM_PROJECTS = {
@@ -23,6 +23,10 @@ _SYSTEM_PROJECTS = {
         "enabled": 0,
     },
 }
+
+
+class SystemProjectCatalogUnavailableError(RuntimeError):
+    """A mandatory system row is absent or has invalid ownership."""
 
 
 def _definition(kind: str) -> dict:
@@ -45,16 +49,22 @@ def require_system_project_id(conn, kind: str) -> int:
         (definition["name"],),
     ).fetchone()
     if row is None:
-        raise ValueError("system_catalog_repair_required")
+        raise SystemProjectCatalogUnavailableError("system_catalog_unavailable")
     return int(row["id"])
 
 
-def require_uncategorized_project_id(conn) -> int:
-    return require_system_project_id(conn, "uncategorized")
+def require_uncategorized_project_id(conn=None) -> int:
+    if conn is not None:
+        return require_system_project_id(conn, "uncategorized")
+    with get_connection() as read_conn:
+        return require_system_project_id(read_conn, "uncategorized")
 
 
-def require_excluded_project_id(conn) -> int:
-    return require_system_project_id(conn, "excluded")
+def require_excluded_project_id(conn=None) -> int:
+    if conn is not None:
+        return require_system_project_id(conn, "excluded")
+    with get_connection() as read_conn:
+        return require_system_project_id(read_conn, "excluded")
 
 
 def ensure_system_projects() -> dict[str, int]:
@@ -65,16 +75,23 @@ def ensure_system_projects() -> dict[str, int]:
         (
             DataGenerationNamespace.CLASSIFICATION_CATALOG,
             DataGenerationNamespace.PRIVACY_CATALOG,
+            DataGenerationNamespace.REPORT_STRUCTURE,
         )
     ) as uow:
         conn = uow.connection
         changed = False
         for definition in _SYSTEM_PROJECTS.values():
             existing = conn.execute(
-                "SELECT id FROM project WHERE name = ?",
+                "SELECT id, created_by FROM project WHERE name = ?",
                 (definition["name"],),
             ).fetchone()
             if existing is not None:
+                if str(existing["created_by"] or "") != "system":
+                    conn.execute(
+                        "UPDATE project SET created_by = 'system', updated_at = ? WHERE id = ?",
+                        (timestamp, int(existing["id"])),
+                    )
+                    changed = True
                 continue
             conn.execute(
                 """
@@ -101,6 +118,7 @@ def ensure_system_projects() -> dict[str, int]:
 
 
 __all__ = [
+    "SystemProjectCatalogUnavailableError",
     "ensure_system_projects",
     "require_excluded_project_id",
     "require_system_project_id",

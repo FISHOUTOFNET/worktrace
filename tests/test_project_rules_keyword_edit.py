@@ -6,6 +6,8 @@ import json
 
 import pytest
 
+from worktrace.services import system_project_service
+
 from worktrace.api import rule_api
 from worktrace.data_generation_repository import DataGenerationNamespace
 from worktrace.db import get_connection
@@ -137,7 +139,7 @@ def test_update_refreshes_keyword_cache_via_generation(temp_db):
 
 
 def test_excluded_keyword_update_refreshes_privacy_generation(temp_db):
-    excluded_id = project_service.get_or_create_excluded_project()
+    excluded_id = system_project_service.require_excluded_project_id()
     project_service.set_project_enabled(excluded_id, True)
     rule_id = rule_service.create_rule("Secret", excluded_id)
     assert privacy_service._exclude_rules()["keywords"]

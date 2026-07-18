@@ -184,7 +184,7 @@ def record_restart_boundary_if_needed() -> None:
         return
     if session_boundary_service.has_boundary_between(candidate, candidate):
         return
-    session_boundary_service.record_hard_boundary(candidate, "restart")
+    activity_lifecycle_service.close_at_boundary(candidate, "restart")
 
 
 def _latest_known_shutdown_boundary() -> str | None:
