@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Iterable
 
 from ..constants import EXCLUDED_PROJECT
@@ -9,6 +10,7 @@ from ..data_generation_repository import DataGenerationNamespace
 from ..db import now_str
 from ..domain_unit_of_work import DomainUnitOfWork
 from ..path_utils import normalize_folder_key
+from . import folder_index_service, folder_index_state_repository
 
 RuleRef = tuple[str, int]
 
@@ -39,17 +41,21 @@ def normalize_rule_refs(rules: Iterable[dict[str, Any] | RuleRef]) -> list[RuleR
     return result
 
 
-def add_catalog_effects_for_project_id(
+def add_catalog_effects_for_project_ids(
     uow: DomainUnitOfWork,
     conn,
-    project_id: int,
+    project_ids: Iterable[int],
 ) -> None:
     uow.add_effects(DataGenerationNamespace.CLASSIFICATION_CATALOG)
+    ids = tuple(dict.fromkeys(int(value) for value in project_ids))
+    if not ids:
+        return
+    placeholders = ",".join("?" for _ in ids)
     row = conn.execute(
-        "SELECT name FROM project WHERE id = ?",
-        (int(project_id),),
+        f"SELECT 1 FROM project WHERE id IN ({placeholders}) AND name = ? LIMIT 1",
+        (*ids, EXCLUDED_PROJECT),
     ).fetchone()
-    if row is not None and str(row["name"] or "") == EXCLUDED_PROJECT:
+    if row is not None:
         uow.add_effects(DataGenerationNamespace.PRIVACY_CATALOG)
 
 
@@ -63,7 +69,7 @@ def add_catalog_effects_for_rule(
     if row is None:
         uow.add_effects(DataGenerationNamespace.CLASSIFICATION_CATALOG)
         return
-    add_catalog_effects_for_project_id(uow, conn, int(row["project_id"]))
+    add_catalog_effects_for_project_ids(uow, conn, (int(row["project_id"]),))
 
 
 def create_keyword_rule(keyword: str, project_id: int) -> int:
@@ -73,7 +79,7 @@ def create_keyword_rule(keyword: str, project_id: int) -> int:
     timestamp = now_str()
     with _catalog_uow() as uow:
         conn = uow.connection
-        add_catalog_effects_for_project_id(uow, conn, project_id)
+        add_catalog_effects_for_project_ids(uow, conn, (project_id,))
         cursor = conn.execute(
             """
             INSERT INTO project_rule(
@@ -97,7 +103,7 @@ def update_keyword_rule(rule_id: int, keyword: str) -> bool:
             return False
         if str(row["pattern"] or "") == cleaned:
             return True
-        add_catalog_effects_for_project_id(uow, conn, int(row["project_id"]))
+        add_catalog_effects_for_project_ids(uow, conn, (int(row["project_id"]),))
         cursor = conn.execute(
             """
             UPDATE project_rule
@@ -136,7 +142,7 @@ def create_or_update_folder_rule(
         raise ValueError("folder path is required")
     requested_recursive = int(bool(recursive))
     timestamp = now_str()
-    changed = False
+    wake_worker = False
     with _catalog_uow() as uow:
         conn = uow.connection
         existing = conn.execute(
@@ -146,13 +152,16 @@ def create_or_update_folder_rule(
         if existing is not None:
             rule_id = int(existing["id"])
             if (
-                str(existing["folder_path"] or "") == folder
+                str(existing["normalized_folder_key"] or "") == key
                 and int(existing["project_id"] or 0) == int(project_id)
                 and int(existing["recursive"] or 0) == requested_recursive
                 and int(existing["enabled"] or 0) == 1
             ):
                 return rule_id
-        add_catalog_effects_for_project_id(uow, conn, project_id)
+        project_ids = [int(project_id)]
+        if existing is not None:
+            project_ids.append(int(existing["project_id"]))
+        add_catalog_effects_for_project_ids(uow, conn, project_ids)
         cursor = conn.execute(
             """
             INSERT INTO folder_project_rule(
@@ -181,11 +190,17 @@ def create_or_update_folder_rule(
             (key,),
         ).fetchone()
         rule_id = int(row["id"] if row else cursor.lastrowid)
-        changed = True
-    if changed:
-        from .folder_index_service import request_rebuild_for_rule
-
-        request_rebuild_for_rule(rule_id)
+        path_behavior_changed = existing is None or (
+            str(existing["normalized_folder_key"] or "") != key
+            or int(existing["recursive"] or 0) != requested_recursive
+        )
+        wake_worker = (
+            folder_index_state_repository.request_rebuild(conn, rule_id)
+            if path_behavior_changed
+            else folder_index_state_repository.ensure_pending_state(conn, rule_id)
+        )
+    if wake_worker:
+        _wake_folder_index_worker_safely()
     return rule_id
 
 
@@ -205,12 +220,11 @@ def update_folder_rule(
         if row is None:
             return False
         if (
-            str(row["folder_path"] or "") == folder
-            and str(row["normalized_folder_key"] or "") == key
+            str(row["normalized_folder_key"] or "") == key
             and int(row["recursive"] or 0) == requested_recursive
         ):
             return True
-        add_catalog_effects_for_project_id(uow, conn, int(row["project_id"]))
+        add_catalog_effects_for_project_ids(uow, conn, (int(row["project_id"]),))
         cursor = conn.execute(
             """
             UPDATE folder_project_rule
@@ -221,25 +235,25 @@ def update_folder_rule(
             (folder, key, requested_recursive, now_str(), int(rule_id)),
         )
         changed = cursor.rowcount == 1
+        if changed:
+            folder_index_state_repository.request_rebuild(conn, int(rule_id))
     if changed:
-        from .folder_index_service import request_rebuild_for_rule
-
-        request_rebuild_for_rule(int(rule_id))
+        _wake_folder_index_worker_safely()
     return changed
 
 
 def delete_folder_rule(rule_id: int) -> bool:
     with _catalog_uow() as uow:
+        folder_index_state_repository.delete_rule_index(
+            uow.connection,
+            int(rule_id),
+        )
         deleted = delete_rule_in_transaction(
             uow,
             uow.connection,
             "folder",
             rule_id,
         )
-    if deleted:
-        from .folder_index_service import delete_index_for_rule
-
-        delete_index_for_rule(int(rule_id))
     return deleted
 
 
@@ -272,7 +286,7 @@ def set_rules_enabled(
         for (rule_type, rule_id), row in zip(refs, rows, strict=True):
             if int(row["enabled"] or 0) == int(requested):
                 continue
-            add_catalog_effects_for_project_id(uow, conn, int(row["project_id"]))
+            add_catalog_effects_for_project_ids(uow, conn, (int(row["project_id"]),))
             table, extra = _rule_table(rule_type)
             cursor = conn.execute(
                 f"UPDATE {table} SET enabled = ?, updated_at = ? WHERE id = ?{extra}",
@@ -298,7 +312,7 @@ def set_rule_enabled_in_transaction(
     requested = int(bool(enabled))
     if int(row["enabled"] or 0) == requested:
         return True
-    add_catalog_effects_for_project_id(uow, conn, int(row["project_id"]))
+    add_catalog_effects_for_project_ids(uow, conn, (int(row["project_id"]),))
     table, extra = _rule_table(rule_type)
     cursor = conn.execute(
         f"UPDATE {table} SET enabled = ?, updated_at = ? WHERE id = ?{extra}",
@@ -316,7 +330,7 @@ def delete_rule_in_transaction(
     row = _rule_row(conn, rule_type, rule_id)
     if row is None:
         return False
-    add_catalog_effects_for_project_id(uow, conn, int(row["project_id"]))
+    add_catalog_effects_for_project_ids(uow, conn, (int(row["project_id"]),))
     table, extra = _rule_table(rule_type)
     cursor = conn.execute(
         f"DELETE FROM {table} WHERE id = ?{extra}",
@@ -356,9 +370,16 @@ def _rule_table(rule_type: str) -> tuple[str, str]:
     raise ValueError("invalid_input")
 
 
+def _wake_folder_index_worker_safely() -> None:
+    try:
+        folder_index_service.wake_folder_index_worker()
+    except Exception:
+        logging.exception("folder index worker wake failed")
+
+
 __all__ = [
     "RuleRef",
-    "add_catalog_effects_for_project_id",
+    "add_catalog_effects_for_project_ids",
     "add_catalog_effects_for_rule",
     "create_keyword_rule",
     "create_or_update_folder_rule",

@@ -2,6 +2,7 @@ from __future__ import annotations
 from tests.support import runtime_state_fixture
 
 import json
+import threading
 
 import pytest
 
@@ -22,7 +23,9 @@ from worktrace.resources.ide_detector import IdeDetector
 from worktrace.resources.types import DetectedResource
 from tests.support import activity_factory as activity_service
 from worktrace.services import (
+    activity_resource_command_service,
     folder_rule_service,
+    privacy_anonymization_service,
     privacy_service,
     project_service,
     rule_service,
@@ -423,3 +426,168 @@ class TestUpdateFilePathHintUpdatesActivityResource:
         assert resource["path_hint"] is None
         assert resource["path_key"] is None
         assert resource["display_name"] == EXCLUDED_APP_NAME
+
+    def test_excluded_folder_is_authorized_inside_path_write_transaction(
+        self,
+        temp_db,
+        monkeypatch,
+    ):
+        excluded_id = system_project_service.require_excluded_project_id()
+        project_service.set_project_enabled(excluded_id, True)
+        folder_rule_service.create_or_update_folder_rule(
+            "D:\\PrivateTxn",
+            excluded_id,
+            True,
+        )
+        aid = activity_service.create_activity(
+            "Word",
+            "winword.exe",
+            "secret.docx - Word",
+            start_time="2026-06-24 10:00:00",
+        )
+        raw_path = "D:\\PrivateTxn\\secret.docx"
+        original_upsert = activity_resource_command_service.create_or_update_activity_resource
+
+        def assert_redacted_before_resource_write(activity_id, resource, conn=None):
+            row = conn.execute(
+                "SELECT status, file_path_hint FROM activity_log WHERE id = ?",
+                (activity_id,),
+            ).fetchone()
+            assert row["status"] == STATUS_EXCLUDED
+            assert row["file_path_hint"] is None
+            return original_upsert(activity_id, resource, conn=conn)
+
+        monkeypatch.setattr(
+            activity_resource_command_service,
+            "create_or_update_activity_resource",
+            assert_redacted_before_resource_write,
+        )
+
+        assert privacy_anonymization_service.update_path_or_anonymize(
+            aid,
+            raw_path,
+        ) is True
+        with get_connection() as conn:
+            activity = conn.execute(
+                "SELECT status, file_path_hint FROM activity_log WHERE id = ?",
+                (aid,),
+            ).fetchone()
+            resource = conn.execute(
+                "SELECT path_hint FROM activity_resource WHERE activity_id = ?",
+                (aid,),
+            ).fetchone()
+        assert activity["status"] == STATUS_EXCLUDED
+        assert activity["file_path_hint"] is None
+        assert resource["path_hint"] is None
+
+    def test_concurrent_excluded_rule_add_commits_before_path_authorization(
+        self,
+        temp_db,
+    ):
+        excluded_id = system_project_service.require_excluded_project_id()
+        project_service.set_project_enabled(excluded_id, True)
+        aid = activity_service.create_activity(
+            "Word",
+            "winword.exe",
+            "race.docx - Word",
+            start_time="2026-06-24 10:05:00",
+        )
+        committed = threading.Event()
+        outcomes: list[bool] = []
+
+        def add_rule():
+            folder_rule_service.create_or_update_folder_rule(
+                "D:\\PrivacyRace",
+                excluded_id,
+                True,
+            )
+            committed.set()
+
+        def write_path():
+            assert committed.wait(5)
+            outcomes.append(
+                privacy_anonymization_service.update_path_or_anonymize(
+                    aid,
+                    "D:\\PrivacyRace\\race.docx",
+                )
+            )
+
+        add_thread = threading.Thread(target=add_rule)
+        path_thread = threading.Thread(target=write_path)
+        add_thread.start()
+        path_thread.start()
+        add_thread.join(5)
+        path_thread.join(5)
+
+        assert outcomes == [True]
+        with get_connection() as conn:
+            assert conn.execute(
+                "SELECT file_path_hint FROM activity_log WHERE id = ?",
+                (aid,),
+            ).fetchone()["file_path_hint"] is None
+
+    def test_removed_excluded_rule_allows_path_at_later_serialization_point(
+        self,
+        temp_db,
+    ):
+        excluded_id = system_project_service.require_excluded_project_id()
+        project_service.set_project_enabled(excluded_id, True)
+        rule_id = folder_rule_service.create_or_update_folder_rule(
+            "D:\\PrivacyRemoved",
+            excluded_id,
+            True,
+        )
+        aid = activity_service.create_activity(
+            "Word",
+            "winword.exe",
+            "allowed.docx - Word",
+            start_time="2026-06-24 10:10:00",
+        )
+        assert folder_rule_service.delete_folder_rule(rule_id) is True
+
+        assert privacy_anonymization_service.update_path_or_anonymize(
+            aid,
+            "D:\\PrivacyRemoved\\allowed.docx",
+        ) is False
+        with get_connection() as conn:
+            assert conn.execute(
+                "SELECT file_path_hint FROM activity_log WHERE id = ?",
+                (aid,),
+            ).fetchone()["file_path_hint"] == "D:\\PrivacyRemoved\\allowed.docx"
+
+    def test_activity_status_change_inside_transaction_forces_anonymous_write(
+        self,
+        temp_db,
+        monkeypatch,
+    ):
+        aid = activity_service.create_activity(
+            "Word",
+            "winword.exe",
+            "state.docx - Word",
+            start_time="2026-06-24 10:15:00",
+        )
+
+        def change_status(_window, *, conn=None):
+            conn.execute(
+                "UPDATE activity_log SET status = ? WHERE id = ?",
+                (STATUS_EXCLUDED, aid),
+            )
+            return False
+
+        monkeypatch.setattr(
+            activity_resource_command_service.privacy_service,
+            "is_excluded",
+            change_status,
+        )
+
+        assert activity_resource_command_service.update_path_or_anonymize(
+            aid,
+            "D:\\StateRace\\state.docx",
+        ) is True
+        with get_connection() as conn:
+            row = conn.execute(
+                "SELECT status, file_path_hint FROM activity_log WHERE id = ?",
+                (aid,),
+            ).fetchone()
+        assert row["status"] == STATUS_EXCLUDED
+        assert row["file_path_hint"] is None

@@ -12,6 +12,7 @@ from worktrace.platforms.windows_path_resolver import WindowsPathResolver
 from worktrace.services import (
     folder_index_query_service,
     folder_index_service,
+    folder_index_state_repository,
     folder_rule_service,
     privacy_service,
     project_service,
@@ -19,6 +20,85 @@ from worktrace.services import (
 from worktrace.services.project_inference_service import assign_project_for_activity
 
 pytestmark = [pytest.mark.db, pytest.mark.integration]
+
+
+def test_catalog_commit_persists_rebuild_marker_before_worker_wake(temp_db):
+    project_id = project_service.create_project("Atomic Index Marker")
+
+    rule_id = folder_rule_service.create_or_update_folder_rule(
+        "D:\\AtomicIndex",
+        project_id,
+        True,
+    )
+
+    with get_connection() as conn:
+        state = conn.execute(
+            """
+            SELECT status, build_status, refresh_requested
+            FROM folder_rule_index_state
+            WHERE folder_rule_id = ?
+            """,
+            (rule_id,),
+        ).fetchone()
+    assert dict(state) == {
+        "status": "pending",
+        "build_status": "pending",
+        "refresh_requested": 1,
+    }
+    assert rule_id in folder_index_service._pending_rule_ids()
+
+
+def test_worker_wake_failure_cannot_lose_durable_rebuild_request(
+    temp_db,
+    monkeypatch,
+):
+    project_id = project_service.create_project("Wake Failure")
+
+    def fail_wake():
+        raise RuntimeError("worker unavailable")
+
+    monkeypatch.setattr(
+        folder_index_service,
+        "wake_folder_index_worker",
+        fail_wake,
+    )
+    rule_id = folder_rule_service.create_or_update_folder_rule(
+        "D:\\WakeFailure",
+        project_id,
+        True,
+    )
+
+    assert rule_id in folder_index_service._pending_rule_ids()
+    folder_index_service.ensure_index_states_for_folder_rules()
+    assert rule_id in folder_index_service._pending_rule_ids()
+
+
+def test_index_state_failure_rolls_back_folder_rule_catalog_write(
+    temp_db,
+    monkeypatch,
+):
+    project_id = project_service.create_project("Index Rollback")
+
+    def fail_state(_conn, _rule_id):
+        raise RuntimeError("index state unavailable")
+
+    monkeypatch.setattr(
+        folder_index_state_repository,
+        "request_rebuild",
+        fail_state,
+    )
+    with pytest.raises(RuntimeError, match="index state unavailable"):
+        folder_rule_service.create_or_update_folder_rule(
+            "D:\\MustRollback",
+            project_id,
+            True,
+        )
+
+    with get_connection() as conn:
+        assert conn.execute(
+            "SELECT id FROM folder_project_rule WHERE folder_path = ?",
+            ("D:\\MustRollback",),
+        ).fetchone() is None
 
 
 def _ready_index(rule_id: int, valid_from: str = "2026-06-18 00:00:00") -> None:

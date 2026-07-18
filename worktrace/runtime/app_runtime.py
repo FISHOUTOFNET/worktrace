@@ -500,6 +500,7 @@ class AppRuntime:
     def request_shutdown(self) -> None:
         self.phase = RuntimePhase.STOPPING
         self.stop_event.set()
+        folder_index_service.wake_folder_index_worker()
         collector_stop_event = self._collector_stop_event
         if collector_stop_event is not None:
             collector_stop_event.set()
@@ -515,6 +516,7 @@ class AppRuntime:
             clear_quiesce_handler(self.quiesce_collection_now)
             self.set_clipboard_capture_enabled(False)
             self.stop_event.set()
+            folder_index_service.wake_folder_index_worker()
             if self._collector_stop_event is not None:
                 self._collector_stop_event.set()
             workers = [

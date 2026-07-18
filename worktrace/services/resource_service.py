@@ -19,12 +19,19 @@ def create_or_update_activity_resource(
 ) -> None:
     """Persist one resource, avoiding writes when semantic fields are unchanged."""
 
-    resource = _enforce_anonymous_if_excluded(activity_id, resource, conn)
-    ts = now_str()
-    path_key = normalize_path_key(resource.path_hint) if resource.path_hint else None
-    metadata = safe_metadata_json(parse_metadata_json(resource.metadata_json))
-
-    def _upsert(c: sqlite3.Connection) -> None:
+    def _upsert(c: sqlite3.Connection, requested: DetectedResource) -> None:
+        safe_resource = _enforce_anonymous_if_excluded(
+            activity_id,
+            requested,
+            c,
+        )
+        ts = now_str()
+        path_key = (
+            normalize_path_key(safe_resource.path_hint)
+            if safe_resource.path_hint
+            else None
+        )
+        metadata = safe_metadata_json(parse_metadata_json(safe_resource.metadata_json))
         c.execute(
             """
             INSERT INTO activity_resource(
@@ -71,21 +78,21 @@ def create_or_update_activity_resource(
             """,
             (
                 activity_id,
-                resource.resource_kind,
-                resource.resource_subtype,
-                resource.display_name,
-                resource.identity_key,
-                int(resource.is_anchor),
-                resource.confidence,
-                resource.source,
-                resource.app_name,
-                resource.process_name,
-                resource.window_title,
-                resource.path_hint,
+                safe_resource.resource_kind,
+                safe_resource.resource_subtype,
+                safe_resource.display_name,
+                safe_resource.identity_key,
+                int(safe_resource.is_anchor),
+                safe_resource.confidence,
+                safe_resource.source,
+                safe_resource.app_name,
+                safe_resource.process_name,
+                safe_resource.window_title,
+                safe_resource.path_hint,
                 path_key,
-                resource.uri_scheme,
-                resource.uri_host,
-                resource.uri_hint,
+                safe_resource.uri_scheme,
+                safe_resource.uri_host,
+                safe_resource.uri_hint,
                 metadata,
                 ts,
                 ts,
@@ -93,12 +100,12 @@ def create_or_update_activity_resource(
         )
 
     if conn is not None:
-        _upsert(conn)
+        _upsert(conn, resource)
     else:
         with DomainUnitOfWork(
             (DataGenerationNamespace.REPORT_STRUCTURE,)
         ) as uow:
-            _upsert(uow.connection)
+            _upsert(uow.connection, resource)
 
 
 def get_resource_for_activity(

@@ -182,38 +182,66 @@ def set_settings(
         if mutation_class is not None
         else None
     )
-    classifications = {
-        key: forced_class or setting_mutation_class(key)
-        for key in normalized
-    }
-    effects: set[DataGenerationNamespace] = set()
-    for classification in classifications.values():
-        effects.update(_effects_for_classification(classification))
+    with DomainUnitOfWork() as uow:
+        set_settings_in_transaction(
+            uow,
+            uow.connection,
+            normalized,
+            mutation_class=forced_class,
+        )
 
-    with DomainUnitOfWork(effects) as uow:
-        conn = uow.connection
-        timestamp = now_str()
-        changed = False
-        for key, value in normalized.items():
-            row = conn.execute(
-                "SELECT value FROM settings WHERE key = ?",
-                (key,),
-            ).fetchone()
-            if row is not None and str(row["value"] or "") == value:
-                continue
-            conn.execute(
-                """
-                INSERT INTO settings(key, value, updated_at)
-                VALUES (?, ?, ?)
-                ON CONFLICT(key) DO UPDATE SET
-                    value = excluded.value,
-                    updated_at = excluded.updated_at
-                """,
-                (key, value, timestamp),
-            )
-            changed = True
-        if changed:
-            uow.mark_changed()
+
+def set_settings_in_transaction(
+    uow: DomainUnitOfWork,
+    conn,
+    values: Mapping[str, str],
+    *,
+    mutation_class: SettingMutationClass | str | None = None,
+) -> bool:
+    """Write changed settings through a caller-owned transaction.
+
+    Effects are derived only from keys whose semantic values actually change.
+    The unit of work de-duplicates namespaces, so a batch can bump each durable
+    generation at most once when the caller commits.
+    """
+
+    if uow.connection is not conn:
+        raise ValueError("settings_transaction_connection_mismatch")
+    forced_class = (
+        SettingMutationClass(str(mutation_class))
+        if mutation_class is not None
+        else None
+    )
+    normalized = {
+        str(key).strip(): str(value)
+        for key, value in values.items()
+        if str(key).strip()
+    }
+    timestamp = now_str()
+    changed = False
+    for key, value in normalized.items():
+        row = conn.execute(
+            "SELECT value FROM settings WHERE key = ?",
+            (key,),
+        ).fetchone()
+        if row is not None and str(row["value"] or "") == value:
+            continue
+        classification = forced_class or setting_mutation_class(key)
+        uow.add_effects(*_effects_for_classification(classification))
+        conn.execute(
+            """
+            INSERT INTO settings(key, value, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET
+                value = excluded.value,
+                updated_at = excluded.updated_at
+            """,
+            (key, value, timestamp),
+        )
+        changed = True
+    if changed:
+        uow.mark_changed()
+    return changed
 
 
 def get_bool_setting(key: str, default: bool = False, *, conn=None) -> bool:
@@ -254,5 +282,6 @@ __all__ = [
     "set_list_setting",
     "set_setting",
     "set_settings",
+    "set_settings_in_transaction",
     "setting_mutation_class",
 ]

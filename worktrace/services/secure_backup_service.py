@@ -37,7 +37,11 @@ from ..security.backup_format import (
 )
 from ..write_gate import DATABASE_WRITE_GATE
 from .database_maintenance_barrier import drain_existing_writers
-from .database_replacement_generation_service import publish_database_replacement
+from .database_replacement_generation_service import (
+    capture_replacement_generation_floor,
+    publish_database_replacement,
+)
+from ..generation_clock import clear as clear_generation_clock
 from ..generation_clock import publish_replacement_committed
 from .runtime_activity_state_service import clear_runtime_activity_state
 from .secure_backup_validation import BackupValidationError, validate_staging_database
@@ -503,6 +507,7 @@ def _replace_import(data: dict[str, Any]) -> dict[str, int]:
         replacement_values = None
         with get_connection() as live:
             live.execute("BEGIN IMMEDIATE")
+            replacement_floor = capture_replacement_generation_floor(live)
             _delete_all_rows(live)
             live.execute("DELETE FROM activity_resource_repair_job")
             source = sqlite3.connect(staging_path)
@@ -531,11 +536,22 @@ def _replace_import(data: dict[str, Any]) -> dict[str, int]:
                     "UPDATE settings SET value = ?, updated_at = ? WHERE key = ?",
                     (value, timestamp, key),
                 )
-            replacement_values = publish_database_replacement(live)
             _validate_staging_database(live)
+            replacement_values = publish_database_replacement(
+                live,
+                minimum_values=replacement_floor,
+            )
+            live.commit()
         if replacement_values is None:
             raise RuntimeError("database_replacement_generation_missing")
-        publish_replacement_committed(get_db_key(), replacement_values)
+        database_key = get_db_key()
+        try:
+            publish_replacement_committed(database_key, replacement_values)
+        except Exception:
+            # Durable replacement already committed. Forgetting the process
+            # clock makes the next cache read reload the exact durable values.
+            logging.exception("database replacement generation publication failed")
+            clear_generation_clock(database_key)
         return imported
     except BackupCorruptedError:
         raise
