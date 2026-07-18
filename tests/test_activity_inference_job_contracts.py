@@ -87,7 +87,7 @@ def test_v10_migration_converts_only_real_legacy_retry_sentinels():
             "SELECT activity_id, confidence FROM activity_project_assignment"
         ).fetchall()
     }
-    assert confidence == {1: 0, 2: 0, 3: 0, 4: 0}
+    assert confidence == {1: 0, 2: 0, 3: -1, 4: 0}
 
 
 def test_job_repository_requires_closed_enum_boundaries():
@@ -137,6 +137,7 @@ def test_backup_payload_matrix_accepts_only_published_combinations():
             _v4_tables(),
         )
     )
+    assert legacy10["version"] == 5
     assert legacy10["tables"]["activity_inference_job"] == []
 
     legacy8 = secure_backup_service._parse_and_validate_payload(
@@ -147,6 +148,7 @@ def test_backup_payload_matrix_accepts_only_published_combinations():
             _v4_tables(),
         )
     )
+    assert legacy8["version"] == 5
     assert legacy8["tables"]["activity_inference_job"] == []
 
     with pytest.raises(secure_backup_service.BackupVersionNotSupportedError):
