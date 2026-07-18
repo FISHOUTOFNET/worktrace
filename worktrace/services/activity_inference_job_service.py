@@ -13,7 +13,7 @@ from ..db import get_connection, now_str
 from ..domain_unit_of_work import DomainUnitOfWork
 from . import activity_inference_job_repository as jobs
 
-InferenceCommand = Callable[[Any, int], tuple[dict, bool]]
+InferenceCommand = Callable[[Any, int], dict]
 
 
 def process_pending_inference_jobs(
@@ -84,8 +84,10 @@ def process_pending_inference_jobs(
                     completed += 1
                     continue
 
-                _result, assignment_changed = infer_activity(conn, activity_id)
-                if assignment_changed:
+                before = _assignment_state(conn, activity_id)
+                infer_activity(conn, activity_id)
+                after = _assignment_state(conn, activity_id)
+                if before != after:
                     uow.add_effects(DataGenerationNamespace.REPORT_STRUCTURE)
                 jobs.delete_job(conn, activity_id)
                 completed += 1
@@ -123,14 +125,12 @@ def _worker_loop(
     batch_size: int,
     poll_seconds: float,
 ) -> None:
-    from .project_inference_service import (
-        assign_project_for_activity_with_change_in_transaction,
-    )
+    from .project_inference_service import assign_project_for_activity_in_transaction
 
     while not stop_event.is_set():
         try:
             processed = process_pending_inference_jobs(
-                assign_project_for_activity_with_change_in_transaction,
+                assign_project_for_activity_in_transaction,
                 limit=batch_size,
             )
         except Exception:
@@ -139,6 +139,19 @@ def _worker_loop(
         if processed >= batch_size:
             continue
         stop_event.wait(poll_seconds)
+
+
+def _assignment_state(conn, activity_id: int) -> tuple[object, ...] | None:
+    row = conn.execute(
+        """
+        SELECT project_id, confidence, source, is_manual,
+               suggested_project_name, source_rule_type, source_rule_id
+        FROM activity_project_assignment
+        WHERE activity_id = ?
+        """,
+        (int(activity_id),),
+    ).fetchone()
+    return tuple(row) if row is not None else None
 
 
 def _classify_failure(exc: BaseException) -> jobs.InferenceFailureCode:
