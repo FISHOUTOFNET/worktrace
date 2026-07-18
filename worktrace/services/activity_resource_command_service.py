@@ -101,13 +101,7 @@ def _finalize_pending_inference(activity_id: int) -> None:
     """Run post-commit derivation without changing the main command result."""
 
     try:
-        # Closed rows have a durable job; open rows can still refresh immediately
-        # and will be scheduled by their eventual close transaction.
-        if project_inference_service.process_pending_inference_jobs(
-            limit=1,
-            activity_ids=[activity_id],
-        ) == 0:
-            project_inference_service.assign_project_for_activity(int(activity_id))
+        project_inference_service.process_new_activity(int(activity_id))
     except Exception:
         logger.exception("path-update inference failed for activity_id=%s", activity_id)
 
@@ -209,6 +203,7 @@ def _persist_activity_path(
             activity_inference_job_repository.enqueue_closed_activity_ids(
                 conn,
                 [int(activity_id)],
+                reason=activity_inference_job_repository.REASON_FACTS_CHANGED,
             )
         uow.mark_changed()
 
