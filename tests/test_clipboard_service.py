@@ -111,9 +111,11 @@ def test_clipboard_fact_on_closed_row_enqueues_without_immediate_assignment(temp
         sequence_number=102,
     )
 
+    provisional = project_inference_service.get_assignment_for_activity(activity_id)
     assert event_id is not None
     assert _job(activity_id)["status"] == "pending"
-    assert project_inference_service.get_assignment_for_activity(activity_id) == {}
+    assert provisional["source"] == "uncategorized"
+    assert int(provisional["project_id"]) != project_id
     assert activity_inference_job_service.process_pending_inference_jobs(
         project_inference_service.assign_project_for_activity_in_transaction,
         limit=1,
