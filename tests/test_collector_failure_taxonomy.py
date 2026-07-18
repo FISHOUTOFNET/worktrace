@@ -5,6 +5,8 @@ from pathlib import Path
 
 import pytest
 
+from worktrace.collector import collector as collector_module
+from worktrace.collector import collector_health
 from worktrace.collector.collector_failure_policy import (
     CollectorFailureCode,
     TransientCollectorError,
@@ -66,6 +68,72 @@ def test_explicit_adapter_failure_is_retryable():
     assert disposition.retryable is True
 
 
+def test_failure_health_api_requires_enum_codes():
+    with pytest.raises(TypeError, match="collector_failure_code_required"):
+        collector_health.record_transient_failure(
+            "clipboard",
+            "database_busy",  # type: ignore[arg-type]
+        )
+    with pytest.raises(TypeError, match="collector_failure_code_required"):
+        collector_health.record_fatal_failure(
+            "startup",
+            "unexpected_failure",  # type: ignore[arg-type]
+        )
+
+
+def test_transient_health_api_rejects_non_retryable_codes():
+    with pytest.raises(ValueError, match="collector_failure_code_not_retryable"):
+        collector_health.record_transient_failure(
+            "clipboard_maintenance",
+            CollectorFailureCode.UNEXPECTED_FAILURE,
+        )
+
+
+def test_clipboard_maintenance_cannot_downgrade_unknown_failures(monkeypatch):
+    def fail_prune():
+        raise RuntimeError("broken retention invariant")
+
+    monkeypatch.setattr(
+        collector_module.clipboard_service,
+        "prune_old_events",
+        fail_prune,
+    )
+
+    with pytest.raises(ValueError, match="collector_failure_code_not_retryable"):
+        collector_module._run_clipboard_maintenance_tick()
+
+
+def test_clipboard_maintenance_records_controlled_contention(monkeypatch):
+    captured: list[tuple[str, CollectorFailureCode]] = []
+
+    def fail_prune():
+        raise sqlite3.OperationalError("database is locked")
+
+    def capture_failure(
+        phase: str,
+        code: CollectorFailureCode,
+        _at_time: str | None = None,
+    ) -> None:
+        captured.append((phase, code))
+
+    monkeypatch.setattr(
+        collector_module.clipboard_service,
+        "prune_old_events",
+        fail_prune,
+    )
+    monkeypatch.setattr(
+        collector_module.collector_health,
+        "record_transient_failure",
+        capture_failure,
+    )
+
+    collector_module._run_clipboard_maintenance_tick()
+
+    assert captured == [
+        ("clipboard_maintenance", CollectorFailureCode.DATABASE_BUSY)
+    ]
+
+
 def test_collector_health_never_receives_or_classifies_raw_failures():
     health_source = (
         ROOT / "worktrace/collector/collector_health.py"
@@ -76,6 +144,7 @@ def test_collector_health_never_receives_or_classifies_raw_failures():
 
     assert "BaseException" not in health_source
     assert "sqlite3" not in health_source
+    assert "CollectorFailureCode | str" not in health_source
     assert "is_transient_failure" not in health_source
     assert "classify_collector_failure" not in health_source
     assert "classify_collector_failure" in collector_source
