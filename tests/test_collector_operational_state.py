@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from worktrace.collector import collector_health, heartbeat
+from worktrace.collector.collector_failure_policy import CollectorFailureCode
 from worktrace.data_generation_repository import (
     DataGenerationNamespace,
     DataGenerationRepository,
@@ -55,13 +56,17 @@ def test_transient_failure_is_one_operational_transaction(temp_db, monkeypatch):
 
     collector_health.record_transient_failure(
         "active_window",
-        RuntimeError("adapter failed"),
+        CollectorFailureCode.ADAPTER_TEMPORARILY_UNAVAILABLE,
         "2026-07-17 10:00:01",
     )
 
     assert len(calls) == 1
     assert calls[0]["collector_health_state"] == "degraded"
     assert calls[0]["collector_consecutive_failures"] == "1"
+    assert (
+        calls[0]["collector_last_failure_kind"]
+        == CollectorFailureCode.ADAPTER_TEMPORARILY_UNAVAILABLE.value
+    )
 
 
 def test_heartbeat_persistence_is_throttled_per_database(temp_db, monkeypatch):
@@ -90,7 +95,7 @@ def test_operational_health_updates_do_not_publish_business_generations(temp_db)
     collector_health.record_successful_observation("2026-07-17 11:00:01")
     collector_health.record_transient_failure(
         "privacy",
-        RuntimeError("privacy failed"),
+        CollectorFailureCode.ADAPTER_TEMPORARILY_UNAVAILABLE,
         "2026-07-17 11:00:02",
     )
 
