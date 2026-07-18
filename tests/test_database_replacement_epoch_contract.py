@@ -8,7 +8,7 @@ import pytest
 
 from worktrace.write_gate import ProcessDatabaseWriteGate
 
-pytestmark = pytest.mark.contract
+pytestmark = [pytest.mark.contract, pytest.mark.db]
 
 
 def test_read_only_drain_does_not_change_database_replacement_epoch():
