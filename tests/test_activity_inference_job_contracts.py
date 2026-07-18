@@ -1,17 +1,21 @@
-"""Durable inference scheduling, migration, and backup compatibility contracts."""
-
+"""Direct contracts for the durable closed-activity inference outbox."""
 from __future__ import annotations
 
-import json
-import sqlite3
 from pathlib import Path
 
 import pytest
 
 from worktrace import db
-from worktrace.services import activity_inference_job_repository as jobs
-from worktrace.services import secure_backup_service
-from worktrace.schema_migrations import migrate_10_to_11
+from worktrace.constants import STATUS_NORMAL
+from worktrace.platforms.base import ActiveWindow
+from worktrace.services import (
+    activity_inference_job_repository as jobs,
+    activity_inference_job_service as consumer,
+    activity_lifecycle_service,
+    assignment_command_service,
+    clipboard_service,
+)
+from worktrace.services.system_project_service import require_uncategorized_project_id
 
 pytestmark = [
     pytest.mark.unit,
@@ -23,171 +27,309 @@ pytestmark = [
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def _v4_tables() -> dict[str, list[dict]]:
-    return {name: [] for name in secure_backup_service._V4_EXPORT_TABLES}
-
-
-def _payload(
-    version: int,
-    schema_version: str,
-    fingerprint: str,
-    tables: dict[str, list[dict]],
-) -> bytes:
-    return json.dumps(
-        {
-            "format": secure_backup_service.PAYLOAD_FORMAT,
-            "version": version,
-            "schema_version": schema_version,
-            "schema_fingerprint": fingerprint,
-            "tables": tables,
-        },
-        separators=(",", ":"),
-    ).encode("utf-8")
-
-
-def test_v10_migration_converts_only_real_legacy_retry_sentinels():
-    conn = sqlite3.connect(":memory:")
-    conn.row_factory = sqlite3.Row
-    conn.executescript(
-        """
-        CREATE TABLE activity_log (
-            id INTEGER PRIMARY KEY,
-            end_time TEXT,
-            status TEXT NOT NULL,
-            is_hidden INTEGER NOT NULL DEFAULT 0,
-            is_deleted INTEGER NOT NULL DEFAULT 0
-        );
-        CREATE TABLE activity_project_assignment (
-            activity_id INTEGER PRIMARY KEY,
-            confidence INTEGER NOT NULL,
-            source TEXT NOT NULL,
-            is_manual INTEGER NOT NULL DEFAULT 0,
-            updated_at TEXT NOT NULL
-        );
-        INSERT INTO activity_log VALUES
-            (1, '2026-07-18 10:00:00', 'normal', 0, 0),
-            (2, '2026-07-18 10:00:00', 'normal', 0, 0),
-            (3, '2026-07-18 10:00:00', 'normal', 0, 0),
-            (4, NULL, 'normal', 0, 0);
-        INSERT INTO activity_project_assignment VALUES
-            (1, -1, 'uncategorized', 0, '2026-07-18 10:00:00'),
-            (2, 0, 'uncategorized', 0, '2026-07-18 10:00:00'),
-            (3, -1, 'uncategorized', 1, '2026-07-18 10:00:00'),
-            (4, -1, 'uncategorized', 0, '2026-07-18 10:00:00');
-        """
-    )
-
-    migrate_10_to_11(conn)
-
-    rows = conn.execute(
-        "SELECT activity_id, reason, status FROM activity_inference_job ORDER BY activity_id"
-    ).fetchall()
-    assert [tuple(row) for row in rows] == [(1, "legacy_retry", "pending")]
-    confidence = {
-        int(row["activity_id"]): int(row["confidence"])
-        for row in conn.execute(
-            "SELECT activity_id, confidence FROM activity_project_assignment"
-        ).fetchall()
-    }
-    assert confidence == {1: 0, 2: 0, 3: -1, 4: 0}
-
-
-def test_job_repository_requires_closed_enum_boundaries():
-    conn = sqlite3.connect(":memory:")
-    with pytest.raises(TypeError, match="inference_job_reason_required"):
-        jobs.enqueue_closed_activity_ids(
-            conn,
-            [],
-            reason="closed_activity",  # type: ignore[arg-type]
+def _create_activity(
+    *,
+    closed: bool = True,
+    status: str = "normal",
+    hidden: bool = False,
+    deleted: bool = False,
+    assignment_source: str | None = None,
+    manual: bool = False,
+) -> int:
+    timestamp = db.now_str()
+    with db.get_connection() as conn:
+        activity_id = int(
+            conn.execute(
+                """
+                INSERT INTO activity_log(
+                    start_time, end_time, duration_seconds, app_name,
+                    process_name, window_title, file_path_hint, status, source,
+                    is_deleted, is_hidden, created_at, updated_at
+                ) VALUES (
+                    '2026-07-18 10:00:00', ?, ?, 'Word', 'winword.exe',
+                    'Matter.docx', 'C:\\Matter\\Matter.docx', ?, 'auto', ?, ?, ?, ?
+                )
+                """,
+                (
+                    "2026-07-18 10:01:00" if closed else None,
+                    60 if closed else 0,
+                    status,
+                    int(deleted),
+                    int(hidden),
+                    timestamp,
+                    timestamp,
+                ),
+            ).lastrowid
         )
-    with pytest.raises(TypeError, match="inference_failure_code_required"):
-        jobs.record_failure(
-            conn,
-            1,
-            "unexpected_failure",  # type: ignore[arg-type]
+        conn.execute(
+            """
+            INSERT INTO activity_resource(
+                activity_id, resource_kind, resource_subtype, display_name,
+                identity_key, is_anchor, confidence, source, app_name,
+                process_name, window_title, path_hint, uri_scheme, uri_host,
+                uri_hint, metadata_json, created_at, updated_at
+            ) VALUES (?, 'office_document', 'word', 'Matter.docx',
+                      'office_file:c:/matter/matter.docx', 1, 100, 'detector',
+                      'Word', 'winword.exe', 'Matter.docx',
+                      'C:\\Matter\\Matter.docx', NULL, NULL, NULL, '{}', ?, ?)
+            """,
+            (activity_id, timestamp, timestamp),
         )
-
-
-def test_job_schema_has_no_running_or_recovery_state():
-    schema = (ROOT / "worktrace/schema_internal.sql").read_text(encoding="utf-8")
-    job_schema = schema.split(
-        "CREATE TABLE IF NOT EXISTS activity_inference_job",
-        1,
-    )[1]
-    repository = (
-        ROOT / "worktrace/services/activity_inference_job_repository.py"
-    ).read_text(encoding="utf-8")
-    assert "status TEXT NOT NULL CHECK(status IN ('pending', 'failed'))" in job_schema
-    assert "'running'" not in job_schema
-    assert "recover_interrupted" not in repository
-    assert "EXECUTION_LOCK" not in repository
-
-
-def test_backup_payload_matrix_accepts_only_published_combinations():
-    v5_tables = {name: [] for name in secure_backup_service.EXPORT_TABLES}
-    current = secure_backup_service._parse_and_validate_payload(
-        _payload(
-            5,
-            secure_backup_service.SCHEMA_VERSION,
-            secure_backup_service._core.expected_schema_fingerprint(),
-            v5_tables,
-        )
-    )
-    assert current["version"] == 5
-
-    legacy10 = secure_backup_service._parse_and_validate_payload(
-        _payload(
-            4,
-            "10",
-            secure_backup_service._legacy_v10_schema_fingerprint(),
-            _v4_tables(),
-        )
-    )
-    assert legacy10["version"] == 5
-    assert legacy10["tables"]["activity_inference_job"] == []
-
-    legacy8 = secure_backup_service._parse_and_validate_payload(
-        _payload(
-            4,
-            "8",
-            secure_backup_service._V4_SCHEMA8_FINGERPRINT,
-            _v4_tables(),
-        )
-    )
-    assert legacy8["version"] == 5
-    assert legacy8["tables"]["activity_inference_job"] == []
-
-    with pytest.raises(secure_backup_service.BackupVersionNotSupportedError):
-        secure_backup_service._parse_and_validate_payload(
-            _payload(
-                4,
-                secure_backup_service.SCHEMA_VERSION,
-                secure_backup_service._core.expected_schema_fingerprint(),
-                _v4_tables(),
+        if assignment_source is not None:
+            project_id = require_uncategorized_project_id(conn)
+            assignment_command_service.upsert_assignment(
+                conn,
+                activity_id=activity_id,
+                project_id=project_id,
+                source=assignment_source,
+                confidence=100 if manual else 90,
+                is_manual=manual,
             )
+    return activity_id
+
+
+def _insert_job(activity_id: int, *, status: str = "pending") -> None:
+    timestamp = db.now_str()
+    with db.get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO activity_inference_job(
+                activity_id, reason, status, attempt_count, next_attempt_at,
+                last_error_code, created_at, updated_at
+            ) VALUES (?, 'closed_activity', ?, 0, NULL, NULL, ?, ?)
+            """,
+            (activity_id, status, timestamp, timestamp),
         )
 
 
-def test_runtime_starts_collector_before_optional_inference_worker():
+def _job(activity_id: int):
+    with db.get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM activity_inference_job WHERE activity_id = ?",
+            (activity_id,),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def test_repository_enqueues_only_canonical_closed_activity_eligibility(temp_db):
+    eligible = _create_activity()
+    open_id = _create_activity(closed=False)
+    hidden = _create_activity(hidden=True)
+    deleted = _create_activity(deleted=True)
+    idle = _create_activity(status="idle")
+    manual = _create_activity(assignment_source="manual", manual=True)
+    midnight = _create_activity(assignment_source="midnight_anchor")
+
+    with db.get_connection() as conn:
+        inserted = jobs.enqueue_closed_activity_ids(
+            conn,
+            [eligible, open_id, hidden, deleted, idle, manual, midnight],
+        )
+        rows = conn.execute(
+            "SELECT activity_id FROM activity_inference_job ORDER BY activity_id"
+        ).fetchall()
+    assert inserted == 1
+    assert [int(row["activity_id"]) for row in rows] == [eligible]
+
+
+def test_close_and_job_enqueue_commit_atomically(temp_db, monkeypatch):
+    activity_id = _create_activity(closed=False)
+
+    def fail_enqueue(*_args, **_kwargs):
+        raise RuntimeError("enqueue failed")
+
+    monkeypatch.setattr(
+        jobs,
+        "enqueue_closed_activity_ids",
+        fail_enqueue,
+    )
+    with pytest.raises(RuntimeError, match="enqueue failed"):
+        activity_lifecycle_service.close_activity(
+            activity_id,
+            "2026-07-18 10:01:00",
+            duration_seconds=60,
+        )
+
+    with db.get_connection() as conn:
+        row = conn.execute(
+            "SELECT end_time FROM activity_log WHERE id = ?",
+            (activity_id,),
+        ).fetchone()
+        assert row["end_time"] is None
+        assert _job(activity_id) is None
+
+
+def test_consumer_assignment_and_job_delete_commit_together(temp_db):
+    activity_id = _create_activity()
+    with db.get_connection() as conn:
+        jobs.enqueue_closed_activity_ids(conn, [activity_id])
+
+    def infer(conn, target_id):
+        project_id = require_uncategorized_project_id(conn)
+        assignment_command_service.upsert_assignment(
+            conn,
+            activity_id=target_id,
+            project_id=project_id,
+            source="uncategorized",
+            confidence=0,
+        )
+        return {"activity_id": target_id}
+
+    assert consumer.process_pending_inference_jobs(infer, limit=10) == 1
+    with db.get_connection() as conn:
+        assert conn.execute(
+            "SELECT 1 FROM activity_project_assignment WHERE activity_id = ?",
+            (activity_id,),
+        ).fetchone()
+        assert conn.execute(
+            "SELECT 1 FROM activity_inference_job WHERE activity_id = ?",
+            (activity_id,),
+        ).fetchone() is None
+
+
+def test_consumer_rolls_back_assignment_when_job_completion_fails(
+    temp_db,
+    monkeypatch,
+):
+    activity_id = _create_activity()
+    with db.get_connection() as conn:
+        jobs.enqueue_closed_activity_ids(conn, [activity_id])
+
+    def infer(conn, target_id):
+        assignment_command_service.upsert_assignment(
+            conn,
+            activity_id=target_id,
+            project_id=require_uncategorized_project_id(conn),
+            source="uncategorized",
+            confidence=0,
+        )
+        return {}
+
+    monkeypatch.setattr(jobs, "delete_job", lambda *_args: (_ for _ in ()).throw(RuntimeError("delete failed")))
+    assert consumer.process_pending_inference_jobs(infer, limit=1) == 0
+    with db.get_connection() as conn:
+        assert conn.execute(
+            "SELECT 1 FROM activity_project_assignment WHERE activity_id = ?",
+            (activity_id,),
+        ).fetchone() is None
+        row = conn.execute(
+            "SELECT status, attempt_count FROM activity_inference_job WHERE activity_id = ?",
+            (activity_id,),
+        ).fetchone()
+    assert row["status"] == "failed"
+    assert row["attempt_count"] == 1
+
+
+def test_consumer_failure_retains_job_with_bounded_backoff(temp_db):
+    activity_id = _create_activity()
+    with db.get_connection() as conn:
+        jobs.enqueue_closed_activity_ids(conn, [activity_id])
+
+    def fail(_conn, _activity_id):
+        raise RuntimeError("inference failed")
+
+    assert consumer.process_pending_inference_jobs(fail, limit=1) == 0
+    row = _job(activity_id)
+    assert row["status"] == "failed"
+    assert row["attempt_count"] == 1
+    assert row["next_attempt_at"] is not None
+    assert row["last_error_code"] == "unexpected_failure"
+
+
+def test_manual_assignment_is_never_overwritten_and_stale_job_is_deleted(temp_db):
+    activity_id = _create_activity(assignment_source="manual", manual=True)
+    _insert_job(activity_id)
+    calls: list[int] = []
+
+    assert consumer.process_pending_inference_jobs(
+        lambda _conn, target: calls.append(target) or {},
+        limit=1,
+    ) == 1
+    assert calls == []
+    assert _job(activity_id) is None
+    with db.get_connection() as conn:
+        row = conn.execute(
+            "SELECT source, is_manual FROM activity_project_assignment WHERE activity_id = ?",
+            (activity_id,),
+        ).fetchone()
+    assert row["source"] == "manual"
+    assert row["is_manual"] == 1
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"hidden": True},
+        {"deleted": True},
+        {"status": "idle"},
+        {"assignment_source": "midnight_anchor"},
+    ],
+)
+def test_consumer_drops_jobs_that_are_no_longer_eligible(temp_db, kwargs):
+    activity_id = _create_activity(**kwargs)
+    _insert_job(activity_id)
+    assert consumer.process_pending_inference_jobs(
+        lambda *_args: pytest.fail("stale job must not infer"),
+        limit=1,
+    ) == 1
+    assert _job(activity_id) is None
+
+
+def test_open_activity_never_receives_closed_activity_job(temp_db):
+    activity_id = _create_activity(closed=False)
+    with db.get_connection() as conn:
+        assert jobs.enqueue_closed_activity_ids(conn, [activity_id]) == 0
+    assert _job(activity_id) is None
+
+
+def test_clipboard_closed_row_enqueues_but_open_row_only_syncs(
+    temp_db,
+    monkeypatch,
+):
+    closed_id = _create_activity()
+    open_id = _create_activity(closed=False)
+    with db.get_connection() as conn:
+        conn.execute(
+            "UPDATE settings SET value = 'true' WHERE key = 'clipboard_capture_enabled'"
+        )
+    synced: list[int] = []
+    monkeypatch.setattr(
+        "worktrace.services.project_inference_service.sync_persisted_open_activity_project",
+        lambda activity_id: synced.append(activity_id) or {},
+    )
+    window = ActiveWindow(
+        app_name="Word",
+        process_name="winword.exe",
+        window_title="Matter.docx",
+        file_path_hint="C:\\Matter\\Matter.docx",
+    )
+
+    assert clipboard_service.record_clipboard_event(closed_id, "closed fact", window)
+    assert clipboard_service.record_clipboard_event(open_id, "open fact", window)
+    assert _job(closed_id) is not None
+    assert _job(open_id) is None
+    assert synced == [open_id]
+
+
+def test_job_schema_and_runtime_have_no_legacy_state_or_second_consumer() -> None:
+    schema = (ROOT / "worktrace/schema_internal.sql").read_text(encoding="utf-8")
     runtime = (ROOT / "worktrace/runtime/app_runtime.py").read_text(encoding="utf-8")
     lifecycle = (
         ROOT / "worktrace/services/activity_lifecycle_service.py"
     ).read_text(encoding="utf-8")
-    assignment = (
-        ROOT / "worktrace/services/assignment_command_service.py"
-    ).read_text(encoding="utf-8")
-
+    assert "reason TEXT NOT NULL CHECK(reason = 'closed_activity')" in schema
+    assert "status TEXT NOT NULL CHECK(status IN ('pending', 'failed'))" in schema
+    assert "legacy_retry" not in schema
     assert "retry_pending_inference" not in runtime
+    assert "process_new_activity" not in lifecycle
     assert runtime.index("self.start_collector()") < runtime.index(
         "self.start_background_workers()"
     )
-    assert "_inference_thread" in runtime
-    assert "_enqueue_closed_inference_jobs" in lifecycle
-    assert "INFERENCE_RETRY_CONFIDENCE" not in assignment
-    assert "activity_inference_job" not in assignment
 
 
-def test_published_versions_are_explicit():
+def test_published_versions_are_current_only() -> None:
+    from worktrace.services import secure_backup_service
+
     assert db.CURRENT_SCHEMA_VERSION == 11
     assert secure_backup_service.PAYLOAD_VERSION == 5
     assert secure_backup_service.EXPORT_TABLES[-1] == "activity_inference_job"
