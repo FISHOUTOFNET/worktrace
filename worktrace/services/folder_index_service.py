@@ -10,6 +10,8 @@ from ..constants import EXCLUDED_PROJECT
 from ..db import dict_rows, get_connection, get_db_path, now_str
 from ..path_utils import normalize_path_key
 from ..resources.title_parsing import normalize_file_name
+from ..write_gate import DATABASE_WRITE_GATE
+from . import folder_index_state_repository
 
 INDEX_STATUS_PENDING = "pending"
 INDEX_STATUS_INDEXING = "indexing"
@@ -23,51 +25,19 @@ _MISS_REFRESH_COOLDOWN_SECONDS = 60.0
 
 _WORKER_LOCK = threading.Lock()
 _WORKER_THREAD: threading.Thread | None = None
+_WORKER_WAKE_EVENT = threading.Event()
 _MISS_REFRESH_TIMES: dict[tuple[str, bool], float] = {}
 
 
 def request_rebuild_for_rule(rule_id: int) -> None:
-    timestamp = now_str()
     with get_connection() as conn:
-        conn.execute(
-            """
-            INSERT INTO folder_rule_index_state(
-                folder_rule_id, status, valid_from, active_generation,
-                building_generation, build_status, last_error, file_count,
-                error_message, refresh_requested, created_at, updated_at
-            )
-            VALUES (?, ?, NULL, NULL, NULL, ?, NULL, 0, NULL, 1, ?, ?)
-            ON CONFLICT(folder_rule_id) DO UPDATE SET
-                status = CASE
-                    WHEN folder_rule_index_state.active_generation IS NULL
-                    THEN excluded.status ELSE folder_rule_index_state.status END,
-                build_status = excluded.build_status,
-                building_generation = NULL,
-                last_error = NULL,
-                error_message = NULL,
-                refresh_requested = 1,
-                updated_at = excluded.updated_at
-            """,
-            (
-                int(rule_id),
-                INDEX_STATUS_PENDING,
-                INDEX_STATUS_PENDING,
-                timestamp,
-                timestamp,
-            ),
-        )
+        folder_index_state_repository.request_rebuild(conn, int(rule_id))
+    wake_folder_index_worker()
 
 
 def delete_index_for_rule(rule_id: int, *, conn=None) -> None:
     if conn is not None:
-        conn.execute(
-            "DELETE FROM folder_rule_file_index WHERE folder_rule_id = ?",
-            (int(rule_id),),
-        )
-        conn.execute(
-            "DELETE FROM folder_rule_index_state WHERE folder_rule_id = ?",
-            (int(rule_id),),
-        )
+        folder_index_state_repository.delete_rule_index(conn, int(rule_id))
         return
     with get_connection() as own_conn:
         delete_index_for_rule(rule_id, conn=own_conn)
@@ -270,6 +240,15 @@ def start_folder_index_worker(stop_event: threading.Event) -> threading.Thread |
         return _WORKER_THREAD
 
 
+def wake_folder_index_worker() -> None:
+    _WORKER_WAKE_EVENT.set()
+
+
+def _wait_for_worker() -> None:
+    _WORKER_WAKE_EVENT.wait(_WORKER_IDLE_SECONDS)
+    _WORKER_WAKE_EVENT.clear()
+
+
 def _worker_loop(stop_event: threading.Event) -> None:
     logging.info("folder index worker start")
     try:
@@ -279,20 +258,18 @@ def _worker_loop(stop_event: threading.Event) -> None:
         logging.exception("folder index startup validation failed")
     while not stop_event.is_set():
         try:
-            from .secure_backup_service import is_secure_import_in_progress
-
-            if is_secure_import_in_progress():
-                stop_event.wait(_WORKER_IDLE_SECONDS)
+            if DATABASE_WRITE_GATE.active():
+                _wait_for_worker()
                 continue
             ensure_index_states_for_folder_rules()
             for rule_id in _pending_rule_ids():
-                if stop_event.is_set() or is_secure_import_in_progress():
+                if stop_event.is_set() or DATABASE_WRITE_GATE.active():
                     break
                 rebuild_folder_index(rule_id, stop_event)
-            stop_event.wait(_WORKER_IDLE_SECONDS)
+            _wait_for_worker()
         except Exception:
             logging.exception("folder index worker error")
-            stop_event.wait(_WORKER_IDLE_SECONDS)
+            _wait_for_worker()
     logging.info("folder index worker stop")
 
 

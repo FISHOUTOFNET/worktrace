@@ -7,7 +7,7 @@ from typing import Any, Iterator
 
 from ..constants import DEFAULT_UNRECORDED_GAP_BOUNDARY_SECONDS
 from ..db import get_connection
-from . import report_operation_repository
+from . import project_lifecycle_policy, report_operation_repository
 from . import report_session_operation_engine as engine
 from .page_read_context import current_page_read_context, page_read_scope
 from .report_fact_query_service import (
@@ -22,11 +22,14 @@ from .report_projection_model import (
     ProjectState,
     ReportProjectionSnapshot,
     project_state_from_row,
+    thaw_value,
 )
 from .report_session_builder import build_report_sessions
 from .report_session_projection_service import (
+    _attach_detail_revision,
     build_base_projection,
     display_safe_contribution,
+    public_session_dto,
 )
 from .report_status_policy import STANDALONE_STATUS, SUPPRESSED, decide_report_status
 from .settings_service import get_int_setting
@@ -69,6 +72,56 @@ def build_visible_snapshot(
         except Exception:
             read_conn.rollback()
             raise
+    return result
+
+
+def get_report_sessions_by_date(date: str) -> list[dict]:
+    return get_report_sessions_by_range(date, date)
+
+
+def get_visible_report_sessions_by_date(date: str) -> list[dict]:
+    return get_report_sessions_by_date(date)
+
+
+def get_visible_report_sessions_for_operations_by_date(date: str) -> list[dict]:
+    return get_report_sessions_for_operations(date, date)
+
+
+def get_report_sessions_by_range(start_date: str, end_date: str) -> list[dict]:
+    return [
+        public_session_dto(session)
+        for session in get_report_sessions_for_operations(start_date, end_date)
+    ]
+
+
+def get_report_sessions_for_operations(
+    start_date: str,
+    end_date: str,
+) -> list[dict]:
+    projected = [
+        _mutable_record(session)
+        for session in build_visible_snapshot(start_date, end_date).final_sessions
+        if project_lifecycle_policy.final_session_is_reportable(session)
+    ]
+    for session in projected:
+        _attach_detail_revision(session)
+    return projected
+
+
+def get_projected_activity_contributions_by_range(
+    start_date: str,
+    end_date: str,
+) -> list[dict]:
+    return [
+        _mutable_record(item)
+        for item in build_visible_snapshot(start_date, end_date).final_contributions
+    ]
+
+
+def _mutable_record(value) -> dict[str, Any]:
+    result = thaw_value(value)
+    if not isinstance(result, dict):
+        raise TypeError("canonical record must thaw to dict")
     return result
 
 
@@ -317,5 +370,11 @@ def _load_project_states(conn, uncategorized_id: int) -> list[ProjectState]:
 __all__ = [
     "ReportProjectionSnapshot",
     "build_visible_snapshot",
+    "get_projected_activity_contributions_by_range",
+    "get_report_sessions_by_date",
+    "get_report_sessions_by_range",
+    "get_report_sessions_for_operations",
+    "get_visible_report_sessions_by_date",
+    "get_visible_report_sessions_for_operations_by_date",
     "snapshot_read_scope",
 ]

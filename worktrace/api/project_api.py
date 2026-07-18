@@ -64,33 +64,6 @@ def get_project_by_name(name: str) -> dict[str, Any] | None:
     return project_service.get_project_by_name(name)
 
 
-def create_project(name: str, description: str = "", language: str = "中文") -> int:
-    return project_service.create_project(name, description, language)
-
-
-def update_project(
-    project_id: int,
-    name: str,
-    description: str = "",
-    language: str = "中文",
-) -> None:
-    project_service.update_project(project_id, name, description, language)
-
-
-def set_project_enabled(project_id: int, enabled: bool) -> None:
-    project_service.set_project_enabled(project_id, enabled)
-
-
-def archive_project(project_id: int) -> None:
-    project_service.archive_project(project_id)
-
-
-def delete_project(project_id: int) -> None:
-    project_service.delete_project(project_id)
-
-
-
-
 def _is_system_or_special_project(project: dict[str, Any]) -> bool:
     """Return True if the project is a system/special project that cannot be modified.
 
@@ -299,11 +272,8 @@ def delete_project_for_rules(project_id: Any) -> dict[str, Any]:
 
 
 __all__ = [
-    "archive_project",
     "archive_project_for_rules",
-    "create_project",
     "create_project_for_rules",
-    "delete_project",
     "delete_project_for_rules",
     "get_project",
     "get_project_by_name",
@@ -312,9 +282,7 @@ __all__ = [
     "list_rule_target_projects",
     "list_selectable_projects",
     "list_user_projects",
-    "set_project_enabled",
     "set_project_enabled_for_rules",
     "set_excluded_rules_enabled",
-    "update_project",
     "update_project_for_rules",
 ]

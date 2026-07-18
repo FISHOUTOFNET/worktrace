@@ -80,9 +80,9 @@ def set_project_rule_enabled(rule_type: str, rule_id: int, enabled: bool) -> dic
         if not _rule_exists(rule_type, rule_id):
             return fail_payload(ERROR_NOT_FOUND)
         if rule_type == "folder":
-            set_folder_rule_enabled(rule_id, enabled)
+            folder_rule_service.set_folder_rule_enabled(rule_id, enabled)
         else:
-            set_keyword_rule_enabled(rule_id, enabled)
+            rule_service.set_rule_enabled(rule_id, enabled)
         return ok_payload(
             rule_type=rule_type,
             rule_id=rule_id,
@@ -338,31 +338,6 @@ def delete_project_folder_rule(rule_id: Any, apply_to_history: Any = _APPLY_TO_H
 
 
 
-def create_keyword_rule(keyword: str, project_id: int) -> int:
-    return rule_service.create_rule(keyword, project_id)
-
-
-def set_keyword_rule_enabled(rule_id: int, enabled: bool) -> None:
-    rule_service.set_rule_enabled(rule_id, enabled)
-
-
-def delete_keyword_rule(rule_id: int) -> None:
-    rule_service.delete_rule(rule_id)
-
-
-
-def create_or_update_folder_rule(folder_path: str, project_id: int, recursive: bool = True) -> int:
-    return folder_rule_service.create_or_update_folder_rule(folder_path, project_id, recursive=recursive)
-
-
-def set_folder_rule_enabled(rule_id: int, enabled: bool) -> None:
-    folder_rule_service.set_folder_rule_enabled(rule_id, enabled)
-
-
-def delete_folder_rule(rule_id: int) -> None:
-    folder_rule_service.delete_folder_rule(rule_id)
-
-
 def preview_folder_rule_conflicts(folder_path: str, project_id: int) -> dict[str, Any]:
     return folder_rule_service.preview_folder_rule_conflicts(folder_path, project_id)
 
@@ -435,19 +410,13 @@ def create_excluded_folder_rule_for_webview(
 __all__ = [
     "create_excluded_folder_rule_for_webview",
     "create_excluded_keyword_rule_for_webview",
-    "create_keyword_rule",
-    "create_or_update_folder_rule",
     "create_project_folder_rule",
     "create_project_keyword_rule",
-    "delete_folder_rule",
-    "delete_keyword_rule",
     "delete_project_folder_rule",
     "delete_project_keyword_rule",
     "ProjectRuleWriteError",
     "preview_folder_rule_conflicts",
     "set_project_rule_enabled",
-    "set_folder_rule_enabled",
-    "set_keyword_rule_enabled",
     "update_project_folder_rule",
     "update_project_keyword_rule",
 ]

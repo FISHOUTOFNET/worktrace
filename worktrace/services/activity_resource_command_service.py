@@ -7,42 +7,16 @@ import ntpath
 
 from ..constants import STATUS_ERROR, STATUS_EXCLUDED, STATUS_IDLE, STATUS_PAUSED
 from ..data_generation_repository import DataGenerationNamespace
-from ..db import get_connection, now_str
+from ..db import now_str
 from ..domain_unit_of_work import DomainUnitOfWork
 from ..path_utils import looks_like_local_file_path, normalize_path_key
 from ..platforms.base import ActiveWindow
 from ..resources.resource_builders import make_system_resource
 from ..resources.types import DetectedResource
 from .resource_service import create_or_update_activity_resource
+from . import privacy_service
 
 logger = logging.getLogger(__name__)
-
-_ACTIVITY_REVISION_FIELDS = (
-    "id",
-    "app_name",
-    "process_name",
-    "window_title",
-    "status",
-    "start_time",
-    "file_path_hint",
-    "updated_at",
-)
-_RESOURCE_REVISION_FIELDS = (
-    "resource_kind",
-    "resource_subtype",
-    "display_name",
-    "identity_key",
-    "is_anchor",
-    "path_hint",
-    "updated_at",
-)
-
-
-def _revision(row: dict | None, fields: tuple[str, ...]) -> tuple | None:
-    if row is None:
-        return None
-    return tuple(row.get(field) for field in fields)
-
 
 def _detect_resource(activity: dict, file_path_hint: str) -> DetectedResource:
     status = str(activity.get("status") or "")
@@ -132,38 +106,15 @@ def _finalize_pending_inference(activity_id: int) -> None:
         logger.exception("path-update inference failed for activity_id=%s", activity_id)
 
 
-def update_activity_file_path_hint(activity_id: int, file_path_hint: str) -> bool:
-    """Atomically update path/resource facts and persist pending derivation."""
+def _persist_activity_path(
+    activity_id: int,
+    file_path_hint: str,
+) -> tuple[bool, bool]:
+    """Persist a path only after transaction-snapshot privacy authorization."""
 
     cleaned = str(file_path_hint or "").strip()
     if not cleaned:
-        return False
-    with get_connection() as read_conn:
-        row = read_conn.execute(
-            """
-            SELECT id, app_name, process_name, window_title, status, start_time,
-                   file_path_hint, updated_at
-            FROM activity_log
-            WHERE id = ? AND is_deleted = 0
-            """,
-            (int(activity_id),),
-        ).fetchone()
-        if row is None:
-            return False
-        activity = dict(row)
-        existing_row = read_conn.execute(
-            "SELECT * FROM activity_resource WHERE activity_id = ?",
-            (int(activity_id),),
-        ).fetchone()
-        existing = dict(existing_row) if existing_row else None
-
-    expected_activity_revision = _revision(activity, _ACTIVITY_REVISION_FIELDS)
-    expected_resource_revision = _revision(existing, _RESOURCE_REVISION_FIELDS)
-    status = str(activity.get("status") or "")
-    effective_path = None if status == STATUS_EXCLUDED else cleaned
-    resource = _detect_resource(activity, cleaned)
-    if status != STATUS_EXCLUDED:
-        resource = _upgrade_path_identity(resource, existing, cleaned)
+        return False, False
 
     with DomainUnitOfWork((DataGenerationNamespace.REPORT_STRUCTURE,)) as uow:
         conn = uow.connection
@@ -177,19 +128,60 @@ def update_activity_file_path_hint(activity_id: int, file_path_hint: str) -> boo
             (int(activity_id),),
         ).fetchone()
         if current_row is None:
-            return False
-        current = dict(current_row)
+            return False, False
+        activity = dict(current_row)
         current_resource_row = conn.execute(
             "SELECT * FROM activity_resource WHERE activity_id = ?",
             (int(activity_id),),
         ).fetchone()
-        current_resource = dict(current_resource_row) if current_resource_row else None
-        if (
-            _revision(current, _ACTIVITY_REVISION_FIELDS) != expected_activity_revision
-            or _revision(current_resource, _RESOURCE_REVISION_FIELDS)
-            != expected_resource_revision
-        ):
-            raise ValueError("activity_changed_during_path_update")
+        existing = dict(current_resource_row) if current_resource_row else None
+        excluded = privacy_service.is_excluded(
+            ActiveWindow(
+                app_name=str(activity.get("app_name") or ""),
+                process_name=str(activity.get("process_name") or ""),
+                window_title=str(activity.get("window_title") or ""),
+                file_path_hint=cleaned,
+                activity_start_time=str(activity.get("start_time") or "") or None,
+            ),
+            conn=conn,
+        )
+        status_row = conn.execute(
+            "SELECT status FROM activity_log WHERE id = ? AND is_deleted = 0",
+            (int(activity_id),),
+        ).fetchone()
+        if status_row is None:
+            return False, False
+        status = str(status_row["status"] or "")
+        excluded = excluded or status == STATUS_EXCLUDED
+        if excluded:
+            payload = privacy_service.make_excluded_activity_payload()
+            conn.execute(
+                """
+                UPDATE activity_log
+                SET app_name = ?, process_name = ?, window_title = ?,
+                    file_path_hint = NULL, status = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    payload["app_name"],
+                    payload["process_name"],
+                    payload["window_title"],
+                    STATUS_EXCLUDED,
+                    now_str(),
+                    int(activity_id),
+                ),
+            )
+            conn.execute(
+                "DELETE FROM activity_clipboard_event WHERE activity_id = ?",
+                (int(activity_id),),
+            )
+            resource = make_system_resource(STATUS_EXCLUDED)
+        else:
+            resource = _upgrade_path_identity(
+                _detect_resource(activity, cleaned),
+                existing,
+                cleaned,
+            )
 
         conn.execute(
             """
@@ -198,22 +190,43 @@ def update_activity_file_path_hint(activity_id: int, file_path_hint: str) -> boo
             WHERE id = ?
               AND file_path_hint IS NOT ?
             """,
-            (effective_path, now_str(), int(activity_id), effective_path),
+            (
+                None if excluded else cleaned,
+                now_str(),
+                int(activity_id),
+                None if excluded else cleaned,
+            ),
         )
         create_or_update_activity_resource(int(activity_id), resource, conn=conn)
 
-        from .assignment_command_service import mark_inference_retry
-        from .system_project_service import require_uncategorized_project_id
+        if not excluded:
+            from .assignment_command_service import mark_inference_retry
+            from .system_project_service import require_uncategorized_project_id
 
-        mark_inference_retry(
-            conn,
-            int(activity_id),
-            require_uncategorized_project_id(conn),
-        )
+            mark_inference_retry(
+                conn,
+                int(activity_id),
+                require_uncategorized_project_id(conn),
+            )
         uow.mark_changed()
 
-    _finalize_pending_inference(int(activity_id))
-    return True
+    if not excluded:
+        _finalize_pending_inference(int(activity_id))
+    return True, excluded
 
 
-__all__ = ["update_activity_file_path_hint"]
+def update_activity_file_path_hint(activity_id: int, file_path_hint: str) -> bool:
+    """Atomically update path/resource facts and persist pending derivation."""
+
+    updated, _excluded = _persist_activity_path(activity_id, file_path_hint)
+    return updated
+
+
+def update_path_or_anonymize(activity_id: int, file_path_hint: str) -> bool:
+    """Return whether the transaction converted the activity to excluded."""
+
+    _updated, excluded = _persist_activity_path(activity_id, file_path_hint)
+    return excluded
+
+
+__all__ = ["update_activity_file_path_hint", "update_path_or_anonymize"]

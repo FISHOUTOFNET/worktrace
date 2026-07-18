@@ -5,6 +5,7 @@ from tests.support import activity_factory as activity_service
 from worktrace.db import get_connection
 from worktrace.platforms.base import ActiveWindow
 from worktrace.services import (
+    clipboard_fact_query_service,
     clipboard_service,
     project_service,
     rule_service,
@@ -272,7 +273,7 @@ def test_file_text_mappings_include_activity_file_path(temp_db):
         copied_at="2026-06-18 09:00:05",
     )
 
-    rows = clipboard_service.list_file_text_mappings(
+    rows = clipboard_fact_query_service.list_file_text_mappings(
         "2026-06-18 00:00:00",
         "2026-06-18 23:59:59",
     )

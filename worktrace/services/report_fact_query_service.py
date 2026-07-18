@@ -6,7 +6,7 @@ from datetime import date as date_type, datetime, time as datetime_time, timedel
 
 from ..constants import DEFAULT_CONTEXT_CARRY_MINUTES, TIME_FORMAT, UNCATEGORIZED_PROJECT
 from ..db import get_connection
-from . import clipboard_service, session_boundary_service
+from . import clipboard_fact_query_service, session_boundary_service
 from .context_service import ReportContextProjection
 from .project_attribution_policy import official_project_fields, report_project_fields
 from .settings_service import get_int_setting
@@ -47,7 +47,7 @@ def load_report_activity_rows(
     rows = _load_fact_rows(conn, start_date, end_date)
     boundaries = boundary_times_for_rows(rows, conn=conn)
     activity_ids = [int(row["id"]) for row in rows if int(row.get("id") or 0)]
-    clipboard_times = clipboard_service.clipboard_times_for_activity_ids(
+    clipboard_times = clipboard_fact_query_service.clipboard_times_for_activity_ids(
         conn,
         activity_ids,
     )

@@ -72,7 +72,7 @@ def test_authorized_start_skips_derived_workers_when_collector_fails(
     runtime._initialized = True
     order: list[str] = []
     monkeypatch.setattr(
-        app_runtime.assignment_command_service,
+        app_runtime.project_inference_service,
         "retry_pending_inference",
         lambda _limit: order.append("retry"),
     )
@@ -107,7 +107,7 @@ def test_derived_worker_failure_degrades_ready_collector(
     runtime._initialized = True
     order: list[str] = []
     monkeypatch.setattr(
-        app_runtime.assignment_command_service,
+        app_runtime.project_inference_service,
         "retry_pending_inference",
         lambda _limit: order.append("retry"),
     )

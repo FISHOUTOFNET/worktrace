@@ -62,10 +62,12 @@ do not capture, restore, export, or replace installation consent. Startup
 performs the one-time migration from legacy settings keys.
 
 `app_api.start_collection_after_privacy_gate()` is the unified startup entry
-for background workers and collector startup. It owns the first-run notice
-read, fail-closed payload, and ordering of background workers before the
-collector. `webview_main`, bridge methods, and frontend code must not duplicate
-that logic.
+for collector and background-worker startup. It owns the first-run notice
+read and fail-closed payload. After authorization it starts the critical
+Collector first, then starts optional/recoverable derived-state workers.
+An optional worker failure is reported as explicit degraded readiness without
+misreporting Collector startup or blocking collection. `webview_main`, bridge
+methods, and frontend code must not duplicate that logic.
 
 `AppRuntime.initialize()` performs DB initialization, single-instance lock, and
 recovery. It does not start the folder-index worker or collector directly.

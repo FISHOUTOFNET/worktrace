@@ -18,7 +18,7 @@ from worktrace.services.project_ownership_service import (
     ProjectLabel,
     begin_ownership_for_new_resource,
 )
-from worktrace.services.report_session_projection_service import get_report_sessions_by_date
+from worktrace.services.report_projection_snapshot_service import get_report_sessions_by_date
 from worktrace.webview_ui.bridge import WebViewBridge
 
 pytestmark = [pytest.mark.collector_runtime, pytest.mark.integration, pytest.mark.db]

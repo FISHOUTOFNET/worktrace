@@ -163,45 +163,10 @@ def mark_inference_retry_with_uow(activity_id: int) -> bool:
         return changed
 
 
-def retry_pending_inference(limit: int = 100) -> int:
-    """Retry a bounded set of prior transient inference failures."""
-
-    with get_connection() as conn:
-        rows = conn.execute(
-            """
-            SELECT a.id
-            FROM activity_log a
-            JOIN activity_project_assignment apa ON apa.activity_id = a.id
-            WHERE a.end_time IS NOT NULL
-              AND a.status = 'normal'
-              AND a.is_hidden = 0
-              AND a.is_deleted = 0
-              AND apa.is_manual = 0
-              AND apa.source = 'uncategorized'
-              AND apa.confidence = ?
-            ORDER BY a.id
-            LIMIT ?
-            """,
-            (INFERENCE_RETRY_CONFIDENCE, max(0, int(limit))),
-        ).fetchall()
-    updated = 0
-    from . import project_inference_service
-
-    for row in rows:
-        try:
-            result = project_inference_service.assign_project_for_activity(int(row["id"]))
-            if int(result.get("confidence") or 0) != INFERENCE_RETRY_CONFIDENCE:
-                updated += 1
-        except Exception:
-            logging.exception("assignment inference retry failed for activity %s", row["id"])
-    return updated
-
-
 __all__ = [
     "INFERENCE_RETRY_CONFIDENCE",
     "assign_with_uow",
     "mark_inference_retry",
     "mark_inference_retry_with_uow",
-    "retry_pending_inference",
     "upsert_assignment",
 ]

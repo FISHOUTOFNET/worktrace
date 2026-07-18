@@ -4,41 +4,19 @@ from ..constants import STATUS_EXCLUDED
 from ..data_generation_repository import DataGenerationNamespace
 from ..domain_unit_of_work import DomainUnitOfWork
 from ..db import now_str
-from ..platforms.base import ActiveWindow
 from ..resources.resource_builders import make_system_resource
-from . import activity_service, privacy_service
+from . import privacy_service
+from .activity_resource_command_service import (
+    update_path_or_anonymize as persist_path_or_anonymize,
+)
 from .resource_service import create_or_update_activity_resource
 
 
-def path_requires_exclusion(activity_id: int, file_path_hint: str) -> bool:
-    """Evaluate a newly resolved path before any real path is persisted."""
-    activity = activity_service.get_activity(int(activity_id))
-    if not activity:
-        return False
-    return privacy_service.is_excluded(
-        ActiveWindow(
-            app_name=str(activity.get("app_name") or ""),
-            process_name=str(activity.get("process_name") or ""),
-            window_title=str(activity.get("window_title") or ""),
-            file_path_hint=file_path_hint,
-        )
-    )
-
-
 def update_path_or_anonymize(activity_id: int, file_path_hint: str) -> bool:
-    """Persist a safe path, or atomically redact the activity if it is excluded.
-
-    Returns ``True`` when the activity was converted to the anonymous excluded
-    representation. Privacy evaluation occurs before the path is written.
-    Exceptions intentionally propagate so the collector fails closed.
-    """
+    """Persist or redact using the path command's transaction snapshot."""
     if not (file_path_hint or "").strip():
         return False
-    if not path_requires_exclusion(activity_id, file_path_hint):
-        activity_service.update_activity_file_path_hint(activity_id, file_path_hint)
-        return False
-    anonymize_activity(activity_id)
-    return True
+    return persist_path_or_anonymize(int(activity_id), file_path_hint)
 
 
 def anonymize_activity(activity_id: int) -> None:
@@ -82,6 +60,5 @@ def anonymize_activity(activity_id: int) -> None:
 
 __all__ = [
     "anonymize_activity",
-    "path_requires_exclusion",
     "update_path_or_anonymize",
 ]

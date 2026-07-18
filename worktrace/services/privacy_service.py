@@ -42,7 +42,7 @@ def clear_exclude_rules_cache() -> None:
         _EXCLUDE_RULE_CACHE = None
 
 
-def is_excluded(active_window: ActiveWindow) -> bool:
+def is_excluded(active_window: ActiveWindow, *, conn=None) -> bool:
     """Evaluate exclusions; unresolved local-file privacy decisions fail closed."""
 
     haystack = " ".join(
@@ -53,12 +53,12 @@ def is_excluded(active_window: ActiveWindow) -> bool:
             active_window.file_path_hint or "",
         ]
     ).casefold()
-    if _matches_exclude_keyword(haystack):
+    if _matches_exclude_keyword(haystack, conn=conn):
         return True
-    if _matches_exclude_folder(active_window.file_path_hint):
+    if _matches_exclude_folder(active_window.file_path_hint, conn=conn):
         return True
 
-    folder_rules = _exclude_rules()["folders"]
+    folder_rules = _exclude_rules(conn=conn)["folders"]
     if not folder_rules:
         return False
     file_name = extract_file_name_from_title(active_window.window_title)
@@ -70,21 +70,23 @@ def is_excluded(active_window: ActiveWindow) -> bool:
     path = resolve_unique_path_from_title(
         active_window.window_title,
         include_excluded=True,
+        conn=conn,
     )
     if path:
-        return _matches_exclude_folder(path)
+        return _matches_exclude_folder(path, conn=conn)
 
     # Privacy is a runtime command owner: it may explicitly request maintenance
     # after the pure lookup, while report/preview callers remain read-only.
-    from .folder_index_service import request_refresh_for_enabled_rules
+    if conn is None:
+        from .folder_index_service import request_refresh_for_enabled_rules
 
-    request_refresh_for_enabled_rules(include_excluded=True)
+        request_refresh_for_enabled_rules(include_excluded=True)
     if active_window.privacy_path_required:
         raise PrivacyResolutionPending("privacy_path_unresolved")
     return False
 
 
-def is_resource_excluded(resource) -> bool:
+def is_resource_excluded(resource, *, conn=None) -> bool:
     """Return True if a DetectedResource (or dict) should be excluded."""
 
     if resource is None:
@@ -119,9 +121,9 @@ def is_resource_excluded(resource) -> bool:
             fields.append(resource.metadata_json)
         resource_path = resource.path_hint
     haystack = " ".join(fields).casefold()
-    if _matches_exclude_keyword(haystack):
+    if _matches_exclude_keyword(haystack, conn=conn):
         return True
-    return _matches_exclude_folder(resource_path)
+    return _matches_exclude_folder(resource_path, conn=conn)
 
 
 def make_excluded_activity_payload() -> dict:
@@ -179,10 +181,12 @@ def _copy_rule_snapshot(value: dict[str, list[dict]]) -> dict[str, list[dict]]:
     return {key: [dict(row) for row in rows] for key, rows in value.items()}
 
 
-def _exclude_rules() -> dict[str, list[dict]]:
+def _exclude_rules(*, conn=None) -> dict[str, list[dict]]:
     global _EXCLUDE_RULE_CACHE_DATABASE_KEY
     global _EXCLUDE_RULE_CACHE_GENERATION
     global _EXCLUDE_RULE_CACHE
+    if conn is not None:
+        return _load_exclude_rules(conn)
     while True:
         database_key = get_db_key()
         current_generation = generation(DataGenerationNamespace.PRIVACY_CATALOG)
@@ -204,20 +208,20 @@ def _exclude_rules() -> dict[str, list[dict]]:
         return _copy_rule_snapshot(result)
 
 
-def _matches_exclude_keyword(haystack: str) -> bool:
+def _matches_exclude_keyword(haystack: str, *, conn=None) -> bool:
     rule_keywords = [
         str(row.get("keyword") or "").strip().casefold()
-        for row in _exclude_rules()["keywords"]
+        for row in _exclude_rules(conn=conn)["keywords"]
     ]
     return any(keyword and keyword in haystack for keyword in rule_keywords)
 
 
-def _matches_exclude_folder(file_path_hint: str | None) -> bool:
+def _matches_exclude_folder(file_path_hint: str | None, *, conn=None) -> bool:
     target = (file_path_hint or "").strip()
     if not target:
         return False
     target_key = normalize_folder_key(target) or normalize_path_key(target)
-    for row in _exclude_rules()["folders"]:
+    for row in _exclude_rules(conn=conn)["folders"]:
         folder = str(row.get("folder_path") or "")
         if target_key and target_key == str(
             row.get("normalized_folder_key") or ""

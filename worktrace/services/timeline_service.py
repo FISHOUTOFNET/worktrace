@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import date as date_type
 
-from . import report_session_projection_service
+from . import report_projection_snapshot_service
 
 
 def get_project_sessions_by_date(date: str) -> list[dict]:
@@ -15,7 +15,7 @@ def get_project_sessions_by_range(
     start_date: str,
     end_date: str,
 ) -> list[dict]:
-    return report_session_projection_service.get_report_sessions_by_range(
+    return report_projection_snapshot_service.get_report_sessions_by_range(
         start_date,
         end_date,
     )

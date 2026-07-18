@@ -15,6 +15,7 @@ from ..data_generation_repository import DataGenerationNamespace
 from ..db import now_str
 from ..domain_unit_of_work import DomainUnitOfWork
 from . import activity_fact_repository, session_boundary_service
+from .settings_service import set_settings_in_transaction
 
 
 def _report_uow() -> DomainUnitOfWork:
@@ -221,27 +222,14 @@ def pause_collection(
             session_boundary_service.insert_boundary(conn, requested_at, reason)
             changed = True
 
-        timestamp = now_str()
-        for key, value in (
-            ("user_paused", "true"),
-            ("collector_status", "paused"),
+        if set_settings_in_transaction(
+            uow,
+            conn,
+            {
+                "user_paused": "true",
+                "collector_status": "paused",
+            },
         ):
-            existing = conn.execute(
-                "SELECT value FROM settings WHERE key = ?",
-                (key,),
-            ).fetchone()
-            if existing is not None and str(existing["value"] or "") == value:
-                continue
-            conn.execute(
-                """
-                INSERT INTO settings(key, value, updated_at)
-                VALUES (?, ?, ?)
-                ON CONFLICT(key) DO UPDATE SET
-                    value = excluded.value,
-                    updated_at = excluded.updated_at
-                """,
-                (key, value, timestamp),
-            )
             changed = True
         if changed:
             uow.mark_changed()

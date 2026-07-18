@@ -8,9 +8,8 @@ from ..generation_clock import generation
 from ..path_utils import (
     is_path_under_folder,
     looks_like_anchor_file_path,
-    normalize_folder_key,
-    normalize_path_key,
 )
+from . import folder_rule_matching_policy
 
 _FOLDER_RULE_CACHE_LOCK = threading.RLock()
 _FOLDER_RULE_CACHE_DATABASE_KEY: str | None = None
@@ -140,16 +139,10 @@ def find_matching_folder_rule(
     target = (path_or_parent_dir or "").strip()
     if not target:
         return None
-    matches = [
-        row
-        for row in _enabled_folder_rules(conn)
-        if _target_matches_rule(target, row)
-        and int(row.get("id") or 0) != int(exclude_rule_id or 0)
-    ]
-    if not matches:
-        return None
-    return dict(
-        max(matches, key=lambda row: len(row["normalized_folder_key"] or ""))
+    return folder_rule_matching_policy.select_automatic_rule(
+        target,
+        _enabled_folder_rules(conn),
+        exclude_rule_id=exclude_rule_id,
     )
 
 
@@ -204,24 +197,9 @@ def _activity_matches_folder(
     activity: dict,
     folder_path: str,
     recursive: bool = True,
-    rule_id: int | None = None,
 ) -> bool:
     for key in ("resource_path_hint", "file_path_hint"):
         path_hint = str(activity.get(key) or "").strip()
         if path_hint and looks_like_anchor_file_path(path_hint):
             return is_path_under_folder(path_hint, folder_path, recursive)
-    if rule_id is not None:
-        from .folder_index_query_service import activity_matches_rule_by_index
-
-        return activity_matches_rule_by_index(activity, rule_id)
     return False
-
-
-def _target_matches_rule(target: str, rule: dict) -> bool:
-    folder_path = rule["folder_path"]
-    recursive = bool(rule["recursive"])
-    if normalize_path_key(target) == normalize_folder_key(folder_path):
-        return True
-    if looks_like_anchor_file_path(target):
-        return is_path_under_folder(target, folder_path, recursive)
-    return bool(recursive and is_path_under_folder(target, folder_path, True))

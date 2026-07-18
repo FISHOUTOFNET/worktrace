@@ -314,7 +314,7 @@ def test_runtime_startup_orders_collector_before_derived_workers(
     runtime = _initialize_owned_runtime(temp_db, tmp_path, monkeypatch)
     order: list[str] = []
     monkeypatch.setattr(
-        "worktrace.runtime.app_runtime.assignment_command_service.retry_pending_inference",
+        "worktrace.runtime.app_runtime.project_inference_service.retry_pending_inference",
         lambda _limit: order.append("retry"),
     )
     monkeypatch.setattr(
