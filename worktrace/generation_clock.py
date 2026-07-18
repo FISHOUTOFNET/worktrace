@@ -17,6 +17,7 @@ from .data_generation_repository import (
     DataGenerationRepository,
 )
 from .db import get_connection, get_db_key
+from .write_gate import DATABASE_WRITE_GATE
 
 _LOCK = threading.RLock()
 _VALUES: dict[tuple[str, DataGenerationNamespace], int] = {}
@@ -87,14 +88,14 @@ def publish_replacement_committed(
     database_key: str,
     values: Mapping[DataGenerationNamespace | str, int],
 ) -> None:
-    """Atomically replace every process-local counter for one database.
+    """Atomically publish a committed replacement and its database identity.
 
-    Replacement publication deliberately does not use monotonic ``max``:
-    installing another database may reset durable generation values. Removing
-    the old namespace set and installing the committed replacement values under
-    one lock prevents readers from observing a partially replaced clock.
+    The write-gate epoch advances only here, after the replacement transaction
+    has committed and while the destructive maintenance owner still holds the
+    exclusive lease. Read-only consistent snapshots never call this path.
     """
 
+    DATABASE_WRITE_GATE.publish_database_replaced(threading.get_ident())
     resolved = {_namespace(namespace): int(value) for namespace, value in values.items()}
     key_prefix = str(database_key)
     with _LOCK:
