@@ -2,7 +2,7 @@
 
 Every durable lifecycle transition is committed in one SQLite transaction.
 Eligible closed activities receive a durable inference job in that same
-transaction; post-commit processing is only a latency optimization.
+transaction and are consumed only by the AppRuntime inference worker.
 """
 
 from __future__ import annotations
@@ -33,23 +33,6 @@ def _enqueue_closed_inference_jobs(conn, closed_ids: list[int]) -> int:
     )
 
 
-def finalize_closed_activity_ids(closed_ids: list[int] | None) -> None:
-    """Best-effort immediate consumption of already-durable inference jobs."""
-
-    if not closed_ids:
-        return
-    from .project_inference_service import process_new_activity
-
-    for activity_id in sorted({int(value) for value in closed_ids}):
-        try:
-            process_new_activity(activity_id)
-        except Exception:
-            logging.exception(
-                "close-finalize inference failed for activity_id=%s",
-                activity_id,
-            )
-
-
 def start_activity(*, start_time: str, source: str, payload: dict[str, Any]) -> int:
     prepared = activity_fact_repository.prepare_activity(
         start_time=start_time,
@@ -68,7 +51,6 @@ def start_activity(*, start_time: str, source: str, payload: dict[str, Any]) -> 
         )
         _enqueue_closed_inference_jobs(conn, closed_ids)
         uow.mark_changed()
-    finalize_closed_activity_ids(closed_ids)
     _sync_open_row_project_safely(activity_id, status=prepared.status)
     return activity_id
 
@@ -138,8 +120,6 @@ def close_activity(
         if changed:
             _enqueue_closed_inference_jobs(conn, [int(activity_id)])
             uow.mark_changed()
-    if changed:
-        finalize_closed_activity_ids([int(activity_id)])
 
 
 def close_all_open_activities(end_time: str | None = None) -> list[int]:
@@ -153,7 +133,6 @@ def close_all_open_activities(end_time: str | None = None) -> list[int]:
         if closed_ids:
             _enqueue_closed_inference_jobs(conn, closed_ids)
             uow.mark_changed()
-    finalize_closed_activity_ids(closed_ids)
     return closed_ids
 
 
@@ -184,7 +163,6 @@ def close_at_boundary(
         _enqueue_closed_inference_jobs(conn, closed_ids)
         session_boundary_service.insert_boundary(conn, requested_at, reason)
         uow.mark_changed()
-    finalize_closed_activity_ids(closed_ids)
     return closed_ids
 
 
@@ -240,7 +218,6 @@ def pause_collection(
         if changed:
             uow.mark_changed()
 
-    finalize_closed_activity_ids(closed_ids)
     from .runtime_activity_state_service import clear_runtime_activity_state
 
     clear_runtime_activity_state(reason)
@@ -338,7 +315,6 @@ def recover_activity_batch(
             changed = True
         if changed:
             uow.mark_changed()
-    finalize_closed_activity_ids(closed_ids)
     return {"closed_ids": closed_ids, "created_ids": created_ids}
 
 
@@ -442,7 +418,6 @@ __all__ = [
     "close_activity",
     "close_all_open_activities",
     "close_at_boundary",
-    "finalize_closed_activity_ids",
     "force_persist_open_activity_for_clipboard",
     "mark_activity_error",
     "persist_midnight_anchor",
