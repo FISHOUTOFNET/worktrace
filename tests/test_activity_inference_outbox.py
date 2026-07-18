@@ -24,7 +24,7 @@ def _insert_closed_activity(conn, *, status: str = "normal") -> int:
             start_time, end_time, duration_seconds, app_name, process_name,
             window_title, status, source, is_hidden, is_deleted,
             created_at, updated_at
-        ) VALUES (?, ?, 60, 'Word', 'winword.exe', 'Doc', ?, 'test', 0, 0, ?, ?)
+        ) VALUES (?, ?, 60, 'Word', 'winword.exe', 'Doc', ?, 'auto', 0, 0, ?, ?)
         """,
         (timestamp, "2026-07-18 10:01:00", status, timestamp, timestamp),
     )
