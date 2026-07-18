@@ -30,6 +30,11 @@ jobs:
     name: Python 3.11 full suite
     runs-on: windows-latest
     timeout-minutes: 30
+    outputs:
+      problem_count: ${{ steps.diagnostics.outputs.problem_count }}
+      first_failure: ${{ steps.diagnostics.outputs.first_failure }}
+      first_location: ${{ steps.diagnostics.outputs.first_location }}
+      diagnostics_b64: ${{ steps.diagnostics.outputs.diagnostics_b64 }}
 
     steps:
       - name: Check out exact revision
@@ -135,6 +140,24 @@ jobs:
           Write-Host "failure_count=${{ steps.diagnostics.outputs.problem_count }}"
           Write-Host "first_failure=${{ steps.diagnostics.outputs.first_failure }}"
           Write-Host "first_location=${{ steps.diagnostics.outputs.first_location }}"
+
+  python_failure_manifest:
+    name: Complete Python failure manifest
+    needs: python311
+    if: ${{ always() && needs.python311.result == 'failure' && needs.python311.outputs.diagnostics_b64 != '' }}
+    runs-on: windows-latest
+    timeout-minutes: 2
+    steps:
+      - name: Publish complete manifest and details
+        shell: pwsh
+        env:
+          DIAGNOSTICS_B64: ${{ needs.python311.outputs.diagnostics_b64 }}
+        run: |
+          $utf8 = [System.Text.UTF8Encoding]::new($false)
+          [Console]::OutputEncoding = $utf8
+          $bytes = [Convert]::FromBase64String($env:DIAGNOSTICS_B64)
+          $report = [Text.Encoding]::UTF8.GetString($bytes)
+          Write-Host $report
 
   node:
     name: WebView Node behavior tests
