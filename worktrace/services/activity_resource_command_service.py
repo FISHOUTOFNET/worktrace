@@ -13,7 +13,11 @@ from ..path_utils import looks_like_local_file_path, normalize_path_key
 from ..platforms.base import ActiveWindow
 from ..resources.resource_builders import make_system_resource
 from ..resources.types import DetectedResource
-from . import activity_inference_job_repository, privacy_service
+from . import (
+    activity_inference_job_repository,
+    privacy_service,
+    project_inference_service,
+)
 from .resource_service import create_or_update_activity_resource
 
 logger = logging.getLogger(__name__)
@@ -97,13 +101,13 @@ def _finalize_pending_inference(activity_id: int) -> None:
     """Run post-commit derivation without changing the main command result."""
 
     try:
-        from .activity_inference_job_service import process_pending_inference_jobs
-        from .project_inference_service import assign_project_for_activity
-
         # Closed rows have a durable job; open rows can still refresh immediately
         # and will be scheduled by their eventual close transaction.
-        if process_pending_inference_jobs(limit=1, activity_ids=[activity_id]) == 0:
-            assign_project_for_activity(int(activity_id))
+        if project_inference_service.process_pending_inference_jobs(
+            limit=1,
+            activity_ids=[activity_id],
+        ) == 0:
+            project_inference_service.assign_project_for_activity(int(activity_id))
     except Exception:
         logger.exception("path-update inference failed for activity_id=%s", activity_id)
 
