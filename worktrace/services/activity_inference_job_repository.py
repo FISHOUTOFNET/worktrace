@@ -83,7 +83,7 @@ def enqueue_closed_activity_ids(
 
 
 def seed_legacy_import_jobs(conn, *, at_time: str | None = None) -> int:
-    """Convert only legacy missing-assignment or explicit retry-marker semantics."""
+    """Seed only legacy missing-assignment or explicit retry-marker semantics."""
 
     at = str(at_time or now_str())
     before = int(conn.total_changes)
@@ -111,16 +111,6 @@ def seed_legacy_import_jobs(conn, *, at_time: str | None = None) -> int:
           )
         """,
         (REASON_IMPORT_REPAIR, at, at, at),
-    )
-    conn.execute(
-        """
-        UPDATE activity_project_assignment
-        SET confidence = 0, updated_at = ?
-        WHERE is_manual = 0
-          AND source = 'uncategorized'
-          AND confidence = -1
-        """,
-        (at,),
     )
     return max(0, int(conn.total_changes) - before)
 
