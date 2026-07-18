@@ -452,14 +452,12 @@ def _pause_machine_then_expose(
 
 
 def _run_clipboard_maintenance_tick() -> None:
-    """Run bounded retention maintenance without hiding fatal failures."""
+    """Run bounded optional retention maintenance without blocking collection."""
 
     try:
         clipboard_service.prune_old_events()
     except Exception as exc:
         disposition = classify_collector_failure(exc)
-        if not disposition.retryable:
-            raise
         collector_health.record_transient_failure(
             "clipboard_maintenance",
             disposition.code,
