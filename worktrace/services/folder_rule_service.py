@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-import time
+import threading
 
-from ..constants import EXCLUDED_PROJECT, RULE_CACHE_TTL_SECONDS
 from ..data_generation_repository import DataGenerationNamespace
-from ..db import dict_rows, get_connection, get_db_path, now_str
-from ..domain_unit_of_work import DomainUnitOfWork
+from ..db import dict_rows, get_connection, get_db_key
+from ..generation_clock import generation
 from ..path_utils import (
     is_path_under_folder,
     looks_like_anchor_file_path,
@@ -13,38 +12,27 @@ from ..path_utils import (
     normalize_path_key,
 )
 
-_FOLDER_RULE_CACHE_TTL_SECONDS = RULE_CACHE_TTL_SECONDS
-_FOLDER_RULE_CACHE: dict[str, tuple[float, list[dict]]] = {}
-
-
-def _catalog_uow() -> DomainUnitOfWork:
-    return DomainUnitOfWork((DataGenerationNamespace.CLASSIFICATION_CATALOG,))
-
-
-def _add_privacy_effect_for_project_id(
-    uow: DomainUnitOfWork,
-    conn,
-    project_id: int,
-) -> None:
-    row = conn.execute(
-        "SELECT name FROM project WHERE id = ?",
-        (int(project_id),),
-    ).fetchone()
-    if row is not None and str(row["name"] or "") == EXCLUDED_PROJECT:
-        uow.add_effects(DataGenerationNamespace.PRIVACY_CATALOG)
+_FOLDER_RULE_CACHE_LOCK = threading.RLock()
+_FOLDER_RULE_CACHE_DATABASE_KEY: str | None = None
+_FOLDER_RULE_CACHE_GENERATION: int | None = None
+_FOLDER_RULE_CACHE: list[dict] | None = None
 
 
 def invalidate_folder_rule_cache() -> None:
-    _FOLDER_RULE_CACHE.pop(str(get_db_path().resolve()), None)
+    """Test/reconfiguration hook; catalog writes invalidate by generation."""
+
+    global _FOLDER_RULE_CACHE_DATABASE_KEY
+    global _FOLDER_RULE_CACHE_GENERATION
+    global _FOLDER_RULE_CACHE
+    with _FOLDER_RULE_CACHE_LOCK:
+        _FOLDER_RULE_CACHE_DATABASE_KEY = None
+        _FOLDER_RULE_CACHE_GENERATION = None
+        _FOLDER_RULE_CACHE = None
 
 
-def _enabled_folder_rules(conn=None) -> list[dict]:
-    cache_key = str(get_db_path().resolve())
-    now = time.monotonic()
-    cached = _FOLDER_RULE_CACHE.get(cache_key) if conn is None else None
-    if cached is not None and cached[0] >= now:
-        return [dict(row) for row in cached[1]]
-    sql = """
+def _load_enabled_folder_rules(conn) -> list[dict]:
+    rows = conn.execute(
+        """
         SELECT fpr.*, p.name AS project_name, p.enabled AS project_enabled,
                p.is_archived AS project_is_archived,
                p.is_deleted AS project_is_deleted
@@ -52,14 +40,10 @@ def _enabled_folder_rules(conn=None) -> list[dict]:
         LEFT JOIN project p ON p.id = fpr.project_id
         WHERE fpr.enabled = 1
         """
-    if conn is None:
-        with get_connection() as read_conn:
-            rows = read_conn.execute(sql).fetchall()
-    else:
-        rows = conn.execute(sql).fetchall()
+    ).fetchall()
     from . import project_lifecycle_policy
 
-    rules = [
+    return [
         row
         for row in dict_rows(rows)
         if project_lifecycle_policy.project_available_for_inference(
@@ -71,163 +55,67 @@ def _enabled_folder_rules(conn=None) -> list[dict]:
             }
         )
     ]
-    if conn is None:
-        _FOLDER_RULE_CACHE[cache_key] = (now + _FOLDER_RULE_CACHE_TTL_SECONDS, rules)
-    return [dict(row) for row in rules]
 
 
-def create_or_update_folder_rule(folder_path: str, project_id: int, recursive: bool = True) -> int:
-    folder = (folder_path or "").strip()
-    if not folder:
-        raise ValueError("folder path is required")
-    key = normalize_folder_key(folder)
-    if not key:
-        raise ValueError("folder path is required")
-    requested_recursive = int(recursive)
-    ts = now_str()
-    changed = False
-    with _catalog_uow() as uow:
-        conn = uow.connection
-        existing = conn.execute(
-            "SELECT * FROM folder_project_rule WHERE normalized_folder_key = ?",
-            (key,),
-        ).fetchone()
-        if existing is not None:
-            rule_id = int(existing["id"])
+def _enabled_folder_rules(conn=None) -> list[dict]:
+    if conn is not None:
+        return [dict(row) for row in _load_enabled_folder_rules(conn)]
+
+    global _FOLDER_RULE_CACHE_DATABASE_KEY
+    global _FOLDER_RULE_CACHE_GENERATION
+    global _FOLDER_RULE_CACHE
+    while True:
+        database_key = get_db_key()
+        current_generation = generation(DataGenerationNamespace.CLASSIFICATION_CATALOG)
+        with _FOLDER_RULE_CACHE_LOCK:
             if (
-                str(existing["folder_path"] or "") == folder
-                and int(existing["project_id"]) == int(project_id)
-                and int(existing["recursive"] or 0) == requested_recursive
-                and int(existing["enabled"] or 0) == 1
+                _FOLDER_RULE_CACHE_DATABASE_KEY == database_key
+                and _FOLDER_RULE_CACHE_GENERATION == current_generation
+                and _FOLDER_RULE_CACHE is not None
             ):
-                return rule_id
-        _add_privacy_effect_for_project_id(uow, conn, project_id)
-        cur = conn.execute(
-            """
-            INSERT INTO folder_project_rule(
-                folder_path, normalized_folder_key, project_id, recursive, enabled, created_at, updated_at
-            )
-            VALUES (?, ?, ?, ?, 1, ?, ?)
-            ON CONFLICT(normalized_folder_key) DO UPDATE SET
-                folder_path = excluded.folder_path,
-                project_id = excluded.project_id,
-                recursive = excluded.recursive,
-                enabled = 1,
-                updated_at = excluded.updated_at
-            """,
-            (folder, key, project_id, requested_recursive, ts, ts),
-        )
-        row = conn.execute(
-            "SELECT id FROM folder_project_rule WHERE normalized_folder_key = ?",
-            (key,),
-        ).fetchone()
-        rule_id = int(row["id"] if row else cur.lastrowid)
-        changed = True
-    if changed:
-        invalidate_folder_rule_cache()
-        from .privacy_service import clear_exclude_rules_cache
-        from .folder_index_service import request_rebuild_for_rule
-
-        clear_exclude_rules_cache()
-        request_rebuild_for_rule(rule_id)
-    return rule_id
+                return [dict(row) for row in _FOLDER_RULE_CACHE]
+        with get_connection() as read_conn:
+            rules = _load_enabled_folder_rules(read_conn)
+        if generation(DataGenerationNamespace.CLASSIFICATION_CATALOG) != current_generation:
+            continue
+        with _FOLDER_RULE_CACHE_LOCK:
+            _FOLDER_RULE_CACHE_DATABASE_KEY = database_key
+            _FOLDER_RULE_CACHE_GENERATION = current_generation
+            _FOLDER_RULE_CACHE = [dict(row) for row in rules]
+        return [dict(row) for row in rules]
 
 
-def update_folder_rule(rule_id: int, folder_path: str, recursive: bool = True) -> None:
-    """Update one existing folder rule while preserving its row identity."""
-    folder = (folder_path or "").strip()
-    if not folder:
-        raise ValueError("folder path is required")
-    key = normalize_folder_key(folder)
-    if not key:
-        raise ValueError("folder path is required")
-    requested_recursive = int(recursive)
-    with _catalog_uow() as uow:
-        conn = uow.connection
-        row = conn.execute(
-            "SELECT * FROM folder_project_rule WHERE id = ?",
-            (rule_id,),
-        ).fetchone()
-        if row is None:
-            raise ValueError("folder rule not found")
-        if (
-            str(row["folder_path"] or "") == folder
-            and str(row["normalized_folder_key"] or "") == key
-            and int(row["recursive"] or 0) == requested_recursive
-        ):
-            return
-        _add_privacy_effect_for_project_id(
-            uow,
-            conn,
-            int(row["project_id"]),
-        )
-        cur = conn.execute(
-            """
-            UPDATE folder_project_rule
-            SET folder_path = ?,
-                normalized_folder_key = ?,
-                recursive = ?,
-                updated_at = ?
-            WHERE id = ?
-            """,
-            (folder, key, requested_recursive, now_str(), rule_id),
-        )
-        if cur.rowcount == 0:
-            raise ValueError("folder rule not found")
-    invalidate_folder_rule_cache()
-    from .privacy_service import clear_exclude_rules_cache
-    from .folder_index_service import request_rebuild_for_rule
+def create_or_update_folder_rule(
+    folder_path: str,
+    project_id: int,
+    recursive: bool = True,
+) -> int:
+    from .rule_catalog_command_service import create_or_update_folder_rule as command
 
-    clear_exclude_rules_cache()
-    request_rebuild_for_rule(rule_id)
+    return command(folder_path, project_id, recursive)
 
 
-def delete_folder_rule(rule_id: int) -> None:
-    with _catalog_uow() as uow:
-        conn = uow.connection
-        row = conn.execute(
-            "SELECT project_id FROM folder_project_rule WHERE id = ?",
-            (rule_id,),
-        ).fetchone()
-        if row is None:
-            return
-        _add_privacy_effect_for_project_id(
-            uow,
-            conn,
-            int(row["project_id"]),
-        )
-        conn.execute("DELETE FROM folder_project_rule WHERE id = ?", (rule_id,))
-    invalidate_folder_rule_cache()
-    from .privacy_service import clear_exclude_rules_cache
-    from .folder_index_service import delete_index_for_rule
+def update_folder_rule(
+    rule_id: int,
+    folder_path: str,
+    recursive: bool = True,
+) -> None:
+    from .rule_catalog_command_service import update_folder_rule as command
 
-    clear_exclude_rules_cache()
-    delete_index_for_rule(rule_id)
+    if not command(rule_id, folder_path, recursive):
+        raise ValueError("folder rule not found")
+
+
+def delete_folder_rule(rule_id: int) -> bool:
+    from .rule_catalog_command_service import delete_folder_rule as command
+
+    return command(rule_id)
 
 
 def set_folder_rule_enabled(rule_id: int, enabled: bool) -> None:
-    requested = int(enabled)
-    with _catalog_uow() as uow:
-        conn = uow.connection
-        row = conn.execute(
-            "SELECT project_id, enabled FROM folder_project_rule WHERE id = ?",
-            (rule_id,),
-        ).fetchone()
-        if row is None or int(row["enabled"] or 0) == requested:
-            return
-        _add_privacy_effect_for_project_id(
-            uow,
-            conn,
-            int(row["project_id"]),
-        )
-        conn.execute(
-            "UPDATE folder_project_rule SET enabled = ?, updated_at = ? WHERE id = ?",
-            (requested, now_str(), rule_id),
-        )
-    invalidate_folder_rule_cache()
-    from .privacy_service import clear_exclude_rules_cache
+    from .rule_catalog_command_service import set_folder_rule_enabled as command
 
-    clear_exclude_rules_cache()
+    command(rule_id, enabled)
 
 
 def list_folder_rules() -> list[dict]:
@@ -243,39 +131,50 @@ def list_folder_rules() -> list[dict]:
     return dict_rows(rows)
 
 
-def find_matching_folder_rule(path_or_parent_dir: str, *, exclude_rule_id: int | None = None, conn=None) -> dict | None:
+def find_matching_folder_rule(
+    path_or_parent_dir: str,
+    *,
+    exclude_rule_id: int | None = None,
+    conn=None,
+) -> dict | None:
     target = (path_or_parent_dir or "").strip()
     if not target:
         return None
     matches = [
-        row for row in _enabled_folder_rules(conn)
+        row
+        for row in _enabled_folder_rules(conn)
         if _target_matches_rule(target, row)
         and int(row.get("id") or 0) != int(exclude_rule_id or 0)
     ]
     if not matches:
         return None
-    return dict(max(matches, key=lambda row: len(row["normalized_folder_key"] or "")))
+    return dict(
+        max(matches, key=lambda row: len(row["normalized_folder_key"] or ""))
+    )
 
 
 def preview_folder_rule_conflicts(folder_path: str, project_id: int) -> dict:
     folder = (folder_path or "").strip()
     with get_connection() as conn:
-        activity_rows = dict_rows(conn.execute(
-            """
-            SELECT
-                a.*,
-                apa.project_id AS effective_project_id,
-                COALESCE(apa.is_manual, 0) AS is_manual,
-                ar.path_hint AS resource_path_hint,
-                ar.is_anchor AS resource_is_anchor
-            FROM activity_log a
-            LEFT JOIN activity_project_assignment apa ON apa.activity_id = a.id
-            LEFT JOIN activity_resource ar ON ar.activity_id = a.id
-            WHERE a.is_deleted = 0
-            """
-        ).fetchall())
-
-        rules = dict_rows(conn.execute("SELECT * FROM folder_project_rule").fetchall())
+        activity_rows = dict_rows(
+            conn.execute(
+                """
+                SELECT
+                    a.*,
+                    apa.project_id AS effective_project_id,
+                    COALESCE(apa.is_manual, 0) AS is_manual,
+                    ar.path_hint AS resource_path_hint,
+                    ar.is_anchor AS resource_is_anchor
+                FROM activity_log a
+                LEFT JOIN activity_project_assignment apa ON apa.activity_id = a.id
+                LEFT JOIN activity_resource ar ON ar.activity_id = a.id
+                WHERE a.is_deleted = 0
+                """
+            ).fetchall()
+        )
+        rules = dict_rows(
+            conn.execute("SELECT * FROM folder_project_rule").fetchall()
+        )
     child_count = sum(
         1
         for rule in rules
@@ -301,13 +200,18 @@ def preview_folder_rule_conflicts(folder_path: str, project_id: int) -> dict:
     }
 
 
-def _activity_matches_folder(activity: dict, folder_path: str, recursive: bool = True, rule_id: int | None = None) -> bool:
+def _activity_matches_folder(
+    activity: dict,
+    folder_path: str,
+    recursive: bool = True,
+    rule_id: int | None = None,
+) -> bool:
     for key in ("resource_path_hint", "file_path_hint"):
         path_hint = str(activity.get(key) or "").strip()
         if path_hint and looks_like_anchor_file_path(path_hint):
             return is_path_under_folder(path_hint, folder_path, recursive)
     if rule_id is not None:
-        from .folder_index_service import activity_matches_rule_by_index
+        from .folder_index_query_service import activity_matches_rule_by_index
 
         return activity_matches_rule_by_index(activity, rule_id)
     return False

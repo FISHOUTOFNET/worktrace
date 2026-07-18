@@ -1,41 +1,64 @@
+from __future__ import annotations
+
+import pytest
+
 from tests.support import activity_factory as activity_service
 from tests.support.db_helpers import assign_activity_project
-from worktrace.db import get_connection
+from worktrace.api import rule_api
+from worktrace.data_generation_repository import DataGenerationNamespace
+from worktrace.db import get_connection, now_str
+from worktrace.generation_clock import generation
 from worktrace.services import (
     folder_rule_service,
     project_service,
     rule_service,
 )
 from worktrace.services.project_inference_service import assign_project_for_activity
-import pytest
 
-pytestmark = [pytest.mark.db]
+pytestmark = [pytest.mark.db, pytest.mark.integration, pytest.mark.contract]
 
 
 def _activity_with_path(path: str, title: str = "Spec.docx - Word") -> int:
-    aid = activity_service.create_activity(
+    return activity_service.create_activity(
         "Word",
         "winword.exe",
         title,
         file_path_hint=path,
         start_time="2026-06-18 09:00:00",
     )
-    return aid
+
+
+def _close_directly(activity_id: int) -> None:
+    with get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE activity_log
+            SET end_time = ?, duration_seconds = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            ("2026-06-18 09:10:00", 600, now_str(), activity_id),
+        )
 
 
 def test_longest_child_folder_rule_wins(temp_db):
     parent_project = project_service.create_project("Parent")
     child_project = project_service.create_project("Child")
-    folder_rule_service.create_or_update_folder_rule("D:\\CaseA", parent_project)
-    folder_rule_service.create_or_update_folder_rule("D:\\CaseA\\Sub", child_project)
-    rule = folder_rule_service.find_matching_folder_rule("D:\\CaseA\\Sub\\Spec.docx")
+    folder_rule_service.create_or_update_folder_rule(r"D:\CaseA", parent_project)
+    folder_rule_service.create_or_update_folder_rule(
+        r"D:\CaseA\Sub",
+        child_project,
+    )
+
+    rule = folder_rule_service.find_matching_folder_rule(
+        r"D:\CaseA\Sub\Spec.docx"
+    )
+
     assert rule["project_id"] == child_project
 
 
-def test_folder_rule_lookup_cache_reuses_reads_and_invalidates_on_update(temp_db, monkeypatch):
+def test_folder_rule_cache_reloads_after_catalog_generation(temp_db, monkeypatch):
     parent_project = project_service.create_project("Parent")
-    folder_rule_service.create_or_update_folder_rule("D:\\CaseA", parent_project)
-    folder_rule_service.invalidate_folder_rule_cache()
+    folder_rule_service.create_or_update_folder_rule(r"D:\CaseA", parent_project)
     original = folder_rule_service.get_connection
     calls = {"count": 0}
 
@@ -44,86 +67,99 @@ def test_folder_rule_lookup_cache_reuses_reads_and_invalidates_on_update(temp_db
         return original()
 
     monkeypatch.setattr(folder_rule_service, "get_connection", counted_connection)
-
-    assert folder_rule_service.find_matching_folder_rule("D:\\CaseA\\Spec.docx")["project_id"] == parent_project
-    assert folder_rule_service.find_matching_folder_rule("D:\\CaseA\\Other.docx")["project_id"] == parent_project
+    assert folder_rule_service.find_matching_folder_rule(
+        r"D:\CaseA\Spec.docx"
+    )["project_id"] == parent_project
+    assert folder_rule_service.find_matching_folder_rule(
+        r"D:\CaseA\Other.docx"
+    )["project_id"] == parent_project
     assert calls["count"] == 1
 
+    before = generation(DataGenerationNamespace.CLASSIFICATION_CATALOG)
     child_project = project_service.create_project("Child")
-    folder_rule_service.create_or_update_folder_rule("D:\\CaseA\\Sub", child_project)
-    calls_after_update = calls["count"]
+    folder_rule_service.create_or_update_folder_rule(
+        r"D:\CaseA\Sub",
+        child_project,
+    )
+    assert generation(DataGenerationNamespace.CLASSIFICATION_CATALOG) == before + 2
+    assert folder_rule_service.find_matching_folder_rule(
+        r"D:\CaseA\Sub\Spec.docx"
+    )["project_id"] == child_project
+    assert calls["count"] == 2
 
-    assert folder_rule_service.find_matching_folder_rule("D:\\CaseA\\Sub\\Spec.docx")["project_id"] == child_project
-    assert calls["count"] == calls_after_update + 1
 
-
-def test_folder_rule_wins_over_keyword_rule_and_source_is_persisted(temp_db):
+def test_folder_rule_wins_over_keyword_and_persists_source(temp_db):
     folder_project = project_service.create_project("Folder")
     keyword_project = project_service.create_project("Keyword")
-    folder_rule_service.create_or_update_folder_rule("D:\\CaseA", folder_project)
+    folder_rule_service.create_or_update_folder_rule(r"D:\CaseA", folder_project)
     rule_service.create_rule("Spec", keyword_project)
-    aid = _activity_with_path("D:\\CaseA\\Spec.docx")
-    assign_project_for_activity(aid)
-    row = activity_service.get_activity(aid)
+    activity_id = _activity_with_path(r"D:\CaseA\Spec.docx")
+
+    assign_project_for_activity(activity_id)
+
+    row = activity_service.get_activity(activity_id)
     assert row["project_id"] == folder_project
     assert row["assignment_source"] == "folder_rule"
-    with get_connection() as conn:
-        assignment = conn.execute(
-            "SELECT source FROM activity_project_assignment WHERE activity_id = ?",
-            (aid,),
-        ).fetchone()
-    assert assignment["source"] == "folder_rule"
 
 
-def test_backfill_safe_does_not_overwrite_manual_override(temp_db):
-    """Backfill via the safe path skips manual_override activities."""
-    from worktrace.db import get_connection, now_str
-    from worktrace.services import rule_impact_service
-
+def test_durable_backfill_preserves_manual_override(temp_db):
     folder_project = project_service.create_project("Folder")
     manual_project = project_service.create_project("Manual")
-    rule_id = folder_rule_service.create_or_update_folder_rule("D:\\CaseA", folder_project)
-    aid = _activity_with_path("D:\\CaseA\\Manual.docx", "Manual.docx - Word")
-    assign_activity_project(aid, manual_project, manual=True)
-    # Close directly so this fixture stays manual and backfill classifies it as
-    # manual_skipped instead of re-running the production close inference.
-    with get_connection() as conn:
-        conn.execute(
-            "UPDATE activity_log SET end_time = ?, duration_seconds = ?, updated_at = ? WHERE id = ?",
-            ("2026-06-18 09:10:00", 600, now_str(), aid),
-        )
-    result = rule_impact_service.backfill_rule_impact("folder", rule_id)
-    assert result["updated_count"] == 0
-    assert result["manual_skipped_count"] == 1
-    assert activity_service.get_activity(aid)["project_id"] == manual_project
+    rule_id = folder_rule_service.create_or_update_folder_rule(
+        r"D:\CaseA",
+        folder_project,
+    )
+    activity_id = _activity_with_path(
+        r"D:\CaseA\Manual.docx",
+        "Manual.docx - Word",
+    )
+    assign_activity_project(activity_id, manual_project, manual=True)
+    _close_directly(activity_id)
+
+    result = rule_api.backfill_project_rule("folder", rule_id)
+
+    assert result["ok"] is True
+    assert result["result"]["updated_count"] == 0
+    assert activity_service.get_activity(activity_id)["project_id"] == manual_project
 
 
-def test_backfill_safe_updates_eligible_activity(temp_db):
-    """The safe path updates an eligible closed activity under the rule's folder."""
-    from worktrace.db import get_connection, now_str
-    from worktrace.services import rule_impact_service
-
+def test_durable_backfill_updates_eligible_activity(temp_db):
     folder_project = project_service.create_project("Folder")
-    rule_id = folder_rule_service.create_or_update_folder_rule("D:\\CaseA", folder_project)
-    aid = _activity_with_path("D:\\CaseA\\Eligible.docx", "Eligible.docx - Word")
-    # Close directly so backfill sees a closed but still-unassigned fixture.
-    with get_connection() as conn:
-        conn.execute(
-            "UPDATE activity_log SET end_time = ?, duration_seconds = ?, updated_at = ? WHERE id = ?",
-            ("2026-06-18 09:10:00", 600, now_str(), aid),
-        )
-    result = rule_impact_service.backfill_rule_impact("folder", rule_id)
-    assert result["updated_count"] == 1
-    assert activity_service.get_activity(aid)["project_id"] == folder_project
+    rule_id = folder_rule_service.create_or_update_folder_rule(
+        r"D:\CaseA",
+        folder_project,
+    )
+    activity_id = _activity_with_path(
+        r"D:\CaseA\Eligible.docx",
+        "Eligible.docx - Word",
+    )
+    _close_directly(activity_id)
+
+    result = rule_api.backfill_project_rule("folder", rule_id)
+
+    assert result["ok"] is True
+    assert result["result"]["updated_count"] == 1
+    assert activity_service.get_activity(activity_id)["project_id"] == folder_project
 
 
 def test_preview_folder_rule_conflicts_counts_folder_scope(temp_db):
     parent_project = project_service.create_project("Parent")
     child_project = project_service.create_project("Child")
-    folder_rule_service.create_or_update_folder_rule("D:\\CaseA\\Sub", child_project)
-    aid = _activity_with_path("D:\\CaseA\\Manual.docx", "Manual.docx - Word")
-    assign_activity_project(aid, child_project, manual=True)
-    preview = folder_rule_service.preview_folder_rule_conflicts("D:\\CaseA", parent_project)
+    folder_rule_service.create_or_update_folder_rule(
+        r"D:\CaseA\Sub",
+        child_project,
+    )
+    activity_id = _activity_with_path(
+        r"D:\CaseA\Manual.docx",
+        "Manual.docx - Word",
+    )
+    assign_activity_project(activity_id, child_project, manual=True)
+
+    preview = folder_rule_service.preview_folder_rule_conflicts(
+        r"D:\CaseA",
+        parent_project,
+    )
+
     assert preview["child_folder_rule_conflicts"] == 1
     assert preview["other_project_activity_count"] == 1
     assert preview["manual_activity_count"] == 1

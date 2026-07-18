@@ -1,17 +1,20 @@
-"""Durable settings with explicit mutation classes and generation effects."""
+"""Durable settings with explicit mutation classes and one-version cache."""
 
 from __future__ import annotations
 
-import time
+import threading
 from enum import StrEnum
 from typing import Mapping
 
 from ..data_generation_repository import DataGenerationNamespace
-from ..db import get_connection, get_db_path, now_str
+from ..db import get_connection, get_db_key, now_str
 from ..domain_unit_of_work import DomainUnitOfWork
+from ..generation_clock import generation
 
-_SETTING_CACHE_TTL_SECONDS = 2.0
-_SETTING_CACHE: dict[tuple[str, str], tuple[float, str | None]] = {}
+_SETTING_CACHE_LOCK = threading.RLock()
+_SETTING_CACHE_DATABASE_KEY: str | None = None
+_SETTING_CACHE_GENERATION: int | None = None
+_SETTING_CACHE: dict[str, str | None] = {}
 
 
 class SettingMutationClass(StrEnum):
@@ -77,15 +80,38 @@ def _effects_for_classification(
     return (DataGenerationNamespace.SETTINGS,)
 
 
-def clear_settings_cache(key: str | None = None) -> None:
-    if key is None:
-        _SETTING_CACHE.clear()
+def _select_cache_snapshot(database_key: str, current_generation: int) -> None:
+    global _SETTING_CACHE_DATABASE_KEY, _SETTING_CACHE_GENERATION
+    if (
+        _SETTING_CACHE_DATABASE_KEY == database_key
+        and _SETTING_CACHE_GENERATION == int(current_generation)
+    ):
         return
-    _SETTING_CACHE.pop((_settings_db_key(), key), None)
+    _SETTING_CACHE.clear()
+    _SETTING_CACHE_DATABASE_KEY = database_key
+    _SETTING_CACHE_GENERATION = int(current_generation)
 
 
-def _settings_db_key() -> str:
-    return str(get_db_path().resolve())
+def clear_settings_cache(key: str | None = None) -> None:
+    """Test/maintenance hook; ordinary writes rely on generation change.
+
+    A full reset is also the post-commit handoff used by the exclusive encrypted
+    import path, whose low-level SQLite transaction cannot use ``DomainUnitOfWork``.
+    """
+
+    global _SETTING_CACHE_DATABASE_KEY, _SETTING_CACHE_GENERATION
+    reset_generation_clock = key is None
+    with _SETTING_CACHE_LOCK:
+        if key is None:
+            _SETTING_CACHE.clear()
+            _SETTING_CACHE_DATABASE_KEY = None
+            _SETTING_CACHE_GENERATION = None
+        else:
+            _SETTING_CACHE.pop(str(key), None)
+    if reset_generation_clock:
+        from ..generation_clock import clear as clear_generation_clock
+
+        clear_generation_clock(get_db_key())
 
 
 def _page_read_connection():
@@ -95,29 +121,41 @@ def _page_read_connection():
     return context.conn if context is not None else None
 
 
+def _read_setting(connection, key: str, default: str | None) -> str | None:
+    row = connection.execute(
+        "SELECT value FROM settings WHERE key = ?",
+        (key,),
+    ).fetchone()
+    value = row["value"] if row else None
+    return value if value is not None else default
+
+
 def get_setting(key: str, default: str | None = None, *, conn=None) -> str | None:
     effective_conn = conn if conn is not None else _page_read_connection()
     if effective_conn is not None:
-        row = effective_conn.execute(
-            "SELECT value FROM settings WHERE key = ?",
-            (key,),
-        ).fetchone()
-        value = row["value"] if row else None
+        return _read_setting(effective_conn, key, default)
+
+    if setting_mutation_class(key) is SettingMutationClass.OPERATIONAL:
+        with get_connection() as own_conn:
+            return _read_setting(own_conn, key, default)
+
+    normalized_key = str(key)
+    while True:
+        database_key = get_db_key()
+        current_generation = generation(DataGenerationNamespace.SETTINGS)
+        with _SETTING_CACHE_LOCK:
+            _select_cache_snapshot(database_key, current_generation)
+            if normalized_key in _SETTING_CACHE:
+                value = _SETTING_CACHE[normalized_key]
+                return value if value is not None else default
+        with get_connection() as own_conn:
+            value = _read_setting(own_conn, normalized_key, None)
+        if generation(DataGenerationNamespace.SETTINGS) != current_generation:
+            continue
+        with _SETTING_CACHE_LOCK:
+            _select_cache_snapshot(database_key, current_generation)
+            _SETTING_CACHE[normalized_key] = value
         return value if value is not None else default
-    cache_key = (_settings_db_key(), key)
-    now = time.monotonic()
-    cached = _SETTING_CACHE.get(cache_key)
-    if cached is not None and cached[0] >= now:
-        value = cached[1]
-        return value if value is not None else default
-    with get_connection() as own_conn:
-        row = own_conn.execute(
-            "SELECT value FROM settings WHERE key = ?",
-            (key,),
-        ).fetchone()
-    value = row["value"] if row else None
-    _SETTING_CACHE[cache_key] = (now + _SETTING_CACHE_TTL_SECONDS, value)
-    return value if value is not None else default
 
 
 def set_setting(
@@ -154,10 +192,10 @@ def set_settings(
     for classification in classifications.values():
         effects.update(_effects_for_classification(classification))
 
-    changed_keys: list[str] = []
     with DomainUnitOfWork(effects) as uow:
         conn = uow.connection
         timestamp = now_str()
+        changed = False
         for key, value in normalized.items():
             row = conn.execute(
                 "SELECT value FROM settings WHERE key = ?",
@@ -175,12 +213,9 @@ def set_settings(
                 """,
                 (key, value, timestamp),
             )
-            changed_keys.append(key)
-        if changed_keys:
+            changed = True
+        if changed:
             uow.mark_changed()
-
-    for key in changed_keys:
-        clear_settings_cache(key)
 
 
 def get_bool_setting(key: str, default: bool = False, *, conn=None) -> bool:

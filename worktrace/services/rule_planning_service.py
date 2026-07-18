@@ -7,7 +7,7 @@ from typing import Any, Iterable
 from ..constants import STATUS_NORMAL
 from ..formatters import format_safe_display_name
 from ..path_utils import is_path_under_folder, looks_like_anchor_file_path
-from . import folder_index_service, project_lifecycle_policy
+from . import folder_index_query_service, project_lifecycle_policy
 from .project_inference_service import keyword_pattern_matches
 
 FOLDER_RULE_CONFIDENCE = 85
@@ -191,11 +191,10 @@ def activity_matches_rule(
         file_name = activity_file_name(activity)
         if not file_name:
             return False
-        candidates = folder_index_service.lookup_indexed_paths_for_file_name(
+        candidates = folder_index_query_service.lookup_indexed_paths_for_file_name(
             file_name,
             str(activity.get("start_time") or "") or None,
             include_excluded=False,
-            request_refresh_on_miss=False,
             conn=conn,
         )
         return any(

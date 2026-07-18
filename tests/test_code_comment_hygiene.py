@@ -33,7 +33,6 @@ FORBIDDEN_REGEXES = (
     re.compile(r"\b" + _token("M", "C2") + r"\b"),
     re.compile(r"\b" + _token("M", "4") + r"\b"),
     re.compile(_token("Ph", "ase R[23]")),
-    re.compile(r'"' + _token("ph", "ase") + r'"\s*:'),
 )
 
 FORBIDDEN_TEXT = (

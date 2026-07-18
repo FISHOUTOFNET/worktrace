@@ -186,7 +186,7 @@ def test_delete_keyword_rule_rolls_back_when_final_delete_fails(
     assert dict(rule) == {"id": first_rule, "enabled": 1}
 
 
-def test_delete_folder_rule_rolls_back_index_and_rule_when_final_stage_fails(
+def test_delete_folder_rule_rolls_back_index_and_rule_when_finalization_fails(
     temp_db,
     monkeypatch,
 ):
@@ -205,7 +205,7 @@ def test_delete_folder_rule_rolls_back_index_and_rule_when_final_stage_fails(
             == 1
         )
 
-    def boom_after_index_delete(conn, job, payload):
+    def boom_after_index_delete(uow, conn, job, payload):
         conn.execute(
             "DELETE FROM folder_rule_index_state WHERE folder_rule_id = ?",
             (int(payload["rule_id"]),),
@@ -232,3 +232,15 @@ def test_delete_folder_rule_rolls_back_index_and_rule_when_final_stage_fails(
         ).fetchone()
     assert dict(rule) == {"id": rule_id, "enabled": 1}
     assert index_state is not None
+
+
+def test_history_service_contains_no_direct_rule_table_dml():
+    text = open(history_mutation_job_service.__file__, encoding="utf-8").read()
+    for forbidden in (
+        "UPDATE project_rule",
+        "UPDATE folder_project_rule",
+        "DELETE FROM project_rule",
+        "DELETE FROM folder_project_rule",
+    ):
+        assert forbidden not in text
+    assert "rule_catalog_command_service as catalog" in text

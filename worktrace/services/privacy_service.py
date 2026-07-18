@@ -1,16 +1,17 @@
 from __future__ import annotations
 
-import time
+import threading
 
 from ..constants import (
     EXCLUDED_APP_NAME,
     EXCLUDED_PROCESS_NAME,
     EXCLUDED_PROJECT,
     EXCLUDED_WINDOW_TITLE,
-    RULE_CACHE_TTL_SECONDS,
     STATUS_EXCLUDED,
 )
-from ..db import dict_rows, get_connection, get_db_path
+from ..data_generation_repository import DataGenerationNamespace
+from ..db import dict_rows, get_connection, get_db_key
+from ..generation_clock import generation
 from ..path_utils import (
     is_path_under_folder,
     normalize_folder_key,
@@ -19,8 +20,10 @@ from ..path_utils import (
 from ..platforms.base import ActiveWindow
 from ..resources.title_parsing import extract_file_name_from_title
 
-_EXCLUDE_RULE_CACHE_TTL_SECONDS = RULE_CACHE_TTL_SECONDS
-_EXCLUDE_RULE_CACHE: dict[str, tuple[float, dict[str, list[dict]]]] = {}
+_EXCLUDE_RULE_CACHE_LOCK = threading.RLock()
+_EXCLUDE_RULE_CACHE_DATABASE_KEY: str | None = None
+_EXCLUDE_RULE_CACHE_GENERATION: int | None = None
+_EXCLUDE_RULE_CACHE: dict[str, list[dict]] | None = None
 
 
 class PrivacyResolutionPending(RuntimeError):
@@ -28,11 +31,20 @@ class PrivacyResolutionPending(RuntimeError):
 
 
 def clear_exclude_rules_cache() -> None:
-    _EXCLUDE_RULE_CACHE.pop(str(get_db_path().resolve()), None)
+    """Test/reconfiguration hook; privacy writes invalidate by generation."""
+
+    global _EXCLUDE_RULE_CACHE_DATABASE_KEY
+    global _EXCLUDE_RULE_CACHE_GENERATION
+    global _EXCLUDE_RULE_CACHE
+    with _EXCLUDE_RULE_CACHE_LOCK:
+        _EXCLUDE_RULE_CACHE_DATABASE_KEY = None
+        _EXCLUDE_RULE_CACHE_GENERATION = None
+        _EXCLUDE_RULE_CACHE = None
 
 
 def is_excluded(active_window: ActiveWindow) -> bool:
     """Evaluate exclusions; unresolved local-file privacy decisions fail closed."""
+
     haystack = " ".join(
         [
             active_window.app_name,
@@ -53,7 +65,7 @@ def is_excluded(active_window: ActiveWindow) -> bool:
     if not file_name:
         return False
 
-    from .folder_index_service import resolve_unique_path_from_title
+    from .folder_index_query_service import resolve_unique_path_from_title
 
     path = resolve_unique_path_from_title(
         active_window.window_title,
@@ -61,6 +73,12 @@ def is_excluded(active_window: ActiveWindow) -> bool:
     )
     if path:
         return _matches_exclude_folder(path)
+
+    # Privacy is a runtime command owner: it may explicitly request maintenance
+    # after the pure lookup, while report/preview callers remain read-only.
+    from .folder_index_service import request_refresh_for_enabled_rules
+
+    request_refresh_for_enabled_rules(include_excluded=True)
     if active_window.privacy_path_required:
         raise PrivacyResolutionPending("privacy_path_unresolved")
     return False
@@ -68,6 +86,7 @@ def is_excluded(active_window: ActiveWindow) -> bool:
 
 def is_resource_excluded(resource) -> bool:
     """Return True if a DetectedResource (or dict) should be excluded."""
+
     if resource is None:
         return False
     if isinstance(resource, dict):
@@ -115,33 +134,20 @@ def make_excluded_activity_payload() -> dict:
     }
 
 
-def _exclude_rules() -> dict[str, list[dict]]:
-    cache_key = str(get_db_path().resolve())
-    now = time.monotonic()
-    cached = _EXCLUDE_RULE_CACHE.get(cache_key)
-    if cached is not None and cached[0] >= now:
-        return {
-            key: [dict(row) for row in rows]
-            for key, rows in cached[1].items()
-        }
-    with get_connection() as conn:
-        project = conn.execute(
-            """
-            SELECT id, enabled
-            FROM project
-            WHERE name = ? AND is_archived = 0
-            """,
-            (EXCLUDED_PROJECT,),
-        ).fetchone()
-        if not project or not int(project["enabled"] or 0):
-            result = {"keywords": [], "folders": []}
-            _EXCLUDE_RULE_CACHE[cache_key] = (
-                now + _EXCLUDE_RULE_CACHE_TTL_SECONDS,
-                result,
-            )
-            return result
-        project_id = int(project["id"])
-        keywords = dict_rows(
+def _load_exclude_rules(conn) -> dict[str, list[dict]]:
+    project = conn.execute(
+        """
+        SELECT id, enabled
+        FROM project
+        WHERE name = ? AND is_archived = 0
+        """,
+        (EXCLUDED_PROJECT,),
+    ).fetchone()
+    if not project or not int(project["enabled"] or 0):
+        return {"keywords": [], "folders": []}
+    project_id = int(project["id"])
+    return {
+        "keywords": dict_rows(
             conn.execute(
                 """
                 SELECT pattern AS keyword
@@ -153,8 +159,8 @@ def _exclude_rules() -> dict[str, list[dict]]:
                 """,
                 (project_id,),
             ).fetchall()
-        )
-        folders = dict_rows(
+        ),
+        "folders": dict_rows(
             conn.execute(
                 """
                 SELECT folder_path, normalized_folder_key, recursive
@@ -165,16 +171,37 @@ def _exclude_rules() -> dict[str, list[dict]]:
                 """,
                 (project_id,),
             ).fetchall()
-        )
-    result = {"keywords": keywords, "folders": folders}
-    _EXCLUDE_RULE_CACHE[cache_key] = (
-        now + _EXCLUDE_RULE_CACHE_TTL_SECONDS,
-        result,
-    )
-    return {
-        key: [dict(row) for row in rows]
-        for key, rows in result.items()
+        ),
     }
+
+
+def _copy_rule_snapshot(value: dict[str, list[dict]]) -> dict[str, list[dict]]:
+    return {key: [dict(row) for row in rows] for key, rows in value.items()}
+
+
+def _exclude_rules() -> dict[str, list[dict]]:
+    global _EXCLUDE_RULE_CACHE_DATABASE_KEY
+    global _EXCLUDE_RULE_CACHE_GENERATION
+    global _EXCLUDE_RULE_CACHE
+    while True:
+        database_key = get_db_key()
+        current_generation = generation(DataGenerationNamespace.PRIVACY_CATALOG)
+        with _EXCLUDE_RULE_CACHE_LOCK:
+            if (
+                _EXCLUDE_RULE_CACHE_DATABASE_KEY == database_key
+                and _EXCLUDE_RULE_CACHE_GENERATION == current_generation
+                and _EXCLUDE_RULE_CACHE is not None
+            ):
+                return _copy_rule_snapshot(_EXCLUDE_RULE_CACHE)
+        with get_connection() as conn:
+            result = _load_exclude_rules(conn)
+        if generation(DataGenerationNamespace.PRIVACY_CATALOG) != current_generation:
+            continue
+        with _EXCLUDE_RULE_CACHE_LOCK:
+            _EXCLUDE_RULE_CACHE_DATABASE_KEY = database_key
+            _EXCLUDE_RULE_CACHE_GENERATION = current_generation
+            _EXCLUDE_RULE_CACHE = _copy_rule_snapshot(result)
+        return _copy_rule_snapshot(result)
 
 
 def _matches_exclude_keyword(haystack: str) -> bool:

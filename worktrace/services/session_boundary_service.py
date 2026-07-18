@@ -1,30 +1,43 @@
 from __future__ import annotations
 
+from ..data_generation_repository import DataGenerationNamespace
 from ..db import dict_rows, get_connection, now_str
+from ..domain_unit_of_work import DomainUnitOfWork
 from .session_boundary_policy import validate_hard_boundary_reason
 
 
+def insert_boundary(conn, occurred_at: str | None = None, reason: str = "unknown") -> None:
+    """Insert one validated hard-boundary fact in the caller-owned transaction."""
+
+    timestamp = now_str()
+    conn.execute(
+        """
+        INSERT INTO session_boundary(occurred_at, reason, created_at)
+        VALUES (?, ?, ?)
+        """,
+        (
+            occurred_at or timestamp,
+            validate_hard_boundary_reason(reason),
+            timestamp,
+        ),
+    )
+
+
 def record_boundary(occurred_at: str | None = None, reason: str = "unknown") -> None:
-    """Low-level test/data-repair helper.
+    """Explicit low-level repair/test command backed by the report UoW."""
 
-    Production runtime paths must call ``record_hard_boundary`` so hard
-    boundary reasons stay whitelisted and collector health cannot masquerade
-    as a session boundary.
-    """
-    ts = now_str()
-    at = occurred_at or ts
-    with get_connection() as conn:
-        conn.execute(
-            """
-            INSERT INTO session_boundary(occurred_at, reason, created_at)
-            VALUES (?, ?, ?)
-            """,
-            (at, reason, ts),
-        )
+    with DomainUnitOfWork((DataGenerationNamespace.REPORT_STRUCTURE,)) as uow:
+        insert_boundary(uow.connection, occurred_at, reason)
+        uow.mark_changed()
 
 
-def record_hard_boundary(occurred_at: str | None = None, reason: str = "unknown") -> None:
-    record_boundary(occurred_at, validate_hard_boundary_reason(reason))
+def record_hard_boundary(
+    occurred_at: str | None = None,
+    reason: str = "unknown",
+) -> None:
+    """Compatibility command; runtime lifecycle uses ``close_at_boundary``."""
+
+    record_boundary(occurred_at, reason)
 
 
 def latest_boundary_time() -> str | None:
@@ -43,7 +56,12 @@ def latest_boundary_time() -> str | None:
 def list_boundaries(start_time: str, end_time: str, *, conn=None) -> list[dict]:
     if conn is not None:
         rows = conn.execute(
-            """SELECT * FROM session_boundary WHERE occurred_at >= ? AND occurred_at <= ? ORDER BY occurred_at ASC, id ASC""",
+            """
+            SELECT *
+            FROM session_boundary
+            WHERE occurred_at >= ? AND occurred_at <= ?
+            ORDER BY occurred_at ASC, id ASC
+            """,
             (start_time, end_time),
         ).fetchall()
         return dict_rows(rows)
@@ -74,3 +92,13 @@ def has_boundary_between(start_time: str, end_time: str) -> bool:
             (start_time, end_time),
         ).fetchone()
     return row is not None
+
+
+__all__ = [
+    "has_boundary_between",
+    "insert_boundary",
+    "latest_boundary_time",
+    "list_boundaries",
+    "record_boundary",
+    "record_hard_boundary",
+]

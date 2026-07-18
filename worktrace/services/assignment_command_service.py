@@ -4,9 +4,21 @@ from __future__ import annotations
 
 import logging
 
+from ..data_generation_repository import DataGenerationNamespace
 from ..db import get_connection, now_str
+from ..domain_unit_of_work import DomainUnitOfWork
 
 INFERENCE_RETRY_CONFIDENCE = -1
+
+
+def _normalized_rule_identity(
+    source: str,
+    source_rule_type: str | None,
+    source_rule_id: int | None,
+) -> tuple[str | None, int | None]:
+    if source not in {"folder_rule", "keyword_rule"}:
+        return None, None
+    return source_rule_type, int(source_rule_id) if source_rule_id is not None else None
 
 
 def upsert_assignment(
@@ -22,24 +34,47 @@ def upsert_assignment(
     source_rule_id: int | None = None,
     protect_manual: bool = False,
 ) -> bool:
-    """Write one assignment using explicit ownership checks.
-
-    Batch callers already hold ``BEGIN IMMEDIATE``. Reading ownership before
-    UPDATE is therefore deterministic and avoids SQLite UPSERT ``rowcount``
-    differences across Python/SQLite builds.
-    """
+    """Persist one assignment and report whether its durable value changed."""
 
     activity_id = int(activity_id)
-    if source not in {"folder_rule", "keyword_rule"}:
-        source_rule_type = None
-        source_rule_id = None
-    timestamp = now_str()
+    source_rule_type, source_rule_id = _normalized_rule_identity(
+        source,
+        source_rule_type,
+        source_rule_id,
+    )
+    desired = (
+        int(project_id) if project_id is not None else None,
+        int(confidence),
+        str(source),
+        int(bool(is_manual)),
+        suggested_project_name or None,
+        source_rule_type,
+        source_rule_id,
+    )
     existing = conn.execute(
-        "SELECT is_manual FROM activity_project_assignment WHERE activity_id = ?",
+        """
+        SELECT project_id, confidence, source, is_manual,
+               suggested_project_name, source_rule_type, source_rule_id
+        FROM activity_project_assignment
+        WHERE activity_id = ?
+        """,
         (activity_id,),
     ).fetchone()
     if existing is not None:
         if protect_manual and int(existing["is_manual"] or 0):
+            return False
+        current = (
+            int(existing["project_id"]) if existing["project_id"] is not None else None,
+            int(existing["confidence"] or 0),
+            str(existing["source"] or ""),
+            int(existing["is_manual"] or 0),
+            existing["suggested_project_name"] or None,
+            existing["source_rule_type"] or None,
+            int(existing["source_rule_id"])
+            if existing["source_rule_id"] is not None
+            else None,
+        )
+        if current == desired:
             return False
         conn.execute(
             """
@@ -49,20 +84,11 @@ def upsert_assignment(
                 source_rule_id = ?, updated_at = ?
             WHERE activity_id = ?
             """,
-            (
-                project_id,
-                int(confidence),
-                source,
-                int(is_manual),
-                suggested_project_name,
-                source_rule_type,
-                source_rule_id,
-                timestamp,
-                activity_id,
-            ),
+            (*desired, now_str(), activity_id),
         )
         return True
 
+    timestamp = now_str()
     conn.execute(
         """
         INSERT INTO activity_project_assignment(
@@ -71,34 +97,70 @@ def upsert_assignment(
             created_at, updated_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (
-            activity_id,
-            project_id,
-            int(confidence),
-            source,
-            int(is_manual),
-            suggested_project_name,
-            source_rule_type,
-            source_rule_id,
-            timestamp,
-            timestamp,
-        ),
+        (activity_id, *desired, timestamp, timestamp),
     )
     return True
 
 
-def mark_inference_retry(conn, activity_id: int, uncategorized_project_id: int) -> None:
-    """Mark a closed activity for opportunity-based retry without new schema."""
+def assign_with_uow(
+    *,
+    activity_id: int,
+    project_id: int | None,
+    source: str,
+    confidence: int,
+    is_manual: bool = False,
+    suggested_project_name: str | None = None,
+    source_rule_type: str | None = None,
+    source_rule_id: int | None = None,
+    protect_manual: bool = False,
+) -> bool:
+    """Run a standalone assignment command in the canonical report UoW."""
 
-    if not upsert_assignment(
+    with DomainUnitOfWork((DataGenerationNamespace.REPORT_STRUCTURE,)) as uow:
+        changed = upsert_assignment(
+            uow.connection,
+            activity_id=activity_id,
+            project_id=project_id,
+            source=source,
+            confidence=confidence,
+            is_manual=is_manual,
+            suggested_project_name=suggested_project_name,
+            source_rule_type=source_rule_type,
+            source_rule_id=source_rule_id,
+            protect_manual=protect_manual,
+        )
+        if changed:
+            uow.mark_changed()
+        return changed
+
+
+def mark_inference_retry(conn, activity_id: int, uncategorized_project_id: int) -> bool:
+    """Mark a closed activity for bounded opportunity-based inference retry."""
+
+    changed = upsert_assignment(
         conn,
         activity_id=activity_id,
         project_id=uncategorized_project_id,
         source="uncategorized",
         confidence=INFERENCE_RETRY_CONFIDENCE,
         protect_manual=True,
-    ):
-        logging.info("inference retry marker skipped for manual activity %s", activity_id)
+    )
+    if not changed:
+        logging.info("inference retry marker unchanged for activity %s", activity_id)
+    return changed
+
+
+def mark_inference_retry_with_uow(activity_id: int) -> bool:
+    """Persist a retry marker through the canonical assignment transaction."""
+
+    from .system_project_service import require_uncategorized_project_id
+
+    with DomainUnitOfWork((DataGenerationNamespace.REPORT_STRUCTURE,)) as uow:
+        project_id = require_uncategorized_project_id(uow.connection)
+        changed = mark_inference_retry(uow.connection, int(activity_id), project_id)
+        if changed:
+            uow.mark_changed()
+        return changed
 
 
 def retry_pending_inference(limit: int = 100) -> int:
@@ -127,9 +189,7 @@ def retry_pending_inference(limit: int = 100) -> int:
 
     for row in rows:
         try:
-            result = project_inference_service.assign_project_for_activity(
-                int(row["id"])
-            )
+            result = project_inference_service.assign_project_for_activity(int(row["id"]))
             if int(result.get("confidence") or 0) != INFERENCE_RETRY_CONFIDENCE:
                 updated += 1
         except Exception:
@@ -139,7 +199,9 @@ def retry_pending_inference(limit: int = 100) -> int:
 
 __all__ = [
     "INFERENCE_RETRY_CONFIDENCE",
+    "assign_with_uow",
     "mark_inference_retry",
+    "mark_inference_retry_with_uow",
     "retry_pending_inference",
     "upsert_assignment",
 ]

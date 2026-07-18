@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from ..db import get_connection, now_str, seed_defaults
+from ..data_generation_repository import DataGenerationNamespace
+from ..db import now_str, seed_defaults
+from ..domain_unit_of_work import DomainUnitOfWork
 from . import privacy_gate_service
 
 _DELETE_ORDER: tuple[str, ...] = (
@@ -29,6 +31,7 @@ _POST_CLEAR_SETTINGS: dict[str, str] = {
 
 def _apply_post_clear_settings(conn) -> None:
     """Persist the safe stopped-write state in the same clear transaction."""
+
     updated_at = now_str()
     for key, value in _POST_CLEAR_SETTINGS.items():
         conn.execute(
@@ -44,28 +47,25 @@ def _apply_post_clear_settings(conn) -> None:
 
 
 def clear_all_live_data() -> None:
-    """Delete business/runtime rows atomically while retaining installation consent."""
-    with get_connection() as conn:
-        conn.execute("BEGIN IMMEDIATE")
-        try:
-            privacy_state = privacy_gate_service.capture_installation_privacy_state(
-                conn=conn
-            )
-            for table in _DELETE_ORDER:
-                conn.execute(f"DELETE FROM {table}")
-            seed_defaults(conn)
-            privacy_gate_service.restore_installation_privacy_state(
-                privacy_state,
-                conn=conn,
-            )
-            _apply_post_clear_settings(conn)
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-    from .settings_service import clear_settings_cache
+    """Delete live rows atomically and publish every affected generation once."""
 
-    clear_settings_cache()
+    # REPORT_STRUCTURE is owned by the command UoW. The remaining catalog,
+    # settings, privacy, and replacement generations are published exactly once
+    # by restore_installation_privacy_state -> publish_database_replacement.
+    with DomainUnitOfWork((DataGenerationNamespace.REPORT_STRUCTURE,)) as uow:
+        conn = uow.connection
+        privacy_state = privacy_gate_service.capture_installation_privacy_state(
+            conn=conn
+        )
+        for table in _DELETE_ORDER:
+            conn.execute(f"DELETE FROM {table}")
+        seed_defaults(conn)
+        privacy_gate_service.restore_installation_privacy_state(
+            privacy_state,
+            conn=conn,
+        )
+        _apply_post_clear_settings(conn)
+        uow.mark_changed()
 
 
 __all__ = ["clear_all_live_data"]

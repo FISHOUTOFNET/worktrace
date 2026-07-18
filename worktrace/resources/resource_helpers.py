@@ -42,13 +42,8 @@ __all__ = [
 
 
 def normalize_for_key(value: str) -> str:
-    """Normalize a free-form string for use in an identity key.
+    """Normalize a free-form string for use in an identity key."""
 
-    Lowercases, collapses whitespace to ``-``, and keeps alphanumerics, ``.``,
-    ``_``, ``-``, CJK characters, and ``@`` (so email subjects/addresses are
-    preserved). Other characters become ``-``. Returns ``"unknown"`` for empty
-    input.
-    """
     value = (value or "").strip().lower()
     value = re.sub(r"\s+", "-", value)
     value = re.sub(r"[^a-z0-9._\-\u4e00-\u9fff@]+", "-", value)
@@ -61,17 +56,12 @@ def resolve_unique_indexed_path_from_title(
     include_excluded: bool = True,
     activity_start_time: str | None = None,
 ) -> str | None:
-    """Safely resolve a unique indexed file path from a window title.
+    """Resolve one path from the published folder-index snapshot."""
 
-    Wraps :func:`worktrace.services.folder_index_service.resolve_unique_path_from_title`
-    and returns ``None`` on any error (e.g. folder index unavailable or
-    multiple ambiguous candidates), so callers can treat the folder index as a
-    best-effort lookup.
-    """
     if not (window_title or "").strip():
         return None
     try:
-        from ..services.folder_index_service import resolve_unique_path_from_title
+        from ..services.folder_index_query_service import resolve_unique_path_from_title
 
         return resolve_unique_path_from_title(
             window_title,
@@ -92,23 +82,8 @@ def resolve_file_candidate(
     allow_title_file: bool = True,
     use_folder_index: bool = True,
 ) -> str | None:
-    """Resolve a file path or bare file name for a detector.
+    """Resolve a file path or bare file name for a detector."""
 
-    Resolution order (each step gated by its flag):
-
-    1. ``file_path_hint`` (when ``prefer_hint``) — always accepted when
-       present. The hint is trusted as an explicit signal, so it is not
-       filtered by ``allowed_extensions``.
-    2. Full path extracted from ``window_title`` (when ``allow_title_path``).
-    3. File name extracted from ``window_title`` (when ``allow_title_file``),
-       optionally filtered by ``allowed_extensions`` (so random title words
-       are not mistaken for file names).
-    4. Folder-index reverse lookup from ``window_title`` (when
-       ``use_folder_index``) — returns a full path when the index has a unique
-       match.
-
-    Returns the resolved string (full path or bare file name), or ``None``.
-    """
     if prefer_hint:
         hint = (active_window.file_path_hint or "").strip()
         if hint:
@@ -144,12 +119,8 @@ def resolve_file_candidate(
 
 
 def build_path_or_name_identity(path_or_name: str, path_prefix: str, name_prefix: str) -> str:
-    """Build an identity key that distinguishes full paths from bare names.
+    """Build an identity key that distinguishes full paths from bare names."""
 
-    When ``path_or_name`` looks like a local file path, the key is
-    ``"{path_prefix}:{normalize_path_key(full_path)}"``. Otherwise it is
-    ``"{name_prefix}:{normalize_file_name(file_name)}"``.
-    """
     full_path, _parent, _stem = split_file_path(path_or_name)
     file_name = ntpath.basename(full_path)
     if looks_like_local_file_path(full_path):
@@ -159,5 +130,6 @@ def build_path_or_name_identity(path_or_name: str, path_prefix: str, name_prefix
 
 def display_name_from_path_or_name(path_or_name: str) -> str:
     """Return the bare file name (basename) of a path or name string."""
+
     full_path, _parent, _stem = split_file_path(path_or_name)
     return ntpath.basename(full_path)

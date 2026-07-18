@@ -4,13 +4,15 @@ import pytest
 
 from tests.support.activity_factory import create_closed_activity
 from tests.support.db_helpers import assign_activity_project, fetch_one, table_count
-
 from worktrace.api import project_api
 from worktrace.constants import EXCLUDED_PROJECT, UNCATEGORIZED_PROJECT
+from worktrace.data_generation_repository import DataGenerationNamespace
 from worktrace.db import get_connection
+from worktrace.generation_clock import generation
 from worktrace.services import (
     export_service,
     folder_rule_service,
+    project_inference_service,
     project_service,
     report_session_operation_service,
     rule_service,
@@ -29,7 +31,7 @@ def _project_row(project_id: int) -> dict:
 
 
 def _activity(project_id: int, start: str, end: str, title: str, app: str = "Word") -> int:
-    aid = create_closed_activity(
+    activity_id = create_closed_activity(
         day="2026-06-18",
         start=start,
         end=end,
@@ -37,8 +39,8 @@ def _activity(project_id: int, start: str, end: str, title: str, app: str = "Wor
         process_name=f"{app.casefold()}.exe",
         window_title=title,
     )
-    assign_activity_project(aid, project_id, manual=True)
-    return aid
+    assign_activity_project(activity_id, project_id, manual=True)
+    return activity_id
 
 
 def _edit_session_project(report_date: str, session: dict, project_id: int) -> None:
@@ -84,9 +86,9 @@ def test_delete_project_soft_deletes_and_keeps_facts_rules_and_bindings_hidden(t
     assert fetch_one("SELECT id FROM project_rule WHERE id = ?", (keyword_id,)) is not None
     assert fetch_one("SELECT id FROM folder_project_rule WHERE id = ?", (folder_id,)) is not None
     assert fetch_one("SELECT id FROM activity_log WHERE id = ?", (activity_id,)) is not None
-    assert project_id not in {int(row["id"]) for row in project_service.list_project_bindings()}
-    assert project_id not in {int(row["id"]) for row in project_service.list_rule_target_projects()}
-    assert project_id not in {int(row["id"]) for row in project_service.list_selectable_projects()}
+    assert project_id not in {int(item["id"]) for item in project_service.list_project_bindings()}
+    assert project_id not in {int(item["id"]) for item in project_service.list_rule_target_projects()}
+    assert project_id not in {int(item["id"]) for item in project_service.list_selectable_projects()}
 
 
 @pytest.mark.parametrize("bad_id", [None, True, False, "1", 1.0, 0, -1, [], {}])
@@ -109,14 +111,12 @@ def test_delete_project_rejects_system_special_projects(temp_db, name):
     assert _project_row(project_id)["is_deleted"] == 0
 
 
-def test_delete_project_update_failure_rolls_back_without_cache_invalidation(temp_db, monkeypatch):
+def test_delete_project_update_failure_rolls_back_without_generation_change(temp_db):
     project_id = project_service.create_project("Client")
-    calls = {"invalidate": 0}
-
-    def spy():
-        calls["invalidate"] += 1
-
-    monkeypatch.setattr(project_service, "_invalidate_project_lifecycle_caches", spy)
+    rule_service.create_rule("Spec", project_id)
+    assert project_inference_service._enabled_keyword_rules()
+    before_generation = generation(DataGenerationNamespace.CLASSIFICATION_CATALOG)
+    before_rules = project_inference_service._enabled_keyword_rules()
     with get_connection() as conn:
         conn.execute(
             """
@@ -136,7 +136,8 @@ def test_delete_project_update_failure_rolls_back_without_cache_invalidation(tem
     assert row["is_deleted"] == 0
     assert row["is_archived"] == 0
     assert row["enabled"] == 1
-    assert calls["invalidate"] == 0
+    assert generation(DataGenerationNamespace.CLASSIFICATION_CATALOG) == before_generation
+    assert project_inference_service._enabled_keyword_rules() == before_rules
 
 
 def test_deleted_project_session_is_suppressed_without_merging_surrounding_sessions(temp_db):
@@ -159,7 +160,7 @@ def test_deleted_project_session_is_suppressed_without_merging_surrounding_sessi
 def test_deleted_project_override_semantics(temp_db):
     valid = project_service.create_project("Valid Project")
     deleted = project_service.create_project("Deleted Project")
-    deleted_activity = _activity(deleted, "09:00:00", "09:30:00", "Deleted.docx")
+    _activity(deleted, "09:00:00", "09:30:00", "Deleted.docx")
     valid_activity = _activity(valid, "10:00:00", "10:30:00", "Valid.docx")
 
     deleted_session = timeline_service.get_project_sessions_by_range("2026-06-18", "2026-06-18")[1]
@@ -172,9 +173,6 @@ def test_deleted_project_override_semantics(temp_db):
     sessions = timeline_service.get_project_sessions_by_range("2026-06-18", "2026-06-18")
     assert len(sessions) == 1
     assert sessions[0]["project_name"] == "Valid Project"
-    # Project lifecycle is resolved at replay time. Deleting either the base
-    # or edit target changes the relevant projection revision, so stale edits
-    # conflict and only the still-reportable base activity remains.
     assert sessions[0]["activity_ids"] == [valid_activity]
     assert table_count("report_session_operation") == 2
     assert "Deleted Project" not in repr(sessions)
