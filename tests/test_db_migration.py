@@ -1,4 +1,4 @@
-"""Tests for current schema initialization, migration and reset."""
+"""Contracts for current-only schema initialization and reset."""
 from __future__ import annotations
 
 import sqlite3
@@ -21,12 +21,15 @@ EXPECTED_TABLES = {
     "project_rule",
     "history_mutation_job",
     "history_mutation_job_rule",
+    "activity_inference_job",
     "activity_project_assignment",
     "activity_clipboard_event",
     "report_session_operation",
     "report_session_operation_member",
     "report_mutation_request",
     "activity_resource",
+    "data_generation_state",
+    "activity_resource_repair_job",
 }
 
 EXPECTED_DEFAULT_SETTINGS = {
@@ -49,14 +52,14 @@ REMOVED_RUNTIME_SETTINGS = {
 }
 
 
-def _get_columns(conn, table: str) -> set[str]:
+def _get_columns(conn: sqlite3.Connection, table: str) -> set[str]:
     return {
         str(row["name"])
         for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
     }
 
 
-def _get_tables(conn) -> set[str]:
+def _get_tables(conn: sqlite3.Connection) -> set[str]:
     return {
         str(row["name"])
         for row in conn.execute(
@@ -65,285 +68,100 @@ def _get_tables(conn) -> set[str]:
     }
 
 
-def _create_v5_source_schema(conn) -> None:
-    """Create the real v5 structural boundary from the current schema text."""
-
-    conn.executescript(db.read_schema_sql())
-    conn.execute("DROP TABLE history_mutation_job_rule")
-    conn.execute("DROP TABLE history_mutation_job")
-
-    conn.execute(
-        "ALTER TABLE folder_rule_index_state RENAME TO folder_rule_index_state_v6"
-    )
-    conn.executescript(
-        """
-        CREATE TABLE folder_rule_index_state (
-            folder_rule_id INTEGER PRIMARY KEY,
-            status TEXT NOT NULL CHECK (
-                status IN ('pending', 'indexing', 'ready', 'stale', 'error')
-            ),
-            valid_from TEXT,
-            last_indexed_at TEXT,
-            last_checked_at TEXT,
-            file_count INTEGER NOT NULL DEFAULT 0,
-            error_message TEXT,
-            refresh_requested INTEGER NOT NULL DEFAULT 0,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            FOREIGN KEY (folder_rule_id) REFERENCES folder_project_rule(id) ON DELETE CASCADE
-        );
-        INSERT INTO folder_rule_index_state(
-            folder_rule_id, status, valid_from, last_indexed_at,
-            last_checked_at, file_count, error_message, refresh_requested,
-            created_at, updated_at
-        )
-        SELECT folder_rule_id, status, valid_from, last_indexed_at,
-               last_checked_at, file_count, error_message, refresh_requested,
-               created_at, updated_at
-        FROM folder_rule_index_state_v6;
-        DROP TABLE folder_rule_index_state_v6;
-        """
-    )
-
-    conn.execute(
-        "ALTER TABLE folder_rule_file_index RENAME TO folder_rule_file_index_v6"
-    )
-    conn.executescript(
-        """
-        CREATE TABLE folder_rule_file_index (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            folder_rule_id INTEGER NOT NULL,
-            file_name TEXT NOT NULL,
-            normalized_file_name TEXT NOT NULL,
-            file_path TEXT NOT NULL,
-            normalized_path_key TEXT NOT NULL,
-            mtime REAL,
-            size INTEGER,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            FOREIGN KEY (folder_rule_id) REFERENCES folder_project_rule(id) ON DELETE CASCADE,
-            UNIQUE(folder_rule_id, normalized_path_key)
-        );
-        INSERT INTO folder_rule_file_index(
-            id, folder_rule_id, file_name, normalized_file_name, file_path,
-            normalized_path_key, mtime, size, created_at, updated_at
-        )
-        SELECT id, folder_rule_id, file_name, normalized_file_name, file_path,
-               normalized_path_key, mtime, size, created_at, updated_at
-        FROM folder_rule_file_index_v6;
-        DROP TABLE folder_rule_file_index_v6;
-        """
-    )
-
-
-def test_initialize_empty_database_sets_current_schema_version(tmp_path):
-    from worktrace.db import CURRENT_SCHEMA_VERSION, get_connection, initialize_database
-
+def test_initialize_empty_database_sets_exact_current_schema(tmp_path):
     db_path = str(tmp_path / "test.db")
-    initialize_database(db_path)
-
-    conn = get_connection()
-    try:
-        assert int(conn.execute("PRAGMA user_version").fetchone()[0]) == CURRENT_SCHEMA_VERSION
-        assert "language" in _get_columns(conn, "project")
-        assert "source_rule_type" in _get_columns(
-            conn,
-            "activity_project_assignment",
-        )
-    finally:
-        conn.close()
-
-
-def test_current_schema_initialization_is_idempotent(tmp_path):
-    from worktrace.db import CURRENT_SCHEMA_VERSION, get_connection, initialize_database
-
-    db_path = str(tmp_path / "test.db")
-    initialize_database(db_path)
-    initialize_database(db_path)
-    conn = get_connection()
-    try:
-        assert int(conn.execute("PRAGMA user_version").fetchone()[0]) == CURRENT_SCHEMA_VERSION
-    finally:
-        conn.close()
-
-
-def test_v9_upgrade_normalizes_reserved_project_ownership_and_installs_constraints(
-    tmp_path,
-):
-    db_path = str(tmp_path / "v9-reserved-project.db")
-    db.configure_database(db_path)
-    with db.get_connection() as conn:
-        conn.executescript(db.read_schema_sql())
-        conn.executescript(db.read_internal_schema_sql())
-        db.seed_defaults(conn)
-        conn.execute(
-            "UPDATE project SET created_by = 'user' WHERE name IN (?, ?)",
-            (UNCATEGORIZED_PROJECT, EXCLUDED_PROJECT),
-        )
-        conn.execute("PRAGMA user_version = 9")
-
     db.initialize_database(db_path)
 
     with db.get_connection() as conn:
-        owners = {
-            row["name"]: row["created_by"]
-            for row in conn.execute(
-                "SELECT name, created_by FROM project WHERE name IN (?, ?)",
-                (UNCATEGORIZED_PROJECT, EXCLUDED_PROJECT),
-            ).fetchall()
-        }
-        trigger_names = {
-            row["name"]
-            for row in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'trigger'"
-            ).fetchall()
-        }
-    assert owners == {
-        UNCATEGORIZED_PROJECT: "system",
-        EXCLUDED_PROJECT: "system",
-    }
-    assert {
-        "project_reserved_name_insert",
-        "project_reserved_name_update",
-    }.issubset(trigger_names)
-
-
-def test_initialize_database_migrates_v4_runtime_settings(tmp_path):
-    db_path = str(tmp_path / "v4.db")
-    db.configure_database(db_path)
-    with db.get_connection() as conn:
-        _create_v5_source_schema(conn)
-        conn.execute("PRAGMA user_version = 4")
-        db.seed_defaults(conn)
-        for key, value in (
-            ("current_activity_snapshot", '{"status":"normal"}'),
-            ("pending_short_seconds", "9"),
-            ("pending_short_carry_provenance", "legacy"),
-        ):
-            conn.execute(
-                "INSERT INTO settings(key, value, updated_at) VALUES (?, ?, ?) "
-                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                (key, value, "2026-07-16 00:00:00"),
-            )
-
-    db.initialize_database(db_path)
-
-    with db.get_connection() as conn:
-        assert int(conn.execute("PRAGMA user_version").fetchone()[0]) == db.CURRENT_SCHEMA_VERSION
+        assert int(conn.execute("PRAGMA user_version").fetchone()[0]) == 11
         assert db.schema_fingerprint(conn) == db.expected_schema_fingerprint()
-        keys = {
-            str(row["key"])
-            for row in conn.execute("SELECT key FROM settings").fetchall()
-        }
-        state_columns = _get_columns(conn, "folder_rule_index_state")
-        index_columns = _get_columns(conn, "folder_rule_file_index")
-    assert not (keys & REMOVED_RUNTIME_SETTINGS)
-    assert {"active_generation", "building_generation", "build_status"}.issubset(
-        state_columns
-    )
-    assert "generation" in index_columns
-
-
-def test_initialize_database_rejects_non_empty_old_database(tmp_path):
-    db_path = str(tmp_path / "old-startup.db")
-    old = sqlite3.connect(db_path)
-    try:
-        old.executescript(
-            """
-            CREATE TABLE project (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL UNIQUE,
-                description TEXT,
-                language TEXT NOT NULL DEFAULT '中文',
-                is_archived INTEGER NOT NULL DEFAULT 0,
-                enabled INTEGER NOT NULL DEFAULT 1,
-                created_by TEXT NOT NULL DEFAULT 'user',
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
-            CREATE TABLE activity_log (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                start_time TEXT NOT NULL,
-                end_time TEXT,
-                duration_seconds INTEGER,
-                app_name TEXT NOT NULL,
-                process_name TEXT NOT NULL,
-                window_title TEXT NOT NULL,
-                file_path_hint TEXT,
-                status TEXT NOT NULL,
-                source TEXT NOT NULL,
-                is_deleted INTEGER NOT NULL DEFAULT 0,
-                is_hidden INTEGER NOT NULL DEFAULT 0,
-                auto_classified INTEGER NOT NULL DEFAULT 0,
-                manual_override INTEGER NOT NULL DEFAULT 0,
-                project_id INTEGER,
-                note TEXT,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
-            CREATE TABLE activity_project_assignment (
-                activity_id INTEGER PRIMARY KEY,
-                project_id INTEGER,
-                confidence INTEGER NOT NULL DEFAULT 0,
-                source TEXT NOT NULL,
-                is_manual INTEGER NOT NULL DEFAULT 0,
-                suggested_project_name TEXT,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
-            INSERT INTO project(id, name, description, language, is_archived, enabled, created_by, created_at, updated_at)
-            VALUES (100, 'Legacy Client', '', '中文', 0, 1, 'user', '2026-06-01 00:00:00', '2026-06-01 00:00:00');
-            INSERT INTO activity_log(id, start_time, end_time, duration_seconds, app_name, process_name, window_title, status, source, created_at, updated_at)
-            VALUES (200, '2026-06-18 09:00:00', '2026-06-18 09:30:00', 1800, 'Word', 'winword.exe', 'Legacy.docx', 'normal', 'auto', '2026-06-18 09:30:00', '2026-06-18 09:30:00');
-            INSERT INTO activity_project_assignment(activity_id, project_id, confidence, source, is_manual, suggested_project_name, created_at, updated_at)
-            VALUES (200, 100, 80, 'keyword_rule', 0, NULL, '2026-06-18 09:30:00', '2026-06-18 09:30:00');
-            """
+        assert EXPECTED_TABLES.issubset(_get_tables(conn))
+        assert "source_rule_type" in _get_columns(
+            conn, "activity_project_assignment"
         )
-        old.commit()
+        assert "activity_inference_job" in _get_tables(conn)
+
+
+def test_current_schema_initialization_is_idempotent_and_preserves_data(tmp_path):
+    from tests.support import activity_factory as activity_service
+
+    db_path = str(tmp_path / "test.db")
+    db.initialize_database(db_path)
+    activity_id = activity_service.create_activity(
+        "Edge",
+        "msedge.exe",
+        "Search",
+        start_time="2026-06-18 09:00:00",
+    )
+    activity_service.finalize_created_activity(activity_id)
+
+    db.initialize_database(db_path)
+
+    with db.get_connection() as conn:
+        assert int(conn.execute("PRAGMA user_version").fetchone()[0]) == 11
+        assert db.schema_fingerprint(conn) == db.expected_schema_fingerprint()
+        assert conn.execute("SELECT COUNT(*) FROM activity_log").fetchone()[0] == 1
+
+
+@pytest.mark.parametrize("version", [1, 4, 8, 9, 10, 12])
+def test_initialize_rejects_every_non_current_schema(tmp_path, version):
+    db_path = str(tmp_path / f"schema-{version}.db")
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute("CREATE TABLE preserved_user_data(id INTEGER PRIMARY KEY)")
+        conn.execute("INSERT INTO preserved_user_data(id) VALUES (1)")
+        conn.execute(f"PRAGMA user_version = {version}")
+        conn.commit()
     finally:
-        old.close()
+        conn.close()
+
+    with pytest.raises(ValueError, match="database_schema_incompatible"):
+        db.initialize_database(db_path)
+
+    verify = sqlite3.connect(db_path)
+    try:
+        assert verify.execute(
+            "SELECT COUNT(*) FROM preserved_user_data"
+        ).fetchone()[0] == 1
+    finally:
+        verify.close()
+
+
+def test_initialize_rejects_current_version_with_wrong_fingerprint(tmp_path):
+    db_path = str(tmp_path / "invalid-v11.db")
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute("CREATE TABLE incomplete(id INTEGER PRIMARY KEY)")
+        conn.execute("PRAGMA user_version = 11")
+        conn.commit()
+    finally:
+        conn.close()
 
     with pytest.raises(ValueError, match="database_schema_incompatible"):
         db.initialize_database(db_path)
 
 
-def test_initialize_database_surfaces_post_migration_index_failures(
+def test_initialize_database_surfaces_current_schema_index_failures(
     tmp_path,
     monkeypatch,
 ):
-    from worktrace import db as db_module
-
     db_path = str(tmp_path / "bad-index.db")
     monkeypatch.setattr(
-        db_module,
+        db,
         "read_schema_indexes_sql",
         lambda: "CREATE INDEX broken_index ON missing_table(id);",
     )
 
     with pytest.raises(sqlite3.OperationalError):
-        db_module.initialize_database(db_path)
+        db.initialize_database(db_path)
 
 
-def test_initialize_creates_all_current_schema_tables(temp_db):
-    with db.get_connection() as conn:
-        tables = _get_tables(conn)
-
-    assert EXPECTED_TABLES.issubset(tables)
-
-
-def test_initialize_seeds_default_settings(temp_db):
+def test_initialize_seeds_default_settings_and_projects(temp_db):
     with db.get_connection() as conn:
         keys = {
             row["key"]
             for row in conn.execute("SELECT key FROM settings").fetchall()
         }
-
-    assert EXPECTED_DEFAULT_SETTINGS.issubset(keys)
-    assert not (keys & REMOVED_RUNTIME_SETTINGS)
-
-
-def test_initialize_seeds_default_projects(temp_db):
-    with db.get_connection() as conn:
         uncategorized = conn.execute(
             "SELECT * FROM project WHERE name = ?",
             (UNCATEGORIZED_PROJECT,),
@@ -353,87 +171,68 @@ def test_initialize_seeds_default_projects(temp_db):
             (EXCLUDED_PROJECT,),
         ).fetchone()
 
+    assert EXPECTED_DEFAULT_SETTINGS.issubset(keys)
+    assert not (keys & REMOVED_RUNTIME_SETTINGS)
     assert uncategorized is not None
     assert uncategorized["created_by"] == "system"
-    assert uncategorized["language"] == "中文"
     assert uncategorized["enabled"] == 1
     assert excluded is not None
     assert excluded["created_by"] == "system"
-    assert excluded["language"] == "中文"
     assert excluded["enabled"] == 0
-    assert excluded["description"] == "命中后匿名记录"
 
 
-def test_repeated_initialize_does_not_error_or_destroy_data(temp_db):
+def test_reset_database_clears_current_business_data_and_rebuilds_defaults(temp_db):
     from tests.support import activity_factory as activity_service
 
-    aid = activity_service.create_activity(
+    activity_id = activity_service.create_activity(
         "Edge",
         "msedge.exe",
         "Search",
         start_time="2026-06-18 09:00:00",
     )
-    activity_service.finalize_created_activity(aid)
-
-    db.initialize_database(temp_db)
-
+    activity_service.finalize_created_activity(activity_id)
     with db.get_connection() as conn:
-        activity_count = conn.execute(
-            "SELECT COUNT(*) AS c FROM activity_log"
-        ).fetchone()["c"]
-        uncategorized = conn.execute(
-            "SELECT * FROM project WHERE name = ?",
-            (UNCATEGORIZED_PROJECT,),
-        ).fetchone()
-
-    assert activity_count == 1
-    assert uncategorized is not None
-
-
-def test_reset_database_clears_business_data_and_rebuilds_defaults(temp_db):
-    from tests.support import activity_factory as activity_service
-
-    aid = activity_service.create_activity(
-        "Edge",
-        "msedge.exe",
-        "Search",
-        start_time="2026-06-18 09:00:00",
-    )
-    activity_service.finalize_created_activity(aid)
+        conn.execute(
+            """
+            INSERT INTO activity_inference_job(
+                activity_id, reason, status, attempt_count, next_attempt_at,
+                last_error_code, created_at, updated_at
+            ) VALUES (?, 'closed_activity', 'pending', 0, NULL, NULL, ?, ?)
+            """,
+            (activity_id, db.now_str(), db.now_str()),
+        )
 
     db.reset_database()
 
     with db.get_connection() as conn:
-        assert conn.execute("SELECT COUNT(*) AS c FROM activity_log").fetchone()["c"] == 0
-        assert conn.execute("SELECT COUNT(*) AS c FROM activity_project_assignment").fetchone()["c"] == 0
-        assert conn.execute("SELECT COUNT(*) AS c FROM activity_clipboard_event").fetchone()["c"] == 0
-        assert conn.execute("SELECT COUNT(*) AS c FROM report_session_operation").fetchone()["c"] == 0
-        assert conn.execute("SELECT COUNT(*) AS c FROM report_session_operation_member").fetchone()["c"] == 0
-        assert conn.execute("SELECT COUNT(*) AS c FROM folder_project_rule").fetchone()["c"] == 0
-        assert conn.execute("SELECT COUNT(*) AS c FROM folder_rule_index_state").fetchone()["c"] == 0
-        assert conn.execute("SELECT COUNT(*) AS c FROM folder_rule_file_index").fetchone()["c"] == 0
-        assert conn.execute("SELECT COUNT(*) AS c FROM history_mutation_job").fetchone()["c"] == 0
-        assert conn.execute("SELECT COUNT(*) AS c FROM history_mutation_job_rule").fetchone()["c"] == 0
-        assert conn.execute("SELECT COUNT(*) AS c FROM project_rule").fetchone()["c"] == 0
-        assert conn.execute("SELECT COUNT(*) AS c FROM activity_resource").fetchone()["c"] == 0
-        uncategorized = conn.execute(
-            "SELECT * FROM project WHERE name = ?",
-            (UNCATEGORIZED_PROJECT,),
-        ).fetchone()
-        excluded = conn.execute(
-            "SELECT * FROM project WHERE name = ?",
-            (EXCLUDED_PROJECT,),
-        ).fetchone()
+        for table in (
+            "activity_log",
+            "activity_project_assignment",
+            "activity_inference_job",
+            "activity_clipboard_event",
+            "activity_resource",
+            "report_session_operation",
+            "report_session_operation_member",
+            "folder_project_rule",
+            "folder_rule_index_state",
+            "folder_rule_file_index",
+            "history_mutation_job",
+            "history_mutation_job_rule",
+            "project_rule",
+        ):
+            assert conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
         keys = {
             row["key"]
             for row in conn.execute("SELECT key FROM settings").fetchall()
         }
+        assert conn.execute(
+            "SELECT 1 FROM project WHERE name = ?",
+            (UNCATEGORIZED_PROJECT,),
+        ).fetchone()
+        assert conn.execute(
+            "SELECT 1 FROM project WHERE name = ?",
+            (EXCLUDED_PROJECT,),
+        ).fetchone()
 
-    assert uncategorized is not None
-    assert excluded is not None
     assert EXPECTED_DEFAULT_SETTINGS.issubset(keys)
     assert not (keys & REMOVED_RUNTIME_SETTINGS)
-
-
-def test_legacy_migration_entrypoint_is_not_exported():
-    assert not hasattr(db, "ensure_schema_migrations")
