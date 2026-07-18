@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from worktrace import db
 from worktrace.services import activity_inference_job_repository as jobs
 from worktrace.services import secure_backup_service
 from worktrace.schema_migrations import migrate_10_to_11
@@ -171,3 +172,8 @@ def test_runtime_starts_collector_before_optional_inference_worker():
     assert "_enqueue_closed_inference_jobs" in lifecycle
     assert "INFERENCE_RETRY_CONFIDENCE" not in assignment
     assert "activity_inference_job" not in assignment
+
+
+def test_phase_2_published_versions_are_explicit():
+    assert db.CURRENT_SCHEMA_VERSION == 11
+    assert secure_backup_service.PAYLOAD_VERSION == 5
