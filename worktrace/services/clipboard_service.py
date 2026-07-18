@@ -36,15 +36,17 @@ def record_clipboard_event(
     copied_time = copied_at or now_str()
     text_hash = _hash_text(copied_text)
     ts = now_str()
+    activity_closed = False
     with _report_uow() as uow:
         conn = uow.connection
-        # This transaction-local check is the final privacy gate. It rejects an
-        # event that was already drained from the adapter when the user disabled
-        # capture before persistence.
         if not _capture_enabled_in_transaction(conn):
             return None
         activity = conn.execute(
-            "SELECT id, status FROM activity_log WHERE id = ? AND is_deleted = 0",
+            """
+            SELECT id, status, end_time
+            FROM activity_log
+            WHERE id = ? AND is_deleted = 0
+            """,
             (activity_id,),
         ).fetchone()
         if not activity or activity["status"] != STATUS_NORMAL:
@@ -83,15 +85,27 @@ def record_clipboard_event(
             ),
         )
         event_id = int(cur.lastrowid)
-        activity_inference_job_repository.enqueue_closed_activity_ids(
-            conn,
-            [int(activity_id)],
-        )
+        activity_closed = activity["end_time"] is not None
+        if activity_closed:
+            activity_inference_job_repository.enqueue_closed_activity_ids(
+                conn,
+                [int(activity_id)],
+            )
         uow.mark_changed()
-    # Closed rows now have a durable job. Open rows are refreshed immediately
-    # and will be scheduled by their eventual close transaction if this fails.
-    _attempt_clipboard_inference(int(activity_id))
+
+    if not activity_closed:
+        _sync_open_activity_project_safely(int(activity_id))
     return event_id
+
+
+def _sync_open_activity_project_safely(activity_id: int) -> None:
+    try:
+        project_inference_service.sync_persisted_open_activity_project(activity_id)
+    except Exception:
+        logging.exception(
+            "clipboard open-row project sync failed activity_id=%s",
+            activity_id,
+        )
 
 
 def _capture_enabled_in_transaction(conn) -> bool:
@@ -155,20 +169,6 @@ def _find_duplicate_event(
         (activity_id, copied_at, text_hash),
     ).fetchone()
     return int(row["id"]) if row else None
-
-
-def _attempt_clipboard_inference(activity_id: int) -> None:
-    try:
-        if project_inference_service.process_pending_inference_jobs(
-            limit=1,
-            activity_ids=[activity_id],
-        ) == 0:
-            project_inference_service.assign_project_for_activity(activity_id)
-    except Exception:
-        logging.exception(
-            "clipboard inference failed; durable close-time retry retained for activity_id=%s",
-            activity_id,
-        )
 
 
 def _hash_text(text: str) -> str:
