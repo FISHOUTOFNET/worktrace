@@ -1,103 +1,139 @@
 from __future__ import annotations
 
-import runpy
+import ast
+import re
 from pathlib import Path
 
 import pytest
 
 pytestmark = [pytest.mark.unit, pytest.mark.contract]
 
-_STATE = runpy.run_path(
-    str(Path(__file__).with_name("_architecture_owner_governance_base.py"))
+ROOT = Path(__file__).resolve().parents[1]
+PRODUCTION = ROOT / "worktrace"
+TESTS = ROOT / "tests"
+
+RETIRED_PRODUCTION_SYMBOLS = {
+    "mark_inference_retry",
+    "mark_inference_retry_with_uow",
+    "INFERENCE_RETRY_CONFIDENCE",
+    "retry_pending_inference",
+    "_synchronize_core_hooks",
+}
+RETIRED_FILES = {
+    PRODUCTION / "schema_migrations.py",
+    PRODUCTION / "runtime" / "app_runtime_core.py",
+    PRODUCTION / "services" / "secure_backup_core.py",
+}
+DYNAMIC_TEST_PATTERNS = (
+    "runpy.run_path(",
+    "globals()[name] = test",
+    "globals()[_name] =",
+    "for _name in dir(_contracts)",
 )
-
-_owners = _STATE["_GENERATION_DML_OWNERS"]
-for _table_owners in _owners.values():
-    if "worktrace/services/secure_backup_service.py" in _table_owners:
-        _table_owners.add("worktrace/services/secure_backup_core.py")
-
-# The current migration removes the legacy assignment sentinel. Runtime
-# assignment writes remain owned only by the command service.
-_owners["activity_project_assignment"].add("worktrace/schema_migrations.py")
-
-# The repository is the sole runtime DML owner. Schema migration, whole-database
-# maintenance, and secure replacement are explicit lifecycle exceptions.
-_owners["activity_inference_job"] = {
-    "worktrace/schema_migrations.py",
+_DML_PATTERN = re.compile(
+    r"\b(?:INSERT(?:\s+OR\s+\w+)?\s+INTO|REPLACE\s+INTO|UPDATE|DELETE\s+FROM)"
+    r"\s+activity_inference_job\b",
+    re.IGNORECASE,
+)
+_INFERENCE_JOB_DML_OWNERS = {
     "worktrace/services/activity_inference_job_repository.py",
     "worktrace/services/database_maintenance_service.py",
-    "worktrace/services/secure_backup_core.py",
     "worktrace/services/secure_backup_service.py",
 }
 
-_original_dynamic_dml = _STATE["_dynamic_dml"]
+
+def _python_files(root: Path) -> list[Path]:
+    return sorted(root.rglob("*.py"))
 
 
-def _dynamic_dml(path):
-    statements = _original_dynamic_dml(path)
-    relative = path.relative_to(_STATE["ROOT"]).as_posix()
-    if relative != "worktrace/services/secure_backup_core.py":
-        return statements
-    replacement_tables = set(_owners) - {"history_mutation_job"}
-    return [
-        (line, operation, tables or replacement_tables)
-        for line, operation, tables in statements
-    ]
+def test_retired_owner_files_are_absent() -> None:
+    assert [path.relative_to(ROOT).as_posix() for path in RETIRED_FILES if path.exists()] == []
 
 
-_STATE["_dynamic_dml"] = _dynamic_dml
+def test_retired_inference_and_hook_symbols_are_absent_from_production() -> None:
+    offenders: list[str] = []
+    for path in _python_files(PRODUCTION):
+        source = path.read_text(encoding="utf-8")
+        for symbol in RETIRED_PRODUCTION_SYMBOLS:
+            if symbol in source:
+                offenders.append(f"{path.relative_to(ROOT).as_posix()}:{symbol}")
+        if re.search(r"confidence\s*(?:=|<)\s*-1\b", source):
+            offenders.append(f"{path.relative_to(ROOT).as_posix()}:negative-confidence")
+    assert offenders == []
 
-for _name, _value in _STATE.items():
-    if _name.startswith("test_"):
-        globals()[_name] = _value
 
-
-def _generation_owner_offenders() -> list[str | None]:
+def test_inference_job_runtime_dml_has_only_canonical_owners() -> None:
     offenders: list[str] = []
     covered: set[str] = set()
-    for path in _STATE["_python_files"]():
-        relative = path.relative_to(_STATE["ROOT"]).as_posix()
-        for line, operation, table in _STATE["_literal_dml"](path):
-            owners = _owners.get(table)
-            if owners is None:
-                continue
-            covered.add(table)
-            if relative not in owners:
-                offenders.append(f"{relative}:{line}:{operation}:{table}")
-        for line, operation, tables in _dynamic_dml(path):
-            if not tables:
-                offenders.append(f"{relative}:{line}:{operation}:dynamic")
-                continue
-            for table in tables:
-                covered.add(table)
-                if relative not in _owners[table]:
-                    offenders.append(f"{relative}:{line}:{operation}:{table}")
-    for table in sorted(set(_owners) - covered):
-        offenders.append(f"missing:{table}")
-    return sorted(set(offenders)) or [None]
+    for path in _python_files(PRODUCTION):
+        relative = path.relative_to(ROOT).as_posix()
+        source = path.read_text(encoding="utf-8")
+        if not _DML_PATTERN.search(source):
+            continue
+        covered.add(relative)
+        if relative not in _INFERENCE_JOB_DML_OWNERS:
+            offenders.append(relative)
+    assert covered == _INFERENCE_JOB_DML_OWNERS
+    assert offenders == []
 
 
-_OWNER_OFFENDERS = _generation_owner_offenders()
+def test_runtime_and_backup_have_single_lifecycle_owners() -> None:
+    runtime = (PRODUCTION / "runtime" / "app_runtime.py").read_text(encoding="utf-8")
+    backup = (PRODUCTION / "services" / "secure_backup_service.py").read_text(
+        encoding="utf-8"
+    )
+    maintenance = (
+        PRODUCTION / "services" / "database_maintenance_service.py"
+    ).read_text(encoding="utf-8")
+
+    assert "class AppRuntime" in runtime
+    assert "start_inference_worker" in runtime
+    assert "database_maintenance_service.register_collector_pause_handler" in runtime
+    assert "from . import database_maintenance_service" in backup
+    assert "maintenance_operation(" in backup
+    assert "class DatabaseMaintenanceCoordinator" in maintenance
+    assert "__getattr__" not in runtime
+    assert "__getattr__" not in backup
 
 
-@pytest.mark.parametrize(
-    "offender",
-    _OWNER_OFFENDERS,
-    ids=lambda value: "clean" if value is None else str(value),
-)
-def test_generation_backed_dml_stays_with_canonical_command_owners(
-    offender: str | None,
-) -> None:
-    assert offender is None, offender
+def test_non_windows_production_adapter_fails_closed() -> None:
+    source = (PRODUCTION / "runtime" / "app_runtime.py").read_text(encoding="utf-8")
+    assert "raise RuntimeError(\"unsupported_platform\")" in source
+    assert "fake_adapter" not in source.casefold()
 
 
-def test_inference_job_owners_are_lifecycle_scoped() -> None:
-    assert _owners["activity_inference_job"] >= {
-        "worktrace/services/activity_inference_job_repository.py",
-        "worktrace/services/database_maintenance_service.py",
-        "worktrace/schema_migrations.py",
-    }
-    assert not (
-        Path(__file__).resolve().parents[1]
-        / "worktrace/schema_migrations_history.py"
-    ).exists()
+def test_dynamic_test_forwarding_is_absent() -> None:
+    offenders: list[str] = []
+    for path in _python_files(TESTS):
+        source = path.read_text(encoding="utf-8")
+        for pattern in DYNAMIC_TEST_PATTERNS:
+            if pattern in source:
+                offenders.append(f"{path.relative_to(ROOT).as_posix()}:{pattern}")
+    assert offenders == []
+
+
+def test_test_functions_are_defined_in_collectable_modules() -> None:
+    for filename in (
+        "test_architecture_owner_governance.py",
+        "test_app_runtime_privacy_gate.py",
+        "test_secure_backup_service.py",
+    ):
+        path = TESTS / filename
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        assert any(
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name.startswith("test_")
+            for node in tree.body
+        )
+
+
+def test_current_only_schema_and_backup_versions_are_explicit() -> None:
+    db_source = (PRODUCTION / "db.py").read_text(encoding="utf-8")
+    backup_source = (
+        PRODUCTION / "services" / "secure_backup_service.py"
+    ).read_text(encoding="utf-8")
+    assert "CURRENT_SCHEMA_VERSION = 11" in db_source
+    assert "database_schema_incompatible" in db_source
+    assert "PAYLOAD_VERSION = 5" in backup_source
+    assert "_normalize_v4_payload" not in backup_source
+    assert "LEGACY" not in backup_source
