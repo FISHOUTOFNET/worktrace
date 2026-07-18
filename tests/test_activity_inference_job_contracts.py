@@ -43,14 +43,14 @@ def test_close_commit_keeps_inference_job_when_immediate_consumer_fails(
         source="auto",
         payload=_payload(),
     )
-    original = project_inference_service.process_pending_inference_jobs
+    original = project_inference_service.process_new_activity
 
     def fail_after_commit(*_args, **_kwargs):
         raise RuntimeError("simulated_process_exit")
 
     monkeypatch.setattr(
         project_inference_service,
-        "process_pending_inference_jobs",
+        "process_new_activity",
         fail_after_commit,
     )
     activity_lifecycle_service.close_activity(
@@ -72,10 +72,13 @@ def test_close_commit_keeps_inference_job_when_immediate_consumer_fails(
 
     monkeypatch.setattr(
         project_inference_service,
-        "process_pending_inference_jobs",
+        "process_new_activity",
         original,
     )
-    assert original(limit=1, activity_ids=[activity_id]) == 1
+    assert project_inference_service.process_pending_inference_jobs(
+        limit=1,
+        activity_ids=[activity_id],
+    ) == 1
     with get_connection() as conn:
         assert conn.execute(
             "SELECT 1 FROM activity_inference_job WHERE activity_id = ?",
@@ -105,8 +108,8 @@ def test_manual_assignment_is_not_scheduled_for_inference(temp_db, monkeypatch):
     )
     monkeypatch.setattr(
         project_inference_service,
-        "process_pending_inference_jobs",
-        lambda *_args, **_kwargs: 0,
+        "process_new_activity",
+        lambda *_args, **_kwargs: {},
     )
     activity_lifecycle_service.close_activity(
         activity_id,
