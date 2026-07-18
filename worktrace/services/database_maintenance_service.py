@@ -5,6 +5,7 @@ from ..domain_unit_of_work import DomainUnitOfWork
 from .database_replacement_generation_service import publish_database_replacement
 
 _DELETE_ORDER: tuple[str, ...] = (
+    "activity_inference_job",
     "activity_resource",
     "report_session_operation_member",
     "report_mutation_request",

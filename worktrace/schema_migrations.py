@@ -35,9 +35,6 @@ def migrate_4_to_5(conn: sqlite3.Connection) -> None:
 def migrate_5_to_6(conn: sqlite3.Connection) -> None:
     """Add lifecycle invariants, resumable jobs and index generations."""
 
-    # Every open row belongs to the process generation that created the v5
-    # database. Migration runs before a new Collector starts, so seal all of
-    # them at their last durable checkpoint before installing the unique index.
     conn.execute(
         """
         UPDATE activity_log
@@ -54,9 +51,6 @@ def migrate_5_to_6(conn: sqlite3.Connection) -> None:
         """
     )
 
-    # Rebuild both folder-index tables rather than appending columns. This keeps
-    # upgraded databases byte-for-byte structurally equivalent to fresh v6
-    # databases, which is required by WorkTrace's schema fingerprint contract.
     conn.execute(
         "ALTER TABLE folder_rule_index_state RENAME TO folder_rule_index_state_v5"
     )
@@ -155,9 +149,6 @@ def migrate_5_to_6(conn: sqlite3.Connection) -> None:
     )
     conn.execute("DROP TABLE folder_rule_file_index_v5")
 
-    # sqlite3.Connection.executescript() performs an implicit COMMIT and would
-    # destroy migrate_schema()'s savepoint. Keep every DDL statement inside the
-    # caller-controlled migration transaction.
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS history_mutation_job (
@@ -324,6 +315,67 @@ def migrate_9_to_10(conn: sqlite3.Connection) -> None:
     )
 
 
+def migrate_10_to_11(conn: sqlite3.Connection) -> None:
+    """Create the minimal outbox and migrate only unresolved legacy semantics."""
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS activity_inference_job (
+            activity_id INTEGER PRIMARY KEY,
+            reason TEXT NOT NULL CHECK(
+                reason IN ('finalize', 'facts_changed', 'migration_repair', 'import_repair')
+            ),
+            attempt_count INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count >= 0),
+            available_at TEXT NOT NULL,
+            last_error_code TEXT CHECK(
+                last_error_code IS NULL OR last_error_code IN (
+                    'database_busy', 'data_repair_required', 'inference_failed'
+                )
+            ),
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(activity_id) REFERENCES activity_log(id) ON DELETE CASCADE
+        )
+        """
+    )
+    now = str(conn.execute("SELECT datetime('now', 'localtime')").fetchone()[0])
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO activity_inference_job(
+            activity_id, reason, attempt_count, available_at,
+            last_error_code, created_at, updated_at
+        )
+        SELECT activity.id, 'migration_repair', 0, ?, NULL, ?, ?
+        FROM activity_log activity
+        LEFT JOIN activity_project_assignment assignment
+          ON assignment.activity_id = activity.id
+        WHERE activity.end_time IS NOT NULL
+          AND activity.status = 'normal'
+          AND activity.is_hidden = 0
+          AND activity.is_deleted = 0
+          AND (
+                assignment.activity_id IS NULL
+                OR (
+                    assignment.is_manual = 0
+                    AND assignment.source = 'uncategorized'
+                    AND assignment.confidence = -1
+                )
+          )
+        """,
+        (now, now, now),
+    )
+    conn.execute(
+        """
+        UPDATE activity_project_assignment
+        SET confidence = 0, updated_at = ?
+        WHERE is_manual = 0
+          AND source = 'uncategorized'
+          AND confidence = -1
+        """,
+        (now,),
+    )
+
+
 MIGRATIONS: dict[int, Migration] = {
     4: migrate_4_to_5,
     5: migrate_5_to_6,
@@ -331,6 +383,7 @@ MIGRATIONS: dict[int, Migration] = {
     7: migrate_7_to_8,
     8: migrate_8_to_9,
     9: migrate_9_to_10,
+    10: migrate_10_to_11,
 }
 
 
@@ -373,5 +426,6 @@ __all__ = [
     "migrate_7_to_8",
     "migrate_8_to_9",
     "migrate_9_to_10",
+    "migrate_10_to_11",
     "migrate_schema",
 ]

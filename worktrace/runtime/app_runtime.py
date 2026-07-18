@@ -1,9 +1,9 @@
 """Process-level application runtime.
 
 Owns every long-lived runtime component: application instance lease, collector,
-folder-index and history workers, platform adapter, maintenance command channels,
-and startup recovery. A process without the application lease never opens the
-business database or creates the WebView.
+folder-index, history and inference workers, platform adapter, maintenance
+command channels, and startup recovery. A process without the application lease
+never opens the business database or creates the WebView.
 """
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ from ..collector import collector_health
 from ..collector.collector import CollectorControl, run_collector
 from ..collector.single_instance import acquire_single_instance, release_single_instance
 from ..services import (
+    activity_inference_job_service,
     activity_lifecycle_service,
     folder_index_service,
     history_mutation_job_service,
@@ -70,14 +71,18 @@ class WorkerReadiness:
     index_started: bool = False
     history_started: bool = False
     error: str | None = None
+    inference_ready: bool = True
+    inference_started: bool = False
 
     @property
     def ready(self) -> bool:
-        return bool(self.index_ready and self.history_ready)
+        return bool(self.index_ready and self.history_ready and self.inference_ready)
 
     @property
     def started_any(self) -> bool:
-        return bool(self.index_started or self.history_started)
+        return bool(
+            self.index_started or self.history_started or self.inference_started
+        )
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -151,6 +156,7 @@ class AppRuntime:
         self._collector_generation = 0
         self._index_thread: threading.Thread | None = None
         self._history_thread: threading.Thread | None = None
+        self._inference_thread: threading.Thread | None = None
         self._registered_collector_thread_id: int | None = None
         self._initialized = False
         self._shutdown = False
@@ -181,7 +187,7 @@ class AppRuntime:
             return True
 
     def start_background_workers(self) -> WorkerReadiness:
-        """Initialize, then start or confirm both derived-state workers."""
+        """Initialize, then start or confirm all derived-state workers."""
 
         with self._lifecycle_lock:
             if not self._initialized or not self.owns_application_instance:
@@ -223,13 +229,34 @@ class AppRuntime:
                     self._history_thread = None
                     logging.exception("history worker initialization failed")
 
-            error = None if index_ready and history_ready else "worker_start_failed"
+            inference_ready = _thread_reference_is_alive(self._inference_thread)
+            inference_started = False
+            if not inference_ready:
+                try:
+                    self._inference_thread = (
+                        activity_inference_job_service.start_inference_worker(
+                            self.stop_event,
+                            project_inference_service.assign_project_for_activity_in_transaction,
+                        )
+                    )
+                    inference_ready = _thread_reference_is_alive(
+                        self._inference_thread
+                    )
+                    inference_started = inference_ready
+                except Exception:
+                    self._inference_thread = None
+                    logging.exception("inference worker initialization failed")
+
+            all_ready = bool(index_ready and history_ready and inference_ready)
+            error = None if all_ready else "worker_start_failed"
             return WorkerReadiness(
                 index_ready=index_ready,
                 history_ready=history_ready,
                 index_started=index_started,
                 history_started=history_started,
                 error=error,
+                inference_ready=inference_ready,
+                inference_started=inference_started,
             )
 
     def start_authorized_collection(self) -> RuntimeStartResult:
@@ -255,13 +282,6 @@ class AppRuntime:
                     error_code="runtime_stopping",
                 )
             self.phase = RuntimePhase.STARTING
-
-        retry_degraded = False
-        try:
-            project_inference_service.retry_pending_inference(100)
-        except Exception:
-            retry_degraded = True
-            logging.exception("pending assignment inference retry failed")
 
         try:
             collector_result = self.start_collector()
@@ -296,9 +316,10 @@ class AppRuntime:
                 index_ready=False,
                 history_ready=False,
                 error="worker_start_failed",
+                inference_ready=False,
             )
 
-        degraded = bool(retry_degraded or not workers.ready)
+        degraded = bool(not workers.ready)
         self.phase = RuntimePhase.DEGRADED if degraded else RuntimePhase.RUNNING
         return RuntimeStartResult(
             ok=True,
@@ -522,6 +543,7 @@ class AppRuntime:
             workers = [
                 self._index_thread,
                 self._history_thread,
+                self._inference_thread,
                 self._collector_thread,
             ]
 
@@ -542,7 +564,11 @@ class AppRuntime:
         if not _thread_reference_is_alive(self._collector_thread):
             self._clear_collector_write_thread()
 
-        for thread in (self._index_thread, self._history_thread):
+        for thread in (
+            self._index_thread,
+            self._history_thread,
+            self._inference_thread,
+        ):
             if thread:
                 joiner = getattr(thread, "join", None)
                 if joiner is not None:

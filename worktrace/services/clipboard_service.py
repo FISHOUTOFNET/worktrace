@@ -9,7 +9,7 @@ from ..data_generation_repository import DataGenerationNamespace
 from ..db import now_str
 from ..domain_unit_of_work import DomainUnitOfWork
 from ..platforms.base import ActiveWindow
-from . import project_inference_service
+from . import activity_inference_job_repository, project_inference_service
 from .settings_service import get_bool_setting
 
 
@@ -36,9 +36,6 @@ def record_clipboard_event(
     ts = now_str()
     with _report_uow() as uow:
         conn = uow.connection
-        # This transaction-local check is the final privacy gate. It rejects an
-        # event that was already drained from the adapter when the user disabled
-        # capture before persistence.
         if not _capture_enabled_in_transaction(conn):
             return None
         activity = conn.execute(
@@ -81,13 +78,10 @@ def record_clipboard_event(
             ),
         )
         event_id = int(cur.lastrowid)
-        from .assignment_command_service import mark_inference_retry
-        from .system_project_service import require_uncategorized_project_id
-
-        mark_inference_retry(
+        activity_inference_job_repository.enqueue_closed_activity_ids(
             conn,
-            int(activity_id),
-            require_uncategorized_project_id(conn),
+            [int(activity_id)],
+            reason=activity_inference_job_repository.REASON_FACTS_CHANGED,
         )
         uow.mark_changed()
     _attempt_clipboard_inference(int(activity_id))
@@ -159,10 +153,13 @@ def _find_duplicate_event(
 
 def _attempt_clipboard_inference(activity_id: int) -> None:
     try:
-        project_inference_service.assign_project_for_activity(activity_id)
+        project_inference_service.process_pending_inference_jobs(
+            limit=1,
+            activity_ids=[int(activity_id)],
+        )
     except Exception:
         logging.exception(
-            "clipboard inference failed; durable retry retained for activity_id=%s",
+            "clipboard inference failed; durable job retained for activity_id=%s",
             activity_id,
         )
 

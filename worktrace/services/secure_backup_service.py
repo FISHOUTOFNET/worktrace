@@ -12,10 +12,11 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterator
 
-from ..constants import APP_VERSION
+from ..constants import APP_VERSION, TIME_FORMAT
 from ..db import (
     CURRENT_SCHEMA_VERSION,
     expected_schema_fingerprint,
@@ -36,6 +37,7 @@ from ..security.backup_format import (
     parse_backup_manifest,
 )
 from ..write_gate import DATABASE_WRITE_GATE
+from . import activity_inference_job_repository as inference_jobs
 from .database_maintenance_barrier import drain_existing_writers
 from .database_replacement_generation_service import (
     capture_replacement_generation_floor,
@@ -48,7 +50,7 @@ from .secure_backup_validation import BackupValidationError, validate_staging_da
 from .settings_service import get_bool_setting, get_setting, set_setting
 
 PAYLOAD_FORMAT = "worktrace-local-data"
-PAYLOAD_VERSION = 4
+PAYLOAD_VERSION = 5
 SCHEMA_VERSION = str(CURRENT_SCHEMA_VERSION)
 _LEGACY_BACKUP_SCHEMA_FINGERPRINTS = {
     "8": "3fd5ae980749886a04f7f9170669a606fa80d6b554924d0ad29b457b0c51deac",
@@ -57,7 +59,7 @@ BACKUP_FILE_SUFFIX = ".wtbackup"
 MAX_BACKUP_FILE_BYTES = 512 * 1024 * 1024
 MAX_BACKUP_PAYLOAD_BYTES = 384 * 1024 * 1024
 
-EXPORT_TABLES: tuple[str, ...] = (
+EXPORT_TABLES_V4: tuple[str, ...] = (
     "project",
     "settings",
     "session_boundary",
@@ -71,6 +73,10 @@ EXPORT_TABLES: tuple[str, ...] = (
     "report_session_operation_member",
     "report_mutation_request",
     "activity_resource",
+)
+EXPORT_TABLES: tuple[str, ...] = (
+    *EXPORT_TABLES_V4,
+    "activity_inference_job",
 )
 EXCLUDED_TABLES: frozenset[str] = frozenset({"folder_rule_file_index"})
 MIGRATABLE_SETTINGS: frozenset[str] = frozenset(
@@ -86,6 +92,7 @@ MIGRATABLE_SETTINGS: frozenset[str] = frozenset(
     }
 )
 _DELETE_ORDER: tuple[str, ...] = (
+    "activity_inference_job",
     "activity_resource",
     "report_session_operation_member",
     "report_mutation_request",
@@ -450,34 +457,74 @@ def _parse_and_validate_payload(payload: bytes) -> dict[str, Any]:
         raise BackupCorruptedError("backup file is invalid or corrupted") from exc
     if not isinstance(data, dict) or data.get("format") != PAYLOAD_FORMAT:
         raise BackupCorruptedError("backup file is invalid or corrupted")
+
+    payload_version = data.get("version")
     schema_version = str(data.get("schema_version") or "")
-    schema_fingerprint_value = str(data.get("schema_fingerprint") or "")
-    if data.get("version") != PAYLOAD_VERSION or schema_version not in {
-        SCHEMA_VERSION,
-        *_LEGACY_BACKUP_SCHEMA_FINGERPRINTS,
-    }:
+    fingerprint = str(data.get("schema_fingerprint") or "")
+    if payload_version == PAYLOAD_VERSION:
+        if schema_version != SCHEMA_VERSION:
+            raise BackupVersionNotSupportedError("backup version is not supported")
+        expected_tables = set(EXPORT_TABLES)
+        required_fingerprint = expected_schema_fingerprint()
+    elif payload_version == 4:
+        expected_tables = set(EXPORT_TABLES_V4)
+        legacy_fingerprints = {
+            "10": _schema_v10_fingerprint(),
+            **_LEGACY_BACKUP_SCHEMA_FINGERPRINTS,
+        }
+        if schema_version not in legacy_fingerprints:
+            raise BackupVersionNotSupportedError("backup version is not supported")
+        required_fingerprint = legacy_fingerprints[schema_version]
+    else:
         raise BackupVersionNotSupportedError("backup version is not supported")
-    required_fingerprint = (
-        expected_schema_fingerprint()
-        if schema_version == SCHEMA_VERSION
-        else _LEGACY_BACKUP_SCHEMA_FINGERPRINTS[schema_version]
-    )
-    if schema_fingerprint_value != required_fingerprint:
+
+    if fingerprint != required_fingerprint:
         raise BackupCorruptedError("backup file is invalid or corrupted")
     tables = data.get("tables")
-    if not isinstance(tables, dict) or set(tables) != set(EXPORT_TABLES):
+    if not isinstance(tables, dict) or set(tables) != expected_tables:
         raise BackupCorruptedError("backup file is invalid or corrupted")
     for rows in tables.values():
         if not isinstance(rows, list) or any(
             not isinstance(row, dict) for row in rows
         ):
             raise BackupCorruptedError("backup file is invalid or corrupted")
+    if payload_version == PAYLOAD_VERSION:
+        _validate_inference_job_rows(tables["activity_inference_job"])
     return data
 
 
-def _replace_import(data: dict[str, Any]) -> dict[str, int]:
-    """Replace business data and publish one durable invalidation protocol."""
+def _validate_inference_job_rows(rows: list[dict[str, Any]]) -> None:
+    expected_columns = {
+        "activity_id",
+        "reason",
+        "attempt_count",
+        "available_at",
+        "last_error_code",
+        "created_at",
+        "updated_at",
+    }
+    for row in rows:
+        if set(row) != expected_columns:
+            raise BackupCorruptedError("backup file is invalid or corrupted")
+        if str(row.get("reason") or "") not in inference_jobs.REASONS:
+            raise BackupCorruptedError("backup file is invalid or corrupted")
+        error_code = row.get("last_error_code")
+        if error_code is not None and str(error_code) not in inference_jobs.ERROR_CODES:
+            raise BackupCorruptedError("backup file is invalid or corrupted")
+        try:
+            if int(row.get("activity_id")) <= 0 or int(row.get("attempt_count")) < 0:
+                raise ValueError
+            for key in ("available_at", "created_at", "updated_at"):
+                datetime.strptime(str(row.get(key) or ""), TIME_FORMAT)
+        except (TypeError, ValueError) as exc:
+            raise BackupCorruptedError("backup file is invalid or corrupted") from exc
 
+
+def _replace_import(data: dict[str, Any]) -> dict[str, int]:
+    """Replace business data and restore or upgrade durable inference jobs."""
+
+    payload_version = int(data["version"])
+    source_tables = EXPORT_TABLES if payload_version == PAYLOAD_VERSION else EXPORT_TABLES_V4
     staging_path: str | None = None
     try:
         fd, staging_path = tempfile.mkstemp(
@@ -493,10 +540,12 @@ def _replace_import(data: dict[str, Any]) -> dict[str, int]:
             staging.executescript(read_internal_schema_sql())
             staging.executescript(read_schema_indexes_sql())
             staging.execute(f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION}")
-            imported = _load_import_tables(staging, data["tables"])
+            imported = _load_import_tables(staging, data["tables"], source_tables)
             seed_defaults(staging)
             _reset_derived_folder_index(staging)
             _validate_staging_database(staging)
+            if payload_version == 4:
+                inference_jobs.seed_legacy_import_jobs(staging)
             staging.commit()
         except Exception:
             staging.rollback()
@@ -548,8 +597,6 @@ def _replace_import(data: dict[str, Any]) -> dict[str, int]:
         try:
             publish_replacement_committed(database_key, replacement_values)
         except Exception:
-            # Durable replacement already committed. Forgetting the process
-            # clock makes the next cache read reload the exact durable values.
             logging.exception("database replacement generation publication failed")
             clear_generation_clock(database_key)
         return imported
@@ -568,9 +615,10 @@ def _replace_import(data: dict[str, Any]) -> dict[str, int]:
 def _load_import_tables(
     conn: sqlite3.Connection,
     tables: dict[str, Any],
+    table_names: tuple[str, ...],
 ) -> dict[str, int]:
     imported: dict[str, int] = {}
-    for table in EXPORT_TABLES:
+    for table in table_names:
         rows = tables.get(table, [])
         if table == "settings":
             rows = [
@@ -661,6 +709,22 @@ def _classify_format_error(exc: BackupFormatError) -> SecureBackupError:
     return BackupCorruptedError("backup file is invalid or corrupted")
 
 
+@lru_cache(maxsize=1)
+def _schema_v10_fingerprint() -> str:
+    """Derive the published v10 fingerprint without retaining copied schema files."""
+
+    reference = sqlite3.connect(":memory:")
+    reference.row_factory = sqlite3.Row
+    try:
+        reference.executescript(read_schema_sql())
+        reference.executescript(read_internal_schema_sql())
+        reference.executescript(read_schema_indexes_sql())
+        reference.execute("DROP TABLE activity_inference_job")
+        return schema_fingerprint(reference)
+    finally:
+        reference.close()
+
+
 def _atomic_write_bytes(path: Path, data: bytes) -> None:
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_bytes(data)
@@ -685,6 +749,7 @@ __all__ = [
     "BackupVersionNotSupportedError",
     "EXCLUDED_TABLES",
     "EXPORT_TABLES",
+    "EXPORT_TABLES_V4",
     "ImportResult",
     "MIGRATABLE_SETTINGS",
     "SECURE_IMPORT_COORDINATOR",

@@ -4,6 +4,7 @@ import logging
 import ntpath
 import re
 import threading
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 from ..constants import STATUS_NORMAL, UNCATEGORIZED_PROJECT
@@ -224,41 +225,26 @@ def process_new_activity(activity_id: int) -> dict:
     return assign_project_for_activity(activity_id)
 
 
-def retry_pending_inference(limit: int = 100) -> int:
-    """Retry bounded durable markers through the inference orchestrator."""
+def process_pending_inference_jobs(
+    limit: int = 100,
+    *,
+    activity_ids: Iterable[int] | None = None,
+) -> int:
+    """Consume durable jobs through the acyclic bounded worker boundary."""
 
-    with get_connection() as conn:
-        rows = conn.execute(
-            """
-            SELECT a.id
-            FROM activity_log a
-            JOIN activity_project_assignment apa ON apa.activity_id = a.id
-            WHERE a.end_time IS NOT NULL
-              AND a.status = 'normal'
-              AND a.is_hidden = 0
-              AND a.is_deleted = 0
-              AND apa.is_manual = 0
-              AND apa.source = 'uncategorized'
-              AND apa.confidence = ?
-            ORDER BY a.id
-            LIMIT ?
-            """,
-            (
-                assignment_command_service.INFERENCE_RETRY_CONFIDENCE,
-                max(0, int(limit)),
-            ),
-        ).fetchall()
-    updated = 0
-    for row in rows:
-        try:
-            result = assign_project_for_activity(int(row["id"]))
-            if int(result.get("confidence") or 0) != (
-                assignment_command_service.INFERENCE_RETRY_CONFIDENCE
-            ):
-                updated += 1
-        except Exception:
-            logging.exception("assignment inference retry failed for activity %s", row["id"])
-    return updated
+    from .activity_inference_job_service import process_pending_inference_jobs as consume
+
+    return consume(
+        assign_project_for_activity_in_transaction,
+        limit=max(0, int(limit)),
+        activity_ids=activity_ids,
+    )
+
+
+def retry_pending_inference(limit: int = 100) -> int:
+    """Consume a bounded set of durable inference jobs."""
+
+    return process_pending_inference_jobs(limit=max(0, int(limit)))
 
 
 _OPEN_ROW_UNCLASSIFIED_SOURCES = {"uncategorized", "suggested_project_name"}
@@ -386,7 +372,7 @@ def _infer_project_resource_first(
     if path_hint:
         for target in (
             path_hint,
-                ntpath.dirname(path_hint.rstrip("\\/")),
+            ntpath.dirname(path_hint.rstrip("\\/")),
         ):
             if not target:
                 continue
@@ -585,6 +571,7 @@ __all__ = [
     "invalidate_keyword_rule_cache",
     "keyword_pattern_matches",
     "process_new_activity",
+    "process_pending_inference_jobs",
     "retry_pending_inference",
     "sync_persisted_open_activity_project",
 ]
