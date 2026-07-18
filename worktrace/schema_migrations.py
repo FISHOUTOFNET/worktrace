@@ -338,6 +338,12 @@ def migrate_10_to_11(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_activity_inference_job_due
+        ON activity_inference_job(available_at, activity_id)
+        """
+    )
     now = str(conn.execute("SELECT datetime('now', 'localtime')").fetchone()[0])
     conn.execute(
         """
