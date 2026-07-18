@@ -151,16 +151,13 @@ def export_all_local_data(path: str) -> str:
 def clear_all_local_data(confirm: bool) -> None:
     if not confirm:
         raise ValueError("confirmation is required")
-    from .database_maintenance_service import clear_all_live_data
-    from .secure_backup_service import (
-        BackupImportInProgressError,
-        SECURE_IMPORT_COORDINATOR,
+    from .database_maintenance_service import (
+        MaintenanceInProgressError,
+        clear_all_live_data,
     )
 
     try:
-        with SECURE_IMPORT_COORDINATOR.acquire(reason="clear_all") as guard:
-            clear_all_live_data()
-            guard.mark_succeeded()
-    except BackupImportInProgressError as exc:
+        clear_all_live_data()
+    except MaintenanceInProgressError as exc:
         raise ValueError("operation_in_progress") from exc
     logging.info("all local data cleared at %s", now_str())
