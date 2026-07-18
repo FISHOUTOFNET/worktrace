@@ -219,828 +219,1063 @@ def _seed_test_data() -> None:
         # A project rule.
         conn.execute(
             """
-            INSERT INTO project_rule(project_id, rule_type, pattern, enabled, created_by, created_at, updated_at)
-            VALUES (?, 'keyword', 'alpha-keyword', 1, 'user', ?, ?)
+            INSERT INTO project_rule(
+                rule_type, pattern, normalized_pattern, project_id,
+                enabled, priority, created_by, created_at, updated_at
+            )
+            VALUES ('keyword', 'alpha', 'alpha', ?, 1, 10, 'user', ?, ?)
             """,
             (project_id, ts, ts),
         )
 
-        # A session boundary.
-        conn.execute(
-            """
-            INSERT INTO session_boundary(occurred_at, reason, created_at)
-            VALUES (?, 'manual', ?)
-            """,
-            ("2026-06-25 10:00:00", ts),
-        )
-
 
 def _row_counts() -> dict[str, int]:
-    tables = [
-        "project",
-        "activity_log",
-        "settings",
-        "session_boundary",
-        "folder_project_rule",
-        "folder_rule_index_state",
-        "folder_rule_file_index",
-        "project_rule",
-        "activity_project_assignment",
-        "activity_clipboard_event",
-        "report_session_operation",
-        "report_mutation_request",
-        "report_session_operation_member",
-        "activity_resource",
-    ]
-    counts: dict[str, int] = {}
     with get_connection() as conn:
-        for table in tables:
-            counts[table] = conn.execute(f"SELECT COUNT(*) AS c FROM {table}").fetchone()["c"]
-    return counts
+        return {
+            table: conn.execute(f"SELECT COUNT(*) AS c FROM {table}").fetchone()["c"]
+            for table in (
+                "project",
+                "activity_log",
+                "activity_project_assignment",
+                "activity_resource",
+                "activity_clipboard_event",
+                "report_session_operation",
+                "report_session_operation_member",
+                "report_mutation_request",
+                "folder_project_rule",
+                "folder_rule_index_state",
+                "folder_rule_file_index",
+                "project_rule",
+            )
+        }
 
 
-
-
-def test_export_payload_contains_required_tables(temp_db, tmp_path):
+def test_export_creates_encrypted_file_without_plaintext(temp_db, tmp_path: Path):
     _seed_test_data()
+    output = tmp_path / "backup.wtbackup"
+
+    result = secure_backup_service.export_encrypted_backup(
+        output, "correct horse battery staple"
+    )
+
+    assert result == output
+    assert output.exists()
+    raw = output.read_bytes()
+    assert raw.startswith(MAGIC)
+    for marker in (
+        TEST_PROJECT_NAME,
+        TEST_WINDOW_TITLE,
+        TEST_FILE_PATH,
+        TEST_NOTE,
+        TEST_COPIED_TEXT,
+        TEST_FOLDER_PATH,
+    ):
+        assert marker.encode("utf-8") not in raw
+
+
+def test_export_payload_contains_required_tables(temp_db):
+    _seed_test_data()
+
     payload = secure_backup_service._build_export_payload()
     data = json.loads(payload.decode("utf-8"))
 
-    assert data["format"] == "worktrace-local-data"
-    assert data["version"] == 4
-    tables = data["tables"]
-    for required in [
-        "project",
-        "activity_log",
-        "settings",
-        "session_boundary",
-        "folder_project_rule",
-        "folder_rule_index_state",
-        "project_rule",
-        "activity_project_assignment",
-        "activity_clipboard_event",
-        "report_session_operation",
-        "report_mutation_request",
-        "report_session_operation_member",
-        "activity_resource",
-    ]:
-        assert required in tables, f"missing table {required} in payload"
+    assert data["format"] == secure_backup_service.PAYLOAD_FORMAT
+    assert data["version"] == 5
+    assert data["schema_version"] == secure_backup_service.SCHEMA_VERSION
+    assert set(data["tables"]) == set(secure_backup_service.EXPORT_TABLES)
+    required = list(secure_backup_service.EXPORT_TABLES)
+    for table in required:
+        assert table in data["tables"]
+    for table in secure_backup_service.EXCLUDED_TABLES:
+        assert table not in data["tables"]
 
 
-def test_export_payload_excludes_folder_rule_file_index(temp_db):
+def test_backup_settings_are_allowlisted_and_exclude_runtime_state(temp_db):
     _seed_test_data()
-    payload = secure_backup_service._build_export_payload()
-    data = json.loads(payload.decode("utf-8"))
-
-    assert "folder_rule_file_index" not in data["tables"]
-
-
-def test_export_payload_excludes_keyring(temp_db):
-    _seed_test_data()
-    payload = secure_backup_service._build_export_payload()
-    data = json.loads(payload.decode("utf-8"))
-
-    assert "keyring" not in data["tables"]
-
-
-def test_export_payload_excludes_runtime_state_settings(temp_db):
-    from worktrace.services.settings_service import set_setting
-
-    runtime_state_fixture.set_setting("current_activity_snapshot", '{"app":"runtime-state-marker"}')
-    runtime_state_fixture.set_setting("pending_short_seconds", "12")
+    set_setting("ui_refresh_seconds", "17")
+    set_setting("user_paused", "false")
     set_setting("collector_status", "running")
+    set_setting("last_collector_heartbeat", "2026-06-25 10:01:00")
+    set_setting("collector_last_failure_kind", "RuntimeError")
+    set_setting("current_activity_snapshot", '{"activity_id": 999}')
 
     payload = secure_backup_service._build_export_payload()
     data = json.loads(payload.decode("utf-8"))
+    settings = {
+        str(row["key"]): str(row["value"])
+        for row in data["tables"]["settings"]
+    }
 
-    settings_rows = {row["key"] for row in data["tables"]["settings"]}
-    assert "current_activity_snapshot" not in settings_rows
-    assert "pending_short_seconds" not in settings_rows
-    assert "collector_status" not in settings_rows
-    assert "last_collector_heartbeat" not in settings_rows
-    assert "user_paused" not in settings_rows
-    assert "secure_import_in_progress" not in settings_rows
-    assert settings_rows <= secure_backup_service.MIGRATABLE_SETTINGS
-
-
-def test_secure_import_guard_clears_runtime_pending_on_boundary(temp_db):
-    _reset_guard_and_pause_state()
-    runtime_state_fixture.set_setting("current_activity_snapshot", '{"status":"normal"}')
-    runtime_state_fixture.set_setting("pending_short_seconds", "12")
-
-    with secure_backup_service.SECURE_IMPORT_COORDINATOR.acquire():
-        assert runtime_state_fixture.get_setting("current_activity_snapshot", "") == ""
-        assert runtime_state_fixture.get_setting("pending_short_seconds", "") == "0"
+    assert settings["ui_refresh_seconds"] == "17"
+    assert set(settings) <= secure_backup_service.MIGRATABLE_SETTINGS
+    assert "user_paused" not in settings
+    assert "collector_status" not in settings
+    assert "last_collector_heartbeat" not in settings
+    assert "collector_last_failure_kind" not in settings
+    assert "current_activity_snapshot" not in settings
 
 
-def test_export_payload_is_valid_utf8_json(temp_db):
+def test_import_round_trip_restores_rows_and_excludes_cache(temp_db, tmp_path: Path):
     _seed_test_data()
-    payload = secure_backup_service._build_export_payload()
+    before = _row_counts()
+    backup = tmp_path / "roundtrip.wtbackup"
+    secure_backup_service.export_encrypted_backup(backup, "passphrase-123")
 
-    # Should not raise.
-    text = payload.decode("utf-8")
-    json.loads(text)
-
-
-
-
-def test_encrypted_export_creates_wtbackup_file(temp_db, tmp_path):
-    _seed_test_data()
-    out = tmp_path / "test-export.wtbackup"
-
-    result = secure_backup_service.export_encrypted_backup(out, "correct-passphrase")
-
-    assert result == out
-    assert out.exists()
-    blob = out.read_bytes()
-    assert blob.startswith(MAGIC + b"\n")
-
-
-def test_wtbackup_does_not_contain_plaintext_project_name(temp_db, tmp_path):
-    _seed_test_data()
-    out = tmp_path / "leak-test.wtbackup"
-    secure_backup_service.export_encrypted_backup(out, "passphrase")
-
-    blob = out.read_bytes()
-    assert TEST_PROJECT_NAME.encode("utf-8") not in blob
-
-
-def test_wtbackup_does_not_contain_plaintext_window_title(temp_db, tmp_path):
-    _seed_test_data()
-    out = tmp_path / "leak-test.wtbackup"
-    secure_backup_service.export_encrypted_backup(out, "passphrase")
-
-    blob = out.read_bytes()
-    assert TEST_WINDOW_TITLE.encode("utf-8") not in blob
-
-
-def test_wtbackup_does_not_contain_plaintext_file_path(temp_db, tmp_path):
-    _seed_test_data()
-    out = tmp_path / "leak-test.wtbackup"
-    secure_backup_service.export_encrypted_backup(out, "passphrase")
-
-    blob = out.read_bytes()
-    assert TEST_FILE_PATH.encode("utf-8") not in blob
-
-
-def test_wtbackup_does_not_contain_plaintext_note(temp_db, tmp_path):
-    _seed_test_data()
-    out = tmp_path / "leak-test.wtbackup"
-    secure_backup_service.export_encrypted_backup(out, "passphrase")
-
-    blob = out.read_bytes()
-    assert TEST_NOTE.encode("utf-8") not in blob
-
-
-def test_wtbackup_does_not_contain_plaintext_copied_text(temp_db, tmp_path):
-    _seed_test_data()
-    out = tmp_path / "leak-test.wtbackup"
-    secure_backup_service.export_encrypted_backup(out, "passphrase")
-
-    blob = out.read_bytes()
-    assert TEST_COPIED_TEXT.encode("utf-8") not in blob
-
-
-def test_wtbackup_does_not_contain_folder_rule_file_index_data(temp_db, tmp_path):
-    _seed_test_data()
-    out = tmp_path / "leak-test.wtbackup"
-    secure_backup_service.export_encrypted_backup(out, "passphrase")
-
-    # Decrypt and verify the payload doesn't include folder_rule_file_index.
-    blob = out.read_bytes()
-    payload = decrypt_encrypted_backup(blob, "passphrase")
-    data = json.loads(payload.decode("utf-8"))
-    assert "folder_rule_file_index" not in data["tables"]
-
-
-
-
-def test_correct_passphrase_imports(temp_db, tmp_path):
-    _seed_test_data()
-    out = tmp_path / "round-trip.wtbackup"
-    secure_backup_service.export_encrypted_backup(out, "correct-passphrase")
-
-    # Reset the DB so import is into a fresh profile, then verify restore.
-    from worktrace.db import reset_database
-
-    reset_database()
+    # Disturb the live database.
     with get_connection() as conn:
-        row = conn.execute(
-            "SELECT id FROM project WHERE name = ?", (TEST_PROJECT_NAME,)
-        ).fetchone()
-    assert row is None
+        conn.execute("DELETE FROM activity_clipboard_event")
+        conn.execute("DELETE FROM activity_project_assignment")
+        conn.execute("DELETE FROM activity_resource")
+        conn.execute("DELETE FROM report_session_operation_member")
+        conn.execute("DELETE FROM report_mutation_request")
+        conn.execute("DELETE FROM report_session_operation")
+        conn.execute("DELETE FROM folder_rule_file_index")
+        conn.execute("DELETE FROM activity_log")
+        conn.execute("DELETE FROM project_rule")
+        conn.execute("DELETE FROM folder_rule_index_state")
+        conn.execute("DELETE FROM folder_project_rule")
+        conn.execute("DELETE FROM project WHERE name = ?", (TEST_PROJECT_NAME,))
 
-    result = secure_backup_service.import_encrypted_backup(out, "correct-passphrase", mode="replace")
+    result = secure_backup_service.import_encrypted_backup(
+        backup, "passphrase-123"
+    )
 
     assert result.mode == "replace"
-    assert result.folder_index_reset is True
+    after = _row_counts()
+    assert after["project"] == before["project"]
+    assert after["activity_log"] == before["activity_log"]
+    assert after["activity_project_assignment"] == before["activity_project_assignment"]
+    assert after["activity_resource"] == before["activity_resource"]
+    assert after["activity_clipboard_event"] == before["activity_clipboard_event"]
+    assert after["report_session_operation"] == before["report_session_operation"]
+    assert after["report_session_operation_member"] == before["report_session_operation_member"]
+    assert after["report_mutation_request"] == before["report_mutation_request"]
+    assert after["folder_project_rule"] == before["folder_project_rule"]
+    assert after["folder_rule_index_state"] == before["folder_rule_index_state"]
+    assert after["project_rule"] == before["project_rule"]
+    # Derived file index is deliberately reset, not restored.
+    assert after["folder_rule_file_index"] == 0
     with get_connection() as conn:
-        row = conn.execute(
-            "SELECT id FROM project WHERE name = ?", (TEST_PROJECT_NAME,)
+        state = conn.execute(
+            "SELECT status, refresh_requested FROM folder_rule_index_state"
         ).fetchone()
-    assert row is not None
+        assert state["status"] == "pending"
+        assert state["refresh_requested"] == 1
 
 
-def test_wrong_passphrase_fails(temp_db, tmp_path):
+def test_import_wrong_passphrase_raises(temp_db, tmp_path: Path):
     _seed_test_data()
-    out = tmp_path / "wrong-pass.wtbackup"
-    secure_backup_service.export_encrypted_backup(out, "correct-passphrase")
+    backup = tmp_path / "wrong-pass.wtbackup"
+    secure_backup_service.export_encrypted_backup(backup, "right-pass")
 
     with pytest.raises(BackupDecryptionError):
-        secure_backup_service.import_encrypted_backup(out, "wrong-passphrase")
+        secure_backup_service.import_encrypted_backup(backup, "wrong-pass")
 
 
-def test_corrupted_backup_fails(temp_db, tmp_path):
+def test_import_tampered_ciphertext_raises(temp_db, tmp_path: Path):
     _seed_test_data()
-    out = tmp_path / "corrupt.wtbackup"
-    secure_backup_service.export_encrypted_backup(out, "passphrase")
+    backup = tmp_path / "tampered.wtbackup"
+    secure_backup_service.export_encrypted_backup(backup, "passphrase")
+    raw = bytearray(backup.read_bytes())
+    raw[-1] ^= 0x01
+    backup.write_bytes(bytes(raw))
 
-    blob = bytearray(out.read_bytes())
-    # Flip a byte in the encrypted payload region (after the manifest).
-    blob[-5] = blob[-5] ^ 0xFF
-    out.write_bytes(bytes(blob))
-
-    with pytest.raises((BackupCorruptedError, BackupDecryptionError)):
-        secure_backup_service.import_encrypted_backup(out, "passphrase")
+    with pytest.raises(BackupDecryptionError):
+        secure_backup_service.import_encrypted_backup(backup, "passphrase")
 
 
-def test_unsupported_version_fails(temp_db, tmp_path):
+def test_import_random_file_raises(temp_db, tmp_path: Path):
+    backup = tmp_path / "random.wtbackup"
+    backup.write_bytes(b"not a backup file")
+
+    with pytest.raises(BackupCorruptedError):
+        secure_backup_service.import_encrypted_backup(backup, "passphrase")
+
+
+def test_import_unsupported_version_raises(temp_db, tmp_path: Path):
     _seed_test_data()
-    out = tmp_path / "bad-version.wtbackup"
-    secure_backup_service.export_encrypted_backup(out, "passphrase")
-
-    # Rewrite the manifest with an unsupported version.
-    blob = out.read_bytes()
-    first_nl = blob.find(b"\n")
-    second_nl = blob.find(b"\n", first_nl + 1)
-    manifest_len = int(blob[first_nl + 1 : second_nl].decode("ascii"))
-    manifest_start = second_nl + 1
-    manifest_end = manifest_start + manifest_len
-    manifest_json = blob[manifest_start:manifest_end]
-    encrypted_payload = blob[manifest_end:]
-
-    manifest_data = json.loads(manifest_json.decode("utf-8"))
-    manifest_data["version"] = 999
-    new_manifest_json = json.dumps(
-        manifest_data, sort_keys=True, separators=(",", ":")
-    ).encode("utf-8")
-    new_blob = (
-        MAGIC
-        + b"\n"
-        + str(len(new_manifest_json)).encode("ascii")
-        + b"\n"
-        + new_manifest_json
-        + encrypted_payload
+    payload = json.loads(
+        secure_backup_service._build_export_payload().decode("utf-8")
     )
-    out.write_bytes(new_blob)
+    payload["version"] = 999
+    blob = create_encrypted_backup(
+        json.dumps(payload).encode("utf-8"), "passphrase", "0.1.0"
+    )
+    backup = tmp_path / "unsupported.wtbackup"
+    backup.write_bytes(blob)
 
     with pytest.raises(BackupVersionNotSupportedError):
-        secure_backup_service.import_encrypted_backup(out, "passphrase")
+        secure_backup_service.import_encrypted_backup(backup, "passphrase")
 
 
-def test_published_v8_backup_remains_importable(temp_db, tmp_path):
+def test_import_unsupported_schema_version_raises(temp_db, tmp_path: Path):
     _seed_test_data()
-    payload = json.loads(secure_backup_service._build_export_payload().decode("utf-8"))
+    payload = json.loads(
+        secure_backup_service._build_export_payload().decode("utf-8")
+    )
+    payload["schema_version"] = "999"
+    blob = create_encrypted_backup(
+        json.dumps(payload).encode("utf-8"), "passphrase", "0.1.0"
+    )
+    backup = tmp_path / "unsupported-schema.wtbackup"
+    backup.write_bytes(blob)
+
+    with pytest.raises(BackupVersionNotSupportedError):
+        secure_backup_service.import_encrypted_backup(backup, "passphrase")
+
+
+def test_import_schema_fingerprint_mismatch_raises(temp_db, tmp_path: Path):
+    _seed_test_data()
+    payload = json.loads(
+        secure_backup_service._build_export_payload().decode("utf-8")
+    )
+    payload["schema_fingerprint"] = "0" * 64
+    blob = create_encrypted_backup(
+        json.dumps(payload).encode("utf-8"), "passphrase", "0.1.0"
+    )
+    backup = tmp_path / "wrong-fingerprint.wtbackup"
+    backup.write_bytes(blob)
+
+    with pytest.raises(BackupCorruptedError):
+        secure_backup_service.import_encrypted_backup(backup, "passphrase")
+
+
+def test_published_v8_backup_remains_importable(temp_db, tmp_path: Path):
+    _seed_test_data()
+    payload = json.loads(
+        secure_backup_service._build_export_payload().decode("utf-8")
+    )
+    payload["version"] = 4
     payload["schema_version"] = "8"
     payload["schema_fingerprint"] = (
-        "3fd5ae980749886a04f7f9170669a606fa80d6b554924d0ad29b457b0c51deac"
+        secure_backup_service._LEGACY_BACKUP_SCHEMA_FINGERPRINTS["8"]
     )
-    out = tmp_path / "published-v8.wtbackup"
-    out.write_bytes(
+    payload["tables"].pop("activity_inference_job", None)
+    blob = create_encrypted_backup(
+        json.dumps(payload).encode("utf-8"), "passphrase", "0.1.0"
+    )
+    backup = tmp_path / "published-v8.wtbackup"
+    backup.write_bytes(blob)
+
+    result = secure_backup_service.import_encrypted_backup(backup, "passphrase")
+
+    assert result.mode == "replace"
+    with get_connection() as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) AS c FROM activity_log"
+        ).fetchone()["c"] == 1
+
+
+def test_import_missing_table_raises(temp_db, tmp_path: Path):
+    _seed_test_data()
+    payload = json.loads(
+        secure_backup_service._build_export_payload().decode("utf-8")
+    )
+    payload["tables"].pop("project")
+    blob = create_encrypted_backup(
+        json.dumps(payload).encode("utf-8"), "passphrase", "0.1.0"
+    )
+    backup = tmp_path / "missing-table.wtbackup"
+    backup.write_bytes(blob)
+
+    with pytest.raises(BackupCorruptedError):
+        secure_backup_service.import_encrypted_backup(backup, "passphrase")
+
+
+def test_import_extra_table_raises(temp_db, tmp_path: Path):
+    _seed_test_data()
+    payload = json.loads(
+        secure_backup_service._build_export_payload().decode("utf-8")
+    )
+    payload["tables"]["unexpected_table"] = []
+    blob = create_encrypted_backup(
+        json.dumps(payload).encode("utf-8"), "passphrase", "0.1.0"
+    )
+    backup = tmp_path / "extra-table.wtbackup"
+    backup.write_bytes(blob)
+
+    with pytest.raises(BackupCorruptedError):
+        secure_backup_service.import_encrypted_backup(backup, "passphrase")
+
+
+def test_import_row_column_mismatch_raises(temp_db, tmp_path: Path):
+    _seed_test_data()
+    payload = json.loads(
+        secure_backup_service._build_export_payload().decode("utf-8")
+    )
+    payload["tables"]["project"][0]["unexpected_column"] = "bad"
+    blob = create_encrypted_backup(
+        json.dumps(payload).encode("utf-8"), "passphrase", "0.1.0"
+    )
+    backup = tmp_path / "column-mismatch.wtbackup"
+    backup.write_bytes(blob)
+
+    with pytest.raises(BackupCorruptedError):
+        secure_backup_service.import_encrypted_backup(backup, "passphrase")
+
+
+def test_import_foreign_key_violation_raises(temp_db, tmp_path: Path):
+    _seed_test_data()
+    payload = json.loads(
+        secure_backup_service._build_export_payload().decode("utf-8")
+    )
+    payload["tables"]["activity_project_assignment"][0]["project_id"] = 999999
+    blob = create_encrypted_backup(
+        json.dumps(payload).encode("utf-8"), "passphrase", "0.1.0"
+    )
+    backup = tmp_path / "fk-violation.wtbackup"
+    backup.write_bytes(blob)
+
+    with pytest.raises(BackupCorruptedError):
+        secure_backup_service.import_encrypted_backup(backup, "passphrase")
+
+
+def test_import_open_activity_is_closed_deterministically(temp_db, tmp_path: Path):
+    _seed_test_data()
+    payload = json.loads(
+        secure_backup_service._build_export_payload().decode("utf-8")
+    )
+    activity = payload["tables"]["activity_log"][0]
+    activity["end_time"] = None
+    activity["duration_seconds"] = 120
+    blob = create_encrypted_backup(
+        json.dumps(payload).encode("utf-8"), "passphrase", "0.1.0"
+    )
+    backup = tmp_path / "open-activity.wtbackup"
+    backup.write_bytes(blob)
+
+    result = secure_backup_service.import_encrypted_backup(backup, "passphrase")
+
+    assert result.mode == "replace"
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT start_time, end_time, duration_seconds FROM activity_log"
+        ).fetchone()
+    assert row["start_time"] == "2026-06-25 10:00:00"
+    assert row["end_time"] == "2026-06-25 10:02:00"
+    assert row["duration_seconds"] == 120
+
+
+def test_import_negative_activity_duration_raises(temp_db, tmp_path: Path):
+    _seed_test_data()
+    payload = json.loads(
+        secure_backup_service._build_export_payload().decode("utf-8")
+    )
+    payload["tables"]["activity_log"][0]["duration_seconds"] = -1
+    blob = create_encrypted_backup(
+        json.dumps(payload).encode("utf-8"), "passphrase", "0.1.0"
+    )
+    backup = tmp_path / "negative-duration.wtbackup"
+    backup.write_bytes(blob)
+
+    with pytest.raises(BackupCorruptedError):
+        secure_backup_service.import_encrypted_backup(backup, "passphrase")
+
+
+def test_import_closed_activity_missing_duration_raises(temp_db, tmp_path: Path):
+    _seed_test_data()
+    payload = json.loads(
+        secure_backup_service._build_export_payload().decode("utf-8")
+    )
+    payload["tables"]["activity_log"][0]["duration_seconds"] = None
+    blob = create_encrypted_backup(
+        json.dumps(payload).encode("utf-8"), "passphrase", "0.1.0"
+    )
+    backup = tmp_path / "missing-duration.wtbackup"
+    backup.write_bytes(blob)
+
+    with pytest.raises(BackupCorruptedError):
+        secure_backup_service.import_encrypted_backup(backup, "passphrase")
+
+
+def test_import_activity_end_before_start_raises(temp_db, tmp_path: Path):
+    _seed_test_data()
+    payload = json.loads(
+        secure_backup_service._build_export_payload().decode("utf-8")
+    )
+    activity = payload["tables"]["activity_log"][0]
+    activity["end_time"] = "2026-06-25 09:59:59"
+    blob = create_encrypted_backup(
+        json.dumps(payload).encode("utf-8"), "passphrase", "0.1.0"
+    )
+    backup = tmp_path / "backward-activity.wtbackup"
+    backup.write_bytes(blob)
+
+    with pytest.raises(BackupCorruptedError):
+        secure_backup_service.import_encrypted_backup(backup, "passphrase")
+
+
+def test_import_activity_duration_shorter_than_interval_raises(temp_db, tmp_path: Path):
+    _seed_test_data()
+    payload = json.loads(
+        secure_backup_service._build_export_payload().decode("utf-8")
+    )
+    activity = payload["tables"]["activity_log"][0]
+    activity["duration_seconds"] = 30
+    blob = create_encrypted_backup(
+        json.dumps(payload).encode("utf-8"), "passphrase", "0.1.0"
+    )
+    backup = tmp_path / "short-duration.wtbackup"
+    backup.write_bytes(blob)
+
+    with pytest.raises(BackupCorruptedError):
+        secure_backup_service.import_encrypted_backup(backup, "passphrase")
+
+
+def test_import_activity_unknown_status_raises(temp_db, tmp_path: Path):
+    _seed_test_data()
+    payload = json.loads(
+        secure_backup_service._build_export_payload().decode("utf-8")
+    )
+    payload["tables"]["activity_log"][0]["status"] = "mystery"
+    blob = create_encrypted_backup(
+        json.dumps(payload).encode("utf-8"), "passphrase", "0.1.0"
+    )
+    backup = tmp_path / "unknown-status.wtbackup"
+    backup.write_bytes(blob)
+
+    with pytest.raises(BackupCorruptedError):
+        secure_backup_service.import_encrypted_backup(backup, "passphrase")
+
+
+def test_import_invalid_operation_payload_raises(temp_db, tmp_path: Path):
+    _seed_test_data()
+    payload = json.loads(
+        secure_backup_service._build_export_payload().decode("utf-8")
+    )
+    operation = payload["tables"]["report_session_operation"][0]
+    operation["payload_json"] = json.dumps(
+        {"payload_version": 4, "unexpected": True}
+    )
+    blob = create_encrypted_backup(
+        json.dumps(payload).encode("utf-8"), "passphrase", "0.1.0"
+    )
+    backup = tmp_path / "bad-operation-payload.wtbackup"
+    backup.write_bytes(blob)
+
+    with pytest.raises(BackupCorruptedError):
+        secure_backup_service.import_encrypted_backup(backup, "passphrase")
+
+
+def test_import_operation_missing_source_member_raises(temp_db, tmp_path: Path):
+    _seed_test_data()
+    payload = json.loads(
+        secure_backup_service._build_export_payload().decode("utf-8")
+    )
+    payload["tables"]["report_session_operation_member"] = []
+    blob = create_encrypted_backup(
+        json.dumps(payload).encode("utf-8"), "passphrase", "0.1.0"
+    )
+    backup = tmp_path / "missing-operation-member.wtbackup"
+    backup.write_bytes(blob)
+
+    with pytest.raises(BackupCorruptedError):
+        secure_backup_service.import_encrypted_backup(backup, "passphrase")
+
+
+def test_import_mutation_request_invalid_json_raises(temp_db, tmp_path: Path):
+    _seed_test_data()
+    payload = json.loads(
+        secure_backup_service._build_export_payload().decode("utf-8")
+    )
+    payload["tables"]["report_mutation_request"][0]["result_json"] = "not-json"
+    blob = create_encrypted_backup(
+        json.dumps(payload).encode("utf-8"), "passphrase", "0.1.0"
+    )
+    backup = tmp_path / "bad-request-json.wtbackup"
+    backup.write_bytes(blob)
+
+    with pytest.raises(BackupCorruptedError):
+        secure_backup_service.import_encrypted_backup(backup, "passphrase")
+
+
+def test_import_duplicate_operation_sequence_raises(temp_db, tmp_path: Path):
+    _seed_test_data()
+    payload = json.loads(
+        secure_backup_service._build_export_payload().decode("utf-8")
+    )
+    operation = dict(payload["tables"]["report_session_operation"][0])
+    operation["id"] = int(operation["id"]) + 100
+    payload["tables"]["report_session_operation"].append(operation)
+    member = dict(payload["tables"]["report_session_operation_member"][0])
+    member["operation_id"] = operation["id"]
+    payload["tables"]["report_session_operation_member"].append(member)
+    blob = create_encrypted_backup(
+        json.dumps(payload).encode("utf-8"), "passphrase", "0.1.0"
+    )
+    backup = tmp_path / "duplicate-operation-sequence.wtbackup"
+    backup.write_bytes(blob)
+
+    with pytest.raises(BackupCorruptedError):
+        secure_backup_service.import_encrypted_backup(backup, "passphrase")
+
+
+def test_import_mutation_request_missing_operation_raises(temp_db, tmp_path: Path):
+    _seed_test_data()
+    payload = json.loads(
+        secure_backup_service._build_export_payload().decode("utf-8")
+    )
+    payload["tables"]["report_mutation_request"][0]["operation_id"] = 999999
+    blob = create_encrypted_backup(
+        json.dumps(payload).encode("utf-8"), "passphrase", "0.1.0"
+    )
+    backup = tmp_path / "missing-request-operation.wtbackup"
+    backup.write_bytes(blob)
+
+    with pytest.raises(BackupCorruptedError):
+        secure_backup_service.import_encrypted_backup(backup, "passphrase")
+
+
+def test_import_replay_revision_conflict_raises(temp_db, tmp_path: Path):
+    _seed_test_data()
+    payload = json.loads(
+        secure_backup_service._build_export_payload().decode("utf-8")
+    )
+    payload["tables"]["report_session_operation"][0][
+        "source_expected_revision"
+    ] = "0" * 40
+    blob = create_encrypted_backup(
+        json.dumps(payload).encode("utf-8"), "passphrase", "0.1.0"
+    )
+    backup = tmp_path / "replay-conflict.wtbackup"
+    backup.write_bytes(blob)
+
+    with pytest.raises(BackupCorruptedError):
+        secure_backup_service.import_encrypted_backup(backup, "passphrase")
+
+
+def test_import_preserves_activity_resource(temp_db, tmp_path: Path):
+    _seed_test_data()
+    backup = tmp_path / "resource-roundtrip.wtbackup"
+    secure_backup_service.export_encrypted_backup(backup, "passphrase")
+
+    secure_backup_service.import_encrypted_backup(backup, "passphrase")
+
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT resource_kind, identity_key, path_hint FROM activity_resource"
+        ).fetchone()
+    assert row["resource_kind"] == "office_document"
+    assert row["identity_key"] == "identity-key-1"
+    assert row["path_hint"] == TEST_FILE_PATH
+
+
+def test_import_preserves_clipboard_event(temp_db, tmp_path: Path):
+    _seed_test_data()
+    backup = tmp_path / "clipboard-roundtrip.wtbackup"
+    secure_backup_service.export_encrypted_backup(backup, "passphrase")
+
+    secure_backup_service.import_encrypted_backup(backup, "passphrase")
+
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT copied_text, file_path_hint FROM activity_clipboard_event"
+        ).fetchone()
+    assert row["copied_text"] == TEST_COPIED_TEXT
+    assert row["file_path_hint"] == TEST_FILE_PATH
+
+
+def test_import_preserves_report_mutation_request(temp_db, tmp_path: Path):
+    _seed_test_data()
+    backup = tmp_path / "request-roundtrip.wtbackup"
+    secure_backup_service.export_encrypted_backup(backup, "passphrase")
+
+    secure_backup_service.import_encrypted_backup(backup, "passphrase")
+
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT request_id, outcome_type, operation_id FROM report_mutation_request"
+        ).fetchone()
+    assert row["request_id"] == "backup-seed-edit"
+    assert row["outcome_type"] == "operation_committed"
+    assert row["operation_id"] is not None
+
+
+def test_import_resets_folder_index(temp_db, tmp_path: Path):
+    _seed_test_data()
+    backup = tmp_path / "index-reset.wtbackup"
+    secure_backup_service.export_encrypted_backup(backup, "passphrase")
+
+    secure_backup_service.import_encrypted_backup(backup, "passphrase")
+
+    with get_connection() as conn:
+        state = conn.execute(
+            "SELECT status, valid_from, last_indexed_at, file_count, refresh_requested "
+            "FROM folder_rule_index_state"
+        ).fetchone()
+        cache_count = conn.execute(
+            "SELECT COUNT(*) AS c FROM folder_rule_file_index"
+        ).fetchone()["c"]
+    assert state["status"] == "pending"
+    assert state["valid_from"] is None
+    assert state["last_indexed_at"] is None
+    assert state["file_count"] == 0
+    assert state["refresh_requested"] == 1
+    assert cache_count == 0
+
+
+def test_import_requires_replace_mode(temp_db, tmp_path: Path):
+    backup = tmp_path / "mode.wtbackup"
+    backup.write_bytes(b"x")
+
+    with pytest.raises(SecureBackupError, match="unsupported import mode"):
+        secure_backup_service.import_encrypted_backup(
+            backup, "passphrase", mode="merge"
+        )
+
+
+def test_export_requires_passphrase(temp_db, tmp_path: Path):
+    with pytest.raises(SecureBackupError, match="passphrase is required"):
+        secure_backup_service.export_encrypted_backup(
+            tmp_path / "empty.wtbackup", ""
+        )
+
+
+def test_import_requires_passphrase(temp_db, tmp_path: Path):
+    with pytest.raises(SecureBackupError, match="passphrase is required"):
+        secure_backup_service.import_encrypted_backup(
+            tmp_path / "missing.wtbackup", ""
+        )
+
+
+def test_import_guard_rejects_concurrent_operation(temp_db):
+    lock = secure_backup_service.SECURE_IMPORT_COORDINATOR._maintenance_lock
+    assert lock.acquire(blocking=False)
+    try:
+        with pytest.raises(BackupImportInProgressError):
+            with secure_backup_service.SECURE_IMPORT_COORDINATOR.acquire():
+                pass
+    finally:
+        lock.release()
+
+
+def test_import_guard_sets_and_clears_import_flag(temp_db):
+    assert secure_backup_service.is_secure_import_in_progress() is False
+    with secure_backup_service.SECURE_IMPORT_COORDINATOR.acquire() as guard:
+        assert secure_backup_service.is_secure_import_in_progress() is True
+        guard.mark_succeeded()
+    assert secure_backup_service.is_secure_import_in_progress() is False
+
+
+def test_import_guard_preserves_user_pause_state_on_failure(temp_db):
+    set_setting("user_paused", "false")
+    set_setting("collector_status", "running")
+
+    with pytest.raises(RuntimeError, match="boom"):
+        with secure_backup_service.SECURE_IMPORT_COORDINATOR.acquire():
+            raise RuntimeError("boom")
+
+    assert get_bool_setting("user_paused", True) is False
+    assert get_setting("collector_status") == "running"
+
+
+def test_import_guard_leaves_paused_after_success(temp_db):
+    set_setting("user_paused", "false")
+    set_setting("collector_status", "running")
+
+    with secure_backup_service.SECURE_IMPORT_COORDINATOR.acquire() as guard:
+        guard.mark_succeeded()
+
+    assert get_bool_setting("user_paused", False) is True
+    assert get_setting("collector_status") == "paused"
+
+
+def test_import_guard_unknown_pause_state_fails_closed(temp_db):
+    set_setting("user_paused", "false")
+    set_setting("collector_status", "running")
+
+    def unknown_pause(**_kwargs):
+        return {
+            "ok": False,
+            "pause_pending": False,
+            "command_state_unknown": True,
+        }
+
+    secure_backup_service.register_collector_pause_handler(unknown_pause)
+    try:
+        with pytest.raises(
+            SecureBackupError,
+            match="collector_pause_not_acknowledged",
+        ):
+            with secure_backup_service.SECURE_IMPORT_COORDINATOR.acquire():
+                pass
+    finally:
+        secure_backup_service.clear_collector_pause_handler(unknown_pause)
+
+    assert get_bool_setting("user_paused", False) is True
+    assert get_setting("collector_status") == "paused"
+
+
+def test_import_guard_unknown_reset_state_fails_closed(temp_db):
+    set_setting("user_paused", "false")
+    set_setting("collector_status", "running")
+
+    def acknowledged_pause(**_kwargs):
+        return {"ok": True, "pause_pending": False}
+
+    def unknown_reset(**_kwargs):
+        return {
+            "ok": False,
+            "reset_pending": False,
+            "command_state_unknown": True,
+        }
+
+    secure_backup_service.register_collector_pause_handler(acknowledged_pause)
+    secure_backup_service.register_collector_reset_handler(unknown_reset)
+    try:
+        with pytest.raises(
+            SecureBackupError,
+            match="collector_reset_not_acknowledged",
+        ):
+            with secure_backup_service.SECURE_IMPORT_COORDINATOR.acquire():
+                pass
+    finally:
+        secure_backup_service.clear_collector_pause_handler(acknowledged_pause)
+        secure_backup_service.clear_collector_reset_handler(unknown_reset)
+
+    assert get_bool_setting("user_paused", False) is True
+    assert get_setting("collector_status") == "paused"
+
+
+def test_import_guard_calls_pause_and_reset_handlers(temp_db):
+    calls: list[str] = []
+
+    def pause_handler(**_kwargs):
+        calls.append("pause")
+        return {"ok": True, "pause_pending": False}
+
+    def reset_handler(**_kwargs):
+        calls.append("reset")
+        return {"ok": True, "reset_pending": False}
+
+    secure_backup_service.register_collector_pause_handler(pause_handler)
+    secure_backup_service.register_collector_reset_handler(reset_handler)
+    try:
+        with secure_backup_service.SECURE_IMPORT_COORDINATOR.acquire() as guard:
+            guard.mark_succeeded()
+    finally:
+        secure_backup_service.clear_collector_pause_handler(pause_handler)
+        secure_backup_service.clear_collector_reset_handler(reset_handler)
+
+    assert calls == ["pause", "reset"]
+
+
+def test_import_guard_pause_failure_restores_state(temp_db):
+    set_setting("user_paused", "false")
+    set_setting("collector_status", "running")
+
+    def pause_handler(**_kwargs):
+        return {"ok": False, "pause_pending": False}
+
+    secure_backup_service.register_collector_pause_handler(pause_handler)
+    try:
+        with pytest.raises(
+            SecureBackupError,
+            match="collector_pause_not_acknowledged",
+        ):
+            with secure_backup_service.SECURE_IMPORT_COORDINATOR.acquire():
+                pass
+    finally:
+        secure_backup_service.clear_collector_pause_handler(pause_handler)
+
+    assert get_bool_setting("user_paused", True) is False
+    assert get_setting("collector_status") == "running"
+
+
+def test_import_guard_reset_failure_restores_state(temp_db):
+    set_setting("user_paused", "false")
+    set_setting("collector_status", "running")
+
+    def pause_handler(**_kwargs):
+        return {"ok": True, "pause_pending": False}
+
+    def reset_handler(**_kwargs):
+        return {"ok": False, "reset_pending": False}
+
+    secure_backup_service.register_collector_pause_handler(pause_handler)
+    secure_backup_service.register_collector_reset_handler(reset_handler)
+    try:
+        with pytest.raises(
+            SecureBackupError,
+            match="collector_reset_not_acknowledged",
+        ):
+            with secure_backup_service.SECURE_IMPORT_COORDINATOR.acquire():
+                pass
+    finally:
+        secure_backup_service.clear_collector_pause_handler(pause_handler)
+        secure_backup_service.clear_collector_reset_handler(reset_handler)
+
+    assert get_bool_setting("user_paused", True) is False
+    assert get_setting("collector_status") == "running"
+
+
+def test_import_guard_phase_transitions(temp_db):
+    coordinator = secure_backup_service.SECURE_IMPORT_COORDINATOR
+    assert coordinator.phase() is secure_backup_service.SecureImportPhase.IDLE
+    with coordinator.acquire() as guard:
+        assert coordinator.phase() is secure_backup_service.SecureImportPhase.EXCLUSIVE
+        guard.mark_succeeded()
+    assert coordinator.phase() is secure_backup_service.SecureImportPhase.IDLE
+
+
+def test_import_guard_clears_runtime_activity_state(temp_db):
+    runtime_state_fixture.publish_activity(321)
+    with secure_backup_service.SECURE_IMPORT_COORDINATOR.acquire() as guard:
+        assert runtime_state_fixture.read_activity() is None
+        runtime_state_fixture.publish_activity(654)
+        guard.mark_succeeded()
+    assert runtime_state_fixture.read_activity() is None
+
+
+def test_import_guard_does_not_write_raw_snapshot_setting(temp_db):
+    set_setting("current_activity_snapshot", '{"activity_id": 999}')
+    with secure_backup_service.SECURE_IMPORT_COORDINATOR.acquire() as guard:
+        guard.mark_succeeded()
+    assert get_setting("current_activity_snapshot") == '{"activity_id": 999}'
+
+
+def test_import_success_disables_clipboard_capture(temp_db, tmp_path: Path):
+    _seed_test_data()
+    set_setting("clipboard_capture_enabled", "true")
+    backup = tmp_path / "clipboard-disabled.wtbackup"
+    secure_backup_service.export_encrypted_backup(backup, "passphrase")
+
+    secure_backup_service.import_encrypted_backup(backup, "passphrase")
+
+    assert get_bool_setting("clipboard_capture_enabled", True) is False
+
+
+def test_import_failure_restores_prior_clipboard_capture_setting(temp_db, tmp_path: Path):
+    set_setting("clipboard_capture_enabled", "true")
+    bad = tmp_path / "bad.wtbackup"
+    bad.write_bytes(b"not-a-backup")
+
+    with pytest.raises(BackupCorruptedError):
+        secure_backup_service.import_encrypted_backup(bad, "passphrase")
+
+    assert get_bool_setting("clipboard_capture_enabled", False) is True
+
+
+def test_api_export_and_import_round_trip(temp_db, tmp_path: Path):
+    _seed_test_data()
+    backup = tmp_path / "api-roundtrip.wtbackup"
+
+    exported = backup_api.export_encrypted_backup(str(backup), "passphrase")
+    assert exported["ok"] is True
+    assert exported["path"] == str(backup)
+
+    imported = backup_api.import_encrypted_backup(str(backup), "passphrase")
+    assert imported["ok"] is True
+    assert imported["mode"] == "replace"
+    assert imported["folder_index_reset"] is True
+
+
+def test_api_import_wrong_passphrase_returns_safe_error(temp_db, tmp_path: Path):
+    _seed_test_data()
+    backup = tmp_path / "api-wrong-pass.wtbackup"
+    secure_backup_service.export_encrypted_backup(backup, "right-pass")
+
+    result = backup_api.import_encrypted_backup(str(backup), "wrong-pass")
+
+    assert result["ok"] is False
+    assert result["error"] == "backup_decryption_failed"
+    assert "wrong-pass" not in str(result)
+
+
+def test_api_import_corrupted_file_returns_safe_error(temp_db, tmp_path: Path):
+    backup = tmp_path / "api-corrupted.wtbackup"
+    backup.write_bytes(b"corrupt")
+
+    result = backup_api.import_encrypted_backup(str(backup), "passphrase")
+
+    assert result["ok"] is False
+    assert result["error"] == "backup_corrupted"
+
+
+def test_api_import_unsupported_version_returns_safe_error(temp_db, tmp_path: Path):
+    _seed_test_data()
+    payload = json.loads(
+        secure_backup_service._build_export_payload().decode("utf-8")
+    )
+    payload["version"] = 999
+    backup = tmp_path / "api-unsupported.wtbackup"
+    backup.write_bytes(
         create_encrypted_backup(
-            json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode(
-                "utf-8"
-            ),
-            "passphrase",
-            "legacy-test",
+            json.dumps(payload).encode("utf-8"), "passphrase", "0.1.0"
         )
     )
 
-    result = secure_backup_service.import_encrypted_backup(out, "passphrase")
+    result = backup_api.import_encrypted_backup(str(backup), "passphrase")
 
-    assert result.mode == "replace"
+    assert result["ok"] is False
+    assert result["error"] == "backup_version_unsupported"
 
 
-def test_import_failure_does_not_change_current_database(temp_db, tmp_path):
+def test_api_import_busy_returns_safe_error(temp_db, tmp_path: Path):
+    backup = tmp_path / "busy.wtbackup"
+    backup.write_bytes(b"x")
+    lock = secure_backup_service.SECURE_IMPORT_COORDINATOR._maintenance_lock
+    assert lock.acquire(blocking=False)
+    try:
+        result = backup_api.import_encrypted_backup(str(backup), "passphrase")
+    finally:
+        lock.release()
+
+    assert result["ok"] is False
+    assert result["error"] == "backup_import_in_progress"
+
+
+def test_api_export_failure_does_not_leak_passphrase(temp_db, monkeypatch):
+    secret = "super-secret-passphrase"
+
+    def fail_export(_path, _passphrase):
+        raise SecureBackupError(f"internal failure: {secret}")
+
+    monkeypatch.setattr(backup_api, "export_backup", fail_export)
+    result = backup_api.export_encrypted_backup("x.wtbackup", secret)
+
+    assert result["ok"] is False
+    assert result["error"] == "backup_export_failed"
+    assert secret not in str(result)
+
+
+def test_api_import_failure_does_not_leak_passphrase(temp_db, monkeypatch):
+    secret = "super-secret-passphrase"
+
+    def fail_import(_path, _passphrase, mode="replace"):
+        raise SecureBackupError(f"internal failure: {secret}")
+
+    monkeypatch.setattr(backup_api, "import_backup", fail_import)
+    result = backup_api.import_encrypted_backup("x.wtbackup", secret)
+
+    assert result["ok"] is False
+    assert result["error"] == "backup_import_failed"
+    assert secret not in str(result)
+
+
+def test_service_logs_do_not_contain_passphrase_or_paths(temp_db, tmp_path: Path, caplog):
     _seed_test_data()
-    out = tmp_path / "safe.wtbackup"
-    secure_backup_service.export_encrypted_backup(out, "correct-passphrase")
+    backup = tmp_path / "hygiene.wtbackup"
+    passphrase = "LogSecret-Passphrase-8H3"
 
-    counts_before = _row_counts()
+    with caplog.at_level(logging.INFO):
+        secure_backup_service.export_encrypted_backup(backup, passphrase)
+        secure_backup_service.import_encrypted_backup(backup, passphrase)
 
-    with pytest.raises(BackupDecryptionError):
-        secure_backup_service.import_encrypted_backup(out, "wrong-passphrase")
+    logs = caplog.text
+    assert passphrase not in logs
+    assert str(backup) not in logs
+    assert TEST_PROJECT_NAME not in logs
+    assert TEST_FILE_PATH not in logs
+    assert TEST_COPIED_TEXT not in logs
 
-    counts_after = _row_counts()
-    assert counts_after == counts_before
 
-
-def test_replace_import_restores_all_tables(temp_db, tmp_path):
+def test_parse_manifest_returns_metadata_without_decrypting(temp_db, tmp_path: Path):
     _seed_test_data()
-    counts_before = _row_counts()
-    out = tmp_path / "full-restore.wtbackup"
-    secure_backup_service.export_encrypted_backup(out, "passphrase")
+    backup = tmp_path / "manifest.wtbackup"
+    secure_backup_service.export_encrypted_backup(backup, "passphrase")
 
-    # Wipe the DB so import is into an empty-ish profile.
-    from worktrace.db import reset_database
-
-    reset_database()
-    counts_after_reset = _row_counts()
-    # After reset, folder_rule_file_index is empty and user data is gone.
-    assert counts_after_reset["activity_log"] == 0
-    assert counts_after_reset["folder_rule_file_index"] == 0
-
-    secure_backup_service.import_encrypted_backup(out, "passphrase", mode="replace")
-    counts_after = _row_counts()
-
-    # All user-data tables should match the original counts.
-    for table in [
-        "project",
-        "activity_log",
-        "session_boundary",
-        "folder_project_rule",
-        "project_rule",
-        "activity_project_assignment",
-        "activity_clipboard_event",
-        "report_session_operation",
-        "report_session_operation_member",
-        "activity_resource",
-    ]:
-        assert counts_after[table] == counts_before[table], f"row count mismatch for {table}"
-
-
-def test_successful_import_refreshes_generation_backed_settings_cache(temp_db, tmp_path):
-    set_setting("ui_refresh_seconds", "11")
-    out = tmp_path / "cache-refresh.wtbackup"
-    secure_backup_service.export_encrypted_backup(out, "passphrase")
-    set_setting("ui_refresh_seconds", "22")
-    assert get_setting("ui_refresh_seconds") == "22"
-
-    secure_backup_service.import_encrypted_backup(out, "passphrase", mode="replace")
-
-    assert get_setting("ui_refresh_seconds") == "11"
-
-
-def test_replace_import_restores_distinctive_data(temp_db, tmp_path):
-    _seed_test_data()
-    out = tmp_path / "data-restore.wtbackup"
-    secure_backup_service.export_encrypted_backup(out, "passphrase")
-
-    from worktrace.db import reset_database
-
-    reset_database()
-    secure_backup_service.import_encrypted_backup(out, "passphrase", mode="replace")
-
-    with get_connection() as conn:
-        project = conn.execute(
-            "SELECT id FROM project WHERE name = ?", (TEST_PROJECT_NAME,)
-        ).fetchone()
-        assert project is not None
-
-        activity = conn.execute(
-            "SELECT id, window_title, file_path_hint FROM activity_log WHERE window_title = ?",
-            (TEST_WINDOW_TITLE,),
-        ).fetchone()
-        assert activity is not None
-        assert activity["file_path_hint"] == TEST_FILE_PATH
-        operation = conn.execute(
-            """
-            SELECT o.payload_json
-            FROM report_mutation_request r
-            JOIN report_session_operation o ON o.id = r.operation_id
-            WHERE r.request_id = 'backup-seed-edit'
-            """
-        ).fetchone()
-        assert TEST_NOTE in operation["payload_json"]
-
-        resource = conn.execute(
-            "SELECT id FROM activity_resource WHERE activity_id = ?", (activity["id"],)
-        ).fetchone()
-        assert resource is not None
-
-        clipboard = conn.execute(
-            "SELECT copied_text FROM activity_clipboard_event WHERE activity_id = ?",
-            (activity["id"],),
-        ).fetchone()
-        assert clipboard is not None
-        assert clipboard["copied_text"] == TEST_COPIED_TEXT
-
-        command = conn.execute(
-            "SELECT payload_json FROM report_session_operation WHERE operation_type = 'edit_session'"
-        ).fetchone()
-        assert command is not None
-        assert json.loads(command["payload_json"])["note"]["value"] == TEST_NOTE
-
-
-def test_folder_rule_file_index_not_imported_and_left_rebuildable(temp_db, tmp_path):
-    _seed_test_data()
-    out = tmp_path / "folder-index.wtbackup"
-    secure_backup_service.export_encrypted_backup(out, "passphrase")
-
-    secure_backup_service.import_encrypted_backup(out, "passphrase", mode="replace")
-
-    with get_connection() as conn:
-        file_index_count = conn.execute(
-            "SELECT COUNT(*) AS c FROM folder_rule_file_index"
-        ).fetchone()["c"]
-        assert file_index_count == 0
-
-        states = conn.execute(
-            "SELECT status, refresh_requested FROM folder_rule_index_state"
-        ).fetchall()
-        assert len(states) > 0
-        for state in states:
-            assert state["status"] == "pending"
-            assert state["refresh_requested"] == 1
-
-
-def test_import_re_seeds_defaults(temp_db, tmp_path):
-    _seed_test_data()
-    out = tmp_path / "defaults.wtbackup"
-    secure_backup_service.export_encrypted_backup(out, "passphrase")
-
-    from worktrace.db import reset_database
-
-    reset_database()
-    secure_backup_service.import_encrypted_backup(out, "passphrase", mode="replace")
-
-    with get_connection() as conn:
-        for name in ("未归类", "排除规则"):
-            row = conn.execute(
-                "SELECT id FROM project WHERE name = ?", (name,)
-            ).fetchone()
-            assert row is not None, f"system project {name} missing after import"
-
-        # Durable runtime controls are re-seeded; the live activity sample is
-        # process-local and must not be recreated as a SQLite setting.
-        for key in ("collector_status", "user_paused"):
-            row = conn.execute(
-                "SELECT value FROM settings WHERE key = ?", (key,)
-            ).fetchone()
-            assert row is not None, f"runtime setting {key} missing after import"
-        snapshot_row = conn.execute(
-            "SELECT value FROM settings WHERE key = ?",
-            ("current_activity_snapshot",),
-        ).fetchone()
-        assert snapshot_row is None
-
-
-
-
-def test_api_export_returns_path_string(temp_db, tmp_path):
-    _seed_test_data()
-    out = tmp_path / "api-export.wtbackup"
-
-    result = backup_api.export_encrypted_backup(str(out), "passphrase")
-
-    assert isinstance(result, str)
-    assert Path(result).exists()
-
-
-def test_api_import_returns_import_result(temp_db, tmp_path):
-    _seed_test_data()
-    out = tmp_path / "api-import.wtbackup"
-    backup_api.export_encrypted_backup(str(out), "passphrase")
-
-    result = backup_api.import_encrypted_backup(str(out), "passphrase", mode="replace")
-
-    assert result.mode == "replace"
-    assert result.folder_index_reset is True
-
-
-def test_api_parse_manifest_does_not_require_passphrase(temp_db, tmp_path):
-    _seed_test_data()
-    out = tmp_path / "manifest.wtbackup"
-    backup_api.export_encrypted_backup(str(out), "passphrase")
-
-    info = backup_api.parse_encrypted_backup_manifest(str(out))
+    info = secure_backup_service.parse_encrypted_backup_manifest(backup)
 
     assert info.version == 4
-    assert info.payload_format == "wtenc1"
+    assert info.payload_format == "json"
+    assert info.payload_alg == "AES-256-GCM"
+    assert info.kdf_algorithm == "argon2id"
+    assert info.app_version
+    assert info.created_at.endswith("Z")
 
 
-def test_api_exposes_typed_errors(temp_db, tmp_path):
+def test_decrypted_payload_contains_expected_markers(temp_db):
     _seed_test_data()
-    out = tmp_path / "errors.wtbackup"
-    backup_api.export_encrypted_backup(str(out), "correct")
+    payload = secure_backup_service._build_export_payload()
+    blob = create_encrypted_backup(payload, "passphrase", "0.1.0")
+    decrypted = decrypt_encrypted_backup(blob, "passphrase")
+    text = decrypted.decode("utf-8")
 
-    with pytest.raises(backup_api.BackupDecryptionError):
-        backup_api.import_encrypted_backup(str(out), "wrong")
-
-
-def test_empty_passphrase_raises(temp_db, tmp_path):
-    with pytest.raises(SecureBackupError):
-        secure_backup_service.export_encrypted_backup(tmp_path / "x.wtbackup", "")
-
-
-def test_unsupported_mode_raises(temp_db, tmp_path):
-    out = tmp_path / "mode.wtbackup"
-    secure_backup_service.export_encrypted_backup(out, "passphrase")
-
-    with pytest.raises(SecureBackupError):
-        secure_backup_service.import_encrypted_backup(out, "passphrase", mode="merge")
+    assert TEST_PROJECT_NAME in text
+    assert TEST_WINDOW_TITLE in text
+    assert TEST_FILE_PATH in text
+    assert TEST_NOTE in text
+    assert TEST_COPIED_TEXT in text
+    assert TEST_FOLDER_PATH in text
 
 
+def test_backup_file_size_limit(temp_db, tmp_path: Path):
+    oversized = tmp_path / "oversized.wtbackup"
+    oversized.write_bytes(b"x")
 
+    class FakeStat:
+        st_size = secure_backup_service.MAX_BACKUP_FILE_BYTES + 1
 
-def test_export_uses_atomic_write(temp_db, tmp_path):
-    _seed_test_data()
-    out = tmp_path / "atomic.wtbackup"
+    original_stat = Path.stat
 
-    secure_backup_service.export_encrypted_backup(out, "passphrase")
+    def fake_stat(self):
+        if self == oversized:
+            return FakeStat()
+        return original_stat(self)
 
-    # The temp file should not linger after a successful write.
-    tmp = out.with_suffix(out.suffix + ".tmp")
-    assert not tmp.exists()
-    assert out.exists()
-
-
-# See docs/v0.2-local-security-design.md.
-
-
-
-
-def _reset_guard_and_pause_state() -> None:
-    """Clear the import guard and pause/status settings to a clean baseline."""
-    set_setting("user_paused", "false")
-    set_setting("collector_status", "stopped")
-    runtime_state_fixture.set_setting("current_activity_snapshot", "")
-
-
-def _make_backup(tmp_path: Path, passphrase: str = "correct-passphrase") -> Path:
-    """Create a valid encrypted backup from the current DB."""
-    _seed_test_data()
-    out = tmp_path / "guard-test.wtbackup"
-    secure_backup_service.export_encrypted_backup(out, passphrase)
-    return out
-
-
-def _corrupt_backup(out: Path) -> None:
-    """Flip a byte in the ciphertext region of a backup file."""
-    blob = bytearray(out.read_bytes())
-    blob[-5] = blob[-5] ^ 0xFF
-    out.write_bytes(bytes(blob))
-
-
-
-
-def test_import_sets_secure_import_in_progress_during_replacement(temp_db, tmp_path, monkeypatch):
-    """While the DB replacement is running, the guard flag must be true."""
-    out = _make_backup(tmp_path)
-    _reset_guard_and_pause_state()
-
-    captured = {}
-
-    original_replace = secure_backup_service._replace_import
-
-    def spy_replace(data):
-        captured["guard_during_replace"] = secure_backup_service.is_secure_import_in_progress()
-        captured["user_paused_during_replace"] = get_bool_setting("user_paused", False)
-        captured["collector_status_during_replace"] = get_setting("collector_status", "")
-        captured["snapshot_during_replace"] = runtime_state_fixture.get_setting("current_activity_snapshot", "")
-        return original_replace(data)
-
-    monkeypatch.setattr(secure_backup_service, "_replace_import", spy_replace)
-
-    secure_backup_service.import_encrypted_backup(out, "correct-passphrase", mode="replace")
-
-    assert captured["guard_during_replace"] is True
-    assert captured["user_paused_during_replace"] is True
-    assert captured["collector_status_during_replace"] == "paused"
-    assert captured["snapshot_during_replace"] == ""
-
-
-def test_import_clears_secure_import_in_progress_after_success(temp_db, tmp_path):
-    out = _make_backup(tmp_path)
-    _reset_guard_and_pause_state()
-
-    secure_backup_service.import_encrypted_backup(out, "correct-passphrase", mode="replace")
-
-    assert secure_backup_service.is_secure_import_in_progress() is False
-
-
-def test_import_clears_secure_import_in_progress_after_failure(temp_db, tmp_path):
-    out = _make_backup(tmp_path)
-    _reset_guard_and_pause_state()
-
-    with pytest.raises(BackupDecryptionError):
-        secure_backup_service.import_encrypted_backup(out, "wrong-passphrase")
-
-    assert secure_backup_service.is_secure_import_in_progress() is False
-
-
-def test_import_success_leaves_user_paused_and_collector_status_paused(temp_db, tmp_path):
-    out = _make_backup(tmp_path)
-    _reset_guard_and_pause_state()
-
-    secure_backup_service.import_encrypted_backup(out, "correct-passphrase", mode="replace")
-
-    assert get_bool_setting("user_paused", False) is True
-    assert get_setting("collector_status", "") == "paused"
-
-
-def test_wrong_passphrase_restores_pause_status_but_clears_live_snapshot(temp_db, tmp_path):
-    out = _make_backup(tmp_path)
-    # Set a distinctive prior state.
-    set_setting("user_paused", "false")
-    set_setting("collector_status", "running")
-    runtime_state_fixture.set_setting("current_activity_snapshot", '{"app":"prior-snapshot-marker"}')
-
-    with pytest.raises(BackupDecryptionError):
-        secure_backup_service.import_encrypted_backup(out, "wrong-passphrase")
-
-    assert secure_backup_service.is_secure_import_in_progress() is False
-    assert get_bool_setting("user_paused", False) is False
-    assert get_setting("collector_status", "") == "running"
-    assert runtime_state_fixture.get_setting("current_activity_snapshot", "") == ""
-
-
-def test_corrupted_backup_restores_pause_status_but_clears_live_snapshot(temp_db, tmp_path):
-    out = _make_backup(tmp_path)
-    _corrupt_backup(out)
-    set_setting("user_paused", "true")
-    set_setting("collector_status", "stopped")
-    runtime_state_fixture.set_setting("current_activity_snapshot", '{"app":"corrupt-prior-marker"}')
-
-    with pytest.raises((BackupCorruptedError, BackupDecryptionError)):
-        secure_backup_service.import_encrypted_backup(out, "correct-passphrase")
-
-    assert secure_backup_service.is_secure_import_in_progress() is False
-    assert get_bool_setting("user_paused", False) is True
-    assert get_setting("collector_status", "") == "stopped"
-    assert runtime_state_fixture.get_setting("current_activity_snapshot", "") == ""
-
-
-def test_existing_secure_import_in_progress_rejects_new_import(temp_db, tmp_path):
-    out = _make_backup(tmp_path)
-    coordinator = secure_backup_service.SECURE_IMPORT_COORDINATOR
-    with coordinator.acquire(reason="test_existing_secure_import") as guard:
-        with pytest.raises(BackupImportInProgressError):
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(Path, "stat", fake_stat)
+        with pytest.raises(BackupCorruptedError):
             secure_backup_service.import_encrypted_backup(
-                out,
-                "correct-passphrase",
+                oversized, "passphrase"
             )
-        guard.mark_succeeded()
 
 
-def test_current_activity_snapshot_cleared_during_import(temp_db, tmp_path, monkeypatch):
-    out = _make_backup(tmp_path)
-    _reset_guard_and_pause_state()
-    runtime_state_fixture.set_setting("current_activity_snapshot", '{"app":"snapshot-before-import"}')
-    runtime_state_fixture.set_setting("pending_short_seconds", "12")
-
-    captured = {}
-    original_replace = secure_backup_service._replace_import
-
-    def spy_replace(data):
-        captured["snapshot_during"] = runtime_state_fixture.get_setting("current_activity_snapshot", "")
-        captured["pending_during"] = runtime_state_fixture.get_setting("pending_short_seconds", "")
-        return original_replace(data)
-
-    monkeypatch.setattr(secure_backup_service, "_replace_import", spy_replace)
-
-    secure_backup_service.import_encrypted_backup(out, "correct-passphrase", mode="replace")
-
-    assert captured["snapshot_during"] == ""
-    assert captured["pending_during"] == "0"
-
-
-
-
-def test_wrong_passphrase_does_not_alter_row_counts(temp_db, tmp_path):
-    out = _make_backup(tmp_path)
-    counts_before = _row_counts()
-
-    with pytest.raises(BackupDecryptionError):
-        secure_backup_service.import_encrypted_backup(out, "wrong-passphrase")
-
-    assert _row_counts() == counts_before
-
-
-def test_corrupted_backup_does_not_alter_row_counts(temp_db, tmp_path):
-    out = _make_backup(tmp_path)
-    _corrupt_backup(out)
-    counts_before = _row_counts()
-
-    with pytest.raises((BackupCorruptedError, BackupDecryptionError)):
-        secure_backup_service.import_encrypted_backup(out, "correct-passphrase")
-
-    assert _row_counts() == counts_before
-
-
-def test_simulated_db_failure_during_replace_rolls_back(temp_db, tmp_path, monkeypatch):
-    out = _make_backup(tmp_path)
-    counts_before = _row_counts()
-
-    def failing_replace(data):
-        raise sqlite3.OperationalError("simulated DB failure during replace")
-
-    monkeypatch.setattr(secure_backup_service, "_replace_import", failing_replace)
-
-    with pytest.raises(sqlite3.OperationalError):
-        secure_backup_service.import_encrypted_backup(out, "correct-passphrase")
-
-    assert _row_counts() == counts_before
-
-
-def test_after_rollback_import_guard_cleared(temp_db, tmp_path, monkeypatch):
-    out = _make_backup(tmp_path)
-
-    def failing_replace(data):
-        raise sqlite3.OperationalError("simulated DB failure during replace")
-
-    monkeypatch.setattr(secure_backup_service, "_replace_import", failing_replace)
-
-    with pytest.raises(sqlite3.OperationalError):
-        secure_backup_service.import_encrypted_backup(out, "correct-passphrase")
-
-    assert secure_backup_service.is_secure_import_in_progress() is False
-
-
-def test_after_rollback_pause_status_restored_but_live_snapshot_cleared(temp_db, tmp_path, monkeypatch):
-    out = _make_backup(tmp_path)
-    set_setting("user_paused", "false")
-    set_setting("collector_status", "running")
-    runtime_state_fixture.set_setting("current_activity_snapshot", '{"app":"rollback-prior-marker"}')
-
-    def failing_replace(data):
-        raise sqlite3.OperationalError("simulated DB failure during replace")
-
-    monkeypatch.setattr(secure_backup_service, "_replace_import", failing_replace)
-
-    with pytest.raises(sqlite3.OperationalError):
-        secure_backup_service.import_encrypted_backup(out, "correct-passphrase")
-
-    assert get_bool_setting("user_paused", False) is False
-    assert get_setting("collector_status", "") == "running"
-    assert runtime_state_fixture.get_setting("current_activity_snapshot", "") == ""
-
-
-
-
-def test_export_success_log_does_not_contain_output_path(temp_db, tmp_path, caplog):
+def test_backup_payload_size_limit(temp_db, tmp_path: Path, monkeypatch):
     _seed_test_data()
-    out = tmp_path / "log-export-path.wtbackup"
+    backup = tmp_path / "payload-too-large.wtbackup"
+    secure_backup_service.export_encrypted_backup(backup, "passphrase")
 
-    with caplog.at_level(logging.INFO):
-        secure_backup_service.export_encrypted_backup(out, "passphrase")
-
-    full_log = "\n".join(record.getMessage() for record in caplog.records)
-    assert str(out) not in full_log
-    assert out.name not in full_log
-
-
-def test_import_success_log_does_not_contain_input_path(temp_db, tmp_path, caplog):
-    out = _make_backup(tmp_path)
-    _reset_guard_and_pause_state()
-
-    with caplog.at_level(logging.INFO):
-        secure_backup_service.import_encrypted_backup(out, "correct-passphrase", mode="replace")
-
-    full_log = "\n".join(record.getMessage() for record in caplog.records)
-    assert str(out) not in full_log
-    assert out.name not in full_log
+    monkeypatch.setattr(
+        secure_backup_service,
+        "MAX_BACKUP_PAYLOAD_BYTES",
+        10,
+    )
+    with pytest.raises(BackupCorruptedError):
+        secure_backup_service.import_encrypted_backup(
+            backup, "passphrase"
+        )
 
 
-def test_failure_log_does_not_contain_passphrase(temp_db, tmp_path, caplog):
-    out = _make_backup(tmp_path)
-    secret_passphrase = "SecretPassphrase-Log-Leak-Test-9Z"
+def test_import_rolls_back_on_live_validation_failure(temp_db, tmp_path: Path, monkeypatch):
+    _seed_test_data()
+    backup = tmp_path / "rollback.wtbackup"
+    secure_backup_service.export_encrypted_backup(backup, "passphrase")
+    before = _row_counts()
+
+    original_validate = secure_backup_service._validate_staging_database
+    calls = {"count": 0}
+
+    def fail_live_validation(conn):
+        calls["count"] += 1
+        if calls["count"] == 2:
+            raise BackupCorruptedError("backup file is invalid or corrupted")
+        return original_validate(conn)
+
+    monkeypatch.setattr(
+        secure_backup_service,
+        "_validate_staging_database",
+        fail_live_validation,
+    )
+
+    with pytest.raises(BackupCorruptedError):
+        secure_backup_service.import_encrypted_backup(
+            backup, "passphrase"
+        )
+
+    assert _row_counts() == before
+
+
+def test_import_does_not_log_exception_text(temp_db, tmp_path: Path, caplog):
+    backup = tmp_path / "random.wtbackup"
+    backup.write_bytes(b"not-a-backup")
 
     with caplog.at_level(logging.WARNING):
-        with pytest.raises(BackupDecryptionError):
-            secure_backup_service.import_encrypted_backup(out, secret_passphrase)
+        with pytest.raises(BackupCorruptedError):
+            secure_backup_service.import_encrypted_backup(
+                backup, "passphrase"
+            )
 
-    full_log = "\n".join(record.getMessage() for record in caplog.records)
-    assert secret_passphrase not in full_log
-
-
-def test_failure_log_does_not_contain_sensitive_markers(temp_db, tmp_path, caplog):
-    _seed_test_data()
-    out = tmp_path / "log-markers.wtbackup"
-    secure_backup_service.export_encrypted_backup(out, "passphrase")
-
-    with caplog.at_level(logging.WARNING):
-        with pytest.raises(BackupDecryptionError):
-            secure_backup_service.import_encrypted_backup(out, "wrong")
-
-    full_log = "\n".join(record.getMessage() for record in caplog.records)
-    for marker in [TEST_PROJECT_NAME, TEST_WINDOW_TITLE, TEST_FILE_PATH, TEST_NOTE, TEST_COPIED_TEXT]:
-        assert marker not in full_log, f"sensitive marker {marker!r} leaked into log"
-
-
-def test_logs_contain_only_safe_counts(temp_db, tmp_path, caplog):
-    out = _make_backup(tmp_path)
-    _reset_guard_and_pause_state()
-
-    with caplog.at_level(logging.INFO):
-        secure_backup_service.import_encrypted_backup(out, "correct-passphrase", mode="replace")
-
-    # The success log should mention operation name, mode, and table count.
-    import_logs = [
-        record.getMessage()
-        for record in caplog.records
-        if "encrypted backup import" in record.getMessage()
-    ]
-    assert any("success" in msg for msg in import_logs), "expected a success log entry"
-    assert any("mode=replace" in msg for msg in import_logs), "expected mode in log"
-    assert any("tables=" in msg for msg in import_logs), "expected table count in log"
+    assert "not-a-backup" not in caplog.text
+    assert str(backup) not in caplog.text
