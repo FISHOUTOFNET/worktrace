@@ -324,6 +324,53 @@ def migrate_9_to_10(conn: sqlite3.Connection) -> None:
     )
 
 
+def migrate_10_to_11(conn: sqlite3.Connection) -> None:
+    """Persist every eligible closed-activity inference request durably."""
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS activity_inference_job (
+            activity_id INTEGER PRIMARY KEY,
+            status TEXT NOT NULL CHECK (
+                status IN ('pending', 'running', 'failed')
+            ),
+            attempt_count INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count >= 0),
+            next_attempt_at TEXT,
+            last_error_code TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(activity_id) REFERENCES activity_log(id) ON DELETE CASCADE
+        )
+        """
+    )
+    now = conn.execute("SELECT datetime('now', 'localtime')").fetchone()[0]
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO activity_inference_job(
+            activity_id, status, attempt_count, next_attempt_at,
+            last_error_code, created_at, updated_at
+        )
+        SELECT
+            activity.id, 'pending', 0, NULL, NULL, ?, ?
+        FROM activity_log activity
+        LEFT JOIN activity_project_assignment assignment
+          ON assignment.activity_id = activity.id
+        WHERE activity.end_time IS NOT NULL
+          AND activity.status = 'normal'
+          AND activity.is_hidden = 0
+          AND activity.is_deleted = 0
+          AND (
+                assignment.activity_id IS NULL
+                OR (
+                    assignment.is_manual = 0
+                    AND assignment.source IN ('uncategorized', 'suggested_project_name')
+                )
+          )
+        """,
+        (str(now), str(now)),
+    )
+
+
 MIGRATIONS: dict[int, Migration] = {
     4: migrate_4_to_5,
     5: migrate_5_to_6,
@@ -331,6 +378,7 @@ MIGRATIONS: dict[int, Migration] = {
     7: migrate_7_to_8,
     8: migrate_8_to_9,
     9: migrate_9_to_10,
+    10: migrate_10_to_11,
 }
 
 
@@ -373,5 +421,6 @@ __all__ = [
     "migrate_7_to_8",
     "migrate_8_to_9",
     "migrate_9_to_10",
+    "migrate_10_to_11",
     "migrate_schema",
 ]
