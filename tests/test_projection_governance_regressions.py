@@ -137,7 +137,9 @@ def test_global_write_gate_blocks_service_writes_from_other_threads(temp_db):
     assert project_service.get_project_by_name("Blocked") is None
 
 
-def test_database_generation_rejects_stale_background_results_until_fresh_read(temp_db):
+def test_database_replacement_rejects_stale_background_results_until_fresh_read(
+    temp_db,
+):
     read_complete = threading.Event()
     replacement_complete = threading.Event()
     outcomes: list[str] = []
@@ -160,12 +162,42 @@ def test_database_generation_rejects_stale_background_results_until_fresh_read(t
     assert read_complete.wait(timeout=5)
     with DATABASE_WRITE_GATE.draining() as lease:
         lease.promote()
+        lease.publish_database_replaced()
     replacement_complete.set()
     thread.join(timeout=5)
 
     assert not thread.is_alive()
     assert outcomes == ["database_generation_changed", "fresh_write_ok"]
     assert project_service.get_project_by_name("FreshWrite") is not None
+
+
+def test_consistent_snapshot_drain_keeps_existing_database_epoch(temp_db):
+    read_complete = threading.Event()
+    snapshot_complete = threading.Event()
+    outcomes: list[str] = []
+
+    def existing_reader_then_writer() -> None:
+        with get_connection() as conn:
+            conn.execute("SELECT COUNT(*) FROM project").fetchone()
+        read_complete.set()
+        assert snapshot_complete.wait(timeout=5)
+        project_service.create_project("ValidAfterSnapshot")
+        outcomes.append("write_ok")
+
+    thread = threading.Thread(target=existing_reader_then_writer)
+    thread.start()
+    assert read_complete.wait(timeout=5)
+    before = DATABASE_WRITE_GATE.generation()
+    with DATABASE_WRITE_GATE.draining() as lease:
+        lease.promote()
+    after = DATABASE_WRITE_GATE.generation()
+    snapshot_complete.set()
+    thread.join(timeout=5)
+
+    assert not thread.is_alive()
+    assert before == after
+    assert outcomes == ["write_ok"]
+    assert project_service.get_project_by_name("ValidAfterSnapshot") is not None
 
 
 def test_secure_validation_accepts_open_activity_with_null_duration(temp_db):
