@@ -9,7 +9,10 @@ from datetime import datetime
 from ..constants import TIME_FORMAT
 from ..db import get_db_path, now_str
 from ..services.settings_service import get_int_setting, get_setting, set_settings
-from .collector_failure_policy import CollectorFailureCode
+from .collector_failure_policy import (
+    RETRYABLE_COLLECTOR_FAILURE_CODES,
+    CollectorFailureCode,
+)
 
 HEALTH_HEALTHY = "healthy"
 HEALTH_DEGRADED = "degraded"
@@ -128,11 +131,13 @@ def record_successful_observation(at_time: str | None = None) -> None:
 
 def record_transient_failure(
     phase: str,
-    code: CollectorFailureCode | str,
+    code: CollectorFailureCode,
     at_time: str | None = None,
 ) -> None:
-    at = at_time or now_str()
     safe_code = _safe_failure_code(code)
+    if code not in RETRYABLE_COLLECTOR_FAILURE_CODES:
+        raise ValueError("collector_failure_code_not_retryable")
+    at = at_time or now_str()
     state = _runtime_state()
     with _STATE_LOCK:
         state.failures += 1
@@ -163,11 +168,11 @@ def record_transient_failure(
 
 def record_fatal_failure(
     phase: str,
-    code: CollectorFailureCode | str,
+    code: CollectorFailureCode,
     at_time: str | None = None,
 ) -> None:
-    at = at_time or now_str()
     safe_code = _safe_failure_code(code)
+    at = at_time or now_str()
     state = _runtime_state()
     with _STATE_LOCK:
         state.health_state = HEALTH_STOPPED
@@ -210,7 +215,7 @@ def reset_collector_failures() -> None:
 
 def record_health_code(code: str, at_time: str | None = None) -> None:
     at = at_time or now_str()
-    safe_code = _safe_failure_code(code)
+    safe_code = _safe_health_code(code)
     state = _runtime_state()
     with _STATE_LOCK:
         state.last_failure_at = at
@@ -230,9 +235,15 @@ def _safe_phase(phase: str) -> str:
     return (normalized or "unknown")[:64]
 
 
-def _safe_failure_code(code: CollectorFailureCode | str) -> str:
-    value = code.value if isinstance(code, CollectorFailureCode) else str(code or "")
-    normalized = _SAFE_CODE_PATTERN.sub("_", value.strip().lower()).strip("_")
+def _safe_failure_code(code: CollectorFailureCode) -> str:
+    if not isinstance(code, CollectorFailureCode):
+        raise TypeError("collector_failure_code_required")
+    return code.value
+
+
+def _safe_health_code(code: str) -> str:
+    value = str(code or "").strip().lower()
+    normalized = _SAFE_CODE_PATTERN.sub("_", value).strip("_")
     return (normalized or CollectorFailureCode.UNEXPECTED_FAILURE.value)[:64]
 
 
