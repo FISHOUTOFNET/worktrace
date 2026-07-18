@@ -1,19 +1,16 @@
-from tests.support import runtime_state_fixture
 from pathlib import Path
 
+import pytest
 from openpyxl import load_workbook
 
 from tests.support import activity_factory as activity_service
-from worktrace.services import (
-    database_maintenance_service,
-    export_service,
-)
+from tests.support import runtime_state_fixture
+from worktrace.services import database_maintenance_service, export_service
 from worktrace.services.settings_service import (
     get_bool_setting,
     get_setting,
     set_setting,
 )
-import pytest
 
 pytestmark = [pytest.mark.db, pytest.mark.integration]
 
@@ -78,12 +75,8 @@ def test_export_all_and_clear_requires_confirmation(temp_db, tmp_path):
     assert "folder_rule_index_state" not in wb.sheetnames
     assert "folder_rule_file_index" not in wb.sheetnames
     assert "activity_resource" in wb.sheetnames
-    try:
+    with pytest.raises(ValueError):
         export_service.clear_all_local_data(confirm=False)
-    except ValueError:
-        pass
-    else:
-        raise AssertionError("clear_all_local_data should require confirmation")
 
 
 def _seed_business_data() -> int:
@@ -96,40 +89,33 @@ def _seed_business_data() -> int:
 
 def test_clear_all_confirm_false_does_not_reset_db(temp_db) -> None:
     aid = _seed_business_data()
-    try:
+    with pytest.raises(ValueError):
         export_service.clear_all_local_data(confirm=False)
-    except ValueError:
-        pass
-    else:
-        raise AssertionError("clear_all_local_data(confirm=False) must raise")
-
     activities = activity_service.get_activities_by_range(
         "2026-06-18", "2026-06-18"
     )
-    assert any(a["id"] == aid for a in activities)
+    assert any(activity["id"] == aid for activity in activities)
 
 
-def test_clear_all_success_sets_pause_guard_and_clears_after(temp_db) -> None:
+def test_clear_all_success_sets_post_replace_pause_state_and_clears_runtime(
+    temp_db,
+) -> None:
     _seed_business_data()
     set_setting("user_paused", "false")
     set_setting("collector_status", "running")
     runtime_state_fixture.set_setting("current_activity_snapshot", '{"app":"Word"}')
-    runtime_state_fixture.set_setting("pending_short_seconds", "12")
 
     export_service.clear_all_local_data(confirm=True)
 
     assert get_bool_setting("user_paused", False) is True
     assert get_setting("collector_status", "") == "paused"
-    assert (runtime_state_fixture.get_setting("current_activity_snapshot", "") or "") == ""
-    assert runtime_state_fixture.get_setting("pending_short_seconds", "") == "0"
-
-    activities = activity_service.get_activities_by_range(
+    assert runtime_state_fixture.get_setting("current_activity_snapshot", "") == ""
+    assert activity_service.get_activities_by_range(
         "2026-06-18", "2026-06-18"
-    )
-    assert activities == []
+    ) == []
 
 
-def test_clear_all_success_re_seeds_default_settings(temp_db) -> None:
+def test_clear_all_success_reseeds_system_projects(temp_db) -> None:
     _seed_business_data()
     export_service.clear_all_local_data(confirm=True)
     from worktrace.db import get_connection
@@ -138,119 +124,117 @@ def test_clear_all_success_re_seeds_default_settings(temp_db) -> None:
         rows = conn.execute(
             "SELECT name FROM project WHERE created_by = 'system'"
         ).fetchall()
-    names = {r[0] for r in rows}
-    assert names
+    assert {row[0] for row in rows}
 
 
-def test_clear_all_rejects_when_secure_import_in_progress(temp_db) -> None:
-    from worktrace.services.secure_backup_service import SECURE_IMPORT_COORDINATOR
-
+def test_clear_all_rejects_when_another_maintenance_operation_owns_gate(
+    temp_db,
+) -> None:
     aid = _seed_business_data()
-    with SECURE_IMPORT_COORDINATOR.acquire() as guard:
-        with pytest.raises(ValueError):
+    with database_maintenance_service.maintenance_operation(
+        reason="competing_operation"
+    ) as state:
+        with pytest.raises(ValueError, match="operation_in_progress"):
             export_service.clear_all_local_data(confirm=True)
-        guard.mark_succeeded()
+        state.mark_succeeded()
 
     activities = activity_service.get_activities_by_range(
         "2026-06-18", "2026-06-18"
     )
-    assert any(a["id"] == aid for a in activities)
+    assert any(activity["id"] == aid for activity in activities)
 
 
-def test_clear_all_failure_restores_prior_state_and_clears_guard(
+def test_clear_all_failure_rolls_back_data_and_settings_and_releases_gate(
     temp_db,
     monkeypatch,
 ) -> None:
-    from worktrace.services import secure_backup_service
-
     aid = _seed_business_data()
     set_setting("user_paused", "false")
     set_setting("collector_status", "running")
-    runtime_state_fixture.set_setting("current_activity_snapshot", '{"persisted_activity_id":77}')
-    runtime_state_fixture.set_setting("pending_short_seconds", "12")
+    runtime_state_fixture.set_setting(
+        "current_activity_snapshot",
+        '{"persisted_activity_id":77}',
+    )
 
-    def _boom() -> None:
-        raise RuntimeError("clear_all_live_data boom")
+    def fail_post_clear(_conn) -> None:
+        raise RuntimeError("post-clear failure")
 
     monkeypatch.setattr(
         database_maintenance_service,
-        "clear_all_live_data",
-        _boom,
+        "_apply_post_clear_settings",
+        fail_post_clear,
     )
 
-    with pytest.raises(RuntimeError, match="clear_all_live_data boom"):
+    with pytest.raises(RuntimeError, match="post-clear failure"):
         export_service.clear_all_local_data(confirm=True)
 
-    assert secure_backup_service.is_secure_import_in_progress() is False
-    assert get_bool_setting("user_paused", False) is False
+    assert database_maintenance_service.is_maintenance_in_progress() is False
+    assert get_bool_setting("user_paused", True) is False
     assert get_setting("collector_status", "") == "running"
-    assert (runtime_state_fixture.get_setting("current_activity_snapshot", "") or "") == ""
-    assert runtime_state_fixture.get_setting("pending_short_seconds", "") == "0"
+    assert runtime_state_fixture.get_setting("current_activity_snapshot", "") == ""
     activities = activity_service.get_activities_by_range(
         "2026-06-18", "2026-06-18"
     )
     assert any(item["id"] == aid for item in activities)
 
 
-def test_clear_all_guard_clears_runtime_pending_on_boundary(temp_db) -> None:
-    from worktrace.services.secure_backup_service import SECURE_IMPORT_COORDINATOR
+def test_maintenance_boundary_clears_runtime_state_without_legacy_settings(
+    temp_db,
+) -> None:
+    runtime_state_fixture.set_setting(
+        "current_activity_snapshot",
+        '{"status":"normal"}',
+    )
 
-    runtime_state_fixture.set_setting("pending_short_seconds", "12")
-    runtime_state_fixture.set_setting("current_activity_snapshot", '{"status":"normal"}')
-
-    with SECURE_IMPORT_COORDINATOR.acquire(reason="clear_all_test") as guard:
-        assert runtime_state_fixture.get_setting("pending_short_seconds", "") == "0"
-        assert runtime_state_fixture.get_setting("current_activity_snapshot", "") == ""
-        guard.mark_succeeded()
+    with database_maintenance_service.maintenance_operation(
+        reason="runtime_state_contract"
+    ) as state:
+        assert database_maintenance_service.is_maintenance_in_progress() is True
+        assert runtime_state_fixture.get_setting(
+            "current_activity_snapshot", ""
+        ) == ""
+        state.mark_succeeded()
 
 
 def test_clear_all_success_invalidates_context_recompute_cache(temp_db) -> None:
     _seed_business_data()
     export_service.clear_all_local_data(confirm=True)
-
-    activities = activity_service.get_activities_by_range(
+    assert activity_service.get_activities_by_range(
         "2026-06-18", "2026-06-18"
-    )
-    assert activities == []
+    ) == []
 
 
-def test_clear_all_guard_exposes_safe_state_during_database_clear(
+def test_clear_all_applies_pause_state_inside_exclusive_transaction(
     temp_db,
     monkeypatch,
 ) -> None:
-    from worktrace.services import secure_backup_service
-
     captured: dict[str, object] = {}
-    real_clear = database_maintenance_service.clear_all_live_data
+    real_apply = database_maintenance_service._apply_post_clear_settings
 
-    def _spy_clear() -> None:
+    def spy_apply(conn) -> None:
         captured["maintenance_active"] = (
-            secure_backup_service.is_secure_import_in_progress()
+            database_maintenance_service.is_maintenance_in_progress()
         )
-        captured["user_paused"] = get_bool_setting("user_paused", False)
-        captured["collector_status"] = get_setting("collector_status", "")
-        captured["snapshot"] = runtime_state_fixture.get_setting("current_activity_snapshot", "")
-        captured["pending"] = runtime_state_fixture.get_setting("pending_short_seconds", "")
-        real_clear()
+        captured["phase"] = database_maintenance_service.MAINTENANCE_COORDINATOR.phase
+        captured["prior_user_paused"] = conn.execute(
+            "SELECT value FROM settings WHERE key = 'user_paused'"
+        ).fetchone()[0]
+        real_apply(conn)
 
     monkeypatch.setattr(
         database_maintenance_service,
-        "clear_all_live_data",
-        _spy_clear,
+        "_apply_post_clear_settings",
+        spy_apply,
     )
     set_setting("user_paused", "false")
     set_setting("collector_status", "running")
-    runtime_state_fixture.set_setting("current_activity_snapshot", '{"status":"normal"}')
-    runtime_state_fixture.set_setting("pending_short_seconds", "12")
 
     export_service.clear_all_local_data(confirm=True)
 
     assert captured == {
         "maintenance_active": True,
-        "user_paused": True,
-        "collector_status": "paused",
-        "snapshot": "",
-        "pending": "0",
+        "phase": database_maintenance_service.MaintenancePhase.EXCLUSIVE,
+        "prior_user_paused": "false",
     }
     assert get_bool_setting("user_paused", False) is True
     assert get_setting("collector_status", "") == "paused"
