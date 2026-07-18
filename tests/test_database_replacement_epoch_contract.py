@@ -1,4 +1,8 @@
-"""Contracts separating maintenance exclusion from database replacement."""
+"""Contracts separating maintenance exclusion from database replacement.
+
+A read-only drain is process coordination, not evidence that SQLite identity
+changed. Only the exclusive replacement owner may advance the epoch.
+"""
 
 from __future__ import annotations
 
