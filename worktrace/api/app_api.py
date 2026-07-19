@@ -1,4 +1,4 @@
-"""Application-control service with an explicitly injected runtime capability."""
+"""Application-control service with explicitly injected runtime capabilities."""
 from __future__ import annotations
 
 import logging
@@ -20,11 +20,25 @@ class ApplicationRuntimeCapability(Protocol):
     def request_shutdown(self) -> None: ...
 
 
-class ApplicationControlService:
-    """Bridge-facing application commands bound to one runtime capability."""
+class MaintenanceStateCapability(Protocol):
+    """Read-only maintenance state required before sensitive runtime resume."""
 
-    def __init__(self, runtime: ApplicationRuntimeCapability | None) -> None:
+    @property
+    def blocked_reason(self) -> str | None: ...
+
+
+class ApplicationControlService:
+    """Bridge-facing application commands bound to explicit process capabilities."""
+
+    def __init__(
+        self,
+        runtime: ApplicationRuntimeCapability,
+        maintenance: MaintenanceStateCapability | None = None,
+    ) -> None:
+        if runtime is None:
+            raise ValueError("application_runtime_required")
         self.runtime = runtime
+        self.maintenance = maintenance
 
     @staticmethod
     def _result_dict(result: Any) -> dict[str, Any]:
@@ -34,6 +48,15 @@ class ApplicationControlService:
         if isinstance(result, dict):
             return dict(result)
         return {"ok": bool(result)}
+
+    def _maintenance_resume_blocked(self) -> bool:
+        if self.maintenance is None:
+            return False
+        try:
+            return bool(self.maintenance.blocked_reason)
+        except Exception:
+            logging.exception("maintenance recovery state read failed")
+            return True
 
     def get_collection_status(self) -> dict[str, Any]:
         raw_status = settings_api.get_collector_status()
@@ -75,8 +98,12 @@ class ApplicationControlService:
             allowed = False
         if not allowed:
             return {"ok": False, "error": "请先确认隐私说明"}
-        if self.runtime is None:
-            return {"ok": False, "error": "collector_start_failed"}
+        if self._maintenance_resume_blocked():
+            return {
+                "ok": False,
+                "error": "maintenance_recovery_required",
+                "message": "维护状态尚未恢复，暂不能开始记录",
+            }
         try:
             return self._result_dict(self.runtime.start_authorized_collection())
         except Exception:
@@ -92,7 +119,11 @@ class ApplicationControlService:
             return {
                 "ok": False,
                 "accepted": True,
-                "error": "隐私说明已确认，但记录功能未能启动，请点击恢复记录重试",
+                "error": str(start_result.get("error") or "collector_start_failed"),
+                "message": str(
+                    start_result.get("message")
+                    or "隐私说明已确认，但记录功能未能启动，请点击恢复记录重试"
+                ),
             }
         payload: dict[str, Any] = {
             "ok": True,
@@ -104,12 +135,6 @@ class ApplicationControlService:
         return payload
 
     def pause_collection_now(self) -> dict[str, Any]:
-        if self.runtime is None:
-            return {
-                "ok": False,
-                "pause_pending": False,
-                "error": "collector_not_available",
-            }
         try:
             return dict(self.runtime.pause_collection_now())
         except Exception:
@@ -135,12 +160,11 @@ class ApplicationControlService:
         return self.get_collection_status()
 
     def set_clipboard_capture_enabled(self, enabled: bool) -> None:
-        if enabled and self.runtime is not None:
+        if enabled:
             privacy_gate_service.require_sensitive_runtime_allowed()
-        if self.runtime is not None:
-            applied = self.runtime.set_clipboard_capture_enabled(bool(enabled))
-            if not applied:
-                raise RuntimeError("clipboard_runtime_rejected")
+        applied = self.runtime.set_clipboard_capture_enabled(bool(enabled))
+        if not applied:
+            raise RuntimeError("clipboard_runtime_rejected")
 
     def set_clipboard_capture_policy(self, enabled: bool) -> dict[str, Any]:
         if enabled is not True and enabled is not False:
@@ -169,8 +193,11 @@ class ApplicationControlService:
             logging.exception("clipboard runtime compensation failed")
 
     def request_shutdown(self) -> None:
-        if self.runtime is not None:
-            self.runtime.request_shutdown()
+        self.runtime.request_shutdown()
 
 
-__all__ = ["ApplicationControlService", "ApplicationRuntimeCapability"]
+__all__ = [
+    "ApplicationControlService",
+    "ApplicationRuntimeCapability",
+    "MaintenanceStateCapability",
+]
