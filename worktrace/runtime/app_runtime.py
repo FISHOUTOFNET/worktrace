@@ -25,7 +25,7 @@ from ..services import (
     recovery_service,
 )
 from ..services.settings_service import set_setting
-from ..worker_health import WorkerHealthRegistry
+from ..worker_health import WorkerHealthRegistry, WorkerHealthReporter
 
 if TYPE_CHECKING:
     class _Paths:
@@ -77,7 +77,6 @@ class WorkerSpec:
     thread_name: str
     target: Callable[..., None]
     args_factory: Callable[[threading.Event], tuple[Any, ...]]
-    startup_probe: Callable[[threading.Event], None]
     startup_timeout_seconds: float = 5.0
     critical: bool = False
 
@@ -90,6 +89,59 @@ class WorkerHandle:
     ready_event: threading.Event = field(default_factory=threading.Event)
     failed_event: threading.Event = field(default_factory=threading.Event)
     error_code: str | None = None
+
+
+class WorkerStartupReporter:
+    """One-shot startup handshake owned by a worker invocation."""
+
+    def __init__(self, handle: WorkerHandle) -> None:
+        self._handle = handle
+        self._lock = threading.Lock()
+
+    @property
+    def ready_reported(self) -> bool:
+        return self._handle.ready_event.is_set()
+
+    @property
+    def failed_reported(self) -> bool:
+        return self._handle.failed_event.is_set()
+
+    def ready(self) -> None:
+        with self._lock:
+            if self._handle.failed_event.is_set():
+                return
+            self._handle.ready_event.set()
+
+    def failed(self, code: str) -> None:
+        with self._lock:
+            if self._handle.ready_event.is_set():
+                return
+            self._handle.error_code = str(code or "worker_startup_failed")
+            self._handle.failed_event.set()
+
+
+class _OwnedWorkerReporter:
+    """Worker-facing health capability that also carries the startup handshake."""
+
+    def __init__(
+        self,
+        health: WorkerHealthReporter,
+        startup: WorkerStartupReporter,
+    ) -> None:
+        self._health = health
+        self._startup = startup
+        self.name = health.name
+
+    def succeeded(self) -> None:
+        self._startup.ready()
+        self._health.succeeded()
+
+    def failed(self, code: str) -> None:
+        self._startup.failed(code)
+        self._health.failed(code)
+
+    def maintenance_paused(self, paused: bool) -> None:
+        self._health.maintenance_paused(paused)
 
 
 @dataclass(frozen=True)
@@ -134,7 +186,7 @@ class RuntimeStartResult:
         )
 
     def to_dict(self) -> dict[str, object]:
-        result: dict[str, object] = {
+        return {
             "ok": bool(self.ok),
             "collector_ready": bool(self.collector_ready),
             "workers": {
@@ -143,11 +195,8 @@ class RuntimeStartResult:
             },
             "already_running": bool(self.already_running),
             "degraded": bool(self.degraded),
+            "error_code": self.error_code,
         }
-        if self.error_code:
-            result["error"] = self.error_code
-            result["error_code"] = self.error_code
-        return result
 
 
 def _choose_adapter() -> WindowsAdapter:
@@ -190,14 +239,12 @@ class AppRuntime:
                 thread_name="WorkTraceFolderIndex",
                 target=folder_index_service.run_folder_index_worker,
                 args_factory=lambda stop: (stop,),
-                startup_probe=self._probe_folder_index,
             ),
             "history": WorkerSpec(
                 name="history",
                 thread_name="WorkTraceHistoryMutation",
                 target=history_mutation_job_service.run_history_worker,
                 args_factory=lambda stop: (stop,),
-                startup_probe=lambda stop: self._probe_table(stop, "history_mutation_job"),
             ),
             "inference": WorkerSpec(
                 name="inference",
@@ -207,42 +254,20 @@ class AppRuntime:
                     stop,
                     project_inference_service.assign_project_for_activity_in_transaction,
                 ),
-                startup_probe=lambda stop: self._probe_table(stop, "activity_inference_job"),
             ),
             "activity_resource_repair": WorkerSpec(
                 name="activity_resource_repair",
                 thread_name="WorkTraceActivityResourceRepair",
                 target=activity_fact_repair_service.run_activity_resource_repair_worker,
                 args_factory=lambda stop: (stop,),
-                startup_probe=lambda stop: self._probe_table(
-                    stop,
-                    "activity_resource_repair_job",
-                ),
             ),
             "startup_recovery": WorkerSpec(
                 name="startup_recovery",
                 thread_name="WorkTraceStartupRecovery",
                 target=recovery_service.run_startup_recovery_worker,
                 args_factory=lambda stop: (stop,),
-                startup_probe=lambda stop: self._probe_table(stop, "startup_recovery_job"),
             ),
         }
-
-    def _probe_folder_index(self, stop_event: threading.Event) -> None:
-        if stop_event.is_set() or self.stop_event.is_set():
-            raise RuntimeError("worker_start_cancelled")
-        folder_index_service.ensure_index_states_for_folder_rules()
-        folder_index_service.validate_ready_indexes(stop_event)
-        if stop_event.is_set() or self.stop_event.is_set():
-            raise RuntimeError("worker_start_cancelled")
-
-    def _probe_table(self, stop_event: threading.Event, table: str) -> None:
-        if stop_event.is_set() or self.stop_event.is_set():
-            raise RuntimeError("worker_start_cancelled")
-        with db.get_connection() as conn:
-            conn.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone()
-        if stop_event.is_set() or self.stop_event.is_set():
-            raise RuntimeError("worker_start_cancelled")
 
     def initialize(self) -> bool:
         """Acquire the application lease and perform bounded startup recovery."""
@@ -276,26 +301,31 @@ class AppRuntime:
     def _run_owned_worker(self, handle: WorkerHandle) -> None:
         spec = handle.spec
         health = self._worker_health.reporter(spec.name)
+        startup = WorkerStartupReporter(handle)
+        worker_reporter = _OwnedWorkerReporter(health, startup)
         health.started()
         try:
-            spec.startup_probe(handle.stop_event)
-            handle.ready_event.set()
-            spec.target(*spec.args_factory(handle.stop_event), health=health)
+            spec.target(
+                *spec.args_factory(handle.stop_event),
+                health=worker_reporter,
+            )
+            if not startup.ready_reported and not startup.failed_reported:
+                startup.failed("worker_returned_before_ready")
             if not handle.stop_event.is_set() and not self.stop_event.is_set():
                 handle.error_code = "worker_unexpected_exit"
+                handle.failed_event.set()
                 health.failed(handle.error_code)
                 logging.error(
                     "owned worker returned unexpectedly worker=%s",
                     spec.name,
                 )
         except Exception:
-            handle.error_code = (
-                "worker_startup_failed"
-                if not handle.ready_event.is_set()
-                else "worker_unhandled_exception"
-            )
-            handle.failed_event.set()
-            health.failed(handle.error_code)
+            if not startup.ready_reported:
+                startup.failed("worker_startup_failed")
+            else:
+                handle.error_code = "worker_unhandled_exception"
+                handle.failed_event.set()
+            health.failed(handle.error_code or "worker_unhandled_exception")
             logging.exception("owned worker failed worker=%s", spec.name)
         finally:
             health.stopped()
@@ -386,7 +416,10 @@ class AppRuntime:
         while time.monotonic() < deadline:
             if handle.ready_event.wait(timeout=0.05):
                 return self._status_for_handle(handle, started=started)
-            if handle.failed_event.is_set() or not _thread_reference_is_alive(handle.thread):
+            if (
+                handle.failed_event.is_set()
+                or not _thread_reference_is_alive(handle.thread)
+            ):
                 return self._status_for_handle(handle, started=started)
         handle.error_code = "worker_startup_timeout"
         handle.failed_event.set()
@@ -404,7 +437,7 @@ class AppRuntime:
         )
 
     def start_background_workers(self) -> WorkerStartupReport:
-        """Start every declared worker and wait for explicit initialization signals."""
+        """Start every declared worker and wait for worker-owned readiness."""
 
         with self._lifecycle_lock:
             if not self._initialized or not self.owns_application_instance:
@@ -508,6 +541,7 @@ class AppRuntime:
             workers=report.workers,
             already_running=bool(collector_result.get("already_running")),
             degraded=degraded,
+            error_code=report.error_code,
         )
 
     def start_collector(
@@ -830,6 +864,7 @@ __all__ = [
     "WorkerHandle",
     "WorkerSpec",
     "WorkerStartupReport",
+    "WorkerStartupReporter",
     "WorkerStartupState",
     "WorkerStartupStatus",
 ]
