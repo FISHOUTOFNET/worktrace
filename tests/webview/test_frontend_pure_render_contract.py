@@ -174,7 +174,9 @@ def test_live_duration_targets_use_exact_clock_and_accepted_runtime():
     assert "App.renderLiveDurationTarget(target, clock, Date.now())" in ticker
     assert "App.getActiveLiveClock = function" in init
     assert "App.getActiveLiveClock ? App.getActiveLiveClock() : null" in core
-    assert source.count("App.getActiveLiveClock") == 2
+    assert init.count("App.getActiveLiveClock") == 1
+    assert core.count("App.getActiveLiveClock") == 2
+    assert source.count("App.getActiveLiveClock") == 3
     for retired in (
         "projectAcceptedClock(clock",
         "data-display-base-seconds",
