@@ -21,6 +21,10 @@ RETIRED_PRODUCTION_SYMBOLS = {
     "mark_inference_retry_with_uow",
     "INFERENCE_RETRY_CONFIDENCE",
     "retry_pending_inference",
+    "process_new_activity",
+    "start_folder_index_worker",
+    "start_history_worker",
+    "start_inference_worker",
     "_synchronize_core_hooks",
 }
 RETIRED_FILES = {
@@ -34,13 +38,21 @@ DYNAMIC_TEST_PATTERNS = (
     "globals()[_name]" + " =",
     "for _name in " + "dir(_contracts)",
 )
-_DML_PATTERN = re.compile(
+_INFERENCE_DML_PATTERN = re.compile(
     r"\b(?:INSERT(?:\s+OR\s+\w+)?\s+INTO|REPLACE\s+INTO|UPDATE|DELETE\s+FROM)"
     r"\s+activity_inference_job\b",
     re.IGNORECASE,
 )
+_RECOVERY_DML_PATTERN = re.compile(
+    r"\b(?:INSERT(?:\s+OR\s+\w+)?\s+INTO|REPLACE\s+INTO|UPDATE|DELETE\s+FROM)"
+    r"\s+startup_recovery_job\b",
+    re.IGNORECASE,
+)
 _INFERENCE_JOB_RUNTIME_DML_OWNER = (
     "worktrace/services/activity_inference_job_repository.py"
+)
+_RECOVERY_JOB_RUNTIME_DML_OWNER = (
+    "worktrace/services/startup_recovery_job_repository.py"
 )
 
 
@@ -68,17 +80,21 @@ def test_retired_inference_and_hook_symbols_are_absent_from_production() -> None
     assert offenders == []
 
 
-def test_inference_job_runtime_dml_has_one_canonical_owner() -> None:
-    covered: set[str] = set()
+def test_durable_job_runtime_dml_has_one_canonical_owner_each() -> None:
+    inference_owners: set[str] = set()
+    recovery_owners: set[str] = set()
     for path in _python_files(PRODUCTION):
         relative = path.relative_to(ROOT).as_posix()
         source = path.read_text(encoding="utf-8")
-        if _DML_PATTERN.search(source):
-            covered.add(relative)
-    assert covered == {_INFERENCE_JOB_RUNTIME_DML_OWNER}
+        if _INFERENCE_DML_PATTERN.search(source):
+            inference_owners.add(relative)
+        if _RECOVERY_DML_PATTERN.search(source):
+            recovery_owners.add(relative)
+    assert inference_owners == {_INFERENCE_JOB_RUNTIME_DML_OWNER}
+    assert recovery_owners == {_RECOVERY_JOB_RUNTIME_DML_OWNER}
 
 
-def test_destructive_owners_reference_inference_jobs_only_in_explicit_table_sets() -> None:
+def test_destructive_owners_reference_internal_jobs_only_in_explicit_table_sets() -> None:
     maintenance = (
         PRODUCTION / "services" / "database_maintenance_service.py"
     ).read_text(encoding="utf-8")
@@ -87,17 +103,21 @@ def test_destructive_owners_reference_inference_jobs_only_in_explicit_table_sets
     ).read_text(encoding="utf-8")
     assert '"activity_inference_job",' in maintenance
     assert '"activity_inference_job",' in backup
-    assert not _DML_PATTERN.search(maintenance)
-    assert not _DML_PATTERN.search(backup)
+    assert '"startup_recovery_job",' in backup
+    assert not _INFERENCE_DML_PATTERN.search(maintenance)
+    assert not _INFERENCE_DML_PATTERN.search(backup)
+    assert not _RECOVERY_DML_PATTERN.search(maintenance)
+    assert not _RECOVERY_DML_PATTERN.search(backup)
 
 
-def test_current_schema_declares_inference_job_and_index_directly() -> None:
+def test_current_schema_declares_durable_jobs_directly() -> None:
     schema = (PRODUCTION / "schema_internal.sql").read_text(encoding="utf-8")
     indexes = (PRODUCTION / "schema_indexes.sql").read_text(encoding="utf-8")
     assert "CREATE TABLE IF NOT EXISTS activity_inference_job" in schema
     assert "reason TEXT NOT NULL CHECK(reason = 'closed_activity')" in schema
     assert "status TEXT NOT NULL CHECK(status IN ('pending', 'failed'))" in schema
     assert "activity_inference_job" in indexes
+    assert "CREATE TABLE IF NOT EXISTS startup_recovery_job" in schema
     assert "legacy_retry" not in schema
 
 
@@ -111,7 +131,9 @@ def test_runtime_and_backup_have_single_lifecycle_owners() -> None:
     ).read_text(encoding="utf-8")
 
     assert "class AppRuntime" in runtime
-    assert "start_inference_worker" in runtime
+    assert "activity_inference_job_service.run_inference_worker" in runtime
+    assert "activity_fact_repair_service.run_activity_resource_repair_worker" in runtime
+    assert "recovery_service.run_startup_recovery_worker" in runtime
     assert "database_maintenance_service.register_collector_pause_handler" in runtime
     assert "from . import database_maintenance_service" in backup
     assert "maintenance_operation(" in backup
@@ -120,10 +142,21 @@ def test_runtime_and_backup_have_single_lifecycle_owners() -> None:
     assert "__getattr__" not in backup
 
 
-def test_app_runtime_has_exactly_one_inference_worker_start_site() -> None:
+def test_app_runtime_has_exactly_one_thread_creation_site_for_derived_workers() -> None:
     runtime = (PRODUCTION / "runtime" / "app_runtime.py").read_text(encoding="utf-8")
-    assert runtime.count("activity_inference_job_service.start_inference_worker(") == 1
+    assert runtime.count("def _start_owned_worker(") == 1
+    assert runtime.count("activity_inference_job_service.run_inference_worker") == 1
     assert "process_pending_inference_jobs(" not in runtime
+    for relative in (
+        "services/folder_index_service.py",
+        "services/history_mutation_job_service.py",
+        "services/activity_inference_job_service.py",
+        "services/activity_fact_repair_service.py",
+        "services/recovery_service.py",
+    ):
+        source = (PRODUCTION / relative).read_text(encoding="utf-8")
+        assert "_WORKER_THREAD" not in source
+        assert "threading.Thread(" not in source
 
 
 def test_non_windows_production_adapter_fails_closed() -> None:
