@@ -6,7 +6,9 @@ from worktrace.runtime import app_runtime
 from worktrace.runtime.app_runtime import (
     AppRuntime,
     RuntimePhase,
-    WorkerReadiness,
+    WorkerStartupReport,
+    WorkerStartupState,
+    WorkerStartupStatus,
 )
 
 pytestmark = [pytest.mark.db, pytest.mark.collector_runtime, pytest.mark.integration]
@@ -80,7 +82,7 @@ def test_authorized_start_skips_derived_workers_when_collector_fails(
     monkeypatch.setattr(
         runtime,
         "start_background_workers",
-        lambda: order.append("workers") or WorkerReadiness(True, True),
+        lambda: order.append("workers") or WorkerStartupReport({}),
     )
 
     result = runtime.start_authorized_collection()
@@ -88,11 +90,7 @@ def test_authorized_start_skips_derived_workers_when_collector_fails(
     assert order == ["collector"]
     assert result.ok is False
     assert result.collector_ready is False
-    assert result.folder_index_ready is False
-    assert result.history_worker_ready is False
-    assert result.inference_worker_ready is False
-    assert result.resource_repair_worker_ready is False
-    assert result.startup_recovery_worker_ready is False
+    assert result.workers == {}
     assert result.error_code == "collector_start_failed"
     assert runtime.phase is RuntimePhase.RECOVERABLE_FAILURE
 
@@ -110,20 +108,30 @@ def test_derived_worker_failure_degrades_ready_collector(
         lambda: order.append("collector")
         or {"ok": True, "started": True, "already_running": False},
     )
+    statuses = {
+        "folder_index": WorkerStartupStatus(
+            WorkerStartupState.FAILED,
+            False,
+            error_code="worker_startup_failed",
+        ),
+        "history": WorkerStartupStatus(WorkerStartupState.READY, True, started=True),
+        "inference": WorkerStartupStatus(WorkerStartupState.READY, True, started=True),
+        "activity_resource_repair": WorkerStartupStatus(
+            WorkerStartupState.READY,
+            True,
+            started=True,
+        ),
+        "startup_recovery": WorkerStartupStatus(
+            WorkerStartupState.READY,
+            True,
+            started=True,
+        ),
+    }
     monkeypatch.setattr(
         runtime,
         "start_background_workers",
         lambda: order.append("workers")
-        or WorkerReadiness(
-            index_ready=False,
-            history_ready=True,
-            history_started=True,
-            inference_ready=True,
-            resource_repair_ready=True,
-            startup_recovery_ready=True,
-            error="worker_start_failed",
-            failed_workers=("folder_index",),
-        ),
+        or WorkerStartupReport(statuses, "worker_start_failed"),
     )
 
     result = runtime.start_authorized_collection()
@@ -131,11 +139,7 @@ def test_derived_worker_failure_degrades_ready_collector(
     assert order == ["collector", "workers"]
     assert result.ok is True
     assert result.collector_ready is True
-    assert result.folder_index_ready is False
-    assert result.history_worker_ready is True
-    assert result.inference_worker_ready is True
-    assert result.resource_repair_worker_ready is True
-    assert result.startup_recovery_worker_ready is True
+    assert result.workers == statuses
     assert result.failed_workers == ("folder_index",)
     assert result.degraded is True
     assert result.error_code is None
