@@ -4,6 +4,7 @@ import logging
 import sqlite3
 import threading
 from datetime import datetime, time as datetime_time, timedelta
+from typing import TYPE_CHECKING
 
 from ..constants import STATUS_ERROR, TIME_FORMAT
 from ..db import get_connection, now_str
@@ -17,6 +18,9 @@ from . import (
 )
 from .runtime_activity_state_service import clear_runtime_activity_state
 from .settings_service import get_setting
+
+if TYPE_CHECKING:
+    from ..worker_health import WorkerHealthReporter
 
 _SYNC_SEGMENT_LIMIT = 4
 _WORKER_SEGMENT_BATCH_SIZE = 7
@@ -128,6 +132,7 @@ def recover_unclosed_records() -> None:
 def run_startup_recovery_worker(
     stop_event: threading.Event,
     *,
+    health: "WorkerHealthReporter | None" = None,
     batch_segments: int = _WORKER_SEGMENT_BATCH_SIZE,
     poll_seconds: float = _WORKER_IDLE_SECONDS,
 ) -> None:
@@ -136,41 +141,58 @@ def run_startup_recovery_worker(
     limit = max(1, int(batch_segments))
     interval = max(0.1, float(poll_seconds))
     logging.info("startup recovery continuation worker start")
-    while not stop_event.is_set():
-        if DATABASE_WRITE_GATE.active():
-            stop_event.wait(interval)
-            continue
-        with get_connection() as conn:
-            jobs = startup_recovery_job_repository.list_runnable_jobs(
-                conn,
-                limit=1,
-            )
-        if not jobs:
-            stop_event.wait(interval)
-            continue
-        job = jobs[0]
-        try:
-            commands, boundaries, next_cursor, completed = _plan_continuation_batch(
-                job,
-                limit,
-            )
-            activity_lifecycle_service.recover_continuation_batch(
-                job_id=int(job["id"]),
-                commands=commands,
-                boundaries=boundaries,
-                next_cursor=next_cursor,
-                completed=completed,
-            )
-        except Exception as exc:
-            code = _classify_recovery_failure(exc)
-            logging.exception(
-                "startup recovery continuation failed job_id=%s code=%s",
-                job.get("id"),
-                code.value,
-            )
-            _record_recovery_failure_safely(int(job["id"]), code)
-            stop_event.wait(interval)
-    logging.info("startup recovery continuation worker stop")
+    if health is not None:
+        health.started()
+    try:
+        while not stop_event.is_set():
+            if DATABASE_WRITE_GATE.active():
+                if health is not None:
+                    health.maintenance_paused(True)
+                stop_event.wait(interval)
+                continue
+            if health is not None:
+                health.maintenance_paused(False)
+            with get_connection() as conn:
+                jobs = startup_recovery_job_repository.list_runnable_jobs(
+                    conn,
+                    limit=1,
+                )
+            if not jobs:
+                if health is not None:
+                    health.succeeded()
+                stop_event.wait(interval)
+                continue
+            job = jobs[0]
+            try:
+                commands, boundaries, next_cursor, completed = _plan_continuation_batch(
+                    job,
+                    limit,
+                )
+                activity_lifecycle_service.recover_continuation_batch(
+                    job_id=int(job["id"]),
+                    commands=commands,
+                    boundaries=boundaries,
+                    next_cursor=next_cursor,
+                    completed=completed,
+                )
+            except Exception as exc:
+                code = _classify_recovery_failure(exc)
+                logging.exception(
+                    "startup recovery continuation failed job_id=%s code=%s",
+                    job.get("id"),
+                    code.value,
+                )
+                _record_recovery_failure_safely(int(job["id"]), code)
+                if health is not None:
+                    health.failed(code.value)
+                stop_event.wait(interval)
+            else:
+                if health is not None:
+                    health.succeeded()
+    finally:
+        if health is not None:
+            health.stopped()
+        logging.info("startup recovery continuation worker stop")
 
 
 def _plan_cross_midnight_row(
