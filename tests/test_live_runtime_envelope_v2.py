@@ -36,7 +36,7 @@ def test_v2_clock_separates_active_elapsed_from_aggregate_duration(monkeypatch):
     assert clock["sample_epoch_ms"] == 12_000
 
 
-def test_v2_recent_first_row_reuses_active_persisted_current_activity():
+def test_v2_recent_first_row_preserves_the_materialized_recent_shape():
     current = {
         "active": True,
         "activity_id": 41,
@@ -44,11 +44,19 @@ def test_v2_recent_first_row_reuses_active_persisted_current_activity():
         "is_in_progress": True,
         "stable_live_key_hash": "stable-1",
     }
+    recent = {
+        "row_kind": "project_session",
+        "activity_id": 41,
+        "duration_seconds": 105,
+        "display_base_seconds": 100,
+        "live_delta_eligible": True,
+        "stable_live_key_hash": "stable-1",
+    }
 
-    assert _recent_first_row({"activities": [{"activity_id": 40}]}, current) == current
+    assert _recent_first_row({"activities": [recent]}, current) == recent
 
 
-def test_v2_recent_first_row_does_not_materialize_unpersisted_status_activity():
+def test_v2_recent_first_row_does_not_materialize_an_absent_recent_row():
     current = {
         "active": True,
         "activity_id": None,
@@ -56,6 +64,5 @@ def test_v2_recent_first_row_does_not_materialize_unpersisted_status_activity():
         "is_in_progress": False,
         "status": "idle",
     }
-    existing = {"activity_id": 40}
 
-    assert _recent_first_row({"activities": [existing]}, current) == existing
+    assert _recent_first_row({"activities": []}, current) is None
