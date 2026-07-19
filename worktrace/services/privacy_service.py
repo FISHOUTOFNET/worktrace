@@ -11,7 +11,7 @@ from ..constants import (
 )
 from ..data_generation_repository import DataGenerationNamespace
 from ..db import dict_rows, get_connection, get_db_key
-from ..generation_clock import generation
+from ..generation_clock import generation_tuple
 from ..path_utils import (
     is_path_under_folder,
     normalize_folder_key,
@@ -22,8 +22,12 @@ from ..resources.title_parsing import extract_file_name_from_title
 
 _EXCLUDE_RULE_CACHE_LOCK = threading.RLock()
 _EXCLUDE_RULE_CACHE_DATABASE_KEY: str | None = None
-_EXCLUDE_RULE_CACHE_GENERATION: int | None = None
+_EXCLUDE_RULE_CACHE_GENERATION: tuple[int, int] | None = None
 _EXCLUDE_RULE_CACHE: dict[str, list[dict]] | None = None
+_EXCLUDE_RULE_CACHE_NAMESPACES = (
+    DataGenerationNamespace.PRIVACY_CATALOG,
+    DataGenerationNamespace.DATABASE_REPLACEMENT,
+)
 
 
 class PrivacyResolutionPending(RuntimeError):
@@ -195,7 +199,7 @@ def _exclude_rules(*, conn=None) -> dict[str, list[dict]]:
         return _load_exclude_rules(conn)
     while True:
         database_key = get_db_key()
-        current_generation = generation(DataGenerationNamespace.PRIVACY_CATALOG)
+        current_generation = generation_tuple(_EXCLUDE_RULE_CACHE_NAMESPACES)
         with _EXCLUDE_RULE_CACHE_LOCK:
             if (
                 _EXCLUDE_RULE_CACHE_DATABASE_KEY == database_key
@@ -205,7 +209,7 @@ def _exclude_rules(*, conn=None) -> dict[str, list[dict]]:
                 return _copy_rule_snapshot(_EXCLUDE_RULE_CACHE)
         with get_connection() as conn:
             result = _load_exclude_rules(conn)
-        if generation(DataGenerationNamespace.PRIVACY_CATALOG) != current_generation:
+        if generation_tuple(_EXCLUDE_RULE_CACHE_NAMESPACES) != current_generation:
             continue
         with _EXCLUDE_RULE_CACHE_LOCK:
             _EXCLUDE_RULE_CACHE_DATABASE_KEY = database_key
