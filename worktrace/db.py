@@ -486,6 +486,7 @@ def drop_all_tables(conn: sqlite3.Connection) -> None:
         DROP TABLE IF EXISTS folder_rule_index_state;
         DROP TABLE IF EXISTS history_mutation_job_rule;
         DROP TABLE IF EXISTS history_mutation_job;
+        DROP TABLE IF EXISTS startup_recovery_job;
         DROP TABLE IF EXISTS activity_inference_job;
         DROP TABLE IF EXISTS report_session_operation_member;
         DROP TABLE IF EXISTS report_mutation_request;
