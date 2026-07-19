@@ -12,7 +12,12 @@ from typing import Any, Callable
 from ..constants import DEFAULT_IDLE_THRESHOLD_SECONDS, TIME_FORMAT
 from ..db import now_str
 from ..platforms.base import PlatformAdapter
-from ..services import clipboard_service, privacy_gate_service, privacy_service
+from ..services import (
+    clipboard_service,
+    folder_index_service,
+    privacy_gate_service,
+    privacy_service,
+)
 from ..services.secure_backup_service import is_secure_import_in_progress
 from ..services.settings_service import (
     get_bool_setting,
@@ -186,13 +191,7 @@ def run_collector(
     startup_ready_event: threading.Event | None = None,
     startup_failed_event: threading.Event | None = None,
 ) -> None:
-    """Run the collector and publish an explicit initialization handshake.
-
-    ``startup_ready_event`` is set only after the state machine, clock tracker,
-    health state, fixed poll contract, and startup pruning have initialized.
-    ``startup_failed_event`` is set when that initialization fails before the
-    collector can enter its service loop.
-    """
+    """Run the collector and publish an explicit initialization handshake."""
 
     try:
         machine = CollectorStateMachine()
@@ -348,9 +347,7 @@ def run_collector(
             phase = "clipboard"
             capture_enabled = clipboard_service.is_capture_enabled()
             _set_clipboard_capture_enabled(adapter, capture_enabled)
-            clipboard_events = (
-                _clipboard_events(adapter) if capture_enabled else []
-            )
+            clipboard_events = _clipboard_events(adapter) if capture_enabled else []
             phase = "idle"
             idle_seconds = adapter.get_idle_seconds()
             idle_threshold = max(1, idle_threshold_seconds)
@@ -360,30 +357,30 @@ def run_collector(
                 machine.transition_to("idle", at_time=observation_time)
             else:
                 phase = "privacy"
-                try:
-                    excluded = privacy_service.is_excluded(active_window)
-                except privacy_service.PrivacyResolutionPending:
+                decision = privacy_service.evaluate_exclusion(active_window)
+                if decision.refresh_required:
+                    folder_index_service.request_refresh_for_enabled_rules(
+                        include_excluded=True
+                    )
+                if decision.resolution_pending:
                     collector_health.record_health_code(
                         "privacy_resolution_pending",
                         observation_time,
                     )
-                    phase = "transition"
+                phase = "transition"
+                if decision.excluded:
                     machine.transition_to("excluded", at_time=observation_time)
                 else:
-                    phase = "transition"
-                    if excluded:
-                        machine.transition_to("excluded", at_time=observation_time)
-                    else:
-                        machine.transition_to(
-                            "recording",
-                            active_window,
+                    machine.transition_to(
+                        "recording",
+                        active_window,
+                        at_time=observation_time,
+                    )
+                    for event in clipboard_events:
+                        machine.record_clipboard_event(
+                            event,
                             at_time=observation_time,
                         )
-                        for event in clipboard_events:
-                            machine.record_clipboard_event(
-                                event,
-                                at_time=observation_time,
-                            )
             collector_health.record_successful_observation(observation_time)
             last_loop_time = observation_time
             next_poll_deadline = _sleep_until_next_poll(
