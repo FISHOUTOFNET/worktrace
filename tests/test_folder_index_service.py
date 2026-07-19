@@ -433,7 +433,6 @@ def test_edited_rule_preview_and_backfill_ignore_previous_generation(
 def test_public_index_candidate_cannot_prove_unresolved_private_path_safe(
     temp_db,
     tmp_path,
-    monkeypatch,
 ):
     project_service.set_excluded_project_enabled(True)
     private_folder = tmp_path / "PrivateActual"
@@ -451,24 +450,20 @@ def test_public_index_candidate_cannot_prove_unresolved_private_path_safe(
         public_project,
     )
     _ready_index(public_rule)
-    refreshes: list[bool] = []
-    monkeypatch.setattr(
-        folder_index_service,
-        "request_refresh_for_enabled_rules",
-        lambda include_excluded=False: refreshes.append(include_excluded),
-    )
 
+    window = ActiveWindow(
+        "Word",
+        "winword.exe",
+        "same.docx - Word",
+        privacy_path_required=True,
+    )
+    decision = privacy_service.evaluate_exclusion(window)
+
+    assert decision.excluded is True
+    assert decision.resolution_pending is True
+    assert decision.refresh_required is True
     with pytest.raises(
         privacy_service.PrivacyResolutionPending,
         match="privacy_path_unresolved",
     ):
-        privacy_service.is_excluded(
-            ActiveWindow(
-                "Word",
-                "winword.exe",
-                "same.docx - Word",
-                privacy_path_required=True,
-            )
-        )
-
-    assert refreshes == [True]
+        privacy_service.is_excluded(window)
