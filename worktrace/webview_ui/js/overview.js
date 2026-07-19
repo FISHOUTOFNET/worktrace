@@ -4,71 +4,41 @@
     "use strict";
     var App = window.WorkTraceApp = window.WorkTraceApp || {};
 
+    function renderKpi(element, durableSeconds, target, continuityKey) {
+        var clock = target && App.validateLiveClock(target.live_clock);
+        var live = !!(target && target.enabled === true && clock && clock.is_live === true
+            && clock.duration_semantic === "aggregate_live");
+        var seconds = live
+            ? App.computeClockDurationNow(clock, Date.now())
+            : Math.max(0, parseInt(durableSeconds, 10) || 0);
+        if (live) App.setLiveClockTarget(element, clock, continuityKey, continuityKey);
+        else App.clearLiveClockTarget(element);
+        App.renderDurationProjected(element, seconds || 0, continuityKey);
+    }
 
     function showOverview(overview) {
         if (!overview) return;
         App.lastOverviewSnapshot = overview;
-        var nowMs = Date.now();
-        var clock = App.getActiveLiveClock();
-        var projectClock = clock && (clock.project_duration_live === true || clock.is_project_duration_live === true);
-        var activeElapsedNowValue = App.computeActiveElapsedNow(clock, nowMs);
         document.getElementById("kpi-date").textContent = overview.date || "--";
         document.getElementById("kpi-projects").textContent = String(overview.project_count || 0);
         var current = overview.current_activity || {};
-        var totalEl = document.getElementById("kpi-total");
-        var totalTarget = kpiLiveTarget(overview, "today_total_seconds");
-        var totalBase = totalTarget.base_seconds;
-        var totalSeconds = (totalTarget.enabled && projectClock)
-            ? App.projectFromDisplayBase(totalBase, activeElapsedNowValue)
-            : (parseInt(overview.today_total_seconds, 10) || 0);
-        if (totalTarget.enabled && projectClock) {
-            App.setLiveProjectionAnchor(totalEl, totalBase, "overview-total", "overview-total");
-        } else {
-            App.clearLiveProjectionAnchor(totalEl);
-        }
-        App.renderDurationProjected(
-            totalEl,
-            totalSeconds,
-            "overview-total",
-            { allowDecrease: !(totalTarget.enabled && projectClock) }
+        renderKpi(
+            document.getElementById("kpi-total"),
+            overview.today_total_seconds,
+            kpiLiveTarget(overview, "today_total_seconds"),
+            "overview-total"
         );
-        var classifiedTarget = kpiLiveTarget(overview, "classified_seconds");
-        var classifiedSeconds = parseInt(overview.classified_seconds, 10) || 0;
-        if (classifiedTarget.enabled && projectClock) {
-            classifiedSeconds = App.projectFromDisplayBase(classifiedTarget.base_seconds, activeElapsedNowValue);
-            App.setLiveProjectionAnchor(
-                document.getElementById("kpi-classified"),
-                classifiedTarget.base_seconds,
-                "overview-classified",
-                "overview-classified"
-            );
-        } else {
-            App.clearLiveProjectionAnchor(document.getElementById("kpi-classified"));
-        }
-        App.renderDurationProjected(
+        renderKpi(
             document.getElementById("kpi-classified"),
-            classifiedSeconds,
-            "overview-classified",
-            { allowDecrease: !(classifiedTarget.enabled && projectClock) }
+            overview.classified_seconds,
+            kpiLiveTarget(overview, "classified_seconds"),
+            "overview-classified"
         );
-        var uncategorizedTarget = kpiLiveTarget(overview, "uncategorized_seconds");
-        var uncategorizedSeconds = parseInt(overview.uncategorized_seconds, 10) || 0;
-        if (uncategorizedTarget.enabled && projectClock) {
-            uncategorizedSeconds = App.projectFromDisplayBase(uncategorizedTarget.base_seconds, activeElapsedNowValue);
-            App.setLiveProjectionAnchor(
-                document.getElementById("kpi-uncategorized"),
-                uncategorizedTarget.base_seconds,
-                "overview-uncategorized",
-                "overview-uncategorized"
-            );
-        } else {
-            App.clearLiveProjectionAnchor(document.getElementById("kpi-uncategorized"));
-        }
-        App.renderDurationProjected(
+        renderKpi(
             document.getElementById("kpi-uncategorized"),
-            uncategorizedSeconds,
-            "overview-uncategorized",
-            { allowDecrease: !(uncategorizedTarget.enabled && projectClock) }
+            overview.uncategorized_seconds,
+            kpiLiveTarget(overview, "uncategorized_seconds"),
+            "overview-uncategorized"
         );
         App.renderCurrentActivityElement(
             document.getElementById("current-activity"),
@@ -80,19 +50,13 @@
 
     function kpiLiveTarget(overview, field) {
         overview = overview || {};
-        var targets = overview.kpi_live_targets || {};
-        var target = targets[field] || {};
-        var legacyBase = App.kpiBaseSeconds(overview, field);
-        return {
-            enabled: target.enabled === true,
-            base_seconds: target.base_seconds !== undefined && target.base_seconds !== null
-                ? (parseInt(target.base_seconds, 10) || 0)
-                : legacyBase
-        };
+        var targets = overview.kpi_live_targets;
+        if (!targets || typeof targets !== "object") return null;
+        var target = targets[field];
+        return target && typeof target === "object" ? target : null;
     }
 
     function showRecent(recentResult) {
-        // Structural cache only — never a live-seconds source.
         App.lastRecentData = recentResult;
         var listEl = document.getElementById("recent-list");
         if (!recentResult || !recentResult.activities || recentResult.activities.length === 0) {
@@ -100,86 +64,46 @@
             return;
         }
         var html = "";
-        var nowMs = Date.now();
-        var activeClock = App.getActiveLiveClock();
-        var activeElapsedNowValue = App.computeActiveElapsedNow(activeClock, nowMs);
         for (var i = 0; i < recentResult.activities.length; i++) {
             var item = recentResult.activities[i];
             var isStatusOnly = item.row_kind === "status_only";
             var inProgress = item.is_in_progress === true || (!item.end_time && item.is_in_progress !== false);
-            var canTick = !isStatusOnly
-                && item.live_delta_eligible === true
-                && !!item.display_span_id;
-            if (!isStatusOnly
-                && item.is_live_projected === true
-                && !item.display_span_id
-                && typeof App.recordLiveClockContractViolation === "function") {
-                App.recordLiveClockContractViolation("", "overview", "recent_live_row_missing_span_id");
+            var clock = App.validateLiveClock(item.live_clock);
+            var canTick = !!(!isStatusOnly
+                && clock
+                && clock.is_live === true
+                && clock.duration_semantic === "aggregate_live");
+            if (item.live_clock && !clock) {
+                App.recordLiveClockContractViolation("", "overview", "recent_invalid_live_clock", 2);
             }
             var timeRange = App.formatTimeRange(item.start_time, item.end_time, inProgress);
-            var durSec = parseInt(item.duration_seconds, 10);
+            var durableSeconds = Math.max(0, parseInt(item.duration_seconds, 10) || 0);
+            var initialSeconds = canTick
+                ? App.computeClockDurationNow(clock, Date.now())
+                : durableSeconds;
+            var continuityKey = canTick ? App.liveContinuityKey(item, "recent") : "";
             var cls = "recent-item";
             if (inProgress) cls += " in-progress";
             if (canTick) cls += " live-projected";
-            // Active-span anchored DOM attributes: ticker reads each row's
-            // own base + active elapsed offset, not a row-owned clock.
-            var spanId = canTick ? (item.display_span_id || "") : "";
-            var rawDurationSemantic = item.duration_semantic;
-            var durationSemantic = String(rawDurationSemantic || "").replace(/_/g, "-");
-            if (canTick && spanId && durationSemantic !== "aggregate-live") {
-                if (typeof App.recordLiveClockContractViolation === "function") {
-                    App.recordLiveClockContractViolation(
-                        spanId,
-                        "overview",
-                        durationSemantic ? "recent_session_non_aggregate_live" : "recent_session_missing_duration_semantic"
-                    );
-                }
-                spanId = "";
-                durationSemantic = "aggregate-live";
-            }
-            var continuityKey = spanId ? App.liveContinuityKey(item, "recent") : "";
-            var displayBaseSec = parseInt(item.display_base_seconds, 10);
-            if (isNaN(displayBaseSec)) displayBaseSec = (!isNaN(durSec) && durSec >= 0) ? durSec : 0;
-            var initialSec = (!isNaN(durSec) && durSec >= 0) ? durSec : 0;
-            if (spanId && activeClock) {
-                initialSec = App.projectFromDisplayBase(displayBaseSec, activeElapsedNowValue);
-            }
-            var prevEntry = continuityKey ? App._monotonicRenderState[continuityKey] : null;
-            if (prevEntry && typeof prevEntry.lastSeconds === "number" && initialSec < prevEntry.lastSeconds) {
-                initialSec = prevEntry.lastSeconds;
-            }
-            var durText = (!isNaN(durSec) && durSec >= 0)
-                ? App.formatDuration(initialSec)
-                : (item.duration || "00:00:00");
+            var durationText = App.formatDuration(initialSeconds || 0);
             var statusText = App.displayStatusText(item);
             var titleText = isStatusOnly
                 ? (item.display_status || item.status_label || statusText || "")
                 : App.formatProjectLabel(item.project_name, item.project_description);
+            var clockAttributes = canTick
+                ? App.liveClockDataAttributes(clock, continuityKey, "recent")
+                : "";
             html += '<div class="' + cls + '" data-recent-index="' + i + '"'
-                + (spanId ? ' data-display-span-id="' + App.escapeHtml(spanId) + '"' : '')
-                + ' data-duration-seconds="' + (isNaN(durSec) ? 0 : durSec) + '"'
-                + '>'
+                + ' data-duration-seconds="' + durableSeconds + '">'
                 + '<div>'
                 + '<div class="recent-item-project">' + App.escapeHtml(titleText) + '</div>'
                 + '<div class="recent-item-time">' + App.escapeHtml(timeRange) + '</div>'
                 + '<div class="recent-item-status">' + App.escapeHtml(statusText) + '</div>'
                 + '</div>'
-                + '<div class="recent-item-duration"'
-                + (spanId ? ' data-live-duration-target="1"' : '')
-                + (spanId ? ' data-duration-semantic="' + App.escapeHtml(durationSemantic) + '"' : '')
-                + (spanId ? ' data-display-span-id="' + App.escapeHtml(spanId) + '"' : '')
-                + (item.stable_live_key_hash ? ' data-stable-live-key-hash="' + App.escapeHtml(item.stable_live_key_hash) + '"' : '')
-                + (spanId ? ' data-display-base-seconds="' + displayBaseSec + '"' : '')
-                + (spanId ? ' data-live-base-seconds="' + displayBaseSec + '"' : '')
-                + (spanId ? ' data-live-role="recent"' : '')
-                + (continuityKey ? ' data-live-continuity-key="' + App.escapeHtml(continuityKey) + '"' : '')
-                + ' data-duration-seconds="' + initialSec + '">'
-                + App.escapeHtml(durText) + '</div>'
+                + '<div class="recent-item-duration"' + clockAttributes
+                + ' data-duration-seconds="' + String(initialSeconds || 0) + '">'
+                + App.escapeHtml(durationText) + '</div>'
                 + '</div>';
-            // Seed monotonic state by the SAME continuity key the ticker reads.
-            if (continuityKey) {
-                App._monotonicRenderState[continuityKey] = { lastSeconds: initialSec };
-            }
         }
         listEl.innerHTML = html;
     }
