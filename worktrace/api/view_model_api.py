@@ -17,9 +17,13 @@ def _attach_runtime(
     *,
     surface: str,
     runtime: "AppRuntime | None",
-    collector_status: Mapping[str, Any],
+    collector_status: Mapping[str, Any] | None,
     scope_report_date: str | None = None,
 ) -> dict[str, Any]:
+    if runtime is None:
+        raise ValueError("runtime_missing")
+    if not isinstance(collector_status, Mapping) or not collector_status:
+        raise ValueError("collector_status_missing")
     live_report_date = str(
         payload.get("today") or timeline_service.get_default_report_date()
     )
@@ -45,7 +49,7 @@ def get_overview_view_model(
             payload,
             surface="overview",
             runtime=runtime,
-            collector_status=collector_status or {},
+            collector_status=collector_status,
             scope_report_date=str(payload.get("date") or today or ""),
         )
 
@@ -62,7 +66,7 @@ def get_timeline_view_model(
             payload,
             surface="timeline",
             runtime=runtime,
-            collector_status=collector_status or {},
+            collector_status=collector_status,
             scope_report_date=str(payload.get("date") or report_date or ""),
         )
 
@@ -85,7 +89,7 @@ def get_session_activity_summary_view_model(
             payload,
             surface="details",
             runtime=runtime,
-            collector_status=collector_status or {},
+            collector_status=collector_status,
             scope_report_date=str(payload.get("date") or report_date or ""),
         )
 
@@ -104,7 +108,7 @@ def get_refresh_state_view_model(
             payload,
             surface="refresh",
             runtime=runtime,
-            collector_status=collector_status or {},
+            collector_status=collector_status,
             scope_report_date=str(payload.get("report_date") or report_date or ""),
         )
 
