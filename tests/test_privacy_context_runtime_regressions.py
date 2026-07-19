@@ -53,11 +53,13 @@ def test_collector_turns_unresolved_privacy_observation_into_excluded_row(
 
     def unresolved(_window):
         stop.set()
-        raise privacy_service.PrivacyResolutionPending(
-            "privacy_path_unresolved"
+        return privacy_service.ExclusionDecision(
+            excluded=True,
+            resolution_pending=True,
+            refresh_required=True,
         )
 
-    monkeypatch.setattr(privacy_service, "is_excluded", unresolved)
+    monkeypatch.setattr(privacy_service, "evaluate_exclusion", unresolved)
     run_collector(
         _OneShotAdapter(
             ActiveWindow(
