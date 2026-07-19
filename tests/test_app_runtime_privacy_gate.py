@@ -45,24 +45,24 @@ def _owned_runtime(temp_db, tmp_path, monkeypatch) -> AppRuntime:
 
 
 def _install_blocking_test_specs(runtime: AppRuntime, *, failing: str | None = None) -> None:
-    def target(stop_event, *, health=None):
-        if health is not None:
-            health.succeeded()
-        stop_event.wait()
-
-    def probe_for(name):
-        def probe(_stop_event):
+    def target_for(name):
+        def target(stop_event, *, health=None):
             if name == failing:
-                raise RuntimeError("startup failed")
-        return probe
+                if health is not None:
+                    health.failed("startup_failed")
+                return
+            if health is not None:
+                health.succeeded()
+            stop_event.wait()
+
+        return target
 
     runtime._worker_specs = {
         name: WorkerSpec(
             name=name,
             thread_name=spec.thread_name,
-            target=target,
+            target=target_for(name),
             args_factory=lambda stop: (stop,),
-            startup_probe=probe_for(name),
             startup_timeout_seconds=0.5,
         )
         for name, spec in runtime._worker_specs.items()
