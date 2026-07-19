@@ -142,6 +142,20 @@ def test_boundary_reasons_and_pause_command_have_no_compatibility_fallback():
     assert "activity_lifecycle_service.pause_collection" not in app_api
 
 
+def test_maintenance_resume_and_status_are_current_only():
+    app_api = _source("worktrace/api/app_api.py")
+    backup_api = _source("worktrace/api/backup_api.py")
+    settings_api = _source("worktrace/api/settings_api.py")
+    combined_status = backup_api + settings_api
+
+    assert "application_runtime_required" in app_api
+    assert "maintenance_recovery_required" in app_api
+    assert "def is_maintenance_in_progress" in backup_api
+    assert '"maintenance_in_progress"' in settings_api
+    assert "secure_import_in_progress" not in combined_status
+    assert "is_secure_import_in_progress" not in combined_status
+
+
 def test_maintenance_unknown_state_requires_terminal_query():
     maintenance = _source("worktrace/services/database_maintenance_service.py")
     collector = _source("worktrace/collector/collector.py")
