@@ -11,7 +11,6 @@ from typing import Any
 
 PROTOCOL = "WORKTRACE_CI_DIAGNOSTICS_V1"
 DEFAULT_MAX_BYTES = 65536
-_TRUNCATION_RESERVE = 256
 
 
 def _single_line(value: object, *, limit: int) -> str:
@@ -31,10 +30,47 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _header_lines(payload: dict[str, Any]) -> list[str]:
+def _normalized_groups(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    groups: list[dict[str, Any]] = []
+    for group in payload.get("root_cause_groups") or []:
+        affected_tests = [
+            _single_line(test_id, limit=300) for test_id in group.get("affected_tests") or []
+        ]
+        groups.append(
+            {
+                "id": _single_line(group.get("id"), limit=80),
+                "kind": _single_line(group.get("kind"), limit=80),
+                "location": _single_line(group.get("representative_location"), limit=200),
+                "message": _single_line(group.get("message"), limit=500),
+                "affected_test_count": len(affected_tests),
+                "affected_tests": affected_tests,
+                "omitted_affected_tests": 0,
+            }
+        )
+    return groups
+
+
+def _normalized_failures(payload: dict[str, Any]) -> list[dict[str, str]]:
+    return [
+        {
+            "test_id": _single_line(failure.get("test_id"), limit=300),
+            "kind": _single_line(failure.get("kind"), limit=80),
+            "location": _single_line(failure.get("location"), limit=200),
+            "message": _single_line(failure.get("message"), limit=500),
+        }
+        for failure in payload.get("failures") or []
+    ]
+
+
+def _render(
+    payload: dict[str, Any],
+    *,
+    groups: list[dict[str, Any]],
+    failures: list[dict[str, str]],
+    omitted_failures: int,
+    truncated: bool,
+) -> str:
     counts = payload.get("counts") or {}
-    failures = payload.get("failures") or []
-    groups = payload.get("root_cause_groups") or []
     lines = [
         PROTOCOL,
         f"schema_version={payload.get('schema_version', '(unknown)')}",
@@ -47,78 +83,69 @@ def _header_lines(payload: dict[str, Any]) -> list[str]:
         lines.append(f"{key}={counts.get(key, 0)}")
     lines.extend(
         [
-            f"failure_count={len(failures)}",
+            f"failure_count={len(payload.get('failures') or [])}",
             f"root_cause_count={len(groups)}",
+            f"omitted_failure_count={omitted_failures}",
         ]
     )
     reason = _single_line(payload.get("reason"), limit=500)
     if reason != "(none)":
         lines.append(f"reason={reason}")
-    return lines
-
-
-def _group_lines(payload: dict[str, Any]) -> list[str]:
-    lines = ["ROOT_CAUSE_GROUPS_BEGIN"]
-    for group in payload.get("root_cause_groups") or []:
-        tests = group.get("affected_tests") or []
-        lines.extend(
-            [
-                f"[{_single_line(group.get('id'), limit=80)}]",
-                f"kind={_single_line(group.get('kind'), limit=80)}",
-                f"location={_single_line(group.get('representative_location'), limit=200)}",
-                f"message={_single_line(group.get('message'), limit=500)}",
-                f"affected_test_count={len(tests)}",
-            ]
-        )
-        lines.extend(f"- {_single_line(test_id, limit=300)}" for test_id in tests)
-    lines.append("ROOT_CAUSE_GROUPS_END")
-    return lines
-
-
-def _failure_lines(payload: dict[str, Any]) -> list[str]:
-    failures = payload.get("failures") or []
-    lines = ["ALL_FAILURES_BEGIN"]
-    for index, failure in enumerate(failures, start=1):
-        lines.append(
-            f"[{index}/{len(failures)}] "
-            f"{_single_line(failure.get('test_id'), limit=300)} | "
-            f"{_single_line(failure.get('kind'), limit=80)} | "
-            f"{_single_line(failure.get('location'), limit=200)} | "
-            f"{_single_line(failure.get('message'), limit=500)}"
-        )
-    lines.append("ALL_FAILURES_END")
-    return lines
-
-
-def _bounded_text(lines: list[str], *, max_bytes: int) -> str:
-    if max_bytes < 1024:
-        raise ValueError("--max-bytes must be at least 1024")
-
-    complete = "\n".join([*lines, "TRUNCATED=false", ""])
-    if len(complete.encode("utf-8")) <= max_bytes:
-        return complete
-
-    kept: list[str] = []
-    budget = max_bytes - _TRUNCATION_RESERVE
-    for line in lines:
-        candidate = "\n".join([*kept, line, ""])
-        if len(candidate.encode("utf-8")) > budget:
-            break
-        kept.append(line)
-
-    truncated = "\n".join(
+    lines.extend(
         [
-            *kept,
-            "TRUNCATED=true",
-            "See diagnostics.json and failure-details.txt in the named artifact for complete data.",
+            "root_cause_groups_json="
+            + json.dumps(groups, ensure_ascii=False, separators=(",", ":")),
+            "failures_json="
+            + json.dumps(failures, ensure_ascii=False, separators=(",", ":")),
+            f"TRUNCATED={'true' if truncated else 'false'}",
             "",
         ]
     )
-    encoded = truncated.encode("utf-8")
-    if len(encoded) > max_bytes:
-        encoded = encoded[:max_bytes]
-        truncated = encoded.decode("utf-8", errors="ignore")
-    return truncated
+    return "\n".join(lines)
+
+
+def _bounded_render(payload: dict[str, Any], *, max_bytes: int) -> str:
+    if max_bytes < 1024:
+        raise ValueError("--max-bytes must be at least 1024")
+
+    groups = _normalized_groups(payload)
+    failures = _normalized_failures(payload)
+    omitted_failures = 0
+    truncated = False
+
+    while True:
+        rendered = _render(
+            payload,
+            groups=groups,
+            failures=failures,
+            omitted_failures=omitted_failures,
+            truncated=truncated,
+        )
+        if len(rendered.encode("utf-8")) <= max_bytes:
+            return rendered
+        truncated = True
+        if failures:
+            failures.pop()
+            omitted_failures += 1
+            continue
+
+        removed_test = False
+        for group in reversed(groups):
+            affected_tests = group["affected_tests"]
+            if affected_tests:
+                affected_tests.pop()
+                group["omitted_affected_tests"] += 1
+                removed_test = True
+                break
+        if removed_test:
+            continue
+
+        for group in groups:
+            if group["message"] != "(omitted for size)":
+                group["message"] = "(omitted for size)"
+                break
+        else:
+            raise ValueError("diagnostics summary cannot fit within --max-bytes")
 
 
 def main() -> int:
@@ -127,12 +154,7 @@ def main() -> int:
     if not isinstance(payload, dict):
         raise ValueError("diagnostics payload must be a JSON object")
 
-    lines = [
-        *_header_lines(payload),
-        *_group_lines(payload),
-        *_failure_lines(payload),
-    ]
-    rendered = _bounded_text(lines, max_bytes=args.max_bytes)
+    rendered = _bounded_render(payload, max_bytes=args.max_bytes)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(rendered, encoding="utf-8", newline="\n")
     return 0
