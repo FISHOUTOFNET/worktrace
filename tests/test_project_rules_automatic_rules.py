@@ -204,12 +204,6 @@ def test_open_hidden_deleted_and_non_normal_rows_are_not_enqueued(temp_db):
         "D:\\Eligibility",
         project_id,
     )
-    open_id = activity_service.create_activity(
-        "Word",
-        "winword.exe",
-        "Open",
-        file_path_hint="D:\\Eligibility\\open.docx",
-    )
     hidden_id = _create_closed_activity(
         file_path_hint="D:\\Eligibility\\hidden.docx"
     )
@@ -219,6 +213,12 @@ def test_open_hidden_deleted_and_non_normal_rows_are_not_enqueued(temp_db):
     idle_id = _create_closed_activity(
         file_path_hint="D:\\Eligibility\\idle.docx",
         status="idle",
+    )
+    open_id = activity_service.create_activity(
+        "Word",
+        "winword.exe",
+        "Open",
+        file_path_hint="D:\\Eligibility\\open.docx",
     )
     with get_connection() as conn:
         conn.execute(
@@ -274,7 +274,11 @@ def test_lifecycle_close_only_enqueues_until_consumer_runs(temp_db):
     )
 
     assert _job(activity_id) is not None
-    assert _assignment(activity_id) == {}
+    provisional = _assignment(activity_id)
+    assert provisional["source"] == "uncategorized"
+    assert int(provisional["is_manual"]) == 0
+    assert provisional["source_rule_type"] is None
+    assert provisional["source_rule_id"] is None
     assert _consume(activity_id) == 1
     assignment = _assignment(activity_id)
     assert int(assignment["project_id"]) == project_id
