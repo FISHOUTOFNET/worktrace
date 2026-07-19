@@ -15,6 +15,12 @@ from .live_display_service import classify_live_state
 
 @dataclass(frozen=True)
 class DisplaySessionPolicy:
+    """Business-only decision describing whether a runtime span may be displayed.
+
+    The policy deliberately owns no timestamps or elapsed-time values. Those are
+    produced by the LiveClock owner after the runtime/SQLite consistency check.
+    """
+
     display_session_kind: str
     base_policy: str
     aggregate_base_seconds: int
@@ -58,6 +64,8 @@ def build_status_display_item(
     report_date: str,
     today: str,
 ) -> dict[str, Any] | None:
+    """Return static status metadata; status rows never carry a ticking contract."""
+
     if report_date != today:
         return None
     status = status_only_reason_for_state(display_live_state)
@@ -77,27 +85,8 @@ def build_status_display_item(
         "end_time": "",
         "duration": "00:00:00",
         "duration_seconds": 0,
-        "duration_semantic": "static_status",
-        "duration_seconds_at_sample": 0,
-        "display_base_seconds": 0,
-        "aggregate_display_base_seconds": 0,
-        "current_live_base_seconds": 0,
-        "current_live_seconds_at_sample": 0,
         "contributes_to_totals": False,
-        "project_duration_live": False,
-        "current_duration_live": False,
-        "live_delta_eligible": False,
-        "is_live": False,
-        "is_project_duration_live": False,
         "is_in_progress": False,
-        "is_live_projected": False,
-        "is_virtual": False,
-        "is_virtual_live": False,
-        "display_span_id": "",
-        "stable_live_key": "",
-        "stable_live_key_hash": "",
-        "live_started_at_epoch_ms": 0,
-        "carry_seconds": 0,
         "exportable": False,
         "editable": False,
         "edit_disabled": True,
@@ -115,7 +104,9 @@ def build_display_session_policy(
     display_live_state: str,
     summary: CurrentActivityContract,
 ) -> DisplaySessionPolicy:
-    del anchor
+    """Decide materialization from durable/runtime state, never from clock fields."""
+
+    del anchor, summary
     if not snapshot:
         return DisplaySessionPolicy(
             display_session_kind="none",
@@ -147,7 +138,6 @@ def build_display_session_policy(
         )
 
     status = str(snapshot.get("status") or "")
-    live_started_at = int(summary.get("live_started_at_epoch_ms") or 0)
     if (
         display_live_state in ("paused", "idle", "excluded", "error", "status_only")
         or status != STATUS_NORMAL
@@ -167,19 +157,21 @@ def build_display_session_policy(
             base_policy_reason="status_not_project_live",
         )
 
-    if display_live_state == "persisted_open":
+    persisted_activity_id = int(snapshot.get("persisted_activity_id") or 0)
+    persisted = bool(snapshot.get("is_persisted") and persisted_activity_id > 0)
+    if display_live_state == "persisted_open" and persisted:
         return DisplaySessionPolicy(
             display_session_kind="persisted_open",
             base_policy="persisted_open",
             aggregate_base_seconds=0,
             current_base_seconds=0,
             project_duration_live=True,
-            current_duration_live=live_started_at > 0,
+            current_duration_live=True,
             materialize_recent=True,
             materialize_timeline=True,
             materialize_details=True,
             status_only_reason="",
-            base_policy_reason="persisted_open_current_elapsed",
+            base_policy_reason="persisted_open_verified_runtime",
         )
 
     return DisplaySessionPolicy(
