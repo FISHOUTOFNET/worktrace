@@ -102,11 +102,15 @@ def test_all_cross_database_caches_listen_to_replacement_epoch() -> None:
         "worktrace/services/folder_rule_service.py",
         "worktrace/services/project_inference_service.py",
         "worktrace/services/privacy_service.py",
+        "worktrace/services/report_revision_service.py",
     )
     for relative in cache_modules:
         source = _source(relative)
         assert "DataGenerationNamespace.DATABASE_REPLACEMENT" in source, relative
-        assert "generation_tuple(" in source, relative
+        assert (
+            "generation_tuple(" in source
+            or "DataGenerationRepository.get_many(" in source
+        ), relative
 
 
 def test_all_derived_workers_are_blocking_entrypoints() -> None:
@@ -133,7 +137,6 @@ def test_all_derived_workers_are_blocking_entrypoints() -> None:
 
 def test_worker_health_is_process_local_and_runtime_owned() -> None:
     health_tree = _tree("worktrace/worker_health.py")
-    runtime = _tree("worktrace/runtime/app_runtime.py")
     module_level_registry = [
         node
         for node in health_tree.body
