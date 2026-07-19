@@ -134,8 +134,16 @@ def test_overview_api_exposes_one_v2_runtime_transport(temp_db):
         "revisions",
     }
     assert not RUNTIME_TOP_LEVEL_ALIASES.intersection(result)
-    if runtime["current_activity"] and runtime["current_activity"].get("active"):
-        assert runtime["recent_first_row"] == runtime["current_activity"]
+    current = runtime["current_activity"] or {}
+    recent = runtime["recent_first_row"] or {}
+    if current.get("active") and current.get("is_in_progress"):
+        assert recent
+        assert recent.get("stable_live_key_hash") == current.get(
+            "stable_live_key_hash"
+        )
+        assert recent.get("display_span_id") == runtime["identity"][
+            "display_span_id"
+        ]
 
 
 def test_schema_trigger_surface_is_constraint_only(temp_db):
