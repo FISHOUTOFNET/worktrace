@@ -153,7 +153,8 @@ Full validation:
 Standard CI validates one exact revision and publishes complete Python diagnostics
 when the suite fails. Diagnosis and repair are performed by root-cause group from
 the full manifest; individual failing tests are not treated as independent patch
-targets.
+targets. Concurrency tests use bounded events or joins rather than explicit sleep
+polling, and the inventory gate requires their runtime-risk markers.
 
 Only `.github/workflows/ci.yml` and its reusable Standard validation workflow are
 used. Acceptance and temporary agent workflows are not part of the architecture.
