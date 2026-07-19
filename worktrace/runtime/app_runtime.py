@@ -7,7 +7,7 @@ import threading
 import time
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 from .. import db
 from ..collector import collector_health
@@ -15,6 +15,7 @@ from ..collector.collector import CollectorControl, run_collector
 from ..collector.single_instance import acquire_single_instance, release_single_instance
 from ..platforms.windows_adapter import WindowsAdapter
 from ..services import (
+    activity_fact_repair_service,
     activity_inference_job_service,
     activity_lifecycle_service,
     database_maintenance_service,
@@ -62,16 +63,30 @@ class WorkerReadiness:
     error: str | None = None
     inference_ready: bool = True
     inference_started: bool = False
+    resource_repair_ready: bool = True
+    resource_repair_started: bool = False
+    startup_recovery_ready: bool = True
+    startup_recovery_started: bool = False
     failed_workers: tuple[str, ...] = ()
 
     @property
     def ready(self) -> bool:
-        return bool(self.index_ready and self.history_ready and self.inference_ready)
+        return bool(
+            self.index_ready
+            and self.history_ready
+            and self.inference_ready
+            and self.resource_repair_ready
+            and self.startup_recovery_ready
+        )
 
     @property
     def started_any(self) -> bool:
         return bool(
-            self.index_started or self.history_started or self.inference_started
+            self.index_started
+            or self.history_started
+            or self.inference_started
+            or self.resource_repair_started
+            or self.startup_recovery_started
         )
 
     def to_dict(self) -> dict[str, object]:
@@ -80,9 +95,13 @@ class WorkerReadiness:
             "index_ready": self.index_ready,
             "history_ready": self.history_ready,
             "inference_ready": self.inference_ready,
+            "resource_repair_ready": self.resource_repair_ready,
+            "startup_recovery_ready": self.startup_recovery_ready,
             "index_started": self.index_started,
             "history_started": self.history_started,
             "inference_started": self.inference_started,
+            "resource_repair_started": self.resource_repair_started,
+            "startup_recovery_started": self.startup_recovery_started,
             "failed_workers": list(self.failed_workers),
             "error": self.error,
         }
@@ -100,6 +119,8 @@ class RuntimeStartResult:
     degraded: bool = False
     error_code: str | None = None
     inference_worker_ready: bool = True
+    resource_repair_worker_ready: bool = True
+    startup_recovery_worker_ready: bool = True
     failed_workers: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, object]:
@@ -109,6 +130,8 @@ class RuntimeStartResult:
             "folder_index_ready": self.folder_index_ready,
             "history_worker_ready": self.history_worker_ready,
             "inference_worker_ready": self.inference_worker_ready,
+            "resource_repair_worker_ready": self.resource_repair_worker_ready,
+            "startup_recovery_worker_ready": self.startup_recovery_worker_ready,
             "already_running": self.already_running,
             "degraded": self.degraded,
             "background_worker_degraded": self.degraded,
@@ -150,12 +173,14 @@ class AppRuntime:
         self._index_thread: threading.Thread | None = None
         self._history_thread: threading.Thread | None = None
         self._inference_thread: threading.Thread | None = None
+        self._resource_repair_thread: threading.Thread | None = None
+        self._startup_recovery_thread: threading.Thread | None = None
         self._registered_collector_thread_id: int | None = None
         self._initialized = False
         self._shutdown = False
 
     def initialize(self) -> bool:
-        """Acquire the application lease and initialize only required state."""
+        """Acquire the application lease and perform bounded startup recovery."""
 
         with self._lifecycle_lock:
             if self._initialized:
@@ -181,17 +206,70 @@ class AppRuntime:
             self.phase = RuntimePhase.INITIALIZED
             return True
 
+    def _start_owned_worker(
+        self,
+        *,
+        reference_name: str,
+        worker_name: str,
+        target: Callable[..., None],
+        args: tuple[Any, ...] = (),
+    ) -> tuple[bool, bool]:
+        """Start one blocking worker target and retain its only thread reference."""
+
+        current = getattr(self, reference_name)
+        if _thread_reference_is_alive(current):
+            return True, False
+        if current is not None:
+            setattr(self, reference_name, None)
+        thread = threading.Thread(
+            target=target,
+            args=args,
+            name=worker_name,
+            daemon=True,
+        )
+        setattr(self, reference_name, thread)
+        try:
+            thread.start()
+        except Exception:
+            setattr(self, reference_name, None)
+            raise
+        ready = _thread_reference_is_alive(thread)
+        if not ready:
+            setattr(self, reference_name, None)
+        return ready, ready
+
+    def _clear_dead_worker_references(self) -> None:
+        for reference_name in (
+            "_index_thread",
+            "_history_thread",
+            "_inference_thread",
+            "_resource_repair_thread",
+            "_startup_recovery_thread",
+        ):
+            thread = getattr(self, reference_name)
+            if thread is not None and not _thread_reference_is_alive(thread):
+                setattr(self, reference_name, None)
+
     def start_background_workers(self) -> WorkerReadiness:
         """Start each bounded non-critical worker at most once."""
 
         with self._lifecycle_lock:
+            all_worker_names = (
+                "folder_index",
+                "history",
+                "inference",
+                "activity_resource_repair",
+                "startup_recovery",
+            )
             if not self._initialized or not self.owns_application_instance:
                 return WorkerReadiness(
                     False,
                     False,
                     error="runtime_not_owned",
                     inference_ready=False,
-                    failed_workers=("folder_index", "history", "inference"),
+                    resource_repair_ready=False,
+                    startup_recovery_ready=False,
+                    failed_workers=all_worker_names,
                 )
             if self._shutdown or self.stop_event.is_set():
                 return WorkerReadiness(
@@ -199,54 +277,48 @@ class AppRuntime:
                     False,
                     error="runtime_stopping",
                     inference_ready=False,
-                    failed_workers=("folder_index", "history", "inference"),
+                    resource_repair_ready=False,
+                    startup_recovery_ready=False,
+                    failed_workers=all_worker_names,
                 )
 
-            index_ready = _thread_reference_is_alive(self._index_thread)
-            index_started = False
-            if not index_ready:
-                try:
-                    self._index_thread = folder_index_service.start_folder_index_worker(
-                        self.stop_event
-                    )
-                    index_ready = _thread_reference_is_alive(self._index_thread)
-                    index_started = index_ready
-                except Exception:
-                    self._index_thread = None
-                    logging.exception("folder index worker initialization failed")
+            self._clear_dead_worker_references()
 
-            history_ready = _thread_reference_is_alive(self._history_thread)
-            history_started = False
-            if not history_ready:
-                try:
-                    self._history_thread = (
-                        history_mutation_job_service.start_history_worker(
-                            self.stop_event
-                        )
-                    )
-                    history_ready = _thread_reference_is_alive(self._history_thread)
-                    history_started = history_ready
-                except Exception:
-                    self._history_thread = None
-                    logging.exception("history worker initialization failed")
-
-            inference_ready = _thread_reference_is_alive(self._inference_thread)
-            inference_started = False
-            if not inference_ready:
-                try:
-                    self._inference_thread = (
-                        activity_inference_job_service.start_inference_worker(
-                            self.stop_event,
-                            project_inference_service.assign_project_for_activity_in_transaction,
-                        )
-                    )
-                    inference_ready = _thread_reference_is_alive(
-                        self._inference_thread
-                    )
-                    inference_started = inference_ready
-                except Exception:
-                    self._inference_thread = None
-                    logging.exception("inference worker initialization failed")
+            index_ready, index_started = self._start_worker_safely(
+                reference_name="_index_thread",
+                worker_name="WorkTraceFolderIndex",
+                target=folder_index_service.run_folder_index_worker,
+                failure_log="folder index worker initialization failed",
+            )
+            history_ready, history_started = self._start_worker_safely(
+                reference_name="_history_thread",
+                worker_name="WorkTraceHistoryMutation",
+                target=history_mutation_job_service.run_history_worker,
+                failure_log="history worker initialization failed",
+            )
+            inference_ready, inference_started = self._start_worker_safely(
+                reference_name="_inference_thread",
+                worker_name="WorkTraceInferenceWorker",
+                target=activity_inference_job_service.run_inference_worker,
+                args=(
+                    self.stop_event,
+                    project_inference_service.assign_project_for_activity_in_transaction,
+                ),
+                include_stop_event=False,
+                failure_log="inference worker initialization failed",
+            )
+            resource_repair_ready, resource_repair_started = self._start_worker_safely(
+                reference_name="_resource_repair_thread",
+                worker_name="WorkTraceActivityResourceRepair",
+                target=activity_fact_repair_service.run_activity_resource_repair_worker,
+                failure_log="activity resource repair worker initialization failed",
+            )
+            startup_recovery_ready, startup_recovery_started = self._start_worker_safely(
+                reference_name="_startup_recovery_thread",
+                worker_name="WorkTraceStartupRecovery",
+                target=recovery_service.run_startup_recovery_worker,
+                failure_log="startup recovery worker initialization failed",
+            )
 
             failed_workers = tuple(
                 name
@@ -254,6 +326,8 @@ class AppRuntime:
                     ("folder_index", index_ready),
                     ("history", history_ready),
                     ("inference", inference_ready),
+                    ("activity_resource_repair", resource_repair_ready),
+                    ("startup_recovery", startup_recovery_ready),
                 )
                 if not ready
             )
@@ -265,8 +339,35 @@ class AppRuntime:
                 error="worker_start_failed" if failed_workers else None,
                 inference_ready=inference_ready,
                 inference_started=inference_started,
+                resource_repair_ready=resource_repair_ready,
+                resource_repair_started=resource_repair_started,
+                startup_recovery_ready=startup_recovery_ready,
+                startup_recovery_started=startup_recovery_started,
                 failed_workers=failed_workers,
             )
+
+    def _start_worker_safely(
+        self,
+        *,
+        reference_name: str,
+        worker_name: str,
+        target: Callable[..., None],
+        failure_log: str,
+        args: tuple[Any, ...] = (),
+        include_stop_event: bool = True,
+    ) -> tuple[bool, bool]:
+        try:
+            worker_args = (self.stop_event, *args) if include_stop_event else args
+            return self._start_owned_worker(
+                reference_name=reference_name,
+                worker_name=worker_name,
+                target=target,
+                args=worker_args,
+            )
+        except Exception:
+            setattr(self, reference_name, None)
+            logging.exception(failure_log)
+            return False, False
 
     def start_authorized_collection(self) -> RuntimeStartResult:
         """Start critical Collector first, then non-critical workers."""
@@ -281,6 +382,8 @@ class AppRuntime:
                     degraded=True,
                     error_code="runtime_not_owned",
                     inference_worker_ready=False,
+                    resource_repair_worker_ready=False,
+                    startup_recovery_worker_ready=False,
                 )
             if self._shutdown or self.stop_event.is_set():
                 return RuntimeStartResult(
@@ -291,6 +394,8 @@ class AppRuntime:
                     degraded=True,
                     error_code="runtime_stopping",
                     inference_worker_ready=False,
+                    resource_repair_worker_ready=False,
+                    startup_recovery_worker_ready=False,
                 )
             self.phase = RuntimePhase.STARTING
 
@@ -317,6 +422,8 @@ class AppRuntime:
                 degraded=True,
                 error_code=error_code,
                 inference_worker_ready=False,
+                resource_repair_worker_ready=False,
+                startup_recovery_worker_ready=False,
             )
 
         try:
@@ -328,7 +435,15 @@ class AppRuntime:
                 False,
                 error="worker_start_failed",
                 inference_ready=False,
-                failed_workers=("folder_index", "history", "inference"),
+                resource_repair_ready=False,
+                startup_recovery_ready=False,
+                failed_workers=(
+                    "folder_index",
+                    "history",
+                    "inference",
+                    "activity_resource_repair",
+                    "startup_recovery",
+                ),
             )
 
         degraded = not workers.ready
@@ -339,6 +454,8 @@ class AppRuntime:
             folder_index_ready=workers.index_ready,
             history_worker_ready=workers.history_ready,
             inference_worker_ready=workers.inference_ready,
+            resource_repair_worker_ready=workers.resource_repair_ready,
+            startup_recovery_worker_ready=workers.startup_recovery_ready,
             already_running=bool(collector_result.get("already_running")),
             degraded=degraded,
             failed_workers=workers.failed_workers,
@@ -557,12 +674,14 @@ class AppRuntime:
             folder_index_service.wake_folder_index_worker()
             if self._collector_stop_event is not None:
                 self._collector_stop_event.set()
-            workers = (
+            derived_workers = (
                 self._index_thread,
                 self._history_thread,
                 self._inference_thread,
-                self._collector_thread,
+                self._resource_repair_thread,
+                self._startup_recovery_thread,
             )
+            workers = (*derived_workers, self._collector_thread)
 
         adapter_shutdown = False
         collector_thread = self._collector_thread
@@ -581,15 +700,14 @@ class AppRuntime:
         if not _thread_reference_is_alive(self._collector_thread):
             self._clear_collector_write_thread()
 
-        for thread in (
-            self._index_thread,
-            self._history_thread,
-            self._inference_thread,
-        ):
+        for thread in derived_workers:
             if thread:
                 joiner = getattr(thread, "join", None)
                 if joiner is not None:
                     joiner(timeout=5)
+
+        with self._lifecycle_lock:
+            self._clear_dead_worker_references()
 
         writers_stopped = not any(
             _thread_reference_is_alive(thread) for thread in workers
