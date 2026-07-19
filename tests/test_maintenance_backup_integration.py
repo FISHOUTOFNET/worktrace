@@ -174,7 +174,7 @@ def test_maintenance_seals_active_status_without_session_boundary(temp_db, statu
     assert row["duration_seconds"] == 45
     assert row["status"] == status
     assert boundaries == 0
-    assert jobs == 1
+    assert jobs == (1 if status == "normal" else 0)
 
 
 def test_maintenance_does_not_change_existing_user_pause(temp_db):
