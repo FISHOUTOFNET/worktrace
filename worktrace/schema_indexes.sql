@@ -41,6 +41,9 @@ ON history_mutation_job_rule(rule_type, rule_id, job_id);
 CREATE INDEX IF NOT EXISTS idx_activity_inference_job_runnable
 ON activity_inference_job(status, next_attempt_at, activity_id);
 
+CREATE INDEX IF NOT EXISTS idx_startup_recovery_job_runnable
+ON startup_recovery_job(status, next_attempt_at, id);
+
 CREATE INDEX IF NOT EXISTS idx_assignment_project
 ON activity_project_assignment(project_id);
 
