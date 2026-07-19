@@ -39,9 +39,16 @@ survive into the new database generation.
 After replacement, the coordinator restores the pre-maintenance state:
 
 - a previously running, privacy-authorized, non-user-paused Collector resumes;
-- durable user pause remains paused;
+- durable user pause remains paused, including when collection is also blocked
+  by the privacy gate;
 - an unaccepted privacy notice never starts collection;
 - failed or unknown quiesce/reset/restore state fails closed.
+
+Restoration and fail-closed writes publish the settings generation whenever
+`user_paused` changes. Cached readers therefore cannot retain an unsafe value
+from before maintenance. The runtime snapshot is cleared before replacement;
+it is not cleared again after restoration because the Collector may already
+have published the first sample of the new generation.
 
 Neither secure import nor clear-all is a durable user session boundary.
 
