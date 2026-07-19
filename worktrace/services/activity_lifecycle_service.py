@@ -18,6 +18,7 @@ from . import (
     activity_fact_repository,
     activity_inference_job_repository,
     session_boundary_service,
+    startup_recovery_job_repository,
 )
 from .settings_service import set_settings_in_transaction
 
@@ -251,71 +252,128 @@ def persist_midnight_anchor(
 def recover_activity_batch(
     commands: list[dict[str, Any]],
     boundaries: list[dict[str, str]],
+    continuations: list[dict[str, Any]] | None = None,
 ) -> dict[str, list[int]]:
-    """Commit all startup recovery activity facts and boundaries atomically."""
+    """Commit bounded startup facts, boundaries, and continuation jobs atomically."""
 
-    closed_ids: list[int] = []
-    created_ids: list[int] = []
-    changed = False
     with _report_uow() as uow:
         conn = uow.connection
-        for command in commands:
-            kind = str(command.get("kind") or "")
-            if kind == "close":
-                activity_id = int(command["activity_id"])
-                if activity_fact_repository.close_activity(
-                    conn,
-                    activity_id,
-                    str(command["end_time"]),
-                    duration_seconds=int(command.get("duration_seconds") or 0),
-                    status=str(command.get("status") or "") or None,
-                ):
-                    closed_ids.append(activity_id)
-                    changed = True
-                continue
-            if kind != "segment":
-                raise ValueError("invalid_recovery_command")
-            status = str(command.get("status") or STATUS_NORMAL)
-            project_id = command.get("project_id")
-            prepared = activity_fact_repository.prepare_activity(
-                start_time=str(command["start_time"]),
-                source=str(command["source"]),
-                payload={**dict(command.get("payload") or {}), "status": status},
-                initial_project_id=(
-                    int(project_id)
-                    if status == STATUS_NORMAL and project_id is not None
-                    else None
-                ),
-                assignment_source=(
-                    "midnight_anchor"
-                    if status == STATUS_NORMAL and project_id is not None
-                    else None
-                ),
-                assignment_confidence=(
-                    90 if status == STATUS_NORMAL and project_id is not None else None
-                ),
-            )
-            activity_id = activity_fact_repository.insert_open_activity(conn, prepared)
-            if not activity_fact_repository.close_activity(
+        closed_ids, created_ids, changed = _apply_recovery_commands(
+            conn,
+            commands,
+            boundaries,
+        )
+        for continuation in continuations or []:
+            inserted = startup_recovery_job_repository.enqueue_continuation(
                 conn,
-                activity_id,
-                str(command["end_time"]),
-            ):
-                raise ValueError("recovery_segment_close_failed")
-            created_ids.append(activity_id)
-            closed_ids.append(activity_id)
-            changed = True
-        _enqueue_closed_inference_jobs(conn, closed_ids)
-        for boundary in boundaries:
-            session_boundary_service.insert_boundary(
-                conn,
-                str(boundary["occurred_at"]),
-                str(boundary["reason"]),
+                source_activity_id=int(continuation["source_activity_id"]),
+                cursor_time=str(continuation["cursor_time"]),
+                end_time=str(continuation["end_time"]),
+                source=str(continuation["source"]),
+                activity_status=str(continuation["activity_status"]),
+                app_name=str(continuation.get("app_name") or ""),
+                process_name=str(continuation.get("process_name") or ""),
+                window_title=str(continuation.get("window_title") or ""),
+                file_path_hint=continuation.get("file_path_hint"),
+                project_id=continuation.get("project_id"),
             )
-            changed = True
+            if inserted:
+                changed = True
         if changed:
             uow.mark_changed()
     return {"closed_ids": closed_ids, "created_ids": created_ids}
+
+
+def recover_continuation_batch(
+    *,
+    job_id: int,
+    commands: list[dict[str, Any]],
+    boundaries: list[dict[str, str]],
+    next_cursor: str,
+    completed: bool,
+) -> dict[str, list[int]]:
+    """Commit one bounded continuation batch and its durable progress atomically."""
+
+    with _report_uow() as uow:
+        conn = uow.connection
+        closed_ids, created_ids, _changed = _apply_recovery_commands(
+            conn,
+            commands,
+            boundaries,
+        )
+        startup_recovery_job_repository.advance_job(
+            conn,
+            job_id=int(job_id),
+            cursor_time=str(next_cursor),
+            completed=bool(completed),
+        )
+        uow.mark_changed()
+    return {"closed_ids": closed_ids, "created_ids": created_ids}
+
+
+def _apply_recovery_commands(
+    conn,
+    commands: list[dict[str, Any]],
+    boundaries: list[dict[str, str]],
+) -> tuple[list[int], list[int], bool]:
+    closed_ids: list[int] = []
+    created_ids: list[int] = []
+    changed = False
+    for command in commands:
+        kind = str(command.get("kind") or "")
+        if kind == "close":
+            activity_id = int(command["activity_id"])
+            if activity_fact_repository.close_activity(
+                conn,
+                activity_id,
+                str(command["end_time"]),
+                duration_seconds=int(command.get("duration_seconds") or 0),
+                status=str(command.get("status") or "") or None,
+            ):
+                closed_ids.append(activity_id)
+                changed = True
+            continue
+        if kind != "segment":
+            raise ValueError("invalid_recovery_command")
+        status = str(command.get("status") or STATUS_NORMAL)
+        project_id = command.get("project_id")
+        prepared = activity_fact_repository.prepare_activity(
+            start_time=str(command["start_time"]),
+            source=str(command["source"]),
+            payload={**dict(command.get("payload") or {}), "status": status},
+            initial_project_id=(
+                int(project_id)
+                if status == STATUS_NORMAL and project_id is not None
+                else None
+            ),
+            assignment_source=(
+                "midnight_anchor"
+                if status == STATUS_NORMAL and project_id is not None
+                else None
+            ),
+            assignment_confidence=(
+                90 if status == STATUS_NORMAL and project_id is not None else None
+            ),
+        )
+        activity_id = activity_fact_repository.insert_open_activity(conn, prepared)
+        if not activity_fact_repository.close_activity(
+            conn,
+            activity_id,
+            str(command["end_time"]),
+        ):
+            raise ValueError("recovery_segment_close_failed")
+        created_ids.append(activity_id)
+        closed_ids.append(activity_id)
+        changed = True
+    _enqueue_closed_inference_jobs(conn, closed_ids)
+    for boundary in boundaries:
+        session_boundary_service.insert_boundary(
+            conn,
+            str(boundary["occurred_at"]),
+            str(boundary["reason"]),
+        )
+        changed = True
+    return closed_ids, created_ids, changed
 
 
 def mark_activity_error(activity_id: int) -> bool:
@@ -420,11 +478,12 @@ __all__ = [
     "close_at_boundary",
     "force_persist_open_activity_for_clipboard",
     "mark_activity_error",
+    "pause_collection",
     "persist_midnight_anchor",
     "persist_open_activity",
-    "pause_collection",
     "recover_activity_batch",
     "recover_close_activity",
+    "recover_continuation_batch",
     "recover_cross_midnight_segment",
     "recover_first_half_close",
     "start_activity",
