@@ -14,11 +14,10 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Standard validation keeps full failure diagnostics observable through bounded log partitions.
   validate:
     name: Standard validation
     uses: ./.github/workflows/_validation.yml
     with:
       revision: ${{ github.event.pull_request.head.sha || github.sha }}
-      run_node_tests: false
-      run_build_smoke: false
+      run_node_tests: true
+      run_build_smoke: true
