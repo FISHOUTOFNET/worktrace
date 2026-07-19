@@ -3,8 +3,12 @@ from __future__ import annotations
 import threading
 import time
 
+import pytest
+
 from worktrace.collector.collector import CollectorCommandKind
 from worktrace.collector.runtime_control import RuntimeCollectorControl
+
+pytestmark = [pytest.mark.unit, pytest.mark.collector_runtime]
 
 
 def _request_in_thread(control: RuntimeCollectorControl, result: dict) -> threading.Thread:
@@ -18,7 +22,7 @@ def _request_in_thread(control: RuntimeCollectorControl, result: dict) -> thread
         with control._lock:
             if CollectorCommandKind.MAINTENANCE_HOLD in control._pending_ids:
                 break
-        time.sleep(0.005)
+        thread.join(timeout=0.005)
     return thread
 
 
@@ -73,7 +77,7 @@ def test_timeout_unknown_can_be_terminalized_after_requester_returns() -> None:
     while time.monotonic() < deadline and command_id is None:
         command_id = control.take_maintenance_hold_request()
         if command_id is None:
-            time.sleep(0.005)
+            thread.join(timeout=0.005)
     thread.join(timeout=1.0)
 
     assert command_id
