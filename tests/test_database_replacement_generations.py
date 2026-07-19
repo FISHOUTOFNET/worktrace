@@ -140,7 +140,7 @@ def test_ordinary_domain_writes_do_not_advance_replacement(temp_db):
 
     settings_service.set_setting("ui_refresh_seconds", "77")
     project_service.create_project("Ordinary Domain Write")
-    rule_catalog_command_service.create_excluded_folder_rule(
+    rule_catalog_command_service.create_or_update_excluded_folder_rule(
         "D:\\ReplacementPrivacy",
         recursive=True,
     )
