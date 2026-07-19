@@ -41,7 +41,7 @@ def parse_encrypted_backup_manifest(input_path: str | Path) -> BackupManifestInf
     return secure_backup_service.parse_encrypted_backup_manifest(input_path)
 
 
-def is_secure_import_in_progress() -> bool:
+def is_maintenance_in_progress() -> bool:
     """Expose the canonical maintenance gate as a read-only UI status."""
 
     return database_maintenance_service.is_maintenance_in_progress()
@@ -57,6 +57,6 @@ __all__ = [
     "SecureBackupError",
     "export_encrypted_backup",
     "import_encrypted_backup",
-    "is_secure_import_in_progress",
+    "is_maintenance_in_progress",
     "parse_encrypted_backup_manifest",
 ]
