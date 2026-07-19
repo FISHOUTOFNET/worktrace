@@ -23,8 +23,6 @@ _SCAN_BATCH_SIZE = 250
 _WORKER_IDLE_SECONDS = 5.0
 _MISS_REFRESH_COOLDOWN_SECONDS = 60.0
 
-_WORKER_LOCK = threading.Lock()
-_WORKER_THREAD: threading.Thread | None = None
 _WORKER_WAKE_EVENT = threading.Event()
 _MISS_REFRESH_TIMES: dict[tuple[str, bool], float] = {}
 
@@ -225,31 +223,9 @@ def mark_index_stale(rule_id: int, reason: str = "") -> None:
         )
 
 
-def start_folder_index_worker(stop_event: threading.Event) -> threading.Thread | None:
-    global _WORKER_THREAD
-    with _WORKER_LOCK:
-        if _WORKER_THREAD is not None and _WORKER_THREAD.is_alive():
-            return _WORKER_THREAD
-        _WORKER_THREAD = threading.Thread(
-            target=_worker_loop,
-            args=(stop_event,),
-            name="WorkTraceFolderIndex",
-            daemon=True,
-        )
-        _WORKER_THREAD.start()
-        return _WORKER_THREAD
+def run_folder_index_worker(stop_event: threading.Event) -> None:
+    """Run the blocking folder-index loop owned by ``AppRuntime``."""
 
-
-def wake_folder_index_worker() -> None:
-    _WORKER_WAKE_EVENT.set()
-
-
-def _wait_for_worker() -> None:
-    _WORKER_WAKE_EVENT.wait(_WORKER_IDLE_SECONDS)
-    _WORKER_WAKE_EVENT.clear()
-
-
-def _worker_loop(stop_event: threading.Event) -> None:
     logging.info("folder index worker start")
     try:
         ensure_index_states_for_folder_rules()
@@ -271,6 +247,15 @@ def _worker_loop(stop_event: threading.Event) -> None:
             logging.exception("folder index worker error")
             _wait_for_worker()
     logging.info("folder index worker stop")
+
+
+def wake_folder_index_worker() -> None:
+    _WORKER_WAKE_EVENT.set()
+
+
+def _wait_for_worker() -> None:
+    _WORKER_WAKE_EVENT.wait(_WORKER_IDLE_SECONDS)
+    _WORKER_WAKE_EVENT.clear()
 
 
 def _pending_rule_ids(limit: int = 20) -> list[int]:
@@ -613,3 +598,17 @@ def _validate_rule_index(
 def _normalize_index_file_name(file_name: str | None) -> str:
     value = str(file_name or "").strip()
     return normalize_file_name(value) if value else ""
+
+
+__all__ = [
+    "delete_index_for_rule",
+    "ensure_index_states_for_folder_rules",
+    "mark_index_stale",
+    "rebuild_folder_index",
+    "recover_interrupted_indexes",
+    "request_rebuild_for_rule",
+    "request_refresh_for_enabled_rules",
+    "run_folder_index_worker",
+    "validate_ready_indexes",
+    "wake_folder_index_worker",
+]
