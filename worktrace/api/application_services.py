@@ -4,7 +4,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from .app_api import ApplicationControlService, ApplicationRuntimeCapability
+from .app_api import (
+    ApplicationControlService,
+    ApplicationRuntimeCapability,
+    MaintenanceStateCapability,
+)
 
 
 @dataclass(frozen=True)
@@ -13,7 +17,7 @@ class ApplicationServices:
 
     app_control: ApplicationControlService
     runtime_view: ApplicationRuntimeCapability
-    maintenance: Any
+    maintenance: MaintenanceStateCapability
     backup: Any
     runtime_state_provider: Any
 
