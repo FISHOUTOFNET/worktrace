@@ -34,14 +34,14 @@ def _normalized_groups(payload: dict[str, Any]) -> list[dict[str, Any]]:
     groups: list[dict[str, Any]] = []
     for group in payload.get("root_cause_groups") or []:
         affected_tests = [
-            _single_line(test_id, limit=300) for test_id in group.get("affected_tests") or []
+            _single_line(test_id, limit=260) for test_id in group.get("affected_tests") or []
         ]
         groups.append(
             {
-                "id": _single_line(group.get("id"), limit=80),
-                "kind": _single_line(group.get("kind"), limit=80),
-                "location": _single_line(group.get("representative_location"), limit=200),
-                "message": _single_line(group.get("message"), limit=500),
+                "id": _single_line(group.get("id"), limit=40),
+                "kind": _single_line(group.get("kind"), limit=40),
+                "location": _single_line(group.get("representative_location"), limit=160),
+                "message": _single_line(group.get("message"), limit=240),
                 "affected_test_count": len(affected_tests),
                 "affected_tests": affected_tests,
                 "omitted_affected_tests": 0,
@@ -50,53 +50,38 @@ def _normalized_groups(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return groups
 
 
-def _normalized_failures(payload: dict[str, Any]) -> list[dict[str, str]]:
-    return [
-        {
-            "test_id": _single_line(failure.get("test_id"), limit=300),
-            "kind": _single_line(failure.get("kind"), limit=80),
-            "location": _single_line(failure.get("location"), limit=200),
-            "message": _single_line(failure.get("message"), limit=500),
-        }
-        for failure in payload.get("failures") or []
-    ]
-
-
 def _render(
     payload: dict[str, Any],
     *,
     groups: list[dict[str, Any]],
-    failures: list[dict[str, str]],
-    omitted_failures: int,
     truncated: bool,
 ) -> str:
     counts = payload.get("counts") or {}
     lines = [
         PROTOCOL,
-        f"schema_version={payload.get('schema_version', '(unknown)')}",
-        f"revision={_single_line(payload.get('revision'), limit=160)}",
-        f"failed_stage={_single_line(payload.get('failed_stage'), limit=80)}",
-        f"artifact_name={_single_line(payload.get('artifact_name'), limit=180)}",
+        f"revision={_single_line(payload.get('revision'), limit=80)}",
+        f"failed_stage={_single_line(payload.get('failed_stage'), limit=40)}",
+        f"artifact_name={_single_line(payload.get('artifact_name'), limit=120)}",
         f"diagnostics_available={'true' if payload.get('diagnostics_available') else 'false'}",
+        f"total={counts.get('total', 0)}",
+        f"passed={counts.get('passed', 0)}",
+        f"failed={counts.get('failed', 0)}",
+        f"errors={counts.get('errors', 0)}",
+        f"skipped={counts.get('skipped', 0)}",
+        f"failure_count={len(payload.get('failures') or [])}",
+        f"root_cause_count={len(groups)}",
     ]
-    for key in ("total", "passed", "failed", "errors", "skipped"):
-        lines.append(f"{key}={counts.get(key, 0)}")
-    lines.extend(
-        [
-            f"failure_count={len(payload.get('failures') or [])}",
-            f"root_cause_count={len(groups)}",
-            f"omitted_failure_count={omitted_failures}",
-        ]
-    )
-    reason = _single_line(payload.get("reason"), limit=500)
+    reason = _single_line(payload.get("reason"), limit=240)
     if reason != "(none)":
         lines.append(f"reason={reason}")
+    lines.append("ROOT_CAUSE_GROUPS_BEGIN")
+    lines.extend(
+        "group_json=" + json.dumps(group, ensure_ascii=False, separators=(",", ":"))
+        for group in groups
+    )
     lines.extend(
         [
-            "root_cause_groups_json="
-            + json.dumps(groups, ensure_ascii=False, separators=(",", ":")),
-            "failures_json="
-            + json.dumps(failures, ensure_ascii=False, separators=(",", ":")),
+            "ROOT_CAUSE_GROUPS_END",
             f"TRUNCATED={'true' if truncated else 'false'}",
             "",
         ]
@@ -109,26 +94,14 @@ def _bounded_render(payload: dict[str, Any], *, max_bytes: int) -> str:
         raise ValueError("--max-bytes must be at least 1024")
 
     groups = _normalized_groups(payload)
-    failures = _normalized_failures(payload)
-    omitted_failures = 0
     truncated = False
 
     while True:
-        rendered = _render(
-            payload,
-            groups=groups,
-            failures=failures,
-            omitted_failures=omitted_failures,
-            truncated=truncated,
-        )
+        rendered = _render(payload, groups=groups, truncated=truncated)
         if len(rendered.encode("utf-8")) <= max_bytes:
             return rendered
-        truncated = True
-        if failures:
-            failures.pop()
-            omitted_failures += 1
-            continue
 
+        truncated = True
         removed_test = False
         for group in reversed(groups):
             affected_tests = group["affected_tests"]

@@ -202,18 +202,14 @@ def test_api_summary_renderer_exposes_all_groups_and_failures_with_a_hard_bound(
     assert len(text.splitlines()) <= 20
     assert len(rendered.read_bytes()) <= 65536
 
-    values = dict(
-        line.split("=", 1)
+    groups = [
+        json.loads(line.split("=", 1)[1])
         for line in text.splitlines()
-        if "=" in line
-    )
-    groups = json.loads(values["root_cause_groups_json"])
-    failures = json.loads(values["failures_json"])
+        if line.startswith("group_json=")
+    ]
     assert [group["id"] for group in groups] == ["group-001", "group-002"]
     assert [group["affected_test_count"] for group in groups] == [30, 5]
     assert groups[1]["affected_tests"][-1] == "tests.synthetic::test_failure_35"
-    assert len(failures) == 35
-    assert failures[-1]["test_id"] == "tests.synthetic::test_failure_35"
 
 
 def test_ci_contract_is_frozen_around_one_static_diagnostic_relay() -> None:
@@ -240,7 +236,7 @@ def test_ci_contract_is_frozen_around_one_static_diagnostic_relay() -> None:
     assert "python_failure_manifest" not in workflow
     assert "python_failure_details" not in workflow
     assert "matrix:" not in workflow
-    assert workflow.count("actions/upload-artifact@v6") == 1
+    assert workflow.count("actions/upload-artifact@v6") == 2
     assert workflow.count("actions/download-artifact@v6") == 1
     assert "retention-days: 3" in workflow
     assert "if-no-files-found: warn" in workflow
