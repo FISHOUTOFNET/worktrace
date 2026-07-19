@@ -41,10 +41,16 @@ def publish_database_replacement(
         uow.add_effects(_REPLACEMENT_NAMESPACE)
         uow.mark_changed()
         return None
+
+    minimum_value = None
+    if minimum_values is not None:
+        for namespace, value in minimum_values.items():
+            if DataGenerationNamespace(str(namespace)) is _REPLACEMENT_NAMESPACE:
+                minimum_value = int(value)
+                break
     return DataGenerationRepository.bump_replacement(
         conn,
-        _REPLACEMENT_NAMESPACES,
-        minimum_values=minimum_values,
+        minimum_value=minimum_value,
     )
 
 
