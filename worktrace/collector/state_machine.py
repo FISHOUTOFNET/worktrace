@@ -317,15 +317,13 @@ class CollectorStateMachine:
 
 
 def _end_reason_for_boundary(reason: str) -> ActivityEndReason:
-    if reason in {"paused", "user_pause"}:
+    if reason == "user_pause":
         return ActivityEndReason.PAUSE_BOUNDARY
-    if reason in {"stopped", "user_stop"}:
-        return ActivityEndReason.STOP_BOUNDARY
-    if reason == "fatal_collector_stop":
+    if reason in {"user_stop", "fatal_collector_stop"}:
         return ActivityEndReason.STOP_BOUNDARY
     if reason == "shutdown":
         return ActivityEndReason.SHUTDOWN_BOUNDARY
-    if reason in {"time_jump", "sleep_resume"}:
+    if reason == "sleep_resume":
         return ActivityEndReason.TIME_JUMP_BOUNDARY
     if reason == "midnight":
         return ActivityEndReason.MIDNIGHT_BOUNDARY
@@ -337,8 +335,6 @@ def _end_reason_for_boundary(reason: str) -> ActivityEndReason:
         return ActivityEndReason.ERROR_BOUNDARY
     if reason == "privacy":
         return ActivityEndReason.PRIVACY_BOUNDARY
-    if reason == "secure_import":
-        return ActivityEndReason.SECURE_IMPORT_BOUNDARY
     if reason == "first_run_gate":
         return ActivityEndReason.FIRST_RUN_GATE_BOUNDARY
     return ActivityEndReason.STOP_BOUNDARY
