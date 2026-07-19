@@ -93,10 +93,13 @@ system catalog rows are reported as unavailable; transport APIs never recreate
 them as a side effect of a normal project or rule request.
 
 All keyword/folder rule create, update, delete, enable and batch operations pass
-through the canonical rule command owner. It validates project type, normalized
-patterns, duplicates and batch atomicity. Classification and privacy generations
-are published after commit only: semantic no-op and rollback publish nothing,
-and a batch publishes at most once per affected namespace.
+through the canonical rule command owner. Excluded keyword/folder rules are also
+created through the catalog command owner; callers cannot assemble an excluded
+rule by combining a reserved project ID with an ordinary rule service. The owner
+validates project type, normalized patterns, duplicates and batch atomicity.
+Classification and privacy generations are published after commit only: semantic
+no-op and rollback publish nothing, and a batch publishes at most once per
+affected namespace.
 
 ## Data contracts
 
