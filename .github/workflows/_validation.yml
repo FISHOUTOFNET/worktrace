@@ -31,6 +31,11 @@ jobs:
     name: Python 3.11 full suite
     runs-on: windows-latest
     timeout-minutes: 15
+    outputs:
+      problem_count: ${{ steps.diagnostics.outputs.problem_count }}
+      root_cause_count: ${{ steps.diagnostics.outputs.root_cause_count }}
+      first_failure: ${{ steps.diagnostics.outputs.first_failure }}
+      first_location: ${{ steps.diagnostics.outputs.first_location }}
 
     steps:
       - name: Check out exact revision
@@ -171,6 +176,19 @@ jobs:
           path: test-results/
           if-no-files-found: warn
           retention-days: 3
+
+  python_diagnostics:
+    name: Python diagnostics / ${{ needs.python311.outputs.problem_count }} problems / ${{ needs.python311.outputs.root_cause_count }} groups / ${{ needs.python311.outputs.first_failure }} / ${{ needs.python311.outputs.first_location }}
+    needs: python311
+    if: ${{ always() && needs.python311.result == 'failure' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Expose API-readable failure metadata
+        run: |
+          echo "problem_count=${{ needs.python311.outputs.problem_count }}"
+          echo "root_cause_count=${{ needs.python311.outputs.root_cause_count }}"
+          echo "first_failure=${{ needs.python311.outputs.first_failure }}"
+          echo "first_location=${{ needs.python311.outputs.first_location }}"
 
   node:
     name: WebView Node behavior tests
