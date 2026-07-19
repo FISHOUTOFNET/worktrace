@@ -27,6 +27,24 @@ def _function(relative: str, name: str) -> ast.FunctionDef | ast.AsyncFunctionDe
     )
 
 
+def _method(
+    relative: str,
+    class_name: str,
+    method_name: str,
+) -> ast.FunctionDef | ast.AsyncFunctionDef:
+    class_node = next(
+        node
+        for node in _tree(relative).body
+        if isinstance(node, ast.ClassDef) and node.name == class_name
+    )
+    return next(
+        node
+        for node in class_node.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == method_name
+    )
+
+
 def _called_names(node: ast.AST) -> set[str]:
     names: set[str] = set()
     for child in ast.walk(node):
@@ -168,9 +186,9 @@ def test_worker_registry_is_declarative_and_single_owned() -> None:
     ):
         assert legacy_member not in runtime
 
-    init = _function("worktrace/runtime/app_runtime.py", "__init__")
+    init = _method("worktrace/runtime/app_runtime.py", "AppRuntime", "__init__")
     assert "WorkerHealthRegistry" in _called_names(init)
-    start = _function("worktrace/runtime/app_runtime.py", "_start_worker")
+    start = _method("worktrace/runtime/app_runtime.py", "AppRuntime", "_start_worker")
     assert "Thread" in _called_names(start)
     assert "ready_event" in runtime
     assert "failed_event" in runtime
