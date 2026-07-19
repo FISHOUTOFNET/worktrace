@@ -127,7 +127,7 @@ def _clock_payload(
         "live_state": str(source.get("live_state") or "none"),
         "is_live": bool(source.get("is_live")),
         "persisted_duration_seconds": active_elapsed_at_sample,
-        "duration_seconds_at_sample": aggregate_duration_at_sample,
+        "duration_seconds_at_sample": active_elapsed_at_sample,
         "aggregate_duration_seconds_at_sample": aggregate_duration_at_sample,
         "aggregate_display_base_seconds": aggregate_display_base_seconds,
         "display_base_seconds": aggregate_display_base_seconds,
