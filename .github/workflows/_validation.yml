@@ -19,7 +19,6 @@ on:
         default: false
 
 permissions:
-  actions: read
   contents: read
 
 env:
@@ -64,7 +63,15 @@ jobs:
         run: python -m pip install --disable-pip-version-check -q -r requirements.txt
 
       - name: Check test inventory
-        run: python scripts/test_inventory.py --check
+        id: inventory
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "test-results" | Out-Null
+          & python scripts/test_inventory.py --check *> "test-results/inventory.log"
+          $inventoryExitCode = $LASTEXITCODE
+          Get-Content -LiteralPath "test-results/inventory.log" |
+            ForEach-Object { Write-Host $_ }
+          exit $inventoryExitCode
 
       - name: Compile Python
         id: compile
@@ -105,126 +112,54 @@ jobs:
               ForEach-Object { Write-Host $_ }
           }
           else {
-            Write-Host "pytest failed; compact diagnostics follow in the next step"
+            Write-Host "pytest failed; the complete compact manifest follows in the diagnostics step"
           }
           exit $pytestExitCode
 
       - name: Publish validation diagnostics
         id: diagnostics
-        if: failure() && (steps.compile.outcome == 'failure' || steps.pytest.outcome == 'failure')
+        if: failure()
+        continue-on-error: true
         shell: pwsh
         run: |
-          if ("${{ steps.compile.outcome }}" -eq "failure") {
-            Write-Host "=== COMPILE_FAILURE_BEGIN ==="
-            if (Test-Path -LiteralPath "test-results/compile.log") {
-              Get-Content -LiteralPath "test-results/compile.log" -Tail 200 |
-                ForEach-Object { Write-Host $_ }
-            }
-            Write-Host "=== COMPILE_FAILURE_END ==="
+          $artifactName = "validation-diagnostics-${{ inputs.revision }}"
+          if ("${{ steps.inventory.outcome }}" -eq "failure") {
+            & python scripts/pytest_diagnostics.py `
+              --stage inventory `
+              --log "test-results/inventory.log" `
+              --output-dir "test-results" `
+              --revision "${{ inputs.revision }}" `
+              --artifact-name $artifactName `
+              --summary "$env:GITHUB_STEP_SUMMARY"
+          }
+          elseif ("${{ steps.compile.outcome }}" -eq "failure") {
+            & python scripts/pytest_diagnostics.py `
+              --stage compile `
+              --log "test-results/compile.log" `
+              --output-dir "test-results" `
+              --revision "${{ inputs.revision }}" `
+              --artifact-name $artifactName `
+              --summary "$env:GITHUB_STEP_SUMMARY"
           }
           elseif ("${{ steps.pytest.outcome }}" -eq "failure") {
             & python scripts/pytest_diagnostics.py `
+              --stage pytest `
               --junit "test-results/pytest-junit.xml" `
               --log "test-results/pytest.log" `
+              --output-dir "test-results" `
+              --revision "${{ inputs.revision }}" `
+              --artifact-name $artifactName `
               --summary "$env:GITHUB_STEP_SUMMARY"
           }
 
-      - name: "Failure summary (${{ steps.diagnostics.outputs.problem_count }}): ${{ steps.diagnostics.outputs.first_failure }}"
-        if: failure() && steps.diagnostics.outputs.first_failure != ''
-        shell: pwsh
-        run: |
-          Write-Host "failure_count=${{ steps.diagnostics.outputs.problem_count }}"
-          Write-Host "first_failure=${{ steps.diagnostics.outputs.first_failure }}"
-          Write-Host "first_location=${{ steps.diagnostics.outputs.first_location }}"
-
-  python_failure_manifest:
-    name: Python failure manifest ${{ matrix.label }}
-    needs: python311
-    if: ${{ always() && needs.python311.result == 'failure' }}
-    runs-on: windows-latest
-    timeout-minutes: 3
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - label: 1-7
-            start: 1
-            end: 7
-          - label: 8-14
-            start: 8
-            end: 14
-          - label: 15-21
-            start: 15
-            end: 21
-          - label: 22-28
-            start: 22
-            end: 28
-    env:
-      GH_TOKEN: ${{ github.token }}
-    steps:
-      - name: Publish bounded failure nodes
-        shell: pwsh
-        run: |
-          $jobs = gh api "/repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID/jobs?per_page=100" | ConvertFrom-Json
-          $job = $jobs.jobs | Where-Object { $_.name -like '*Python 3.11 full suite' } | Select-Object -First 1
-          if ($null -eq $job) { throw 'python_validation_job_not_found' }
-          gh api "/repos/$env:GITHUB_REPOSITORY/actions/jobs/$($job.id)/logs" | Set-Content python-job.log -Encoding UTF8
-          $lines = Get-Content python-job.log | ForEach-Object { $_ -replace '^\d{4}-\d{2}-\d{2}T\S+Z\s+', '' }
-          $start = [Array]::IndexOf($lines, '=== PYTEST_FAILURE_MANIFEST_BEGIN ===')
-          $end = [Array]::IndexOf($lines, '=== PYTEST_FAILURE_MANIFEST_END ===')
-          if ($start -lt 0 -or $end -le $start) { throw 'pytest_failure_manifest_not_found' }
-          $lines[($start + 1)..($end - 1)] | ForEach-Object {
-            if ($_ -match '^\[(\d+)/\d+\]') {
-              $index = [int]$Matches[1]
-              if ($index -ge ${{ matrix.start }} -and $index -le ${{ matrix.end }}) { Write-Host $_ }
-            }
-          }
-
-  python_failure_details:
-    name: Python failure details ${{ matrix.label }}
-    needs: python311
-    if: ${{ always() && needs.python311.result == 'failure' }}
-    runs-on: windows-latest
-    timeout-minutes: 3
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - label: 1-7
-            start: 1
-            end: 7
-          - label: 8-14
-            start: 8
-            end: 14
-          - label: 15-21
-            start: 15
-            end: 21
-          - label: 22-28
-            start: 22
-            end: 28
-    env:
-      GH_TOKEN: ${{ github.token }}
-    steps:
-      - name: Publish bounded failure details
-        shell: pwsh
-        run: |
-          $jobs = gh api "/repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID/jobs?per_page=100" | ConvertFrom-Json
-          $job = $jobs.jobs | Where-Object { $_.name -like '*Python 3.11 full suite' } | Select-Object -First 1
-          if ($null -eq $job) { throw 'python_validation_job_not_found' }
-          gh api "/repos/$env:GITHUB_REPOSITORY/actions/jobs/$($job.id)/logs" | Set-Content python-job.log -Encoding UTF8
-          $lines = Get-Content python-job.log | ForEach-Object { $_ -replace '^\d{4}-\d{2}-\d{2}T\S+Z\s+', '' }
-          $start = [Array]::IndexOf($lines, '=== PYTEST_FAILURE_DETAILS_BEGIN ===')
-          $end = [Array]::IndexOf($lines, '=== PYTEST_FAILURE_DETAILS_END ===')
-          if ($start -lt 0 -or $end -le $start) { throw 'pytest_failure_details_not_found' }
-          $section = $lines[($start + 1)..($end - 1)] -join "`n"
-          $pattern = '(?ms)^--- \[(?<position>\d+)/\d+\] (?<node>.+?) ---\n(?<detail>.*?)(?=^--- \[|\z)'
-          foreach ($match in [regex]::Matches($section, $pattern)) {
-            $index = [int]$match.Groups['position'].Value
-            if ($index -lt ${{ matrix.start }} -or $index -gt ${{ matrix.end }}) { continue }
-            $detail = [regex]::Replace($match.Groups['detail'].Value, '\s+', ' ').Trim()
-            if ($detail.Length -gt 650) { $detail = $detail.Substring(0, 647) + '...' }
-            Write-Host "[$index] $($match.Groups['node'].Value) | $detail"
-          }
+      - name: Upload Python failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: validation-diagnostics-${{ inputs.revision }}
+          path: test-results/
+          if-no-files-found: warn
+          retention-days: 3
 
   node:
     name: WebView Node behavior tests
