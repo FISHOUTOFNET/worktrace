@@ -52,6 +52,10 @@ class CollectorCommandNotAcknowledgedError(RuntimeError):
     """A runtime maintenance command did not reach a known successful state."""
 
 
+class MaintenanceRecoveryError(RuntimeError):
+    """Fail-closed maintenance state could not be verified as recovered."""
+
+
 class MaintenanceIntent(str, Enum):
     CONSISTENT_SNAPSHOT = "consistent_snapshot"
     DATABASE_REPLACEMENT = "database_replacement"
@@ -89,6 +93,7 @@ class RuntimeMaintenanceCoordinator:
         self._state_lock = threading.RLock()
         self._phase = MaintenancePhase.IDLE
         self._runtime_control: Any = None
+        self._blocked_reason: str | None = None
 
     def register_runtime_control(self, control: Any) -> None:
         with self._state_lock:
@@ -104,8 +109,17 @@ class RuntimeMaintenanceCoordinator:
         with self._state_lock:
             return self._phase
 
+    @property
+    def blocked_reason(self) -> str | None:
+        with self._state_lock:
+            return self._blocked_reason
+
     def active(self) -> bool:
-        return self.phase is not MaintenancePhase.IDLE or DATABASE_WRITE_GATE.active()
+        return (
+            self.phase is not MaintenancePhase.IDLE
+            or self.blocked_reason is not None
+            or DATABASE_WRITE_GATE.active()
+        )
 
     def _set_phase(self, phase: MaintenancePhase) -> None:
         with self._state_lock:
@@ -114,6 +128,31 @@ class RuntimeMaintenanceCoordinator:
     def _control(self) -> Any:
         with self._state_lock:
             return self._runtime_control
+
+    def _latch_fail_closed(self, reason: str) -> None:
+        with self._state_lock:
+            self._blocked_reason = str(reason or "maintenance_failed_closed")
+            self._phase = MaintenancePhase.FAILED_CLOSED
+
+    def recover_fail_closed(self) -> None:
+        """Clear the latch only after the registered runtime is verifiably operational."""
+
+        with self._state_lock:
+            if self._blocked_reason is None:
+                return
+            control = self._runtime_control
+        if control is None or DATABASE_WRITE_GATE.active():
+            raise MaintenanceRecoveryError("maintenance_recovery_not_verified")
+        running = bool(control.is_collection_running_for_maintenance())
+        channel = getattr(control, "collector_control", None)
+        hold_state = getattr(getattr(channel, "hold_state", None), "value", None)
+        if not running or hold_state != "operational":
+            raise MaintenanceRecoveryError("maintenance_recovery_not_verified")
+        with self._state_lock:
+            if self._runtime_control is not control:
+                raise MaintenanceRecoveryError("maintenance_recovery_superseded")
+            self._blocked_reason = None
+            self._phase = MaintenancePhase.IDLE
 
     @staticmethod
     def _replacement_epoch() -> int:
@@ -135,7 +174,9 @@ class RuntimeMaintenanceCoordinator:
             ),
             user_paused=get_bool_setting("user_paused", False),
             collector_running=collector_running,
-            collector_status=str(get_setting("collector_status", "stopped") or "stopped"),
+            collector_status=str(
+                get_setting("collector_status", "stopped") or "stopped"
+            ),
             runtime_generation=DATABASE_WRITE_GATE.generation(),
             replacement_epoch=self._replacement_epoch(),
         )
@@ -149,9 +190,8 @@ class RuntimeMaintenanceCoordinator:
         value = query(command_id)
         return dict(value) if isinstance(value, dict) else None
 
-    @classmethod
     def _require_ack(
-        cls,
+        self,
         result: dict[str, Any],
         *,
         control: Any,
@@ -162,7 +202,7 @@ class RuntimeMaintenanceCoordinator:
         resolved = dict(result)
         command_id = str(resolved.get("command_id") or "")
         if bool(resolved.get("command_state_unknown")):
-            queried = cls._query_command(control, command_id)
+            queried = self._query_command(control, command_id)
             if queried is not None:
                 resolved = queried
                 command_id = str(resolved.get("command_id") or "")
@@ -177,17 +217,20 @@ class RuntimeMaintenanceCoordinator:
         if known_terminal:
             return
         if bool(resolved.get("command_state_unknown")):
-            cls._fail_closed(reason=reason, command=command_kind)
+            self._latch_fail_closed(f"{reason}_{command_kind}_unknown")
+            self._persist_fail_closed(reason=reason, command=command_kind)
         raise CollectorCommandNotAcknowledgedError(
             f"collector_{command_kind}_not_acknowledged"
         )
 
     @staticmethod
-    def _fail_closed(*, reason: str, command: str) -> None:
+    def _persist_fail_closed(*, reason: str, command: str) -> None:
         set_settings(
             {
                 "user_paused": "true",
                 "collector_status": "paused",
+                "maintenance_fail_closed": "true",
+                "maintenance_fail_closed_reason": f"{reason}_{command}",
             }
         )
         clear_runtime_activity_state(f"{reason}_{command}_fail_closed")
@@ -208,6 +251,8 @@ class RuntimeMaintenanceCoordinator:
             {
                 "user_paused": "true" if state.user_paused else "false",
                 "collector_status": collector_status,
+                "maintenance_fail_closed": "false",
+                "maintenance_fail_closed_reason": "",
             }
         )
 
@@ -219,6 +264,8 @@ class RuntimeMaintenanceCoordinator:
         reason: str,
         timeout_seconds: float,
     ) -> Iterator[RuntimeMaintenanceState]:
+        if self.blocked_reason is not None:
+            raise MaintenanceInProgressError("maintenance_failed_closed")
         if not self._operation_lock.acquire(blocking=False):
             raise MaintenanceInProgressError("maintenance_operation_in_progress")
 
@@ -226,7 +273,10 @@ class RuntimeMaintenanceCoordinator:
         control: Any = None
         hold_acquired = False
         operation_committed = False
+        completed = False
         try:
+            if self.blocked_reason is not None:
+                raise MaintenanceInProgressError("maintenance_failed_closed")
             control = self._control()
             state = self._capture_state(control)
             self._set_phase(MaintenancePhase.HOLD_REQUESTED)
@@ -296,12 +346,13 @@ class RuntimeMaintenanceCoordinator:
                     terminal_state="operational",
                     reason=reason,
                 )
+            completed = True
         except Exception:
-            self._set_phase(MaintenancePhase.FAILED_CLOSED)
+            command = "restore" if operation_committed else "operation"
+            self._latch_fail_closed(f"{reason}_{command}")
             if state is not None:
-                command = "restore" if operation_committed else "operation"
                 try:
-                    self._fail_closed(reason=reason, command=command)
+                    self._persist_fail_closed(reason=reason, command=command)
                 except Exception:
                     logging.exception(
                         "maintenance fail-closed persistence failed reason=%s",
@@ -314,7 +365,8 @@ class RuntimeMaintenanceCoordinator:
             )
             raise
         finally:
-            self._set_phase(MaintenancePhase.IDLE)
+            if completed and self.blocked_reason is None:
+                self._set_phase(MaintenancePhase.IDLE)
             self._operation_lock.release()
 
     @contextmanager
@@ -355,6 +407,10 @@ def register_runtime_control(control: Any) -> None:
 
 def clear_runtime_control(control: Any | None = None) -> None:
     MAINTENANCE_COORDINATOR.clear_runtime_control(control)
+
+
+def recover_fail_closed() -> None:
+    MAINTENANCE_COORDINATOR.recover_fail_closed()
 
 
 def is_maintenance_in_progress() -> bool:
@@ -415,6 +471,7 @@ __all__ = [
     "MaintenanceInProgressError",
     "MaintenanceIntent",
     "MaintenancePhase",
+    "MaintenanceRecoveryError",
     "RuntimeMaintenanceCoordinator",
     "RuntimeMaintenanceState",
     "clear_all_live_data",
@@ -423,5 +480,6 @@ __all__ = [
     "consistent_snapshot",
     "database_replacement",
     "is_maintenance_in_progress",
+    "recover_fail_closed",
     "register_runtime_control",
 ]
