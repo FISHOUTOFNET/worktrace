@@ -18,6 +18,7 @@ from worktrace.services import (
     privacy_service,
     project_inference_service,
     project_service,
+    rule_catalog_command_service,
     rule_service,
     secure_backup_service,
 )
@@ -233,14 +234,12 @@ def test_first_domain_mutations_after_import_invalidate_hot_caches(
         "D:\\PostImportFolder\\brief.docx"
     )["id"] == folder_id
 
-    excluded = project_service.get_project_by_name("排除规则")
-    project_service.set_project_enabled(int(excluded["id"]), True)
+    project_service.set_excluded_project_enabled(True)
     privacy_service.is_excluded(ActiveWindow("App", "app.exe", "Public"))
     privacy_before = generation(DataGenerationNamespace.PRIVACY_CATALOG)
-    folder_rule_service.create_or_update_folder_rule(
+    rule_catalog_command_service.create_or_update_excluded_folder_rule(
         "D:\\PostImportPrivate",
-        int(excluded["id"]),
-        True,
+        recursive=True,
     )
     assert generation(DataGenerationNamespace.PRIVACY_CATALOG) == privacy_before + 1
     assert privacy_service.is_excluded(
