@@ -7,41 +7,33 @@ from dataclasses import dataclass
 
 from ..constants import STATUS_NORMAL, UNCATEGORIZED_PROJECT
 from ..data_generation_repository import DataGenerationNamespace
-from ..db import get_connection, get_db_key
+from ..db import dict_rows, get_connection, get_db_key
 from ..domain_unit_of_work import DomainUnitOfWork
-from ..generation_clock import generation
-from ..path_utils import has_auto_project_extension
+from ..generation_clock import generation_tuple
+from ..resources.resource_helpers import (
+    GENERIC_FILE_PROJECT_NAMES,
+    has_auto_project_extension,
+)
 from . import (
     assignment_command_service,
     clipboard_fact_query_service,
     folder_index_query_service,
     folder_rule_service,
-    project_lifecycle_policy,
 )
 from .system_project_service import require_uncategorized_project_id
 
-GENERIC_FILE_PROJECT_NAMES = {
-    "desktop",
-    "downloads",
-    "documents",
-    "document",
-    "wps cloud files",
-    "my documents",
-    "我的文档",
-    "下载",
-    "桌面",
-    "文档",
-}
 _KEYWORD_RULE_CACHE_LOCK = threading.RLock()
 _KEYWORD_RULE_CACHE_DATABASE_KEY: str | None = None
-_KEYWORD_RULE_CACHE_GENERATION: int | None = None
+_KEYWORD_RULE_CACHE_GENERATION: tuple[int, int] | None = None
 _KEYWORD_RULE_CACHE: list[dict] | None = None
+_KEYWORD_RULE_CACHE_NAMESPACES = (
+    DataGenerationNamespace.CLASSIFICATION_CATALOG,
+    DataGenerationNamespace.DATABASE_REPLACEMENT,
+)
 
 
 @dataclass(frozen=True)
 class ProjectAssignmentDecision:
-    """The complete, persistable result of automatic project inference."""
-
     project_id: int
     source: str
     confidence: int
@@ -65,31 +57,27 @@ def invalidate_keyword_rule_cache() -> None:
 def _load_enabled_keyword_rules(conn) -> list[dict]:
     rows = conn.execute(
         """
-        SELECT pr.id, pr.project_id, pr.pattern,
-               p.name AS project_name, p.enabled AS project_enabled,
+        SELECT pr.*, p.name AS project_name, p.enabled AS project_enabled,
                p.is_archived AS project_is_archived,
                p.is_deleted AS project_is_deleted
         FROM project_rule pr
-        JOIN project p ON p.id = pr.project_id
+        LEFT JOIN project p ON p.id = pr.project_id
         WHERE pr.enabled = 1
           AND pr.rule_type = 'keyword'
-          AND pr.created_by = 'user'
-        ORDER BY pr.created_at, pr.id
+        ORDER BY length(pr.pattern) DESC, pr.id DESC
         """
     ).fetchall()
+    from . import project_lifecycle_policy
+
     return [
-        {
-            "id": int(row["id"]),
-            "project_id": int(row["project_id"]),
-            "pattern": str(row["pattern"] or "").strip().casefold(),
-        }
-        for row in rows
+        row
+        for row in dict_rows(rows)
         if project_lifecycle_policy.project_available_for_inference(
             {
-                "name": row["project_name"],
-                "enabled": row["project_enabled"],
-                "is_archived": row["project_is_archived"],
-                "is_deleted": row["project_is_deleted"],
+                "name": row.get("project_name"),
+                "enabled": row.get("project_enabled"),
+                "is_archived": row.get("project_is_archived"),
+                "is_deleted": row.get("project_is_deleted"),
             }
         )
     ]
@@ -104,7 +92,7 @@ def _enabled_keyword_rules(conn=None) -> list[dict]:
     global _KEYWORD_RULE_CACHE
     while True:
         database_key = get_db_key()
-        current_generation = generation(DataGenerationNamespace.CLASSIFICATION_CATALOG)
+        current_generation = generation_tuple(_KEYWORD_RULE_CACHE_NAMESPACES)
         with _KEYWORD_RULE_CACHE_LOCK:
             if (
                 _KEYWORD_RULE_CACHE_DATABASE_KEY == database_key
@@ -114,7 +102,7 @@ def _enabled_keyword_rules(conn=None) -> list[dict]:
                 return [dict(row) for row in _KEYWORD_RULE_CACHE]
         with get_connection() as read_conn:
             rules = _load_enabled_keyword_rules(read_conn)
-        if generation(DataGenerationNamespace.CLASSIFICATION_CATALOG) != current_generation:
+        if generation_tuple(_KEYWORD_RULE_CACHE_NAMESPACES) != current_generation:
             continue
         with _KEYWORD_RULE_CACHE_LOCK:
             _KEYWORD_RULE_CACHE_DATABASE_KEY = database_key
