@@ -40,11 +40,10 @@ def test_maintenance_enters_draining_before_pause_and_exclusive_before_operation
     coordinator.register_pause_handler(pause)
     coordinator.register_reset_handler(reset)
 
-    with coordinator.acquire(reason="drain_contract") as state:
+    with coordinator.acquire(reason="drain_contract"):
         observed.append(
             ("operation", coordinator.phase, DATABASE_WRITE_GATE.phase())
         )
-        state.mark_succeeded()
 
     assert observed == [
         ("pause", MaintenancePhase.DRAINING, WriteGatePhase.DRAINING),
