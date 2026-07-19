@@ -1,9 +1,8 @@
 """Fast static guards for retired live-display semantics.
 
 These checks deliberately protect boundaries rather than replaying the old
-pending/borrowed scenarios.  Compatibility metadata may be decoded at an
-ingress boundary, but it must not regain lifecycle, projection, revision, or
-frontend-identity meaning.
+pending/borrowed scenarios. Compatibility metadata cannot regain lifecycle,
+projection, revision, clock, or frontend-identity meaning.
 """
 
 from __future__ import annotations
@@ -58,8 +57,8 @@ def test_production_live_contract_has_no_retired_state_labels():
 def test_active_tests_do_not_assert_retired_states_or_skip_them():
     offenders: list[str] = []
     retired_skip_markers = (
-        "pytest.skip(\"virtual",
-        "pytest.skip(\"legacy short",
+        'pytest.skip("virtual',
+        'pytest.skip("legacy short',
         "snapshot-only pending projection was removed",
         "_RETIRED_SHORT_ACTIVITY_CASES",
         "_retire_",
@@ -129,8 +128,8 @@ def test_display_model_neither_borrows_rows_nor_mutates_lifecycle():
 
 def test_candidate_metadata_cannot_enter_revision_or_identity_inputs():
     inputs = (
-        ("worktrace/services/live_display_service.py", "_live_display_key"),
         ("worktrace/services/live_display_service.py", "_stable_live_key"),
+        ("worktrace/services/activity_live_clock.py", "current_resource_identity_hash"),
         ("worktrace/services/activity_display_projection.py", "build_revision_parts"),
     )
     metadata = (
