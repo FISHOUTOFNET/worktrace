@@ -395,4 +395,5 @@ def test_published_versions_are_current_only() -> None:
 
     assert db.CURRENT_SCHEMA_VERSION == 11
     assert secure_backup_service.PAYLOAD_VERSION == 5
-    assert secure_backup_service.EXPORT_TABLES[-1] == "activity_inference_job"
+    assert "activity_inference_job" not in secure_backup_service.EXPORT_TABLES
+    assert "activity_inference_job" in secure_backup_service.EXCLUDED_TABLES
