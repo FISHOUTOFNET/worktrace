@@ -104,6 +104,7 @@ CREATE TABLE IF NOT EXISTS project_rule (
         rule_type IN ('keyword')
     ),
     pattern TEXT NOT NULL,
+    normalized_pattern TEXT NOT NULL,
     enabled INTEGER NOT NULL DEFAULT 1,
     created_by TEXT NOT NULL DEFAULT 'user' CHECK (
         created_by IN ('system', 'user')
