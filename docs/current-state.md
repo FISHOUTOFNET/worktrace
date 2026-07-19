@@ -82,9 +82,9 @@ runtime recovery can clear the latch. See
 
 Current schema seeding is the only creator of system projects. Stable system
 identity, not display name, controls reserved behavior. Ordinary commands cannot
-create, rename, archive, delete or toggle system projects. User project create /
-edit / enable-disable / archive are distinct shipped capabilities. Excluded
-project configuration uses its explicit system-project command.
+create, rename, archive, delete or toggle system projects. The shipped user
+project capabilities are: user project create / edit / enable-disable / archive.
+Excluded project configuration uses its explicit system-project command.
 
 All keyword/folder rule create, update, delete, enable and batch operations pass
 through the canonical rule command owner. It validates project type, normalized
