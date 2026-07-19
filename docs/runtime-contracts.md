@@ -64,6 +64,9 @@ error_code
 `workers` is the sole worker-name mapping. There are no worker-specific top-level
 status fields and no parallel `error` alias. User-facing error text is translated
 at the Bridge boundary; runtime transport retains the canonical `error_code`.
+A successful startup has `error_code=null`, including when `degraded=true`
+because an optional worker failed; the affected worker entry retains the exact
+diagnostic. A non-null top-level error code is reserved for startup failure.
 
 ## LiveClock v2 exact DTO
 
