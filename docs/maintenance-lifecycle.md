@@ -111,6 +111,8 @@ maintenance.
 - An unaccepted privacy notice never starts collection.
 - A previously stopped Collector remains stopped.
 - Failed replacement rolls back business data and replacement epoch.
+- Any destructive-operation exception after a verified hold keeps the coordinator
+  in stable `FAILED_CLOSED`, even when the business transaction rolled back.
 - Unknown hold/reset/release state, release failure or shutdown ambiguity fails
   closed: durable pause/status are committed as a separate safety transition,
   runtime activity state is cleared and collection is not resumed optimistically.
