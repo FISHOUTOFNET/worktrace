@@ -22,6 +22,7 @@ _CURRENT_UNIT_OF_WORK: ContextVar[DomainUnitOfWork | None] = ContextVar(
     default=None,
 )
 
+
 def _namespace(value: DataGenerationNamespace | str) -> DataGenerationNamespace:
     if isinstance(value, DataGenerationNamespace):
         return value
@@ -116,15 +117,17 @@ class DomainUnitOfWork:
             connection.commit()
             committed = True
             if committed_effects:
+                from .db import get_db_key
+
+                database_key = get_db_key()
                 try:
-                    from .db import get_db_key
                     from .generation_clock import (
                         publish_committed,
                         publish_replacement_committed,
                     )
 
                     if DataGenerationNamespace.DATABASE_REPLACEMENT in committed_effects:
-                        publish_replacement_committed(get_db_key(), committed_values)
+                        publish_replacement_committed(database_key, committed_values)
                     else:
                         publish_committed(connection, committed_effects)
                 except Exception:
@@ -134,7 +137,7 @@ class DomainUnitOfWork:
                     logging.exception("generation clock publication failed")
                     from .generation_clock import clear
 
-                    clear()
+                    clear(database_key)
             return False
         except Exception:
             if not committed:
