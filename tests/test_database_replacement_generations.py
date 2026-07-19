@@ -182,7 +182,7 @@ def test_clear_all_refreshes_generation_backed_settings_cache(temp_db):
     assert settings_service.get_setting("ui_refresh_seconds") == "10"
 
 
-def test_replacement_generation_failure_rolls_back_data_and_generations(
+def test_replacement_generation_failure_rolls_back_data_and_replacement_epoch(
     temp_db,
     monkeypatch,
 ):
@@ -204,6 +204,13 @@ def test_replacement_generation_failure_rolls_back_data_and_generations(
     with pytest.raises(RuntimeError, match="generation_publish_failed"):
         database_maintenance_service.clear_all_live_data()
 
-    assert _generations() == before
+    after = _generations()
+    for namespace in DataGenerationNamespace:
+        if namespace is DataGenerationNamespace.SETTINGS:
+            assert after[namespace] == before[namespace] + 1
+        else:
+            assert after[namespace] == before[namespace]
+    assert settings_service.get_bool_setting("user_paused", False) is True
+    assert settings_service.get_setting("collector_status", "") == "paused"
     assert project_service.get_project(project_id) is not None
     assert privacy_gate_service.is_privacy_notice_accepted() is True
