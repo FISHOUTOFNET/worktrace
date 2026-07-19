@@ -40,17 +40,27 @@ def test_stream_switches_close_and_open_their_own_rows(stream):
 
 def test_stream_open_row_is_the_only_live_display_target(stream):
     stream.start("A", at=0).same("A", at=60).switch("B", at=120)
-    row = stream.rows()[-1]
-    overview = build_test_bridge().get_overview()
+    rows = sorted(stream.rows(), key=lambda item: item["start_time"])
+    open_row = rows[-1]
+    closed_row = rows[0]
+    bridge = build_test_bridge()
+
+    overview = bridge.get_overview()
+    timeline = bridge.get_timeline("2026-06-18")
+
     assert overview["runtime"]["clock"]["live_state"] == "persisted_open"
-    live_rows = [
+    live_entries = [
         item
-        for item in overview["activities"]
-        if int(item.get("open_activity_id") or 0) == int(row["id"])
+        for item in timeline["entries"]
+        if int(item.get("open_activity_id") or 0) == int(open_row["id"])
     ]
-    assert len(live_rows) == 1
-    assert row["id"] in live_rows[0]["activity_ids"]
-    assert "live_state" not in live_rows[0]
+    assert len(live_entries) == 1
+    assert open_row["id"] in live_entries[0]["activity_ids"]
+    assert closed_row["id"] not in [
+        int(item.get("open_activity_id") or 0)
+        for item in timeline["entries"]
+    ]
+    assert "live_state" not in live_entries[0]
 
 
 def test_decision_trace_is_privacy_safe(stream):
