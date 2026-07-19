@@ -85,6 +85,7 @@ def test_shipping_js_contains_no_retired_liveclock_alias_substrings():
 def test_current_only_schema_backup_and_database_helpers():
     assert db.CURRENT_SCHEMA_VERSION == 12
     assert secure_backup_service.PAYLOAD_VERSION == 6
+    assert not hasattr(secure_backup_service, "is_secure_import_in_progress")
 
     production_db = ast.parse(_source("worktrace/db.py"), filename="worktrace/db.py")
     function_names = {
@@ -98,6 +99,24 @@ def test_current_only_schema_backup_and_database_helpers():
     test_helper = _source("tests/support/database.py")
     assert "def reset_database" in test_helper
     assert "def drop_all_tables" in test_helper
+
+
+def test_boundary_reasons_and_pause_command_have_no_compatibility_fallback():
+    state_machine = _source("worktrace/collector/state_machine.py")
+    app_api = _source("worktrace/api/app_api.py")
+    for retired in ('"paused"', '"stopped"', '"time_jump"', '"secure_import"'):
+        assert retired not in state_machine
+    assert "pause_fallback" not in app_api
+    assert "activity_lifecycle_service.pause_collection" not in app_api
+
+
+def test_maintenance_unknown_state_requires_terminal_query():
+    maintenance = _source("worktrace/services/database_maintenance_service.py")
+    collector = _source("worktrace/collector/collector.py")
+    assert "query_command" in maintenance
+    assert "command_state_unknown" in maintenance
+    assert "def query_command" in collector
+    assert "terminal_state" in maintenance
 
 
 def test_no_acceptance_temporary_workflow_or_agent_script():
