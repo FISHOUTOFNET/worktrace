@@ -70,6 +70,7 @@ EXCLUDED_TABLES: frozenset[str] = frozenset(
         "history_mutation_job_rule",
         "data_generation_state",
         "activity_resource_repair_job",
+        "startup_recovery_job",
     }
 )
 MIGRATABLE_SETTINGS: frozenset[str] = frozenset(
@@ -330,6 +331,7 @@ def _replace_import(data: dict[str, Any]) -> dict[str, int]:
             replacement_floor = capture_replacement_generation_floor(live)
             _delete_all_rows(live)
             live.execute("DELETE FROM activity_resource_repair_job")
+            live.execute("DELETE FROM startup_recovery_job")
             live.execute("DELETE FROM history_mutation_job_rule")
             live.execute("DELETE FROM history_mutation_job")
             source = sqlite3.connect(staging_path)
