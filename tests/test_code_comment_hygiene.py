@@ -5,7 +5,6 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCAN_TARGETS = (
     REPO_ROOT / "worktrace",
@@ -60,6 +59,9 @@ CURRENT_DOMAIN_IDENTIFIERS = (
     "MaintenancePhase",
     "SecureImportPhase",
     "WriteGatePhase",
+    "runtimePhase",
+    "runtime_phase",
+    "phase_value",
 )
 
 ALLOWED_FILE_NAMES = {
