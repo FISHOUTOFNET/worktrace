@@ -560,7 +560,7 @@ class AppRuntime:
             workers=report.workers,
             already_running=bool(collector_result.get("already_running")),
             degraded=degraded,
-            error_code=report.error_code,
+            error_code=None,
         )
 
     def start_collector(
