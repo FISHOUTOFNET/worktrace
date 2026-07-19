@@ -1,14 +1,8 @@
 """Service-layer regression tests for the Project Rules domain.
 
-The six ``ProjectRulesView`` widget-wiring tests and the two
-``worktrace.ui.*`` imports were removed. The five service-layer tests below
-exercise ``project_service`` /
-``folder_rule_service`` / ``rule_service`` / ``activity_service`` directly and
-do not depend on any UI module. They are kept because they lock behavior that
-is not fully covered by the API-facade tests in
-``test_project_rules_project_lifecycle.py`` (notably the direct
-``project_service.delete_project`` cascade, which is intentionally not exposed
-through the ``*_for_rules`` API facades).
+The service-layer tests exercise project, folder-rule, keyword-rule and activity
+behavior without depending on a UI implementation. Direct user-project deletion
+coverage remains here because it is intentionally not exposed by the rules API.
 """
 
 import pytest
@@ -21,6 +15,7 @@ from tests.support import activity_factory as activity_service
 from worktrace.services import (
     folder_rule_service,
     project_service,
+    rule_catalog_command_service,
     rule_service,
 )
 
@@ -29,11 +24,15 @@ pytestmark = [pytest.mark.db]
 
 def test_project_bindings_readonly_returns_grouped_user_and_excluded_projects(temp_db):
     user_project = project_service.create_project("Client")
-    other_project = project_service.create_project("Other")
-    excluded_project = system_project_service.require_excluded_project_id()
+    project_service.create_project("Other")
+    _excluded_rule, excluded_project = (
+        rule_catalog_command_service.create_or_update_excluded_folder_rule(
+            r"D:\Private",
+            recursive=True,
+        )
+    )
     folder_rule_service.create_or_update_folder_rule(r"D:\Client", user_project)
     rule_service.create_rule("Spec", user_project)
-    folder_rule_service.create_or_update_folder_rule(r"D:\Private", excluded_project)
 
     before_counts = _table_counts()
 
@@ -47,6 +46,7 @@ def test_project_bindings_readonly_returns_grouped_user_and_excluded_projects(te
         "Other",
     ]
     by_name = {project["name"]: project for project in projects}
+    assert int(by_name[EXCLUDED_PROJECT]["id"]) == excluded_project
     assert len(by_name["Client"]["folder_rules"]) == 1
     assert by_name["Client"]["folder_rules"][0]["folder_path"] == r"D:\Client"
     assert len(by_name["Client"]["keyword_rules"]) == 1
