@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import sqlite3
-import json
 
 import pytest
 
@@ -13,26 +12,12 @@ from worktrace.services.secure_backup_service import EXPORT_TABLES, MIGRATABLE_S
 pytestmark = [pytest.mark.db, pytest.mark.integration, pytest.mark.contract]
 
 
-def test_v8_legacy_privacy_setting_migrates_once_outside_business_db(tmp_path):
+def test_current_schema_initialization_does_not_read_or_migrate_legacy_privacy_settings(
+    tmp_path,
+):
     path = tmp_path / "worktrace.db"
-    conn = sqlite3.connect(path)
-    try:
-        conn.executescript(db.read_schema_sql())
-        conn.executescript(db.read_schema_indexes_sql())
-        conn.executescript(
-            """
-            CREATE TABLE data_generation_state (
-                namespace TEXT PRIMARY KEY CHECK(length(trim(namespace)) > 0),
-                generation INTEGER NOT NULL CHECK(generation >= 0)
-            );
-            INSERT INTO data_generation_state(namespace, generation) VALUES
-                ('report_structure', 3),
-                ('classification_catalog', 0),
-                ('settings', 0),
-                ('privacy_catalog', 0),
-                ('database_replacement', 0);
-            """
-        )
+    db.initialize_database(path)
+    with db.get_connection() as conn:
         conn.execute(
             "INSERT INTO settings(key, value, updated_at) VALUES (?, ?, ?)",
             ("first_run_notice_accepted", "true", "2026-07-18 09:00:00"),
@@ -40,49 +25,39 @@ def test_v8_legacy_privacy_setting_migrates_once_outside_business_db(tmp_path):
         conn.execute(
             "INSERT INTO settings(key, value, updated_at) VALUES (?, ?, ?)",
             (
-                "maintenance.activity_resource_repair.v1",
-                json.dumps(
-                    {
-                        "policy_version": 1,
-                        "status": "running",
-                        "cursor_activity_id": 41,
-                        "scanned_count": 40,
-                        "repaired_count": 39,
-                        "error_count": 1,
-                        "last_error": "detector unavailable",
-                    }
-                ),
+                "accepted_privacy_notice_version",
+                "1",
                 "2026-07-18 09:00:00",
             ),
         )
-        conn.execute("PRAGMA user_version = 8")
-        conn.commit()
-    finally:
-        conn.close()
 
     db.initialize_database(path)
 
+    assert privacy_gate_service.is_privacy_notice_accepted() is False
+    with db.get_connection() as conn:
+        values = {
+            row["key"]: row["value"]
+            for row in conn.execute(
+                "SELECT key, value FROM settings WHERE key IN (?, ?)",
+                ("first_run_notice_accepted", "accepted_privacy_notice_version"),
+            ).fetchall()
+        }
+    assert values == {
+        "first_run_notice_accepted": "true",
+        "accepted_privacy_notice_version": "1",
+    }
+
+
+def test_installation_consent_is_stored_outside_business_database(temp_db):
+    privacy_gate_service.accept_privacy_notice()
+
     assert privacy_gate_service.is_privacy_notice_accepted() is True
     assert metadata_path().exists()
-    with db.get_connection() as business_conn:
-        keys = business_conn.execute(
-            "SELECT key FROM settings WHERE key IN (?, ?)",
-            ("first_run_notice_accepted", "accepted_privacy_notice_version"),
+    with db.get_connection() as conn:
+        keys = conn.execute(
+            "SELECT key FROM settings WHERE key LIKE '%privacy_notice%'"
         ).fetchall()
-        job = business_conn.execute(
-            "SELECT * FROM activity_resource_repair_job WHERE singleton_id = 1"
-        ).fetchone()
-        legacy_job = business_conn.execute(
-            "SELECT value FROM settings WHERE key = ?",
-            ("maintenance.activity_resource_repair.v1",),
-        ).fetchone()
     assert keys == []
-    assert job["status"] == "running"
-    assert job["cursor_activity_id"] == 41
-    assert job["processed_count"] == 40
-    assert job["repaired_count"] == 39
-    assert job["failed_count"] == 1
-    assert legacy_job is None
 
 
 def test_clear_all_preserves_installation_consent_without_business_restore(temp_db):
@@ -103,3 +78,27 @@ def test_backup_contract_excludes_installation_and_repair_metadata():
     assert "activity_resource_repair_job" not in EXPORT_TABLES
     assert "first_run_notice_accepted" not in MIGRATABLE_SETTINGS
     assert "accepted_privacy_notice_version" not in MIGRATABLE_SETTINGS
+
+
+def test_non_current_schema_is_rejected_without_modifying_original_database(tmp_path):
+    path = tmp_path / "legacy.db"
+    conn = sqlite3.connect(path)
+    try:
+        conn.execute("CREATE TABLE preserved_user_data(id INTEGER PRIMARY KEY, value TEXT)")
+        conn.execute("INSERT INTO preserved_user_data(id, value) VALUES (1, 'keep')")
+        conn.execute("PRAGMA user_version = 8")
+        conn.commit()
+    finally:
+        conn.close()
+
+    with pytest.raises(ValueError, match="database_schema_incompatible"):
+        db.initialize_database(path)
+
+    verify = sqlite3.connect(path)
+    try:
+        assert verify.execute(
+            "SELECT value FROM preserved_user_data WHERE id = 1"
+        ).fetchone()[0] == "keep"
+        assert int(verify.execute("PRAGMA user_version").fetchone()[0]) == 8
+    finally:
+        verify.close()
