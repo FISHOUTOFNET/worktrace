@@ -121,6 +121,10 @@ use `static_closed`. Overlay occurs only when the runtime sample and SQLite
 snapshot agree, including database-replacement epoch. Historical dates and
 mismatched samples remain static.
 
+Overview owns the current-activity clock and static summary metadata. Timeline is
+the canonical row surface for matching an open persisted activity ID to exactly
+one live entry; closed entries never inherit the open-row identity.
+
 The frontend validates the exact key set and types. It never reads aliases,
 chooses a maximum among candidates or carries a prior duration into a new
 payload. Malformed clocks stop the affected ticker, retain durable static
