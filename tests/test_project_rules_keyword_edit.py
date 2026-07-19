@@ -6,8 +6,6 @@ import json
 
 import pytest
 
-from worktrace.services import system_project_service
-
 from worktrace.api import rule_api
 from worktrace.data_generation_repository import DataGenerationNamespace
 from worktrace.db import get_connection
@@ -18,6 +16,7 @@ from worktrace.services import (
     privacy_service,
     project_inference_service,
     project_service,
+    rule_catalog_command_service,
     rule_service,
 )
 
@@ -139,9 +138,11 @@ def test_update_refreshes_keyword_cache_via_generation(temp_db):
 
 
 def test_excluded_keyword_update_refreshes_privacy_generation(temp_db):
-    excluded_id = system_project_service.require_excluded_project_id()
-    project_service.set_project_enabled(excluded_id, True)
-    rule_id = rule_service.create_rule("Secret", excluded_id)
+    project_service.set_excluded_project_enabled(True)
+    rule_id, excluded_id = rule_catalog_command_service.create_excluded_keyword_rule(
+        "Secret"
+    )
+    assert excluded_id > 0
     assert privacy_service._exclude_rules()["keywords"]
     before = generation(DataGenerationNamespace.PRIVACY_CATALOG)
 
@@ -170,7 +171,7 @@ def test_service_exception_collapses_to_privacy_safe_error(temp_db, monkeypatch)
     def boom(*args, **kwargs):
         raise RuntimeError("SELECT traceback window_title clipboard C:\\Secret")
 
-    monkeypatch.setattr(rule_service, "update_rule", boom)
+    monkeypatch.setattr(rule_catalog_command_service, "update_keyword_rule", boom)
     result = rule_api.update_project_keyword_rule(rule_id, "NewSpec")
 
     assert result == {"ok": False, "error": "operation_failed"}
