@@ -67,11 +67,10 @@ def build_project_live_clock(
     report_date: str,
     today: str,
 ) -> LiveClockContract:
-    """Build the verified current-span clock used as the row-overlay source.
+    """Build the verified current-span source clock.
 
-    Aggregate rows receive their own ``aggregate_live`` clock in
-    ``activity_row_overlay``. This source clock therefore always represents the
-    current activity itself and never reconstructs time from another DTO field.
+    Static policy owns only materialization. The clock owner decides liveness from
+    the canonical persisted-open session kind and current report scope.
     """
 
     del anchor, summary
@@ -86,7 +85,7 @@ def build_project_live_clock(
         not historical
         and persisted
         and display_live_state == "persisted_open"
-        and policy.current_duration_live
+        and policy.display_session_kind == "persisted_open"
     )
     if not live:
         return {

@@ -15,18 +15,12 @@ from .live_display_service import classify_live_state
 
 @dataclass(frozen=True)
 class DisplaySessionPolicy:
-    """Business-only decision describing whether a runtime span may be displayed.
-
-    The policy deliberately owns no timestamps or elapsed-time values. Those are
-    produced by the LiveClock owner after the runtime/SQLite consistency check.
-    """
+    """Static business/materialization policy; LiveClock owns ticking semantics."""
 
     display_session_kind: str
     base_policy: str
     aggregate_base_seconds: int
     current_base_seconds: int
-    project_duration_live: bool
-    current_duration_live: bool
     materialize_recent: bool
     materialize_timeline: bool
     materialize_details: bool
@@ -104,7 +98,7 @@ def build_display_session_policy(
     display_live_state: str,
     summary: CurrentActivityContract,
 ) -> DisplaySessionPolicy:
-    """Decide materialization from durable/runtime state, never from clock fields."""
+    """Decide static materialization from durable/runtime state, never clock fields."""
 
     del anchor, summary
     if not snapshot:
@@ -113,8 +107,6 @@ def build_display_session_policy(
             base_policy="suppressed",
             aggregate_base_seconds=0,
             current_base_seconds=0,
-            project_duration_live=False,
-            current_duration_live=False,
             materialize_recent=False,
             materialize_timeline=False,
             materialize_details=False,
@@ -128,8 +120,6 @@ def build_display_session_policy(
             base_policy="suppressed",
             aggregate_base_seconds=0,
             current_base_seconds=0,
-            project_duration_live=False,
-            current_duration_live=False,
             materialize_recent=False,
             materialize_timeline=False,
             materialize_details=False,
@@ -148,8 +138,6 @@ def build_display_session_policy(
             base_policy="suppressed",
             aggregate_base_seconds=0,
             current_base_seconds=0,
-            project_duration_live=False,
-            current_duration_live=False,
             materialize_recent=False,
             materialize_timeline=False,
             materialize_details=False,
@@ -165,8 +153,6 @@ def build_display_session_policy(
             base_policy="persisted_open",
             aggregate_base_seconds=0,
             current_base_seconds=0,
-            project_duration_live=True,
-            current_duration_live=True,
             materialize_recent=True,
             materialize_timeline=True,
             materialize_details=True,
@@ -179,8 +165,6 @@ def build_display_session_policy(
         base_policy="suppressed",
         aggregate_base_seconds=0,
         current_base_seconds=0,
-        project_duration_live=False,
-        current_duration_live=False,
         materialize_recent=False,
         materialize_timeline=False,
         materialize_details=False,

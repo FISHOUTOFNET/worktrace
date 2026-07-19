@@ -55,8 +55,6 @@ class DisplaySessionPolicyContract(TypedDict, total=False):
     base_policy: DisplayBasePolicy
     aggregate_base_seconds: int
     current_base_seconds: int
-    project_duration_live: bool
-    current_duration_live: bool
     materialize_recent: bool
     materialize_timeline: bool
     materialize_details: bool

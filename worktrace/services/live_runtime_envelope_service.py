@@ -236,7 +236,6 @@ def build_live_runtime_envelope(
         "live_report_date": live_date,
         "snapshot": {
             "id": str(payload.get("sample_id") or ""),
-            "timestamp_epoch_ms": int(clock["sampled_at_epoch_ms"]),
             "revision": str(payload.get("live_revision") or ""),
         },
         "current_activity": current_activity,

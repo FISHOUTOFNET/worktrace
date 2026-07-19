@@ -15,6 +15,7 @@ class TestRuntime:
     start_result: Any = None
     pause_result: dict[str, object] | None = None
     clipboard_accepted: bool = True
+    phase: str = "running"
 
     def start_authorized_collection(self) -> Any:
         return self.start_result or {
@@ -34,6 +35,9 @@ class TestRuntime:
 
     def request_shutdown(self) -> None:
         return None
+
+    def worker_registry_snapshot(self) -> dict[str, object]:
+        return {}
 
     def worker_health_snapshot(self) -> dict[str, object]:
         return {"workers": {}, "degraded_workers": []}
