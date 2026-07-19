@@ -39,6 +39,23 @@ concurrent-write races rather than duplicate service logic.
 Payload v5 and earlier are unsupported. Export never emits both old and new
 fields. See [`v0.2-local-security-design.md`](v0.2-local-security-design.md).
 
+## RuntimeStartResult exact transport
+
+Runtime startup exposes exactly one normalized result shape:
+
+```text
+ok
+collector_ready
+workers
+already_running
+degraded
+error_code
+```
+
+`workers` is the sole worker-name mapping. There are no worker-specific top-level
+status fields and no parallel `error` alias. User-facing error text is translated
+at the Bridge boundary; runtime transport retains the canonical `error_code`.
+
 ## LiveClock v2 exact DTO
 
 The key set is exactly:
