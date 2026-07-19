@@ -99,7 +99,7 @@ def test_page_read_scope_is_capability_read_only() -> None:
 def test_only_permanent_workflows_and_no_agent_helpers() -> None:
     workflow_dir = ROOT / ".github" / "workflows"
     workflow_names = {path.name for path in workflow_dir.glob("*.yml")}
-    expected = {"_validation.yml", "ci.yml"}
+    expected = {"_validation.yml", "acceptance.yml", "ci.yml"}
     offenders = {
         _relative(path)
         for path in (ROOT / ".github").glob("agent_*.py")
