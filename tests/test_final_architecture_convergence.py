@@ -181,9 +181,7 @@ def test_runtime_start_result_is_worker_mapping_only():
 def test_collector_maintenance_hold_has_explicit_terminal_states():
     control = CollectorControl()
     assert control.hold_state is CollectorHoldState.OPERATIONAL
-    assert {
-        state.value for state in CollectorHoldState
-    } == {
+    assert {state.value for state in CollectorHoldState} == {
         "operational",
         "hold_requested",
         "sealing",
@@ -204,3 +202,35 @@ def test_production_has_no_runtime_service_locator_or_second_coordinator():
     assert "get_runtime" not in app_api
     assert "ApplicationServices" in bridge
     assert maintenance.count("class RuntimeMaintenanceCoordinator") == 1
+
+
+def test_shipping_frontend_contains_only_liveclock_v2_names():
+    root = Path(__file__).resolve().parents[1] / "worktrace/webview_ui/js"
+    source = "\n".join(
+        (root / name).read_text(encoding="utf-8")
+        for name in ("core.js", "init.js", "overview.js", "timeline.js")
+    )
+    forbidden = {
+        "duration_seconds_at_sample",
+        "carry_seconds",
+        "live_started_at_epoch_ms",
+        "sample_epoch_ms",
+        "current_live_duration_seconds",
+        "persisted_duration_seconds",
+        "active_elapsed_at_sample",
+        "current_elapsed_at_sample",
+        "current_duration_live",
+        "project_duration_live",
+        "is_project_duration_live",
+        "live_delta_eligible",
+        "is_live_projected",
+    }
+    assert forbidden.isdisjoint(source)
+
+
+def test_view_model_api_requires_explicit_runtime_context():
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "worktrace/api/view_model_api.py").read_text(encoding="utf-8")
+    assert "collector_status or {}" not in source
+    assert 'raise ValueError("runtime_missing")' in source
+    assert 'raise ValueError("collector_status_missing")' in source
