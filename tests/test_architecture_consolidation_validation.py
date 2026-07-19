@@ -278,6 +278,12 @@ def test_permanent_ci_workflows_are_read_only():
     assert "python_failure_details" not in reusable_source
     assert "validation-diagnostics-${{ inputs.revision }}" in reusable_source
     assert "retention-days: 3" in reusable_source
+    assert "PYTHONFAULTHANDLER" in reusable_source
+    assert '"pytest-timeout>=2.3,<3"' in reusable_source
+    assert "python -m pytest -vv" in reusable_source
+    assert "--timeout=90 --timeout-method=thread" in reusable_source
+    assert 'Tee-Object -FilePath "test-results/pytest.log"' in reusable_source
+    assert "timeout-minutes: 15" in reusable_source
 
     ci_source = (workflow_dir / "ci.yml").read_text(encoding="utf-8")
     assert "pull_request:" in ci_source
@@ -286,7 +292,10 @@ def test_permanent_ci_workflows_are_read_only():
     assert "github.event.pull_request.head.sha || github.sha" in ci_source
     assert "run_node_tests: true" in ci_source
     assert "run_build_smoke: true" in ci_source
-    assert "cancel-in-progress: false" in ci_source
+    assert (
+        "cancel-in-progress: ${{ github.event_name == 'pull_request' }}"
+        in ci_source
+    )
 
 
 def test_live_semantics_harness_recent_reuses_overview_projection(
