@@ -41,7 +41,7 @@ from .database_replacement_generation_service import (
 from .secure_backup_validation import BackupValidationError, validate_staging_database
 
 PAYLOAD_FORMAT = "worktrace-local-data"
-PAYLOAD_VERSION = 5
+PAYLOAD_VERSION = 6
 SCHEMA_VERSION = str(CURRENT_SCHEMA_VERSION)
 BACKUP_FILE_SUFFIX = ".wtbackup"
 MAX_BACKUP_FILE_BYTES = 512 * 1024 * 1024
@@ -149,10 +149,6 @@ class ImportResult:
     mode: str
     imported_tables: dict[str, int] = field(default_factory=dict)
     folder_index_reset: bool = False
-
-
-def is_secure_import_in_progress() -> bool:
-    return database_maintenance_service.is_maintenance_in_progress()
 
 
 def export_encrypted_backup(output_path: str | Path, passphrase: str) -> Path:
@@ -508,6 +504,5 @@ __all__ = [
     "SecureBackupError",
     "export_encrypted_backup",
     "import_encrypted_backup",
-    "is_secure_import_in_progress",
     "parse_encrypted_backup_manifest",
 ]
