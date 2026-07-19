@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 from ..constants import STATUS_NORMAL, UNCATEGORIZED_PROJECT
 from ..data_generation_repository import DataGenerationNamespace
-from ..db import dict_rows, get_connection, get_db_key
+from ..db import get_connection, get_db_key
 from ..domain_unit_of_work import DomainUnitOfWork
 from ..generation_clock import generation_tuple
 from ..path_utils import has_auto_project_extension
@@ -66,27 +66,33 @@ def invalidate_keyword_rule_cache() -> None:
 def _load_enabled_keyword_rules(conn) -> list[dict]:
     rows = conn.execute(
         """
-        SELECT pr.*, p.name AS project_name, p.enabled AS project_enabled,
+        SELECT pr.id, pr.project_id, pr.pattern,
+               p.name AS project_name, p.enabled AS project_enabled,
                p.is_archived AS project_is_archived,
                p.is_deleted AS project_is_deleted
         FROM project_rule pr
-        LEFT JOIN project p ON p.id = pr.project_id
+        JOIN project p ON p.id = pr.project_id
         WHERE pr.enabled = 1
           AND pr.rule_type = 'keyword'
-        ORDER BY length(pr.pattern) DESC, pr.id DESC
+          AND pr.created_by = 'user'
+        ORDER BY pr.created_at, pr.id
         """
     ).fetchall()
     from . import project_lifecycle_policy
 
     return [
-        row
-        for row in dict_rows(rows)
+        {
+            "id": int(row["id"]),
+            "project_id": int(row["project_id"]),
+            "pattern": str(row["pattern"] or "").strip().casefold(),
+        }
+        for row in rows
         if project_lifecycle_policy.project_available_for_inference(
             {
-                "name": row.get("project_name"),
-                "enabled": row.get("project_enabled"),
-                "is_archived": row.get("project_is_archived"),
-                "is_deleted": row.get("project_is_deleted"),
+                "name": row["project_name"],
+                "enabled": row["project_enabled"],
+                "is_archived": row["project_is_archived"],
+                "is_deleted": row["project_is_deleted"],
             }
         )
     ]
