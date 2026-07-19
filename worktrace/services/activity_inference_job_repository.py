@@ -226,10 +226,18 @@ def record_failure(
     return attempts
 
 
+def clear_all_jobs(conn) -> int:
+    """Clear all inference progress inside the caller-owned transaction."""
+
+    cursor = conn.execute("DELETE FROM activity_inference_job")
+    return max(0, int(cursor.rowcount or 0))
+
+
 __all__ = [
     "InferenceFailureCode",
     "InferenceJobReason",
     "InferenceJobStatus",
+    "clear_all_jobs",
     "delete_job",
     "enqueue_closed_activity_ids",
     "list_runnable_jobs",
