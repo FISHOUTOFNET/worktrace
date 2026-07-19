@@ -50,6 +50,11 @@ from before maintenance. The runtime snapshot is cleared before replacement;
 it is not cleared again after restoration because the Collector may already
 have published the first sample of the new generation.
 
+A failed replacement rolls back business data and the replacement epoch. The
+subsequent fail-closed command is a separate committed safety transition, so it
+may advance the settings generation while leaving all replacement generations
+unchanged.
+
 Neither secure import nor clear-all is a durable user session boundary.
 
 ## Write capability
