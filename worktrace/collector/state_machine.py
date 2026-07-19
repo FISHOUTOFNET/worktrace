@@ -215,6 +215,8 @@ class CollectorStateMachine:
         self.active_signature = self.recorder.current_signature
 
     def pause(self, at_time: str | None = None) -> None:
+        """Apply the durable user-pause boundary and user intent."""
+
         transition_time = at_time or now_str()
         if self.state != "paused" or self.recorder.current_payload is not None:
             prepared = self.recorder.stop_for_boundary(
@@ -232,6 +234,23 @@ class CollectorStateMachine:
                 ),
             )
             self.recorder.finalize_prepared_close(prepared)
+            self.active_signature = None
+        self.state = "paused"
+
+    def quiesce_for_maintenance(self, at_time: str | None = None) -> None:
+        """Seal active facts without mutating durable user pause intent."""
+
+        transition_time = at_time or now_str()
+        if self.state != "paused" or self.recorder.current_payload is not None:
+            prepared = self.recorder.stop_for_boundary(
+                transition_time,
+                ActivityEndReason.PAUSE_BOUNDARY,
+            )
+            self._commit_boundary(
+                transition_time,
+                "maintenance_pause",
+                prepared,
+            )
             self.active_signature = None
         self.state = "paused"
 
@@ -297,7 +316,7 @@ class CollectorStateMachine:
 
 
 def _end_reason_for_boundary(reason: str) -> ActivityEndReason:
-    if reason in {"paused", "user_pause"}:
+    if reason in {"paused", "user_pause", "maintenance_pause"}:
         return ActivityEndReason.PAUSE_BOUNDARY
     if reason in {"stopped", "user_stop"}:
         return ActivityEndReason.STOP_BOUNDARY
