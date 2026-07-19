@@ -152,7 +152,7 @@ def test_ci_has_one_diagnostic_owner_and_no_self_log_replay() -> None:
     assert "python_failure_details" not in workflow
     assert "matrix:" not in workflow
     assert workflow.count("validation-diagnostics-${{ inputs.revision }}") == 2
-    assert "actions/upload-artifact@v4" in workflow
+    assert "actions/upload-artifact@v6" in workflow
     assert "retention-days: 3" in workflow
     assert "if-no-files-found: warn" in workflow
     assert "run_node_tests: true" in ci_workflow
