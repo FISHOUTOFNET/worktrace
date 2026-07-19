@@ -134,6 +134,13 @@ Every production bridge caller supplies explicit runtime and Collector status.
 Missing required dependencies produce a contract error that the bridge logs and
 maps to a generic UI failure; APIs do not silently invent `{}` status.
 
+## Frontend ownership
+
+`core.js` owns the exact clock validator and ticker helpers. `init.js` owns the
+single accepted runtime-envelope store and refresh coordination. Overview and
+Timeline consume those shared owners; governance checks shipping behavior across
+all shipping scripts and do not require an owner to remain in a historical file.
+
 ## Malformed frontend behavior
 
 The shared frontend validator rejects wrong keys/types/enums or invalid live
