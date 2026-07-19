@@ -47,6 +47,10 @@ response.ok is true
 response.command_state_unknown is false
 ```
 
+Runtime-control fakes and integration fixtures must emit this same exact contract;
+partial legacy responses such as `quiesce_pending=false` are not accepted as
+maintenance success.
+
 A timeout before Collector takes the command cancels that command, returns the
 hold channel to OPERATIONAL and leaves the coordinator IDLE; it does not create a
 fail-closed latch. A timeout after take has unknown outcome and fails closed.
