@@ -1,9 +1,10 @@
 """Python capability bridge exposed to the WebView frontend via pywebview."""
-
 from __future__ import annotations
 
 from typing import Any
 
+from ..api.app_api import ApplicationControlService
+from ..runtime.application_services import ApplicationServices
 from .bridge_dialogs import BridgeDialogMixin
 from .bridge_overview import OverviewBridgeMixin
 from .bridge_rules import ProjectRulesBridgeMixin
@@ -13,58 +14,32 @@ from .bridge_timeline import TimelineBridgeMixin
 
 SHIPPING_METHODS = frozenset(
     {
-        "accept_first_run_notice",
-        "archive_project_for_rules",
-        "automatic_rules_status",
-        "backfill_project_rule",
-        "backfill_project_rules_batch",
-        "clear_all_local_data",
-        "copy_timeline_session",
-        "create_excluded_folder_rule",
-        "create_excluded_keyword_rule",
-        "create_project_folder_rule",
-        "create_project_for_rules",
-        "create_project_keyword_rule",
-        "delete_project_folder_rule",
-        "delete_project_for_rules",
-        "delete_project_keyword_rule",
-        "export_encrypted_backup",
-        "export_statistics_csv",
-        "get_first_run_notice",
-        "get_overview",
-        "get_project_rules",
-        "get_refresh_state",
-        "get_settings_privacy_status",
-        "get_statistics_export_summary",
-        "get_status",
-        "get_timeline",
-        "get_timeline_session_activity_summary",
-        "hide_timeline_session",
-        "hide_timeline_session_activity",
-        "import_encrypted_backup",
-        "list_projects_for_timeline",
-        "merge_timeline_session",
-        "preview_encrypted_backup_manifest",
-        "preview_project_rule_impact",
-        "preview_project_rules_batch_impact",
-        "save_timeline_session_edit",
-        "set_clipboard_capture_enabled",
-        "set_excluded_rules_enabled",
-        "set_project_enabled_for_rules",
-        "set_project_rule_enabled",
-        "set_project_rules_batch_enabled",
-        "split_timeline_session",
-        "toggle_pause",
-        "update_project_folder_rule",
-        "update_project_for_rules",
-        "update_project_keyword_rule",
+        "accept_first_run_notice", "archive_project_for_rules",
+        "automatic_rules_status", "backfill_project_rule",
+        "backfill_project_rules_batch", "clear_all_local_data",
+        "copy_timeline_session", "create_excluded_folder_rule",
+        "create_excluded_keyword_rule", "create_project_folder_rule",
+        "create_project_for_rules", "create_project_keyword_rule",
+        "delete_project_folder_rule", "delete_project_for_rules",
+        "delete_project_keyword_rule", "export_encrypted_backup",
+        "export_statistics_csv", "get_first_run_notice", "get_overview",
+        "get_project_rules", "get_refresh_state", "get_settings_privacy_status",
+        "get_statistics_export_summary", "get_status", "get_timeline",
+        "get_timeline_session_activity_summary", "hide_timeline_session",
+        "hide_timeline_session_activity", "import_encrypted_backup",
+        "list_projects_for_timeline", "merge_timeline_session",
+        "preview_encrypted_backup_manifest", "preview_project_rule_impact",
+        "preview_project_rules_batch_impact", "save_timeline_session_edit",
+        "set_clipboard_capture_enabled", "set_excluded_rules_enabled",
+        "set_project_enabled_for_rules", "set_project_rule_enabled",
+        "set_project_rules_batch_enabled", "split_timeline_session",
+        "toggle_pause", "update_project_folder_rule",
+        "update_project_for_rules", "update_project_keyword_rule",
     }
 )
 
 
 class _ShippingBridge:
-    """Read-only capability view passed to pywebview as ``js_api``."""
-
     def __init__(self, owner: "WebViewBridge") -> None:
         self._owner = owner
 
@@ -85,10 +60,14 @@ class WebViewBridge(
     TimelineBridgeMixin,
     ProjectRulesBridgeMixin,
 ):
-    """Internal bridge controller with a fixed shipping capability view."""
+    """Internal bridge controller with explicitly composed application services."""
 
-    def __init__(self) -> None:
+    def __init__(self, services: ApplicationServices | None = None) -> None:
         self._window: Any = None
+        self._services = services
+        self._app_control = ApplicationControlService(
+            services.runtime if services is not None else None
+        )
         self._shipping_api = _ShippingBridge(self)
 
     @property
@@ -96,9 +75,13 @@ class WebViewBridge(
         return self._shipping_api
 
     def set_window(self, window: Any) -> None:
-        """Inject the already-created pywebview window for native dialogs."""
-
         self._window = window
+
+    def _runtime(self):
+        return self._services.runtime if self._services is not None else None
+
+    def _collector_status(self) -> dict[str, Any]:
+        return self._app_control.get_collection_status()
 
 
 __all__ = ["SHIPPING_METHODS", "WebViewBridge"]
