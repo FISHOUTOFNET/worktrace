@@ -103,3 +103,5 @@ def test_missing_generation_namespace_is_schema_error(temp_db):
                 conn,
                 DataGenerationNamespace.DATABASE_REPLACEMENT,
             )
+        with pytest.raises(ValueError, match="database_schema_incompatible"):
+            DataGenerationRepository.bump_replacement(conn, minimum_value=100)
