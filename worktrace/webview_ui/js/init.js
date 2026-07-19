@@ -69,12 +69,13 @@
     var runtimeState = null;
 
     function nonNegativeInt(value, fallback) {
-        var parsed = parseInt(value, 10);
-        return isNaN(parsed) || parsed < 0 ? (fallback || 0) : parsed;
+        return typeof value === "number" && Number.isInteger(value) && value >= 0
+            ? value
+            : (fallback || 0);
     }
 
     function objectValue(value) {
-        return value && typeof value === "object" ? value : {};
+        return value && typeof value === "object" && !Array.isArray(value) ? value : {};
     }
 
     function frozenRuntime(value) {
@@ -82,13 +83,12 @@
         var copy = Object.assign({}, value);
         [
             "liveClock", "currentActivity", "recentFirstRow", "currentProject",
-            "collector", "workerHealth", "generations", "identity", "revisions"
+            "collector", "workers", "generations", "revisions"
         ].forEach(function (field) {
             if (copy[field] && typeof copy[field] === "object") {
                 copy[field] = Object.freeze(Object.assign({}, copy[field]));
             }
         });
-        if (Array.isArray(copy.degradedWorkers)) copy.degradedWorkers = Object.freeze(copy.degradedWorkers.slice());
         if (Array.isArray(copy.errorCodes)) copy.errorCodes = Object.freeze(copy.errorCodes.slice());
         return Object.freeze(copy);
     }
@@ -101,119 +101,52 @@
 
     function sameRuntimeContinuity(previous, next) {
         if (!previous || !next) return false;
-        if (previous.displaySpanId && next.displaySpanId) {
-            return previous.displaySpanId === next.displaySpanId;
-        }
         return !!(
-            previous.stableLiveKeyHash
-            && next.stableLiveKeyHash
+            previous.displaySpanId
+            && next.displaySpanId
+            && previous.displaySpanId === next.displaySpanId
+            && previous.stableLiveKeyHash
             && previous.stableLiveKeyHash === next.stableLiveKeyHash
         );
     }
 
-    function projectAcceptedClock(clock, nowMs) {
-        if (!clock) return 0;
-        var base = nonNegativeInt(clock.carry_seconds, clock.duration_seconds_at_sample);
-        if (clock.is_live !== true || !clock.live_started_at_epoch_ms) return base;
-        var elapsed = Math.floor((nonNegativeInt(nowMs, Date.now()) - clock.live_started_at_epoch_ms) / 1000);
-        return base + Math.max(0, elapsed);
-    }
-
-    function normalizeRuntimeClock(envelope, collector, previousRuntime, nowMs) {
-        var source = objectValue(envelope.clock);
-        if (!Object.keys(source).length) return null;
-        var identity = objectValue(envelope.identity);
-        var snapshot = objectValue(envelope.snapshot);
-        var durationAtSample = Math.max(
-            nonNegativeInt(source.duration_seconds_at_sample, 0),
-            nonNegativeInt(source.current_live_duration_seconds, 0),
-            nonNegativeInt(source.persisted_duration_seconds, 0)
-        );
-        var sampleEpochMs = nonNegativeInt(
-            source.sample_epoch_ms,
-            nonNegativeInt(snapshot.timestamp_epoch_ms, 0)
-        );
-        var collectorRunning = String(collector.status || "") === "running";
-        var ticking = source.is_live === true
-            && collector.paused !== true
-            && collectorRunning
-            && String(envelope.runtime_phase || "") !== "stopped"
-            && String(envelope.runtime_phase || "") !== "stopping";
-        var acceptedSeconds = durationAtSample;
-        if (ticking && sampleEpochMs > 0) {
-            acceptedSeconds += Math.max(0, Math.floor((nowMs - sampleEpochMs) / 1000));
-        }
-        var continuityCandidate = {
-            displaySpanId: String(identity.display_span_id || source.display_span_id || ""),
-            stableLiveKeyHash: String(identity.stable_live_key_hash || source.stable_live_key_hash || "")
-        };
-        if (previousRuntime && previousRuntime.liveClock && sameRuntimeContinuity(previousRuntime, continuityCandidate)) {
-            acceptedSeconds = Math.max(
-                acceptedSeconds,
-                projectAcceptedClock(previousRuntime.liveClock, nowMs)
-            );
-        }
-        var normalized = Object.assign({}, source, {
-            display_span_id: continuityCandidate.displaySpanId,
-            stable_live_key_hash: continuityCandidate.stableLiveKeyHash,
-            duration_seconds_at_sample: acceptedSeconds,
-            current_live_duration_seconds: acceptedSeconds,
-            current_elapsed_at_sample: acceptedSeconds,
-            active_elapsed_at_sample: acceptedSeconds,
-            carry_seconds: acceptedSeconds,
-            source_live_started_at_epoch_ms: nonNegativeInt(source.live_started_at_epoch_ms, 0),
-            live_started_at_epoch_ms: ticking ? nowMs : 0,
-            sample_epoch_ms: sampleEpochMs,
-            is_live: ticking,
-            current_duration_live: ticking && source.current_duration_live === true,
-            project_duration_live: ticking && (
-                source.project_duration_live === true
-                || source.is_project_duration_live === true
-            ),
-            is_project_duration_live: ticking && (
-                source.project_duration_live === true
-                || source.is_project_duration_live === true
-            )
-        });
-        return App.normalizeLiveClock ? App.normalizeLiveClock(normalized) : normalized;
-    }
-
-    function normalizeRuntimeEnvelope(value, page, reportDate, previousRuntime) {
+    function normalizeRuntimeEnvelope(value, page, reportDate) {
         var envelope = rawRuntimeEnvelope(value);
-        if (!envelope || Number(envelope.schema_version || 0) !== 2) return null;
+        if (!envelope || Number(envelope.schema_version) !== 2) return null;
         var surface = String(envelope.surface || page || App.currentPage || "overview");
         var runtimePage = String(page || App.currentPage || surface || "overview");
-        var scopeDate = String(
-            envelope.scope_report_date
-            || reportDate
-            || App.runtimeReportDateForPage(runtimePage, reportDate)
-            || ""
-        );
+        var scopeDate = String(envelope.scope_report_date || reportDate || "");
         var liveDate = String(envelope.live_report_date || scopeDate || "");
         var snapshot = objectValue(envelope.snapshot);
-        var identity = objectValue(envelope.identity);
         var revisions = objectValue(envelope.revisions);
         var collector = objectValue(envelope.collector);
-        var nowMs = Date.now();
-        var liveClock = scopeDate && liveDate && scopeDate !== liveDate
-            ? null
-            : normalizeRuntimeClock(envelope, collector, previousRuntime, nowMs);
+        var sourceClock = envelope.clock;
+        var liveClock = App.validateLiveClock(sourceClock);
+        var malformed = !liveClock;
+        if (malformed) {
+            App.recordLiveClockContractViolation(
+                sourceClock && typeof sourceClock.display_span_id === "string"
+                    ? sourceClock.display_span_id
+                    : "",
+                surface,
+                "runtime_clock_invalid",
+                envelope.schema_version
+            );
+        }
         return {
             schemaVersion: 2,
             surface: surface,
             page: runtimePage,
             reportDate: scopeDate,
             liveReportDate: liveDate,
-            acceptedAtEpochMs: nowMs,
+            acceptedAtEpochMs: Date.now(),
             liveClock: liveClock,
-            displaySpanId: String(identity.display_span_id || (liveClock && liveClock.display_span_id) || ""),
-            stableLiveKeyHash: String(identity.stable_live_key_hash || (liveClock && liveClock.stable_live_key_hash) || ""),
+            displaySpanId: liveClock ? liveClock.display_span_id : "",
+            stableLiveKeyHash: liveClock ? liveClock.stable_live_key_hash : "",
             liveRevision: String(snapshot.revision || ""),
             structureRevision: String(revisions.structure || ""),
             pageRevision: String(revisions.page || ""),
             sampleId: String(snapshot.id || ""),
-            currentActivityDisplaySpanId: String(identity.current_activity_display_span_id || ""),
-            currentResourceIdentityHash: String(identity.current_resource_identity_hash || ""),
             currentActivity: objectValue(envelope.current_activity),
             recentFirstRow: envelope.recent_first_row && typeof envelope.recent_first_row === "object"
                 ? envelope.recent_first_row
@@ -223,13 +156,13 @@
                 : null,
             collector: collector,
             runtimePhase: String(envelope.runtime_phase || "unavailable"),
-            workerHealth: objectValue(envelope.worker_health),
-            degradedWorkers: Array.isArray(envelope.degraded_workers) ? envelope.degraded_workers : [],
+            workers: objectValue(envelope.workers),
             generations: objectValue(envelope.generations),
             databaseReplacementEpoch: nonNegativeInt(envelope.database_replacement_epoch, 0),
             errorCodes: Array.isArray(envelope.error_codes) ? envelope.error_codes : [],
-            identity: identity,
-            revisions: revisions
+            revisions: revisions,
+            runtimeConsistent: envelope.runtime_consistent === true,
+            needsFullRefresh: malformed || envelope.needs_full_refresh === true
         };
     }
 
@@ -238,9 +171,7 @@
         return [
             runtime.page || "",
             runtime.displaySpanId || "",
-            runtime.stableLiveKeyHash || "",
-            runtime.currentActivityDisplaySpanId || "",
-            runtime.currentResourceIdentityHash || ""
+            runtime.stableLiveKeyHash || ""
         ].join("|");
     }
     App.runtimeVisualContinuityKey = runtimeVisualContinuityKey;
@@ -249,7 +180,7 @@
     var liveRuntimeStore = Object.freeze({
         get: function () { return runtimeState; },
         acceptEnvelope: function (value, page, reportDate) {
-            var next = normalizeRuntimeEnvelope(value, page, reportDate, runtimeState);
+            var next = normalizeRuntimeEnvelope(value, page, reportDate);
             if (!next) return null;
             runtimeState = frozenRuntime(next);
             return runtimeState;
@@ -278,23 +209,21 @@
         get: function () { return liveRuntimeStore.get(); }
     });
 
-    App.projectClockSeconds = projectAcceptedClock;
-    App.computeActiveElapsedNow = projectAcceptedClock;
-    App.activeElapsedNow = projectAcceptedClock;
-    App.activeElapsedAtSample = function (clock) {
-        return clock ? nonNegativeInt(clock.carry_seconds, clock.duration_seconds_at_sample) : 0;
+    App.projectClockSeconds = function (clock, nowMs) {
+        return App.computeClockDurationNow(clock, nowMs);
     };
     App.sameLiveContinuity = function (previousClock, incomingClock) {
-        if (!previousClock || !incomingClock) return false;
+        var previous = App.validateLiveClock(previousClock);
+        var incoming = App.validateLiveClock(incomingClock);
         return sameRuntimeContinuity(
-            {
-                displaySpanId: String(previousClock.display_span_id || ""),
-                stableLiveKeyHash: String(previousClock.stable_live_key_hash || "")
-            },
-            {
-                displaySpanId: String(incomingClock.display_span_id || ""),
-                stableLiveKeyHash: String(incomingClock.stable_live_key_hash || "")
-            }
+            previous ? {
+                displaySpanId: previous.display_span_id,
+                stableLiveKeyHash: previous.stable_live_key_hash
+            } : null,
+            incoming ? {
+                displaySpanId: incoming.display_span_id,
+                stableLiveKeyHash: incoming.stable_live_key_hash
+            } : null
         );
     };
 
@@ -329,6 +258,7 @@
         App.reconcileInFlight = false;
         App.liveClockContractRefreshRequested = false;
         App.liveClockContractViolation = null;
+        App.liveClockViolationKeys = {};
         App.firstRunNoticeLoaded = false;
         App.firstRunNoticeLoading = false;
         liveRuntimeStore.reset();
@@ -351,25 +281,23 @@
 
     function runtimeIdentityFromPayload(payload) {
         var envelope = rawRuntimeEnvelope(payload);
-        if (!envelope || Number(envelope.schema_version || 0) !== 2) return null;
-        var identity = objectValue(envelope.identity);
+        if (!envelope || Number(envelope.schema_version) !== 2) return null;
         var snapshot = objectValue(envelope.snapshot);
         var revisions = objectValue(envelope.revisions);
+        var clock = App.validateLiveClock(envelope.clock);
         return {
-            displaySpanId: String(identity.display_span_id || ""),
-            stableLiveKeyHash: String(identity.stable_live_key_hash || ""),
+            displaySpanId: clock ? clock.display_span_id : "",
+            stableLiveKeyHash: clock ? clock.stable_live_key_hash : "",
             liveRevision: String(snapshot.revision || ""),
             pageRevision: String(revisions.page || ""),
-            sampleId: String(snapshot.id || ""),
-            currentActivityDisplaySpanId: String(identity.current_activity_display_span_id || ""),
-            currentResourceIdentityHash: String(identity.current_resource_identity_hash || "")
+            sampleId: String(snapshot.id || "")
         };
     }
     App.runtimeIdentityFromPayload = runtimeIdentityFromPayload;
 
     function incomingRuntimeCompatible(payload, page, reportDate) {
         var envelope = rawRuntimeEnvelope(payload);
-        if (!payload || payload.ok !== true || !envelope || Number(envelope.schema_version || 0) !== 2) {
+        if (!payload || payload.ok !== true || !envelope || Number(envelope.schema_version) !== 2) {
             return false;
         }
         var expectedPage = String(page || App.currentPage || "overview");
@@ -381,30 +309,20 @@
         } else if (expectedDate && expectedDate !== App.localTodayStr()) {
             return false;
         }
-        var currentRuntime = liveRuntimeStore.get();
-        if (!currentRuntime || !currentRuntime.liveClock) return true;
-        var incoming = runtimeIdentityFromPayload(payload);
-        if (!incoming) return false;
-        if (currentRuntime.displaySpanId && incoming.displaySpanId) {
-            return currentRuntime.displaySpanId === incoming.displaySpanId;
-        }
-        if (currentRuntime.stableLiveKeyHash && incoming.stableLiveKeyHash) {
-            return currentRuntime.stableLiveKeyHash === incoming.stableLiveKeyHash;
-        }
-        return objectValue(envelope.current_activity).active !== true;
+        return true;
     }
     App.isPagePayloadCompatibleWithRuntime = incomingRuntimeCompatible;
 
     function noteRejectedPagePayload(payload, page, reportDate) {
         var envelope = rawRuntimeEnvelope(payload) || {};
-        var identity = objectValue(envelope.identity);
-        App.liveClockContractRefreshRequested = true;
-        App.liveClockContractViolation = {
-            spanId: String(identity.display_span_id || ""),
-            page: String(page || App.currentPage || "overview"),
-            reason: "page_payload_runtime_v2_mismatch",
-            reportDate: reportDate || envelope.scope_report_date || ""
-        };
+        var clock = envelope.clock && typeof envelope.clock === "object" ? envelope.clock : {};
+        App.recordLiveClockContractViolation(
+            typeof clock.display_span_id === "string" ? clock.display_span_id : "",
+            String(page || App.currentPage || "overview"),
+            "page_payload_runtime_v2_mismatch",
+            envelope.schema_version || 2
+        );
+        App.liveClockContractViolation.reportDate = reportDate || envelope.scope_report_date || "";
     }
     App.noteRejectedPagePayload = noteRejectedPagePayload;
 
@@ -412,7 +330,7 @@
         if (!payload || payload.ok !== true) return false;
         options = options || {};
         var envelope = rawRuntimeEnvelope(payload);
-        if (!envelope || Number(envelope.schema_version || 0) !== 2) return false;
+        if (!envelope || Number(envelope.schema_version) !== 2) return false;
         var previous = liveRuntimeStore.get();
         var incomingEpoch = nonNegativeInt(envelope.database_replacement_epoch, 0);
         if (previous && incomingEpoch !== previous.databaseReplacementEpoch) {
@@ -430,6 +348,7 @@
         if (previousKey && previousKey !== runtimeVisualContinuityKey(accepted)) {
             App._monotonicRenderState = {};
         }
+        if (accepted.needsFullRefresh) App.liveClockContractRefreshRequested = true;
         if (options.source === "refresh_state") App.lastRefreshState = payload;
         return true;
     }
@@ -465,41 +384,30 @@
 
     App.applyLocalTicker = function () {
         var runtime = liveRuntimeStore.get();
-        var clock = App.getActiveLiveClock();
         var tickerPage = App.currentPage || "overview";
         var pageRoot = document.getElementById("page-" + tickerPage);
         var liveTargets = pageRoot
-            ? pageRoot.querySelectorAll('[data-live-duration-target="1"]')
+            ? pageRoot.querySelectorAll('[data-live-clock-target="1"]')
             : [];
-        if (!clock || clock.is_live !== true) return;
-        var activeElapsedNowValue = projectAcceptedClock(clock, Date.now());
         for (var i = 0; i < liveTargets.length; i++) {
             var target = liveTargets[i];
+            var clock = App.readLiveClockTarget(target);
+            if (!clock) {
+                App.recordLiveClockContractViolation("", tickerPage, "target_clock_invalid", 2);
+                App.clearLiveClockTarget(target);
+                continue;
+            }
             if (!App.liveTargetCompatibleWithRuntime(target, runtime)) {
                 App.recordLiveClockContractViolation(
-                    target.getAttribute("data-display-span-id") || "",
+                    clock.display_span_id,
                     tickerPage,
-                    "live_target_runtime_mismatch"
+                    "live_target_runtime_mismatch",
+                    2
                 );
+                App.clearLiveClockTarget(target);
                 continue;
             }
-            var baseAttr = target.getAttribute("data-display-base-seconds");
-            if (baseAttr === null || baseAttr === "") {
-                baseAttr = target.getAttribute("data-live-base-seconds");
-            }
-            if (baseAttr === null || baseAttr === "") continue;
-            var displayBaseSeconds = parseInt(baseAttr, 10);
-            if (isNaN(displayBaseSeconds)) continue;
-            var semantic = target.getAttribute("data-duration-semantic") || "";
-            if (semantic === "current-live" && displayBaseSeconds !== 0) {
-                App.recordLiveClockContractViolation(
-                    target.getAttribute("data-display-span-id") || "",
-                    tickerPage,
-                    "current_live_target_nonzero_base"
-                );
-                continue;
-            }
-            App.renderLiveDurationTarget(target, displayBaseSeconds, activeElapsedNowValue);
+            App.renderLiveDurationTarget(target, clock, Date.now());
         }
     };
 
@@ -537,8 +445,7 @@
 
     function refreshStatusFromRefreshState(state) {
         if (!state || state.ok !== true) return refreshStatus();
-        var runtime = liveRuntimeStore.get();
-        return refreshStatusFromRuntime(runtime);
+        return refreshStatusFromRuntime(liveRuntimeStore.get());
     }
     App.refreshStatusFromRefreshState = refreshStatusFromRefreshState;
 
@@ -552,11 +459,7 @@
             var overview = Object.assign({}, bundle.overview || {});
             overview.date = bundle.date || overview.date;
             overview.current_activity = runtime ? runtime.currentActivity : {};
-            overview.live_clock = runtime ? runtime.liveClock : null;
-            overview.display_span_id = runtime ? runtime.displaySpanId : "";
-            overview.sample_id = runtime ? runtime.sampleId : "";
-            overview.kpi_live_base = bundle.kpi_live_base || overview.kpi_live_base;
-            overview.kpi_live_targets = bundle.kpi_live_targets || overview.kpi_live_targets;
+            overview.kpi_live_targets = bundle.kpi_live_targets || {};
             if (overview.today_total_seconds === undefined) overview.today_total_seconds = bundle.today_total_seconds || 0;
             if (overview.classified_seconds === undefined) overview.classified_seconds = bundle.classified_seconds || 0;
             if (overview.uncategorized_seconds === undefined) overview.uncategorized_seconds = bundle.uncategorized_seconds || 0;
@@ -744,14 +647,13 @@
     function currentActivityRenderIdentity(runtime) {
         runtime = runtime || {};
         var current = runtime.currentActivity || {};
+        var clock = App.validateLiveClock(runtime.liveClock);
         return [
             current.active === true ? "active" : "inactive",
-            runtime.liveClock && runtime.liveClock.current_duration_live === true ? "live" : "static",
-            String(current.live_state || ""),
-            String(runtime.displaySpanId || ""),
-            String(runtime.currentActivityDisplaySpanId || ""),
-            String(runtime.currentResourceIdentityHash || ""),
-            String(runtime.stableLiveKeyHash || "")
+            clock ? clock.duration_semantic : "static",
+            clock ? clock.display_span_id : "",
+            clock ? clock.stable_live_key_hash : "",
+            String(current.persisted_activity_id || current.activity_id || "")
         ].join("|");
     }
 
@@ -785,18 +687,16 @@
             if (!state) return;
             var previousRuntime = liveRuntimeStore.get();
             var envelope = rawRuntimeEnvelope(state);
-            if (!envelope || Number(envelope.schema_version || 0) !== 2) return;
+            if (!envelope || Number(envelope.schema_version) !== 2) return;
             var snapshot = objectValue(envelope.snapshot);
             var revisions = objectValue(envelope.revisions);
             var incomingIdentity = runtimeIdentityFromPayload(state) || {};
             var incomingCurrent = objectValue(envelope.current_activity);
             var nextIdentity = [
                 incomingCurrent.active === true ? "active" : "inactive",
-                String(incomingCurrent.live_state || ""),
                 incomingIdentity.displaySpanId || "",
-                incomingIdentity.currentActivityDisplaySpanId || "",
-                incomingIdentity.currentResourceIdentityHash || "",
-                incomingIdentity.stableLiveKeyHash || ""
+                incomingIdentity.stableLiveKeyHash || "",
+                String(incomingCurrent.persisted_activity_id || incomingCurrent.activity_id || "")
             ].join("|");
             var previousIdentity = currentActivityRenderIdentity(previousRuntime);
             var isFirstCheck = !previousRuntime;
