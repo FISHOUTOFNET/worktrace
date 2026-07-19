@@ -37,7 +37,10 @@ concurrent-write races rather than duplicate service logic.
 - list/object row shapes before staging and replacement.
 
 Payload v5 and earlier are unsupported. Export never emits both old and new
-fields. See [`v0.2-local-security-design.md`](v0.2-local-security-design.md).
+fields. Durable worker queues such as `activity_inference_job` are intentionally
+excluded from backup payloads and are rebuilt or recovered by their current
+runtime owners after replacement. See
+[`v0.2-local-security-design.md`](v0.2-local-security-design.md).
 
 ## RuntimeStartResult exact transport
 
