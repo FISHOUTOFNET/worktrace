@@ -26,11 +26,16 @@ RETIRED_PRODUCTION_SYMBOLS = {
     "start_history_worker",
     "start_inference_worker",
     "_synchronize_core_hooks",
+    "register_collector_pause_handler",
+    "register_collector_reset_handler",
+    "register_maintenance_thread",
+    "unregister_maintenance_thread",
 }
 RETIRED_FILES = {
     PRODUCTION / "schema_migrations.py",
     PRODUCTION / "runtime" / "app_runtime_core.py",
     PRODUCTION / "services" / "secure_backup_core.py",
+    PRODUCTION / "services" / "runtime_snapshot_barrier.py",
 }
 DYNAMIC_TEST_PATTERNS = (
     "runpy." + "run_path(",
@@ -136,10 +141,12 @@ def test_runtime_and_backup_have_single_lifecycle_owners() -> None:
     assert "activity_inference_job_service.run_inference_worker" in runtime
     assert "activity_fact_repair_service.run_activity_resource_repair_worker" in runtime
     assert "recovery_service.run_startup_recovery_worker" in runtime
-    assert "database_maintenance_service.register_collector_pause_handler" in runtime
+    assert runtime.count("database_maintenance_service.register_runtime_control(self)") >= 1
     assert "from . import database_maintenance_service" in backup
-    assert "maintenance_operation(" in backup
-    assert "class DatabaseMaintenanceCoordinator" in maintenance
+    assert "database_maintenance_service.consistent_snapshot(" in backup
+    assert "database_maintenance_service.database_replacement(" in backup
+    assert "class RuntimeMaintenanceCoordinator" in maintenance
+    assert "class DatabaseMaintenanceCoordinator" not in maintenance
     assert "__getattr__" not in runtime
     assert "__getattr__" not in backup
 
@@ -163,7 +170,7 @@ def test_app_runtime_has_exactly_one_thread_creation_site_for_derived_workers() 
 
 def test_non_windows_production_adapter_fails_closed() -> None:
     source = (PRODUCTION / "runtime" / "app_runtime.py").read_text(encoding="utf-8")
-    assert "raise RuntimeError(\"unsupported_platform\")" in source
+    assert 'raise RuntimeError("unsupported_platform")' in source
     assert "fake_adapter" not in source.casefold()
 
 
