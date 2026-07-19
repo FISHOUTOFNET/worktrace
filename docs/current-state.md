@@ -150,6 +150,11 @@ Full validation:
 - `node --test tests/webview/*.test.js`
 - Windows single-file and installer smoke in Standard CI
 
+Standard CI validates one exact revision and publishes complete Python diagnostics
+when the suite fails. Diagnosis and repair are performed by root-cause group from
+the full manifest; individual failing tests are not treated as independent patch
+targets.
+
 Only `.github/workflows/ci.yml` and its reusable Standard validation workflow are
 used. Acceptance and temporary agent workflows are not part of the architecture.
 Historical WebView implementation phases are retained only at
