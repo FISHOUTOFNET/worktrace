@@ -24,12 +24,12 @@ from ..services import (
     project_inference_service,
     recovery_service,
 )
-from ..services.runtime_activity_state_service import clear_runtime_activity_state
 from ..services.runtime_snapshot_barrier import (
     clear_quiesce_handler,
     register_quiesce_handler,
 )
-from ..services.settings_service import get_bool_setting, get_setting, set_setting
+from ..services.settings_service import set_setting
+from ..worker_health import WorkerHealthRegistry
 from ..write_gate import DATABASE_WRITE_GATE
 
 if TYPE_CHECKING:
@@ -167,6 +167,7 @@ class AppRuntime:
         self.phase = RuntimePhase.NEW
         self._lifecycle_lock = threading.RLock()
         self._adapter = adapter if adapter is not None else _choose_adapter()
+        self._worker_health = WorkerHealthRegistry()
         self._collector_thread: threading.Thread | None = None
         self._collector_stop_event: threading.Event | None = None
         self._collector_generation = 0
@@ -206,11 +207,46 @@ class AppRuntime:
             self.phase = RuntimePhase.INITIALIZED
             return True
 
+    def _run_owned_worker(
+        self,
+        worker_name: str,
+        target: Callable[..., None],
+        args: tuple[Any, ...],
+    ) -> None:
+        """Run one blocking worker with process-local privacy-safe health state."""
+
+        health = self._worker_health.reporter(worker_name)
+        health.started()
+        try:
+            target(*args, health=health)
+            if not self.stop_event.is_set():
+                health.failed("worker_unexpected_exit")
+                logging.error("owned worker returned unexpectedly worker=%s", worker_name)
+        except Exception:
+            health.failed("worker_unhandled_exception")
+            logging.exception("owned worker failed worker=%s", worker_name)
+        finally:
+            health.stopped()
+            if (
+                self.phase is RuntimePhase.RUNNING
+                and worker_name in self._worker_health.degraded_workers()
+            ):
+                self.phase = RuntimePhase.DEGRADED
+
+    def worker_health_snapshot(self) -> dict[str, object]:
+        """Return the process-local health snapshot for runtime transport."""
+
+        return {
+            "workers": self._worker_health.public_snapshot(),
+            "degraded_workers": list(self._worker_health.degraded_workers()),
+        }
+
     def _start_owned_worker(
         self,
         *,
         reference_name: str,
         worker_name: str,
+        health_name: str,
         target: Callable[..., None],
         args: tuple[Any, ...] = (),
     ) -> tuple[bool, bool]:
@@ -222,8 +258,8 @@ class AppRuntime:
         if current is not None:
             setattr(self, reference_name, None)
         thread = threading.Thread(
-            target=target,
-            args=args,
+            target=self._run_owned_worker,
+            args=(health_name, target, args),
             name=worker_name,
             daemon=True,
         )
@@ -287,35 +323,36 @@ class AppRuntime:
             index_ready, index_started = self._start_worker_safely(
                 reference_name="_index_thread",
                 worker_name="WorkTraceFolderIndex",
+                health_name="folder_index",
                 target=folder_index_service.run_folder_index_worker,
                 failure_log="folder index worker initialization failed",
             )
             history_ready, history_started = self._start_worker_safely(
                 reference_name="_history_thread",
                 worker_name="WorkTraceHistoryMutation",
+                health_name="history",
                 target=history_mutation_job_service.run_history_worker,
                 failure_log="history worker initialization failed",
             )
             inference_ready, inference_started = self._start_worker_safely(
                 reference_name="_inference_thread",
                 worker_name="WorkTraceInferenceWorker",
+                health_name="inference",
                 target=activity_inference_job_service.run_inference_worker,
-                args=(
-                    self.stop_event,
-                    project_inference_service.assign_project_for_activity_in_transaction,
-                ),
-                include_stop_event=False,
+                args=(project_inference_service.assign_project_for_activity_in_transaction,),
                 failure_log="inference worker initialization failed",
             )
             resource_repair_ready, resource_repair_started = self._start_worker_safely(
                 reference_name="_resource_repair_thread",
                 worker_name="WorkTraceActivityResourceRepair",
+                health_name="activity_resource_repair",
                 target=activity_fact_repair_service.run_activity_resource_repair_worker,
                 failure_log="activity resource repair worker initialization failed",
             )
             startup_recovery_ready, startup_recovery_started = self._start_worker_safely(
                 reference_name="_startup_recovery_thread",
                 worker_name="WorkTraceStartupRecovery",
+                health_name="startup_recovery",
                 target=recovery_service.run_startup_recovery_worker,
                 failure_log="startup recovery worker initialization failed",
             )
@@ -351,18 +388,18 @@ class AppRuntime:
         *,
         reference_name: str,
         worker_name: str,
+        health_name: str,
         target: Callable[..., None],
         failure_log: str,
         args: tuple[Any, ...] = (),
-        include_stop_event: bool = True,
     ) -> tuple[bool, bool]:
         try:
-            worker_args = (self.stop_event, *args) if include_stop_event else args
             return self._start_owned_worker(
                 reference_name=reference_name,
                 worker_name=worker_name,
+                health_name=health_name,
                 target=target,
-                args=worker_args,
+                args=(self.stop_event, *args),
             )
         except Exception:
             setattr(self, reference_name, None)
@@ -602,17 +639,9 @@ class AppRuntime:
         self,
         timeout_seconds: float = 5.0,
     ) -> dict[str, object]:
-        prior_user_paused = get_bool_setting("user_paused", False)
-        prior_collector_status = get_setting("collector_status", "stopped") or "stopped"
-        result = self.pause_collection_now(timeout_seconds=timeout_seconds)
-        if bool(result.get("ok")):
-            set_setting("user_paused", "true" if prior_user_paused else "false")
-            set_setting("collector_status", prior_collector_status)
-        elif bool(result.get("command_state_unknown")):
-            set_setting("user_paused", "true")
-            set_setting("collector_status", "paused")
-            clear_runtime_activity_state("collector_pause_state_unknown")
-        return result
+        """Adapt the coordinator pause command to the active Collector."""
+
+        return self.pause_collection_now(timeout_seconds=timeout_seconds)
 
     def reset_collection_runtime_now(
         self,
@@ -632,10 +661,6 @@ class AppRuntime:
         )
         if bool(result.get("ok")):
             self._reset_adapter_runtime_state()
-        elif bool(result.get("command_state_unknown")):
-            set_setting("user_paused", "true")
-            set_setting("collector_status", "paused")
-            clear_runtime_activity_state("collector_reset_state_unknown")
         return result
 
     def _reset_adapter_runtime_state(self) -> None:
