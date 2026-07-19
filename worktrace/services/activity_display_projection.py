@@ -43,31 +43,43 @@ def resolve_official_anchor_project(anchor: dict[str, Any] | None) -> dict[str, 
     }
 
 
+def _aggregate_clock(source: dict[str, Any], base_seconds: int) -> dict[str, Any]:
+    return {
+        "sampled_at_epoch_ms": int(source["sampled_at_epoch_ms"]),
+        "started_at_epoch_ms": int(source["started_at_epoch_ms"]),
+        "elapsed_seconds_at_sample": int(source["elapsed_seconds_at_sample"]),
+        "aggregate_base_seconds": max(0, int(base_seconds)),
+        "duration_semantic": "aggregate_live",
+        "is_live": True,
+        "live_state": "persisted_open",
+        "display_span_id": str(source["display_span_id"]),
+        "stable_live_key_hash": str(source["stable_live_key_hash"]),
+    }
+
+
+def _row_live_clock(row: dict[str, Any]) -> dict[str, Any] | None:
+    clock = row.get("live_clock")
+    if not isinstance(clock, dict):
+        return None
+    if (
+        clock.get("is_live") is True
+        and clock.get("live_state") == "persisted_open"
+        and clock.get("duration_semantic") == "aggregate_live"
+    ):
+        return clock
+    return None
+
+
 def build_kpi_live_targets(
     rows: list[dict[str, Any]],
     live_clock: dict[str, Any],
 ) -> dict[str, dict[str, Any]]:
-    active_elapsed = int(
-        live_clock.get("current_elapsed_at_sample")
-        or live_clock.get("active_elapsed_at_sample")
-        or 0
-    )
-    live_projects = bool(
-        live_clock.get("is_live")
-        and (
-            live_clock.get("project_duration_live") is True
-            or live_clock.get("is_project_duration_live") is True
-        )
-    )
-    live_span_id = str(live_clock.get("display_span_id") or "")
-    live_rows = [
-        row
-        for row in rows
-        if live_projects
-        and live_span_id
-        and row.get("live_delta_eligible") is True
-        and str(row.get("display_span_id") or "") == live_span_id
-    ]
+    """Build exact aggregate clocks for KPI rows from verified row clocks."""
+
+    del live_clock
+    live_rows = [(row, _row_live_clock(row)) for row in rows]
+    live_rows = [(row, clock) for row, clock in live_rows if clock is not None]
+    source_clock = live_rows[0][1] if live_rows else None
 
     total_seconds = sum(int(row.get("duration_seconds") or 0) for row in rows)
     classified_seconds = sum(
@@ -80,21 +92,33 @@ def build_kpi_live_targets(
         for row in rows
         if bool(row.get("is_uncategorized"))
     )
-
-    total_enabled = bool(live_rows)
-    classified_enabled = any(bool(row.get("is_classified")) for row in live_rows)
-    uncategorized_enabled = any(bool(row.get("is_uncategorized")) for row in live_rows)
+    active_elapsed = (
+        int(source_clock["elapsed_seconds_at_sample"])
+        if source_clock is not None
+        else 0
+    )
 
     def target(enabled: bool, seconds: int) -> dict[str, Any]:
+        if not enabled or source_clock is None:
+            return {"enabled": False, "live_clock": None}
         return {
-            "enabled": bool(enabled),
-            "base_seconds": max(0, int(seconds) - active_elapsed) if enabled else 0,
+            "enabled": True,
+            "live_clock": _aggregate_clock(
+                source_clock,
+                max(0, int(seconds) - active_elapsed),
+            ),
         }
 
     return {
-        "today_total_seconds": target(total_enabled, total_seconds),
-        "classified_seconds": target(classified_enabled, classified_seconds),
-        "uncategorized_seconds": target(uncategorized_enabled, uncategorized_seconds),
+        "today_total_seconds": target(bool(live_rows), total_seconds),
+        "classified_seconds": target(
+            any(bool(row.get("is_classified")) for row, _clock in live_rows),
+            classified_seconds,
+        ),
+        "uncategorized_seconds": target(
+            any(bool(row.get("is_uncategorized")) for row, _clock in live_rows),
+            uncategorized_seconds,
+        ),
     }
 
 
@@ -111,22 +135,22 @@ def build_revision_parts(
     live_clock = model.get("live_clock") or {}
     current_activity = model.get("current_activity") or {}
     live_clock_input = {
-        "stable_live_key_hash": str(live_clock.get("stable_live_key_hash") or ""),
+        "sampled_at_epoch_ms": int(live_clock.get("sampled_at_epoch_ms") or 0),
+        "started_at_epoch_ms": int(live_clock.get("started_at_epoch_ms") or 0),
+        "elapsed_seconds_at_sample": int(
+            live_clock.get("elapsed_seconds_at_sample") or 0
+        ),
+        "aggregate_base_seconds": int(
+            live_clock.get("aggregate_base_seconds") or 0
+        ),
+        "duration_semantic": str(live_clock.get("duration_semantic") or ""),
         "display_span_id": str(live_clock.get("display_span_id") or ""),
-        "current_activity_display_span_id": str(
-            current_activity.get("current_activity_display_span_id") or ""
+        "stable_live_key_hash": str(
+            live_clock.get("stable_live_key_hash") or ""
         ),
-        "current_resource_identity_hash": str(
-            current_activity.get("current_resource_identity_hash") or ""
-        ),
-        "live_started_at_epoch_ms": int(live_clock.get("live_started_at_epoch_ms") or 0),
         "status": snapshot_status,
         "live_state": str(live_clock.get("live_state") or ""),
         "is_live": bool(live_clock.get("is_live")),
-        "project_duration_live": bool(
-            live_clock.get("project_duration_live", live_clock.get("is_project_duration_live"))
-        ),
-        "current_duration_live": bool(live_clock.get("current_duration_live")),
         "collector_status": collector_status,
         "user_paused": bool(user_paused),
         "today": today,
@@ -134,17 +158,27 @@ def build_revision_parts(
     }
     display_policy = live_clock.get("display_policy") or {}
     display_projection_input = {
-        "display_structural_signature": str(model.get("display_structural_signature") or ""),
+        "display_structural_signature": str(
+            model.get("display_structural_signature") or ""
+        ),
         "display_policy": {
-            "display_session_kind": str(display_policy.get("display_session_kind") or ""),
+            "display_session_kind": str(
+                display_policy.get("display_session_kind") or ""
+            ),
             "base_policy": str(display_policy.get("base_policy") or ""),
-            "project_duration_live": bool(display_policy.get("project_duration_live")),
-            "current_duration_live": bool(display_policy.get("current_duration_live")),
             "materialize_recent": bool(display_policy.get("materialize_recent")),
-            "materialize_timeline": bool(display_policy.get("materialize_timeline")),
-            "materialize_details": bool(display_policy.get("materialize_details")),
-            "status_only_reason": str(display_policy.get("status_only_reason") or ""),
-            "base_policy_reason": str(display_policy.get("base_policy_reason") or ""),
+            "materialize_timeline": bool(
+                display_policy.get("materialize_timeline")
+            ),
+            "materialize_details": bool(
+                display_policy.get("materialize_details")
+            ),
+            "status_only_reason": str(
+                display_policy.get("status_only_reason") or ""
+            ),
+            "base_policy_reason": str(
+                display_policy.get("base_policy_reason") or ""
+            ),
         },
         "current_display_project": _project_revision_identity(
             current_activity.get("display_project")
