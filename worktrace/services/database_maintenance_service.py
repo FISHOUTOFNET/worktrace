@@ -59,10 +59,14 @@ class MaintenanceIntent(str, Enum):
 
 class MaintenancePhase(str, Enum):
     IDLE = "idle"
-    QUIESCING = "quiescing"
+    HOLD_REQUESTED = "hold_requested"
+    HELD = "held"
     DRAINING = "draining"
     EXCLUSIVE = "exclusive"
+    RESETTING = "resetting"
     RESTORING = "restoring"
+    RELEASING = "releasing"
+    FAILED_CLOSED = "failed_closed"
 
 
 @dataclass(frozen=True)
@@ -78,7 +82,7 @@ class RuntimeMaintenanceState:
 
 
 class RuntimeMaintenanceCoordinator:
-    """Own the only maintenance state machine, lock order and runtime control."""
+    """Own the only maintenance state machine, lock order and failure recovery."""
 
     def __init__(self) -> None:
         self._operation_lock = threading.Lock()
@@ -87,8 +91,6 @@ class RuntimeMaintenanceCoordinator:
         self._runtime_control: Any = None
 
     def register_runtime_control(self, control: Any) -> None:
-        """Register the process runtime at the single maintenance control point."""
-
         with self._state_lock:
             self._runtime_control = control
 
@@ -142,25 +144,32 @@ class RuntimeMaintenanceCoordinator:
     def _require_ack(
         result: dict[str, Any],
         *,
-        command: str,
+        command_kind: str,
+        terminal_state: str,
         reason: str,
     ) -> None:
-        if bool(result.get("ok")):
+        command_id = str(result.get("command_id") or "")
+        known_terminal = (
+            bool(result.get("ok"))
+            and bool(command_id)
+            and str(result.get("command_kind") or "") == command_kind
+            and str(result.get("command_state") or "") == "completed"
+            and str(result.get("terminal_state") or "") == terminal_state
+            and not bool(result.get("command_state_unknown"))
+        )
+        if known_terminal:
             return
         if bool(result.get("command_state_unknown")):
             RuntimeMaintenanceCoordinator._fail_closed(
                 reason=reason,
-                command=command,
+                command=command_kind,
             )
         raise CollectorCommandNotAcknowledgedError(
-            f"collector_{command}_not_acknowledged"
+            f"collector_{command_kind}_not_acknowledged"
         )
 
     @staticmethod
     def _fail_closed(*, reason: str, command: str) -> None:
-        # Do not force one mutation class across semantically different keys.
-        # ``user_paused`` must publish the SETTINGS generation so cached readers
-        # cannot continue observing an unsafe pre-maintenance value.
         set_settings(
             {
                 "user_paused": "true",
@@ -201,26 +210,31 @@ class RuntimeMaintenanceCoordinator:
 
         state: RuntimeMaintenanceState | None = None
         control: Any = None
-        operation_succeeded = False
+        hold_acquired = False
+        operation_committed = False
         try:
             control = self._control()
             state = self._capture_state(control)
-            self._set_phase(MaintenancePhase.QUIESCING)
+            self._set_phase(MaintenancePhase.HOLD_REQUESTED)
             if state.collector_running:
                 if control is None:
                     raise CollectorCommandNotAcknowledgedError(
-                        "collector_quiesce_not_acknowledged"
+                        "collector_maintenance_hold_not_acknowledged"
                     )
+                hold_result = dict(
+                    control.quiesce_collection_for_maintenance(
+                        timeout_seconds=timeout_seconds
+                    )
+                )
                 self._require_ack(
-                    dict(
-                        control.quiesce_collection_for_maintenance(
-                            timeout_seconds=timeout_seconds
-                        )
-                    ),
-                    command="quiesce",
+                    hold_result,
+                    command_kind="maintenance_hold",
+                    terminal_state="held",
                     reason=reason,
                 )
-            clear_runtime_activity_state(f"{reason}_quiesced")
+                hold_acquired = True
+            self._set_phase(MaintenancePhase.HELD)
+            clear_runtime_activity_state(f"{reason}_held")
 
             self._set_phase(MaintenancePhase.DRAINING)
             with DATABASE_WRITE_GATE.draining() as lease:
@@ -228,49 +242,52 @@ class RuntimeMaintenanceCoordinator:
                 lease.promote()
                 self._set_phase(MaintenancePhase.EXCLUSIVE)
                 yield state
-            operation_succeeded = True
+            operation_committed = True
+
+            if (
+                intent is MaintenanceIntent.DATABASE_REPLACEMENT
+                and hold_acquired
+                and control is not None
+            ):
+                self._set_phase(MaintenancePhase.RESETTING)
+                reset_result = dict(
+                    control.reset_after_database_replacement(
+                        timeout_seconds=timeout_seconds
+                    )
+                )
+                self._require_ack(
+                    reset_result,
+                    command_kind="database_reset",
+                    terminal_state="held",
+                    reason=reason,
+                )
 
             self._set_phase(MaintenancePhase.RESTORING)
-            if intent is MaintenanceIntent.DATABASE_REPLACEMENT and control is not None:
-                self._require_ack(
-                    dict(
-                        control.reset_after_database_replacement(
-                            timeout_seconds=timeout_seconds
-                        )
-                    ),
-                    command="reset",
-                    reason=reason,
-                )
             self._restore_durable_state(state)
-            if control is not None:
+
+            if hold_acquired and control is not None:
+                self._set_phase(MaintenancePhase.RELEASING)
+                release_result = dict(
+                    control.restore_after_maintenance(
+                        state,
+                        timeout_seconds=timeout_seconds,
+                    )
+                )
                 self._require_ack(
-                    dict(
-                        control.restore_after_maintenance(
-                            state,
-                            timeout_seconds=timeout_seconds,
-                        )
-                    ),
-                    command="restore",
+                    release_result,
+                    command_kind="maintenance_release",
+                    terminal_state="operational",
                     reason=reason,
                 )
-            # The snapshot was cleared before maintenance and replacement reset.
-            # Do not clear again after restore: a resumed Collector may already
-            # have published the first sample of the new runtime generation.
         except Exception:
-            if state is not None and not operation_succeeded:
+            self._set_phase(MaintenancePhase.FAILED_CLOSED)
+            if state is not None:
+                command = "restore" if operation_committed else "operation"
                 try:
-                    self._fail_closed(reason=reason, command="operation")
+                    self._fail_closed(reason=reason, command=command)
                 except Exception:
                     logging.exception(
                         "maintenance fail-closed persistence failed reason=%s",
-                        reason,
-                    )
-            elif state is not None:
-                try:
-                    self._fail_closed(reason=reason, command="restore")
-                except Exception:
-                    logging.exception(
-                        "maintenance restore fail-closed persistence failed reason=%s",
                         reason,
                     )
             logging.exception(
