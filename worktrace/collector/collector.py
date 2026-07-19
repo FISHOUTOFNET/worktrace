@@ -295,6 +295,7 @@ def run_collector(
                 _pause_machine_then_expose(
                     machine,
                     now,
+                    maintenance=True,
                 )
                 control.complete_pause(
                     pause_command_id,
@@ -332,7 +333,7 @@ def run_collector(
 
             if maintenance_active:
                 _set_clipboard_capture_enabled(adapter, False)
-                _pause_machine_then_expose(machine, now)
+                _pause_machine_then_expose(machine, now, maintenance=True)
                 next_poll_deadline = _sleep_until_next_poll(
                     stop_event,
                     control,
@@ -446,8 +447,13 @@ def _normalize_poll_interval_setting() -> None:
 def _pause_machine_then_expose(
     machine: CollectorStateMachine,
     at_time: str,
+    *,
+    maintenance: bool = False,
 ) -> None:
-    machine.pause(at_time=at_time)
+    if maintenance:
+        machine.quiesce_for_maintenance(at_time=at_time)
+    else:
+        machine.pause(at_time=at_time)
     update_heartbeat("paused")
 
 
