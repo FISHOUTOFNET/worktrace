@@ -27,7 +27,7 @@ def test_closed_activity_inference_has_one_consumer_boundary() -> None:
         ROOT / "worktrace/services/activity_resource_command_service.py"
     ).read_text(encoding="utf-8")
 
-    assert runtime.count("start_inference_worker(") == 1
+    assert runtime.count("activity_inference_job_service.run_inference_worker") == 1
     assert "process_pending_inference_jobs(" not in runtime
     assert "process_new_activity(" not in lifecycle
     assert "process_pending_inference_jobs(" not in clipboard
