@@ -7,6 +7,7 @@ and durable generation coordinates exposed to the WebView.
 
 from __future__ import annotations
 
+import time
 from typing import TYPE_CHECKING, Any, Mapping
 
 from ..data_generation_repository import (
@@ -70,46 +71,52 @@ def _generation_snapshot() -> dict[str, int]:
     return {namespace.value: int(values[namespace]) for namespace in values}
 
 
+def _non_negative_int(value: Any, fallback: int = 0) -> int:
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return max(0, int(fallback))
+
+
 def _clock_payload(
     payload: Mapping[str, Any],
     current_activity: Mapping[str, Any],
 ) -> dict[str, Any]:
     source = _mapping(payload.get("live_clock"))
-    duration_at_sample = max(
-        0,
-        int(
-            source.get("duration_seconds_at_sample")
-            or current_activity.get("duration_seconds_at_sample")
-            or current_activity.get("current_live_duration_seconds")
-            or current_activity.get("elapsed_seconds")
-            or current_activity.get("duration_seconds")
-            or 0
-        ),
+    active_elapsed_at_sample = _non_negative_int(
+        source.get("current_live_seconds_at_sample")
+        or source.get("current_elapsed_at_sample")
+        or source.get("active_elapsed_at_sample")
+        or source.get("active_elapsed_seconds_at_sample")
+        or current_activity.get("duration_seconds_at_sample")
+        or current_activity.get("elapsed_seconds")
+        or current_activity.get("duration_seconds")
+        or 0
     )
-    active_elapsed_at_sample = max(
-        0,
-        int(
-            source.get("current_elapsed_at_sample")
-            or source.get("active_elapsed_at_sample")
-            or source.get("active_elapsed_seconds_at_sample")
-            or duration_at_sample
-        ),
+    aggregate_display_base_seconds = _non_negative_int(
+        source.get("aggregate_display_base_seconds")
+        or source.get("display_base_seconds")
+        or source.get("carry_seconds")
+        or 0
     )
-    sample_epoch_ms = max(
-        0,
-        int(
-            source.get("sample_epoch_ms")
-            or payload.get("sample_epoch_ms")
-            or 0
-        ),
+    aggregate_duration_at_sample = _non_negative_int(
+        source.get("aggregate_duration_seconds_at_sample")
+        or source.get("duration_seconds_at_sample")
+        or aggregate_display_base_seconds + active_elapsed_at_sample
     )
-    live_started_at_epoch_ms = max(
-        0,
-        int(
-            source.get("live_started_at_epoch_ms")
-            or current_activity.get("live_started_at_epoch_ms")
-            or 0
-        ),
+    aggregate_duration_at_sample = max(
+        aggregate_duration_at_sample,
+        aggregate_display_base_seconds + active_elapsed_at_sample,
+    )
+    sample_epoch_ms = _non_negative_int(
+        source.get("sample_epoch_ms")
+        or payload.get("sample_epoch_ms")
+        or time.time_ns() // 1_000_000
+    )
+    live_started_at_epoch_ms = _non_negative_int(
+        source.get("live_started_at_epoch_ms")
+        or current_activity.get("live_started_at_epoch_ms")
+        or 0
     )
     project_duration_live = bool(
         source.get("project_duration_live")
@@ -119,12 +126,14 @@ def _clock_payload(
     return {
         "live_state": str(source.get("live_state") or "none"),
         "is_live": bool(source.get("is_live")),
-        "persisted_duration_seconds": duration_at_sample,
-        "duration_seconds_at_sample": duration_at_sample,
-        "current_live_duration_seconds": max(
-            duration_at_sample,
-            int(source.get("current_live_duration_seconds") or duration_at_sample),
-        ),
+        "persisted_duration_seconds": active_elapsed_at_sample,
+        "duration_seconds_at_sample": aggregate_duration_at_sample,
+        "aggregate_duration_seconds_at_sample": aggregate_duration_at_sample,
+        "aggregate_display_base_seconds": aggregate_display_base_seconds,
+        "display_base_seconds": aggregate_display_base_seconds,
+        "current_live_duration_seconds": active_elapsed_at_sample,
+        "current_live_seconds_at_sample": active_elapsed_at_sample,
+        "current_live_base_seconds": 0,
         "current_elapsed_at_sample": active_elapsed_at_sample,
         "active_elapsed_at_sample": active_elapsed_at_sample,
         "current_duration_live": current_duration_live,
@@ -232,7 +241,7 @@ def build_live_runtime_envelope(
         or ""
     )
     sample_id = str(payload.get("sample_id") or "")
-    sample_epoch_ms = int(clock.get("sample_epoch_ms") or 0)
+    sample_epoch_ms = int(clock["sample_epoch_ms"])
     return {
         "schema_version": LIVE_RUNTIME_SCHEMA_VERSION,
         "surface": str(surface or ""),
