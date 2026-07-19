@@ -33,7 +33,7 @@ from ..security.backup_format import (
     decrypt_encrypted_backup,
     parse_backup_manifest,
 )
-from . import database_maintenance_service, startup_recovery_job_repository
+from . import database_maintenance_service
 from .database_replacement_generation_service import (
     capture_replacement_generation_floor,
     publish_database_replacement,
@@ -61,7 +61,6 @@ EXPORT_TABLES: tuple[str, ...] = (
     "report_session_operation_member",
     "report_mutation_request",
     "activity_resource",
-    "activity_inference_job",
 )
 EXCLUDED_TABLES: frozenset[str] = frozenset(
     {
@@ -69,6 +68,7 @@ EXCLUDED_TABLES: frozenset[str] = frozenset(
         "history_mutation_job",
         "history_mutation_job_rule",
         "data_generation_state",
+        "activity_inference_job",
         "activity_resource_repair_job",
         "startup_recovery_job",
     }
@@ -86,7 +86,6 @@ MIGRATABLE_SETTINGS: frozenset[str] = frozenset(
     }
 )
 _DELETE_ORDER: tuple[str, ...] = (
-    "activity_inference_job",
     "activity_resource",
     "report_session_operation_member",
     "report_mutation_request",
@@ -183,12 +182,11 @@ def import_encrypted_backup(
     try:
         with database_maintenance_service.maintenance_operation(
             reason="secure_import"
-        ) as state:
+        ):
             blob = input_file.read_bytes()
             payload = _read_and_decrypt(blob, passphrase)
             data = _parse_and_validate_payload(payload)
             imported_counts = _replace_import(data)
-            state.mark_succeeded()
     except database_maintenance_service.MaintenanceInProgressError as exc:
         raise BackupImportInProgressError(
             "another destructive operation is already in progress"
@@ -329,11 +327,8 @@ def _replace_import(data: dict[str, Any]) -> dict[str, int]:
         with get_connection() as live:
             live.execute("BEGIN IMMEDIATE")
             replacement_floor = capture_replacement_generation_floor(live)
+            database_maintenance_service.clear_all_worker_progress_in_transaction(live)
             _delete_all_rows(live)
-            live.execute("DELETE FROM activity_resource_repair_job")
-            startup_recovery_job_repository.clear_all_jobs(live)
-            live.execute("DELETE FROM history_mutation_job_rule")
-            live.execute("DELETE FROM history_mutation_job")
             source = sqlite3.connect(staging_path)
             source.row_factory = sqlite3.Row
             try:
