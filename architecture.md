@@ -44,7 +44,8 @@ state or database facts.
 | Row runtime overlay | `ActivityRowOverlay` |
 | Exact live-time DTO | `activity_live_clock` |
 | Application composition | `ApplicationServices` |
-| Frontend clock validation/ticking | shared frontend clock functions in `core.js` |
+| Frontend exact clock validation/ticking | shared clock functions in `core.js` |
+| Accepted runtime-envelope state and refresh coordination | single store in `init.js` |
 
 Two owners must never be synchronized to solve an ownership conflict. The
 responsibility must be moved to one owner and the duplicate state deleted.
@@ -69,8 +70,11 @@ Shutdown sets the runtime stop signal, wakes blocking workers, signals each
 handle, joins Collector and every registered worker and records any surviving
 writer. The single-instance lease is released only after all writers stop.
 
-`RuntimeStartResult` exposes Collector readiness and one worker-status mapping.
-Transport callers do not depend on worker-specific top-level fields.
+`RuntimeStartResult` exposes exactly `ok`, `collector_ready`, `workers`,
+`already_running`, `degraded` and `error_code`. `workers` is the only worker
+status mapping. Runtime transport does not expose worker-specific top-level
+fields or a parallel `error` alias; the Bridge translates canonical error codes
+for users.
 
 ## Collector and maintenance
 
