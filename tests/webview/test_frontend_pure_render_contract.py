@@ -12,7 +12,7 @@ pytestmark = [pytest.mark.webview_static, pytest.mark.contract, pytest.mark.live
 def _assigned_app_function(source: str, name: str) -> str:
     marker = f"App.{name} = function ("
     start = source.find(marker)
-    assert start != -1, f"init.js must assign App.{name}"
+    assert start != -1, f"frontend must assign App.{name}"
     end = source.find("\n    };", start)
     assert end != -1, f"App.{name} assignment must close"
     return source[start:end]
@@ -56,14 +56,25 @@ def test_frontend_live_identity_excludes_candidate_metadata_and_retired_states()
             + forbidden
         )
 
-    owners = {
+    declared_owners = {
         "runtimeIdentityFromPayload": read_js("init.js"),
         "runtimeVisualContinuityKey": read_js("init.js"),
+    }
+    assigned_owners = {
         "liveContinuityKey": read_js("core.js"),
         "currentActivityContinuityKey": read_js("core.js"),
     }
-    for function_name, owner_source in owners.items():
-        body = func_body(owner_source, function_name)
+    bodies = {
+        **{
+            name: func_body(owner_source, name)
+            for name, owner_source in declared_owners.items()
+        },
+        **{
+            name: _assigned_app_function(owner_source, name)
+            for name, owner_source in assigned_owners.items()
+        },
+    }
+    for function_name, body in bodies.items():
         for forbidden in (
             "candidate_project",
             "current_candidate_project",
