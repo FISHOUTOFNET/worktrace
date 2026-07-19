@@ -286,6 +286,7 @@ class RuntimeMaintenanceCoordinator:
         state: RuntimeMaintenanceState | None = None
         control: Any = None
         hold_acquired = False
+        operation_started = False
         operation_committed = False
         try:
             if self.blocked_reason is not None:
@@ -320,6 +321,7 @@ class RuntimeMaintenanceCoordinator:
                 drain_existing_writers()
                 lease.promote()
                 self._set_phase(MaintenancePhase.EXCLUSIVE)
+                operation_started = intent is MaintenanceIntent.DATABASE_REPLACEMENT
                 yield state
             operation_committed = True
 
@@ -363,6 +365,7 @@ class RuntimeMaintenanceCoordinator:
         except Exception as exc:
             should_fail_closed = (
                 hold_acquired
+                or operation_started
                 or operation_committed
                 or (
                     isinstance(exc, CollectorCommandNotAcknowledgedError)
