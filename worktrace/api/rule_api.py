@@ -26,8 +26,18 @@ from ..services import (
     rule_query_service,
 )
 from ..services.keyword_rule_policy import ProjectRuleWriteError
+from ..services.system_project_service import SystemProjectCatalogUnavailableError
 
 _APPLY_TO_HISTORY_UNSET = object()
+_CATALOG_DOMAIN_ERRORS = (
+    ProjectRuleWriteError,
+    SystemProjectCatalogUnavailableError,
+)
+
+
+def _catalog_failure(exc: Exception) -> dict[str, Any]:
+    code = getattr(exc, "code", None) or str(exc)
+    return fail_payload(str(code or ERROR_OPERATION_FAILED))
 
 
 def set_project_rule_enabled(
@@ -57,8 +67,8 @@ def set_project_rule_enabled(
             rule_id=rule_id,
             enabled=enabled,
         )
-    except ProjectRuleWriteError as exc:
-        return fail_payload(exc.code)
+    except _CATALOG_DOMAIN_ERRORS as exc:
+        return _catalog_failure(exc)
     except Exception:
         return fail_payload(ERROR_OPERATION_FAILED)
 
@@ -80,8 +90,8 @@ def create_project_keyword_rule(project_id: Any, keyword: Any) -> dict[str, Any]
                 "enabled": True,
             }
         )
-    except ProjectRuleWriteError as exc:
-        return fail_payload(exc.code)
+    except _CATALOG_DOMAIN_ERRORS as exc:
+        return _catalog_failure(exc)
     except Exception:
         return fail_payload(ERROR_OPERATION_FAILED)
 
@@ -114,8 +124,8 @@ def delete_project_keyword_rule(
                 }
             )
         return ok_payload(rule=rule)
-    except ProjectRuleWriteError as exc:
-        return fail_payload(exc.code)
+    except _CATALOG_DOMAIN_ERRORS as exc:
+        return _catalog_failure(exc)
     except rule_impact_service.RuleImpactError as exc:
         return fail_payload(exc.code)
     except Exception:
@@ -143,8 +153,8 @@ def update_project_keyword_rule(rule_id: Any, keyword: Any) -> dict[str, Any]:
                 "enabled": bool(int(existing.get("enabled") or 0)),
             }
         )
-    except ProjectRuleWriteError as exc:
-        return fail_payload(exc.code)
+    except _CATALOG_DOMAIN_ERRORS as exc:
+        return _catalog_failure(exc)
     except Exception:
         return fail_payload(ERROR_OPERATION_FAILED)
 
@@ -175,8 +185,8 @@ def create_project_folder_rule(
                 "enabled": True,
             }
         )
-    except ProjectRuleWriteError as exc:
-        return fail_payload(exc.code)
+    except _CATALOG_DOMAIN_ERRORS as exc:
+        return _catalog_failure(exc)
     except Exception:
         return fail_payload(ERROR_OPERATION_FAILED)
 
@@ -211,8 +221,8 @@ def update_project_folder_rule(
                 "enabled": bool(int(existing.get("enabled") or 0)),
             }
         )
-    except ProjectRuleWriteError as exc:
-        return fail_payload(exc.code)
+    except _CATALOG_DOMAIN_ERRORS as exc:
+        return _catalog_failure(exc)
     except Exception:
         return fail_payload(ERROR_OPERATION_FAILED)
 
@@ -245,8 +255,8 @@ def delete_project_folder_rule(
                 }
             )
         return ok_payload(rule=rule)
-    except ProjectRuleWriteError as exc:
-        return fail_payload(exc.code)
+    except _CATALOG_DOMAIN_ERRORS as exc:
+        return _catalog_failure(exc)
     except rule_impact_service.RuleImpactError as exc:
         return fail_payload(exc.code)
     except Exception:
@@ -274,8 +284,8 @@ def create_excluded_keyword_rule_for_webview(keyword: Any) -> dict[str, Any]:
                 "enabled": True,
             }
         )
-    except ProjectRuleWriteError as exc:
-        return fail_payload(exc.code)
+    except _CATALOG_DOMAIN_ERRORS as exc:
+        return _catalog_failure(exc)
     except Exception:
         return fail_payload(ERROR_OPERATION_FAILED)
 
@@ -304,8 +314,8 @@ def create_excluded_folder_rule_for_webview(
                 "enabled": True,
             }
         )
-    except ProjectRuleWriteError as exc:
-        return fail_payload(exc.code)
+    except _CATALOG_DOMAIN_ERRORS as exc:
+        return _catalog_failure(exc)
     except Exception:
         return fail_payload(ERROR_OPERATION_FAILED)
 
