@@ -12,7 +12,6 @@ from ._write_contract import (
     ERROR_INVALID_INPUT,
     ERROR_NOT_FOUND,
     ERROR_OPERATION_FAILED,
-    ERROR_SYSTEM_CATALOG_UNAVAILABLE,
     fail_payload,
     ok_payload,
     valid_bool,
@@ -25,13 +24,8 @@ from ..services import (
     rule_history_application_service,
     rule_impact_service,
     rule_query_service,
-    rule_service,
 )
 from ..services.keyword_rule_policy import ProjectRuleWriteError
-from ..services.system_project_service import (
-    SystemProjectCatalogUnavailableError,
-    require_excluded_project_id,
-)
 
 _APPLY_TO_HISTORY_UNSET = object()
 
@@ -52,7 +46,10 @@ def set_project_rule_enabled(
                 enabled,
             )
         else:
-            changed = rule_service.set_rule_enabled(rule_id, enabled)
+            changed = rule_catalog_command_service.set_keyword_rule_enabled(
+                rule_id,
+                enabled,
+            )
         if not changed:
             return fail_payload(ERROR_NOT_FOUND)
         return ok_payload(
@@ -73,7 +70,7 @@ def create_project_keyword_rule(project_id: Any, keyword: Any) -> dict[str, Any]
     if trimmed is None:
         return fail_payload(ERROR_INVALID_INPUT)
     try:
-        rule_id = rule_service.create_rule(trimmed, project_id)
+        rule_id = rule_catalog_command_service.create_keyword_rule(trimmed, project_id)
         return ok_payload(
             rule={
                 "kind": "keyword",
@@ -135,7 +132,7 @@ def update_project_keyword_rule(rule_id: Any, keyword: Any) -> dict[str, Any]:
         existing = rule_query_service.get_keyword_rule(rule_id)
         if existing is None:
             return fail_payload(ERROR_NOT_FOUND)
-        if not rule_service.update_rule(rule_id, trimmed):
+        if not rule_catalog_command_service.update_keyword_rule(rule_id, trimmed):
             return fail_payload(ERROR_NOT_FOUND)
         return ok_payload(
             rule={
@@ -163,7 +160,7 @@ def create_project_folder_rule(
     if trimmed is None or not valid_bool(recursive):
         return fail_payload(ERROR_INVALID_INPUT)
     try:
-        rule_id = folder_rule_service.create_or_update_folder_rule(
+        rule_id = rule_catalog_command_service.create_or_update_folder_rule(
             trimmed,
             project_id,
             recursive=recursive,
@@ -265,19 +262,18 @@ def create_excluded_keyword_rule_for_webview(keyword: Any) -> dict[str, Any]:
     if trimmed is None:
         return fail_payload(ERROR_INVALID_INPUT)
     try:
-        excluded_project_id = require_excluded_project_id()
-        rule_id = rule_service.create_rule(trimmed, excluded_project_id)
+        rule_id, excluded_project_id = (
+            rule_catalog_command_service.create_excluded_keyword_rule(trimmed)
+        )
         return ok_payload(
             rule={
                 "kind": "keyword",
                 "id": int(rule_id),
-                "project_id": excluded_project_id,
+                "project_id": int(excluded_project_id),
                 "keyword": trimmed,
                 "enabled": True,
             }
         )
-    except SystemProjectCatalogUnavailableError:
-        return fail_payload(ERROR_SYSTEM_CATALOG_UNAVAILABLE)
     except ProjectRuleWriteError as exc:
         return fail_payload(exc.code)
     except Exception:
@@ -292,24 +288,22 @@ def create_excluded_folder_rule_for_webview(
     if trimmed is None or not valid_bool(recursive):
         return fail_payload(ERROR_INVALID_INPUT)
     try:
-        excluded_project_id = require_excluded_project_id()
-        rule_id = folder_rule_service.create_or_update_folder_rule(
-            trimmed,
-            excluded_project_id,
-            recursive=recursive,
+        rule_id, excluded_project_id = (
+            rule_catalog_command_service.create_or_update_excluded_folder_rule(
+                trimmed,
+                recursive=recursive,
+            )
         )
         return ok_payload(
             rule={
                 "kind": "folder",
                 "id": int(rule_id),
-                "project_id": excluded_project_id,
+                "project_id": int(excluded_project_id),
                 "folder_path": trimmed,
                 "recursive": bool(recursive),
                 "enabled": True,
             }
         )
-    except SystemProjectCatalogUnavailableError:
-        return fail_payload(ERROR_SYSTEM_CATALOG_UNAVAILABLE)
     except ProjectRuleWriteError as exc:
         return fail_payload(exc.code)
     except Exception:
