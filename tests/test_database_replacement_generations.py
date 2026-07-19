@@ -25,7 +25,7 @@ def _generations() -> dict[DataGenerationNamespace, int]:
         }
 
 
-def test_clear_all_invalidates_every_generation_once(temp_db):
+def test_clear_all_advances_only_replacement_epoch_once(temp_db):
     privacy_gate_service.accept_privacy_notice()
     project_service.create_project("Replacement Source")
     before = _generations()
@@ -33,11 +33,52 @@ def test_clear_all_invalidates_every_generation_once(temp_db):
     database_maintenance_service.clear_all_live_data()
 
     after = _generations()
-    assert {
-        namespace: after[namespace] - before[namespace]
-        for namespace in DataGenerationNamespace
-    } == {namespace: 1 for namespace in DataGenerationNamespace}
+    assert after[DataGenerationNamespace.DATABASE_REPLACEMENT] == (
+        before[DataGenerationNamespace.DATABASE_REPLACEMENT] + 1
+    )
+    for namespace in DataGenerationNamespace:
+        if namespace is DataGenerationNamespace.DATABASE_REPLACEMENT:
+            continue
+        assert after[namespace] == before[namespace]
     assert privacy_gate_service.is_privacy_notice_accepted() is True
+
+
+def test_ordinary_domain_writes_do_not_advance_replacement(temp_db):
+    before = _generations()
+
+    settings_service.set_setting("ui_refresh_seconds", "77")
+    project_service.create_project("Ordinary Domain Write")
+    privacy_gate_service.accept_privacy_notice()
+
+    after = _generations()
+    assert after[DataGenerationNamespace.DATABASE_REPLACEMENT] == before[
+        DataGenerationNamespace.DATABASE_REPLACEMENT
+    ]
+    assert after[DataGenerationNamespace.SETTINGS] > before[
+        DataGenerationNamespace.SETTINGS
+    ]
+    assert after[DataGenerationNamespace.CLASSIFICATION_CATALOG] > before[
+        DataGenerationNamespace.CLASSIFICATION_CATALOG
+    ]
+    assert after[DataGenerationNamespace.PRIVACY_CATALOG] > before[
+        DataGenerationNamespace.PRIVACY_CATALOG
+    ]
+
+
+def test_replacement_repository_advances_above_live_floor_and_rolls_back(temp_db):
+    before = _generations()[DataGenerationNamespace.DATABASE_REPLACEMENT]
+    with get_connection() as conn:
+        conn.execute("BEGIN")
+        values = DataGenerationRepository.bump_replacement(
+            conn,
+            minimum_value=before + 20,
+        )
+        assert values == {
+            DataGenerationNamespace.DATABASE_REPLACEMENT: before + 21
+        }
+        conn.rollback()
+
+    assert _generations()[DataGenerationNamespace.DATABASE_REPLACEMENT] == before
 
 
 def test_clear_all_refreshes_generation_backed_settings_cache(temp_db):
