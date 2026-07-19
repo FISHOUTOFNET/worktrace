@@ -78,5 +78,17 @@ def test_current_contract_versions_and_internal_progress() -> None:
     assert "retry_pending_inference" not in runtime_source_for_contract()
 
 
+def test_replacement_clears_recovery_progress_through_repository_owner() -> None:
+    backup_source = (
+        PRODUCTION / "services" / "secure_backup_service.py"
+    ).read_text(encoding="utf-8")
+    repository_source = (
+        PRODUCTION / "services" / "startup_recovery_job_repository.py"
+    ).read_text(encoding="utf-8")
+    assert "startup_recovery_job_repository.clear_all_jobs(live)" in backup_source
+    assert 'live.execute("DELETE FROM startup_recovery_job")' not in backup_source
+    assert 'cursor = conn.execute("DELETE FROM startup_recovery_job")' in repository_source
+
+
 def runtime_source_for_contract() -> str:
     return (PRODUCTION / "runtime" / "app_runtime.py").read_text(encoding="utf-8")
