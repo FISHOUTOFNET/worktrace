@@ -26,9 +26,7 @@ _BATCH_SIZE = 100
 _BATCH_PLAN_SIZE = 101
 _BATCH_MODE = "ordered_rule_batch"
 _WORKER_IDLE_SECONDS = 2.0
-_WORKER_LOCK = threading.Lock()
 _JOB_EXECUTION_LOCK = threading.RLock()
-_WORKER_THREAD: threading.Thread | None = None
 
 
 def submit_rule_job(
@@ -360,22 +358,9 @@ def batch_job_result(job_id: int) -> dict[str, Any]:
     }
 
 
-def start_history_worker(stop_event: threading.Event) -> threading.Thread | None:
-    global _WORKER_THREAD
-    with _WORKER_LOCK:
-        if _WORKER_THREAD is not None and _WORKER_THREAD.is_alive():
-            return _WORKER_THREAD
-        _WORKER_THREAD = threading.Thread(
-            target=_worker_loop,
-            args=(stop_event,),
-            name="WorkTraceHistoryMutation",
-            daemon=True,
-        )
-        _WORKER_THREAD.start()
-        return _WORKER_THREAD
+def run_history_worker(stop_event: threading.Event) -> None:
+    """Run the blocking history mutation loop owned by ``AppRuntime``."""
 
-
-def _worker_loop(stop_event: threading.Event) -> None:
     logging.info("history mutation worker start")
     while not stop_event.is_set():
         try:
@@ -934,10 +919,10 @@ __all__ = [
     "batch_job_result",
     "compensate_failed_synchronous_job",
     "job_result",
+    "run_history_worker",
     "run_job_batch",
     "run_job_to_completion",
     "run_pending_jobs",
-    "start_history_worker",
     "submit_rule_batch_job",
     "submit_rule_job",
 ]
