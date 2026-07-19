@@ -156,9 +156,17 @@ def record_failure(
     return attempts
 
 
+def clear_all_jobs(conn) -> int:
+    """Clear replacement-invalid progress through the sole runtime DML owner."""
+
+    cursor = conn.execute("DELETE FROM startup_recovery_job")
+    return max(0, int(cursor.rowcount or 0))
+
+
 __all__ = [
     "RecoveryFailureCode",
     "advance_job",
+    "clear_all_jobs",
     "enqueue_continuation",
     "list_runnable_jobs",
     "record_failure",
