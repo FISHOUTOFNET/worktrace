@@ -94,14 +94,16 @@ def test_durable_job_runtime_dml_has_one_canonical_owner_each() -> None:
     assert recovery_owners == {_RECOVERY_JOB_RUNTIME_DML_OWNER}
 
 
-def test_destructive_owners_reference_internal_jobs_only_in_explicit_table_sets() -> None:
+def test_destructive_owners_use_canonical_job_cleanup_interfaces() -> None:
     maintenance = (
         PRODUCTION / "services" / "database_maintenance_service.py"
     ).read_text(encoding="utf-8")
     backup = (
         PRODUCTION / "services" / "secure_backup_service.py"
     ).read_text(encoding="utf-8")
-    assert '"activity_inference_job",' in maintenance
+    assert "activity_inference_job_repository.clear_all_jobs(conn)" in maintenance
+    assert "startup_recovery_job_repository.clear_all_jobs(conn)" in maintenance
+    assert "clear_all_worker_progress_in_transaction(live)" in backup
     assert '"activity_inference_job",' in backup
     assert '"startup_recovery_job",' in backup
     assert not _INFERENCE_DML_PATTERN.search(maintenance)
