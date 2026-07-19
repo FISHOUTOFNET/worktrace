@@ -43,12 +43,20 @@ class TestRuntime:
         return {"workers": {}, "degraded_workers": []}
 
 
+@dataclass
+class TestMaintenance:
+    """Explicit maintenance-state fake used by composed bridge tests."""
+
+    blocked_reason: str | None = None
+
+
 def build_test_application_services(runtime: Any | None = None) -> ApplicationServices:
     runtime_capability = runtime if runtime is not None else TestRuntime()
+    maintenance = TestMaintenance()
     return ApplicationServices(
-        app_control=ApplicationControlService(runtime_capability),
+        app_control=ApplicationControlService(runtime_capability, maintenance),
         runtime_view=runtime_capability,
-        maintenance=object(),
+        maintenance=maintenance,
         backup=object(),
         runtime_state_provider=object(),
     )
@@ -59,6 +67,7 @@ def build_test_bridge(runtime: Any | None = None) -> WebViewBridge:
 
 
 __all__ = [
+    "TestMaintenance",
     "TestRuntime",
     "build_test_application_services",
     "build_test_bridge",
