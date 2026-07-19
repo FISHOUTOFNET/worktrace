@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import sqlite3
 from typing import Any, Iterable
 
 from ..constants import EXCLUDED_PROJECT
@@ -11,6 +12,7 @@ from ..db import now_str
 from ..domain_unit_of_work import DomainUnitOfWork
 from ..path_utils import normalize_folder_key
 from . import folder_index_service, folder_index_state_repository
+from .keyword_rule_policy import ProjectRuleWriteError, normalize_keyword_pattern
 
 RuleRef = tuple[str, int]
 
@@ -72,46 +74,96 @@ def add_catalog_effects_for_rule(
     add_catalog_effects_for_project_ids(uow, conn, (int(row["project_id"]),))
 
 
+def _require_rule_target_project(conn, project_id: int) -> dict[str, Any]:
+    row = conn.execute(
+        "SELECT * FROM project WHERE id = ?",
+        (int(project_id),),
+    ).fetchone()
+    project = dict(row) if row is not None else None
+    if (
+        project is None
+        or int(project.get("is_deleted") or 0) == 1
+        or int(project.get("is_archived") or 0) == 1
+        or int(project.get("enabled") or 0) != 1
+        or (
+            project.get("created_by") != "user"
+            and str(project.get("name") or "") != EXCLUDED_PROJECT
+        )
+    ):
+        raise ProjectRuleWriteError("project_not_found")
+    return project
+
+
+def _raise_keyword_integrity(exc: sqlite3.IntegrityError) -> None:
+    message = str(exc).casefold()
+    if (
+        "uq_project_rule_normalized_pattern" in message
+        or "project_rule.project_id" in message
+        and "project_rule.normalized_pattern" in message
+    ):
+        raise ProjectRuleWriteError("duplicate_rule") from exc
+    raise exc
+
+
 def create_keyword_rule(keyword: str, project_id: int) -> int:
     cleaned = str(keyword or "").strip()
-    if not cleaned:
-        raise ValueError("keyword is required")
+    normalized = normalize_keyword_pattern(cleaned)
+    if not cleaned or not normalized:
+        raise ProjectRuleWriteError("invalid_input")
     timestamp = now_str()
     with _catalog_uow() as uow:
         conn = uow.connection
+        _require_rule_target_project(conn, int(project_id))
         add_catalog_effects_for_project_ids(uow, conn, (project_id,))
-        cursor = conn.execute(
-            """
-            INSERT INTO project_rule(
-                project_id, rule_type, pattern, enabled, created_by,
-                created_at, updated_at
-            ) VALUES (?, 'keyword', ?, 1, 'user', ?, ?)
-            """,
-            (int(project_id), cleaned, timestamp, timestamp),
-        )
+        try:
+            cursor = conn.execute(
+                """
+                INSERT INTO project_rule(
+                    project_id, rule_type, pattern, normalized_pattern,
+                    enabled, created_by, created_at, updated_at
+                ) VALUES (?, 'keyword', ?, ?, 1, 'user', ?, ?)
+                """,
+                (
+                    int(project_id),
+                    cleaned,
+                    normalized,
+                    timestamp,
+                    timestamp,
+                ),
+            )
+        except sqlite3.IntegrityError as exc:
+            _raise_keyword_integrity(exc)
         return int(cursor.lastrowid)
 
 
 def update_keyword_rule(rule_id: int, keyword: str) -> bool:
     cleaned = str(keyword or "").strip()
-    if not cleaned:
-        raise ValueError("keyword is required")
+    normalized = normalize_keyword_pattern(cleaned)
+    if not cleaned or not normalized:
+        raise ProjectRuleWriteError("invalid_input")
     with _catalog_uow() as uow:
         conn = uow.connection
         row = _rule_row(conn, "keyword", rule_id)
         if row is None:
             return False
-        if str(row["pattern"] or "") == cleaned:
+        _require_rule_target_project(conn, int(row["project_id"]))
+        if (
+            str(row["pattern"] or "") == cleaned
+            and str(row["normalized_pattern"] or "") == normalized
+        ):
             return True
         add_catalog_effects_for_project_ids(uow, conn, (int(row["project_id"]),))
-        cursor = conn.execute(
-            """
-            UPDATE project_rule
-            SET pattern = ?, updated_at = ?
-            WHERE id = ? AND rule_type = 'keyword'
-            """,
-            (cleaned, now_str(), int(rule_id)),
-        )
+        try:
+            cursor = conn.execute(
+                """
+                UPDATE project_rule
+                SET pattern = ?, normalized_pattern = ?, updated_at = ?
+                WHERE id = ? AND rule_type = 'keyword'
+                """,
+                (cleaned, normalized, now_str(), int(rule_id)),
+            )
+        except sqlite3.IntegrityError as exc:
+            _raise_keyword_integrity(exc)
         return cursor.rowcount == 1
 
 
@@ -145,6 +197,7 @@ def create_or_update_folder_rule(
     wake_worker = False
     with _catalog_uow() as uow:
         conn = uow.connection
+        _require_rule_target_project(conn, int(project_id))
         existing = conn.execute(
             "SELECT * FROM folder_project_rule WHERE normalized_folder_key = ?",
             (key,),
@@ -219,6 +272,7 @@ def update_folder_rule(
         row = _rule_row(conn, "folder", rule_id)
         if row is None:
             return False
+        _require_rule_target_project(conn, int(row["project_id"]))
         if (
             str(row["normalized_folder_key"] or "") == key
             and int(row["recursive"] or 0) == requested_recursive
@@ -353,7 +407,8 @@ def _rule_row(conn, rule_type: str, rule_id: int):
     if rule_type == "keyword":
         return conn.execute(
             """
-            SELECT id, pattern, project_id, enabled, created_at, updated_at
+            SELECT id, pattern, normalized_pattern, project_id, enabled,
+                   created_at, updated_at
             FROM project_rule
             WHERE id = ? AND rule_type = 'keyword'
             """,
@@ -378,6 +433,7 @@ def _wake_folder_index_worker_safely() -> None:
 
 
 __all__ = [
+    "ProjectRuleWriteError",
     "RuleRef",
     "add_catalog_effects_for_project_ids",
     "add_catalog_effects_for_rule",
