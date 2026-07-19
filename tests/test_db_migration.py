@@ -1,10 +1,11 @@
-"""Contracts for current-only schema initialization and reset."""
+"""Contracts for current-only schema initialization and test-only reset."""
 from __future__ import annotations
 
 import sqlite3
 
 import pytest
 
+from tests.support.database import reset_database
 from worktrace import db
 from worktrace.constants import EXCLUDED_PROJECT, UNCATEGORIZED_PROJECT
 
@@ -73,7 +74,7 @@ def test_initialize_empty_database_sets_exact_current_schema(tmp_path):
     db.initialize_database(db_path)
 
     with db.get_connection() as conn:
-        assert int(conn.execute("PRAGMA user_version").fetchone()[0]) == 11
+        assert int(conn.execute("PRAGMA user_version").fetchone()[0]) == 12
         assert db.schema_fingerprint(conn) == db.expected_schema_fingerprint()
         assert EXPECTED_TABLES.issubset(_get_tables(conn))
         assert "source_rule_type" in _get_columns(
@@ -98,12 +99,12 @@ def test_current_schema_initialization_is_idempotent_and_preserves_data(tmp_path
     db.initialize_database(db_path)
 
     with db.get_connection() as conn:
-        assert int(conn.execute("PRAGMA user_version").fetchone()[0]) == 11
+        assert int(conn.execute("PRAGMA user_version").fetchone()[0]) == 12
         assert db.schema_fingerprint(conn) == db.expected_schema_fingerprint()
         assert conn.execute("SELECT COUNT(*) FROM activity_log").fetchone()[0] == 1
 
 
-@pytest.mark.parametrize("version", [1, 4, 8, 9, 10, 12])
+@pytest.mark.parametrize("version", [1, 4, 8, 9, 10, 11])
 def test_initialize_rejects_every_non_current_schema(tmp_path, version):
     db_path = str(tmp_path / f"schema-{version}.db")
     conn = sqlite3.connect(db_path)
@@ -128,11 +129,11 @@ def test_initialize_rejects_every_non_current_schema(tmp_path, version):
 
 
 def test_initialize_rejects_current_version_with_wrong_fingerprint(tmp_path):
-    db_path = str(tmp_path / "invalid-v11.db")
+    db_path = str(tmp_path / "invalid-v12.db")
     conn = sqlite3.connect(db_path)
     try:
         conn.execute("CREATE TABLE incomplete(id INTEGER PRIMARY KEY)")
-        conn.execute("PRAGMA user_version = 11")
+        conn.execute("PRAGMA user_version = 12")
         conn.commit()
     finally:
         conn.close()
@@ -181,7 +182,7 @@ def test_initialize_seeds_default_settings_and_projects(temp_db):
     assert excluded["enabled"] == 0
 
 
-def test_reset_database_clears_current_business_data_and_rebuilds_defaults(temp_db):
+def test_test_reset_clears_current_business_data_and_rebuilds_defaults(temp_db):
     from tests.support import activity_factory as activity_service
 
     activity_id = activity_service.create_activity(
@@ -202,7 +203,7 @@ def test_reset_database_clears_current_business_data_and_rebuilds_defaults(temp_
             (activity_id, db.now_str(), db.now_str()),
         )
 
-    db.reset_database()
+    reset_database()
 
     with db.get_connection() as conn:
         for table in (
