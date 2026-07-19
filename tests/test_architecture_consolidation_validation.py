@@ -30,6 +30,25 @@ FORBIDDEN_HELPER_PREFIXES = (
     "apply_patch_",
     "one_time_",
 )
+RUNTIME_TOP_LEVEL_ALIASES = {
+    "activity_display_model",
+    "collection_status",
+    "collector_status",
+    "current_activity",
+    "current_activity_display_span_id",
+    "current_activity_elapsed_seconds",
+    "current_resource_identity_hash",
+    "display_span_id",
+    "live_clock",
+    "live_revision",
+    "page_revision",
+    "paused",
+    "sample_epoch_ms",
+    "sample_id",
+    "stable_live_key_hash",
+    "status_display",
+    "structure_revision",
+}
 
 
 def test_page_and_heartbeat_use_one_revision_owner(temp_db):
@@ -77,14 +96,46 @@ def test_session_summary_api_calls_keyword_only_service(monkeypatch):
 
     assert result["ok"] is True
     assert result["summary_rows"] == []
-    assert result["runtime"]["schema_version"] == 1
+    assert result["runtime"]["schema_version"] == 2
     assert result["runtime"]["surface"] == "details"
     assert result["runtime"]["scope_report_date"] == "2026-07-16"
+    assert not RUNTIME_TOP_LEVEL_ALIASES.intersection(result)
     assert captured == {
         "report_date": "2026-07-16",
         "projection_instance_key": "session:1",
         "expected_projection_revision": "a" * 40,
     }
+
+
+def test_overview_api_exposes_one_v2_runtime_transport(temp_db):
+    result = view_model_api.get_overview_view_model()
+
+    assert result["ok"] is True
+    runtime = result["runtime"]
+    assert runtime["schema_version"] == 2
+    assert set(runtime) == {
+        "schema_version",
+        "surface",
+        "scope_report_date",
+        "live_report_date",
+        "snapshot",
+        "current_activity",
+        "recent_first_row",
+        "clock",
+        "current_project",
+        "collector",
+        "runtime_phase",
+        "worker_health",
+        "degraded_workers",
+        "generations",
+        "database_replacement_epoch",
+        "error_codes",
+        "identity",
+        "revisions",
+    }
+    assert not RUNTIME_TOP_LEVEL_ALIASES.intersection(result)
+    if runtime["current_activity"] and runtime["current_activity"].get("active"):
+        assert runtime["recent_first_row"] == runtime["current_activity"]
 
 
 def test_schema_trigger_surface_is_constraint_only(temp_db):
@@ -110,6 +161,10 @@ def test_frontend_uses_explicit_bridge_and_settings_bindings():
     assert "App.callBridge =" not in init_source
     assert "MutationObserver" not in init_source
     assert 'bind("settings-clear-local-data-btn", "click", App.clearAllLocalData)' in init_source
+    assert "schema_version || 0) !== 1" not in init_source
+    assert "bundle.current_activity" not in init_source
+    assert "bundle.live_clock" not in init_source
+    assert "state.collector_status" not in init_source
 
 
 def test_composition_root_imports_canonical_windows_adapter():
