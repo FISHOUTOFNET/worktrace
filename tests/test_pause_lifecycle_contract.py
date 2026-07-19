@@ -50,21 +50,16 @@ def _assert_paused_without_open_activity() -> None:
     assert runtime_activity_state_service.get_runtime_activity_snapshot() is None
 
 
-def test_runtime_missing_pause_fails_without_mutating_business_state(temp_db):
+def test_missing_runtime_composition_is_rejected_without_business_mutation(temp_db):
     activity_id = _open_activity()
     runtime_activity_state_service.publish_runtime_activity_snapshot(
         {"status": STATUS_NORMAL},
         "test",
     )
-    control = ApplicationControlService(None)
 
-    result = control.pause_collection_now()
+    with pytest.raises(ValueError, match="application_runtime_required"):
+        ApplicationControlService(None)  # type: ignore[arg-type]
 
-    assert result == {
-        "ok": False,
-        "pause_pending": False,
-        "error": "collector_not_available",
-    }
     with get_connection() as conn:
         row = conn.execute(
             "SELECT end_time FROM activity_log WHERE id = ?",
@@ -122,20 +117,15 @@ def test_runtime_exception_pause_fails_without_business_fallback(temp_db):
     assert get_bool_setting("user_paused", False) is False
 
 
-def test_repeated_missing_runtime_pause_is_side_effect_free(temp_db):
-    control = ApplicationControlService(None)
-    first = control.pause_collection_now()
-    second = control.pause_collection_now()
+def test_repeated_missing_runtime_composition_is_side_effect_free(temp_db):
+    for _ in range(2):
+        with pytest.raises(ValueError, match="application_runtime_required"):
+            ApplicationControlService(None)  # type: ignore[arg-type]
 
     with get_connection() as conn:
         boundaries = conn.execute(
             "SELECT reason FROM session_boundary ORDER BY id"
         ).fetchall()
-    assert first == second == {
-        "ok": False,
-        "pause_pending": False,
-        "error": "collector_not_available",
-    }
     assert boundaries == []
     assert get_bool_setting("user_paused", False) is False
 
