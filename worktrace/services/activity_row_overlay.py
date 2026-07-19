@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import hashlib
+import time
 from typing import Any
 
 from ..constants import UNCATEGORIZED_PROJECT
@@ -8,6 +8,8 @@ from ..contracts.live_display_contracts import DisplaySpanContract, LiveClockCon
 from ..formatters import format_duration
 from .activity_display_span import LIVE_EDIT_DISABLE_REASON
 from .activity_live_clock import AGGREGATE_LIVE, CURRENT_LIVE, STATIC_CLOSED
+from .live_display_service import _stable_live_key_hash
+from .page_read_context import current_page_read_context
 
 ROW_KIND_CURRENT_ACTIVITY_HEADER = "current_activity_header"
 ROW_KIND_ACTIVITY_DETAIL_ROW = "activity_detail_row"
@@ -33,6 +35,17 @@ _REPORT_ROW_KINDS = {
     ROW_KIND_ACTIVITY_DETAIL_ROW,
     ROW_KIND_PROJECT_ACTIVITY_SUMMARY_ROW,
 }
+_LIVE_CLOCK_KEYS = {
+    "sampled_at_epoch_ms",
+    "started_at_epoch_ms",
+    "elapsed_seconds_at_sample",
+    "aggregate_base_seconds",
+    "duration_semantic",
+    "is_live",
+    "live_state",
+    "display_span_id",
+    "stable_live_key_hash",
+}
 
 
 def apply_live_span_to_row(
@@ -41,185 +54,170 @@ def apply_live_span_to_row(
     *,
     row_kind: str,
 ) -> dict[str, Any]:
+    """Overlay one verified runtime span; otherwise preserve a static row."""
+
     semantic = _duration_semantic_for_row_kind(row_kind)
     if semantic == STATIC_CLOSED:
-        row["duration_semantic"] = STATIC_CLOSED
-        row["live_delta_eligible"] = False
-        return row
-    if not span:
-        return row
-    if row_kind == ROW_KIND_RECENT_PROJECT_SESSION_ROW and not span.get("is_visible_in_recent"):
-        return row
-    if row_kind == ROW_KIND_PROJECT_SESSION_ROW and not span.get("is_visible_in_timeline"):
-        return row
-    if row_kind == ROW_KIND_ACTIVITY_DETAIL_ROW and not span.get("is_visible_in_details"):
-        return row
-    if row_kind == ROW_KIND_PROJECT_ACTIVITY_SUMMARY_ROW and not span.get("is_visible_in_details"):
-        return row
+        return _fail_static(row)
+    if not span or not _span_visible_for_row(span, row_kind):
+        return _fail_static(row)
+
+    context = current_page_read_context()
+    if context is None or not context.runtime_consistent:
+        return _fail_static(row)
     anchor_id = int(span.get("anchor_activity_id") or 0)
-    if anchor_id <= 0:
-        return row
+    if anchor_id <= 0 or context.verified_open_activity_id != anchor_id:
+        return _fail_static(row)
+    if not _row_contains_anchor(row, anchor_id):
+        return _fail_static(row)
+
     row_id = int(row.get("activity_id") or row.get("id") or 0)
-    first_activity_id = int(row.get("first_activity_id") or 0)
-    open_activity_id = int(row.get("open_activity_id") or 0)
-    activity_ids = row.get("activity_ids")
-    matches = row_id == anchor_id or first_activity_id == anchor_id or open_activity_id == anchor_id
-    if not matches and isinstance(activity_ids, list):
-        matches = anchor_id in {int(aid) for aid in activity_ids if aid}
-    if not matches:
-        return row
+    if row_id == anchor_id and row.get("end_time") not in {None, ""}:
+        return _fail_static(row)
 
-    live_clock = span.get("live_clock") or {}
-    state = str(span.get("live_state") or "")
-    row.update(_live_clock_fields(live_clock))
-    current_live_seconds = int(
-        live_clock.get("current_live_seconds_at_sample")
-        or live_clock.get("current_elapsed_at_sample")
-        or 0
-    )
-    aggregate_base = _aggregate_base_for_live_row(row, span, live_clock, state, row_kind)
-    if "raw_duration_seconds" not in row:
-        row["raw_duration_seconds"] = int(row.get("duration_seconds") or 0)
-    aggregate_duration = aggregate_base + current_live_seconds
+    live_clock = span.get("live_clock")
+    if not _valid_live_clock(live_clock):
+        return _fail_static(row)
+    runtime_snapshot = context.runtime_sample.snapshot
+    if not isinstance(runtime_snapshot, dict):
+        return _fail_static(row)
+    if str(live_clock["stable_live_key_hash"]) != _stable_live_key_hash(
+        runtime_snapshot
+    ):
+        return _fail_static(row)
+    if str(live_clock["live_state"]) != "persisted_open":
+        return _fail_static(row)
 
-    row["current_live_seconds_at_sample"] = int(current_live_seconds)
-    row["current_live_base_seconds"] = 0
-    row["aggregate_duration_seconds_at_sample"] = int(aggregate_duration)
-    row["aggregate_display_base_seconds"] = int(aggregate_base)
-    row["current_activity_start_time"] = str(span.get("start_time") or "")
-    row["open_activity_start_time"] = str(span.get("start_time") or "")
-
-    if semantic == CURRENT_LIVE:
-        row["duration_semantic"] = CURRENT_LIVE
-        row["duration_seconds"] = int(current_live_seconds)
-        row["duration"] = format_duration(current_live_seconds)
-        row["display_base_seconds"] = 0
-        row["live_base_seconds"] = 0
-        row["duration_seconds_at_sample"] = int(current_live_seconds)
-    else:
-        row["duration_semantic"] = AGGREGATE_LIVE
-        row["duration_seconds"] = int(aggregate_duration)
-        row["duration"] = format_duration(aggregate_duration)
-        row["display_base_seconds"] = int(aggregate_base)
-        row["live_base_seconds"] = int(aggregate_base)
-        row["duration_seconds_at_sample"] = int(aggregate_duration)
-    row["live_delta_eligible"] = True
+    aggregate_base = _aggregate_base(row, row_kind)
+    if aggregate_base is None:
+        row["live_contract_reason"] = "missing_closed_static_base"
+        return _fail_static(row)
+    elapsed = int(live_clock["elapsed_seconds_at_sample"])
+    row_clock: LiveClockContract = {
+        "sampled_at_epoch_ms": int(live_clock["sampled_at_epoch_ms"]),
+        "started_at_epoch_ms": int(live_clock["started_at_epoch_ms"]),
+        "elapsed_seconds_at_sample": elapsed,
+        "aggregate_base_seconds": aggregate_base,
+        "duration_semantic": semantic,
+        "is_live": True,
+        "live_state": "persisted_open",
+        "display_span_id": str(live_clock["display_span_id"]),
+        "stable_live_key_hash": str(live_clock["stable_live_key_hash"]),
+    }
+    duration_seconds = elapsed if semantic == CURRENT_LIVE else aggregate_base + elapsed
+    row["live_clock"] = row_clock
+    row["duration_seconds"] = int(duration_seconds)
+    row["duration"] = format_duration(duration_seconds)
     row["is_live_projected"] = True
     row["is_in_progress"] = True
-    row["is_virtual_live"] = False
     row["edit_disabled"] = True
     row["editable"] = False
     row["exportable"] = False
     row["disable_reason"] = LIVE_EDIT_DISABLE_REASON
 
-    if state == "persisted_open":
-        preserve_report_attribution = _should_preserve_report_attribution(row, row_kind)
-        if not preserve_report_attribution:
-            row["project_id"] = int(span.get("project_id") or 0)
-            row["project_name"] = str(span.get("project_name") or UNCATEGORIZED_PROJECT)
-            row["project_description"] = str(span.get("project_description") or "")
-            row["display_project"] = span.get("display_project")
-            if not _copy_span_classification(row, span):
-                project_name_str = str(row.get("project_name") or "")
-                if project_name_str == UNCATEGORIZED_PROJECT:
-                    row["is_uncategorized"] = True
-                    row["is_classified"] = False
-                else:
-                    row["is_uncategorized"] = not bool(row.get("project_id"))
-                    row["is_classified"] = bool(row.get("project_id"))
-        row["source"] = "db"
-        if row_kind in _CURRENT_LIVE_ROW_KINDS:
-            row["start_time"] = str(span.get("start_time") or row.get("start_time") or "")
-        row["live_anchor_activity_id"] = int(span.get("live_anchor_activity_id") or 0)
-        row["live_anchor_base_seconds"] = int(span.get("live_anchor_base_seconds") or 0)
+    preserve_report_attribution = _should_preserve_report_attribution(row, row_kind)
+    if not preserve_report_attribution:
+        row["project_id"] = int(span.get("project_id") or 0)
+        row["project_name"] = str(
+            span.get("project_name") or UNCATEGORIZED_PROJECT
+        )
+        row["project_description"] = str(span.get("project_description") or "")
+        row["display_project"] = span.get("display_project")
+        if not _copy_span_classification(row, span):
+            row["is_uncategorized"] = not bool(row.get("project_id"))
+            row["is_classified"] = bool(row.get("project_id"))
+    row["source"] = "db"
+    if row_kind in _CURRENT_LIVE_ROW_KINDS:
+        row["start_time"] = str(span.get("start_time") or row.get("start_time") or "")
     return row
 
 
-def _live_clock_fields(live_clock: LiveClockContract) -> dict[str, Any]:
-    return {
-        "display_span_id": str(live_clock.get("display_span_id") or ""),
-        "stable_live_key": str(live_clock.get("stable_live_key") or ""),
-        "stable_live_key_hash": str(live_clock.get("stable_live_key_hash") or ""),
-        "live_state": str(live_clock.get("live_state") or ""),
-        "live_started_at_epoch_ms": int(live_clock.get("live_started_at_epoch_ms") or 0),
-        "carry_seconds": int(live_clock.get("carry_seconds") or 0),
-        "duration_semantic": str(live_clock.get("duration_semantic") or ""),
-        "current_live_seconds_at_sample": int(live_clock.get("current_live_seconds_at_sample") or 0),
-        "current_live_base_seconds": int(live_clock.get("current_live_base_seconds") or 0),
-        "aggregate_duration_seconds_at_sample": int(live_clock.get("aggregate_duration_seconds_at_sample") or 0),
-        "aggregate_display_base_seconds": int(live_clock.get("aggregate_display_base_seconds") or 0),
-        "display_base_seconds": int(live_clock.get("display_base_seconds") or 0),
-        "duration_seconds_at_sample": int(live_clock.get("duration_seconds_at_sample") or 0),
-        "active_elapsed_at_sample": int(live_clock.get("active_elapsed_at_sample") or 0),
-        "current_elapsed_at_sample": int(live_clock.get("current_elapsed_at_sample") or 0),
-        "is_live": bool(live_clock.get("is_live")),
-        "is_project_duration_live": bool(live_clock.get("is_project_duration_live")),
-        "project_duration_live": bool(
-            live_clock.get("project_duration_live", live_clock.get("is_project_duration_live"))
-        ),
-        "current_duration_live": bool(live_clock.get("current_duration_live")),
-        "display_session_kind": str(live_clock.get("display_session_kind") or ""),
-        "base_policy": str(live_clock.get("base_policy") or ""),
-        "status_only_reason": str(live_clock.get("status_only_reason") or ""),
-        "base_policy_reason": str(live_clock.get("base_policy_reason") or ""),
+def _valid_live_clock(value: Any) -> bool:
+    if not isinstance(value, dict) or set(value) != _LIVE_CLOCK_KEYS:
+        return False
+    return (
+        type(value.get("sampled_at_epoch_ms")) is int
+        and type(value.get("started_at_epoch_ms")) is int
+        and type(value.get("elapsed_seconds_at_sample")) is int
+        and type(value.get("aggregate_base_seconds")) is int
+        and value.get("duration_semantic")
+        in {CURRENT_LIVE, AGGREGATE_LIVE, STATIC_CLOSED}
+        and type(value.get("is_live")) is bool
+        and value.get("live_state") in {"persisted_open", "suppressed", "none"}
+        and isinstance(value.get("display_span_id"), str)
+        and isinstance(value.get("stable_live_key_hash"), str)
+    )
+
+
+def _span_visible_for_row(span: DisplaySpanContract, row_kind: str) -> bool:
+    if row_kind == ROW_KIND_RECENT_PROJECT_SESSION_ROW:
+        return bool(span.get("is_visible_in_recent"))
+    if row_kind == ROW_KIND_PROJECT_SESSION_ROW:
+        return bool(span.get("is_visible_in_timeline"))
+    if row_kind in {
+        ROW_KIND_ACTIVITY_DETAIL_ROW,
+        ROW_KIND_PROJECT_ACTIVITY_SUMMARY_ROW,
+    }:
+        return bool(span.get("is_visible_in_details"))
+    return True
+
+
+def _row_contains_anchor(row: dict[str, Any], anchor_id: int) -> bool:
+    direct_ids = {
+        int(row.get("activity_id") or row.get("id") or 0),
+        int(row.get("first_activity_id") or 0),
+        int(row.get("open_activity_id") or 0),
     }
+    if anchor_id in direct_ids:
+        return True
+    activity_ids = row.get("activity_ids")
+    if not isinstance(activity_ids, list):
+        return False
+    return anchor_id in {int(value) for value in activity_ids if type(value) is int}
+
+
+def _aggregate_base(row: dict[str, Any], row_kind: str) -> int | None:
+    if row_kind in _CURRENT_LIVE_ROW_KINDS:
+        return 0
+    if row_kind not in _AGGREGATE_LIVE_ROW_KINDS:
+        return None
+    value = row.get("closed_duration_seconds")
+    if type(value) is not int or value < 0:
+        return None
+    return int(value)
+
+
+def _fail_static(row: dict[str, Any]) -> dict[str, Any]:
+    duration = int(row.get("duration_seconds") or 0)
+    row["live_clock"] = {
+        "sampled_at_epoch_ms": int(time.time() * 1000),
+        "started_at_epoch_ms": 0,
+        "elapsed_seconds_at_sample": duration,
+        "aggregate_base_seconds": 0,
+        "duration_semantic": STATIC_CLOSED,
+        "is_live": False,
+        "live_state": "none",
+        "display_span_id": "",
+        "stable_live_key_hash": "",
+    }
+    row["is_live_projected"] = False
+    if row.get("end_time") not in {None, ""}:
+        row["is_in_progress"] = False
+    return row
 
 
 def _should_preserve_report_attribution(row: dict[str, Any], row_kind: str) -> bool:
     if row_kind not in _REPORT_ROW_KINDS:
         return False
-    return (
-        "is_report_project" in row
-        or "is_report_classified" in row
-        or "is_report_uncategorized" in row
-        or "report_attribution_kind" in row
+    return any(
+        key in row
+        for key in (
+            "is_report_project",
+            "is_report_classified",
+            "is_report_uncategorized",
+            "report_attribution_kind",
+        )
     )
-
-
-def _static_base_for_live_row(
-    row: dict[str, Any],
-    span: DisplaySpanContract,
-    live_clock: LiveClockContract,
-    state: str,
-) -> int:
-    del state
-    anchor_id = int(span.get("anchor_activity_id") or 0)
-    snapshot_base = int(
-        live_clock.get("display_base_seconds") or span.get("display_base_seconds") or 0
-    )
-    row_id = int(row.get("activity_id") or row.get("id") or 0)
-    open_activity_id = int(row.get("open_activity_id") or 0)
-    activity_ids = row.get("activity_ids")
-    if row_id == anchor_id:
-        return snapshot_base
-    if open_activity_id == anchor_id and "closed_duration_seconds" in row:
-        return int(row.get("closed_duration_seconds") or 0) + snapshot_base
-    if isinstance(activity_ids, list) and anchor_id in {int(aid) for aid in activity_ids if aid}:
-        if "closed_duration_seconds" in row:
-            return int(row.get("closed_duration_seconds") or 0) + snapshot_base
-        row["live_contract_reason"] = "missing_closed_static_base"
-    return snapshot_base
-
-
-def _aggregate_base_for_live_row(
-    row: dict[str, Any],
-    span: DisplaySpanContract,
-    live_clock: LiveClockContract,
-    state: str,
-    row_kind: str,
-) -> int:
-    fallback = int(
-        live_clock.get("aggregate_display_base_seconds")
-        or live_clock.get("display_base_seconds")
-        or span.get("aggregate_display_base_seconds")
-        or span.get("display_base_seconds")
-        or 0
-    )
-    if row_kind not in _AGGREGATE_LIVE_ROW_KINDS:
-        return fallback
-    if state == "persisted_open":
-        return _static_base_for_live_row(row, span, live_clock, state)
-    return fallback
 
 
 def _duration_semantic_for_row_kind(row_kind: str) -> str:
@@ -232,7 +230,10 @@ def _duration_semantic_for_row_kind(row_kind: str) -> str:
     raise ValueError(f"unknown live display row_kind: {row_kind!r}")
 
 
-def _copy_span_classification(row: dict[str, Any], span: DisplaySpanContract) -> bool:
+def _copy_span_classification(
+    row: dict[str, Any],
+    span: DisplaySpanContract,
+) -> bool:
     span_uncategorized = span.get("is_uncategorized")
     span_classified = span.get("is_classified")
     if span_uncategorized is None:
@@ -244,28 +245,3 @@ def _copy_span_classification(row: dict[str, Any], span: DisplaySpanContract) ->
         else not bool(span_uncategorized)
     )
     return True
-
-
-def _row_matches_span_resource(row: dict[str, Any], span: DisplaySpanContract) -> bool:
-    current_identity_hash = str(span.get("resource_identity_hash") or "").strip()
-    if not current_identity_hash:
-        return False
-    for field in ("activity_identity_key", "resource_identity_key"):
-        value = str(row.get(field) or "").strip().lower()
-        if value:
-            return _identity_hash(value) == current_identity_hash
-    for field in (
-        "resource_display_name",
-        "activity_display_name",
-        "activity_name",
-        "app_name",
-        "process_name",
-    ):
-        value = str(row.get(field) or "").strip().lower()
-        if value:
-            return _identity_hash(value) == current_identity_hash
-    return False
-
-
-def _identity_hash(value: str) -> str:
-    return hashlib.sha1(value.strip().lower().encode("utf-8")).hexdigest()[:16]
