@@ -44,16 +44,16 @@ def list_rules(include_system: bool = False) -> list[dict]:
     return dict_rows(rows)
 
 
-def set_rule_enabled(rule_id: int, enabled: bool) -> None:
+def set_rule_enabled(rule_id: int, enabled: bool) -> bool:
     from .rule_catalog_command_service import set_keyword_rule_enabled
 
-    set_keyword_rule_enabled(rule_id, enabled)
+    return set_keyword_rule_enabled(rule_id, enabled)
 
 
-def update_rule(rule_id: int, keyword: str) -> None:
+def update_rule(rule_id: int, keyword: str) -> bool:
     from .rule_catalog_command_service import update_keyword_rule
 
-    update_keyword_rule(rule_id, keyword)
+    return update_keyword_rule(rule_id, keyword)
 
 
 def delete_rule(rule_id: int) -> bool:
