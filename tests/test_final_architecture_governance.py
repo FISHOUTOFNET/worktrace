@@ -36,6 +36,35 @@ def _function_calls(relative: str, function_name: str) -> set[str]:
     return calls
 
 
+def _boundary_reason_literals(relative: str) -> set[str]:
+    """Return literals used as lifecycle reasons, excluding UI state literals."""
+
+    tree = ast.parse(_source(relative), filename=relative)
+    boundary_calls = {
+        "_commit_boundary",
+        "_stop_recording_at_boundary",
+        "close_at_boundary",
+        "pause_collection",
+        "record_boundary",
+    }
+    literals: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if isinstance(node.func, ast.Name):
+            name = node.func.id
+        elif isinstance(node.func, ast.Attribute):
+            name = node.func.attr
+        else:
+            continue
+        if name not in boundary_calls:
+            continue
+        for argument in (*node.args, *(item.value for item in node.keywords)):
+            if isinstance(argument, ast.Constant) and isinstance(argument.value, str):
+                literals.add(argument.value)
+    return literals
+
+
 def test_app_runtime_is_the_only_worker_started_stopped_owner():
     workers = (
         ("worktrace/services/folder_index_service.py", "run_folder_index_worker"),
@@ -103,11 +132,12 @@ def test_current_only_schema_backup_and_database_helpers():
 
 
 def test_boundary_reasons_and_pause_command_have_no_compatibility_fallback():
-    state_machine = _source("worktrace/collector/state_machine.py")
-    app_api = _source("worktrace/api/app_api.py")
-    for retired in ('"paused"', '"stopped"', '"time_jump"', '"secure_import"'):
-        assert retired not in state_machine
+    reason_literals = _boundary_reason_literals("worktrace/collector/state_machine.py")
+    assert {"paused", "stopped", "time_jump", "secure_import"}.isdisjoint(
+        reason_literals
+    )
     assert "pause_fallback" not in ALLOWED_HARD_BOUNDARY_REASONS
+    app_api = _source("worktrace/api/app_api.py")
     assert "pause_fallback" not in app_api
     assert "activity_lifecycle_service.pause_collection" not in app_api
 
@@ -137,7 +167,7 @@ def test_production_has_no_runtime_service_locator():
         _source(path)
         for path in (
             "worktrace/api/app_api.py",
-            "worktrace/runtime/application_services.py",
+            "worktrace/api/application_services.py",
             "worktrace/webview_main.py",
             "worktrace/webview_ui/bridge.py",
         )
