@@ -24,12 +24,7 @@ from .database_replacement_generation_service import (
     publish_database_replacement,
 )
 from .runtime_activity_state_service import clear_runtime_activity_state
-from .settings_service import (
-    SettingMutationClass,
-    get_bool_setting,
-    get_setting,
-    set_settings,
-)
+from .settings_service import get_bool_setting, get_setting, set_settings
 
 _DELETE_ORDER: tuple[str, ...] = (
     "activity_resource",
@@ -163,21 +158,23 @@ class RuntimeMaintenanceCoordinator:
 
     @staticmethod
     def _fail_closed(*, reason: str, command: str) -> None:
+        # Do not force one mutation class across semantically different keys.
+        # ``user_paused`` must publish the SETTINGS generation so cached readers
+        # cannot continue observing an unsafe pre-maintenance value.
         set_settings(
             {
                 "user_paused": "true",
                 "collector_status": "paused",
-            },
-            mutation_class=SettingMutationClass.OPERATIONAL,
+            }
         )
         clear_runtime_activity_state(f"{reason}_{command}_fail_closed")
 
     @staticmethod
     def _restore_durable_state(state: RuntimeMaintenanceState) -> None:
-        if not state.privacy_notice_accepted:
-            collector_status = "stopped"
-        elif state.user_paused:
+        if state.user_paused:
             collector_status = "paused"
+        elif not state.privacy_notice_accepted:
+            collector_status = "stopped"
         elif state.collector_running:
             collector_status = "running"
         elif state.collector_status in {"stopped", "error", "paused"}:
@@ -188,8 +185,7 @@ class RuntimeMaintenanceCoordinator:
             {
                 "user_paused": "true" if state.user_paused else "false",
                 "collector_status": collector_status,
-            },
-            mutation_class=SettingMutationClass.OPERATIONAL,
+            }
         )
 
     @contextmanager
@@ -257,7 +253,9 @@ class RuntimeMaintenanceCoordinator:
                     command="restore",
                     reason=reason,
                 )
-            clear_runtime_activity_state(f"{reason}_complete")
+            # The snapshot was cleared before maintenance and replacement reset.
+            # Do not clear again after restore: a resumed Collector may already
+            # have published the first sample of the new runtime generation.
         except Exception:
             if state is not None and not operation_succeeded:
                 try:
