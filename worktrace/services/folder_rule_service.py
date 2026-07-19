@@ -4,7 +4,7 @@ import threading
 
 from ..data_generation_repository import DataGenerationNamespace
 from ..db import dict_rows, get_connection, get_db_key
-from ..generation_clock import generation
+from ..generation_clock import generation_tuple
 from ..path_utils import (
     is_path_under_folder,
     looks_like_anchor_file_path,
@@ -13,8 +13,12 @@ from . import folder_rule_matching_policy
 
 _FOLDER_RULE_CACHE_LOCK = threading.RLock()
 _FOLDER_RULE_CACHE_DATABASE_KEY: str | None = None
-_FOLDER_RULE_CACHE_GENERATION: int | None = None
+_FOLDER_RULE_CACHE_GENERATION: tuple[int, int] | None = None
 _FOLDER_RULE_CACHE: list[dict] | None = None
+_FOLDER_RULE_CACHE_NAMESPACES = (
+    DataGenerationNamespace.CLASSIFICATION_CATALOG,
+    DataGenerationNamespace.DATABASE_REPLACEMENT,
+)
 
 
 def invalidate_folder_rule_cache() -> None:
@@ -65,7 +69,7 @@ def _enabled_folder_rules(conn=None) -> list[dict]:
     global _FOLDER_RULE_CACHE
     while True:
         database_key = get_db_key()
-        current_generation = generation(DataGenerationNamespace.CLASSIFICATION_CATALOG)
+        current_generation = generation_tuple(_FOLDER_RULE_CACHE_NAMESPACES)
         with _FOLDER_RULE_CACHE_LOCK:
             if (
                 _FOLDER_RULE_CACHE_DATABASE_KEY == database_key
@@ -75,7 +79,7 @@ def _enabled_folder_rules(conn=None) -> list[dict]:
                 return [dict(row) for row in _FOLDER_RULE_CACHE]
         with get_connection() as read_conn:
             rules = _load_enabled_folder_rules(read_conn)
-        if generation(DataGenerationNamespace.CLASSIFICATION_CATALOG) != current_generation:
+        if generation_tuple(_FOLDER_RULE_CACHE_NAMESPACES) != current_generation:
             continue
         with _FOLDER_RULE_CACHE_LOCK:
             _FOLDER_RULE_CACHE_DATABASE_KEY = database_key
