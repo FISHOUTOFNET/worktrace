@@ -14,6 +14,7 @@ from worktrace.services import (
     folder_rule_service,
     privacy_service,
     project_service,
+    rule_catalog_command_service,
     timeline_service,
 )
 from worktrace.services.privacy_anonymization_service import anonymize_activity
@@ -61,10 +62,10 @@ def test_unresolved_file_path_fails_closed_when_exclusion_folder_exists(
     temp_db,
     monkeypatch,
 ):
-    excluded_id = project_service.set_excluded_project_enabled(True)
-    folder_rule_service.create_or_update_folder_rule(
+    project_service.set_excluded_project_enabled(True)
+    rule_catalog_command_service.create_or_update_excluded_folder_rule(
         r"C:\Confidential",
-        excluded_id,
+        recursive=True,
     )
     monkeypatch.setattr(
         folder_index_query_service,
