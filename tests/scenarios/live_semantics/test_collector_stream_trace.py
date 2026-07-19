@@ -32,7 +32,7 @@ def test_stream_open_row_is_the_only_live_display_target(stream):
     stream.start("A", at=0).same("A", at=60).switch("B", at=120)
     row = stream.rows()[-1]
     overview = WebViewBridge().get_overview()
-    assert overview["live_clock"]["live_state"] == "persisted_open"
+    assert overview["runtime"]["clock"]["live_state"] == "persisted_open"
     live_rows = [item for item in overview["activities"] if item.get("live_state") == "persisted_open"]
     assert live_rows and row["id"] in live_rows[0]["activity_ids"]
 
