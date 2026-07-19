@@ -9,13 +9,30 @@ def create_rule(keyword: str, project_id: int) -> int:
     return create_keyword_rule(keyword, project_id)
 
 
+def get_rule(rule_id: int) -> dict | None:
+    with get_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT pr.id, pr.pattern AS keyword, pr.normalized_pattern,
+                   pr.project_id, pr.enabled, pr.created_at, pr.updated_at,
+                   p.name AS project_name
+            FROM project_rule pr
+            LEFT JOIN project p ON p.id = pr.project_id
+            WHERE pr.id = ? AND pr.rule_type = 'keyword'
+            """,
+            (int(rule_id),),
+        ).fetchone()
+    return dict(row) if row is not None else None
+
+
 def list_rules(include_system: bool = False) -> list[dict]:
     with get_connection() as conn:
         rows = conn.execute(
             """
             SELECT
-                pr.id, pr.pattern AS keyword, pr.project_id, pr.enabled,
-                pr.created_at, pr.updated_at, p.name AS project_name
+                pr.id, pr.pattern AS keyword, pr.normalized_pattern,
+                pr.project_id, pr.enabled, pr.created_at, pr.updated_at,
+                p.name AS project_name
             FROM project_rule pr
             LEFT JOIN project p ON p.id = pr.project_id
             WHERE pr.rule_type = 'keyword'
