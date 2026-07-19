@@ -27,6 +27,35 @@ CREATE TABLE IF NOT EXISTS activity_resource_repair_job (
     updated_at TEXT NOT NULL DEFAULT ''
 );
 
+CREATE TABLE IF NOT EXISTS startup_recovery_job (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_activity_id INTEGER NOT NULL UNIQUE,
+    cursor_time TEXT NOT NULL,
+    end_time TEXT NOT NULL,
+    source TEXT NOT NULL,
+    activity_status TEXT NOT NULL,
+    app_name TEXT NOT NULL DEFAULT '',
+    process_name TEXT NOT NULL DEFAULT '',
+    window_title TEXT NOT NULL DEFAULT '',
+    file_path_hint TEXT,
+    project_id INTEGER,
+    status TEXT NOT NULL CHECK(status IN ('pending', 'failed')),
+    attempt_count INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count >= 0),
+    next_attempt_at TEXT,
+    last_error_code TEXT CHECK(
+        last_error_code IS NULL OR last_error_code IN (
+            'database_busy',
+            'database_generation_changed',
+            'secure_import_in_progress',
+            'unexpected_failure'
+        )
+    ),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY(source_activity_id) REFERENCES activity_log(id) ON DELETE CASCADE,
+    FOREIGN KEY(project_id) REFERENCES project(id) ON DELETE SET NULL
+);
+
 CREATE TABLE IF NOT EXISTS activity_inference_job (
     activity_id INTEGER PRIMARY KEY,
     reason TEXT NOT NULL CHECK(reason = 'closed_activity'),
