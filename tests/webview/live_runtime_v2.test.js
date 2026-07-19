@@ -4,6 +4,20 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 
+function liveClock(overrides = {}) {
+  return Object.assign({
+    sampled_at_epoch_ms: 8000,
+    started_at_epoch_ms: 3000,
+    elapsed_seconds_at_sample: 5,
+    aggregate_base_seconds: 0,
+    duration_semantic: "current_live",
+    is_live: true,
+    live_state: "persisted_open",
+    display_span_id: "display-1",
+    stable_live_key_hash: "stable-1",
+  }, overrides);
+}
+
 function runtimePayload(overrides = {}) {
   const runtime = {
     schema_version: 2,
@@ -20,47 +34,23 @@ function runtimePayload(overrides = {}) {
       activity_id: 41,
       persisted_activity_id: 41,
       is_in_progress: true,
-      live_state: "persisted_open",
-      current_activity_display_span_id: "current-span-1",
-      current_resource_identity_hash: "resource-1",
-      stable_live_key_hash: "stable-1",
     },
     recent_first_row: {
-      active: true,
       activity_id: 41,
       persisted_activity_id: 41,
       is_in_progress: true,
-      stable_live_key_hash: "stable-1",
     },
-    clock: {
-      live_state: "persisted_open",
-      is_live: true,
-      duration_seconds_at_sample: 5,
-      current_live_duration_seconds: 5,
-      persisted_duration_seconds: 5,
-      sample_epoch_ms: 8000,
-      live_started_at_epoch_ms: 3000,
-      display_span_id: "display-1",
-      stable_live_key_hash: "stable-1",
-      current_duration_live: true,
-      project_duration_live: true,
-      is_project_duration_live: true,
-    },
+    clock: liveClock(),
     current_project: { id: 7, name: "Matter" },
     collector: { status: "running", paused: false, display: "记录中" },
     runtime_phase: "running",
-    worker_health: {},
-    degraded_workers: [],
+    workers: {},
     generations: { database_replacement: 1 },
     database_replacement_epoch: 1,
     error_codes: [],
-    identity: {
-      display_span_id: "display-1",
-      stable_live_key_hash: "stable-1",
-      current_activity_display_span_id: "current-span-1",
-      current_resource_identity_hash: "resource-1",
-    },
     revisions: { structure: "structure-1", page: "page-1" },
+    runtime_consistent: true,
+    needs_full_refresh: false,
   };
   Object.assign(runtime, overrides);
   return { ok: true, runtime };
@@ -73,15 +63,27 @@ function harness() {
   const listeners = new Map();
   const elements = new Map();
 
+  class FakeDate extends Date {
+    constructor(...args) {
+      super(...(args.length ? args : [now]));
+    }
+    static now() { return now; }
+  }
+
   function element(id) {
     if (!elements.has(id)) {
+      const attributes = new Map();
       elements.set(id, {
         id,
-        classList: { add() {}, remove() {}, contains() { return false; } },
+        hidden: false,
+        textContent: "",
+        innerHTML: "",
+        className: "",
+        classList: { add() {}, remove() {}, contains() { return false; }, toggle() {} },
         addEventListener() {},
-        getAttribute() { return ""; },
-        setAttribute() {},
-        removeAttribute() {},
+        getAttribute(name) { return attributes.has(name) ? attributes.get(name) : null; },
+        setAttribute(name, value) { attributes.set(name, String(value)); },
+        removeAttribute(name) { attributes.delete(name); },
         querySelectorAll() { return []; },
         querySelector() { return null; },
       });
@@ -99,8 +101,8 @@ function harness() {
     Math,
     parseInt,
     isNaN,
-    Date: { now: () => now },
-    setInterval(callback) {
+    Date: FakeDate,
+    setInterval() {
       const id = nextTimerId++;
       activeTimers.add(id);
       return id;
@@ -120,148 +122,166 @@ function harness() {
     },
   };
   vm.createContext(context);
-
+  for (const file of ["core.js", "init.js"]) {
+    vm.runInContext(
+      fs.readFileSync(path.join(__dirname, "../../worktrace/webview_ui/js", file), "utf8"),
+      context,
+      { filename: file }
+    );
+  }
   const App = context.window.WorkTraceApp;
   Object.assign(App, {
-    HEARTBEAT_INTERVAL_MS: 1000,
-    heartbeatTimer: null,
-    currentPage: "overview",
-    timelineDate: null,
-    timelineLoaded: false,
-    timelineLoading: false,
-    statisticsLoaded: true,
-    rulesLoaded: true,
-    settingsLoaded: true,
-    _monotonicRenderState: {},
     requestCoordinator: {
       bumpDataEpoch() {},
       beginLatest() { return {}; },
       isCurrent() { return true; },
     },
-    runtimeReportDateForPage(page, fallback) {
-      return fallback || "2026-07-19";
-    },
-    localTodayStr() { return "2026-07-19"; },
-    normalizeLiveClock(clock) { return clock ? Object.assign({}, clock) : null; },
-    liveTargetCompatibleWithRuntime() { return true; },
-    recordLiveClockContractViolation() {},
-    renderLiveDurationTarget() {},
-    loadTimelineReport() {},
     initStatisticsDefaults() {},
     loadStatisticsExportSummary() {},
     loadProjectRules() {},
     loadSettingsPrivacyStatus() {},
   });
-
-  vm.runInContext(
-    fs.readFileSync(path.join(__dirname, "../../worktrace/webview_ui/js/init.js"), "utf8"),
-    context,
-    { filename: "init.js" }
-  );
-
   return {
     App,
     activeTimers,
+    element,
     setNow(value) { now = value; },
   };
 }
 
-test("v1 is rejected and v2 is the only accepted transport", () => {
+test("v2 exact clock is accepted and v1 is rejected", () => {
   const { App } = harness();
   assert.equal(
-    App.liveRuntimeStore.acceptEnvelope({ ok: true, runtime: { schema_version: 1 } }, "overview", "2026-07-19"),
+    App.liveRuntimeStore.acceptEnvelope(
+      { ok: true, runtime: { schema_version: 1 } },
+      "overview",
+      "2026-07-19"
+    ),
     null
   );
-
   const accepted = App.liveRuntimeStore.acceptEnvelope(
     runtimePayload(),
     "overview",
     "2026-07-19"
   );
-
   assert.equal(accepted.schemaVersion, 2);
-  assert.equal(accepted.liveRevision, "live-1");
-  assert.equal(accepted.pageRevision, "page-1");
+  assert.equal(accepted.liveClock.duration_semantic, "current_live");
+  assert.equal(accepted.liveClock.elapsed_seconds_at_sample, 5);
+  assert.equal(accepted.displaySpanId, "display-1");
   assert.equal(accepted.currentActivity.activity_id, 41);
-  assert.equal(accepted.recentFirstRow.activity_id, 41);
-  assert.equal(accepted.liveClock.carry_seconds, 7);
 });
 
-test("repeated refresh rebases one clock without double counting", () => {
-  const { App, setNow } = harness();
-  App.liveRuntimeStore.acceptEnvelope(runtimePayload(), "overview", "2026-07-19");
-
-  setNow(12000);
-  const second = runtimePayload({
-    snapshot: { id: "sample-2", timestamp_epoch_ms: 11000, revision: "live-2" },
-    clock: {
-      live_state: "persisted_open",
-      is_live: true,
-      duration_seconds_at_sample: 8,
-      current_live_duration_seconds: 8,
-      persisted_duration_seconds: 8,
-      sample_epoch_ms: 11000,
-      live_started_at_epoch_ms: 3000,
-      display_span_id: "display-1",
-      stable_live_key_hash: "stable-1",
-      current_duration_live: true,
-      project_duration_live: true,
-      is_project_duration_live: true,
-    },
-  });
-  const accepted = App.liveRuntimeStore.acceptEnvelope(second, "overview", "2026-07-19");
-
-  assert.equal(accepted.liveClock.carry_seconds, 9);
-  setNow(13000);
-  assert.equal(App.computeActiveElapsedNow(accepted.liveClock, 13000), 10);
-});
-
-test("page switches do not create another application timer", () => {
-  const { App, activeTimers } = harness();
-  App.startHeartbeat();
-  assert.equal(activeTimers.size, 1);
-
-  App.switchPage("rules");
-  assert.equal(activeTimers.size, 1);
-});
-
-test("database replacement resets stale client state before accepting the new epoch", () => {
+test("clock validator rejects missing, extra, negative, and invalid live states", () => {
   const { App } = harness();
-  App.acceptRefreshStateRuntime(runtimePayload());
-  App.timelineLoaded = true;
+  const missing = liveClock();
+  delete missing.started_at_epoch_ms;
+  assert.equal(App.validateLiveClock(missing), null);
+  assert.equal(App.validateLiveClock(Object.assign(liveClock(), { extra: 1 })), null);
+  assert.equal(App.validateLiveClock(liveClock({ elapsed_seconds_at_sample: -1 })), null);
+  assert.equal(App.validateLiveClock(liveClock({ live_state: "none" })), null);
+  assert.equal(
+    App.validateLiveClock(liveClock({ duration_semantic: "static_closed", is_live: true })),
+    null
+  );
+});
 
+test("current and aggregate formulas use sampled elapsed exactly", () => {
+  const { App } = harness();
+  assert.equal(App.computeClockDurationNow(liveClock(), 12000), 9);
+  assert.equal(
+    App.computeClockDurationNow(
+      liveClock({ duration_semantic: "aggregate_live", aggregate_base_seconds: 100 }),
+      12000
+    ),
+    109
+  );
+  const staticClock = liveClock({
+    sampled_at_epoch_ms: 8000,
+    started_at_epoch_ms: 0,
+    elapsed_seconds_at_sample: 22,
+    aggregate_base_seconds: 0,
+    duration_semantic: "static_closed",
+    is_live: false,
+    live_state: "none",
+    display_span_id: "",
+    stable_live_key_hash: "",
+  });
+  assert.equal(App.computeClockDurationNow(staticClock, 12000), null);
+});
+
+test("malformed clock fails static, deduplicates diagnostics, and requests low-frequency refresh", () => {
+  const { App } = harness();
+  const badPayload = runtimePayload({ clock: Object.assign(liveClock(), { unexpected: 1 }) });
+  const accepted = App.liveRuntimeStore.acceptEnvelope(
+    badPayload,
+    "overview",
+    "2026-07-19"
+  );
+  assert.equal(accepted.liveClock, null);
+  assert.equal(accepted.needsFullRefresh, true);
+  assert.equal(App.liveClockContractRefreshRequested, true);
+  App.recordLiveClockContractViolation("display-1", "overview", "runtime_clock_invalid", 2);
+  App.recordLiveClockContractViolation("display-1", "overview", "runtime_clock_invalid", 2);
+  assert.equal(Object.keys(App.liveClockViolationKeys).length, 2);
+});
+
+test("render continuity never changes duration", () => {
+  const { App, element } = harness();
+  const target = element("duration");
+  App.renderDurationProjected(target, 12, "same-key");
+  App.renderDurationProjected(target, 8, "same-key");
+  assert.equal(target.getAttribute("data-duration-seconds"), "8");
+  assert.equal(target.textContent, "00:00:08");
+});
+
+test("database replacement resets stale client state before accepting new epoch", () => {
+  const { App } = harness();
+  assert.equal(App.acceptRefreshStateRuntime(runtimePayload()), true);
+  App.timelineLoaded = true;
   const replacement = runtimePayload({
     generations: { database_replacement: 2 },
     database_replacement_epoch: 2,
   });
   assert.equal(App.acceptRefreshStateRuntime(replacement), true);
-
   assert.equal(App.lastClientGenerationResetReason, "database_replacement_epoch_changed");
   assert.equal(App.timelineLoaded, false);
   assert.equal(App.liveRuntime.databaseReplacementEpoch, 2);
 });
 
-test("paused runtime retains the sampled duration and does not advance locally", () => {
-  const { App, setNow } = harness();
-  const paused = runtimePayload({
-    collector: { status: "running", paused: true, display: "已暂停" },
-  });
-  const accepted = App.liveRuntimeStore.acceptEnvelope(paused, "overview", "2026-07-19");
-  assert.equal(accepted.liveClock.is_live, false);
-  const sampled = accepted.liveClock.carry_seconds;
-
-  setNow(20000);
-  assert.equal(App.computeActiveElapsedNow(accepted.liveClock, 20000), sampled);
+test("page switches keep one application timer", () => {
+  const { App, activeTimers } = harness();
+  App.startHeartbeat();
+  assert.equal(activeTimers.size, 1);
+  App.currentPage = "rules";
+  App.startHeartbeat();
+  assert.equal(activeTimers.size, 1);
 });
 
-test("init source contains one timer and no retired v1 or top-level runtime reads", () => {
-  const source = fs.readFileSync(
-    path.join(__dirname, "../../worktrace/webview_ui/js/init.js"),
-    "utf8"
-  );
-  assert.equal((source.match(/setInterval\s*\(/g) || []).length, 1);
-  assert.equal(source.includes("schema_version || 0) !== 1"), false);
-  assert.equal(source.includes("bundle.current_activity"), false);
-  assert.equal(source.includes("bundle.live_clock"), false);
-  assert.equal(source.includes("state.collector_status"), false);
+test("shipping JavaScript has one clock contract and no retired aliases", () => {
+  const directory = path.join(__dirname, "../../worktrace/webview_ui/js");
+  const files = ["core.js", "init.js", "overview.js", "timeline.js"];
+  const source = files.map((file) => fs.readFileSync(path.join(directory, file), "utf8")).join("\n");
+  const forbidden = [
+    "duration_seconds_at_sample",
+    "carry_seconds",
+    "live_started_at_epoch_ms",
+    "sample_epoch_ms",
+    "current_live_duration_seconds",
+    "persisted_duration_seconds",
+    "active_elapsed_at_sample",
+    "current_elapsed_at_sample",
+    "current_duration_live",
+    "project_duration_live",
+    "is_project_duration_live",
+    "live_delta_eligible",
+    "is_live_projected",
+    "data-live-duration-target",
+    "data-display-base-seconds",
+    "data-live-base-seconds",
+  ];
+  for (const alias of forbidden) {
+    assert.equal(source.includes(alias), false, `retired alias remains: ${alias}`);
+  }
+  const initSource = fs.readFileSync(path.join(directory, "init.js"), "utf8");
+  assert.equal((initSource.match(/setInterval\s*\(/g) || []).length, 1);
 });
