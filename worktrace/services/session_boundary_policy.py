@@ -2,7 +2,6 @@ from __future__ import annotations
 
 ALLOWED_HARD_BOUNDARY_REASONS = {
     "user_pause",
-    "pause_fallback",
     "user_stop",
     "shutdown",
     "restart",
@@ -16,6 +15,7 @@ FORBIDDEN_TRANSIENT_REASONS = {
     "paused",
     "stopped",
     "time_jump",
+    "pause_fallback",
     "transient_exception",
     "adapter_failure",
     "active_window_failure",
