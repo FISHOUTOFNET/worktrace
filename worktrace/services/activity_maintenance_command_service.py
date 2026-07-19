@@ -17,33 +17,31 @@ def seal_open_activity_for_maintenance(
 
     Activity closure and inference-job creation commit in the same report UoW.
     The command deliberately does not mutate ``user_paused`` or collector
-    settings; maintenance is not a user-observable pause transition.
+    settings; maintenance is not a user-observable pause transition. Once the
+    Collector has acknowledged a seal, repeated maintenance polling has no
+    durable command to execute and therefore performs no write attempt.
     """
 
+    if current_activity_id is None:
+        return []
     requested_at = str(occurred_at or now_str())
-    closed_ids: list[int] = []
+    activity_id = int(current_activity_id)
     with DomainUnitOfWork((DataGenerationNamespace.REPORT_STRUCTURE,)) as uow:
         conn = uow.connection
-        if current_activity_id is not None and activity_fact_repository.close_activity(
+        changed = activity_fact_repository.close_activity(
             conn,
-            int(current_activity_id),
+            activity_id,
             requested_at,
             duration_seconds=current_duration_seconds,
-        ):
-            closed_ids.append(int(current_activity_id))
-        for activity_id in activity_fact_repository.close_all_open_activities(
+        )
+        if not changed:
+            return []
+        activity_inference_job_repository.enqueue_closed_activity_ids(
             conn,
-            requested_at,
-        ):
-            if activity_id not in closed_ids:
-                closed_ids.append(activity_id)
-        if closed_ids:
-            activity_inference_job_repository.enqueue_closed_activity_ids(
-                conn,
-                closed_ids,
-            )
-            uow.mark_changed()
-    return closed_ids
+            [activity_id],
+        )
+        uow.mark_changed()
+    return [activity_id]
 
 
 __all__ = ["seal_open_activity_for_maintenance"]
