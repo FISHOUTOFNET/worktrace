@@ -42,6 +42,12 @@ excluded from backup payloads and are rebuilt or recovered by their current
 runtime owners after replacement. See
 [`v0.2-local-security-design.md`](v0.2-local-security-design.md).
 
+A successful replacement publishes each committed durable generation and then
+loads the same values into the process generation clock. Pre-commit validation,
+generation-write or database-commit failure preserves the live database and its
+existing clock alignment. A process publication failure recovers by reloading the
+committed durable values; it does not invent a second replacement generation.
+
 ## RuntimeStartResult exact transport
 
 Runtime startup exposes exactly one normalized result shape:
