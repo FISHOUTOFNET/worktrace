@@ -5,8 +5,6 @@ from contextlib import contextmanager
 
 import pytest
 
-from worktrace.services import system_project_service
-
 from worktrace import generation_clock
 from worktrace.collector.activity_session_recorder import ActivitySessionRecorder
 from worktrace.collector.state_machine import CollectorStateMachine
@@ -17,6 +15,7 @@ from worktrace.services import (
     privacy_service,
     project_inference_service,
     project_service,
+    rule_catalog_command_service,
     rule_service,
     settings_service,
 )
@@ -198,12 +197,13 @@ def test_rule_caches_replace_their_snapshot_instead_of_accumulating(temp_db):
 @pytest.mark.integration
 @pytest.mark.contract
 def test_privacy_cache_replaces_its_snapshot_instead_of_accumulating(temp_db):
-    excluded_project_id = system_project_service.require_excluded_project_id()
-    project_service.set_project_enabled(excluded_project_id, True)
+    project_service.set_excluded_project_enabled(True)
     privacy_service.clear_exclude_rules_cache()
 
     for index in range(4):
-        rule_service.create_rule(f"private-token-{index}", excluded_project_id)
+        rule_catalog_command_service.create_excluded_keyword_rule(
+            f"private-token-{index}"
+        )
         snapshot = privacy_service._exclude_rules()
         assert len(snapshot["keywords"]) == index + 1
 
