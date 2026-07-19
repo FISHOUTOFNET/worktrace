@@ -5,6 +5,7 @@ import os
 import threading
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from ..constants import EXCLUDED_PROJECT
 from ..db import dict_rows, get_connection, get_db_path, now_str
@@ -12,6 +13,9 @@ from ..path_utils import normalize_path_key
 from ..resources.title_parsing import normalize_file_name
 from ..write_gate import DATABASE_WRITE_GATE
 from . import folder_index_state_repository
+
+if TYPE_CHECKING:
+    from ..worker_health import WorkerHealthReporter
 
 INDEX_STATUS_PENDING = "pending"
 INDEX_STATUS_INDEXING = "indexing"
@@ -223,30 +227,53 @@ def mark_index_stale(rule_id: int, reason: str = "") -> None:
         )
 
 
-def run_folder_index_worker(stop_event: threading.Event) -> None:
+def run_folder_index_worker(
+    stop_event: threading.Event,
+    *,
+    health: "WorkerHealthReporter | None" = None,
+) -> None:
     """Run the blocking folder-index loop owned by ``AppRuntime``."""
 
     logging.info("folder index worker start")
+    if health is not None:
+        health.started()
     try:
-        ensure_index_states_for_folder_rules()
-        validate_ready_indexes(stop_event)
-    except Exception:
-        logging.exception("folder index startup validation failed")
-    while not stop_event.is_set():
         try:
-            if DATABASE_WRITE_GATE.active():
-                _wait_for_worker()
-                continue
             ensure_index_states_for_folder_rules()
-            for rule_id in _pending_rule_ids():
-                if stop_event.is_set() or DATABASE_WRITE_GATE.active():
-                    break
-                rebuild_folder_index(rule_id, stop_event)
-            _wait_for_worker()
+            validate_ready_indexes(stop_event)
         except Exception:
-            logging.exception("folder index worker error")
-            _wait_for_worker()
-    logging.info("folder index worker stop")
+            logging.exception("folder index startup validation failed")
+            if health is not None:
+                health.failed("folder_index_startup_failed")
+        else:
+            if health is not None:
+                health.succeeded()
+        while not stop_event.is_set():
+            try:
+                if DATABASE_WRITE_GATE.active():
+                    if health is not None:
+                        health.maintenance_paused(True)
+                    _wait_for_worker()
+                    continue
+                if health is not None:
+                    health.maintenance_paused(False)
+                ensure_index_states_for_folder_rules()
+                for rule_id in _pending_rule_ids():
+                    if stop_event.is_set() or DATABASE_WRITE_GATE.active():
+                        break
+                    rebuild_folder_index(rule_id, stop_event)
+                if health is not None:
+                    health.succeeded()
+                _wait_for_worker()
+            except Exception:
+                logging.exception("folder index worker error")
+                if health is not None:
+                    health.failed("folder_index_iteration_failed")
+                _wait_for_worker()
+    finally:
+        if health is not None:
+            health.stopped()
+        logging.info("folder index worker stop")
 
 
 def wake_folder_index_worker() -> None:
