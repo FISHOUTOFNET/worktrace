@@ -82,6 +82,21 @@ def test_unreadable_maintenance_state_fails_closed(monkeypatch):
     assert runtime.start_calls == 0
 
 
+def test_cleared_maintenance_state_allows_runtime_start(monkeypatch):
+    runtime = _Runtime()
+    control = ApplicationControlService(runtime, _Maintenance(None))
+    monkeypatch.setattr(
+        privacy_gate_service,
+        "is_sensitive_runtime_allowed",
+        lambda: True,
+    )
+
+    result = control.start_collection_after_privacy_gate()
+
+    assert result["ok"] is True
+    assert runtime.start_calls == 1
+
+
 def test_toggle_does_not_clear_user_pause_while_fail_closed(monkeypatch):
     runtime = _Runtime()
     control = ApplicationControlService(
