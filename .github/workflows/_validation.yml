@@ -1,3 +1,8 @@
+# FROZEN CI CONTRACT
+# Failed tests must be fixed in production code or tests, not by reshaping this workflow.
+# Modify this file only for action/runtime upgrades, security fixes, validation-scope
+# changes, or a reproducible failure of the diagnostics protocol below.
+
 name: Reusable validation
 
 on:
@@ -31,11 +36,6 @@ jobs:
     name: Python 3.11 full suite
     runs-on: windows-latest
     timeout-minutes: 15
-    outputs:
-      problem_count: ${{ steps.diagnostics.outputs.problem_count }}
-      root_cause_count: ${{ steps.diagnostics.outputs.root_cause_count }}
-      first_failure: ${{ steps.diagnostics.outputs.first_failure }}
-      first_location: ${{ steps.diagnostics.outputs.first_location }}
 
     steps:
       - name: Check out exact revision
@@ -87,7 +87,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path "test-results" | Out-Null
-          & python -m compileall -q worktrace scripts/pytest_diagnostics.py scripts/pytest_log_to_junit.py *> "test-results/compile.log"
+          & python -m compileall -q worktrace scripts/pytest_diagnostics.py scripts/pytest_log_to_junit.py scripts/render_ci_api_summary.py *> "test-results/compile.log"
           $compileExitCode = $LASTEXITCODE
           Write-Host "compile exit code: $compileExitCode"
           if ($compileExitCode -ne 0) {
@@ -108,7 +108,7 @@ jobs:
 
           New-Item -ItemType Directory -Force -Path "test-results" | Out-Null
           $pytestStartedAt = Get-Date
-          & python -m pytest -vv -ra --tb=short --color=no --cache-clear `
+          & python -m pytest -q -ra --tb=short --color=no --cache-clear `
             --timeout=90 --timeout-method=thread `
             --durations=25 --durations-min=0.2 `
             --junitxml="test-results/pytest-junit.xml" *> "test-results/pytest.log"
@@ -117,8 +117,12 @@ jobs:
 
           Write-Host "pytest exit code: $pytestExitCode"
           Write-Host ("pytest elapsed seconds: {0:N2}" -f $pytestElapsedSeconds)
-          if ($pytestExitCode -ne 0) {
-            Write-Host "pytest failed; the complete compact manifest follows in the diagnostics step"
+          if ($pytestExitCode -eq 0) {
+            Get-Content -LiteralPath "test-results/pytest.log" -Tail 40 |
+              ForEach-Object { Write-Host $_ }
+          }
+          else {
+            Write-Host "pytest failed; compact diagnostics will be published by the fixed relay job"
           }
           exit $pytestExitCode
 
@@ -168,6 +172,19 @@ jobs:
               --summary "$env:GITHUB_STEP_SUMMARY"
           }
 
+          if (Test-Path -LiteralPath "test-results/diagnostics.json") {
+            & python scripts/render_ci_api_summary.py `
+              --input "test-results/diagnostics.json" `
+              --output "test-results/api-summary.txt" `
+              --max-bytes 65536
+            if ($LASTEXITCODE -ne 0) {
+              throw "Failed to render the fixed API diagnostics summary"
+            }
+          }
+          else {
+            throw "Canonical diagnostics.json was not generated"
+          }
+
       - name: Upload Python failure diagnostics
         if: failure()
         uses: actions/upload-artifact@v6
@@ -178,17 +195,23 @@ jobs:
           retention-days: 3
 
   python_diagnostics:
-    name: Python diagnostics / ${{ needs.python311.outputs.problem_count }} problems / ${{ needs.python311.outputs.root_cause_count }} groups / ${{ needs.python311.outputs.first_failure }} / ${{ needs.python311.outputs.first_location }}
+    name: Python failure diagnostics
     needs: python311
     if: ${{ always() && needs.python311.result == 'failure' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
-      - name: Expose API-readable failure metadata
+      - name: Download canonical Python diagnostics
+        uses: actions/download-artifact@v6
+        with:
+          name: validation-diagnostics-${{ inputs.revision }}
+          path: test-results
+
+      - name: Publish bounded API diagnostics
+        shell: bash
         run: |
-          echo "problem_count=${{ needs.python311.outputs.problem_count }}"
-          echo "root_cause_count=${{ needs.python311.outputs.root_cause_count }}"
-          echo "first_failure=${{ needs.python311.outputs.first_failure }}"
-          echo "first_location=${{ needs.python311.outputs.first_location }}"
+          test -f test-results/api-summary.txt
+          cat test-results/api-summary.txt
 
   node:
     name: WebView Node behavior tests
