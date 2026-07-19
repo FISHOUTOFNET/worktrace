@@ -39,6 +39,12 @@ class _Maintenance:
         self.blocked_reason = blocked_reason
 
 
+class _UnreadableMaintenance:
+    @property
+    def blocked_reason(self) -> str | None:
+        raise RuntimeError("maintenance_state_unavailable")
+
+
 def test_fail_closed_latch_blocks_resume_before_runtime_start(monkeypatch):
     runtime = _Runtime()
     control = ApplicationControlService(
@@ -58,6 +64,21 @@ def test_fail_closed_latch_blocks_resume_before_runtime_start(monkeypatch):
         "error": "maintenance_recovery_required",
         "message": "维护状态尚未恢复，暂不能开始记录",
     }
+    assert runtime.start_calls == 0
+
+
+def test_unreadable_maintenance_state_fails_closed(monkeypatch):
+    runtime = _Runtime()
+    control = ApplicationControlService(runtime, _UnreadableMaintenance())
+    monkeypatch.setattr(
+        privacy_gate_service,
+        "is_sensitive_runtime_allowed",
+        lambda: True,
+    )
+
+    result = control.start_collection_after_privacy_gate()
+
+    assert result["error"] == "maintenance_recovery_required"
     assert runtime.start_calls == 0
 
 
