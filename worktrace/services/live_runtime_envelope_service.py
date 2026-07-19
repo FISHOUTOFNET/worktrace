@@ -23,16 +23,24 @@ if TYPE_CHECKING:
 LIVE_RUNTIME_SCHEMA_VERSION = 2
 _RUNTIME_ALIAS_FIELDS = frozenset(
     {
+        "activity_display_model",
         "collection_status",
         "collector_status",
         "current_activity",
+        "current_activity_display_span_id",
+        "current_activity_elapsed_seconds",
         "current_activity_revision",
+        "current_resource_identity_hash",
+        "display_span_id",
         "live_clock",
         "live_revision",
+        "page_revision",
         "paused",
         "sample_epoch_ms",
         "sample_id",
+        "stable_live_key_hash",
         "status_display",
+        "structure_revision",
     }
 )
 
@@ -62,7 +70,10 @@ def _generation_snapshot() -> dict[str, int]:
     return {namespace.value: int(values[namespace]) for namespace in values}
 
 
-def _clock_payload(payload: Mapping[str, Any], current_activity: Mapping[str, Any]) -> dict[str, Any]:
+def _clock_payload(
+    payload: Mapping[str, Any],
+    current_activity: Mapping[str, Any],
+) -> dict[str, Any]:
     source = _mapping(payload.get("live_clock"))
     duration_at_sample = max(
         0,
@@ -70,6 +81,7 @@ def _clock_payload(payload: Mapping[str, Any], current_activity: Mapping[str, An
             source.get("duration_seconds_at_sample")
             or current_activity.get("duration_seconds_at_sample")
             or current_activity.get("current_live_duration_seconds")
+            or current_activity.get("elapsed_seconds")
             or current_activity.get("duration_seconds")
             or 0
         ),
@@ -128,7 +140,11 @@ def _recent_first_row(
     payload: Mapping[str, Any],
     current_activity: Mapping[str, Any],
 ) -> dict[str, Any] | None:
-    if current_activity.get("id") is not None:
+    if current_activity.get("active") is True and (
+        current_activity.get("activity_id") is not None
+        or current_activity.get("persisted_activity_id")
+        or current_activity.get("is_in_progress") is True
+    ):
         return dict(current_activity)
     activities = payload.get("activities")
     if isinstance(activities, list) and activities:
@@ -136,7 +152,9 @@ def _recent_first_row(
     return None
 
 
-def _runtime_health(runtime: "AppRuntime | None") -> tuple[str, dict[str, Any], list[str]]:
+def _runtime_health(
+    runtime: "AppRuntime | None",
+) -> tuple[str, dict[str, Any], list[str]]:
     if runtime is None:
         return "unavailable", {}, []
     phase = getattr(runtime, "phase", "unavailable")
