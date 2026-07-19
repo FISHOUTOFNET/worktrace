@@ -3,8 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..api.app_api import ApplicationControlService
-from ..runtime.application_services import ApplicationServices
+from ..api.application_services import ApplicationServices
 from .bridge_dialogs import BridgeDialogMixin
 from .bridge_overview import OverviewBridgeMixin
 from .bridge_rules import ProjectRulesBridgeMixin
@@ -60,14 +59,14 @@ class WebViewBridge(
     TimelineBridgeMixin,
     ProjectRulesBridgeMixin,
 ):
-    """Internal bridge controller with explicitly composed application services."""
+    """Internal bridge controller with explicitly composed API capabilities."""
 
-    def __init__(self, services: ApplicationServices | None = None) -> None:
+    def __init__(self, services: ApplicationServices) -> None:
+        if services is None:
+            raise ValueError("application_services_required")
         self._window: Any = None
         self._services = services
-        self._app_control = ApplicationControlService(
-            services.runtime if services is not None else None
-        )
+        self._app_control = services.app_control
         self._shipping_api = _ShippingBridge(self)
 
     @property
@@ -78,7 +77,7 @@ class WebViewBridge(
         self._window = window
 
     def _runtime(self):
-        return self._services.runtime if self._services is not None else None
+        return self._services.runtime_view
 
     def _collector_status(self) -> dict[str, Any]:
         return self._app_control.get_collection_status()

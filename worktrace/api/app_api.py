@@ -1,18 +1,29 @@
-"""Application-control service with an explicitly injected runtime."""
+"""Application-control service with an explicitly injected runtime capability."""
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Protocol
 
-from ..runtime.app_runtime import AppRuntime
 from ..services import privacy_gate_service
 from . import settings_api
 
 
-class ApplicationControlService:
-    """Bridge-facing application commands bound to one AppRuntime instance."""
+class ApplicationRuntimeCapability(Protocol):
+    """Narrow runtime capability consumed by API-facing application commands."""
 
-    def __init__(self, runtime: AppRuntime | None) -> None:
+    def start_authorized_collection(self) -> Any: ...
+
+    def pause_collection_now(self) -> dict[str, object]: ...
+
+    def set_clipboard_capture_enabled(self, enabled: bool) -> bool: ...
+
+    def request_shutdown(self) -> None: ...
+
+
+class ApplicationControlService:
+    """Bridge-facing application commands bound to one runtime capability."""
+
+    def __init__(self, runtime: ApplicationRuntimeCapability | None) -> None:
         self.runtime = runtime
 
     @staticmethod
@@ -162,4 +173,4 @@ class ApplicationControlService:
             self.runtime.request_shutdown()
 
 
-__all__ = ["ApplicationControlService"]
+__all__ = ["ApplicationControlService", "ApplicationRuntimeCapability"]

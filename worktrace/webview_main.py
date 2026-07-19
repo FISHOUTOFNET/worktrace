@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any
 
 from . import config
-from .api.app_api import ApplicationControlService
 from .runtime.app_runtime import AppRuntime
 from .runtime.application_services import build_application_services
 from .webview_ui.bridge import WebViewBridge
@@ -76,7 +75,7 @@ def main() -> int:
     if runtime.initialize() is False:
         return _report_already_running()
     services = build_application_services(runtime)
-    app_control = ApplicationControlService(runtime)
+    app_control = services.app_control
 
     try:
         try:
@@ -86,7 +85,7 @@ def main() -> int:
                     "collector startup rejected error=%s",
                     startup_result.get("error", "unknown"),
                 )
-            elif startup_result.get("background_worker_degraded"):
+            elif startup_result.get("degraded"):
                 logging.warning("collector started with background worker degradation")
         except Exception:
             logging.exception(
