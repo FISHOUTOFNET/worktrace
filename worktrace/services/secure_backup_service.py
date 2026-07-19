@@ -33,7 +33,7 @@ from ..security.backup_format import (
     decrypt_encrypted_backup,
     parse_backup_manifest,
 )
-from . import database_maintenance_service
+from . import database_maintenance_service, startup_recovery_job_repository
 from .database_replacement_generation_service import (
     capture_replacement_generation_floor,
     publish_database_replacement,
@@ -331,7 +331,7 @@ def _replace_import(data: dict[str, Any]) -> dict[str, int]:
             replacement_floor = capture_replacement_generation_floor(live)
             _delete_all_rows(live)
             live.execute("DELETE FROM activity_resource_repair_job")
-            live.execute("DELETE FROM startup_recovery_job")
+            startup_recovery_job_repository.clear_all_jobs(live)
             live.execute("DELETE FROM history_mutation_job_rule")
             live.execute("DELETE FROM history_mutation_job")
             source = sqlite3.connect(staging_path)
