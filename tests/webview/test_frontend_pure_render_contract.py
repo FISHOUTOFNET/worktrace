@@ -9,6 +9,15 @@ from static_helpers import FRONTEND_RESOURCE_FILES, func_body, read_all_js, read
 pytestmark = [pytest.mark.webview_static, pytest.mark.contract, pytest.mark.live_display]
 
 
+def _assigned_app_function(source: str, name: str) -> str:
+    marker = f"App.{name} = function ("
+    start = source.find(marker)
+    assert start != -1, f"frontend must assign App.{name}"
+    end = source.find("\n    };", start)
+    assert end != -1, f"App.{name} assignment must close"
+    return source[start:end]
+
+
 def test_frontend_has_no_second_live_clock_registry():
     source = read_all_js()
     forbidden = (
@@ -47,13 +56,25 @@ def test_frontend_live_identity_excludes_candidate_metadata_and_retired_states()
             + forbidden
         )
 
-    for function_name in (
-        "runtimeIdentityFromPayload",
-        "runtimeVisualContinuityKey",
-        "liveContinuityKey",
-        "currentActivityContinuityKey",
-    ):
-        body = func_body(read_js("core.js"), function_name)
+    declared_owners = {
+        "runtimeIdentityFromPayload": read_js("init.js"),
+        "runtimeVisualContinuityKey": read_js("init.js"),
+    }
+    assigned_owners = {
+        "liveContinuityKey": read_js("core.js"),
+        "currentActivityContinuityKey": read_js("core.js"),
+    }
+    bodies = {
+        **{
+            name: func_body(owner_source, name)
+            for name, owner_source in declared_owners.items()
+        },
+        **{
+            name: _assigned_app_function(owner_source, name)
+            for name, owner_source in assigned_owners.items()
+        },
+    }
+    for function_name, body in bodies.items():
         for forbidden in (
             "candidate_project",
             "current_candidate_project",
@@ -82,7 +103,10 @@ def test_frontend_uses_only_single_live_delta_clock_fields():
 
 
 def test_apply_local_ticker_never_reads_structural_caches_or_bridge():
-    body = func_body(read_js("core.js"), "applyLocalTicker")
+    core = read_js("core.js")
+    init = read_js("init.js")
+    assert "applyLocalTicker" not in core
+    body = _assigned_app_function(init, "applyLocalTicker")
     forbidden = (
         "lastOverviewSnapshot",
         "lastRecentData",
@@ -90,6 +114,7 @@ def test_apply_local_ticker_never_reads_structural_caches_or_bridge():
         "lastSessionDetailsViewModel",
         "callBridge",
         "pywebview",
+        "App.bridge",
     )
     offenders = [token for token in forbidden if token in body]
     assert not offenders, (
@@ -124,7 +149,7 @@ def test_frontend_resources_have_no_storage_network_cdn_or_module_pipeline():
         "XMLHttpRequest",
         "fetch(",
         "navigator.sendBeacon",
-        "type=\"module\"",
+        'type="module"',
         "type='module'",
         "http://",
         "https://",
@@ -140,10 +165,39 @@ def test_frontend_resources_have_no_storage_network_cdn_or_module_pipeline():
 
 def test_live_duration_targets_use_backend_display_base_and_accepted_runtime():
     source = read_all_js()
-    ticker = func_body(read_js("core.js"), "applyLocalTicker")
+    ticker = _assigned_app_function(read_js("init.js"), "applyLocalTicker")
     assert "App.liveRuntime" in source
-    assert "getActiveLiveClock()" in ticker
+    assert "App.getActiveLiveClock()" in ticker
     assert 'data-display-base-seconds' in source
-    assert "computeActiveElapsedNow(clock" in ticker
-    assert "renderLiveDurationTarget(target, displayBaseSeconds, activeElapsedNowValue)" in ticker
+    assert "projectAcceptedClock(clock" in ticker
+    assert "App.renderLiveDurationTarget(target, displayBaseSeconds, activeElapsedNowValue)" in ticker
     assert "data-live-base-seconds" in source
+
+
+def test_runtime_transport_and_clock_have_one_frontend_owner():
+    source = read_all_js()
+    core = read_js("core.js")
+    init = read_js("init.js")
+    for retired in (
+        "runtimeIdentityFromPayload",
+        "acceptLiveRuntimePayload",
+        "acceptRefreshStateRuntime",
+        "acceptPagePayloadRuntime",
+        "applyLocalTicker",
+        "rebaseIncomingClockWithoutRollback",
+        "findClockInPayload",
+        "activity_display_model",
+    ):
+        assert retired not in core
+    for required in (
+        "runtimeIdentityFromPayload",
+        "acceptLiveRuntimePayload",
+        "acceptRefreshStateRuntime",
+        "acceptPagePayloadRuntime",
+        "App.applyLocalTicker",
+        "schema_version || 0) !== 2",
+    ):
+        assert required in init
+    assert source.count("setInterval(") == 1
+    assert init.count("setInterval(") == 1
+    assert "schema_version || 0) !== 1" not in source

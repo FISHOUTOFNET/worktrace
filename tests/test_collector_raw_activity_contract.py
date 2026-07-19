@@ -8,7 +8,6 @@ from __future__ import annotations
 from tests.support import runtime_state_fixture
 
 import json
-
 import pytest
 
 from worktrace.collector.state_machine import CollectorStateMachine
@@ -22,7 +21,6 @@ from worktrace.services.report_projection_snapshot_service import get_report_ses
 from worktrace.webview_ui.bridge import WebViewBridge
 
 pytestmark = [pytest.mark.collector_runtime, pytest.mark.integration, pytest.mark.db]
-
 DATE = "2026-06-18"
 
 
@@ -47,7 +45,7 @@ def test_new_activity_persists_immediately(temp_db):
     assert rows[0]["end_time"] is None
     assert _snapshot()["is_persisted"] is True
     assert _snapshot()["persisted_activity_id"] == rows[0]["id"]
-    assert WebViewBridge().get_overview()["live_clock"]["live_state"] == "persisted_open"
+    assert WebViewBridge().get_overview()["runtime"]["clock"]["live_state"] == "persisted_open"
 
 
 def test_switch_under_30_creates_separate_raw_rows(temp_db):
@@ -103,8 +101,8 @@ def test_live_display_uses_the_persisted_open_state(temp_db):
     machine = CollectorStateMachine()
     machine.transition_to("recording", _normal("A"), at_time=f"{DATE} 09:00:00")
     overview = WebViewBridge().get_overview()
-    assert overview["live_clock"]["live_state"] == "persisted_open"
-    assert overview["current_activity"]["live_state"] == "persisted_open"
+    assert overview["runtime"]["clock"]["live_state"] == "persisted_open"
+    assert overview["runtime"]["current_activity"]["live_state"] == "persisted_open"
 
 
 def test_report_projection_can_group_without_mutating_raw(temp_db):

@@ -2,13 +2,9 @@
 
 from __future__ import annotations
 
-import logging
-
 from ..data_generation_repository import DataGenerationNamespace
-from ..db import get_connection, now_str
+from ..db import now_str
 from ..domain_unit_of_work import DomainUnitOfWork
-
-INFERENCE_RETRY_CONFIDENCE = -1
 
 
 def _normalized_rule_identity(
@@ -134,39 +130,7 @@ def assign_with_uow(
         return changed
 
 
-def mark_inference_retry(conn, activity_id: int, uncategorized_project_id: int) -> bool:
-    """Mark a closed activity for bounded opportunity-based inference retry."""
-
-    changed = upsert_assignment(
-        conn,
-        activity_id=activity_id,
-        project_id=uncategorized_project_id,
-        source="uncategorized",
-        confidence=INFERENCE_RETRY_CONFIDENCE,
-        protect_manual=True,
-    )
-    if not changed:
-        logging.info("inference retry marker unchanged for activity %s", activity_id)
-    return changed
-
-
-def mark_inference_retry_with_uow(activity_id: int) -> bool:
-    """Persist a retry marker through the canonical assignment transaction."""
-
-    from .system_project_service import require_uncategorized_project_id
-
-    with DomainUnitOfWork((DataGenerationNamespace.REPORT_STRUCTURE,)) as uow:
-        project_id = require_uncategorized_project_id(uow.connection)
-        changed = mark_inference_retry(uow.connection, int(activity_id), project_id)
-        if changed:
-            uow.mark_changed()
-        return changed
-
-
 __all__ = [
-    "INFERENCE_RETRY_CONFIDENCE",
     "assign_with_uow",
-    "mark_inference_retry",
-    "mark_inference_retry_with_uow",
     "upsert_assignment",
 ]

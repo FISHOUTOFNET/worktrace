@@ -9,12 +9,16 @@ from typing import Mapping
 from ..data_generation_repository import DataGenerationNamespace
 from ..db import get_connection, get_db_key, now_str
 from ..domain_unit_of_work import DomainUnitOfWork
-from ..generation_clock import generation
+from ..generation_clock import generation_tuple
 
 _SETTING_CACHE_LOCK = threading.RLock()
 _SETTING_CACHE_DATABASE_KEY: str | None = None
-_SETTING_CACHE_GENERATION: int | None = None
+_SETTING_CACHE_GENERATION: tuple[int, int] | None = None
 _SETTING_CACHE: dict[str, str | None] = {}
+_SETTING_CACHE_NAMESPACES = (
+    DataGenerationNamespace.SETTINGS,
+    DataGenerationNamespace.DATABASE_REPLACEMENT,
+)
 
 
 class SettingMutationClass(StrEnum):
@@ -78,16 +82,19 @@ def _effects_for_classification(
     return (DataGenerationNamespace.SETTINGS,)
 
 
-def _select_cache_snapshot(database_key: str, current_generation: int) -> None:
+def _select_cache_snapshot(
+    database_key: str,
+    current_generation: tuple[int, int],
+) -> None:
     global _SETTING_CACHE_DATABASE_KEY, _SETTING_CACHE_GENERATION
     if (
         _SETTING_CACHE_DATABASE_KEY == database_key
-        and _SETTING_CACHE_GENERATION == int(current_generation)
+        and _SETTING_CACHE_GENERATION == current_generation
     ):
         return
     _SETTING_CACHE.clear()
     _SETTING_CACHE_DATABASE_KEY = database_key
-    _SETTING_CACHE_GENERATION = int(current_generation)
+    _SETTING_CACHE_GENERATION = current_generation
 
 
 def clear_settings_cache(key: str | None = None) -> None:
@@ -140,7 +147,7 @@ def get_setting(key: str, default: str | None = None, *, conn=None) -> str | Non
     normalized_key = str(key)
     while True:
         database_key = get_db_key()
-        current_generation = generation(DataGenerationNamespace.SETTINGS)
+        current_generation = generation_tuple(_SETTING_CACHE_NAMESPACES)
         with _SETTING_CACHE_LOCK:
             _select_cache_snapshot(database_key, current_generation)
             if normalized_key in _SETTING_CACHE:
@@ -148,7 +155,7 @@ def get_setting(key: str, default: str | None = None, *, conn=None) -> str | Non
                 return value if value is not None else default
         with get_connection() as own_conn:
             value = _read_setting(own_conn, normalized_key, None)
-        if generation(DataGenerationNamespace.SETTINGS) != current_generation:
+        if generation_tuple(_SETTING_CACHE_NAMESPACES) != current_generation:
             continue
         with _SETTING_CACHE_LOCK:
             _select_cache_snapshot(database_key, current_generation)

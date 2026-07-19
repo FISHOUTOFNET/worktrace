@@ -11,24 +11,26 @@ from __future__ import annotations
 import json
 import logging
 import threading
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ..data_generation_repository import DataGenerationNamespace
 from ..db import get_connection, now_str
 from ..domain_unit_of_work import DomainUnitOfWork
+from ..write_gate import DATABASE_WRITE_GATE
 from . import (
     assignment_command_service,
     rule_catalog_command_service as catalog,
     rule_planning_service as planner,
 )
 
+if TYPE_CHECKING:
+    from ..worker_health import WorkerHealthReporter
+
 _BATCH_SIZE = 100
 _BATCH_PLAN_SIZE = 101
 _BATCH_MODE = "ordered_rule_batch"
 _WORKER_IDLE_SECONDS = 2.0
-_WORKER_LOCK = threading.Lock()
 _JOB_EXECUTION_LOCK = threading.RLock()
-_WORKER_THREAD: threading.Thread | None = None
 
 
 def submit_rule_job(
@@ -360,33 +362,50 @@ def batch_job_result(job_id: int) -> dict[str, Any]:
     }
 
 
-def start_history_worker(stop_event: threading.Event) -> threading.Thread | None:
-    global _WORKER_THREAD
-    with _WORKER_LOCK:
-        if _WORKER_THREAD is not None and _WORKER_THREAD.is_alive():
-            return _WORKER_THREAD
-        _WORKER_THREAD = threading.Thread(
-            target=_worker_loop,
-            args=(stop_event,),
-            name="WorkTraceHistoryMutation",
-            daemon=True,
-        )
-        _WORKER_THREAD.start()
-        return _WORKER_THREAD
+def run_history_worker(
+    stop_event: threading.Event,
+    *,
+    health: "WorkerHealthReporter | None" = None,
+) -> None:
+    """Run the blocking history mutation loop owned by ``AppRuntime``."""
 
-
-def _worker_loop(stop_event: threading.Event) -> None:
     logging.info("history mutation worker start")
-    while not stop_event.is_set():
-        try:
-            from .secure_backup_service import is_secure_import_in_progress
-
-            if not is_secure_import_in_progress() and run_pending_jobs(limit=1):
+    if health is not None:
+        health.started()
+    try:
+        while not stop_event.is_set():
+            if DATABASE_WRITE_GATE.active():
+                if health is not None:
+                    health.maintenance_paused(True)
+                stop_event.wait(_WORKER_IDLE_SECONDS)
                 continue
-        except Exception:
-            logging.exception("history mutation worker error")
-        stop_event.wait(_WORKER_IDLE_SECONDS)
-    logging.info("history mutation worker stop")
+            if health is not None:
+                health.maintenance_paused(False)
+            try:
+                processed = run_pending_jobs(limit=1)
+            except Exception:
+                logging.exception("history mutation worker error")
+                if health is not None:
+                    health.failed("history_iteration_failed")
+                processed = 0
+            else:
+                if health is not None:
+                    health.succeeded()
+            if processed:
+                continue
+            stop_event.wait(_WORKER_IDLE_SECONDS)
+    finally:
+        if health is not None:
+            health.stopped()
+        logging.info("history mutation worker stop")
+
+
+def clear_all_jobs_in_transaction(conn) -> int:
+    """Clear child and parent job rows without committing the caller transaction."""
+
+    conn.execute("DELETE FROM history_mutation_job_rule")
+    cursor = conn.execute("DELETE FROM history_mutation_job")
+    return max(0, int(cursor.rowcount or 0))
 
 
 def _run_backfill_batch(job: dict, batch_size: int) -> None:
@@ -932,12 +951,13 @@ def _result_for_job(job_id: int, payload: dict[str, Any]) -> dict[str, Any]:
 
 __all__ = [
     "batch_job_result",
+    "clear_all_jobs_in_transaction",
     "compensate_failed_synchronous_job",
     "job_result",
+    "run_history_worker",
     "run_job_batch",
     "run_job_to_completion",
     "run_pending_jobs",
-    "start_history_worker",
     "submit_rule_batch_job",
     "submit_rule_job",
 ]

@@ -15,7 +15,14 @@ from .page_read_context import current_page_read_context
 from .report_projection_identity import stable_json_hash
 
 _STRUCTURE_CACHE_LOCK = threading.Lock()
-_STRUCTURE_REVISION_CACHE: dict[tuple[str, str], tuple[int, str]] = {}
+_STRUCTURE_REVISION_CACHE: dict[
+    tuple[str, str],
+    tuple[tuple[int, int], str],
+] = {}
+_STRUCTURE_GENERATION_NAMESPACES = (
+    DataGenerationNamespace.REPORT_STRUCTURE,
+    DataGenerationNamespace.DATABASE_REPLACEMENT,
+)
 
 
 def clear_report_structure_revision_cache(database_key: str | None = None) -> None:
@@ -31,11 +38,12 @@ def clear_report_structure_revision_cache(database_key: str | None = None) -> No
                 _STRUCTURE_REVISION_CACHE.pop(cache_key, None)
 
 
-def _read_durable_generation(connection) -> int:
-    return DataGenerationRepository.get(
+def _read_durable_generations(connection) -> tuple[int, int]:
+    values = DataGenerationRepository.get_many(
         connection,
-        DataGenerationNamespace.REPORT_STRUCTURE,
+        _STRUCTURE_GENERATION_NAMESPACES,
     )
+    return tuple(values[namespace] for namespace in _STRUCTURE_GENERATION_NAMESPACES)
 
 
 def _build_report_structure_revision(
@@ -182,8 +190,8 @@ def get_report_structure_revision(report_date: str, *, conn=None) -> str:
 
     Transaction-bound callers receive an immediate hash of their uncommitted
     view. Page requests reuse the request-level read transaction. Ordinary
-    refresh callers read the durable generation and revision from one SQLite
-    snapshot, so a committed structure and its cache key cannot diverge.
+    refresh callers read both durable generations and the revision from one
+    SQLite snapshot, so a committed structure and its cache key cannot diverge.
     """
 
     date_type.fromisoformat(report_date)
@@ -199,10 +207,10 @@ def get_report_structure_revision(report_date: str, *, conn=None) -> str:
     own_conn = get_connection()
     own_conn.execute("BEGIN")
     try:
-        generation = _read_durable_generation(own_conn)
+        generations = _read_durable_generations(own_conn)
         with _STRUCTURE_CACHE_LOCK:
             cached = _STRUCTURE_REVISION_CACHE.get(cache_key)
-        if cached is not None and cached[0] == generation:
+        if cached is not None and cached[0] == generations:
             own_conn.commit()
             return cached[1]
 
@@ -215,7 +223,7 @@ def get_report_structure_revision(report_date: str, *, conn=None) -> str:
         own_conn.close()
 
     with _STRUCTURE_CACHE_LOCK:
-        _STRUCTURE_REVISION_CACHE[cache_key] = (generation, value)
+        _STRUCTURE_REVISION_CACHE[cache_key] = (generations, value)
     return value
 
 

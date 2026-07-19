@@ -53,6 +53,10 @@ def get_collector_last_successful_observation_at() -> str:
     return get_setting("collector_last_successful_observation_at", "") or ""
 
 
+def get_collector_last_failure_code() -> str:
+    return get_setting("collector_last_failure_kind", "") or ""
+
+
 def get_collector_consecutive_failures() -> int:
     return get_int_setting("collector_consecutive_failures", 0)
 
@@ -289,6 +293,7 @@ __all__ = [
     "export_encrypted_backup_for_webview",
     "get_collector_consecutive_failures",
     "get_collector_health_state",
+    "get_collector_last_failure_code",
     "get_collector_last_successful_observation_at",
     "get_collector_status",
     "get_first_run_notice_for_webview",

@@ -1,7 +1,5 @@
-"""Automatic Project Rules application foundation tests."""
-
+"""Automatic Project Rules contracts through the durable inference boundary."""
 from __future__ import annotations
-from tests.support.db_helpers import assign_activity_project
 
 import json
 import re
@@ -9,18 +7,20 @@ from pathlib import Path
 
 import pytest
 
-from worktrace.services import system_project_service
-
-from worktrace.api import rule_history_api as rule_api
-from worktrace.db import get_connection, now_str
 from tests.support import activity_factory as activity_service
+from tests.support.db_helpers import assign_activity_project
+from worktrace.api import rule_history_api as rule_api
+from worktrace.db import get_connection
 from worktrace.services import (
+    activity_inference_job_repository,
+    activity_inference_job_service,
     activity_lifecycle_service,
     folder_rule_service,
     project_inference_service,
     project_service,
     rule_automation_service,
     rule_service,
+    system_project_service,
 )
 from worktrace.webview_ui.bridge_rules import ProjectRulesBridgeMixin
 
@@ -28,6 +28,7 @@ pytestmark = [pytest.mark.db, pytest.mark.integration, pytest.mark.contract]
 
 
 def _create_closed_activity(
+    *,
     app_name: str = "Word",
     process_name: str = "winword.exe",
     window_title: str = "Doc.docx - Word",
@@ -37,13 +38,7 @@ def _create_closed_activity(
     status: str = "normal",
     project_id: int | None = None,
 ) -> int:
-    """Create a closed activity (end_time set) with the given fields.
-
-    ``create_activity`` auto-closes any open activities first, so the
-    explicit ``close_activity`` call here only sets the end_time on the
-    newly-created row.
-    """
-    aid = activity_service.create_activity(
+    activity_id = activity_service.create_activity(
         app_name,
         process_name,
         window_title,
@@ -52,409 +47,242 @@ def _create_closed_activity(
         file_path_hint=file_path_hint,
         project_id=project_id,
     )
-    activity_service.close_activity(aid, end_time)
-    return aid
+    activity_service.close_activity(activity_id, end_time)
+    return activity_id
 
 
-def _set_manual_override(aid: int) -> None:
+def _consume(activity_id: int) -> int:
     with get_connection() as conn:
-        conn.execute(
-            "UPDATE activity_project_assignment SET is_manual = 1, updated_at = ? "
-            "WHERE activity_id = ?",
-            (now_str(), aid),
+        activity_inference_job_repository.enqueue_closed_activity_ids(
+            conn,
+            [int(activity_id)],
         )
+    return activity_inference_job_service.process_pending_inference_jobs(
+        project_inference_service.assign_project_for_activity_in_transaction,
+        limit=1,
+        activity_ids=[int(activity_id)],
+    )
 
 
-def _set_hidden(aid: int) -> None:
-    with get_connection() as conn:
-        conn.execute(
-            "UPDATE activity_log SET is_hidden = 1, updated_at = ? WHERE id = ?",
-            (now_str(), aid),
-        )
-
-
-def _set_deleted(aid: int) -> None:
-    with get_connection() as conn:
-        conn.execute(
-            "UPDATE activity_log SET is_deleted = 1, updated_at = ? WHERE id = ?",
-            (now_str(), aid),
-        )
-
-
-def _set_non_normal(aid: int) -> None:
-    with get_connection() as conn:
-        conn.execute(
-            "UPDATE activity_log SET status = 'idle', updated_at = ? WHERE id = ?",
-            (now_str(), aid),
-        )
-
-
-def _set_in_progress(aid: int) -> None:
-    with get_connection() as conn:
-        conn.execute(
-            "UPDATE activity_log SET end_time = NULL, duration_seconds = NULL, "
-            "updated_at = ? WHERE id = ?",
-            (now_str(), aid),
-        )
-
-
-def _activity_row(aid: int) -> dict:
-    with get_connection() as conn:
-        row = conn.execute(
-            "SELECT * FROM activity_log WHERE id = ?", (aid,)
-        ).fetchone()
-        assignment = conn.execute(
-            "SELECT project_id, source, is_manual FROM activity_project_assignment WHERE activity_id = ?",
-            (aid,),
-        ).fetchone()
-    if not row:
-        return {}
-    result = dict(row)
-    if assignment:
-        result["project_id"] = assignment["project_id"]
-        result["manual_override"] = int(assignment["is_manual"] or 0)
-        result["auto_classified"] = 1 if assignment["source"] in {"folder_rule", "keyword_rule"} else 0
-    else:
-        result["project_id"] = result.get("project_id") or 0
-    return result
-
-
-def _assignment_row(aid: int) -> dict:
+def _assignment(activity_id: int) -> dict:
     with get_connection() as conn:
         row = conn.execute(
             "SELECT * FROM activity_project_assignment WHERE activity_id = ?",
-            (aid,),
+            (int(activity_id),),
         ).fetchone()
     return dict(row) if row else {}
 
 
-def _schema_sql_text() -> str:
-    schema_path = Path(__file__).resolve().parent.parent / "worktrace" / "schema.sql"
-    return schema_path.read_text(encoding="utf-8")
+def _job(activity_id: int):
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM activity_inference_job WHERE activity_id = ?",
+            (int(activity_id),),
+        ).fetchone()
+    return dict(row) if row else None
 
 
-def test_rule_automation_service_confidence_constants_match_inference_contract(temp_db):
-    # Automatic-rules confidence must match the single-rule backfill confidence (single inference contract).
+def test_rule_confidence_and_priority_contracts(temp_db):
     assert rule_automation_service.FOLDER_RULE_CONFIDENCE == 85
     assert rule_automation_service.KEYWORD_RULE_CONFIDENCE == 80
-
-
-def test_rule_automation_service_source_constants(temp_db):
     assert rule_automation_service.FOLDER_RULE_SOURCE == "folder_rule"
     assert rule_automation_service.KEYWORD_RULE_SOURCE == "keyword_rule"
-    # Deterministic priority: folder before keyword.
     assert rule_automation_service.AUTOMATIC_RULE_PRIORITY == (
         "folder_rule",
         "keyword_rule",
     )
 
 
-# Automatic application: enabled folder rule
+def test_enabled_folder_rule_applies_when_durable_job_is_consumed(temp_db):
+    project_id = project_service.create_project("FolderAuto")
+    folder_rule_service.create_or_update_folder_rule("D:\\AutoFolder", project_id)
+    activity_id = _create_closed_activity(
+        file_path_hint="D:\\AutoFolder\\Doc.docx"
+    )
 
+    assert _consume(activity_id) == 1
 
-def test_enabled_folder_rule_auto_applies_to_new_closed_activity(temp_db):
-    project = project_service.create_project("FolderAuto")
-    folder_rule_service.create_or_update_folder_rule("D:\\AutoFolder", project)
-    aid = _create_closed_activity(file_path_hint="D:\\AutoFolder\\Doc.docx")
-    activity_service.finalize_created_activity(aid)
-    activity = _activity_row(aid)
-    assignment = _assignment_row(aid)
-    assert int(activity["project_id"]) == project
-    assert int(activity["auto_classified"]) == 1
-    # Automatic rules NEVER set manual_override = 1.
-    assert int(activity["manual_override"]) == 0
+    assignment = _assignment(activity_id)
+    assert int(assignment["project_id"]) == project_id
     assert assignment["source"] == "folder_rule"
     assert int(assignment["confidence"]) == 85
     assert int(assignment["is_manual"]) == 0
+    assert _job(activity_id) is None
 
 
-def test_enabled_keyword_rule_auto_applies_to_new_closed_activity(temp_db):
-    project = project_service.create_project("KeywordAuto")
-    rule_service.create_rule("invoice", project)
-    aid = _create_closed_activity(
+def test_enabled_keyword_rule_applies_when_durable_job_is_consumed(temp_db):
+    project_id = project_service.create_project("KeywordAuto")
+    rule_service.create_rule("invoice", project_id)
+    activity_id = _create_closed_activity(
         app_name="Excel",
         process_name="excel.exe",
         window_title="invoice-2026.xlsx - Excel",
     )
-    activity_service.finalize_created_activity(aid)
-    activity = _activity_row(aid)
-    assignment = _assignment_row(aid)
-    assert int(activity["project_id"]) == project
-    assert int(activity["auto_classified"]) == 1
-    assert int(activity["manual_override"]) == 0
+
+    assert _consume(activity_id) == 1
+
+    assignment = _assignment(activity_id)
+    assert int(assignment["project_id"]) == project_id
     assert assignment["source"] == "keyword_rule"
     assert int(assignment["confidence"]) == 80
-    assert int(assignment["is_manual"]) == 0
 
 
-def test_disabled_folder_rule_does_not_apply(temp_db):
-    project = project_service.create_project("Disabled")
-    rule_id = folder_rule_service.create_or_update_folder_rule(
-        "D:\\DisabledFolder", project
+def test_disabled_rules_and_projects_do_not_apply(temp_db):
+    folder_project = project_service.create_project("DisabledFolderProject")
+    folder_rule_id = folder_rule_service.create_or_update_folder_rule(
+        "D:\\DisabledFolder",
+        folder_project,
     )
-    folder_rule_service.set_folder_rule_enabled(rule_id, False)
-    aid = _create_closed_activity(file_path_hint="D:\\DisabledFolder\\Doc.docx")
-    activity_service.finalize_created_activity(aid)
-    activity = _activity_row(aid)
-    assert int(activity["project_id"]) != project
-    assert int(activity["auto_classified"]) == 0
-
-
-def test_disabled_keyword_rule_does_not_apply(temp_db):
-    project = project_service.create_project("DisabledKw")
-    rule_id = rule_service.create_rule("secretkeyword", project)
-    rule_service.set_rule_enabled(rule_id, False)
-    aid = _create_closed_activity(
-        app_name="Excel",
-        process_name="excel.exe",
-        window_title="secretkeyword-report.xlsx - Excel",
+    folder_rule_service.set_folder_rule_enabled(folder_rule_id, False)
+    folder_activity = _create_closed_activity(
+        file_path_hint="D:\\DisabledFolder\\Doc.docx"
     )
-    activity_service.finalize_created_activity(aid)
-    activity = _activity_row(aid)
-    assert int(activity["project_id"]) != project
-    assert int(activity["auto_classified"]) == 0
+    _consume(folder_activity)
+    assert _assignment(folder_activity).get("project_id") != folder_project
+
+    keyword_project = project_service.create_project("DisabledKeywordProject")
+    keyword_rule_id = rule_service.create_rule("secretkeyword", keyword_project)
+    rule_service.set_rule_enabled(keyword_rule_id, False)
+    keyword_activity = _create_closed_activity(
+        window_title="secretkeyword-report.xlsx - Excel"
+    )
+    _consume(keyword_activity)
+    assert _assignment(keyword_activity).get("project_id") != keyword_project
+
+    archived_project = project_service.create_project("ArchivedProject")
+    folder_rule_service.create_or_update_folder_rule(
+        "D:\\ArchivedFolder",
+        archived_project,
+    )
+    project_service.archive_project(archived_project)
+    archived_activity = _create_closed_activity(
+        file_path_hint="D:\\ArchivedFolder\\Doc.docx"
+    )
+    _consume(archived_activity)
+    assert _assignment(archived_activity).get("project_id") != archived_project
 
 
-def test_disabled_target_project_does_not_apply(temp_db):
-    project = project_service.create_project("DisabledProj")
-    folder_rule_service.create_or_update_folder_rule("D:\\DisabledProjFolder", project)
-    project_service.set_project_enabled(project, False)
-    aid = _create_closed_activity(file_path_hint="D:\\DisabledProjFolder\\Doc.docx")
-    activity_service.finalize_created_activity(aid)
-    activity = _activity_row(aid)
-    assert int(activity["project_id"]) != project
-
-
-def test_archived_target_project_does_not_apply(temp_db):
-    project = project_service.create_project("ArchivedProj")
-    folder_rule_service.create_or_update_folder_rule("D:\\ArchivedFolder", project)
-    project_service.archive_project(project)
-    aid = _create_closed_activity(file_path_hint="D:\\ArchivedFolder\\Doc.docx")
-    activity_service.finalize_created_activity(aid)
-    activity = _activity_row(aid)
-    assert int(activity["project_id"]) != project
-
-
-def test_excluded_target_project_does_not_apply(temp_db):
+def test_excluded_system_project_is_not_an_inference_target(temp_db):
     excluded_id = system_project_service.require_excluded_project_id()
-    # Inference path filters excluded projects via _enabled_keyword_rules and find_matching_folder_rule.
     folder_rule_service.create_or_update_folder_rule(
-        "D:\\ExcludedFolder", excluded_id
+        "D:\\ExcludedFolder",
+        excluded_id,
     )
-    aid = _create_closed_activity(file_path_hint="D:\\ExcludedFolder\\Doc.docx")
-    activity_service.finalize_created_activity(aid)
-    activity = _activity_row(aid)
-    assert int(activity["project_id"]) != excluded_id
-
-
-def test_manual_override_activity_is_not_overwritten(temp_db):
-    project = project_service.create_project("Manual")
-    folder_rule_service.create_or_update_folder_rule("D:\\ManualFolder", project)
-    other = project_service.create_project("Other")
-    aid = _create_closed_activity(file_path_hint="D:\\ManualFolder\\Doc.docx")
-    assign_activity_project(aid, other, manual=True)
-    _set_manual_override(aid)
-    activity_service.finalize_created_activity(aid)
-    activity = _activity_row(aid)
-    assignment = _assignment_row(aid)
-    assert int(activity["project_id"]) == other
-    assert int(activity["manual_override"]) == 1
-    assert int(assignment["is_manual"]) == 1
-    assert assignment["source"] != "folder_rule"
-
-
-def test_is_manual_activity_is_not_overwritten(temp_db):
-    project = project_service.create_project("ManualAssign")
-    folder_rule_service.create_or_update_folder_rule("D:\\ManualAssignFolder", project)
-    other = project_service.create_project("Other2")
-    aid = _create_closed_activity(file_path_hint="D:\\ManualAssignFolder\\Doc.docx")
-    assign_activity_project(aid, other, manual=True)
-    activity_service.finalize_created_activity(aid)
-    activity = _activity_row(aid)
-    assignment = _assignment_row(aid)
-    assert int(activity["project_id"]) == other
-    assert int(assignment["is_manual"]) == 1
-    assert assignment["source"] != "folder_rule"
-
-
-def test_hidden_activity_is_not_touched(temp_db):
-    project = project_service.create_project("Hidden")
-    folder_rule_service.create_or_update_folder_rule("D:\\HiddenFolder", project)
-    # Create in-progress so finalize/close triggers skip via the in-progress guard.
-    aid = activity_service.create_activity(
-        "Word", "winword.exe", "Doc.docx - Word",
-        file_path_hint="D:\\HiddenFolder\\Doc.docx",
-        start_time="2026-06-25 09:00:00",
+    activity_id = _create_closed_activity(
+        file_path_hint="D:\\ExcludedFolder\\Doc.docx"
     )
-    activity_service.finalize_created_activity(aid)
-    _set_hidden(aid)
-    activity_lifecycle_service.close_activity(aid, "2026-06-25 09:10:00")
-    activity = _activity_row(aid)
-    assert int(activity["project_id"]) != project
+    _consume(activity_id)
+    assert _assignment(activity_id).get("project_id") != excluded_id
 
 
-def test_deleted_activity_is_not_touched(temp_db):
-    project = project_service.create_project("Deleted")
-    folder_rule_service.create_or_update_folder_rule("D:\\DeletedFolder", project)
-    aid = activity_service.create_activity(
-        "Word", "winword.exe", "Doc.docx - Word",
-        file_path_hint="D:\\DeletedFolder\\Doc.docx",
-        start_time="2026-06-25 09:00:00",
-    )
-    activity_service.finalize_created_activity(aid)
-    _set_deleted(aid)
-    activity_lifecycle_service.close_activity(aid, "2026-06-25 09:10:00")
-    activity = _activity_row(aid)
-    assert int(activity["project_id"]) != project
-
-
-def test_in_progress_activity_is_not_touched(temp_db):
-    project = project_service.create_project("InProgress")
-    folder_rule_service.create_or_update_folder_rule("D:\\InProgressFolder", project)
-    aid = activity_service.create_activity(
-        "Word", "winword.exe", "Doc.docx - Word",
-        file_path_hint="D:\\InProgressFolder\\Doc.docx",
-        start_time="2026-06-25 09:00:00",
-    )
-    activity_service.finalize_created_activity(aid)
-    project_inference_service.process_new_activity(aid)
-    activity = _activity_row(aid)
-    assert int(activity["project_id"]) != project
-
-
-def test_non_normal_activity_is_not_touched(temp_db):
-    project = project_service.create_project("NonNormal")
-    folder_rule_service.create_or_update_folder_rule("D:\\NonNormalFolder", project)
-    aid = _create_closed_activity(
-        file_path_hint="D:\\NonNormalFolder\\Doc.docx", status="idle"
-    )
-    activity_service.finalize_created_activity(aid)
-    activity = _activity_row(aid)
-    assert int(activity["project_id"]) != project
-
-
-def test_already_target_activity_not_rewritten(temp_db):
-    project = project_service.create_project("AlreadyTarget")
+def test_manual_assignment_is_never_overwritten_or_enqueued(temp_db):
+    automatic_project = project_service.create_project("Automatic")
+    manual_project = project_service.create_project("Manual")
     folder_rule_service.create_or_update_folder_rule(
-        "D:\\AlreadyTargetFolder", project
+        "D:\\ManualFolder",
+        automatic_project,
     )
-    aid = _create_closed_activity(
-        file_path_hint="D:\\AlreadyTargetFolder\\Doc.docx", project_id=project
+    activity_id = _create_closed_activity(
+        file_path_hint="D:\\ManualFolder\\Doc.docx"
     )
-    activity_service.finalize_created_activity(aid)
-    assignment = _assignment_row(aid)
-    assert assignment["source"] != "folder_rule"
+    assign_activity_project(activity_id, manual_project, manual=True)
+
+    with get_connection() as conn:
+        inserted = activity_inference_job_repository.enqueue_closed_activity_ids(
+            conn,
+            [activity_id],
+        )
+    assert inserted == 0
+    assignment = _assignment(activity_id)
+    assert int(assignment["project_id"]) == manual_project
+    assert int(assignment["is_manual"]) == 1
+
+
+def test_open_hidden_deleted_and_non_normal_rows_are_not_enqueued(temp_db):
+    project_id = project_service.create_project("Eligibility")
+    folder_rule_service.create_or_update_folder_rule(
+        "D:\\Eligibility",
+        project_id,
+    )
+    hidden_id = _create_closed_activity(
+        file_path_hint="D:\\Eligibility\\hidden.docx"
+    )
+    deleted_id = _create_closed_activity(
+        file_path_hint="D:\\Eligibility\\deleted.docx"
+    )
+    idle_id = _create_closed_activity(
+        file_path_hint="D:\\Eligibility\\idle.docx",
+        status="idle",
+    )
+    open_id = activity_service.create_activity(
+        "Word",
+        "winword.exe",
+        "Open",
+        file_path_hint="D:\\Eligibility\\open.docx",
+    )
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE activity_log SET is_hidden = 1 WHERE id = ?",
+            (hidden_id,),
+        )
+        conn.execute(
+            "UPDATE activity_log SET is_deleted = 1 WHERE id = ?",
+            (deleted_id,),
+        )
+        inserted = activity_inference_job_repository.enqueue_closed_activity_ids(
+            conn,
+            [open_id, hidden_id, deleted_id, idle_id],
+        )
+    assert inserted == 0
 
 
 def test_folder_rule_wins_over_keyword_rule(temp_db):
     folder_project = project_service.create_project("FolderWins")
     keyword_project = project_service.create_project("KeywordLoses")
     folder_rule_service.create_or_update_folder_rule(
-        "D:\\PriorityFolder", folder_project
+        "D:\\PriorityFolder",
+        folder_project,
     )
     rule_service.create_rule("prioritydoc", keyword_project)
-    aid = _create_closed_activity(
+    activity_id = _create_closed_activity(
         file_path_hint="D:\\PriorityFolder\\prioritydoc.docx",
         window_title="prioritydoc - Word",
     )
-    activity_service.finalize_created_activity(aid)
-    activity = _activity_row(aid)
-    assignment = _assignment_row(aid)
-    assert int(activity["project_id"]) == folder_project
+    _consume(activity_id)
+    assignment = _assignment(activity_id)
+    assert int(assignment["project_id"]) == folder_project
     assert assignment["source"] == "folder_rule"
-    assert int(assignment["confidence"]) == 85
 
 
-def test_first_keyword_rule_wins_in_creation_order(temp_db):
-    # _enabled_keyword_rules orders by created_at, id; first match wins (duplicate keywords allowed).
-    first_project = project_service.create_project("FirstKw")
-    second_project = project_service.create_project("SecondKw")
-    rule_service.create_rule("sharedkeyword", first_project)
-    rule_service.create_rule("sharedkeyword", second_project)
-    aid = _create_closed_activity(
-        app_name="Excel",
-        process_name="excel.exe",
-        window_title="sharedkeyword-report.xlsx - Excel",
-    )
-    activity_service.finalize_created_activity(aid)
-    activity = _activity_row(aid)
-    assignment = _assignment_row(aid)
-    assert int(activity["project_id"]) == first_project
-    assert assignment["source"] == "keyword_rule"
-
-
-def test_first_match_wins_no_later_rule_overwrites(temp_db):
-    folder_project = project_service.create_project("FirstMatch")
-    keyword_project = project_service.create_project("LaterNoOverwrite")
+def test_lifecycle_close_only_enqueues_until_consumer_runs(temp_db):
+    project_id = project_service.create_project("CloseTrigger")
     folder_rule_service.create_or_update_folder_rule(
-        "D:\\FirstMatchFolder", folder_project
+        "D:\\CloseTriggerFolder",
+        project_id,
     )
-    rule_service.create_rule("firstmatch", keyword_project)
-    aid = _create_closed_activity(
-        file_path_hint="D:\\FirstMatchFolder\\firstmatch.docx",
-        window_title="firstmatch - Word",
+    activity_id = activity_service.create_activity(
+        "Word",
+        "winword.exe",
+        "Doc.docx - Word",
+        file_path_hint="D:\\CloseTriggerFolder\\Doc.docx",
+        start_time="2026-06-25 09:00:00",
     )
-    activity_service.finalize_created_activity(aid)
-    # Call the automatic path again — the assignment must NOT change.
-    first_assignment = _assignment_row(aid)
-    activity_service.finalize_created_activity(aid)
-    second_assignment = _assignment_row(aid)
-    assert first_assignment["project_id"] == second_assignment["project_id"]
-    assert first_assignment["source"] == second_assignment["source"]
-    assert first_assignment["source"] == "folder_rule"
 
+    activity_lifecycle_service.close_activity(
+        activity_id,
+        "2026-06-25 09:10:00",
+    )
 
-def test_folder_rule_fields_correct(temp_db):
-    project = project_service.create_project("FieldsFolder")
-    folder_rule_service.create_or_update_folder_rule("D:\\FieldsFolder", project)
-    aid = _create_closed_activity(file_path_hint="D:\\FieldsFolder\\Doc.docx")
-    activity_service.finalize_created_activity(aid)
-    activity = _activity_row(aid)
-    assignment = _assignment_row(aid)
-    assert int(activity["auto_classified"]) == 1
-    assert int(activity["manual_override"]) == 0
+    assert _job(activity_id) is not None
+    provisional = _assignment(activity_id)
+    assert provisional["source"] == "uncategorized"
+    assert int(provisional["is_manual"]) == 0
+    assert provisional["source_rule_type"] is None
+    assert provisional["source_rule_id"] is None
+    assert _consume(activity_id) == 1
+    assignment = _assignment(activity_id)
+    assert int(assignment["project_id"]) == project_id
     assert assignment["source"] == "folder_rule"
-    assert int(assignment["confidence"]) == 85
-    assert int(assignment["is_manual"]) == 0
-
-
-def test_keyword_rule_fields_correct(temp_db):
-    project = project_service.create_project("FieldsKeyword")
-    rule_service.create_rule("fieldskw", project)
-    aid = _create_closed_activity(
-        app_name="Excel",
-        process_name="excel.exe",
-        window_title="fieldskw.xlsx - Excel",
-    )
-    activity_service.finalize_created_activity(aid)
-    activity = _activity_row(aid)
-    assignment = _assignment_row(aid)
-    assert int(activity["auto_classified"]) == 1
-    assert int(activity["manual_override"]) == 0
-    assert assignment["source"] == "keyword_rule"
-    assert int(assignment["confidence"]) == 80
-    assert int(assignment["is_manual"]) == 0
-
-
-# No schema change
-
-
-_SCHEMA_PATH = Path(__file__).resolve().parent.parent / "worktrace" / "schema.sql"
-
-
-def test_no_schema_change_for_automatic_rules(temp_db):
-    # schema.sql is the single source of truth; automatic-rules services
-    # must not issue CREATE/ALTER/DROP TABLE SQL.
-    import inspect
-
-    for module in (rule_automation_service,):
-        source = inspect.getsource(module)
-        assert "CREATE TABLE" not in source.upper()
-        assert "ALTER TABLE" not in source.upper()
-        assert "DROP TABLE" not in source.upper()
-    # The schema.sql file must exist and not be empty.
-    assert _SCHEMA_PATH.exists()
-    assert _SCHEMA_PATH.read_text(encoding="utf-8").strip() != ""
 
 
 _FORBIDDEN_TOKENS = [
@@ -470,7 +298,6 @@ _FORBIDDEN_TOKENS = [
     "sqlite3",
     "OperationalError",
 ]
-
 _SQL_KEYWORD_TOKENS = {"SELECT", "INSERT", "UPDATE", "DELETE"}
 
 
@@ -479,137 +306,37 @@ def _assert_no_sensitive_tokens(payload: dict) -> None:
     for token in _FORBIDDEN_TOKENS:
         token_lower = token.lower()
         if token in _SQL_KEYWORD_TOKENS:
-            pattern = r"\b" + re.escape(token_lower) + r"\b"
-            assert re.search(pattern, serialized) is None, (
-                f"forbidden token '{token}' found in payload"
-            )
-        elif token == "note":
-            assert '"note"' not in serialized, (
-                f"forbidden token '{token}' found in payload"
-            )
-        elif token == "path_hint":
-            assert "path_hint" not in serialized, (
-                f"forbidden token '{token}' found in payload"
-            )
+            assert re.search(r"\b" + re.escape(token_lower) + r"\b", serialized) is None
         else:
-            assert token_lower not in serialized, (
-                f"forbidden token '{token}' found in payload"
-            )
+            assert token_lower not in serialized
 
 
-def test_automatic_rules_status_bridge_payload_display_safe(temp_db):
-    bridge = ProjectRulesBridgeMixin()
-    result = bridge.automatic_rules_status()
-    assert result["ok"] is True
-    assert "status" in result
-    _assert_no_sensitive_tokens(result)
+def test_automatic_rules_status_is_display_safe_and_serializable(temp_db):
+    for result in (
+        ProjectRulesBridgeMixin().automatic_rules_status(),
+        rule_api.automatic_rules_status(),
+    ):
+        assert result["ok"] is True
+        status = result["status"]
+        assert status["scope"] == "enabled_folder_keyword_rules"
+        assert status["priority"] == "folder_before_keyword"
+        assert status["confidence"] == {
+            "folder_rule": 85,
+            "keyword_rule": 80,
+        }
+        assert status["writes"]["activity_project_assignment"] is True
+        assert status["writes"]["activity_log"] is False
+        for field in ("enabled", "toggle", "on", "off", "active", "is_enabled"):
+            assert field not in status
+        _assert_no_sensitive_tokens(result)
+        json.dumps(result, ensure_ascii=False, default=str)
 
 
-def test_automatic_rules_status_api_payload_display_safe(temp_db):
-    result = rule_api.automatic_rules_status()
-    assert result["ok"] is True
-    assert "status" in result
-    _assert_no_sensitive_tokens(result)
+def test_automatic_rule_service_does_not_own_schema_changes(temp_db):
+    import inspect
 
-
-def test_automatic_rules_status_payload_fields(temp_db):
-    bridge = ProjectRulesBridgeMixin()
-    result = bridge.automatic_rules_status()
-    status = result["status"]
-    assert status["supported"] is True
-    assert status["scope"] == "enabled_folder_keyword_rules"
-    assert status["priority"] == "folder_before_keyword"
-    assert status["confidence"]["folder_rule"] == 85
-    assert status["confidence"]["keyword_rule"] == 80
-    assert "is_manual" in status["skips"]
-    assert "hidden" in status["skips"]
-    assert "deleted" in status["skips"]
-    assert "in_progress" in status["skips"]
-    assert "non_normal" in status["skips"]
-    assert "already_target" in status["skips"]
-    assert "disabled_rule" in status["skips"]
-    assert "disabled_project" in status["skips"]
-    assert "archived_project" in status["skips"]
-    assert "excluded_project" in status["skips"]
-    assert status["writes"]["activity_project_assignment"] is True
-    assert status["writes"]["activity_log"] is False
-
-
-def test_automatic_rules_status_payload_json_serializable(temp_db):
-    bridge = ProjectRulesBridgeMixin()
-    result = bridge.automatic_rules_status()
-    # Must be JSON-serializable (no datetime / set / custom object).
-    json.dumps(result, ensure_ascii=False, default=str)
-
-
-def test_process_new_activity_in_progress_guard_runs_before_assign(
-    temp_db, monkeypatch
-):
-    # process_new_activity must skip in-progress (end_time IS NULL) before delegating to assign_project_for_activity.
-    project = project_service.create_project("GuardOrder")
-    folder_rule_service.create_or_update_folder_rule(
-        "D:\\GuardOrderFolder", project
-    )
-    aid = _create_closed_activity(file_path_hint="D:\\GuardOrderFolder\\Doc.docx")
-    _set_in_progress(aid)
-    # Spy installed after _create_closed_activity to avoid close_activity trigger polluting the counter.
-    called = {"assign": False}
-    original_assign = project_inference_service.assign_project_for_activity
-
-    def _spy_assign(activity_id):
-        called["assign"] = True
-        return original_assign(activity_id)
-
-    monkeypatch.setattr(
-        project_inference_service, "assign_project_for_activity", _spy_assign
-    )
-    project_inference_service.process_new_activity(aid)
-    assert called["assign"] is False, (
-        "process_new_activity must skip in-progress activities before "
-        "calling assign_project_for_activity"
-    )
-
-
-def test_automatic_rules_status_payload_has_no_on_off_toggle_field(temp_db):
-    # Status payload is display-only; must NOT carry a toggle-like field (enabled/toggle/on/off/active/is_enabled).
-    bridge = ProjectRulesBridgeMixin()
-    result = bridge.automatic_rules_status()
-    status = result["status"]
-    for field in ("enabled", "toggle", "on", "off", "active", "is_enabled"):
-        assert field not in status, (
-            "automatic_rules_status payload must not carry toggle-like field '"
-            + field + "'"
-        )
-
-
-def test_close_activity_triggers_automatic_rules_for_in_progress_activity(temp_db):
-    project = project_service.create_project("CloseTrigger")
-    folder_rule_service.create_or_update_folder_rule(
-        "D:\\CloseTriggerFolder", project
-    )
-    aid = activity_service.create_activity(
-        "Word",
-        "winword.exe",
-        "Doc.docx - Word",
-        file_path_hint="D:\\CloseTriggerFolder\\Doc.docx",
-        start_time="2026-06-25 09:00:00",
-    )
-    activity_service.finalize_created_activity(aid)
-    activity = activity_service.get_activity(aid)
-    assert activity["project_id"] != project, (
-        "in-progress activity must not receive automatic rule application"
-    )
-    # close_activity close-finalize must re-trigger process_new_activity so the folder rule applies.
-    activity_lifecycle_service.close_activity(aid, "2026-06-25 09:10:00")
-    activity = activity_service.get_activity(aid)
-    assert activity["project_id"] == project, (
-        "lifecycle close_activity must trigger automatic rules so the "
-        "folder rule applies to the just-closed activity"
-    )
-    assignment = _assignment_row(aid)
-    assert assignment["source"] == "folder_rule"
-    assert int(assignment["confidence"]) == 85
-    assert int(assignment["is_manual"] or 0) == 0
-    # auto_classified lives on activity_log, not activity_project_assignment.
-    activity = _activity_row(aid)
-    assert int(activity["auto_classified"] or 0) == 1
+    source = inspect.getsource(rule_automation_service).upper()
+    for statement in ("CREATE TABLE", "ALTER TABLE", "DROP TABLE"):
+        assert statement not in source
+    schema_path = Path(__file__).resolve().parents[1] / "worktrace" / "schema.sql"
+    assert schema_path.read_text(encoding="utf-8").strip()

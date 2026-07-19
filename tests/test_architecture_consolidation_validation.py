@@ -18,7 +18,7 @@ from worktrace.services import (
 pytestmark = [pytest.mark.db, pytest.mark.integration, pytest.mark.serial]
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-WORKFLOW_ALLOWLIST = {"_validation.yml", "acceptance.yml", "ci.yml"}
+WORKFLOW_ALLOWLIST = {"_validation.yml", "ci.yml"}
 FORBIDDEN_WORKFLOW_COMMANDS = (
     "git push",
     "git merge",
@@ -30,6 +30,25 @@ FORBIDDEN_HELPER_PREFIXES = (
     "apply_patch_",
     "one_time_",
 )
+RUNTIME_TOP_LEVEL_ALIASES = {
+    "activity_display_model",
+    "collection_status",
+    "collector_status",
+    "current_activity",
+    "current_activity_display_span_id",
+    "current_activity_elapsed_seconds",
+    "current_resource_identity_hash",
+    "display_span_id",
+    "live_clock",
+    "live_revision",
+    "page_revision",
+    "paused",
+    "sample_epoch_ms",
+    "sample_id",
+    "stable_live_key_hash",
+    "status_display",
+    "structure_revision",
+}
 
 
 def test_page_and_heartbeat_use_one_revision_owner(temp_db):
@@ -77,14 +96,54 @@ def test_session_summary_api_calls_keyword_only_service(monkeypatch):
 
     assert result["ok"] is True
     assert result["summary_rows"] == []
-    assert result["runtime"]["schema_version"] == 1
+    assert result["runtime"]["schema_version"] == 2
     assert result["runtime"]["surface"] == "details"
     assert result["runtime"]["scope_report_date"] == "2026-07-16"
+    assert not RUNTIME_TOP_LEVEL_ALIASES.intersection(result)
     assert captured == {
         "report_date": "2026-07-16",
         "projection_instance_key": "session:1",
         "expected_projection_revision": "a" * 40,
     }
+
+
+def test_overview_api_exposes_one_v2_runtime_transport(temp_db):
+    result = view_model_api.get_overview_view_model()
+
+    assert result["ok"] is True
+    runtime = result["runtime"]
+    assert runtime["schema_version"] == 2
+    assert set(runtime) == {
+        "schema_version",
+        "surface",
+        "scope_report_date",
+        "live_report_date",
+        "snapshot",
+        "current_activity",
+        "recent_first_row",
+        "clock",
+        "current_project",
+        "collector",
+        "runtime_phase",
+        "worker_health",
+        "degraded_workers",
+        "generations",
+        "database_replacement_epoch",
+        "error_codes",
+        "identity",
+        "revisions",
+    }
+    assert not RUNTIME_TOP_LEVEL_ALIASES.intersection(result)
+    current = runtime["current_activity"] or {}
+    recent = runtime["recent_first_row"] or {}
+    if current.get("active") and current.get("is_in_progress"):
+        assert recent
+        assert recent.get("stable_live_key_hash") == current.get(
+            "stable_live_key_hash"
+        )
+        assert recent.get("display_span_id") == runtime["identity"][
+            "display_span_id"
+        ]
 
 
 def test_schema_trigger_surface_is_constraint_only(temp_db):
@@ -110,6 +169,10 @@ def test_frontend_uses_explicit_bridge_and_settings_bindings():
     assert "App.callBridge =" not in init_source
     assert "MutationObserver" not in init_source
     assert 'bind("settings-clear-local-data-btn", "click", App.clearAllLocalData)' in init_source
+    assert "schema_version || 0) !== 1" not in init_source
+    assert "bundle.current_activity" not in init_source
+    assert "bundle.live_clock" not in init_source
+    assert "state.collector_status" not in init_source
 
 
 def test_composition_root_imports_canonical_windows_adapter():
@@ -158,7 +221,7 @@ def test_page_wrapper_services_are_removed():
         assert not (REPO_ROOT / "worktrace/services" / name).exists()
 
 
-def test_permanent_ci_and_acceptance_workflows_are_read_only():
+def test_permanent_ci_workflows_are_read_only():
     workflow_dir = REPO_ROOT / ".github" / "workflows"
     workflows = sorted(
         path
@@ -194,6 +257,9 @@ def test_permanent_ci_and_acceptance_workflows_are_read_only():
 
     assert "3.12" not in combined_source
     assert "run_python312" not in combined_source
+    assert "acceptance.yml" not in combined_source
+    assert "ready_for_review" not in combined_source
+    assert "Final acceptance" not in combined_source
 
     reusable_source = (workflow_dir / "_validation.yml").read_text(encoding="utf-8")
     checkout_count = reusable_source.count("uses: actions/checkout@")
@@ -206,24 +272,21 @@ def test_permanent_ci_and_acceptance_workflows_are_read_only():
     assert "node --test tests/webview/*.test.js" in reusable_source
     assert "python -m PyInstaller --noconfirm --clean WorkTrace.spec" in reusable_source
     assert "scripts\\build_windows_installer.ps1" in reusable_source
+    assert "gh api" not in reusable_source
+    assert "actions: read" not in reusable_source
+    assert "python_failure_manifest" not in reusable_source
+    assert "python_failure_details" not in reusable_source
+    assert "validation-diagnostics-${{ inputs.revision }}" in reusable_source
+    assert "retention-days: 3" in reusable_source
 
     ci_source = (workflow_dir / "ci.yml").read_text(encoding="utf-8")
     assert "pull_request:" in ci_source
     assert "push:" in ci_source
     assert "./.github/workflows/_validation.yml" in ci_source
     assert "github.event.pull_request.head.sha || github.sha" in ci_source
-    assert "run_node_tests: false" in ci_source
-    assert "run_build_smoke: false" in ci_source
+    assert "run_node_tests: true" in ci_source
+    assert "run_build_smoke: true" in ci_source
     assert "cancel-in-progress: false" in ci_source
-
-    acceptance_source = (workflow_dir / "acceptance.yml").read_text(encoding="utf-8")
-    for event_type in ("ready_for_review", "synchronize", "reopened"):
-        assert event_type in acceptance_source
-    assert "github.event.pull_request.draft == false" in acceptance_source
-    assert "github.event.pull_request.head.sha" in acceptance_source
-    assert "run_node_tests: true" in acceptance_source
-    assert "run_build_smoke: true" in acceptance_source
-    assert "cancel-in-progress: false" in acceptance_source
 
 
 def test_live_semantics_harness_recent_reuses_overview_projection(

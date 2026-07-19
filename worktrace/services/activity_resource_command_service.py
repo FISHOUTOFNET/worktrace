@@ -13,10 +13,11 @@ from ..path_utils import looks_like_local_file_path, normalize_path_key
 from ..platforms.base import ActiveWindow
 from ..resources.resource_builders import make_system_resource
 from ..resources.types import DetectedResource
+from . import activity_inference_job_repository, privacy_service
 from .resource_service import create_or_update_activity_resource
-from . import privacy_service
 
 logger = logging.getLogger(__name__)
+
 
 def _detect_resource(activity: dict, file_path_hint: str) -> DetectedResource:
     status = str(activity.get("status") or "")
@@ -92,36 +93,32 @@ def _upgrade_path_identity(
     )
 
 
-def _finalize_pending_inference(activity_id: int) -> None:
-    """Run post-commit derivation without changing the main command result."""
-
+def _sync_open_activity_project_safely(activity_id: int) -> None:
     try:
-        from .project_inference_service import assign_project_for_activity
+        from .project_inference_service import sync_persisted_open_activity_project
 
-        assign_project_for_activity(int(activity_id))
+        sync_persisted_open_activity_project(int(activity_id))
     except Exception:
-        # The durable path/resource facts and their retry marker already
-        # committed. The opportunity worker can retry without the caller being
-        # told that the main command failed.
-        logger.exception("path-update inference failed for activity_id=%s", activity_id)
+        logger.exception("path open-row project sync failed activity_id=%s", activity_id)
 
 
 def _persist_activity_path(
     activity_id: int,
     file_path_hint: str,
 ) -> tuple[bool, bool]:
-    """Persist a path only after transaction-snapshot privacy authorization."""
+    """Persist a path after transaction-snapshot privacy authorization."""
 
     cleaned = str(file_path_hint or "").strip()
     if not cleaned:
         return False, False
 
+    activity_closed = False
     with DomainUnitOfWork((DataGenerationNamespace.REPORT_STRUCTURE,)) as uow:
         conn = uow.connection
         current_row = conn.execute(
             """
             SELECT id, app_name, process_name, window_title, status, start_time,
-                   file_path_hint, updated_at
+                   end_time, file_path_hint, updated_at
             FROM activity_log
             WHERE id = ? AND is_deleted = 0
             """,
@@ -145,13 +142,22 @@ def _persist_activity_path(
             ),
             conn=conn,
         )
-        status_row = conn.execute(
-            "SELECT status FROM activity_log WHERE id = ? AND is_deleted = 0",
+        # Privacy evaluation may execute policy callbacks that change this row.
+        # Re-read the authoritative status before any path or resource write.
+        latest_row = conn.execute(
+            """
+            SELECT status, end_time
+            FROM activity_log
+            WHERE id = ? AND is_deleted = 0
+            """,
             (int(activity_id),),
         ).fetchone()
-        if status_row is None:
+        if latest_row is None:
             return False, False
-        status = str(status_row["status"] or "")
+        activity["status"] = latest_row["status"]
+        activity["end_time"] = latest_row["end_time"]
+        activity_closed = latest_row["end_time"] is not None
+        status = str(latest_row["status"] or "")
         excluded = excluded or status == STATUS_EXCLUDED
         if excluded:
             payload = privacy_service.make_excluded_activity_payload()
@@ -199,24 +205,20 @@ def _persist_activity_path(
         )
         create_or_update_activity_resource(int(activity_id), resource, conn=conn)
 
-        if not excluded:
-            from .assignment_command_service import mark_inference_retry
-            from .system_project_service import require_uncategorized_project_id
-
-            mark_inference_retry(
+        if not excluded and activity_closed:
+            activity_inference_job_repository.enqueue_closed_activity_ids(
                 conn,
-                int(activity_id),
-                require_uncategorized_project_id(conn),
+                [int(activity_id)],
             )
         uow.mark_changed()
 
-    if not excluded:
-        _finalize_pending_inference(int(activity_id))
+    if not excluded and not activity_closed:
+        _sync_open_activity_project_safely(int(activity_id))
     return True, excluded
 
 
 def update_activity_file_path_hint(activity_id: int, file_path_hint: str) -> bool:
-    """Atomically update path/resource facts and persist pending derivation."""
+    """Atomically update path/resource facts and schedule derived state."""
 
     updated, _excluded = _persist_activity_path(activity_id, file_path_hint)
     return updated

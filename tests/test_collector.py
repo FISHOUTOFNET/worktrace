@@ -212,8 +212,8 @@ def test_collector_control_pause_completes_lifecycle_before_ack(monkeypatch):
     calls: list[str] = []
 
     class FakeMachine:
-        def pause(self, at_time=None):
-            calls.append("machine.pause")
+        def quiesce_for_maintenance(self, at_time=None):
+            calls.append("machine.quiesce_for_maintenance")
 
         def transition_to(self, state, at_time=None):
             calls.append("machine.transition_to:" + state)
@@ -259,7 +259,7 @@ def test_collector_control_pause_completes_lifecycle_before_ack(monkeypatch):
     assert result["command_state"] == "completed"
     assert result["command_state_unknown"] is False
     assert isinstance(result["command_id"], str) and result["command_id"]
-    pause_index = calls.index("machine.pause")
+    pause_index = calls.index("machine.quiesce_for_maintenance")
     heartbeat_index = calls.index("heartbeat:paused")
     assert pause_index < heartbeat_index
 

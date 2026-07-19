@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from worktrace import db
-from worktrace.constants import SOURCE_AUTO, STATUS_PAUSED
+from worktrace.constants import SOURCE_AUTO, STATUS_NORMAL, STATUS_PAUSED
 from tests.support import activity_factory as activity_service
 from worktrace.services import (
     activity_lifecycle_service,
@@ -44,7 +44,7 @@ def test_schema_contains_only_invariant_triggers(temp_db):
     assert _trigger_names() == _ALLOWED_SCHEMA_TRIGGERS
 
 
-def test_current_database_converges_retired_triggers_before_fingerprint(temp_db):
+def test_current_database_rejects_fingerprint_drift_without_deleting_data(temp_db):
     with db.get_connection() as conn:
         conn.executescript(
             """
@@ -65,14 +65,20 @@ def test_current_database_converges_retired_triggers_before_fingerprint(temp_db)
             BEGIN SELECT 1; END;
             """
         )
+        conn.execute(
+            "INSERT INTO settings(key, value, updated_at) VALUES ('preserved', 'yes', ?)",
+            (db.now_str(),),
+        )
     assert _RETIRED_SCHEMA_TRIGGERS.issubset(_trigger_names())
 
-    db.initialize_database(temp_db)
+    with pytest.raises(ValueError, match="database_schema_incompatible"):
+        db.initialize_database(temp_db)
 
-    names = _trigger_names()
-    assert names == _ALLOWED_SCHEMA_TRIGGERS
+    assert _RETIRED_SCHEMA_TRIGGERS.issubset(_trigger_names())
     with db.get_connection() as conn:
-        assert db.schema_fingerprint(conn) == db.expected_schema_fingerprint()
+        assert conn.execute(
+            "SELECT value FROM settings WHERE key = 'preserved'"
+        ).fetchone()["value"] == "yes"
 
 
 def test_low_level_insert_rejects_second_open_row_without_closing_first(temp_db):
@@ -110,16 +116,10 @@ def test_low_level_insert_rejects_second_open_row_without_closing_first(temp_db)
     assert open_count == 1
 
 
-def test_lifecycle_start_explicitly_closes_and_replaces_open_row(
+def test_lifecycle_start_closes_prior_row_and_enqueues_durable_job(
     temp_db,
     monkeypatch,
 ):
-    finalized: list[int] = []
-    monkeypatch.setattr(
-        activity_lifecycle_service,
-        "finalize_closed_activity_ids",
-        lambda ids: finalized.extend(ids),
-    )
     monkeypatch.setattr(
         activity_lifecycle_service,
         "_sync_open_row_project_safely",
@@ -130,20 +130,20 @@ def test_lifecycle_start_explicitly_closes_and_replaces_open_row(
         start_time="2026-07-16 10:00:00",
         source=SOURCE_AUTO,
         payload={
-            "app_name": "System",
-            "process_name": "system",
-            "window_title": "Paused",
-            "status": STATUS_PAUSED,
+            "app_name": "Editor",
+            "process_name": "editor.exe",
+            "window_title": "First",
+            "status": STATUS_NORMAL,
         },
     )
     second_id = activity_lifecycle_service.start_activity(
         start_time="2026-07-16 10:01:30",
         source=SOURCE_AUTO,
         payload={
-            "app_name": "System",
-            "process_name": "system",
-            "window_title": "Paused again",
-            "status": STATUS_PAUSED,
+            "app_name": "Browser",
+            "process_name": "browser.exe",
+            "window_title": "Second",
+            "status": STATUS_NORMAL,
         },
     )
 
@@ -161,12 +161,16 @@ def test_lifecycle_start_explicitly_closes_and_replaces_open_row(
                 "SELECT COUNT(*) AS value FROM activity_log WHERE end_time IS NULL"
             ).fetchone()["value"]
         )
+        job = conn.execute(
+            "SELECT reason, status FROM activity_inference_job WHERE activity_id = ?",
+            (first_id,),
+        ).fetchone()
     assert first is not None and second is not None
     assert first["end_time"] == "2026-07-16 10:01:30"
     assert int(first["duration_seconds"] or 0) == 90
     assert second["end_time"] is None
     assert open_count == 1
-    assert finalized == [first_id]
+    assert dict(job) == {"reason": "closed_activity", "status": "pending"}
 
 
 def test_page_and_heartbeat_share_structure_and_page_revision(temp_db):

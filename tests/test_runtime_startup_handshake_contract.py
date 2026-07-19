@@ -72,11 +72,6 @@ def test_authorized_start_skips_derived_workers_when_collector_fails(
     runtime._initialized = True
     order: list[str] = []
     monkeypatch.setattr(
-        app_runtime.project_inference_service,
-        "retry_pending_inference",
-        lambda _limit: order.append("retry"),
-    )
-    monkeypatch.setattr(
         runtime,
         "start_collector",
         lambda: order.append("collector")
@@ -90,11 +85,14 @@ def test_authorized_start_skips_derived_workers_when_collector_fails(
 
     result = runtime.start_authorized_collection()
 
-    assert order == ["retry", "collector"]
+    assert order == ["collector"]
     assert result.ok is False
     assert result.collector_ready is False
     assert result.folder_index_ready is False
     assert result.history_worker_ready is False
+    assert result.inference_worker_ready is False
+    assert result.resource_repair_worker_ready is False
+    assert result.startup_recovery_worker_ready is False
     assert result.error_code == "collector_start_failed"
     assert runtime.phase is RuntimePhase.RECOVERABLE_FAILURE
 
@@ -106,11 +104,6 @@ def test_derived_worker_failure_degrades_ready_collector(
     runtime = _owned_runtime()
     runtime._initialized = True
     order: list[str] = []
-    monkeypatch.setattr(
-        app_runtime.project_inference_service,
-        "retry_pending_inference",
-        lambda _limit: order.append("retry"),
-    )
     monkeypatch.setattr(
         runtime,
         "start_collector",
@@ -125,16 +118,25 @@ def test_derived_worker_failure_degrades_ready_collector(
             index_ready=False,
             history_ready=True,
             history_started=True,
+            inference_ready=True,
+            resource_repair_ready=True,
+            startup_recovery_ready=True,
             error="worker_start_failed",
+            failed_workers=("folder_index",),
         ),
     )
 
     result = runtime.start_authorized_collection()
 
-    assert order == ["retry", "collector", "workers"]
+    assert order == ["collector", "workers"]
     assert result.ok is True
     assert result.collector_ready is True
     assert result.folder_index_ready is False
     assert result.history_worker_ready is True
+    assert result.inference_worker_ready is True
+    assert result.resource_repair_worker_ready is True
+    assert result.startup_recovery_worker_ready is True
+    assert result.failed_workers == ("folder_index",)
     assert result.degraded is True
+    assert result.error_code is None
     assert runtime.phase is RuntimePhase.DEGRADED

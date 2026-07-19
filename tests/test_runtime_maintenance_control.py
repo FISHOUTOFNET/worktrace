@@ -13,9 +13,9 @@ from worktrace.platforms.base import ActiveWindow
 from worktrace.platforms.windows_clipboard import ClipboardMonitor
 from worktrace.security.kdf import KdfError, KdfParams, derive_backup_key
 from worktrace.services import runtime_activity_state_service, settings_service
-from worktrace.services.secure_backup_service import (
-    SecureBackupError,
-    SecureImportCoordinator,
+from worktrace.services.database_maintenance_service import (
+    DatabaseMaintenanceCoordinator,
+    MaintenancePhase,
 )
 
 pytestmark = [
@@ -93,7 +93,6 @@ def test_reset_command_is_acknowledged_once():
 
 
 def test_long_poll_gap_rebases_instead_of_replaying_ticks():
-
     next_deadline = _sleep_until_next_poll(
         threading.Event(),
         None,
@@ -199,50 +198,51 @@ def test_recorder_generation_reset_forgets_old_activity_id(monkeypatch):
 
 def test_maintenance_coordinator_pauses_and_resets_before_operation(temp_db):
     calls: list[str] = []
-    coordinator = SecureImportCoordinator()
+    coordinator = DatabaseMaintenanceCoordinator()
 
     def pause(timeout_seconds=5.0):
-        assert coordinator.write_gate_active() is True
+        assert coordinator.active() is True
         calls.append("pause")
         return {"ok": True, "pause_pending": False}
 
     def reset(timeout_seconds=5.0):
-        assert coordinator.write_gate_active() is True
+        assert coordinator.active() is True
         calls.append("reset")
         return {"ok": True, "reset_pending": False}
 
-    coordinator.register_collector_pause_handler(pause)
-    coordinator.register_collector_reset_handler(reset)
+    coordinator.register_pause_handler(pause)
+    coordinator.register_reset_handler(reset)
 
-    with coordinator.acquire(reason="test") as guard:
-        assert coordinator.write_gate_active() is True
+    with coordinator.acquire(reason="test"):
+        assert coordinator.active() is True
+        assert coordinator.phase is MaintenancePhase.EXCLUSIVE
         calls.append("operation")
-        guard.mark_succeeded()
 
     assert calls == ["pause", "reset", "operation"]
-    assert coordinator.write_gate_active() is False
+    assert coordinator.active() is False
+    assert coordinator.phase is MaintenancePhase.IDLE
 
 
 def test_maintenance_reset_failure_restores_intent_without_stale_snapshot(temp_db):
-    coordinator = SecureImportCoordinator()
+    coordinator = DatabaseMaintenanceCoordinator()
     settings_service.set_setting("user_paused", "false")
     settings_service.set_setting("collector_status", "running")
     runtime_activity_state_service.publish_runtime_activity_snapshot(
         {"persisted_activity_id": 77},
         "maintenance_test",
     )
-    coordinator.register_collector_pause_handler(
+    coordinator.register_pause_handler(
         lambda timeout_seconds=5.0: {"ok": True, "pause_pending": False}
     )
-    coordinator.register_collector_reset_handler(
+    coordinator.register_reset_handler(
         lambda timeout_seconds=5.0: {"ok": False, "reset_pending": False}
     )
 
-    with pytest.raises(SecureBackupError, match="reset_not_acknowledged"):
+    with pytest.raises(RuntimeError, match="collector_reset_not_acknowledged"):
         with coordinator.acquire(reason="failure"):
             pytest.fail("operation must not start")
 
-    assert coordinator.write_gate_active() is False
+    assert coordinator.active() is False
     assert settings_service.get_bool_setting("user_paused", True) is False
     assert settings_service.get_setting("collector_status", "") == "running"
     assert runtime_activity_state_service.sample_runtime_activity_state().snapshot is None
@@ -280,7 +280,6 @@ def test_clipboard_disable_waits_for_inflight_capture_and_drops_generation(
     monitor.set_enabled(True)
     generation = monitor._generation
 
-    # ``_capture_locked`` uses the same serialization lock as the real loop.
     def serialized_capture():
         with monitor._lifecycle_lock:
             monitor._capture_locked(7, generation)
@@ -313,11 +312,12 @@ def test_kdf_rejects_excessive_resource_parameters():
             KdfParams(n=2**19, r=8, p=1),
         )
 
+
 def test_maintenance_unknown_command_state_remains_fail_closed(temp_db):
-    coordinator = SecureImportCoordinator()
+    coordinator = DatabaseMaintenanceCoordinator()
     settings_service.set_setting("user_paused", "false")
     settings_service.set_setting("collector_status", "running")
-    coordinator.register_collector_pause_handler(
+    coordinator.register_pause_handler(
         lambda timeout_seconds=5.0: {
             "ok": False,
             "pause_pending": False,
@@ -326,10 +326,10 @@ def test_maintenance_unknown_command_state_remains_fail_closed(temp_db):
         }
     )
 
-    with pytest.raises(SecureBackupError, match="pause_not_acknowledged"):
+    with pytest.raises(RuntimeError, match="collector_pause_not_acknowledged"):
         with coordinator.acquire(reason="unknown"):
             pytest.fail("operation must not start")
 
-    assert coordinator.write_gate_active() is False
+    assert coordinator.active() is False
     assert settings_service.get_bool_setting("user_paused", False) is True
     assert settings_service.get_setting("collector_status", "") == "paused"

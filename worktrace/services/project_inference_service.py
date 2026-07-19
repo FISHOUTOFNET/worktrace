@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 import ntpath
 import re
 import threading
@@ -10,18 +9,17 @@ from ..constants import STATUS_NORMAL, UNCATEGORIZED_PROJECT
 from ..data_generation_repository import DataGenerationNamespace
 from ..db import get_connection, get_db_key
 from ..domain_unit_of_work import DomainUnitOfWork
-from ..generation_clock import generation
+from ..generation_clock import generation_tuple
 from ..path_utils import has_auto_project_extension
 from . import (
     assignment_command_service,
     clipboard_fact_query_service,
     folder_index_query_service,
     folder_rule_service,
-    project_lifecycle_policy,
 )
 from .system_project_service import require_uncategorized_project_id
 
-GENERIC_FILE_PROJECT_NAMES = {
+_GENERIC_FILE_PROJECT_NAMES = {
     "desktop",
     "downloads",
     "documents",
@@ -35,14 +33,16 @@ GENERIC_FILE_PROJECT_NAMES = {
 }
 _KEYWORD_RULE_CACHE_LOCK = threading.RLock()
 _KEYWORD_RULE_CACHE_DATABASE_KEY: str | None = None
-_KEYWORD_RULE_CACHE_GENERATION: int | None = None
+_KEYWORD_RULE_CACHE_GENERATION: tuple[int, int] | None = None
 _KEYWORD_RULE_CACHE: list[dict] | None = None
+_KEYWORD_RULE_CACHE_NAMESPACES = (
+    DataGenerationNamespace.CLASSIFICATION_CATALOG,
+    DataGenerationNamespace.DATABASE_REPLACEMENT,
+)
 
 
 @dataclass(frozen=True)
 class ProjectAssignmentDecision:
-    """The complete, persistable result of automatic project inference."""
-
     project_id: int
     source: str
     confidence: int
@@ -78,6 +78,8 @@ def _load_enabled_keyword_rules(conn) -> list[dict]:
         ORDER BY pr.created_at, pr.id
         """
     ).fetchall()
+    from . import project_lifecycle_policy
+
     return [
         {
             "id": int(row["id"]),
@@ -105,7 +107,7 @@ def _enabled_keyword_rules(conn=None) -> list[dict]:
     global _KEYWORD_RULE_CACHE
     while True:
         database_key = get_db_key()
-        current_generation = generation(DataGenerationNamespace.CLASSIFICATION_CATALOG)
+        current_generation = generation_tuple(_KEYWORD_RULE_CACHE_NAMESPACES)
         with _KEYWORD_RULE_CACHE_LOCK:
             if (
                 _KEYWORD_RULE_CACHE_DATABASE_KEY == database_key
@@ -115,7 +117,7 @@ def _enabled_keyword_rules(conn=None) -> list[dict]:
                 return [dict(row) for row in _KEYWORD_RULE_CACHE]
         with get_connection() as read_conn:
             rules = _load_enabled_keyword_rules(read_conn)
-        if generation(DataGenerationNamespace.CLASSIFICATION_CATALOG) != current_generation:
+        if generation_tuple(_KEYWORD_RULE_CACHE_NAMESPACES) != current_generation:
             continue
         with _KEYWORD_RULE_CACHE_LOCK:
             _KEYWORD_RULE_CACHE_DATABASE_KEY = database_key
@@ -205,60 +207,6 @@ def _assign_project_for_activity_in_transaction(
         source_rule_id=decision.source_rule_id,
     )
     return _assignment_dict(conn, activity_id), changed
-
-
-def process_new_activity(activity_id: int) -> dict:
-    """Apply automatic rules only to closed, visible, durable activities."""
-
-    with get_connection() as conn:
-        activity = conn.execute(
-            "SELECT is_hidden, is_deleted, end_time FROM activity_log WHERE id = ?",
-            (int(activity_id),),
-        ).fetchone()
-        if activity is None:
-            raise ValueError(f"activity not found: {activity_id}")
-        if int(activity["is_hidden"] or 0) or int(activity["is_deleted"] or 0):
-            return _assignment_dict(conn, activity_id)
-        if activity["end_time"] is None:
-            return _assignment_dict(conn, activity_id)
-    return assign_project_for_activity(activity_id)
-
-
-def retry_pending_inference(limit: int = 100) -> int:
-    """Retry bounded durable markers through the inference orchestrator."""
-
-    with get_connection() as conn:
-        rows = conn.execute(
-            """
-            SELECT a.id
-            FROM activity_log a
-            JOIN activity_project_assignment apa ON apa.activity_id = a.id
-            WHERE a.end_time IS NOT NULL
-              AND a.status = 'normal'
-              AND a.is_hidden = 0
-              AND a.is_deleted = 0
-              AND apa.is_manual = 0
-              AND apa.source = 'uncategorized'
-              AND apa.confidence = ?
-            ORDER BY a.id
-            LIMIT ?
-            """,
-            (
-                assignment_command_service.INFERENCE_RETRY_CONFIDENCE,
-                max(0, int(limit)),
-            ),
-        ).fetchall()
-    updated = 0
-    for row in rows:
-        try:
-            result = assign_project_for_activity(int(row["id"]))
-            if int(result.get("confidence") or 0) != (
-                assignment_command_service.INFERENCE_RETRY_CONFIDENCE
-            ):
-                updated += 1
-        except Exception:
-            logging.exception("assignment inference retry failed for activity %s", row["id"])
-    return updated
 
 
 _OPEN_ROW_UNCLASSIFIED_SOURCES = {"uncategorized", "suggested_project_name"}
@@ -359,7 +307,7 @@ def candidate_project_name_for_resource(resource: dict) -> str | None:
             candidate = _clean_project_candidate(
                 ntpath.basename(parent_dir.rstrip("\\/"))
             )
-            if candidate and candidate.casefold() not in GENERIC_FILE_PROJECT_NAMES:
+            if candidate and candidate.casefold() not in _GENERIC_FILE_PROJECT_NAMES:
                 return candidate
 
     if resource_kind == "ide_file" and resource_subtype == "ide_workspace":
@@ -386,7 +334,7 @@ def _infer_project_resource_first(
     if path_hint:
         for target in (
             path_hint,
-                ntpath.dirname(path_hint.rstrip("\\/")),
+            ntpath.dirname(path_hint.rstrip("\\/")),
         ):
             if not target:
                 continue
@@ -584,7 +532,5 @@ __all__ = [
     "get_assignment_for_activity",
     "invalidate_keyword_rule_cache",
     "keyword_pattern_matches",
-    "process_new_activity",
-    "retry_pending_inference",
     "sync_persisted_open_activity_project",
 ]

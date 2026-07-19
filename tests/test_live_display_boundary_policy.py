@@ -4,14 +4,12 @@ from __future__ import annotations
 from tests.support import runtime_state_fixture
 
 import json
-
 import pytest
 
 from worktrace.collector.state_machine import CollectorStateMachine
 from worktrace.platforms.base import ActiveWindow
 from worktrace.services import activity_service, settings_service
 from worktrace.webview_ui.bridge import WebViewBridge
-
 
 pytestmark = [pytest.mark.contract, pytest.mark.integration, pytest.mark.db, pytest.mark.live_display]
 DATE = "2026-06-18"
@@ -36,5 +34,5 @@ def test_pause_snapshot_is_status_only_and_has_no_normal_live_overlay(temp_db):
     settings_service.set_setting("collector_status", "paused")
     settings_service.clear_settings_cache()
     overview = WebViewBridge().get_overview()
-    assert overview["live_clock"]["live_state"] == "status_only"
-    assert overview["current_activity"]["live_state"] == "status_only"
+    assert overview["runtime"]["clock"]["live_state"] == "status_only"
+    assert overview["runtime"]["current_activity"]["live_state"] == "status_only"

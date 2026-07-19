@@ -63,7 +63,15 @@ jobs:
         run: python -m pip install --disable-pip-version-check -q -r requirements.txt
 
       - name: Check test inventory
-        run: python scripts/test_inventory.py --check
+        id: inventory
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "test-results" | Out-Null
+          & python scripts/test_inventory.py --check *> "test-results/inventory.log"
+          $inventoryExitCode = $LASTEXITCODE
+          Get-Content -LiteralPath "test-results/inventory.log" |
+            ForEach-Object { Write-Host $_ }
+          exit $inventoryExitCode
 
       - name: Compile Python
         id: compile
@@ -104,37 +112,54 @@ jobs:
               ForEach-Object { Write-Host $_ }
           }
           else {
-            Write-Host "pytest failed; compact diagnostics follow in the next step"
+            Write-Host "pytest failed; the complete compact manifest follows in the diagnostics step"
           }
           exit $pytestExitCode
 
       - name: Publish validation diagnostics
         id: diagnostics
-        if: failure() && (steps.compile.outcome == 'failure' || steps.pytest.outcome == 'failure')
+        if: failure()
+        continue-on-error: true
         shell: pwsh
         run: |
-          if ("${{ steps.compile.outcome }}" -eq "failure") {
-            Write-Host "=== COMPILE_FAILURE_BEGIN ==="
-            if (Test-Path -LiteralPath "test-results/compile.log") {
-              Get-Content -LiteralPath "test-results/compile.log" -Tail 200 |
-                ForEach-Object { Write-Host $_ }
-            }
-            Write-Host "=== COMPILE_FAILURE_END ==="
+          $artifactName = "validation-diagnostics-${{ inputs.revision }}"
+          if ("${{ steps.inventory.outcome }}" -eq "failure") {
+            & python scripts/pytest_diagnostics.py `
+              --stage inventory `
+              --log "test-results/inventory.log" `
+              --output-dir "test-results" `
+              --revision "${{ inputs.revision }}" `
+              --artifact-name $artifactName `
+              --summary "$env:GITHUB_STEP_SUMMARY"
+          }
+          elseif ("${{ steps.compile.outcome }}" -eq "failure") {
+            & python scripts/pytest_diagnostics.py `
+              --stage compile `
+              --log "test-results/compile.log" `
+              --output-dir "test-results" `
+              --revision "${{ inputs.revision }}" `
+              --artifact-name $artifactName `
+              --summary "$env:GITHUB_STEP_SUMMARY"
           }
           elseif ("${{ steps.pytest.outcome }}" -eq "failure") {
             & python scripts/pytest_diagnostics.py `
+              --stage pytest `
               --junit "test-results/pytest-junit.xml" `
               --log "test-results/pytest.log" `
+              --output-dir "test-results" `
+              --revision "${{ inputs.revision }}" `
+              --artifact-name $artifactName `
               --summary "$env:GITHUB_STEP_SUMMARY"
           }
 
-      - name: "Failure summary (${{ steps.diagnostics.outputs.problem_count }}): ${{ steps.diagnostics.outputs.first_failure }}"
-        if: failure() && steps.diagnostics.outputs.first_failure != ''
-        shell: pwsh
-        run: |
-          Write-Host "failure_count=${{ steps.diagnostics.outputs.problem_count }}"
-          Write-Host "first_failure=${{ steps.diagnostics.outputs.first_failure }}"
-          Write-Host "first_location=${{ steps.diagnostics.outputs.first_location }}"
+      - name: Upload Python failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: validation-diagnostics-${{ inputs.revision }}
+          path: test-results/
+          if-no-files-found: warn
+          retention-days: 3
 
   node:
     name: WebView Node behavior tests
@@ -229,7 +254,7 @@ jobs:
 
       - name: Upload release smoke artifacts
         if: startsWith(github.ref, 'refs/tags/')
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: worktrace-windows-smoke
           path: |

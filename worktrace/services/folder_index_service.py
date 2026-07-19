@@ -5,6 +5,7 @@ import os
 import threading
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from ..constants import EXCLUDED_PROJECT
 from ..db import dict_rows, get_connection, get_db_path, now_str
@@ -12,6 +13,9 @@ from ..path_utils import normalize_path_key
 from ..resources.title_parsing import normalize_file_name
 from ..write_gate import DATABASE_WRITE_GATE
 from . import folder_index_state_repository
+
+if TYPE_CHECKING:
+    from ..worker_health import WorkerHealthReporter
 
 INDEX_STATUS_PENDING = "pending"
 INDEX_STATUS_INDEXING = "indexing"
@@ -23,8 +27,6 @@ _SCAN_BATCH_SIZE = 250
 _WORKER_IDLE_SECONDS = 5.0
 _MISS_REFRESH_COOLDOWN_SECONDS = 60.0
 
-_WORKER_LOCK = threading.Lock()
-_WORKER_THREAD: threading.Thread | None = None
 _WORKER_WAKE_EVENT = threading.Event()
 _MISS_REFRESH_TIMES: dict[tuple[str, bool], float] = {}
 
@@ -225,19 +227,53 @@ def mark_index_stale(rule_id: int, reason: str = "") -> None:
         )
 
 
-def start_folder_index_worker(stop_event: threading.Event) -> threading.Thread | None:
-    global _WORKER_THREAD
-    with _WORKER_LOCK:
-        if _WORKER_THREAD is not None and _WORKER_THREAD.is_alive():
-            return _WORKER_THREAD
-        _WORKER_THREAD = threading.Thread(
-            target=_worker_loop,
-            args=(stop_event,),
-            name="WorkTraceFolderIndex",
-            daemon=True,
-        )
-        _WORKER_THREAD.start()
-        return _WORKER_THREAD
+def run_folder_index_worker(
+    stop_event: threading.Event,
+    *,
+    health: "WorkerHealthReporter | None" = None,
+) -> None:
+    """Run the blocking folder-index loop owned by ``AppRuntime``."""
+
+    logging.info("folder index worker start")
+    if health is not None:
+        health.started()
+    try:
+        try:
+            ensure_index_states_for_folder_rules()
+            validate_ready_indexes(stop_event)
+        except Exception:
+            logging.exception("folder index startup validation failed")
+            if health is not None:
+                health.failed("folder_index_startup_failed")
+        else:
+            if health is not None:
+                health.succeeded()
+        while not stop_event.is_set():
+            try:
+                if DATABASE_WRITE_GATE.active():
+                    if health is not None:
+                        health.maintenance_paused(True)
+                    _wait_for_worker()
+                    continue
+                if health is not None:
+                    health.maintenance_paused(False)
+                ensure_index_states_for_folder_rules()
+                for rule_id in _pending_rule_ids():
+                    if stop_event.is_set() or DATABASE_WRITE_GATE.active():
+                        break
+                    rebuild_folder_index(rule_id, stop_event)
+                if health is not None:
+                    health.succeeded()
+                _wait_for_worker()
+            except Exception:
+                logging.exception("folder index worker error")
+                if health is not None:
+                    health.failed("folder_index_iteration_failed")
+                _wait_for_worker()
+    finally:
+        if health is not None:
+            health.stopped()
+        logging.info("folder index worker stop")
 
 
 def wake_folder_index_worker() -> None:
@@ -247,30 +283,6 @@ def wake_folder_index_worker() -> None:
 def _wait_for_worker() -> None:
     _WORKER_WAKE_EVENT.wait(_WORKER_IDLE_SECONDS)
     _WORKER_WAKE_EVENT.clear()
-
-
-def _worker_loop(stop_event: threading.Event) -> None:
-    logging.info("folder index worker start")
-    try:
-        ensure_index_states_for_folder_rules()
-        validate_ready_indexes(stop_event)
-    except Exception:
-        logging.exception("folder index startup validation failed")
-    while not stop_event.is_set():
-        try:
-            if DATABASE_WRITE_GATE.active():
-                _wait_for_worker()
-                continue
-            ensure_index_states_for_folder_rules()
-            for rule_id in _pending_rule_ids():
-                if stop_event.is_set() or DATABASE_WRITE_GATE.active():
-                    break
-                rebuild_folder_index(rule_id, stop_event)
-            _wait_for_worker()
-        except Exception:
-            logging.exception("folder index worker error")
-            _wait_for_worker()
-    logging.info("folder index worker stop")
 
 
 def _pending_rule_ids(limit: int = 20) -> list[int]:
@@ -613,3 +625,17 @@ def _validate_rule_index(
 def _normalize_index_file_name(file_name: str | None) -> str:
     value = str(file_name or "").strip()
     return normalize_file_name(value) if value else ""
+
+
+__all__ = [
+    "delete_index_for_rule",
+    "ensure_index_states_for_folder_rules",
+    "mark_index_stale",
+    "rebuild_folder_index",
+    "recover_interrupted_indexes",
+    "request_rebuild_for_rule",
+    "request_refresh_for_enabled_rules",
+    "run_folder_index_worker",
+    "validate_ready_indexes",
+    "wake_folder_index_worker",
+]

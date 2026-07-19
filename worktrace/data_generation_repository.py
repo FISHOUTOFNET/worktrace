@@ -51,7 +51,9 @@ class DataGenerationRepository:
         conn: sqlite3.Connection,
         namespaces: Iterable[DataGenerationNamespace | str],
     ) -> dict[DataGenerationNamespace, int]:
-        resolved = tuple(dict.fromkeys(DataGenerationNamespace(str(value)) for value in namespaces))
+        resolved = tuple(
+            dict.fromkeys(DataGenerationNamespace(str(value)) for value in namespaces)
+        )
         return {
             namespace: DataGenerationRepository.get(conn, namespace)
             for namespace in resolved
@@ -62,7 +64,9 @@ class DataGenerationRepository:
         conn: sqlite3.Connection,
         namespaces: Iterable[DataGenerationNamespace | str],
     ) -> None:
-        resolved = tuple(dict.fromkeys(DataGenerationNamespace(str(value)) for value in namespaces))
+        resolved = tuple(
+            dict.fromkeys(DataGenerationNamespace(str(value)) for value in namespaces)
+        )
         for namespace in resolved:
             cursor = conn.execute(
                 """
@@ -74,6 +78,30 @@ class DataGenerationRepository:
             )
             if cursor.rowcount != 1:
                 raise ValueError("database_schema_incompatible")
+
+    @staticmethod
+    def bump_replacement(
+        conn: sqlite3.Connection,
+        *,
+        minimum_value: int | None = None,
+    ) -> dict[DataGenerationNamespace, int]:
+        """Advance only the database-replacement epoch above its durable floor."""
+
+        namespace = DataGenerationNamespace.DATABASE_REPLACEMENT
+        current = DataGenerationRepository.get(conn, namespace)
+        floor = max(current, int(minimum_value or 0))
+        committed_value = floor + 1
+        cursor = conn.execute(
+            """
+            UPDATE data_generation_state
+            SET generation = ?
+            WHERE namespace = ?
+            """,
+            (committed_value, namespace.value),
+        )
+        if cursor.rowcount != 1:
+            raise ValueError("database_schema_incompatible")
+        return {namespace: committed_value}
 
     @staticmethod
     def reset_all(conn: sqlite3.Connection) -> None:
