@@ -86,6 +86,15 @@ def _clock_payload(
             or 0
         ),
     )
+    active_elapsed_at_sample = max(
+        0,
+        int(
+            source.get("current_elapsed_at_sample")
+            or source.get("active_elapsed_at_sample")
+            or source.get("active_elapsed_seconds_at_sample")
+            or duration_at_sample
+        ),
+    )
     sample_epoch_ms = max(
         0,
         int(
@@ -102,6 +111,11 @@ def _clock_payload(
             or 0
         ),
     )
+    project_duration_live = bool(
+        source.get("project_duration_live")
+        or source.get("is_project_duration_live")
+    )
+    current_duration_live = bool(source.get("current_duration_live"))
     return {
         "live_state": str(source.get("live_state") or "none"),
         "is_live": bool(source.get("is_live")),
@@ -111,6 +125,11 @@ def _clock_payload(
             duration_at_sample,
             int(source.get("current_live_duration_seconds") or duration_at_sample),
         ),
+        "current_elapsed_at_sample": active_elapsed_at_sample,
+        "active_elapsed_at_sample": active_elapsed_at_sample,
+        "current_duration_live": current_duration_live,
+        "project_duration_live": project_duration_live,
+        "is_project_duration_live": project_duration_live,
         "sample_epoch_ms": sample_epoch_ms,
         "live_started_at_epoch_ms": live_started_at_epoch_ms,
         "display_span_id": str(source.get("display_span_id") or ""),
