@@ -54,7 +54,7 @@ def apply_live_span_to_row(
     *,
     row_kind: str,
 ) -> dict[str, Any]:
-    """Overlay one verified runtime span; otherwise preserve a static row."""
+    """Attach one row-owned exact clock after the runtime/SQLite handshake."""
 
     semantic = _duration_semantic_for_row_kind(row_kind)
     if semantic == STATIC_CLOSED:
@@ -76,7 +76,7 @@ def apply_live_span_to_row(
         return _fail_static(row)
 
     live_clock = span.get("live_clock")
-    if not _valid_live_clock(live_clock):
+    if not _valid_source_clock(live_clock):
         return _fail_static(row)
     runtime_snapshot = context.runtime_sample.snapshot
     if not isinstance(runtime_snapshot, dict):
@@ -85,12 +85,9 @@ def apply_live_span_to_row(
         runtime_snapshot
     ):
         return _fail_static(row)
-    if str(live_clock["live_state"]) != "persisted_open":
-        return _fail_static(row)
 
     aggregate_base = _aggregate_base(row, row_kind)
     if aggregate_base is None:
-        row["live_contract_reason"] = "missing_closed_static_base"
         return _fail_static(row)
     elapsed = int(live_clock["elapsed_seconds_at_sample"])
     row_clock: LiveClockContract = {
@@ -108,15 +105,13 @@ def apply_live_span_to_row(
     row["live_clock"] = row_clock
     row["duration_seconds"] = int(duration_seconds)
     row["duration"] = format_duration(duration_seconds)
-    row["is_live_projected"] = True
     row["is_in_progress"] = True
     row["edit_disabled"] = True
     row["editable"] = False
     row["exportable"] = False
     row["disable_reason"] = LIVE_EDIT_DISABLE_REASON
 
-    preserve_report_attribution = _should_preserve_report_attribution(row, row_kind)
-    if not preserve_report_attribution:
+    if not _should_preserve_report_attribution(row, row_kind):
         row["project_id"] = int(span.get("project_id") or 0)
         row["project_name"] = str(
             span.get("project_name") or UNCATEGORIZED_PROJECT
@@ -132,20 +127,26 @@ def apply_live_span_to_row(
     return row
 
 
-def _valid_live_clock(value: Any) -> bool:
+def _valid_source_clock(value: Any) -> bool:
     if not isinstance(value, dict) or set(value) != _LIVE_CLOCK_KEYS:
         return False
+    integers = (
+        value.get("sampled_at_epoch_ms"),
+        value.get("started_at_epoch_ms"),
+        value.get("elapsed_seconds_at_sample"),
+        value.get("aggregate_base_seconds"),
+    )
     return (
-        type(value.get("sampled_at_epoch_ms")) is int
-        and type(value.get("started_at_epoch_ms")) is int
-        and type(value.get("elapsed_seconds_at_sample")) is int
-        and type(value.get("aggregate_base_seconds")) is int
-        and value.get("duration_semantic")
-        in {CURRENT_LIVE, AGGREGATE_LIVE, STATIC_CLOSED}
-        and type(value.get("is_live")) is bool
-        and value.get("live_state") in {"persisted_open", "suppressed", "none"}
+        all(type(item) is int and item >= 0 for item in integers)
+        and value.get("duration_semantic") == CURRENT_LIVE
+        and value.get("is_live") is True
+        and value.get("live_state") == "persisted_open"
+        and int(value.get("sampled_at_epoch_ms") or 0) > 0
+        and int(value.get("started_at_epoch_ms") or 0) > 0
         and isinstance(value.get("display_span_id"), str)
+        and bool(value.get("display_span_id"))
         and isinstance(value.get("stable_live_key_hash"), str)
+        and bool(value.get("stable_live_key_hash"))
     )
 
 
@@ -184,11 +185,11 @@ def _aggregate_base(row: dict[str, Any], row_kind: str) -> int | None:
     value = row.get("closed_duration_seconds")
     if type(value) is not int or value < 0:
         return None
-    return int(value)
+    return value
 
 
 def _fail_static(row: dict[str, Any]) -> dict[str, Any]:
-    duration = int(row.get("duration_seconds") or 0)
+    duration = max(0, int(row.get("duration_seconds") or 0))
     row["live_clock"] = {
         "sampled_at_epoch_ms": int(time.time() * 1000),
         "started_at_epoch_ms": 0,
@@ -200,7 +201,6 @@ def _fail_static(row: dict[str, Any]) -> dict[str, Any]:
         "display_span_id": "",
         "stable_live_key_hash": "",
     }
-    row["is_live_projected"] = False
     if row.get("end_time") not in {None, ""}:
         row["is_in_progress"] = False
     return row
