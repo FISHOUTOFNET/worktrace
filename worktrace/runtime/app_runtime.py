@@ -24,13 +24,8 @@ from ..services import (
     project_inference_service,
     recovery_service,
 )
-from ..services.runtime_snapshot_barrier import (
-    clear_quiesce_handler,
-    register_quiesce_handler,
-)
 from ..services.settings_service import set_setting
 from ..worker_health import WorkerHealthRegistry
-from ..write_gate import DATABASE_WRITE_GATE
 
 if TYPE_CHECKING:
     class _Paths:
@@ -176,7 +171,6 @@ class AppRuntime:
         self._inference_thread: threading.Thread | None = None
         self._resource_repair_thread: threading.Thread | None = None
         self._startup_recovery_thread: threading.Thread | None = None
-        self._registered_collector_thread_id: int | None = None
         self._initialized = False
         self._shutdown = False
 
@@ -198,7 +192,9 @@ class AppRuntime:
             try:
                 db.initialize_database(self.paths.db_path)
                 recovery_service.recover_unclosed_records()
+                database_maintenance_service.register_runtime_control(self)
             except Exception:
+                database_maintenance_service.clear_runtime_control(self)
                 release_single_instance()
                 self.owns_application_instance = False
                 self.phase = RuntimePhase.FAILED
@@ -498,24 +494,6 @@ class AppRuntime:
             failed_workers=workers.failed_workers,
         )
 
-    def _register_collector_write_thread(self) -> None:
-        thread_id = getattr(self._collector_thread, "ident", None)
-        if thread_id is None:
-            return
-        normalized = int(thread_id)
-        if self._registered_collector_thread_id == normalized:
-            return
-        self._clear_collector_write_thread()
-        DATABASE_WRITE_GATE.register_maintenance_thread(normalized)
-        self._registered_collector_thread_id = normalized
-
-    def _clear_collector_write_thread(self) -> None:
-        thread_id = self._registered_collector_thread_id
-        if thread_id is None:
-            return
-        DATABASE_WRITE_GATE.unregister_maintenance_thread(thread_id)
-        self._registered_collector_thread_id = None
-
     def start_collector(
         self,
         *,
@@ -532,12 +510,10 @@ class AppRuntime:
                     and self._collector_stop_event.is_set()
                 ):
                     return {"ok": False, "error": "collector_stopping"}
-                self._register_collector_write_thread()
-                self._register_maintenance_handlers()
+                database_maintenance_service.register_runtime_control(self)
                 return {"ok": True, "started": False, "already_running": True}
             if self._collector_thread is not None:
                 collector_health.record_health_code("thread_dead_replaced")
-                self._clear_collector_write_thread()
                 self._collector_thread = None
                 self._collector_stop_event = None
 
@@ -566,7 +542,6 @@ class AppRuntime:
                 thread.start()
             except Exception:
                 logging.exception("collector thread start failed")
-                self._clear_collector_write_thread()
                 self._collector_thread = None
                 self._collector_stop_event = None
                 self.collector_control = CollectorControl()
@@ -590,8 +565,7 @@ class AppRuntime:
                 ):
                     attempt_stop_event.set()
                     return {"ok": False, "error": "collector_attempt_superseded"}
-                self._register_collector_write_thread()
-                self._register_maintenance_handlers()
+                database_maintenance_service.register_runtime_control(self)
                 return {"ok": True, "started": True, "already_running": False}
 
         collector_health.record_health_code("collector_startup_not_ready")
@@ -602,7 +576,6 @@ class AppRuntime:
         still_alive = _thread_reference_is_alive(thread)
         with self._lifecycle_lock:
             if attempt_generation == self._collector_generation:
-                self._clear_collector_write_thread()
                 if still_alive:
                     self.phase = RuntimePhase.FAILED
                     return {"ok": False, "error": "collector_stop_timeout"}
@@ -612,22 +585,23 @@ class AppRuntime:
                 self.phase = RuntimePhase.RECOVERABLE_FAILURE
         return {"ok": False, "error": "collector_start_failed"}
 
-    def _register_maintenance_handlers(self) -> None:
-        database_maintenance_service.register_collector_pause_handler(
-            self.quiesce_collection_now
-        )
-        database_maintenance_service.register_collector_reset_handler(
-            self.reset_collection_runtime_now
-        )
-        register_quiesce_handler(self.quiesce_collection_now)
+    def is_collection_running_for_maintenance(self) -> bool:
+        """Return whether the Collector must be quiesced and later restored."""
+
+        with self._lifecycle_lock:
+            return bool(
+                self.owns_application_instance
+                and not self._shutdown
+                and _thread_reference_is_alive(self._collector_thread)
+                and self._collector_stop_event is not None
+                and not self._collector_stop_event.is_set()
+            )
 
     def pause_collection_now(
         self,
         timeout_seconds: float = 5.0,
     ) -> dict[str, object]:
-        if not self.owns_application_instance or not _thread_reference_is_alive(
-            self._collector_thread
-        ):
+        if not self.is_collection_running_for_maintenance():
             return {
                 "ok": True,
                 "pause_pending": False,
@@ -635,32 +609,87 @@ class AppRuntime:
             }
         return self.collector_control.request_pause(timeout_seconds=timeout_seconds)
 
+    def quiesce_collection_for_maintenance(
+        self,
+        timeout_seconds: float = 5.0,
+    ) -> dict[str, object]:
+        """Seal the active segment before the write gate begins draining."""
+
+        if not self.is_collection_running_for_maintenance():
+            return {
+                "ok": True,
+                "quiesce_pending": False,
+                "collector_active": False,
+            }
+        result = dict(
+            self.collector_control.request_pause(timeout_seconds=timeout_seconds)
+        )
+        result["quiesce_pending"] = bool(result.get("pause_pending", False))
+        return result
+
     def quiesce_collection_now(
         self,
         timeout_seconds: float = 5.0,
     ) -> dict[str, object]:
-        """Adapt the coordinator pause command to the active Collector."""
+        """Compatibility-free internal spelling used by direct runtime callers."""
 
-        return self.pause_collection_now(timeout_seconds=timeout_seconds)
+        return self.quiesce_collection_for_maintenance(timeout_seconds)
 
-    def reset_collection_runtime_now(
+    def reset_after_database_replacement(
         self,
         timeout_seconds: float = 5.0,
     ) -> dict[str, object]:
-        if not self.owns_application_instance or not _thread_reference_is_alive(
-            self._collector_thread
-        ):
+        """Clear only process-local identities after the exclusive gate exits."""
+
+        if not self.is_collection_running_for_maintenance():
             self._reset_adapter_runtime_state()
             return {
                 "ok": True,
                 "reset_pending": False,
                 "collector_active": False,
             }
-        result = self.collector_control.request_reset(
-            timeout_seconds=timeout_seconds
+        result = dict(
+            self.collector_control.request_reset(timeout_seconds=timeout_seconds)
         )
         if bool(result.get("ok")):
             self._reset_adapter_runtime_state()
+        return result
+
+    def reset_collection_runtime_now(
+        self,
+        timeout_seconds: float = 5.0,
+    ) -> dict[str, object]:
+        return self.reset_after_database_replacement(timeout_seconds)
+
+    def restore_after_maintenance(
+        self,
+        state: database_maintenance_service.RuntimeMaintenanceState,
+        *,
+        timeout_seconds: float = 5.0,
+    ) -> dict[str, object]:
+        """Restore collection only when pre-state and privacy authorization allow."""
+
+        should_run = bool(
+            state.collector_running
+            and state.privacy_notice_accepted
+            and not state.user_paused
+        )
+        if not should_run:
+            return {
+                "ok": True,
+                "restore_pending": False,
+                "collector_active": self.is_collection_running_for_maintenance(),
+            }
+        if self.is_collection_running_for_maintenance():
+            return {
+                "ok": True,
+                "restore_pending": False,
+                "collector_active": True,
+            }
+        result = dict(
+            self.start_collector(startup_timeout_seconds=timeout_seconds)
+        )
+        result["restore_pending"] = False
         return result
 
     def _reset_adapter_runtime_state(self) -> None:
@@ -687,13 +716,7 @@ class AppRuntime:
                 return
             self._shutdown = True
             self.phase = RuntimePhase.STOPPING
-            database_maintenance_service.clear_collector_pause_handler(
-                self.quiesce_collection_now
-            )
-            database_maintenance_service.clear_collector_reset_handler(
-                self.reset_collection_runtime_now
-            )
-            clear_quiesce_handler(self.quiesce_collection_now)
+            database_maintenance_service.clear_runtime_control(self)
             self.set_clipboard_capture_enabled(False)
             self.stop_event.set()
             folder_index_service.wake_folder_index_worker()
@@ -721,9 +744,6 @@ class AppRuntime:
                     adapter_shutdown = True
                 if joiner is not None:
                     joiner(timeout=5)
-
-        if not _thread_reference_is_alive(self._collector_thread):
-            self._clear_collector_write_thread()
 
         for thread in derived_workers:
             if thread:
