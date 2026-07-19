@@ -102,6 +102,7 @@ def test_transient_adapter_failure_only_updates_health_not_activity_continuity(t
         captured["health"] = settings_service.get_setting("collector_health_state")
         captured["failures"] = settings_service.get_setting("collector_consecutive_failures")
         _assert_no_error_activity_or_boundary_before_stop()
+        _assert_same_open_snapshot(captured["snapshot"], activity_id)
         stop_event.set()
         return next_poll_deadline + 1
 
@@ -110,7 +111,6 @@ def test_transient_adapter_failure_only_updates_health_not_activity_continuity(t
     run_collector(adapter, stop_event)
 
     assert captured["pending"] == "0"
-    _assert_same_open_snapshot(captured["snapshot"], activity_id)
     assert captured["health"] == "degraded"
     assert captured["failures"] == "1"
 
@@ -134,7 +134,7 @@ def test_privacy_failure_only_updates_health_not_activity_continuity(temp_db, mo
 
     monkeypatch.setattr(
         collector_mod.privacy_service,
-        "is_excluded",
+        "evaluate_exclusion",
         lambda _window: (_ for _ in ()).throw(_transient_adapter_failure()),
     )
 
@@ -143,6 +143,7 @@ def test_privacy_failure_only_updates_health_not_activity_continuity(temp_db, mo
         captured["snapshot"] = runtime_state_fixture.get_setting("current_activity_snapshot")
         captured["phase"] = settings_service.get_setting("collector_last_failure_phase")
         _assert_no_error_activity_or_boundary_before_stop()
+        _assert_same_open_snapshot(captured["snapshot"], activity_id)
         stop_event.set()
         return next_poll_deadline + 1
 
@@ -151,7 +152,6 @@ def test_privacy_failure_only_updates_health_not_activity_continuity(temp_db, mo
     run_collector(Adapter(), stop_event)
 
     assert captured["pending"] == "0"
-    _assert_same_open_snapshot(captured["snapshot"], activity_id)
     assert captured["phase"] == "privacy"
 
 
