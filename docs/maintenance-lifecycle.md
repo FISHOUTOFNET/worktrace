@@ -47,10 +47,11 @@ response.ok is true
 response.command_state_unknown is false
 ```
 
-A timeout before Collector takes the command may cancel it. A timeout after take
-has unknown outcome and fails closed. Completed command state may be read from
-`CollectorControl` when response delivery is uncertain. Exclusive maintenance
-must never begin while hold state is unknown.
+A timeout before Collector takes the command cancels that command, returns the
+hold channel to OPERATIONAL and leaves the coordinator IDLE; it does not create a
+fail-closed latch. A timeout after take has unknown outcome and fails closed.
+Completed command state may be read from `CollectorControl` when response delivery
+is uncertain. Exclusive maintenance must never begin while hold state is unknown.
 
 ## Consistent snapshot order
 
@@ -109,6 +110,12 @@ maintenance.
 - Unknown hold/reset/release state, release failure or shutdown ambiguity fails
   closed: durable pause/status are committed as a separate safety transition,
   runtime activity state is cleared and collection is not resumed optimistically.
+
+The fail-closed latch remains queryable as `FAILED_CLOSED` and rejects subsequent
+destructive maintenance. It is cleared only by explicit recovery after the
+registered runtime is verified running, the command channel is OPERATIONAL and
+the write gate is inactive. Recovery clears the durable latch markers but
+preserves the safety-created durable user pause until the user explicitly resumes.
 
 Restoration and fail-closed settings writes publish their normal settings
 change. They do not fabricate replacement success.
