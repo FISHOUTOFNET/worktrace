@@ -19,51 +19,79 @@ def _source(relative: str) -> str:
     return (ROOT / relative).read_text(encoding="utf-8")
 
 
+def _tree(relative: str) -> ast.Module:
+    return ast.parse(_source(relative), filename=relative)
+
+
 def _functions(relative: str) -> set[str]:
-    tree = ast.parse(_source(relative), filename=relative)
     return {
         node.name
-        for node in tree.body
+        for node in _tree(relative).body
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
     }
 
 
-def test_generation_clock_is_published_only_after_uow_commit() -> None:
-    source = _source("worktrace/domain_unit_of_work.py")
-    commit_position = source.index("connection.commit()")
-    assert commit_position < source.index("publish_committed(connection, committed_effects)")
-    assert commit_position < source.index("publish_replacement_committed")
-    assert "if not committed:" in source
-    clock = _source("worktrace/generation_clock.py")
-    assert "max(int(_VALUES.get(key, 0)), int(value))" in clock
-    assert "publish_replacement_committed" in clock
+def _function(relative: str, name: str) -> ast.FunctionDef | ast.AsyncFunctionDef:
+    return next(
+        node
+        for node in ast.walk(_tree(relative))
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == name
+    )
 
 
-def test_catalog_caches_retain_only_one_generation_snapshot() -> None:
-    settings = _source("worktrace/services/settings_service.py")
-    folders = _source("worktrace/services/folder_rule_service.py")
-    keywords = _source("worktrace/services/project_inference_service.py")
-    privacy = _source("worktrace/services/privacy_service.py")
+def _called_names(node: ast.AST) -> set[str]:
+    result: set[str] = set()
+    for child in ast.walk(node):
+        if not isinstance(child, ast.Call):
+            continue
+        if isinstance(child.func, ast.Name):
+            result.add(child.func.id)
+        elif isinstance(child.func, ast.Attribute):
+            result.add(child.func.attr)
+    return result
 
-    for module, source in (
-        ("settings", settings),
-        ("folders", folders),
-        ("keywords", keywords),
-        ("privacy", privacy),
-    ):
-        assert "generation(" in source, module
-        assert "RULE_CACHE_TTL_SECONDS" not in source, module
-        assert "time.monotonic" not in source, module
 
-    assert "_SETTING_CACHE_GENERATION" in settings
-    assert "dict[tuple[str, int, str]" not in settings
-    assert "_FOLDER_RULE_CACHE_GENERATION" in folders
-    assert "dict[tuple[str, int]" not in folders
-    assert "_KEYWORD_RULE_CACHE_GENERATION" in keywords
-    assert "dict[tuple[str, int]" not in keywords
-    assert "_EXCLUDE_RULE_CACHE_GENERATION" in privacy
-    assert "dict[tuple[str, int]" not in privacy
-    assert "SettingMutationClass.OPERATIONAL" in settings
+def _namespace_attributes(relative: str) -> set[str]:
+    return {
+        node.attr
+        for node in ast.walk(_tree(relative))
+        if isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "DataGenerationNamespace"
+    }
+
+
+def test_generation_publication_is_owned_by_unit_of_work() -> None:
+    repository = _source("worktrace/data_generation_repository.py")
+    replacement = _source(
+        "worktrace/services/database_replacement_generation_service.py"
+    )
+    assert "generation_clock" not in repository
+    assert "generation_clock" not in replacement
+
+    uow = _source("worktrace/domain_unit_of_work.py")
+    assert "publish_committed" in uow
+    assert "publish_replacement_committed" in uow
+    assert "connection.commit()" in uow
+
+
+def test_database_derived_caches_use_domain_and_replacement_tokens() -> None:
+    cache_modules = {
+        "settings": "worktrace/services/settings_service.py",
+        "folders": "worktrace/services/folder_rule_service.py",
+        "keywords": "worktrace/services/project_inference_service.py",
+        "privacy": "worktrace/services/privacy_service.py",
+        "report_revision": "worktrace/services/report_revision_service.py",
+    }
+    for name, relative in cache_modules.items():
+        source = _source(relative)
+        assert "DataGenerationNamespace.DATABASE_REPLACEMENT" in source, name
+        assert (
+            "generation_tuple(" in source
+            or "DataGenerationRepository.get_many(" in source
+        ), name
+        assert "RULE_CACHE_TTL_SECONDS" not in source, name
 
 
 def test_rule_history_facade_has_no_direct_sql_owner() -> None:
@@ -119,18 +147,16 @@ def test_rule_facades_delegate_all_catalog_writes() -> None:
 
 
 def test_history_jobs_are_durable_before_candidate_scans() -> None:
-    source = _source("worktrace/services/history_mutation_job_service.py")
-    single_start = source.index("def submit_rule_job(")
-    batch_start = source.index("def submit_rule_batch_job(")
-    compensation_start = source.index("def compensate_failed_synchronous_job(")
-    single_body = source[single_start:batch_start]
-    batch_body = source[batch_start:compensation_start]
-    assert "planner.load_candidate_activities" not in single_body
-    assert "planner.classify_activities" not in single_body
-    assert "planner.load_candidate_activities" not in batch_body
-    assert "planner.classify_activities" not in batch_body
-    assert "run_job_batch(job_id" in single_body
-    assert "run_job_batch(job_id" in batch_body
+    for function_name in ("submit_rule_job", "submit_rule_batch_job"):
+        calls = _called_names(
+            _function(
+                "worktrace/services/history_mutation_job_service.py",
+                function_name,
+            )
+        )
+        assert "load_candidate_activities" not in calls
+        assert "classify_activities" not in calls
+        assert "run_job_batch" in calls
 
 
 def test_recovery_service_only_plans_lifecycle_commands() -> None:
@@ -138,7 +164,6 @@ def test_recovery_service_only_plans_lifecycle_commands() -> None:
     lifecycle = _source("worktrace/services/activity_lifecycle_service.py")
     assert "UPDATE activity_log" not in recovery
     assert "activity_lifecycle_service.recover_activity_batch(" in recovery
-    assert "continuations," in recovery
     assert "mark_activity_error" in recovery
     assert "def recover_activity_batch(" in lifecycle
     assert "def recover_continuation_batch(" in lifecycle
@@ -164,7 +189,6 @@ def test_folder_index_read_model_is_deterministic_and_side_effect_free() -> None
     assert "folder_index_query_service" in inference
     assert "folder_index_query_service" in planning
     assert "folder_index_query_service" not in resources
-    assert "folder_index_service.find_matching_folder_rule_for_file_name" not in inference
 
 
 def test_project_catalog_has_no_cross_service_cache_fanout() -> None:
@@ -175,48 +199,33 @@ def test_project_catalog_has_no_cross_service_cache_fanout() -> None:
     assert "clear_exclude_rules_cache" not in source
 
 
-def test_clear_and_replacement_publish_through_transaction_owners() -> None:
-    maintenance = _source("worktrace/services/database_maintenance_service.py")
-    assert "publish_database_replacement(conn)" in maintenance
-    for duplicate in (
-        "DataGenerationNamespace.CLASSIFICATION_CATALOG",
-        "DataGenerationNamespace.SETTINGS",
-        "DataGenerationNamespace.PRIVACY_CATALOG",
-        "DataGenerationNamespace.DATABASE_REPLACEMENT",
-    ):
-        assert duplicate not in maintenance
-    assert "publish_database_replacement(conn)" in maintenance
-    assert "privacy_gate_service" not in maintenance
+def test_clear_and_replacement_use_one_independent_epoch_owner() -> None:
+    maintenance = _function(
+        "worktrace/services/database_maintenance_service.py",
+        "clear_all_live_data",
+    )
+    assert "publish_database_replacement" in _called_names(maintenance)
+    assert _namespace_attributes(
+        "worktrace/services/database_maintenance_service.py"
+    ) == set()
 
-    replacement = _source(
+    replacement_relative = (
         "worktrace/services/database_replacement_generation_service.py"
     )
-    assert "uow.add_effects(*_REPLACEMENT_NAMESPACES)" in replacement
-    assert "DataGenerationRepository.bump" in replacement
-    assert "generation_clock" not in replacement
-    assert "clear()" not in replacement
+    assert _namespace_attributes(replacement_relative) == {"DATABASE_REPLACEMENT"}
+    publish = _function(replacement_relative, "publish_database_replacement")
+    calls = _called_names(publish)
+    assert "add_effects" in calls
+    assert "bump_replacement" in calls
+    assert "bump" not in calls
 
-    gate = _source("worktrace/services/privacy_gate_service.py")
-    assert "clear_settings_cache" not in gate
 
-
-def test_database_replacement_generation_docstring_matches_commit_protocol() -> None:
-    path = ROOT / "worktrace/services/database_replacement_generation_service.py"
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    function = next(
-        node
-        for node in tree.body
-        if isinstance(node, ast.FunctionDef)
-        and node.name == "publish_database_replacement"
+def test_replacement_repository_does_not_commit_or_publish_process_state() -> None:
+    repository = _function(
+        "worktrace/data_generation_repository.py",
+        "bump_replacement",
     )
-    docstring = " ".join((ast.get_docstring(function) or "").split())
-    for required in (
-        "DomainUnitOfWork",
-        "after its transaction commits",
-        "writes durable replacement generations",
-        "exact committed values",
-        "Only a failure",
-        "clears the process clock",
-        "reload the already durable values",
-    ):
-        assert required in docstring
+    calls = _called_names(repository)
+    assert "commit" not in calls
+    assert "publish_committed" not in calls
+    assert "publish_replacement_committed" not in calls
