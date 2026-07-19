@@ -37,7 +37,7 @@ def _result_dict(result: Any) -> dict[str, Any]:
 
 
 def get_collection_status() -> dict[str, Any]:
-    """Return the display-safe collection status from one API owner."""
+    """Return the privacy-safe collection status from one API owner."""
 
     raw_status = settings_api.get_collector_status()
     health_state = settings_api.get_collector_health_state()
@@ -61,6 +61,9 @@ def get_collection_status() -> dict[str, Any]:
         "collector_health_state": health_state,
         "collector_last_successful_observation_at": (
             settings_api.get_collector_last_successful_observation_at()
+        ),
+        "collector_last_failure_code": (
+            settings_api.get_collector_last_failure_code()
         ),
         "collector_consecutive_failures": (
             settings_api.get_collector_consecutive_failures()
