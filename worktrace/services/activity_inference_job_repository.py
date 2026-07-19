@@ -40,7 +40,11 @@ def enqueue_closed_activity_ids(
     reason: InferenceJobReason = InferenceJobReason.CLOSED_ACTIVITY,
     at_time: str | None = None,
 ) -> int:
-    """Insert missing jobs for activities accepted by the canonical policy."""
+    """Insert missing jobs for activities accepted by the canonical policy.
+
+    The work performed is bounded by the number of requested activity ids. The
+    implementation deliberately avoids whole-outbox counts or preload scans.
+    """
 
     if reason is not InferenceJobReason.CLOSED_ACTIVITY:
         raise TypeError("inference_job_reason_required")
@@ -78,31 +82,25 @@ def enqueue_closed_activity_ids(
         return 0
 
     at = str(at_time or now_str())
-    before = int(
-        conn.execute("SELECT COUNT(*) FROM activity_inference_job").fetchone()[0]
-    )
-    conn.executemany(
-        """
-        INSERT OR IGNORE INTO activity_inference_job(
-            activity_id, reason, status, attempt_count, next_attempt_at,
-            last_error_code, created_at, updated_at
-        ) VALUES (?, ?, ?, 0, NULL, NULL, ?, ?)
-        """,
-        [
+    inserted = 0
+    for activity_id in eligible_ids:
+        cursor = conn.execute(
+            """
+            INSERT OR IGNORE INTO activity_inference_job(
+                activity_id, reason, status, attempt_count, next_attempt_at,
+                last_error_code, created_at, updated_at
+            ) VALUES (?, ?, ?, 0, NULL, NULL, ?, ?)
+            """,
             (
                 activity_id,
                 reason.value,
                 InferenceJobStatus.PENDING.value,
                 at,
                 at,
-            )
-            for activity_id in eligible_ids
-        ],
-    )
-    after = int(
-        conn.execute("SELECT COUNT(*) FROM activity_inference_job").fetchone()[0]
-    )
-    return max(0, after - before)
+            ),
+        )
+        inserted += max(0, int(cursor.rowcount or 0))
+    return inserted
 
 
 def list_runnable_jobs(
