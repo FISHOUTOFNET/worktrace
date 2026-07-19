@@ -9,8 +9,6 @@ ALLOWED_HARD_BOUNDARY_REASONS = {
     "recovered",
     "sleep_resume",
     "midnight",
-    "secure_import",
-    "clear_all",
     "fatal_collector_stop",
 }
 
@@ -33,6 +31,9 @@ FORBIDDEN_TRANSIENT_REASONS = {
     "same_resource_stall_recovery",
     "collector_degraded",
     "collector_failing",
+    "secure_import",
+    "clear_all",
+    "maintenance_pause",
 }
 
 
