@@ -11,7 +11,8 @@
 - WebView is the only shipping UI. Window close runs `AppRuntime.shutdown()`.
 - The privacy notice is fail-closed. Sensitive workers and clipboard capture do
   not start before acceptance.
-- CSV is the only current public export.
+- CSV export is the only current public export. Excel, PDF and timesheet-template
+  export are unsupported in the shipping WebView.
 
 ## Composition and lifecycle owners
 
@@ -72,8 +73,9 @@ backup-specific alias. See [`maintenance-lifecycle.md`](maintenance-lifecycle.md
 
 Schema seeding alone creates system projects. Stable identity, not display name,
 controls reserved behavior. Ordinary commands cannot create, rename, archive,
-delete or toggle system projects. Missing system rows are reported unavailable;
-normal API reads or writes never recreate them.
+delete or toggle system projects. Shipped lifecycle capabilities are exactly:
+user project create / edit / enable-disable / archive. Missing system rows are
+reported unavailable; normal API reads or writes never recreate them.
 
 All keyword/folder create, update, delete, enable and batch mutations use the
 canonical rule command owner. Excluded rules use explicit catalog commands;
