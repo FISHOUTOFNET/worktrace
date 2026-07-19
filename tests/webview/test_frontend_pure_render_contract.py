@@ -164,6 +164,7 @@ def test_live_duration_targets_use_backend_display_base_and_accepted_runtime():
 
 
 def test_runtime_transport_and_clock_have_one_frontend_owner():
+    source = read_all_js()
     core = read_js("core.js")
     init = read_js("init.js")
     for retired in (
@@ -186,3 +187,6 @@ def test_runtime_transport_and_clock_have_one_frontend_owner():
         "schema_version || 0) !== 2",
     ):
         assert required in init
+    assert source.count("setInterval(") == 1
+    assert init.count("setInterval(") == 1
+    assert "schema_version || 0) !== 1" not in source
