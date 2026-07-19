@@ -16,12 +16,18 @@ def _attach_runtime(
     surface: str,
     scope_report_date: str | None = None,
 ) -> dict[str, Any]:
+    """Attach the sole runtime transport using current composition-root state."""
+
+    from . import app_api
+
     live_report_date = str(
         payload.get("today") or timeline_service.get_default_report_date()
     )
     return attach_live_runtime_envelope(
         payload,
         surface=surface,
+        runtime=app_api.get_runtime(),
+        collector_status=app_api.get_collection_status(),
         scope_report_date=scope_report_date,
         live_report_date=live_report_date,
     )
