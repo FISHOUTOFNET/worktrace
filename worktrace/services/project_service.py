@@ -1,13 +1,14 @@
 from __future__ import annotations
 
+import sqlite3
+
 from ..constants import EXCLUDED_PROJECT, UNCATEGORIZED_PROJECT
 from ..data_generation_repository import DataGenerationNamespace
 from ..db import dict_rows, get_connection, now_str
 from ..domain_unit_of_work import DomainUnitOfWork
 from . import project_lifecycle_policy
-from .system_project_service import (
-    require_excluded_project_id,
-)
+from .project_command_policy import ProjectLifecycleError
+from .system_project_service import require_excluded_project_id
 
 
 def _catalog_uow(
@@ -35,6 +36,38 @@ def _normalize_project_language(language: str | None = None) -> str:
     return cleaned or "中文"
 
 
+def require_mutable_user_project(conn, project_id: int) -> dict:
+    """Load and validate one mutable, active user project in this transaction."""
+
+    row = conn.execute(
+        "SELECT * FROM project WHERE id = ?",
+        (int(project_id),),
+    ).fetchone()
+    project = dict(row) if row is not None else None
+    if project is None:
+        raise ProjectLifecycleError("not_found")
+    if project_lifecycle_policy.project_is_system_or_special(project):
+        raise ProjectLifecycleError("system_project")
+    if (
+        project_lifecycle_policy.project_is_deleted(project)
+        or project_lifecycle_policy.project_is_archived(project)
+    ):
+        raise ProjectLifecycleError("project_not_available")
+    return project
+
+
+def _raise_project_integrity(exc: sqlite3.IntegrityError) -> None:
+    message = str(exc).casefold()
+    if "project.name" in message or "reserved_project_name" in message:
+        code = (
+            "system_project"
+            if "reserved_project_name" in message
+            else "duplicate_project"
+        )
+        raise ProjectLifecycleError(code) from exc
+    raise exc
+
+
 def create_project(
     name: str,
     description: str = "",
@@ -42,26 +75,29 @@ def create_project(
 ) -> int:
     cleaned = name.strip()
     if not cleaned:
-        raise ValueError("project name is required")
+        raise ProjectLifecycleError("invalid_input")
     if project_lifecycle_policy.project_name_is_reserved(cleaned):
-        raise ValueError("reserved_project_name")
+        raise ProjectLifecycleError("system_project")
     timestamp = now_str()
     with _catalog_uow() as uow:
-        cursor = uow.connection.execute(
-            """
-            INSERT INTO project(
-                name, description, language, is_archived, enabled,
-                created_by, created_at, updated_at
-            ) VALUES (?, ?, ?, 0, 1, 'user', ?, ?)
-            """,
-            (
-                cleaned,
-                description,
-                _normalize_project_language(language),
-                timestamp,
-                timestamp,
-            ),
-        )
+        try:
+            cursor = uow.connection.execute(
+                """
+                INSERT INTO project(
+                    name, description, language, is_archived, enabled,
+                    created_by, created_at, updated_at
+                ) VALUES (?, ?, ?, 0, 1, 'user', ?, ?)
+                """,
+                (
+                    cleaned,
+                    description,
+                    _normalize_project_language(language),
+                    timestamp,
+                    timestamp,
+                ),
+            )
+        except sqlite3.IntegrityError as exc:
+            _raise_project_integrity(exc)
         return int(cursor.lastrowid)
 
 
@@ -73,60 +109,46 @@ def update_project(
 ) -> None:
     cleaned = name.strip()
     if not cleaned:
-        raise ValueError("project name is required")
+        raise ProjectLifecycleError("invalid_input")
     if project_lifecycle_policy.project_name_is_reserved(cleaned):
-        raise ValueError("reserved_project_name")
+        raise ProjectLifecycleError("system_project")
     normalized_description = description.strip()
     normalized_language = _normalize_project_language(language)
     with _catalog_uow() as uow:
         conn = uow.connection
-        row = conn.execute(
-            "SELECT * FROM project WHERE id = ?",
-            (project_id,),
-        ).fetchone()
-        project = dict(row) if row else None
-        if not project:
-            raise ValueError("project not found")
-        if project.get("created_by") == "system":
-            raise ValueError("system project cannot be edited")
+        project = require_mutable_user_project(conn, project_id)
         if (
             str(project.get("name") or "") == cleaned
             and str(project.get("description") or "") == normalized_description
             and str(project.get("language") or "") == normalized_language
         ):
             return
-        conn.execute(
-            """
-            UPDATE project
-            SET name = ?, description = ?, language = ?, updated_at = ?
-            WHERE id = ?
-            """,
-            (
-                cleaned,
-                normalized_description,
-                normalized_language,
-                now_str(),
-                project_id,
-            ),
-        )
+        try:
+            conn.execute(
+                """
+                UPDATE project
+                SET name = ?, description = ?, language = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    cleaned,
+                    normalized_description,
+                    normalized_language,
+                    now_str(),
+                    project_id,
+                ),
+            )
+        except sqlite3.IntegrityError as exc:
+            _raise_project_integrity(exc)
 
 
 def set_project_enabled(project_id: int, enabled: bool) -> None:
     requested = int(enabled)
     with _catalog_uow() as uow:
         conn = uow.connection
-        row = conn.execute(
-            "SELECT * FROM project WHERE id = ?",
-            (project_id,),
-        ).fetchone()
-        project = dict(row) if row else None
-        if not project:
-            raise ValueError("project not found")
-        if project.get("name") == UNCATEGORIZED_PROJECT:
-            raise ValueError("uncategorized project cannot be disabled")
+        project = require_mutable_user_project(conn, project_id)
         if int(project.get("enabled") or 0) == requested:
             return
-        _add_privacy_effect_for_project(uow, project)
         conn.execute(
             "UPDATE project SET enabled = ?, updated_at = ? WHERE id = ?",
             (requested, now_str(), project_id),
@@ -315,18 +337,13 @@ def list_project_bindings(include_system_special: bool = True) -> list[dict]:
 def archive_project(project_id: int) -> None:
     with _catalog_uow() as uow:
         conn = uow.connection
-        row = conn.execute(
-            "SELECT * FROM project WHERE id = ?",
-            (project_id,),
-        ).fetchone()
-        project = dict(row) if row else None
-        if not project or int(project.get("is_archived") or 0) == 1:
-            return
-        _add_privacy_effect_for_project(uow, project)
-        conn.execute(
+        require_mutable_user_project(conn, project_id)
+        cursor = conn.execute(
             "UPDATE project SET is_archived = 1, updated_at = ? WHERE id = ?",
             (now_str(), project_id),
         )
+        if cursor.rowcount != 1:
+            raise ProjectLifecycleError("not_found")
 
 
 def delete_project(project_id: int) -> None:
@@ -334,21 +351,11 @@ def delete_project(project_id: int) -> None:
 
 
 def soft_delete_project(project_id: int) -> None:
-    """Tombstone a project without deleting facts, rules, or assignments."""
+    """Tombstone a mutable user project without deleting facts or rules."""
 
     with _catalog_uow() as uow:
         conn = uow.connection
-        row = conn.execute(
-            "SELECT * FROM project WHERE id = ?",
-            (project_id,),
-        ).fetchone()
-        project = dict(row) if row else None
-        if not project:
-            raise ValueError("project not found")
-        if project_lifecycle_policy.project_is_system_or_special(project):
-            raise ValueError("system project cannot be deleted")
-        if int(project.get("is_deleted") or 0) == 1:
-            return
+        require_mutable_user_project(conn, project_id)
         cursor = conn.execute(
             """
             UPDATE project
@@ -359,4 +366,25 @@ def soft_delete_project(project_id: int) -> None:
             (now_str(), project_id),
         )
         if cursor.rowcount != 1:
-            raise ValueError("project not found")
+            raise ProjectLifecycleError("not_found")
+
+
+__all__ = [
+    "ProjectLifecycleError",
+    "archive_project",
+    "create_project",
+    "delete_project",
+    "get_project",
+    "get_project_by_name",
+    "is_concrete_project_id",
+    "list_active_projects",
+    "list_project_bindings",
+    "list_rule_target_projects",
+    "list_selectable_projects",
+    "list_user_projects",
+    "require_mutable_user_project",
+    "set_excluded_project_enabled",
+    "set_project_enabled",
+    "soft_delete_project",
+    "update_project",
+]
