@@ -71,6 +71,10 @@ enters exclusive write ownership. Database replacement publishes its epoch in
 the replacement transaction, resets process-local identities while Collector is
 still held, restores durable settings and releases the hold.
 
+Collector has no secure-backup import guard or backup-service reverse dependency.
+Backup and replacement flows obtain safety exclusively through the explicit
+maintenance hold and coordinator ordering.
+
 Every acknowledgement must match command ID, kind, completed state, expected
 terminal state and `ok=true`. Unknown command or unconfirmed release state enters
 a stable fail-closed latch: durable user pause is set, the runtime snapshot is
