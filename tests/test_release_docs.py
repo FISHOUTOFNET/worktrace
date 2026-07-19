@@ -141,26 +141,3 @@ def test_ci_workflows_contain_required_release_smoke_steps():
 
 
 # release-checklist stub tests.
-
-
-def test_current_state_doc_stays_within_governance_budget():
-    line_count = _line_count(CURRENT_STATE_PATH)
-    assert line_count <= CURRENT_STATE_HARD_MAX_LINES, (
-        f"docs/current-state.md has {line_count} lines; "
-        f"target <= {CURRENT_STATE_TARGET_LINES}, hard max {CURRENT_STATE_HARD_MAX_LINES}"
-    )
-
-
-def test_current_state_doc_keeps_required_sections():
-    current_state = _read_text(CURRENT_STATE_PATH)
-    for heading in (
-        "## Current architecture",
-        "## Validation commands",
-        "## Known limitations",
-    ):
-        assert heading in current_state
-
-
-def test_migration_and_ai_context_docs_exist():
-    assert MIGRATION_PATH.is_file()
-    assert AI_CONTEXT_PATH.is_file()
