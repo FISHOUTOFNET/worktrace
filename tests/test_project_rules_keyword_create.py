@@ -6,8 +6,6 @@ import json
 
 import pytest
 
-from worktrace.services import system_project_service
-
 from tests.support import activity_factory as activity_service
 from tests.support.db_helpers import table_count
 from worktrace.api import rule_api
@@ -18,7 +16,8 @@ from worktrace.services import (
     history_mutation_job_service,
     project_inference_service,
     project_service,
-    rule_service,
+    rule_catalog_command_service,
+    system_project_service,
 )
 
 pytestmark = [
@@ -189,7 +188,7 @@ def test_service_exception_collapses_to_privacy_safe_error(temp_db, monkeypatch)
     def boom(*args, **kwargs):
         raise RuntimeError("SELECT traceback window_title clipboard C:\\Secret")
 
-    monkeypatch.setattr(rule_service, "create_rule", boom)
+    monkeypatch.setattr(rule_catalog_command_service, "create_keyword_rule", boom)
     result = rule_api.create_project_keyword_rule(project_id, "Spec")
 
     assert result == {"ok": False, "error": "operation_failed"}
