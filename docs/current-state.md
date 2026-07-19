@@ -156,6 +156,11 @@ the full manifest; individual failing tests are not treated as independent patch
 targets. Concurrency tests use bounded events or joins rather than explicit sleep
 polling, and the inventory gate requires their runtime-risk markers.
 
+Test fixtures exercise current owners rather than manufacturing legacy state:
+open activity continuity is seeded through `CollectorStateMachine`, excluded
+keyword/folder rules use explicit catalog commands, and frontend governance checks
+exact LiveClock v2 behavior rather than historical file placement or aliases.
+
 Only `.github/workflows/ci.yml` and its reusable Standard validation workflow are
 used. Acceptance and temporary agent workflows are not part of the architecture.
 Historical WebView implementation phases are retained only at
