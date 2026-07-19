@@ -20,7 +20,7 @@ def test_normal_activity_is_persisted_open_on_its_first_sample(live):
     rows = live.rows()
     assert len(rows) == 1 and rows[0]["end_time"] is None
     pages = live.pages(details_ids=[int(rows[0]["id"])])
-    assert pages["overview"]["live_clock"]["live_state"] == "persisted_open"
+    assert pages["overview"]["runtime"]["clock"]["live_state"] == "persisted_open"
     assert pages["timeline"]["entries"][0]["open_activity_id"] == rows[0]["id"]
 
 
@@ -43,4 +43,4 @@ def test_non_normal_states_are_status_only(state, live):
         live.status(state, "09:00:10")
     overview = live.pages()["overview"]
     expected_live_state = "none" if state == "paused" else "status_only"
-    assert overview["live_clock"]["live_state"] == expected_live_state
+    assert overview["runtime"]["clock"]["live_state"] == expected_live_state
