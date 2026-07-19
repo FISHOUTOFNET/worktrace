@@ -2,8 +2,6 @@ from pathlib import Path
 
 import pytest
 
-from worktrace.services import system_project_service
-
 from tests.support import activity_factory as activity_service
 from worktrace.api import rule_history_api as rule_api
 from worktrace.api import rule_api as catalog_rule_api
@@ -17,6 +15,7 @@ from worktrace.services import (
     folder_rule_service,
     privacy_service,
     project_service,
+    rule_catalog_command_service,
 )
 from worktrace.services.project_inference_service import assign_project_for_activity
 
@@ -335,14 +334,15 @@ def test_windows_resolver_returns_none_after_live_sources_miss(
 
 
 def test_indexed_exclude_folder_anonymizes_title_only_activity(temp_db, tmp_path):
-    excluded_project = system_project_service.require_excluded_project_id()
-    project_service.set_project_enabled(excluded_project, True)
+    project_service.set_excluded_project_enabled(True)
     folder = tmp_path / "Private"
     folder.mkdir()
     (folder / "secret.txt").write_text("secret", encoding="utf-8")
-    rule_id = folder_rule_service.create_or_update_folder_rule(
-        str(folder),
-        excluded_project,
+    rule_id, _excluded_project = (
+        rule_catalog_command_service.create_or_update_excluded_folder_rule(
+            str(folder),
+            recursive=True,
+        )
     )
     _ready_index(rule_id)
 
@@ -435,15 +435,14 @@ def test_public_index_candidate_cannot_prove_unresolved_private_path_safe(
     tmp_path,
     monkeypatch,
 ):
-    excluded_project = system_project_service.require_excluded_project_id()
-    project_service.set_project_enabled(excluded_project, True)
+    project_service.set_excluded_project_enabled(True)
     private_folder = tmp_path / "PrivateActual"
     public_folder = tmp_path / "PublicIndexed"
     private_folder.mkdir()
     public_folder.mkdir()
-    folder_rule_service.create_or_update_folder_rule(
+    rule_catalog_command_service.create_or_update_excluded_folder_rule(
         str(private_folder),
-        excluded_project,
+        recursive=True,
     )
     public_project = project_service.create_project("Public Candidate")
     (public_folder / "same.docx").write_text("public", encoding="utf-8")
