@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from typing import Any
 
 from ..constants import STATUS_ERROR, STATUS_EXCLUDED, STATUS_IDLE, STATUS_PAUSED
@@ -13,10 +14,12 @@ from ..platforms.base import ActiveWindow
 from ..resources.detectors import detect_resource
 from ..resources.resource_builders import make_system_resource
 from ..resources.types import DetectedResource
+from ..write_gate import DATABASE_WRITE_GATE
 from .resource_service import create_or_update_activity_resource
 
 DEFAULT_BATCH_SIZE = 200
 REPAIR_POLICY_VERSION = 1
+_WORKER_IDLE_SECONDS = 1.0
 _VALID_STATUSES = {"pending", "running", "completed", "failed"}
 
 
@@ -37,7 +40,7 @@ def _default_state() -> dict[str, Any]:
 
 
 def get_activity_fact_repair_state(*, conn=None) -> dict[str, Any]:
-    """Return validated durable repair progress for diagnostics and startup gates."""
+    """Return validated durable repair progress for diagnostics and runtime gates."""
 
     if conn is None:
         with get_connection() as read_conn:
@@ -71,16 +74,16 @@ def get_activity_fact_repair_state(*, conn=None) -> dict[str, Any]:
 
 
 def repair_missing_activity_resources(batch_size: int = DEFAULT_BATCH_SIZE) -> int:
-    """Persist all missing resource facts under a versioned, resumable policy."""
+    """Repair at most one deterministic batch and persist its durable cursor."""
 
     size = max(1, int(batch_size))
-    first_missing_id = _first_unrepaired_activity_id()
     try:
         state = get_activity_fact_repair_state()
     except ValueError:
         logging.exception("activity resource repair state was invalid; restarting policy")
         state = _default_state()
 
+    first_missing_id = _first_unrepaired_activity_id()
     if first_missing_id is None:
         if state["status"] != "completed":
             state["status"] = "completed"
@@ -92,84 +95,99 @@ def repair_missing_activity_resources(batch_size: int = DEFAULT_BATCH_SIZE) -> i
     if state["status"] == "completed":
         state = _default_state()
 
-    initial_repaired_count = int(state["repaired_count"])
+    cursor = int(state["cursor_activity_id"])
+    if first_missing_id <= cursor:
+        cursor = 0
+        state["cursor_activity_id"] = 0
+
+    rows = _load_missing_rows_after(cursor, size)
+    if not rows:
+        raise RuntimeError("activity_resource_repair_cursor_inconsistent")
+
     state["status"] = "running"
     state["started_at"] = str(state["started_at"] or now_str())
     state["completed_at"] = ""
     state["last_error"] = ""
-    _persist_state(state)
-
-    reset_cursor_once = False
     try:
-        while True:
-            rows = _load_missing_rows_after(
-                int(state["cursor_activity_id"]),
-                size,
+        prepared: list[tuple[int, DetectedResource, bool, bool]] = []
+        for row in rows:
+            resource, detection_failed = _resource_for_row(row)
+            prepared.append(
+                (
+                    int(row["id"]),
+                    resource,
+                    resource.resource_kind == "unknown",
+                    detection_failed,
+                )
             )
-            if not rows:
-                remaining_id = _first_unrepaired_activity_id()
-                if (
-                    remaining_id is not None
-                    and remaining_id <= int(state["cursor_activity_id"])
-                    and not reset_cursor_once
-                ):
-                    state["cursor_activity_id"] = 0
-                    reset_cursor_once = True
-                    _persist_state(state)
-                    continue
-                if remaining_id is not None:
-                    raise RuntimeError("activity_resource_repair_cursor_inconsistent")
-                state["status"] = "completed"
-                state["completed_at"] = now_str()
-                state["last_error"] = ""
-                _persist_state(state)
-                return int(state["repaired_count"]) - initial_repaired_count
 
-            prepared: list[tuple[int, DetectedResource, bool, bool]] = []
-            for row in rows:
-                resource, detection_failed = _resource_for_row(row)
-                prepared.append(
-                    (
-                        int(row["id"]),
-                        resource,
-                        resource.resource_kind == "unknown",
-                        detection_failed,
-                    )
-                )
-
-            with DomainUnitOfWork(
-                (DataGenerationNamespace.REPORT_STRUCTURE,)
-            ) as uow:
-                conn = uow.connection
-                for activity_id, resource, _is_unknown, _failed in prepared:
-                    create_or_update_activity_resource(activity_id, resource, conn=conn)
-                state["cursor_activity_id"] = int(prepared[-1][0])
-                state["processed_count"] = int(state["processed_count"]) + len(prepared)
-                state["repaired_count"] = int(state["repaired_count"]) + len(prepared)
-                state["unknown_count"] = int(state["unknown_count"]) + sum(
-                    1 for _activity_id, _resource, is_unknown, _failed in prepared if is_unknown
-                )
-                state["failed_count"] = int(state["failed_count"]) + sum(
-                    1 for _activity_id, _resource, _is_unknown, failed in prepared if failed
-                )
-                _write_state(conn, state)
-                uow.mark_changed()
-
-            logging.info(
-                "activity resource repair committed policy=%s batch=%s total=%s cursor=%s",
-                REPAIR_POLICY_VERSION,
-                len(prepared),
-                state["repaired_count"],
-                state["cursor_activity_id"],
+        with DomainUnitOfWork(
+            (DataGenerationNamespace.REPORT_STRUCTURE,)
+        ) as uow:
+            conn = uow.connection
+            for activity_id, resource, _is_unknown, _failed in prepared:
+                create_or_update_activity_resource(activity_id, resource, conn=conn)
+            state["cursor_activity_id"] = int(prepared[-1][0])
+            state["processed_count"] = int(state["processed_count"]) + len(prepared)
+            state["repaired_count"] = int(state["repaired_count"]) + len(prepared)
+            state["unknown_count"] = int(state["unknown_count"]) + sum(
+                1 for _activity_id, _resource, is_unknown, _failed in prepared if is_unknown
             )
+            state["failed_count"] = int(state["failed_count"]) + sum(
+                1 for _activity_id, _resource, _is_unknown, failed in prepared if failed
+            )
+            _write_state(conn, state)
+            uow.mark_changed()
+
+        if _first_unrepaired_activity_id() is None:
+            state["status"] = "completed"
+            state["completed_at"] = now_str()
+            state["last_error"] = ""
+            _persist_state(state)
+
+        logging.info(
+            "activity resource repair committed policy=%s batch=%s total=%s cursor=%s status=%s",
+            REPAIR_POLICY_VERSION,
+            len(prepared),
+            state["repaired_count"],
+            state["cursor_activity_id"],
+            state["status"],
+        )
+        return len(prepared)
     except Exception as exc:
         state["status"] = "failed"
-        state["last_error"] = f"{type(exc).__name__}: {exc}"
+        state["last_error"] = _failure_code(exc)
         try:
             _persist_state(state)
         except Exception:
             logging.exception("activity resource repair failure state could not be persisted")
         raise
+
+
+def run_activity_resource_repair_worker(
+    stop_event: threading.Event,
+    *,
+    batch_size: int = DEFAULT_BATCH_SIZE,
+    poll_seconds: float = _WORKER_IDLE_SECONDS,
+) -> None:
+    """Run the blocking bounded repair loop owned by ``AppRuntime``."""
+
+    size = max(1, int(batch_size))
+    interval = max(0.1, float(poll_seconds))
+    logging.info("activity resource repair worker start")
+    while not stop_event.is_set():
+        if DATABASE_WRITE_GATE.active():
+            stop_event.wait(interval)
+            continue
+        try:
+            repaired = repair_missing_activity_resources(size)
+        except Exception:
+            logging.exception("activity resource repair worker iteration failed")
+            repaired = 0
+        if repaired >= size:
+            continue
+        stop_event.wait(interval)
+    logging.info("activity resource repair worker stop")
 
 
 def require_activity_fact_repair_complete() -> dict[str, Any]:
@@ -179,6 +197,12 @@ def require_activity_fact_repair_complete() -> dict[str, Any]:
     if state["status"] != "completed" or _first_unrepaired_activity_id() is not None:
         raise ValueError("data_repair_required")
     return state
+
+
+def _failure_code(exc: BaseException) -> str:
+    if isinstance(exc, RuntimeError) and str(exc) == "activity_resource_repair_cursor_inconsistent":
+        return "cursor_inconsistent"
+    return "repair_failed"
 
 
 def _persist_state(state: dict[str, Any]) -> None:
@@ -320,4 +344,5 @@ __all__ = [
     "get_activity_fact_repair_state",
     "repair_missing_activity_resources",
     "require_activity_fact_repair_complete",
+    "run_activity_resource_repair_worker",
 ]
