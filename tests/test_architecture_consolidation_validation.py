@@ -18,7 +18,7 @@ from worktrace.services import (
 pytestmark = [pytest.mark.db, pytest.mark.integration, pytest.mark.serial]
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-WORKFLOW_ALLOWLIST = {"_validation.yml", "ci.yml"}
+WORKFLOW_ALLOWLIST = {"_validation.yml", "acceptance.yml", "ci.yml"}
 FORBIDDEN_WORKFLOW_COMMANDS = (
     "git push",
     "git merge",
@@ -194,7 +194,6 @@ def test_permanent_ci_workflows_are_read_only():
 
     assert "3.12" not in combined_source
     assert "run_python312" not in combined_source
-    assert "acceptance.yml" not in combined_source
 
     reusable_source = (workflow_dir / "_validation.yml").read_text(encoding="utf-8")
     checkout_count = reusable_source.count("uses: actions/checkout@")
@@ -222,6 +221,16 @@ def test_permanent_ci_workflows_are_read_only():
     assert "run_node_tests: true" in ci_source
     assert "run_build_smoke: true" in ci_source
     assert "cancel-in-progress: false" in ci_source
+
+    acceptance_source = (workflow_dir / "acceptance.yml").read_text(encoding="utf-8")
+    assert "ready_for_review" in acceptance_source
+    assert "synchronize" in acceptance_source
+    assert "reopened" in acceptance_source
+    assert "github.event.pull_request.draft == false" in acceptance_source
+    assert "github.event.pull_request.head.sha" in acceptance_source
+    assert "run_node_tests: true" in acceptance_source
+    assert "run_build_smoke: true" in acceptance_source
+    assert "cancel-in-progress: false" in acceptance_source
 
 
 def test_live_semantics_harness_recent_reuses_overview_projection(
