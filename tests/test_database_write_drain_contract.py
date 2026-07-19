@@ -27,6 +27,18 @@ class _RuntimeControl:
     def __init__(self, coordinator: RuntimeMaintenanceCoordinator) -> None:
         self.coordinator = coordinator
         self.observed: list[tuple[str, MaintenancePhase, WriteGatePhase]] = []
+        self._next_command = 0
+
+    def _ack(self, command_kind: str, terminal_state: str) -> dict:
+        self._next_command += 1
+        return {
+            "ok": True,
+            "command_id": f"test-command-{self._next_command}",
+            "command_kind": command_kind,
+            "command_state": "completed",
+            "terminal_state": terminal_state,
+            "command_state_unknown": False,
+        }
 
     def is_collection_running_for_maintenance(self) -> bool:
         return True
@@ -35,19 +47,19 @@ class _RuntimeControl:
         self.observed.append(
             ("quiesce", self.coordinator.phase, DATABASE_WRITE_GATE.phase())
         )
-        return {"ok": True, "quiesce_pending": False}
+        return self._ack("maintenance_hold", "held")
 
     def reset_after_database_replacement(self, timeout_seconds=5.0):
         self.observed.append(
             ("reset", self.coordinator.phase, DATABASE_WRITE_GATE.phase())
         )
-        return {"ok": True, "reset_pending": False}
+        return self._ack("database_reset", "held")
 
     def restore_after_maintenance(self, state, timeout_seconds=5.0):
         self.observed.append(
             ("restore", self.coordinator.phase, DATABASE_WRITE_GATE.phase())
         )
-        return {"ok": True, "restore_pending": False}
+        return self._ack("maintenance_release", "operational")
 
 
 def test_maintenance_quiesces_before_draining_and_resets_after_exclusive(temp_db):
@@ -63,10 +75,10 @@ def test_maintenance_quiesces_before_draining_and_resets_after_exclusive(temp_db
         )
 
     assert control.observed == [
-        ("quiesce", MaintenancePhase.QUIESCING, WriteGatePhase.OPEN),
+        ("quiesce", MaintenancePhase.HOLD_REQUESTED, WriteGatePhase.OPEN),
         ("operation", MaintenancePhase.EXCLUSIVE, WriteGatePhase.EXCLUSIVE),
-        ("reset", MaintenancePhase.RESTORING, WriteGatePhase.OPEN),
-        ("restore", MaintenancePhase.RESTORING, WriteGatePhase.OPEN),
+        ("reset", MaintenancePhase.RESETTING, WriteGatePhase.OPEN),
+        ("restore", MaintenancePhase.RELEASING, WriteGatePhase.OPEN),
     ]
     assert coordinator.phase is MaintenancePhase.IDLE
     assert DATABASE_WRITE_GATE.phase() is WriteGatePhase.OPEN
@@ -153,18 +165,23 @@ def test_failed_reset_releases_gate_and_fails_closed(temp_db):
     control = _RuntimeControl(coordinator)
     control.reset_after_database_replacement = lambda timeout_seconds=5.0: {
         "ok": False,
-        "reset_pending": False,
+        "command_id": "failed-reset",
+        "command_kind": "database_reset",
+        "command_state": "completed",
+        "terminal_state": "held",
+        "command_state_unknown": False,
     }
     coordinator.register_runtime_control(control)
     settings_service.set_setting("user_paused", "false")
     settings_service.set_setting("collector_status", "running")
 
-    with pytest.raises(RuntimeError, match="collector_reset_not_acknowledged"):
+    with pytest.raises(RuntimeError, match="collector_database_reset_not_acknowledged"):
         with coordinator.database_replacement("failure_contract"):
             pass
 
-    assert coordinator.phase is MaintenancePhase.IDLE
-    assert coordinator.active() is False
+    assert coordinator.phase is MaintenancePhase.FAILED_CLOSED
+    assert coordinator.active() is True
+    assert coordinator.blocked_reason == "failure_contract_restore"
     assert DATABASE_WRITE_GATE.phase() is WriteGatePhase.OPEN
     assert settings_service.get_bool_setting("user_paused", False) is True
     assert settings_service.get_setting("collector_status", "") == "paused"
