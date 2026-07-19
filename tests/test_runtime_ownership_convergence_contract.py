@@ -64,6 +64,7 @@ def test_maintenance_coordinator_is_the_only_semantic_owner() -> None:
     assert "class DatabaseMaintenanceCoordinator" not in maintenance
     assert "runtime_snapshot_barrier" not in runtime
     assert "is_secure_import_in_progress" not in collector
+    assert "query_command" in maintenance
 
     hold = _function(
         "worktrace/runtime/app_runtime.py",
@@ -92,7 +93,7 @@ def test_maintenance_coordinator_is_the_only_semantic_owner() -> None:
     assert "maintenance_hold" in collector
     assert "maintenance_release" in collector
     assert "database_reset" in collector
-    assert "PAYLOAD_VERSION" in backup
+    assert "PAYLOAD_VERSION = 6" in backup
 
 
 def test_database_replacement_is_one_independent_epoch() -> None:
@@ -124,7 +125,7 @@ def test_all_cross_database_caches_listen_to_replacement_epoch() -> None:
         ), relative
 
 
-def test_all_derived_workers_are_blocking_entrypoints() -> None:
+def test_all_derived_workers_are_blocking_entrypoints_without_lifecycle_ownership() -> None:
     workers = (
         ("worktrace/services/folder_index_service.py", "run_folder_index_worker"),
         ("worktrace/services/history_mutation_job_service.py", "run_history_worker"),
@@ -137,6 +138,7 @@ def test_all_derived_workers_are_blocking_entrypoints() -> None:
     )
     for relative, function_name in workers:
         definition = _function(relative, function_name)
+        source = _source(relative)
         argument_names = {
             argument.arg
             for argument in (*definition.args.args, *definition.args.kwonlyargs)
@@ -144,6 +146,8 @@ def test_all_derived_workers_are_blocking_entrypoints() -> None:
         assert "stop_event" in argument_names, relative
         assert "health" in argument_names, relative
         assert not _thread_constructor_calls(relative), relative
+        assert "health.started()" not in source, relative
+        assert "health.stopped()" not in source, relative
 
 
 def test_worker_registry_is_declarative_and_single_owned() -> None:
