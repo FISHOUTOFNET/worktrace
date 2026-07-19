@@ -151,11 +151,32 @@ def test_runtime_and_backup_have_single_lifecycle_owners() -> None:
     assert "__getattr__" not in backup
 
 
-def test_app_runtime_has_exactly_one_thread_creation_site_for_derived_workers() -> None:
-    runtime = (PRODUCTION / "runtime" / "app_runtime.py").read_text(encoding="utf-8")
-    assert runtime.count("def _start_owned_worker(") == 1
-    assert runtime.count("activity_inference_job_service.run_inference_worker") == 1
-    assert "process_pending_inference_jobs(" not in runtime
+def test_app_runtime_has_one_registry_driven_thread_creation_site() -> None:
+    path = PRODUCTION / "runtime" / "app_runtime.py"
+    source = path.read_text(encoding="utf-8")
+    tree = ast.parse(source, filename=str(path))
+    thread_calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "threading"
+        and node.func.attr == "Thread"
+    ]
+    derived_calls = [
+        node
+        for node in thread_calls
+        if any(
+            keyword.arg == "target"
+            and isinstance(keyword.value, ast.Attribute)
+            and keyword.value.attr == "_run_owned_worker"
+            for keyword in node.keywords
+        )
+    ]
+    assert len(derived_calls) == 1
+    assert source.count("activity_inference_job_service.run_inference_worker") == 1
+    assert "process_pending_inference_jobs(" not in source
     for relative in (
         "services/folder_index_service.py",
         "services/history_mutation_job_service.py",
@@ -163,9 +184,9 @@ def test_app_runtime_has_exactly_one_thread_creation_site_for_derived_workers() 
         "services/activity_fact_repair_service.py",
         "services/recovery_service.py",
     ):
-        source = (PRODUCTION / relative).read_text(encoding="utf-8")
-        assert "_WORKER_THREAD" not in source
-        assert "threading.Thread(" not in source
+        worker_source = (PRODUCTION / relative).read_text(encoding="utf-8")
+        assert "_WORKER_THREAD" not in worker_source
+        assert "threading.Thread(" not in worker_source
 
 
 def test_non_windows_production_adapter_fails_closed() -> None:
@@ -206,8 +227,8 @@ def test_current_only_schema_and_backup_versions_are_explicit() -> None:
     backup_source = (
         PRODUCTION / "services" / "secure_backup_service.py"
     ).read_text(encoding="utf-8")
-    assert "CURRENT_SCHEMA_VERSION = 11" in db_source
+    assert "CURRENT_SCHEMA_VERSION = 12" in db_source
     assert "database_schema_incompatible" in db_source
-    assert "PAYLOAD_VERSION = 5" in backup_source
+    assert "PAYLOAD_VERSION = 6" in backup_source
     assert "_normalize_v4_payload" not in backup_source
     assert "LEGACY" not in backup_source
