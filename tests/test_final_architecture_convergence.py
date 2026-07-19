@@ -6,18 +6,22 @@ from pathlib import Path
 import pytest
 
 from worktrace import db
+from worktrace.collector.collector import CollectorControl, CollectorHoldState
 from worktrace.constants import EXCLUDED_PROJECT, UNCATEGORIZED_PROJECT
-from worktrace.runtime.app_runtime import RuntimeStartResult, WorkerStartupState, WorkerStartupStatus
+from worktrace.platforms.base import ActiveWindow
+from worktrace.runtime.app_runtime import (
+    RuntimeStartResult,
+    WorkerStartupState,
+    WorkerStartupStatus,
+)
 from worktrace.services import (
     privacy_service,
     project_service,
     rule_catalog_command_service,
     rule_service,
-    runtime_activity_state_service,
 )
 from worktrace.services.keyword_rule_policy import ProjectRuleWriteError
 from worktrace.services.project_command_policy import ProjectLifecycleError
-from worktrace.platforms.base import ActiveWindow
 
 pytestmark = [pytest.mark.db, pytest.mark.integration, pytest.mark.contract]
 
@@ -102,7 +106,6 @@ def test_archived_project_cannot_be_new_rule_target(temp_db):
 
 
 def test_privacy_evaluation_is_read_only_and_fail_closed(temp_db, monkeypatch):
-    writes: list[str] = []
     monkeypatch.setattr(
         privacy_service,
         "get_connection",
@@ -111,7 +114,16 @@ def test_privacy_evaluation_is_read_only_and_fail_closed(temp_db, monkeypatch):
     monkeypatch.setattr(
         privacy_service,
         "_exclude_rules",
-        lambda **_kwargs: {"keywords": [], "folders": [{"folder_path": "D:/Secret", "normalized_folder_key": "d:/secret", "recursive": 1}]},
+        lambda **_kwargs: {
+            "keywords": [],
+            "folders": [
+                {
+                    "folder_path": "D:/Secret",
+                    "normalized_folder_key": "d:/secret",
+                    "recursive": 1,
+                }
+            ],
+        },
     )
     window = ActiveWindow(
         "Word",
@@ -124,7 +136,6 @@ def test_privacy_evaluation_is_read_only_and_fail_closed(temp_db, monkeypatch):
     assert decision.excluded is True
     assert decision.resolution_pending is True
     assert decision.refresh_required is True
-    assert writes == []
 
 
 def test_live_clock_contract_is_exact_key_set():
@@ -156,20 +167,39 @@ def test_runtime_start_result_is_worker_mapping_only():
     ).to_dict()
     assert set(result["workers"]) == {"inference"}
     forbidden = {
-        "folder_worker_started",
-        "history_worker_started",
-        "inference_worker_started",
-        "repair_worker_started",
-        "recovery_worker_started",
+        "folder_index_ready",
+        "history_worker_ready",
+        "inference_worker_ready",
+        "resource_repair_worker_ready",
+        "startup_recovery_worker_ready",
+        "background_worker_degraded",
+        "failed_workers",
     }
     assert forbidden.isdisjoint(result)
+
+
+def test_collector_maintenance_hold_has_explicit_terminal_states():
+    control = CollectorControl()
+    assert control.hold_state is CollectorHoldState.OPERATIONAL
+    assert {
+        state.value for state in CollectorHoldState
+    } == {
+        "operational",
+        "hold_requested",
+        "sealing",
+        "held",
+        "resetting",
+        "release_requested",
+    }
 
 
 def test_production_has_no_runtime_service_locator_or_second_coordinator():
     root = Path(__file__).resolve().parents[1]
     app_api = (root / "worktrace/api/app_api.py").read_text(encoding="utf-8")
     bridge = (root / "worktrace/webview_ui/bridge.py").read_text(encoding="utf-8")
-    maintenance = (root / "worktrace/services/database_maintenance_service.py").read_text(encoding="utf-8")
+    maintenance = (
+        root / "worktrace/services/database_maintenance_service.py"
+    ).read_text(encoding="utf-8")
     assert "_RUNTIME" not in app_api
     assert "get_runtime" not in app_api
     assert "ApplicationServices" in bridge
