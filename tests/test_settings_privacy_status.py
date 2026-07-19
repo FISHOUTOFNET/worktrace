@@ -110,9 +110,7 @@ def test_api_secure_import_in_progress_field_is_bool(temp_db) -> None:
 
 
 def test_api_secure_import_in_progress_reflects_maintenance_gate(temp_db) -> None:
-    with database_maintenance_service.maintenance_operation(
-        reason="settings_status_contract"
-    ):
+    with database_maintenance_service.consistent_snapshot("settings_status_contract"):
         status = get_settings_privacy_status()["status"]
         assert status["secure_import_in_progress"] is True
     assert get_settings_privacy_status()["status"]["secure_import_in_progress"] is False
