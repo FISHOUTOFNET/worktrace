@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import pytest
 
-from worktrace.constants import EXCLUDED_PROJECT
 from worktrace.data_generation_repository import (
     DataGenerationNamespace,
     DataGenerationRepository,
 )
 from worktrace.db import get_connection
 from worktrace.services import folder_rule_service, project_service, rule_service
+from worktrace.services import rule_catalog_command_service
 
 pytestmark = [pytest.mark.db, pytest.mark.integration, pytest.mark.contract]
 
@@ -64,13 +64,14 @@ def test_normal_keyword_rule_does_not_invalidate_privacy_or_report(temp_db):
 
 
 def test_excluded_keyword_rule_adds_privacy_effect(temp_db):
-    excluded = project_service.get_project_by_name(EXCLUDED_PROJECT)
-    assert excluded is not None
     catalog_before = _generation(DataGenerationNamespace.CLASSIFICATION_CATALOG)
     privacy_before = _generation(DataGenerationNamespace.PRIVACY_CATALOG)
 
-    rule_service.create_rule("private-keyword-uow", int(excluded["id"]))
+    _rule_id, excluded_id = rule_catalog_command_service.create_excluded_keyword_rule(
+        "private-keyword-uow"
+    )
 
+    assert excluded_id > 0
     assert _generation(DataGenerationNamespace.CLASSIFICATION_CATALOG) == catalog_before + 1
     assert _generation(DataGenerationNamespace.PRIVACY_CATALOG) == privacy_before + 1
 
@@ -97,17 +98,17 @@ def test_folder_rule_semantic_no_op_does_not_publish_generation(temp_db):
 
 
 def test_excluded_folder_rule_adds_privacy_effect(temp_db):
-    excluded = project_service.get_project_by_name(EXCLUDED_PROJECT)
-    assert excluded is not None
     catalog_before = _generation(DataGenerationNamespace.CLASSIFICATION_CATALOG)
     privacy_before = _generation(DataGenerationNamespace.PRIVACY_CATALOG)
 
-    folder_rule_service.create_or_update_folder_rule(
-        "D:\\PrivateCatalogUow",
-        int(excluded["id"]),
-        True,
+    _rule_id, excluded_id = (
+        rule_catalog_command_service.create_or_update_excluded_folder_rule(
+            "D:\\PrivateCatalogUow",
+            True,
+        )
     )
 
+    assert excluded_id > 0
     assert _generation(DataGenerationNamespace.CLASSIFICATION_CATALOG) == catalog_before + 1
     assert _generation(DataGenerationNamespace.PRIVACY_CATALOG) == privacy_before + 1
 
@@ -129,21 +130,36 @@ def test_normalized_folder_upsert_accounts_for_old_and_new_owner_effects(
     owners = {
         "normal_a": project_service.create_project("Folder Owner A"),
         "normal_b": project_service.create_project("Folder Owner B"),
-        "excluded": int(project_service.get_project_by_name(EXCLUDED_PROJECT)["id"]),
     }
-    rule_id = folder_rule_service.create_or_update_folder_rule(
-        "D:\\OwnerMigration",
-        owners[old_owner],
-        True,
-    )
+    if old_owner == "excluded":
+        rule_id, _excluded_id = (
+            rule_catalog_command_service.create_or_update_excluded_folder_rule(
+                "D:\\OwnerMigration",
+                True,
+            )
+        )
+    else:
+        rule_id = folder_rule_service.create_or_update_folder_rule(
+            "D:\\OwnerMigration",
+            owners[old_owner],
+            True,
+        )
     catalog_before = _generation(DataGenerationNamespace.CLASSIFICATION_CATALOG)
     privacy_before = _generation(DataGenerationNamespace.PRIVACY_CATALOG)
 
-    repeated_id = folder_rule_service.create_or_update_folder_rule(
-        "d:/OwnerMigration/",
-        owners[new_owner],
-        True,
-    )
+    if new_owner == "excluded":
+        repeated_id, _excluded_id = (
+            rule_catalog_command_service.create_or_update_excluded_folder_rule(
+                "d:/OwnerMigration/",
+                True,
+            )
+        )
+    else:
+        repeated_id = folder_rule_service.create_or_update_folder_rule(
+            "d:/OwnerMigration/",
+            owners[new_owner],
+            True,
+        )
 
     assert repeated_id == rule_id
     assert _generation(DataGenerationNamespace.CLASSIFICATION_CATALOG) == catalog_before + 1
@@ -151,11 +167,11 @@ def test_normalized_folder_upsert_accounts_for_old_and_new_owner_effects(
 
 
 def test_excluded_folder_semantic_change_bumps_privacy_once(temp_db):
-    excluded_id = int(project_service.get_project_by_name(EXCLUDED_PROJECT)["id"])
-    rule_id = folder_rule_service.create_or_update_folder_rule(
-        "D:\\ExcludedOwner",
-        excluded_id,
-        True,
+    rule_id, _excluded_id = (
+        rule_catalog_command_service.create_or_update_excluded_folder_rule(
+            "D:\\ExcludedOwner",
+            True,
+        )
     )
     catalog_before = _generation(DataGenerationNamespace.CLASSIFICATION_CATALOG)
     privacy_before = _generation(DataGenerationNamespace.PRIVACY_CATALOG)
