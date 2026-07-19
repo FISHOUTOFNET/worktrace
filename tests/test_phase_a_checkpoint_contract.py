@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PRODUCTION = ROOT / "worktrace"
 
 
-def test_phase_a_startup_and_enqueue_are_bounded() -> None:
+def test_startup_and_enqueue_are_bounded() -> None:
     runtime_source = (PRODUCTION / "runtime" / "app_runtime.py").read_text(
         encoding="utf-8"
     )
@@ -38,7 +38,7 @@ def test_phase_a_startup_and_enqueue_are_bounded() -> None:
     assert "INSERT OR IGNORE INTO activity_inference_job" in repository_source
 
 
-def test_phase_a_has_no_retired_paths_or_secondary_thread_owner() -> None:
+def test_no_retired_paths_or_secondary_thread_owner() -> None:
     retired = (
         "schema_migrations.py",
         "runtime/app_runtime_core.py",
@@ -62,7 +62,7 @@ def test_phase_a_has_no_retired_paths_or_secondary_thread_owner() -> None:
         assert "threading.Thread(" not in source
 
 
-def test_phase_a_current_contract_versions_and_internal_progress() -> None:
+def test_current_contract_versions_and_internal_progress() -> None:
     db_source = (PRODUCTION / "db.py").read_text(encoding="utf-8")
     backup_source = (
         PRODUCTION / "services" / "secure_backup_service.py"
