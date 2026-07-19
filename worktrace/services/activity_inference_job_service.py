@@ -6,13 +6,17 @@ import logging
 import sqlite3
 import threading
 from collections.abc import Callable, Iterable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ..data_generation_repository import DataGenerationNamespace
 from ..db import get_connection, now_str
 from ..domain_unit_of_work import DomainUnitOfWork
+from ..write_gate import DATABASE_WRITE_GATE
 from . import activity_inference_job_repository as jobs
 from .activity_inference_policy import is_closed_activity_inference_eligible
+
+if TYPE_CHECKING:
+    from ..worker_health import WorkerHealthReporter
 
 InferenceCommand = Callable[[Any, int], dict]
 
@@ -89,6 +93,7 @@ def run_inference_worker(
     stop_event: threading.Event,
     infer_activity: InferenceCommand,
     *,
+    health: "WorkerHealthReporter | None" = None,
     batch_size: int = 50,
     poll_seconds: float = 1.0,
 ) -> None:
@@ -97,19 +102,37 @@ def run_inference_worker(
     size = max(1, int(batch_size))
     interval = max(0.1, float(poll_seconds))
     logging.info("activity inference worker start")
-    while not stop_event.is_set():
-        try:
-            processed = process_pending_inference_jobs(
-                infer_activity,
-                limit=size,
-            )
-        except Exception:
-            logging.exception("activity inference worker iteration failed")
-            processed = 0
-        if processed >= size:
-            continue
-        stop_event.wait(interval)
-    logging.info("activity inference worker stop")
+    if health is not None:
+        health.started()
+    try:
+        while not stop_event.is_set():
+            if DATABASE_WRITE_GATE.active():
+                if health is not None:
+                    health.maintenance_paused(True)
+                stop_event.wait(interval)
+                continue
+            if health is not None:
+                health.maintenance_paused(False)
+            try:
+                processed = process_pending_inference_jobs(
+                    infer_activity,
+                    limit=size,
+                )
+            except Exception:
+                logging.exception("activity inference worker iteration failed")
+                if health is not None:
+                    health.failed("inference_iteration_failed")
+                processed = 0
+            else:
+                if health is not None:
+                    health.succeeded()
+            if processed >= size:
+                continue
+            stop_event.wait(interval)
+    finally:
+        if health is not None:
+            health.stopped()
+        logging.info("activity inference worker stop")
 
 
 def _assignment_state(conn, activity_id: int) -> tuple[object, ...] | None:
