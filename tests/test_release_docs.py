@@ -128,7 +128,7 @@ def test_ci_workflows_contain_required_release_smoke_steps():
         "node --test tests/webview/*.test.js",
         "python -m PyInstaller --noconfirm --clean WorkTrace.spec",
         r"scripts\build_windows_installer.ps1",
-        "actions/upload-artifact@v4",
+        "actions/upload-artifact@v6",
         "validation-diagnostics-${{ inputs.revision }}",
         "retention-days: 3",
     ):
