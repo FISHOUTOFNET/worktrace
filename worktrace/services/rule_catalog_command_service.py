@@ -6,13 +6,13 @@ import logging
 import sqlite3
 from typing import Any, Iterable
 
-from ..constants import EXCLUDED_PROJECT
 from ..data_generation_repository import DataGenerationNamespace
 from ..db import now_str
 from ..domain_unit_of_work import DomainUnitOfWork
 from ..path_utils import normalize_folder_key
 from . import folder_index_service, folder_index_state_repository
 from .keyword_rule_policy import ProjectRuleWriteError, normalize_keyword_pattern
+from .system_project_service import require_excluded_project_id
 
 RuleRef = tuple[str, int]
 
@@ -48,16 +48,13 @@ def add_catalog_effects_for_project_ids(
     conn,
     project_ids: Iterable[int],
 ) -> None:
+    """Publish catalog effects from canonical project identity, never display name."""
+
     uow.add_effects(DataGenerationNamespace.CLASSIFICATION_CATALOG)
     ids = tuple(dict.fromkeys(int(value) for value in project_ids))
     if not ids:
         return
-    placeholders = ",".join("?" for _ in ids)
-    row = conn.execute(
-        f"SELECT 1 FROM project WHERE id IN ({placeholders}) AND name = ? LIMIT 1",
-        (*ids, EXCLUDED_PROJECT),
-    ).fetchone()
-    if row is not None:
+    if require_excluded_project_id(conn) in ids:
         uow.add_effects(DataGenerationNamespace.PRIVACY_CATALOG)
 
 
@@ -75,20 +72,30 @@ def add_catalog_effects_for_rule(
 
 
 def _require_rule_target_project(conn, project_id: int) -> dict[str, Any]:
+    """Require a current user project or the canonical excluded system project."""
+
+    requested_id = int(project_id)
     row = conn.execute(
         "SELECT * FROM project WHERE id = ?",
-        (int(project_id),),
+        (requested_id,),
     ).fetchone()
     project = dict(row) if row is not None else None
     if (
         project is None
         or int(project.get("is_deleted") or 0) == 1
         or int(project.get("is_archived") or 0) == 1
+    ):
+        raise ProjectRuleWriteError("project_not_found")
+
+    excluded_id = require_excluded_project_id(conn)
+    if requested_id == excluded_id:
+        if project.get("created_by") != "system":
+            raise ProjectRuleWriteError("project_not_found")
+        return project
+
+    if (
+        project.get("created_by") != "user"
         or int(project.get("enabled") or 0) != 1
-        or (
-            project.get("created_by") != "user"
-            and str(project.get("name") or "") != EXCLUDED_PROJECT
-        )
     ):
         raise ProjectRuleWriteError("project_not_found")
     return project
