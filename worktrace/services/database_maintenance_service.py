@@ -51,6 +51,10 @@ class MaintenanceInProgressError(RuntimeError):
 class CollectorCommandNotAcknowledgedError(RuntimeError):
     """A runtime maintenance command did not reach a known successful state."""
 
+    def __init__(self, message: str, *, fail_closed: bool = False) -> None:
+        super().__init__(message)
+        self.fail_closed = bool(fail_closed)
+
 
 class MaintenanceRecoveryError(RuntimeError):
     """Fail-closed maintenance state could not be verified as recovered."""
@@ -148,6 +152,12 @@ class RuntimeMaintenanceCoordinator:
         hold_state = getattr(getattr(channel, "hold_state", None), "value", None)
         if not running or hold_state != "operational":
             raise MaintenanceRecoveryError("maintenance_recovery_not_verified")
+        set_settings(
+            {
+                "maintenance_fail_closed": "false",
+                "maintenance_fail_closed_reason": "",
+            }
+        )
         with self._state_lock:
             if self._runtime_control is not control:
                 raise MaintenanceRecoveryError("maintenance_recovery_superseded")
@@ -216,11 +226,15 @@ class RuntimeMaintenanceCoordinator:
         )
         if known_terminal:
             return
-        if bool(resolved.get("command_state_unknown")):
-            self._latch_fail_closed(f"{reason}_{command_kind}_unknown")
-            self._persist_fail_closed(reason=reason, command=command_kind)
+        safe_pending_hold_cancel = (
+            command_kind == "maintenance_hold"
+            and bool(command_id)
+            and str(resolved.get("command_state") or "") == "cancelled"
+            and not bool(resolved.get("command_state_unknown"))
+        )
         raise CollectorCommandNotAcknowledgedError(
-            f"collector_{command_kind}_not_acknowledged"
+            f"collector_{command_kind}_not_acknowledged",
+            fail_closed=not safe_pending_hold_cancel,
         )
 
     @staticmethod
@@ -273,7 +287,6 @@ class RuntimeMaintenanceCoordinator:
         control: Any = None
         hold_acquired = False
         operation_committed = False
-        completed = False
         try:
             if self.blocked_reason is not None:
                 raise MaintenanceInProgressError("maintenance_failed_closed")
@@ -283,7 +296,8 @@ class RuntimeMaintenanceCoordinator:
             if state.collector_running:
                 if control is None:
                     raise CollectorCommandNotAcknowledgedError(
-                        "collector_maintenance_hold_not_acknowledged"
+                        "collector_maintenance_hold_not_acknowledged",
+                        fail_closed=True,
                     )
                 hold_result = dict(
                     control.quiesce_collection_for_maintenance(
@@ -346,18 +360,26 @@ class RuntimeMaintenanceCoordinator:
                     terminal_state="operational",
                     reason=reason,
                 )
-            completed = True
-        except Exception:
-            command = "restore" if operation_committed else "operation"
-            self._latch_fail_closed(f"{reason}_{command}")
-            if state is not None:
-                try:
-                    self._persist_fail_closed(reason=reason, command=command)
-                except Exception:
-                    logging.exception(
-                        "maintenance fail-closed persistence failed reason=%s",
-                        reason,
-                    )
+        except Exception as exc:
+            should_fail_closed = (
+                hold_acquired
+                or operation_committed
+                or (
+                    isinstance(exc, CollectorCommandNotAcknowledgedError)
+                    and exc.fail_closed
+                )
+            )
+            if should_fail_closed:
+                command = "restore" if operation_committed else "operation"
+                self._latch_fail_closed(f"{reason}_{command}")
+                if state is not None:
+                    try:
+                        self._persist_fail_closed(reason=reason, command=command)
+                    except Exception:
+                        logging.exception(
+                            "maintenance fail-closed persistence failed reason=%s",
+                            reason,
+                        )
             logging.exception(
                 "runtime maintenance failed intent=%s reason=%s",
                 intent.value,
@@ -365,7 +387,7 @@ class RuntimeMaintenanceCoordinator:
             )
             raise
         finally:
-            if completed and self.blocked_reason is None:
+            if self.blocked_reason is None:
                 self._set_phase(MaintenancePhase.IDLE)
             self._operation_lock.release()
 
