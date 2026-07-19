@@ -5,7 +5,7 @@ import logging
 import sys
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Callable
 
@@ -47,59 +47,71 @@ class RuntimePhase(str, Enum):
     FAILED = "failed"
 
 
+class WorkerStartupState(str, Enum):
+    STARTING = "starting"
+    READY = "ready"
+    DEGRADED = "degraded"
+    FAILED = "failed"
+    STOPPED = "stopped"
+
+
 @dataclass(frozen=True)
-class WorkerReadiness:
-    """Readiness of every non-critical AppRuntime-owned worker."""
-
-    index_ready: bool
-    history_ready: bool
-    index_started: bool = False
-    history_started: bool = False
-    error: str | None = None
-    inference_ready: bool = True
-    inference_started: bool = False
-    resource_repair_ready: bool = True
-    resource_repair_started: bool = False
-    startup_recovery_ready: bool = True
-    startup_recovery_started: bool = False
-    failed_workers: tuple[str, ...] = ()
-
-    @property
-    def ready(self) -> bool:
-        return bool(
-            self.index_ready
-            and self.history_ready
-            and self.inference_ready
-            and self.resource_repair_ready
-            and self.startup_recovery_ready
-        )
-
-    @property
-    def started_any(self) -> bool:
-        return bool(
-            self.index_started
-            or self.history_started
-            or self.inference_started
-            or self.resource_repair_started
-            or self.startup_recovery_started
-        )
+class WorkerStartupStatus:
+    state: WorkerStartupState
+    ready: bool
+    started: bool = False
+    error_code: str | None = None
 
     def to_dict(self) -> dict[str, object]:
         return {
-            "ready": self.ready,
-            "index_ready": self.index_ready,
-            "history_ready": self.history_ready,
-            "inference_ready": self.inference_ready,
-            "resource_repair_ready": self.resource_repair_ready,
-            "startup_recovery_ready": self.startup_recovery_ready,
-            "index_started": self.index_started,
-            "history_started": self.history_started,
-            "inference_started": self.inference_started,
-            "resource_repair_started": self.resource_repair_started,
-            "startup_recovery_started": self.startup_recovery_started,
-            "failed_workers": list(self.failed_workers),
-            "error": self.error,
+            "state": self.state.value,
+            "ready": bool(self.ready),
+            "started": bool(self.started),
+            "error_code": self.error_code,
         }
+
+
+@dataclass(frozen=True)
+class WorkerSpec:
+    name: str
+    thread_name: str
+    target: Callable[..., None]
+    args_factory: Callable[[threading.Event], tuple[Any, ...]]
+    startup_probe: Callable[[threading.Event], None]
+    startup_timeout_seconds: float = 5.0
+    critical: bool = False
+
+
+@dataclass
+class WorkerHandle:
+    spec: WorkerSpec
+    thread: threading.Thread | None
+    stop_event: threading.Event
+    ready_event: threading.Event = field(default_factory=threading.Event)
+    failed_event: threading.Event = field(default_factory=threading.Event)
+    error_code: str | None = None
+
+
+@dataclass(frozen=True)
+class WorkerStartupReport:
+    workers: dict[str, WorkerStartupStatus]
+    error_code: str | None = None
+
+    @property
+    def ready(self) -> bool:
+        return all(status.ready for status in self.workers.values())
+
+    @property
+    def started_any(self) -> bool:
+        return any(status.started for status in self.workers.values())
+
+    @property
+    def failed_workers(self) -> tuple[str, ...]:
+        return tuple(
+            name
+            for name, status in self.workers.items()
+            if not status.ready
+        )
 
 
 @dataclass(frozen=True)
@@ -108,29 +120,29 @@ class RuntimeStartResult:
 
     ok: bool
     collector_ready: bool
-    folder_index_ready: bool
-    history_worker_ready: bool
+    workers: dict[str, WorkerStartupStatus]
     already_running: bool = False
     degraded: bool = False
     error_code: str | None = None
-    inference_worker_ready: bool = True
-    resource_repair_worker_ready: bool = True
-    startup_recovery_worker_ready: bool = True
-    failed_workers: tuple[str, ...] = ()
+
+    @property
+    def failed_workers(self) -> tuple[str, ...]:
+        return tuple(
+            name
+            for name, status in self.workers.items()
+            if not status.ready
+        )
 
     def to_dict(self) -> dict[str, object]:
         result: dict[str, object] = {
-            "ok": self.ok,
-            "collector_ready": self.collector_ready,
-            "folder_index_ready": self.folder_index_ready,
-            "history_worker_ready": self.history_worker_ready,
-            "inference_worker_ready": self.inference_worker_ready,
-            "resource_repair_worker_ready": self.resource_repair_worker_ready,
-            "startup_recovery_worker_ready": self.startup_recovery_worker_ready,
-            "already_running": self.already_running,
-            "degraded": self.degraded,
-            "background_worker_degraded": self.degraded,
-            "failed_workers": list(self.failed_workers),
+            "ok": bool(self.ok),
+            "collector_ready": bool(self.collector_ready),
+            "workers": {
+                name: status.to_dict()
+                for name, status in sorted(self.workers.items())
+            },
+            "already_running": bool(self.already_running),
+            "degraded": bool(self.degraded),
         }
         if self.error_code:
             result["error"] = self.error_code
@@ -166,13 +178,71 @@ class AppRuntime:
         self._collector_thread: threading.Thread | None = None
         self._collector_stop_event: threading.Event | None = None
         self._collector_generation = 0
-        self._index_thread: threading.Thread | None = None
-        self._history_thread: threading.Thread | None = None
-        self._inference_thread: threading.Thread | None = None
-        self._resource_repair_thread: threading.Thread | None = None
-        self._startup_recovery_thread: threading.Thread | None = None
+        self._worker_handles: dict[str, WorkerHandle] = {}
+        self._worker_specs = self._build_worker_specs()
         self._initialized = False
         self._shutdown = False
+
+    def _build_worker_specs(self) -> dict[str, WorkerSpec]:
+        return {
+            "folder_index": WorkerSpec(
+                name="folder_index",
+                thread_name="WorkTraceFolderIndex",
+                target=folder_index_service.run_folder_index_worker,
+                args_factory=lambda stop: (stop,),
+                startup_probe=self._probe_folder_index,
+            ),
+            "history": WorkerSpec(
+                name="history",
+                thread_name="WorkTraceHistoryMutation",
+                target=history_mutation_job_service.run_history_worker,
+                args_factory=lambda stop: (stop,),
+                startup_probe=lambda stop: self._probe_table(stop, "history_mutation_job"),
+            ),
+            "inference": WorkerSpec(
+                name="inference",
+                thread_name="WorkTraceInferenceWorker",
+                target=activity_inference_job_service.run_inference_worker,
+                args_factory=lambda stop: (
+                    stop,
+                    project_inference_service.assign_project_for_activity_in_transaction,
+                ),
+                startup_probe=lambda stop: self._probe_table(stop, "activity_inference_job"),
+            ),
+            "activity_resource_repair": WorkerSpec(
+                name="activity_resource_repair",
+                thread_name="WorkTraceActivityResourceRepair",
+                target=activity_fact_repair_service.run_activity_resource_repair_worker,
+                args_factory=lambda stop: (stop,),
+                startup_probe=lambda stop: self._probe_table(
+                    stop,
+                    "activity_resource_repair_job",
+                ),
+            ),
+            "startup_recovery": WorkerSpec(
+                name="startup_recovery",
+                thread_name="WorkTraceStartupRecovery",
+                target=recovery_service.run_startup_recovery_worker,
+                args_factory=lambda stop: (stop,),
+                startup_probe=lambda stop: self._probe_table(stop, "startup_recovery_job"),
+            ),
+        }
+
+    def _probe_folder_index(self, stop_event: threading.Event) -> None:
+        if stop_event.is_set() or self.stop_event.is_set():
+            raise RuntimeError("worker_start_cancelled")
+        folder_index_service.ensure_index_states_for_folder_rules()
+        folder_index_service.validate_ready_indexes(stop_event)
+        if stop_event.is_set() or self.stop_event.is_set():
+            raise RuntimeError("worker_start_cancelled")
+
+    def _probe_table(self, stop_event: threading.Event, table: str) -> None:
+        if stop_event.is_set() or self.stop_event.is_set():
+            raise RuntimeError("worker_start_cancelled")
+        with db.get_connection() as conn:
+            conn.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone()
+        if stop_event.is_set() or self.stop_event.is_set():
+            raise RuntimeError("worker_start_cancelled")
 
     def initialize(self) -> bool:
         """Acquire the application lease and perform bounded startup recovery."""
@@ -203,232 +273,191 @@ class AppRuntime:
             self.phase = RuntimePhase.INITIALIZED
             return True
 
-    def _run_owned_worker(
-        self,
-        worker_name: str,
-        target: Callable[..., None],
-        args: tuple[Any, ...],
-    ) -> None:
-        """Run one blocking worker with process-local privacy-safe health state."""
-
-        health = self._worker_health.reporter(worker_name)
+    def _run_owned_worker(self, handle: WorkerHandle) -> None:
+        spec = handle.spec
+        health = self._worker_health.reporter(spec.name)
         health.started()
         try:
-            target(*args, health=health)
-            if not self.stop_event.is_set():
-                health.failed("worker_unexpected_exit")
-                logging.error("owned worker returned unexpectedly worker=%s", worker_name)
+            spec.startup_probe(handle.stop_event)
+            handle.ready_event.set()
+            spec.target(*spec.args_factory(handle.stop_event), health=health)
+            if not handle.stop_event.is_set() and not self.stop_event.is_set():
+                handle.error_code = "worker_unexpected_exit"
+                health.failed(handle.error_code)
+                logging.error(
+                    "owned worker returned unexpectedly worker=%s",
+                    spec.name,
+                )
         except Exception:
-            health.failed("worker_unhandled_exception")
-            logging.exception("owned worker failed worker=%s", worker_name)
+            handle.error_code = (
+                "worker_startup_failed"
+                if not handle.ready_event.is_set()
+                else "worker_unhandled_exception"
+            )
+            handle.failed_event.set()
+            health.failed(handle.error_code)
+            logging.exception("owned worker failed worker=%s", spec.name)
         finally:
             health.stopped()
-            if (
-                self.phase is RuntimePhase.RUNNING
-                and worker_name in self._worker_health.degraded_workers()
-            ):
+            if self.phase in {RuntimePhase.RUNNING, RuntimePhase.STARTING}:
                 self.phase = RuntimePhase.DEGRADED
 
     def worker_health_snapshot(self) -> dict[str, object]:
-        """Return the process-local health snapshot for runtime transport."""
-
         return {
             "workers": self._worker_health.public_snapshot(),
             "degraded_workers": list(self._worker_health.degraded_workers()),
         }
 
-    def _start_owned_worker(
-        self,
-        *,
-        reference_name: str,
-        worker_name: str,
-        health_name: str,
-        target: Callable[..., None],
-        args: tuple[Any, ...] = (),
-    ) -> tuple[bool, bool]:
-        """Start one blocking worker target and retain its only thread reference."""
+    def worker_registry_snapshot(self) -> dict[str, WorkerStartupStatus]:
+        with self._lifecycle_lock:
+            return {
+                name: self._status_for_handle(handle, started=False)
+                for name, handle in self._worker_handles.items()
+            }
 
-        current = getattr(self, reference_name)
-        if _thread_reference_is_alive(current):
-            return True, False
-        if current is not None:
-            setattr(self, reference_name, None)
+    def _status_for_handle(
+        self,
+        handle: WorkerHandle,
+        *,
+        started: bool,
+    ) -> WorkerStartupStatus:
+        alive = _thread_reference_is_alive(handle.thread)
+        ready = bool(handle.ready_event.is_set() and alive)
+        if ready:
+            state = WorkerStartupState.READY
+        elif handle.failed_event.is_set() or handle.error_code:
+            state = WorkerStartupState.FAILED
+        elif alive:
+            state = WorkerStartupState.STARTING
+        else:
+            state = WorkerStartupState.STOPPED
+        return WorkerStartupStatus(
+            state=state,
+            ready=ready,
+            started=started,
+            error_code=handle.error_code,
+        )
+
+    def _start_worker(self, spec: WorkerSpec) -> WorkerStartupStatus:
+        existing = self._worker_handles.get(spec.name)
+        if existing is not None and _thread_reference_is_alive(existing.thread):
+            return self._await_worker_startup(existing, started=False)
+        if existing is not None:
+            self._worker_handles.pop(spec.name, None)
+
+        handle = WorkerHandle(
+            spec=spec,
+            thread=None,
+            stop_event=threading.Event(),
+        )
         thread = threading.Thread(
             target=self._run_owned_worker,
-            args=(health_name, target, args),
-            name=worker_name,
+            args=(handle,),
+            name=spec.thread_name,
             daemon=True,
         )
-        setattr(self, reference_name, thread)
+        handle.thread = thread
+        self._worker_handles[spec.name] = handle
         try:
             thread.start()
         except Exception:
-            setattr(self, reference_name, None)
-            raise
-        ready = _thread_reference_is_alive(thread)
-        if not ready:
-            setattr(self, reference_name, None)
-        return ready, ready
+            handle.error_code = "worker_thread_start_failed"
+            handle.failed_event.set()
+            self._worker_handles.pop(spec.name, None)
+            logging.exception("worker thread start failed worker=%s", spec.name)
+            return WorkerStartupStatus(
+                WorkerStartupState.FAILED,
+                False,
+                started=False,
+                error_code=handle.error_code,
+            )
+        return self._await_worker_startup(handle, started=True)
 
-    def _clear_dead_worker_references(self) -> None:
-        for reference_name in (
-            "_index_thread",
-            "_history_thread",
-            "_inference_thread",
-            "_resource_repair_thread",
-            "_startup_recovery_thread",
-        ):
-            thread = getattr(self, reference_name)
-            if thread is not None and not _thread_reference_is_alive(thread):
-                setattr(self, reference_name, None)
+    def _await_worker_startup(
+        self,
+        handle: WorkerHandle,
+        *,
+        started: bool,
+    ) -> WorkerStartupStatus:
+        deadline = time.monotonic() + max(
+            0.1,
+            float(handle.spec.startup_timeout_seconds),
+        )
+        while time.monotonic() < deadline:
+            if handle.ready_event.wait(timeout=0.05):
+                return self._status_for_handle(handle, started=started)
+            if handle.failed_event.is_set() or not _thread_reference_is_alive(handle.thread):
+                return self._status_for_handle(handle, started=started)
+        handle.error_code = "worker_startup_timeout"
+        handle.failed_event.set()
+        handle.stop_event.set()
+        joiner = getattr(handle.thread, "join", None)
+        if joiner is not None:
+            joiner(timeout=1.0)
+        if not _thread_reference_is_alive(handle.thread):
+            self._worker_handles.pop(handle.spec.name, None)
+        return WorkerStartupStatus(
+            WorkerStartupState.FAILED,
+            False,
+            started=started,
+            error_code=handle.error_code,
+        )
 
-    def start_background_workers(self) -> WorkerReadiness:
-        """Start each bounded non-critical worker at most once."""
+    def start_background_workers(self) -> WorkerStartupReport:
+        """Start every declared worker and wait for explicit initialization signals."""
 
         with self._lifecycle_lock:
-            all_worker_names = (
-                "folder_index",
-                "history",
-                "inference",
-                "activity_resource_repair",
-                "startup_recovery",
-            )
             if not self._initialized or not self.owns_application_instance:
-                return WorkerReadiness(
-                    False,
-                    False,
-                    error="runtime_not_owned",
-                    inference_ready=False,
-                    resource_repair_ready=False,
-                    startup_recovery_ready=False,
-                    failed_workers=all_worker_names,
-                )
+                statuses = {
+                    name: WorkerStartupStatus(
+                        WorkerStartupState.FAILED,
+                        False,
+                        error_code="runtime_not_owned",
+                    )
+                    for name in self._worker_specs
+                }
+                return WorkerStartupReport(statuses, "runtime_not_owned")
             if self._shutdown or self.stop_event.is_set():
-                return WorkerReadiness(
-                    False,
-                    False,
-                    error="runtime_stopping",
-                    inference_ready=False,
-                    resource_repair_ready=False,
-                    startup_recovery_ready=False,
-                    failed_workers=all_worker_names,
-                )
+                statuses = {
+                    name: WorkerStartupStatus(
+                        WorkerStartupState.STOPPED,
+                        False,
+                        error_code="runtime_stopping",
+                    )
+                    for name in self._worker_specs
+                }
+                return WorkerStartupReport(statuses, "runtime_stopping")
 
-            self._clear_dead_worker_references()
-
-            index_ready, index_started = self._start_worker_safely(
-                reference_name="_index_thread",
-                worker_name="WorkTraceFolderIndex",
-                health_name="folder_index",
-                target=folder_index_service.run_folder_index_worker,
-                failure_log="folder index worker initialization failed",
+            statuses = {
+                name: self._start_worker(spec)
+                for name, spec in self._worker_specs.items()
+            }
+            error_code = (
+                "worker_start_failed"
+                if any(not status.ready for status in statuses.values())
+                else None
             )
-            history_ready, history_started = self._start_worker_safely(
-                reference_name="_history_thread",
-                worker_name="WorkTraceHistoryMutation",
-                health_name="history",
-                target=history_mutation_job_service.run_history_worker,
-                failure_log="history worker initialization failed",
-            )
-            inference_ready, inference_started = self._start_worker_safely(
-                reference_name="_inference_thread",
-                worker_name="WorkTraceInferenceWorker",
-                health_name="inference",
-                target=activity_inference_job_service.run_inference_worker,
-                args=(project_inference_service.assign_project_for_activity_in_transaction,),
-                failure_log="inference worker initialization failed",
-            )
-            resource_repair_ready, resource_repair_started = self._start_worker_safely(
-                reference_name="_resource_repair_thread",
-                worker_name="WorkTraceActivityResourceRepair",
-                health_name="activity_resource_repair",
-                target=activity_fact_repair_service.run_activity_resource_repair_worker,
-                failure_log="activity resource repair worker initialization failed",
-            )
-            startup_recovery_ready, startup_recovery_started = self._start_worker_safely(
-                reference_name="_startup_recovery_thread",
-                worker_name="WorkTraceStartupRecovery",
-                health_name="startup_recovery",
-                target=recovery_service.run_startup_recovery_worker,
-                failure_log="startup recovery worker initialization failed",
-            )
-
-            failed_workers = tuple(
-                name
-                for name, ready in (
-                    ("folder_index", index_ready),
-                    ("history", history_ready),
-                    ("inference", inference_ready),
-                    ("activity_resource_repair", resource_repair_ready),
-                    ("startup_recovery", startup_recovery_ready),
-                )
-                if not ready
-            )
-            return WorkerReadiness(
-                index_ready=index_ready,
-                history_ready=history_ready,
-                index_started=index_started,
-                history_started=history_started,
-                error="worker_start_failed" if failed_workers else None,
-                inference_ready=inference_ready,
-                inference_started=inference_started,
-                resource_repair_ready=resource_repair_ready,
-                resource_repair_started=resource_repair_started,
-                startup_recovery_ready=startup_recovery_ready,
-                startup_recovery_started=startup_recovery_started,
-                failed_workers=failed_workers,
-            )
-
-    def _start_worker_safely(
-        self,
-        *,
-        reference_name: str,
-        worker_name: str,
-        health_name: str,
-        target: Callable[..., None],
-        failure_log: str,
-        args: tuple[Any, ...] = (),
-    ) -> tuple[bool, bool]:
-        try:
-            return self._start_owned_worker(
-                reference_name=reference_name,
-                worker_name=worker_name,
-                health_name=health_name,
-                target=target,
-                args=(self.stop_event, *args),
-            )
-        except Exception:
-            setattr(self, reference_name, None)
-            logging.exception(failure_log)
-            return False, False
+            return WorkerStartupReport(statuses, error_code)
 
     def start_authorized_collection(self) -> RuntimeStartResult:
-        """Start critical Collector first, then non-critical workers."""
+        """Start critical Collector first, then the registry-owned workers."""
 
         with self._lifecycle_lock:
             if not self._initialized or not self.owns_application_instance:
                 return RuntimeStartResult(
                     ok=False,
                     collector_ready=False,
-                    folder_index_ready=False,
-                    history_worker_ready=False,
+                    workers={},
                     degraded=True,
                     error_code="runtime_not_owned",
-                    inference_worker_ready=False,
-                    resource_repair_worker_ready=False,
-                    startup_recovery_worker_ready=False,
                 )
             if self._shutdown or self.stop_event.is_set():
                 return RuntimeStartResult(
                     ok=False,
                     collector_ready=False,
-                    folder_index_ready=False,
-                    history_worker_ready=False,
+                    workers={},
                     degraded=True,
                     error_code="runtime_stopping",
-                    inference_worker_ready=False,
-                    resource_repair_worker_ready=False,
-                    startup_recovery_worker_ready=False,
                 )
             self.phase = RuntimePhase.STARTING
 
@@ -450,48 +479,35 @@ class AppRuntime:
             return RuntimeStartResult(
                 ok=False,
                 collector_ready=False,
-                folder_index_ready=False,
-                history_worker_ready=False,
+                workers={},
                 degraded=True,
                 error_code=error_code,
-                inference_worker_ready=False,
-                resource_repair_worker_ready=False,
-                startup_recovery_worker_ready=False,
             )
 
         try:
-            workers = self.start_background_workers()
+            report = self.start_background_workers()
         except Exception:
             logging.exception("background worker startup failed")
-            workers = WorkerReadiness(
-                False,
-                False,
-                error="worker_start_failed",
-                inference_ready=False,
-                resource_repair_ready=False,
-                startup_recovery_ready=False,
-                failed_workers=(
-                    "folder_index",
-                    "history",
-                    "inference",
-                    "activity_resource_repair",
-                    "startup_recovery",
-                ),
+            report = WorkerStartupReport(
+                {
+                    name: WorkerStartupStatus(
+                        WorkerStartupState.FAILED,
+                        False,
+                        error_code="worker_start_failed",
+                    )
+                    for name in self._worker_specs
+                },
+                "worker_start_failed",
             )
 
-        degraded = not workers.ready
+        degraded = not report.ready
         self.phase = RuntimePhase.DEGRADED if degraded else RuntimePhase.RUNNING
         return RuntimeStartResult(
             ok=True,
             collector_ready=True,
-            folder_index_ready=workers.index_ready,
-            history_worker_ready=workers.history_ready,
-            inference_worker_ready=workers.inference_ready,
-            resource_repair_worker_ready=workers.resource_repair_ready,
-            startup_recovery_worker_ready=workers.startup_recovery_ready,
+            workers=report.workers,
             already_running=bool(collector_result.get("already_running")),
             degraded=degraded,
-            failed_workers=workers.failed_workers,
         )
 
     def start_collector(
@@ -586,8 +602,6 @@ class AppRuntime:
         return {"ok": False, "error": "collector_start_failed"}
 
     def is_collection_running_for_maintenance(self) -> bool:
-        """Return whether the Collector must be quiesced and later restored."""
-
         with self._lifecycle_lock:
             return bool(
                 self.owns_application_instance
@@ -607,52 +621,65 @@ class AppRuntime:
                 "pause_pending": False,
                 "collector_active": False,
             }
-        return self.collector_control.request_pause(timeout_seconds=timeout_seconds)
+        result = dict(
+            self.collector_control.request_pause(timeout_seconds=timeout_seconds)
+        )
+        result["collector_active"] = True
+        return result
 
     def quiesce_collection_for_maintenance(
         self,
         timeout_seconds: float = 5.0,
     ) -> dict[str, object]:
-        """Seal the active segment before the write gate begins draining."""
+        """Request and acknowledge Collector HELD before write-gate draining."""
 
         if not self.is_collection_running_for_maintenance():
             return {
                 "ok": True,
-                "quiesce_pending": False,
                 "collector_active": False,
+                "command_id": "inactive-collector",
+                "command_kind": "maintenance_hold",
+                "command_state": "completed",
+                "command_state_unknown": False,
+                "terminal_state": "held",
             }
         result = dict(
-            self.collector_control.request_pause(timeout_seconds=timeout_seconds)
+            self.collector_control.request_maintenance_hold(
+                timeout_seconds=timeout_seconds
+            )
         )
-        result["quiesce_pending"] = bool(result.get("pause_pending", False))
+        result["collector_active"] = True
         return result
 
     def quiesce_collection_now(
         self,
         timeout_seconds: float = 5.0,
     ) -> dict[str, object]:
-        """Compatibility-free internal spelling used by direct runtime callers."""
-
         return self.quiesce_collection_for_maintenance(timeout_seconds)
 
     def reset_after_database_replacement(
         self,
         timeout_seconds: float = 5.0,
     ) -> dict[str, object]:
-        """Clear only process-local identities after the exclusive gate exits."""
+        """Reset process-local identities while the Collector remains HELD."""
 
         if not self.is_collection_running_for_maintenance():
             self._reset_adapter_runtime_state()
             return {
                 "ok": True,
-                "reset_pending": False,
                 "collector_active": False,
+                "command_id": "inactive-collector",
+                "command_kind": "database_reset",
+                "command_state": "completed",
+                "command_state_unknown": False,
+                "terminal_state": "held",
             }
         result = dict(
             self.collector_control.request_reset(timeout_seconds=timeout_seconds)
         )
         if bool(result.get("ok")):
             self._reset_adapter_runtime_state()
+        result["collector_active"] = True
         return result
 
     def reset_collection_runtime_now(
@@ -667,8 +694,16 @@ class AppRuntime:
         *,
         timeout_seconds: float = 5.0,
     ) -> dict[str, object]:
-        """Restore collection only when pre-state and privacy authorization allow."""
+        """Release an existing hold or restart only a previously running Collector."""
 
+        if self.is_collection_running_for_maintenance():
+            result = dict(
+                self.collector_control.request_maintenance_release(
+                    timeout_seconds=timeout_seconds
+                )
+            )
+            result["collector_active"] = True
+            return result
         should_run = bool(
             state.collector_running
             and state.privacy_notice_accepted
@@ -677,19 +712,26 @@ class AppRuntime:
         if not should_run:
             return {
                 "ok": True,
-                "restore_pending": False,
-                "collector_active": self.is_collection_running_for_maintenance(),
-            }
-        if self.is_collection_running_for_maintenance():
-            return {
-                "ok": True,
-                "restore_pending": False,
-                "collector_active": True,
+                "collector_active": False,
+                "command_id": "inactive-collector",
+                "command_kind": "maintenance_release",
+                "command_state": "completed",
+                "command_state_unknown": False,
+                "terminal_state": "operational",
             }
         result = dict(
             self.start_collector(startup_timeout_seconds=timeout_seconds)
         )
-        result["restore_pending"] = False
+        if bool(result.get("ok")):
+            result.update(
+                {
+                    "command_id": "collector-restarted",
+                    "command_kind": "maintenance_release",
+                    "command_state": "completed",
+                    "command_state_unknown": False,
+                    "terminal_state": "operational",
+                }
+            )
         return result
 
     def _reset_adapter_runtime_state(self) -> None:
@@ -707,6 +749,8 @@ class AppRuntime:
         self.phase = RuntimePhase.STOPPING
         self.stop_event.set()
         folder_index_service.wake_folder_index_worker()
+        for handle in self._worker_handles.values():
+            handle.stop_event.set()
         if self._collector_stop_event is not None:
             self._collector_stop_event.set()
 
@@ -720,19 +764,14 @@ class AppRuntime:
             self.set_clipboard_capture_enabled(False)
             self.stop_event.set()
             folder_index_service.wake_folder_index_worker()
+            handles = list(self._worker_handles.values())
+            for handle in handles:
+                handle.stop_event.set()
             if self._collector_stop_event is not None:
                 self._collector_stop_event.set()
-            derived_workers = (
-                self._index_thread,
-                self._history_thread,
-                self._inference_thread,
-                self._resource_repair_thread,
-                self._startup_recovery_thread,
-            )
-            workers = (*derived_workers, self._collector_thread)
+            collector_thread = self._collector_thread
 
         adapter_shutdown = False
-        collector_thread = self._collector_thread
         if collector_thread:
             joiner = getattr(collector_thread, "join", None)
             if joiner is not None:
@@ -745,17 +784,23 @@ class AppRuntime:
                 if joiner is not None:
                     joiner(timeout=5)
 
-        for thread in derived_workers:
-            if thread:
+        for handle in handles:
+            thread = handle.thread
+            if thread is not None:
                 joiner = getattr(thread, "join", None)
                 if joiner is not None:
                     joiner(timeout=5)
 
         with self._lifecycle_lock:
-            self._clear_dead_worker_references()
+            self._worker_handles = {
+                name: handle
+                for name, handle in self._worker_handles.items()
+                if _thread_reference_is_alive(handle.thread)
+            }
 
+        writers = [collector_thread, *(handle.thread for handle in handles)]
         writers_stopped = not any(
-            _thread_reference_is_alive(thread) for thread in workers
+            _thread_reference_is_alive(thread) for thread in writers
         )
         if self.owns_application_instance and writers_stopped:
             if self._initialized:
@@ -782,5 +827,9 @@ __all__ = [
     "AppRuntime",
     "RuntimePhase",
     "RuntimeStartResult",
-    "WorkerReadiness",
+    "WorkerHandle",
+    "WorkerSpec",
+    "WorkerStartupReport",
+    "WorkerStartupState",
+    "WorkerStartupStatus",
 ]
