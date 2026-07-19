@@ -10,14 +10,18 @@ from typing import Any, Iterator
 from ..db import now_str, seed_defaults
 from ..domain_unit_of_work import DomainUnitOfWork
 from ..write_gate import DATABASE_WRITE_GATE
-from . import startup_recovery_job_repository
+from . import (
+    activity_fact_repair_service,
+    activity_inference_job_repository,
+    history_mutation_job_service,
+    startup_recovery_job_repository,
+)
 from .database_maintenance_barrier import drain_existing_writers
 from .database_replacement_generation_service import publish_database_replacement
 from .runtime_activity_state_service import clear_runtime_activity_state
-from .settings_service import set_setting
+from .settings_service import SettingMutationClass, set_settings
 
 _DELETE_ORDER: tuple[str, ...] = (
-    "activity_inference_job",
     "activity_resource",
     "report_session_operation_member",
     "report_mutation_request",
@@ -93,8 +97,13 @@ class DatabaseMaintenanceCoordinator:
 
     @staticmethod
     def _fail_closed(*, reason: str, command: str) -> None:
-        set_setting("user_paused", "true")
-        set_setting("collector_status", "paused")
+        set_settings(
+            {
+                "user_paused": "true",
+                "collector_status": "paused",
+            },
+            mutation_class=SettingMutationClass.OPERATIONAL,
+        )
         clear_runtime_activity_state(f"{reason}_{command}_state_unknown")
 
     @classmethod
@@ -183,6 +192,15 @@ def maintenance_operation(*, reason: str) -> Iterator[None]:
         yield None
 
 
+def clear_all_worker_progress_in_transaction(conn) -> None:
+    """Clear replacement-invalid durable progress through canonical owners."""
+
+    history_mutation_job_service.clear_all_jobs_in_transaction(conn)
+    activity_inference_job_repository.clear_all_jobs(conn)
+    activity_fact_repair_service.clear_all_jobs_in_transaction(conn)
+    startup_recovery_job_repository.clear_all_jobs(conn)
+
+
 def _apply_post_clear_settings(conn) -> None:
     updated_at = now_str()
     for key, value in _POST_CLEAR_SETTINGS.items():
@@ -204,10 +222,9 @@ def clear_all_live_data() -> None:
     with maintenance_operation(reason="clear_database"):
         with DomainUnitOfWork() as uow:
             conn = uow.connection
-            startup_recovery_job_repository.clear_all_jobs(conn)
+            clear_all_worker_progress_in_transaction(conn)
             for table in _DELETE_ORDER:
                 conn.execute(f"DELETE FROM {table}")
-            conn.execute("DELETE FROM activity_resource_repair_job")
             seed_defaults(conn)
             _apply_post_clear_settings(conn)
             publish_database_replacement(conn)
@@ -220,6 +237,7 @@ __all__ = [
     "MaintenanceInProgressError",
     "MaintenancePhase",
     "clear_all_live_data",
+    "clear_all_worker_progress_in_transaction",
     "clear_collector_pause_handler",
     "clear_collector_reset_handler",
     "is_maintenance_in_progress",
