@@ -13,7 +13,11 @@ from worktrace.security.backup_format import (
     create_encrypted_backup,
     decrypt_encrypted_backup,
 )
-from worktrace.services import secure_backup_service
+from worktrace.services import (
+    history_mutation_job_service,
+    rule_service,
+    secure_backup_service,
+)
 from worktrace.services.secure_backup_service import (
     BackupCorruptedError,
     BackupDecryptionError,
@@ -32,6 +36,13 @@ pytestmark = [
 
 PASSPHRASE = "current-format-passphrase"
 PROJECT_NAME = "Backup Current Project"
+_WORKER_PROGRESS_TABLES = (
+    "history_mutation_job_rule",
+    "history_mutation_job",
+    "activity_inference_job",
+    "activity_resource_repair_job",
+    "startup_recovery_job",
+)
 
 
 def _seed_current_data() -> tuple[int, int]:
@@ -119,6 +130,57 @@ def _seed_current_data() -> tuple[int, int]:
     return activity_ids[0], activity_ids[1]
 
 
+def _seed_all_worker_progress(source_activity_id: int) -> None:
+    with db.get_connection() as conn:
+        project_id = int(
+            conn.execute(
+                "SELECT id FROM project WHERE name = ?",
+                (PROJECT_NAME,),
+            ).fetchone()[0]
+        )
+    rule_id = rule_service.create_rule("Matter", project_id)
+    history_mutation_job_service.submit_rule_job(
+        "rule_backfill",
+        "keyword",
+        rule_id,
+        synchronous_limit=0,
+    )
+    timestamp = db.now_str()
+    with db.get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO activity_resource_repair_job(
+                singleton_id, policy_version, status, cursor_activity_id,
+                processed_count, repaired_count, failed_count, unknown_count,
+                last_error, started_at, completed_at, updated_at
+            ) VALUES (1, 1, 'pending', 0, 0, 0, 0, 0, '', '', '', ?)
+            """,
+            (timestamp,),
+        )
+        conn.execute(
+            """
+            INSERT INTO startup_recovery_job(
+                source_activity_id, cursor_time, end_time, source,
+                activity_status, app_name, process_name, window_title,
+                file_path_hint, project_id, status, attempt_count,
+                next_attempt_at, last_error_code, created_at, updated_at
+            ) VALUES (?, '2026-07-18 10:01:00', '2026-07-20 10:01:00',
+                      'auto', 'normal', 'Word', 'winword.exe', 'Matter 0.docx',
+                      'C:\\Matter\\Matter 0.docx', ?, 'pending', 0,
+                      NULL, NULL, ?, ?)
+            """,
+            (source_activity_id, project_id, timestamp, timestamp),
+        )
+
+
+def _worker_progress_counts() -> dict[str, int]:
+    with db.get_connection() as conn:
+        return {
+            table: int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+            for table in _WORKER_PROGRESS_TABLES
+        }
+
+
 def _write_payload(tmp_path: Path, data: dict, name: str) -> Path:
     path = tmp_path / name
     path.write_bytes(
@@ -141,17 +203,19 @@ def test_export_payload_is_exact_current_contract(temp_db):
     assert data["schema_version"] == "11"
     assert data["schema_fingerprint"] == db.expected_schema_fingerprint()
     assert set(data["tables"]) == set(secure_backup_service.EXPORT_TABLES)
-    assert "activity_inference_job" not in data["tables"]
-    assert "activity_inference_job" in secure_backup_service.EXCLUDED_TABLES
+    for table in _WORKER_PROGRESS_TABLES:
+        assert table not in data["tables"]
+        assert table in secure_backup_service.EXCLUDED_TABLES
     assert "folder_rule_file_index" not in data["tables"]
-    assert "history_mutation_job" not in data["tables"]
 
 
 def test_current_v5_round_trip_restores_business_data_and_clears_worker_progress(
     temp_db,
     tmp_path,
 ):
-    _seed_current_data()
+    first_activity_id, _second_activity_id = _seed_current_data()
+    _seed_all_worker_progress(first_activity_id)
+    assert all(count > 0 for count in _worker_progress_counts().values())
     out = tmp_path / "round-trip.wtbackup"
     secure_backup_service.export_encrypted_backup(out, PASSPHRASE)
 
@@ -166,12 +230,11 @@ def test_current_v5_round_trip_restores_business_data_and_clears_worker_progress
         activity_count = conn.execute(
             "SELECT COUNT(*) FROM activity_log"
         ).fetchone()[0]
-        inference_job_count = conn.execute(
-            "SELECT COUNT(*) FROM activity_inference_job"
-        ).fetchone()[0]
     assert project is not None
     assert activity_count == 2
-    assert inference_job_count == 0
+    assert _worker_progress_counts() == {
+        table: 0 for table in _WORKER_PROGRESS_TABLES
+    }
 
 
 def test_non_current_payload_version_is_explicitly_rejected(temp_db, tmp_path):
