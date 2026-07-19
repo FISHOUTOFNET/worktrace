@@ -82,7 +82,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path "test-results" | Out-Null
-          & python -m compileall -q worktrace scripts/pytest_diagnostics.py *> "test-results/compile.log"
+          & python -m compileall -q worktrace scripts/pytest_diagnostics.py scripts/pytest_log_to_junit.py *> "test-results/compile.log"
           $compileExitCode = $LASTEXITCODE
           Write-Host "compile exit code: $compileExitCode"
           if ($compileExitCode -ne 0) {
@@ -144,6 +144,16 @@ jobs:
               --summary "$env:GITHUB_STEP_SUMMARY"
           }
           elseif ("${{ steps.pytest.outcome }}" -eq "failure") {
+            if (-not (Test-Path -LiteralPath "test-results/pytest-junit.xml")) {
+              Write-Host "JUnit was not finalized; recovering partial results from pytest.log"
+              & python scripts/pytest_log_to_junit.py `
+                --log "test-results/pytest.log" `
+                --output "test-results/pytest-junit.xml" `
+                --timeout-seconds 90
+              if ($LASTEXITCODE -ne 0) {
+                Write-Warning "Partial JUnit recovery failed; diagnostics will use the log fallback"
+              }
+            }
             & python scripts/pytest_diagnostics.py `
               --stage pytest `
               --junit "test-results/pytest-junit.xml" `
