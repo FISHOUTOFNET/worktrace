@@ -1,10 +1,8 @@
 """Activity Display Model orchestration layer.
 
-This module remains the only service entry point that samples the current
-activity state and decides the full live display model. Policy, live clock,
-span construction, and row overlay live in focused sibling modules.
+This module is the only service entry point that samples current activity state
+and composes policy, LiveClock v2, spans, and current activity metadata.
 """
-
 from __future__ import annotations
 
 from typing import Any
@@ -38,7 +36,7 @@ def build_activity_display_model(
     today: str | None = None,
     snapshot: Any = _UNSET,
 ) -> dict[str, Any]:
-    """Build the unified Activity Display Model from one typed sample."""
+    """Build the unified Activity Display Model from one revisioned sample."""
 
     if snapshot is _UNSET:
         snapshot = sample_runtime_activity_state().snapshot
@@ -47,8 +45,6 @@ def build_activity_display_model(
     is_today = report_date == today
 
     base_state = classify_live_state(snapshot)
-    # Normal live display is exclusively backed by its own persisted open
-    # activity. It never borrows or reopens a previously closed anchor.
     anchor: dict[str, Any] | None = None
     if not is_today:
         display_live_state = "none"
@@ -67,7 +63,7 @@ def build_activity_display_model(
     policy = build_display_session_policy(
         snapshot,
         report_date,
-        today or "",
+        today,
         base_state,
         anchor,
         display_live_state,
@@ -83,7 +79,7 @@ def build_activity_display_model(
             summary,
             policy,
             report_date,
-            today or "",
+            today,
         )
 
     display_spans: list[dict[str, Any]] = []
@@ -99,8 +95,9 @@ def build_activity_display_model(
                 anchor,
                 live_clock,
                 summary,
+                policy,
                 report_date,
-                today or "",
+                today,
             )
         )
 
@@ -115,7 +112,7 @@ def build_activity_display_model(
         snapshot,
         display_live_state,
         report_date,
-        today or "",
+        today,
     )
     display_structural_signature = build_display_structural_signature(
         snapshot,
@@ -123,8 +120,9 @@ def build_activity_display_model(
         anchor,
         live_clock,
         current_activity,
+        policy,
         report_date,
-        today or "",
+        today,
         is_today,
     )
 
@@ -132,7 +130,7 @@ def build_activity_display_model(
         "ok": True,
         "date": report_date,
         "is_today": bool(is_today),
-        "sample_id": str(live_clock.get("stable_live_key_hash") or ""),
+        "sample_id": str(live_clock["stable_live_key_hash"]),
         "live_clock": live_clock,
         "current_activity": current_activity,
         "status_display_item": status_display_item,
