@@ -33,6 +33,10 @@ def test_v2_clock_separates_active_elapsed_from_aggregate_duration(monkeypatch):
     assert clock["current_elapsed_at_sample"] == 5
     assert clock["aggregate_display_base_seconds"] == 100
     assert clock["aggregate_duration_seconds_at_sample"] == 105
+    assert clock["aggregate_duration_seconds_at_sample"] == (
+        clock["aggregate_display_base_seconds"]
+        + clock["duration_seconds_at_sample"]
+    )
     assert clock["sample_epoch_ms"] == 12_000
 
 
