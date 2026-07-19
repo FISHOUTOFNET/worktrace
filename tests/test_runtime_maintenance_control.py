@@ -322,7 +322,7 @@ def test_user_pause_and_privacy_gate_are_preserved(temp_db, monkeypatch):
     assert control.restored_state.privacy_notice_accepted is False
     assert control.restored_state.user_paused is True
     assert settings_service.get_bool_setting("user_paused", False) is True
-    assert settings_service.get_setting("collector_status", "") == "stopped"
+    assert settings_service.get_setting("collector_status", "") == "paused"
 
 
 def _window() -> ActiveWindow:
