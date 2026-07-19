@@ -4,8 +4,6 @@ import json
 
 import pytest
 
-from worktrace.services import system_project_service
-
 from tests.support import activity_factory as activity_service
 from worktrace.api import rule_api
 from worktrace.constants import EXCLUDED_PROJECT
@@ -18,7 +16,7 @@ from worktrace.services import (
     privacy_service,
     project_inference_service,
     project_service,
-    rule_service,
+    rule_catalog_command_service,
 )
 
 pytestmark = [pytest.mark.db, pytest.mark.integration, pytest.mark.contract]
@@ -52,7 +50,7 @@ def _history_counts() -> tuple[int, int, int]:
 
 def test_keyword_rule_disable_enable_updates_existing_row(temp_db):
     project_id = project_service.create_project("Client")
-    rule_id = rule_service.create_rule("Spec", project_id)
+    rule_id = rule_catalog_command_service.create_keyword_rule("Spec", project_id)
 
     assert rule_api.set_project_rule_enabled("keyword", rule_id, False) == {
         "ok": True,
@@ -67,7 +65,7 @@ def test_keyword_rule_disable_enable_updates_existing_row(temp_db):
 
 def test_folder_rule_disable_enable_updates_existing_row(temp_db):
     project_id = project_service.create_project("Client")
-    rule_id = folder_rule_service.create_or_update_folder_rule(
+    rule_id = rule_catalog_command_service.create_or_update_folder_rule(
         r"D:\Client",
         project_id,
     )
@@ -103,19 +101,8 @@ def test_invalid_toggle_inputs_return_stable_error(
     }
 
 
-def test_missing_rules_return_not_found_without_calling_writer(temp_db, monkeypatch):
-    calls = {"keyword": 0, "folder": 0}
-
-    def fail_keyword(*args, **kwargs):
-        calls["keyword"] += 1
-        raise AssertionError("missing keyword rule must not reach writer")
-
-    def fail_folder(*args, **kwargs):
-        calls["folder"] += 1
-        raise AssertionError("missing folder rule must not reach writer")
-
-    monkeypatch.setattr(rule_service, "set_rule_enabled", fail_keyword)
-    monkeypatch.setattr(folder_rule_service, "set_folder_rule_enabled", fail_folder)
+def test_missing_rules_return_not_found_without_generation_effect(temp_db):
+    before = generation(DataGenerationNamespace.CLASSIFICATION_CATALOG)
 
     assert rule_api.set_project_rule_enabled("keyword", 999, False) == {
         "ok": False,
@@ -125,13 +112,13 @@ def test_missing_rules_return_not_found_without_calling_writer(temp_db, monkeypa
         "ok": False,
         "error": "not_found",
     }
-    assert calls == {"keyword": 0, "folder": 0}
+    assert generation(DataGenerationNamespace.CLASSIFICATION_CATALOG) == before
 
 
 def test_toggle_does_not_submit_history_job_or_change_history(temp_db, monkeypatch):
     project_id = project_service.create_project("Client")
-    keyword_id = rule_service.create_rule("Spec", project_id)
-    folder_id = folder_rule_service.create_or_update_folder_rule(
+    keyword_id = rule_catalog_command_service.create_keyword_rule("Spec", project_id)
+    folder_id = rule_catalog_command_service.create_or_update_folder_rule(
         r"D:\Client",
         project_id,
     )
@@ -156,8 +143,8 @@ def test_toggle_does_not_submit_history_job_or_change_history(temp_db, monkeypat
 
 def test_toggle_invalidates_rule_caches_via_catalog_generation(temp_db):
     project_id = project_service.create_project("Client")
-    keyword_id = rule_service.create_rule("Spec", project_id)
-    folder_id = folder_rule_service.create_or_update_folder_rule(
+    keyword_id = rule_catalog_command_service.create_keyword_rule("Spec", project_id)
+    folder_id = rule_catalog_command_service.create_or_update_folder_rule(
         r"D:\Client",
         project_id,
     )
@@ -177,13 +164,15 @@ def test_toggle_invalidates_rule_caches_via_catalog_generation(temp_db):
 
 
 def test_excluded_rule_toggle_invalidates_privacy_generation(temp_db):
-    excluded_id = system_project_service.require_excluded_project_id()
-    project_service.set_project_enabled(excluded_id, True)
-    keyword_id = rule_service.create_rule("Secret", excluded_id)
-    folder_id = folder_rule_service.create_or_update_folder_rule(
-        r"D:\Secret",
-        excluded_id,
+    keyword_id, excluded_id = (
+        rule_catalog_command_service.create_excluded_keyword_rule("Secret")
     )
+    folder_id, folder_excluded_id = (
+        rule_catalog_command_service.create_or_update_excluded_folder_rule(
+            r"D:\Secret"
+        )
+    )
+    assert folder_excluded_id == excluded_id
     assert privacy_service._exclude_rules()
     before = generation(DataGenerationNamespace.PRIVACY_CATALOG)
 
@@ -198,12 +187,13 @@ def test_excluded_rule_toggle_invalidates_privacy_generation(temp_db):
         for item in project_service.list_project_bindings()
         if item["name"] == EXCLUDED_PROJECT
     )
-    assert excluded["enabled"] == 1
+    assert excluded["id"] == excluded_id
+    assert excluded["enabled"] == 0
 
 
 def test_idempotent_toggle_does_not_bump_catalog_generation(temp_db):
     project_id = project_service.create_project("Client")
-    keyword_id = rule_service.create_rule("Spec", project_id)
+    keyword_id = rule_catalog_command_service.create_keyword_rule("Spec", project_id)
     before = generation(DataGenerationNamespace.CLASSIFICATION_CATALOG)
 
     assert rule_api.set_project_rule_enabled("keyword", keyword_id, True)["ok"] is True
@@ -212,8 +202,8 @@ def test_idempotent_toggle_does_not_bump_catalog_generation(temp_db):
 
 def test_service_exceptions_are_folded_to_operation_failed(temp_db, monkeypatch):
     project_id = project_service.create_project("Client")
-    keyword_id = rule_service.create_rule("Spec", project_id)
-    folder_id = folder_rule_service.create_or_update_folder_rule(
+    keyword_id = rule_catalog_command_service.create_keyword_rule("Spec", project_id)
+    folder_id = rule_catalog_command_service.create_or_update_folder_rule(
         r"D:\Client",
         project_id,
     )
@@ -221,9 +211,17 @@ def test_service_exceptions_are_folded_to_operation_failed(temp_db, monkeypatch)
     def boom(*args, **kwargs):
         raise RuntimeError("SELECT traceback window_title clipboard C:\\Secret")
 
-    monkeypatch.setattr(rule_service, "set_rule_enabled", boom)
+    monkeypatch.setattr(
+        rule_catalog_command_service,
+        "set_keyword_rule_enabled",
+        boom,
+    )
     keyword_result = rule_api.set_project_rule_enabled("keyword", keyword_id, False)
-    monkeypatch.setattr(folder_rule_service, "set_folder_rule_enabled", boom)
+    monkeypatch.setattr(
+        rule_catalog_command_service,
+        "set_folder_rule_enabled",
+        boom,
+    )
     folder_result = rule_api.set_project_rule_enabled("folder", folder_id, False)
 
     assert keyword_result == {"ok": False, "error": "operation_failed"}
@@ -235,7 +233,7 @@ def test_service_exceptions_are_folded_to_operation_failed(temp_db, monkeypatch)
 
 def test_toggle_payload_is_json_serializable_and_stable(temp_db):
     project_id = project_service.create_project("Client")
-    keyword_id = rule_service.create_rule("Spec", project_id)
+    keyword_id = rule_catalog_command_service.create_keyword_rule("Spec", project_id)
     result = rule_api.set_project_rule_enabled("keyword", keyword_id, False)
     assert json.loads(json.dumps(result)) == {
         "ok": True,
