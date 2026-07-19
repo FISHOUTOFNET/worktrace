@@ -213,11 +213,10 @@ def test_maintenance_coordinator_pauses_and_resets_before_operation(temp_db):
     coordinator.register_pause_handler(pause)
     coordinator.register_reset_handler(reset)
 
-    with coordinator.acquire(reason="test") as state:
+    with coordinator.acquire(reason="test"):
         assert coordinator.active() is True
         assert coordinator.phase is MaintenancePhase.EXCLUSIVE
         calls.append("operation")
-        state.mark_succeeded()
 
     assert calls == ["pause", "reset", "operation"]
     assert coordinator.active() is False
