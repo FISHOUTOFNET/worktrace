@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ..services import secure_backup_service
+from ..services import database_maintenance_service, secure_backup_service
 from ..services.secure_backup_service import (
     BackupCorruptedError,
     BackupDecryptionError,
@@ -42,7 +42,9 @@ def parse_encrypted_backup_manifest(input_path: str | Path) -> BackupManifestInf
 
 
 def is_secure_import_in_progress() -> bool:
-    return secure_backup_service.is_secure_import_in_progress()
+    """Expose the canonical maintenance gate as a read-only UI status."""
+
+    return database_maintenance_service.is_maintenance_in_progress()
 
 
 __all__ = [

@@ -37,10 +37,11 @@ def drop_all_tables(conn: sqlite3.Connection) -> None:
 
 
 def reset_database() -> None:
-    """Rebuild the configured test database using the current-only schema."""
+    """Rebuild the configured test database using the exact current schema."""
 
     with db.get_connection() as conn:
         db.ensure_wal(conn)
         with report_structure_classifier_scope():
             drop_all_tables(conn)
             db.apply_current_schema(conn)
+            db.seed_defaults(conn)
