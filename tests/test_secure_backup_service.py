@@ -141,13 +141,17 @@ def test_export_payload_is_exact_current_contract(temp_db):
     assert data["schema_version"] == "11"
     assert data["schema_fingerprint"] == db.expected_schema_fingerprint()
     assert set(data["tables"]) == set(secure_backup_service.EXPORT_TABLES)
-    assert "activity_inference_job" in data["tables"]
+    assert "activity_inference_job" not in data["tables"]
+    assert "activity_inference_job" in secure_backup_service.EXCLUDED_TABLES
     assert "folder_rule_file_index" not in data["tables"]
     assert "history_mutation_job" not in data["tables"]
 
 
-def test_current_v5_round_trip_restores_pending_and_failed_jobs(temp_db, tmp_path):
-    pending_id, failed_id = _seed_current_data()
+def test_current_v5_round_trip_restores_business_data_and_clears_worker_progress(
+    temp_db,
+    tmp_path,
+):
+    _seed_current_data()
     out = tmp_path / "round-trip.wtbackup"
     secure_backup_service.export_encrypted_backup(out, PASSPHRASE)
 
@@ -159,18 +163,15 @@ def test_current_v5_round_trip_restores_pending_and_failed_jobs(temp_db, tmp_pat
             "SELECT 1 FROM project WHERE name = ?",
             (PROJECT_NAME,),
         ).fetchone()
-        jobs = {
-            int(row["activity_id"]): dict(row)
-            for row in conn.execute(
-                "SELECT * FROM activity_inference_job ORDER BY activity_id"
-            ).fetchall()
-        }
+        activity_count = conn.execute(
+            "SELECT COUNT(*) FROM activity_log"
+        ).fetchone()[0]
+        inference_job_count = conn.execute(
+            "SELECT COUNT(*) FROM activity_inference_job"
+        ).fetchone()[0]
     assert project is not None
-    assert jobs[pending_id]["status"] == "pending"
-    assert jobs[pending_id]["attempt_count"] == 0
-    assert jobs[failed_id]["status"] == "failed"
-    assert jobs[failed_id]["attempt_count"] == 3
-    assert jobs[failed_id]["last_error_code"] == "database_busy"
+    assert activity_count == 2
+    assert inference_job_count == 0
 
 
 def test_non_current_payload_version_is_explicitly_rejected(temp_db, tmp_path):
@@ -275,10 +276,9 @@ def test_concurrent_maintenance_rejects_import(temp_db, tmp_path):
     _seed_current_data()
     out = tmp_path / "busy.wtbackup"
     secure_backup_service.export_encrypted_backup(out, PASSPHRASE)
-    with database_maintenance_service.maintenance_operation(reason="test") as state:
+    with database_maintenance_service.maintenance_operation(reason="test"):
         with pytest.raises(BackupImportInProgressError):
             secure_backup_service.import_encrypted_backup(out, PASSPHRASE)
-        state.mark_succeeded()
 
 
 def test_file_and_payload_size_limits_fail_closed(temp_db, tmp_path, monkeypatch):
