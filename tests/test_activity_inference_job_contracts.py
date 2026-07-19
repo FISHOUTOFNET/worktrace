@@ -132,6 +132,65 @@ def test_repository_enqueues_only_canonical_closed_activity_eligibility(temp_db)
     assert [int(row["activity_id"]) for row in rows] == [eligible]
 
 
+def test_duplicate_enqueue_returns_zero(temp_db):
+    activity_id = _create_activity()
+    with db.get_connection() as conn:
+        assert jobs.enqueue_closed_activity_ids(conn, [activity_id]) == 1
+        assert jobs.enqueue_closed_activity_ids(conn, [activity_id, activity_id]) == 0
+
+
+def test_enqueue_does_not_scan_existing_outbox_for_single_new_activity(temp_db):
+    existing_ids = [_create_activity() for _ in range(50)]
+    target_id = _create_activity()
+    with db.get_connection() as conn:
+        assert jobs.enqueue_closed_activity_ids(conn, existing_ids) == len(existing_ids)
+        statements: list[str] = []
+        conn.set_trace_callback(statements.append)
+        assert jobs.enqueue_closed_activity_ids(conn, [target_id]) == 1
+        conn.set_trace_callback(None)
+
+    normalized = [" ".join(statement.casefold().split()) for statement in statements]
+    assert not any(
+        "count(*)" in statement and "activity_inference_job" in statement
+        for statement in normalized
+    )
+    assert sum(
+        statement.startswith("insert or ignore into activity_inference_job")
+        for statement in normalized
+    ) == 1
+
+
+def test_enqueue_preserves_existing_failed_job_backoff(temp_db):
+    activity_id = _create_activity()
+    with db.get_connection() as conn:
+        assert jobs.enqueue_closed_activity_ids(conn, [activity_id]) == 1
+        conn.execute(
+            """
+            UPDATE activity_inference_job
+            SET status = 'failed', attempt_count = 4,
+                next_attempt_at = '2099-01-01 00:00:00',
+                last_error_code = 'database_busy'
+            WHERE activity_id = ?
+            """,
+            (activity_id,),
+        )
+        assert jobs.enqueue_closed_activity_ids(conn, [activity_id]) == 0
+        row = conn.execute(
+            """
+            SELECT status, attempt_count, next_attempt_at, last_error_code
+            FROM activity_inference_job
+            WHERE activity_id = ?
+            """,
+            (activity_id,),
+        ).fetchone()
+    assert dict(row) == {
+        "status": "failed",
+        "attempt_count": 4,
+        "next_attempt_at": "2099-01-01 00:00:00",
+        "last_error_code": "database_busy",
+    }
+
+
 def test_close_and_job_enqueue_commit_atomically(temp_db, monkeypatch):
     activity_id = _create_activity(closed=False)
 
@@ -205,7 +264,11 @@ def test_consumer_rolls_back_assignment_when_job_completion_fails(
         )
         return {}
 
-    monkeypatch.setattr(jobs, "delete_job", lambda *_args: (_ for _ in ()).throw(RuntimeError("delete failed")))
+    monkeypatch.setattr(
+        jobs,
+        "delete_job",
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("delete failed")),
+    )
     assert consumer.process_pending_inference_jobs(infer, limit=1) == 0
     with db.get_connection() as conn:
         assert conn.execute(
