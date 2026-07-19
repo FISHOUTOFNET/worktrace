@@ -106,8 +106,7 @@ jobs:
           & python -m pytest -vv -ra --tb=short --color=no --cache-clear `
             --timeout=90 --timeout-method=thread `
             --durations=25 --durations-min=0.2 `
-            --junitxml="test-results/pytest-junit.xml" 2>&1 |
-            Tee-Object -FilePath "test-results/pytest.log"
+            --junitxml="test-results/pytest-junit.xml" *> "test-results/pytest.log"
           $pytestExitCode = $LASTEXITCODE
           $pytestElapsedSeconds = ((Get-Date) - $pytestStartedAt).TotalSeconds
 
