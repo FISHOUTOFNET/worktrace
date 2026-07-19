@@ -168,12 +168,7 @@ def _recent_first_row(
     payload: Mapping[str, Any],
     current_activity: Mapping[str, Any],
 ) -> dict[str, Any] | None:
-    if current_activity.get("active") is True and (
-        current_activity.get("activity_id") is not None
-        or current_activity.get("persisted_activity_id")
-        or current_activity.get("is_in_progress") is True
-    ):
-        return dict(current_activity)
+    del current_activity
     activities = payload.get("activities")
     if isinstance(activities, list) and activities:
         return _optional_mapping(activities[0])
