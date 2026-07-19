@@ -104,18 +104,18 @@ def test_invalid_input_is_rejected(temp_db, project_id, keyword):
     }
 
 
-def test_keyword_is_trimmed_and_duplicate_scope_is_per_project(temp_db):
+def test_keyword_is_trimmed_casefolded_and_duplicate_scope_is_per_project(temp_db):
     project_a = project_service.create_project("A")
     project_b = project_service.create_project("B")
 
     first = rule_api.create_project_keyword_rule(project_a, "  Spec  ")
     assert first["ok"] is True
     assert first["rule"]["keyword"] == "Spec"
-    assert rule_api.create_project_keyword_rule(project_a, "Spec") == {
-        "ok": False,
-        "error": "duplicate_rule",
-    }
-    assert rule_api.create_project_keyword_rule(project_a, "spec")["ok"] is True
+    for duplicate in ("Spec", "spec", " SPEC "):
+        assert rule_api.create_project_keyword_rule(project_a, duplicate) == {
+            "ok": False,
+            "error": "duplicate_rule",
+        }
     assert rule_api.create_project_keyword_rule(project_b, "Spec")["ok"] is True
 
 
