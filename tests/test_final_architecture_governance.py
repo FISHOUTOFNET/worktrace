@@ -7,6 +7,7 @@ import pytest
 
 from worktrace import db
 from worktrace.services import secure_backup_service
+from worktrace.services.session_boundary_policy import ALLOWED_HARD_BOUNDARY_REASONS
 
 pytestmark = [pytest.mark.unit, pytest.mark.contract, pytest.mark.parallel_safe]
 ROOT = Path(__file__).resolve().parents[1]
@@ -106,6 +107,7 @@ def test_boundary_reasons_and_pause_command_have_no_compatibility_fallback():
     app_api = _source("worktrace/api/app_api.py")
     for retired in ('"paused"', '"stopped"', '"time_jump"', '"secure_import"'):
         assert retired not in state_machine
+    assert "pause_fallback" not in ALLOWED_HARD_BOUNDARY_REASONS
     assert "pause_fallback" not in app_api
     assert "activity_lifecycle_service.pause_collection" not in app_api
 
