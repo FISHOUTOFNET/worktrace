@@ -85,48 +85,31 @@ def process_pending_inference_jobs(
     return completed
 
 
-def start_inference_worker(
+def run_inference_worker(
     stop_event: threading.Event,
     infer_activity: InferenceCommand,
     *,
     batch_size: int = 50,
     poll_seconds: float = 1.0,
-) -> threading.Thread:
-    """Start the single AppRuntime-owned inference worker."""
-
-    thread = threading.Thread(
-        target=_worker_loop,
-        args=(
-            stop_event,
-            infer_activity,
-            max(1, int(batch_size)),
-            max(0.1, float(poll_seconds)),
-        ),
-        name="WorkTraceInferenceWorker",
-        daemon=True,
-    )
-    thread.start()
-    return thread
-
-
-def _worker_loop(
-    stop_event: threading.Event,
-    infer_activity: InferenceCommand,
-    batch_size: int,
-    poll_seconds: float,
 ) -> None:
+    """Run the blocking inference loop owned by ``AppRuntime``."""
+
+    size = max(1, int(batch_size))
+    interval = max(0.1, float(poll_seconds))
+    logging.info("activity inference worker start")
     while not stop_event.is_set():
         try:
             processed = process_pending_inference_jobs(
                 infer_activity,
-                limit=batch_size,
+                limit=size,
             )
         except Exception:
             logging.exception("activity inference worker iteration failed")
             processed = 0
-        if processed >= batch_size:
+        if processed >= size:
             continue
-        stop_event.wait(poll_seconds)
+        stop_event.wait(interval)
+    logging.info("activity inference worker stop")
 
 
 def _assignment_state(conn, activity_id: int) -> tuple[object, ...] | None:
@@ -183,5 +166,5 @@ def _record_failure_safely(
 __all__ = [
     "InferenceCommand",
     "process_pending_inference_jobs",
-    "start_inference_worker",
+    "run_inference_worker",
 ]
