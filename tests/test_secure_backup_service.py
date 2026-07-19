@@ -323,7 +323,11 @@ def test_replace_failure_rolls_back_and_fails_closed(
     with pytest.raises(sqlite3.OperationalError):
         secure_backup_service.import_encrypted_backup(out, PASSPHRASE)
 
-    assert database_maintenance_service.is_maintenance_in_progress() is False
+    assert database_maintenance_service.is_maintenance_in_progress() is True
+    assert (
+        database_maintenance_service.MAINTENANCE_COORDINATOR.phase
+        is database_maintenance_service.MaintenancePhase.FAILED_CLOSED
+    )
     assert get_bool_setting("user_paused", False) is True
     assert get_setting("collector_status") == "paused"
     with db.get_connection() as conn:
