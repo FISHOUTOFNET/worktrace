@@ -57,19 +57,22 @@ def _thread_constructor_calls(relative: str) -> list[ast.Call]:
 def test_maintenance_coordinator_is_the_only_semantic_owner() -> None:
     maintenance = _source("worktrace/services/database_maintenance_service.py")
     backup = _source("worktrace/services/secure_backup_service.py")
+    runtime = _source("worktrace/runtime/app_runtime.py")
 
-    assert "class DatabaseMaintenanceCoordinator" in maintenance
+    assert "class RuntimeMaintenanceCoordinator" in maintenance
+    assert "class DatabaseMaintenanceCoordinator" not in maintenance
     assert "class MaintenanceState" not in maintenance
     assert "mark_succeeded" not in maintenance
     assert "mark_succeeded" not in backup
+    assert "runtime_snapshot_barrier" not in runtime
 
     quiesce = _function(
         "worktrace/runtime/app_runtime.py",
-        "quiesce_collection_now",
+        "quiesce_collection_for_maintenance",
     )
     reset = _function(
         "worktrace/runtime/app_runtime.py",
-        "reset_collection_runtime_now",
+        "reset_after_database_replacement",
     )
     forbidden = {
         "set_setting",
@@ -80,7 +83,7 @@ def test_maintenance_coordinator_is_the_only_semantic_owner() -> None:
     }
     assert _called_names(quiesce).isdisjoint(forbidden)
     assert _called_names(reset).isdisjoint(forbidden)
-    assert "pause_collection_now" in _called_names(quiesce)
+    assert "request_pause" in _called_names(quiesce)
     assert "request_reset" in _called_names(reset)
 
 
@@ -182,4 +185,4 @@ def test_worker_progress_cleanup_uses_canonical_owners() -> None:
         "activity_resource_repair_job",
         "startup_recovery_job",
     ):
-        assert f'DELETE FROM {table_name}' not in backup_source
+        assert f"DELETE FROM {table_name}" not in backup_source
