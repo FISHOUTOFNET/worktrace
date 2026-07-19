@@ -120,7 +120,10 @@ def test_recovery_routes_activity_and_boundary_facts_through_one_lifecycle_owner
         re.IGNORECASE,
     )
     assert direct_close.search(source) is None
-    assert "activity_lifecycle_service.recover_activity_batch(commands, boundaries)" in source
+    assert "activity_lifecycle_service.recover_activity_batch(" in source
+    assert "commands," in source
+    assert "boundaries," in source
+    assert "continuations," in source
     assert "activity_service.close_activity(" not in source
     assert "session_boundary_service.insert_boundary" not in source
 
