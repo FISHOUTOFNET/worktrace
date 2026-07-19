@@ -1,5 +1,4 @@
 """WebView UI entry point (default and only shipping UI)."""
-
 from __future__ import annotations
 
 import logging
@@ -8,8 +7,9 @@ from pathlib import Path
 from typing import Any
 
 from . import config
-from .api import app_api
+from .api.app_api import ApplicationControlService
 from .runtime.app_runtime import AppRuntime
+from .runtime.application_services import build_application_services
 from .webview_ui.bridge import WebViewBridge
 from .webview_ui.runtime_check import (
     detect_webview2_runtime,
@@ -27,7 +27,6 @@ def setup_logging(log_path) -> None:
 
 
 def resource_path(relative: str) -> Path:
-    """Resolve a bundled WebView resource for source and frozen builds."""
     base = getattr(sys, "_MEIPASS", None)
     if base:
         return Path(base) / "worktrace" / "webview_ui" / relative
@@ -37,7 +36,6 @@ def resource_path(relative: str) -> Path:
 def _check_pywebview_available() -> Any:
     try:
         import webview
-
         return webview
     except ImportError as exc:
         raise RuntimeError(
@@ -68,7 +66,6 @@ def main() -> int:
 
     if detect_webview2_runtime() == "missing":
         return _report_runtime_missing()
-
     try:
         webview = _check_pywebview_available()
     except RuntimeError as exc:
@@ -76,14 +73,14 @@ def main() -> int:
         return 2
 
     runtime = AppRuntime(paths)
-    initialized = runtime.initialize()
-    if initialized is False:
+    if runtime.initialize() is False:
         return _report_already_running()
-    app_api.set_runtime(runtime)
+    services = build_application_services(runtime)
+    app_control = ApplicationControlService(runtime)
 
     try:
         try:
-            startup_result = app_api.start_collection_after_privacy_gate()
+            startup_result = app_control.start_collection_after_privacy_gate()
             if not startup_result.get("ok"):
                 logging.error(
                     "collector startup rejected error=%s",
@@ -93,13 +90,11 @@ def main() -> int:
                 logging.warning("collector started with background worker degradation")
         except Exception:
             logging.exception(
-                "webview startup: start_collection_after_privacy_gate raised; "
-                "user can retry via sidebar toggle"
+                "webview startup: authorized startup failed; user can retry"
             )
 
-        bridge = WebViewBridge()
+        bridge = WebViewBridge(services)
         index_path = resource_path("index.html")
-
         try:
             window = webview.create_window(
                 title="WorkTrace",
