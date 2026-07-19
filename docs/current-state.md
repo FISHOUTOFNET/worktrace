@@ -84,7 +84,9 @@ Current schema seeding is the only creator of system projects. Stable system
 identity, not display name, controls reserved behavior. Ordinary commands cannot
 create, rename, archive, delete or toggle system projects. The shipped user
 project capabilities are: user project create / edit / enable-disable / archive.
-Excluded project configuration uses its explicit system-project command.
+Excluded project configuration uses its explicit system-project command. Missing
+system catalog rows are reported as unavailable; transport APIs never recreate
+them as a side effect of a normal project or rule request.
 
 All keyword/folder rule create, update, delete, enable and batch operations pass
 through the canonical rule command owner. It validates project type, normalized
