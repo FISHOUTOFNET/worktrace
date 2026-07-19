@@ -58,21 +58,24 @@ def test_maintenance_coordinator_is_the_only_semantic_owner() -> None:
     maintenance = _source("worktrace/services/database_maintenance_service.py")
     backup = _source("worktrace/services/secure_backup_service.py")
     runtime = _source("worktrace/runtime/app_runtime.py")
+    collector = _source("worktrace/collector/collector.py")
 
-    assert "class RuntimeMaintenanceCoordinator" in maintenance
+    assert maintenance.count("class RuntimeMaintenanceCoordinator") == 1
     assert "class DatabaseMaintenanceCoordinator" not in maintenance
-    assert "class MaintenanceState" not in maintenance
-    assert "mark_succeeded" not in maintenance
-    assert "mark_succeeded" not in backup
     assert "runtime_snapshot_barrier" not in runtime
+    assert "is_secure_import_in_progress" not in collector
 
-    quiesce = _function(
+    hold = _function(
         "worktrace/runtime/app_runtime.py",
         "quiesce_collection_for_maintenance",
     )
     reset = _function(
         "worktrace/runtime/app_runtime.py",
         "reset_after_database_replacement",
+    )
+    restore = _function(
+        "worktrace/runtime/app_runtime.py",
+        "restore_after_maintenance",
     )
     forbidden = {
         "set_setting",
@@ -81,10 +84,15 @@ def test_maintenance_coordinator_is_the_only_semantic_owner() -> None:
         "get_bool_setting",
         "clear_runtime_activity_state",
     }
-    assert _called_names(quiesce).isdisjoint(forbidden)
+    assert _called_names(hold).isdisjoint(forbidden)
     assert _called_names(reset).isdisjoint(forbidden)
-    assert "request_pause" in _called_names(quiesce)
+    assert "request_maintenance_hold" in _called_names(hold)
     assert "request_reset" in _called_names(reset)
+    assert "request_maintenance_release" in _called_names(restore)
+    assert "maintenance_hold" in collector
+    assert "maintenance_release" in collector
+    assert "database_reset" in collector
+    assert "PAYLOAD_VERSION" in backup
 
 
 def test_database_replacement_is_one_independent_epoch() -> None:
@@ -138,29 +146,30 @@ def test_all_derived_workers_are_blocking_entrypoints() -> None:
         assert not _thread_constructor_calls(relative), relative
 
 
-def test_worker_health_is_process_local_and_runtime_owned() -> None:
-    health_tree = _tree("worktrace/worker_health.py")
-    module_level_registry = [
-        node
-        for node in health_tree.body
-        if isinstance(node, (ast.Assign, ast.AnnAssign))
-        and any(
-            isinstance(call, ast.Call)
-            and (
-                (isinstance(call.func, ast.Name) and call.func.id == "WorkerHealthRegistry")
-                or (
-                    isinstance(call.func, ast.Attribute)
-                    and call.func.attr == "WorkerHealthRegistry"
-                )
-            )
-            for call in ast.walk(node)
-        )
-    ]
-    assert module_level_registry == []
+def test_worker_registry_is_declarative_and_single_owned() -> None:
+    runtime = _source("worktrace/runtime/app_runtime.py")
+    assert "class WorkerSpec" in runtime
+    assert "class WorkerHandle" in runtime
+    assert "class WorkerStartupState" in runtime
+    assert "class WorkerStartupStatus" in runtime
+    assert "self._worker_specs" in runtime
+    assert "self._worker_handles" in runtime
+    assert "thread.is_alive()" not in runtime
+    for legacy_member in (
+        "_index_thread",
+        "_history_thread",
+        "_inference_thread",
+        "_resource_repair_thread",
+        "_startup_recovery_thread",
+    ):
+        assert legacy_member not in runtime
+
     init = _function("worktrace/runtime/app_runtime.py", "__init__")
     assert "WorkerHealthRegistry" in _called_names(init)
-    start = _function("worktrace/runtime/app_runtime.py", "_start_owned_worker")
+    start = _function("worktrace/runtime/app_runtime.py", "_start_worker")
     assert "Thread" in _called_names(start)
+    assert "ready_event" in runtime
+    assert "failed_event" in runtime
 
 
 def test_worker_progress_cleanup_uses_canonical_owners() -> None:
