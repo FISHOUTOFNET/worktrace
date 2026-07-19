@@ -97,12 +97,10 @@ def test_clear_all_confirm_false_does_not_reset_db(temp_db) -> None:
     assert any(activity["id"] == aid for activity in activities)
 
 
-def test_clear_all_success_sets_post_replace_pause_state_and_clears_runtime(
-    temp_db,
-) -> None:
+def test_clear_all_success_restores_user_intent_and_clears_runtime(temp_db) -> None:
     _seed_business_data()
-    set_setting("user_paused", "false")
-    set_setting("collector_status", "running")
+    set_setting("user_paused", "true")
+    set_setting("collector_status", "paused")
     runtime_state_fixture.set_setting("current_activity_snapshot", '{"app":"Word"}')
 
     export_service.clear_all_local_data(confirm=True)
@@ -131,9 +129,7 @@ def test_clear_all_rejects_when_another_maintenance_operation_owns_gate(
     temp_db,
 ) -> None:
     aid = _seed_business_data()
-    with database_maintenance_service.maintenance_operation(
-        reason="competing_operation"
-    ):
+    with database_maintenance_service.consistent_snapshot("competing_operation"):
         with pytest.raises(ValueError, match="operation_in_progress"):
             export_service.clear_all_local_data(confirm=True)
 
@@ -143,7 +139,7 @@ def test_clear_all_rejects_when_another_maintenance_operation_owns_gate(
     assert any(activity["id"] == aid for activity in activities)
 
 
-def test_clear_all_failure_rolls_back_data_and_settings_and_releases_gate(
+def test_clear_all_failure_rolls_back_data_and_fails_closed(
     temp_db,
     monkeypatch,
 ) -> None:
@@ -155,21 +151,17 @@ def test_clear_all_failure_rolls_back_data_and_settings_and_releases_gate(
         '{"persisted_activity_id":77}',
     )
 
-    def fail_post_clear(_conn) -> None:
+    def fail_seed(_conn) -> None:
         raise RuntimeError("post-clear failure")
 
-    monkeypatch.setattr(
-        database_maintenance_service,
-        "_apply_post_clear_settings",
-        fail_post_clear,
-    )
+    monkeypatch.setattr(database_maintenance_service, "seed_defaults", fail_seed)
 
     with pytest.raises(RuntimeError, match="post-clear failure"):
         export_service.clear_all_local_data(confirm=True)
 
     assert database_maintenance_service.is_maintenance_in_progress() is False
-    assert get_bool_setting("user_paused", True) is False
-    assert get_setting("collector_status", "") == "running"
+    assert get_bool_setting("user_paused", False) is True
+    assert get_setting("collector_status", "") == "paused"
     assert runtime_state_fixture.get_setting("current_activity_snapshot", "") == ""
     activities = activity_service.get_activities_by_range(
         "2026-06-18", "2026-06-18"
@@ -177,7 +169,7 @@ def test_clear_all_failure_rolls_back_data_and_settings_and_releases_gate(
     assert any(item["id"] == aid for item in activities)
 
 
-def test_maintenance_boundary_clears_runtime_state_without_legacy_settings(
+def test_maintenance_context_clears_runtime_state_without_legacy_settings(
     temp_db,
 ) -> None:
     runtime_state_fixture.set_setting(
@@ -185,9 +177,7 @@ def test_maintenance_boundary_clears_runtime_state_without_legacy_settings(
         '{"status":"normal"}',
     )
 
-    with database_maintenance_service.maintenance_operation(
-        reason="runtime_state_contract"
-    ):
+    with database_maintenance_service.consistent_snapshot("runtime_state_contract"):
         assert database_maintenance_service.is_maintenance_in_progress() is True
         assert runtime_state_fixture.get_setting(
             "current_activity_snapshot", ""
@@ -200,39 +190,3 @@ def test_clear_all_success_invalidates_context_recompute_cache(temp_db) -> None:
     assert activity_service.get_activities_by_range(
         "2026-06-18", "2026-06-18"
     ) == []
-
-
-def test_clear_all_applies_pause_state_inside_exclusive_transaction(
-    temp_db,
-    monkeypatch,
-) -> None:
-    captured: dict[str, object] = {}
-    real_apply = database_maintenance_service._apply_post_clear_settings
-
-    def spy_apply(conn) -> None:
-        captured["maintenance_active"] = (
-            database_maintenance_service.is_maintenance_in_progress()
-        )
-        captured["phase"] = database_maintenance_service.MAINTENANCE_COORDINATOR.phase
-        captured["prior_user_paused"] = conn.execute(
-            "SELECT value FROM settings WHERE key = 'user_paused'"
-        ).fetchone()[0]
-        real_apply(conn)
-
-    monkeypatch.setattr(
-        database_maintenance_service,
-        "_apply_post_clear_settings",
-        spy_apply,
-    )
-    set_setting("user_paused", "false")
-    set_setting("collector_status", "running")
-
-    export_service.clear_all_local_data(confirm=True)
-
-    assert captured == {
-        "maintenance_active": True,
-        "phase": database_maintenance_service.MaintenancePhase.EXCLUSIVE,
-        "prior_user_paused": "false",
-    }
-    assert get_bool_setting("user_paused", False) is True
-    assert get_setting("collector_status", "") == "paused"
