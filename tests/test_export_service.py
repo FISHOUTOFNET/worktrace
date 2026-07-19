@@ -133,10 +133,9 @@ def test_clear_all_rejects_when_another_maintenance_operation_owns_gate(
     aid = _seed_business_data()
     with database_maintenance_service.maintenance_operation(
         reason="competing_operation"
-    ) as state:
+    ):
         with pytest.raises(ValueError, match="operation_in_progress"):
             export_service.clear_all_local_data(confirm=True)
-        state.mark_succeeded()
 
     activities = activity_service.get_activities_by_range(
         "2026-06-18", "2026-06-18"
@@ -188,12 +187,11 @@ def test_maintenance_boundary_clears_runtime_state_without_legacy_settings(
 
     with database_maintenance_service.maintenance_operation(
         reason="runtime_state_contract"
-    ) as state:
+    ):
         assert database_maintenance_service.is_maintenance_in_progress() is True
         assert runtime_state_fixture.get_setting(
             "current_activity_snapshot", ""
         ) == ""
-        state.mark_succeeded()
 
 
 def test_clear_all_success_invalidates_context_recompute_cache(temp_db) -> None:
