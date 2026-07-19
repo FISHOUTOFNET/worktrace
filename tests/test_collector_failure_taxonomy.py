@@ -128,7 +128,6 @@ def test_clipboard_maintenance_records_controlled_contention(monkeypatch):
     )
 
     collector_module._run_clipboard_maintenance_tick()
-
     assert captured == [
         ("clipboard_maintenance", CollectorFailureCode.DATABASE_BUSY)
     ]
@@ -149,5 +148,6 @@ def test_collector_health_never_receives_or_classifies_raw_failures():
     assert "classify_collector_failure" not in health_source
     assert "classify_collector_failure" in collector_source
     assert "is_transient_failure" not in collector_source
-    assert "logging.exception" not in collector_source
+    assert "record_transient_failure(phase, exc" not in collector_source
+    assert "record_fatal_failure(phase, exc" not in collector_source
     assert "type(exc).__name__" not in collector_source
