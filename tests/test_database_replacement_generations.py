@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from tests.support import activity_factory as activity_service
+from worktrace.constants import EXCLUDED_PROJECT
 from worktrace.data_generation_repository import (
     DataGenerationNamespace,
     DataGenerationRepository,
@@ -10,6 +11,7 @@ from worktrace.data_generation_repository import (
 from worktrace.db import get_connection, now_str
 from worktrace.services import (
     database_maintenance_service,
+    folder_rule_service,
     history_mutation_job_service,
     privacy_gate_service,
     project_service,
@@ -131,7 +133,14 @@ def test_ordinary_domain_writes_do_not_advance_replacement(temp_db):
 
     settings_service.set_setting("ui_refresh_seconds", "77")
     project_service.create_project("Ordinary Domain Write")
-    privacy_gate_service.accept_privacy_notice()
+    excluded = project_service.get_project_by_name(EXCLUDED_PROJECT)
+    assert excluded is not None
+    project_service.set_project_enabled(int(excluded["id"]), True)
+    folder_rule_service.create_or_update_folder_rule(
+        "D:\\ReplacementPrivacy",
+        int(excluded["id"]),
+        True,
+    )
 
     after = _generations()
     assert after[DataGenerationNamespace.DATABASE_REPLACEMENT] == before[
