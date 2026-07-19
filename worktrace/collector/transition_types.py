@@ -11,6 +11,7 @@ ActivitySignature: TypeAlias = tuple[str, ...]
 
 class ActivityEndReason(str, Enum):
     RESOURCE_SWITCH = "resource_switch"
+    MAINTENANCE_SEGMENT = "maintenance_segment"
     PAUSE_BOUNDARY = "pause_boundary"
     STOP_BOUNDARY = "stop_boundary"
     SHUTDOWN_BOUNDARY = "shutdown_boundary"
