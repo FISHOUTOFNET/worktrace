@@ -137,9 +137,11 @@ def test_recovery_service_only_plans_lifecycle_commands() -> None:
     recovery = _source("worktrace/services/recovery_service.py")
     lifecycle = _source("worktrace/services/activity_lifecycle_service.py")
     assert "UPDATE activity_log" not in recovery
-    assert "recover_activity_batch(commands, boundaries)" in recovery
+    assert "activity_lifecycle_service.recover_activity_batch(" in recovery
+    assert "continuations," in recovery
     assert "mark_activity_error" in recovery
     assert "def recover_activity_batch(" in lifecycle
+    assert "def recover_continuation_batch(" in lifecycle
     assert "session_boundary_service.insert_boundary" in lifecycle
 
 
