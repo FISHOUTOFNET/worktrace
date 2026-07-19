@@ -11,7 +11,8 @@ from typing import TYPE_CHECKING, Any, Callable
 
 from .. import db
 from ..collector import collector_health
-from ..collector.collector import CollectorControl, run_collector
+from ..collector.collector import run_collector
+from ..collector.runtime_control import RuntimeCollectorControl
 from ..collector.single_instance import acquire_single_instance, release_single_instance
 from ..platforms.windows_adapter import WindowsAdapter
 from ..services import (
@@ -121,7 +122,7 @@ class WorkerStartupReporter:
 
 
 class _OwnedWorkerReporter:
-    """Worker-facing health capability that also carries the startup handshake."""
+    """Worker-facing health capability carrying the startup handshake."""
 
     def __init__(
         self,
@@ -219,7 +220,7 @@ class AppRuntime:
         self.paths = paths
         self.stop_event = threading.Event()
         self.owns_application_instance = False
-        self.collector_control = CollectorControl()
+        self.collector_control = RuntimeCollectorControl()
         self.phase = RuntimePhase.NEW
         self._lifecycle_lock = threading.RLock()
         self._adapter = adapter if adapter is not None else _choose_adapter()
@@ -270,8 +271,6 @@ class AppRuntime:
         }
 
     def initialize(self) -> bool:
-        """Acquire the application lease and perform bounded startup recovery."""
-
         with self._lifecycle_lock:
             if self._initialized:
                 return self.owns_application_instance
@@ -331,6 +330,30 @@ class AppRuntime:
             health.stopped()
             if self.phase in {RuntimePhase.RUNNING, RuntimePhase.STARTING}:
                 self.phase = RuntimePhase.DEGRADED
+
+    @staticmethod
+    def _run_owned_collector(
+        adapter: Any,
+        stop_event: threading.Event,
+        control: RuntimeCollectorControl,
+        ready_event: threading.Event,
+        failed_event: threading.Event,
+    ) -> None:
+        try:
+            run_collector(
+                adapter,
+                stop_event,
+                control,
+                ready_event,
+                failed_event,
+            )
+        finally:
+            reason = (
+                "collector_fatal_exit"
+                if failed_event.is_set() or not stop_event.is_set()
+                else "collector_shutdown"
+            )
+            control.terminalize_unfinished(reason)
 
     def worker_health_snapshot(self) -> dict[str, object]:
         return {
@@ -437,8 +460,6 @@ class AppRuntime:
         )
 
     def start_background_workers(self) -> WorkerStartupReport:
-        """Start every declared worker and wait for worker-owned readiness."""
-
         with self._lifecycle_lock:
             if not self._initialized or not self.owns_application_instance:
                 statuses = {
@@ -473,8 +494,6 @@ class AppRuntime:
             return WorkerStartupReport(statuses, error_code)
 
     def start_authorized_collection(self) -> RuntimeStartResult:
-        """Start critical Collector first, then the registry-owned workers."""
-
         with self._lifecycle_lock:
             if not self._initialized or not self.owns_application_instance:
                 return RuntimeStartResult(
@@ -570,14 +589,14 @@ class AppRuntime:
             ready_event = threading.Event()
             failed_event = threading.Event()
             attempt_stop_event = threading.Event()
-            attempt_control = CollectorControl()
+            attempt_control = RuntimeCollectorControl()
             self._collector_generation += 1
             attempt_generation = self._collector_generation
             self._collector_stop_event = attempt_stop_event
             self.collector_control = attempt_control
             try:
                 thread = threading.Thread(
-                    target=run_collector,
+                    target=self._run_owned_collector,
                     args=(
                         self._adapter,
                         attempt_stop_event,
@@ -592,9 +611,10 @@ class AppRuntime:
                 thread.start()
             except Exception:
                 logging.exception("collector thread start failed")
+                attempt_control.terminalize_unfinished("collector_thread_start_failed")
                 self._collector_thread = None
                 self._collector_stop_event = None
-                self.collector_control = CollectorControl()
+                self.collector_control = RuntimeCollectorControl()
                 self.phase = RuntimePhase.RECOVERABLE_FAILURE
                 return {"ok": False, "error": "collector_start_failed"}
 
@@ -614,6 +634,9 @@ class AppRuntime:
                     or self._collector_thread is not thread
                 ):
                     attempt_stop_event.set()
+                    attempt_control.terminalize_unfinished(
+                        "collector_attempt_superseded"
+                    )
                     return {"ok": False, "error": "collector_attempt_superseded"}
                 database_maintenance_service.register_runtime_control(self)
                 return {"ok": True, "started": True, "already_running": False}
@@ -624,6 +647,8 @@ class AppRuntime:
         if joiner is not None:
             joiner(timeout=2)
         still_alive = _thread_reference_is_alive(thread)
+        if still_alive:
+            attempt_control.terminalize_unfinished("collector_startup_stop_timeout")
         with self._lifecycle_lock:
             if attempt_generation == self._collector_generation:
                 if still_alive:
@@ -631,7 +656,7 @@ class AppRuntime:
                     return {"ok": False, "error": "collector_stop_timeout"}
                 self._collector_thread = None
                 self._collector_stop_event = None
-                self.collector_control = CollectorControl()
+                self.collector_control = RuntimeCollectorControl()
                 self.phase = RuntimePhase.RECOVERABLE_FAILURE
         return {"ok": False, "error": "collector_start_failed"}
 
@@ -665,8 +690,6 @@ class AppRuntime:
         self,
         timeout_seconds: float = 5.0,
     ) -> dict[str, object]:
-        """Request and acknowledge Collector HELD before write-gate draining."""
-
         if not self.is_collection_running_for_maintenance():
             return {
                 "ok": True,
@@ -695,8 +718,6 @@ class AppRuntime:
         self,
         timeout_seconds: float = 5.0,
     ) -> dict[str, object]:
-        """Reset process-local identities while the Collector remains HELD."""
-
         if not self.is_collection_running_for_maintenance():
             self._reset_adapter_runtime_state()
             return {
@@ -728,8 +749,6 @@ class AppRuntime:
         *,
         timeout_seconds: float = 5.0,
     ) -> dict[str, object]:
-        """Release an existing hold or restart only a previously running Collector."""
-
         if self.is_collection_running_for_maintenance():
             result = dict(
                 self.collector_control.request_maintenance_release(
@@ -804,6 +823,7 @@ class AppRuntime:
             if self._collector_stop_event is not None:
                 self._collector_stop_event.set()
             collector_thread = self._collector_thread
+            collector_control = self.collector_control
 
         adapter_shutdown = False
         if collector_thread:
@@ -817,6 +837,10 @@ class AppRuntime:
                     adapter_shutdown = True
                 if joiner is not None:
                     joiner(timeout=5)
+            if _thread_reference_is_alive(collector_thread):
+                collector_control.terminalize_unfinished(
+                    "collector_shutdown_timeout"
+                )
 
         for handle in handles:
             thread = handle.thread
