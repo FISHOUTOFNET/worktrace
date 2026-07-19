@@ -6,8 +6,6 @@ import json
 
 import pytest
 
-from worktrace.services import system_project_service
-
 from tests.support import activity_factory as activity_service
 from tests.support.db_helpers import table_count
 from worktrace.api import rule_api
@@ -19,6 +17,7 @@ from worktrace.services import (
     privacy_service,
     project_inference_service,
     project_service,
+    rule_catalog_command_service,
     rule_history_application_service,
     rule_service,
 )
@@ -51,8 +50,10 @@ def test_delete_enabled_and_disabled_keyword_rules(temp_db):
 
 
 def test_delete_keyword_rule_under_excluded_project(temp_db):
-    excluded_id = system_project_service.require_excluded_project_id()
-    rule_id = rule_service.create_rule("Secret", excluded_id)
+    rule_id, excluded_id = rule_catalog_command_service.create_excluded_keyword_rule(
+        "Secret"
+    )
+    assert excluded_id > 0
 
     before = generation(DataGenerationNamespace.PRIVACY_CATALOG)
     result = rule_api.delete_project_keyword_rule(rule_id)
