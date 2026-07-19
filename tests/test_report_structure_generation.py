@@ -8,7 +8,11 @@ from tests.support import activity_factory as activity_service
 from worktrace.db import get_connection, now_str
 from worktrace.report_generation_classifier import report_structure_classifier_scope
 from worktrace.resources.types import DetectedResource
-from worktrace.services import report_revision_service, resource_service
+from worktrace.services import (
+    database_maintenance_service,
+    report_revision_service,
+    resource_service,
+)
 from worktrace.services.settings_service import set_setting
 
 pytestmark = [pytest.mark.db, pytest.mark.integration, pytest.mark.contract]
@@ -81,6 +85,27 @@ def test_structural_setting_commit_invalidates_cached_revision(temp_db):
     set_setting("context_carry_minutes", "7")
 
     second = report_revision_service.get_report_structure_revision(DATE)
+    assert second != first
+
+
+def test_database_replacement_invalidates_cached_revision(temp_db):
+    _open_activity()
+    report_revision_service.clear_report_structure_revision_cache()
+    builder = report_revision_service._build_report_structure_revision
+
+    with patch.object(
+        report_revision_service,
+        "_build_report_structure_revision",
+        wraps=builder,
+    ) as build:
+        first = report_revision_service.get_report_structure_revision(DATE)
+        assert build.call_count == 1
+
+        database_maintenance_service.clear_all_live_data()
+
+        second = report_revision_service.get_report_structure_revision(DATE)
+        assert build.call_count == 2
+
     assert second != first
 
 
