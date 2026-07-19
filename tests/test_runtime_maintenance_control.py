@@ -18,6 +18,7 @@ from worktrace.services import (
     settings_service,
 )
 from worktrace.services.database_maintenance_service import (
+    MaintenanceInProgressError,
     MaintenancePhase,
     RuntimeMaintenanceCoordinator,
 )
@@ -41,6 +42,14 @@ def _ack(kind: str, terminal_state: str) -> dict[str, object]:
     }
 
 
+class _OperationalHoldState:
+    value = "operational"
+
+
+class _OperationalChannel:
+    hold_state = _OperationalHoldState()
+
+
 class _RuntimeControl:
     def __init__(self, *, running: bool = True) -> None:
         self.running = running
@@ -49,6 +58,7 @@ class _RuntimeControl:
         self.reset_result = _ack("database_reset", "held")
         self.restore_result = _ack("maintenance_release", "operational")
         self.restored_state = None
+        self.collector_control = _OperationalChannel()
 
     def is_collection_running_for_maintenance(self) -> bool:
         return self.running
@@ -314,6 +324,42 @@ def test_replacement_resets_after_exclusive_and_before_release(temp_db, monkeypa
     assert control.calls == ["hold", "operation", "reset", "release"]
 
 
+def test_pending_hold_timeout_returns_to_idle_without_fail_closed(temp_db, monkeypatch):
+    coordinator = RuntimeMaintenanceCoordinator()
+    control = _RuntimeControl()
+    control.quiesce_result = {
+        "ok": False,
+        "command_id": "pending-hold-id",
+        "command_kind": "maintenance_hold",
+        "command_state": "cancelled",
+        "command_state_unknown": False,
+        "timed_out": True,
+    }
+    coordinator.register_runtime_control(control)
+    settings_service.set_setting("user_paused", "false")
+    settings_service.set_setting("collector_status", "running")
+    monkeypatch.setattr(
+        database_maintenance_service.privacy_gate_service,
+        "is_privacy_notice_accepted",
+        lambda: True,
+    )
+
+    with pytest.raises(RuntimeError, match="collector_maintenance_hold_not_acknowledged"):
+        with coordinator.consistent_snapshot("pending_timeout"):
+            pytest.fail("exclusive operation must not start")
+
+    assert coordinator.phase is MaintenancePhase.IDLE
+    assert coordinator.blocked_reason is None
+    assert coordinator.active() is False
+    assert settings_service.get_bool_setting("user_paused", True) is False
+    assert settings_service.get_setting("collector_status", "") == "running"
+
+    control.quiesce_result = _ack("maintenance_hold", "held")
+    with coordinator.consistent_snapshot("retry"):
+        pass
+    assert control.calls == ["hold", "hold", "release"]
+
+
 def test_replacement_reset_failure_fails_closed_and_clears_snapshot(temp_db, monkeypatch):
     coordinator = RuntimeMaintenanceCoordinator()
     control = _RuntimeControl()
@@ -340,7 +386,12 @@ def test_replacement_reset_failure_fails_closed_and_clears_snapshot(temp_db, mon
     with pytest.raises(RuntimeError, match="collector_database_reset_not_acknowledged"):
         with coordinator.database_replacement("failure"):
             pass
-    assert coordinator.active() is False
+    assert coordinator.active() is True
+    assert coordinator.phase is MaintenancePhase.FAILED_CLOSED
+    assert coordinator.blocked_reason
+    with pytest.raises(MaintenanceInProgressError, match="maintenance_failed_closed"):
+        with coordinator.consistent_snapshot("blocked"):
+            pass
     assert settings_service.get_bool_setting("user_paused", False) is True
     assert settings_service.get_setting("collector_status", "") == "paused"
     assert runtime_activity_state_service.sample_runtime_activity_state().snapshot is None
@@ -368,9 +419,23 @@ def test_unknown_hold_command_state_remains_fail_closed(temp_db, monkeypatch):
     with pytest.raises(RuntimeError, match="collector_maintenance_hold_not_acknowledged"):
         with coordinator.consistent_snapshot("unknown"):
             pytest.fail("operation must not start")
-    assert coordinator.active() is False
+    assert coordinator.active() is True
+    assert coordinator.phase is MaintenancePhase.FAILED_CLOSED
+    assert coordinator.blocked_reason
+    with pytest.raises(MaintenanceInProgressError, match="maintenance_failed_closed"):
+        with coordinator.consistent_snapshot("blocked"):
+            pass
     assert settings_service.get_bool_setting("user_paused", False) is True
     assert settings_service.get_setting("collector_status", "") == "paused"
+    assert settings_service.get_bool_setting("maintenance_fail_closed", False) is True
+
+    coordinator.recover_fail_closed()
+    assert coordinator.phase is MaintenancePhase.IDLE
+    assert coordinator.blocked_reason is None
+    assert coordinator.active() is False
+    assert settings_service.get_bool_setting("maintenance_fail_closed", True) is False
+    assert settings_service.get_setting("maintenance_fail_closed_reason", "x") == ""
+    assert settings_service.get_bool_setting("user_paused", False) is True
 
 
 def test_user_pause_and_privacy_gate_are_preserved(temp_db, monkeypatch):
