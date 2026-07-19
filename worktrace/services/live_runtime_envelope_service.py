@@ -1,4 +1,4 @@
-"""Canonical live-runtime transport envelope."""
+"""Canonical current-only live-runtime transport envelope."""
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Mapping
@@ -48,6 +48,29 @@ _RUNTIME_ALIAS_FIELDS = frozenset(
         "structure_revision",
     }
 )
+_LIVE_METADATA_FIELDS = frozenset(
+    {
+        "live_clock",
+        "current_activity_display_span_id",
+        "current_resource_identity_hash",
+        "display_span_id",
+        "stable_live_key",
+        "stable_live_key_hash",
+        "live_started_at_epoch_ms",
+        "sample_epoch_ms",
+        "duration_seconds_at_sample",
+        "current_live_duration_seconds",
+        "persisted_duration_seconds",
+        "active_elapsed_at_sample",
+        "current_elapsed_at_sample",
+        "carry_seconds",
+        "current_duration_live",
+        "project_duration_live",
+        "is_project_duration_live",
+        "live_delta_eligible",
+        "is_live_projected",
+    }
+)
 
 
 def _mapping(value: Any) -> dict[str, Any]:
@@ -74,12 +97,16 @@ def _require_live_clock(payload: Mapping[str, Any]) -> dict[str, Any]:
     clock = dict(value)
     if set(clock) != _LIVE_CLOCK_KEYS:
         raise ValueError("live_clock_invalid_keys")
+    integer_fields = (
+        "sampled_at_epoch_ms",
+        "started_at_epoch_ms",
+        "elapsed_seconds_at_sample",
+        "aggregate_base_seconds",
+    )
+    if any(type(clock[field]) is not int or clock[field] < 0 for field in integer_fields):
+        raise ValueError("live_clock_invalid_values")
     if (
-        type(clock["sampled_at_epoch_ms"]) is not int
-        or type(clock["started_at_epoch_ms"]) is not int
-        or type(clock["elapsed_seconds_at_sample"]) is not int
-        or type(clock["aggregate_base_seconds"]) is not int
-        or type(clock["is_live"]) is not bool
+        type(clock["is_live"]) is not bool
         or clock["duration_semantic"]
         not in {"current_live", "aggregate_live", "static_closed"}
         or clock["live_state"] not in {"persisted_open", "suppressed", "none"}
@@ -87,7 +114,42 @@ def _require_live_clock(payload: Mapping[str, Any]) -> dict[str, Any]:
         or not isinstance(clock["stable_live_key_hash"], str)
     ):
         raise ValueError("live_clock_invalid_values")
+    if clock["is_live"]:
+        if (
+            clock["duration_semantic"] == "static_closed"
+            or clock["live_state"] != "persisted_open"
+            or clock["sampled_at_epoch_ms"] <= 0
+            or clock["started_at_epoch_ms"] <= 0
+            or not clock["display_span_id"]
+            or not clock["stable_live_key_hash"]
+        ):
+            raise ValueError("live_clock_invalid_live_state")
+    elif clock["duration_semantic"] != "static_closed":
+        raise ValueError("live_clock_invalid_static_state")
     return clock
+
+
+def _static_clock_from(clock: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "sampled_at_epoch_ms": int(clock["sampled_at_epoch_ms"]),
+        "started_at_epoch_ms": 0,
+        "elapsed_seconds_at_sample": 0,
+        "aggregate_base_seconds": 0,
+        "duration_semantic": "static_closed",
+        "is_live": False,
+        "live_state": "none",
+        "display_span_id": "",
+        "stable_live_key_hash": "",
+    }
+
+
+def _static_metadata(value: Any) -> dict[str, Any] | None:
+    result = _mapping(value)
+    if not result:
+        return None
+    for field in _LIVE_METADATA_FIELDS:
+        result.pop(field, None)
+    return result
 
 
 def _project_payload(current_activity: Mapping[str, Any]) -> dict[str, Any] | None:
@@ -106,22 +168,17 @@ def _project_payload(current_activity: Mapping[str, Any]) -> dict[str, Any] | No
 
 def _recent_first_row(payload: Mapping[str, Any]) -> dict[str, Any] | None:
     activities = payload.get("activities")
-    if isinstance(activities, list) and activities and isinstance(activities[0], Mapping):
-        return dict(activities[0])
+    if isinstance(activities, list) and activities:
+        return _static_metadata(activities[0])
     return None
 
 
-def _runtime_health(
-    runtime: "AppRuntime | None",
-) -> tuple[str, dict[str, Any], list[str]]:
-    if runtime is None:
-        return "unavailable", {}, []
-    phase = getattr(runtime, "phase", "unavailable")
-    phase_value = str(getattr(phase, "value", phase) or "unavailable")
-    snapshot = _mapping(runtime.worker_health_snapshot())
-    workers = _mapping(snapshot.get("workers"))
-    degraded = [str(value) for value in list(snapshot.get("degraded_workers") or [])]
-    return phase_value, workers, degraded
+def _runtime_workers(runtime: "AppRuntime") -> dict[str, dict[str, Any]]:
+    snapshot = runtime.worker_registry_snapshot()
+    return {
+        str(name): status.to_dict()
+        for name, status in sorted(snapshot.items())
+    }
 
 
 def build_live_runtime_envelope(
@@ -133,20 +190,33 @@ def build_live_runtime_envelope(
     scope_report_date: str | None = None,
     live_report_date: str | None = None,
 ) -> dict[str, Any]:
-    """Build the sole current-only live-runtime transport contract."""
+    """Build the sole current-only runtime envelope with one exact LiveClock."""
 
-    current_activity = _mapping(payload.get("current_activity"))
-    clock = _require_live_clock(payload)
-    generations = _generation_snapshot()
-    runtime_phase, workers, degraded_workers = _runtime_health(runtime)
+    if runtime is None:
+        raise ValueError("runtime_missing")
     collector = _mapping(collector_status)
     if not collector:
         raise ValueError("collector_status_missing")
+
+    current_activity_source = _mapping(payload.get("current_activity"))
+    current_activity = _static_metadata(current_activity_source)
+    clock = _require_live_clock(payload)
+    generations = _generation_snapshot()
+    workers = _runtime_workers(runtime)
+    phase = getattr(runtime, "phase", "unavailable")
+    runtime_phase = str(getattr(phase, "value", phase) or "unavailable")
+    scoped_date = str(
+        scope_report_date or payload.get("report_date") or payload.get("date") or ""
+    )
+    live_date = str(live_report_date or payload.get("today") or scoped_date or "")
+    if scoped_date and live_date and scoped_date != live_date:
+        clock = _static_clock_from(clock)
+
     error_codes = sorted(
         {
-            str(value.get("last_failure_code") or "")
-            for value in workers.values()
-            if isinstance(value, Mapping) and value.get("last_failure_code")
+            str(status.get("error_code") or "")
+            for status in workers.values()
+            if status.get("error_code")
         }
         | {
             str(collector.get("collector_last_failure_code") or "")
@@ -155,8 +225,10 @@ def build_live_runtime_envelope(
         }
         - {""}
     )
-    scoped_date = str(scope_report_date or payload.get("report_date") or payload.get("date") or "")
-    live_date = str(live_report_date or payload.get("today") or scoped_date or "")
+    context = current_page_read_context()
+    runtime_consistent = bool(context is None or context.runtime_consistent)
+    needs_full_refresh = bool(context is not None and context.needs_full_refresh)
+
     return {
         "schema_version": LIVE_RUNTIME_SCHEMA_VERSION,
         "surface": str(surface or ""),
@@ -167,38 +239,24 @@ def build_live_runtime_envelope(
             "timestamp_epoch_ms": int(clock["sampled_at_epoch_ms"]),
             "revision": str(payload.get("live_revision") or ""),
         },
-        "current_activity": current_activity or None,
+        "current_activity": current_activity,
         "recent_first_row": _recent_first_row(payload),
         "clock": clock,
-        "current_project": _project_payload(current_activity),
+        "current_project": _project_payload(current_activity_source),
         "collector": collector,
         "runtime_phase": runtime_phase,
-        "worker_health": workers,
-        "degraded_workers": degraded_workers,
+        "workers": workers,
         "generations": generations,
         "database_replacement_epoch": generations[
             DataGenerationNamespace.DATABASE_REPLACEMENT.value
         ],
         "error_codes": error_codes,
-        "identity": {
-            "display_span_id": str(clock["display_span_id"]),
-            "stable_live_key_hash": str(clock["stable_live_key_hash"]),
-            "current_activity_display_span_id": str(
-                current_activity.get("current_activity_display_span_id") or ""
-            ),
-        },
         "revisions": {
             "structure": str(payload.get("structure_revision") or ""),
             "page": str(payload.get("page_revision") or ""),
         },
-        "runtime_consistent": bool(
-            current_page_read_context() is None
-            or current_page_read_context().runtime_consistent
-        ),
-        "needs_full_refresh": bool(
-            current_page_read_context() is not None
-            and current_page_read_context().needs_full_refresh
-        ),
+        "runtime_consistent": runtime_consistent,
+        "needs_full_refresh": needs_full_refresh,
     }
 
 
