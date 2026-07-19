@@ -32,8 +32,8 @@ state or database facts.
 | --- | --- |
 | Process/thread lifecycle | `AppRuntime` |
 | Worker declarations and handles | `AppRuntime` worker registry |
-| Worker initialization readiness | `WorkerSpec` probe + handle startup events |
-| Collector command identity/state | `CollectorControl` |
+| Worker initialization readiness | worker-owned `WorkerStartupReporter` handshake |
+| Collector command identity/state | `CollectorControl` / `RuntimeCollectorControl` |
 | Collection transitions | `CollectorStateMachine` |
 | Atomic maintenance activity seal | `ActivityMaintenanceCommandService` |
 | Maintenance ordering/recovery | `RuntimeMaintenanceCoordinator` |
@@ -57,13 +57,13 @@ tracked by name in `WorkerHandle` mappings. Production code must not reintroduce
 `_index_thread`, `_history_thread`, `_inference_thread` or similar parallel
 members.
 
-A worker is READY only after its startup probe has completed required
-initialization, schema/database access and recovery/validation and the worker has
-entered a stable blocking loop. Thread liveness is used only as a health fact;
-it cannot create readiness. The runtime wrapper owns thread start, startup
-timeout, unexpected exit, unhandled exception, stopped state and handle cleanup.
-Worker functions own iteration success/failure, maintenance-paused state and
-domain health codes only.
+A worker is READY only after the worker itself has completed required
+initialization, schema/database access and recovery/validation and reports ready
+before entering its stable blocking loop. Thread liveness and AppRuntime
+preflight cannot create readiness. The runtime wrapper owns thread start,
+startup timeout, unexpected exit, unhandled exception, stopped state and handle
+cleanup. Worker functions own initialization signalling, iteration
+success/failure, maintenance-paused state and domain health codes only.
 
 Shutdown sets the runtime stop signal, wakes blocking workers, signals each
 handle, joins Collector and every registered worker and records any surviving
@@ -96,7 +96,10 @@ creates a user session boundary and never mutates durable `user_paused`.
 Every acknowledgement is identity-bearing: command ID, command kind, completed
 state, expected terminal state and `ok=true` must match. A pending command may be
 cancelled on timeout. A taken command with unknown result fails closed; the
-coordinator cannot enter exclusive maintenance on an unverified hold.
+coordinator cannot enter exclusive maintenance on an unverified hold. On
+Collector shutdown or fatal exit, `RuntimeCollectorControl` terminalizes every
+unfinished command with an explicit diagnostic, so no taken command remains
+permanently unexplained.
 
 The global order is:
 
@@ -117,7 +120,9 @@ capture state
 Only one maintenance operation can enter this sequence. Replacement publishes
 its database epoch in the same transaction as replacement data. On unknown
 state or failed restoration, durable pause/status are committed as a separate
-fail-closed safety transition and the runtime snapshot remains cleared.
+fail-closed safety transition and the runtime snapshot remains cleared. The
+fail-closed latch blocks later destructive maintenance until explicit runtime
+recovery verifies an operational Collector and inactive write gate.
 
 See [`docs/maintenance-lifecycle.md`](docs/maintenance-lifecycle.md).
 
