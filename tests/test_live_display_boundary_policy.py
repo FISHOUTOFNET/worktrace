@@ -29,10 +29,11 @@ def test_collector_switch_creates_a_new_open_row_without_carrying_the_prior_row(
     assert rows[1]["end_time"] is None
 
 
-def test_pause_snapshot_is_status_only_and_has_no_normal_live_overlay(temp_db):
+def test_pause_snapshot_is_static_and_has_no_normal_live_overlay(temp_db):
     runtime_state_fixture.set_setting("current_activity_snapshot", json.dumps({"status": "paused", "elapsed_seconds": 10}))
     settings_service.set_setting("collector_status", "paused")
     settings_service.clear_settings_cache()
     overview = WebViewBridge().get_overview()
-    assert overview["runtime"]["clock"]["live_state"] == "status_only"
-    assert overview["runtime"]["current_activity"]["live_state"] == "status_only"
+    assert overview["runtime"]["clock"]["duration_semantic"] == "static_closed"
+    assert overview["runtime"]["clock"]["live_state"] == "none"
+    assert overview["runtime"]["current_activity"]["live_state"] == "none"
