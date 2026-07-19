@@ -2,19 +2,30 @@ from __future__ import annotations
 
 import pytest
 
+from tests.support import activity_factory as activity_service
 from worktrace.data_generation_repository import (
     DataGenerationNamespace,
     DataGenerationRepository,
 )
-from worktrace.db import get_connection
+from worktrace.db import get_connection, now_str
 from worktrace.services import (
     database_maintenance_service,
+    history_mutation_job_service,
     privacy_gate_service,
     project_service,
+    rule_service,
     settings_service,
 )
 
 pytestmark = [pytest.mark.db, pytest.mark.integration, pytest.mark.contract]
+
+_WORKER_PROGRESS_TABLES = (
+    "history_mutation_job_rule",
+    "history_mutation_job",
+    "activity_inference_job",
+    "activity_resource_repair_job",
+    "startup_recovery_job",
+)
 
 
 def _generations() -> dict[DataGenerationNamespace, int]:
@@ -23,6 +34,67 @@ def _generations() -> dict[DataGenerationNamespace, int]:
             namespace: DataGenerationRepository.get(conn, namespace)
             for namespace in DataGenerationNamespace
         }
+
+
+def _worker_progress_counts() -> dict[str, int]:
+    with get_connection() as conn:
+        return {
+            table: int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+            for table in _WORKER_PROGRESS_TABLES
+        }
+
+
+def _seed_all_worker_progress() -> None:
+    project_id = project_service.create_project("Worker Progress Source")
+    rule_id = rule_service.create_rule("worker-progress", project_id)
+    activity_id = activity_service.create_activity(
+        "Word",
+        "winword.exe",
+        "worker-progress document",
+        start_time="2026-07-18 13:00:00",
+    )
+    activity_service.close_activity_row(activity_id, "2026-07-18 13:05:00")
+    history_mutation_job_service.submit_rule_job(
+        "rule_backfill",
+        "keyword",
+        rule_id,
+        synchronous_limit=0,
+    )
+    timestamp = now_str()
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO activity_inference_job(
+                activity_id, reason, status, attempt_count, next_attempt_at,
+                last_error_code, created_at, updated_at
+            ) VALUES (?, 'closed_activity', 'pending', 0, NULL, NULL, ?, ?)
+            """,
+            (activity_id, timestamp, timestamp),
+        )
+        conn.execute(
+            """
+            INSERT INTO activity_resource_repair_job(
+                singleton_id, policy_version, status, cursor_activity_id,
+                processed_count, repaired_count, failed_count, unknown_count,
+                last_error, started_at, completed_at, updated_at
+            ) VALUES (1, 1, 'pending', 0, 0, 0, 0, 0, '', '', '', ?)
+            """,
+            (timestamp,),
+        )
+        conn.execute(
+            """
+            INSERT INTO startup_recovery_job(
+                source_activity_id, cursor_time, end_time, source,
+                activity_status, app_name, process_name, window_title,
+                file_path_hint, project_id, status, attempt_count,
+                next_attempt_at, last_error_code, created_at, updated_at
+            ) VALUES (?, '2026-07-18 13:05:00', '2026-07-20 13:05:00',
+                      'auto', 'normal', 'Word', 'winword.exe',
+                      'worker-progress document', NULL, ?, 'pending', 0,
+                      NULL, NULL, ?, ?)
+            """,
+            (activity_id, project_id, timestamp, timestamp),
+        )
 
 
 def test_clear_all_advances_only_replacement_epoch_once(temp_db):
@@ -41,6 +113,17 @@ def test_clear_all_advances_only_replacement_epoch_once(temp_db):
             continue
         assert after[namespace] == before[namespace]
     assert privacy_gate_service.is_privacy_notice_accepted() is True
+
+
+def test_clear_all_removes_every_durable_worker_progress(temp_db):
+    _seed_all_worker_progress()
+    assert all(count > 0 for count in _worker_progress_counts().values())
+
+    database_maintenance_service.clear_all_live_data()
+
+    assert _worker_progress_counts() == {
+        table: 0 for table in _WORKER_PROGRESS_TABLES
+    }
 
 
 def test_ordinary_domain_writes_do_not_advance_replacement(temp_db):
