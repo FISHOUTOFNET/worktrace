@@ -5,7 +5,7 @@ import logging
 from typing import Any
 
 from ..runtime.app_runtime import AppRuntime
-from ..services import activity_lifecycle_service, privacy_gate_service
+from ..services import privacy_gate_service
 from . import settings_api
 
 
@@ -87,32 +87,27 @@ class ApplicationControlService:
             "ok": True,
             "accepted": True,
             "message": "已确认隐私说明",
-            "background_worker_degraded": bool(
-                start_result.get("background_worker_degraded")
-                or start_result.get("degraded")
-            ),
+            "degraded": bool(start_result.get("degraded")),
         }
         payload["status"] = self.get_collection_status()
         return payload
 
     def pause_collection_now(self) -> dict[str, Any]:
+        if self.runtime is None:
+            return {
+                "ok": False,
+                "pause_pending": False,
+                "error": "collector_not_available",
+            }
         try:
-            if self.runtime is not None:
-                result = dict(self.runtime.pause_collection_now())
-                if not bool(result.get("collector_active", True)):
-                    activity_lifecycle_service.pause_collection(
-                        reason="pause_fallback"
-                    )
-                return result
-            activity_lifecycle_service.pause_collection(reason="pause_fallback")
-            return {"ok": False, "pause_pending": True}
+            return dict(self.runtime.pause_collection_now())
         except Exception:
             logging.exception("pause collection command failed")
-            try:
-                activity_lifecycle_service.pause_collection(reason="pause_fallback")
-            except Exception:
-                logging.exception("pause fallback failed")
-            return {"ok": False, "pause_pending": True}
+            return {
+                "ok": False,
+                "pause_pending": False,
+                "error": "collector_pause_failed",
+            }
 
     def toggle_collection(self) -> dict[str, Any]:
         status = self.get_collection_status()
