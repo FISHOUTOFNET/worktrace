@@ -165,13 +165,17 @@ def test_frontend_resources_have_no_storage_network_cdn_or_module_pipeline():
 
 def test_live_duration_targets_use_exact_clock_and_accepted_runtime():
     source = read_all_js()
-    ticker = _assigned_app_function(read_js("init.js"), "applyLocalTicker")
+    core = read_js("core.js")
+    init = read_js("init.js")
+    ticker = _assigned_app_function(init, "applyLocalTicker")
     assert "liveRuntimeStore.get()" in ticker
     assert "App.readLiveClockTarget(target)" in ticker
     assert "App.liveTargetCompatibleWithRuntime(target, runtime)" in ticker
     assert "App.renderLiveDurationTarget(target, clock, Date.now())" in ticker
+    assert "App.getActiveLiveClock = function" in init
+    assert "App.getActiveLiveClock ? App.getActiveLiveClock() : null" in core
+    assert source.count("App.getActiveLiveClock") == 2
     for retired in (
-        "App.getActiveLiveClock()",
         "projectAcceptedClock(clock",
         "data-display-base-seconds",
         "data-live-base-seconds",
@@ -200,6 +204,7 @@ def test_runtime_transport_and_clock_have_one_frontend_owner():
         "acceptRefreshStateRuntime",
         "acceptPagePayloadRuntime",
         "App.applyLocalTicker",
+        "App.getActiveLiveClock = function",
         "Number(envelope.schema_version) !== 2",
     ):
         assert required in init
