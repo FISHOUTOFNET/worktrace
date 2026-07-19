@@ -1,16 +1,24 @@
 from tests.support import runtime_state_fixture
+
 import inspect
 import re
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
-pytestmark = [pytest.mark.collector_runtime, pytest.mark.integration, pytest.mark.db, pytest.mark.serial]
+pytestmark = [
+    pytest.mark.collector_runtime,
+    pytest.mark.integration,
+    pytest.mark.db,
+    pytest.mark.serial,
+]
 
 from worktrace.collector import collector as collector_mod
 from worktrace.collector.collector import (
     CollectorControl,
+    CollectorHoldState,
     _midnight_crossed_between,
     _normalize_poll_interval_setting,
     _sleep_until_next_poll,
@@ -29,17 +37,41 @@ def _stop_after_poll(monkeypatch, stop_event):
     monkeypatch.setattr(collector_mod, "_sleep_until_next_poll", fake_poll_wait)
 
 
+def _queue_maintenance_hold(
+    control: CollectorControl,
+    result: dict,
+) -> threading.Thread:
+    def request() -> None:
+        result.update(control.request_maintenance_hold(timeout_seconds=2.0))
+
+    thread = threading.Thread(target=request, daemon=True)
+    thread.start()
+    deadline = time.monotonic() + 1.0
+    while time.monotonic() < deadline:
+        if control.hold_state is CollectorHoldState.HOLD_REQUESTED:
+            return thread
+        thread.join(timeout=0.005)
+    raise AssertionError("maintenance hold request was not queued")
+
+
 def test_collector_loop_with_fake_adapter(temp_db, monkeypatch):
     privacy_gate_service.accept_privacy_notice()
     settings_service.set_setting("poll_interval_seconds", "1")
     settings_service.set_setting("idle_threshold_seconds", "60")
     adapter = FakeAdapter(
-        windows=[ActiveWindow("Word", "word.exe", "Doc"), ActiveWindow("Excel", "excel.exe", "Sheet")],
+        windows=[
+            ActiveWindow("Word", "word.exe", "Doc"),
+            ActiveWindow("Excel", "excel.exe", "Sheet"),
+        ],
         idle_values=[0, 0],
     )
     stop_event = threading.Event()
     _stop_after_poll(monkeypatch, stop_event)
-    thread = threading.Thread(target=run_collector, args=(adapter, stop_event), daemon=True)
+    thread = threading.Thread(
+        target=run_collector,
+        args=(adapter, stop_event),
+        daemon=True,
+    )
     thread.start()
     thread.join(timeout=3)
     rows = activity_service.get_activities_by_date(time.strftime("%Y-%m-%d"))
@@ -191,24 +223,29 @@ def test_collector_pause_does_not_poll_active_window(temp_db, monkeypatch):
     privacy_gate_service.accept_privacy_notice()
     settings_service.set_setting("user_paused", "true")
     settings_service.set_setting("poll_interval_seconds", "1")
-    runtime_state_fixture.set_setting("current_activity_snapshot", '{"status":"normal"}')
+    runtime_state_fixture.set_setting(
+        "current_activity_snapshot",
+        '{"status":"normal"}',
+    )
     adapter = RaisingAdapter()
     stop_event = threading.Event()
     _stop_after_poll(monkeypatch, stop_event)
-    thread = threading.Thread(target=run_collector, args=(adapter, stop_event), daemon=True)
+    thread = threading.Thread(
+        target=run_collector,
+        args=(adapter, stop_event),
+        daemon=True,
+    )
     thread.start()
     thread.join(timeout=3)
 
     assert adapter.calls == 0
     rows = activity_service.get_activities_by_date(time.strftime("%Y-%m-%d"))
-    non_system_rows = [r for r in rows if r["resource_kind"] != "system"]
-    assert non_system_rows == [], f"no real app activity expected while paused, got {non_system_rows}"
+    non_system_rows = [row for row in rows if row["resource_kind"] != "system"]
+    assert non_system_rows == []
     assert runtime_state_fixture.get_setting("current_activity_snapshot", "") == ""
 
 
 def test_collector_control_pause_completes_lifecycle_before_ack(monkeypatch):
-    from worktrace.collector import collector as collector_mod
-
     calls: list[str] = []
 
     class FakeMachine:
@@ -226,7 +263,11 @@ def test_collector_control_pause_completes_lifecycle_before_ack(monkeypatch):
             raise AssertionError("idle state should not be polled")
 
     monkeypatch.setattr(collector_mod, "CollectorStateMachine", lambda: FakeMachine())
-    monkeypatch.setattr(collector_mod, "get_setting", lambda key, default=None: default or "1")
+    monkeypatch.setattr(
+        collector_mod,
+        "get_setting",
+        lambda key, default=None: default or "1",
+    )
     monkeypatch.setattr(collector_mod, "get_int_setting", lambda key, default=1: 1)
     monkeypatch.setattr(
         collector_mod,
@@ -238,9 +279,21 @@ def test_collector_control_pause_completes_lifecycle_before_ack(monkeypatch):
         "is_privacy_notice_accepted",
         lambda: True,
     )
-    monkeypatch.setattr(collector_mod.clipboard_service, "prune_old_events", lambda: None)
-    monkeypatch.setattr(collector_mod, "update_heartbeat", lambda status: calls.append("heartbeat:" + status))
-    monkeypatch.setattr(collector_mod, "now_str", lambda: "2026-07-05 10:00:00")
+    monkeypatch.setattr(
+        collector_mod.clipboard_service,
+        "prune_old_events",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        collector_mod,
+        "update_heartbeat",
+        lambda status: calls.append("heartbeat:" + status),
+    )
+    monkeypatch.setattr(
+        collector_mod,
+        "now_str",
+        lambda: "2026-07-05 10:00:00",
+    )
 
     stop_event = threading.Event()
     control = CollectorControl()
@@ -265,8 +318,6 @@ def test_collector_control_pause_completes_lifecycle_before_ack(monkeypatch):
 
 
 def test_collector_paused_branch_delegates_to_lifecycle_machine(monkeypatch):
-    from worktrace.collector import collector as collector_mod
-
     calls: list[str] = []
 
     class FakeMachine:
@@ -274,83 +325,96 @@ def test_collector_paused_branch_delegates_to_lifecycle_machine(monkeypatch):
             calls.append("machine.pause")
 
     monkeypatch.setattr(collector_mod, "update_heartbeat", lambda status: None)
-    collector_mod._pause_machine_then_expose(FakeMachine(), "2026-07-05 10:00:00")
+    collector_mod._pause_machine_then_expose(
+        FakeMachine(),
+        "2026-07-05 10:00:00",
+    )
 
     assert calls == ["machine.pause"]
 
 
-def test_collector_skips_active_window_when_import_guard_active(temp_db, monkeypatch):
+def test_maintenance_hold_prevents_sampling_and_activity_writes(temp_db):
     class RaisingAdapter:
         calls = 0
 
         def get_active_window(self):
             self.calls += 1
-            raise AssertionError("active window should not be polled during secure import")
+            raise AssertionError("active window must not be sampled while held")
 
         def get_idle_seconds(self):
-            raise AssertionError("idle state should not be polled during secure import")
+            raise AssertionError("idle state must not be sampled while held")
+
+        def get_clipboard_events(self):
+            raise AssertionError("clipboard must not be sampled while held")
 
     privacy_gate_service.accept_privacy_notice()
     settings_service.set_setting("user_paused", "false")
-    monkeypatch.setattr(collector_mod, "is_secure_import_in_progress", lambda: True)
-    settings_service.set_setting("poll_interval_seconds", "1")
-    runtime_state_fixture.set_setting("current_activity_snapshot", '{"status":"normal"}')
+    control = CollectorControl()
+    result: dict = {}
+    request_thread = _queue_maintenance_hold(control, result)
     adapter = RaisingAdapter()
     stop_event = threading.Event()
-    _stop_after_poll(monkeypatch, stop_event)
-    thread = threading.Thread(target=run_collector, args=(adapter, stop_event), daemon=True)
-    thread.start()
-    thread.join(timeout=3)
+    collector_thread = threading.Thread(
+        target=run_collector,
+        args=(adapter, stop_event, control),
+        daemon=True,
+    )
+    collector_thread.start()
+    request_thread.join(timeout=2)
 
+    assert not request_thread.is_alive()
+    assert result["ok"] is True
+    assert result["command_kind"] == "maintenance_hold"
+    assert result["command_state"] == "completed"
+    assert result["terminal_state"] == "held"
+    assert result["command_state_unknown"] is False
+    assert control.hold_state is CollectorHoldState.HELD
     assert adapter.calls == 0
     rows = activity_service.get_activities_by_date(time.strftime("%Y-%m-%d"))
-    non_system_rows = [r for r in rows if r["resource_kind"] != "system"]
-    assert non_system_rows == [], f"no real app activity expected during import guard, got {non_system_rows}"
+    assert [row for row in rows if row["resource_kind"] != "system"] == []
+
+    stop_event.set()
+    collector_thread.join(timeout=3)
+    assert not collector_thread.is_alive()
 
 
-def test_no_new_activity_during_import_guard(temp_db, monkeypatch):
-    privacy_gate_service.accept_privacy_notice()
-    settings_service.set_setting("user_paused", "false")
-    monkeypatch.setattr(collector_mod, "is_secure_import_in_progress", lambda: True)
-    settings_service.set_setting("poll_interval_seconds", "1")
-    settings_service.set_setting("idle_threshold_seconds", "60")
-
-    adapter = FakeAdapter(
-        windows=[ActiveWindow("GuardTestApp", "guard.exe", "Guard-Test-Window-Title-7Q2")],
-        idle_values=[0],
-    )
-    stop_event = threading.Event()
-    _stop_after_poll(monkeypatch, stop_event)
-    thread = threading.Thread(target=run_collector, args=(adapter, stop_event), daemon=True)
-    thread.start()
-    thread.join(timeout=3)
-
-    rows = activity_service.get_activities_by_date(time.strftime("%Y-%m-%d"))
-    non_system_rows = [r for r in rows if r["resource_kind"] != "system"]
-    assert non_system_rows == [], f"no real app activity should be recorded during import guard, got {non_system_rows}"
-
-
-def test_no_real_title_path_stored_during_import_guard(temp_db, monkeypatch):
+def test_maintenance_hold_never_persists_sensitive_adapter_data(temp_db):
     from worktrace.db import get_connection
 
+    sensitive_title = "Hold-Leak-Test-Window-9XK"
+    sensitive_path = "C:\\Hold-Leak-Test-Path-5M8\\secret.docx"
+
+    class SensitiveAdapter:
+        def get_active_window(self):
+            return ActiveWindow(
+                "LeakApp",
+                "leak.exe",
+                sensitive_title,
+                sensitive_path,
+            )
+
+        def get_idle_seconds(self):
+            return 0
+
+        def get_clipboard_events(self):
+            return []
+
     privacy_gate_service.accept_privacy_notice()
     settings_service.set_setting("user_paused", "false")
-    monkeypatch.setattr(collector_mod, "is_secure_import_in_progress", lambda: True)
-    settings_service.set_setting("poll_interval_seconds", "1")
-    settings_service.set_setting("idle_threshold_seconds", "60")
-
-    sensitive_title = "Guard-Leak-Test-Window-9XK"
-    sensitive_path = "C:\\Guard-Leak-Test-Path-5M8\\secret.docx"
-    adapter = FakeAdapter(
-        windows=[ActiveWindow("LeakApp", "leak.exe", sensitive_title)],
-        idle_values=[0],
-    )
+    control = CollectorControl()
+    result: dict = {}
+    request_thread = _queue_maintenance_hold(control, result)
     stop_event = threading.Event()
-    _stop_after_poll(monkeypatch, stop_event)
-    thread = threading.Thread(target=run_collector, args=(adapter, stop_event), daemon=True)
-    thread.start()
-    thread.join(timeout=3)
+    collector_thread = threading.Thread(
+        target=run_collector,
+        args=(SensitiveAdapter(), stop_event, control),
+        daemon=True,
+    )
+    collector_thread.start()
+    request_thread.join(timeout=2)
 
+    assert not request_thread.is_alive()
+    assert result["ok"] is True
     with get_connection() as conn:
         rows = conn.execute(
             "SELECT window_title, file_path_hint FROM activity_log"
@@ -359,8 +423,31 @@ def test_no_real_title_path_stored_during_import_guard(temp_db, monkeypatch):
         assert sensitive_title not in (row["window_title"] or "")
         assert sensitive_path not in (row["file_path_hint"] or "")
 
+    stop_event.set()
+    collector_thread.join(timeout=3)
+    assert not collector_thread.is_alive()
+
+
+def test_collector_has_no_secure_backup_reverse_dependency():
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "worktrace" / "collector" / "collector.py").read_text(
+        encoding="utf-8"
+    )
+    assert "secure_backup" not in source
+    assert "is_secure_import_in_progress" not in source
+    assert "maintenance_hold" in source
+
 
 def test_midnight_crossing_detects_exact_boundary():
-    assert _midnight_crossed_between("2026-06-18 23:59:59", "2026-06-19 00:00:02") == "2026-06-19 00:00:00"
-    assert _midnight_crossed_between("2026-06-18 23:59:59", "2026-06-18 23:59:59") is None
-    assert _midnight_crossed_between("2026-06-19 00:00:01", "2026-06-19 00:00:02") is None
+    assert _midnight_crossed_between(
+        "2026-06-18 23:59:59",
+        "2026-06-19 00:00:02",
+    ) == "2026-06-19 00:00:00"
+    assert _midnight_crossed_between(
+        "2026-06-18 23:59:59",
+        "2026-06-18 23:59:59",
+    ) is None
+    assert _midnight_crossed_between(
+        "2026-06-19 00:00:01",
+        "2026-06-19 00:00:02",
+    ) is None
