@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import pytest
 
@@ -54,18 +54,30 @@ class _MachineRuntimeControl:
     resume_at: str
     restore_observed: bool = False
     reset_observed: bool = False
+    _next_command: int = field(default=0, init=False)
+
+    def _ack(self, command_kind: str, terminal_state: str) -> dict:
+        self._next_command += 1
+        return {
+            "ok": True,
+            "command_id": f"machine-command-{self._next_command}",
+            "command_kind": command_kind,
+            "command_state": "completed",
+            "terminal_state": terminal_state,
+            "command_state_unknown": False,
+        }
 
     def is_collection_running_for_maintenance(self) -> bool:
         return True
 
     def quiesce_collection_for_maintenance(self, timeout_seconds=5.0):
         self.machine.quiesce_for_maintenance(self.quiesce_at)
-        return {"ok": True, "quiesce_pending": False}
+        return self._ack("maintenance_hold", "held")
 
     def reset_after_database_replacement(self, timeout_seconds=5.0):
         self.reset_observed = True
         self.machine.reset_runtime_state("database_replacement")
-        return {"ok": True, "reset_pending": False}
+        return self._ack("database_reset", "held")
 
     def restore_after_maintenance(self, state, timeout_seconds=5.0):
         self.restore_observed = True
@@ -84,7 +96,7 @@ class _MachineRuntimeControl:
                 ),
                 at_time=self.resume_at,
             )
-        return {"ok": True, "restore_pending": False}
+        return self._ack("maintenance_release", "operational")
 
 
 def test_direct_backup_export_seals_and_resumes_without_maintenance_boundary(
