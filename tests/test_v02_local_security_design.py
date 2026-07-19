@@ -18,6 +18,7 @@ def test_v02_local_security_design_doc_covers_required_boundaries() -> None:
     text = (REPO_ROOT / "docs" / "v0.2-local-security-design.md").read_text(
         encoding="utf-8"
     )
+    normalized = " ".join(text.split())
 
     required = [
         "DPAPI",
@@ -30,7 +31,7 @@ def test_v02_local_security_design_doc_covers_required_boundaries() -> None:
         "no server",
     ]
     for phrase in required:
-        assert phrase in text
+        assert phrase in normalized
 
 
 def test_readme_links_v02_local_security_design() -> None:
