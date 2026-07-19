@@ -10,10 +10,7 @@ from ..data_generation_repository import DataGenerationNamespace
 from ..db import dict_rows, get_connection, get_db_key
 from ..domain_unit_of_work import DomainUnitOfWork
 from ..generation_clock import generation_tuple
-from ..resources.resource_helpers import (
-    GENERIC_FILE_PROJECT_NAMES,
-    has_auto_project_extension,
-)
+from ..path_utils import has_auto_project_extension
 from . import (
     assignment_command_service,
     clipboard_fact_query_service,
@@ -22,6 +19,18 @@ from . import (
 )
 from .system_project_service import require_uncategorized_project_id
 
+_GENERIC_FILE_PROJECT_NAMES = {
+    "desktop",
+    "downloads",
+    "documents",
+    "document",
+    "wps cloud files",
+    "my documents",
+    "我的文档",
+    "下载",
+    "桌面",
+    "文档",
+}
 _KEYWORD_RULE_CACHE_LOCK = threading.RLock()
 _KEYWORD_RULE_CACHE_DATABASE_KEY: str | None = None
 _KEYWORD_RULE_CACHE_GENERATION: tuple[int, int] | None = None
@@ -292,7 +301,7 @@ def candidate_project_name_for_resource(resource: dict) -> str | None:
             candidate = _clean_project_candidate(
                 ntpath.basename(parent_dir.rstrip("\\/"))
             )
-            if candidate and candidate.casefold() not in GENERIC_FILE_PROJECT_NAMES:
+            if candidate and candidate.casefold() not in _GENERIC_FILE_PROJECT_NAMES:
                 return candidate
 
     if resource_kind == "ide_file" and resource_subtype == "ide_workspace":
