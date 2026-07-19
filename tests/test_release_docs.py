@@ -26,6 +26,7 @@ AI_CONTEXT_PATH = REPO_ROOT / "docs" / "ai-context-guide.md"
 WORKFLOW_DIR = REPO_ROOT / ".github" / "workflows"
 CI_PATH = WORKFLOW_DIR / "ci.yml"
 REUSABLE_VALIDATION_PATH = WORKFLOW_DIR / "_validation.yml"
+ACCEPTANCE_PATH = WORKFLOW_DIR / "acceptance.yml"
 BUILD_DEP_CANDIDATES = [
     REPO_ROOT / "requirements-dev.txt",
     REPO_ROOT / "requirements-build.txt",
@@ -88,6 +89,7 @@ def test_release_validation_doc_and_workflows_exist():
     assert VALIDATION_PATH.is_file(), "docs/release-validation.md must exist"
     for path in (CI_PATH, REUSABLE_VALIDATION_PATH):
         assert path.is_file(), f"expected permanent workflow: {path}"
+    assert not ACCEPTANCE_PATH.exists(), "Acceptance workflow must remain removed"
 
 
 def test_readme_points_to_release_validation_doc():
@@ -137,7 +139,6 @@ def test_ci_workflows_contain_required_release_smoke_steps():
     combined = "\n".join((standard, reusable))
     assert "3.12" not in combined
     assert "run_python312" not in combined
-    assert "acceptance.yml" not in combined
 
 
 # release-checklist stub tests.
