@@ -36,6 +36,15 @@ def _is_defined(source: str, name: str) -> bool:
     return bool(declaration or assignment)
 
 
+def _assigned_app_function(source: str, name: str) -> str:
+    marker = f"App.{name} = function ("
+    start = source.find(marker)
+    assert start != -1, f"init.js must assign App.{name}"
+    end = source.find("\n    };", start)
+    assert end != -1, f"App.{name} assignment must close"
+    return source[start:end]
+
+
 def test_frontend_resource_set_is_complete_and_ordered() -> None:
     assert (WEBVIEW_UI_DIR / "index.html").is_file()
     assert (WEBVIEW_UI_DIR / "styles.css").is_file()
@@ -239,12 +248,14 @@ def test_startup_waits_for_privacy_notice_before_refresh_and_heartbeat() -> None
 
 def test_local_ticker_never_calls_backend() -> None:
     core = read_js("core.js")
-    body = func_body(core, "applyLocalTicker")
-    assert "App.applyLocalTicker" in core
+    init = read_js("init.js")
+    body = _assigned_app_function(init, "applyLocalTicker")
+    assert "applyLocalTicker" not in core
     assert "callBridge" not in body
     assert "App.bridge" not in body
-    assert "App.LOCAL_TICKER_INTERVAL_MS" not in core
-    assert "App.REFRESH_INTERVAL_MS" not in core
+    assert "pywebview" not in body
+    assert "App.LOCAL_TICKER_INTERVAL_MS" not in init
+    assert "App.REFRESH_INTERVAL_MS" not in init
 
 
 def test_packaging_includes_current_frontend_resources() -> None:
