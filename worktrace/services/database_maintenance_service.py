@@ -141,29 +141,43 @@ class RuntimeMaintenanceCoordinator:
         )
 
     @staticmethod
+    def _query_command(control: Any, command_id: str) -> dict[str, Any] | None:
+        channel = getattr(control, "collector_control", None)
+        query = getattr(channel, "query_command", None)
+        if query is None or not command_id:
+            return None
+        value = query(command_id)
+        return dict(value) if isinstance(value, dict) else None
+
+    @classmethod
     def _require_ack(
+        cls,
         result: dict[str, Any],
         *,
+        control: Any,
         command_kind: str,
         terminal_state: str,
         reason: str,
     ) -> None:
-        command_id = str(result.get("command_id") or "")
+        resolved = dict(result)
+        command_id = str(resolved.get("command_id") or "")
+        if bool(resolved.get("command_state_unknown")):
+            queried = cls._query_command(control, command_id)
+            if queried is not None:
+                resolved = queried
+                command_id = str(resolved.get("command_id") or "")
         known_terminal = (
-            bool(result.get("ok"))
+            bool(resolved.get("ok"))
             and bool(command_id)
-            and str(result.get("command_kind") or "") == command_kind
-            and str(result.get("command_state") or "") == "completed"
-            and str(result.get("terminal_state") or "") == terminal_state
-            and not bool(result.get("command_state_unknown"))
+            and str(resolved.get("command_kind") or "") == command_kind
+            and str(resolved.get("command_state") or "") == "completed"
+            and str(resolved.get("terminal_state") or "") == terminal_state
+            and not bool(resolved.get("command_state_unknown"))
         )
         if known_terminal:
             return
-        if bool(result.get("command_state_unknown")):
-            RuntimeMaintenanceCoordinator._fail_closed(
-                reason=reason,
-                command=command_kind,
-            )
+        if bool(resolved.get("command_state_unknown")):
+            cls._fail_closed(reason=reason, command=command_kind)
         raise CollectorCommandNotAcknowledgedError(
             f"collector_{command_kind}_not_acknowledged"
         )
@@ -228,6 +242,7 @@ class RuntimeMaintenanceCoordinator:
                 )
                 self._require_ack(
                     hold_result,
+                    control=control,
                     command_kind="maintenance_hold",
                     terminal_state="held",
                     reason=reason,
@@ -257,6 +272,7 @@ class RuntimeMaintenanceCoordinator:
                 )
                 self._require_ack(
                     reset_result,
+                    control=control,
                     command_kind="database_reset",
                     terminal_state="held",
                     reason=reason,
@@ -275,6 +291,7 @@ class RuntimeMaintenanceCoordinator:
                 )
                 self._require_ack(
                     release_result,
+                    control=control,
                     command_kind="maintenance_release",
                     terminal_state="operational",
                     reason=reason,
