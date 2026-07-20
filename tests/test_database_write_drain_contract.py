@@ -118,7 +118,7 @@ def test_draining_rejects_new_ordinary_writer(temp_db):
         thread.join(timeout=5)
         assert not thread.is_alive()
 
-    assert outcome == ["secure_import_in_progress"]
+    assert outcome == ["database_maintenance_in_progress"]
     assert project_service.get_project_by_name("RejectedDuringDrain") is None
     assert DATABASE_WRITE_GATE.phase() is WriteGatePhase.OPEN
 
