@@ -88,6 +88,14 @@ def _groups(rendered: Path) -> list[dict]:
     ]
 
 
+def _index(rendered: Path) -> list[dict]:
+    return [
+        json.loads(line.split("=", 1)[1])
+        for line in rendered.read_text(encoding="utf-8").splitlines()
+        if line.startswith("cause_json=")
+    ]
+
+
 def test_single_collection_error_exposes_real_traceback(tmp_path: Path) -> None:
     diagnostics = _produce(
         tmp_path,
@@ -125,6 +133,48 @@ def test_multiple_groups_keep_distinct_representative_details(tmp_path: Path) ->
     assert len(groups) == 2
     assert "FIRST-TRACEBACK" in " ".join(groups[0]["representative_details"])
     assert "SECOND-TRACEBACK" in " ".join(groups[1]["representative_details"])
+
+
+def test_compact_index_precedes_details_and_lists_every_group(tmp_path: Path) -> None:
+    groups = [
+        {
+            "id": f"group-{index:03d}",
+            "signature": f"failure|{index}",
+            "kind": "failure",
+            "message": f"root cause {index}",
+            "representative_location": f"tests/test_{index}.py:{index}",
+            "representative_details": "TRACEBACK\n" + ("x" * 3000),
+            "affected_tests": [f"tests.synthetic::test_{index}"],
+        }
+        for index in range(1, 40)
+    ]
+    payload = {
+        "schema_version": 1,
+        "revision": "c" * 40,
+        "status": "failed",
+        "failed_stage": "pytest",
+        "artifact_name": "validation-diagnostics-index",
+        "diagnostics_available": True,
+        "reason": "",
+        "counts": {"total": 39, "passed": 0, "failed": 39, "errors": 0, "skipped": 0},
+        "failures": [],
+        "log_tail": [],
+        "root_cause_groups": groups,
+    }
+    diagnostics = tmp_path / "diagnostics.json"
+    diagnostics.write_text(json.dumps(payload), encoding="utf-8")
+    rendered = tmp_path / "api-summary.txt"
+
+    result = _render(diagnostics, rendered)
+
+    assert result.returncode == 0, result.stderr
+    index = _index(rendered)
+    assert [entry["id"] for entry in index] == [
+        f"group-{number:03d}" for number in range(1, 40)
+    ]
+    assert all(set(entry) == {"id", "kind", "location", "message", "affected_test_count"} for entry in index)
+    text = rendered.read_text(encoding="utf-8")
+    assert text.index("ROOT_CAUSE_INDEX_BEGIN") < text.index("ROOT_CAUSE_GROUPS_BEGIN")
 
 
 def test_non_ascii_traceback_round_trips(tmp_path: Path) -> None:
@@ -183,6 +233,7 @@ def test_renderer_preserves_groups_under_64k_and_truncates_affected_tests_first(
     assert len(rendered.read_bytes()) <= 8192
     text = rendered.read_text(encoding="utf-8")
     assert "TRUNCATED=true" in text
+    assert [entry["id"] for entry in _index(rendered)] == ["group-001", "group-002"]
     groups = _groups(rendered)
     assert [group["id"] for group in groups] == ["group-001", "group-002"]
     assert groups[0]["affected_test_count"] == 500
@@ -219,6 +270,13 @@ def test_producer_and_renderer_group_fields_match(tmp_path: Path) -> None:
     assert group["kind"] == source_group["kind"]
     assert group["location"] == source_group["representative_location"]
     assert "CONTRACT-DETAIL" in " ".join(group["representative_details"])
+    assert _index(rendered)[0] == {
+        "id": source_group["id"],
+        "kind": source_group["kind"],
+        "location": source_group["representative_location"],
+        "message": source_group["message"],
+        "affected_test_count": len(source_group["affected_tests"]),
+    }
 
 
 def test_missing_diagnostics_fails_closed(tmp_path: Path) -> None:
