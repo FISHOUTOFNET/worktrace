@@ -25,6 +25,7 @@ from worktrace.api.settings_api import (
     get_settings_privacy_status,
     import_encrypted_backup_for_webview,
     preview_encrypted_backup_manifest_for_webview,
+    recover_database_maintenance_for_webview,
     set_clipboard_capture_enabled_for_webview,
 )
 from worktrace.services import database_maintenance_service, privacy_gate_service
@@ -38,6 +39,7 @@ from worktrace.services.secure_backup_service import (
     SecureBackupError,
 )
 from worktrace.services.settings_service import set_setting, set_settings
+from worktrace.write_gate import DATABASE_RECOVERY_ERROR
 
 pytestmark = [pytest.mark.security_privacy, pytest.mark.integration, pytest.mark.db]
 
@@ -146,6 +148,56 @@ def test_failed_closed_is_blocked_but_not_reported_as_in_progress(temp_db) -> No
     coordinator.recover_fail_closed()
 
 
+def test_explicit_recovery_api_clears_only_through_maintenance_owner(temp_db) -> None:
+    coordinator = database_maintenance_service.MAINTENANCE_COORDINATOR
+    set_settings(
+        {
+            "maintenance_fail_closed": "true",
+            "maintenance_fail_closed_reason": "explicit_recovery",
+            "user_paused": "true",
+            "collector_status": "paused",
+        }
+    )
+    assert coordinator.hydrate_fail_closed_from_durable() is True
+
+    result = recover_database_maintenance_for_webview()
+
+    assert result["ok"] is True
+    assert result["maintenance"]["maintenance_restored"] is True
+    assert result["maintenance"]["recovery_blocked"] is False
+
+
+def test_explicit_recovery_api_preserves_block_when_not_verified(
+    temp_db,
+    monkeypatch,
+) -> None:
+    coordinator = database_maintenance_service.MAINTENANCE_COORDINATOR
+    set_settings(
+        {
+            "maintenance_fail_closed": "true",
+            "maintenance_fail_closed_reason": "unverified_recovery",
+            "user_paused": "true",
+            "collector_status": "paused",
+        }
+    )
+    assert coordinator.hydrate_fail_closed_from_durable() is True
+    monkeypatch.setattr(
+        database_maintenance_service,
+        "recover_fail_closed",
+        lambda: (_ for _ in ()).throw(
+            database_maintenance_service.MaintenanceRecoveryError(
+                "maintenance_recovery_not_verified"
+            )
+        ),
+    )
+
+    result = recover_database_maintenance_for_webview()
+
+    assert result["ok"] is False
+    assert result["error"] == "maintenance_recovery_not_verified"
+    assert result["maintenance"]["recovery_blocked"] is True
+
+
 def test_api_encrypted_backup_availability_fields_are_present(temp_db) -> None:
     enc = get_settings_privacy_status()["status"]["encrypted_backup"]
     assert enc == {
@@ -233,7 +285,9 @@ def test_api_does_not_change_schema(temp_db) -> None:
 
 
 def test_bridge_method_exists_on_composed_webview_bridge() -> None:
-    assert callable(getattr(build_test_bridge(), "get_settings_privacy_status", None))
+    bridge = build_test_bridge()
+    assert callable(getattr(bridge, "get_settings_privacy_status", None))
+    assert callable(getattr(bridge.shipping_api, "recover_database_maintenance", None))
 
 
 def test_bridge_returns_narrow_success_payload(temp_db) -> None:
