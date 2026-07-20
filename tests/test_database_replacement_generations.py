@@ -58,10 +58,10 @@ def _seed_all_worker_progress() -> None:
     )
     activity_service.close_activity_row(activity_id, "2026-07-18 13:05:00")
     history_mutation_job_service.submit_rule_job(
-        "rule_backfill",
         "keyword",
         rule_id,
-        synchronous_limit=0,
+        kind="rule_backfill",
+        synchronous_scan_limit=0,
     )
     timestamp = now_str()
     with get_connection() as conn:
