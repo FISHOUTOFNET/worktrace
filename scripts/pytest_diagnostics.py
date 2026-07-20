@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 """Publish stable, API-readable CI diagnostics and failure artifacts."""
-
 from __future__ import annotations
 
 import argparse
@@ -41,6 +40,7 @@ class RootCauseGroup:
     kind: str
     message: str
     representative_location: str
+    representative_details: str
     affected_tests: list[str]
 
 
@@ -86,7 +86,8 @@ def _source_location(text: str) -> str:
                 continue
             path = match.group("path").strip().replace("\\", "/")
             location = f"{path}:{match.group('line')}"
-            if "/worktrace/" in f"/{path.lower()}/" and "/tests/" not in f"/{path.lower()}/":
+            normalized = f"/{path.lower()}/"
+            if "/worktrace/" in normalized and "/tests/" not in normalized:
                 return location
             if fallback == "(unknown)":
                 fallback = location
@@ -110,14 +111,12 @@ def _collect(root: ET.Element, *, detail_limit: int) -> tuple[int, int, list[Pro
     testcases = [element for element in root.iter() if _local_name(element.tag) == "testcase"]
     skipped = 0
     problems: list[Problem] = []
-
     for testcase in testcases:
         if any(_local_name(child.tag) == "skipped" for child in testcase):
             skipped += 1
         problem = _problem_child(testcase)
         if problem is None:
             continue
-
         kind = _local_name(problem.tag)
         raw_details = problem.text or ""
         raw_message = problem.attrib.get("message", "") or raw_details
@@ -130,7 +129,6 @@ def _collect(root: ET.Element, *, detail_limit: int) -> tuple[int, int, list[Pro
                 details=_bounded_details(raw_details or raw_message, limit=detail_limit),
             )
         )
-
     return len(testcases), skipped, problems
 
 
@@ -143,7 +141,11 @@ def _normalize_signature_text(value: str) -> str:
         "<uuid>",
         normalized,
     )
-    normalized = re.sub(r"\b\d{4}-\d{2}-\d{2}[t ]\d{2}:\d{2}:\d{2}(?:\.\d+)?z?\b", "<timestamp>", normalized)
+    normalized = re.sub(
+        r"\b\d{4}-\d{2}-\d{2}[t ]\d{2}:\d{2}:\d{2}(?:\.\d+)?z?\b",
+        "<timestamp>",
+        normalized,
+    )
     return _single_line(normalized, limit=220)
 
 
@@ -159,6 +161,7 @@ def _group_problems(problems: list[Problem]) -> list[RootCauseGroup]:
                 kind=problem.kind,
                 message=problem.message,
                 representative_location=problem.location,
+                representative_details=problem.details,
                 affected_tests=[],
             )
             grouped[signature] = group
@@ -188,8 +191,7 @@ def _append_summary(path: Path | None, lines: Iterable[str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8", newline="\n") as stream:
         for line in lines:
-            stream.write(line)
-            stream.write("\n")
+            stream.write(line + "\n")
 
 
 def _write_text(path: Path, lines: Iterable[str]) -> None:
@@ -227,8 +229,7 @@ def _manifest_lines(counts: dict[str, int], problems: list[Problem]) -> list[str
 def _details_lines(problems: list[Problem]) -> list[str]:
     lines: list[str] = []
     for index, problem in enumerate(problems, start=1):
-        lines.append(f"--- [{index}/{len(problems)}] {problem.test_id} ---")
-        lines.append(problem.details)
+        lines.extend((f"--- [{index}/{len(problems)}] {problem.test_id} ---", problem.details))
     return lines
 
 
@@ -251,15 +252,7 @@ def _summary_lines(
             f"- `{group.id}` ({len(group.affected_tests)}): "
             f"`{_escape_markdown(group.kind)}` — {_escape_markdown(group.message)}"
         )
-    lines.extend(
-        [
-            "",
-            "### All failures",
-            "",
-            "| # | Test | Kind | Location | Error |",
-            "|---:|---|---|---|---|",
-        ]
-    )
+    lines.extend(("", "### All failures", "", "| # | Test | Kind | Location | Error |", "|---:|---|---|---|---|"))
     for index, problem in enumerate(problems, start=1):
         lines.append(
             "| "
@@ -301,23 +294,23 @@ def _emit_protocol(
     print(f"root_cause_count={len(groups)}")
     if reason:
         print(f"reason={_single_line(reason, limit=500)}")
-
     print(FAILURES_BEGIN)
     empty_counts = {"total": 0, "passed": 0, "failed": 0, "errors": 0, "skipped": 0}
     for line in _manifest_lines(counts or empty_counts, problems)[1:]:
         print(line)
     print(FAILURES_END)
-
     print(GROUPS_BEGIN)
     for group in groups:
         print(
             f"[{group.id}] affected={len(group.affected_tests)} | {group.kind} | "
             f"{group.representative_location} | {group.message}"
         )
+        print("  representative_details:")
+        for line in group.representative_details.splitlines():
+            print(f"    {line}")
         for test_id in group.affected_tests:
             print(f"  - {test_id}")
     print(GROUPS_END)
-
     if log_tail is not None:
         print(LOG_TAIL_BEGIN)
         for line in log_tail:
@@ -335,6 +328,7 @@ def _diagnostics_payload(
     problems: list[Problem],
     groups: list[RootCauseGroup],
     reason: str = "",
+    log_tail: list[str] | None = None,
 ) -> dict:
     return {
         "schema_version": SCHEMA_VERSION,
@@ -347,6 +341,7 @@ def _diagnostics_payload(
         "counts": counts,
         "root_cause_groups": [asdict(group) for group in groups],
         "failures": [asdict(problem) for problem in problems],
+        "log_tail": list(log_tail or []),
     }
 
 
@@ -403,17 +398,12 @@ def _fallback(args: argparse.Namespace, reason: str) -> int:
         problems=[],
         groups=[],
         reason=reason,
+        log_tail=tail,
     )
     manifest = [f"Stage: {args.stage}", f"Reason: {reason}"]
     details = [f"Stage: {args.stage}", f"Reason: {reason}", "", *tail]
     summary = ["## Validation diagnostics", "", f"Stage: `{args.stage}`", "", reason]
-    _write_outputs(
-        args.output_dir,
-        payload=payload,
-        manifest=manifest,
-        details=details,
-        summary=summary,
-    )
+    _write_outputs(args.output_dir, payload=payload, manifest=manifest, details=details, summary=summary)
     _append_github_outputs([], [])
     _append_summary(args.summary, summary)
     _emit_protocol(
@@ -432,24 +422,17 @@ def _fallback(args: argparse.Namespace, reason: str) -> int:
 def main() -> int:
     _configure_utf8()
     args = _parse_args()
-
     if args.stage != "pytest":
         return _fallback(args, f"{args.stage} validation failed; see the captured log.")
     if args.junit is None or not args.junit.is_file():
         return _fallback(args, "JUnit report was not generated.")
-
     try:
         root = ET.parse(args.junit).getroot()
         total, skipped, problems = _collect(root, detail_limit=max(1000, args.detail_chars))
     except (ET.ParseError, OSError, ValueError) as exc:
         return _fallback(args, f"Could not parse pytest JUnit: {exc}")
-
     if not problems:
-        return _fallback(
-            args,
-            "Pytest failed but the JUnit report contains no failure or error cases.",
-        )
-
+        return _fallback(args, "Pytest failed but the JUnit report contains no failure or error cases.")
     counts = _counts(total, skipped, problems)
     groups = _group_problems(problems)
     manifest = _manifest_lines(counts, problems)
@@ -463,13 +446,7 @@ def main() -> int:
         problems=problems,
         groups=groups,
     )
-    _write_outputs(
-        args.output_dir,
-        payload=payload,
-        manifest=manifest,
-        details=details,
-        summary=summary,
-    )
+    _write_outputs(args.output_dir, payload=payload, manifest=manifest, details=details, summary=summary)
     _append_github_outputs(problems, groups)
     _append_summary(args.summary, summary)
     _emit_protocol(
