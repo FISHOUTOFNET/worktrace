@@ -114,14 +114,13 @@ def test_adapter_reset_and_shutdown_clear_owned_components(monkeypatch):
     resolver.resolve = lambda *_args: None
     adapter = WindowsAdapter(path_resolver=resolver)
     calls: list[object] = []
-    monkeypatch.setattr(adapter._clipboard, "set_enabled", lambda value: calls.append(value))
-    monkeypatch.setattr(adapter._clipboard, "clear", lambda: calls.append("clear"))
+    monkeypatch.setattr(adapter._clipboard, "reset", lambda: calls.append("reset"))
     monkeypatch.setattr(adapter._clipboard, "shutdown", lambda: calls.append("shutdown"))
 
     adapter.reset_runtime_state()
     adapter.shutdown()
 
-    assert calls == [False, "clear", "shutdown"]
+    assert calls == ["reset", "shutdown"]
     assert resolver.reset_calls == 2
 
 
