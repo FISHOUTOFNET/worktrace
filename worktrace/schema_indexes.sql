@@ -74,6 +74,9 @@ ON report_session_operation_member(operation_id, role);
 CREATE INDEX IF NOT EXISTS idx_project_rule_pattern
 ON project_rule(pattern);
 
+CREATE UNIQUE INDEX IF NOT EXISTS uq_project_rule_normalized_pattern
+ON project_rule(project_id, rule_type, normalized_pattern);
+
 CREATE TRIGGER IF NOT EXISTS project_reserved_name_insert
 BEFORE INSERT ON project
 WHEN NEW.name IN ('未归类', '排除规则') AND NEW.created_by <> 'system'

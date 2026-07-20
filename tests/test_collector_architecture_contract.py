@@ -298,9 +298,13 @@ def test_pending_short_settings_are_limited_to_compatibility_cleanup():
 
 
 def test_frontend_keeps_single_live_runtime_clock():
-    core = _source("worktrace/webview_ui/js/core.js")
-    assert "App.liveRuntime" in core
-    assert core.count("App.liveRuntime") >= 1
+    init = _source("worktrace/webview_ui/js/init.js")
+    shipping_js = "\n".join(
+        _source(f"worktrace/webview_ui/js/{name}")
+        for name in ("core.js", "init.js", "overview.js", "timeline.js")
+    )
+    assert "App.liveRuntimeStore = liveRuntimeStore" in init
+    assert 'Object.defineProperty(App, "liveRuntime"' in init
     for token in (
         "App.activeSpanClockByPage",
         "App.liveClockByPage",
@@ -308,4 +312,4 @@ def test_frontend_keeps_single_live_runtime_clock():
         "baseline_epoch_ms",
         "snapshot_baseline_epoch_ms",
     ):
-        assert token not in core
+        assert token not in shipping_js

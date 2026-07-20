@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 from tests.support import runtime_state_fixture
+from tests.support.application import build_test_bridge
 
 import json
 import pytest
@@ -9,7 +10,6 @@ import pytest
 from worktrace.collector.state_machine import CollectorStateMachine
 from worktrace.platforms.base import ActiveWindow
 from worktrace.services import activity_service, settings_service
-from worktrace.webview_ui.bridge import WebViewBridge
 
 pytestmark = [pytest.mark.contract, pytest.mark.integration, pytest.mark.db, pytest.mark.live_display]
 DATE = "2026-06-18"
@@ -29,10 +29,16 @@ def test_collector_switch_creates_a_new_open_row_without_carrying_the_prior_row(
     assert rows[1]["end_time"] is None
 
 
-def test_pause_snapshot_is_status_only_and_has_no_normal_live_overlay(temp_db):
-    runtime_state_fixture.set_setting("current_activity_snapshot", json.dumps({"status": "paused", "elapsed_seconds": 10}))
+def test_pause_snapshot_is_static_and_has_no_normal_live_overlay(temp_db):
+    runtime_state_fixture.set_setting(
+        "current_activity_snapshot",
+        json.dumps({"status": "paused", "elapsed_seconds": 10}),
+    )
     settings_service.set_setting("collector_status", "paused")
     settings_service.clear_settings_cache()
-    overview = WebViewBridge().get_overview()
-    assert overview["runtime"]["clock"]["live_state"] == "status_only"
-    assert overview["runtime"]["current_activity"]["live_state"] == "status_only"
+
+    overview = build_test_bridge().get_overview()
+
+    assert overview["runtime"]["clock"]["duration_semantic"] == "static_closed"
+    assert overview["runtime"]["clock"]["live_state"] == "none"
+    assert "live_clock" not in overview["runtime"]["current_activity"]

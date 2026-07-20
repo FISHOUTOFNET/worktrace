@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import time
 
 from ..contracts.live_display_contracts import (
     ActivitySnapshotContract,
@@ -8,8 +9,8 @@ from ..contracts.live_display_contracts import (
     LiveClockContract,
 )
 from .activity_display_policy import DisplaySessionPolicy
-from .live_display_service import _stable_live_key, _stable_live_key_hash
-from .live_time_service import snapshot_elapsed_seconds
+from .live_display_service import _stable_live_key_hash
+from .live_time_service import snapshot_elapsed_seconds, snapshot_start_time
 
 CURRENT_LIVE = "current_live"
 AGGREGATE_LIVE = "aggregate_live"
@@ -17,43 +18,18 @@ STATIC_CLOSED = "static_closed"
 
 
 def build_suppressed_live_clock() -> LiveClockContract:
+    """Build the exact non-ticking v2 contract used when no span is verified."""
+
     return {
-        "display_span_id": "",
-        "stable_live_key": "",
-        "stable_live_key_hash": "",
-        "live_state": "none",
-        "live_started_at_epoch_ms": 0,
-        "carry_seconds": 0,
+        "sampled_at_epoch_ms": int(time.time() * 1000),
+        "started_at_epoch_ms": 0,
+        "elapsed_seconds_at_sample": 0,
+        "aggregate_base_seconds": 0,
         "duration_semantic": STATIC_CLOSED,
-        "current_live_seconds_at_sample": 0,
-        "current_live_base_seconds": 0,
-        "aggregate_duration_seconds_at_sample": 0,
-        "aggregate_display_base_seconds": 0,
-        "display_base_seconds": 0,
-        "duration_seconds_at_sample": 0,
-        "active_elapsed_at_sample": 0,
-        "current_elapsed_at_sample": 0,
         "is_live": False,
-        "is_project_duration_live": False,
-        "current_duration_live": False,
-        "project_duration_live": False,
-        "display_session_kind": "suppressed",
-        "base_policy": "suppressed",
-        "status_only_reason": "historical_date",
-        "base_policy_reason": "historical_date",
-        "display_policy": DisplaySessionPolicy(
-            display_session_kind="suppressed",
-            base_policy="suppressed",
-            aggregate_base_seconds=0,
-            current_base_seconds=0,
-            project_duration_live=False,
-            current_duration_live=False,
-            materialize_recent=False,
-            materialize_timeline=False,
-            materialize_details=False,
-            status_only_reason="historical_date",
-            base_policy_reason="historical_date",
-        ).to_dict(),
+        "live_state": "none",
+        "display_span_id": "",
+        "stable_live_key_hash": "",
     }
 
 
@@ -91,41 +67,64 @@ def build_project_live_clock(
     report_date: str,
     today: str,
 ) -> LiveClockContract:
-    stable_key = _stable_live_key(snapshot)
+    """Build the verified current-span source clock.
+
+    Static policy owns only materialization. The clock owner decides liveness from
+    the canonical persisted-open session kind and current report scope.
+    """
+
+    del anchor, summary
+    sampled_at = int(time.time() * 1000)
+    historical = bool(report_date and today and report_date != today)
+    persisted = bool(
+        snapshot
+        and snapshot.get("is_persisted")
+        and int(snapshot.get("persisted_activity_id") or 0) > 0
+    )
+    live = bool(
+        not historical
+        and persisted
+        and display_live_state == "persisted_open"
+        and policy.display_session_kind == "persisted_open"
+    )
+    if not live:
+        return {
+            "sampled_at_epoch_ms": sampled_at,
+            "started_at_epoch_ms": 0,
+            "elapsed_seconds_at_sample": 0,
+            "aggregate_base_seconds": 0,
+            "duration_semantic": STATIC_CLOSED,
+            "is_live": False,
+            "live_state": "suppressed" if snapshot is not None else "none",
+            "display_span_id": "",
+            "stable_live_key_hash": "",
+        }
+
     stable_hash = _stable_live_key_hash(snapshot)
-    display_span_id = ("span:" + stable_hash) if stable_hash else ""
-    live_started_at = int(summary.get("live_started_at_epoch_ms") or 0)
-    current_elapsed_at_sample = int(snapshot_elapsed_seconds(snapshot))
-    display_base_seconds = int(policy.aggregate_base_seconds)
-    carry_seconds = int(policy.aggregate_base_seconds)
-    duration_at_sample = display_base_seconds + current_elapsed_at_sample
-    is_project_duration_live = bool(policy.project_duration_live)
-    is_current_duration_live = bool(policy.current_duration_live and live_started_at > 0)
+    start_dt = snapshot_start_time(snapshot)
+    started_at = int(start_dt.timestamp() * 1000) if start_dt is not None else 0
+    elapsed = int(snapshot_elapsed_seconds(snapshot))
+    if started_at <= 0 or elapsed < 0 or not stable_hash:
+        return {
+            "sampled_at_epoch_ms": sampled_at,
+            "started_at_epoch_ms": 0,
+            "elapsed_seconds_at_sample": 0,
+            "aggregate_base_seconds": 0,
+            "duration_semantic": STATIC_CLOSED,
+            "is_live": False,
+            "live_state": "suppressed",
+            "display_span_id": "",
+            "stable_live_key_hash": "",
+        }
 
     return {
-        "display_span_id": display_span_id,
-        "stable_live_key": stable_key,
+        "sampled_at_epoch_ms": sampled_at,
+        "started_at_epoch_ms": started_at,
+        "elapsed_seconds_at_sample": elapsed,
+        "aggregate_base_seconds": 0,
+        "duration_semantic": CURRENT_LIVE,
+        "is_live": True,
+        "live_state": "persisted_open",
+        "display_span_id": "span:" + stable_hash,
         "stable_live_key_hash": stable_hash,
-        "live_state": display_live_state,
-        "live_started_at_epoch_ms": live_started_at,
-        "carry_seconds": int(carry_seconds),
-        "duration_semantic": AGGREGATE_LIVE if is_project_duration_live else STATIC_CLOSED,
-        "current_live_seconds_at_sample": int(current_elapsed_at_sample),
-        "current_live_base_seconds": 0,
-        "aggregate_duration_seconds_at_sample": int(duration_at_sample),
-        "aggregate_display_base_seconds": int(display_base_seconds),
-        "display_base_seconds": int(display_base_seconds),
-        "duration_seconds_at_sample": int(duration_at_sample),
-        "active_elapsed_at_sample": int(current_elapsed_at_sample),
-        "current_elapsed_at_sample": int(current_elapsed_at_sample),
-        "project_duration_live": bool(is_project_duration_live),
-        "current_duration_live": bool(is_current_duration_live),
-        "is_live": bool(is_project_duration_live or is_current_duration_live),
-        "is_project_duration_live": bool(is_project_duration_live),
-        "display_session_kind": policy.display_session_kind,
-        "base_policy": policy.base_policy,
-        "status_only_reason": policy.status_only_reason,
-        "base_policy_reason": policy.base_policy_reason,
-        "display_policy": policy.to_dict(),
     }
-

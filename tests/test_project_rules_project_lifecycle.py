@@ -21,6 +21,7 @@ from worktrace.services import (
     privacy_service,
     project_inference_service,
     project_service,
+    rule_catalog_command_service,
     rule_service,
 )
 
@@ -267,8 +268,9 @@ def test_project_state_refreshes_rule_caches_via_generation(temp_db):
 
 
 def test_excluded_project_toggle_publishes_privacy_generation(temp_db):
-    excluded_id = system_project_service.require_excluded_project_id()
-    rule_service.create_rule("Secret", excluded_id)
+    _rule_id, _excluded_id = rule_catalog_command_service.create_excluded_keyword_rule(
+        "Secret"
+    )
     before = generation(DataGenerationNamespace.PRIVACY_CATALOG)
 
     result = project_api.set_excluded_rules_enabled(True)

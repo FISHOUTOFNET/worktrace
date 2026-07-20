@@ -134,10 +134,14 @@ def repair_missing_activity_resources(batch_size: int = DEFAULT_BATCH_SIZE) -> i
             state["processed_count"] = int(state["processed_count"]) + len(prepared)
             state["repaired_count"] = int(state["repaired_count"]) + len(prepared)
             state["unknown_count"] = int(state["unknown_count"]) + sum(
-                1 for _activity_id, _resource, is_unknown, _failed in prepared if is_unknown
+                1
+                for _activity_id, _resource, is_unknown, _failed in prepared
+                if is_unknown
             )
             state["failed_count"] = int(state["failed_count"]) + sum(
-                1 for _activity_id, _resource, _is_unknown, failed in prepared if failed
+                1
+                for _activity_id, _resource, _is_unknown, failed in prepared
+                if failed
             )
             _write_state(conn, state)
             uow.mark_changed()
@@ -174,39 +178,33 @@ def run_activity_resource_repair_worker(
     batch_size: int = DEFAULT_BATCH_SIZE,
     poll_seconds: float = _WORKER_IDLE_SECONDS,
 ) -> None:
-    """Run the blocking bounded repair loop owned by ``AppRuntime``."""
+    """Run iterations only; AppRuntime owns thread started/stopped state."""
 
     size = max(1, int(batch_size))
     interval = max(0.1, float(poll_seconds))
-    logging.info("activity resource repair worker start")
-    if health is not None:
-        health.started()
-    try:
-        while not stop_event.is_set():
-            if DATABASE_WRITE_GATE.active():
-                if health is not None:
-                    health.maintenance_paused(True)
-                stop_event.wait(interval)
-                continue
+    logging.info("activity resource repair worker loop enter")
+    while not stop_event.is_set():
+        if DATABASE_WRITE_GATE.active():
             if health is not None:
-                health.maintenance_paused(False)
-            try:
-                repaired = repair_missing_activity_resources(size)
-            except Exception:
-                logging.exception("activity resource repair worker iteration failed")
-                if health is not None:
-                    health.failed("activity_resource_repair_iteration_failed")
-                repaired = 0
-            else:
-                if health is not None:
-                    health.succeeded()
-            if repaired >= size:
-                continue
+                health.maintenance_paused(True)
             stop_event.wait(interval)
-    finally:
+            continue
         if health is not None:
-            health.stopped()
-        logging.info("activity resource repair worker stop")
+            health.maintenance_paused(False)
+        try:
+            repaired = repair_missing_activity_resources(size)
+        except Exception:
+            logging.exception("activity resource repair worker iteration failed")
+            if health is not None:
+                health.failed("activity_resource_repair_iteration_failed")
+            repaired = 0
+        else:
+            if health is not None:
+                health.succeeded()
+        if repaired >= size:
+            continue
+        stop_event.wait(interval)
+    logging.info("activity resource repair worker loop exit")
 
 
 def require_activity_fact_repair_complete() -> dict[str, Any]:

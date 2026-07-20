@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.support.database import reset_database
 from worktrace import db
 from worktrace.security.backup_format import (
     MAGIC,
@@ -14,6 +15,7 @@ from worktrace.security.backup_format import (
     decrypt_encrypted_backup,
 )
 from worktrace.services import (
+    database_maintenance_service,
     history_mutation_job_service,
     rule_service,
     secure_backup_service,
@@ -195,12 +197,17 @@ def _write_payload(tmp_path: Path, data: dict, name: str) -> Path:
     return path
 
 
+def _current_payload() -> bytes:
+    with database_maintenance_service.consistent_snapshot("backup_test_payload"):
+        return secure_backup_service._build_export_payload_under_snapshot()
+
+
 def test_export_payload_is_exact_current_contract(temp_db):
     _seed_current_data()
-    data = json.loads(secure_backup_service._build_export_payload())
+    data = json.loads(_current_payload())
     assert data["format"] == "worktrace-local-data"
-    assert data["version"] == 5
-    assert data["schema_version"] == "11"
+    assert data["version"] == 6
+    assert data["schema_version"] == "12"
     assert data["schema_fingerprint"] == db.expected_schema_fingerprint()
     assert set(data["tables"]) == set(secure_backup_service.EXPORT_TABLES)
     for table in _WORKER_PROGRESS_TABLES:
@@ -209,7 +216,7 @@ def test_export_payload_is_exact_current_contract(temp_db):
     assert "folder_rule_file_index" not in data["tables"]
 
 
-def test_current_v5_round_trip_restores_business_data_and_clears_worker_progress(
+def test_current_v6_round_trip_restores_business_data_and_clears_worker_progress(
     temp_db,
     tmp_path,
 ):
@@ -219,7 +226,7 @@ def test_current_v5_round_trip_restores_business_data_and_clears_worker_progress
     out = tmp_path / "round-trip.wtbackup"
     secure_backup_service.export_encrypted_backup(out, PASSPHRASE)
 
-    db.reset_database()
+    reset_database()
     secure_backup_service.import_encrypted_backup(out, PASSPHRASE)
 
     with db.get_connection() as conn:
@@ -238,23 +245,23 @@ def test_current_v5_round_trip_restores_business_data_and_clears_worker_progress
 
 
 def test_non_current_payload_version_is_explicitly_rejected(temp_db, tmp_path):
-    data = json.loads(secure_backup_service._build_export_payload())
-    data["version"] = 4
-    path = _write_payload(tmp_path, data, "payload-v4.wtbackup")
+    data = json.loads(_current_payload())
+    data["version"] = 5
+    path = _write_payload(tmp_path, data, "payload-v5.wtbackup")
     with pytest.raises(BackupVersionNotSupportedError):
         secure_backup_service.import_encrypted_backup(path, PASSPHRASE)
 
 
 def test_non_current_schema_version_is_explicitly_rejected(temp_db, tmp_path):
-    data = json.loads(secure_backup_service._build_export_payload())
-    data["schema_version"] = "10"
-    path = _write_payload(tmp_path, data, "schema-v10.wtbackup")
+    data = json.loads(_current_payload())
+    data["schema_version"] = "11"
+    path = _write_payload(tmp_path, data, "schema-v11.wtbackup")
     with pytest.raises(BackupVersionNotSupportedError):
         secure_backup_service.import_encrypted_backup(path, PASSPHRASE)
 
 
 def test_current_schema_wrong_fingerprint_is_corruption(temp_db, tmp_path):
-    data = json.loads(secure_backup_service._build_export_payload())
+    data = json.loads(_current_payload())
     data["schema_fingerprint"] = "0" * 64
     path = _write_payload(tmp_path, data, "bad-fingerprint.wtbackup")
     with pytest.raises(BackupCorruptedError):
@@ -296,7 +303,7 @@ def test_wrong_passphrase_and_corruption_do_not_change_live_database(
         assert conn.execute("SELECT COUNT(*) FROM activity_log").fetchone()[0] == before
 
 
-def test_replace_failure_rolls_back_and_restores_prior_pause_state(
+def test_replace_failure_rolls_back_and_fails_closed(
     temp_db,
     tmp_path,
     monkeypatch,
@@ -316,36 +323,42 @@ def test_replace_failure_rolls_back_and_restores_prior_pause_state(
     with pytest.raises(sqlite3.OperationalError):
         secure_backup_service.import_encrypted_backup(out, PASSPHRASE)
 
-    assert secure_backup_service.is_secure_import_in_progress() is False
-    assert get_bool_setting("user_paused", True) is False
-    assert get_setting("collector_status") == "running"
+    assert database_maintenance_service.is_maintenance_in_progress() is True
+    assert (
+        database_maintenance_service.MAINTENANCE_COORDINATOR.phase
+        is database_maintenance_service.MaintenancePhase.FAILED_CLOSED
+    )
+    assert get_bool_setting("user_paused", False) is True
+    assert get_setting("collector_status") == "paused"
     with db.get_connection() as conn:
         assert conn.execute("SELECT COUNT(*) FROM activity_log").fetchone()[0] == before
 
 
-def test_secure_import_uses_shared_maintenance_gate(temp_db, tmp_path):
+def test_secure_import_preserves_preexisting_user_pause(temp_db, tmp_path):
     _seed_current_data()
     out = tmp_path / "maintenance.wtbackup"
     secure_backup_service.export_encrypted_backup(out, PASSPHRASE)
+    set_setting("user_paused", "true")
+    set_setting("collector_status", "paused")
+
     secure_backup_service.import_encrypted_backup(out, PASSPHRASE)
-    assert secure_backup_service.is_secure_import_in_progress() is False
+
+    assert database_maintenance_service.is_maintenance_in_progress() is False
     assert get_bool_setting("user_paused", False) is True
     assert get_setting("collector_status") == "paused"
 
 
 def test_concurrent_maintenance_rejects_import(temp_db, tmp_path):
-    from worktrace.services import database_maintenance_service
-
     _seed_current_data()
     out = tmp_path / "busy.wtbackup"
     secure_backup_service.export_encrypted_backup(out, PASSPHRASE)
-    with database_maintenance_service.maintenance_operation(reason="test"):
+    with database_maintenance_service.consistent_snapshot("test"):
         with pytest.raises(BackupImportInProgressError):
             secure_backup_service.import_encrypted_backup(out, PASSPHRASE)
 
 
 def test_file_and_payload_size_limits_fail_closed(temp_db, tmp_path, monkeypatch):
-    path = tmp_path / "oversize.wtbackup"
+    path = tmp_path / "oversized.wtbackup"
     path.write_bytes(b"x" * 10)
     monkeypatch.setattr(secure_backup_service, "MAX_BACKUP_FILE_BYTES", 5)
     with pytest.raises(BackupCorruptedError):
@@ -353,7 +366,7 @@ def test_file_and_payload_size_limits_fail_closed(temp_db, tmp_path, monkeypatch
 
     monkeypatch.setattr(secure_backup_service, "MAX_BACKUP_PAYLOAD_BYTES", 5)
     with pytest.raises(SecureBackupError):
-        secure_backup_service._build_export_payload()
+        _current_payload()
 
 
 def test_manifest_parse_requires_no_passphrase(temp_db, tmp_path):

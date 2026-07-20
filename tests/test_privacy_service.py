@@ -2,26 +2,25 @@ from __future__ import annotations
 
 import pytest
 
-from worktrace.services import system_project_service
-
 from worktrace.constants import EXCLUDED_WINDOW_TITLE
 from worktrace.data_generation_repository import DataGenerationNamespace
 from worktrace.generation_clock import generation
 from worktrace.platforms.base import ActiveWindow
 from worktrace.services import (
-    folder_rule_service,
     privacy_service,
     project_service,
-    rule_service,
+    rule_catalog_command_service,
+    system_project_service,
 )
 
 pytestmark = [pytest.mark.security_privacy, pytest.mark.integration, pytest.mark.db]
 
 
 def _enable_excluded_project_with_keyword(keyword: str) -> int:
-    excluded_project = system_project_service.require_excluded_project_id()
     project_service.set_excluded_project_enabled(True)
-    rule_service.create_rule(keyword, excluded_project)
+    _rule_id, excluded_project = (
+        rule_catalog_command_service.create_excluded_keyword_rule(keyword)
+    )
     return excluded_project
 
 
@@ -50,13 +49,16 @@ def test_privacy_matches_file_path_hint_and_accepts_none(temp_db):
 
 
 def test_exclude_project_keyword_and_folder_rules_match(temp_db):
-    excluded_project = system_project_service.require_excluded_project_id()
     project_service.set_excluded_project_enabled(True)
-    rule_service.create_rule("SuperSecret", excluded_project)
-    folder_rule_service.create_or_update_folder_rule(
-        r"D:\PrivateFolder",
-        excluded_project,
+    _keyword_id, excluded_project = (
+        rule_catalog_command_service.create_excluded_keyword_rule("SuperSecret")
     )
+    _folder_id, folder_project = (
+        rule_catalog_command_service.create_or_update_excluded_folder_rule(
+            r"D:\PrivateFolder"
+        )
+    )
+    assert folder_project == excluded_project
 
     assert privacy_service.is_excluded(
         ActiveWindow("Word", "word.exe", "SuperSecret plan")
@@ -80,8 +82,7 @@ def test_exclude_project_keyword_and_folder_rules_match(temp_db):
 
 
 def test_disabled_exclude_project_stops_rule_matching(temp_db):
-    excluded_project = system_project_service.require_excluded_project_id()
-    rule_service.create_rule("DisabledSecret", excluded_project)
+    rule_catalog_command_service.create_excluded_keyword_rule("DisabledSecret")
     project_service.set_excluded_project_enabled(False)
 
     assert not privacy_service.is_excluded(
@@ -98,8 +99,7 @@ def test_excluded_project_defaults_disabled(temp_db):
 
 
 def test_excluded_toggle_refreshes_cache_via_privacy_generation(temp_db):
-    excluded_project = system_project_service.require_excluded_project_id()
-    rule_service.create_rule("CachedSecret", excluded_project)
+    rule_catalog_command_service.create_excluded_keyword_rule("CachedSecret")
     window = ActiveWindow("Word", "word.exe", "CachedSecret")
 
     assert not privacy_service.is_excluded(window)

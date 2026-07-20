@@ -16,10 +16,11 @@ def test_allowed_hard_boundary_reasons_are_whitelisted(temp_db):
         session_boundary_service.record_boundary("2026-06-18 09:00:00", reason)
 
 
-def test_legacy_boundary_reasons_are_normalized():
-    assert normalize_hard_boundary_reason("paused") == "user_pause"
-    assert normalize_hard_boundary_reason("stopped") == "user_stop"
-    assert normalize_hard_boundary_reason("time_jump") == "sleep_resume"
+def test_retired_boundary_reason_aliases_are_rejected():
+    for reason in ("paused", "stopped", "time_jump", "secure_import"):
+        assert normalize_hard_boundary_reason(reason) == reason
+        with pytest.raises(ValueError):
+            validate_hard_boundary_reason(reason)
 
 
 def test_transient_reasons_cannot_be_written_as_hard_boundaries(temp_db):

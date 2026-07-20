@@ -19,8 +19,8 @@ from worktrace.services import (
     project_inference_service,
     project_service,
     rule_automation_service,
+    rule_catalog_command_service,
     rule_service,
-    system_project_service,
 )
 from worktrace.webview_ui.bridge_rules import ProjectRulesBridgeMixin
 
@@ -163,10 +163,11 @@ def test_disabled_rules_and_projects_do_not_apply(temp_db):
 
 
 def test_excluded_system_project_is_not_an_inference_target(temp_db):
-    excluded_id = system_project_service.require_excluded_project_id()
-    folder_rule_service.create_or_update_folder_rule(
-        "D:\\ExcludedFolder",
-        excluded_id,
+    _rule_id, excluded_id = (
+        rule_catalog_command_service.create_or_update_excluded_folder_rule(
+            "D:\\ExcludedFolder",
+            recursive=True,
+        )
     )
     activity_id = _create_closed_activity(
         file_path_hint="D:\\ExcludedFolder\\Doc.docx"

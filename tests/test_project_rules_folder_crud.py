@@ -6,8 +6,6 @@ import json
 
 import pytest
 
-from worktrace.services import system_project_service
-
 from tests.support.db_helpers import table_count
 from worktrace.api import rule_api
 from worktrace.data_generation_repository import DataGenerationNamespace
@@ -15,12 +13,11 @@ from worktrace.db import get_connection
 from worktrace.generation_clock import generation
 from worktrace.path_utils import normalize_folder_key
 from worktrace.services import (
-    folder_index_service,
-    folder_rule_service,
     history_mutation_job_service,
     project_service,
+    rule_catalog_command_service,
     rule_history_application_service,
-    rule_service,
+    system_project_service,
 )
 
 pytestmark = [pytest.mark.db, pytest.mark.integration, pytest.mark.contract]
@@ -139,7 +136,7 @@ def test_update_preserves_id_project_and_disabled_state(temp_db):
     project_id = project_service.create_project("Client")
     created = rule_api.create_project_folder_rule(project_id, r"D:\Old", True)
     rule_id = created["rule"]["id"]
-    folder_rule_service.set_folder_rule_enabled(rule_id, False)
+    rule_catalog_command_service.set_folder_rule_enabled(rule_id, False)
 
     result = rule_api.update_project_folder_rule(rule_id, r"D:\New", False)
 
@@ -170,7 +167,7 @@ def test_update_normalized_key_conflict_rolls_back(temp_db):
 
 def test_delete_folder_rule_isolated_from_keyword_rules_and_history(temp_db):
     project_id = project_service.create_project("Client")
-    keyword_id = rule_service.create_rule("Spec", project_id)
+    keyword_id = rule_catalog_command_service.create_keyword_rule("Spec", project_id)
     folder = rule_api.create_project_folder_rule(project_id, r"D:\Work", True)
     before = {
         "project": table_count("project"),
@@ -196,7 +193,7 @@ def test_delete_folder_rule_isolated_from_keyword_rules_and_history(temp_db):
 
 def test_delete_rejects_keyword_id_and_invalid_id(temp_db):
     project_id = project_service.create_project("Client")
-    keyword_id = rule_service.create_rule("Spec", project_id)
+    keyword_id = rule_catalog_command_service.create_keyword_rule("Spec", project_id)
 
     assert rule_api.delete_project_folder_rule(keyword_id) == {
         "ok": False,

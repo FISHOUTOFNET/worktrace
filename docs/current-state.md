@@ -1,157 +1,148 @@
 # WorkTrace Current State
 
-> **Default entry point for AI tools and developers.** Read this file first.
-> It is a snapshot of what WorkTrace ships today. For architecture decisions
-> see [`architecture.md`](../architecture.md); history:
-> [`history/webview-phases.md`](history/webview-phases.md).
+> Default entry point for developers and AI tools. This is the pre-release,
+> current-only product contract; historical notes do not override it.
 
-## Current Shipped State
+## Product
 
-- WebView (`pywebview` + Microsoft Edge WebView2 Runtime) is the only
-  shipping UI; no Tkinter fallback. Start with `python -m worktrace.main`.
-- Closing the WebView main window exits WorkTrace and runs runtime shutdown.
-- The installation privacy notice gate is fail-closed: collector, folder-index
-  scanning, and clipboard capture cannot start before the current notice is
-  accepted. Backup replacement and clear-all preserve installation consent but
-  always leave WorkTrace paused and clipboard capture disabled.
-- `AppRuntime` owns all long-lived sensitive runtime components. API/bridge
-  failures collapse to stable Chinese messages and never return full paths,
-  passphrases, ciphertext, SQL, or tracebacks.
+- Windows desktop application using Python, SQLite, pywebview and WebView2.
+- Local-only: no registration, cloud sync, administrator privilege, screenshots,
+  screen recording, OCR or keyboard logging.
+- WebView is the only shipping UI. Window close runs `AppRuntime.shutdown()`.
+- The privacy notice is fail-closed. Sensitive workers and clipboard capture do
+  not start before acceptance.
+- CSV export is the only current public export. Excel, PDF and timesheet-template
+  export are unsupported in the shipping WebView.
 
-## Migrated Pages
-
-- **Overview**: canonical daily KPIs, current activity, recent activities,
-  anonymous standalone excluded intervals, pause/resume, and auto-refresh.
-- **Timeline / Time Details**: date navigation, daily total, canonical session
-  list, per-session activity summaries, project/note editing for safe persisted
-  open normal sessions, and the closed-session correction operations below.
-- **Statistics / Export**: canonical summary cards and grouped tables, closed
-  export preview, and CSV export guarded by an export-record revision.
-- **Project Rules**: intentionally compact project-grouped list with project
-  create/edit/delete, rule create/delete, folder rules, keyword rules, special
-  `排除规则` marker, and recursion scope.
-- **Settings / Privacy**: safety status, clipboard capture toggle, encrypted
-  backup export/manifest/import, clear-all, and privacy notice view/gate.
-
-## Supported Timeline Write Operations
-
-- Project reclassification and session-note editing.
-- Persisted open normal sessions permit project and note edits only; their
-  natural duration and structural actions remain read-only until closed.
-- Closed sessions support time correction, split, adjacent merge, copy, hide,
-  and single-activity hide where the canonical capability flags allow it.
-- Every Timeline write uses projection identity, durable revision, request
-  receipt, operation ledger, replay, and authoritative post-state.
-
-## Project Rules Shipping UI
-
-The shipping UI deliberately exposes only common workflows:
-
-- read project-grouped folder and keyword rules;
-- create/edit/delete user projects;
-- create/delete folder and keyword rules;
-- create rules for the special `排除规则` project.
-
-The UI intentionally does **not** expose rule enable/disable, rule editing,
-project archive/enable-disable, rule-impact preview, history backfill, or batch
-rule operations. These are low-frequency maintenance capabilities whose UI
-state and cognitive cost would materially complicate the primary workflow.
-Their absence is intentional and is not a frontend defect.
-
-## Internal / API Project Rules Capabilities
-
-The following backend/API capabilities remain available for tests, maintenance,
-or future product decisions, but are not part of the shipping UI contract. The
-backend lifecycle covers user project create / edit / enable-disable / archive:
-
-- enable/disable existing rules and edit folder/keyword rules;
-- project enable-disable and archive;
-- display-safe single-rule impact preview and bounded history backfill;
-- selected-rule batch preview/apply/enable/disable;
-- automatic application of enabled rules to eligible activities;
-- special-project lifecycle and exclusion-rule policy enforcement.
-
-Batch history application is first-rule-wins, bounded by unique activity IDs,
-and all-or-nothing inside one `BEGIN IMMEDIATE` transaction.
-
-## Statistics / Export Capability
-
-- Read-only canonical statistics for closed, non-hidden, non-deleted entries,
-  with inclusive date ranges of at most 31 days.
-- `project_count` counts only concrete projects actually present in the range;
-  “未归类” and anonymous “已排除” remain display buckets, not projects.
-- CSV export uses the exact accepted closed-record `export_revision`; natural
-  growth of an open activity cannot invalidate a closed-data export.
-- CSV is UTF-8 BOM with Chinese headers and formula-injection escaping. Only
-  the basename is returned to the UI.
-
-## Explicitly Unsupported Capabilities
-
-- Excel / PDF / timesheet-template export; folder opening; auto-open or
-  auto-submit after export.
-- Hard project delete, raw/unbounded rule backfill, automatic-rule global UI
-  toggle, and the internal Project Rules maintenance capabilities listed above.
-- Arbitrary settings writes, arbitrary file/folder dialog, and export-path
-  setting. Only CSV save and `.wtbackup` save/open are shipping.
-- Batch hide/delete/restore, permanent delete, general undo stack, batch time,
-  batch split/merge, note append/merge, automatic rule creation, and global
-  overlap detection.
-- AI, server, payment, license, login, cloud sync, OCR, screenshots, screen
-  recording, keyboard logging, automatic startup, and tray lifecycle.
-- Schema migration support during development; `schema.sql` is the source of
-  truth for the current cutover database.
-
-## Architecture Boundary
+## Composition and lifecycle owners
 
 ```text
-WebView -> bridge -> worktrace.api -> worktrace.services
-  overview/timeline/session_detail_view_model_service (page DTO owners)
-    view_model_service (shared page projection components)
-      activity_display_model_service (live display semantics owner)
-  report_projection_snapshot_service (canonical report query)
-  report_revision_service (structure/export revision semantics)
-  report_session_operation_service + report_session_edit_service (mutation ledger)
-  assignment_command_service (assignment write/retry boundary)
-  privacy_gate_service + AppRuntime (sensitive runtime ownership)
-  activity_lifecycle_service (open-row command facade)
-  collector -> activity_lifecycle_service
+webview_main -> AppRuntime -> ApplicationServices -> WebViewBridge
 ```
 
-Frontend JS uses local classic scripts only. `App.requestCoordinator` owns
-request generations, shared read Promises, and database-replacement `dataEpoch`.
-The heartbeat compares `structure_revision`; natural live seconds are rendered
-by the DOM-only local ticker and do not request a full page reload.
+- `AppRuntime` owns the single-instance lease, Collector and every background
+  worker thread handle.
+- `ApplicationServices` is explicit process composition; there is no service
+  locator, global DI container or dynamic service registry.
+- `WebViewBridge` requires composed capabilities and imports no runtime/database
+  implementation.
+- `RuntimeMaintenanceCoordinator` solely owns snapshot/replacement ordering and
+  the stable fail-closed latch.
+- `CollectorControl` owns command identity and terminal states;
+  `CollectorStateMachine` owns collection transitions.
+- `ActivityMaintenanceCommandService` atomically seals an open activity and
+  enqueues eligible inference.
+- `PageReadContext`, `ActivityRowOverlay` and `activity_live_clock` respectively
+  own read consistency, verified runtime overlay and the exact LiveClock DTO.
 
-- Canonical report facts are built only by
-  `report_projection_snapshot_service`; Statistics, export, Overview, Timeline,
-  and Details do not create competing report attribution models.
-- Page-specific ViewModel services own their public DTOs and share the same
-  structural revision and canonical projection snapshot contracts.
-- All Timeline writes remain ledger operations with idempotent request receipts.
-- Automatic and batch assignment commands share
-  `assignment_command_service`; transient inference failures are marked using
-  the existing assignment row and retried in bounded batches.
+## Worker startup and shutdown
 
-## Privacy Boundary
+Workers are declared by `WorkerSpec` in one `AppRuntime` registry. A worker is
+ready only after its own initialization succeeds and it reports readiness before
+its stable blocking loop. Thread liveness or AppRuntime preflight is not
+readiness. AppRuntime alone publishes worker `started`/`stopped`, signals and
+joins every handle, and releases the instance lease only after all writers stop.
 
-- No registration, network upload, admin rights, screenshots, recording, or
-  keyboard logging. WorkTrace records active-window metadata and optional local
-  clipboard text only after installation consent.
-- Clipboard capture is off by default and cannot be enabled before consent.
-- Folder-index scanning and collector start use the same privacy gate.
-- `.wtbackup` is a local encrypted file. Business-data replacement does not
-  replace the current installation's privacy acceptance.
+## Maintenance
 
-## Common Test Commands
+Collector maintenance is not user pause:
 
-- `python scripts/run_affected_tests.py`
-- `python -m compileall -q worktrace scripts/pytest_diagnostics.py`
-- `pytest`
+```text
+OPERATIONAL -> HOLD_REQUESTED -> SEALING -> HELD
+HELD -> RESETTING -> HELD
+HELD -> RELEASE_REQUESTED -> OPERATIONAL
+```
+
+A successful hold closes the current activity and enqueues inference in one
+transaction, clears process-local activity state, then blocks Collector writes.
+It creates no user-pause boundary and does not change durable `user_paused`.
+The coordinator drains writers, acquires exclusive ownership, performs the
+snapshot or replacement, resets identities while held, restores durable state
+and releases the hold.
+
+Every acknowledgement must match command ID, kind, completed state, expected
+terminal state and `ok=true`. A known pending hold cancellation is retryable.
+An unknown/taken command outcome, unconfirmed reset/release, or failure after
+replacement work starts enters a stable fail-closed latch: durable pause is set,
+runtime state is cleared and further destructive maintenance is rejected.
+Ordinary pause/resume cannot clear this latch; only explicit verified recovery
+may do so. The Settings status exposes `maintenance_in_progress`, not a
+backup-specific alias. See [`maintenance-lifecycle.md`](maintenance-lifecycle.md).
+
+## Project, rule and privacy invariants
+
+Schema seeding alone creates system projects. Stable identity, not display name,
+controls reserved behavior. Ordinary commands cannot create, rename, archive,
+delete or toggle system projects. Shipped lifecycle capabilities are exactly:
+user project create / edit / enable-disable / archive. Missing system rows are
+reported unavailable; normal API reads or writes never recreate them.
+
+All keyword/folder create, update, delete, enable and batch mutations use the
+canonical rule command owner. Excluded rules use explicit catalog commands;
+callers cannot combine a reserved project ID with an ordinary service. The owner
+validates project type, normalized patterns, duplicates and batch atomicity.
+Classification/privacy generations publish only after commit; no-op and rollback
+publish nothing, and a batch publishes at most once per affected namespace.
+
+Privacy classification is a pure query returning `ExclusionDecision`. When a
+private path is unresolved it fails closed and reports whether refresh is
+required; Collector alone schedules the folder-index refresh.
+
+## Current data contracts
+
+- Database schema: **v12**.
+- Encrypted backup payload: **v6**.
+- Frontend live-time transport: **LiveClock v2**.
+- Old schemas, backup payloads and LiveClock aliases are unsupported.
+- Schema SQL files define the exact current fingerprint.
+- Production `worktrace.db` has no destructive reset/drop helper; tests use
+  `tests/support/database.py`.
+
+Exact versions and DTO keys are in
+[`runtime-contracts.md`](runtime-contracts.md).
+
+## Live display
+
+Every live-capable row has one exact nine-field clock. Current activity uses
+`current_live`; project/session/KPI aggregates use `aggregate_live`; closed rows
+use `static_closed`. Overlay occurs only when runtime and SQLite agree, including
+the database-replacement epoch. Historical or mismatched samples stay static.
+
+Overview owns current-activity presentation. Timeline is the canonical row
+surface that matches an open persisted activity ID to exactly one live entry.
+The frontend validates exact keys and types, never chooses among candidate
+clocks, and never carries duration into a new identity. `init.js` owns the
+accepted runtime store and its narrow active-clock reader; render helpers may
+consume that reader but cannot create another clock registry. Invalid clocks
+stop the target ticker, retain durable seconds and request bounded reconciliation.
+
+## Pages and writes
+
+- Overview: KPIs, current activity, Recent and pause/resume.
+- Timeline: navigation, sessions, summaries and permitted edits.
+- Statistics/Export: canonical summaries and display-safe CSV.
+- Project Rules: transactional project/rule management.
+- Settings/Privacy: privacy status, clipboard control, backup/import and clear-all.
+
+Persisted open normal sessions allow project and note edits, but duration and
+structural edits wait for closure. Rule batches are atomic; manual assignments
+are preserved. Statistics/export use persisted report facts, not frontend time.
+
+## Validation
+
+Affected validation: `python scripts/run_affected_tests.py`.
+
+Full validation:
+
+- `python -m pytest`
 - `node --test tests/webview/*.test.js`
-- Failed same-repository PR CI writes compact diagnostics, the run ID, and the
-  exact tested head to `diagnostics/pytest-hardening-latest.txt` on the isolated
-  `agent/worktrace-ci-diagnostics` branch, so repair-branch concurrency cannot
-  discard or relabel the failure evidence.
-- Local paths: DB at `%LOCALAPPDATA%\WorkTrace\data\worktrace.db`; logs at
-  `%LOCALAPPDATA%\WorkTrace\logs\worktrace.log`; default exports at
-  `Documents\WorkTrace Exports`.
+- Windows executable and installer smoke in Standard CI
+
+Standard CI validates one exact revision and publishes one complete bounded
+Python diagnostic manifest. Repairs are grouped by root cause, not patched one
+test at a time. Concurrency tests use bounded events/joins and required risk
+markers. Fixtures exercise current owners through explicit composed fakes.
+
+Only `.github/workflows/ci.yml` and `_validation.yml` are permanent workflows.
+Acceptance and temporary agent workflows are absent. Historical WebView phases
+remain only in [`history/webview-phases.md`](history/webview-phases.md).

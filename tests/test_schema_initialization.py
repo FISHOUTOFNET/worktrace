@@ -1,8 +1,11 @@
+import sqlite3
+
+import pytest
+
+from tests.support.database import reset_database
 from worktrace import db
 from worktrace.constants import EXCLUDED_PROJECT, UNCATEGORIZED_PROJECT
 from worktrace.db import now_str
-import sqlite3
-import pytest
 
 pytestmark = [pytest.mark.db, pytest.mark.contract]
 
@@ -11,23 +14,54 @@ def test_new_database_has_current_schema_and_defaults(temp_db):
     with db.get_connection() as conn:
         tables = {
             row["name"]
-            for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            ).fetchall()
         }
-        activity_columns = {row["name"] for row in conn.execute("PRAGMA table_info(activity_log)").fetchall()}
-        project_columns = {row["name"] for row in conn.execute("PRAGMA table_info(project)").fetchall()}
+        activity_columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(activity_log)").fetchall()
+        }
+        project_columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(project)").fetchall()
+        }
         assignment_columns = {
-            row["name"] for row in conn.execute("PRAGMA table_info(activity_project_assignment)").fetchall()
+            row["name"]
+            for row in conn.execute(
+                "PRAGMA table_info(activity_project_assignment)"
+            ).fetchall()
         }
-        setting = conn.execute("SELECT value FROM settings WHERE key = 'context_carry_minutes'").fetchone()
-        idle_threshold = conn.execute("SELECT value FROM settings WHERE key = 'idle_threshold_seconds'").fetchone()
-        ui_refresh = conn.execute("SELECT value FROM settings WHERE key = 'ui_refresh_seconds'").fetchone()
-        clipboard_capture = conn.execute("SELECT value FROM settings WHERE key = 'clipboard_capture_enabled'").fetchone()
-        removed_setting = conn.execute("SELECT value FROM settings WHERE key = 'default_billable'").fetchone()
-        min_history = conn.execute("SELECT value FROM settings WHERE key = 'min_history_seconds'").fetchone()
-        min_idle = conn.execute("SELECT value FROM settings WHERE key = 'min_idle_segment_seconds'").fetchone()
-        min_activity = conn.execute("SELECT value FROM settings WHERE key = 'min_activity_seconds'").fetchone()
-        uncategorized = conn.execute("SELECT * FROM project WHERE name = ?", (UNCATEGORIZED_PROJECT,)).fetchone()
-        excluded = conn.execute("SELECT * FROM project WHERE name = ?", (EXCLUDED_PROJECT,)).fetchone()
+        setting = conn.execute(
+            "SELECT value FROM settings WHERE key = 'context_carry_minutes'"
+        ).fetchone()
+        idle_threshold = conn.execute(
+            "SELECT value FROM settings WHERE key = 'idle_threshold_seconds'"
+        ).fetchone()
+        ui_refresh = conn.execute(
+            "SELECT value FROM settings WHERE key = 'ui_refresh_seconds'"
+        ).fetchone()
+        clipboard_capture = conn.execute(
+            "SELECT value FROM settings WHERE key = 'clipboard_capture_enabled'"
+        ).fetchone()
+        removed_setting = conn.execute(
+            "SELECT value FROM settings WHERE key = 'default_billable'"
+        ).fetchone()
+        min_history = conn.execute(
+            "SELECT value FROM settings WHERE key = 'min_history_seconds'"
+        ).fetchone()
+        min_idle = conn.execute(
+            "SELECT value FROM settings WHERE key = 'min_idle_segment_seconds'"
+        ).fetchone()
+        min_activity = conn.execute(
+            "SELECT value FROM settings WHERE key = 'min_activity_seconds'"
+        ).fetchone()
+        uncategorized = conn.execute(
+            "SELECT * FROM project WHERE name = ?", (UNCATEGORIZED_PROJECT,)
+        ).fetchone()
+        excluded = conn.execute(
+            "SELECT * FROM project WHERE name = ?", (EXCLUDED_PROJECT,)
+        ).fetchone()
         exclude_rule_count = conn.execute(
             """
             SELECT COUNT(*) AS c
@@ -38,7 +72,8 @@ def test_new_database_has_current_schema_and_defaults(temp_db):
             (EXCLUDED_PROJECT,),
         ).fetchone()
         assignment_schema = conn.execute(
-            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'activity_project_assignment'"
+            "SELECT sql FROM sqlite_master "
+            "WHERE type = 'table' AND name = 'activity_project_assignment'"
         ).fetchone()["sql"]
 
     assert "resource_id" not in activity_columns
@@ -95,8 +130,18 @@ def test_new_database_has_current_schema_and_defaults(temp_db):
 
 def test_report_session_operation_has_user_command_columns(temp_db):
     with db.get_connection() as conn:
-        columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(report_session_operation)").fetchall()}
-        member_columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(report_session_operation_member)").fetchall()}
+        columns = {
+            str(row["name"])
+            for row in conn.execute(
+                "PRAGMA table_info(report_session_operation)"
+            ).fetchall()
+        }
+        member_columns = {
+            str(row["name"])
+            for row in conn.execute(
+                "PRAGMA table_info(report_session_operation_member)"
+            ).fetchall()
+        }
         assert "operation_type" in columns
         assert "source_instance_key" in columns
         assert "sequence" in columns
@@ -143,7 +188,15 @@ def test_operation_and_receipt_json_and_cardinality_constraints(temp_db):
                     report_date, sequence, operation_type, source_instance_key,
                     source_expected_revision, payload_json, created_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                ("2026-07-01", 1, "merge_sessions", "base:a", "revision", '{"payload_version":4}', timestamp),
+                (
+                    "2026-07-01",
+                    1,
+                    "merge_sessions",
+                    "base:a",
+                    "revision",
+                    '{"payload_version":4}',
+                    timestamp,
+                ),
             )
         with pytest.raises(sqlite3.IntegrityError):
             conn.execute(
@@ -155,13 +208,18 @@ def test_operation_and_receipt_json_and_cardinality_constraints(temp_db):
             )
 
 
-def test_reset_database_clears_current_schema_tables(temp_db):
+def test_test_reset_clears_current_schema_tables(temp_db):
     from tests.support import activity_factory as activity_service
 
-    aid = activity_service.create_activity("Edge", "msedge.exe", "Search", start_time="2026-06-18 09:00:00")
+    aid = activity_service.create_activity(
+        "Edge",
+        "msedge.exe",
+        "Search",
+        start_time="2026-06-18 09:00:00",
+    )
     activity_service.finalize_created_activity(aid)
 
-    db.reset_database()
+    reset_database()
 
     with db.get_connection() as conn:
         assert conn.execute("SELECT COUNT(*) AS c FROM activity_log").fetchone()["c"] == 0
@@ -172,10 +230,19 @@ def test_reset_database_clears_current_schema_tables(temp_db):
         assert conn.execute("SELECT COUNT(*) AS c FROM folder_rule_index_state").fetchone()["c"] == 0
         assert conn.execute("SELECT COUNT(*) AS c FROM folder_rule_file_index").fetchone()["c"] == 0
         assert conn.execute("SELECT COUNT(*) AS c FROM project_rule").fetchone()["c"] == 0
-        activity_columns = {row["name"] for row in conn.execute("PRAGMA table_info(activity_log)").fetchall()}
-        project_columns = {row["name"] for row in conn.execute("PRAGMA table_info(project)").fetchall()}
+        activity_columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(activity_log)").fetchall()
+        }
+        project_columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(project)").fetchall()
+        }
         assignment_columns = {
-            row["name"] for row in conn.execute("PRAGMA table_info(activity_project_assignment)").fetchall()
+            row["name"]
+            for row in conn.execute(
+                "PRAGMA table_info(activity_project_assignment)"
+            ).fetchall()
         }
         assert "file_path_hint" in activity_columns
         assert "is_billable" not in activity_columns
@@ -187,13 +254,33 @@ def test_reset_database_clears_current_schema_tables(temp_db):
         assert "suggested_project_name" in assignment_columns
         assert "source_rule_type" in assignment_columns
         assert "source_rule_id" in assignment_columns
-        assert conn.execute("SELECT value FROM settings WHERE key = 'context_carry_minutes'").fetchone()["value"] == "15"
-        assert conn.execute("SELECT value FROM settings WHERE key = 'idle_threshold_seconds'").fetchone()["value"] == "300"
-        assert conn.execute("SELECT value FROM settings WHERE key = 'ui_refresh_seconds'").fetchone()["value"] == "10"
-        assert conn.execute("SELECT value FROM settings WHERE key = 'clipboard_capture_enabled'").fetchone()["value"] == "false"
-        assert conn.execute("SELECT value FROM settings WHERE key = 'default_billable'").fetchone() is None
-        assert conn.execute("SELECT value FROM settings WHERE key = 'min_history_seconds'").fetchone() is None
-        assert conn.execute("SELECT value FROM settings WHERE key = 'min_idle_segment_seconds'").fetchone() is None
-        assert conn.execute("SELECT value FROM settings WHERE key = 'min_activity_seconds'").fetchone() is None
-        assert conn.execute("SELECT language FROM project WHERE name = ?", (UNCATEGORIZED_PROJECT,)).fetchone()["language"] == "中文"
-        assert conn.execute("SELECT language FROM project WHERE name = ?", (EXCLUDED_PROJECT,)).fetchone()["language"] == "中文"
+        assert conn.execute(
+            "SELECT value FROM settings WHERE key = 'context_carry_minutes'"
+        ).fetchone()["value"] == "15"
+        assert conn.execute(
+            "SELECT value FROM settings WHERE key = 'idle_threshold_seconds'"
+        ).fetchone()["value"] == "300"
+        assert conn.execute(
+            "SELECT value FROM settings WHERE key = 'ui_refresh_seconds'"
+        ).fetchone()["value"] == "10"
+        assert conn.execute(
+            "SELECT value FROM settings WHERE key = 'clipboard_capture_enabled'"
+        ).fetchone()["value"] == "false"
+        assert conn.execute(
+            "SELECT value FROM settings WHERE key = 'default_billable'"
+        ).fetchone() is None
+        assert conn.execute(
+            "SELECT value FROM settings WHERE key = 'min_history_seconds'"
+        ).fetchone() is None
+        assert conn.execute(
+            "SELECT value FROM settings WHERE key = 'min_idle_segment_seconds'"
+        ).fetchone() is None
+        assert conn.execute(
+            "SELECT value FROM settings WHERE key = 'min_activity_seconds'"
+        ).fetchone() is None
+        assert conn.execute(
+            "SELECT language FROM project WHERE name = ?", (UNCATEGORIZED_PROJECT,)
+        ).fetchone()["language"] == "中文"
+        assert conn.execute(
+            "SELECT language FROM project WHERE name = ?", (EXCLUDED_PROJECT,)
+        ).fetchone()["language"] == "中文"

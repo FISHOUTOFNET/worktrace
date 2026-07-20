@@ -11,13 +11,14 @@ from ..contracts.live_display_contracts import (
     LiveClockContract,
 )
 from ..formatters import format_duration
-from .activity_live_clock import CURRENT_LIVE, current_resource_identity_hash
+from .activity_display_policy import DisplaySessionPolicy
+from .activity_live_clock import current_resource_identity_hash
 from .live_display_service import (
     _display_resource_name,
     _snapshot_display_project_fields,
-    _stable_live_key,
+    _stable_live_key_hash,
 )
-from .live_time_service import snapshot_elapsed_seconds, snapshot_persisted_id
+from .live_time_service import snapshot_persisted_id
 
 LIVE_EDIT_DISABLE_REASON = "当前活动正在进行，暂不能编辑"
 
@@ -29,109 +30,16 @@ def build_current_activity_display(
     summary: CurrentActivityContract,
     live_clock: LiveClockContract,
 ) -> CurrentActivityContract:
-    del anchor
-    if not snapshot:
-        return {
-            "active": False,
-            "display": "无",
-            "elapsed_seconds": 0,
-            "resource_elapsed_seconds": 0,
-            "is_paused": False,
-            "status": "",
-            "is_persisted": False,
-            "project_name": "",
-            "project_id": 0,
-            "persisted_activity_id": 0,
-            "live_state": "none",
-            "is_in_progress": False,
-            "is_virtual_live": False,
-            "live_display_key": "",
-            "stable_live_key": "",
-            "stable_live_key_hash": "",
-            "live_started_at_epoch_ms": 0,
-            "carry_seconds": 0,
-            "resource_name": "",
-            "app_name": "",
-            "start_time": "",
-            "end_time": None,
-            "activity_id": None,
-            "source": "none",
-            "is_uncategorized": True,
-            "is_classified": False,
-            "project_description": "",
-            "display_project": None,
-            "display_span_id": "",
-            "live_clock": live_clock,
-            "current_activity_display_span_id": "",
-            "current_resource_identity_hash": "",
-            "current_duration_live": False,
-            "is_live": False,
-            "project_duration_live": False,
-            "display_base_seconds": 0,
-            "live_base_seconds": 0,
-            "duration_semantic": CURRENT_LIVE,
-            "current_live_seconds_at_sample": 0,
-            "current_live_base_seconds": 0,
-            "duration_seconds_at_sample": 0,
-            "aggregate_duration_seconds_at_sample": 0,
-            "aggregate_display_base_seconds": 0,
-            "display_session_kind": "none",
-            "base_policy": "suppressed",
-            "status_only_reason": "",
-            "base_policy_reason": "no_snapshot",
-        }
+    """Attach the sole live-time DTO to static current-activity metadata."""
 
+    del anchor, display_live_state
     display = dict(summary)
-    display["live_clock"] = live_clock
-    display["display_span_id"] = live_clock.get("display_span_id") or ""
-    display["stable_live_key_hash"] = (
-        live_clock.get("stable_live_key_hash")
-        or display.get("stable_live_key_hash")
-        or ""
-    )
+    display["live_clock"] = dict(live_clock)
+    if not snapshot:
+        return display
     identity_hash = current_resource_identity_hash(snapshot)
-    display["current_activity_display_span_id"] = (
-        "current:" + identity_hash
-    ) if identity_hash else ""
-    display["current_resource_identity_hash"] = identity_hash
-    display["live_state"] = display_live_state
-    display["live_started_at_epoch_ms"] = int(
-        live_clock.get("live_started_at_epoch_ms") or 0
-    )
-    display["carry_seconds"] = int(live_clock.get("carry_seconds") or 0)
-    display["current_duration_live"] = bool(live_clock.get("current_duration_live"))
-    display["is_live"] = bool(live_clock.get("is_live"))
-    display["project_duration_live"] = bool(
-        live_clock.get("project_duration_live", live_clock.get("is_project_duration_live"))
-    )
-    display["display_base_seconds"] = 0
-    display["live_base_seconds"] = 0
-    display["duration_semantic"] = CURRENT_LIVE
-    current_elapsed = int(snapshot_elapsed_seconds(snapshot))
-    display["resource_elapsed_seconds"] = current_elapsed
-    display["elapsed_seconds"] = current_elapsed
-    display["duration_seconds_at_sample"] = current_elapsed
-    display["current_live_seconds_at_sample"] = int(
-        live_clock.get("current_live_seconds_at_sample")
-        or live_clock.get("current_elapsed_at_sample")
-        or current_elapsed
-    )
-    display["current_live_base_seconds"] = 0
-    display["aggregate_duration_seconds_at_sample"] = int(
-        live_clock.get("aggregate_duration_seconds_at_sample") or current_elapsed
-    )
-    display["aggregate_display_base_seconds"] = int(
-        live_clock.get("aggregate_display_base_seconds")
-        or live_clock.get("display_base_seconds")
-        or 0
-    )
-    display["display_session_kind"] = str(live_clock.get("display_session_kind") or "")
-    display["base_policy"] = str(live_clock.get("base_policy") or "")
-    display["status_only_reason"] = str(live_clock.get("status_only_reason") or "")
-    display["base_policy_reason"] = str(live_clock.get("base_policy_reason") or "")
-    display["is_virtual_live"] = False
-    display["is_in_progress"] = display_live_state == "persisted_open"
-    display["source"] = source_for_state(display_live_state)
+    if identity_hash:
+        display["current_activity_display_span_id"] = "current:" + identity_hash
     return display
 
 
@@ -141,39 +49,32 @@ def build_display_structural_signature(
     anchor: dict[str, Any] | None,
     live_clock: LiveClockContract,
     current_activity: CurrentActivityContract,
+    policy: DisplaySessionPolicy,
     report_date: str,
     today: str,
     is_today: bool,
 ) -> str:
-    display_policy = live_clock.get("display_policy") or {}
     signature_payload = {
-        "current_activity_stable_key": str(
-            current_activity.get("stable_live_key") or _stable_live_key(snapshot)
+        "stable_live_key_hash": str(
+            live_clock.get("stable_live_key_hash")
+            or _stable_live_key_hash(snapshot)
         ),
         "display_live_state": display_live_state,
         "is_persisted": bool(snapshot and snapshot.get("is_persisted")),
         "persisted_activity_id": int(snapshot_persisted_id(snapshot) or 0)
         if snapshot
         else 0,
-        "display_project": _signature_project_dict(current_activity.get("display_project")),
+        "display_project": _signature_project_dict(
+            current_activity.get("display_project")
+        ),
         "project_live_span": {
             "display_span_id": str(live_clock.get("display_span_id") or ""),
             "anchor_activity_id": int(anchor.get("id") or 0) if anchor else 0,
-            "anchor_project_id": 0,
-            "anchor_project_name": "",
-            "materialize_recent": bool(display_policy.get("materialize_recent")),
-            "materialize_timeline": bool(display_policy.get("materialize_timeline")),
-            "materialize_details": bool(display_policy.get("materialize_details")),
+            "materialize_recent": bool(policy.materialize_recent),
+            "materialize_timeline": bool(policy.materialize_timeline),
+            "materialize_details": bool(policy.materialize_details),
         },
-        "base_policy": {
-            "display_session_kind": str(live_clock.get("display_session_kind") or ""),
-            "base_policy": str(live_clock.get("base_policy") or ""),
-            "status_only_reason": str(live_clock.get("status_only_reason") or ""),
-            "base_policy_reason": str(live_clock.get("base_policy_reason") or ""),
-        },
-        "current_activity_display_span_id": str(
-            current_activity.get("current_activity_display_span_id") or ""
-        ),
+        "display_policy": policy.to_dict(),
         "report_date": report_date,
         "today": today,
         "is_today": bool(is_today),
@@ -191,84 +92,53 @@ def build_display_span(
     anchor: dict[str, Any] | None,
     live_clock: LiveClockContract,
     summary: CurrentActivityContract,
+    policy: DisplaySessionPolicy,
     report_date: str,
     today: str,
 ) -> DisplaySpanContract:
     del anchor, summary, report_date, today
-    activity_id = 0
-    start_time = str(snapshot.get("start_time") or "") if snapshot else ""
+    activity_id = (
+        int(snapshot_persisted_id(snapshot) or 0)
+        if display_live_state == "persisted_open"
+        else 0
+    )
+    is_persisted = activity_id > 0
     project_fields = _snapshot_display_project_fields(snapshot)
-    current_live_seconds = int(
-        live_clock.get("current_live_seconds_at_sample")
-        or live_clock.get("current_elapsed_at_sample")
-        or 0
+    elapsed = int(live_clock["elapsed_seconds_at_sample"])
+    aggregate_base = int(live_clock["aggregate_base_seconds"])
+    semantic = str(live_clock["duration_semantic"])
+    duration_seconds = (
+        aggregate_base + elapsed
+        if semantic == "aggregate_live"
+        else elapsed
     )
-    aggregate_duration = int(
-        live_clock.get("aggregate_duration_seconds_at_sample")
-        or live_clock.get("duration_seconds_at_sample")
-        or current_live_seconds
-    )
-    aggregate_base = int(
-        live_clock.get("aggregate_display_base_seconds")
-        or live_clock.get("display_base_seconds")
-        or 0
-    )
-    policy = live_clock.get("display_policy") or {}
-
-    if display_live_state == "persisted_open":
-        activity_id = int(snapshot_persisted_id(snapshot) or 0) if snapshot else 0
-        source = "db"
-        is_persisted = True
-    else:
-        source = "none"
-        is_persisted = False
-
     return {
-        "display_span_id": live_clock.get("display_span_id") or "",
-        "activity_id": int(activity_id),
-        "anchor_activity_id": int(activity_id),
-        "source": source,
-        "live_state": display_live_state,
-        "start_time": start_time,
+        "display_span_id": str(live_clock["display_span_id"]),
+        "activity_id": activity_id,
+        "anchor_activity_id": activity_id,
+        "source": source_for_state(display_live_state),
+        "start_time": str(snapshot.get("start_time") or "") if snapshot else "",
         "end_time": "",
-        "duration_semantic": "",
-        "duration": format_duration(aggregate_duration),
-        "duration_seconds": aggregate_duration,
-        "duration_seconds_at_sample": aggregate_duration,
-        "current_live_seconds_at_sample": current_live_seconds,
-        "current_live_base_seconds": 0,
-        "aggregate_duration_seconds_at_sample": aggregate_duration,
-        "aggregate_display_base_seconds": aggregate_base,
-        "display_base_seconds": aggregate_base,
-        "live_clock": live_clock,
+        "duration": format_duration(duration_seconds),
+        "duration_seconds": duration_seconds,
+        "live_clock": dict(live_clock),
         "project_id": int(project_fields["project_id"]),
         "project_name": project_fields["project_name"],
         "project_description": project_fields["project_description"],
         "resource_name": _display_resource_name(snapshot) if snapshot else "",
         "resource_identity_hash": _resource_identity_hash(snapshot),
         "is_current": True,
-        "is_live": bool(live_clock.get("is_live")),
-        "project_duration_live": bool(
-            live_clock.get("project_duration_live", live_clock.get("is_project_duration_live"))
-        ),
-        "current_duration_live": bool(live_clock.get("current_duration_live")),
-        "display_session_kind": str(live_clock.get("display_session_kind") or ""),
-        "base_policy": str(live_clock.get("base_policy") or ""),
-        "status_only_reason": str(live_clock.get("status_only_reason") or ""),
-        "base_policy_reason": str(live_clock.get("base_policy_reason") or ""),
         "is_virtual": False,
-        "is_persisted": bool(is_persisted),
+        "is_persisted": is_persisted,
         "is_visible_in_current": True,
-        "is_visible_in_recent": bool(policy.get("materialize_recent")),
-        "is_visible_in_timeline": bool(policy.get("materialize_timeline")),
-        "is_visible_in_details": bool(policy.get("materialize_details")),
+        "is_visible_in_recent": bool(policy.materialize_recent),
+        "is_visible_in_timeline": bool(policy.materialize_timeline),
+        "is_visible_in_details": bool(policy.materialize_details),
         "editable": False,
         "exportable": False,
         "edit_disabled": True,
         "disable_reason": LIVE_EDIT_DISABLE_REASON,
         "display_project": project_fields["display_project"],
-        "live_anchor_activity_id": int(activity_id),
-        "live_anchor_base_seconds": 0,
         "is_uncategorized": bool(project_fields["is_uncategorized"]),
         "is_classified": bool(project_fields["is_classified"]),
     }

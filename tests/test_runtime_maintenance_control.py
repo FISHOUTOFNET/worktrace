@@ -12,10 +12,15 @@ from worktrace.platforms import windows_clipboard as clipboard_module
 from worktrace.platforms.base import ActiveWindow
 from worktrace.platforms.windows_clipboard import ClipboardMonitor
 from worktrace.security.kdf import KdfError, KdfParams, derive_backup_key
-from worktrace.services import runtime_activity_state_service, settings_service
+from worktrace.services import (
+    database_maintenance_service,
+    runtime_activity_state_service,
+    settings_service,
+)
 from worktrace.services.database_maintenance_service import (
-    DatabaseMaintenanceCoordinator,
+    MaintenanceInProgressError,
     MaintenancePhase,
+    RuntimeMaintenanceCoordinator,
 )
 
 pytestmark = [
@@ -26,20 +31,85 @@ pytestmark = [
 ]
 
 
-def test_unclaimed_pause_timeout_is_cancelled():
+def _ack(kind: str, terminal_state: str) -> dict[str, object]:
+    return {
+        "ok": True,
+        "command_id": f"{kind}-id",
+        "command_kind": kind,
+        "command_state": "completed",
+        "command_state_unknown": False,
+        "terminal_state": terminal_state,
+    }
+
+
+class _OperationalHoldState:
+    value = "operational"
+
+
+class _OperationalChannel:
+    hold_state = _OperationalHoldState()
+
+
+class _RuntimeControl:
+    def __init__(self, *, running: bool = True) -> None:
+        self.running = running
+        self.calls: list[str] = []
+        self.quiesce_result = _ack("maintenance_hold", "held")
+        self.reset_result = _ack("database_reset", "held")
+        self.restore_result = _ack("maintenance_release", "operational")
+        self.restored_state = None
+        self.collector_control = _OperationalChannel()
+
+    def is_collection_running_for_maintenance(self) -> bool:
+        return self.running
+
+    def quiesce_collection_for_maintenance(self, timeout_seconds=5.0):
+        self.calls.append("hold")
+        return dict(self.quiesce_result)
+
+    def reset_after_database_replacement(self, timeout_seconds=5.0):
+        self.calls.append("reset")
+        return dict(self.reset_result)
+
+    def restore_after_maintenance(self, state, timeout_seconds=5.0):
+        self.calls.append("release")
+        self.restored_state = state
+        return dict(self.restore_result)
+
+
+def _complete_hold(control: CollectorControl) -> None:
+    result_box: dict[str, dict] = {}
+    request = threading.Thread(
+        target=lambda: result_box.setdefault(
+            "result",
+            control.request_maintenance_hold(timeout_seconds=2),
+        ),
+        daemon=True,
+    )
+    request.start()
+    assert control._wake_event.wait(timeout=1)
+    command_id = control.take_maintenance_hold_request()
+    assert command_id is not None
+    assert control.complete_maintenance_hold(
+        command_id,
+        {"ok": True, "hold_pending": False},
+    )
+    request.join(timeout=2)
+    assert result_box["result"]["terminal_state"] == "held"
+
+
+def test_unclaimed_user_pause_timeout_is_cancelled():
     control = CollectorControl()
-
     result = control.request_pause(timeout_seconds=0)
-
     assert result["ok"] is False
-    assert result["pause_pending"] is False
     assert result["timed_out"] is True
+    assert result["command_kind"] == "user_pause"
     assert result["command_state"] == "cancelled"
     assert result["command_state_unknown"] is False
     assert control.take_pause_request() is None
 
 
-def test_taken_pause_timeout_reports_unknown_and_late_completion_is_identified():
+def test_taken_pause_timeout_reports_unknown_and_late_completion_is_queryable():
     control = CollectorControl()
     result_box: dict[str, dict] = {}
     request = threading.Thread(
@@ -54,29 +124,36 @@ def test_taken_pause_timeout_reports_unknown_and_late_completion_is_identified()
     command_id = control.take_pause_request()
     assert command_id is not None
     request.join(timeout=1)
-
     result = result_box["result"]
     assert result["command_id"] == command_id
+    assert result["command_kind"] == "user_pause"
     assert result["command_state"] == "unknown"
     assert result["command_state_unknown"] is True
     assert control.complete_pause(
         command_id,
         {"ok": True, "pause_pending": False},
     ) is True
+    completed = control.query_command(command_id)
+    assert completed is not None
+    assert completed["command_state"] == "completed"
 
 
-def test_reset_command_is_acknowledged_once():
+def test_reset_requires_held_state_and_is_acknowledged_once():
     control = CollectorControl()
+    rejected = control.request_reset(timeout_seconds=0)
+    assert rejected["ok"] is False
+    assert rejected["error"] == "collector_command_state_conflict"
+    _complete_hold(control)
+
     result_box: dict[str, dict] = {}
-    thread = threading.Thread(
+    request = threading.Thread(
         target=lambda: result_box.setdefault(
             "result",
             control.request_reset(timeout_seconds=2),
         ),
         daemon=True,
     )
-
-    thread.start()
+    request.start()
     assert control._wake_event.wait(timeout=1)
     command_id = control.take_reset_request()
     assert command_id is not None
@@ -84,12 +161,34 @@ def test_reset_command_is_acknowledged_once():
         command_id,
         {"ok": True, "reset_pending": False},
     ) is True
-    thread.join(timeout=2)
-
-    assert result_box["result"]["ok"] is True
-    assert result_box["result"]["command_id"] == command_id
-    assert result_box["result"]["command_state"] == "completed"
+    request.join(timeout=2)
+    assert result_box["result"]["command_kind"] == "database_reset"
+    assert result_box["result"]["terminal_state"] == "held"
     assert control.take_reset_request() is None
+
+
+def test_release_returns_collector_to_operational_state():
+    control = CollectorControl()
+    _complete_hold(control)
+    result_box: dict[str, dict] = {}
+    request = threading.Thread(
+        target=lambda: result_box.setdefault(
+            "result",
+            control.request_maintenance_release(timeout_seconds=2),
+        ),
+        daemon=True,
+    )
+    request.start()
+    assert control._wake_event.wait(timeout=1)
+    command_id = control.take_maintenance_release_request()
+    assert command_id is not None
+    assert control.complete_maintenance_release(
+        command_id,
+        {"ok": True, "release_pending": False},
+    )
+    request.join(timeout=2)
+    assert result_box["result"]["command_kind"] == "maintenance_release"
+    assert result_box["result"]["terminal_state"] == "operational"
 
 
 def test_long_poll_gap_rebases_instead_of_replaying_ticks():
@@ -100,7 +199,6 @@ def test_long_poll_gap_rebases_instead_of_replaying_ticks():
         monotonic_func=lambda: 28_800.0,
         wait_func=lambda *_args: pytest.fail("must not wait after long gap"),
     )
-
     assert next_deadline == pytest.approx(28_801.0)
 
 
@@ -112,14 +210,12 @@ def test_clock_tracker_detects_collector_stall():
         clock_jump_threshold_seconds=300,
         stall_threshold_seconds=180,
     ) is None
-
     event = tracker.observe(
         "2026-07-15 09:10:00",
         700.0,
         clock_jump_threshold_seconds=300,
         stall_threshold_seconds=180,
     )
-
     assert event is not None
     assert event.reason == "collector_stall"
     assert event.safe_end_time == "2026-07-15 09:00:00"
@@ -133,14 +229,12 @@ def test_clock_tracker_detects_backward_wall_clock_jump():
         clock_jump_threshold_seconds=300,
         stall_threshold_seconds=180,
     )
-
     event = tracker.observe(
         "2026-07-15 09:00:00",
         101.0,
         clock_jump_threshold_seconds=300,
         stall_threshold_seconds=180,
     )
-
     assert event is not None
     assert event.reason == "clock_jump_backward"
     assert event.safe_end_time == "2026-07-15 09:00:00"
@@ -154,14 +248,12 @@ def test_clock_tracker_detects_forward_wall_clock_jump():
         clock_jump_threshold_seconds=300,
         stall_threshold_seconds=180,
     )
-
     event = tracker.observe(
         "2026-07-15 12:00:00",
         101.0,
         clock_jump_threshold_seconds=300,
         stall_threshold_seconds=180,
     )
-
     assert event is not None
     assert event.reason == "clock_jump_forward"
     assert event.safe_end_time == "2026-07-15 10:00:01"
@@ -185,9 +277,7 @@ def test_recorder_generation_reset_forgets_old_activity_id(monkeypatch):
     recorder.current_start_time = "2026-07-15 09:00:00"
     recorder.current_last_seen_time = "2026-07-15 09:01:00"
     recorder.persisted_activity_id = 77
-
     recorder.clear_runtime_state("database_generation_changed")
-
     assert recorder.current_payload is None
     assert recorder.current_signature is None
     assert recorder.current_start_time is None
@@ -196,56 +286,176 @@ def test_recorder_generation_reset_forgets_old_activity_id(monkeypatch):
     assert "database_generation_changed" in cleared
 
 
-def test_maintenance_coordinator_pauses_and_resets_before_operation(temp_db):
-    calls: list[str] = []
-    coordinator = DatabaseMaintenanceCoordinator()
-
-    def pause(timeout_seconds=5.0):
-        assert coordinator.active() is True
-        calls.append("pause")
-        return {"ok": True, "pause_pending": False}
-
-    def reset(timeout_seconds=5.0):
-        assert coordinator.active() is True
-        calls.append("reset")
-        return {"ok": True, "reset_pending": False}
-
-    coordinator.register_pause_handler(pause)
-    coordinator.register_reset_handler(reset)
-
-    with coordinator.acquire(reason="test"):
-        assert coordinator.active() is True
+def test_snapshot_holds_and_releases_without_replacement_reset(temp_db, monkeypatch):
+    coordinator = RuntimeMaintenanceCoordinator()
+    control = _RuntimeControl()
+    coordinator.register_runtime_control(control)
+    settings_service.set_setting("user_paused", "false")
+    settings_service.set_setting("collector_status", "running")
+    monkeypatch.setattr(
+        database_maintenance_service.privacy_gate_service,
+        "is_privacy_notice_accepted",
+        lambda: True,
+    )
+    with coordinator.consistent_snapshot("test"):
         assert coordinator.phase is MaintenancePhase.EXCLUSIVE
-        calls.append("operation")
-
-    assert calls == ["pause", "reset", "operation"]
-    assert coordinator.active() is False
+        control.calls.append("operation")
+    assert control.calls == ["hold", "operation", "release"]
+    assert control.restored_state is not None
+    assert control.restored_state.collector_running is True
+    assert control.restored_state.user_paused is False
     assert coordinator.phase is MaintenancePhase.IDLE
 
 
-def test_maintenance_reset_failure_restores_intent_without_stale_snapshot(temp_db):
-    coordinator = DatabaseMaintenanceCoordinator()
+def test_replacement_resets_after_exclusive_and_before_release(temp_db, monkeypatch):
+    coordinator = RuntimeMaintenanceCoordinator()
+    control = _RuntimeControl()
+    coordinator.register_runtime_control(control)
     settings_service.set_setting("user_paused", "false")
     settings_service.set_setting("collector_status", "running")
+    monkeypatch.setattr(
+        database_maintenance_service.privacy_gate_service,
+        "is_privacy_notice_accepted",
+        lambda: True,
+    )
+    with coordinator.database_replacement("replacement"):
+        assert coordinator.phase is MaintenancePhase.EXCLUSIVE
+        control.calls.append("operation")
+    assert control.calls == ["hold", "operation", "reset", "release"]
+
+
+def test_pending_hold_timeout_returns_to_idle_without_fail_closed(temp_db, monkeypatch):
+    coordinator = RuntimeMaintenanceCoordinator()
+    control = _RuntimeControl()
+    control.quiesce_result = {
+        "ok": False,
+        "command_id": "pending-hold-id",
+        "command_kind": "maintenance_hold",
+        "command_state": "cancelled",
+        "command_state_unknown": False,
+        "timed_out": True,
+    }
+    coordinator.register_runtime_control(control)
+    settings_service.set_setting("user_paused", "false")
+    settings_service.set_setting("collector_status", "running")
+    monkeypatch.setattr(
+        database_maintenance_service.privacy_gate_service,
+        "is_privacy_notice_accepted",
+        lambda: True,
+    )
+
+    with pytest.raises(RuntimeError, match="collector_maintenance_hold_not_acknowledged"):
+        with coordinator.consistent_snapshot("pending_timeout"):
+            pytest.fail("exclusive operation must not start")
+
+    assert coordinator.phase is MaintenancePhase.IDLE
+    assert coordinator.blocked_reason is None
+    assert coordinator.active() is False
+    assert settings_service.get_bool_setting("user_paused", True) is False
+    assert settings_service.get_setting("collector_status", "") == "running"
+
+    control.quiesce_result = _ack("maintenance_hold", "held")
+    with coordinator.consistent_snapshot("retry"):
+        pass
+    assert control.calls == ["hold", "hold", "release"]
+
+
+def test_replacement_reset_failure_fails_closed_and_clears_snapshot(temp_db, monkeypatch):
+    coordinator = RuntimeMaintenanceCoordinator()
+    control = _RuntimeControl()
+    control.reset_result = {
+        "ok": False,
+        "command_id": "reset-id",
+        "command_kind": "database_reset",
+        "command_state": "cancelled",
+        "command_state_unknown": False,
+        "terminal_state": "held",
+    }
+    coordinator.register_runtime_control(control)
+    settings_service.set_setting("user_paused", "false")
+    settings_service.set_setting("collector_status", "running")
+    monkeypatch.setattr(
+        database_maintenance_service.privacy_gate_service,
+        "is_privacy_notice_accepted",
+        lambda: True,
+    )
     runtime_activity_state_service.publish_runtime_activity_snapshot(
         {"persisted_activity_id": 77},
         "maintenance_test",
     )
-    coordinator.register_pause_handler(
-        lambda timeout_seconds=5.0: {"ok": True, "pause_pending": False}
-    )
-    coordinator.register_reset_handler(
-        lambda timeout_seconds=5.0: {"ok": False, "reset_pending": False}
-    )
-
-    with pytest.raises(RuntimeError, match="collector_reset_not_acknowledged"):
-        with coordinator.acquire(reason="failure"):
-            pytest.fail("operation must not start")
-
-    assert coordinator.active() is False
-    assert settings_service.get_bool_setting("user_paused", True) is False
-    assert settings_service.get_setting("collector_status", "") == "running"
+    with pytest.raises(RuntimeError, match="collector_database_reset_not_acknowledged"):
+        with coordinator.database_replacement("failure"):
+            pass
+    assert coordinator.active() is True
+    assert coordinator.phase is MaintenancePhase.FAILED_CLOSED
+    assert coordinator.blocked_reason
+    with pytest.raises(MaintenanceInProgressError, match="maintenance_failed_closed"):
+        with coordinator.consistent_snapshot("blocked"):
+            pass
+    assert settings_service.get_bool_setting("user_paused", False) is True
+    assert settings_service.get_setting("collector_status", "") == "paused"
     assert runtime_activity_state_service.sample_runtime_activity_state().snapshot is None
+
+
+def test_unknown_hold_command_state_remains_fail_closed(temp_db, monkeypatch):
+    coordinator = RuntimeMaintenanceCoordinator()
+    control = _RuntimeControl()
+    control.quiesce_result = {
+        "ok": False,
+        "command_id": "hold-id",
+        "command_kind": "maintenance_hold",
+        "command_state": "unknown",
+        "command_state_unknown": True,
+        "terminal_state": "sealing",
+    }
+    coordinator.register_runtime_control(control)
+    settings_service.set_setting("user_paused", "false")
+    settings_service.set_setting("collector_status", "running")
+    monkeypatch.setattr(
+        database_maintenance_service.privacy_gate_service,
+        "is_privacy_notice_accepted",
+        lambda: True,
+    )
+    with pytest.raises(RuntimeError, match="collector_maintenance_hold_not_acknowledged"):
+        with coordinator.consistent_snapshot("unknown"):
+            pytest.fail("operation must not start")
+    assert coordinator.active() is True
+    assert coordinator.phase is MaintenancePhase.FAILED_CLOSED
+    assert coordinator.blocked_reason
+    with pytest.raises(MaintenanceInProgressError, match="maintenance_failed_closed"):
+        with coordinator.consistent_snapshot("blocked"):
+            pass
+    assert settings_service.get_bool_setting("user_paused", False) is True
+    assert settings_service.get_setting("collector_status", "") == "paused"
+    assert settings_service.get_bool_setting("maintenance_fail_closed", False) is True
+
+    coordinator.recover_fail_closed()
+    assert coordinator.phase is MaintenancePhase.IDLE
+    assert coordinator.blocked_reason is None
+    assert coordinator.active() is False
+    assert settings_service.get_bool_setting("maintenance_fail_closed", True) is False
+    assert settings_service.get_setting("maintenance_fail_closed_reason", "x") == ""
+    assert settings_service.get_bool_setting("user_paused", False) is True
+
+
+def test_user_pause_and_privacy_gate_are_preserved(temp_db, monkeypatch):
+    coordinator = RuntimeMaintenanceCoordinator()
+    control = _RuntimeControl()
+    coordinator.register_runtime_control(control)
+    settings_service.set_setting("user_paused", "true")
+    settings_service.set_setting("collector_status", "paused")
+    monkeypatch.setattr(
+        database_maintenance_service.privacy_gate_service,
+        "is_privacy_notice_accepted",
+        lambda: False,
+    )
+    with coordinator.consistent_snapshot("privacy_gate"):
+        pass
+    assert control.restored_state is not None
+    assert control.restored_state.privacy_notice_accepted is False
+    assert control.restored_state.user_paused is True
+    assert settings_service.get_bool_setting("user_paused", False) is True
+    assert settings_service.get_setting("collector_status", "") == "paused"
 
 
 def _window() -> ActiveWindow:
@@ -254,15 +464,12 @@ def _window() -> ActiveWindow:
 
 def test_clipboard_monitor_does_not_start_or_retain_while_disabled():
     monitor = ClipboardMonitor(_window)
-
     monitor.set_enabled(False)
     assert monitor.drain() == []
     assert monitor._thread is None
 
 
-def test_clipboard_disable_waits_for_inflight_capture_and_drops_generation(
-    monkeypatch,
-):
+def test_clipboard_disable_waits_for_inflight_capture_and_drops_generation(monkeypatch):
     read_started = threading.Event()
     allow_read = threading.Event()
 
@@ -287,7 +494,6 @@ def test_clipboard_disable_waits_for_inflight_capture_and_drops_generation(
     capture = threading.Thread(target=serialized_capture, daemon=True)
     capture.start()
     assert read_started.wait(timeout=1)
-
     disabled = threading.Event()
     disable_thread = threading.Thread(
         target=lambda: (monitor.set_enabled(False), disabled.set()),
@@ -298,7 +504,6 @@ def test_clipboard_disable_waits_for_inflight_capture_and_drops_generation(
     allow_read.set()
     capture.join(timeout=2)
     disable_thread.join(timeout=2)
-
     assert disabled.is_set()
     assert monitor.drain() == []
     monitor.shutdown()
@@ -311,25 +516,3 @@ def test_kdf_rejects_excessive_resource_parameters():
             b"0" * 16,
             KdfParams(n=2**19, r=8, p=1),
         )
-
-
-def test_maintenance_unknown_command_state_remains_fail_closed(temp_db):
-    coordinator = DatabaseMaintenanceCoordinator()
-    settings_service.set_setting("user_paused", "false")
-    settings_service.set_setting("collector_status", "running")
-    coordinator.register_pause_handler(
-        lambda timeout_seconds=5.0: {
-            "ok": False,
-            "pause_pending": False,
-            "command_state_unknown": True,
-            "command_state": "unknown",
-        }
-    )
-
-    with pytest.raises(RuntimeError, match="collector_pause_not_acknowledged"):
-        with coordinator.acquire(reason="unknown"):
-            pytest.fail("operation must not start")
-
-    assert coordinator.active() is False
-    assert settings_service.get_bool_setting("user_paused", False) is True
-    assert settings_service.get_setting("collector_status", "") == "paused"

@@ -53,7 +53,7 @@ def test_user_project_cannot_claim_reserved_name_at_service_or_database_level(
     temp_db,
     reserved,
 ):
-    with pytest.raises(ValueError, match="reserved_project_name"):
+    with pytest.raises(ValueError, match="system_project"):
         project_service.create_project(reserved)
     assert project_api.create_project_for_rules(reserved) == {
         "ok": False,

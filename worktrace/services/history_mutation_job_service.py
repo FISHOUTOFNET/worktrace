@@ -367,37 +367,31 @@ def run_history_worker(
     *,
     health: "WorkerHealthReporter | None" = None,
 ) -> None:
-    """Run the blocking history mutation loop owned by ``AppRuntime``."""
+    """Run iterations only; AppRuntime owns thread started/stopped state."""
 
-    logging.info("history mutation worker start")
-    if health is not None:
-        health.started()
-    try:
-        while not stop_event.is_set():
-            if DATABASE_WRITE_GATE.active():
-                if health is not None:
-                    health.maintenance_paused(True)
-                stop_event.wait(_WORKER_IDLE_SECONDS)
-                continue
+    logging.info("history mutation worker loop enter")
+    while not stop_event.is_set():
+        if DATABASE_WRITE_GATE.active():
             if health is not None:
-                health.maintenance_paused(False)
-            try:
-                processed = run_pending_jobs(limit=1)
-            except Exception:
-                logging.exception("history mutation worker error")
-                if health is not None:
-                    health.failed("history_iteration_failed")
-                processed = 0
-            else:
-                if health is not None:
-                    health.succeeded()
-            if processed:
-                continue
+                health.maintenance_paused(True)
             stop_event.wait(_WORKER_IDLE_SECONDS)
-    finally:
+            continue
         if health is not None:
-            health.stopped()
-        logging.info("history mutation worker stop")
+            health.maintenance_paused(False)
+        try:
+            processed = run_pending_jobs(limit=1)
+        except Exception:
+            logging.exception("history mutation worker error")
+            if health is not None:
+                health.failed("history_iteration_failed")
+            processed = 0
+        else:
+            if health is not None:
+                health.succeeded()
+        if processed:
+            continue
+        stop_event.wait(_WORKER_IDLE_SECONDS)
+    logging.info("history mutation worker loop exit")
 
 
 def clear_all_jobs_in_transaction(conn) -> int:

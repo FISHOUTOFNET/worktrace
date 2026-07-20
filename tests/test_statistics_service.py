@@ -103,7 +103,7 @@ def test_project_stats_count_project_records_split_by_boundary(temp_db):
         "Word", "word.exe", "A1.docx", project_id=project_a, start_time="2026-06-18 09:00:00"
     )
     activity_service.close_activity(first, "2026-06-18 09:10:00")
-    session_boundary_service.record_boundary("2026-06-18 09:10:00", "stopped")
+    session_boundary_service.record_boundary("2026-06-18 09:10:00", "shutdown")
     second = activity_service.create_activity(
         "Word", "word.exe", "A2.docx", project_id=project_a, start_time="2026-06-18 09:20:00"
     )

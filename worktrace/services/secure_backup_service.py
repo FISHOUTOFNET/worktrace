@@ -41,7 +41,7 @@ from .database_replacement_generation_service import (
 from .secure_backup_validation import BackupValidationError, validate_staging_database
 
 PAYLOAD_FORMAT = "worktrace-local-data"
-PAYLOAD_VERSION = 5
+PAYLOAD_VERSION = 6
 SCHEMA_VERSION = str(CURRENT_SCHEMA_VERSION)
 BACKUP_FILE_SUFFIX = ".wtbackup"
 MAX_BACKUP_FILE_BYTES = 512 * 1024 * 1024
@@ -151,16 +151,17 @@ class ImportResult:
     folder_index_reset: bool = False
 
 
-def is_secure_import_in_progress() -> bool:
-    return database_maintenance_service.is_maintenance_in_progress()
-
-
 def export_encrypted_backup(output_path: str | Path, passphrase: str) -> Path:
+    """Export a current-format backup from a coordinator-owned snapshot."""
+
     if not passphrase:
         raise SecureBackupError("passphrase is required")
     out = Path(output_path)
     out.parent.mkdir(parents=True, exist_ok=True)
-    payload = _build_export_payload()
+    with database_maintenance_service.consistent_snapshot(
+        "encrypted_backup_export"
+    ):
+        payload = _build_export_payload_under_snapshot()
     blob = create_encrypted_backup(payload, passphrase, APP_VERSION)
     _atomic_write_bytes(out, blob)
     logging.info("encrypted backup export success suffix=%s", BACKUP_FILE_SUFFIX)
@@ -179,13 +180,11 @@ def import_encrypted_backup(
 
     input_file = Path(input_path)
     _require_bounded_backup_file(input_file)
+    blob = input_file.read_bytes()
+    payload = _read_and_decrypt(blob, passphrase)
+    data = _parse_and_validate_payload(payload)
     try:
-        with database_maintenance_service.maintenance_operation(
-            reason="secure_import"
-        ):
-            blob = input_file.read_bytes()
-            payload = _read_and_decrypt(blob, passphrase)
-            data = _parse_and_validate_payload(payload)
+        with database_maintenance_service.database_replacement("secure_import"):
             imported_counts = _replace_import(data)
     except database_maintenance_service.MaintenanceInProgressError as exc:
         raise BackupImportInProgressError(
@@ -223,7 +222,9 @@ def _require_bounded_backup_file(path: Path) -> None:
         raise BackupCorruptedError("backup file is invalid or corrupted")
 
 
-def _build_export_payload() -> bytes:
+def _build_export_payload_under_snapshot() -> bytes:
+    """Build payload while the caller owns the maintenance snapshot capability."""
+
     tables: dict[str, list[dict[str, Any]]] = {}
     conn = get_connection()
     try:
@@ -345,16 +346,6 @@ def _replace_import(data: dict[str, Any]) -> dict[str, int]:
                 source.close()
             seed_defaults(live)
             _reset_derived_folder_index(live)
-            timestamp = now_str()
-            for key, value in (
-                ("user_paused", "true"),
-                ("collector_status", "paused"),
-                ("clipboard_capture_enabled", "false"),
-            ):
-                live.execute(
-                    "UPDATE settings SET value = ?, updated_at = ? WHERE key = ?",
-                    (value, timestamp, key),
-                )
             _validate_staging_database(live)
             replacement_values = publish_database_replacement(
                 live,
@@ -513,6 +504,5 @@ __all__ = [
     "SecureBackupError",
     "export_encrypted_backup",
     "import_encrypted_backup",
-    "is_secure_import_in_progress",
     "parse_encrypted_backup_manifest",
 ]

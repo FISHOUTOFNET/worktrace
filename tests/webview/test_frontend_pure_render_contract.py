@@ -163,15 +163,26 @@ def test_frontend_resources_have_no_storage_network_cdn_or_module_pipeline():
     assert not offenders, "frontend resources must remain local classic pure render: " + repr(offenders)
 
 
-def test_live_duration_targets_use_backend_display_base_and_accepted_runtime():
+def test_live_duration_targets_use_exact_clock_and_accepted_runtime():
     source = read_all_js()
-    ticker = _assigned_app_function(read_js("init.js"), "applyLocalTicker")
-    assert "App.liveRuntime" in source
-    assert "App.getActiveLiveClock()" in ticker
-    assert 'data-display-base-seconds' in source
-    assert "projectAcceptedClock(clock" in ticker
-    assert "App.renderLiveDurationTarget(target, displayBaseSeconds, activeElapsedNowValue)" in ticker
-    assert "data-live-base-seconds" in source
+    core = read_js("core.js")
+    init = read_js("init.js")
+    ticker = _assigned_app_function(init, "applyLocalTicker")
+    assert "liveRuntimeStore.get()" in ticker
+    assert "App.readLiveClockTarget(target)" in ticker
+    assert "App.liveTargetCompatibleWithRuntime(target, runtime)" in ticker
+    assert "App.renderLiveDurationTarget(target, clock, Date.now())" in ticker
+    assert "App.getActiveLiveClock = function" in init
+    assert "App.getActiveLiveClock ? App.getActiveLiveClock() : null" in core
+    assert init.count("App.getActiveLiveClock") == 1
+    assert core.count("App.getActiveLiveClock") == 2
+    assert source.count("App.getActiveLiveClock") == 3
+    for retired in (
+        "projectAcceptedClock(clock",
+        "data-display-base-seconds",
+        "data-live-base-seconds",
+    ):
+        assert retired not in source
 
 
 def test_runtime_transport_and_clock_have_one_frontend_owner():
@@ -195,7 +206,8 @@ def test_runtime_transport_and_clock_have_one_frontend_owner():
         "acceptRefreshStateRuntime",
         "acceptPagePayloadRuntime",
         "App.applyLocalTicker",
-        "schema_version || 0) !== 2",
+        "App.getActiveLiveClock = function",
+        "Number(envelope.schema_version) !== 2",
     ):
         assert required in init
     assert source.count("setInterval(") == 1

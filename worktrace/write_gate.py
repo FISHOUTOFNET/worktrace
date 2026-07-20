@@ -18,7 +18,7 @@ class WriteGatePhase(str, Enum):
 
 @dataclass(frozen=True)
 class WriteDrainLease:
-    """Owner capability for promoting one drained window to exclusivity."""
+    """Short-lived capability for promoting one drained window to exclusivity."""
 
     _gate: "ProcessDatabaseWriteGate"
     _owner_thread_id: int
@@ -28,7 +28,12 @@ class WriteDrainLease:
 
 
 class ProcessDatabaseWriteGate:
-    """Reject new writes while SQLite drains, then grant one exclusive owner."""
+    """Reject new writes while SQLite drains, then grant one exclusive owner.
+
+    The gate never grants durable write authority to a worker identity. The
+    maintenance coordinator must quiesce the Collector while the gate is OPEN;
+    only then may the coordinator enter DRAINING and eventually EXCLUSIVE.
+    """
 
     def __init__(self) -> None:
         self._lock = threading.RLock()
@@ -36,7 +41,6 @@ class ProcessDatabaseWriteGate:
         self._owner_thread_id: int | None = None
         self._generation = 0
         self._thread_state = threading.local()
-        self._maintenance_thread_ids: set[int] = set()
 
     def active(self) -> bool:
         with self._lock:
@@ -49,18 +53,6 @@ class ProcessDatabaseWriteGate:
     def generation(self) -> int:
         with self._lock:
             return self._generation
-
-    def register_maintenance_thread(self, thread_id: int | None) -> None:
-        if thread_id is None:
-            return
-        with self._lock:
-            self._maintenance_thread_ids.add(int(thread_id))
-
-    def unregister_maintenance_thread(self, thread_id: int | None) -> None:
-        if thread_id is None:
-            return
-        with self._lock:
-            self._maintenance_thread_ids.discard(int(thread_id))
 
     def note_current_thread_read(self) -> None:
         with self._lock:
@@ -78,10 +70,7 @@ class ProcessDatabaseWriteGate:
                 return
 
             if self._phase is WriteGatePhase.DRAINING:
-                if (
-                    thread_id != self._owner_thread_id
-                    and thread_id not in self._maintenance_thread_ids
-                ):
+                if thread_id != self._owner_thread_id:
                     raise sqlite3.OperationalError("secure_import_in_progress")
                 self._thread_state.observed_generation = self._generation
                 return
@@ -123,6 +112,7 @@ class ProcessDatabaseWriteGate:
                 self._phase = WriteGatePhase.OPEN
                 self._owner_thread_id = None
                 self._thread_state.observed_generation = self._generation
+
 
 DATABASE_WRITE_GATE = ProcessDatabaseWriteGate()
 

@@ -29,7 +29,7 @@ def _sessions(temp_db):
         activity_id = activity_service.create_activity(app, f"{app}.exe", f"{app}-{index}", project_id=project, start_time=start)
         activity_service.close_activity(activity_id, end)
         if index < 2:
-            session_boundary_service.record_boundary(end, "stopped")
+            session_boundary_service.record_boundary(end, "shutdown")
     return timeline_service.get_project_sessions_by_date(DATE)
 
 

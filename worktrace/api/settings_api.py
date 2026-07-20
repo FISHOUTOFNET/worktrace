@@ -99,8 +99,8 @@ def get_settings_privacy_status() -> dict[str, Any]:
                 "storage_model": "local_only",
                 "clipboard_capture_enabled": is_clipboard_capture_enabled(),
                 "export_path_configured": bool(get_export_path()),
-                "secure_import_in_progress": bool(
-                    backup_api.is_secure_import_in_progress()
+                "maintenance_in_progress": bool(
+                    backup_api.is_maintenance_in_progress()
                 ),
                 "encrypted_backup": {
                     "supported": True,
@@ -261,48 +261,47 @@ def get_first_run_notice_for_webview() -> dict[str, Any]:
         }
     return {
         "ok": True,
-        "accepted": accepted,
-        "title": _FIRST_RUN_NOTICE_TITLE,
-        "highlights": list(_FIRST_RUN_NOTICE_HIGHLIGHTS),
-        "notice_text": str(PRIVACY_NOTICE_TEXT),
+        "notice": {
+            "title": _FIRST_RUN_NOTICE_TITLE,
+            "text": PRIVACY_NOTICE_TEXT,
+            "highlights": list(_FIRST_RUN_NOTICE_HIGHLIGHTS),
+            "accepted": accepted,
+            "accept_required": not accepted,
+        },
     }
 
 
 def accept_first_run_notice_for_webview() -> dict[str, Any]:
     try:
         accept_first_run_notice()
-        return {
-            "ok": True,
-            "accepted": True,
-            "message": "已确认隐私说明",
-        }
     except Exception:
         return {"ok": False, "error": "确认隐私说明失败"}
-
-
-def get_refresh_state(report_date: str | None = None) -> dict[str, Any]:
-    try:
-        return view_model_api.get_refresh_state_view_model(report_date)
-    except Exception:
-        return {"ok": False, "error": "刷新状态加载失败"}
+    return {"ok": True, "accepted": True}
 
 
 __all__ = [
+    "accept_first_run_notice",
     "accept_first_run_notice_for_webview",
+    "clear_all_local_data",
     "clear_all_local_data_for_webview",
     "export_encrypted_backup_for_webview",
+    "first_run_notice_accepted",
     "get_collector_consecutive_failures",
     "get_collector_health_state",
     "get_collector_last_failure_code",
     "get_collector_last_successful_observation_at",
     "get_collector_status",
+    "get_export_path",
     "get_first_run_notice_for_webview",
-    "get_refresh_state",
     "get_settings_privacy_status",
+    "get_ui_refresh_seconds",
     "import_encrypted_backup_for_webview",
     "is_clipboard_capture_enabled",
+    "is_paused",
     "is_user_paused",
     "preview_encrypted_backup_manifest_for_webview",
+    "set_clipboard_capture_enabled",
     "set_clipboard_capture_enabled_for_webview",
+    "set_collector_status",
     "set_user_paused",
 ]

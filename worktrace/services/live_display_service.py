@@ -1,9 +1,7 @@
 """Display-safe helpers for the unified Activity Display Model."""
-
 from __future__ import annotations
 
 import hashlib
-from datetime import datetime
 from typing import Any
 
 from ..constants import (
@@ -116,12 +114,14 @@ def _stable_live_key(snapshot: ActivitySnapshotContract | None) -> str:
         return ""
     return "|".join(
         [
+            str(snapshot.get("resource_identity_key") or ""),
             str(snapshot.get("resource_display_name") or ""),
             str(snapshot.get("activity_display_name") or ""),
             str(snapshot.get("app_name") or ""),
             str(snapshot.get("process_name") or ""),
             str(snapshot.get("start_time") or ""),
             str(snapshot.get("status") or ""),
+            str(int(snapshot.get("persisted_activity_id") or 0)),
         ]
     )
 
@@ -129,36 +129,6 @@ def _stable_live_key(snapshot: ActivitySnapshotContract | None) -> str:
 def _stable_live_key_hash(snapshot: ActivitySnapshotContract | None) -> str:
     key = _stable_live_key(snapshot)
     return hashlib.sha1(key.encode("utf-8")).hexdigest()[:12] if key else ""
-
-
-def _start_time_epoch_ms(snapshot: ActivitySnapshotContract | None) -> int:
-    if not snapshot:
-        return 0
-    start_time = str(snapshot.get("start_time") or "")
-    if not start_time:
-        return 0
-    try:
-        value = datetime.strptime(start_time, "%Y-%m-%d %H:%M:%S")
-    except ValueError:
-        return 0
-    return int(value.timestamp() * 1000)
-
-
-def _live_display_key(snapshot: ActivitySnapshotContract | None) -> str:
-    if not snapshot:
-        return ""
-    return "|".join(
-        [
-            str(snapshot.get("resource_display_name") or ""),
-            str(snapshot.get("activity_display_name") or ""),
-            str(snapshot.get("app_name") or ""),
-            str(snapshot.get("process_name") or ""),
-            str(snapshot.get("start_time") or ""),
-            str(snapshot.get("status") or ""),
-            "1" if bool(snapshot.get("is_persisted")) else "0",
-            str(int(snapshot.get("persisted_activity_id") or 0)),
-        ]
-    )
 
 
 def _uncategorized_display_project() -> dict[str, Any]:
@@ -193,26 +163,19 @@ def build_current_activity_summary(
     report_date: str | None = None,
     today: str | None = None,
 ) -> CurrentActivityContract:
+    """Build static current-activity metadata; live time lives only in LiveClockV2."""
+
     if not snapshot:
         return {
             "active": False,
             "display": "无",
             "elapsed_seconds": 0,
             "resource_elapsed_seconds": 0,
-            "is_paused": False,
             "status": "",
             "is_persisted": False,
             "project_name": "",
             "project_id": 0,
             "persisted_activity_id": 0,
-            "live_state": "none",
-            "is_in_progress": False,
-            "is_virtual_live": False,
-            "live_display_key": "",
-            "stable_live_key": "",
-            "stable_live_key_hash": "",
-            "live_started_at_epoch_ms": 0,
-            "carry_seconds": 0,
             "resource_name": "",
             "app_name": "",
             "start_time": "",
@@ -228,7 +191,8 @@ def build_current_activity_summary(
         today = timeline_service.get_default_report_date()
     if report_date is None:
         report_date = today
-    live_state = classify_live_state(snapshot)
+    del report_date, today
+
     elapsed_seconds = _snapshot_total_seconds(snapshot)
     display_project = _formal_display_project(snapshot)
     project_name = str(display_project["name"])
@@ -237,12 +201,9 @@ def build_current_activity_summary(
     app_name = _display_app_name(snapshot)
     start_time = str(snapshot.get("start_time") or "")
     status = _snapshot_status(snapshot)
-    is_paused = status == STATUS_PAUSED
     is_persisted = bool(snapshot.get("is_persisted"))
     persisted_id = snapshot_persisted_id(snapshot) or 0
-    is_in_progress = live_state == "persisted_open"
     is_uncategorized = bool(display_project["is_uncategorized"])
-    live_started_at_epoch_ms = _start_time_epoch_ms(snapshot)
 
     state_label = "进行中" if is_persisted else "活动状态异常"
     if status == STATUS_IDLE:
@@ -258,31 +219,23 @@ def build_current_activity_summary(
         f"{resource_name}｜{project_name}｜{format_duration(elapsed_seconds)}｜{state_label}"
     )
     project_id = display_project.get("id")
+    live_source = "db" if classify_live_state(snapshot) == "persisted_open" else "none"
     return {
         "active": True,
         "display": display,
         "elapsed_seconds": int(elapsed_seconds),
         "resource_elapsed_seconds": int(snapshot_elapsed_seconds(snapshot)),
-        "is_paused": bool(is_paused),
         "status": status,
         "is_persisted": is_persisted,
         "project_name": project_name,
         "project_id": int(project_id) if project_id is not None else 0,
         "persisted_activity_id": int(persisted_id or 0),
-        "live_state": live_state,
-        "is_in_progress": bool(is_in_progress),
-        "is_virtual_live": False,
-        "live_display_key": _live_display_key(snapshot),
-        "stable_live_key": _stable_live_key(snapshot),
-        "stable_live_key_hash": _stable_live_key_hash(snapshot),
-        "live_started_at_epoch_ms": int(live_started_at_epoch_ms or 0),
-        "carry_seconds": 0,
         "resource_name": resource_name,
         "app_name": app_name,
         "start_time": start_time,
         "end_time": None,
         "activity_id": int(persisted_id or 0) or None,
-        "source": "db" if is_in_progress else "none",
+        "source": live_source,
         "is_uncategorized": is_uncategorized,
         "is_classified": not is_uncategorized,
         "project_description": project_description,
@@ -312,7 +265,7 @@ def persisted_open_live_seconds(
     snapshot: ActivitySnapshotContract | None,
     row: dict[str, Any] | None,
 ) -> int:
-    if not snapshot or not row:
+    if not snapshot or not row or row.get("end_time") is not None:
         return 0
     try:
         row_id = int(row.get("id") or 0)

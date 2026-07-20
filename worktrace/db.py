@@ -30,7 +30,7 @@ from .report_generation_classifier import (
 )
 from .write_gate import DATABASE_WRITE_GATE
 
-CURRENT_SCHEMA_VERSION = 11
+CURRENT_SCHEMA_VERSION = 12
 
 _WRITE_TOKEN_RE = re.compile(
     r"\b(?:INSERT|UPDATE|DELETE|REPLACE|CREATE|DROP|ALTER|VACUUM|REINDEX|ATTACH|DETACH)\b",
@@ -433,14 +433,6 @@ def seed_defaults(conn: sqlite3.Connection) -> None:
     )
 
 
-def reset_database() -> None:
-    with get_connection() as conn:
-        ensure_wal(conn)
-        with report_structure_classifier_scope():
-            drop_all_tables(conn)
-            apply_current_schema(conn)
-
-
 def _database_has_user_tables(conn: sqlite3.Connection) -> bool:
     row = conn.execute(
         """
@@ -458,49 +450,3 @@ def ensure_current_indexes(conn: sqlite3.Connection) -> None:
     """Install the indexes declared by the current schema contract."""
 
     conn.executescript(read_schema_indexes_sql())
-
-
-def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
-    return bool(
-        conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
-            (name,),
-        ).fetchone()
-    )
-
-
-def _table_columns(conn: sqlite3.Connection, name: str) -> set[str]:
-    if not _table_exists(conn, name):
-        return set()
-    return {
-        str(row["name"])
-        for row in conn.execute(f"PRAGMA table_info({name})").fetchall()
-    }
-
-
-def drop_all_tables(conn: sqlite3.Connection) -> None:
-    conn.executescript(
-        """
-        DROP TABLE IF EXISTS activity_resource;
-        DROP TABLE IF EXISTS folder_rule_file_index;
-        DROP TABLE IF EXISTS folder_rule_index_state;
-        DROP TABLE IF EXISTS history_mutation_job_rule;
-        DROP TABLE IF EXISTS history_mutation_job;
-        DROP TABLE IF EXISTS startup_recovery_job;
-        DROP TABLE IF EXISTS activity_inference_job;
-        DROP TABLE IF EXISTS report_session_operation_member;
-        DROP TABLE IF EXISTS report_mutation_request;
-        DROP TABLE IF EXISTS report_session_operation;
-        DROP TABLE IF EXISTS activity_clipboard_event;
-        DROP TABLE IF EXISTS activity_project_assignment;
-        DROP TABLE IF EXISTS activity_log;
-        DROP TABLE IF EXISTS session_boundary;
-        DROP TABLE IF EXISTS folder_project_rule;
-        DROP TABLE IF EXISTS project_rule;
-        DROP TABLE IF EXISTS project;
-        DROP TABLE IF EXISTS settings;
-        DROP TABLE IF EXISTS report_structure_revision_state;
-        DROP TABLE IF EXISTS data_generation_state;
-        DROP TABLE IF EXISTS activity_resource_repair_job;
-        """
-    )

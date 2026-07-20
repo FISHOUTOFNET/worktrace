@@ -14,6 +14,7 @@ from ..db import now_str
 from ..platforms.base import ActiveWindow, ClipboardTextEvent
 from ..services import (
     activity_lifecycle_service,
+    activity_maintenance_command_service,
     clipboard_fact_query_service,
     clipboard_service,
     privacy_service,
@@ -189,12 +190,8 @@ class CollectorStateMachine:
         self.active_signature = None
 
     def reset_runtime_state(self, reason: str = "runtime_reset") -> None:
-        """Seal the old generation, then forget every process-local identity."""
+        """Forget process-local identity after the durable generation changed."""
 
-        if self.recorder.current_payload is not None:
-            self.stop(now_str(), reason="secure_import")
-        else:
-            activity_lifecycle_service.close_all_open_activities(now_str())
         self.recorder.clear_runtime_state(reason)
         self.state = "stopped"
         self.active_signature = None
@@ -238,21 +235,25 @@ class CollectorStateMachine:
         self.state = "paused"
 
     def quiesce_for_maintenance(self, at_time: str | None = None) -> None:
-        """Seal active facts without mutating durable user pause intent."""
+        """Seal active facts without a session boundary or durable pause mutation."""
 
         transition_time = at_time or now_str()
-        if self.state != "paused" or self.recorder.current_payload is not None:
-            prepared = self.recorder.stop_for_boundary(
-                transition_time,
-                ActivityEndReason.PAUSE_BOUNDARY,
-            )
-            self._commit_boundary(
-                transition_time,
-                "maintenance_pause",
-                prepared,
-            )
-            self.active_signature = None
-        self.state = "paused"
+        prepared = self.recorder.stop_for_boundary(
+            transition_time,
+            ActivityEndReason.MAINTENANCE_SEGMENT,
+        )
+        activity_maintenance_command_service.seal_open_activity_for_maintenance(
+            transition_time,
+            current_activity_id=(
+                prepared.activity_id if prepared is not None else None
+            ),
+            current_duration_seconds=(
+                prepared.duration_seconds if prepared is not None else None
+            ),
+        )
+        self.recorder.finalize_prepared_close(prepared)
+        self.active_signature = None
+        self.state = "maintenance"
 
     def stop(self, at_time: str | None = None, reason: str = "user_stop") -> None:
         transition_time = at_time or now_str()
@@ -316,15 +317,13 @@ class CollectorStateMachine:
 
 
 def _end_reason_for_boundary(reason: str) -> ActivityEndReason:
-    if reason in {"paused", "user_pause", "maintenance_pause"}:
+    if reason == "user_pause":
         return ActivityEndReason.PAUSE_BOUNDARY
-    if reason in {"stopped", "user_stop"}:
-        return ActivityEndReason.STOP_BOUNDARY
-    if reason == "fatal_collector_stop":
+    if reason in {"user_stop", "fatal_collector_stop"}:
         return ActivityEndReason.STOP_BOUNDARY
     if reason == "shutdown":
         return ActivityEndReason.SHUTDOWN_BOUNDARY
-    if reason in {"time_jump", "sleep_resume"}:
+    if reason == "sleep_resume":
         return ActivityEndReason.TIME_JUMP_BOUNDARY
     if reason == "midnight":
         return ActivityEndReason.MIDNIGHT_BOUNDARY
@@ -336,8 +335,6 @@ def _end_reason_for_boundary(reason: str) -> ActivityEndReason:
         return ActivityEndReason.ERROR_BOUNDARY
     if reason == "privacy":
         return ActivityEndReason.PRIVACY_BOUNDARY
-    if reason == "secure_import":
-        return ActivityEndReason.SECURE_IMPORT_BOUNDARY
     if reason == "first_run_gate":
         return ActivityEndReason.FIRST_RUN_GATE_BOUNDARY
     return ActivityEndReason.STOP_BOUNDARY

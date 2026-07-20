@@ -83,9 +83,17 @@ def test_lifecycle_service_owns_repository_backed_transitions() -> None:
         assert forbidden not in source
 
 
-def test_collector_state_machine_routes_close_all_through_lifecycle() -> None:
+def test_collector_maintenance_routes_through_atomic_seal_command() -> None:
     source = _read(COLLECTOR_DIR / "state_machine.py")
-    assert "activity_lifecycle_service.close_all_open_activities" in source
+    maintenance = _read(
+        SERVICES_DIR / "activity_maintenance_command_service.py"
+    )
+
+    assert "activity_maintenance_command_service.seal_open_activity_for_maintenance" in source
+    assert "activity_fact_repository.close_activity" in maintenance
+    assert "activity_inference_job_repository.enqueue_closed_activity_ids" in maintenance
+    assert "close_all_open_activities" not in maintenance
+    assert "session_boundary" not in maintenance
 
 
 def test_recorder_has_no_public_midnight_split_compatibility_entrypoint() -> None:

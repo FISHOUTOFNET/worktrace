@@ -10,8 +10,8 @@ from worktrace.db import get_connection
 from worktrace.services import project_service, settings_service
 from worktrace.services.database_maintenance_barrier import drain_existing_writers
 from worktrace.services.database_maintenance_service import (
-    DatabaseMaintenanceCoordinator,
     MaintenancePhase,
+    RuntimeMaintenanceCoordinator,
 )
 from worktrace.write_gate import DATABASE_WRITE_GATE, WriteGatePhase
 
@@ -23,35 +23,84 @@ pytestmark = [
 ]
 
 
-def test_maintenance_enters_draining_before_pause_and_exclusive_before_operation(
-    temp_db,
-):
-    coordinator = DatabaseMaintenanceCoordinator()
-    observed: list[tuple[str, MaintenancePhase, WriteGatePhase]] = []
+class _RuntimeControl:
+    def __init__(self, coordinator: RuntimeMaintenanceCoordinator) -> None:
+        self.coordinator = coordinator
+        self.observed: list[tuple[str, MaintenancePhase, WriteGatePhase]] = []
+        self._next_command = 0
 
-    def pause(timeout_seconds=5.0):
-        observed.append(("pause", coordinator.phase, DATABASE_WRITE_GATE.phase()))
-        return {"ok": True, "pause_pending": False}
+    def _ack(self, command_kind: str, terminal_state: str) -> dict:
+        self._next_command += 1
+        return {
+            "ok": True,
+            "command_id": f"test-command-{self._next_command}",
+            "command_kind": command_kind,
+            "command_state": "completed",
+            "terminal_state": terminal_state,
+            "command_state_unknown": False,
+        }
 
-    def reset(timeout_seconds=5.0):
-        observed.append(("reset", coordinator.phase, DATABASE_WRITE_GATE.phase()))
-        return {"ok": True, "reset_pending": False}
+    def is_collection_running_for_maintenance(self) -> bool:
+        return True
 
-    coordinator.register_pause_handler(pause)
-    coordinator.register_reset_handler(reset)
+    def quiesce_collection_for_maintenance(self, timeout_seconds=5.0):
+        self.observed.append(
+            ("quiesce", self.coordinator.phase, DATABASE_WRITE_GATE.phase())
+        )
+        return self._ack("maintenance_hold", "held")
 
-    with coordinator.acquire(reason="drain_contract"):
-        observed.append(
+    def reset_after_database_replacement(self, timeout_seconds=5.0):
+        self.observed.append(
+            ("reset", self.coordinator.phase, DATABASE_WRITE_GATE.phase())
+        )
+        return self._ack("database_reset", "held")
+
+    def restore_after_maintenance(self, state, timeout_seconds=5.0):
+        self.observed.append(
+            ("restore", self.coordinator.phase, DATABASE_WRITE_GATE.phase())
+        )
+        return self._ack("maintenance_release", "operational")
+
+
+def test_maintenance_quiesces_before_draining_and_resets_after_exclusive(temp_db):
+    coordinator = RuntimeMaintenanceCoordinator()
+    control = _RuntimeControl(coordinator)
+    coordinator.register_runtime_control(control)
+    settings_service.set_setting("user_paused", "false")
+    settings_service.set_setting("collector_status", "running")
+
+    with coordinator.database_replacement("drain_contract"):
+        control.observed.append(
             ("operation", coordinator.phase, DATABASE_WRITE_GATE.phase())
         )
 
-    assert observed == [
-        ("pause", MaintenancePhase.DRAINING, WriteGatePhase.DRAINING),
-        ("reset", MaintenancePhase.DRAINING, WriteGatePhase.DRAINING),
+    assert control.observed == [
+        ("quiesce", MaintenancePhase.HOLD_REQUESTED, WriteGatePhase.OPEN),
         ("operation", MaintenancePhase.EXCLUSIVE, WriteGatePhase.EXCLUSIVE),
+        ("reset", MaintenancePhase.RESETTING, WriteGatePhase.OPEN),
+        ("restore", MaintenancePhase.RELEASING, WriteGatePhase.OPEN),
     ]
     assert coordinator.phase is MaintenancePhase.IDLE
     assert DATABASE_WRITE_GATE.phase() is WriteGatePhase.OPEN
+
+
+def test_snapshot_does_not_issue_replacement_reset(temp_db):
+    coordinator = RuntimeMaintenanceCoordinator()
+    control = _RuntimeControl(coordinator)
+    coordinator.register_runtime_control(control)
+    settings_service.set_setting("user_paused", "false")
+    settings_service.set_setting("collector_status", "running")
+
+    with coordinator.consistent_snapshot("snapshot_contract"):
+        control.observed.append(
+            ("operation", coordinator.phase, DATABASE_WRITE_GATE.phase())
+        )
+
+    assert [name for name, _phase, _gate in control.observed] == [
+        "quiesce",
+        "operation",
+        "restore",
+    ]
 
 
 def test_draining_rejects_new_ordinary_writer(temp_db):
@@ -111,33 +160,41 @@ def test_sqlite_barrier_waits_for_preexisting_writer_before_exclusive(temp_db):
     assert DATABASE_WRITE_GATE.phase() is WriteGatePhase.OPEN
 
 
-def test_failed_reset_releases_coordinator_and_process_gate(temp_db):
-    coordinator = DatabaseMaintenanceCoordinator()
+def test_failed_reset_releases_gate_and_fails_closed(temp_db):
+    coordinator = RuntimeMaintenanceCoordinator()
+    control = _RuntimeControl(coordinator)
+    control.reset_after_database_replacement = lambda timeout_seconds=5.0: {
+        "ok": False,
+        "command_id": "failed-reset",
+        "command_kind": "database_reset",
+        "command_state": "completed",
+        "terminal_state": "held",
+        "command_state_unknown": False,
+    }
+    coordinator.register_runtime_control(control)
     settings_service.set_setting("user_paused", "false")
     settings_service.set_setting("collector_status", "running")
-    coordinator.register_pause_handler(
-        lambda timeout_seconds=5.0: {"ok": True, "pause_pending": False}
-    )
-    coordinator.register_reset_handler(
-        lambda timeout_seconds=5.0: {"ok": False, "reset_pending": False}
-    )
 
-    with pytest.raises(RuntimeError, match="collector_reset_not_acknowledged"):
-        with coordinator.acquire(reason="failure_contract"):
-            pytest.fail("exclusive operation must not begin")
+    with pytest.raises(RuntimeError, match="collector_database_reset_not_acknowledged"):
+        with coordinator.database_replacement("failure_contract"):
+            pass
 
-    assert coordinator.phase is MaintenancePhase.IDLE
-    assert coordinator.active() is False
+    assert coordinator.phase is MaintenancePhase.FAILED_CLOSED
+    assert coordinator.active() is True
+    assert coordinator.blocked_reason == "failure_contract_restore"
     assert DATABASE_WRITE_GATE.phase() is WriteGatePhase.OPEN
-    assert settings_service.get_bool_setting("user_paused", True) is False
-    assert settings_service.get_setting("collector_status", "") == "running"
+    assert settings_service.get_bool_setting("user_paused", False) is True
+    assert settings_service.get_setting("collector_status", "") == "paused"
 
 
 def test_secure_backup_exposes_no_second_maintenance_coordinator() -> None:
-    source = (
-        Path(__file__).resolve().parents[1]
-        / "worktrace/services/secure_backup_service.py"
-    ).read_text(encoding="utf-8")
-    assert "SecureImportCoordinator" not in source
-    assert "DatabaseMaintenanceCoordinator" not in source
-    assert "database_maintenance_service.maintenance_operation" in source
+    root = Path(__file__).resolve().parents[1]
+    backup = (root / "worktrace/services/secure_backup_service.py").read_text(
+        encoding="utf-8"
+    )
+    services = root / "worktrace/services"
+
+    assert "RuntimeMaintenanceCoordinator" not in backup
+    assert "database_maintenance_service.consistent_snapshot" in backup
+    assert "database_maintenance_service.database_replacement" in backup
+    assert not (services / "runtime_snapshot_barrier.py").exists()

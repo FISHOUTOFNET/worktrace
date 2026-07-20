@@ -26,11 +26,16 @@ RETIRED_PRODUCTION_SYMBOLS = {
     "start_history_worker",
     "start_inference_worker",
     "_synchronize_core_hooks",
+    "register_collector_pause_handler",
+    "register_collector_reset_handler",
+    "register_maintenance_thread",
+    "unregister_maintenance_thread",
 }
 RETIRED_FILES = {
     PRODUCTION / "schema_migrations.py",
     PRODUCTION / "runtime" / "app_runtime_core.py",
     PRODUCTION / "services" / "secure_backup_core.py",
+    PRODUCTION / "services" / "runtime_snapshot_barrier.py",
 }
 DYNAMIC_TEST_PATTERNS = (
     "runpy." + "run_path(",
@@ -136,19 +141,42 @@ def test_runtime_and_backup_have_single_lifecycle_owners() -> None:
     assert "activity_inference_job_service.run_inference_worker" in runtime
     assert "activity_fact_repair_service.run_activity_resource_repair_worker" in runtime
     assert "recovery_service.run_startup_recovery_worker" in runtime
-    assert "database_maintenance_service.register_collector_pause_handler" in runtime
+    assert runtime.count("database_maintenance_service.register_runtime_control(self)") >= 1
     assert "from . import database_maintenance_service" in backup
-    assert "maintenance_operation(" in backup
-    assert "class DatabaseMaintenanceCoordinator" in maintenance
+    assert "database_maintenance_service.consistent_snapshot(" in backup
+    assert "database_maintenance_service.database_replacement(" in backup
+    assert "class RuntimeMaintenanceCoordinator" in maintenance
+    assert "class DatabaseMaintenanceCoordinator" not in maintenance
     assert "__getattr__" not in runtime
     assert "__getattr__" not in backup
 
 
-def test_app_runtime_has_exactly_one_thread_creation_site_for_derived_workers() -> None:
-    runtime = (PRODUCTION / "runtime" / "app_runtime.py").read_text(encoding="utf-8")
-    assert runtime.count("def _start_owned_worker(") == 1
-    assert runtime.count("activity_inference_job_service.run_inference_worker") == 1
-    assert "process_pending_inference_jobs(" not in runtime
+def test_app_runtime_has_one_registry_driven_thread_creation_site() -> None:
+    path = PRODUCTION / "runtime" / "app_runtime.py"
+    source = path.read_text(encoding="utf-8")
+    tree = ast.parse(source, filename=str(path))
+    thread_calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "threading"
+        and node.func.attr == "Thread"
+    ]
+    derived_calls = [
+        node
+        for node in thread_calls
+        if any(
+            keyword.arg == "target"
+            and isinstance(keyword.value, ast.Attribute)
+            and keyword.value.attr == "_run_owned_worker"
+            for keyword in node.keywords
+        )
+    ]
+    assert len(derived_calls) == 1
+    assert source.count("activity_inference_job_service.run_inference_worker") == 1
+    assert "process_pending_inference_jobs(" not in source
     for relative in (
         "services/folder_index_service.py",
         "services/history_mutation_job_service.py",
@@ -156,14 +184,14 @@ def test_app_runtime_has_exactly_one_thread_creation_site_for_derived_workers() 
         "services/activity_fact_repair_service.py",
         "services/recovery_service.py",
     ):
-        source = (PRODUCTION / relative).read_text(encoding="utf-8")
-        assert "_WORKER_THREAD" not in source
-        assert "threading.Thread(" not in source
+        worker_source = (PRODUCTION / relative).read_text(encoding="utf-8")
+        assert "_WORKER_THREAD" not in worker_source
+        assert "threading.Thread(" not in worker_source
 
 
 def test_non_windows_production_adapter_fails_closed() -> None:
     source = (PRODUCTION / "runtime" / "app_runtime.py").read_text(encoding="utf-8")
-    assert "raise RuntimeError(\"unsupported_platform\")" in source
+    assert 'raise RuntimeError("unsupported_platform")' in source
     assert "fake_adapter" not in source.casefold()
 
 
@@ -199,8 +227,8 @@ def test_current_only_schema_and_backup_versions_are_explicit() -> None:
     backup_source = (
         PRODUCTION / "services" / "secure_backup_service.py"
     ).read_text(encoding="utf-8")
-    assert "CURRENT_SCHEMA_VERSION = 11" in db_source
+    assert "CURRENT_SCHEMA_VERSION = 12" in db_source
     assert "database_schema_incompatible" in db_source
-    assert "PAYLOAD_VERSION = 5" in backup_source
+    assert "PAYLOAD_VERSION = 6" in backup_source
     assert "_normalize_v4_payload" not in backup_source
     assert "LEGACY" not in backup_source

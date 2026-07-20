@@ -1,297 +1,222 @@
 # WorkTrace Architecture Contract
 
-This document records the current architecture contract for WorkTrace. For the
-one-screen shipped-behavior snapshot, start with
-[`docs/current-state.md`](docs/current-state.md). Historical WebView migration
-phases live under [`docs/history/webview-phases.md`](docs/history/webview-phases.md).
+This is the current pre-release architecture contract. It defines ownership,
+transaction, concurrency and transport boundaries. Historical implementation
+notes are subordinate to this document and to
+[`docs/current-state.md`](docs/current-state.md).
 
-## Product Boundary
-
-WorkTrace is a local Windows work-trace and timesheet helper. It runs without
-registration, network access, cloud sync, administrator privileges, a Windows
-service, a driver, automatic startup, screenshots, screen recording, OCR, or
-keyboard logging.
-
-The current public export capability in the WebView UI is display-safe CSV
-export. Excel, PDF, and timesheet-template export are not current public
-WebView export capabilities.
-
-The shipping UI is WebView-only (`pywebview` + Microsoft Edge WebView2
-Runtime). The legacy `worktrace/ui` package has been deleted. There is no
-Tkinter fallback. Closing the WebView main window exits WorkTrace and runs
-runtime shutdown; no tray hide-to-background lifecycle is currently shipped.
-
-## Runtime Shape
+## Composition root
 
 ```text
-WebView UI
-  └─ bridge mixins under worktrace.webview_ui
-      └─ worktrace.api facades
-          └─ worktrace.services
-              ├─ page ViewModel projection
-              ├─ Activity Display Model semantics
-              ├─ activity lifecycle commands
-              ├─ DB/report services
-              └─ collector-facing services
+worktrace.webview_main
+  -> AppRuntime
+  -> ApplicationServices
+  -> WebViewBridge
+  -> explicit bridge-facing APIs and services
 ```
 
-`worktrace.webview_ui` may reach backend behavior only through `worktrace.api`.
-Bridge modules must not import `worktrace.services`, `worktrace.db`,
-`worktrace.collector`, `worktrace.security`, `worktrace.runtime`, or
-`worktrace.config` directly. This is enforced by
-`tests/test_ui_backend_boundary.py`.
+`webview_main` resolves paths, configures logging, creates `AppRuntime`, builds
+`ApplicationServices`, exposes the bridge and guarantees runtime shutdown.
+`ApplicationServices` is a lightweight explicit composition object, not a DI
+framework. Production code must not add a global container, module-level runtime
+locator, `get_runtime()`/`set_runtime()`, string service lookup or dynamic
+registry.
 
-`worktrace.webview_main` owns application startup: resolve paths, initialize
-logging, initialize `AppRuntime`, register it with `app_api`, start the
-privacy-gated runtime entry, run the WebView loop, and call
-`runtime.shutdown()` when the WebView loop exits.
+Bridge code performs transport validation, stable error translation and explicit
+service calls only. It does not own business invariants, transactions, runtime
+state or database facts.
 
-The composition root imports `platforms.windows_adapter.WindowsAdapter`
-directly. That module is the only Windows adapter implementation and there is
-no compatibility adapter or alias entry.
+## Owner map
 
-## Startup And Privacy Gate
+| Responsibility | Sole owner |
+| --- | --- |
+| Process/thread lifecycle | `AppRuntime` |
+| Worker declarations and handles | `AppRuntime` worker registry |
+| Worker initialization readiness | worker-owned `WorkerStartupReporter` handshake |
+| Collector command identity/state | `CollectorControl` / `RuntimeCollectorControl` |
+| Collection transitions | `CollectorStateMachine` |
+| Atomic maintenance activity seal | `ActivityMaintenanceCommandService` |
+| Maintenance ordering/recovery | `RuntimeMaintenanceCoordinator` |
+| Backup use cases | `SecureBackupService` module |
+| Project lifecycle invariants | `project_service` |
+| Rule write invariants | canonical rule command/service layer |
+| Verified page read snapshot | `PageReadContext` |
+| Row runtime overlay | `ActivityRowOverlay` |
+| Exact live-time DTO | `activity_live_clock` |
+| Application composition | `ApplicationServices` |
+| Frontend exact clock validation/ticking | shared clock functions in `core.js` |
+| Accepted runtime-envelope state and refresh coordination | single store in `init.js` |
 
-The first-run privacy notice gate is fail-closed. The collector and
-folder-index worker must not start before the notice is accepted.
+Two owners must never be synchronized to solve an ownership conflict. The
+responsibility must be moved to one owner and the duplicate state deleted.
 
-Privacy-notice acceptance is installation metadata, not business data. Its
-only durable owner is `installation_metadata_store` in the separate
-`installation_metadata.db`. Database replacement, clear-all, and backup import
-do not capture, restore, export, or replace installation consent. Startup
-performs the one-time migration from legacy settings keys.
+## Runtime and workers
 
-`app_api.start_collection_after_privacy_gate()` is the unified startup entry
-for collector and background-worker startup. It owns the first-run notice
-read and fail-closed payload. After authorization it starts the critical
-Collector first, then starts optional/recoverable derived-state workers.
-An optional worker failure is reported as explicit degraded readiness without
-misreporting Collector startup or blocking collection. `webview_main`, bridge
-methods, and frontend code must not duplicate that logic.
+`AppRuntime` owns the single-instance lease, adapter, Collector thread and every
+background worker thread. Background workers are declared by `WorkerSpec` and
+tracked by name in `WorkerHandle` mappings. Production code must not reintroduce
+`_index_thread`, `_history_thread`, `_inference_thread` or similar parallel
+members.
 
-`AppRuntime.initialize()` performs DB initialization, single-instance lock, and
-recovery. It does not start the folder-index worker or collector directly.
+A worker is READY only after the worker itself has completed required
+initialization, schema/database access and recovery/validation and reports ready
+before entering its stable blocking loop. Thread liveness and AppRuntime
+preflight cannot create readiness. The runtime wrapper owns thread start,
+startup timeout, unexpected exit, unhandled exception, stopped state and handle
+cleanup. Worker functions own initialization signalling, iteration
+success/failure, maintenance-paused state and domain health codes only.
 
-## Activity Lifecycle Boundary
+Shutdown sets the runtime stop signal, wakes blocking workers, signals each
+handle, joins Collector and every registered worker and records any surviving
+writer. The single-instance lease is released only after all writers stop.
 
-`activity_lifecycle_service` is the sole open-row command facade. Collector,
-recovery, clipboard force-persist, midnight split, shutdown, and close-all
-paths must route open-row lifecycle changes through this facade.
+`RuntimeStartResult` exposes exactly `ok`, `collector_ready`, `workers`,
+`already_running`, `degraded` and `error_code`. `workers` is the only worker
+status mapping. Runtime transport does not expose worker-specific top-level
+fields or a parallel `error` alias; the Bridge translates canonical error codes
+for users.
 
-Raw activity is persisted immediately. The lifecycle facade creates the open
-row as soon as a resource signature is observed, then closes that same row at
-the next boundary. Callers do not decide whether an observed activity is
-"long enough" to become history.
+## Collector and maintenance
 
-Clipboard force-persist goes through
-`activity_lifecycle_service.force_persist_open_activity_for_clipboard()` and is
-restricted to `STATUS_NORMAL` inside the facade.
-
-Clipboard facts and their inference retry marker commit in one UoW. Immediate
-inference after commit may fail without changing the clipboard command result;
-the durable marker remains for retry. Retention pruning runs only in the
-collector's bounded maintenance tick and is never part of clipboard command
-success.
-
-Post-close project inference is centralized through
-`finalize_closed_activity_ids()` so closed-row convergence is consistent across
-collector, recovery, shutdown, and manual lifecycle paths.
-
-## Collector Boundary
-
-The collector loop owns sampling, gate checks, heartbeat, poll cadence, and
-pause/import/privacy/idle control. `ResourceIdentityResolver` owns
-ActiveWindow-to-resource identity, signatures, path supplement, same-resource
-checks, and privacy-safe identity. `CollectorStateMachine` owns transition and
-hard-boundary decisions only. `ActivitySessionRecorder` coordinates current
-session state, lifecycle commands, project ownership, and snapshot publication.
-
-`SnapshotPublisher` is the sole process-local activity snapshot construction
-and publication owner; runtime cleanup remains the transient-state clearing
-owner. The public snapshot carries only display-safe resource identity,
-`status`, `start_time`, sampled `elapsed_seconds`, persisted-row identity, and
-one formal `display_project` block. Candidate project inference remains inside
-`ProjectOwnershipState`; it never enters Snapshot, ViewModel, API, revision, or
-frontend identity. Crash-recovery checkpoint progress remains
-`ActivitySessionRecorder.persisted_checkpoint_seconds` and the open SQLite row;
-it is not a display field.
-
-The collector is a fact collector, not a noise filter. Every normal activity,
-including a five-second first activity, gets its own raw `activity_log` row.
-There is no collector merge, drop, borrowed anchor, or reopen-anchor path.
-Report projection and view models may aggregate or suppress short raw rows for
-human-facing reports, but they never mutate the raw rows.
-
-`worktrace.collector.decision_trace` provides privacy-safe diagnostic records
-for collector decisions. The default recorder is no-op; tests may inject an
-in-memory recorder. Decision traces are not written to the DB, are not exposed
-to WebView, do not contain raw window titles, paths, clipboard text, SQL, or
-tracebacks, and never participate in collector decisions.
-
-Collector continuity has three separate fact streams:
-
-- `activity_log` records user-time facts. `normal`, `excluded`, `idle`,
-  `paused`, and reserved recovery `error` rows are activity facts.
-- Collector health is not an activity status. Transient collector failures
-  update settings-backed collector health only; they must not create
-  `activity_log` rows, `STATUS_ERROR` rows, `session_boundary` rows, pending
-  short resets, snapshot clears, open-activity closes, or project attribution
-  changes.
-- Activity status is not a session boundary. Hard boundaries are written only
-  through `session_boundary_service.insert_boundary()` inside a lifecycle UoW,
-  or the explicit `record_boundary()` repair command, with a whitelisted
-  reason from `session_boundary_policy`.
-
-Normal and fallback pause share `activity_lifecycle_service.pause_collection`.
-It closes any open row, records the hard boundary, updates paused/collector
-state in one UoW, and clears runtime activity state after commit. Repeated pause
-is idempotent.
-
-Hard boundary reasons are intentionally narrow: user pause, pause fallback,
-user stop, shutdown, restart, recovered startup data, sleep/resume, midnight,
-secure import, clear-all, and fatal collector stop. `excluded` is an anonymous
-activity fact, not collector health and not a natural hard boundary. `idle` is
-user state, not collector stall; short idle can carry context and long idle is
-policy-controlled. `STATUS_ERROR` is reserved for historical or recovery
-activity errors, not collector health. Same-resource collector stall recovery
-is continuity-preserving. Startup failure must not be reported as success. UI
-read failures must return error payloads without mutating collector, runtime,
-activity, pending, snapshot, boundary, or health state.
-
-## Activity Display Model Boundary
-
-`activity_display_model_service` remains the sole orchestration entry point for
-live display semantics. Its internals are split by responsibility:
-
-- `activity_display_policy` decides display policy, status-only handling, and
-  surface materialization flags.
-- `activity_live_clock` builds the single backend live clock consumed by the
-  frontend runtime.
-- `activity_display_span` builds current activity display fields, display span
-  identity, and display structural signatures.
-- `activity_row_overlay` overlays a display span onto DB-backed row payloads.
-
-Together, the Activity Display Model modules decide:
-
-- live eligibility;
-- `live_state` (`persisted_open`, `status_only`, `suppressed`);
-- display span identity;
-- live clock fields;
-- display base policy;
-- `persisted_open` overlay semantics;
-- surface visibility for Recent, Timeline, Details, and KPI projection.
-
-They never write the DB. They build display-safe JSON payloads only.
-
-`worktrace.contracts.live_display_contracts` contains internal `TypedDict` and
-`Literal` contracts for these plain dict payloads. They are development
-contracts, not a published API and not a runtime validation layer.
-
-`live_display_service` is not the page live-display model owner. It provides
-low-level display-safe helper functions used by the Activity Display Model and
-refresh/current-summary paths: stable live identity, display-safe field
-extraction, current-activity summary helpers, classification helpers,
-persisted-open helper functions, and refresh-revision computation.
-
-`view_model_service` is the sole page ViewModel projection/materialization
-layer. It calls the Activity Display Model once per request from a single
-snapshot sample, then assembles Overview / Timeline / Details / Refresh State
-payloads. It may project or materialize live rows only from Activity Display
-Model spans. It must not independently decide live display semantics.
-
-## Live Time Formula
-
-The frontend has one accepted runtime: `App.liveRuntime`.
-
-Every tickable live target must render from:
+User pause and runtime maintenance are separate commands. Collector control kinds
+are user pause, maintenance hold, database reset and maintenance release. The
+maintenance state machine is:
 
 ```text
-display_seconds = display_base_seconds + current_elapsed_now
+OPERATIONAL
+  -> HOLD_REQUESTED
+  -> SEALING
+  -> HELD
+  -> optional RESETTING -> HELD
+  -> RELEASE_REQUESTED
+  -> OPERATIONAL
 ```
 
-Current Activity uses base `0`. Recent, Timeline, Details, and KPI targets use
-their own static display base plus the same current elapsed source.
+In HELD, Collector performs no active-window observation, clipboard capture,
+activity/heartbeat write or privacy-refresh write. It accepts only reset,
+release or shutdown. Maintenance never creates `maintenance_pause`, never
+creates a user session boundary and never mutates durable `user_paused`.
 
-`App.applyLocalTicker()` is DOM-only. It must not call the bridge, write the DB,
-start or stop the collector, or derive live seconds from structural caches such
-as `lastOverviewSnapshot`, `lastRecentData`, `lastTimelineData`, or
-`lastSessionDetailsViewModel`.
+Every acknowledgement is identity-bearing: command ID, command kind, completed
+state, expected terminal state and `ok=true` must match. A pending command may be
+cancelled on timeout. A taken command with unknown result fails closed; the
+coordinator cannot enter exclusive maintenance on an unverified hold. On
+Collector shutdown or fatal exit, `RuntimeCollectorControl` terminalizes every
+unfinished command with an explicit diagnostic, so no taken command remains
+permanently unexplained.
 
-Natural elapsed growth must not force a heavy page refresh. Structural changes,
-such as live state handoff or page structure changes, flow through
-`refresh_revision` / `live_state_revision` / `page_structure_revision`.
+The global order is:
 
-## DB / Report Boundary
-
-`DomainUnitOfWork` is the generation-effect owner for normal business
-commands, including `REPORT_STRUCTURE`. The connection-level SQL classifier is
-disabled by default and may run only inside the explicit migration, repair, or
-database-replacement capability scope. A UoW using the same connection wins,
-so one transaction cannot double-bump. Duration-only open-row checkpoints are
-not structural effects.
-
-Database replacement publishes every durable generation in its replacement
-transaction, then atomically publishes the committed database key/generation
-set to the process clock. Caches key themselves by database identity and
-generation; import and clear-all do not enumerate cache-clearing fanout.
-
-Restartable activity-resource repair progress is operational state owned by
-the dedicated `activity_resource_repair_job` table. It is not a settings JSON
-blob and is excluded from business backup/export.
-
-`folder_index_query_service` is the only production folder-index query owner.
-Queries use indexed SQLite facts only and never check the filesystem, mark
-stale, request refresh, or write. Scanning, validation, stale transitions,
-refresh requests, and interrupted-build recovery belong to
-`folder_index_service` maintenance commands and its existing bounded worker.
-
-System-project reads use `system_project_service.require_*` and never repair.
-Missing mandatory rows return the stable `system_catalog_unavailable` API
-error. Initialization, migrations, and `ensure_system_projects()` are the only
-catalog repair boundaries. Reserved names are protected both by project
-lifecycle validation and database triggers.
-
-Project Rules API responsibilities are split into `project_api` (project
-lifecycle), `rule_api` (rule CRUD), and `rule_history_api` (history, batch, and
-automation status). The WebView bridge depends only on these APIs and owns
-display-safe payload/error translation; services never import the API layer.
-
-`timeline_service`, `statistics_service`, and `export_service` are DB/report
-layers. They must not read the process-local activity snapshot, import
-`activity_display_model_service`, or invoke live projection helpers. Report
-outputs are based on persisted DB rows, not frontend live runtime state.
-
-The WebView Statistics / Export page exposes display-safe CSV export through
-the controlled export path. Export results return basenames only and must not
-surface raw local paths, SQL, tracebacks, clipboard content, or internal
-exception messages.
-
-## Frontend Boundary
-
-Frontend resources are local classic scripts under `worktrace/webview_ui/js/`
-loaded by plain `<script src>` tags. There is no ES module pipeline, bundler,
-Node build step, remote script, CDN, external link dependency, browser storage,
-or network request requirement.
-
-Page payloads may be rendered only after proving compatibility with the
-accepted live runtime. Incompatible payloads request a refresh instead of
-mixing stale runtime state with new structural payloads.
-
-## Test Boundary
-
-`tests/support/live_semantics_harness.py` and
-`tests/support/collector_stream.py` are test-only harnesses for driving real
-ViewModel and collector flows with fixed time inputs. They do not copy
-collector lifecycle rules into production runtime paths.
-
-Use these default validation commands for architecture-contract cleanup:
-
-```powershell
-python scripts/comment_hygiene.py --check
-python scripts/test_inventory.py --check
-python scripts/run_affected_tests.py
-pytest tests/test_display_model_anti_regression.py tests/test_ui_backend_boundary.py tests/test_release_docs.py -q
+```text
+capture state
+-> Collector hold and HELD acknowledgement
+-> clear runtime snapshot
+-> write-gate draining
+-> drain admitted writers
+-> exclusive coordinator capability
+-> snapshot or database replacement
+-> release exclusive capability
+-> reset process-local identities while still HELD (replacement only)
+-> restore durable settings
+-> Collector release acknowledgement
 ```
 
-Run full `pytest` for collector/lifecycle/display-model behavior changes,
-DB/schema changes, release validation, or pre-push validation.
+Only one maintenance operation can enter this sequence. Replacement publishes
+its database epoch in the same transaction as replacement data. On unknown
+state or failed restoration, durable pause/status are committed as a separate
+fail-closed safety transition and the runtime snapshot remains cleared. The
+fail-closed latch blocks later destructive maintenance until explicit runtime
+recovery verifies an operational Collector and inactive write gate.
+
+See [`docs/maintenance-lifecycle.md`](docs/maintenance-lifecycle.md).
+
+## Database and transaction boundaries
+
+The current schema is v12 and is current-only. Startup accepts an empty database
+or the exact current schema fingerprint. It does not run compatibility
+migrations. Production `worktrace.db` owns initialization, connections, schema
+application/fingerprint and defaults; destructive reset/drop helpers are test
+only.
+
+`DomainUnitOfWork` owns business transaction effects and generation publication.
+Project/rule invariants are enforced inside canonical service transactions and
+by current-schema constraints where concurrency requires it. APIs do not scan
+whole tables to recreate uniqueness or atomicity.
+
+Database replacement is independent from ordinary report/data generations.
+Caches and page-read handshakes include the replacement epoch so facts from an
+old database generation cannot overlay a new database.
+
+## Runtime/SQLite handshake
+
+A page request obtains a `PageReadContext` containing the persisted read snapshot
+and the verified runtime sample. Runtime overlay is allowed only when the
+sample, persisted open row identity, report date, runtime generation and database
+replacement epoch agree. Failure is static, not guessed. `ActivityRowOverlay`
+may attach one exact row clock; no API or UI layer may reconstruct the clock from
+other fields.
+
+## LiveClock v2
+
+The only clock keys are:
+
+```text
+sampled_at_epoch_ms
+started_at_epoch_ms
+elapsed_seconds_at_sample
+aggregate_base_seconds
+duration_semantic
+is_live
+live_state
+display_span_id
+stable_live_key_hash
+```
+
+`duration_semantic` is `current_live`, `aggregate_live` or `static_closed`.
+`live_state` is `persisted_open`, `suppressed` or `none`. Current activity uses
+`current_live`. Aggregate rows use their durable closed base plus the current
+verified elapsed sample. Closed and historical rows are static.
+
+The frontend validates the exact key set, primitive types, enums, non-negative
+numbers and live identity. It rejects extra/missing keys and never reads v1
+aliases. Current duration is `elapsed_at_sample + local_delta`; aggregate
+duration additionally includes `aggregate_base_seconds`. It does not recompute
+server elapsed from `started_at_epoch_ms`, select maxima, carry old seconds or
+use continuity to alter business duration.
+
+Malformed clocks stop that ticker, render durable static duration, record one
+deduplicated diagnostic and request an existing low-frequency refresh.
+
+See [`docs/runtime-contracts.md`](docs/runtime-contracts.md).
+
+## Backup and security
+
+`.wtbackup` export/import is owned by `secure_backup_service`, which acquires the
+maintenance capability itself. Current payload version is v6 and requires schema
+v12 plus the exact schema fingerprint. Old payloads are rejected; there is no
+backup migration path. Installation privacy consent is not backup business data
+and remains owned by installation metadata.
+
+Collector does not depend on backup service to learn maintenance state. Backup
+service depends on the maintenance coordinator, never the reverse.
+
+## Frontend and page boundaries
+
+Frontend scripts are local classic scripts. `core.js` owns the shared exact clock
+validator and ticker helpers. `init.js` owns accepted runtime envelope state and
+page refresh coordination. Page modules render backend DTOs and row-owned clocks
+only. They must not infer database business facts or search aliases.
+
+Overview, Timeline, Details, Statistics and Export use the same canonical report
+facts. Natural live-second growth is DOM-local and does not trigger heavy page
+reload. Structural/replacement changes flow through explicit revisions and the
+existing refresh coordinator.
+
+## Governance
+
+The permanent validation path is Standard CI only: Python 3.11 full suite,
+WebView Node tests and Windows package smoke. Acceptance and temporary workflows,
+`.github/agent_*.py`, one-off code generators and service locators are forbidden.
+Tests preserve behavior and owner contracts; failures are fixed by root-cause
+groups, not by deleting tests, weakening assertions or restoring compatibility
+fallbacks.

@@ -228,8 +228,8 @@ def test_pause_collection_closes_and_enqueues_once(temp_db_setup):
         },
     )
 
-    first = pause_collection("2026-06-18 09:05:00", reason="pause_fallback")
-    second = pause_collection("2026-06-18 09:06:00", reason="pause_fallback")
+    first = pause_collection("2026-06-18 09:05:00", reason="user_pause")
+    second = pause_collection("2026-06-18 09:06:00", reason="user_pause")
 
     with get_connection() as conn:
         boundaries = conn.execute(
@@ -238,7 +238,7 @@ def test_pause_collection_closes_and_enqueues_once(temp_db_setup):
     assert first == [activity_id]
     assert second == []
     assert activity_service.get_activity(activity_id)["end_time"] == "2026-06-18 09:05:00"
-    assert [item["reason"] for item in boundaries] == ["pause_fallback"]
+    assert [item["reason"] for item in boundaries] == ["user_pause"]
     assert _job(activity_id) is not None
 
 

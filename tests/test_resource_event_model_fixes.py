@@ -6,8 +6,6 @@ import threading
 
 import pytest
 
-from worktrace.services import system_project_service
-
 from worktrace.collector.state_machine import CollectorStateMachine
 from worktrace.constants import (
     EXCLUDED_APP_NAME,
@@ -28,7 +26,7 @@ from worktrace.services import (
     privacy_anonymization_service,
     privacy_service,
     project_service,
-    rule_service,
+    rule_catalog_command_service,
     settings_service,
 )
 from worktrace.services.project_inference_service import (
@@ -44,10 +42,11 @@ pytestmark = [pytest.mark.db, pytest.mark.collector_runtime, pytest.mark.integra
 
 
 def _enable_excluded_project_with_keyword(keyword: str) -> int:
-    """Enable the 排除规则 project and add a keyword rule. Returns the project id."""
-    excluded_project = system_project_service.require_excluded_project_id()
-    project_service.set_project_enabled(excluded_project, True)
-    rule_service.create_rule(keyword, excluded_project)
+    """Enable the excluded system project and add a keyword rule."""
+    project_service.set_excluded_project_enabled(True)
+    _rule_id, excluded_project = (
+        rule_catalog_command_service.create_excluded_keyword_rule(keyword)
+    )
     return excluded_project
 
 
@@ -184,9 +183,11 @@ class TestResourceExclusion:
         assert privacy_service.is_resource_excluded(resource) is True
 
     def test_resource_exclusion_folder_rule_anonymizes_file_path(self, temp_db):
-        excluded_project = system_project_service.require_excluded_project_id()
-        project_service.set_project_enabled(excluded_project, True)
-        folder_rule_service.create_or_update_folder_rule("D:\\PrivateFolder", excluded_project)
+        project_service.set_excluded_project_enabled(True)
+        rule_catalog_command_service.create_or_update_excluded_folder_rule(
+            "D:\\PrivateFolder",
+            recursive=True,
+        )
         resource = DetectedResource(
             resource_kind="office_document",
             resource_subtype="word_document",
@@ -339,7 +340,9 @@ class TestIdeWorkspaceAnchorAndProject:
 
 
 def _snapshot():
-    return json.loads(runtime_state_fixture.get_setting("current_activity_snapshot", "") or "{}")
+    return json.loads(
+        runtime_state_fixture.get_setting("current_activity_snapshot", "") or "{}"
+    )
 
 
 class TestCurrentSnapshotUsesResourceDisplayName:
@@ -432,12 +435,10 @@ class TestUpdateFilePathHintUpdatesActivityResource:
         temp_db,
         monkeypatch,
     ):
-        excluded_id = system_project_service.require_excluded_project_id()
-        project_service.set_project_enabled(excluded_id, True)
-        folder_rule_service.create_or_update_folder_rule(
+        project_service.set_excluded_project_enabled(True)
+        rule_catalog_command_service.create_or_update_excluded_folder_rule(
             "D:\\PrivateTxn",
-            excluded_id,
-            True,
+            recursive=True,
         )
         aid = activity_service.create_activity(
             "Word",
@@ -446,7 +447,9 @@ class TestUpdateFilePathHintUpdatesActivityResource:
             start_time="2026-06-24 10:00:00",
         )
         raw_path = "D:\\PrivateTxn\\secret.docx"
-        original_upsert = activity_resource_command_service.create_or_update_activity_resource
+        original_upsert = (
+            activity_resource_command_service.create_or_update_activity_resource
+        )
 
         def assert_redacted_before_resource_write(activity_id, resource, conn=None):
             row = conn.execute(
@@ -484,8 +487,7 @@ class TestUpdateFilePathHintUpdatesActivityResource:
         self,
         temp_db,
     ):
-        excluded_id = system_project_service.require_excluded_project_id()
-        project_service.set_project_enabled(excluded_id, True)
+        project_service.set_excluded_project_enabled(True)
         aid = activity_service.create_activity(
             "Word",
             "winword.exe",
@@ -496,10 +498,9 @@ class TestUpdateFilePathHintUpdatesActivityResource:
         outcomes: list[bool] = []
 
         def add_rule():
-            folder_rule_service.create_or_update_folder_rule(
+            rule_catalog_command_service.create_or_update_excluded_folder_rule(
                 "D:\\PrivacyRace",
-                excluded_id,
-                True,
+                recursive=True,
             )
             committed.set()
 
@@ -530,12 +531,12 @@ class TestUpdateFilePathHintUpdatesActivityResource:
         self,
         temp_db,
     ):
-        excluded_id = system_project_service.require_excluded_project_id()
-        project_service.set_project_enabled(excluded_id, True)
-        rule_id = folder_rule_service.create_or_update_folder_rule(
-            "D:\\PrivacyRemoved",
-            excluded_id,
-            True,
+        project_service.set_excluded_project_enabled(True)
+        rule_id, _excluded_id = (
+            rule_catalog_command_service.create_or_update_excluded_folder_rule(
+                "D:\\PrivacyRemoved",
+                recursive=True,
+            )
         )
         aid = activity_service.create_activity(
             "Word",

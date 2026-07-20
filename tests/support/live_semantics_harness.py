@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from tests.support.activity_factory import create_open_activity
+from tests.support.application import build_test_bridge
 from worktrace.collector.state_machine import CollectorStateMachine
 from worktrace.constants import STATUS_NORMAL
 from worktrace.platforms.base import ActiveWindow
@@ -12,7 +13,6 @@ from worktrace.services import (
     runtime_activity_state_service,
     timeline_service,
 )
-from worktrace.webview_ui.bridge import WebViewBridge
 
 
 @dataclass
@@ -22,7 +22,7 @@ class LiveSemanticsHarness:
 
     def __post_init__(self) -> None:
         self.machine = CollectorStateMachine()
-        self.bridge = WebViewBridge()
+        self.bridge = build_test_bridge()
         self.monkeypatch.setattr(
             timeline_service,
             "get_default_report_date",
@@ -146,7 +146,6 @@ class LiveSemanticsHarness:
                 report_date,
                 selected["projection_revision"],
             )
-        # Recent activity is a projection inside the canonical Overview bundle.
         overview = self.bridge.get_overview()
         return {
             "overview": overview,

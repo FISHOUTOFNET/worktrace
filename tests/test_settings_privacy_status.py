@@ -24,6 +24,7 @@ from unittest.mock import patch
 import pytest
 
 from tests.support import runtime_state_fixture
+from tests.support.application import build_test_bridge
 from worktrace.api import settings_api
 from worktrace.api.backup_api import BackupManifestInfo
 from worktrace.api.settings_api import (
@@ -47,7 +48,6 @@ from worktrace.services.secure_backup_service import (
     SecureBackupError,
 )
 from worktrace.services.settings_service import set_setting
-from worktrace.webview_ui.bridge import WebViewBridge
 
 pytestmark = [pytest.mark.security_privacy, pytest.mark.integration, pytest.mark.db]
 
@@ -72,7 +72,7 @@ def test_api_returns_success_payload_with_required_keys(temp_db) -> None:
         "storage_model",
         "clipboard_capture_enabled",
         "export_path_configured",
-        "secure_import_in_progress",
+        "maintenance_in_progress",
         "encrypted_backup",
         "destructive_actions",
         "first_run_notice",
@@ -102,20 +102,18 @@ def test_api_export_path_configured_is_bool_and_does_not_leak_path(temp_db) -> N
     assert "TestSettings-Alpha" not in serialized
 
 
-def test_api_secure_import_in_progress_field_is_bool(temp_db) -> None:
+def test_api_maintenance_in_progress_field_is_bool(temp_db) -> None:
     assert isinstance(
-        get_settings_privacy_status()["status"]["secure_import_in_progress"],
+        get_settings_privacy_status()["status"]["maintenance_in_progress"],
         bool,
     )
 
 
-def test_api_secure_import_in_progress_reflects_maintenance_gate(temp_db) -> None:
-    with database_maintenance_service.maintenance_operation(
-        reason="settings_status_contract"
-    ):
+def test_api_maintenance_in_progress_reflects_canonical_gate(temp_db) -> None:
+    with database_maintenance_service.consistent_snapshot("settings_status_contract"):
         status = get_settings_privacy_status()["status"]
-        assert status["secure_import_in_progress"] is True
-    assert get_settings_privacy_status()["status"]["secure_import_in_progress"] is False
+        assert status["maintenance_in_progress"] is True
+    assert get_settings_privacy_status()["status"]["maintenance_in_progress"] is False
 
 
 def test_api_encrypted_backup_availability_fields_are_present(temp_db) -> None:
@@ -207,11 +205,11 @@ def test_api_does_not_change_schema(temp_db) -> None:
 
 
 def test_bridge_method_exists_on_composed_webview_bridge() -> None:
-    assert callable(getattr(WebViewBridge(), "get_settings_privacy_status", None))
+    assert callable(getattr(build_test_bridge(), "get_settings_privacy_status", None))
 
 
 def test_bridge_returns_narrow_success_payload(temp_db) -> None:
-    result = WebViewBridge().get_settings_privacy_status()
+    result = build_test_bridge().get_settings_privacy_status()
     assert set(result) == {"ok", "status"}
     assert result["ok"] is True
     assert set(result["status"]) == {
@@ -219,7 +217,7 @@ def test_bridge_returns_narrow_success_payload(temp_db) -> None:
         "storage_model",
         "clipboard_capture_enabled",
         "export_path_configured",
-        "secure_import_in_progress",
+        "maintenance_in_progress",
         "encrypted_backup",
         "destructive_actions",
         "first_run_notice",

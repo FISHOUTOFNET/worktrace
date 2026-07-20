@@ -1,72 +1,67 @@
 from __future__ import annotations
 
-from worktrace.services.live_runtime_envelope_service import _clock_payload, _recent_first_row
+import pytest
+
+from worktrace.services.live_runtime_envelope_service import (
+    _recent_first_row,
+    _require_live_clock,
+)
 
 
-def test_v2_clock_separates_active_elapsed_from_aggregate_duration(monkeypatch):
-    monkeypatch.setattr(
-        "worktrace.services.live_runtime_envelope_service.time.time_ns",
-        lambda: 12_000_000_000,
-    )
-    clock = _clock_payload(
-        {
-            "live_clock": {
-                "display_span_id": "span:1",
-                "stable_live_key_hash": "stable-1",
-                "live_state": "persisted_open",
-                "is_live": True,
-                "current_live_seconds_at_sample": 5,
-                "current_elapsed_at_sample": 5,
-                "aggregate_display_base_seconds": 100,
-                "aggregate_duration_seconds_at_sample": 105,
-                "duration_seconds_at_sample": 105,
-                "current_duration_live": True,
-                "project_duration_live": True,
-                "live_started_at_epoch_ms": 7_000,
-            }
-        },
-        {"elapsed_seconds": 5},
-    )
-
-    assert clock["duration_seconds_at_sample"] == 5
-    assert clock["current_live_duration_seconds"] == 5
-    assert clock["current_elapsed_at_sample"] == 5
-    assert clock["aggregate_display_base_seconds"] == 100
-    assert clock["aggregate_duration_seconds_at_sample"] == 105
-    assert clock["aggregate_duration_seconds_at_sample"] == (
-        clock["aggregate_display_base_seconds"]
-        + clock["duration_seconds_at_sample"]
-    )
-    assert clock["sample_epoch_ms"] == 12_000
+EXACT_CLOCK = {
+    "sampled_at_epoch_ms": 12_000,
+    "started_at_epoch_ms": 7_000,
+    "elapsed_seconds_at_sample": 5,
+    "aggregate_base_seconds": 100,
+    "duration_semantic": "aggregate_live",
+    "is_live": True,
+    "live_state": "persisted_open",
+    "display_span_id": "span:1",
+    "stable_live_key_hash": "stable-1",
+}
 
 
-def test_v2_recent_first_row_preserves_the_materialized_recent_shape():
-    current = {
-        "active": True,
-        "activity_id": 41,
-        "persisted_activity_id": 41,
-        "is_in_progress": True,
-        "stable_live_key_hash": "stable-1",
-    }
+def test_v2_clock_accepts_only_the_exact_transport_contract():
+    assert _require_live_clock({"live_clock": EXACT_CLOCK}) == EXACT_CLOCK
+
+
+def test_v2_clock_rejects_missing_alias_negative_and_invalid_live_state():
+    missing = dict(EXACT_CLOCK)
+    missing.pop("elapsed_seconds_at_sample")
+    with pytest.raises(ValueError, match="live_clock_invalid_keys"):
+        _require_live_clock({"live_clock": missing})
+
+    alias = dict(EXACT_CLOCK)
+    alias["duration_seconds_at_sample"] = 105
+    with pytest.raises(ValueError, match="live_clock_invalid_keys"):
+        _require_live_clock({"live_clock": alias})
+
+    negative = dict(EXACT_CLOCK)
+    negative["aggregate_base_seconds"] = -1
+    with pytest.raises(ValueError, match="live_clock_invalid_values"):
+        _require_live_clock({"live_clock": negative})
+
+    invalid_state = dict(EXACT_CLOCK)
+    invalid_state["live_state"] = "none"
+    with pytest.raises(ValueError, match="live_clock_invalid_live_state"):
+        _require_live_clock({"live_clock": invalid_state})
+
+
+def test_v2_recent_first_row_is_static_metadata_only():
     recent = {
         "row_kind": "project_session",
         "activity_id": 41,
         "duration_seconds": 105,
-        "display_base_seconds": 100,
-        "live_delta_eligible": True,
-        "stable_live_key_hash": "stable-1",
+        "live_clock": dict(EXACT_CLOCK),
+        "display_span_id": "duplicate",
+        "stable_live_key_hash": "duplicate",
     }
-
-    assert _recent_first_row({"activities": [recent]}, current) == recent
+    assert _recent_first_row({"activities": [recent]}) == {
+        "row_kind": "project_session",
+        "activity_id": 41,
+        "duration_seconds": 105,
+    }
 
 
 def test_v2_recent_first_row_does_not_materialize_an_absent_recent_row():
-    current = {
-        "active": True,
-        "activity_id": None,
-        "persisted_activity_id": 0,
-        "is_in_progress": False,
-        "status": "idle",
-    }
-
-    assert _recent_first_row({"activities": []}, current) is None
+    assert _recent_first_row({"activities": []}) is None

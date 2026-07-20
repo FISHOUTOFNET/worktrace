@@ -1,46 +1,28 @@
-"""Page ViewModel constructor — projects the unified Activity Display Model.
-
-Assembles the page-level ViewModel for Overview / Recent / Timeline /
-Details. Owns no live-display semantics: every live semantic, display span
-identity, persisted-open overlay, and official project attribution is decided by
-``activity_display_model_service``. This module projects page payloads only.
-"""
-
+"""Page ViewModel projection over the unified Activity Display Model."""
 from __future__ import annotations
 
 from typing import Any
 
 from ..constants import UNCATEGORIZED_PROJECT
+from ..contracts.live_display_contracts import ActivitySnapshotContract, DisplaySpanContract
 from ..formatters import format_duration
-from ..contracts.live_display_contracts import (
-    ActivitySnapshotContract,
-    CurrentActivityContract,
-    DisplaySpanContract,
-    LiveClockContract,
-    RefreshStateContract,
-)
 from . import (
-    live_display_service,
+    page_revision_service,
     project_activity_summary_service,
-    project_service,
-    statistics_service,
     timeline_service,
 )
 from .activity_display_model_service import build_activity_display_model
 from .activity_display_projection import build_kpi_live_targets
-from .page_view_model_common import enable_safe_open_edit
 from .activity_row_overlay import (
-    ROW_KIND_ACTIVITY_DETAIL_ROW,
     ROW_KIND_PROJECT_ACTIVITY_SUMMARY_ROW,
     ROW_KIND_PROJECT_SESSION_ROW,
     ROW_KIND_RECENT_PROJECT_SESSION_ROW,
     apply_live_span_to_row,
 )
-from . import page_revision_service
+from .page_view_model_common import enable_safe_open_edit
 from .report_projection_identity import stable_json_hash
 from .report_revision_service import get_report_structure_revision
 from .runtime_activity_state_service import sample_runtime_activity_state
-from .settings_service import get_bool_setting, get_int_setting, get_setting
 
 _RECENT_LIMIT = 20
 
@@ -49,16 +31,9 @@ def _get_current_activity_snapshot() -> ActivitySnapshotContract | None:
     return sample_runtime_activity_state().snapshot
 
 
-def _get_collector_status() -> str:
-    return get_setting("collector_status", "stopped") or "stopped"
-
-
-def _get_collector_health_state() -> str:
-    return get_setting("collector_health_state", "stopped") or "stopped"
-
-
-def _is_user_paused() -> bool:
-    return get_bool_setting("user_paused", False)
+def _first_display_span(model: dict[str, Any]) -> DisplaySpanContract | None:
+    spans = model.get("display_spans") or []
+    return spans[0] if spans else None
 
 
 def _apply_live_span_to_rows(
@@ -68,38 +43,17 @@ def _apply_live_span_to_rows(
     row_kind: str,
 ) -> None:
     span = _first_display_span(model)
-    if not span:
-        return
-    if row_kind == ROW_KIND_RECENT_PROJECT_SESSION_ROW:
-        surface = "recent"
-    elif row_kind == ROW_KIND_PROJECT_SESSION_ROW:
-        surface = "timeline"
-    elif row_kind in {ROW_KIND_ACTIVITY_DETAIL_ROW, ROW_KIND_PROJECT_ACTIVITY_SUMMARY_ROW}:
-        surface = "details"
-    else:
-        surface = ""
-    if surface and not span.get("is_visible_in_" + surface):
-        return
     for row in rows:
         apply_live_span_to_row(row, span, row_kind=row_kind)
-
-
-def _first_display_span(model: dict[str, Any]) -> DisplaySpanContract | None:
-    spans = model.get("display_spans") or []
-    return spans[0] if spans else None
 
 
 def _set_summary_activity_ids(rows: list[dict[str, Any]]) -> None:
     for row in rows:
         ids = _unique_positive_ids(row.get("activity_ids") or [])
-        if row.get("is_live_projected"):
-            anchor_id = int(
-                row.get("live_anchor_activity_id")
-                or row.get("anchor_activity_id")
-                or 0
-            )
-            if anchor_id > 0:
-                ids = _unique_positive_ids([*ids, anchor_id])
+        anchor_id = int(row.get("live_anchor_activity_id") or row.get("anchor_activity_id") or 0)
+        clock = row.get("live_clock")
+        if isinstance(clock, dict) and clock.get("is_live") is True and anchor_id > 0:
+            ids = _unique_positive_ids([*ids, anchor_id])
         row["summary_activity_ids"] = ids
 
 
@@ -115,32 +69,12 @@ def _unique_positive_ids(values: list[Any]) -> list[int]:
     return result
 
 
-def _current_elapsed_at_sample(live_clock: LiveClockContract) -> int:
-    return int(
-        live_clock.get("current_elapsed_at_sample")
-        or live_clock.get("active_elapsed_at_sample")
-        or 0
-    )
-
-
-def _clock_projects_live_duration(live_clock: LiveClockContract) -> bool:
-    return bool(
-        live_clock.get("is_live")
-        and (
-            live_clock.get("project_duration_live") is True
-            or live_clock.get("is_project_duration_live") is True
-        )
-    )
-
-
 def _revision_fields_for_model(
-    snapshot: dict[str, Any] | None,
     model: dict[str, Any],
     *,
     today: str,
     report_date: str,
 ) -> dict[str, str]:
-    del snapshot
     live_clock = model.get("live_clock") or {}
     current_activity = model.get("current_activity") or {}
     live_revision = page_revision_service.live_revision(current_activity, live_clock)
@@ -151,15 +85,6 @@ def _revision_fields_for_model(
         "page_revision": stable_json_hash(
             [structure_revision, live_revision if report_date == today else ""]
         ),
-    }
-
-
-def _live_identity_fields(model: dict[str, Any]) -> dict[str, Any]:
-    live_clock = model.get("live_clock") or {}
-    return {
-        "display_span_id": str(live_clock.get("display_span_id") or ""),
-        "stable_live_key_hash": str(live_clock.get("stable_live_key_hash") or ""),
-        "sample_id": str(model.get("sample_id") or ""),
     }
 
 
@@ -179,21 +104,113 @@ def _detail_report_project_dict(row: dict[str, Any]) -> dict[str, Any]:
 def _detail_report_attribution_fields(row: dict[str, Any]) -> dict[str, Any]:
     is_report_project = bool(row.get("is_report_project"))
     is_report_classified = bool(row.get("is_report_classified", is_report_project))
-    is_report_uncategorized = bool(row.get("is_report_uncategorized", not is_report_project))
+    is_report_uncategorized = bool(
+        row.get("is_report_uncategorized", not is_report_project)
+    )
     return {
         "project_id": int(row.get("project_id") or 0),
         "project_name": str(row.get("project_name") or UNCATEGORIZED_PROJECT),
         "project_description": str(row.get("project_description") or ""),
-        "display_project": row.get("display_project") or _detail_report_project_dict(row),
-        "is_uncategorized": bool(row.get("is_report_uncategorized", not is_report_project)),
-        "is_classified": bool(row.get("is_report_classified", is_report_project)),
+        "display_project": row.get("display_project")
+        or _detail_report_project_dict(row),
+        "is_uncategorized": is_report_uncategorized,
+        "is_classified": is_report_classified,
         "is_report_project": is_report_project,
         "is_report_classified": is_report_classified,
         "is_report_uncategorized": is_report_uncategorized,
-        "report_attribution_kind": str(row.get("report_attribution_kind") or "none"),
+        "report_attribution_kind": str(
+            row.get("report_attribution_kind") or "none"
+        ),
         "is_official_project": bool(row.get("is_official_project")),
         "assignment_source": str(row.get("assignment_source") or ""),
-        "project_attribution_kind": str(row.get("project_attribution_kind") or ""),
+        "project_attribution_kind": str(
+            row.get("project_attribution_kind") or ""
+        ),
+    }
+
+
+def _base_session_row(session: dict[str, Any], *, row_kind: str) -> dict[str, Any]:
+    base_seconds = int(session.get("duration_seconds") or 0)
+    adjusted = session.get("adjusted_duration_seconds")
+    adjusted = int(adjusted) if adjusted is not None else None
+    display_seconds = adjusted if adjusted is not None else base_seconds
+    is_in_progress = bool(session.get("is_in_progress"))
+    is_report_project = bool(
+        session.get("is_report_project", session.get("is_classified"))
+    )
+    is_report_classified = bool(
+        session.get("is_report_classified", is_report_project)
+    )
+    is_report_uncategorized = bool(
+        session.get("is_report_uncategorized", not is_report_project)
+    )
+    first_activity_id = int(session.get("first_activity_id") or 0) or None
+    return {
+        "row_kind": row_kind,
+        "project_name": str(session.get("project_name") or UNCATEGORIZED_PROJECT),
+        "project_description": str(session.get("project_description") or ""),
+        "project_id": int(session.get("project_id") or 0),
+        "start_time": str(session.get("start_time") or ""),
+        "end_time": str(session.get("end_time") or ""),
+        "duration": format_duration(display_seconds),
+        "duration_seconds": display_seconds,
+        "adjusted_duration_seconds": adjusted,
+        "has_duration_override": adjusted is not None,
+        "is_in_progress": is_in_progress,
+        "contributes_to_totals": bool(session.get("contributes_to_totals", True)),
+        "activity_ids": list(session.get("activity_ids") or []),
+        "activity_member_hash": str(session.get("activity_member_hash") or ""),
+        "anchor_activity_id": int(session.get("anchor_activity_id") or 0),
+        "first_activity_id": first_activity_id,
+        "activity_id": int(first_activity_id or 0),
+        "open_activity_id": int(session.get("open_activity_id") or 0),
+        "closed_duration_seconds": int(
+            session.get("closed_duration_seconds") or 0
+        ),
+        "source": "db",
+        "editable": bool(session.get("editable", not is_in_progress)),
+        "exportable": bool(session.get("exportable", not is_in_progress)),
+        "edit_disabled": bool(is_in_progress),
+        "disable_reason": "进行中记录暂不支持编辑" if is_in_progress else "",
+        "status": str(session.get("status") or "normal"),
+        "status_code": str(
+            session.get("status_code") or session.get("status") or "normal"
+        ),
+        "display_status": str(
+            session.get("display_status")
+            or session.get("status_label")
+            or session.get("status_summary")
+            or ""
+        ),
+        "status_summary": str(session.get("status_summary") or ""),
+        "is_uncategorized": is_report_uncategorized,
+        "is_classified": is_report_classified,
+        "is_report_project": is_report_project,
+        "is_report_classified": is_report_classified,
+        "is_report_uncategorized": is_report_uncategorized,
+        "report_attribution_kind": str(
+            session.get("report_attribution_kind") or "none"
+        ),
+        "is_official_project": bool(session.get("is_official_project")),
+        "has_project_override": bool(session.get("has_project_override")),
+        "session_note": str(session.get("session_note") or ""),
+        "projection_instance_key": str(
+            session.get("projection_instance_key") or ""
+        ),
+        "projection_revision": str(session.get("projection_revision") or ""),
+        "projection_kind": str(session.get("projection_kind") or "base"),
+        "operation_id": session.get("operation_id"),
+        "origin_activity_member_hashes": list(
+            session.get("origin_activity_member_hashes") or []
+        ),
+        "event_count": int(session.get("event_count") or 0),
+        "can_hide": bool(session.get("can_hide")),
+        "can_merge_previous": bool(session.get("can_merge_previous")),
+        "can_merge_next": bool(session.get("can_merge_next")),
+        "can_split": bool(session.get("can_split")),
+        "can_copy": bool(session.get("can_copy")),
+        "can_hide_activity": bool(session.get("can_hide_activity")),
+        "display_project": session.get("display_project"),
     }
 
 
@@ -201,49 +218,46 @@ def get_overview_view_model(today: str | None = None) -> dict[str, Any]:
     scoped_today = today or timeline_service.get_default_report_date()
     snapshot = _get_current_activity_snapshot()
     model = build_activity_display_model(
-        report_date=scoped_today, today=scoped_today, snapshot=snapshot
-    )
-    live_clock = model.get("live_clock") or {}
-    current_activity = model.get("current_activity") or {}
-    identity_fields = _live_identity_fields(model)
-    revision_fields = _revision_fields_for_model(
-        snapshot,
-        model,
-        today=scoped_today,
         report_date=scoped_today,
+        today=scoped_today,
+        snapshot=snapshot,
     )
+    current_activity = model.get("current_activity") or {}
 
     from .report_projection_snapshot_service import build_visible_snapshot
     from .report_status_policy import decide_report_status
 
-    overview_projection = build_visible_snapshot(scoped_today, scoped_today)
-    sessions = list(overview_projection.final_sessions)
+    projection = build_visible_snapshot(scoped_today, scoped_today)
+    sessions = list(projection.final_sessions)
     standalone_entries = [
         entry
-        for entry in overview_projection.final_entries
+        for entry in projection.final_entries
         if str(entry.get("row_kind") or "") == "standalone_status"
         and not bool(entry.get("is_in_progress"))
     ]
-    concrete_project_ids = {
-        int(row.get("report_project_id") or row.get("project_id") or 0)
-        for row in overview_projection.final_contributions
-        if bool(row.get("is_report_project"))
-        and int(row.get("report_project_id") or row.get("project_id") or 0) > 0
-    }
-    project_count = len(concrete_project_ids)
+    project_count = len(
+        {
+            int(row.get("report_project_id") or row.get("project_id") or 0)
+            for row in projection.final_contributions
+            if bool(row.get("is_report_project"))
+            and int(row.get("report_project_id") or row.get("project_id") or 0) > 0
+        }
+    )
 
     recent_rows: list[dict[str, Any]] = []
     for session in sessions:
-        contribution_rows = list(session.get("_projection_contributions") or [])
-        if contribution_rows and not any(
+        contributions = list(session.get("_projection_contributions") or [])
+        if contributions and not any(
             decide_report_status(
                 str(item.get("status") or ""),
                 has_project_attribution=bool(item.get("is_report_project")),
             ).visible_in_recent
-            for item in contribution_rows
+            for item in contributions
         ):
             continue
-        recent_rows.append(_session_to_overview_row(session))
+        recent_rows.append(
+            _base_session_row(session, row_kind="project_session")
+        )
     _apply_live_span_to_rows(
         recent_rows,
         model,
@@ -253,53 +267,36 @@ def get_overview_view_model(today: str | None = None) -> dict[str, Any]:
     if isinstance(status_display_item, dict):
         recent_rows.insert(0, dict(status_display_item))
 
-    total_rows = [r for r in recent_rows if r.get("contributes_to_totals") is not False]
-    today_total_seconds = sum(int(r.get("duration_seconds") or 0) for r in total_rows)
+    total_rows = [
+        row for row in recent_rows if row.get("contributes_to_totals") is not False
+    ]
+    today_total_seconds = sum(int(row.get("duration_seconds") or 0) for row in total_rows)
     classified_seconds = sum(
-        int(r.get("duration_seconds") or 0)
-        for r in total_rows
-        if bool(r.get("is_classified"))
+        int(row.get("duration_seconds") or 0)
+        for row in total_rows
+        if bool(row.get("is_classified"))
     )
     uncategorized_seconds = sum(
-        int(r.get("duration_seconds") or 0)
-        for r in total_rows
-        if bool(r.get("is_uncategorized"))
+        int(row.get("duration_seconds") or 0)
+        for row in total_rows
+        if bool(row.get("is_uncategorized"))
     )
     today_total_seconds += sum(
         int(entry.get("duration_seconds") or 0) for entry in standalone_entries
     )
-    active_elapsed = _current_elapsed_at_sample(live_clock)
-    live_projects = _clock_projects_live_duration(live_clock)
-    today_total_base_seconds = (
-        max(0, today_total_seconds - active_elapsed)
-        if live_projects
-        else today_total_seconds
+    kpi_live_targets = build_kpi_live_targets(
+        total_rows,
+        model.get("live_clock") or {},
     )
-    classified_base_seconds = classified_seconds
-    uncategorized_base_seconds = uncategorized_seconds
-    live_span_id = str(live_clock.get("display_span_id") or "")
-    live_total_rows = [
-        row
-        for row in total_rows
-        if live_span_id
-        and str(row.get("display_span_id") or "") == live_span_id
-        and row.get("live_delta_eligible") is True
-    ]
-    if live_projects and any(bool(row.get("is_classified")) for row in live_total_rows):
-        classified_base_seconds = max(0, classified_seconds - active_elapsed)
-    if live_projects and any(bool(row.get("is_uncategorized")) for row in live_total_rows):
-        uncategorized_base_seconds = max(0, uncategorized_seconds - active_elapsed)
-    kpi_live_targets = build_kpi_live_targets(total_rows, live_clock)
-    items = recent_rows[:_RECENT_LIMIT]
-    elapsed = int(current_activity.get("elapsed_seconds") or 0)
-
     return {
         "ok": True,
         "date": scoped_today,
-        **identity_fields,
-        **revision_fields,
-        "live_clock": live_clock,
-        "activity_display_model": model,
+        **_revision_fields_for_model(
+            model,
+            today=scoped_today,
+            report_date=scoped_today,
+        ),
+        "live_clock": model.get("live_clock") or {},
         "overview": {
             "total_duration": format_duration(today_total_seconds),
             "classified_duration": format_duration(classified_seconds),
@@ -310,87 +307,11 @@ def get_overview_view_model(today: str | None = None) -> dict[str, Any]:
             "uncategorized_seconds": uncategorized_seconds,
         },
         "current_activity": current_activity,
-        "activities": items,
+        "activities": recent_rows[:_RECENT_LIMIT],
         "today_total_seconds": today_total_seconds,
         "classified_seconds": classified_seconds,
         "uncategorized_seconds": uncategorized_seconds,
-        "today_total_base_seconds": today_total_base_seconds,
-        "classified_base_seconds": classified_base_seconds,
-        "uncategorized_base_seconds": uncategorized_base_seconds,
-        "current_activity_elapsed_seconds": elapsed,
-        "kpi_live_base": {
-            "today_total_seconds": today_total_base_seconds,
-            "classified_seconds": classified_base_seconds,
-            "uncategorized_seconds": uncategorized_base_seconds,
-        },
         "kpi_live_targets": kpi_live_targets,
-    }
-
-
-def _session_to_overview_row(session: dict[str, Any]) -> dict[str, Any]:
-    base_seconds = int(session.get("duration_seconds") or 0)
-    is_in_progress = bool(session.get("is_in_progress"))
-    is_report_project = bool(session.get("is_report_project", session.get("is_classified")))
-    is_report_classified = bool(session.get("is_report_classified", is_report_project))
-    is_report_uncategorized = bool(session.get("is_report_uncategorized", not is_report_project))
-    first_activity_id = int(session.get("first_activity_id") or 0) or None
-    return {
-        "project_name": str(session.get("project_name") or "未归类"),
-        "project_description": str(session.get("project_description") or ""),
-        "project_id": int(session.get("project_id") or 0),
-        "row_kind": "project_session",
-        "is_uncategorized": is_report_uncategorized,
-        "is_classified": is_report_classified,
-        "is_report_project": is_report_project,
-        "is_report_classified": is_report_classified,
-        "is_report_uncategorized": is_report_uncategorized,
-        "report_attribution_kind": str(session.get("report_attribution_kind") or "none"),
-        "is_official_project": bool(session.get("is_official_project")),
-        "start_time": str(session.get("start_time") or ""),
-        "end_time": str(session.get("end_time") or ""),
-        "duration": format_duration(base_seconds),
-        "duration_seconds": base_seconds,
-        "display_duration_seconds": int(session.get("display_duration_seconds") or base_seconds),
-        "duration_seconds_at_sample": base_seconds,
-        "display_base_seconds": base_seconds,
-        "live_base_seconds": base_seconds,
-        "is_in_progress": is_in_progress,
-        "is_live_projected": False,
-        "is_virtual": False,
-        "is_virtual_live": False,
-        "contributes_to_totals": bool(session.get("contributes_to_totals", True)),
-        "live_delta_eligible": False,
-        "live_display_key": "",
-        "live_state": "",
-        "stable_live_key": "",
-        "stable_live_key_hash": "",
-        "live_started_at_epoch_ms": 0,
-        "carry_seconds": 0,
-        "display_span_id": "",
-        "activity_ids": list(session.get("activity_ids") or []),
-        "activity_member_hash": str(session.get("activity_member_hash") or ""),
-        "anchor_activity_id": int(session.get("anchor_activity_id") or 0),
-        "first_activity_id": first_activity_id,
-        "activity_id": int(first_activity_id or 0),
-        "open_activity_id": int(session.get("open_activity_id") or 0),
-        "closed_duration_seconds": int(session.get("closed_duration_seconds") or 0),
-        "source": "db",
-        "editable": bool(session.get("editable", not is_in_progress)),
-        "exportable": bool(session.get("exportable", not is_in_progress)),
-        "edit_disabled": bool(is_in_progress),
-        "disable_reason": "进行中记录暂不支持编辑" if is_in_progress else "",
-        "status_code": str(session.get("status_code") or session.get("status") or "normal"),
-        "display_status": str(
-            session.get("display_status")
-            or session.get("status_label")
-            or session.get("status_summary")
-            or ""
-        ),
-        "status": str(session.get("status") or "normal"),
-        "status_summary": str(session.get("status_summary") or ""),
-        "has_project_override": bool(session.get("has_project_override")),
-        "has_duration_override": bool(session.get("has_duration_override")),
-        "session_note": str(session.get("session_note") or ""),
     }
 
 
@@ -406,139 +327,58 @@ def get_timeline_view_model(report_date: str | None = None) -> dict[str, Any]:
     live_model = (
         report_model
         if scoped_report_date == today
-        else build_activity_display_model(report_date=today, today=today, snapshot=snapshot)
-    )
-    report_live_clock = report_model.get("live_clock") or {}
-    live_clock = live_model.get("live_clock") or {}
-    current_activity = live_model.get("current_activity") or {}
-    identity_fields = _live_identity_fields(live_model)
-    revision_fields = _revision_fields_for_model(
-        snapshot,
-        report_model,
-        today=today,
-        report_date=scoped_report_date,
+        else build_activity_display_model(
+            report_date=today,
+            today=today,
+            snapshot=snapshot,
+        )
     )
 
     from .report_projection_snapshot_service import build_visible_snapshot
 
-    report_projection = build_visible_snapshot(scoped_report_date, scoped_report_date)
-    sessions_raw = list(report_projection.final_entries)
-    sessions: list[dict[str, Any]] = []
-
-    for session in sessions_raw:
-        is_session_in_progress = bool(session.get("is_in_progress"))
-        is_report_project = bool(session.get("is_report_project", session.get("is_classified")))
-        is_report_classified = bool(session.get("is_report_classified", is_report_project))
-        is_report_uncategorized = bool(session.get("is_report_uncategorized", not is_report_project))
-        start_time = str(session.get("start_time") or "")
-        base_seconds = int(session.get("duration_seconds") or 0)
-        adjusted = session.get("adjusted_duration_seconds")
-        if adjusted is not None:
-            adjusted = int(adjusted)
-        has_override = adjusted is not None
-        display_seconds = int(session.get("duration_seconds") or (adjusted if has_override else base_seconds))
-        row = {
-            "row_kind": str(session.get("row_kind") or "project_session"),
-            "project_name": str(session.get("project_name") or "未归类"),
-            "project_description": str(session.get("project_description") or ""),
-            "project_id": int(session.get("project_id") or 0),
-            "start_time": start_time,
-            "end_time": str(session.get("end_time") or ""),
-            "duration": format_duration(display_seconds),
-            "duration_seconds": display_seconds,
-            "display_duration_seconds": display_seconds,
-            "duration_seconds_at_sample": display_seconds,
-            "display_base_seconds": display_seconds,
-            "live_base_seconds": display_seconds,
-            "adjusted_duration_seconds": adjusted,
-            "has_duration_override": has_override,
-            "status": str(session.get("status") or "normal"),
-            "status_code": str(session.get("status_code") or session.get("status") or "normal"),
-            "display_status": str(
-                session.get("display_status")
-                or session.get("status_label")
-                or session.get("status_summary")
-                or ""
-            ),
-            "status_summary": str(session.get("status_summary") or ""),
-            "event_count": int(session.get("event_count") or 0),
-            "is_uncategorized": is_report_uncategorized,
-            "is_classified": is_report_classified,
-            "is_report_project": is_report_project,
-            "is_report_classified": is_report_classified,
-            "is_report_uncategorized": is_report_uncategorized,
-            "report_attribution_kind": str(session.get("report_attribution_kind") or "none"),
-            "is_official_project": bool(session.get("is_official_project")),
-            "is_in_progress": is_session_in_progress,
-            "is_live_projected": False,
-            "is_virtual": False,
-            "is_virtual_live": False,
-            "contributes_to_totals": bool(session.get("contributes_to_totals", True)),
-            "live_delta_eligible": False,
-            "live_display_key": "",
-            "live_state": "",
-            "stable_live_key": "",
-            "stable_live_key_hash": "",
-            "live_started_at_epoch_ms": 0,
-            "carry_seconds": 0,
-            "display_span_id": "",
-            "activity_ids": list(session.get("activity_ids") or []),
-            "activity_member_hash": str(session.get("activity_member_hash") or ""),
-            "projection_instance_key": str(session.get("projection_instance_key") or ""),
-            "projection_revision": str(session.get("projection_revision") or ""),
-            "projection_kind": str(session.get("projection_kind") or "base"),
-            "operation_id": session.get("operation_id"),
-            "origin_activity_member_hashes": list(session.get("origin_activity_member_hashes") or []),
-            "can_hide": bool(session.get("can_hide")),
-            "can_merge_previous": bool(session.get("can_merge_previous")),
-            "can_merge_next": bool(session.get("can_merge_next")),
-            "can_split": bool(session.get("can_split")),
-            "can_copy": bool(session.get("can_copy")),
-            "can_hide_activity": bool(session.get("can_hide_activity")),
-            "anchor_activity_id": int(session.get("anchor_activity_id") or 0),
-            "first_activity_id": int(session.get("first_activity_id") or 0) or None,
-            "open_activity_id": int(session.get("open_activity_id") or 0),
-            "closed_duration_seconds": int(session.get("closed_duration_seconds") or 0),
-            "session_note": str(session.get("session_note") or ""),
-            "has_project_override": bool(session.get("has_project_override")),
-            "editable": bool(session.get("editable", not is_session_in_progress)),
-            "exportable": bool(session.get("exportable", not is_session_in_progress)),
-            "edit_disabled": bool(is_session_in_progress),
-            "disable_reason": "进行中记录暂不支持编辑" if is_session_in_progress else "",
-            "source": "db",
-            "display_project": None,
-        }
-        sessions.append(row)
-    _apply_live_span_to_rows(sessions, report_model, row_kind=ROW_KIND_PROJECT_SESSION_ROW)
+    projection = build_visible_snapshot(scoped_report_date, scoped_report_date)
+    sessions = [
+        _base_session_row(
+            session,
+            row_kind=str(session.get("row_kind") or "project_session"),
+        )
+        for session in projection.final_entries
+    ]
+    _apply_live_span_to_rows(
+        sessions,
+        report_model,
+        row_kind=ROW_KIND_PROJECT_SESSION_ROW,
+    )
     _set_summary_activity_ids(sessions)
     for row in sessions:
         enable_safe_open_edit(row)
 
-    display_total_seconds = sum(int(row.get("duration_seconds") or 0) for row in sessions)
-    active_elapsed = _current_elapsed_at_sample(report_live_clock)
-    today_total_base_seconds = (
-        max(0, display_total_seconds - active_elapsed)
-        if _clock_projects_live_duration(report_live_clock)
-        else display_total_seconds
+    display_total_seconds = sum(
+        int(row.get("duration_seconds") or 0) for row in sessions
     )
-    elapsed = int(current_activity.get("elapsed_seconds") or 0)
-
+    total_target = build_kpi_live_targets(
+        sessions,
+        report_model.get("live_clock") or {},
+    )["today_total_seconds"]
     return {
         "ok": True,
         "date": scoped_report_date,
+        "today": today,
         "total_duration": format_duration(display_total_seconds),
         "total_seconds": display_total_seconds,
-        "current_activity": current_activity,
-        "live_clock": live_clock,
-        **identity_fields,
-        **revision_fields,
-        "activity_display_model": live_model,
-        "report_activity_display_model": report_model,
+        "current_activity": live_model.get("current_activity") or {},
+        "live_clock": live_model.get("live_clock") or {},
+        **_revision_fields_for_model(
+            report_model,
+            today=today,
+            report_date=scoped_report_date,
+        ),
         "entries": sessions,
-        "snapshot_revision": report_projection.snapshot_revision,
+        "snapshot_revision": projection.snapshot_revision,
         "today_total_seconds": display_total_seconds,
-        "today_total_base_seconds": today_total_base_seconds,
-        "current_activity_elapsed_seconds": elapsed,
+        "total_live_clock": total_target.get("live_clock")
+        if total_target.get("enabled") is True
+        else None,
     }
 
 
@@ -552,39 +392,40 @@ def get_session_activity_summary_view_model(
     today = timeline_service.get_default_report_date()
     snapshot = _get_current_activity_snapshot()
     report_model = build_activity_display_model(
-        report_date=date, today=today, snapshot=snapshot
+        report_date=date,
+        today=today,
+        snapshot=snapshot,
     )
     live_model = (
         report_model
         if date == today
-        else build_activity_display_model(report_date=today, today=today, snapshot=snapshot)
+        else build_activity_display_model(
+            report_date=today,
+            today=today,
+            snapshot=snapshot,
+        )
     )
-    live_clock = live_model.get("live_clock") or {}
-    current_activity = live_model.get("current_activity") or {}
-    identity_fields = _live_identity_fields(live_model)
-    revision_fields = _revision_fields_for_model(
-        snapshot,
-        report_model,
-        today=today,
-        report_date=date,
+    detail_projection = (
+        project_activity_summary_service.get_projection_session_activity_summary(
+            projection_instance_key,
+            date,
+            expected_projection_revision=expected_projection_revision,
+        )
     )
-
-    detail_projection = project_activity_summary_service.get_projection_session_activity_summary(
-        projection_instance_key,
-        date,
-        expected_projection_revision=expected_projection_revision,
-    )
-    rows = list(detail_projection["summary_rows"])
+    rows = [dict(row) for row in detail_projection["summary_rows"]]
+    for row in rows:
+        row.update(_detail_report_attribution_fields(row))
     _apply_live_span_to_rows(
         rows,
         report_model,
         row_kind=ROW_KIND_PROJECT_ACTIVITY_SUMMARY_ROW,
     )
-
     for row in rows:
         if row.get("is_in_progress") and not row.get("edit_disabled"):
             row["edit_disabled"] = True
-            row["disable_reason"] = row.get("disable_reason") or "进行中记录暂不支持编辑"
+            row["disable_reason"] = (
+                row.get("disable_reason") or "进行中记录暂不支持编辑"
+            )
         row["duration"] = format_duration(int(row.get("duration_seconds") or 0))
     rows.sort(
         key=lambda item: (
@@ -592,19 +433,22 @@ def get_session_activity_summary_view_model(
             str(item.get("activity_name") or ""),
         )
     )
-
     return {
         "ok": True,
         "date": date,
+        "today": today,
         "projection_instance_key": projection_instance_key,
-        "resolved_projection_revision": detail_projection["resolved_projection_revision"],
+        "resolved_projection_revision": detail_projection[
+            "resolved_projection_revision"
+        ],
         "summary_rows": rows,
-        "current_activity": current_activity,
-        "live_clock": live_clock,
-        **identity_fields,
-        **revision_fields,
-        "activity_display_model": live_model,
-        "report_activity_display_model": report_model,
+        "current_activity": live_model.get("current_activity") or {},
+        "live_clock": live_model.get("live_clock") or {},
+        **_revision_fields_for_model(
+            report_model,
+            today=today,
+            report_date=date,
+        ),
     }
 
 

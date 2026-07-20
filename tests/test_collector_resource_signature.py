@@ -2,23 +2,22 @@ from __future__ import annotations
 
 import pytest
 
-from worktrace.services import system_project_service
-
 pytestmark = [pytest.mark.collector_runtime, pytest.mark.integration, pytest.mark.db, pytest.mark.security_privacy]
 
 from worktrace.collector.state_machine import CollectorStateMachine
 from worktrace.constants import EXCLUDED_APP_NAME, EXCLUDED_PROCESS_NAME, EXCLUDED_WINDOW_TITLE
 from worktrace.db import get_connection
 from worktrace.platforms.base import ActiveWindow
-from worktrace.services import activity_service, project_service, rule_service
+from worktrace.services import activity_service, project_service, rule_catalog_command_service
 from worktrace.services.resource_service import get_resource_for_activity
 
 
 def _enable_excluded_project_with_keyword(keyword: str) -> int:
-    """Enable the 排除规则 project and add a keyword rule. Returns the project id."""
-    excluded_project = system_project_service.require_excluded_project_id()
-    project_service.set_project_enabled(excluded_project, True)
-    rule_service.create_rule(keyword, excluded_project)
+    """Enable the excluded system project through its explicit command."""
+    project_service.set_excluded_project_enabled(True)
+    _rule_id, excluded_project = (
+        rule_catalog_command_service.create_excluded_keyword_rule(keyword)
+    )
     return excluded_project
 
 
@@ -27,25 +26,21 @@ class TestSameDocxTitleVariationSameSignature:
 
     def test_docx_title_variation_no_split(self, temp_db):
         machine = CollectorStateMachine()
-        # First: "合同.docx - Word"
         machine.transition_to(
             "recording",
             ActiveWindow("Word", "winword.exe", "合同.docx - Word", "D:\\Docs\\合同.docx"),
             at_time="2026-06-18 09:00:00",
         )
-        # Second: "合同.docx - Word [已保存]" — title changed but same file
         machine.transition_to(
             "recording",
             ActiveWindow("Word", "winword.exe", "合同.docx - Word [已保存]", "D:\\Docs\\合同.docx"),
             at_time="2026-06-18 09:01:00",
         )
-        # Third: "合同.docx - Word [兼容模式]"
         machine.transition_to(
             "recording",
             ActiveWindow("Word", "winword.exe", "合同.docx - Word [兼容模式]", "D:\\Docs\\合同.docx"),
             at_time="2026-06-18 09:02:00",
         )
-        # Should still be one continuous activity
         row = activity_service.get_open_activity()
         assert row is not None
         assert row["start_time"] == "2026-06-18 09:00:00"
@@ -87,18 +82,16 @@ class TestDifferentFilePathSplits:
             at_time="2026-06-18 09:01:00",
         )
         first_id = activity_service.get_open_activity()["id"]
-        # Switch to different file
         machine.transition_to(
             "recording",
             ActiveWindow("Word", "winword.exe", "合同B.docx - Word", "D:\\Docs\\合同B.docx"),
             at_time="2026-06-18 09:02:00",
         )
-        # Old activity should be closed
         assert activity_service.get_activity(first_id)["end_time"] is not None
 
 
 class TestIdleNoDuplicateRecords:
-    """4. idle consecutive transition_to("idle") does not produce multiple records."""
+    """4. Consecutive idle transitions do not produce multiple records."""
 
     def test_idle_no_duplicates(self, temp_db):
         machine = CollectorStateMachine()
@@ -106,7 +99,6 @@ class TestIdleNoDuplicateRecords:
         machine.transition_to("idle", at_time="2026-06-18 09:00:30")
         machine.transition_to("idle", at_time="2026-06-18 09:01:00")
         machine.transition_to("idle", at_time="2026-06-18 09:02:00")
-        # Should be at most one open activity or no open activity for idle
         with get_connection() as conn:
             open_count = conn.execute(
                 "SELECT COUNT(*) AS c FROM activity_log WHERE end_time IS NULL"
@@ -119,7 +111,7 @@ class TestIdleNoDuplicateRecords:
 
 
 class TestExcludedNoDuplicatesAndAnonymous:
-    """5. excluded consecutive transitions don't produce multiple records, and resource is anonymous."""
+    """5. Excluded transitions remain singular and anonymous."""
 
     def test_excluded_no_duplicates(self, temp_db):
         _enable_excluded_project_with_keyword("银行")
@@ -157,7 +149,6 @@ class TestExcludedNoDuplicatesAndAnonymous:
             ActiveWindow("BankApp", "bank.exe", "银行真实标题"),
             at_time="2026-06-18 09:00:00",
         )
-        # Force persistence
         machine.transition_to(
             "excluded",
             ActiveWindow("BankApp", "bank.exe", "银行真实标题"),
@@ -180,7 +171,7 @@ class TestExcludedNoDuplicatesAndAnonymous:
 
 
 class TestCreateActivityWritesResource:
-    """6. create_activity is called with resource, activity_resource exists."""
+    """6. Persisted activities have a corresponding activity_resource."""
 
     def test_recording_creates_resource(self, temp_db):
         machine = CollectorStateMachine()
@@ -189,7 +180,6 @@ class TestCreateActivityWritesResource:
             ActiveWindow("Word", "winword.exe", "合同.docx - Word", "D:\\Docs\\合同.docx"),
             at_time="2026-06-18 09:00:00",
         )
-        # Force persistence by advancing time
         machine.transition_to(
             "recording",
             ActiveWindow("Word", "winword.exe", "合同.docx - Word", "D:\\Docs\\合同.docx"),

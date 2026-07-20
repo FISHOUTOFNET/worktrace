@@ -1,15 +1,14 @@
 """Encrypted backup facade for the UI.
 
-The facade acquires a consistent runtime snapshot for export. Import remains
-owned by the secure backup service's destructive replacement coordinator.
+Backup consistency and replacement maintenance are owned by the application
+use cases in ``secure_backup_service`` rather than by this transport facade.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from ..services import secure_backup_service
-from ..services.runtime_snapshot_barrier import consistent_snapshot
+from ..services import database_maintenance_service, secure_backup_service
 from ..services.secure_backup_service import (
     BackupCorruptedError,
     BackupDecryptionError,
@@ -22,13 +21,12 @@ from ..services.secure_backup_service import (
 
 
 def export_encrypted_backup(output_path: str | Path, passphrase: str) -> str:
-    with consistent_snapshot():
-        return str(
-            secure_backup_service.export_encrypted_backup(
-                output_path,
-                passphrase,
-            )
+    return str(
+        secure_backup_service.export_encrypted_backup(
+            output_path,
+            passphrase,
         )
+    )
 
 
 def import_encrypted_backup(
@@ -43,8 +41,10 @@ def parse_encrypted_backup_manifest(input_path: str | Path) -> BackupManifestInf
     return secure_backup_service.parse_encrypted_backup_manifest(input_path)
 
 
-def is_secure_import_in_progress() -> bool:
-    return secure_backup_service.is_secure_import_in_progress()
+def is_maintenance_in_progress() -> bool:
+    """Expose the canonical maintenance gate as a read-only UI status."""
+
+    return database_maintenance_service.is_maintenance_in_progress()
 
 
 __all__ = [
@@ -57,6 +57,6 @@ __all__ = [
     "SecureBackupError",
     "export_encrypted_backup",
     "import_encrypted_backup",
-    "is_secure_import_in_progress",
+    "is_maintenance_in_progress",
     "parse_encrypted_backup_manifest",
 ]

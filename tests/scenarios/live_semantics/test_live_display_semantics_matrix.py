@@ -42,5 +42,5 @@ def test_non_normal_states_are_status_only(state, live):
     else:
         live.status(state, "09:00:10")
     overview = live.pages()["overview"]
-    expected_live_state = "none" if state == "paused" else "status_only"
+    expected_live_state = "none" if state == "paused" else "suppressed"
     assert overview["runtime"]["clock"]["live_state"] == expected_live_state

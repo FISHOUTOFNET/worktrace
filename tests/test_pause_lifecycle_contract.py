@@ -4,7 +4,7 @@ import threading
 
 import pytest
 
-from worktrace.api import app_api
+from worktrace.api.app_api import ApplicationControlService
 from worktrace.collector import collector as collector_module
 from worktrace.collector.collector import run_collector
 from worktrace.collector.state_machine import CollectorStateMachine
@@ -24,16 +24,6 @@ from worktrace.services.settings_service import (
 )
 
 pytestmark = [pytest.mark.db, pytest.mark.integration, pytest.mark.contract]
-
-
-@pytest.fixture(autouse=True)
-def _restore_runtime():
-    previous = app_api.get_runtime()
-    app_api.set_runtime(None)
-    try:
-        yield
-    finally:
-        app_api.set_runtime(previous)
 
 
 def _open_activity() -> int:
@@ -60,20 +50,29 @@ def _assert_paused_without_open_activity() -> None:
     assert runtime_activity_state_service.get_runtime_activity_snapshot() is None
 
 
-def test_runtime_missing_pause_uses_lifecycle_owner(temp_db):
-    _open_activity()
+def test_missing_runtime_composition_is_rejected_without_business_mutation(temp_db):
+    activity_id = _open_activity()
     runtime_activity_state_service.publish_runtime_activity_snapshot(
         {"status": STATUS_NORMAL},
         "test",
     )
 
-    result = app_api.pause_collection_now()
+    with pytest.raises(ValueError, match="application_runtime_required"):
+        ApplicationControlService(None)  # type: ignore[arg-type]
 
-    assert result == {"ok": False, "pause_pending": True}
-    _assert_paused_without_open_activity()
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT end_time FROM activity_log WHERE id = ?",
+            (activity_id,),
+        ).fetchone()
+        boundaries = conn.execute("SELECT reason FROM session_boundary").fetchall()
+    assert row["end_time"] is None
+    assert boundaries == []
+    assert get_bool_setting("user_paused", False) is False
+    assert runtime_activity_state_service.get_runtime_activity_snapshot() is not None
 
 
-def test_normal_pause_uses_lifecycle_owner_and_clears_runtime(temp_db):
+def test_normal_pause_uses_collector_state_machine_and_clears_runtime(temp_db):
     machine = CollectorStateMachine()
     machine.transition_to(
         "recording",
@@ -92,31 +91,43 @@ def test_normal_pause_uses_lifecycle_owner_and_clears_runtime(temp_db):
     _assert_paused_without_open_activity()
 
 
-def test_runtime_exception_pause_uses_same_lifecycle_owner(temp_db):
+def test_runtime_exception_pause_fails_without_business_fallback(temp_db):
     class FailingRuntime:
         def pause_collection_now(self):
             raise RuntimeError("runtime unavailable")
 
-    _open_activity()
-    app_api.set_runtime(FailingRuntime())
+    activity_id = _open_activity()
+    control = ApplicationControlService(FailingRuntime())
 
-    result = app_api.pause_collection_now()
+    result = control.pause_collection_now()
 
-    assert result == {"ok": False, "pause_pending": True}
-    _assert_paused_without_open_activity()
+    assert result == {
+        "ok": False,
+        "pause_pending": False,
+        "error": "collector_pause_failed",
+    }
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT end_time FROM activity_log WHERE id = ?",
+            (activity_id,),
+        ).fetchone()
+        boundaries = conn.execute("SELECT reason FROM session_boundary").fetchall()
+    assert row["end_time"] is None
+    assert boundaries == []
+    assert get_bool_setting("user_paused", False) is False
 
 
-def test_pause_without_open_row_and_repeated_pause_are_idempotent(temp_db):
-    first = app_api.pause_collection_now()
-    second = app_api.pause_collection_now()
+def test_repeated_missing_runtime_composition_is_side_effect_free(temp_db):
+    for _ in range(2):
+        with pytest.raises(ValueError, match="application_runtime_required"):
+            ApplicationControlService(None)  # type: ignore[arg-type]
 
     with get_connection() as conn:
         boundaries = conn.execute(
             "SELECT reason FROM session_boundary ORDER BY id"
         ).fetchall()
-    assert first == second == {"ok": False, "pause_pending": True}
-    assert [row["reason"] for row in boundaries] == ["pause_fallback"]
-    _assert_paused_without_open_activity()
+    assert boundaries == []
+    assert get_bool_setting("user_paused", False) is False
 
 
 def test_pause_invalidates_hot_settings_cache_and_gates_next_collector_loop(

@@ -2,18 +2,22 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from datetime import datetime, time as datetime_time
 from enum import Enum
 import threading
 import time
 import uuid
-from datetime import datetime, time as datetime_time
 from typing import Any, Callable
 
 from ..constants import DEFAULT_IDLE_THRESHOLD_SECONDS, TIME_FORMAT
 from ..db import now_str
 from ..platforms.base import PlatformAdapter
-from ..services import clipboard_service, privacy_gate_service, privacy_service
-from ..services.secure_backup_service import is_secure_import_in_progress
+from ..services import (
+    clipboard_service,
+    folder_index_service,
+    privacy_gate_service,
+    privacy_service,
+)
 from ..services.settings_service import (
     get_bool_setting,
     get_int_setting,
@@ -29,6 +33,13 @@ from .state_machine import CollectorStateMachine
 POLL_CADENCE_SECONDS = 1.0
 
 
+class CollectorCommandKind(str, Enum):
+    USER_PAUSE = "user_pause"
+    MAINTENANCE_HOLD = "maintenance_hold"
+    DATABASE_RESET = "database_reset"
+    MAINTENANCE_RELEASE = "maintenance_release"
+
+
 class CollectorCommandState(str, Enum):
     PENDING = "pending"
     TAKEN = "taken"
@@ -37,61 +48,186 @@ class CollectorCommandState(str, Enum):
     UNKNOWN = "unknown"
 
 
+class CollectorHoldState(str, Enum):
+    OPERATIONAL = "operational"
+    HOLD_REQUESTED = "hold_requested"
+    SEALING = "sealing"
+    HELD = "held"
+    RESETTING = "resetting"
+    RELEASE_REQUESTED = "release_requested"
+
+
 @dataclass
 class _CollectorCommand:
     command_id: str
-    kind: str
+    kind: CollectorCommandKind
     state: CollectorCommandState = CollectorCommandState.PENDING
     done_event: threading.Event = field(default_factory=threading.Event)
     result: dict[str, Any] = field(default_factory=dict)
 
 
 class CollectorControl:
-    """Cancellable command channel with identity and an explicit terminal state."""
+    """Identity-bearing Collector command channel with observable terminal states."""
 
     def __init__(self) -> None:
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._wake_event = threading.Event()
         self._commands: dict[str, _CollectorCommand] = {}
-        self._pending_ids: dict[str, str] = {}
+        self._pending_ids: dict[CollectorCommandKind, str] = {}
+        self._hold_state = CollectorHoldState.OPERATIONAL
+
+    @property
+    def hold_state(self) -> CollectorHoldState:
+        with self._lock:
+            return self._hold_state
 
     def request_pause(self, timeout_seconds: float = 5.0) -> dict[str, Any]:
-        return self._request("pause", timeout_seconds)
+        return self._request(CollectorCommandKind.USER_PAUSE, timeout_seconds)
 
     def take_pause_request(self) -> str | None:
-        return self._take("pause")
+        return self._take(CollectorCommandKind.USER_PAUSE)
 
     def complete_pause(self, command_id: str, result: dict[str, Any]) -> bool:
-        return self._complete(command_id, "pause", result)
+        return self._complete(
+            command_id,
+            CollectorCommandKind.USER_PAUSE,
+            result,
+            terminal_state=CollectorHoldState.OPERATIONAL,
+        )
+
+    def request_maintenance_hold(
+        self,
+        timeout_seconds: float = 5.0,
+    ) -> dict[str, Any]:
+        with self._lock:
+            if self._hold_state is CollectorHoldState.HELD:
+                return self._synthetic_completed(
+                    CollectorCommandKind.MAINTENANCE_HOLD,
+                    CollectorHoldState.HELD,
+                    already_held=True,
+                )
+            if self._hold_state is not CollectorHoldState.OPERATIONAL:
+                return self._state_conflict(CollectorCommandKind.MAINTENANCE_HOLD)
+            self._hold_state = CollectorHoldState.HOLD_REQUESTED
+        result = self._request(CollectorCommandKind.MAINTENANCE_HOLD, timeout_seconds)
+        if not bool(result.get("ok")) and result.get("command_state") == "cancelled":
+            with self._lock:
+                if self._hold_state is CollectorHoldState.HOLD_REQUESTED:
+                    self._hold_state = CollectorHoldState.OPERATIONAL
+        return result
+
+    def take_maintenance_hold_request(self) -> str | None:
+        command_id = self._take(CollectorCommandKind.MAINTENANCE_HOLD)
+        if command_id is not None:
+            with self._lock:
+                self._hold_state = CollectorHoldState.SEALING
+        return command_id
+
+    def complete_maintenance_hold(
+        self,
+        command_id: str,
+        result: dict[str, Any],
+    ) -> bool:
+        completed = self._complete(
+            command_id,
+            CollectorCommandKind.MAINTENANCE_HOLD,
+            result,
+            terminal_state=CollectorHoldState.HELD,
+        )
+        if completed:
+            with self._lock:
+                self._hold_state = CollectorHoldState.HELD
+        return completed
 
     def request_reset(self, timeout_seconds: float = 5.0) -> dict[str, Any]:
-        return self._request("reset", timeout_seconds)
+        with self._lock:
+            if self._hold_state is not CollectorHoldState.HELD:
+                return self._state_conflict(CollectorCommandKind.DATABASE_RESET)
+            self._hold_state = CollectorHoldState.RESETTING
+        result = self._request(CollectorCommandKind.DATABASE_RESET, timeout_seconds)
+        if not bool(result.get("ok")) and not bool(result.get("command_state_unknown")):
+            with self._lock:
+                self._hold_state = CollectorHoldState.HELD
+        return result
 
     def take_reset_request(self) -> str | None:
-        return self._take("reset")
+        return self._take(CollectorCommandKind.DATABASE_RESET)
 
     def complete_reset(self, command_id: str, result: dict[str, Any]) -> bool:
-        return self._complete(command_id, "reset", result)
-
-    def _request(self, kind: str, timeout_seconds: float) -> dict[str, Any]:
-        command = _CollectorCommand(
-            command_id=uuid.uuid4().hex,
-            kind=kind,
-            result={"ok": False, f"{kind}_pending": True},
+        completed = self._complete(
+            command_id,
+            CollectorCommandKind.DATABASE_RESET,
+            result,
+            terminal_state=CollectorHoldState.HELD,
         )
+        if completed:
+            with self._lock:
+                self._hold_state = CollectorHoldState.HELD
+        return completed
+
+    def request_maintenance_release(
+        self,
+        timeout_seconds: float = 5.0,
+    ) -> dict[str, Any]:
+        with self._lock:
+            if self._hold_state is CollectorHoldState.OPERATIONAL:
+                return self._synthetic_completed(
+                    CollectorCommandKind.MAINTENANCE_RELEASE,
+                    CollectorHoldState.OPERATIONAL,
+                    already_released=True,
+                )
+            if self._hold_state is not CollectorHoldState.HELD:
+                return self._state_conflict(CollectorCommandKind.MAINTENANCE_RELEASE)
+            self._hold_state = CollectorHoldState.RELEASE_REQUESTED
+        result = self._request(CollectorCommandKind.MAINTENANCE_RELEASE, timeout_seconds)
+        if not bool(result.get("ok")) and not bool(result.get("command_state_unknown")):
+            with self._lock:
+                self._hold_state = CollectorHoldState.HELD
+        return result
+
+    def take_maintenance_release_request(self) -> str | None:
+        return self._take(CollectorCommandKind.MAINTENANCE_RELEASE)
+
+    def complete_maintenance_release(
+        self,
+        command_id: str,
+        result: dict[str, Any],
+    ) -> bool:
+        completed = self._complete(
+            command_id,
+            CollectorCommandKind.MAINTENANCE_RELEASE,
+            result,
+            terminal_state=CollectorHoldState.OPERATIONAL,
+        )
+        if completed:
+            with self._lock:
+                self._hold_state = CollectorHoldState.OPERATIONAL
+        return completed
+
+    def query_command(self, command_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            command = self._commands.get(str(command_id or ""))
+            if command is None:
+                return None
+            if command.state is CollectorCommandState.COMPLETED:
+                return dict(command.result)
+            return self._command_status(command, ok=False)
+
+    def _request(
+        self,
+        kind: CollectorCommandKind,
+        timeout_seconds: float,
+    ) -> dict[str, Any]:
+        command = _CollectorCommand(command_id=uuid.uuid4().hex, kind=kind)
         with self._lock:
             previous_id = self._pending_ids.get(kind)
-            if previous_id:
-                previous = self._commands.get(previous_id)
-                if previous is not None and previous.state is CollectorCommandState.PENDING:
-                    return {
-                        "ok": False,
-                        f"{kind}_pending": True,
-                        "error": "command_already_pending",
-                        "command_id": previous.command_id,
-                        "command_state": previous.state.value,
-                        "command_state_unknown": False,
-                    }
+            previous = self._commands.get(previous_id or "")
+            if previous is not None and previous.state is CollectorCommandState.PENDING:
+                return {
+                    **self._command_status(previous, ok=False),
+                    "error": "command_already_pending",
+                }
+            command.result = self._command_status(command, ok=False)
             self._commands[command.command_id] = command
             self._pending_ids[kind] = command.command_id
             self._wake_event.set()
@@ -108,25 +244,17 @@ class CollectorControl:
                 self._pending_ids.pop(kind, None)
                 self._refresh_wake_event_locked()
                 return {
-                    "ok": False,
-                    f"{kind}_pending": False,
+                    **self._command_status(command, ok=False),
                     "timed_out": True,
-                    "command_id": command.command_id,
-                    "command_state": command.state.value,
-                    "command_state_unknown": False,
                 }
             if command.state is CollectorCommandState.TAKEN:
                 command.state = CollectorCommandState.UNKNOWN
             return {
-                "ok": False,
-                f"{kind}_pending": False,
+                **self._command_status(command, ok=False),
                 "timed_out": True,
-                "command_id": command.command_id,
-                "command_state": command.state.value,
-                "command_state_unknown": command.state is CollectorCommandState.UNKNOWN,
             }
 
-    def _take(self, kind: str) -> str | None:
+    def _take(self, kind: CollectorCommandKind) -> str | None:
         with self._lock:
             command_id = self._pending_ids.get(kind)
             command = self._commands.get(command_id or "")
@@ -142,12 +270,14 @@ class CollectorControl:
     def _complete(
         self,
         command_id: str,
-        kind: str,
+        kind: CollectorCommandKind,
         result: dict[str, Any],
+        *,
+        terminal_state: CollectorHoldState,
     ) -> bool:
         with self._lock:
             command = self._commands.get(str(command_id or ""))
-            if command is None or command.kind != kind:
+            if command is None or command.kind is not kind:
                 return False
             if command.state not in {
                 CollectorCommandState.TAKEN,
@@ -157,12 +287,48 @@ class CollectorControl:
             command.state = CollectorCommandState.COMPLETED
             command.result = {
                 **dict(result),
-                "command_id": command.command_id,
-                "command_state": command.state.value,
-                "command_state_unknown": False,
+                **self._command_status(command, ok=bool(result.get("ok"))),
+                "terminal_state": terminal_state.value,
             }
             command.done_event.set()
             return True
+
+    def _synthetic_completed(
+        self,
+        kind: CollectorCommandKind,
+        terminal_state: CollectorHoldState,
+        **values: Any,
+    ) -> dict[str, Any]:
+        return {
+            "ok": True,
+            "command_id": f"synthetic-{uuid.uuid4().hex}",
+            "command_kind": kind.value,
+            "command_state": CollectorCommandState.COMPLETED.value,
+            "command_state_unknown": False,
+            "terminal_state": terminal_state.value,
+            **values,
+        }
+
+    def _state_conflict(self, kind: CollectorCommandKind) -> dict[str, Any]:
+        return {
+            "ok": False,
+            "command_id": "",
+            "command_kind": kind.value,
+            "command_state": CollectorCommandState.CANCELLED.value,
+            "command_state_unknown": False,
+            "terminal_state": self._hold_state.value,
+            "error": "collector_command_state_conflict",
+        }
+
+    @staticmethod
+    def _command_status(command: _CollectorCommand, *, ok: bool) -> dict[str, Any]:
+        return {
+            "ok": bool(ok),
+            "command_id": command.command_id,
+            "command_kind": command.kind.value,
+            "command_state": command.state.value,
+            "command_state_unknown": command.state is CollectorCommandState.UNKNOWN,
+        }
 
     def _refresh_wake_event_locked(self) -> None:
         if self._pending_ids:
@@ -186,13 +352,7 @@ def run_collector(
     startup_ready_event: threading.Event | None = None,
     startup_failed_event: threading.Event | None = None,
 ) -> None:
-    """Run the collector and publish an explicit initialization handshake.
-
-    ``startup_ready_event`` is set only after the state machine, clock tracker,
-    health state, fixed poll contract, and startup pruning have initialized.
-    ``startup_failed_event`` is set when that initialization fails before the
-    collector can enter its service loop.
-    """
+    """Run collection with explicit startup and maintenance-hold handshakes."""
 
     try:
         machine = CollectorStateMachine()
@@ -201,6 +361,7 @@ def run_collector(
         heartbeat_counter = 0
         prune_counter = 0
         fatal_stop = False
+        held = False
         logging.info("collector start")
         collector_health.record_collector_started(now_str())
         _normalize_poll_interval_setting()
@@ -208,11 +369,7 @@ def run_collector(
         next_poll_deadline = time.monotonic() + POLL_CADENCE_SECONDS
     except Exception as exc:
         disposition = classify_collector_failure(exc)
-        collector_health.record_fatal_failure(
-            "startup",
-            disposition.code,
-            now_str(),
-        )
+        collector_health.record_fatal_failure("startup", disposition.code, now_str())
         collector_health.record_collector_stopped(now_str())
         if startup_failed_event is not None:
             startup_failed_event.set()
@@ -229,6 +386,78 @@ def run_collector(
         phase = "loop"
         try:
             now = now_str()
+
+            if held:
+                reset_command_id = (
+                    control.take_reset_request() if control is not None else None
+                )
+                if reset_command_id is not None:
+                    phase = "database_reset"
+                    _set_clipboard_capture_enabled(adapter, False)
+                    machine.reset_runtime_state("database_generation_changed")
+                    control.complete_reset(
+                        reset_command_id,
+                        {"ok": True, "reset_pending": False},
+                    )
+                    last_loop_time = now
+                    continue
+
+                release_command_id = (
+                    control.take_maintenance_release_request()
+                    if control is not None
+                    else None
+                )
+                if release_command_id is not None:
+                    phase = "maintenance_release"
+                    held = False
+                    control.complete_maintenance_release(
+                        release_command_id,
+                        {"ok": True, "release_pending": False},
+                    )
+                    last_loop_time = None
+                    next_poll_deadline = time.monotonic() + POLL_CADENCE_SECONDS
+                    continue
+
+                _set_clipboard_capture_enabled(adapter, False)
+                _wait_for_poll_delay(stop_event, control, POLL_CADENCE_SECONDS)
+                continue
+
+            hold_command_id = (
+                control.take_maintenance_hold_request()
+                if control is not None
+                else None
+            )
+            if hold_command_id is not None:
+                phase = "maintenance_hold"
+                _set_clipboard_capture_enabled(adapter, False)
+                machine.quiesce_for_maintenance(at_time=now)
+                held = True
+                control.complete_maintenance_hold(
+                    hold_command_id,
+                    {"ok": True, "hold_pending": False},
+                )
+                last_loop_time = now
+                continue
+
+            pause_command_id = (
+                control.take_pause_request() if control is not None else None
+            )
+            if pause_command_id is not None:
+                phase = "user_pause"
+                _set_clipboard_capture_enabled(adapter, False)
+                _pause_machine_then_expose(machine, now)
+                control.complete_pause(
+                    pause_command_id,
+                    {"ok": True, "pause_pending": False},
+                )
+                last_loop_time = now
+                next_poll_deadline = _sleep_until_next_poll(
+                    stop_event,
+                    control,
+                    next_poll_deadline,
+                )
+                continue
+
             monotonic_now = time.monotonic()
             phase = "gate_check"
             idle_threshold_seconds = get_int_setting(
@@ -255,27 +484,10 @@ def run_collector(
                 next_poll_deadline = monotonic_now + POLL_CADENCE_SECONDS
                 continue
 
-            maintenance_active = is_secure_import_in_progress()
             prune_counter += 1
-            if prune_counter >= 20 and not maintenance_active:
+            if prune_counter >= 20:
                 _run_clipboard_maintenance_tick()
                 prune_counter = 0
-
-            reset_command_id = control.take_reset_request() if control is not None else None
-            if reset_command_id is not None:
-                _set_clipboard_capture_enabled(adapter, False)
-                machine.reset_runtime_state("database_generation_changed")
-                control.complete_reset(
-                    reset_command_id,
-                    {"ok": True, "reset_pending": False},
-                )
-                next_poll_deadline = _sleep_until_next_poll(
-                    stop_event,
-                    control,
-                    next_poll_deadline,
-                )
-                last_loop_time = now
-                continue
 
             if last_loop_time:
                 midnight = _midnight_crossed_between(last_loop_time, now)
@@ -287,27 +499,6 @@ def run_collector(
             if heartbeat_counter == 1 or heartbeat_counter >= 4:
                 update_heartbeat("running")
                 heartbeat_counter = 0
-
-            phase = "gate_check"
-            pause_command_id = control.take_pause_request() if control is not None else None
-            if pause_command_id is not None:
-                _set_clipboard_capture_enabled(adapter, False)
-                _pause_machine_then_expose(
-                    machine,
-                    now,
-                    maintenance=True,
-                )
-                control.complete_pause(
-                    pause_command_id,
-                    {"ok": True, "pause_pending": False},
-                )
-                next_poll_deadline = _sleep_until_next_poll(
-                    stop_event,
-                    control,
-                    next_poll_deadline,
-                )
-                last_loop_time = now
-                continue
 
             if not privacy_gate_service.is_privacy_notice_accepted():
                 _set_clipboard_capture_enabled(adapter, False)
@@ -331,26 +522,13 @@ def run_collector(
                 last_loop_time = now
                 continue
 
-            if maintenance_active:
-                _set_clipboard_capture_enabled(adapter, False)
-                _pause_machine_then_expose(machine, now, maintenance=True)
-                next_poll_deadline = _sleep_until_next_poll(
-                    stop_event,
-                    control,
-                    next_poll_deadline,
-                )
-                last_loop_time = now
-                continue
-
             phase = "active_window"
             active_window = adapter.get_active_window()
             observation_time = now_str()
             phase = "clipboard"
             capture_enabled = clipboard_service.is_capture_enabled()
             _set_clipboard_capture_enabled(adapter, capture_enabled)
-            clipboard_events = (
-                _clipboard_events(adapter) if capture_enabled else []
-            )
+            clipboard_events = _clipboard_events(adapter) if capture_enabled else []
             phase = "idle"
             idle_seconds = adapter.get_idle_seconds()
             idle_threshold = max(1, idle_threshold_seconds)
@@ -360,30 +538,30 @@ def run_collector(
                 machine.transition_to("idle", at_time=observation_time)
             else:
                 phase = "privacy"
-                try:
-                    excluded = privacy_service.is_excluded(active_window)
-                except privacy_service.PrivacyResolutionPending:
+                decision = privacy_service.evaluate_exclusion(active_window)
+                if decision.refresh_required:
+                    folder_index_service.request_refresh_for_enabled_rules(
+                        include_excluded=True
+                    )
+                if decision.resolution_pending:
                     collector_health.record_health_code(
                         "privacy_resolution_pending",
                         observation_time,
                     )
-                    phase = "transition"
+                phase = "transition"
+                if decision.excluded:
                     machine.transition_to("excluded", at_time=observation_time)
                 else:
-                    phase = "transition"
-                    if excluded:
-                        machine.transition_to("excluded", at_time=observation_time)
-                    else:
-                        machine.transition_to(
-                            "recording",
-                            active_window,
+                    machine.transition_to(
+                        "recording",
+                        active_window,
+                        at_time=observation_time,
+                    )
+                    for event in clipboard_events:
+                        machine.record_clipboard_event(
+                            event,
                             at_time=observation_time,
                         )
-                        for event in clipboard_events:
-                            machine.record_clipboard_event(
-                                event,
-                                at_time=observation_time,
-                            )
             collector_health.record_successful_observation(observation_time)
             last_loop_time = observation_time
             next_poll_deadline = _sleep_until_next_poll(
@@ -406,6 +584,11 @@ def run_collector(
                 disposition.code,
                 now_str(),
             )
+            logging.exception(
+                "collector transient failure phase=%s code=%s",
+                phase,
+                disposition.code.value,
+            )
             next_poll_deadline = _sleep_until_next_poll(
                 stop_event,
                 control,
@@ -422,11 +605,10 @@ def run_collector(
             now_str(),
         )
     try:
-        if fatal_stop:
-            machine.stop(
-                at_time=now_str(),
-                reason="fatal_collector_stop",
-            )
+        if held:
+            machine.reset_runtime_state("shutdown_during_maintenance_hold")
+        elif fatal_stop:
+            machine.stop(at_time=now_str(), reason="fatal_collector_stop")
         else:
             machine.transition_to("stopped", at_time=now_str())
     finally:
@@ -447,13 +629,8 @@ def _normalize_poll_interval_setting() -> None:
 def _pause_machine_then_expose(
     machine: CollectorStateMachine,
     at_time: str,
-    *,
-    maintenance: bool = False,
 ) -> None:
-    if maintenance:
-        machine.quiesce_for_maintenance(at_time=at_time)
-    else:
-        machine.pause(at_time=at_time)
+    machine.pause(at_time=at_time)
     update_heartbeat("paused")
 
 
@@ -504,10 +681,7 @@ def _sleep_until_next_poll(
             abs(delay),
         )
         return float(now) + POLL_CADENCE_SECONDS
-    logging.debug(
-        "collector loop exceeded cadence by %.3fs",
-        abs(delay),
-    )
+    logging.debug("collector loop exceeded cadence by %.3fs", abs(delay))
     return float(next_poll_deadline) + POLL_CADENCE_SECONDS
 
 
@@ -568,3 +742,12 @@ def _midnight_crossed_between(previous: str, current: str) -> str | None:
     if previous_dt < midnight <= current_dt:
         return midnight.strftime(TIME_FORMAT)
     return None
+
+
+__all__ = [
+    "CollectorCommandKind",
+    "CollectorCommandState",
+    "CollectorControl",
+    "CollectorHoldState",
+    "run_collector",
+]

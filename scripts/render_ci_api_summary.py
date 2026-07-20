@@ -1,0 +1,137 @@
+#!/usr/bin/env python3
+"""Render bounded, API-readable CI diagnostics from the canonical JSON artifact."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+from pathlib import Path
+from typing import Any
+
+PROTOCOL = "WORKTRACE_CI_DIAGNOSTICS_V1"
+DEFAULT_MAX_BYTES = 65536
+
+
+def _single_line(value: object, *, limit: int) -> str:
+    compact = re.sub(r"\s+", " ", str(value or "")).strip()
+    if not compact:
+        return "(none)"
+    if len(compact) <= limit:
+        return compact
+    return compact[: max(0, limit - 3)].rstrip() + "..."
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--input", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--max-bytes", type=int, default=DEFAULT_MAX_BYTES)
+    return parser.parse_args()
+
+
+def _normalized_groups(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    groups: list[dict[str, Any]] = []
+    for group in payload.get("root_cause_groups") or []:
+        affected_tests = [
+            _single_line(test_id, limit=260) for test_id in group.get("affected_tests") or []
+        ]
+        groups.append(
+            {
+                "id": _single_line(group.get("id"), limit=40),
+                "kind": _single_line(group.get("kind"), limit=40),
+                "location": _single_line(group.get("representative_location"), limit=160),
+                "message": _single_line(group.get("message"), limit=240),
+                "affected_test_count": len(affected_tests),
+                "affected_tests": affected_tests,
+                "omitted_affected_tests": 0,
+            }
+        )
+    return groups
+
+
+def _render(
+    payload: dict[str, Any],
+    *,
+    groups: list[dict[str, Any]],
+    truncated: bool,
+) -> str:
+    counts = payload.get("counts") or {}
+    lines = [
+        PROTOCOL,
+        f"revision={_single_line(payload.get('revision'), limit=80)}",
+        f"failed_stage={_single_line(payload.get('failed_stage'), limit=40)}",
+        f"artifact_name={_single_line(payload.get('artifact_name'), limit=120)}",
+        f"diagnostics_available={'true' if payload.get('diagnostics_available') else 'false'}",
+        f"total={counts.get('total', 0)}",
+        f"passed={counts.get('passed', 0)}",
+        f"failed={counts.get('failed', 0)}",
+        f"errors={counts.get('errors', 0)}",
+        f"skipped={counts.get('skipped', 0)}",
+        f"failure_count={len(payload.get('failures') or [])}",
+        f"root_cause_count={len(groups)}",
+    ]
+    reason = _single_line(payload.get("reason"), limit=240)
+    if reason != "(none)":
+        lines.append(f"reason={reason}")
+    lines.append("ROOT_CAUSE_GROUPS_BEGIN")
+    lines.extend(
+        "group_json=" + json.dumps(group, ensure_ascii=False, separators=(",", ":"))
+        for group in groups
+    )
+    lines.extend(
+        [
+            "ROOT_CAUSE_GROUPS_END",
+            f"TRUNCATED={'true' if truncated else 'false'}",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _bounded_render(payload: dict[str, Any], *, max_bytes: int) -> str:
+    if max_bytes < 1024:
+        raise ValueError("--max-bytes must be at least 1024")
+
+    groups = _normalized_groups(payload)
+    truncated = False
+
+    while True:
+        rendered = _render(payload, groups=groups, truncated=truncated)
+        if len(rendered.encode("utf-8")) <= max_bytes:
+            return rendered
+
+        truncated = True
+        removed_test = False
+        for group in reversed(groups):
+            affected_tests = group["affected_tests"]
+            if affected_tests:
+                affected_tests.pop()
+                group["omitted_affected_tests"] += 1
+                removed_test = True
+                break
+        if removed_test:
+            continue
+
+        for group in groups:
+            if group["message"] != "(omitted for size)":
+                group["message"] = "(omitted for size)"
+                break
+        else:
+            raise ValueError("diagnostics summary cannot fit within --max-bytes")
+
+
+def main() -> int:
+    args = _parse_args()
+    payload = json.loads(args.input.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("diagnostics payload must be a JSON object")
+
+    rendered = _bounded_render(payload, max_bytes=args.max_bytes)
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(rendered, encoding="utf-8", newline="\n")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

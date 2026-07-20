@@ -17,6 +17,7 @@
     App.liveDisplayModel = null;
     App.liveClockContractViolation = null;
     App.liveClockContractRefreshRequested = false;
+    App.liveClockViolationKeys = {};
     App.lastRefreshState = null;
     App.refreshCheckInFlight = false;
     App.activePageRefreshInFlight = false;
@@ -256,18 +257,15 @@
 
     function renderDurationProjected(element, seconds, continuityKey, options) {
         if (!element) return;
-        var allowDecrease = options && options.allowDecrease === true;
-        var key = String(continuityKey || "");
         var next = Math.max(0, parseInt(seconds, 10) || 0);
-        var previous = key ? App._monotonicRenderState[key] : null;
-        if (!allowDecrease && previous && next < previous.lastSeconds) next = previous.lastSeconds;
         element.textContent = formatDuration(next);
         element.setAttribute("data-duration-seconds", String(next));
-        if (key) App._monotonicRenderState[key] = { lastSeconds: next };
+        if (continuityKey) App._monotonicRenderState[String(continuityKey)] = { lastSeconds: next };
+        void options;
     }
     App.renderDurationProjected = renderDurationProjected;
-    App.renderDurationMonotonic = function (element, seconds, key, allowDecrease) {
-        renderDurationProjected(element, seconds, key, { allowDecrease: allowDecrease === true });
+    App.renderDurationMonotonic = function (element, seconds, key) {
+        renderDurationProjected(element, seconds, key);
     };
     App.resetMonotonicRenderState = function (key) {
         if (key) delete App._monotonicRenderState[key];
@@ -284,42 +282,80 @@
         return item.display_status || item.status_label || item.status_summary || "";
     };
 
-    function nonNegativeInt(value, fallback) {
-        var parsed = parseInt(value, 10);
-        return isNaN(parsed) || parsed < 0 ? (fallback || 0) : parsed;
+    var LIVE_CLOCK_KEYS = [
+        "aggregate_base_seconds",
+        "display_span_id",
+        "duration_semantic",
+        "elapsed_seconds_at_sample",
+        "is_live",
+        "live_state",
+        "sampled_at_epoch_ms",
+        "stable_live_key_hash",
+        "started_at_epoch_ms"
+    ];
+
+    function exactObjectKeys(value, expected) {
+        if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+        var actual = Object.keys(value).sort();
+        if (actual.length !== expected.length) return false;
+        for (var index = 0; index < expected.length; index++) {
+            if (actual[index] !== expected[index]) return false;
+        }
+        return true;
     }
 
-    App.normalizeLiveClock = function (clock) {
-        if (!clock || typeof clock !== "object") return null;
-        var durationAtSample = nonNegativeInt(clock.duration_seconds_at_sample, 0);
-        var projectLive = clock.project_duration_live === true || clock.is_project_duration_live === true;
-        return Object.assign({}, clock, {
-            display_span_id: String(clock.display_span_id || ""),
-            stable_live_key_hash: String(clock.stable_live_key_hash || ""),
-            live_state: String(clock.live_state || "none"),
-            duration_seconds_at_sample: durationAtSample,
-            carry_seconds: nonNegativeInt(clock.carry_seconds, durationAtSample),
-            live_started_at_epoch_ms: nonNegativeInt(clock.live_started_at_epoch_ms, 0),
-            is_live: clock.is_live === true,
-            current_duration_live: clock.current_duration_live === true,
-            project_duration_live: projectLive,
-            is_project_duration_live: projectLive
-        });
-    };
+    function nonNegativeInteger(value) {
+        return typeof value === "number" && Number.isInteger(value) && value >= 0;
+    }
 
-    App.recordLiveClockContractViolation = function (spanId, page, reason) {
+    App.validateLiveClock = function (clock) {
+        if (!exactObjectKeys(clock, LIVE_CLOCK_KEYS)) return null;
+        if (!nonNegativeInteger(clock.sampled_at_epoch_ms)
+            || !nonNegativeInteger(clock.started_at_epoch_ms)
+            || !nonNegativeInteger(clock.elapsed_seconds_at_sample)
+            || !nonNegativeInteger(clock.aggregate_base_seconds)
+            || typeof clock.is_live !== "boolean"
+            || ["current_live", "aggregate_live", "static_closed"].indexOf(clock.duration_semantic) === -1
+            || ["persisted_open", "suppressed", "none"].indexOf(clock.live_state) === -1
+            || typeof clock.display_span_id !== "string"
+            || typeof clock.stable_live_key_hash !== "string") {
+            return null;
+        }
+        if (clock.is_live === true) {
+            if (clock.live_state !== "persisted_open"
+                || clock.duration_semantic === "static_closed"
+                || clock.sampled_at_epoch_ms <= 0
+                || clock.started_at_epoch_ms <= 0
+                || !clock.display_span_id
+                || !clock.stable_live_key_hash) {
+                return null;
+            }
+        } else if (clock.duration_semantic !== "static_closed") {
+            return null;
+        }
+        return Object.freeze(Object.assign({}, clock));
+    };
+    App.normalizeLiveClock = App.validateLiveClock;
+
+    App.recordLiveClockContractViolation = function (spanId, page, reason, schemaVersion) {
+        var key = [
+            String(page || App.currentPage || ""),
+            String(reason || "invalid_live_clock"),
+            String(schemaVersion || 2),
+            String(spanId || "")
+        ].join("|");
+        if (App.liveClockViolationKeys[key]) return;
+        App.liveClockViolationKeys[key] = true;
         App.liveClockContractViolation = {
             spanId: String(spanId || ""),
             page: String(page || App.currentPage || ""),
-            reason: String(reason || "missing_live_clock"),
+            reason: String(reason || "invalid_live_clock"),
+            schemaVersion: Number(schemaVersion || 2),
             at: Date.now()
         };
         App.liveClockContractRefreshRequested = true;
     };
 
-    App.projectFromDisplayBase = function (base, active) {
-        return nonNegativeInt(base, 0) + nonNegativeInt(active, 0);
-    };
     App.runtimeReportDateForPage = function (page, fallbackDate) {
         return page === "timeline"
             ? (fallbackDate || App.timelineDate || localTodayStr())
@@ -327,122 +363,168 @@
     };
 
     App.liveContinuityKey = function (item, prefix) {
-        if (!item) return prefix;
-        if (item.stable_live_key_hash) return prefix + ":live:" + item.stable_live_key_hash;
-        if (item.display_span_id) return prefix + ":span:" + item.display_span_id;
-        if (item.projection_instance_key) return prefix + ":" + item.projection_instance_key;
-        if (item.activity_id) return prefix + ":" + item.activity_id;
+        var clock = item && App.validateLiveClock(item.live_clock);
+        if (clock && clock.stable_live_key_hash) return prefix + ":live:" + clock.stable_live_key_hash;
+        if (clock && clock.display_span_id) return prefix + ":span:" + clock.display_span_id;
+        if (item && item.projection_instance_key) return prefix + ":" + item.projection_instance_key;
+        if (item && item.activity_id) return prefix + ":" + item.activity_id;
         return prefix;
     };
 
     App.currentActivityContinuityKey = function (current, clock, prefix) {
-        var identity = current.current_activity_display_span_id
-            || current.current_resource_identity_hash
-            || current.stable_live_key_hash
-            || (clock && clock.display_span_id)
-            || ((current.resource_name || current.app_name || "current") + ":" + (current.start_time || ""));
+        var identity = clock && (clock.display_span_id || clock.stable_live_key_hash);
+        if (!identity) identity = String(current.persisted_activity_id || current.activity_id || "")
+            + ":" + String(current.start_time || "");
         return prefix + ":current:" + (identity || "none");
+    };
+
+    App.computeClockDurationNow = function (clock, nowMs) {
+        var accepted = App.validateLiveClock(clock);
+        if (!accepted || accepted.duration_semantic === "static_closed") return null;
+        var delta = accepted.is_live
+            ? Math.max(0, Math.floor((nowMs - accepted.sampled_at_epoch_ms) / 1000))
+            : 0;
+        var elapsed = accepted.elapsed_seconds_at_sample + delta;
+        return accepted.duration_semantic === "aggregate_live"
+            ? accepted.aggregate_base_seconds + elapsed
+            : elapsed;
+    };
+    App.computeActiveElapsedNow = function (clock, nowMs) {
+        var accepted = App.validateLiveClock(clock);
+        if (!accepted || accepted.duration_semantic !== "current_live") return 0;
+        return App.computeClockDurationNow(accepted, nowMs) || 0;
+    };
+
+    function liveClockAttribute(name, value) {
+        return ' data-clock-' + name + '="' + escapeHtml(String(value)) + '"';
+    }
+
+    App.liveClockDataAttributes = function (clock, continuityKey, role) {
+        var accepted = App.validateLiveClock(clock);
+        if (!accepted || accepted.is_live !== true) return "";
+        var result = ' data-live-clock-target="1"';
+        result += liveClockAttribute("sampled-at-epoch-ms", accepted.sampled_at_epoch_ms);
+        result += liveClockAttribute("started-at-epoch-ms", accepted.started_at_epoch_ms);
+        result += liveClockAttribute("elapsed-seconds-at-sample", accepted.elapsed_seconds_at_sample);
+        result += liveClockAttribute("aggregate-base-seconds", accepted.aggregate_base_seconds);
+        result += liveClockAttribute("duration-semantic", accepted.duration_semantic);
+        result += liveClockAttribute("is-live", "true");
+        result += liveClockAttribute("live-state", accepted.live_state);
+        result += liveClockAttribute("display-span-id", accepted.display_span_id);
+        result += liveClockAttribute("stable-live-key-hash", accepted.stable_live_key_hash);
+        if (continuityKey) result += ' data-live-continuity-key="' + escapeHtml(String(continuityKey)) + '"';
+        if (role) result += ' data-live-role="' + escapeHtml(String(role)) + '"';
+        return result;
+    };
+
+    App.readLiveClockTarget = function (element) {
+        if (!element || element.getAttribute("data-live-clock-target") !== "1") return null;
+        var clock = {
+            sampled_at_epoch_ms: Number(element.getAttribute("data-clock-sampled-at-epoch-ms")),
+            started_at_epoch_ms: Number(element.getAttribute("data-clock-started-at-epoch-ms")),
+            elapsed_seconds_at_sample: Number(element.getAttribute("data-clock-elapsed-seconds-at-sample")),
+            aggregate_base_seconds: Number(element.getAttribute("data-clock-aggregate-base-seconds")),
+            duration_semantic: String(element.getAttribute("data-clock-duration-semantic") || ""),
+            is_live: element.getAttribute("data-clock-is-live") === "true",
+            live_state: String(element.getAttribute("data-clock-live-state") || ""),
+            display_span_id: String(element.getAttribute("data-clock-display-span-id") || ""),
+            stable_live_key_hash: String(element.getAttribute("data-clock-stable-live-key-hash") || "")
+        };
+        return App.validateLiveClock(clock);
+    };
+
+    App.setLiveClockTarget = function (element, clock, continuityKey, role) {
+        if (!element) return false;
+        App.clearLiveClockTarget(element);
+        var accepted = App.validateLiveClock(clock);
+        if (!accepted || accepted.is_live !== true) return false;
+        element.setAttribute("data-live-clock-target", "1");
+        element.setAttribute("data-clock-sampled-at-epoch-ms", String(accepted.sampled_at_epoch_ms));
+        element.setAttribute("data-clock-started-at-epoch-ms", String(accepted.started_at_epoch_ms));
+        element.setAttribute("data-clock-elapsed-seconds-at-sample", String(accepted.elapsed_seconds_at_sample));
+        element.setAttribute("data-clock-aggregate-base-seconds", String(accepted.aggregate_base_seconds));
+        element.setAttribute("data-clock-duration-semantic", accepted.duration_semantic);
+        element.setAttribute("data-clock-is-live", "true");
+        element.setAttribute("data-clock-live-state", accepted.live_state);
+        element.setAttribute("data-clock-display-span-id", accepted.display_span_id);
+        element.setAttribute("data-clock-stable-live-key-hash", accepted.stable_live_key_hash);
+        if (continuityKey) element.setAttribute("data-live-continuity-key", String(continuityKey));
+        if (role) element.setAttribute("data-live-role", String(role));
+        return true;
+    };
+
+    App.clearLiveClockTarget = function (element) {
+        if (!element) return;
+        [
+            "data-live-clock-target",
+            "data-clock-sampled-at-epoch-ms",
+            "data-clock-started-at-epoch-ms",
+            "data-clock-elapsed-seconds-at-sample",
+            "data-clock-aggregate-base-seconds",
+            "data-clock-duration-semantic",
+            "data-clock-is-live",
+            "data-clock-live-state",
+            "data-clock-display-span-id",
+            "data-clock-stable-live-key-hash",
+            "data-live-continuity-key",
+            "data-live-role"
+        ].forEach(function (name) { element.removeAttribute(name); });
     };
 
     App.renderCurrentActivityElement = function (element, current, prefix) {
         if (!element) return;
         current = current || {};
         if (!current.active) {
+            App.clearLiveClockTarget(element);
             element.textContent = "当前活动：无";
             return;
         }
         var clock = App.getActiveLiveClock ? App.getActiveLiveClock() : null;
-        var displaySpanId = String((clock && clock.display_span_id) || "");
-        var currentSpanId = String(current.current_activity_display_span_id || "");
-        var resourceHash = String(current.current_resource_identity_hash || "");
-        var stableHash = String(current.stable_live_key_hash || (clock && clock.stable_live_key_hash) || "");
-        var canTick = !!(clock && clock.current_duration_live === true && displaySpanId && currentSpanId && resourceHash);
-        var seconds = canTick && App.computeActiveElapsedNow
-            ? App.computeActiveElapsedNow(clock, Date.now())
+        var accepted = App.validateLiveClock(clock);
+        var canTick = !!(accepted
+            && accepted.is_live === true
+            && accepted.duration_semantic === "current_live");
+        var seconds = canTick
+            ? App.computeClockDurationNow(accepted, Date.now())
             : (parseInt(current.elapsed_seconds, 10) || 0);
-        var continuity = App.currentActivityContinuityKey(current, clock, prefix);
-        var priorKey = element.getAttribute("data-current-continuity-key") || "";
-        if (priorKey && priorKey !== continuity) App.resetMonotonicRenderState(priorKey);
-        element.setAttribute("data-current-continuity-key", continuity);
-        var prior = App._monotonicRenderState[continuity];
-        if (prior && seconds < prior.lastSeconds) seconds = prior.lastSeconds;
+        var continuity = App.currentActivityContinuityKey(current, accepted, prefix);
         var parts = String(current.display || "").split("｜");
         if (parts.length < 3) {
             element.textContent = "当前活动：" + (current.display || App.displayStatusText(current));
             return;
         }
+        var attributes = canTick
+            ? App.liveClockDataAttributes(accepted, continuity, (prefix || "current") + "-current")
+            : "";
         var html = "当前活动：" + escapeHtml(parts[0]) + "｜" + escapeHtml(parts[1]) + "｜"
-            + '<span class="current-activity-duration"'
-            + (canTick ? ' data-live-duration-target="1" data-duration-semantic="current-live" data-display-base-seconds="0" data-live-base-seconds="0"' : '')
-            + (canTick ? ' data-live-role="' + escapeHtml(prefix || "current") + '-current"' : '')
-            + (canTick ? ' data-live-continuity-key="' + escapeHtml(continuity) + '"' : '')
-            + (canTick ? ' data-current-activity-display-span-id="' + escapeHtml(currentSpanId) + '"' : '')
-            + (canTick ? ' data-current-resource-identity-hash="' + escapeHtml(resourceHash) + '"' : '')
-            + (canTick ? ' data-display-span-id="' + escapeHtml(displaySpanId) + '"' : '')
-            + (canTick && stableHash ? ' data-stable-live-key-hash="' + escapeHtml(stableHash) + '"' : '')
-            + ' data-duration-seconds="' + String(seconds) + '">' + escapeHtml(formatDuration(seconds)) + '</span>';
+            + '<span class="current-activity-duration"' + attributes
+            + ' data-duration-seconds="' + String(seconds || 0) + '">'
+            + escapeHtml(formatDuration(seconds || 0)) + '</span>';
         for (var index = 3; index < parts.length; index++) html += "｜" + escapeHtml(parts[index]);
         element.innerHTML = html;
-        App._monotonicRenderState[continuity] = { lastSeconds: seconds };
     };
 
-    App.kpiBaseSeconds = function (snapshot, field) {
-        snapshot = snapshot || {};
-        var base = snapshot.kpi_live_base || {};
-        return base[field] !== undefined && base[field] !== null
-            ? nonNegativeInt(base[field], 0)
-            : nonNegativeInt(snapshot[field], 0);
-    };
-
-    App.setLiveProjectionAnchor = function (element, baseSeconds, continuityKey, role) {
-        if (!element) return;
-        var base = String(nonNegativeInt(baseSeconds, 0));
-        element.setAttribute("data-live-duration-target", "1");
-        element.setAttribute("data-duration-semantic", "aggregate-live");
-        element.setAttribute("data-display-base-seconds", base);
-        element.setAttribute("data-live-base-seconds", base);
-        if (role) element.setAttribute("data-live-role", String(role));
-        if (continuityKey) element.setAttribute("data-live-continuity-key", String(continuityKey));
-        var runtime = App.liveRuntime || {};
-        if (runtime.displaySpanId) element.setAttribute("data-display-span-id", String(runtime.displaySpanId));
-        if (runtime.stableLiveKeyHash) element.setAttribute("data-stable-live-key-hash", String(runtime.stableLiveKeyHash));
-    };
-
-    App.clearLiveProjectionAnchor = function (element) {
-        if (!element) return;
-        [
-            "data-live-duration-target", "data-duration-semantic",
-            "data-display-base-seconds", "data-live-base-seconds",
-            "data-live-role", "data-live-continuity-key",
-            "data-display-span-id", "data-stable-live-key-hash"
-        ].forEach(function (name) { element.removeAttribute(name); });
-    };
-
-    App.renderLiveDurationTarget = function (target, baseSeconds, activeSeconds) {
-        if (!target) return;
+    App.renderLiveDurationTarget = function (target, clock, nowMs) {
+        if (!target) return false;
+        var accepted = App.validateLiveClock(clock);
+        if (!accepted || accepted.is_live !== true) return false;
+        var seconds = App.computeClockDurationNow(accepted, nowMs);
+        if (seconds === null) return false;
         renderDurationProjected(
             target,
-            App.projectFromDisplayBase(baseSeconds, activeSeconds),
-            target.getAttribute("data-live-continuity-key") || "",
-            { allowDecrease: false }
+            seconds,
+            target.getAttribute("data-live-continuity-key") || ""
         );
+        return true;
     };
 
     App.liveTargetCompatibleWithRuntime = function (target, runtime) {
         if (!target || !runtime) return false;
-        var currentSpan = target.getAttribute("data-current-activity-display-span-id") || "";
-        if (currentSpan) return currentSpan === runtime.currentActivityDisplaySpanId;
-        var resourceHash = target.getAttribute("data-current-resource-identity-hash") || "";
-        if (resourceHash) return resourceHash === runtime.currentResourceIdentityHash;
-        var span = target.getAttribute("data-display-span-id") || "";
-        if (span) return span === runtime.displaySpanId;
-        var stable = target.getAttribute("data-stable-live-key-hash") || "";
-        var node = target.parentElement;
-        while (!stable && node) {
-            stable = node.getAttribute && node.getAttribute("data-stable-live-key-hash");
-            node = node.parentElement;
-        }
-        return !!stable && stable === runtime.stableLiveKeyHash;
+        var targetClock = App.readLiveClockTarget(target);
+        var runtimeClock = App.validateLiveClock(runtime.liveClock);
+        if (!targetClock || !runtimeClock) return false;
+        return targetClock.display_span_id === runtimeClock.display_span_id
+            && targetClock.stable_live_key_hash === runtimeClock.stable_live_key_hash;
     };
 
     App._timelineEditingActive = function () {

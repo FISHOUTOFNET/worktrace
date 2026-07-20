@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+from dataclasses import dataclass
 
 from ..constants import (
     EXCLUDED_APP_NAME,
@@ -34,6 +35,13 @@ class PrivacyResolutionPending(RuntimeError):
     """A privacy-sensitive local-file window cannot yet be classified safely."""
 
 
+@dataclass(frozen=True)
+class ExclusionDecision:
+    excluded: bool
+    resolution_pending: bool
+    refresh_required: bool
+
+
 def clear_exclude_rules_cache() -> None:
     """Test/reconfiguration hook; privacy writes invalidate by generation."""
 
@@ -46,8 +54,12 @@ def clear_exclude_rules_cache() -> None:
         _EXCLUDE_RULE_CACHE = None
 
 
-def is_excluded(active_window: ActiveWindow, *, conn=None) -> bool:
-    """Evaluate exclusions; unresolved local-file privacy decisions fail closed."""
+def evaluate_exclusion(
+    active_window: ActiveWindow,
+    *,
+    conn=None,
+) -> ExclusionDecision:
+    """Pure exclusion query; it never schedules maintenance or writes SQLite."""
 
     haystack = " ".join(
         [
@@ -58,14 +70,18 @@ def is_excluded(active_window: ActiveWindow, *, conn=None) -> bool:
         ]
     ).casefold()
     if _matches_exclude_keyword(haystack, conn=conn):
-        return True
+        return ExclusionDecision(True, False, False)
     authoritative_path = str(active_window.file_path_hint or "").strip()
     if authoritative_path:
-        return _matches_exclude_folder(authoritative_path, conn=conn)
+        return ExclusionDecision(
+            _matches_exclude_folder(authoritative_path, conn=conn),
+            False,
+            False,
+        )
 
     folder_rules = _exclude_rules(conn=conn)["folders"]
     if not folder_rules:
-        return False
+        return ExclusionDecision(False, False, False)
     file_name = extract_file_name_from_title(active_window.window_title)
     if file_name:
         from .folder_index_query_service import lookup_indexed_paths_for_file_name
@@ -83,17 +99,20 @@ def is_excluded(active_window: ActiveWindow, *, conn=None) -> bool:
             )
             for candidate in candidates
         ):
-            return True
+            return ExclusionDecision(True, False, False)
 
-    # Privacy is a runtime command owner: it may explicitly request maintenance
-    # after the pure lookup, while report/preview callers remain read-only.
-    if active_window.privacy_path_required and conn is None:
-        from .folder_index_service import request_refresh_for_enabled_rules
-
-        request_refresh_for_enabled_rules(include_excluded=True)
     if active_window.privacy_path_required:
+        return ExclusionDecision(True, True, True)
+    return ExclusionDecision(False, False, False)
+
+
+def is_excluded(active_window: ActiveWindow, *, conn=None) -> bool:
+    """Compatibility query wrapper with no implicit write capability."""
+
+    decision = evaluate_exclusion(active_window, conn=conn)
+    if decision.resolution_pending:
         raise PrivacyResolutionPending("privacy_path_unresolved")
-    return False
+    return decision.excluded
 
 
 def is_resource_excluded(resource, *, conn=None) -> bool:
@@ -207,8 +226,8 @@ def _exclude_rules(*, conn=None) -> dict[str, list[dict]]:
                 and _EXCLUDE_RULE_CACHE is not None
             ):
                 return _copy_rule_snapshot(_EXCLUDE_RULE_CACHE)
-        with get_connection() as conn:
-            result = _load_exclude_rules(conn)
+        with get_connection() as read_conn:
+            result = _load_exclude_rules(read_conn)
         if generation_tuple(_EXCLUDE_RULE_CACHE_NAMESPACES) != current_generation:
             continue
         with _EXCLUDE_RULE_CACHE_LOCK:
@@ -247,8 +266,10 @@ def _matches_exclude_folder(file_path_hint: str | None, *, conn=None) -> bool:
 
 
 __all__ = [
+    "ExclusionDecision",
     "PrivacyResolutionPending",
     "clear_exclude_rules_cache",
+    "evaluate_exclusion",
     "is_excluded",
     "is_resource_excluded",
     "make_excluded_activity_payload",

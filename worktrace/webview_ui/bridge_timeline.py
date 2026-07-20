@@ -25,7 +25,11 @@ class TimelineBridgeMixin:
 
     def get_timeline(self, date: str | None = None) -> dict[str, Any]:
         try:
-            return view_model_api.get_timeline_view_model(date)
+            return view_model_api.get_timeline_view_model(
+                date,
+                runtime=self._runtime(),
+                collector_status=self._collector_status(),
+            )
         except Exception:
             logger.exception("webview bridge get_timeline failed")
             return {"ok": False, "error": "operation_failed", "message": "操作失败"}
@@ -57,6 +61,8 @@ class TimelineBridgeMixin:
                 expected_projection_revision=(
                     (expected_projection_revision or "").strip() or None
                 ),
+                runtime=self._runtime(),
+                collector_status=self._collector_status(),
             )
         except Exception as exc:
             return self._public_operation_error(

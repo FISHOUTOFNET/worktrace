@@ -221,11 +221,13 @@ def test_overview_surface_has_required_user_contracts() -> None:
     assert "WebView 迁移中" not in index
 
 
-def test_overview_uses_numeric_live_bases_and_safe_error_surface() -> None:
+def test_overview_uses_exact_aggregate_clocks_and_safe_error_surface() -> None:
     source = read_all_js()
     assert "overview-error" in source
     assert "showError" in source and "clearError" in source
-    assert "kpi_live_base" in source
+    assert "kpi_live_targets" in source
+    assert 'duration_semantic === "aggregate_live"' in source
+    assert "kpi_live_base" not in source
     assert "classified_seconds" in source
     assert "uncategorized_seconds" in source
 

@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+import threading
 from types import SimpleNamespace
 
 import pytest
 
 from worktrace.platforms.fake_adapter import FakeAdapter
-from worktrace.runtime.app_runtime import AppRuntime, RuntimePhase
+from worktrace.runtime.app_runtime import (
+    AppRuntime,
+    RuntimePhase,
+    WorkerHandle,
+    WorkerSpec,
+)
 from worktrace.worker_health import (
     DEFAULT_CONSECUTIVE_FAILURE_THRESHOLD,
     WorkerHealthRegistry,
@@ -68,8 +74,16 @@ def test_app_runtime_marks_unexpected_worker_exit_degraded() -> None:
         adapter=FakeAdapter(),
     )
     runtime.phase = RuntimePhase.RUNNING
+    stop_event = threading.Event()
+    spec = WorkerSpec(
+        name="folder_index",
+        thread_name="test-folder-index",
+        target=lambda _stop_event, *, health=None: None,
+        args_factory=lambda stop: (stop,),
+    )
+    handle = WorkerHandle(spec=spec, thread=None, stop_event=stop_event)
 
-    runtime._run_owned_worker("folder_index", lambda *, health: None, ())
+    runtime._run_owned_worker(handle)
 
     snapshot = runtime.worker_health_snapshot()
     assert snapshot["degraded_workers"] == ["folder_index"]

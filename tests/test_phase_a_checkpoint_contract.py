@@ -49,7 +49,7 @@ def test_no_retired_paths_or_secondary_thread_owner() -> None:
     runtime_source = (PRODUCTION / "runtime" / "app_runtime.py").read_text(
         encoding="utf-8"
     )
-    assert runtime_source.count("def _start_owned_worker(") == 1
+    assert runtime_source.count("def _start_worker(") == 1
     for relative in (
         "services/folder_index_service.py",
         "services/history_mutation_job_service.py",
@@ -70,8 +70,8 @@ def test_current_contract_versions_and_internal_progress() -> None:
     schema = (PRODUCTION / "schema_internal.sql").read_text(encoding="utf-8")
     indexes = (PRODUCTION / "schema_indexes.sql").read_text(encoding="utf-8")
 
-    assert "CURRENT_SCHEMA_VERSION = 11" in db_source
-    assert "PAYLOAD_VERSION = 5" in backup_source
+    assert "CURRENT_SCHEMA_VERSION = 12" in db_source
+    assert "PAYLOAD_VERSION = 6" in backup_source
     assert '"startup_recovery_job",' in backup_source
     assert "CREATE TABLE IF NOT EXISTS startup_recovery_job" in schema
     assert "idx_startup_recovery_job_runnable" in indexes

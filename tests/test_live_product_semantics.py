@@ -1,14 +1,16 @@
 """Small end-to-end contracts for the current collector and live product."""
 
 from __future__ import annotations
-from tests.support import runtime_state_fixture
 
 import json
+
 import pytest
+
+from tests.support import runtime_state_fixture
+from tests.support.application import build_test_bridge
 from worktrace.collector.state_machine import CollectorStateMachine
 from worktrace.platforms.base import ActiveWindow
 from worktrace.services import activity_service
-from worktrace.webview_ui.bridge import WebViewBridge
 
 pytestmark = [
     pytest.mark.contract,
@@ -40,7 +42,10 @@ def test_fresh_normal_activity_immediately_owns_a_persisted_open_row(temp_db):
     )
     assert len(rows) == 1 and rows[0]["end_time"] is None
     assert snapshot["persisted_activity_id"] == rows[0]["id"]
-    assert WebViewBridge().get_overview()["runtime"]["clock"]["live_state"] == "persisted_open"
+    assert (
+        build_test_bridge().get_overview()["runtime"]["clock"]["live_state"]
+        == "persisted_open"
+    )
 
 
 def test_window_switch_closes_its_own_row_and_never_reopens_an_anchor(temp_db):

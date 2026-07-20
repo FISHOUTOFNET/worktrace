@@ -3,7 +3,6 @@ from __future__ import annotations
 import pytest
 
 from tests.support import activity_factory as activity_service
-from worktrace.constants import EXCLUDED_PROJECT
 from worktrace.data_generation_repository import (
     DataGenerationNamespace,
     DataGenerationRepository,
@@ -11,11 +10,10 @@ from worktrace.data_generation_repository import (
 from worktrace.db import get_connection, now_str
 from worktrace.services import (
     database_maintenance_service,
-    folder_rule_service,
     history_mutation_job_service,
     privacy_gate_service,
     project_service,
-    rule_service,
+    rule_catalog_command_service,
     settings_service,
 )
 
@@ -48,7 +46,10 @@ def _worker_progress_counts() -> dict[str, int]:
 
 def _seed_all_worker_progress() -> None:
     project_id = project_service.create_project("Worker Progress Source")
-    rule_id = rule_service.create_rule("worker-progress", project_id)
+    rule_id = rule_catalog_command_service.create_keyword_rule(
+        "worker-progress",
+        project_id,
+    )
     activity_id = activity_service.create_activity(
         "Word",
         "winword.exe",
@@ -99,7 +100,7 @@ def _seed_all_worker_progress() -> None:
         )
 
 
-def test_clear_all_advances_only_replacement_epoch_once(temp_db):
+def test_clear_all_advances_replacement_and_restored_settings_once(temp_db):
     privacy_gate_service.accept_privacy_notice()
     project_service.create_project("Replacement Source")
     before = _generations()
@@ -110,8 +111,14 @@ def test_clear_all_advances_only_replacement_epoch_once(temp_db):
     assert after[DataGenerationNamespace.DATABASE_REPLACEMENT] == (
         before[DataGenerationNamespace.DATABASE_REPLACEMENT] + 1
     )
+    assert after[DataGenerationNamespace.SETTINGS] == (
+        before[DataGenerationNamespace.SETTINGS] + 1
+    )
     for namespace in DataGenerationNamespace:
-        if namespace is DataGenerationNamespace.DATABASE_REPLACEMENT:
+        if namespace in {
+            DataGenerationNamespace.DATABASE_REPLACEMENT,
+            DataGenerationNamespace.SETTINGS,
+        }:
             continue
         assert after[namespace] == before[namespace]
     assert privacy_gate_service.is_privacy_notice_accepted() is True
@@ -133,13 +140,9 @@ def test_ordinary_domain_writes_do_not_advance_replacement(temp_db):
 
     settings_service.set_setting("ui_refresh_seconds", "77")
     project_service.create_project("Ordinary Domain Write")
-    excluded = project_service.get_project_by_name(EXCLUDED_PROJECT)
-    assert excluded is not None
-    project_service.set_project_enabled(int(excluded["id"]), True)
-    folder_rule_service.create_or_update_folder_rule(
+    rule_catalog_command_service.create_or_update_excluded_folder_rule(
         "D:\\ReplacementPrivacy",
-        int(excluded["id"]),
-        True,
+        recursive=True,
     )
 
     after = _generations()
@@ -182,7 +185,7 @@ def test_clear_all_refreshes_generation_backed_settings_cache(temp_db):
     assert settings_service.get_setting("ui_refresh_seconds") == "10"
 
 
-def test_replacement_generation_failure_rolls_back_data_and_generations(
+def test_replacement_generation_failure_rolls_back_data_and_replacement_epoch(
     temp_db,
     monkeypatch,
 ):
@@ -204,6 +207,13 @@ def test_replacement_generation_failure_rolls_back_data_and_generations(
     with pytest.raises(RuntimeError, match="generation_publish_failed"):
         database_maintenance_service.clear_all_live_data()
 
-    assert _generations() == before
+    after = _generations()
+    for namespace in DataGenerationNamespace:
+        if namespace is DataGenerationNamespace.SETTINGS:
+            assert after[namespace] == before[namespace] + 1
+        else:
+            assert after[namespace] == before[namespace]
+    assert settings_service.get_bool_setting("user_paused", False) is True
+    assert settings_service.get_setting("collector_status", "") == "paused"
     assert project_service.get_project(project_id) is not None
     assert privacy_gate_service.is_privacy_notice_accepted() is True
