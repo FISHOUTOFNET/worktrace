@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import ast
+from pathlib import Path
+
 import pytest
 
 from worktrace.constants import EXCLUDED_WINDOW_TITLE
@@ -26,6 +29,35 @@ def _enable_excluded_project_with_keyword(keyword: str) -> int:
 
 def _is_excluded(window: ActiveWindow) -> bool:
     return privacy_service.evaluate_exclusion(window).excluded
+
+
+def test_privacy_public_contract_is_structured_only():
+    assert not hasattr(privacy_service, "is_excluded")
+    assert not hasattr(privacy_service, "PrivacyResolutionPending")
+    assert privacy_service.__all__ == [
+        "ExclusionDecision",
+        "clear_exclude_rules_cache",
+        "evaluate_exclusion",
+        "is_resource_excluded",
+        "make_excluded_activity_payload",
+    ]
+
+
+def test_no_source_uses_retired_privacy_surface():
+    for root in (Path("worktrace"), Path("tests")):
+        for path in root.rglob("*.py"):
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Attribute):
+                    assert not (
+                        isinstance(node.value, ast.Name)
+                        and node.value.id == "privacy_service"
+                        and node.attr == "is_excluded"
+                    ), path
+                if isinstance(node, ast.ImportFrom):
+                    assert "PrivacyResolutionPending" not in {
+                        alias.name for alias in node.names
+                    }, path
 
 
 def test_privacy_keyword_matching_and_payload(temp_db):
