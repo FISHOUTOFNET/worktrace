@@ -98,20 +98,22 @@ class MaintenanceStatus:
     """Exact backend-owned maintenance status exposed through every API surface."""
 
     maintenance_in_progress: bool
+    maintenance_restored: bool
+    recovery_blocked: bool
+    blocked_reason: str | None
     collector_running: bool
     collector_status: str
     user_paused: bool
-    maintenance_restored: bool
-    blocked_reason: str | None
 
     def to_dict(self) -> dict[str, object]:
         return {
             "maintenance_in_progress": self.maintenance_in_progress,
+            "maintenance_restored": self.maintenance_restored,
+            "recovery_blocked": self.recovery_blocked,
+            "blocked_reason": self.blocked_reason,
             "collector_running": self.collector_running,
             "collector_status": self.collector_status,
             "user_paused": self.user_paused,
-            "maintenance_restored": self.maintenance_restored,
-            "blocked_reason": self.blocked_reason,
         }
 
 
@@ -162,17 +164,27 @@ class RuntimeMaintenanceCoordinator:
             control is not None
             and control.is_collection_running_for_maintenance()
         )
+        phase = self.phase
         blocked_reason = self.blocked_reason
-        in_progress = self.active()
+        gate_active = DATABASE_WRITE_GATE.active()
+        recovery_blocked = (
+            phase is MaintenancePhase.FAILED_CLOSED
+            or blocked_reason is not None
+        )
+        in_progress = (
+            phase not in {MaintenancePhase.IDLE, MaintenancePhase.FAILED_CLOSED}
+            or gate_active
+        )
         return MaintenanceStatus(
             maintenance_in_progress=in_progress,
+            maintenance_restored=not in_progress and not recovery_blocked,
+            recovery_blocked=recovery_blocked,
+            blocked_reason=blocked_reason,
             collector_running=collector_running,
             collector_status=str(
                 get_setting("collector_status", "stopped") or "stopped"
             ),
             user_paused=get_bool_setting("user_paused", False),
-            maintenance_restored=not in_progress and blocked_reason is None,
-            blocked_reason=blocked_reason,
         )
 
     def _set_phase(self, phase: MaintenancePhase) -> None:
