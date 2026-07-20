@@ -12,6 +12,7 @@ PROTOCOL = "WORKTRACE_CI_DIAGNOSTICS_V1"
 DEFAULT_MAX_BYTES = 65536
 _MAX_DETAIL_LINES = 120
 _MAX_DETAIL_LINE_CHARS = 500
+_TRANSPORT_CHUNK_SIZE = 5
 
 
 def _single_line(value: object, *, limit: int) -> str:
@@ -106,7 +107,7 @@ def _normalized_groups(payload: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _index_group(group: dict[str, Any]) -> dict[str, object]:
-    """Return the compact first-pass record that must expose every root cause."""
+    """Return the readable compact record for one root cause."""
 
     return {
         "id": group["id"],
@@ -115,6 +116,26 @@ def _index_group(group: dict[str, Any]) -> dict[str, object]:
         "message": group["message"],
         "affected_test_count": group["affected_test_count"],
     }
+
+
+def _transport_group(group: dict[str, Any]) -> dict[str, object]:
+    """Return the bounded machine record used by API log readers."""
+
+    return {
+        "i": group["id"],
+        "k": group["kind"],
+        "l": group["location"],
+        "m": _single_line(group["message"], limit=100),
+        "n": group["affected_test_count"],
+    }
+
+
+def _transport_chunks(groups: list[dict[str, Any]]) -> list[list[dict[str, object]]]:
+    records = [_transport_group(group) for group in groups]
+    return [
+        records[index : index + _TRANSPORT_CHUNK_SIZE]
+        for index in range(0, len(records), _TRANSPORT_CHUNK_SIZE)
+    ]
 
 
 def _normalized_log_tail(payload: dict[str, Any]) -> list[str]:
@@ -147,10 +168,14 @@ def _render(
         f"skipped={counts.get('skipped', 0)}",
         f"failure_count={len(payload.get('failures') or [])}",
         f"root_cause_count={len(groups)}",
-        "cause_index_json="
-        + json.dumps(compact_index, ensure_ascii=False, separators=(",", ":")),
-        "ROOT_CAUSE_INDEX_BEGIN",
+        "ROOT_CAUSE_TRANSPORT_BEGIN",
     ]
+    lines.extend(
+        f"cause_chunk_json_{index:03d}="
+        + json.dumps(chunk, ensure_ascii=False, separators=(",", ":"))
+        for index, chunk in enumerate(_transport_chunks(groups), start=1)
+    )
+    lines.extend(("ROOT_CAUSE_TRANSPORT_END", "ROOT_CAUSE_INDEX_BEGIN"))
     lines.extend(
         "cause_json=" + json.dumps(group, ensure_ascii=False, separators=(",", ":"))
         for group in compact_index
