@@ -18,6 +18,8 @@ from ..constants import (
 from ..data_generation_repository import DataGenerationRepository
 from ..db import CURRENT_SCHEMA_VERSION, expected_schema_fingerprint, schema_fingerprint
 from ..domain_limits import NOTE_MAX_LENGTH
+from .report_replay_binding import ReplayBinding
+from .report_session_operation_engine import OPERATION_PAYLOAD_VERSION
 
 _ALLOWED_ACTIVITY_STATUSES = {
     STATUS_NORMAL,
@@ -95,6 +97,7 @@ def _seal_imported_open_activity_rows(conn: sqlite3.Connection) -> None:
 
 def _validate_activity_rows(conn: sqlite3.Connection) -> None:
     """Validate activity intervals and duration semantics."""
+
     for row in conn.execute(
         "SELECT id, start_time, end_time, duration_seconds, status "
         "FROM activity_log ORDER BY id"
@@ -172,10 +175,18 @@ def _validate_operation_payload(
     conn: sqlite3.Connection,
 ) -> None:
     payload = operation.get("payload")
-    if not isinstance(payload, dict) or payload.get("payload_version") != 4:
+    if (
+        not isinstance(payload, dict)
+        or isinstance(payload.get("payload_version"), bool)
+        or payload.get("payload_version") != OPERATION_PAYLOAD_VERSION
+    ):
         raise BackupValidationError("operation payload version")
+    try:
+        ReplayBinding(str(payload["replay_binding"]))
+    except (KeyError, ValueError) as exc:
+        raise BackupValidationError("operation replay binding") from exc
     operation_type = str(operation.get("operation_type") or "")
-    allowed = {"payload_version"}
+    allowed = {"payload_version", "replay_binding"}
     if operation_type == "edit_session":
         allowed |= {"project", "duration", "note"}
         if not any(key in payload for key in ("project", "duration", "note")):
