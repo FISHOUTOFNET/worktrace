@@ -11,10 +11,12 @@ import sqlite3
 from dataclasses import dataclass
 from enum import Enum
 
+from ..write_gate import DATABASE_MAINTENANCE_ERROR
+
 
 class CollectorFailureCode(str, Enum):
     DATABASE_BUSY = "database_busy"
-    SECURE_IMPORT_IN_PROGRESS = "secure_import_in_progress"
+    DATABASE_MAINTENANCE_IN_PROGRESS = DATABASE_MAINTENANCE_ERROR
     DATABASE_GENERATION_CHANGED = "database_generation_changed"
     ADAPTER_TEMPORARILY_UNAVAILABLE = "adapter_temporarily_unavailable"
     UNEXPECTED_FAILURE = "unexpected_failure"
@@ -24,7 +26,7 @@ RETRYABLE_COLLECTOR_FAILURE_CODES = frozenset(
     {
         CollectorFailureCode.ADAPTER_TEMPORARILY_UNAVAILABLE,
         CollectorFailureCode.DATABASE_BUSY,
-        CollectorFailureCode.SECURE_IMPORT_IN_PROGRESS,
+        CollectorFailureCode.DATABASE_MAINTENANCE_IN_PROGRESS,
         CollectorFailureCode.DATABASE_GENERATION_CHANGED,
     }
 )
@@ -69,9 +71,9 @@ def classify_collector_failure(exc: BaseException) -> CollectorFailureDispositio
                 CollectorFailureCode.DATABASE_BUSY,
                 True,
             )
-        if message == CollectorFailureCode.SECURE_IMPORT_IN_PROGRESS.value:
+        if message == CollectorFailureCode.DATABASE_MAINTENANCE_IN_PROGRESS.value:
             return CollectorFailureDisposition(
-                CollectorFailureCode.SECURE_IMPORT_IN_PROGRESS,
+                CollectorFailureCode.DATABASE_MAINTENANCE_IN_PROGRESS,
                 True,
             )
         if message == CollectorFailureCode.DATABASE_GENERATION_CHANGED.value:
