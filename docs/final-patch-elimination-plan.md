@@ -79,8 +79,9 @@ Only the permanent Standard CI workflow is used.
 
 1. Runtime/platform boundary: completed on the branch.
 2. Checkpoint 2 run `29718444163` proved Node validation and Windows package smoke; its Python job stopped at the inventory gate before collection. The stale current-only projection target and conservative DB-risk classification were corrected in one root-cause batch.
-3. A new Checkpoint 2 run validates inventory, Python collection/full suite, Node and packaging without rerunning the failed historical job.
-4. Final semantic governance, documentation and packaging validation follows a successful Checkpoint 2 run.
+3. Checkpoint 2 run `29718839199` again proved Node and Windows packaging but exposed that the fixed diagnostics relay did not surface inventory-log details through the GitHub API. The permanent relay now emits a bounded artifact-log tail for inventory and compile failures without changing validation scope or outcomes.
+4. The next Checkpoint 2 run validates the diagnostics protocol and exposes any remaining inventory root causes before Python collection/full-suite execution.
+5. Final semantic governance, documentation and packaging validation follows a successful Checkpoint 2 run.
 
 The branch remains unmerged and PR #25 remains Draft until explicit user
 confirmation.
