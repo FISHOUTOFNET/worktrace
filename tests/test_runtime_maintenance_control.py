@@ -479,7 +479,7 @@ def test_clipboard_monitor_does_not_start_or_retain_while_disabled():
     monitor = ClipboardMonitor(_window)
     monitor.set_enabled(False)
     assert monitor.drain() == []
-    assert monitor._thread is None
+    assert not hasattr(monitor, "_thread")
 
 
 def test_clipboard_disable_waits_for_inflight_capture_and_drops_generation(monkeypatch):
@@ -501,7 +501,7 @@ def test_clipboard_disable_waits_for_inflight_capture_and_drops_generation(monke
     generation = monitor._generation
 
     def serialized_capture():
-        with monitor._lifecycle_lock:
+        with monitor._state_lock:
             monitor._capture_locked(7, generation)
 
     capture = threading.Thread(target=serialized_capture, daemon=True)
