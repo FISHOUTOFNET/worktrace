@@ -28,7 +28,6 @@ from ..services import (
 from ..services.keyword_rule_policy import ProjectRuleWriteError
 from ..services.system_project_service import SystemProjectCatalogUnavailableError
 
-_APPLY_TO_HISTORY_UNSET = object()
 _CATALOG_DOMAIN_ERRORS = (
     ProjectRuleWriteError,
     SystemProjectCatalogUnavailableError,
@@ -50,23 +49,14 @@ def set_project_rule_enabled(
     if not valid_int(rule_id) or not valid_bool(enabled):
         return fail_payload(ERROR_INVALID_INPUT)
     try:
-        if rule_type == "folder":
-            changed = rule_catalog_command_service.set_folder_rule_enabled(
-                rule_id,
-                enabled,
-            )
-        else:
-            changed = rule_catalog_command_service.set_keyword_rule_enabled(
-                rule_id,
-                enabled,
-            )
+        changed = (
+            rule_catalog_command_service.set_folder_rule_enabled(rule_id, enabled)
+            if rule_type == "folder"
+            else rule_catalog_command_service.set_keyword_rule_enabled(rule_id, enabled)
+        )
         if not changed:
             return fail_payload(ERROR_NOT_FOUND)
-        return ok_payload(
-            rule_type=rule_type,
-            rule_id=rule_id,
-            enabled=enabled,
-        )
+        return ok_payload(rule_type=rule_type, rule_id=rule_id, enabled=enabled)
     except _CATALOG_DOMAIN_ERRORS as exc:
         return _catalog_failure(exc)
     except Exception:
@@ -98,32 +88,25 @@ def create_project_keyword_rule(project_id: Any, keyword: Any) -> dict[str, Any]
 
 def delete_project_keyword_rule(
     rule_id: Any,
-    apply_to_history: Any = _APPLY_TO_HISTORY_UNSET,
+    apply_to_history: bool,
 ) -> dict[str, Any]:
-    if not valid_int(rule_id):
-        return fail_payload(ERROR_INVALID_INPUT)
-    if (
-        apply_to_history is not _APPLY_TO_HISTORY_UNSET
-        and not valid_bool(apply_to_history)
-    ):
+    if not valid_int(rule_id) or not valid_bool(apply_to_history):
         return fail_payload(ERROR_INVALID_INPUT)
     try:
-        explicit_history_choice = apply_to_history is not _APPLY_TO_HISTORY_UNSET
-        requested_history = False if not explicit_history_choice else apply_to_history
         history_result = rule_history_application_service.delete_rule(
             "keyword",
             rule_id,
-            requested_history,
+            apply_to_history,
         )
-        rule = {"kind": "keyword", "id": int(rule_id), "deleted": True}
-        if explicit_history_choice:
-            rule.update(
-                {
-                    "history_updated": bool(requested_history),
-                    "updated_count": int(history_result.get("updated_count") or 0),
-                }
-            )
-        return ok_payload(rule=rule)
+        return ok_payload(
+            rule={
+                "kind": "keyword",
+                "id": int(rule_id),
+                "deleted": True,
+                "history_updated": bool(apply_to_history),
+                "updated_count": int(history_result.get("updated_count") or 0),
+            }
+        )
     except _CATALOG_DOMAIN_ERRORS as exc:
         return _catalog_failure(exc)
     except rule_impact_service.RuleImpactError as exc:
@@ -229,32 +212,25 @@ def update_project_folder_rule(
 
 def delete_project_folder_rule(
     rule_id: Any,
-    apply_to_history: Any = _APPLY_TO_HISTORY_UNSET,
+    apply_to_history: bool,
 ) -> dict[str, Any]:
-    if not valid_int(rule_id):
-        return fail_payload(ERROR_INVALID_INPUT)
-    if (
-        apply_to_history is not _APPLY_TO_HISTORY_UNSET
-        and not valid_bool(apply_to_history)
-    ):
+    if not valid_int(rule_id) or not valid_bool(apply_to_history):
         return fail_payload(ERROR_INVALID_INPUT)
     try:
-        explicit_history_choice = apply_to_history is not _APPLY_TO_HISTORY_UNSET
-        requested_history = False if not explicit_history_choice else apply_to_history
         history_result = rule_history_application_service.delete_rule(
             "folder",
             rule_id,
-            requested_history,
+            apply_to_history,
         )
-        rule = {"kind": "folder", "id": int(rule_id), "deleted": True}
-        if explicit_history_choice:
-            rule.update(
-                {
-                    "history_updated": bool(requested_history),
-                    "updated_count": int(history_result.get("updated_count") or 0),
-                }
-            )
-        return ok_payload(rule=rule)
+        return ok_payload(
+            rule={
+                "kind": "folder",
+                "id": int(rule_id),
+                "deleted": True,
+                "history_updated": bool(apply_to_history),
+                "updated_count": int(history_result.get("updated_count") or 0),
+            }
+        )
     except _CATALOG_DOMAIN_ERRORS as exc:
         return _catalog_failure(exc)
     except rule_impact_service.RuleImpactError as exc:
