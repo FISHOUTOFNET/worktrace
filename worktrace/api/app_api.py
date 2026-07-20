@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Protocol
 
+from ..runtime.app_runtime import RuntimeStartResult
 from ..services import privacy_gate_service
 from . import settings_api
 
@@ -11,7 +12,7 @@ from . import settings_api
 class ApplicationRuntimeCapability(Protocol):
     """Narrow runtime capability consumed by API-facing application commands."""
 
-    def start_authorized_collection(self) -> Any: ...
+    def start_authorized_collection(self) -> RuntimeStartResult: ...
 
     def pause_collection_now(self) -> dict[str, object]: ...
 
@@ -33,25 +34,16 @@ class ApplicationControlService:
     def __init__(
         self,
         runtime: ApplicationRuntimeCapability,
-        maintenance: MaintenanceStateCapability | None = None,
+        maintenance: MaintenanceStateCapability,
     ) -> None:
         if runtime is None:
             raise ValueError("application_runtime_required")
+        if maintenance is None:
+            raise ValueError("maintenance_capability_required")
         self.runtime = runtime
         self.maintenance = maintenance
 
-    @staticmethod
-    def _result_dict(result: Any) -> dict[str, Any]:
-        converter = getattr(result, "to_dict", None)
-        if converter is not None:
-            return dict(converter())
-        if isinstance(result, dict):
-            return dict(result)
-        return {"ok": bool(result)}
-
     def _maintenance_resume_blocked(self) -> bool:
-        if self.maintenance is None:
-            return False
         try:
             return bool(self.maintenance.blocked_reason)
         except Exception:
@@ -105,7 +97,10 @@ class ApplicationControlService:
                 "message": "维护状态尚未恢复，暂不能开始记录",
             }
         try:
-            return self._result_dict(self.runtime.start_authorized_collection())
+            result = self.runtime.start_authorized_collection()
+            if not isinstance(result, RuntimeStartResult):
+                raise TypeError("runtime_start_result_required")
+            return result.to_dict()
         except Exception:
             logging.exception("runtime authorized startup failed")
             return {"ok": False, "error": "collector_start_failed"}
