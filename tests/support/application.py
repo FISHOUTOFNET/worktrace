@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
 
 from worktrace.api.app_api import ApplicationControlService
 from worktrace.api.application_services import ApplicationServices
+from worktrace.runtime.app_runtime import RuntimeStartResult
 from worktrace.webview_ui.bridge import WebViewBridge
 
 
@@ -12,20 +12,20 @@ from worktrace.webview_ui.bridge import WebViewBridge
 class TestRuntime:
     """Explicit runtime fake for bridge tests; never installed globally."""
 
-    start_result: Any = None
+    start_result: RuntimeStartResult | None = None
     pause_result: dict[str, object] | None = None
     clipboard_accepted: bool = True
     phase: str = "running"
 
-    def start_authorized_collection(self) -> Any:
-        return self.start_result or {
-            "ok": True,
-            "collector_ready": True,
-            "workers": {},
-            "already_running": False,
-            "degraded": False,
-            "error_code": None,
-        }
+    def start_authorized_collection(self) -> RuntimeStartResult:
+        return self.start_result or RuntimeStartResult(
+            ok=True,
+            collector_ready=True,
+            workers={},
+            already_running=False,
+            degraded=False,
+            error_code=None,
+        )
 
     def pause_collection_now(self) -> dict[str, object]:
         return self.pause_result or {"ok": True, "pause_pending": False}
@@ -50,20 +50,26 @@ class TestMaintenance:
     blocked_reason: str | None = None
 
 
-def build_test_application_services(runtime: Any | None = None) -> ApplicationServices:
+def build_test_application_services(
+    runtime: TestRuntime | None = None,
+    maintenance: TestMaintenance | None = None,
+) -> ApplicationServices:
     runtime_capability = runtime if runtime is not None else TestRuntime()
-    maintenance = TestMaintenance()
+    maintenance_capability = maintenance if maintenance is not None else TestMaintenance()
     return ApplicationServices(
-        app_control=ApplicationControlService(runtime_capability, maintenance),
+        app_control=ApplicationControlService(
+            runtime_capability,
+            maintenance_capability,
+        ),
         runtime_view=runtime_capability,
-        maintenance=maintenance,
-        backup=object(),
-        runtime_state_provider=object(),
     )
 
 
-def build_test_bridge(runtime: Any | None = None) -> WebViewBridge:
-    return WebViewBridge(build_test_application_services(runtime))
+def build_test_bridge(
+    runtime: TestRuntime | None = None,
+    maintenance: TestMaintenance | None = None,
+) -> WebViewBridge:
+    return WebViewBridge(build_test_application_services(runtime, maintenance))
 
 
 __all__ = [
