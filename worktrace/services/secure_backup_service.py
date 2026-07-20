@@ -12,6 +12,11 @@ from pathlib import Path
 from typing import Any
 
 from ..constants import APP_VERSION
+from ..database_content_manifest import (
+    BACKUP_TABLES,
+    DELETE_ORDER,
+    TABLE_NAMES,
+)
 from ..db import (
     CURRENT_SCHEMA_VERSION,
     expected_schema_fingerprint,
@@ -47,32 +52,8 @@ BACKUP_FILE_SUFFIX = ".wtbackup"
 MAX_BACKUP_FILE_BYTES = 512 * 1024 * 1024
 MAX_BACKUP_PAYLOAD_BYTES = 384 * 1024 * 1024
 
-EXPORT_TABLES: tuple[str, ...] = (
-    "project",
-    "settings",
-    "session_boundary",
-    "activity_log",
-    "folder_project_rule",
-    "project_rule",
-    "folder_rule_index_state",
-    "activity_project_assignment",
-    "activity_clipboard_event",
-    "report_session_operation",
-    "report_session_operation_member",
-    "report_mutation_request",
-    "activity_resource",
-)
-EXCLUDED_TABLES: frozenset[str] = frozenset(
-    {
-        "folder_rule_file_index",
-        "history_mutation_job",
-        "history_mutation_job_rule",
-        "data_generation_state",
-        "activity_inference_job",
-        "activity_resource_repair_job",
-        "startup_recovery_job",
-    }
-)
+EXPORT_TABLES: tuple[str, ...] = BACKUP_TABLES
+EXCLUDED_TABLES: frozenset[str] = frozenset(TABLE_NAMES) - frozenset(EXPORT_TABLES)
 MIGRATABLE_SETTINGS: frozenset[str] = frozenset(
     {
         "poll_interval_seconds",
@@ -84,22 +65,6 @@ MIGRATABLE_SETTINGS: frozenset[str] = frozenset(
         "collector_stall_threshold_seconds",
         "clock_jump_threshold_seconds",
     }
-)
-_DELETE_ORDER: tuple[str, ...] = (
-    "activity_resource",
-    "report_session_operation_member",
-    "report_mutation_request",
-    "report_session_operation",
-    "activity_clipboard_event",
-    "activity_project_assignment",
-    "folder_rule_file_index",
-    "folder_rule_index_state",
-    "project_rule",
-    "folder_project_rule",
-    "activity_log",
-    "session_boundary",
-    "settings",
-    "project",
 )
 
 
@@ -149,6 +114,7 @@ class ImportResult:
     mode: str
     imported_tables: dict[str, int] = field(default_factory=dict)
     folder_index_reset: bool = False
+    maintenance_status: dict[str, object] = field(default_factory=dict)
 
 
 def export_encrypted_backup(output_path: str | Path, passphrase: str) -> Path:
@@ -191,15 +157,18 @@ def import_encrypted_backup(
             "another destructive operation is already in progress"
         ) from exc
 
+    status = database_maintenance_service.maintenance_status().to_dict()
     logging.info(
-        "encrypted backup import success mode=%s tables=%d",
+        "encrypted backup import success mode=%s tables=%d restored=%s",
         mode,
         len(imported_counts),
+        status["maintenance_restored"],
     )
     return ImportResult(
         mode=mode,
         imported_tables=imported_counts,
         folder_index_reset=True,
+        maintenance_status=status,
     )
 
 
@@ -328,7 +297,6 @@ def _replace_import(data: dict[str, Any]) -> dict[str, int]:
         with get_connection() as live:
             live.execute("BEGIN IMMEDIATE")
             replacement_floor = capture_replacement_generation_floor(live)
-            database_maintenance_service.clear_all_worker_progress_in_transaction(live)
             _delete_all_rows(live)
             source = sqlite3.connect(staging_path)
             source.row_factory = sqlite3.Row
@@ -412,7 +380,7 @@ def _validate_staging_database(conn: sqlite3.Connection) -> None:
 
 
 def _delete_all_rows(conn: sqlite3.Connection) -> None:
-    for table in _DELETE_ORDER:
+    for table in DELETE_ORDER:
         conn.execute(f"DELETE FROM {table}")
 
 
