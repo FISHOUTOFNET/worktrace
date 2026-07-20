@@ -6,17 +6,15 @@ import logging
 import sqlite3
 import threading
 from collections.abc import Callable, Iterable
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from ..data_generation_repository import DataGenerationNamespace
 from ..db import get_connection, now_str
 from ..domain_unit_of_work import DomainUnitOfWork
+from ..worker_health import WorkerHealthReporter
 from ..write_gate import DATABASE_WRITE_GATE
 from . import activity_inference_job_repository as jobs
 from .activity_inference_policy import is_closed_activity_inference_eligible
-
-if TYPE_CHECKING:
-    from ..worker_health import WorkerHealthReporter
 
 InferenceCommand = Callable[[Any, int], dict]
 
@@ -93,7 +91,7 @@ def run_inference_worker(
     stop_event: threading.Event,
     infer_activity: InferenceCommand,
     *,
-    health: "WorkerHealthReporter | None" = None,
+    health: WorkerHealthReporter,
     batch_size: int = 50,
     poll_seconds: float = 1.0,
 ) -> None:
@@ -104,12 +102,10 @@ def run_inference_worker(
     logging.info("activity inference worker loop enter")
     while not stop_event.is_set():
         if DATABASE_WRITE_GATE.active():
-            if health is not None:
-                health.maintenance_paused(True)
+            health.maintenance_paused(True)
             stop_event.wait(interval)
             continue
-        if health is not None:
-            health.maintenance_paused(False)
+        health.maintenance_paused(False)
         try:
             processed = process_pending_inference_jobs(
                 infer_activity,
@@ -117,12 +113,10 @@ def run_inference_worker(
             )
         except Exception:
             logging.exception("activity inference worker iteration failed")
-            if health is not None:
-                health.failed("inference_iteration_failed")
+            health.failed("inference_iteration_failed")
             processed = 0
         else:
-            if health is not None:
-                health.succeeded()
+            health.succeeded()
         if processed >= size:
             continue
         stop_event.wait(interval)
@@ -154,8 +148,8 @@ def _classify_failure(exc: BaseException) -> jobs.InferenceFailureCode:
             "database is busy",
         }:
             return jobs.InferenceFailureCode.DATABASE_BUSY
-        if message == jobs.InferenceFailureCode.SECURE_IMPORT_IN_PROGRESS.value:
-            return jobs.InferenceFailureCode.SECURE_IMPORT_IN_PROGRESS
+        if message == jobs.InferenceFailureCode.DATABASE_MAINTENANCE_IN_PROGRESS.value:
+            return jobs.InferenceFailureCode.DATABASE_MAINTENANCE_IN_PROGRESS
         if message == jobs.InferenceFailureCode.DATABASE_GENERATION_CHANGED.value:
             return jobs.InferenceFailureCode.DATABASE_GENERATION_CHANGED
     return jobs.InferenceFailureCode.UNEXPECTED_FAILURE
