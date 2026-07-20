@@ -168,10 +168,10 @@ def test_history_backfill_resumes_from_cursor_in_bounded_batches(temp_db):
         activity_ids.append(activity_id)
 
     submitted = history_mutation_job_service.submit_rule_job(
-        "rule_backfill",
         "keyword",
         rule_id,
-        synchronous_limit=0,
+        kind="rule_backfill",
+        synchronous_scan_limit=0,
     )
     assert submitted["queued"] is True
 
