@@ -232,8 +232,10 @@ class AppRuntime:
                 return False
             try:
                 db.initialize_database(self.paths.db_path)
-                recovery_service.recover_unclosed_records()
                 database_maintenance_service.register_runtime_control(self)
+                blocked = database_maintenance_service.hydrate_fail_closed_from_durable()
+                if not blocked:
+                    recovery_service.recover_unclosed_records()
             except Exception:
                 database_maintenance_service.clear_runtime_control(self)
                 release_single_instance()
@@ -241,7 +243,11 @@ class AppRuntime:
                 self.phase = RuntimePhase.FAILED
                 raise
             self._initialized = True
-            self.phase = RuntimePhase.INITIALIZED
+            self.phase = (
+                RuntimePhase.RECOVERABLE_FAILURE
+                if blocked
+                else RuntimePhase.INITIALIZED
+            )
             return True
 
     def _run_owned_worker(self, handle: WorkerHandle) -> None:
@@ -390,8 +396,25 @@ class AppRuntime:
             error_code=handle.error_code,
         )
 
+    def _blocked_worker_report(self) -> WorkerStartupReport:
+        statuses = {
+            name: _WorkerStartupStatus(
+                _WorkerStartupState.FAILED,
+                False,
+                error_code="database_maintenance_recovery_required",
+            )
+            for name in self._worker_specs
+        }
+        return WorkerStartupReport(
+            statuses,
+            "database_maintenance_recovery_required",
+        )
+
     def start_background_workers(self) -> WorkerStartupReport:
         with self._lifecycle_lock:
+            if database_maintenance_service.MAINTENANCE_COORDINATOR.recovery_blocked():
+                self.phase = RuntimePhase.RECOVERABLE_FAILURE
+                return self._blocked_worker_report()
             if not self._initialized or not self.owns_application_instance:
                 statuses = {
                     name: _WorkerStartupStatus(
@@ -426,6 +449,15 @@ class AppRuntime:
 
     def start_authorized_collection(self) -> _RuntimeStartResult:
         with self._lifecycle_lock:
+            if database_maintenance_service.MAINTENANCE_COORDINATOR.recovery_blocked():
+                self.phase = RuntimePhase.RECOVERABLE_FAILURE
+                return _RuntimeStartResult(
+                    ok=False,
+                    collector_ready=False,
+                    workers={},
+                    degraded=True,
+                    error_code="database_maintenance_recovery_required",
+                )
             if not self._initialized or not self.owns_application_instance:
                 return _RuntimeStartResult(
                     ok=False,
@@ -498,6 +530,12 @@ class AppRuntime:
         startup_timeout_seconds: float = 5.0,
     ) -> dict[str, object]:
         with self._lifecycle_lock:
+            if database_maintenance_service.MAINTENANCE_COORDINATOR.recovery_blocked():
+                self.phase = RuntimePhase.RECOVERABLE_FAILURE
+                return {
+                    "ok": False,
+                    "error": "database_maintenance_recovery_required",
+                }
             if self._shutdown or self.stop_event.is_set():
                 return {"ok": False, "error": "runtime_stopping"}
             if not self.owns_application_instance:
@@ -719,7 +757,6 @@ class AppRuntime:
             if self._collector_stop_event is not None:
                 self._collector_stop_event.set()
 
-        # Collector is the primary writer and is stopped before derived workers.
         if collector_thread is not None:
             collector_thread.join(timeout=5)
             if collector_thread.is_alive():
@@ -735,8 +772,6 @@ class AppRuntime:
             if handle.thread is not None:
                 handle.thread.join(timeout=5)
 
-        # Platform resources are torn down only after all runtime worker stop signals
-        # have been delivered and their bounded joins have completed.
         self._adapter.shutdown()
 
         surviving_workers = [
