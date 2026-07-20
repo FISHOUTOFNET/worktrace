@@ -1,104 +1,73 @@
-"""Recoverable, cursor-based history mutations for project rules.
-
-A job row is committed before any history scan begins. Single-rule jobs apply
-bounded cursor batches. Multi-rule jobs use durable bounded planning, retain at
-most the configured number of winners, and apply the final ordered plan in one
-transaction. Rule catalog mutations are delegated to their canonical owner.
-"""
+"""Durable bounded jobs for Project Rules history mutation."""
 
 from __future__ import annotations
 
 import json
 import logging
 import threading
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from ..data_generation_repository import DataGenerationNamespace
 from ..db import get_connection, now_str
 from ..domain_unit_of_work import DomainUnitOfWork
+from ..worker_health import WorkerHealthReporter
 from ..write_gate import DATABASE_WRITE_GATE
-from . import (
-    assignment_command_service,
-    rule_catalog_command_service as catalog,
-    rule_planning_service as planner,
-)
+from . import assignment_command_service
+from . import rule_catalog_command_service as catalog
+from . import rule_impact_planner as planner
 
-if TYPE_CHECKING:
-    from ..worker_health import WorkerHealthReporter
-
-_BATCH_SIZE = 100
-_BATCH_PLAN_SIZE = 101
+_BATCH_SIZE = 200
+_BATCH_PLAN_SIZE = 500
 _BATCH_MODE = "ordered_rule_batch"
-_WORKER_IDLE_SECONDS = 2.0
+_WORKER_IDLE_SECONDS = 1.0
 _JOB_EXECUTION_LOCK = threading.RLock()
 
 
 def submit_rule_job(
-    kind: str,
     rule_type: str,
     rule_id: int,
     *,
-    synchronous_limit: int = 100,
+    kind: str = "rule_backfill",
+    restore_enabled: bool = False,
 ) -> dict[str, Any]:
-    """Commit one durable job before running any bounded history scan."""
-
+    normalized_type = str(rule_type or "").strip()
+    normalized_id = int(rule_id)
+    if normalized_type not in {"folder", "keyword"} or normalized_id <= 0:
+        raise ValueError("invalid_input")
     if kind not in {"rule_backfill", "rule_remove", "rule_delete"}:
         raise ValueError("invalid_history_job_kind")
-    if rule_type not in {"folder", "keyword"} or type(rule_id) is not int or rule_id <= 0:
-        raise ValueError("not_found")
-
     with get_connection() as read_conn:
-        rule = planner.resolve_rule(read_conn, rule_type, int(rule_id))
+        rule = planner.resolve_rule(read_conn, normalized_type, normalized_id)
         if not rule:
             raise ValueError("not_found")
-        if kind == "rule_backfill":
-            if not int(rule.get("enabled") or 0):
-                raise ValueError("rule_disabled")
-            if not planner.project_available(rule):
-                raise ValueError("project_not_available")
-            estimated: int | None = None
-        else:
-            estimated = int(
-                read_conn.execute(
-                    """
-                    SELECT COUNT(*) AS value
-                    FROM activity_project_assignment
-                    WHERE is_manual = 0
-                      AND source_rule_type = ?
-                      AND source_rule_id = ?
-                    """,
-                    (rule_type, int(rule_id)),
-                ).fetchone()["value"]
-                or 0
-            )
         cutoff = _activity_cutoff(read_conn)
+        estimated_count = (
+            planner.plan_rule_impact(
+                read_conn,
+                normalized_type,
+                normalized_id,
+                scan_limit=_BATCH_PLAN_SIZE,
+                max_updates=max(1, cutoff + 1),
+            )["counts"]["would_update_count"]
+            if kind == "rule_backfill"
+            else planner.count_provenance_assignments(
+                read_conn,
+                normalized_type,
+                normalized_id,
+            )
+        )
+        rule_version = str(rule.get("updated_at") or "")
+        payload = {
+            "rule_type": normalized_type,
+            "rule_id": normalized_id,
+            "rule_version": rule_version,
+            "restore_enabled": bool(restore_enabled),
+            "estimated_count": int(estimated_count),
+        }
 
     timestamp = now_str()
-    restore_enabled = bool(int(rule.get("enabled") or 0))
-    payload = {
-        "rule_type": rule_type,
-        "rule_id": int(rule_id),
-        "restore_enabled": restore_enabled,
-        "estimated_count": estimated,
-    }
     with DomainUnitOfWork() as uow:
         conn = uow.connection
-        if kind in {"rule_remove", "rule_delete"} and restore_enabled:
-            if not catalog.set_rule_enabled_in_transaction(
-                uow,
-                conn,
-                rule_type,
-                int(rule_id),
-                False,
-                timestamp=timestamp,
-            ):
-                raise ValueError("not_found")
-            rule_version = timestamp
-        else:
-            current = planner.resolve_rule(conn, rule_type, int(rule_id))
-            if not current:
-                raise ValueError("not_found")
-            rule_version = str(current.get("updated_at") or "")
         job_id = _insert_job(
             conn,
             kind=kind,
@@ -109,14 +78,10 @@ def submit_rule_job(
         _insert_job_rule(
             conn,
             job_id=job_id,
-            rule_type=rule_type,
-            rule_id=int(rule_id),
+            rule_type=normalized_type,
+            rule_id=normalized_id,
             rule_version=rule_version,
         )
-
-    limit = max(0, int(synchronous_limit))
-    if limit:
-        run_job_batch(job_id, batch_size=min(_BATCH_SIZE, limit))
     return job_result(job_id)
 
 
@@ -365,29 +330,25 @@ def batch_job_result(job_id: int) -> dict[str, Any]:
 def run_history_worker(
     stop_event: threading.Event,
     *,
-    health: "WorkerHealthReporter | None" = None,
+    health: WorkerHealthReporter,
 ) -> None:
     """Run iterations only; AppRuntime owns thread started/stopped state."""
 
     logging.info("history mutation worker loop enter")
     while not stop_event.is_set():
         if DATABASE_WRITE_GATE.active():
-            if health is not None:
-                health.maintenance_paused(True)
+            health.maintenance_paused(True)
             stop_event.wait(_WORKER_IDLE_SECONDS)
             continue
-        if health is not None:
-            health.maintenance_paused(False)
+        health.maintenance_paused(False)
         try:
             processed = run_pending_jobs(limit=1)
         except Exception:
             logging.exception("history mutation worker error")
-            if health is not None:
-                health.failed("history_iteration_failed")
+            health.failed("history_iteration_failed")
             processed = 0
         else:
-            if health is not None:
-                health.succeeded()
+            health.succeeded()
         if processed:
             continue
         stop_event.wait(_WORKER_IDLE_SECONDS)
