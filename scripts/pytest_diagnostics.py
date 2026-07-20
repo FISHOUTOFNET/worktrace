@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Publish stable, API-readable CI diagnostics and failure artifacts."""
+"""Generate canonical CI failure artifacts without replaying failures to job logs."""
+
 from __future__ import annotations
 
 import argparse
@@ -14,14 +15,6 @@ from pathlib import Path
 from typing import Iterable
 
 SCHEMA_VERSION = 1
-PROTOCOL_BEGIN = "=== WORKTRACE_CI_DIAGNOSTICS_V1_BEGIN ==="
-PROTOCOL_END = "=== WORKTRACE_CI_DIAGNOSTICS_V1_END ==="
-FAILURES_BEGIN = "FAILURES_BEGIN"
-FAILURES_END = "FAILURES_END"
-GROUPS_BEGIN = "ROOT_CAUSE_GROUPS_BEGIN"
-GROUPS_END = "ROOT_CAUSE_GROUPS_END"
-LOG_TAIL_BEGIN = "LOG_TAIL_BEGIN"
-LOG_TAIL_END = "LOG_TAIL_END"
 
 
 @dataclass(frozen=True)
@@ -185,31 +178,9 @@ def _escape_markdown(value: str) -> str:
     return value.replace("|", "\\|").replace("`", "\\`").replace("\n", " ")
 
 
-def _append_summary(path: Path | None, lines: Iterable[str]) -> None:
-    if path is None:
-        return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8", newline="\n") as stream:
-        for line in lines:
-            stream.write(line + "\n")
-
-
 def _write_text(path: Path, lines: Iterable[str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-
-def _append_github_outputs(problems: list[Problem], groups: list[RootCauseGroup]) -> None:
-    output_path = os.environ.get("GITHUB_OUTPUT", "").strip()
-    if not output_path:
-        return
-    first_failure = problems[0].test_id if problems else ""
-    first_location = problems[0].location if problems else ""
-    with Path(output_path).open("a", encoding="utf-8", newline="\n") as stream:
-        stream.write(f"problem_count={len(problems)}\n")
-        stream.write(f"root_cause_count={len(groups)}\n")
-        stream.write(f"first_failure={_single_line(first_failure, limit=160)}\n")
-        stream.write(f"first_location={_single_line(first_location, limit=120)}\n")
 
 
 def _manifest_lines(counts: dict[str, int], problems: list[Problem]) -> list[str]:
@@ -242,9 +213,9 @@ def _summary_lines(
         "Total: {total} | Passed: {passed} | Failed: {failed} | Errors: {errors} | Skipped: {skipped}".format(
             **counts
         ),
-        f"Root-cause groups: {len(groups)}",
+        f"Signature groups: {len(groups)}",
         "",
-        "### Root-cause groups",
+        "### Signature groups",
         "",
     ]
     for group in groups:
@@ -268,55 +239,6 @@ def _summary_lines(
             + " |"
         )
     return lines
-
-
-def _emit_protocol(
-    *,
-    revision: str,
-    stage: str,
-    artifact_name: str,
-    counts: dict[str, int] | None,
-    problems: list[Problem],
-    groups: list[RootCauseGroup],
-    reason: str = "",
-    log_tail: list[str] | None = None,
-) -> None:
-    print(PROTOCOL_BEGIN)
-    print(f"schema_version={SCHEMA_VERSION}")
-    print(f"revision={revision or '(unknown)'}")
-    print(f"failed_stage={stage}")
-    print(f"artifact_name={artifact_name or '(none)'}")
-    print(f"diagnostics_available={'true' if counts is not None else 'false'}")
-    if counts is not None:
-        for key in ("total", "passed", "failed", "errors", "skipped"):
-            print(f"{key}={counts[key]}")
-    print(f"failure_count={len(problems)}")
-    print(f"root_cause_count={len(groups)}")
-    if reason:
-        print(f"reason={_single_line(reason, limit=500)}")
-    print(FAILURES_BEGIN)
-    empty_counts = {"total": 0, "passed": 0, "failed": 0, "errors": 0, "skipped": 0}
-    for line in _manifest_lines(counts or empty_counts, problems)[1:]:
-        print(line)
-    print(FAILURES_END)
-    print(GROUPS_BEGIN)
-    for group in groups:
-        print(
-            f"[{group.id}] affected={len(group.affected_tests)} | {group.kind} | "
-            f"{group.representative_location} | {group.message}"
-        )
-        print("  representative_details:")
-        for line in group.representative_details.splitlines():
-            print(f"    {line}")
-        for test_id in group.affected_tests:
-            print(f"  - {test_id}")
-    print(GROUPS_END)
-    if log_tail is not None:
-        print(LOG_TAIL_BEGIN)
-        for line in log_tail:
-            print(line)
-        print(LOG_TAIL_END)
-    print(PROTOCOL_END)
 
 
 def _diagnostics_payload(
@@ -373,12 +295,20 @@ def _workflow_warning(message: str) -> None:
     print(f"::warning title=CI diagnostics fallback::{escaped}")
 
 
+def _control_line(args: argparse.Namespace, *, fallback: bool) -> None:
+    status = "fallback" if fallback else "ready"
+    print(
+        "diagnostics_artifact_status="
+        f"{status} stage={args.stage} name={args.artifact_name or '(none)'} "
+        "source=diagnostics.json"
+    )
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--stage", choices=("inventory", "compile", "pytest"), default="pytest")
     parser.add_argument("--junit", type=Path)
     parser.add_argument("--log", type=Path, required=True)
-    parser.add_argument("--summary", type=Path)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--revision", default=os.environ.get("GITHUB_SHA", ""))
     parser.add_argument("--artifact-name", default="")
@@ -404,18 +334,7 @@ def _fallback(args: argparse.Namespace, reason: str) -> int:
     details = [f"Stage: {args.stage}", f"Reason: {reason}", "", *tail]
     summary = ["## Validation diagnostics", "", f"Stage: `{args.stage}`", "", reason]
     _write_outputs(args.output_dir, payload=payload, manifest=manifest, details=details, summary=summary)
-    _append_github_outputs([], [])
-    _append_summary(args.summary, summary)
-    _emit_protocol(
-        revision=args.revision,
-        stage=args.stage,
-        artifact_name=args.artifact_name,
-        counts=None,
-        problems=[],
-        groups=[],
-        reason=reason,
-        log_tail=tail,
-    )
+    _control_line(args, fallback=True)
     return 0
 
 
@@ -423,7 +342,7 @@ def main() -> int:
     _configure_utf8()
     args = _parse_args()
     if args.stage != "pytest":
-        return _fallback(args, f"{args.stage} validation failed; see the captured log.")
+        return _fallback(args, f"{args.stage} validation failed; see the captured artifact log.")
     if args.junit is None or not args.junit.is_file():
         return _fallback(args, "JUnit report was not generated.")
     try:
@@ -447,16 +366,7 @@ def main() -> int:
         groups=groups,
     )
     _write_outputs(args.output_dir, payload=payload, manifest=manifest, details=details, summary=summary)
-    _append_github_outputs(problems, groups)
-    _append_summary(args.summary, summary)
-    _emit_protocol(
-        revision=args.revision,
-        stage=args.stage,
-        artifact_name=args.artifact_name,
-        counts=counts,
-        problems=problems,
-        groups=groups,
-    )
+    _control_line(args, fallback=False)
     return 0
 
 

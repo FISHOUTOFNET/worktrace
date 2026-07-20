@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
@@ -13,11 +12,12 @@ pytestmark = [pytest.mark.contract, pytest.mark.integration, pytest.mark.db]
 
 ROOT = Path(__file__).resolve().parents[1]
 PRODUCER = ROOT / "scripts" / "pytest_diagnostics.py"
-RENDERER = ROOT / "scripts" / "render_ci_api_summary.py"
+PYTEST_RUNNER = ROOT / "scripts" / "run_pytest_ci.py"
+RETIRED_RENDERER = ROOT / "scripts" / "render_ci_api_summary.py"
 WORKFLOW = ROOT / ".github" / "workflows" / "_validation.yml"
 
 
-def _write_junit(path: Path, count: int = 35, *, distinct: bool = False) -> None:
+def _write_junit(path: Path, count: int = 35) -> None:
     suite = ET.Element("testsuite", tests=str(count), failures=str(count))
     for index in range(1, count + 1):
         case = ET.SubElement(
@@ -26,10 +26,7 @@ def _write_junit(path: Path, count: int = 35, *, distinct: bool = False) -> None
             classname="tests.synthetic",
             name=f"test_failure_{index:02d}",
         )
-        if distinct:
-            message = f"AssertionError: synthetic root cause {index:02d}"
-            location = f"worktrace/service_{index:02d}.py:{100 + index}"
-        elif index <= 30:
+        if index <= 30:
             message = "sqlite3.OperationalError: no such table: activity_inference_job"
             location = "worktrace/db.py:412"
         else:
@@ -43,13 +40,7 @@ def _write_junit(path: Path, count: int = 35, *, distinct: bool = False) -> None
     ET.ElementTree(suite).write(path, encoding="utf-8", xml_declaration=True)
 
 
-def _produce(
-    tmp_path: Path,
-    *,
-    stage: str = "pytest",
-    count: int = 35,
-    distinct: bool = False,
-) -> Path:
+def _produce(tmp_path: Path, *, stage: str = "pytest") -> tuple[Path, subprocess.CompletedProcess[str]]:
     log = tmp_path / f"{stage}.log"
     output = tmp_path / "diagnostics"
     log.write_text(
@@ -72,149 +63,137 @@ def _produce(
     ]
     if stage == "pytest":
         junit = tmp_path / "pytest-junit.xml"
-        _write_junit(junit, count=count, distinct=distinct)
+        _write_junit(junit)
         command[4:4] = ["--junit", str(junit)]
-    env = os.environ.copy()
-    env["GITHUB_OUTPUT"] = str(tmp_path / "github-output.txt")
     result = subprocess.run(
         command,
         cwd=ROOT,
-        env=env,
         capture_output=True,
         text=True,
         check=False,
     )
     assert result.returncode == 0, result.stderr
-    return output
+    return output, result
 
 
-def _render(output: Path, rendered: Path) -> str:
-    result = subprocess.run(
-        [
-            sys.executable,
-            str(RENDERER),
-            "--input",
-            str(output / "diagnostics.json"),
-            "--output",
-            str(rendered),
-            "--max-bytes",
-            "65536",
-        ],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert result.returncode == 0, result.stderr
-    return rendered.read_text(encoding="utf-8")
-
-
-def _metadata(text: str) -> dict[str, object]:
-    line = next(
-        item
-        for item in text.splitlines()
-        if item.startswith("diagnostics_metadata_json=")
-    )
-    return json.loads(line.split("=", 1)[1])
-
-
-def _index_groups(text: str) -> list[dict[str, object]]:
-    groups: list[dict[str, object]] = []
-    for line in text.splitlines():
-        if not line.startswith("root_cause_index_chunk_json="):
-            continue
-        chunk = json.loads(line.split("=", 1)[1])
-        groups.extend(chunk["groups"])
-    return groups
-
-
-def test_artifact_preserves_all_failures_and_signature_groups(tmp_path: Path) -> None:
-    output = _produce(tmp_path)
+def test_artifact_preserves_all_failures_without_replaying_them_to_stdout(
+    tmp_path: Path,
+) -> None:
+    output, result = _produce(tmp_path)
     payload = json.loads((output / "diagnostics.json").read_text(encoding="utf-8"))
+
     assert payload["counts"]["failed"] == 35
     assert len(payload["failures"]) == 35
     assert [len(group["affected_tests"]) for group in payload["root_cause_groups"]] == [30, 5]
     assert "TRACEBACK-SENTINEL-35" in payload["failures"][-1]["details"]
-    assert "TRACEBACK-SENTINEL-35" in (output / "failure-details.txt").read_text(encoding="utf-8")
+    assert "TRACEBACK-SENTINEL-35" in (output / "failure-details.txt").read_text(
+        encoding="utf-8"
+    )
+
+    assert "diagnostics_artifact_status=ready" in result.stdout
+    assert "source=diagnostics.json" in result.stdout
+    assert "TRACEBACK-SENTINEL" not in result.stdout
+    assert "no such table" not in result.stdout
+    assert "retry_pending_inference" not in result.stdout
+    assert "ROOT_CAUSE_GROUPS" not in result.stdout
 
 
-def test_renderer_publishes_complete_compact_root_cause_index(tmp_path: Path) -> None:
-    output = _produce(tmp_path)
-    rendered = output / "api-summary.txt"
-    text = _render(output, rendered)
-    metadata = _metadata(text)
-    groups = _index_groups(text)
-    assert text.startswith("WORKTRACE_CI_DIAGNOSTICS_V1\n")
-    assert metadata["scope"] == "complete_root_cause_index"
-    assert metadata["group_count"] == 2
-    assert metadata["shown_group_count"] == 2
-    assert metadata["omitted_group_count"] == 0
-    assert [group["affected_test_count"] for group in groups] == [30, 5]
-    assert "TRACEBACK-SENTINEL" not in text
-    assert "cause_catalog_json" not in text
-    assert "\ngroup_json=" not in text
-    assert "artifact_index_json=" in text
-    assert len(rendered.read_bytes()) <= 8192
+def test_fallback_keeps_raw_error_only_inside_artifact(tmp_path: Path) -> None:
+    output, result = _produce(tmp_path, stage="compile")
+    payload = json.loads((output / "diagnostics.json").read_text(encoding="utf-8"))
+
+    assert payload["failed_stage"] == "compile"
+    assert payload["diagnostics_available"] is False
+    assert "SyntaxError: invalid syntax" in payload["log_tail"]
+    assert "SyntaxError: invalid syntax" in (output / "failure-details.txt").read_text(
+        encoding="utf-8"
+    )
+
+    assert "diagnostics_artifact_status=fallback" in result.stdout
+    assert "SyntaxError: invalid syntax" not in result.stdout
 
 
-def test_renderer_keeps_all_realistic_root_cause_groups_under_api_limit(
-    tmp_path: Path,
-) -> None:
-    output = _produce(tmp_path, count=40, distinct=True)
-    rendered = output / "api-summary.txt"
-    text = _render(output, rendered)
-    metadata = _metadata(text)
-    groups = _index_groups(text)
-    assert metadata["group_count"] == 40
-    assert metadata["shown_group_count"] == 40
-    assert metadata["omitted_group_count"] == 0
-    assert len(groups) == 40
-    assert [group["id"] for group in groups] == [
-        f"group-{index:03d}" for index in range(1, 41)
-    ]
-    assert text.count("root_cause_index_chunk_json=") == 4
-    assert len(rendered.read_bytes()) <= 8192
+def test_pytest_runner_streams_progress_but_keeps_test_output_in_log(tmp_path: Path) -> None:
+    synthetic = tmp_path / "test_synthetic_progress.py"
+    synthetic.write_text(
+        """
+import time
 
 
-def test_fallback_summary_is_bounded_and_points_to_artifact(tmp_path: Path) -> None:
-    output = _produce(tmp_path, stage="compile")
-    rendered = output / "api-summary.txt"
+def test_passes():
+    time.sleep(0.12)
+
+
+def test_fails():
+    time.sleep(0.12)
+    assert False, "SENTINEL_FAILURE"
+""".lstrip(),
+        encoding="utf-8",
+    )
+    log = tmp_path / "pytest.log"
+    progress = tmp_path / "pytest-progress.json"
     result = subprocess.run(
         [
             sys.executable,
-            str(RENDERER),
-            "--input",
-            str(output / "diagnostics.json"),
-            "--output",
-            str(rendered),
+            str(PYTEST_RUNNER),
+            "--log",
+            str(log),
+            "--progress",
+            str(progress),
+            "--heartbeat-seconds",
+            "0.05",
+            "--",
+            "-q",
+            "--tb=short",
+            "--color=no",
+            str(synthetic),
         ],
         cwd=ROOT,
         capture_output=True,
         text=True,
         check=False,
     )
-    assert result.returncode == 0, result.stderr
-    text = rendered.read_text(encoding="utf-8")
-    assert _metadata(text)["stage"] == "compile"
-    assert "LOG_EXCERPT_BEGIN" in text
-    assert "SyntaxError: invalid syntax" in text
-    assert '"failure_details":"failure-details.txt"' in text
+
+    assert result.returncode == 1
+    assert "pytest_progress status=starting" in result.stdout
+    assert "pytest_progress status=finished" in result.stdout
+    assert "SENTINEL_FAILURE" not in result.stdout
+    assert "short test summary info" not in result.stdout
+    assert "SENTINEL_FAILURE" in log.read_text(encoding="utf-8")
+
+    payload = json.loads(progress.read_text(encoding="utf-8"))
+    assert payload["status"] == "finished"
+    assert payload["completed"] == 2
+    assert payload["total"] == 2
 
 
-def test_ci_contract_uses_one_artifact_and_one_complete_human_relay() -> None:
+def test_ci_contract_is_artifact_only_with_bounded_progress() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
-    assert "python -m pytest -q -ra" in workflow
-    assert "Tee-Object" not in workflow
+    producer = PRODUCER.read_text(encoding="utf-8")
+
+    assert "# Business-test diagnostics are artifact-only." in workflow
+    assert "scripts/run_pytest_ci.py" in workflow
+    assert "--heartbeat-seconds 60" in workflow
+    assert '*> "test-results/pytest.log"' not in workflow
+    assert 'Get-Content -LiteralPath "test-results/pytest.log"' not in workflow
+
     assert workflow.count("actions/upload-artifact@v6") == 2
-    assert workflow.count("actions/download-artifact@v8") == 1
-    assert "actions/download-artifact@v6" not in workflow
-    assert "name: Python failure diagnostics" in workflow
-    assert "api-summary.txt" in workflow
-    assert "--max-bytes 8192" in workflow
-    assert "INVENTORY_LOG_TAIL_BEGIN" not in workflow
-    assert "COMPILE_LOG_TAIL_BEGIN" not in workflow
-    assert "failed_stage=inventory" not in workflow
-    assert "problem_count:" not in workflow
-    assert "first_failure:" not in workflow
-    assert "gh api" not in workflow
-    assert "matrix:" not in workflow
+    assert "actions/download-artifact@" not in workflow
+    assert "python_diagnostics:" not in workflow
+    assert "name: Python failure diagnostics" not in workflow
+    assert "api-summary.txt" not in workflow
+    assert "render_ci_api_summary.py" not in workflow
+    assert not RETIRED_RENDERER.exists()
+
+    assert "name: Generate diagnostic artifact" in workflow
+    assert "name: Upload diagnostic artifact" in workflow
+    assert "if-no-files-found: error" in workflow
+    assert "retention-days: 3" in workflow
+    assert "retention-days: 1" in workflow
+    assert '--summary "$env:GITHUB_STEP_SUMMARY"' not in workflow
+
+    assert "_emit_protocol" not in producer
+    assert "ROOT_CAUSE_GROUPS_BEGIN" not in producer
+    assert "GITHUB_OUTPUT" not in producer
+    assert "problem_count=" not in producer
+    assert "first_failure=" not in producer
