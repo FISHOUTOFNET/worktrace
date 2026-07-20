@@ -4,6 +4,7 @@ import pytest
 
 from worktrace.api import settings_api
 from worktrace.api.app_api import ApplicationControlService
+from worktrace.runtime.app_runtime import RuntimeStartResult
 from worktrace.services import privacy_gate_service
 
 pytestmark = [pytest.mark.unit, pytest.mark.contract]
@@ -13,16 +14,16 @@ class _Runtime:
     def __init__(self) -> None:
         self.start_calls = 0
 
-    def start_authorized_collection(self):
+    def start_authorized_collection(self) -> RuntimeStartResult:
         self.start_calls += 1
-        return {
-            "ok": True,
-            "collector_ready": True,
-            "workers": {},
-            "already_running": False,
-            "degraded": False,
-            "error_code": None,
-        }
+        return RuntimeStartResult(
+            ok=True,
+            collector_ready=True,
+            workers={},
+            already_running=False,
+            degraded=False,
+            error_code=None,
+        )
 
     def pause_collection_now(self):
         return {"ok": True, "pause_pending": False}
