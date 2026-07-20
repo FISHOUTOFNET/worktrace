@@ -132,6 +132,7 @@ def _render(
     truncated: bool,
 ) -> str:
     counts = payload.get("counts") or {}
+    compact_index = [_index_group(group) for group in groups]
     lines = [
         PROTOCOL,
         f"schema_version={payload.get('schema_version')}",
@@ -146,11 +147,13 @@ def _render(
         f"skipped={counts.get('skipped', 0)}",
         f"failure_count={len(payload.get('failures') or [])}",
         f"root_cause_count={len(groups)}",
+        "cause_index_json="
+        + json.dumps(compact_index, ensure_ascii=False, separators=(",", ":")),
         "ROOT_CAUSE_INDEX_BEGIN",
     ]
     lines.extend(
-        "cause_json=" + json.dumps(_index_group(group), ensure_ascii=False, separators=(",", ":"))
-        for group in groups
+        "cause_json=" + json.dumps(group, ensure_ascii=False, separators=(",", ":"))
+        for group in compact_index
     )
     lines.append("ROOT_CAUSE_INDEX_END")
     reason = _single_line(payload.get("reason"), limit=240)
