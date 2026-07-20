@@ -7,7 +7,11 @@ from worktrace.api.app_api import ApplicationControlService
 from worktrace.runtime.app_runtime import RuntimeStartResult
 from worktrace.services import privacy_gate_service
 
-pytestmark = [pytest.mark.unit, pytest.mark.contract]
+pytestmark = [
+    pytest.mark.unit,
+    pytest.mark.contract,
+    pytest.mark.collector_runtime,
+]
 
 
 class _Runtime:
