@@ -11,13 +11,13 @@ def write_gate_state() -> tuple[WriteGatePhase, str | None]:
 
 def reset_global_write_gate_for_test() -> None:
     gate = DATABASE_WRITE_GATE
-    with gate._lock:  # noqa: SLF001 - test-only global isolation
-        gate._phase = WriteGatePhase.OPEN  # noqa: SLF001
-        gate._owner_thread_id = None  # noqa: SLF001
-        gate._recovery_block_reason = None  # noqa: SLF001
-        gate._generation += 1  # noqa: SLF001
-        gate._thread_state.observed_generation = gate._generation  # noqa: SLF001
-        gate._thread_state.recovery_write_depth = 0  # noqa: SLF001
+    with gate._lock:
+        gate._phase = WriteGatePhase.OPEN
+        gate._owner_thread_id = None
+        gate._recovery_block_reason = None
+        gate._generation += 1
+        gate._thread_state.observed_generation = gate._generation
+        gate._thread_state.recovery_write_depth = 0
 
 
 __all__ = ["reset_global_write_gate_for_test", "write_gate_state"]
