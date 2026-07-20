@@ -8,6 +8,7 @@ import re
 from pathlib import Path
 
 PROTOCOL = "WORKTRACE_CI_DIAGNOSTICS_V1"
+_CHUNK_SIZE = 13
 
 
 def _one(value: object, limit: int) -> str:
@@ -65,20 +66,28 @@ def _render(
         "diagnostics_metadata_json="
         + json.dumps(metadata, ensure_ascii=False, separators=(",", ":")),
     ]
+    records: list[dict[str, object]] = []
     for raw in shown:
         if not isinstance(raw, dict):
             raise ValueError("root_cause_groups entries must be objects")
         tests = raw.get("affected_tests") or []
-        record = {
-            "id": _one(raw.get("id"), 40),
-            "kind": _one(raw.get("kind"), 24),
-            "location": _one(raw.get("representative_location"), location_limit),
-            "message": _one(raw.get("message"), message_limit),
-            "affected_test_count": len(tests) if isinstance(tests, list) else 0,
+        records.append(
+            {
+                "id": _one(raw.get("id"), 40),
+                "kind": _one(raw.get("kind"), 24),
+                "location": _one(raw.get("representative_location"), location_limit),
+                "message": _one(raw.get("message"), message_limit),
+                "affected_test_count": len(tests) if isinstance(tests, list) else 0,
+            }
+        )
+    for start in range(0, len(records), _CHUNK_SIZE):
+        chunk = {
+            "start": start + 1,
+            "groups": records[start : start + _CHUNK_SIZE],
         }
         lines.append(
-            "signature_group_json="
-            + json.dumps(record, ensure_ascii=False, separators=(",", ":"))
+            "root_cause_index_chunk_json="
+            + json.dumps(chunk, ensure_ascii=False, separators=(",", ":"))
         )
 
     reason = _one(payload.get("reason"), 240)
