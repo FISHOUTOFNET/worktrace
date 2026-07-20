@@ -140,6 +140,7 @@
                                 <button id="edit-cancel-btn" class="edit-btn edit-cancel-btn" type="button" disabled>取消</button>
                             </div>
                             <div id="edit-status" class="edit-status" hidden></div>
+                        </div>
                     </div>
                 </div>
             </section>
@@ -359,7 +360,13 @@
                             <span id="settings-clipboard-toggle-status" class="settings-toggle-status">未加载</span>
                         </div>
                         <p class="settings-card-line" data-settings-key="export_path_configured">导出目录：未加载</p>
-                        <p class="settings-card-line" data-settings-key="secure_import_in_progress">加密备份导入进行中：未加载</p>
+                        <p class="settings-card-line" data-settings-key="maintenance_in_progress">数据库维护进行中：未加载</p>
+                        <p class="settings-card-line" data-settings-key="maintenance_restored">维护恢复完成：未加载</p>
+                        <p class="settings-card-line" data-settings-key="recovery_blocked">维护恢复阻断：未加载</p>
+                        <p class="settings-card-line" data-settings-key="blocked_reason">阻断原因：无</p>
+                        <p class="settings-card-line" data-settings-key="collector_running">采集器运行中：未加载</p>
+                        <p class="settings-card-line" data-settings-key="collector_status">采集器状态：未加载</p>
+                        <p class="settings-card-line" data-settings-key="user_paused">用户暂停：未加载</p>
                         <div class="settings-privacy-notice-row">
                             <span id="settings-privacy-notice-status" class="settings-privacy-notice-status">隐私说明：未加载</span>
                             <button id="settings-privacy-notice-btn" type="button" class="settings-privacy-notice-btn">查看隐私说明</button>
@@ -386,7 +393,7 @@
                         </div>
                         <div class="settings-backup-import-section">
                             <div class="settings-backup-import-title">导入加密备份（替换当前本地数据）</div>
-                            <p class="settings-backup-import-hint">导入将以替换方式覆盖当前本地数据库；导入成功后 WorkTrace 会保持暂停，请在检查数据后手动恢复记录。</p>
+                            <p class="settings-backup-import-hint">操作完成后按维护前的运行状态恢复；用户此前已暂停时继续保持暂停。若恢复失败，应用将保持阻断并显示具体状态。</p>
                             <div class="settings-backup-row">
                                 <label class="settings-backup-label" for="settings-backup-import-passphrase">备份口令</label>
                                 <input id="settings-backup-import-passphrase" type="password" class="settings-backup-input" autocomplete="off" disabled>
@@ -405,7 +412,7 @@
                         <h2 class="settings-card-title">危险操作</h2>
                         <div class="settings-danger-clear-section">
                             <div class="settings-danger-clear-title">清空本地数据</div>
-                            <p class="settings-danger-clear-hint">该操作将清空当前本地数据库中的所有项目、活动记录、规则与设置，并重建默认数据。清空期间会暂停采集器并阻断写入；成功后 WorkTrace 会保持暂停，请在检查后手动恢复记录。</p>
+                            <p class="settings-danger-clear-hint">该操作将清空当前本地数据库中的所有项目、活动记录、规则与设置，并重建默认数据。操作完成后按维护前的运行状态恢复；恢复失败时应用保持阻断并显示具体状态。</p>
                             <div class="settings-backup-row">
                                 <label class="settings-backup-label" for="settings-clear-confirm">确认文字</label>
                                 <input id="settings-clear-confirm" type="text" class="settings-backup-input settings-clear-input" autocomplete="off" placeholder="清空本地数据" disabled>
