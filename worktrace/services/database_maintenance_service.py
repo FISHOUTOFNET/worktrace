@@ -223,7 +223,7 @@ class RuntimeMaintenanceCoordinator:
         if not latch.blocked:
             return False
         reason = latch.reason or DATABASE_RECOVERY_ERROR
-        DATABASE_WRITE_GATE._set_recovery_block(reason)  # noqa: SLF001
+        DATABASE_WRITE_GATE._set_recovery_block(reason)
         self._set_phase(MaintenancePhase.FAILED_CLOSED)
         return True
 
@@ -237,7 +237,7 @@ class RuntimeMaintenanceCoordinator:
         if lease is not None:
             lease.handoff_to_recovery_block(normalized)
         else:
-            DATABASE_WRITE_GATE._set_recovery_block(normalized)  # noqa: SLF001
+            DATABASE_WRITE_GATE._set_recovery_block(normalized)
         self._set_phase(MaintenancePhase.FAILED_CLOSED)
         try:
             clear_runtime_activity_state(f"{normalized}_fail_closed")
@@ -246,7 +246,7 @@ class RuntimeMaintenanceCoordinator:
                 "runtime activity state cleanup failed during fail-closed handoff"
             )
         try:
-            with DATABASE_WRITE_GATE._maintenance_recovery_write_scope():  # noqa: SLF001
+            with DATABASE_WRITE_GATE._maintenance_recovery_write_scope():
                 maintenance_recovery_latch_repository.persist_fail_closed(normalized)
         except Exception:
             logging.exception(
@@ -266,14 +266,14 @@ class RuntimeMaintenanceCoordinator:
                 if not latch.blocked and self.phase is not MaintenancePhase.FAILED_CLOSED:
                     return
                 reason = latch.reason or "maintenance_recovery_state_inconsistent"
-                DATABASE_WRITE_GATE._set_recovery_block(reason)  # noqa: SLF001
+                DATABASE_WRITE_GATE._set_recovery_block(reason)
                 self._set_phase(MaintenancePhase.FAILED_CLOSED)
 
             control, control_epoch = self._control_snapshot()
             if control is None or not self._runtime_control_is_operational(control):
                 raise MaintenanceRecoveryError("maintenance_recovery_not_verified")
 
-            with DATABASE_WRITE_GATE._maintenance_recovery_write_scope():  # noqa: SLF001
+            with DATABASE_WRITE_GATE._maintenance_recovery_write_scope():
                 maintenance_recovery_latch_repository.clear_latch()
 
             with self._state_lock:
@@ -283,7 +283,7 @@ class RuntimeMaintenanceCoordinator:
                 )
                 operational = self._runtime_control_is_operational(control)
                 if not superseded and operational:
-                    DATABASE_WRITE_GATE._clear_recovery_block()  # noqa: SLF001
+                    DATABASE_WRITE_GATE._clear_recovery_block()
                     self._phase = MaintenancePhase.IDLE
                     return
 
@@ -292,10 +292,10 @@ class RuntimeMaintenanceCoordinator:
                 if superseded
                 else "maintenance_recovery_not_verified"
             )
-            DATABASE_WRITE_GATE._set_recovery_block(reason)  # noqa: SLF001
+            DATABASE_WRITE_GATE._set_recovery_block(reason)
             self._set_phase(MaintenancePhase.FAILED_CLOSED)
             try:
-                with DATABASE_WRITE_GATE._maintenance_recovery_write_scope():  # noqa: SLF001
+                with DATABASE_WRITE_GATE._maintenance_recovery_write_scope():
                     maintenance_recovery_latch_repository.persist_fail_closed(reason)
             except Exception:
                 logging.exception("failed maintenance recovery persistence failed")
