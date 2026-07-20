@@ -11,10 +11,10 @@ from typing import Iterator
 
 DATABASE_MAINTENANCE_ERROR = "database_maintenance_in_progress"
 DATABASE_RECOVERY_ERROR = "database_maintenance_recovery_required"
-_RECOVERY_WRITE_TABLE_PATTERN = re.compile(
-    r"\b(?:INSERT(?:\s+OR\s+\w+)?\s+INTO|REPLACE\s+INTO|UPDATE|DELETE\s+FROM)"
+_RECOVERY_WRITE_STATEMENT_PATTERN = re.compile(
+    r"^(?:INSERT(?:\s+OR\s+\w+)?\s+INTO|REPLACE\s+INTO|UPDATE|DELETE\s+FROM)"
     r"\s+([A-Za-z_][A-Za-z0-9_]*)\b",
-    re.IGNORECASE,
+    re.IGNORECASE | re.DOTALL,
 )
 _RECOVERY_WRITE_TABLES = frozenset({"settings", "data_generation"})
 
@@ -131,15 +131,19 @@ class ProcessDatabaseWriteGate:
 
     @staticmethod
     def _is_recovery_latch_sql(sql: str) -> bool:
-        normalized = " ".join(str(sql or "").strip().split())
+        statements = [
+            " ".join(statement.strip().split())
+            for statement in str(sql or "").split(";")
+            if statement.strip()
+        ]
+        if len(statements) != 1:
+            return False
+        normalized = statements[0]
         upper = normalized.upper()
-        if upper.startswith("BEGIN IMMEDIATE") or upper.startswith("BEGIN EXCLUSIVE"):
+        if upper in {"BEGIN IMMEDIATE", "BEGIN EXCLUSIVE"}:
             return True
-        tables = {
-            str(table).casefold()
-            for table in _RECOVERY_WRITE_TABLE_PATTERN.findall(normalized)
-        }
-        return bool(tables) and tables.issubset(_RECOVERY_WRITE_TABLES)
+        match = _RECOVERY_WRITE_STATEMENT_PATTERN.match(normalized)
+        return bool(match) and match.group(1).casefold() in _RECOVERY_WRITE_TABLES
 
     @contextmanager
     def _maintenance_recovery_write_scope(self) -> Iterator[None]:
