@@ -7,7 +7,7 @@ from worktrace.data_generation_repository import (
     DataGenerationRepository,
 )
 from worktrace.db import get_connection, now_str
-from worktrace.report_generation_classifier import report_structure_classifier_scope
+from worktrace.domain_unit_of_work import DomainUnitOfWork
 from worktrace.services import activity_lifecycle_service
 
 pytestmark = [pytest.mark.db, pytest.mark.integration, pytest.mark.serial]
@@ -40,11 +40,10 @@ def test_structure_generation_is_durable_and_ignores_duration_checkpoint(temp_db
     assert activity_lifecycle_service.checkpoint_activity(activity_id, 30) is True
     assert _generation() == after_insert
 
-    with report_structure_classifier_scope():
-        with get_connection() as conn:
-            conn.execute(
-                "UPDATE activity_log SET status = ?, updated_at = ? WHERE id = ?",
-                ("idle", now_str(), activity_id),
-            )
+    with DomainUnitOfWork((DataGenerationNamespace.REPORT_STRUCTURE,)) as uow:
+        uow.connection.execute(
+            "UPDATE activity_log SET status = ?, updated_at = ? WHERE id = ?",
+            ("idle", now_str(), activity_id),
+        )
 
     assert _generation() > after_insert
