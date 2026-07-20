@@ -128,7 +128,7 @@ def test_replay_result_records_are_recursively_immutable_and_deepcopy_safe():
         result.final_entries[0]["member_slices"][0]["activity_id"] = 99
 
 
-def test_merge_revalidates_adjacency_direction_and_revisions():
+def test_merge_revalidates_adjacency_but_member_binding_survives_revision_changes():
     base = [
         _session("base:left", 1, f"{DATE} 09:00:00", 600),
         _session("base:middle", 2, f"{DATE} 09:10:00", 600),
@@ -151,7 +151,32 @@ def test_merge_revalidates_adjacency_direction_and_revisions():
     invalid["members"]["target"] = prepared["base:middle"]["member_slices"]
     invalid["target_expected_revision"] = "stale"
     result = engine.replay_operations(base, [invalid])
-    assert result.operation_diagnostics[0].reason == "target_revision_conflict"
+    assert result.operation_diagnostics[0].state == engine.APPLIED
+    assert result.operation_diagnostics[0].reason == ""
+
+
+def test_member_binding_uses_projection_key_to_disambiguate_copy_from_source():
+    base = [_session("base:a", 1, f"{DATE} 09:00:00", 600)]
+    source = engine.replay_operations(base, []).final_entries[0]
+    copy = _operation(1, "copy_session", source)
+    copied = next(
+        row
+        for row in engine.replay_operations(base, [copy]).final_entries
+        if row["projection_instance_key"] == "copy:1"
+    )
+    hide_copy = _operation(
+        2,
+        "hide_activity",
+        copied,
+        payload={"summary_id": "activity:1"},
+        members={
+            "source": copied["member_slices"],
+            "affected": copied["member_slices"],
+        },
+    )
+    result = engine.replay_operations(base, [copy, hide_copy])
+    assert [row["projection_instance_key"] for row in result.final_entries] == ["base:a"]
+    assert result.operation_diagnostics[-1].state == engine.APPLIED
 
 
 def test_strict_member_recovery_distinguishes_conflict_and_orphaned():
