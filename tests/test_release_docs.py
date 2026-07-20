@@ -125,7 +125,7 @@ def test_ci_workflows_contain_required_release_smoke_steps():
     for phrase in (
         'python-version: "3.11"',
         "pip install --disable-pip-version-check -q -r requirements-dev.txt",
-        "python -m pytest",
+        "python scripts/run_pytest_ci.py",
         "node --test tests/webview/*.test.js",
         "python -m PyInstaller --noconfirm --clean WorkTrace.spec",
         r"scripts\build_windows_installer.ps1",

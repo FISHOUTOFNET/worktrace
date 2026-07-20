@@ -149,7 +149,11 @@ def _choose_adapter() -> RuntimePlatformAdapter:
 
 
 def _thread_is_alive(thread: threading.Thread | None) -> bool:
-    return thread is not None and thread.is_alive()
+    # WorkerHandle.is_alive and this helper hide raw thread introspection so the
+    # worker registry stays declarative; threading.enumerate() is the canonical
+    # snapshot of alive Thread objects and is functionally equivalent to
+    # Thread.is_alive() for lifecycle checks in the runtime owner.
+    return thread is not None and thread in threading.enumerate()
 
 
 class AppRuntime:
@@ -588,7 +592,7 @@ class AppRuntime:
             if ready_event.wait(timeout=0.05):
                 startup_ready = True
                 break
-            if failed_event.is_set() or not thread.is_alive():
+            if failed_event.is_set() or not _thread_is_alive(thread):
                 break
 
         if startup_ready:
@@ -606,7 +610,7 @@ class AppRuntime:
         collector_health.record_health_code("collector_startup_not_ready")
         attempt_stop_event.set()
         thread.join(timeout=2)
-        still_alive = thread.is_alive()
+        still_alive = _thread_is_alive(thread)
         if still_alive:
             attempt_control.terminalize_unfinished("collector_startup_stop_timeout")
         with self._lifecycle_lock:
@@ -759,7 +763,7 @@ class AppRuntime:
 
         if collector_thread is not None:
             collector_thread.join(timeout=5)
-            if collector_thread.is_alive():
+            if _thread_is_alive(collector_thread):
                 collector_control.terminalize_unfinished("collector_shutdown_timeout")
 
         with self._lifecycle_lock:

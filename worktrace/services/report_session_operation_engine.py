@@ -22,9 +22,13 @@ from .report_projection_model import (
     freeze_value,
     thaw_value,
 )
+from .report_operation_contract import (
+    OPERATION_PAYLOAD_VERSION,
+    allowed_payload_keys,
+    expected_roles,
+)
 from .report_replay_binding import ReplayBinding
 
-OPERATION_PAYLOAD_VERSION = 5
 APPLIED = "applied"
 CONFLICT = "conflict"
 ORPHANED = "orphaned"
@@ -260,14 +264,6 @@ def _binding(operation: OperationRecord) -> ReplayBinding | None:
         return None
 
 
-def _revision_matches(
-    session: Mapping[str, Any],
-    expected: str | None,
-) -> bool:
-    value = str(expected or "")
-    return bool(value) and value == str(session.get("projection_revision") or "")
-
-
 def _apply_one(
     sessions: list[dict[str, Any]],
     operation: OperationRecord,
@@ -286,15 +282,6 @@ def _apply_one(
             operation,
             source_reason,
             "source_" + source_reason,
-        )
-    if _binding(operation) is ReplayBinding.REVISION and not _revision_matches(
-        source,
-        operation.source_expected_revision,
-    ):
-        return sessions, _diagnostic(
-            operation,
-            CONFLICT,
-            "source_revision_conflict",
         )
 
     operation_type = operation.operation_type
@@ -407,15 +394,6 @@ def _apply_one(
                 CONFLICT,
                 "same_merge_input",
             )
-        if _binding(operation) is ReplayBinding.REVISION and not _revision_matches(
-            target,
-            operation.target_expected_revision,
-        ):
-            return sessions, _diagnostic(
-                operation,
-                CONFLICT,
-                "target_revision_conflict",
-            )
         ordered = _ordered_sessions(sessions)
         source_index = ordered.index(source)
         target_index = ordered.index(target)
@@ -503,12 +481,6 @@ def _validate_splits(
         if source is None:
             invalid[operation.id] = "split_source_" + reason
             continue
-        if _binding(operation) is ReplayBinding.REVISION and not _revision_matches(
-            source,
-            operation.source_expected_revision,
-        ):
-            invalid[operation.id] = "source_revision_conflict"
-            continue
         if str(source.get("projection_instance_key")) != merge_projection_key(
             original.id
         ):
@@ -586,32 +558,14 @@ def _undo_closure(
     return superseded, undo_by_operation
 
 
-def _expected_roles(operation_type: str) -> set[str] | None:
-    if operation_type == "merge_sessions":
-        return {"source", "target"}
-    if operation_type == "hide_activity":
-        return {"source", "affected"}
-    if operation_type in {
-        "edit_session",
-        "hide_session",
-        "copy_session",
-        "split_session",
-    }:
-        return {"source"}
-    return None
-
-
 def _members_are_valid(operation: OperationRecord) -> bool:
-    expected_roles = _expected_roles(operation.operation_type)
-    if expected_roles is None:
+    expected = expected_roles(operation.operation_type)
+    if expected is None:
         return False
     roles = set(operation.members)
-    binding = _binding(operation)
-    if binding is ReplayBinding.REVISION:
-        return not roles
-    if binding is not ReplayBinding.MEMBERS or roles != expected_roles:
+    if _binding(operation) is not ReplayBinding.MEMBERS or roles != expected:
         return False
-    for role in expected_roles:
+    for role in expected:
         members = operation.members_for(role)
         identities = [_identity_tuple(member) for member in members]
         if not identities or len(identities) != len(set(identities)):
@@ -643,11 +597,9 @@ def _payload_is_valid(operation: OperationRecord) -> bool:
         return False
     if _binding(operation) is None or not _members_are_valid(operation):
         return False
-    allowed = {"payload_version", "replay_binding"}
-    if operation.operation_type == "edit_session":
-        allowed |= {"project", "duration", "note"}
-    elif operation.operation_type == "hide_activity":
-        allowed |= {"summary_id"}
+    allowed = allowed_payload_keys(operation.operation_type)
+    if allowed is None:
+        return False
     return set(payload) <= allowed
 
 
@@ -772,19 +724,13 @@ def _resolve_bound_input(
     role: str,
     key: str,
 ) -> tuple[dict[str, Any] | None, str]:
-    binding = _binding(operation)
+    if _binding(operation) is not ReplayBinding.MEMBERS:
+        return None, CONFLICT
     by_key = [
         item
         for item in sessions
         if str(item.get("projection_instance_key") or "") == key
     ]
-    if binding is ReplayBinding.REVISION:
-        if len(by_key) == 1:
-            return by_key[0], ""
-        return None, CONFLICT if by_key else ORPHANED
-    if binding is not ReplayBinding.MEMBERS:
-        return None, CONFLICT
-
     expected_members = operation.members_for(role)
     expected = tuple(
         sorted(_identity_tuple(member) for member in expected_members)

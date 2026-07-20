@@ -41,7 +41,34 @@ def _write_progress(*, status: str) -> None:
         json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n",
         encoding="utf-8",
     )
-    temporary.replace(path)
+    _replace_progress_file(temporary, path)
+
+
+def _replace_progress_file(temporary: Path, target: Path) -> None:
+    """Replace the progress file, tolerating transient Windows file locks.
+
+    The runner process polls the progress file via _read_progress while the
+    pytest subprocess writes it here. On Windows, Path.replace fails with
+    PermissionError when another handle holds the target open for reading.
+    The progress file is best-effort; retrying briefly lets the read finish
+    rather than crashing pytest_sessionfinish and losing failure output.
+    """
+    last_error: OSError | None = None
+    for attempt in range(5):
+        try:
+            temporary.replace(target)
+            return
+        except OSError as exc:
+            last_error = exc
+            time.sleep(0.02 * (attempt + 1))
+    try:
+        temporary.unlink(missing_ok=True)
+    except OSError:
+        pass
+    # Last attempt failed; the runner still emits a final heartbeat, so a
+    # stale progress file is acceptable. Silence the error rather than
+    # tearing down pytest_sessionfinish and masking test failure output.
+    del last_error
 
 
 def pytest_collection_finish(session: Any) -> None:

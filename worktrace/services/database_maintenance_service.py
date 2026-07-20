@@ -7,9 +7,8 @@ import threading
 from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum
-from typing import Iterator, Protocol
+from typing import TYPE_CHECKING, Iterator, Protocol
 
-from ..collector.runtime_control import RuntimeCollectorControl
 from ..database_content_manifest import DELETE_ORDER
 from ..db import get_connection, seed_defaults
 from ..domain_unit_of_work import DomainUnitOfWork
@@ -29,6 +28,12 @@ from .database_replacement_generation_service import (
 )
 from .runtime_activity_state_service import clear_runtime_activity_state
 from .settings_service import get_bool_setting, get_setting, set_settings
+
+if TYPE_CHECKING:
+    # Avoid a collector -> services -> collector import cycle that breaks
+    # ``import worktrace.webview_main``. The symbol is only used as a type
+    # annotation; the runtime reference comes from the runtime owner.
+    from ..collector.runtime_control import RuntimeCollectorControl
 
 
 class RuntimeMaintenanceControl(Protocol):

@@ -39,7 +39,8 @@ def test_backup_operation_rejects_note_above_domain_limit():
     operation = {
         "operation_type": "edit_session",
         "payload": {
-            "payload_version": 4,
+            "payload_version": 5,
+            "replay_binding": "members",
             "note": {"mode": "set", "value": "x" * (NOTE_MAX_LENGTH + 1)},
         },
     }
@@ -47,5 +48,92 @@ def test_backup_operation_rejects_note_above_domain_limit():
     try:
         with pytest.raises(BackupValidationError, match="note value length"):
             _validate_operation_payload(operation, conn)
+    finally:
+        conn.close()
+
+
+def _make_valid_backup_operation() -> dict:
+    """Return a minimal payload that passes the backup validator's contract."""
+
+    return {
+        "operation_type": "hide_session",
+        "payload": {
+            "payload_version": 5,
+            "replay_binding": "members",
+        },
+    }
+
+
+def test_backup_validator_rejects_legacy_payload_version():
+    operation = _make_valid_backup_operation()
+    operation["payload"]["payload_version"] = 4
+    conn = sqlite3.connect(":memory:")
+    try:
+        with pytest.raises(BackupValidationError, match="operation payload version"):
+            _validate_operation_payload(operation, conn)
+    finally:
+        conn.close()
+
+
+def test_backup_validator_rejects_legacy_revision_binding():
+    operation = _make_valid_backup_operation()
+    operation["payload"]["replay_binding"] = "revision"
+    conn = sqlite3.connect(":memory:")
+    try:
+        with pytest.raises(BackupValidationError, match="operation replay binding"):
+            _validate_operation_payload(operation, conn)
+    finally:
+        conn.close()
+
+
+def test_backup_validator_rejects_non_members_binding():
+    operation = _make_valid_backup_operation()
+    operation["payload"]["replay_binding"] = "something_else"
+    conn = sqlite3.connect(":memory:")
+    try:
+        with pytest.raises(BackupValidationError, match="operation replay binding"):
+            _validate_operation_payload(operation, conn)
+    finally:
+        conn.close()
+
+
+def test_backup_validator_rejects_missing_binding():
+    operation = _make_valid_backup_operation()
+    del operation["payload"]["replay_binding"]
+    conn = sqlite3.connect(":memory:")
+    try:
+        with pytest.raises(BackupValidationError, match="operation replay binding"):
+            _validate_operation_payload(operation, conn)
+    finally:
+        conn.close()
+
+
+def test_backup_validator_rejects_unknown_payload_field():
+    operation = _make_valid_backup_operation()
+    operation["payload"]["rogue_field"] = 1
+    conn = sqlite3.connect(":memory:")
+    try:
+        with pytest.raises(BackupValidationError, match="unknown payload field"):
+            _validate_operation_payload(operation, conn)
+    finally:
+        conn.close()
+
+
+def test_backup_validator_rejects_unknown_operation_type():
+    operation = _make_valid_backup_operation()
+    operation["operation_type"] = "unknown_op"
+    conn = sqlite3.connect(":memory:")
+    try:
+        with pytest.raises(BackupValidationError, match="operation type"):
+            _validate_operation_payload(operation, conn)
+    finally:
+        conn.close()
+
+
+def test_backup_validator_accepts_members_only_current_payload():
+    operation = _make_valid_backup_operation()
+    conn = sqlite3.connect(":memory:")
+    try:
+        _validate_operation_payload(operation, conn)
     finally:
         conn.close()

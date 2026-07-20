@@ -18,8 +18,13 @@ from ..constants import (
 from ..data_generation_repository import DataGenerationRepository
 from ..db import CURRENT_SCHEMA_VERSION, expected_schema_fingerprint, schema_fingerprint
 from ..domain_limits import NOTE_MAX_LENGTH
-from .report_replay_binding import ReplayBinding
-from .report_session_operation_engine import OPERATION_PAYLOAD_VERSION
+from .report_operation_contract import (
+    OPERATION_PAYLOAD_VERSION,
+    validate_operation_type,
+    validate_payload_fields,
+    validate_payload_metadata,
+)
+from .report_projection_model import InvalidInputError
 
 _ALLOWED_ACTIVITY_STATUSES = {
     STATUS_NORMAL,
@@ -27,6 +32,17 @@ _ALLOWED_ACTIVITY_STATUSES = {
     STATUS_ERROR,
     STATUS_EXCLUDED,
     STATUS_PAUSED,
+}
+
+# Map the shared contract's InvalidInputError messages to backup-facing
+# error tags. The acceptance set is identical to the runtime engine; only
+# the exception type and tag change so backup diagnostics stay scoped to
+# staging validation.
+_BACKUP_ERROR_BY_CONTRACT: dict[str, str] = {
+    "操作负载版本损坏": "operation payload version",
+    "操作重放绑定损坏": "operation replay binding",
+    "操作类型损坏": "operation type",
+    "操作负载字段损坏": "unknown payload field",
 }
 
 
@@ -175,20 +191,16 @@ def _validate_operation_payload(
     conn: sqlite3.Connection,
 ) -> None:
     payload = operation.get("payload")
-    if (
-        not isinstance(payload, dict)
-        or isinstance(payload.get("payload_version"), bool)
-        or payload.get("payload_version") != OPERATION_PAYLOAD_VERSION
-    ):
+    if not isinstance(payload, dict):
         raise BackupValidationError("operation payload version")
-    try:
-        ReplayBinding(str(payload["replay_binding"]))
-    except (KeyError, ValueError) as exc:
-        raise BackupValidationError("operation replay binding") from exc
     operation_type = str(operation.get("operation_type") or "")
-    allowed = {"payload_version", "replay_binding"}
+    try:
+        validate_payload_metadata(payload)
+        validate_operation_type(operation_type)
+        validate_payload_fields(operation_type, payload)
+    except InvalidInputError as exc:
+        raise BackupValidationError(_BACKUP_ERROR_BY_CONTRACT[exc.message]) from exc
     if operation_type == "edit_session":
-        allowed |= {"project", "duration", "note"}
         if not any(key in payload for key in ("project", "duration", "note")):
             raise BackupValidationError("empty edit")
         project = payload.get("project")
@@ -229,18 +241,8 @@ def _validate_operation_payload(
             elif note.get("mode") != "inherit":
                 raise BackupValidationError("note mode")
     elif operation_type == "hide_activity":
-        allowed |= {"summary_id"}
         if not isinstance(payload.get("summary_id"), str) or not payload["summary_id"]:
             raise BackupValidationError("summary id")
-    elif operation_type not in {
-        "hide_session",
-        "copy_session",
-        "merge_sessions",
-        "split_session",
-    }:
-        raise BackupValidationError("operation type")
-    if set(payload) - allowed:
-        raise BackupValidationError("unknown payload field")
 
 
 def _validate_operation_graph(conn: sqlite3.Connection) -> None:

@@ -5,9 +5,12 @@ import json
 from collections import defaultdict
 from typing import Any
 
+from .report_operation_contract import (
+    validate_operation_type,
+    validate_payload_fields,
+    validate_payload_metadata,
+)
 from .report_projection_model import InvalidInputError
-from .report_replay_binding import ReplayBinding
-from .report_session_operation_engine import OPERATION_PAYLOAD_VERSION
 
 
 def load_operations_by_date(
@@ -60,17 +63,10 @@ def load_operations_by_date(
             raise InvalidInputError("操作负载损坏") from exc
         if not isinstance(payload, dict):
             raise InvalidInputError("操作负载损坏")
-        payload_version = payload.get("payload_version")
-        if (
-            isinstance(payload_version, bool)
-            or not isinstance(payload_version, int)
-            or payload_version != OPERATION_PAYLOAD_VERSION
-        ):
-            raise InvalidInputError("操作负载版本损坏")
-        try:
-            ReplayBinding(str(payload["replay_binding"]))
-        except (KeyError, ValueError) as exc:
-            raise InvalidInputError("操作重放绑定损坏") from exc
+        validate_payload_metadata(payload)
+        operation_type = str(operation.get("operation_type") or "")
+        validate_operation_type(operation_type)
+        validate_payload_fields(operation_type, payload)
         operation["payload"] = payload
         operation["members"] = {
             role: list(values)
