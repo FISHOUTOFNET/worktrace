@@ -1,18 +1,8 @@
 """Settings / Privacy status facade + bridge tests.
 
-These tests verify the ``settings_api.get_settings_privacy_status`` facade,
-the ``settings_api.set_clipboard_capture_enabled_for_webview`` write facade,
-the ``settings_api.export_encrypted_backup_for_webview`` and
-``settings_api.preview_encrypted_backup_manifest_for_webview`` facades, the
-backup import ``settings_api.import_encrypted_backup_for_webview`` and
-``settings_api.clear_all_local_data_for_webview`` facades, the first-run notice
-``settings_api.get_first_run_notice_for_webview`` and
-``settings_api.accept_first_run_notice_for_webview`` facades, and the
-corresponding ``WebViewBridge`` methods. They assert the read-only status
-payload and the clipboard capture toggle / backup export / manifest preview
-/ backup import / clear-all / first-run notice write payloads never leak
-paths, clipboard content, passphrases, tracebacks, or any unintended
-write-side action surface.
+These tests verify the named settings/privacy capabilities and assert that
+read-only status payloads do not expose paths, clipboard content, passphrases,
+tracebacks, or unintended write-side actions.
 """
 
 from __future__ import annotations
@@ -59,7 +49,6 @@ def _set_notice_accepted(accepted: bool) -> None:
 SENSITIVE_EXPORT_PATH = "C:\\TestSettings-Alpha-7Q2\\exports"
 SENSITIVE_CLIPBOARD_TOKEN = "TestClipboard-Epsilon-Secret-1W4"
 SENSITIVE_PASSPHRASE = "TestPassphrase-Delta-Secret-9XK"
-
 
 MAINTENANCE_KEYS = {
     "maintenance_in_progress",
@@ -198,9 +187,8 @@ def test_api_payload_does_not_leak_sensitive_tokens(temp_db) -> None:
 
 
 def test_api_does_not_call_write_actions_during_status_read(temp_db) -> None:
+    assert not hasattr(settings_api, "set_setting_value")
     with patch.object(settings_api, "clear_all_local_data") as mock_clear, patch.object(
-        settings_api, "set_setting_value"
-    ) as mock_set_value, patch.object(
         settings_api, "set_clipboard_capture_enabled"
     ) as mock_set_clip, patch(
         "worktrace.api.backup_api.export_encrypted_backup"
@@ -211,7 +199,6 @@ def test_api_does_not_call_write_actions_during_status_read(temp_db) -> None:
     ) as mock_manifest:
         get_settings_privacy_status()
         mock_clear.assert_not_called()
-        mock_set_value.assert_not_called()
         mock_set_clip.assert_not_called()
         mock_export.assert_not_called()
         mock_import.assert_not_called()
