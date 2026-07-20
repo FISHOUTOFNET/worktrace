@@ -38,19 +38,26 @@ class SettingsBridgeMixin:
             logger.exception("webview bridge set_clipboard_capture_enabled failed")
             return {"ok": False, "error": "设置剪贴板记录失败"}
 
-    def export_encrypted_backup(self, passphrase, confirm_passphrase) -> dict[str, Any]:
+    def export_encrypted_backup(
+        self,
+        passphrase,
+        confirm_passphrase,
+    ) -> dict[str, Any]:
         try:
             output_path = self._choose_backup_save_path()
             if output_path is None:
                 return {"ok": False, "error": "已取消导出"}
             result = settings_api.export_encrypted_backup_for_webview(
-                output_path, passphrase, confirm_passphrase
+                output_path,
+                passphrase,
+                confirm_passphrase,
             )
             if result.get("ok"):
                 return {
                     "ok": True,
                     "filename": str(result.get("filename") or ""),
                     "message": str(result.get("message") or "加密备份已导出"),
+                    "maintenance": dict(result.get("maintenance") or {}),
                 }
             return {"ok": False, "error": result.get("error") or "导出加密备份失败"}
         except Exception:
@@ -80,7 +87,9 @@ class SettingsBridgeMixin:
             if input_path is None:
                 return {"ok": False, "error": "已取消导入"}
             result = settings_api.import_encrypted_backup_for_webview(
-                input_path, passphrase, confirm_text
+                input_path,
+                passphrase,
+                confirm_text,
             )
             if result.get("ok"):
                 return {
@@ -89,6 +98,7 @@ class SettingsBridgeMixin:
                     "imported_table_count": int(result.get("imported_table_count") or 0),
                     "imported_row_count": int(result.get("imported_row_count") or 0),
                     "folder_index_reset": bool(result.get("folder_index_reset")),
+                    "maintenance": dict(result.get("maintenance") or {}),
                 }
             return {"ok": False, "error": result.get("error") or "导入加密备份失败"}
         except Exception:
@@ -102,6 +112,7 @@ class SettingsBridgeMixin:
                 payload: dict[str, Any] = {
                     "ok": True,
                     "message": str(result.get("message") or "本地数据已清空"),
+                    "maintenance": dict(result.get("maintenance") or {}),
                 }
                 if "status" in result:
                     payload["status"] = result["status"]
