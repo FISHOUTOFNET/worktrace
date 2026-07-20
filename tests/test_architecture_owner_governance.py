@@ -119,8 +119,10 @@ def test_destructive_owners_use_the_static_database_manifest() -> None:
 
     assert "from ..database_content_manifest import DELETE_ORDER" in maintenance
     assert "for table in DELETE_ORDER" in maintenance
-    assert "from ..database_content_manifest import BACKUP_TABLES" in backup
-    assert "for table in BACKUP_TABLES" in backup
+    assert "database_content_manifest import (" in backup
+    assert "BACKUP_TABLES" in backup
+    assert "EXPORT_TABLES: tuple[str, ...] = BACKUP_TABLES" in backup
+    assert "for table in EXPORT_TABLES" in backup
     assert not _INFERENCE_DML_PATTERN.search(maintenance)
     assert not _INFERENCE_DML_PATTERN.search(backup)
     assert not _RECOVERY_DML_PATTERN.search(maintenance)
