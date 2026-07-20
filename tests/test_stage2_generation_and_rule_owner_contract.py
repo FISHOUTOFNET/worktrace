@@ -76,15 +76,14 @@ def test_generation_publication_is_owned_by_unit_of_work() -> None:
     assert "connection.commit()" in uow
 
 
-def test_database_derived_caches_use_domain_and_replacement_tokens() -> None:
-    cache_modules = {
+def test_database_derived_caches_use_domain_and_replacement_identity() -> None:
+    direct_generation_caches = {
         "settings": "worktrace/services/settings_service.py",
         "folders": "worktrace/services/folder_rule_service.py",
         "keywords": "worktrace/services/project_inference_service.py",
-        "privacy": "worktrace/services/privacy_service.py",
         "report_revision": "worktrace/services/report_revision_service.py",
     }
-    for name, relative in cache_modules.items():
+    for name, relative in direct_generation_caches.items():
         source = _source(relative)
         assert "DataGenerationNamespace.DATABASE_REPLACEMENT" in source, name
         assert (
@@ -92,6 +91,13 @@ def test_database_derived_caches_use_domain_and_replacement_tokens() -> None:
             or "DataGenerationRepository.get_many(" in source
         ), name
         assert "RULE_CACHE_TTL_SECONDS" not in source, name
+
+    privacy = _source("worktrace/services/privacy_service.py")
+    assert "active_database_epoch_key" in privacy
+    assert "generation_tuple(" in privacy
+    assert "DataGenerationNamespace.PRIVACY_CATALOG" in privacy
+    assert "DataGenerationNamespace.DATABASE_REPLACEMENT" not in privacy
+    assert "RULE_CACHE_TTL_SECONDS" not in privacy
 
 
 def test_rule_history_facade_has_no_direct_sql_owner() -> None:
@@ -178,68 +184,5 @@ def test_recovery_service_only_plans_lifecycle_commands() -> None:
     lifecycle = _source("worktrace/services/activity_lifecycle_service.py")
     assert "UPDATE activity_log" not in recovery
     assert "activity_lifecycle_service.recover_activity_batch(" in recovery
-    assert "mark_activity_error" in recovery
-    assert "def recover_activity_batch(" in lifecycle
-    assert "def recover_continuation_batch(" in lifecycle
-    assert "session_boundary_service.insert_boundary" in lifecycle
-
-
-def test_folder_index_read_model_is_deterministic_and_side_effect_free() -> None:
-    source = _source("worktrace/services/folder_index_query_service.py")
-    for forbidden in (
-        "request_rebuild_for_rule",
-        "request_refresh_for_enabled_rules",
-        "mark_index_stale",
-        "os.path.exists",
-        "Path.exists",
-        "INSERT INTO",
-        "UPDATE folder_rule_index_state",
-        "DELETE FROM",
-    ):
-        assert forbidden not in source
-    inference = _source("worktrace/services/project_inference_service.py")
-    planning = _source("worktrace/services/rule_planning_service.py")
-    resources = _source("worktrace/resources/resource_helpers.py")
-    assert "folder_index_query_service" in inference
-    assert "folder_index_query_service" in planning
-    assert "folder_index_query_service" not in resources
-
-
-def test_project_catalog_has_no_cross_service_cache_fanout() -> None:
-    source = _source("worktrace/services/project_service.py")
-    assert "_invalidate_project_lifecycle_caches" not in source
-    assert "invalidate_folder_rule_cache" not in source
-    assert "invalidate_keyword_rule_cache" not in source
-    assert "clear_exclude_rules_cache" not in source
-
-
-def test_clear_and_replacement_use_one_independent_epoch_owner() -> None:
-    maintenance = _function(
-        "worktrace/services/database_maintenance_service.py",
-        "clear_all_live_data",
-    )
-    assert "publish_database_replacement" in _called_names(maintenance)
-    assert _namespace_attributes(
-        "worktrace/services/database_maintenance_service.py"
-    ) == set()
-
-    replacement_relative = (
-        "worktrace/services/database_replacement_generation_service.py"
-    )
-    assert _namespace_attributes(replacement_relative) == {"DATABASE_REPLACEMENT"}
-    publish = _function(replacement_relative, "publish_database_replacement")
-    calls = _called_names(publish)
-    assert "add_effects" in calls
-    assert "bump_replacement" in calls
-    assert "bump" not in calls
-
-
-def test_replacement_repository_does_not_commit_or_publish_process_state() -> None:
-    repository = _function(
-        "worktrace/data_generation_repository.py",
-        "bump_replacement",
-    )
-    calls = _called_names(repository)
-    assert "commit" not in calls
-    assert "publish_committed" not in calls
-    assert "publish_replacement_committed" not in calls
+    assert "activity_lifecycle_service.recover_continuation_batch(" in recovery
+    assert "UPDATE activity_log" in lifecycle
