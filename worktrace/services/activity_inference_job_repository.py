@@ -13,6 +13,7 @@ from typing import Iterable
 
 from ..constants import TIME_FORMAT
 from ..db import now_str
+from ..write_gate import DATABASE_MAINTENANCE_ERROR
 from .activity_inference_policy import is_closed_activity_inference_eligible
 
 
@@ -29,7 +30,7 @@ class InferenceFailureCode(str, Enum):
     DATA_REPAIR_REQUIRED = "data_repair_required"
     DATABASE_BUSY = "database_busy"
     DATABASE_GENERATION_CHANGED = "database_generation_changed"
-    SECURE_IMPORT_IN_PROGRESS = "secure_import_in_progress"
+    DATABASE_MAINTENANCE_IN_PROGRESS = DATABASE_MAINTENANCE_ERROR
     UNEXPECTED_FAILURE = "unexpected_failure"
 
 
@@ -40,11 +41,7 @@ def enqueue_closed_activity_ids(
     reason: InferenceJobReason = InferenceJobReason.CLOSED_ACTIVITY,
     at_time: str | None = None,
 ) -> int:
-    """Insert missing jobs for activities accepted by the canonical policy.
-
-    The work performed is bounded by the number of requested activity ids. The
-    implementation deliberately avoids whole-outbox counts or preload scans.
-    """
+    """Insert missing jobs for activities accepted by the canonical policy."""
 
     if reason is not InferenceJobReason.CLOSED_ACTIVITY:
         raise TypeError("inference_job_reason_required")
