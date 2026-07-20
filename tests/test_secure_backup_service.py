@@ -142,10 +142,10 @@ def _seed_all_worker_progress(source_activity_id: int) -> None:
         )
     rule_id = rule_service.create_rule("Matter", project_id)
     history_mutation_job_service.submit_rule_job(
-        "rule_backfill",
         "keyword",
         rule_id,
-        synchronous_limit=0,
+        kind="rule_backfill",
+        synchronous_scan_limit=0,
     )
     timestamp = db.now_str()
     with db.get_connection() as conn:
