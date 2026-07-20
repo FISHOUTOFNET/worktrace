@@ -369,7 +369,7 @@ def run_history_worker(
 
     logging.info("history mutation worker loop enter")
     while not stop_event.is_set():
-        if DATABASE_WRITE_GATE.active():
+        if DATABASE_WRITE_GATE.writes_blocked():
             health.maintenance_paused(True)
             stop_event.wait(_WORKER_IDLE_SECONDS)
             continue
