@@ -61,6 +61,17 @@ SENSITIVE_CLIPBOARD_TOKEN = "TestClipboard-Epsilon-Secret-1W4"
 SENSITIVE_PASSPHRASE = "TestPassphrase-Delta-Secret-9XK"
 
 
+MAINTENANCE_KEYS = {
+    "maintenance_in_progress",
+    "maintenance_restored",
+    "recovery_blocked",
+    "blocked_reason",
+    "collector_running",
+    "collector_status",
+    "user_paused",
+}
+
+
 def test_api_returns_success_payload_with_required_keys(temp_db) -> None:
     result = get_settings_privacy_status()
     assert isinstance(result, dict)
@@ -72,7 +83,7 @@ def test_api_returns_success_payload_with_required_keys(temp_db) -> None:
         "storage_model",
         "clipboard_capture_enabled",
         "export_path_configured",
-        "maintenance_in_progress",
+        *sorted(MAINTENANCE_KEYS),
         "encrypted_backup",
         "destructive_actions",
         "first_run_notice",
@@ -102,18 +113,42 @@ def test_api_export_path_configured_is_bool_and_does_not_leak_path(temp_db) -> N
     assert "TestSettings-Alpha" not in serialized
 
 
-def test_api_maintenance_in_progress_field_is_bool(temp_db) -> None:
-    assert isinstance(
-        get_settings_privacy_status()["status"]["maintenance_in_progress"],
-        bool,
-    )
+def test_api_maintenance_fields_have_exact_types(temp_db) -> None:
+    status = get_settings_privacy_status()["status"]
+    assert type(status["maintenance_in_progress"]) is bool
+    assert type(status["maintenance_restored"]) is bool
+    assert type(status["recovery_blocked"]) is bool
+    assert status["blocked_reason"] is None or isinstance(status["blocked_reason"], str)
+    assert type(status["collector_running"]) is bool
+    assert isinstance(status["collector_status"], str)
+    assert type(status["user_paused"]) is bool
 
 
 def test_api_maintenance_in_progress_reflects_canonical_gate(temp_db) -> None:
     with database_maintenance_service.consistent_snapshot("settings_status_contract"):
         status = get_settings_privacy_status()["status"]
         assert status["maintenance_in_progress"] is True
-    assert get_settings_privacy_status()["status"]["maintenance_in_progress"] is False
+        assert status["maintenance_restored"] is False
+        assert status["recovery_blocked"] is False
+    status = get_settings_privacy_status()["status"]
+    assert status["maintenance_in_progress"] is False
+    assert status["maintenance_restored"] is True
+    assert status["recovery_blocked"] is False
+
+
+def test_failed_closed_is_blocked_but_not_reported_as_in_progress(temp_db) -> None:
+    coordinator = database_maintenance_service.MAINTENANCE_COORDINATOR
+    coordinator._latch_fail_closed("test_restore_failed")
+    try:
+        status = get_settings_privacy_status()["status"]
+        assert status["maintenance_in_progress"] is False
+        assert status["maintenance_restored"] is False
+        assert status["recovery_blocked"] is True
+        assert status["blocked_reason"] == "test_restore_failed"
+    finally:
+        with coordinator._state_lock:
+            coordinator._blocked_reason = None
+            coordinator._phase = database_maintenance_service.MaintenancePhase.IDLE
 
 
 def test_api_encrypted_backup_availability_fields_are_present(temp_db) -> None:
@@ -217,7 +252,7 @@ def test_bridge_returns_narrow_success_payload(temp_db) -> None:
         "storage_model",
         "clipboard_capture_enabled",
         "export_path_configured",
-        "maintenance_in_progress",
+        *MAINTENANCE_KEYS,
         "encrypted_backup",
         "destructive_actions",
         "first_run_notice",
