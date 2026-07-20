@@ -37,7 +37,7 @@ from worktrace.services.secure_backup_service import (
     ImportResult,
     SecureBackupError,
 )
-from worktrace.services.settings_service import set_setting
+from worktrace.services.settings_service import set_setting, set_settings
 
 pytestmark = [pytest.mark.security_privacy, pytest.mark.integration, pytest.mark.db]
 
@@ -127,17 +127,23 @@ def test_api_maintenance_in_progress_reflects_canonical_gate(temp_db) -> None:
 
 def test_failed_closed_is_blocked_but_not_reported_as_in_progress(temp_db) -> None:
     coordinator = database_maintenance_service.MAINTENANCE_COORDINATOR
-    coordinator._latch_fail_closed("test_restore_failed")
-    try:
-        status = get_settings_privacy_status()["status"]
-        assert status["maintenance_in_progress"] is False
-        assert status["maintenance_restored"] is False
-        assert status["recovery_blocked"] is True
-        assert status["blocked_reason"] == "test_restore_failed"
-    finally:
-        with coordinator._state_lock:
-            coordinator._blocked_reason = None
-            coordinator._phase = database_maintenance_service.MaintenancePhase.IDLE
+    set_settings(
+        {
+            "maintenance_fail_closed": "true",
+            "maintenance_fail_closed_reason": "test_restore_failed",
+            "user_paused": "true",
+            "collector_status": "paused",
+        }
+    )
+    assert coordinator.hydrate_fail_closed_from_durable() is True
+
+    status = get_settings_privacy_status()["status"]
+    assert status["maintenance_in_progress"] is False
+    assert status["maintenance_restored"] is False
+    assert status["recovery_blocked"] is True
+    assert status["blocked_reason"] == "test_restore_failed"
+
+    coordinator.recover_fail_closed()
 
 
 def test_api_encrypted_backup_availability_fields_are_present(temp_db) -> None:
