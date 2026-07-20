@@ -773,12 +773,12 @@ def _resolve_bound_input(
     key: str,
 ) -> tuple[dict[str, Any] | None, str]:
     binding = _binding(operation)
+    by_key = [
+        item
+        for item in sessions
+        if str(item.get("projection_instance_key") or "") == key
+    ]
     if binding is ReplayBinding.REVISION:
-        by_key = [
-            item
-            for item in sessions
-            if str(item.get("projection_instance_key") or "") == key
-        ]
         if len(by_key) == 1:
             return by_key[0], ""
         return None, CONFLICT if by_key else ORPHANED
@@ -790,6 +790,18 @@ def _resolve_bound_input(
         sorted(_identity_tuple(member) for member in expected_members)
     )
     if not expected:
+        return None, CONFLICT
+    if len(by_key) > 1:
+        return None, CONFLICT
+    if len(by_key) == 1:
+        keyed_members = tuple(
+            sorted(
+                _member_key(member)
+                for member in by_key[0].get("member_slices") or []
+            )
+        )
+        if keyed_members == expected:
+            return by_key[0], ""
         return None, CONFLICT
     exact = [
         item
@@ -844,8 +856,6 @@ def _coerce_operation(
         if isinstance(value.get("payload"), Mapping)
         else {}
     )
-    if "replay_binding" not in payload:
-        payload["replay_binding"] = str(value.get("replay_binding") or "")
     return OperationRecord(
         id=int(value.get("id") or 0),
         report_date=str(value.get("report_date") or ""),
