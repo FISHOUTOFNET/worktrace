@@ -78,7 +78,7 @@ class WorkTraceConnection(sqlite3.Connection):
 
     def _require_write_allowed(self, sql: str) -> None:
         if _sql_requires_write_gate(sql):
-            DATABASE_WRITE_GATE.require_current_thread_allowed()
+            DATABASE_WRITE_GATE.require_current_thread_allowed(sql)
 
     def execute(self, sql, parameters=(), /):  # type: ignore[override]
         text = str(sql)
