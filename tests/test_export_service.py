@@ -159,7 +159,8 @@ def test_clear_all_failure_rolls_back_data_and_fails_closed(
     with pytest.raises(RuntimeError, match="post-clear failure"):
         export_service.clear_all_local_data(confirm=True)
 
-    assert database_maintenance_service.is_maintenance_in_progress() is True
+    assert database_maintenance_service.is_maintenance_in_progress() is False
+    assert database_maintenance_service.MAINTENANCE_COORDINATOR.recovery_blocked() is True
     assert (
         database_maintenance_service.MAINTENANCE_COORDINATOR.phase
         is database_maintenance_service.MaintenancePhase.FAILED_CLOSED
