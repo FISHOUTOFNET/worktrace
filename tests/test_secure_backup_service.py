@@ -207,7 +207,7 @@ def test_export_payload_is_exact_current_contract(temp_db):
     data = json.loads(_current_payload())
     assert data["format"] == "worktrace-local-data"
     assert data["version"] == 6
-    assert data["schema_version"] == "12"
+    assert data["schema_version"] == "13"
     assert data["schema_fingerprint"] == db.expected_schema_fingerprint()
     assert set(data["tables"]) == set(secure_backup_service.EXPORT_TABLES)
     for table in _WORKER_PROGRESS_TABLES:
@@ -323,7 +323,11 @@ def test_replace_failure_rolls_back_and_fails_closed(
     with pytest.raises(sqlite3.OperationalError):
         secure_backup_service.import_encrypted_backup(out, PASSPHRASE)
 
-    assert database_maintenance_service.is_maintenance_in_progress() is True
+    status = database_maintenance_service.maintenance_status()
+    assert status.maintenance_in_progress is False
+    assert status.maintenance_restored is False
+    assert status.recovery_blocked is True
+    assert status.blocked_reason
     assert (
         database_maintenance_service.MAINTENANCE_COORDINATOR.phase
         is database_maintenance_service.MaintenancePhase.FAILED_CLOSED
