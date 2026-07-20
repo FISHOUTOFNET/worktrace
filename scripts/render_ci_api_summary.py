@@ -105,6 +105,18 @@ def _normalized_groups(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return groups
 
 
+def _index_group(group: dict[str, Any]) -> dict[str, object]:
+    """Return the compact first-pass record that must expose every root cause."""
+
+    return {
+        "id": group["id"],
+        "kind": group["kind"],
+        "location": group["location"],
+        "message": group["message"],
+        "affected_test_count": group["affected_test_count"],
+    }
+
+
 def _normalized_log_tail(payload: dict[str, Any]) -> list[str]:
     raw_tail = payload.get("log_tail") or []
     if not isinstance(raw_tail, list):
@@ -134,7 +146,13 @@ def _render(
         f"skipped={counts.get('skipped', 0)}",
         f"failure_count={len(payload.get('failures') or [])}",
         f"root_cause_count={len(groups)}",
+        "ROOT_CAUSE_INDEX_BEGIN",
     ]
+    lines.extend(
+        "cause_json=" + json.dumps(_index_group(group), ensure_ascii=False, separators=(",", ":"))
+        for group in groups
+    )
+    lines.append("ROOT_CAUSE_INDEX_END")
     reason = _single_line(payload.get("reason"), limit=240)
     if reason != "(none)":
         lines.append(f"reason={reason}")
