@@ -8,6 +8,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ..constants import EXCLUDED_PROJECT
+from ..data_generation_repository import (
+    DataGenerationNamespace,
+    DataGenerationRepository,
+)
 from ..db import dict_rows, get_connection, get_db_path, now_str
 from ..path_utils import normalize_path_key
 from ..resources.title_parsing import normalize_file_name
@@ -28,7 +32,7 @@ _WORKER_IDLE_SECONDS = 5.0
 _MISS_REFRESH_COOLDOWN_SECONDS = 60.0
 
 _WORKER_WAKE_EVENT = threading.Event()
-_MISS_REFRESH_TIMES: dict[tuple[str, bool], float] = {}
+_MISS_REFRESH_TIMES: dict[tuple[str, int, bool], float] = {}
 
 
 def request_rebuild_for_rule(rule_id: int) -> None:
@@ -45,8 +49,19 @@ def delete_index_for_rule(rule_id: int, *, conn=None) -> None:
         delete_index_for_rule(rule_id, conn=own_conn)
 
 
+def _replacement_cache_identity() -> tuple[str, int]:
+    database_key = str(get_db_path().resolve())
+    with get_connection() as conn:
+        replacement_epoch = DataGenerationRepository.get(
+            conn,
+            DataGenerationNamespace.DATABASE_REPLACEMENT,
+        )
+    return database_key, replacement_epoch
+
+
 def request_refresh_for_enabled_rules(include_excluded: bool = False) -> None:
-    cache_key = (str(get_db_path().resolve()), bool(include_excluded))
+    database_key, replacement_epoch = _replacement_cache_identity()
+    cache_key = (database_key, replacement_epoch, bool(include_excluded))
     current = time.monotonic()
     if current - _MISS_REFRESH_TIMES.get(cache_key, 0.0) < _MISS_REFRESH_COOLDOWN_SECONDS:
         return
@@ -230,7 +245,7 @@ def mark_index_stale(rule_id: int, reason: str = "") -> None:
 def run_folder_index_worker(
     stop_event: threading.Event,
     *,
-    health: "WorkerHealthReporter | None" = None,
+    health: "WorkerHealthReporter",
 ) -> None:
     """Run iterations only; AppRuntime owns thread started/stopped state."""
 
@@ -240,32 +255,26 @@ def run_folder_index_worker(
         validate_ready_indexes(stop_event)
     except Exception:
         logging.exception("folder index startup validation failed")
-        if health is not None:
-            health.failed("folder_index_startup_failed")
+        health.failed("folder_index_startup_failed")
     else:
-        if health is not None:
-            health.succeeded()
+        health.succeeded()
     while not stop_event.is_set():
         try:
             if DATABASE_WRITE_GATE.active():
-                if health is not None:
-                    health.maintenance_paused(True)
+                health.maintenance_paused(True)
                 _wait_for_worker()
                 continue
-            if health is not None:
-                health.maintenance_paused(False)
+            health.maintenance_paused(False)
             ensure_index_states_for_folder_rules()
             for rule_id in _pending_rule_ids():
                 if stop_event.is_set() or DATABASE_WRITE_GATE.active():
                     break
                 rebuild_folder_index(rule_id, stop_event)
-            if health is not None:
-                health.succeeded()
+            health.succeeded()
             _wait_for_worker()
         except Exception:
             logging.exception("folder index worker error")
-            if health is not None:
-                health.failed("folder_index_iteration_failed")
+            health.failed("folder_index_iteration_failed")
             _wait_for_worker()
     logging.info("folder index worker loop exit")
 
