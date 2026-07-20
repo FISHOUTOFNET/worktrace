@@ -45,6 +45,11 @@ def _member(aid: int, start: str) -> dict:
 
 
 def _operation(op_id: int, kind: str, source: dict, **values) -> dict:
+    payload = {
+        "payload_version": engine.OPERATION_PAYLOAD_VERSION,
+        "replay_binding": "members",
+    }
+    payload.update(values.pop("payload", {}))
     return {
         "id": op_id,
         "report_date": DATE,
@@ -52,7 +57,7 @@ def _operation(op_id: int, kind: str, source: dict, **values) -> dict:
         "operation_type": kind,
         "source_instance_key": source["projection_instance_key"],
         "source_expected_revision": source["projection_revision"],
-        "payload": {"payload_version": engine.OPERATION_PAYLOAD_VERSION},
+        "payload": payload,
         "members": {"source": source["member_slices"]},
         **values,
     }
@@ -87,10 +92,7 @@ def test_replay_is_deterministic_and_does_not_modify_inputs():
         1,
         "edit_session",
         prepared,
-        payload={
-            "payload_version": engine.OPERATION_PAYLOAD_VERSION,
-            "note": {"mode": "set", "value": "note"},
-        },
+        payload={"note": {"mode": "set", "value": "note"}},
     )
     before_base, before_operation = deepcopy(base), deepcopy(operation)
     first = engine.replay_operations(base, [operation])
@@ -186,10 +188,7 @@ def test_split_supersedes_merge_and_all_descendants_without_virtual_entry():
         2,
         "edit_session",
         merged,
-        payload={
-            "payload_version": engine.OPERATION_PAYLOAD_VERSION,
-            "note": {"mode": "set", "value": "descendant"},
-        },
+        payload={"note": {"mode": "set", "value": "descendant"}},
     )
     edited = engine.replay_operations(base, [merge, edit]).final_entries[0]
     split = _operation(3, "split_session", edited, undo_of_operation_id=1)
