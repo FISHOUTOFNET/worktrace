@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import threading
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from ..constants import STATUS_ERROR, STATUS_EXCLUDED, STATUS_IDLE, STATUS_PAUSED
 from ..data_generation_repository import DataGenerationNamespace
@@ -14,11 +14,9 @@ from ..platforms.base import ActiveWindow
 from ..resources.detectors import detect_resource
 from ..resources.resource_builders import make_system_resource
 from ..resources.types import DetectedResource
+from ..worker_health import WorkerHealthReporter
 from ..write_gate import DATABASE_WRITE_GATE
 from .resource_service import create_or_update_activity_resource
-
-if TYPE_CHECKING:
-    from ..worker_health import WorkerHealthReporter
 
 DEFAULT_BATCH_SIZE = 200
 REPAIR_POLICY_VERSION = 1
@@ -174,7 +172,7 @@ def repair_missing_activity_resources(batch_size: int = DEFAULT_BATCH_SIZE) -> i
 def run_activity_resource_repair_worker(
     stop_event: threading.Event,
     *,
-    health: "WorkerHealthReporter | None" = None,
+    health: WorkerHealthReporter,
     batch_size: int = DEFAULT_BATCH_SIZE,
     poll_seconds: float = _WORKER_IDLE_SECONDS,
 ) -> None:
@@ -185,22 +183,18 @@ def run_activity_resource_repair_worker(
     logging.info("activity resource repair worker loop enter")
     while not stop_event.is_set():
         if DATABASE_WRITE_GATE.active():
-            if health is not None:
-                health.maintenance_paused(True)
+            health.maintenance_paused(True)
             stop_event.wait(interval)
             continue
-        if health is not None:
-            health.maintenance_paused(False)
+        health.maintenance_paused(False)
         try:
             repaired = repair_missing_activity_resources(size)
         except Exception:
             logging.exception("activity resource repair worker iteration failed")
-            if health is not None:
-                health.failed("activity_resource_repair_iteration_failed")
+            health.failed("activity_resource_repair_iteration_failed")
             repaired = 0
         else:
-            if health is not None:
-                health.succeeded()
+            health.succeeded()
         if repaired >= size:
             continue
         stop_event.wait(interval)
@@ -224,7 +218,10 @@ def clear_all_jobs_in_transaction(conn) -> int:
 
 
 def _failure_code(exc: BaseException) -> str:
-    if isinstance(exc, RuntimeError) and str(exc) == "activity_resource_repair_cursor_inconsistent":
+    if (
+        isinstance(exc, RuntimeError)
+        and str(exc) == "activity_resource_repair_cursor_inconsistent"
+    ):
         return "cursor_inconsistent"
     return "repair_failed"
 
@@ -289,7 +286,10 @@ def _first_unrepaired_activity_id() -> int | None:
     return int(row["activity_id"])
 
 
-def _load_missing_rows_after(cursor_activity_id: int, limit: int) -> list[dict[str, Any]]:
+def _load_missing_rows_after(
+    cursor_activity_id: int,
+    limit: int,
+) -> list[dict[str, Any]]:
     with get_connection() as conn:
         rows = conn.execute(
             """
