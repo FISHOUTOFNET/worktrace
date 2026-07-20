@@ -138,10 +138,17 @@ class ProcessDatabaseWriteGate:
 
         thread_id = threading.get_ident()
         with self._lock:
-            if (
-                self._recovery_block_reason is not None
-                and not self._recovery_write_allowed()
-            ):
+            recovery_write = self._recovery_write_allowed()
+            if recovery_write:
+                if (
+                    self._phase is not WriteGatePhase.OPEN
+                    and thread_id != self._owner_thread_id
+                ):
+                    raise sqlite3.OperationalError(DATABASE_MAINTENANCE_ERROR)
+                self._thread_state.observed_generation = self._generation
+                return
+
+            if self._recovery_block_reason is not None:
                 raise sqlite3.OperationalError(DATABASE_RECOVERY_ERROR)
 
             if self._phase is WriteGatePhase.EXCLUSIVE:
