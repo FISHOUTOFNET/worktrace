@@ -50,6 +50,47 @@ class TestMaintenance:
     blocked_reason: str | None = None
 
 
+class _OperationalHoldState:
+    value = "operational"
+
+
+class _OperationalCollectorControl:
+    hold_state = _OperationalHoldState()
+
+    def query_command(self, command_id: str):
+        return None
+
+
+class TestRuntimeMaintenanceControl:
+    """Stopped, operational runtime boundary for service integration tests."""
+
+    def __init__(self) -> None:
+        self.collector_control = _OperationalCollectorControl()
+
+    @staticmethod
+    def _ack(command_kind: str, terminal_state: str) -> dict[str, object]:
+        return {
+            "ok": True,
+            "command_id": f"test-{command_kind}",
+            "command_kind": command_kind,
+            "command_state": "completed",
+            "command_state_unknown": False,
+            "terminal_state": terminal_state,
+        }
+
+    def is_collection_running_for_maintenance(self) -> bool:
+        return False
+
+    def quiesce_collection_for_maintenance(self, timeout_seconds=5.0):
+        return self._ack("maintenance_hold", "held")
+
+    def reset_after_database_replacement(self, timeout_seconds=5.0):
+        return self._ack("database_reset", "held")
+
+    def restore_after_maintenance(self, state, timeout_seconds=5.0):
+        return self._ack("maintenance_release", "operational")
+
+
 def build_test_application_services(
     runtime: TestRuntime | None = None,
     maintenance: TestMaintenance | None = None,
@@ -75,6 +116,7 @@ def build_test_bridge(
 __all__ = [
     "TestMaintenance",
     "TestRuntime",
+    "TestRuntimeMaintenanceControl",
     "build_test_application_services",
     "build_test_bridge",
 ]
