@@ -78,8 +78,9 @@ worker progress and derived indexes are not exported.
 Only the permanent Standard CI workflow is used.
 
 1. Runtime/platform boundary: completed on the branch.
-2. Maintenance, replacement, projection, transaction and composition boundary: submitted for Checkpoint 2 validation.
-3. Final semantic governance, documentation and packaging validation: pending Checkpoint 2 results.
+2. Checkpoint 2 run `29718444163` proved Node validation and Windows package smoke; its Python job stopped at the inventory gate before collection. The stale current-only projection target and conservative DB-risk classification were corrected in one root-cause batch.
+3. A new Checkpoint 2 run validates inventory, Python collection/full suite, Node and packaging without rerunning the failed historical job.
+4. Final semantic governance, documentation and packaging validation follows a successful Checkpoint 2 run.
 
 The branch remains unmerged and PR #25 remains Draft until explicit user
 confirmation.
