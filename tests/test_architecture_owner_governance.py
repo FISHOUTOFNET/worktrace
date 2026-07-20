@@ -317,6 +317,30 @@ def test_test_functions_are_defined_in_collectable_modules() -> None:
         )
 
 
+def test_no_top_level_test_function_in_non_collectable_files() -> None:
+    """Any file under tests/ that defines a top-level test_* function must be named test_*.py."""
+    offenders: list[str] = []
+    for path in _python_files(TESTS):
+        if path.name == "__init__.py":
+            continue
+        if path.name.startswith("test_"):
+            continue
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        except SyntaxError:
+            offenders.append(f"{path.relative_to(ROOT).as_posix()}:syntax_error")
+            continue
+        for node in tree.body:
+            if (
+                isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name.startswith("test_")
+            ):
+                offenders.append(
+                    f"{path.relative_to(ROOT).as_posix()}:{node.lineno}:{node.name}"
+                )
+    assert offenders == []
+
+
 def test_current_only_schema_and_backup_versions_are_explicit() -> None:
     db_source = (PRODUCTION / "db.py").read_text(encoding="utf-8")
     backup_source = (

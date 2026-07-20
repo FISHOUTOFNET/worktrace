@@ -941,10 +941,19 @@ def test_create_project_keyword_rule_bridge_rejects_tuple_and_set_keyword():
 def test_delete_project_keyword_rule_success_payload(monkeypatch):
     monkeypatch.setattr(
         bridge_rules_module.rule_api, "delete_project_keyword_rule",
-        lambda rule_id: {"ok": True, "rule": {"kind": "keyword", "id": rule_id, "deleted": True}},
+        lambda rule_id, apply_to_history: {"ok": True, "rule": {"kind": "keyword", "id": rule_id, "deleted": True}},
     )
-    result = build_test_bridge().delete_project_keyword_rule(123)
-    assert result == {"ok": True, "rule": {"kind": "keyword", "id": 123, "deleted": True}}
+    result = build_test_bridge().delete_project_keyword_rule(123, apply_to_history=False)
+    assert result == {
+        "ok": True,
+        "rule": {
+            "kind": "keyword",
+            "id": 123,
+            "deleted": True,
+            "history_updated": False,
+            "updated_count": 0,
+        },
+    }
     assert "projects" not in result
     assert "rules" not in result
 
@@ -954,14 +963,14 @@ def test_delete_project_keyword_rule_success_payload(monkeypatch):
     [None, True, False, "1", "abc", 0, -1, 1.0, 2.5, [], {}, (), {1, 2}, (1,), frozenset({1})],
 )
 def test_delete_project_keyword_rule_rejects_invalid_rule_id(bad_id):
-    result = build_test_bridge().delete_project_keyword_rule(bad_id)
+    result = build_test_bridge().delete_project_keyword_rule(bad_id, apply_to_history=False)
     assert result == {"ok": False, "error": "操作无效"}
 
 
 def test_delete_project_keyword_rule_invalid_input_payload_excludes_sensitive_text():
     bridge = build_test_bridge()
     for bad_id in (None, True, False, "1", 1.0, [], {}, 0, -1, (), {1, 2}, (1,), frozenset({1})):
-        result = bridge.delete_project_keyword_rule(bad_id)
+        result = bridge.delete_project_keyword_rule(bad_id, apply_to_history=False)
         assert result == {"ok": False, "error": "操作无效"}
         lowered = repr(result).lower()
         for forbidden in ("traceback", "sqlite", "select", "window_title", "clipboard", "note", "secret"):
@@ -971,46 +980,47 @@ def test_delete_project_keyword_rule_invalid_input_payload_excludes_sensitive_te
 def test_delete_project_keyword_rule_not_found_maps_to_chinese(monkeypatch):
     monkeypatch.setattr(
         bridge_rules_module.rule_api, "delete_project_keyword_rule",
-        lambda rule_id: {"ok": False, "error": "not_found"},
+        lambda rule_id, apply_to_history: {"ok": False, "error": "not_found"},
     )
-    result = build_test_bridge().delete_project_keyword_rule(999)
+    result = build_test_bridge().delete_project_keyword_rule(999, apply_to_history=False)
     assert result == {"ok": False, "error": "关键词规则不存在"}
 
 
 def test_delete_project_keyword_rule_invalid_input_code_maps_to_chinese(monkeypatch):
     monkeypatch.setattr(
         bridge_rules_module.rule_api, "delete_project_keyword_rule",
-        lambda rule_id: {"ok": False, "error": "invalid_input"},
+        lambda rule_id, apply_to_history: {"ok": False, "error": "invalid_input"},
     )
-    result = build_test_bridge().delete_project_keyword_rule(1)
+    result = build_test_bridge().delete_project_keyword_rule(1, apply_to_history=False)
     assert result == {"ok": False, "error": "操作无效"}
 
 
 def test_delete_project_keyword_rule_operation_failed_code_maps_to_chinese(monkeypatch):
     monkeypatch.setattr(
         bridge_rules_module.rule_api, "delete_project_keyword_rule",
-        lambda rule_id: {"ok": False, "error": "operation_failed"},
+        lambda rule_id, apply_to_history: {"ok": False, "error": "operation_failed"},
     )
-    result = build_test_bridge().delete_project_keyword_rule(1)
+    result = build_test_bridge().delete_project_keyword_rule(1, apply_to_history=False)
     assert result == {"ok": False, "error": "删除关键词规则失败"}
 
 
 def test_delete_project_keyword_rule_unknown_error_code_collapses_to_delete_failed(monkeypatch):
     monkeypatch.setattr(
         bridge_rules_module.rule_api, "delete_project_keyword_rule",
-        lambda rule_id: {"ok": False, "error": "unexpected raw code"},
+        lambda rule_id, apply_to_history: {"ok": False, "error": "unexpected raw code"},
     )
-    result = build_test_bridge().delete_project_keyword_rule(1)
+    result = build_test_bridge().delete_project_keyword_rule(1, apply_to_history=False)
     assert result == {"ok": False, "error": "删除关键词规则失败"}
 
 
 def test_delete_project_keyword_rule_unknown_exception_collapses(monkeypatch):
-    def fail(rule_id):
+    def fail(rule_id, apply_to_history):
+        assert type(apply_to_history) is bool
         raise RuntimeError(
             "boom SELECT * FROM activity_log traceback window_title clipboard note C:\\Secret"
         )
     monkeypatch.setattr(bridge_rules_module.rule_api, "delete_project_keyword_rule", fail)
-    result = build_test_bridge().delete_project_keyword_rule(1)
+    result = build_test_bridge().delete_project_keyword_rule(1, apply_to_history=False)
     assert result == {"ok": False, "error": "删除关键词规则失败"}
     lowered = repr(result).lower()
     for forbidden in (
@@ -1022,13 +1032,13 @@ def test_delete_project_keyword_rule_unknown_exception_collapses(monkeypatch):
 def test_delete_project_keyword_rule_failure_payload_excludes_backend_codes(monkeypatch):
     monkeypatch.setattr(
         bridge_rules_module.rule_api, "delete_project_keyword_rule",
-        lambda rule_id: {
+        lambda rule_id, apply_to_history: {
             "ok": False, "error": "not_found", "code": "not_found",
             "internal_field": "should not leak", "traceback": "SELECT * FROM project_rule",
             "details": "C:\\Secret window_title clipboard note",
         },
     )
-    result = build_test_bridge().delete_project_keyword_rule(999)
+    result = build_test_bridge().delete_project_keyword_rule(999, apply_to_history=False)
     assert result == {"ok": False, "error": "关键词规则不存在"}
     lowered = repr(result).lower()
     for forbidden in (
@@ -1041,9 +1051,9 @@ def test_delete_project_keyword_rule_failure_payload_excludes_backend_codes(monk
 def test_delete_project_keyword_rule_success_payload_types_are_stable(monkeypatch):
     monkeypatch.setattr(
         bridge_rules_module.rule_api, "delete_project_keyword_rule",
-        lambda rule_id: {"ok": True, "rule": {"kind": "keyword", "id": rule_id, "deleted": 1}},
+        lambda rule_id, apply_to_history: {"ok": True, "rule": {"kind": "keyword", "id": rule_id, "deleted": 1}},
     )
-    result = build_test_bridge().delete_project_keyword_rule(25)
+    result = build_test_bridge().delete_project_keyword_rule(25, apply_to_history=False)
     assert type(result["ok"]) is bool
     rule = result["rule"]
     assert type(rule["kind"]) is str
@@ -1054,9 +1064,9 @@ def test_delete_project_keyword_rule_success_payload_types_are_stable(monkeypatc
 def test_delete_project_keyword_rule_payload_json_serializable(monkeypatch):
     monkeypatch.setattr(
         bridge_rules_module.rule_api, "delete_project_keyword_rule",
-        lambda rule_id: {"ok": True, "rule": {"kind": "keyword", "id": rule_id, "deleted": True}},
+        lambda rule_id, apply_to_history: {"ok": True, "rule": {"kind": "keyword", "id": rule_id, "deleted": True}},
     )
-    result = build_test_bridge().delete_project_keyword_rule(20)
+    result = build_test_bridge().delete_project_keyword_rule(20, apply_to_history=False)
     json.dumps(result, ensure_ascii=False)
     assert "Traceback" not in repr(result)
     assert "SELECT" not in repr(result)
@@ -1065,7 +1075,7 @@ def test_delete_project_keyword_rule_payload_json_serializable(monkeypatch):
 def test_delete_project_keyword_rule_never_calls_other_project_rules_write_apis(monkeypatch):
     monkeypatch.setattr(
         bridge_rules_module.rule_api, "delete_project_keyword_rule",
-        lambda rule_id: {"ok": True, "rule": {"kind": "keyword", "id": rule_id, "deleted": True}},
+        lambda rule_id, apply_to_history: {"ok": True, "rule": {"kind": "keyword", "id": rule_id, "deleted": True}},
     )
     forbidden_calls: list[str] = []
 
@@ -1095,7 +1105,7 @@ def test_delete_project_keyword_rule_never_calls_other_project_rules_write_apis(
     for name in ("create_project", "update_project", "delete_project", "archive_project", "set_project_enabled"):
         if hasattr(bridge_rules_module.project_api, name):
             monkeypatch.setattr(bridge_rules_module.project_api, name, make_project_forbidden(name))
-    result = build_test_bridge().delete_project_keyword_rule(1)
+    result = build_test_bridge().delete_project_keyword_rule(1, apply_to_history=False)
     assert result["ok"] is True
     assert forbidden_calls == []
     assert forbidden_project_calls == []
@@ -1148,7 +1158,7 @@ def test_delete_project_keyword_rule_does_not_regress_create_project_keyword_rul
 def test_delete_project_keyword_rule_success_payload_strips_extra_api_keys(monkeypatch):
     monkeypatch.setattr(
         bridge_rules_module.rule_api, "delete_project_keyword_rule",
-        lambda rule_id: {
+        lambda rule_id, apply_to_history: {
             "ok": True,
             "rule": {
                 "kind": "keyword", "id": rule_id, "deleted": True, "project_id": 999,
@@ -1158,10 +1168,19 @@ def test_delete_project_keyword_rule_success_payload_strips_extra_api_keys(monke
             },
         },
     )
-    result = build_test_bridge().delete_project_keyword_rule(7)
-    assert result == {"ok": True, "rule": {"kind": "keyword", "id": 7, "deleted": True}}
+    result = build_test_bridge().delete_project_keyword_rule(7, apply_to_history=False)
+    assert result == {
+        "ok": True,
+        "rule": {
+            "kind": "keyword",
+            "id": 7,
+            "deleted": True,
+            "history_updated": False,
+            "updated_count": 0,
+        },
+    }
     rule = result["rule"]
-    assert set(rule.keys()) == {"kind", "id", "deleted"}
+    assert set(rule.keys()) == {"kind", "id", "deleted", "history_updated", "updated_count"}
     lowered = repr(result).lower()
     for forbidden in (
         "should not leak", "project_id", "folder_path", "internal_field", "traceback", "sqlite",
@@ -1173,16 +1192,18 @@ def test_delete_project_keyword_rule_success_payload_strips_extra_api_keys(monke
 def test_delete_project_keyword_rule_folder_rule_id_maps_to_stable_not_found(monkeypatch):
     captured: dict[str, object] = {}
 
-    def fake_delete(rule_id):
+    def fake_delete(rule_id, apply_to_history):
         captured["rule_id"] = rule_id
+        captured["apply_to_history"] = apply_to_history
         return {
             "ok": False, "error": "not_found", "table": "folder_project_rule",
             "details": "C:\\Secret folder path window_title clipboard note",
         }
 
     monkeypatch.setattr(bridge_rules_module.rule_api, "delete_project_keyword_rule", fake_delete)
-    result = build_test_bridge().delete_project_keyword_rule(55)
+    result = build_test_bridge().delete_project_keyword_rule(55, apply_to_history=False)
     assert captured["rule_id"] == 55
+    assert captured["apply_to_history"] is False
     assert result == {"ok": False, "error": "关键词规则不存在"}
     lowered = repr(result).lower()
     for forbidden in (
@@ -1195,7 +1216,7 @@ def test_delete_project_keyword_rule_folder_rule_id_maps_to_stable_not_found(mon
 def test_delete_project_keyword_rule_bridge_input_validation_payloads_json_serializable():
     bridge = build_test_bridge()
     for bad_id in (None, True, False, "1", "abc", 1.0, 2.5, 0, -1, [], {}, (), {1, 2}, (1,), frozenset({1})):
-        result = bridge.delete_project_keyword_rule(bad_id)
+        result = bridge.delete_project_keyword_rule(bad_id, apply_to_history=False)
         assert result == {"ok": False, "error": "操作无效"}
         json.dumps(result, ensure_ascii=False)
         lowered = repr(result).lower()
@@ -1491,11 +1512,11 @@ def test_create_project_folder_rule_does_not_regress_delete_project_keyword_rule
     )
     monkeypatch.setattr(
         bridge_rules_module.rule_api, "delete_project_keyword_rule",
-        lambda rule_id: {"ok": True, "rule": {"kind": "keyword", "id": rule_id, "deleted": True}},
+        lambda rule_id, apply_to_history: {"ok": True, "rule": {"kind": "keyword", "id": rule_id, "deleted": True}},
     )
     bridge = build_test_bridge()
     folder_result = bridge.create_project_folder_rule(1, r"D:\Work", True)
-    delete_result = bridge.delete_project_keyword_rule(99)
+    delete_result = bridge.delete_project_keyword_rule(99, apply_to_history=False)
     assert folder_result["ok"] is True
     assert delete_result["ok"] is True
 
@@ -1696,23 +1717,32 @@ def test_update_project_folder_rule_never_calls_other_project_rules_write_apis(m
 def test_delete_project_folder_rule_success_payload(monkeypatch):
     monkeypatch.setattr(
         bridge_rules_module.rule_api, "delete_project_folder_rule",
-        lambda rule_id: {"ok": True, "rule": {"kind": "folder", "id": rule_id, "deleted": True}},
+        lambda rule_id, apply_to_history: {"ok": True, "rule": {"kind": "folder", "id": rule_id, "deleted": True}},
     )
-    result = build_test_bridge().delete_project_folder_rule(10)
-    assert result == {"ok": True, "rule": {"kind": "folder", "id": 10, "deleted": True}}
+    result = build_test_bridge().delete_project_folder_rule(10, apply_to_history=False)
+    assert result == {
+        "ok": True,
+        "rule": {
+            "kind": "folder",
+            "id": 10,
+            "deleted": True,
+            "history_updated": False,
+            "updated_count": 0,
+        },
+    }
     assert "projects" not in result
 
 
 @pytest.mark.parametrize("bad_id", [None, True, False, "1", "abc", 0, -1, 1.0, 2.5, [], {}, (), {1, 2}, (1,), frozenset({1})])
 def test_delete_project_folder_rule_rejects_invalid_rule_id(bad_id):
-    result = build_test_bridge().delete_project_folder_rule(bad_id)
+    result = build_test_bridge().delete_project_folder_rule(bad_id, apply_to_history=False)
     assert result == {"ok": False, "error": "操作无效"}
 
 
 def test_delete_project_folder_rule_invalid_input_payload_excludes_sensitive_text():
     bridge = build_test_bridge()
     for bad_id in (None, True, False, "1", "abc", 1.0, 2.5, 0, -1, [], {}, (), {1, 2}, (1,), frozenset({1})):
-        result = bridge.delete_project_folder_rule(bad_id)
+        result = bridge.delete_project_folder_rule(bad_id, apply_to_history=False)
         assert result == {"ok": False, "error": "操作无效"}
         lowered = repr(result).lower()
         for forbidden in ("traceback", "sqlite", "select", "window_title", "clipboard", "note", "secret"):
@@ -1722,27 +1752,27 @@ def test_delete_project_folder_rule_invalid_input_payload_excludes_sensitive_tex
 def test_delete_project_folder_rule_not_found_maps_to_chinese(monkeypatch):
     monkeypatch.setattr(
         bridge_rules_module.rule_api, "delete_project_folder_rule",
-        lambda rule_id: {"ok": False, "error": "not_found"},
+        lambda rule_id, apply_to_history: {"ok": False, "error": "not_found"},
     )
-    result = build_test_bridge().delete_project_folder_rule(9999)
+    result = build_test_bridge().delete_project_folder_rule(9999, apply_to_history=False)
     assert result == {"ok": False, "error": "文件夹规则不存在"}
 
 
 def test_delete_project_folder_rule_operation_failed_maps_to_chinese(monkeypatch):
     monkeypatch.setattr(
         bridge_rules_module.rule_api, "delete_project_folder_rule",
-        lambda rule_id: {"ok": False, "error": "operation_failed"},
+        lambda rule_id, apply_to_history: {"ok": False, "error": "operation_failed"},
     )
-    result = build_test_bridge().delete_project_folder_rule(1)
+    result = build_test_bridge().delete_project_folder_rule(1, apply_to_history=False)
     assert result == {"ok": False, "error": "删除文件夹规则失败"}
 
 
 def test_delete_project_folder_rule_unknown_error_code_collapses(monkeypatch):
     monkeypatch.setattr(
         bridge_rules_module.rule_api, "delete_project_folder_rule",
-        lambda rule_id: {"ok": False, "error": "unknown_code"},
+        lambda rule_id, apply_to_history: {"ok": False, "error": "unknown_code"},
     )
-    result = build_test_bridge().delete_project_folder_rule(1)
+    result = build_test_bridge().delete_project_folder_rule(1, apply_to_history=False)
     assert result == {"ok": False, "error": "删除文件夹规则失败"}
 
 
@@ -1750,7 +1780,7 @@ def test_delete_project_folder_rule_unknown_exception_collapses(monkeypatch):
     def _boom(*args, **kwargs):
         raise RuntimeError("boom: sensitive SQL DELETE FROM ...")
     monkeypatch.setattr(bridge_rules_module.rule_api, "delete_project_folder_rule", _boom)
-    result = build_test_bridge().delete_project_folder_rule(1)
+    result = build_test_bridge().delete_project_folder_rule(1, apply_to_history=False)
     assert result == {"ok": False, "error": "删除文件夹规则失败"}
     lowered = repr(result).lower()
     for forbidden in ("boom", "delete", "sensitive", "traceback", "runtimeerror", "window_title", "clipboard", "note"):
@@ -1760,12 +1790,12 @@ def test_delete_project_folder_rule_unknown_exception_collapses(monkeypatch):
 def test_delete_project_folder_rule_failure_payload_excludes_backend_codes(monkeypatch):
     monkeypatch.setattr(
         bridge_rules_module.rule_api, "delete_project_folder_rule",
-        lambda rule_id: {
+        lambda rule_id, apply_to_history: {
             "ok": False, "error": "operation_failed", "sql": "DELETE FROM folder_project_rule WHERE ...",
             "traceback": "RuntimeError: ...", "details": "C:\\Secret window_title clipboard note",
         },
     )
-    result = build_test_bridge().delete_project_folder_rule(1)
+    result = build_test_bridge().delete_project_folder_rule(1, apply_to_history=False)
     assert result == {"ok": False, "error": "删除文件夹规则失败"}
     lowered = repr(result).lower()
     for forbidden in (
@@ -1777,9 +1807,9 @@ def test_delete_project_folder_rule_failure_payload_excludes_backend_codes(monke
 def test_delete_project_folder_rule_success_payload_types_are_stable(monkeypatch):
     monkeypatch.setattr(
         bridge_rules_module.rule_api, "delete_project_folder_rule",
-        lambda rule_id: {"ok": True, "rule": {"kind": "folder", "id": rule_id, "deleted": True}},
+        lambda rule_id, apply_to_history: {"ok": True, "rule": {"kind": "folder", "id": rule_id, "deleted": True}},
     )
-    result = build_test_bridge().delete_project_folder_rule(1)
+    result = build_test_bridge().delete_project_folder_rule(1, apply_to_history=False)
     assert isinstance(result["ok"], bool)
     rule = result["rule"]
     assert isinstance(rule["kind"], str)
@@ -1790,16 +1820,16 @@ def test_delete_project_folder_rule_success_payload_types_are_stable(monkeypatch
 def test_delete_project_folder_rule_payload_json_serializable(monkeypatch):
     monkeypatch.setattr(
         bridge_rules_module.rule_api, "delete_project_folder_rule",
-        lambda rule_id: {"ok": True, "rule": {"kind": "folder", "id": rule_id, "deleted": True}},
+        lambda rule_id, apply_to_history: {"ok": True, "rule": {"kind": "folder", "id": rule_id, "deleted": True}},
     )
-    result = build_test_bridge().delete_project_folder_rule(1)
+    result = build_test_bridge().delete_project_folder_rule(1, apply_to_history=False)
     json.dumps(result, ensure_ascii=False)
 
 
 def test_delete_project_folder_rule_success_payload_strips_extra_api_keys(monkeypatch):
     monkeypatch.setattr(
         bridge_rules_module.rule_api, "delete_project_folder_rule",
-        lambda rule_id: {
+        lambda rule_id, apply_to_history: {
             "ok": True,
             "rule": {
                 "kind": "folder", "id": rule_id, "deleted": True, "folder_path": r"C:\Secret",
@@ -1808,9 +1838,9 @@ def test_delete_project_folder_rule_success_payload_strips_extra_api_keys(monkey
             },
         },
     )
-    result = build_test_bridge().delete_project_folder_rule(1)
+    result = build_test_bridge().delete_project_folder_rule(1, apply_to_history=False)
     rule = result["rule"]
-    assert set(rule.keys()) == {"kind", "id", "deleted"}
+    assert set(rule.keys()) == {"kind", "id", "deleted", "history_updated", "updated_count"}
     lowered = repr(result).lower()
     for forbidden in (
         "folder_path", "project_id", "normalized_folder_key", "internal_note",
@@ -1834,23 +1864,25 @@ def test_delete_project_folder_rule_never_calls_other_project_rules_write_apis(m
     monkeypatch.setattr(bridge_rules_module.rule_api, "delete_project_keyword_rule", _track("delete_keyword"))
     monkeypatch.setattr(bridge_rules_module.rule_api, "create_project_folder_rule", _track("create_folder"))
     monkeypatch.setattr(bridge_rules_module.rule_api, "update_project_folder_rule", _track("update_folder"))
-    build_test_bridge().delete_project_folder_rule(1)
+    build_test_bridge().delete_project_folder_rule(1, apply_to_history=False)
     assert called == {"delete_folder": 1}
 
 
 def test_delete_project_folder_rule_keyword_rule_id_maps_to_stable_not_found(monkeypatch):
     captured: dict[str, object] = {}
 
-    def fake_delete(rule_id):
+    def fake_delete(rule_id, apply_to_history):
         captured["rule_id"] = rule_id
+        captured["apply_to_history"] = apply_to_history
         return {
             "ok": False, "error": "not_found", "table": "project_rule",
             "details": "Spec keyword window_title clipboard note",
         }
 
     monkeypatch.setattr(bridge_rules_module.rule_api, "delete_project_folder_rule", fake_delete)
-    result = build_test_bridge().delete_project_folder_rule(77)
+    result = build_test_bridge().delete_project_folder_rule(77, apply_to_history=False)
     assert captured["rule_id"] == 77
+    assert captured["apply_to_history"] is False
     assert result == {"ok": False, "error": "文件夹规则不存在"}
     lowered = repr(result).lower()
     for forbidden in (
@@ -1863,7 +1895,7 @@ def test_delete_project_folder_rule_keyword_rule_id_maps_to_stable_not_found(mon
 def test_delete_project_folder_rule_bridge_input_validation_payloads_json_serializable():
     bridge = build_test_bridge()
     for bad_id in (None, True, False, "1", "abc", 1.0, 2.5, 0, -1, [], {}, (), {1, 2}, (1,), frozenset({1})):
-        result = bridge.delete_project_folder_rule(bad_id)
+        result = bridge.delete_project_folder_rule(bad_id, apply_to_history=False)
         assert result == {"ok": False, "error": "操作无效"}
         json.dumps(result, ensure_ascii=False)
         lowered = repr(result).lower()
@@ -1881,10 +1913,10 @@ def test_delete_project_folder_rule_does_not_regress_get_project_rules(monkeypat
     monkeypatch.setattr(bridge_rules_module.project_api, "list_project_bindings", _track)
     monkeypatch.setattr(
         bridge_rules_module.rule_api, "delete_project_folder_rule",
-        lambda rule_id: {"ok": True, "rule": {"kind": "folder", "id": rule_id, "deleted": True}},
+        lambda rule_id, apply_to_history: {"ok": True, "rule": {"kind": "folder", "id": rule_id, "deleted": True}},
     )
     bridge = build_test_bridge()
-    bridge.delete_project_folder_rule(1)
+    bridge.delete_project_folder_rule(1, apply_to_history=False)
     result = bridge.get_project_rules()
     assert called["get_project_rules"] == 1
     assert result["ok"] is True
@@ -1893,14 +1925,14 @@ def test_delete_project_folder_rule_does_not_regress_get_project_rules(monkeypat
 def test_delete_project_folder_rule_does_not_regress_set_project_rule_enabled(monkeypatch):
     monkeypatch.setattr(
         bridge_rules_module.rule_api, "delete_project_folder_rule",
-        lambda rule_id: {"ok": True, "rule": {"kind": "folder", "id": rule_id, "deleted": True}},
+        lambda rule_id, apply_to_history: {"ok": True, "rule": {"kind": "folder", "id": rule_id, "deleted": True}},
     )
     monkeypatch.setattr(
         bridge_rules_module.rule_api, "set_project_rule_enabled",
         lambda rule_type, rule_id, enabled: {"ok": True, "rule": {"kind": rule_type, "id": rule_id, "enabled": enabled}},
     )
     bridge = build_test_bridge()
-    delete_result = bridge.delete_project_folder_rule(1)
+    delete_result = bridge.delete_project_folder_rule(1, apply_to_history=False)
     toggle_result = bridge.set_project_rule_enabled("folder", 10, False)
     assert delete_result["ok"] is True
     assert toggle_result["ok"] is True
@@ -1909,7 +1941,7 @@ def test_delete_project_folder_rule_does_not_regress_set_project_rule_enabled(mo
 def test_delete_project_folder_rule_does_not_regress_create_project_keyword_rule(monkeypatch):
     monkeypatch.setattr(
         bridge_rules_module.rule_api, "delete_project_folder_rule",
-        lambda rule_id: {"ok": True, "rule": {"kind": "folder", "id": rule_id, "deleted": True}},
+        lambda rule_id, apply_to_history: {"ok": True, "rule": {"kind": "folder", "id": rule_id, "deleted": True}},
     )
     monkeypatch.setattr(
         bridge_rules_module.rule_api, "create_project_keyword_rule",
@@ -1919,7 +1951,7 @@ def test_delete_project_folder_rule_does_not_regress_create_project_keyword_rule
         },
     )
     bridge = build_test_bridge()
-    delete_result = bridge.delete_project_folder_rule(1)
+    delete_result = bridge.delete_project_folder_rule(1, apply_to_history=False)
     keyword_result = bridge.create_project_keyword_rule(1, "Spec")
     assert delete_result["ok"] is True
     assert keyword_result["ok"] is True
@@ -1928,15 +1960,15 @@ def test_delete_project_folder_rule_does_not_regress_create_project_keyword_rule
 def test_delete_project_folder_rule_does_not_regress_delete_project_keyword_rule(monkeypatch):
     monkeypatch.setattr(
         bridge_rules_module.rule_api, "delete_project_folder_rule",
-        lambda rule_id: {"ok": True, "rule": {"kind": "folder", "id": rule_id, "deleted": True}},
+        lambda rule_id, apply_to_history: {"ok": True, "rule": {"kind": "folder", "id": rule_id, "deleted": True}},
     )
     monkeypatch.setattr(
         bridge_rules_module.rule_api, "delete_project_keyword_rule",
-        lambda rule_id: {"ok": True, "rule": {"kind": "keyword", "id": rule_id, "deleted": True}},
+        lambda rule_id, apply_to_history: {"ok": True, "rule": {"kind": "keyword", "id": rule_id, "deleted": True}},
     )
     bridge = build_test_bridge()
-    folder_result = bridge.delete_project_folder_rule(1)
-    keyword_result = bridge.delete_project_keyword_rule(99)
+    folder_result = bridge.delete_project_folder_rule(1, apply_to_history=False)
+    keyword_result = bridge.delete_project_keyword_rule(99, apply_to_history=False)
     assert folder_result["ok"] is True
     assert keyword_result["ok"] is True
 
@@ -1955,7 +1987,7 @@ def test_update_project_folder_rule_rejects_bool_as_int_rule_id_consolidated(bad
 
 @pytest.mark.parametrize("bad_id", [True, False])
 def test_delete_project_folder_rule_rejects_bool_as_int_rule_id_consolidated(bad_id):
-    result = build_test_bridge().delete_project_folder_rule(bad_id)
+    result = build_test_bridge().delete_project_folder_rule(bad_id, apply_to_history=False)
     assert result == {"ok": False, "error": "操作无效"}
 
 
@@ -1963,7 +1995,7 @@ def test_folder_bridge_methods_invalid_input_return_consistent_message():
     bridge = build_test_bridge()
     create_result = bridge.create_project_folder_rule(True, r"D:\Work", True)
     update_result = bridge.update_project_folder_rule(True, r"D:\New", True)
-    delete_result = bridge.delete_project_folder_rule(True)
+    delete_result = bridge.delete_project_folder_rule(True, apply_to_history=False)
     assert create_result == update_result == delete_result == {"ok": False, "error": "操作无效"}
 
 
@@ -2009,7 +2041,7 @@ def test_delete_project_folder_rule_never_forwards_bool_rule_id_to_api(monkeypat
         return {"ok": True, "rule": {"kind": "folder", "id": 1, "deleted": True}}
 
     monkeypatch.setattr(bridge_rules_module.rule_api, "delete_project_folder_rule", _spy)
-    build_test_bridge().delete_project_folder_rule(True)
+    build_test_bridge().delete_project_folder_rule(True, apply_to_history=False)
     assert called == []
 
 
@@ -2050,15 +2082,15 @@ def test_folder_bridge_failure_payloads_are_json_serializable(monkeypatch):
     )
     monkeypatch.setattr(
         bridge_rules_module.rule_api, "delete_project_folder_rule",
-        lambda rule_id: {"ok": False, "error": "operation_failed"},
+        lambda rule_id, apply_to_history: {"ok": False, "error": "operation_failed"},
     )
     bridge = build_test_bridge()
     json.dumps(bridge.create_project_folder_rule(True, r"D:\Work", True), ensure_ascii=False)
     json.dumps(bridge.create_project_folder_rule(1, r"D:\Work", True), ensure_ascii=False)
     json.dumps(bridge.update_project_folder_rule(True, r"D:\New", True), ensure_ascii=False)
     json.dumps(bridge.update_project_folder_rule(1, r"D:\New", True), ensure_ascii=False)
-    json.dumps(bridge.delete_project_folder_rule(True), ensure_ascii=False)
-    json.dumps(bridge.delete_project_folder_rule(1), ensure_ascii=False)
+    json.dumps(bridge.delete_project_folder_rule(True, apply_to_history=False), ensure_ascii=False)
+    json.dumps(bridge.delete_project_folder_rule(1, apply_to_history=False), ensure_ascii=False)
 
 
 def test_folder_bridge_methods_do_not_cross_pollute_keyword_or_toggle(monkeypatch):
@@ -2079,11 +2111,11 @@ def test_folder_bridge_methods_do_not_cross_pollute_keyword_or_toggle(monkeypatc
     bridge = build_test_bridge()
     bridge.create_project_folder_rule(1, r"D:\Work", True)
     bridge.update_project_folder_rule(1, r"D:\New", False)
-    bridge.delete_project_folder_rule(1)
+    bridge.delete_project_folder_rule(1, apply_to_history=False)
     assert called == {"create_folder": 1, "update_folder": 1, "delete_folder": 1}
     before = dict(called)
     bridge.create_project_keyword_rule(1, "Spec")
-    bridge.delete_project_keyword_rule(99)
+    bridge.delete_project_keyword_rule(99, apply_to_history=False)
     bridge.set_project_rule_enabled("folder", 1, False)
     assert called["create_folder"] == before["create_folder"]
     assert called["update_folder"] == before["update_folder"]
@@ -2110,18 +2142,18 @@ def test_folder_bridge_success_payloads_never_include_api_error_keys(monkeypatch
     )
     monkeypatch.setattr(
         bridge_rules_module.rule_api, "delete_project_folder_rule",
-        lambda rule_id: {"ok": True, "rule": {"kind": "folder", "id": rule_id, "deleted": True}},
+        lambda rule_id, apply_to_history: {"ok": True, "rule": {"kind": "folder", "id": rule_id, "deleted": True}},
     )
     bridge = build_test_bridge()
     create_result = bridge.create_project_folder_rule(1, r"D:\Work", True)
     update_result = bridge.update_project_folder_rule(1, r"D:\New", False)
-    delete_result = bridge.delete_project_folder_rule(1)
+    delete_result = bridge.delete_project_folder_rule(1, apply_to_history=False)
     assert set(create_result.keys()) == {"ok", "rule"}
     assert set(create_result["rule"].keys()) == {"kind", "id", "project_id", "folder_path", "recursive", "enabled"}
     assert set(update_result.keys()) == {"ok", "rule"}
     assert set(update_result["rule"].keys()) == {"kind", "id", "project_id", "folder_path", "recursive", "enabled"}
     assert set(delete_result.keys()) == {"ok", "rule"}
-    assert set(delete_result["rule"].keys()) == {"kind", "id", "deleted"}
+    assert set(delete_result["rule"].keys()) == {"kind", "id", "deleted", "history_updated", "updated_count"}
     for result in (create_result, update_result, delete_result):
         assert "error" not in result
         assert "projects" not in result
@@ -2358,7 +2390,7 @@ def test_other_write_apis_do_not_call_update_project_keyword_rule(monkeypatch):
     )
     monkeypatch.setattr(
         bridge_rules_module.rule_api, "delete_project_keyword_rule",
-        lambda rule_id: {"ok": True, "rule": {"kind": "keyword", "id": rule_id, "deleted": True}},
+        lambda rule_id, apply_to_history: {"ok": True, "rule": {"kind": "keyword", "id": rule_id, "deleted": True}},
     )
     monkeypatch.setattr(
         bridge_rules_module.rule_api, "set_project_rule_enabled",
@@ -2374,15 +2406,15 @@ def test_other_write_apis_do_not_call_update_project_keyword_rule(monkeypatch):
     )
     monkeypatch.setattr(
         bridge_rules_module.rule_api, "delete_project_folder_rule",
-        lambda rule_id: {"ok": True, "rule": {"kind": "folder", "id": rule_id, "deleted": True}},
+        lambda rule_id, apply_to_history: {"ok": True, "rule": {"kind": "folder", "id": rule_id, "deleted": True}},
     )
     bridge = build_test_bridge()
     bridge.create_project_keyword_rule(1, "Spec")
-    bridge.delete_project_keyword_rule(1)
+    bridge.delete_project_keyword_rule(1, apply_to_history=False)
     bridge.set_project_rule_enabled("keyword", 1, False)
     bridge.create_project_folder_rule(1, r"D:\Work", True)
     bridge.update_project_folder_rule(1, r"D:\New", False)
-    bridge.delete_project_folder_rule(1)
+    bridge.delete_project_folder_rule(1, apply_to_history=False)
     assert called == []
 
 
