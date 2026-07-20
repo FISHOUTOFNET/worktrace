@@ -13,12 +13,14 @@ ROOT = Path(__file__).resolve().parents[1]
 RENDERER = ROOT / "scripts" / "render_ci_api_summary.py"
 
 
-def test_aggregate_index_exposes_every_root_cause_on_one_line(tmp_path: Path) -> None:
+def test_chunked_transport_exposes_every_root_cause_in_bounded_lines(
+    tmp_path: Path,
+) -> None:
     source_groups = [
         {
             "id": f"group-{index:03d}",
             "kind": "failure",
-            "message": f"root cause {index}",
+            "message": f"root cause {index} " + ("message " * 40),
             "representative_location": f"tests/test_{index}.py:{index}",
             "representative_details": "TRACEBACK\n" + ("x" * 1200),
             "affected_tests": [f"tests.synthetic::test_{index}"],
@@ -30,7 +32,7 @@ def test_aggregate_index_exposes_every_root_cause_on_one_line(tmp_path: Path) ->
         "revision": "d" * 40,
         "status": "failed",
         "failed_stage": "pytest",
-        "artifact_name": "validation-diagnostics-aggregate-index",
+        "artifact_name": "validation-diagnostics-chunked-index",
         "diagnostics_available": True,
         "reason": "",
         "counts": {
@@ -66,19 +68,21 @@ def test_aggregate_index_exposes_every_root_cause_on_one_line(tmp_path: Path) ->
     )
 
     assert result.returncode == 0, result.stderr
-    aggregate_lines = [
-        line
-        for line in summary.read_text(encoding="utf-8").splitlines()
-        if line.startswith("cause_index_json=")
+    lines = summary.read_text(encoding="utf-8").splitlines()
+    chunk_lines = [line for line in lines if line.startswith("cause_chunk_json_")]
+    assert len(chunk_lines) == 8
+    assert all(len(line.encode("utf-8")) < 1600 for line in chunk_lines)
+    records = [
+        record
+        for line in chunk_lines
+        for record in json.loads(line.split("=", 1)[1])
     ]
-    assert len(aggregate_lines) == 1
-    aggregate = json.loads(aggregate_lines[0].split("=", 1)[1])
-    assert [entry["id"] for entry in aggregate] == [
+    assert [entry["i"] for entry in records] == [
         f"group-{index:03d}" for index in range(1, 41)
     ]
-    assert all(
-        set(entry)
-        == {"id", "kind", "location", "message", "affected_test_count"}
-        for entry in aggregate
+    assert all(set(entry) == {"i", "k", "l", "m", "n"} for entry in records)
+    assert all(entry["n"] == 1 for entry in records)
+    assert all(len(entry["m"]) <= 100 for entry in records)
+    assert lines.index("ROOT_CAUSE_TRANSPORT_BEGIN") < lines.index(
+        "ROOT_CAUSE_INDEX_BEGIN"
     )
-    assert all(entry["affected_test_count"] == 1 for entry in aggregate)
