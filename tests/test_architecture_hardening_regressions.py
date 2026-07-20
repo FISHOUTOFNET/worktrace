@@ -9,8 +9,9 @@ import pytest
 
 from tests.support.activity_factory import create_closed_activity, create_open_activity
 from worktrace.api import timeline_api
+from worktrace.data_generation_repository import DataGenerationNamespace
 from worktrace.db import get_connection, now_str
-from worktrace.report_generation_classifier import report_structure_classifier_scope
+from worktrace.domain_unit_of_work import DomainUnitOfWork
 from worktrace.services import (
     database_maintenance_service,
     folder_rule_service,
@@ -82,8 +83,8 @@ def test_structure_revision_ignores_open_duration_but_tracks_structure(temp_db):
             (777, now_str(), activity_id),
         )
     assert report_revision_service.get_report_structure_revision(DATE) == before
-    with report_structure_classifier_scope(), get_connection() as conn:
-        conn.execute(
+    with DomainUnitOfWork((DataGenerationNamespace.REPORT_STRUCTURE,)) as uow:
+        uow.connection.execute(
             "UPDATE activity_log SET status = ?, updated_at = ? WHERE id = ?",
             ("idle", now_str(), activity_id),
         )
@@ -93,8 +94,8 @@ def test_structure_revision_ignores_open_duration_but_tracks_structure(temp_db):
 def test_structure_revision_tracks_resource_display_facts(temp_db):
     activity_id = _activity("09:00:00", None)
     before = report_revision_service.get_report_structure_revision(DATE)
-    with report_structure_classifier_scope(), get_connection() as conn:
-        conn.execute(
+    with DomainUnitOfWork((DataGenerationNamespace.REPORT_STRUCTURE,)) as uow:
+        uow.connection.execute(
             "UPDATE activity_resource SET display_name = ? WHERE activity_id = ?",
             ("Renamed.docx", activity_id),
         )
