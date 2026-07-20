@@ -88,7 +88,7 @@ def test_settings_api_has_named_capabilities_only() -> None:
             "clear_runtime_activity_state",
         }
     )
-    assert not callable(settings_api.set_setting_value)
+    assert not hasattr(settings_api, "set_setting_value")
     assert "set_setting_value" not in settings_api.__all__
 
 
