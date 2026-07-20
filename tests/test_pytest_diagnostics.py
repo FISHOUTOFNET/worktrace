@@ -135,9 +135,14 @@ def test_ci_contract_uses_one_artifact_and_one_human_relay() -> None:
     assert "python -m pytest -q -ra" in workflow
     assert "Tee-Object" not in workflow
     assert workflow.count("actions/upload-artifact@v6") == 2
-    assert workflow.count("actions/download-artifact@v6") == 1
+    assert workflow.count("actions/download-artifact@v8") == 1
+    assert "actions/download-artifact@v6" not in workflow
     assert "name: Python failure diagnostics" in workflow
     assert "api-summary.txt" in workflow
+    assert "--max-bytes 8192" in workflow
+    assert "INVENTORY_LOG_TAIL_BEGIN" not in workflow
+    assert "COMPILE_LOG_TAIL_BEGIN" not in workflow
+    assert "failed_stage=inventory" not in workflow
     assert "problem_count:" not in workflow
     assert "first_failure:" not in workflow
     assert "gh api" not in workflow

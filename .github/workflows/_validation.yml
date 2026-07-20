@@ -176,9 +176,9 @@ jobs:
             & python scripts/render_ci_api_summary.py `
               --input "test-results/diagnostics.json" `
               --output "test-results/api-summary.txt" `
-              --max-bytes 65536
+              --max-bytes 8192
             if ($LASTEXITCODE -ne 0) {
-              throw "Failed to render the fixed API diagnostics summary"
+              throw "Failed to render the human diagnostics summary"
             }
           }
           else {
@@ -202,26 +202,15 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Download canonical Python diagnostics
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8
         with:
           name: validation-diagnostics-${{ inputs.revision }}
           path: test-results
 
-      - name: Publish bounded API diagnostics
+      - name: Publish bounded human diagnostics
         shell: bash
         run: |
           test -f test-results/api-summary.txt
-          if grep -q '^failed_stage=inventory$' test-results/api-summary.txt; then
-            test -f test-results/inventory.log
-            echo 'INVENTORY_LOG_TAIL_BEGIN'
-            tail -n 160 test-results/inventory.log
-            echo 'INVENTORY_LOG_TAIL_END'
-          elif grep -q '^failed_stage=compile$' test-results/api-summary.txt; then
-            test -f test-results/compile.log
-            echo 'COMPILE_LOG_TAIL_BEGIN'
-            tail -n 120 test-results/compile.log
-            echo 'COMPILE_LOG_TAIL_END'
-          fi
           cat test-results/api-summary.txt
 
   node:
