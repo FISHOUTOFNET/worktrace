@@ -48,6 +48,23 @@ def _method(path: Path, class_name: str, method_name: str) -> ast.FunctionDef:
     )
 
 
+def _function(path: Path, function_name: str) -> ast.FunctionDef:
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    return next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == function_name
+    )
+
+
+def _called_attributes(node: ast.AST) -> set[str]:
+    return {
+        call.func.attr
+        for call in ast.walk(node)
+        if isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
+    }
+
+
 def test_recovery_write_capability_has_one_production_owner() -> None:
     assert _attribute_callers("_maintenance_recovery_write_scope") == {MAINTENANCE}
     assert _attribute_callers("_set_recovery_block") == {MAINTENANCE}
@@ -149,3 +166,26 @@ def test_durable_latch_repository_is_only_imported_by_maintenance_owner() -> Non
             ):
                 importers.add(_relative(path))
     assert importers == {MAINTENANCE}
+
+
+def test_explicit_recovery_surface_routes_to_the_single_maintenance_owner() -> None:
+    settings_path = PRODUCTION / "api" / "settings_api.py"
+    settings_recovery = _function(
+        settings_path,
+        "recover_database_maintenance_for_webview",
+    )
+    assert "recover_fail_closed" in _called_attributes(settings_recovery)
+
+    bridge_path = PRODUCTION / "webview_ui" / "bridge_settings.py"
+    bridge_recovery = _method(
+        bridge_path,
+        "SettingsBridgeMixin",
+        "recover_database_maintenance",
+    )
+    assert (
+        "recover_database_maintenance_for_webview"
+        in _called_attributes(bridge_recovery)
+    )
+
+    shipping = (PRODUCTION / "webview_ui" / "bridge.py").read_text(encoding="utf-8")
+    assert '"recover_database_maintenance"' in shipping
