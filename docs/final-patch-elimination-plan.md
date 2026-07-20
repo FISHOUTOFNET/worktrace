@@ -24,7 +24,7 @@ the target architecture.
 
 Implementation checkpoints use only the permanent Standard CI workflow:
 
-1. runtime/platform lifecycle boundary;
+1. runtime/platform lifecycle boundary — implementation submitted for Standard CI;
 2. maintenance, replacement, projection, transaction and composition boundary;
 3. final semantic governance and documentation.
 
