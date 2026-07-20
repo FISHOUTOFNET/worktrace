@@ -8,8 +8,10 @@ JS = ROOT / "worktrace" / "webview_ui" / "js"
 def test_settings_uses_single_client_generation_reset():
     source = (JS / "settings.js").read_text(encoding="utf-8")
     assert "resetFrontendAfterLocalDataReplacement" not in source
-    assert 'App.resetClientGeneration("secure_import")' in source
-    assert 'App.resetClientGeneration("clear_all_local_data")' in source
+    assert 'App.resetClientGeneration("database_replacement")' in source
+    assert 'App.resetClientGeneration("database_clear")' in source
+    assert "secure_import" not in source
+    assert "clear_all_local_data" not in source
 
 
 def test_client_generation_reset_clears_all_runtime_owners():
