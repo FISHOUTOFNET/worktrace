@@ -1,5 +1,4 @@
 """Bulk read repository for immutable current-format report operations."""
-
 from __future__ import annotations
 
 import json
@@ -8,6 +7,7 @@ from typing import Any
 
 from .report_projection_model import InvalidInputError
 from .report_replay_binding import ReplayBinding
+from .report_session_operation_engine import OPERATION_PAYLOAD_VERSION
 
 
 def load_operations_by_date(
@@ -60,6 +60,13 @@ def load_operations_by_date(
             raise InvalidInputError("操作负载损坏") from exc
         if not isinstance(payload, dict):
             raise InvalidInputError("操作负载损坏")
+        payload_version = payload.get("payload_version")
+        if (
+            isinstance(payload_version, bool)
+            or not isinstance(payload_version, int)
+            or payload_version != OPERATION_PAYLOAD_VERSION
+        ):
+            raise InvalidInputError("操作负载版本损坏")
         try:
             binding = ReplayBinding(str(payload.pop("replay_binding")))
         except (KeyError, ValueError) as exc:
