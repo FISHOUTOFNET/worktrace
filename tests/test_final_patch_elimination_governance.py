@@ -119,7 +119,14 @@ def test_failed_closed_is_distinct_from_active_maintenance() -> None:
         "worktrace/services/database_maintenance_service.py",
         "status",
     )
-    source = ast.unparse(status)
-    assert "MaintenancePhase.FAILED_CLOSED" in source
-    assert "recovery_blocked" in source
-    assert "maintenance_in_progress" in source
+    recovery_blocked = _function(
+        "worktrace/services/database_maintenance_service.py",
+        "recovery_blocked",
+    )
+    status_calls = _called_names(status)
+    recovery_source = ast.unparse(recovery_blocked)
+
+    assert "operation_active" in status_calls
+    assert "recovery_blocked" in status_calls
+    assert "MaintenancePhase.FAILED_CLOSED" in recovery_source
+    assert "DATABASE_WRITE_GATE.recovery_blocked" in recovery_source
