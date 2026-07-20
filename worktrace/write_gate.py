@@ -4,12 +4,17 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from enum import Enum
+import re
 import sqlite3
 import threading
 from typing import Iterator
 
 DATABASE_MAINTENANCE_ERROR = "database_maintenance_in_progress"
 DATABASE_RECOVERY_ERROR = "database_maintenance_recovery_required"
+_RECOVERY_WRITE_TABLE_PATTERN = re.compile(
+    r"\b(?:INTO|UPDATE|FROM)\s+(?:settings|data_generation)\b",
+    re.IGNORECASE,
+)
 
 
 class WriteGatePhase(str, Enum):
@@ -122,6 +127,14 @@ class ProcessDatabaseWriteGate:
     def _recovery_write_allowed(self) -> bool:
         return int(getattr(self._thread_state, "recovery_write_depth", 0)) > 0
 
+    @staticmethod
+    def _is_recovery_latch_sql(sql: str) -> bool:
+        normalized = " ".join(str(sql or "").strip().split())
+        upper = normalized.upper()
+        if upper.startswith("BEGIN IMMEDIATE") or upper.startswith("BEGIN EXCLUSIVE"):
+            return True
+        return bool(_RECOVERY_WRITE_TABLE_PATTERN.search(normalized))
+
     @contextmanager
     def _maintenance_recovery_write_scope(self) -> Iterator[None]:
         """Permit the maintenance owner to update only the durable recovery latch."""
@@ -133,13 +146,15 @@ class ProcessDatabaseWriteGate:
         finally:
             self._thread_state.recovery_write_depth = depth
 
-    def require_current_thread_allowed(self) -> None:
+    def require_current_thread_allowed(self, sql: str = "") -> None:
         """Validate one write at statement admission time."""
 
         thread_id = threading.get_ident()
         with self._lock:
             recovery_write = self._recovery_write_allowed()
             if recovery_write:
+                if not self._is_recovery_latch_sql(sql):
+                    raise sqlite3.OperationalError(DATABASE_RECOVERY_ERROR)
                 if (
                     self._phase is not WriteGatePhase.OPEN
                     and thread_id != self._owner_thread_id
