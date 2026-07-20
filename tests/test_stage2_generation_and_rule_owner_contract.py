@@ -147,13 +147,27 @@ def test_rule_facades_delegate_all_catalog_writes() -> None:
 
 
 def test_history_jobs_are_durable_before_candidate_scans() -> None:
+    relative = "worktrace/services/history_mutation_job_service.py"
+    source = _source(relative)
+    assert "rule_impact_planner" not in source
+    assert "rule_planning_service as planner" in source
+
+    single = _function(relative, "submit_rule_job")
+    assert [argument.arg for argument in single.args.args] == [
+        "rule_type",
+        "rule_id",
+    ]
+    assert [argument.arg for argument in single.args.kwonlyargs] == [
+        "kind",
+        "synchronous_scan_limit",
+    ]
+    assert "restore_enabled" not in {
+        argument.arg
+        for argument in (*single.args.args, *single.args.kwonlyargs)
+    }
+
     for function_name in ("submit_rule_job", "submit_rule_batch_job"):
-        calls = _called_names(
-            _function(
-                "worktrace/services/history_mutation_job_service.py",
-                function_name,
-            )
-        )
+        calls = _called_names(_function(relative, function_name))
         assert "load_candidate_activities" not in calls
         assert "classify_activities" not in calls
         assert "run_job_batch" in calls
