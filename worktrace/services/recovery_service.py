@@ -4,11 +4,11 @@ import logging
 import sqlite3
 import threading
 from datetime import datetime, time as datetime_time, timedelta
-from typing import TYPE_CHECKING
 
 from ..constants import STATUS_ERROR, TIME_FORMAT
 from ..db import get_connection, now_str
 from ..domain_unit_of_work import DomainUnitOfWork
+from ..worker_health import WorkerHealthReporter
 from ..write_gate import DATABASE_WRITE_GATE
 from . import (
     activity_lifecycle_service,
@@ -18,9 +18,6 @@ from . import (
 )
 from .runtime_activity_state_service import clear_runtime_activity_state
 from .settings_service import get_setting
-
-if TYPE_CHECKING:
-    from ..worker_health import WorkerHealthReporter
 
 _SYNC_SEGMENT_LIMIT = 4
 _WORKER_SEGMENT_BATCH_SIZE = 7
@@ -132,7 +129,7 @@ def recover_unclosed_records() -> None:
 def run_startup_recovery_worker(
     stop_event: threading.Event,
     *,
-    health: "WorkerHealthReporter | None" = None,
+    health: WorkerHealthReporter,
     batch_segments: int = _WORKER_SEGMENT_BATCH_SIZE,
     poll_seconds: float = _WORKER_IDLE_SECONDS,
 ) -> None:
@@ -143,20 +140,17 @@ def run_startup_recovery_worker(
     logging.info("startup recovery continuation worker loop enter")
     while not stop_event.is_set():
         if DATABASE_WRITE_GATE.active():
-            if health is not None:
-                health.maintenance_paused(True)
+            health.maintenance_paused(True)
             stop_event.wait(interval)
             continue
-        if health is not None:
-            health.maintenance_paused(False)
+        health.maintenance_paused(False)
         with get_connection() as conn:
             jobs = startup_recovery_job_repository.list_runnable_jobs(
                 conn,
                 limit=1,
             )
         if not jobs:
-            if health is not None:
-                health.succeeded()
+            health.succeeded()
             stop_event.wait(interval)
             continue
         job = jobs[0]
@@ -180,12 +174,10 @@ def run_startup_recovery_worker(
                 code.value,
             )
             _record_recovery_failure_safely(int(job["id"]), code)
-            if health is not None:
-                health.failed(code.value)
+            health.failed(code.value)
             stop_event.wait(interval)
         else:
-            if health is not None:
-                health.succeeded()
+            health.succeeded()
     logging.info("startup recovery continuation worker loop exit")
 
 
@@ -354,9 +346,13 @@ def _classify_recovery_failure(
             "database is busy",
         }:
             return startup_recovery_job_repository.RecoveryFailureCode.DATABASE_BUSY
-        if message == "secure_import_in_progress":
-            return startup_recovery_job_repository.RecoveryFailureCode.SECURE_IMPORT_IN_PROGRESS
-        if message == "database_generation_changed":
+        if message == (
+            startup_recovery_job_repository.RecoveryFailureCode.DATABASE_MAINTENANCE_IN_PROGRESS.value
+        ):
+            return startup_recovery_job_repository.RecoveryFailureCode.DATABASE_MAINTENANCE_IN_PROGRESS
+        if message == (
+            startup_recovery_job_repository.RecoveryFailureCode.DATABASE_GENERATION_CHANGED.value
+        ):
             return startup_recovery_job_repository.RecoveryFailureCode.DATABASE_GENERATION_CHANGED
     return startup_recovery_job_repository.RecoveryFailureCode.UNEXPECTED_FAILURE
 
@@ -406,7 +402,7 @@ def _latest_known_shutdown_boundary() -> str | None:
             continue
     if not parsed:
         return None
-    now = datetime.strptime(now_str(), TIME_FORMAT)
+    now = datetime.now()
     past_candidates = [item for item in parsed if item[0] <= now]
     if not past_candidates:
         return None
