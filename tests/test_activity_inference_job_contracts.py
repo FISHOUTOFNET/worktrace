@@ -393,7 +393,7 @@ def test_job_schema_and_runtime_have_no_legacy_state_or_second_consumer() -> Non
 def test_published_versions_are_current_only() -> None:
     from worktrace.services import secure_backup_service
 
-    assert db.CURRENT_SCHEMA_VERSION == 12
+    assert db.CURRENT_SCHEMA_VERSION == 13
     assert secure_backup_service.PAYLOAD_VERSION == 6
     assert "activity_inference_job" not in secure_backup_service.EXPORT_TABLES
     assert "activity_inference_job" in secure_backup_service.EXCLUDED_TABLES
