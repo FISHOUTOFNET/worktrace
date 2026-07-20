@@ -87,7 +87,10 @@ def test_replay_is_deterministic_and_does_not_modify_inputs():
         1,
         "edit_session",
         prepared,
-        payload={"payload_version": 4, "note": {"mode": "set", "value": "note"}},
+        payload={
+            "payload_version": engine.OPERATION_PAYLOAD_VERSION,
+            "note": {"mode": "set", "value": "note"},
+        },
     )
     before_base, before_operation = deepcopy(base), deepcopy(operation)
     first = engine.replay_operations(base, [operation])
@@ -183,7 +186,10 @@ def test_split_supersedes_merge_and_all_descendants_without_virtual_entry():
         2,
         "edit_session",
         merged,
-        payload={"payload_version": 4, "note": {"mode": "set", "value": "descendant"}},
+        payload={
+            "payload_version": engine.OPERATION_PAYLOAD_VERSION,
+            "note": {"mode": "set", "value": "descendant"},
+        },
     )
     edited = engine.replay_operations(base, [merge, edit]).final_entries[0]
     split = _operation(3, "split_session", edited, undo_of_operation_id=1)
