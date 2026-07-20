@@ -187,18 +187,35 @@ def test_fail_closed_persistence_failure_does_not_open_process_gate(
     assert DATABASE_WRITE_GATE.writes_blocked() is True
 
 
-def test_recovery_write_scope_rejects_non_latch_tables():
+def test_recovery_write_scope_accepts_latch_upserts_and_rejects_escape_sql():
     gate = ProcessDatabaseWriteGate()
     gate._set_recovery_block("test")  # noqa: SLF001 - isolated capability test
 
     with gate._maintenance_recovery_write_scope():  # noqa: SLF001
-        gate.require_current_thread_allowed("UPDATE settings SET value = 'x'")
+        gate.require_current_thread_allowed("BEGIN IMMEDIATE")
+        gate.require_current_thread_allowed(
+            """
+            INSERT INTO settings(key, value, updated_at)
+            VALUES ('maintenance_fail_closed', 'true', '2026-07-20 00:00:00')
+            ON CONFLICT(key) DO UPDATE SET
+                value = excluded.value,
+                updated_at = excluded.updated_at
+            """
+        )
         gate.require_current_thread_allowed("UPDATE data_generation SET value = 2")
         with pytest.raises(
             sqlite3.OperationalError,
             match="database_maintenance_recovery_required",
         ):
             gate.require_current_thread_allowed(
+                "INSERT INTO project(name) VALUES ('forbidden')"
+            )
+        with pytest.raises(
+            sqlite3.OperationalError,
+            match="database_maintenance_recovery_required",
+        ):
+            gate.require_current_thread_allowed(
+                "UPDATE settings SET value = 'x'; "
                 "INSERT INTO project(name) VALUES ('forbidden')"
             )
 
@@ -210,8 +227,13 @@ def test_startup_hydrates_durable_latch_before_recovery_or_worker_start(
 ):
     _persist_blocked_latch("startup_blocked")
     recovery_calls: list[str] = []
+    release_calls: list[str] = []
     monkeypatch.setattr(runtime_module, "acquire_single_instance", lambda: True)
-    monkeypatch.setattr(runtime_module, "release_single_instance", lambda: None)
+    monkeypatch.setattr(
+        runtime_module,
+        "release_single_instance",
+        lambda: release_calls.append("released"),
+    )
     monkeypatch.setattr(
         runtime_module.recovery_service,
         "recover_unclosed_records",
@@ -236,3 +258,9 @@ def test_startup_hydrates_durable_latch_before_recovery_or_worker_start(
     assert worker_report.ready is False
     assert worker_report.started_any is False
     assert worker_report.error_code == "database_maintenance_recovery_required"
+
+    runtime.shutdown()
+
+    assert runtime.phase is RuntimePhase.STOPPED
+    assert release_calls == ["released"]
+    assert settings_service.get_bool_setting("maintenance_fail_closed", False) is True
