@@ -8,7 +8,6 @@ import ntpath
 import re
 import subprocess
 import sys
-import threading
 import time
 from dataclasses import dataclass
 from functools import lru_cache
@@ -29,7 +28,6 @@ from ..resources.title_parsing import (
 _PATH_SUCCESS_TTL_SECONDS = 0.5
 _PATH_FAILURE_TTL_SECONDS = 0.75
 _MAX_PATH_CACHE = 256
-_RESOLVER_CAPACITY = 2
 _COM_CALL_TIMEOUT_SECONDS = 2.0
 _OPEN_FILES_TIMEOUT_SECONDS = 2.0
 _FAILURE_COOLDOWN_SECONDS = 30.0
@@ -53,9 +51,7 @@ class ComPathCatalogEntry:
 
 
 def _versioned_prog_ids(base: str, start: int, end: int) -> tuple[str, ...]:
-    return tuple(
-        [base, *[f"{base}.{version}" for version in range(end, start - 1, -1)]]
-    )
+    return tuple([base, *[f"{base}.{version}" for version in range(end, start - 1, -1)]])
 
 
 _BUILTIN_COM_PATH_CATALOG: tuple[ComPathCatalogEntry, ...] = (
@@ -165,11 +161,9 @@ _BUILTIN_COM_PATH_CATALOG: tuple[ComPathCatalogEntry, ...] = (
 
 
 class WindowsPathResolver:
-    """Resolve the active local path with bounded blocking capacity and cache."""
+    """Resolve active local paths with bounded subprocess probes and cache."""
 
-    def __init__(self, *, capacity: int = _RESOLVER_CAPACITY) -> None:
-        self._slots = threading.BoundedSemaphore(max(1, int(capacity)))
-        self._state_lock = threading.Lock()
+    def __init__(self) -> None:
         self._path_cache: dict[
             tuple[int | None, int | None, str, str],
             tuple[float, str | None],
@@ -208,19 +202,15 @@ class WindowsPathResolver:
         try:
             resolved = self.resolve_active_file_path(process_name, title, pid)
         except Exception:
-            logging.debug(
-                "synchronous active path resolution failed",
-                exc_info=True,
-            )
+            logging.debug("synchronous active path resolution failed", exc_info=True)
             resolved = None
         self._store(cache_key, resolved)
         return resolved
 
     def reset(self) -> None:
-        with self._state_lock:
-            self._path_cache.clear()
-            self._com_failure_times.clear()
-            self._open_files_failure_times.clear()
+        self._path_cache.clear()
+        self._com_failure_times.clear()
+        self._open_files_failure_times.clear()
 
     def resolve_active_file_path(
         self,
@@ -236,59 +226,17 @@ class WindowsPathResolver:
             if not self._available(self._com_failure_times, prog_id):
                 continue
             try:
-                path = self._run_with_timeout(
-                    _get_com_file_path_threadsafe,
-                    _COM_CALL_TIMEOUT_SECONDS,
-                    prog_id,
-                    expression,
-                )
-                if _is_valid_com_path(path, window_title):
-                    return split_file_path(path)[0]
+                path = _get_com_file_path_subprocess(prog_id, expression)
+                normalized = _normalize_com_file_path(path)
+                if _is_valid_com_path(normalized, window_title):
+                    return split_file_path(normalized)[0]
             except TimeoutError:
                 self._mark_failed(self._com_failure_times, prog_id)
-                logging.debug(
-                    "active file path com lookup timed out for %s",
-                    prog_id,
-                )
+                logging.debug("active file path com lookup timed out for %s", prog_id)
             except Exception:
-                logging.debug(
-                    "active file path com lookup failed",
-                    exc_info=True,
-                )
+                logging.debug("active file path com lookup failed", exc_info=True)
 
-        fallback = self._resolve_open_file_path(pid, window_title)
-        if fallback:
-            return fallback
-        return None
-
-    def _run_with_timeout(self, func, timeout_seconds: float, *args):
-        if not self._slots.acquire(blocking=False):
-            raise TimeoutError("blocking resolver capacity exhausted")
-        result_box: list = [None]
-        exc_box: list = [None]
-        done = threading.Event()
-
-        def worker() -> None:
-            try:
-                result_box[0] = func(*args)
-            except Exception as exc:  # pragma: no cover - forwarded below
-                exc_box[0] = exc
-            finally:
-                done.set()
-                self._slots.release()
-
-        threading.Thread(
-            target=worker,
-            name="WorkTraceBoundedPathCall",
-            daemon=True,
-        ).start()
-        if not done.wait(timeout_seconds):
-            raise TimeoutError(
-                f"call timed out after {timeout_seconds:.1f}s"
-            )
-        if exc_box[0] is not None:
-            raise exc_box[0]
-        return result_box[0]
+        return self._resolve_open_file_path(pid, window_title)
 
     def _com_candidates(self, process_name: str) -> list[tuple[str, str]]:
         return [
@@ -307,14 +255,8 @@ class WindowsPathResolver:
     ) -> str | None:
         if pid is None:
             return None
-        title_file = (
-            extract_file_name_from_title(window_title)
-            or extract_anchor_file_name(window_title)
-        )
-        if not title_file or not self._available(
-            self._open_files_failure_times,
-            pid,
-        ):
+        title_file = extract_file_name_from_title(window_title) or extract_anchor_file_name(window_title)
+        if not title_file or not self._available(self._open_files_failure_times, pid):
             return None
         try:
             paths = _get_process_open_file_paths(pid)
@@ -323,54 +265,42 @@ class WindowsPathResolver:
             logging.debug("active file path open-files lookup timed out")
             return None
         except Exception:
-            logging.debug(
-                "active file path open-files lookup failed",
-                exc_info=True,
-            )
+            logging.debug("active file path open-files lookup failed", exc_info=True)
             return None
         return _match_open_file_path(title_file, paths)
 
-    def _available(self, failures: dict, key) -> bool:
-        with self._state_lock:
-            last_fail = failures.get(key)
-        return (
-            last_fail is None
-            or time.monotonic() - last_fail > _FAILURE_COOLDOWN_SECONDS
-        )
+    @staticmethod
+    def _available(failures: dict, key) -> bool:
+        last_fail = failures.get(key)
+        return last_fail is None or time.monotonic() - last_fail > _FAILURE_COOLDOWN_SECONDS
 
-    def _mark_failed(self, failures: dict, key) -> None:
-        with self._state_lock:
-            failures[key] = time.monotonic()
+    @staticmethod
+    def _mark_failed(failures: dict, key) -> None:
+        failures[key] = time.monotonic()
 
     def _cached(
         self,
         key: tuple[int | None, int | None, str, str],
     ) -> tuple[str | None, bool]:
         now = time.monotonic()
-        with self._state_lock:
-            entry = self._path_cache.get(key)
-            if entry is None:
-                return None, False
-            expires_at, value = entry
-            if expires_at <= now:
-                self._path_cache.pop(key, None)
-                return None, False
-            return value, True
+        entry = self._path_cache.get(key)
+        if entry is None:
+            return None, False
+        expires_at, value = entry
+        if expires_at <= now:
+            self._path_cache.pop(key, None)
+            return None, False
+        return value, True
 
     def _store(
         self,
         key: tuple[int | None, int | None, str, str],
         value: str | None,
     ) -> None:
-        ttl = (
-            _PATH_SUCCESS_TTL_SECONDS
-            if value
-            else _PATH_FAILURE_TTL_SECONDS
-        )
-        with self._state_lock:
-            if len(self._path_cache) >= _MAX_PATH_CACHE:
-                self._path_cache.clear()
-            self._path_cache[key] = (time.monotonic() + ttl, value)
+        ttl = _PATH_SUCCESS_TTL_SECONDS if value else _PATH_FAILURE_TTL_SECONDS
+        if len(self._path_cache) >= _MAX_PATH_CACHE:
+            self._path_cache.clear()
+        self._path_cache[key] = (time.monotonic() + ttl, value)
 
 
 def resolve_title_file_path(window_title: str) -> str | None:
@@ -383,54 +313,64 @@ def resolve_title_file_path(window_title: str) -> str | None:
     return None
 
 
-def _ensure_com_initialized() -> bool:
+def _probe_command(operation: str, payload: dict[str, object]) -> list[str]:
+    encoded = json.dumps(payload, ensure_ascii=True, separators=(",", ":"))
+    if getattr(sys, "frozen", False):
+        return [sys.executable, "--windows-probe-helper", operation, encoded]
+    return [
+        sys.executable,
+        "-m",
+        "worktrace.platforms.windows_probe_helper",
+        operation,
+        encoded,
+    ]
+
+
+def _run_probe(
+    operation: str,
+    payload: dict[str, object],
+    *,
+    timeout_seconds: float,
+):
+    startupinfo = None
+    creationflags = 0
+    if sys.platform.startswith("win"):
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     try:
-        import pythoncom
-
-        pythoncom.CoInitialize()
-        return True
-    except Exception:
-        logging.debug("COM CoInitialize failed", exc_info=True)
-        return False
-
-
-def _uninitialize_com() -> None:
+        completed = subprocess.run(
+            _probe_command(operation, payload),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout_seconds,
+            startupinfo=startupinfo,
+            creationflags=creationflags,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise TimeoutError(
+            f"{operation} helper timed out after {timeout_seconds:.1f}s"
+        ) from exc
     try:
-        import pythoncom
-
-        pythoncom.CoUninitialize()
-    except Exception:
-        logging.debug("COM CoUninitialize failed", exc_info=True)
-
-
-def _get_com_file_path_threadsafe(
-    prog_id: str,
-    path_expression: str,
-) -> str | None:
-    _ensure_com_initialized()
-    try:
-        import win32com.client
-
-        app = win32com.client.GetActiveObject(prog_id)
-        value = _evaluate_com_path_expression(app, path_expression)
-        return _normalize_com_file_path(value)
-    finally:
-        _uninitialize_com()
+        response = json.loads(completed.stdout or "{}")
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"{operation} helper returned invalid JSON") from exc
+    if completed.returncode != 0 or not isinstance(response, dict) or response.get("ok") is not True:
+        error = str(response.get("error") if isinstance(response, dict) else "probe_failed")
+        raise RuntimeError(f"{operation} helper failed: {error}")
+    return response.get("value")
 
 
-def _evaluate_com_path_expression(app, path_expression: str):
-    value = app
-    for raw_step in path_expression.split("."):
-        step = raw_step.strip()
-        if not step:
-            return None
-        if step.endswith("()"):
-            value = getattr(value, step[:-2])()
-        else:
-            value = getattr(value, step)
-        if value is None:
-            return None
-    return value
+def _get_com_file_path_subprocess(prog_id: str, expression: str) -> str | None:
+    value = _run_probe(
+        "com_path",
+        {"prog_id": prog_id, "expression": expression},
+        timeout_seconds=_COM_CALL_TIMEOUT_SECONDS,
+    )
+    return str(value) if value is not None else None
 
 
 def _is_valid_com_path(path: str | None, window_title: str | None) -> bool:
@@ -444,65 +384,25 @@ def _is_valid_com_path(path: str | None, window_title: str | None) -> bool:
     if file_name.casefold() in title or file_stem.casefold() in title:
         return True
     title_path = extract_file_path_from_title(window_title)
-    if (
-        title_path
-        and normalize_path_key(title_path) == normalize_path_key(full_path)
-    ):
+    if title_path and normalize_path_key(title_path) == normalize_path_key(full_path):
         return True
     title_file = extract_file_name_from_title(window_title)
-    return bool(
-        title_file and title_file.casefold() == file_name.casefold()
-    )
+    return bool(title_file and title_file.casefold() == file_name.casefold())
 
 
 def _get_process_open_file_paths(pid: int) -> list[str]:
-    if sys.platform.startswith("win"):
-        return _get_process_open_file_paths_subprocess(pid)
-    import psutil
+    if not sys.platform.startswith("win"):
+        import psutil
 
-    return [item.path for item in psutil.Process(pid).open_files()]
-
-
-def _get_process_open_file_paths_subprocess(pid: int) -> list[str]:
-    helper_cmd = _open_files_helper_cmd()
-    if helper_cmd is None:
-        return []
-    startupinfo = None
-    creationflags = 0
-    if sys.platform.startswith("win"):
-        startupinfo = subprocess.STARTUPINFO()
-        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-    try:
-        completed = subprocess.run(
-            [*helper_cmd, str(pid)],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=_OPEN_FILES_TIMEOUT_SECONDS,
-            startupinfo=startupinfo,
-            creationflags=creationflags,
-            check=False,
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise TimeoutError(
-            "open-files helper timed out after "
-            f"{_OPEN_FILES_TIMEOUT_SECONDS:.1f}s"
-        ) from exc
-    if completed.returncode != 0:
-        message = (completed.stderr or completed.stdout or "").strip()
-        raise RuntimeError(f"open-files helper failed: {message}")
-    raw = json.loads(completed.stdout or "[]")
+        return [item.path for item in psutil.Process(pid).open_files()]
+    raw = _run_probe(
+        "open_files",
+        {"pid": int(pid)},
+        timeout_seconds=_OPEN_FILES_TIMEOUT_SECONDS,
+    )
     if not isinstance(raw, list):
         return []
     return [str(path) for path in raw if str(path or "").strip()]
-
-
-def _open_files_helper_cmd() -> list[str] | None:
-    if getattr(sys, "frozen", False):
-        return [sys.executable, "--open-files-helper"]
-    return [sys.executable, "-m", "worktrace.platforms.open_files_helper"]
 
 
 def _match_open_file_path(title_file: str, paths: list[str]) -> str | None:
@@ -536,10 +436,7 @@ def _load_user_com_catalog_entries() -> tuple[ComPathCatalogEntry, ...]:
         try:
             entries.append(_coerce_com_catalog_entry(raw_entry))
         except ValueError:
-            logging.debug(
-                "invalid user com path catalog entry skipped",
-                exc_info=True,
-            )
+            logging.debug("invalid user com path catalog entry skipped", exc_info=True)
     return tuple(entries)
 
 
@@ -549,13 +446,9 @@ def _coerce_com_catalog_entry(raw_entry) -> ComPathCatalogEntry:
     name = str(raw_entry.get("name") or "User COM entry").strip()
     process_names = _coerce_string_tuple(raw_entry.get("process_names"))
     prog_ids = _coerce_string_tuple(raw_entry.get("prog_ids"))
-    path_expressions = _coerce_string_tuple(
-        raw_entry.get("path_expressions")
-    )
+    path_expressions = _coerce_string_tuple(raw_entry.get("path_expressions"))
     if not process_names or not prog_ids or not path_expressions:
-        raise ValueError(
-            "entry requires process_names, prog_ids, and path_expressions"
-        )
+        raise ValueError("entry requires process_names, prog_ids, and path_expressions")
     return ComPathCatalogEntry(
         name=name or "User COM entry",
         process_names=process_names,
@@ -571,11 +464,7 @@ def _coerce_string_tuple(value) -> tuple[str, ...]:
         items = value
     else:
         return ()
-    return tuple(
-        str(item).strip()
-        for item in items
-        if str(item).strip()
-    )
+    return tuple(str(item).strip() for item in items if str(item).strip())
 
 
 def _process_matches_entry(
@@ -583,16 +472,11 @@ def _process_matches_entry(
     entry: ComPathCatalogEntry,
 ) -> bool:
     process_keys = _process_name_keys(process_name)
-    return any(
-        process_keys & _process_name_keys(alias)
-        for alias in entry.process_names
-    )
+    return any(process_keys & _process_name_keys(alias) for alias in entry.process_names)
 
 
 def _process_name_keys(process_name: str) -> set[str]:
-    normalized = ntpath.basename(
-        str(process_name or "").strip()
-    ).casefold()
+    normalized = ntpath.basename(str(process_name or "").strip()).casefold()
     if not normalized:
         return set()
     stem = ntpath.splitext(normalized)[0]
