@@ -16,7 +16,7 @@ _RECOVERY_WRITE_STATEMENT_PATTERN = re.compile(
     r"\s+([A-Za-z_][A-Za-z0-9_]*)\b",
     re.IGNORECASE | re.DOTALL,
 )
-_RECOVERY_WRITE_TABLES = frozenset({"settings", "data_generation"})
+_RECOVERY_WRITE_TABLES = frozenset({"settings", "data_generation_state"})
 
 
 class WriteGatePhase(str, Enum):
