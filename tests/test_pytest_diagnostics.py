@@ -118,6 +118,16 @@ def _metadata(text: str) -> dict[str, object]:
     return json.loads(line.split("=", 1)[1])
 
 
+def _index_groups(text: str) -> list[dict[str, object]]:
+    groups: list[dict[str, object]] = []
+    for line in text.splitlines():
+        if not line.startswith("root_cause_index_chunk_json="):
+            continue
+        chunk = json.loads(line.split("=", 1)[1])
+        groups.extend(chunk["groups"])
+    return groups
+
+
 def test_artifact_preserves_all_failures_and_signature_groups(tmp_path: Path) -> None:
     output = _produce(tmp_path)
     payload = json.loads((output / "diagnostics.json").read_text(encoding="utf-8"))
@@ -133,14 +143,14 @@ def test_renderer_publishes_complete_compact_root_cause_index(tmp_path: Path) ->
     rendered = output / "api-summary.txt"
     text = _render(output, rendered)
     metadata = _metadata(text)
+    groups = _index_groups(text)
     assert text.startswith("WORKTRACE_CI_DIAGNOSTICS_V1\n")
     assert metadata["scope"] == "complete_root_cause_index"
     assert metadata["group_count"] == 2
     assert metadata["shown_group_count"] == 2
     assert metadata["omitted_group_count"] == 0
-    assert text.count("signature_group_json=") == 2
+    assert [group["affected_test_count"] for group in groups] == [30, 5]
     assert "TRACEBACK-SENTINEL" not in text
-    assert "cause_chunk_json" not in text
     assert "cause_catalog_json" not in text
     assert "\ngroup_json=" not in text
     assert "artifact_index_json=" in text
@@ -154,10 +164,15 @@ def test_renderer_keeps_all_realistic_root_cause_groups_under_api_limit(
     rendered = output / "api-summary.txt"
     text = _render(output, rendered)
     metadata = _metadata(text)
+    groups = _index_groups(text)
     assert metadata["group_count"] == 40
     assert metadata["shown_group_count"] == 40
     assert metadata["omitted_group_count"] == 0
-    assert text.count("signature_group_json=") == 40
+    assert len(groups) == 40
+    assert [group["id"] for group in groups] == [
+        f"group-{index:03d}" for index in range(1, 41)
+    ]
+    assert text.count("root_cause_index_chunk_json=") == 4
     assert len(rendered.read_bytes()) <= 8192
 
 
