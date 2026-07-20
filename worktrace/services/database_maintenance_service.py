@@ -6,18 +6,14 @@ import threading
 from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Iterator
+from typing import Iterator, Protocol
 
+from ..collector.runtime_control import RuntimeCollectorControl
+from ..database_content_manifest import DELETE_ORDER
 from ..db import get_connection, seed_defaults
 from ..domain_unit_of_work import DomainUnitOfWork
 from ..write_gate import DATABASE_WRITE_GATE
-from . import (
-    activity_fact_repair_service,
-    activity_inference_job_repository,
-    history_mutation_job_service,
-    privacy_gate_service,
-    startup_recovery_job_repository,
-)
+from . import privacy_gate_service
 from .database_maintenance_barrier import drain_existing_writers
 from .database_replacement_generation_service import (
     capture_replacement_generation_floor,
@@ -26,22 +22,30 @@ from .database_replacement_generation_service import (
 from .runtime_activity_state_service import clear_runtime_activity_state
 from .settings_service import get_bool_setting, get_setting, set_settings
 
-_DELETE_ORDER: tuple[str, ...] = (
-    "activity_resource",
-    "report_session_operation_member",
-    "report_mutation_request",
-    "report_session_operation",
-    "activity_clipboard_event",
-    "activity_project_assignment",
-    "folder_rule_file_index",
-    "folder_rule_index_state",
-    "project_rule",
-    "folder_project_rule",
-    "activity_log",
-    "session_boundary",
-    "settings",
-    "project",
-)
+
+class RuntimeMaintenanceControl(Protocol):
+    """Complete runtime capability required by the sole maintenance owner."""
+
+    collector_control: RuntimeCollectorControl
+
+    def is_collection_running_for_maintenance(self) -> bool: ...
+
+    def quiesce_collection_for_maintenance(
+        self,
+        timeout_seconds: float = 5.0,
+    ) -> dict[str, object]: ...
+
+    def reset_after_database_replacement(
+        self,
+        timeout_seconds: float = 5.0,
+    ) -> dict[str, object]: ...
+
+    def restore_after_maintenance(
+        self,
+        state: "RuntimeMaintenanceState",
+        *,
+        timeout_seconds: float = 5.0,
+    ) -> dict[str, object]: ...
 
 
 class MaintenanceInProgressError(RuntimeError):
@@ -89,6 +93,28 @@ class RuntimeMaintenanceState:
     replacement_epoch: int
 
 
+@dataclass(frozen=True)
+class MaintenanceStatus:
+    """Exact backend-owned maintenance status exposed through every API surface."""
+
+    maintenance_in_progress: bool
+    collector_running: bool
+    collector_status: str
+    user_paused: bool
+    maintenance_restored: bool
+    blocked_reason: str | None
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "maintenance_in_progress": self.maintenance_in_progress,
+            "collector_running": self.collector_running,
+            "collector_status": self.collector_status,
+            "user_paused": self.user_paused,
+            "maintenance_restored": self.maintenance_restored,
+            "blocked_reason": self.blocked_reason,
+        }
+
+
 class RuntimeMaintenanceCoordinator:
     """Own the only maintenance state machine, lock order and failure recovery."""
 
@@ -96,14 +122,19 @@ class RuntimeMaintenanceCoordinator:
         self._operation_lock = threading.Lock()
         self._state_lock = threading.RLock()
         self._phase = MaintenancePhase.IDLE
-        self._runtime_control: Any = None
+        self._runtime_control: RuntimeMaintenanceControl | None = None
         self._blocked_reason: str | None = None
 
-    def register_runtime_control(self, control: Any) -> None:
+    def register_runtime_control(self, control: RuntimeMaintenanceControl) -> None:
+        if control is None:
+            raise ValueError("runtime_maintenance_control_required")
         with self._state_lock:
             self._runtime_control = control
 
-    def clear_runtime_control(self, control: Any | None = None) -> None:
+    def clear_runtime_control(
+        self,
+        control: RuntimeMaintenanceControl | None = None,
+    ) -> None:
         with self._state_lock:
             if control is None or self._runtime_control is control:
                 self._runtime_control = None
@@ -125,11 +156,30 @@ class RuntimeMaintenanceCoordinator:
             or DATABASE_WRITE_GATE.active()
         )
 
+    def status(self) -> MaintenanceStatus:
+        control = self._control()
+        collector_running = bool(
+            control is not None
+            and control.is_collection_running_for_maintenance()
+        )
+        blocked_reason = self.blocked_reason
+        in_progress = self.active()
+        return MaintenanceStatus(
+            maintenance_in_progress=in_progress,
+            collector_running=collector_running,
+            collector_status=str(
+                get_setting("collector_status", "stopped") or "stopped"
+            ),
+            user_paused=get_bool_setting("user_paused", False),
+            maintenance_restored=not in_progress and blocked_reason is None,
+            blocked_reason=blocked_reason,
+        )
+
     def _set_phase(self, phase: MaintenancePhase) -> None:
         with self._state_lock:
             self._phase = phase
 
-    def _control(self) -> Any:
+    def _control(self) -> RuntimeMaintenanceControl | None:
         with self._state_lock:
             return self._runtime_control
 
@@ -139,7 +189,7 @@ class RuntimeMaintenanceCoordinator:
             self._phase = MaintenancePhase.FAILED_CLOSED
 
     def recover_fail_closed(self) -> None:
-        """Clear the latch only after the registered runtime is verifiably operational."""
+        """Clear the latch only after the runtime is verifiably operational."""
 
         with self._state_lock:
             if self._blocked_reason is None:
@@ -148,8 +198,7 @@ class RuntimeMaintenanceCoordinator:
         if control is None or DATABASE_WRITE_GATE.active():
             raise MaintenanceRecoveryError("maintenance_recovery_not_verified")
         running = bool(control.is_collection_running_for_maintenance())
-        channel = getattr(control, "collector_control", None)
-        hold_state = getattr(getattr(channel, "hold_state", None), "value", None)
+        hold_state = control.collector_control.hold_state.value
         if not running or hold_state != "operational":
             raise MaintenanceRecoveryError("maintenance_recovery_not_verified")
         set_settings(
@@ -173,10 +222,13 @@ class RuntimeMaintenanceCoordinator:
         finally:
             conn.close()
 
-    def _capture_state(self, control: Any) -> RuntimeMaintenanceState:
+    def _capture_state(
+        self,
+        control: RuntimeMaintenanceControl | None,
+    ) -> RuntimeMaintenanceState:
         collector_running = bool(
             control is not None
-            and bool(control.is_collection_running_for_maintenance())
+            and control.is_collection_running_for_maintenance()
         )
         return RuntimeMaintenanceState(
             privacy_notice_accepted=bool(
@@ -192,19 +244,20 @@ class RuntimeMaintenanceCoordinator:
         )
 
     @staticmethod
-    def _query_command(control: Any, command_id: str) -> dict[str, Any] | None:
-        channel = getattr(control, "collector_control", None)
-        query = getattr(channel, "query_command", None)
-        if query is None or not command_id:
+    def _query_command(
+        control: RuntimeMaintenanceControl,
+        command_id: str,
+    ) -> dict[str, object] | None:
+        if not command_id:
             return None
-        value = query(command_id)
+        value = control.collector_control.query_command(command_id)
         return dict(value) if isinstance(value, dict) else None
 
     def _require_ack(
         self,
-        result: dict[str, Any],
+        result: dict[str, object],
         *,
-        control: Any,
+        control: RuntimeMaintenanceControl,
         command_kind: str,
         terminal_state: str,
         reason: str,
@@ -284,7 +337,7 @@ class RuntimeMaintenanceCoordinator:
             raise MaintenanceInProgressError("maintenance_operation_in_progress")
 
         state: RuntimeMaintenanceState | None = None
-        control: Any = None
+        control: RuntimeMaintenanceControl | None = None
         hold_acquired = False
         operation_started = False
         operation_committed = False
@@ -426,11 +479,13 @@ class RuntimeMaintenanceCoordinator:
 MAINTENANCE_COORDINATOR = RuntimeMaintenanceCoordinator()
 
 
-def register_runtime_control(control: Any) -> None:
+def register_runtime_control(control: RuntimeMaintenanceControl) -> None:
     MAINTENANCE_COORDINATOR.register_runtime_control(control)
 
 
-def clear_runtime_control(control: Any | None = None) -> None:
+def clear_runtime_control(
+    control: RuntimeMaintenanceControl | None = None,
+) -> None:
     MAINTENANCE_COORDINATOR.clear_runtime_control(control)
 
 
@@ -440,6 +495,10 @@ def recover_fail_closed() -> None:
 
 def is_maintenance_in_progress() -> bool:
     return MAINTENANCE_COORDINATOR.active()
+
+
+def maintenance_status() -> MaintenanceStatus:
+    return MAINTENANCE_COORDINATOR.status()
 
 
 @contextmanager
@@ -468,23 +527,13 @@ def database_replacement(
         yield state
 
 
-def clear_all_worker_progress_in_transaction(conn) -> None:
-    """Clear replacement-invalid durable progress through canonical owners."""
-
-    history_mutation_job_service.clear_all_jobs_in_transaction(conn)
-    activity_inference_job_repository.clear_all_jobs(conn)
-    activity_fact_repair_service.clear_all_jobs_in_transaction(conn)
-    startup_recovery_job_repository.clear_all_jobs(conn)
-
-
 def clear_all_live_data() -> None:
-    """Delete live rows and publish replacement only after commit succeeds."""
+    """Delete current content and publish replacement in one maintenance transaction."""
 
     with database_replacement("clear_database"):
         with DomainUnitOfWork() as uow:
             conn = uow.connection
-            clear_all_worker_progress_in_transaction(conn)
-            for table in _DELETE_ORDER:
+            for table in DELETE_ORDER:
                 conn.execute(f"DELETE FROM {table}")
             seed_defaults(conn)
             publish_database_replacement(conn)
@@ -497,14 +546,16 @@ __all__ = [
     "MaintenanceIntent",
     "MaintenancePhase",
     "MaintenanceRecoveryError",
+    "MaintenanceStatus",
+    "RuntimeMaintenanceControl",
     "RuntimeMaintenanceCoordinator",
     "RuntimeMaintenanceState",
     "clear_all_live_data",
-    "clear_all_worker_progress_in_transaction",
     "clear_runtime_control",
     "consistent_snapshot",
     "database_replacement",
     "is_maintenance_in_progress",
+    "maintenance_status",
     "recover_fail_closed",
     "register_runtime_control",
 ]
