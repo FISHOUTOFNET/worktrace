@@ -9,6 +9,8 @@ import sqlite3
 import threading
 from typing import Iterator
 
+DATABASE_MAINTENANCE_ERROR = "database_maintenance_in_progress"
+
 
 class WriteGatePhase(str, Enum):
     OPEN = "open"
@@ -65,13 +67,13 @@ class ProcessDatabaseWriteGate:
         with self._lock:
             if self._phase is WriteGatePhase.EXCLUSIVE:
                 if thread_id != self._owner_thread_id:
-                    raise sqlite3.OperationalError("secure_import_in_progress")
+                    raise sqlite3.OperationalError(DATABASE_MAINTENANCE_ERROR)
                 self._thread_state.observed_generation = self._generation
                 return
 
             if self._phase is WriteGatePhase.DRAINING:
                 if thread_id != self._owner_thread_id:
-                    raise sqlite3.OperationalError("secure_import_in_progress")
+                    raise sqlite3.OperationalError(DATABASE_MAINTENANCE_ERROR)
                 self._thread_state.observed_generation = self._generation
                 return
 
@@ -99,7 +101,7 @@ class ProcessDatabaseWriteGate:
         owner = threading.get_ident()
         with self._lock:
             if self._phase is not WriteGatePhase.OPEN:
-                raise sqlite3.OperationalError("secure_import_in_progress")
+                raise sqlite3.OperationalError(DATABASE_MAINTENANCE_ERROR)
             self._phase = WriteGatePhase.DRAINING
             self._owner_thread_id = owner
             self._thread_state.observed_generation = self._generation
@@ -118,6 +120,7 @@ DATABASE_WRITE_GATE = ProcessDatabaseWriteGate()
 
 
 __all__ = [
+    "DATABASE_MAINTENANCE_ERROR",
     "DATABASE_WRITE_GATE",
     "ProcessDatabaseWriteGate",
     "WriteDrainLease",
