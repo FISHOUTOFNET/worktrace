@@ -189,9 +189,9 @@ def test_fail_closed_persistence_failure_does_not_open_process_gate(
 
 def test_recovery_write_scope_accepts_latch_upserts_and_rejects_escape_sql():
     gate = ProcessDatabaseWriteGate()
-    gate._set_recovery_block("test")  # noqa: SLF001 - isolated capability test
+    gate._set_recovery_block("test")
 
-    with gate._maintenance_recovery_write_scope():  # noqa: SLF001
+    with gate._maintenance_recovery_write_scope():
         gate.require_current_thread_allowed("BEGIN IMMEDIATE")
         gate.require_current_thread_allowed(
             """
@@ -202,7 +202,9 @@ def test_recovery_write_scope_accepts_latch_upserts_and_rejects_escape_sql():
                 updated_at = excluded.updated_at
             """
         )
-        gate.require_current_thread_allowed("UPDATE data_generation SET value = 2")
+        gate.require_current_thread_allowed(
+            "UPDATE data_generation_state SET value = 2"
+        )
         with pytest.raises(
             sqlite3.OperationalError,
             match="database_maintenance_recovery_required",
