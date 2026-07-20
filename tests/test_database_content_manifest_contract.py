@@ -12,7 +12,7 @@ from worktrace.database_content_manifest import (
     TABLE_NAMES,
 )
 from worktrace.db import CURRENT_SCHEMA_VERSION, get_connection
-from worktrace.services.secure_backup_service import BACKUP_FORMAT_VERSION
+from worktrace.services.secure_backup_service import PAYLOAD_VERSION
 
 pytestmark = [pytest.mark.db, pytest.mark.integration, pytest.mark.contract]
 
@@ -65,4 +65,4 @@ def test_delete_order_places_foreign_key_children_before_parents(temp_db) -> Non
 
 def test_current_only_schema_and_backup_versions_are_frozen() -> None:
     assert CURRENT_SCHEMA_VERSION == 13
-    assert BACKUP_FORMAT_VERSION == 6
+    assert PAYLOAD_VERSION == 6
