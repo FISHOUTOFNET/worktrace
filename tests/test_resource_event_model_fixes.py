@@ -573,11 +573,11 @@ class TestUpdateFilePathHintUpdatesActivityResource:
                 "UPDATE activity_log SET status = ? WHERE id = ?",
                 (STATUS_EXCLUDED, aid),
             )
-            return False
+            return privacy_service.ExclusionDecision(False, False, False)
 
         monkeypatch.setattr(
             activity_resource_command_service.privacy_service,
-            "is_excluded",
+            "evaluate_exclusion",
             change_status,
         )
 
