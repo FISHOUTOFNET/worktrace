@@ -111,6 +111,30 @@
             "maintenance_in_progress",
             "数据库维护进行中：" + boolLabel(!!status.maintenance_in_progress)
         );
+        setLineText(
+            "maintenance_restored",
+            "维护恢复完成：" + boolLabel(!!status.maintenance_restored)
+        );
+        setLineText(
+            "recovery_blocked",
+            "维护恢复阻断：" + boolLabel(!!status.recovery_blocked)
+        );
+        setLineText(
+            "blocked_reason",
+            "阻断原因：" + (status.blocked_reason ? String(status.blocked_reason) : "无")
+        );
+        setLineText(
+            "collector_running",
+            "采集器运行中：" + boolLabel(!!status.collector_running)
+        );
+        setLineText(
+            "collector_status",
+            "采集器状态：" + String(status.collector_status || "stopped")
+        );
+        setLineText(
+            "user_paused",
+            "用户暂停：" + boolLabel(!!status.user_paused)
+        );
         if (status.storage_model === "local_only") {
             setLineText("storage_model", "本地优先：所有数据仅存储在本机，不上传任何远端服务器。");
         }
