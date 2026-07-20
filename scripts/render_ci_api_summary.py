@@ -44,23 +44,26 @@ def _render(
     counts = payload.get("counts") or {}
     stage = _one(payload.get("failed_stage"), 40)
     shown = groups[: max(0, group_limit)]
+    metadata = {
+        "scope": "complete_root_cause_index",
+        "revision": _one(payload.get("revision"), 80),
+        "stage": stage,
+        "artifact": _one(payload.get("artifact_name"), 120),
+        "available": bool(payload.get("diagnostics_available")),
+        "total": counts.get("total", 0),
+        "passed": counts.get("passed", 0),
+        "failed": counts.get("failed", 0),
+        "errors": counts.get("errors", 0),
+        "skipped": counts.get("skipped", 0),
+        "failure_count": len(failures),
+        "group_count": len(groups),
+        "shown_group_count": len(shown),
+        "omitted_group_count": max(0, len(groups) - len(shown)),
+    }
     lines = [
         PROTOCOL,
-        "summary_scope=complete_root_cause_index",
-        "machine_source=artifact:diagnostics.json",
-        f"revision={_one(payload.get('revision'), 80)}",
-        f"stage={stage}",
-        f"artifact_name={_one(payload.get('artifact_name'), 120)}",
-        f"diagnostics_available={'true' if payload.get('diagnostics_available') else 'false'}",
-        f"total={counts.get('total', 0)}",
-        f"passed={counts.get('passed', 0)}",
-        f"failed={counts.get('failed', 0)}",
-        f"errors={counts.get('errors', 0)}",
-        f"skipped={counts.get('skipped', 0)}",
-        f"failure_count={len(failures)}",
-        f"failure_signature_group_count={len(groups)}",
-        f"shown_signature_group_count={len(shown)}",
-        f"omitted_signature_group_count={max(0, len(groups) - len(shown))}",
+        "diagnostics_metadata_json="
+        + json.dumps(metadata, ensure_ascii=False, separators=(",", ":")),
     ]
     for raw in shown:
         if not isinstance(raw, dict):
@@ -90,15 +93,19 @@ def _render(
         "compile": "compile.log",
         "pytest": "pytest.log",
     }.get(stage, "validation.log")
-    lines.extend(
-        (
-            "full_failure_index=artifact:failure-manifest.txt",
-            "full_failure_details=artifact:failure-details.txt",
-            f"raw_validation_log=artifact:{raw_log}",
-            "artifact_contract=diagnostics.json,pytest-junit.xml,failure-manifest.txt,failure-details.txt,summary.md,raw-log",
-            "",
-        )
+    artifact_index = {
+        "machine_source": "diagnostics.json",
+        "failure_index": "failure-manifest.txt",
+        "failure_details": "failure-details.txt",
+        "raw_log": raw_log,
+        "summary": "summary.md",
+        "junit": "pytest-junit.xml",
+    }
+    lines.append(
+        "artifact_index_json="
+        + json.dumps(artifact_index, ensure_ascii=False, separators=(",", ":"))
     )
+    lines.append("")
     return "\n".join(lines)
 
 
