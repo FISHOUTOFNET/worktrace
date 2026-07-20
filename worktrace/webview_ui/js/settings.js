@@ -77,7 +77,7 @@
     }
     App.setSettingsLoading = setSettingsLoading;
 
-    function boolLabel(value) { return value ? "开启" : "关闭"; }
+    function boolLabel(value) { return value ? "是" : "否"; }
 
     function setLineText(key, text) {
         var target = document.querySelector('#settings-status [data-settings-key="' + key + '"]');
@@ -96,7 +96,7 @@
         var enabled = !!(status && status.clipboard_capture_enabled);
         toggle.checked = enabled;
         toggle.disabled = anySettingsOperationInProgress() || !App.settingsLoaded;
-        setCaptureToggleStatus(boolLabel(enabled));
+        setCaptureToggleStatus(enabled ? "开启" : "关闭");
     }
     App.renderCaptureToggle = renderCaptureToggle;
 
@@ -108,8 +108,8 @@
             status.export_path_configured ? "导出目录：已配置" : "导出目录：未配置"
         );
         setLineText(
-            "secure_import_in_progress",
-            "加密备份导入进行中：" + boolLabel(!!status.secure_import_in_progress)
+            "maintenance_in_progress",
+            "数据库维护进行中：" + boolLabel(!!status.maintenance_in_progress)
         );
         if (status.storage_model === "local_only") {
             setLineText("storage_model", "本地优先：所有数据仅存储在本机，不上传任何远端服务器。");
@@ -158,7 +158,7 @@
             });
             if (!data) {
                 if (toggle) toggle.checked = !enabled;
-                setCaptureToggleStatus(boolLabel(!enabled));
+                setCaptureToggleStatus(!enabled ? "开启" : "关闭");
                 return;
             }
             renderSettingsStatus(data.status);
@@ -166,7 +166,7 @@
         }).catch(function () {
             showSettingsError(WRITE_ERROR_MESSAGE);
             if (toggle) toggle.checked = !enabled;
-            setCaptureToggleStatus(boolLabel(!enabled));
+            setCaptureToggleStatus(!enabled ? "开启" : "关闭");
         }).then(function () {
             App.settingsWriteInProgress = false;
             setSettingsControlsDisabled(anySettingsOperationInProgress());
@@ -248,7 +248,7 @@
             var data = App.handleResult(result, function (message) {
                 setSettingsBackupStatus(message || BACKUP_EXPORT_ERROR_MESSAGE);
             });
-            if (data) setSettingsBackupStatus("已导出：" + (data.filename || ""));
+            if (data) setSettingsBackupStatus(data.message || ("已导出：" + (data.filename || "")));
         }).catch(function () {
             setSettingsBackupStatus(BACKUP_EXPORT_ERROR_MESSAGE);
         }).then(function () {
@@ -283,7 +283,6 @@
     }
     App.previewEncryptedBackupManifest = previewEncryptedBackupManifest;
 
-
     function importEncryptedBackup() {
         if (anySettingsOperationInProgress()) return;
         var passInput = element("settings-backup-import-passphrase");
@@ -309,7 +308,7 @@
                 message += "（已导入：" + tableCount + " 个数据组 / " + rowCount + " 条记录）";
             }
             setSettingsImportStatus(message);
-            App.resetClientGeneration("secure_import");
+            App.resetClientGeneration("database_replacement");
             renderBackupManifest(null, "");
             return loadSettingsPrivacyStatus().then(function () {
                 if (typeof App.refreshAll === "function") App.refreshAll();
@@ -341,7 +340,7 @@
             });
             if (!data) return;
             setSettingsClearStatus(data.message || "本地数据已清空");
-            App.resetClientGeneration("clear_all_local_data");
+            App.resetClientGeneration("database_replacement");
             renderBackupManifest(null, "");
             return loadSettingsPrivacyStatus().then(function () {
                 if (typeof App.refreshAll === "function") App.refreshAll();
