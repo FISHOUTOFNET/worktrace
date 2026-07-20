@@ -151,7 +151,8 @@ def test_maintenance_resume_and_status_are_current_only():
     assert "application_runtime_required" in app_api
     assert "maintenance_recovery_required" in app_api
     assert "def is_maintenance_in_progress" in backup_api
-    assert '"maintenance_in_progress"' in settings_api
+    assert "database_maintenance_service.maintenance_status()" in settings_api
+    assert '"maintenance": maintenance' in settings_api
     assert "secure_import_in_progress" not in combined_status
     assert "is_secure_import_in_progress" not in combined_status
 
