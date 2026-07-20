@@ -118,6 +118,34 @@ def _index_group(group: dict[str, Any]) -> dict[str, object]:
     }
 
 
+def _short_location(value: object) -> str:
+    location = str(value or "(unknown)").replace("\\", "/")
+    path_text, separator, line = location.rpartition(":")
+    if not separator or not line.isdigit():
+        return _single_line(location, limit=36)
+    stem = Path(path_text).stem
+    return _single_line(f"{stem}:{line}", limit=36)
+
+
+def _error_type(value: object) -> str:
+    message = _single_line(value, limit=240)
+    head = message.split(":", 1)[0].strip()
+    if head.startswith("assert ") or head.startswith("E assert "):
+        return "AssertionError"
+    return _single_line(head, limit=24)
+
+
+def _catalog_group(group: dict[str, Any]) -> list[object]:
+    identifier = str(group["id"])
+    suffix = identifier.rsplit("-", 1)[-1]
+    return [
+        int(suffix) if suffix.isdigit() else suffix,
+        _short_location(group["location"]),
+        int(group["affected_test_count"]),
+        _error_type(group["message"]),
+    ]
+
+
 def _transport_group(group: dict[str, Any]) -> dict[str, object]:
     """Return the bounded machine record used by API log readers."""
 
@@ -154,6 +182,7 @@ def _render(
 ) -> str:
     counts = payload.get("counts") or {}
     compact_index = [_index_group(group) for group in groups]
+    catalog = [_catalog_group(group) for group in groups]
     lines = [
         PROTOCOL,
         f"schema_version={payload.get('schema_version')}",
@@ -168,6 +197,8 @@ def _render(
         f"skipped={counts.get('skipped', 0)}",
         f"failure_count={len(payload.get('failures') or [])}",
         f"root_cause_count={len(groups)}",
+        "cause_catalog_json="
+        + json.dumps(catalog, ensure_ascii=False, separators=(",", ":")),
         "ROOT_CAUSE_TRANSPORT_BEGIN",
     ]
     lines.extend(
