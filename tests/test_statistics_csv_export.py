@@ -3,29 +3,25 @@
 from __future__ import annotations
 
 import csv
-import os
-import re
 import sys
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
-from worktrace.api import export_api, statistics_api
+from tests.support import activity_factory as activity_service
+from tests.support.application import build_test_bridge
+from worktrace.api import export_api
 from worktrace.api.export_api import StatisticsExportError
 from worktrace.db import get_connection
-from tests.support import activity_factory as activity_service
 from worktrace.services import (
     export_service,
     project_service,
     settings_service,
-    statistics_service,
     timeline_service,
 )
-from worktrace.webview_ui.bridge import WebViewBridge
 
 pytestmark = [pytest.mark.db, pytest.mark.integration, pytest.mark.contract]
-
 
 SENSITIVE_TOKENS = (
     "window_title",
@@ -103,29 +99,17 @@ def _seed_closed_activity(
 
 def _read_csv(path: Path) -> tuple[list[str], list[list[str]]]:
     with open(path, "r", encoding="utf-8-sig", newline="") as handle:
-        reader = csv.reader(handle)
-        rows = list(reader)
+        rows = list(csv.reader(handle))
     return rows[0], rows[1:]
-
-
 
 
 def test_build_csv_rows_returns_display_safe_dicts(temp_db):
     pid = project_service.create_project("Client")
-    _seed_closed_activity(
-        app="Word",
-        resource="A1.docx",
-        start="09:00:00",
-        end="09:30:00",
-        day="2026-06-25",
-        project_id=pid,
-        file_path_hint="C:\\secret\\A1.docx",
-        note="top secret note",
-    )
+    _seed_closed_activity(project_id=pid, file_path_hint="C:\\secret\\A1.docx")
     rows = export_service.build_statistics_csv_rows("2026-06-25", "2026-06-25")
     assert len(rows) == 1
     row = rows[0]
-    expected_keys = {
+    assert set(row) == {
         "date",
         "start_time",
         "end_time",
@@ -137,7 +121,6 @@ def test_build_csv_rows_returns_display_safe_dicts(temp_db):
         "adjusted_duration",
         "is_adjusted",
     }
-    assert set(row.keys()) == expected_keys
     assert row["date"] == "2026-06-25"
     assert row["start_time"].startswith("2026-06-25 09:00:00")
     assert row["duration_seconds"] == 1800
@@ -146,166 +129,131 @@ def test_build_csv_rows_returns_display_safe_dicts(temp_db):
     assert row["note"] == ""
     assert row["adjusted_duration"] == ""
     assert row["is_adjusted"] == "否"
-    for forbidden_key in ("window_title", "file_path_hint", "full_path", "clipboard", "traceback", "sql"):
-        assert forbidden_key not in row
+    for key in ("window_title", "file_path_hint", "full_path", "clipboard", "traceback", "sql"):
+        assert key not in row
 
 
 def test_build_csv_rows_excludes_in_progress(temp_db):
-    """In-progress activities (end_time IS NULL) are not exported."""
     aid = activity_service.create_activity(
-        "Word", "winword.exe", "A1.docx",
+        "Word",
+        "winword.exe",
+        "A1.docx",
         start_time="2026-06-25 09:00:00",
         file_path_hint="C:\\secret\\A1.docx",
         note="live note",
     )
     activity_service.finalize_created_activity(aid)
-    # NOT closing the activity leaves it in-progress.
-    rows = export_service.build_statistics_csv_rows("2026-06-25", "2026-06-25")
-    assert rows == []
+    assert export_service.build_statistics_csv_rows("2026-06-25", "2026-06-25") == []
 
 
 def test_build_csv_rows_excludes_hidden(temp_db):
-    """Hidden activities are excluded (include_hidden=False)."""
-    aid = _seed_closed_activity(day="2026-06-25")
+    aid = _seed_closed_activity()
     with get_connection() as conn:
         conn.execute("UPDATE activity_log SET is_hidden = 1 WHERE id = ?", (aid,))
-    rows = export_service.build_statistics_csv_rows("2026-06-25", "2026-06-25")
-    assert rows == []
+    assert export_service.build_statistics_csv_rows("2026-06-25", "2026-06-25") == []
 
 
 def test_build_csv_rows_excludes_deleted(temp_db):
-    """Soft-deleted activities are excluded."""
-    aid = _seed_closed_activity(day="2026-06-25")
+    aid = _seed_closed_activity()
     with get_connection() as conn:
         conn.execute("UPDATE activity_log SET is_deleted = 1 WHERE id = ?", (aid,))
-    rows = export_service.build_statistics_csv_rows("2026-06-25", "2026-06-25")
-    assert rows == []
+    assert export_service.build_statistics_csv_rows("2026-06-25", "2026-06-25") == []
 
 
 def test_build_csv_rows_all_statuses_exported(temp_db):
-    """Status policy exports attributed status contributions and suppresses paused."""
     pid = project_service.create_project("Client")
     statuses = ("normal", "idle", "paused", "excluded", "error")
-    starts = [
-        "09:00:00", "09:30:00", "10:00:00", "10:30:00", "11:00:00",
-    ]
-    ends = [
-        "09:30:00", "10:00:00", "10:30:00", "11:00:00", "11:30:00",
-    ]
+    starts = ("09:00:00", "09:30:00", "10:00:00", "10:30:00", "11:00:00")
+    ends = ("09:30:00", "10:00:00", "10:30:00", "11:00:00", "11:30:00")
     for status, start, end in zip(statuses, starts, ends):
         _seed_closed_activity(
             app=status.title(),
             resource=f"{status}.txt",
             start=start,
             end=end,
-            day="2026-06-25",
             project_id=pid,
             status=status,
         )
     rows = export_service.build_statistics_csv_rows("2026-06-25", "2026-06-25")
-    # Export is entry-based: one closed final entry produces one record even
-    # when it contains multiple allocated status contributions.
     assert len(rows) == 2
     by_start = {row["start_time"][-8:]: row for row in rows}
     assert "正常" in by_start["09:00:00"]["status"]
-    assert by_start["09:00:00"]["project"] == "Client"
     assert "空闲" in by_start["09:00:00"]["status"]
+    assert by_start["09:00:00"]["project"] == "Client"
     assert "已排除" in by_start["10:30:00"]["status"]
     assert by_start["10:30:00"]["project"] == "Client"
 
 
 def test_build_csv_rows_multi_day_range(temp_db):
-    """Multi-day range exports activities from all included days."""
-    _seed_closed_activity(
-        resource="day1.txt", start="09:00:00", end="09:30:00", day="2026-06-25",
-    )
-    _seed_closed_activity(
-        resource="day2.txt", start="10:00:00", end="10:15:00", day="2026-06-26",
-    )
-    _seed_closed_activity(
-        resource="day3.txt", start="11:00:00", end="11:45:00", day="2026-06-27",
-    )
+    _seed_closed_activity(resource="day1.txt", day="2026-06-25")
+    _seed_closed_activity(resource="day2.txt", start="10:00:00", end="10:15:00", day="2026-06-26")
+    _seed_closed_activity(resource="day3.txt", start="11:00:00", end="11:45:00", day="2026-06-27")
     rows = export_service.build_statistics_csv_rows("2026-06-25", "2026-06-27")
     assert len(rows) == 3
-    dates = sorted(r["date"] for r in rows)
-    assert dates == ["2026-06-25", "2026-06-26", "2026-06-27"]
+    assert sorted(row["date"] for row in rows) == [
+        "2026-06-25",
+        "2026-06-26",
+        "2026-06-27",
+    ]
 
 
-def test_build_csv_rows_invalid_date(temp_db):
+@pytest.mark.parametrize(
+    ("date_from", "date_to"),
+    [
+        ("not-a-date", "2026-06-25"),
+        ("2026-06-26", "2026-06-25"),
+        ("2026-05-25", "2026-06-26"),
+        (True, "2026-06-25"),
+        ("2026-06-25", False),
+        (None, "2026-06-25"),
+        ("2026-06-25", None),
+    ],
+)
+def test_build_csv_rows_rejects_invalid_ranges(temp_db, date_from, date_to):
     with pytest.raises(ValueError):
-        export_service.build_statistics_csv_rows("not-a-date", "2026-06-25")
-
-
-def test_build_csv_rows_invalid_range(temp_db):
-    """date_from > date_to is rejected."""
-    with pytest.raises(ValueError):
-        export_service.build_statistics_csv_rows("2026-06-26", "2026-06-25")
-
-
-def test_build_csv_rows_range_too_large(temp_db):
-    """Range > 31 days is rejected."""
-    with pytest.raises(ValueError):
-        export_service.build_statistics_csv_rows("2026-05-25", "2026-06-26")
-
-
-def test_build_csv_rows_bool_rejected(temp_db):
-    with pytest.raises(ValueError):
-        export_service.build_statistics_csv_rows(True, "2026-06-25")
-    with pytest.raises(ValueError):
-        export_service.build_statistics_csv_rows("2026-06-25", False)
-
-
-def test_build_csv_rows_none_rejected(temp_db):
-    with pytest.raises(ValueError):
-        export_service.build_statistics_csv_rows(None, "2026-06-25")
-    with pytest.raises(ValueError):
-        export_service.build_statistics_csv_rows("2026-06-25", None)
-
-
+        export_service.build_statistics_csv_rows(date_from, date_to)
 
 
 def test_write_csv_success_creates_utf8_bom_file(temp_db, tmp_path):
-    _seed_closed_activity(
-        app="Word", resource="A1.docx",
-        start="09:00:00", end="09:30:00", day="2026-06-25",
-        file_path_hint="C:\\secret\\A1.docx", note="top secret note",
-    )
+    _seed_closed_activity(file_path_hint="C:\\secret\\A1.docx")
     out = tmp_path / "report.csv"
     result = export_service.write_statistics_csv("2026-06-25", "2026-06-25", out)
     assert out.exists()
-    assert result["activity_count"] == 1
-    assert result["duration_seconds"] == 1800
-    # filename is the basename only (never the full local path).
-    assert result["filename"] == "report.csv"
-    # UTF-8 BOM is the first three bytes.
-    raw = out.read_bytes()
-    assert raw[:3] == b"\xef\xbb\xbf"
+    assert result == {
+        "activity_count": 1,
+        "duration_seconds": 1800,
+        "filename": "report.csv",
+    }
+    assert out.read_bytes()[:3] == b"\xef\xbb\xbf"
     headers, rows = _read_csv(out)
     assert headers == [
-        "日期", "开始时间", "结束时间", "时长", "时长秒数",
-        "项目", "状态", "备注", "修正时长", "是否已修正",
+        "日期",
+        "开始时间",
+        "结束时间",
+        "时长",
+        "时长秒数",
+        "项目",
+        "状态",
+        "备注",
+        "修正时长",
+        "是否已修正",
     ]
     assert len(rows) == 1
-    # Total duration matches.
     assert rows[0][4] == "1800"
     assert rows[0][3] == "00:30:00"
 
 
 def test_write_csv_auto_appends_csv_extension(temp_db, tmp_path):
-    _seed_closed_activity(day="2026-06-25")
-    out = tmp_path / "report"  # no extension
-    result = export_service.write_statistics_csv("2026-06-25", "2026-06-25", out)
-    written = tmp_path / "report.csv"
-    assert written.exists()
+    _seed_closed_activity()
+    result = export_service.write_statistics_csv("2026-06-25", "2026-06-25", tmp_path / "report")
+    assert (tmp_path / "report.csv").exists()
     assert result["filename"] == "report.csv"
 
 
 def test_write_csv_replaces_non_csv_extension(temp_db, tmp_path):
-    _seed_closed_activity(day="2026-06-25")
-    out = tmp_path / "report.txt"
-    result = export_service.write_statistics_csv("2026-06-25", "2026-06-25", out)
-    written = tmp_path / "report.csv"
-    assert written.exists()
+    _seed_closed_activity()
+    result = export_service.write_statistics_csv("2026-06-25", "2026-06-25", tmp_path / "report.txt")
+    assert (tmp_path / "report.csv").exists()
     assert not (tmp_path / "report.txt").exists()
     assert result["filename"] == "report.csv"
 
@@ -314,7 +262,6 @@ def test_write_csv_empty_data_returns_empty_data_no_file(temp_db, tmp_path):
     out = tmp_path / "empty.csv"
     with pytest.raises(ValueError, match="empty_data"):
         export_service.write_statistics_csv("2026-06-25", "2026-06-25", out)
-    # No file is created for an empty range.
     assert not out.exists()
 
 
@@ -326,17 +273,15 @@ def test_write_csv_rejects_directory_path(temp_db, tmp_path):
 
 
 def test_write_csv_rejects_missing_parent(temp_db, tmp_path):
-    out = tmp_path / "no_such_dir" / "report.csv"
     with pytest.raises(ValueError, match="invalid_path"):
-        export_service.write_statistics_csv("2026-06-25", "2026-06-25", out)
+        export_service.write_statistics_csv(
+            "2026-06-25", "2026-06-25", tmp_path / "missing" / "report.csv"
+        )
 
 
 def test_write_csv_propagates_permission_error(temp_db, tmp_path):
-    """PermissionError surfaces as itself so the API can map it to
-    permission_denied; the service does not swallow it as invalid_path."""
-    _seed_closed_activity(day="2026-06-25")
+    _seed_closed_activity()
     out = tmp_path / "report.csv"
-    # Force open() to raise PermissionError.
     real_open = open
 
     def fake_open(path, mode, *args, **kwargs):
@@ -346,14 +291,11 @@ def test_write_csv_propagates_permission_error(temp_db, tmp_path):
 
     with patch("worktrace.services.export_service.open", fake_open):
         with pytest.raises(PermissionError):
-            export_service.write_statistics_csv(
-                "2026-06-25", "2026-06-25", out,
-            )
+            export_service.write_statistics_csv("2026-06-25", "2026-06-25", out)
 
 
 def test_write_csv_propagates_oserror(temp_db, tmp_path):
-    """OSError surfaces as itself so the API can map it to file_busy."""
-    _seed_closed_activity(day="2026-06-25")
+    _seed_closed_activity()
     out = tmp_path / "report.csv"
     real_open = open
 
@@ -364,99 +306,69 @@ def test_write_csv_propagates_oserror(temp_db, tmp_path):
 
     with patch("worktrace.services.export_service.open", fake_open):
         with pytest.raises(OSError):
-            export_service.write_statistics_csv(
-                "2026-06-25", "2026-06-25", out,
-            )
+            export_service.write_statistics_csv("2026-06-25", "2026-06-25", out)
 
 
 def test_write_csv_no_db_write(temp_db, tmp_path):
-    """Export must not mutate the DB: no new rows, no updated_at changes."""
-    aid = _seed_closed_activity(day="2026-06-25")
-    # Snapshot the activity's updated_at before export.
+    aid = _seed_closed_activity()
     with get_connection() as conn:
-        before = conn.execute(
-            "SELECT updated_at FROM activity_log WHERE id = ?", (aid,),
-        ).fetchone()
-    assert before is not None
-    updated_at_before = before[0]
-
-    out = tmp_path / "report.csv"
-    export_service.write_statistics_csv("2026-06-25", "2026-06-25", out)
-
-    # No new activity rows were inserted.
+        updated_at_before = conn.execute(
+            "SELECT updated_at FROM activity_log WHERE id = ?", (aid,)
+        ).fetchone()[0]
+    export_service.write_statistics_csv("2026-06-25", "2026-06-25", tmp_path / "report.csv")
     with get_connection() as conn:
         after = conn.execute(
-            "SELECT updated_at FROM activity_log WHERE id = ?", (aid,),
-        ).fetchone()
-        count = conn.execute(
-            "SELECT COUNT(*) FROM activity_log",
+            "SELECT updated_at FROM activity_log WHERE id = ?", (aid,)
         ).fetchone()[0]
-    assert after is not None
-    assert after[0] == updated_at_before
+        count = conn.execute("SELECT COUNT(*) FROM activity_log").fetchone()[0]
+    assert after == updated_at_before
     assert count == 1
 
 
 def test_write_csv_no_resource_or_assignment_mutation(temp_db, tmp_path):
-    """Export must not mutate activity_resource / assignment rows."""
     pid = project_service.create_project("Client")
-    _seed_closed_activity(day="2026-06-25", project_id=pid)
+    _seed_closed_activity(project_id=pid)
     with get_connection() as conn:
-        before_res = conn.execute(
-            "SELECT COUNT(*) FROM activity_resource",
-        ).fetchone()[0]
-        before_asg = conn.execute(
-            "SELECT COUNT(*) FROM activity_project_assignment",
-        ).fetchone()[0]
-        before_note = conn.execute(
-            "SELECT COUNT(*) FROM report_session_operation",
-        ).fetchone()[0]
-    out = tmp_path / "report.csv"
-    export_service.write_statistics_csv("2026-06-25", "2026-06-25", out)
+        before = tuple(
+            conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            for table in (
+                "activity_resource",
+                "activity_project_assignment",
+                "report_session_operation",
+            )
+        )
+    export_service.write_statistics_csv("2026-06-25", "2026-06-25", tmp_path / "report.csv")
     with get_connection() as conn:
-        after_res = conn.execute(
-            "SELECT COUNT(*) FROM activity_resource",
-        ).fetchone()[0]
-        after_asg = conn.execute(
-            "SELECT COUNT(*) FROM activity_project_assignment",
-        ).fetchone()[0]
-        after_note = conn.execute(
-            "SELECT COUNT(*) FROM report_session_operation",
-        ).fetchone()[0]
-    assert after_res == before_res
-    assert after_asg == before_asg
-    assert after_note == before_note
+        after = tuple(
+            conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            for table in (
+                "activity_resource",
+                "activity_project_assignment",
+                "report_session_operation",
+            )
+        )
+    assert after == before
 
 
 def test_write_csv_no_raw_sensitive_fields_in_output(temp_db, tmp_path):
-    """The CSV file content must never contain raw window_title /
-    file_path_hint / full_path / clipboard / note / traceback / SQL."""
-    _seed_closed_activity(
-        app="Word", resource="A1.docx",
-        start="09:00:00", end="09:30:00", day="2026-06-25",
-        file_path_hint="C:\\Users\\secret\\A1.docx",
-        note="top secret note",
-    )
+    _seed_closed_activity(file_path_hint="C:\\Users\\secret\\A1.docx")
     out = tmp_path / "report.csv"
     export_service.write_statistics_csv("2026-06-25", "2026-06-25", out)
-    text = out.read_text(encoding="utf-8-sig")
-    _assert_no_sensitive_text(text, "csv content")
+    _assert_no_sensitive_text(out.read_text(encoding="utf-8-sig"), "csv content")
 
 
 def test_write_csv_escapes_formula_injection(temp_db, tmp_path):
-    """Cells starting with ``=`` / ``+`` / ``-`` / ``@`` / tab get a
-    single-quote prefix so spreadsheet apps treat them as text."""
-    # Seed session notes that start with each dangerous prefix. Resource
-    # detail columns are no longer exported, but all session/result cells
-    # still pass through formula-injection escaping.
     from worktrace.api import timeline_api
 
     prefixes = ["=", "+", "-", "@"]
     starts = ["09:00:00", "09:30:00", "10:00:00", "10:30:00"]
     ends = ["09:30:00", "10:00:00", "10:30:00", "11:00:00"]
-    for idx, (prefix, start, end) in enumerate(zip(prefixes, starts, ends), start=1):
-        project_id = project_service.create_project(f"CSV Formula {idx}")
+    for index, (prefix, start, end) in enumerate(zip(prefixes, starts, ends), start=1):
+        project_id = project_service.create_project(f"CSV Formula {index}")
         aid = activity_service.create_activity(
-            "App", "app.exe", "r.txt",
+            "App",
+            "app.exe",
+            "r.txt",
             start_time=f"2026-06-25 {start}",
             project_id=project_id,
             note="top secret note",
@@ -465,14 +377,15 @@ def test_write_csv_escapes_formula_injection(temp_db, tmp_path):
         activity_service.finalize_created_activity(aid)
         activity_service.close_activity(aid, f"2026-06-25 {end}")
         session = next(
-            item for item in timeline_service.get_project_sessions_by_date("2026-06-25")
+            item
+            for item in timeline_service.get_project_sessions_by_date("2026-06-25")
             if aid in item["activity_ids"]
         )
         timeline_api.save_timeline_session_edit(
             "2026-06-25",
             session["projection_instance_key"],
             session["projection_revision"],
-            f"req-formula-{idx}",
+            f"req-formula-{index}",
             None,
             None,
             prefix + "SUM(A1:A2)",
@@ -481,22 +394,15 @@ def test_write_csv_escapes_formula_injection(temp_db, tmp_path):
     export_service.write_statistics_csv("2026-06-25", "2026-06-25", out)
     headers, rows = _read_csv(out)
     assert len(rows) == 4
-    # Session/result fields are escaped; resource detail columns are not exported.
     assert "资源名称" not in headers
-    note_col = headers.index("备注")
-    for cell in [row[note_col] for row in rows]:
-        assert cell.startswith("'"), (
-            f"formula-injection cell must be escaped with leading quote: {cell!r}"
-        )
-        assert cell[1:2] in ("=", "+", "-", "@"), (
-            f"escaped cell must retain dangerous prefix: {cell!r}"
-        )
-
-
+    note_column = headers.index("备注")
+    for cell in [row[note_column] for row in rows]:
+        assert cell.startswith("'")
+        assert cell[1:2] in ("=", "+", "-", "@")
 
 
 def test_api_export_success_returns_payload(temp_db, tmp_path):
-    _seed_closed_activity(day="2026-06-25")
+    _seed_closed_activity()
     out = tmp_path / "report.csv"
     result = export_api.export_statistics_csv("2026-06-25", "2026-06-25", out)
     assert result["activity_count"] == 1
@@ -505,39 +411,20 @@ def test_api_export_success_returns_payload(temp_db, tmp_path):
     assert out.exists()
 
 
-def test_api_export_invalid_date_raises(temp_db, tmp_path):
-    out = tmp_path / "report.csv"
+@pytest.mark.parametrize(
+    ("date_from", "date_to", "code"),
+    [
+        ("not-a-date", "2026-06-25", "invalid_date"),
+        ("2026-06-26", "2026-06-25", "invalid_range"),
+        ("2026-05-25", "2026-06-26", "range_too_large"),
+        (True, "2026-06-25", "invalid_date"),
+        (None, "2026-06-25", "invalid_date"),
+    ],
+)
+def test_api_export_rejects_invalid_inputs(temp_db, tmp_path, date_from, date_to, code):
     with pytest.raises(StatisticsExportError) as exc:
-        export_api.export_statistics_csv("not-a-date", "2026-06-25", out)
-    assert exc.value.code == "invalid_date"
-
-
-def test_api_export_invalid_range_raises(temp_db, tmp_path):
-    out = tmp_path / "report.csv"
-    with pytest.raises(StatisticsExportError) as exc:
-        export_api.export_statistics_csv("2026-06-26", "2026-06-25", out)
-    assert exc.value.code == "invalid_range"
-
-
-def test_api_export_range_too_large_raises(temp_db, tmp_path):
-    out = tmp_path / "report.csv"
-    with pytest.raises(StatisticsExportError) as exc:
-        export_api.export_statistics_csv("2026-05-25", "2026-06-26", out)
-    assert exc.value.code == "range_too_large"
-
-
-def test_api_export_bool_raises_invalid_date(temp_db, tmp_path):
-    out = tmp_path / "report.csv"
-    with pytest.raises(StatisticsExportError) as exc:
-        export_api.export_statistics_csv(True, "2026-06-25", out)
-    assert exc.value.code == "invalid_date"
-
-
-def test_api_export_none_raises_invalid_date(temp_db, tmp_path):
-    out = tmp_path / "report.csv"
-    with pytest.raises(StatisticsExportError) as exc:
-        export_api.export_statistics_csv(None, "2026-06-25", out)
-    assert exc.value.code == "invalid_date"
+        export_api.export_statistics_csv(date_from, date_to, tmp_path / "report.csv")
+    assert exc.value.code == code
 
 
 def test_api_export_empty_data_raises(temp_db, tmp_path):
@@ -548,133 +435,94 @@ def test_api_export_empty_data_raises(temp_db, tmp_path):
     assert not out.exists()
 
 
-def test_api_export_invalid_path_raises(temp_db, tmp_path):
-    _seed_closed_activity(day="2026-06-25")
+def test_api_export_invalid_paths_raise(temp_db, tmp_path):
+    _seed_closed_activity()
     directory = tmp_path / "subdir"
     directory.mkdir()
     with pytest.raises(StatisticsExportError) as exc:
         export_api.export_statistics_csv("2026-06-25", "2026-06-25", directory)
     assert exc.value.code == "invalid_path"
-
-
-def test_api_export_missing_parent_raises_invalid_path(temp_db, tmp_path):
-    _seed_closed_activity(day="2026-06-25")
-    out = tmp_path / "no_such_dir" / "report.csv"
     with pytest.raises(StatisticsExportError) as exc:
-        export_api.export_statistics_csv("2026-06-25", "2026-06-25", out)
+        export_api.export_statistics_csv(
+            "2026-06-25", "2026-06-25", tmp_path / "missing" / "report.csv"
+        )
     assert exc.value.code == "invalid_path"
 
 
-def test_api_export_permission_denied_maps_to_stable_code(temp_db, tmp_path):
-    _seed_closed_activity(day="2026-06-25")
-    out = tmp_path / "report.csv"
-    with patch(
-        "worktrace.services.export_service.open",
-        side_effect=PermissionError("denied"),
-    ):
+@pytest.mark.parametrize(
+    ("exception", "code"),
+    [(PermissionError("denied"), "permission_denied"), (OSError("busy"), "file_busy")],
+)
+def test_api_export_maps_file_errors(temp_db, tmp_path, exception, code):
+    _seed_closed_activity()
+    with patch("worktrace.services.export_service.open", side_effect=exception):
         with pytest.raises(StatisticsExportError) as exc:
             export_api.export_statistics_csv(
-                "2026-06-25", "2026-06-25", out,
+                "2026-06-25", "2026-06-25", tmp_path / "report.csv"
             )
-    assert exc.value.code == "permission_denied"
-
-
-def test_api_export_oserror_maps_to_file_busy(temp_db, tmp_path):
-    _seed_closed_activity(day="2026-06-25")
-    out = tmp_path / "report.csv"
-    with patch(
-        "worktrace.services.export_service.open",
-        side_effect=OSError("busy"),
-    ):
-        with pytest.raises(StatisticsExportError) as exc:
-            export_api.export_statistics_csv(
-                "2026-06-25", "2026-06-25", out,
-            )
-    assert exc.value.code == "file_busy"
+    assert exc.value.code == code
 
 
 def test_api_export_unknown_exception_maps_to_operation_failed(temp_db, tmp_path):
-    _seed_closed_activity(day="2026-06-25")
-    out = tmp_path / "report.csv"
+    _seed_closed_activity()
     with patch(
         "worktrace.services.export_service.write_statistics_csv",
         side_effect=RuntimeError("unexpected"),
     ):
         with pytest.raises(StatisticsExportError) as exc:
             export_api.export_statistics_csv(
-                "2026-06-25", "2026-06-25", out,
+                "2026-06-25", "2026-06-25", tmp_path / "report.csv"
             )
     assert exc.value.code == "operation_failed"
 
 
 def test_api_export_error_message_never_leaks_internals(temp_db, tmp_path):
-    """The StatisticsExportError message must never contain the raw
-    exception text, full path, SQL, traceback, or sensitive fields."""
-    _seed_closed_activity(
-        day="2026-06-25",
-        file_path_hint="C:\\Users\\secret\\A1.docx",
-        note="top secret note",
-    )
-    out = tmp_path / "report.csv"
+    _seed_closed_activity(file_path_hint="C:\\Users\\secret\\A1.docx")
     with patch(
         "worktrace.services.export_service.open",
         side_effect=PermissionError(
-            "Traceback (most recent call last): File C:\\secret\\A1.docx "
-            "SELECT * FROM activity_log"
+            "Traceback (most recent call last): File C:\\secret\\A1.docx SELECT * FROM activity_log"
         ),
     ):
-        try:
+        with pytest.raises(StatisticsExportError) as exc:
             export_api.export_statistics_csv(
-                "2026-06-25", "2026-06-25", out,
+                "2026-06-25", "2026-06-25", tmp_path / "report.csv"
             )
-            assert False, "expected StatisticsExportError"
-        except StatisticsExportError as exc:
-            text = str(exc)
-            lowered = text.lower()
-            for token in (
-                "traceback", "secret", "select", "c:\\", "a1.docx",
-                "window_title", "file_path_hint", "note",
-            ):
-                assert token.lower() not in lowered, (
-                    f"error message must not leak '{token}': {text!r}"
-                )
-
-
+    lowered = str(exc.value).lower()
+    for token in (
+        "traceback",
+        "secret",
+        "select",
+        "c:\\",
+        "a1.docx",
+        "window_title",
+        "file_path_hint",
+        "note",
+    ):
+        assert token.lower() not in lowered
 
 
 @pytest.fixture()
 def bridge(temp_db):
     settings_service.clear_settings_cache()
-    return WebViewBridge()
+    return build_test_bridge()
 
 
 def _stub_window(save_path: str | None):
-    """Return a fake pywebview window whose save dialog returns ``save_path``.
-
-    ``save_path=None`` simulates a user cancel.
-    """
     class _FakeWindow:
-        def __init__(self, save_path):
-            self._save_path = save_path
+        def __init__(self, value):
+            self._save_path = value
             self.dialog_calls = 0
 
         def create_file_dialog(self, *args, **kwargs):
             self.dialog_calls += 1
-            if self._save_path is None:
-                return None
-            return (self._save_path,)
+            return None if self._save_path is None else (self._save_path,)
 
     return _FakeWindow(save_path)
 
 
 def test_bridge_export_success_returns_basename_only(temp_db, tmp_path, bridge):
-    """Success returns only the basename; the full local path never leaves
-    the bridge."""
-    _seed_closed_activity(
-        day="2026-06-25",
-        file_path_hint="C:\\Users\\secret\\A1.docx",
-        note="top secret note",
-    )
+    _seed_closed_activity(file_path_hint="C:\\Users\\secret\\A1.docx")
     out = tmp_path / "deep" / "nested" / "report.csv"
     out.parent.mkdir(parents=True)
     bridge.set_window(_stub_window(str(out)))
@@ -684,125 +532,86 @@ def test_bridge_export_success_returns_basename_only(temp_db, tmp_path, bridge):
     assert result["filename"] == "report.csv"
     assert result["activity_count"] == 1
     assert result["duration"] == "00:30:00"
-    # The full local path must NOT appear in the returned payload.
-    payload_str = str(result)
-    assert str(out) not in payload_str
-    assert "deep" not in payload_str
-    assert "nested" not in payload_str
+    assert str(out) not in str(result)
+    assert "deep" not in str(result)
+    assert "nested" not in str(result)
     _assert_no_sensitive_keys(result)
 
 
 def test_bridge_export_cancel_does_not_call_api(temp_db, tmp_path, bridge):
-    """When the user cancels the save dialog, the bridge returns the clean
-    cancel payload and does NOT call the API write."""
-    _seed_closed_activity(day="2026-06-25")
-    # Use a dedicated output subdir so we can check no CSV was written
-    # without colliding with the temp_db fixture's worktrace.db file.
+    _seed_closed_activity()
     out_dir = tmp_path / "exports"
     out_dir.mkdir()
     bridge.set_window(_stub_window(None))
     with patch(
-        "worktrace.webview_ui.bridge_statistics.export_api.export_statistics_csv",
+        "worktrace.webview_ui.bridge_statistics.export_api.export_statistics_csv"
     ) as fake_write:
         result = bridge.export_statistics_csv("2026-06-25", "2026-06-25")
-    assert result["ok"] is False
-    assert result["cancelled"] is True
-    assert result["error"] == "已取消导出"
-    # The API write was NOT called.
+    assert result == {"ok": False, "cancelled": True, "error": "已取消导出"}
     assert fake_write.call_count == 0
-    # No CSV file was written to the output dir.
     assert list(out_dir.iterdir()) == []
 
 
-def test_bridge_export_invalid_date_returns_chinese(temp_db, tmp_path, bridge):
+@pytest.mark.parametrize(
+    ("date_from", "date_to", "message"),
+    [
+        ("not-a-date", "2026-06-25", "请选择有效日期"),
+        ("2026-06-26", "2026-06-25", "请选择有效日期范围"),
+        ("2026-05-25", "2026-06-26", "日期范围过大"),
+        (True, "2026-06-25", "请选择有效日期"),
+        (None, "2026-06-25", "请选择有效日期"),
+    ],
+)
+def test_bridge_export_invalid_inputs_return_chinese(
+    temp_db, tmp_path, bridge, date_from, date_to, message
+):
     bridge.set_window(_stub_window(str(tmp_path / "x.csv")))
-    result = bridge.export_statistics_csv("not-a-date", "2026-06-25")
+    result = bridge.export_statistics_csv(date_from, date_to)
     assert result["ok"] is False
     assert result["cancelled"] is False
-    assert result["error"] == "请选择有效日期"
-
-
-def test_bridge_export_invalid_range_returns_chinese(temp_db, tmp_path, bridge):
-    bridge.set_window(_stub_window(str(tmp_path / "x.csv")))
-    result = bridge.export_statistics_csv("2026-06-26", "2026-06-25")
-    assert result["ok"] is False
-    assert result["cancelled"] is False
-    assert result["error"] == "请选择有效日期范围"
-
-
-def test_bridge_export_range_too_large_returns_chinese(temp_db, tmp_path, bridge):
-    bridge.set_window(_stub_window(str(tmp_path / "x.csv")))
-    result = bridge.export_statistics_csv("2026-05-25", "2026-06-26")
-    assert result["ok"] is False
-    assert result["cancelled"] is False
-    assert result["error"] == "日期范围过大"
-
-
-def test_bridge_export_bool_returns_chinese(temp_db, tmp_path, bridge):
-    bridge.set_window(_stub_window(str(tmp_path / "x.csv")))
-    result = bridge.export_statistics_csv(True, "2026-06-25")
-    assert result["ok"] is False
-    assert result["error"] == "请选择有效日期"
-
-
-def test_bridge_export_none_returns_chinese(temp_db, tmp_path, bridge):
-    bridge.set_window(_stub_window(str(tmp_path / "x.csv")))
-    result = bridge.export_statistics_csv(None, "2026-06-25")
-    assert result["ok"] is False
-    assert result["error"] == "请选择有效日期"
+    assert result["error"] == message
 
 
 def test_bridge_export_empty_data_returns_chinese(temp_db, tmp_path, bridge):
-    bridge.set_window(_stub_window(str(tmp_path / "x.csv")))
+    out = tmp_path / "x.csv"
+    bridge.set_window(_stub_window(str(out)))
     result = bridge.export_statistics_csv("2026-06-25", "2026-06-25")
     assert result["ok"] is False
     assert result["cancelled"] is False
     assert result["error"] == "当前范围没有可导出的记录"
-    # No file was created.
-    assert not (tmp_path / "x.csv").exists()
+    assert not out.exists()
 
 
-def test_bridge_export_permission_denied_returns_chinese(temp_db, tmp_path, bridge):
-    _seed_closed_activity(day="2026-06-25")
-    out = tmp_path / "report.csv"
-    bridge.set_window(_stub_window(str(out)))
-    with patch(
-        "worktrace.services.export_service.open",
-        side_effect=PermissionError("denied"),
-    ):
+@pytest.mark.parametrize(
+    ("exception", "message"),
+    [
+        (PermissionError("denied"), "无法写入文件，请检查权限或文件是否被占用"),
+        (OSError("busy"), "无法写入文件，请检查权限或文件是否被占用"),
+    ],
+)
+def test_bridge_export_file_errors_return_chinese(
+    temp_db, tmp_path, bridge, exception, message
+):
+    _seed_closed_activity()
+    bridge.set_window(_stub_window(str(tmp_path / "report.csv")))
+    with patch("worktrace.services.export_service.open", side_effect=exception):
         result = bridge.export_statistics_csv("2026-06-25", "2026-06-25")
     assert result["ok"] is False
     assert result["cancelled"] is False
-    assert result["error"] == "无法写入文件，请检查权限或文件是否被占用"
-
-
-def test_bridge_export_file_busy_returns_chinese(temp_db, tmp_path, bridge):
-    _seed_closed_activity(day="2026-06-25")
-    out = tmp_path / "report.csv"
-    bridge.set_window(_stub_window(str(out)))
-    with patch(
-        "worktrace.services.export_service.open",
-        side_effect=OSError("busy"),
-    ):
-        result = bridge.export_statistics_csv("2026-06-25", "2026-06-25")
-    assert result["ok"] is False
-    assert result["error"] == "无法写入文件，请检查权限或文件是否被占用"
+    assert result["error"] == message
 
 
 def test_bridge_export_invalid_path_returns_chinese(temp_db, tmp_path, bridge):
-    _seed_closed_activity(day="2026-06-25")
-    # Point the save dialog at a non-existent parent directory.
-    bad = tmp_path / "no_such_dir" / "report.csv"
-    bridge.set_window(_stub_window(str(bad)))
+    _seed_closed_activity()
+    bridge.set_window(_stub_window(str(tmp_path / "missing" / "report.csv")))
     result = bridge.export_statistics_csv("2026-06-25", "2026-06-25")
     assert result["ok"] is False
     assert result["error"] == "请选择有效保存位置"
 
 
 def test_bridge_export_unknown_exception_collapses_to_chinese(temp_db, tmp_path, bridge):
-    _seed_closed_activity(day="2026-06-25")
-    out = tmp_path / "report.csv"
-    bridge.set_window(_stub_window(str(out)))
+    _seed_closed_activity()
+    bridge.set_window(_stub_window(str(tmp_path / "report.csv")))
     with patch(
         "worktrace.services.export_service.write_statistics_csv",
         side_effect=RuntimeError("Traceback SELECT FROM C:\\secret"),
@@ -810,56 +619,44 @@ def test_bridge_export_unknown_exception_collapses_to_chinese(temp_db, tmp_path,
         result = bridge.export_statistics_csv("2026-06-25", "2026-06-25")
     assert result["ok"] is False
     assert result["error"] == "导出失败"
-    # The raw exception text must NOT leak through the payload.
-    payload_str = str(result)
-    lowered = payload_str.lower()
+    lowered = str(result).lower()
     for token in (
-        "traceback", "select", "secret", "c:\\", "runtimeerror",
-        "window_title", "file_path_hint", "note",
+        "traceback",
+        "select",
+        "secret",
+        "c:\\",
+        "runtimeerror",
+        "window_title",
+        "file_path_hint",
+        "note",
     ):
-        assert token.lower() not in lowered, (
-            f"payload must not leak '{token}': {payload_str!r}"
-        )
+        assert token.lower() not in lowered
 
 
 def test_bridge_export_no_window_returns_operation_failed(temp_db, bridge):
-    """Without ``set_window``, the save dialog cannot open and the bridge
-    collapses to the generic export failure."""
-    _seed_closed_activity(day="2026-06-25")
-    # No set_window call: self._window stays None.
+    _seed_closed_activity()
     result = bridge.export_statistics_csv("2026-06-25", "2026-06-25")
     assert result["ok"] is False
     assert result["error"] == "导出失败"
 
 
 def test_bridge_export_payload_never_contains_full_path(temp_db, tmp_path, bridge):
-    """The full local path must never appear in the success payload even
-    if the user picks a deeply nested location."""
-    _seed_closed_activity(day="2026-06-25")
+    _seed_closed_activity()
     nested = tmp_path / "very" / "deep" / "nested" / "report.csv"
     nested.parent.mkdir(parents=True)
     bridge.set_window(_stub_window(str(nested)))
     result = bridge.export_statistics_csv("2026-06-25", "2026-06-25")
     assert result["ok"] is True
-    payload_str = str(result)
-    assert str(nested) not in payload_str
-    assert "very" not in payload_str
-    assert "nested" not in payload_str
+    assert str(nested) not in str(result)
+    assert "very" not in str(result)
+    assert "nested" not in str(result)
 
 
 def test_bridge_export_does_not_import_backend_internals():
-    """The WebView bridge modules must import only ``worktrace.api`` (plus
-    formatters and the lazily-resolved pywebview UI dependency). They must
-    NOT import services / db / collector / runtime / config / security.
-
-    ``bridge.py`` is now a thin composition class; the method
-    bodies live in the mixin files (``bridge_common.py``,
-    ``bridge_dialogs.py``, ``bridge_overview.py``, ``bridge_settings.py``,
-    ``bridge_statistics.py``, ``bridge_timeline.py``, ``bridge_rules.py``).
-    All 8 bridge files must satisfy the boundary."""
     import worktrace
+
     bridge_dir = Path(worktrace.__file__).parent / "webview_ui"
-    bridge_files = [
+    for name in (
         "bridge.py",
         "bridge_common.py",
         "bridge_dialogs.py",
@@ -868,11 +665,8 @@ def test_bridge_export_does_not_import_backend_internals():
         "bridge_statistics.py",
         "bridge_timeline.py",
         "bridge_rules.py",
-    ]
-    for name in bridge_files:
-        bridge_path = bridge_dir / name
-        assert bridge_path.is_file(), f"missing bridge file: {name}"
-        source = bridge_path.read_text(encoding="utf-8")
+    ):
+        source = (bridge_dir / name).read_text(encoding="utf-8")
         for forbidden in (
             "from ..services",
             "from worktrace.services",
@@ -893,40 +687,27 @@ def test_bridge_export_does_not_import_backend_internals():
             "import worktrace.runtime",
             "import worktrace.config",
         ):
-            assert forbidden not in source, (
-                f"{name} must not import backend internals: {forbidden}"
-            )
+            assert forbidden not in source
 
 
 def test_bridge_get_statistics_export_summary_remains_read_only(temp_db, tmp_path, bridge):
-    """The existing read-only summary method must NOT open a save dialog
-    or write a file, even with a window injected."""
-    _seed_closed_activity(day="2026-06-25")
+    _seed_closed_activity()
     window = _stub_window(str(tmp_path / "should_not_be_used.csv"))
     bridge.set_window(window)
     result = bridge.get_statistics_export_summary("2026-06-25", "2026-06-25")
     assert result["ok"] is True
-    # The save dialog was never opened by the read-only path.
     assert window.dialog_calls == 0
-    # No file was written.
     assert not (tmp_path / "should_not_be_used.csv").exists()
 
 
-def test_bridge_set_window_does_not_start_gui():
-    """Importing the bridge and constructing it must not start the GUI."""
-    bridge = WebViewBridge()
+def test_bridge_set_window_does_not_start_gui(temp_db):
+    bridge = build_test_bridge()
     assert bridge._window is None
-    # set_window itself must not start the GUI either; it just stores the
-    # reference pywebview already created.
     bridge.set_window(object())
     assert bridge._window is not None
 
 
-
-
 def test_bridge_export_error_messages_are_stable_chinese():
-    """All error codes map to stable Chinese messages; unknown codes
-    collapse to '导出失败'."""
     from worktrace.webview_ui.bridge_statistics import _STATISTICS_EXPORT_ERROR_MESSAGES
 
     expected = {
@@ -941,25 +722,10 @@ def test_bridge_export_error_messages_are_stable_chinese():
         "operation_failed": "导出失败",
     }
     for code, message in expected.items():
-        assert _STATISTICS_EXPORT_ERROR_MESSAGES.get(code) == message, (
-            f"error code '{code}' must map to '{message}'"
-        )
-
-
-# Precision tests for pywebview save-dialog return-shape variants and the
-# dialog-constant / dialog-exception collapse paths. The bridge must handle
-# every ``create_file_dialog`` return shape and map every dialog failure to
-# the stable ``导出失败`` message without leaking raw exceptions.
+        assert _STATISTICS_EXPORT_ERROR_MESSAGES.get(code) == message
 
 
 class _FakeDialogWindow:
-    """Fake pywebview window with a configurable ``create_file_dialog``.
-
-    ``return_value`` is what the dialog returns; ``raise_exc`` (if set) is
-    raised instead. ``dialog_calls`` counts invocations so tests can assert
-    the dialog was opened exactly once.
-    """
-
     def __init__(self, return_value=None, raise_exc=None):
         self._return_value = return_value
         self._raise_exc = raise_exc
@@ -973,9 +739,7 @@ class _FakeDialogWindow:
 
 
 def test_bridge_export_dialog_returns_single_string(temp_db, tmp_path, bridge):
-    """when ``create_file_dialog`` returns a bare string (not
-    wrapped in a tuple/list), the bridge must accept it as a valid path."""
-    _seed_closed_activity(day="2026-06-25")
+    _seed_closed_activity()
     out = tmp_path / "report.csv"
     bridge.set_window(_FakeDialogWindow(return_value=str(out)))
     result = bridge.export_statistics_csv("2026-06-25", "2026-06-25")
@@ -985,44 +749,25 @@ def test_bridge_export_dialog_returns_single_string(temp_db, tmp_path, bridge):
     assert out.exists()
 
 
-def test_bridge_export_dialog_returns_empty_tuple(temp_db, tmp_path, bridge):
-    """an empty tuple from the dialog is treated as a cancel
-    (not as a failure and not as a write attempt)."""
-    _seed_closed_activity(day="2026-06-25")
+@pytest.mark.parametrize("return_value", [(), []])
+def test_bridge_export_dialog_empty_sequence_is_cancelled(
+    temp_db, tmp_path, bridge, return_value
+):
+    _seed_closed_activity()
     out_dir = tmp_path / "exports"
     out_dir.mkdir()
-    bridge.set_window(_FakeDialogWindow(return_value=()))
+    bridge.set_window(_FakeDialogWindow(return_value=return_value))
     with patch(
-        "worktrace.webview_ui.bridge_statistics.export_api.export_statistics_csv",
+        "worktrace.webview_ui.bridge_statistics.export_api.export_statistics_csv"
     ) as fake_write:
         result = bridge.export_statistics_csv("2026-06-25", "2026-06-25")
-    assert result["ok"] is False
-    assert result["cancelled"] is True
-    assert result["error"] == "已取消导出"
-    assert fake_write.call_count == 0
-    assert list(out_dir.iterdir()) == []
-
-
-def test_bridge_export_dialog_returns_empty_list(temp_db, tmp_path, bridge):
-    """an empty list from the dialog is treated as a cancel."""
-    _seed_closed_activity(day="2026-06-25")
-    out_dir = tmp_path / "exports"
-    out_dir.mkdir()
-    bridge.set_window(_FakeDialogWindow(return_value=[]))
-    with patch(
-        "worktrace.webview_ui.bridge_statistics.export_api.export_statistics_csv",
-    ) as fake_write:
-        result = bridge.export_statistics_csv("2026-06-25", "2026-06-25")
-    assert result["ok"] is False
-    assert result["cancelled"] is True
-    assert result["error"] == "已取消导出"
+    assert result == {"ok": False, "cancelled": True, "error": "已取消导出"}
     assert fake_write.call_count == 0
     assert list(out_dir.iterdir()) == []
 
 
 def test_bridge_export_dialog_returns_list_with_path(temp_db, tmp_path, bridge):
-    """a list (not just a tuple) containing a path is accepted."""
-    _seed_closed_activity(day="2026-06-25")
+    _seed_closed_activity()
     out = tmp_path / "report.csv"
     bridge.set_window(_FakeDialogWindow(return_value=[str(out)]))
     result = bridge.export_statistics_csv("2026-06-25", "2026-06-25")
@@ -1031,56 +776,45 @@ def test_bridge_export_dialog_returns_list_with_path(temp_db, tmp_path, bridge):
     assert out.exists()
 
 
-def test_bridge_export_dialog_raises_exception(temp_db, tmp_path, bridge):
-    """when ``create_file_dialog`` raises, the bridge collapses
-    to ``导出失败`` and never leaks the raw exception text."""
-    _seed_closed_activity(day="2026-06-25")
+def test_bridge_export_dialog_raises_exception(temp_db, bridge):
+    _seed_closed_activity()
     bridge.set_window(
         _FakeDialogWindow(raise_exc=RuntimeError("Traceback SELECT C:\\secret"))
     )
     result = bridge.export_statistics_csv("2026-06-25", "2026-06-25")
     assert result["ok"] is False
     assert result["error"] == "导出失败"
-    payload_str = str(result)
+    lowered = str(result).lower()
     for token in ("traceback", "select", "secret", "c:\\", "runtimeerror"):
-        assert token.lower() not in payload_str.lower(), (
-            f"dialog-exception payload must not leak '{token}': {payload_str!r}"
-        )
+        assert token not in lowered
 
 
 def test_bridge_export_dialog_missing_file_dialog_constant(
     temp_db, tmp_path, bridge, monkeypatch
 ):
-    """when the installed pywebview exposes neither
-    ``FileDialog.SAVE`` nor the deprecated ``SAVE_DIALOG``, the bridge
-    collapses to ``导出失败`` and never opens the dialog."""
-    _seed_closed_activity(day="2026-06-25")
+    _seed_closed_activity()
     window = _FakeDialogWindow(return_value=str(tmp_path / "x.csv"))
     bridge.set_window(window)
 
     class _BareWebview:
-        """A pywebview shim without FileDialog or SAVE_DIALOG."""
+        pass
 
     monkeypatch.setitem(sys.modules, "webview", _BareWebview())
     result = bridge.export_statistics_csv("2026-06-25", "2026-06-25")
     assert result["ok"] is False
     assert result["error"] == "导出失败"
-    # The dialog must NOT have been opened because the constant was missing.
     assert window.dialog_calls == 0
 
 
 def test_bridge_export_dialog_file_dialog_without_save_constant(
     temp_db, tmp_path, bridge, monkeypatch
 ):
-    """when ``webview.FileDialog`` exists but has no ``SAVE``
-    attribute (and no ``SAVE_DIALOG`` fallback), the bridge collapses to
-    ``导出失败``."""
-    _seed_closed_activity(day="2026-06-25")
+    _seed_closed_activity()
     window = _FakeDialogWindow(return_value=str(tmp_path / "x.csv"))
     bridge.set_window(window)
 
     class _FileDialogNoSave:
-        """FileDialog shim that is missing the SAVE constant."""
+        pass
 
     class _WebviewNoSave:
         FileDialog = _FileDialogNoSave
@@ -1095,16 +829,13 @@ def test_bridge_export_dialog_file_dialog_without_save_constant(
 def test_bridge_export_dialog_uses_deprecated_save_dialog_fallback(
     temp_db, tmp_path, bridge, monkeypatch
 ):
-    """when ``FileDialog`` is absent but the deprecated
-    ``SAVE_DIALOG`` constant exists, the bridge must use it and the export
-    must succeed. This locks the documented fallback behavior."""
-    _seed_closed_activity(day="2026-06-25")
+    _seed_closed_activity()
     out = tmp_path / "report.csv"
     window = _FakeDialogWindow(return_value=str(out))
     bridge.set_window(window)
 
     class _LegacyWebview:
-        SAVE_DIALOG = 10  # deprecated constant
+        SAVE_DIALOG = 10
 
     monkeypatch.setitem(sys.modules, "webview", _LegacyWebview())
     result = bridge.export_statistics_csv("2026-06-25", "2026-06-25")
@@ -1114,45 +845,18 @@ def test_bridge_export_dialog_uses_deprecated_save_dialog_fallback(
     assert out.exists()
 
 
-
-
-def test_write_csv_preserves_uppercase_csv_extension(temp_db, tmp_path):
-    """an uppercase ``.CSV`` suffix must be preserved (not
-    double-suffixed to ``.CSV.csv``). ``with_suffix`` is only applied when
-    the lowercased suffix is not ``.csv``."""
-    _seed_closed_activity(day="2026-06-25")
-    out = tmp_path / "report.CSV"
+@pytest.mark.parametrize("suffix", [".CSV", ".Csv", ".csv"])
+def test_write_csv_preserves_csv_extension_case(temp_db, tmp_path, suffix):
+    _seed_closed_activity()
+    out = tmp_path / f"report{suffix}"
     result = export_service.write_statistics_csv("2026-06-25", "2026-06-25", out)
-    assert result["filename"] == "report.CSV"
-    written = tmp_path / "report.CSV"
-    assert written.exists()
-    # No double-suffixed file should be created.
-    assert not (tmp_path / "report.CSV.csv").exists()
-
-
-def test_write_csv_preserves_mixed_case_csv_extension(temp_db, tmp_path):
-    """a mixed-case ``.Csv`` suffix must also be preserved."""
-    _seed_closed_activity(day="2026-06-25")
-    out = tmp_path / "report.Csv"
-    result = export_service.write_statistics_csv("2026-06-25", "2026-06-25", out)
-    assert result["filename"] == "report.Csv"
-    assert (tmp_path / "report.Csv").exists()
-
-
-def test_write_csv_preserves_lowercase_csv_extension(temp_db, tmp_path):
-    """an existing lowercase ``.csv`` suffix is unchanged
-    (regression lock for the suffix normalization branch)."""
-    _seed_closed_activity(day="2026-06-25")
-    out = tmp_path / "report.csv"
-    result = export_service.write_statistics_csv("2026-06-25", "2026-06-25", out)
-    assert result["filename"] == "report.csv"
+    assert result["filename"] == f"report{suffix}"
     assert out.exists()
+    assert not (tmp_path / f"report{suffix}.csv").exists()
 
 
 def test_api_export_uppercase_csv_extension(temp_db, tmp_path):
-    """the API layer must preserve an uppercase ``.CSV`` suffix
-    and return it as the basename (no double-suffixing)."""
-    _seed_closed_activity(day="2026-06-25")
+    _seed_closed_activity()
     out = tmp_path / "report.CSV"
     result = export_api.export_statistics_csv("2026-06-25", "2026-06-25", out)
     assert result["filename"] == "report.CSV"
@@ -1160,17 +864,11 @@ def test_api_export_uppercase_csv_extension(temp_db, tmp_path):
 
 
 def test_write_csv_chinese_and_space_path(temp_db, tmp_path):
-    """a path containing Chinese characters and spaces must be
-    written successfully. This locks the Windows Chinese-path / space-path
-    write behavior without requiring a real Windows filesystem."""
-    _seed_closed_activity(day="2026-06-25")
+    _seed_closed_activity()
     nested = tmp_path / "导出 目录" / "报表 文件.csv"
     nested.parent.mkdir(parents=True)
-    result = export_service.write_statistics_csv(
-        "2026-06-25", "2026-06-25", nested,
-    )
+    result = export_service.write_statistics_csv("2026-06-25", "2026-06-25", nested)
     assert result["filename"] == "报表 文件.csv"
     assert nested.exists()
-    # The file content must be readable with the UTF-8 BOM.
-    headers, rows = _read_csv(nested)
+    _, rows = _read_csv(nested)
     assert len(rows) == 1
