@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import ctypes
 import logging
+import threading
 from ctypes import wintypes
 
+from ..worker_health import WorkerHealthReporter
 from .base import ActiveWindow, ClipboardTextEvent
 from .windows_clipboard import ClipboardMonitor
 from .windows_path_resolver import WindowsPathResolver, resolve_title_file_path
@@ -88,9 +90,16 @@ class WindowsAdapter:
     def get_clipboard_events(self) -> list[ClipboardTextEvent]:
         return self._clipboard.drain()
 
+    def run_clipboard_capture(
+        self,
+        stop_event: threading.Event,
+        *,
+        health: WorkerHealthReporter,
+    ) -> None:
+        self._clipboard.run(stop_event, health=health)
+
     def reset_runtime_state(self) -> None:
-        self._clipboard.set_enabled(False)
-        self._clipboard.clear()
+        self._clipboard.reset()
         self._path_resolver.reset()
 
     def shutdown(self) -> None:
