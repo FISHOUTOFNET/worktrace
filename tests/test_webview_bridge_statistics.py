@@ -22,14 +22,14 @@ from unittest.mock import patch
 
 import pytest
 
+from tests.support import activity_factory as activity_service
+from tests.support.application import build_test_bridge
 from worktrace.api import statistics_api
 from worktrace.api.statistics_api import StatisticsSummaryError
-from tests.support import activity_factory as activity_service
 from worktrace.services import (
     project_service,
     settings_service,
 )
-from worktrace.webview_ui.bridge import WebViewBridge
 
 pytestmark = [pytest.mark.db, pytest.mark.integration, pytest.mark.contract]
 
@@ -37,7 +37,7 @@ pytestmark = [pytest.mark.db, pytest.mark.integration, pytest.mark.contract]
 @pytest.fixture()
 def bridge(temp_db):
     settings_service.clear_settings_cache()
-    return WebViewBridge()
+    return build_test_bridge()
 
 
 SENSITIVE_KEYS = (
@@ -92,8 +92,6 @@ def _seed_closed_activity(
     return aid
 
 
-
-
 def test_bridge_statistics_summary_success(bridge):
     pid = project_service.create_project("Client")
     _seed_closed_activity(day="2026-06-25", project_id=pid, app="Word")
@@ -111,9 +109,7 @@ def test_bridge_statistics_summary_success(bridge):
     assert summary["activity_count"] == 2
     assert summary["project_count"] == 1
     assert summary["app_count"] == 2
-    # Pre-formatted duration strings are present (no second bridge round-trip).
     assert summary["total_duration"] == "00:45:00"
-    # by_project / by_app / by_status each have pre-formatted duration.
     for group in summary["by_project"]:
         assert "duration" in group
         assert "duration_seconds" in group
@@ -122,8 +118,6 @@ def test_bridge_statistics_summary_success(bridge):
         assert "duration" in group
     for group in summary["by_status"]:
         assert "duration" in group
-    # export_preview: the CSV write action is open. timesheet is no
-    # longer advertised as an available format.
     preview = summary["export_preview"]
     assert preview["export_actions_enabled"] is True
     assert preview["available_formats"] == ["csv"]
@@ -142,8 +136,6 @@ def test_bridge_statistics_summary_empty_range(bridge):
     assert summary["by_app"] == []
     assert summary["by_status"] == []
     _assert_no_sensitive_keys(result)
-
-
 
 
 def test_bridge_statistics_summary_invalid_date_shape(bridge):
@@ -175,8 +167,6 @@ def test_bridge_statistics_summary_non_string_input(bridge):
     _assert_no_sensitive_keys(result2)
 
 
-
-
 def test_bridge_statistics_summary_invalid_range(bridge):
     result = bridge.get_statistics_export_summary("2026-06-26", "2026-06-25")
     assert result["ok"] is False
@@ -199,7 +189,6 @@ def test_bridge_statistics_summary_range_too_large(bridge):
 
 
 def test_bridge_statistics_summary_invalid_date_from_api(bridge):
-    """An ``invalid_date`` StatisticsSummaryError maps to 请选择有效日期."""
     with patch.object(
         statistics_api,
         "get_statistics_export_summary",
@@ -252,7 +241,6 @@ def test_bridge_statistics_summary_operation_failed_from_api(bridge):
 
 
 def test_bridge_statistics_summary_unknown_error_code_collapses(bridge):
-    """An unknown StatisticsSummaryError code collapses to 加载统计失败."""
     with patch.object(
         statistics_api,
         "get_statistics_export_summary",
@@ -266,8 +254,6 @@ def test_bridge_statistics_summary_unknown_error_code_collapses(bridge):
 
 
 def test_bridge_statistics_summary_unexpected_exception_collapses(bridge):
-    """An unexpected non-API exception collapses to 加载统计失败 without
-    echoing the traceback."""
     with patch.object(
         statistics_api,
         "get_statistics_export_summary",
@@ -285,11 +271,7 @@ def test_bridge_statistics_summary_unexpected_exception_collapses(bridge):
     _assert_no_sensitive_keys(result)
 
 
-
-
 def test_bridge_statistics_summary_no_raw_fields(bridge):
-    """A successful summary must not surface raw window_title /
-    file_path_hint / full_path / clipboard / note / traceback / sql."""
     _seed_closed_activity(
         app="Word", resource="SecretReport.docx", start="09:00:00", end="09:30:00",
         day="2026-06-25", note="top secret note",
@@ -304,74 +286,43 @@ def test_bridge_statistics_summary_no_raw_fields(bridge):
     assert "clipboard" not in payload_str.lower()
     assert "traceback" not in payload_str.lower()
     assert "sql" not in payload_str.lower()
-    # The secret note content must never appear.
     assert "top secret note" not in payload_str.lower()
-    # The raw file path must never appear.
-    assert "c:\\\\users\\\\secret" not in payload_str.lower()
+    assert "c:\\users\\secret" not in payload_str.lower()
     assert "secretreport.docx" not in payload_str.lower()
     _assert_no_sensitive_keys(result)
 
 
 def test_bridge_statistics_summary_display_safe_keys_only(bridge):
-    """The summary payload must only contain display-safe keys."""
     pid = project_service.create_project("Client")
     _seed_closed_activity(day="2026-06-25", project_id=pid)
     result = bridge.get_statistics_export_summary("2026-06-25", "2026-06-25")
     assert result["ok"] is True
     summary = result["summary"]
     allowed_top_keys = {
-        "date_from",
-        "date_to",
-        "total_duration_seconds",
-        "total_duration",
-        "project_duration_seconds",
-        "project_duration",
-        "activity_count",
-        "session_count",
-        "export_row_count",
-        "snapshot_revision",
-        "project_count",
-        "app_count",
-        "by_project",
-        "by_app",
-        "by_status",
+        "date_from", "date_to", "total_duration_seconds", "total_duration",
+        "project_duration_seconds", "project_duration", "activity_count",
+        "session_count", "export_row_count", "snapshot_revision",
+        "project_count", "app_count", "by_project", "by_app", "by_status",
         "export_preview",
     }
-    assert set(summary.keys()) <= allowed_top_keys, (
-        f"unexpected top-level keys: {set(summary.keys()) - allowed_top_keys}"
-    )
+    assert set(summary.keys()) <= allowed_top_keys
     allowed_group_keys = {
-        "key",
-        "display_name",
-        "duration_seconds",
-        "duration",
-        "activity_count",
-        "percentage",
+        "key", "display_name", "duration_seconds", "duration",
+        "activity_count", "percentage",
     }
     for group in summary["by_project"] + summary["by_app"] + summary["by_status"]:
-        assert set(group.keys()) <= allowed_group_keys, (
-            f"unexpected group keys: {set(group.keys()) - allowed_group_keys}"
-        )
+        assert set(group.keys()) <= allowed_group_keys
     allowed_preview_keys = {
-        "date_from",
-        "date_to",
-        "included_activity_count",
-        "included_duration_seconds",
-        "included_duration",
-        "available_formats",
-        "export_actions_enabled",
-        "snapshot_revision",
-        "export_row_count",
+        "date_from", "date_to", "included_activity_count",
+        "included_duration_seconds", "included_duration", "available_formats",
+        "export_actions_enabled", "snapshot_revision", "export_row_count",
         "session_count",
     }
     assert set(summary["export_preview"].keys()) <= allowed_preview_keys
     _assert_no_sensitive_keys(result)
 
 
-
-
 def test_bridge_statistics_summary_does_not_write_db(bridge, temp_db):
-    """The bridge method must not INSERT / UPDATE / DELETE any row."""
     from worktrace.db import get_connection
 
     pid = project_service.create_project("Client")
@@ -388,55 +339,28 @@ def test_bridge_statistics_summary_does_not_write_db(bridge, temp_db):
 
 
 def test_bridge_statistics_summary_does_not_call_export_write(bridge):
-    """The bridge method must not call any export write / file save function.
-    We verify by ensuring no module-level write helper is invoked."""
-    # The bridge module must not even reference save / write / export action
-    # helpers. We check the source for forbidden method names.
     bridge_path = Path(__file__).resolve().parents[1] / "worktrace" / "webview_ui" / "bridge.py"
     source = bridge_path.read_text(encoding="utf-8")
-    # ``get_statistics_export_summary`` must be the only statistics method.
     assert "get_statistics_export_summary" in source
-    # No export write / save dialog / file creation helpers.
     forbidden = [
-        "save_dialog",
-        "saveas_dialog",
-        "save_file_dialog",
-        "export_csv",
-        "export_excel",
-        "export_pdf",
-        "export_timesheet",
-        "write_file",
-        "open_folder",
-        "asksaveasfilename",
+        "save_dialog", "saveas_dialog", "save_file_dialog", "export_csv",
+        "export_excel", "export_pdf", "export_timesheet", "write_file",
+        "open_folder", "asksaveasfilename",
     ]
     for name in forbidden:
-        assert name not in source, (
-            f"bridge.py must not reference export write helper '{name}'"
-        )
-
-
+        assert name not in source
 
 
 def test_bridge_does_not_import_backend_internals():
-    """The bridge module must not import services, db, collector, runtime,
-    security, or config directly. It may only import from worktrace.api."""
     bridge_path = Path(__file__).resolve().parents[1] / "worktrace" / "webview_ui" / "bridge.py"
     source = bridge_path.read_text(encoding="utf-8")
     forbidden_patterns = [
-        r"from\s+worktrace\.services\b",
-        r"import\s+worktrace\.services\b",
-        r"from\s+worktrace\.db\b",
-        r"import\s+worktrace\.db\b",
-        r"from\s+worktrace\.collector\b",
-        r"import\s+worktrace\.collector\b",
-        r"from\s+worktrace\.runtime\b",
-        r"import\s+worktrace\.runtime\b",
-        r"from\s+worktrace\.security\b",
-        r"import\s+worktrace\.security\b",
-        r"from\s+worktrace\.config\b",
-        r"import\s+worktrace\.config\b",
+        r"from\s+worktrace\.services\b", r"import\s+worktrace\.services\b",
+        r"from\s+worktrace\.db\b", r"import\s+worktrace\.db\b",
+        r"from\s+worktrace\.collector\b", r"import\s+worktrace\.collector\b",
+        r"from\s+worktrace\.runtime\b", r"import\s+worktrace\.runtime\b",
+        r"from\s+worktrace\.security\b", r"import\s+worktrace\.security\b",
+        r"from\s+worktrace\.config\b", r"import\s+worktrace\.config\b",
     ]
     for pattern in forbidden_patterns:
-        assert not re.search(pattern, source), (
-            f"bridge.py must not import backend internals: matched {pattern}"
-        )
+        assert not re.search(pattern, source)
