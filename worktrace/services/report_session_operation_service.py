@@ -414,6 +414,7 @@ def _operation_input(
 ) -> tuple[dict[str, Any], dict[str, list[dict]], int | None]:
     payload: dict[str, Any] = {
         "payload_version": OPERATION_PAYLOAD_VERSION,
+        "replay_binding": ReplayBinding.MEMBERS.value,
     }
     roles = {"source": _members(source)}
     undo_of: int | None = None
@@ -533,7 +534,6 @@ def _candidate_operation(**values: Any) -> dict[str, Any]:
         "target_expected_revision": values.get("target_expected_revision"),
         "direction": values.get("direction"),
         "undo_of_operation_id": values.get("undo_of_operation_id"),
-        "replay_binding": ReplayBinding.MEMBERS.value,
         "payload": dict(values["payload"]),
         "members": {
             str(role): [dict(member) for member in members]
@@ -544,8 +544,6 @@ def _candidate_operation(**values: Any) -> dict[str, Any]:
 
 
 def _insert_operation(conn, operation: Mapping[str, Any]) -> None:
-    payload = dict(operation["payload"])
-    payload["replay_binding"] = str(operation["replay_binding"])
     conn.execute(
         """
         INSERT INTO report_session_operation(
@@ -566,7 +564,11 @@ def _insert_operation(conn, operation: Mapping[str, Any]) -> None:
             operation.get("target_expected_revision"),
             operation.get("direction"),
             operation.get("undo_of_operation_id"),
-            json.dumps(payload, ensure_ascii=False, sort_keys=True),
+            json.dumps(
+                dict(operation["payload"]),
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
             operation["created_at"],
         ),
     )
