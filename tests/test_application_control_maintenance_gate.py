@@ -6,6 +6,7 @@ from worktrace.api import settings_api
 from worktrace.api.app_api import ApplicationControlService
 from worktrace.runtime.contracts import RuntimeStartResult
 from worktrace.services import privacy_gate_service
+from worktrace.write_gate import DATABASE_RECOVERY_ERROR
 
 pytestmark = [
     pytest.mark.unit,
@@ -85,7 +86,7 @@ def test_fail_closed_latch_blocks_resume_before_runtime_start(monkeypatch):
 
     assert result == {
         "ok": False,
-        "error": "maintenance_recovery_required",
+        "error": DATABASE_RECOVERY_ERROR,
         "message": "维护状态尚未恢复，暂不能开始记录",
     }
     assert runtime.start_calls == 0
@@ -98,7 +99,7 @@ def test_unreadable_maintenance_state_fails_closed(monkeypatch):
 
     result = control.start_collection_after_privacy_gate()
 
-    assert result["error"] == "maintenance_recovery_required"
+    assert result["error"] == DATABASE_RECOVERY_ERROR
     assert runtime.start_calls == 0
 
 
@@ -163,6 +164,6 @@ def test_toggle_does_not_clear_user_pause_while_fail_closed(monkeypatch):
 
     result = control.toggle_collection()
 
-    assert result["error"] == "maintenance_recovery_required"
+    assert result["error"] == DATABASE_RECOVERY_ERROR
     assert runtime.start_calls == 0
     assert cleared == []
