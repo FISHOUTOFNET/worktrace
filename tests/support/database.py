@@ -3,7 +3,6 @@ from __future__ import annotations
 import sqlite3
 
 from worktrace import db
-from worktrace.report_generation_classifier import report_structure_classifier_scope
 
 
 def drop_all_tables(conn: sqlite3.Connection) -> None:
@@ -41,7 +40,6 @@ def reset_database() -> None:
 
     with db.get_connection() as conn:
         db.ensure_wal(conn)
-        with report_structure_classifier_scope():
-            drop_all_tables(conn)
-            db.apply_current_schema(conn)
-            db.seed_defaults(conn)
+        drop_all_tables(conn)
+        db.apply_current_schema(conn)
+        db.seed_defaults(conn)
