@@ -31,6 +31,16 @@ class SettingsBridgeMixin:
             logger.exception("webview bridge get_settings_privacy_status failed")
             return {"ok": False, "error": "加载设置状态失败"}
 
+    def recover_database_maintenance(self) -> dict[str, Any]:
+        try:
+            return settings_api.recover_database_maintenance_for_webview()
+        except Exception:
+            logger.exception("webview bridge recover_database_maintenance failed")
+            return {
+                "ok": False,
+                "error": "database_maintenance_recovery_required",
+            }
+
     def set_clipboard_capture_enabled(self, enabled) -> dict[str, Any]:
         try:
             return self._app_control.set_clipboard_capture_policy(enabled)
