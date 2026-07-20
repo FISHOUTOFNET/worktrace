@@ -24,6 +24,7 @@ from ..services.settings_service import (
     get_setting,
     set_setting,
 )
+from ..write_gate import DATABASE_RECOVERY_ERROR
 from . import backup_api
 
 
@@ -125,6 +126,44 @@ def get_settings_privacy_status() -> dict[str, Any]:
         }
     except Exception:
         return {"ok": False, "error": "加载设置状态失败"}
+
+
+def recover_database_maintenance_for_webview() -> dict[str, Any]:
+    """Run the sole explicit fail-closed recovery protocol for the UI."""
+
+    before = _maintenance_status()
+    if not bool(before.get("recovery_blocked")):
+        return {
+            "ok": True,
+            "message": "当前无需维护恢复",
+            "maintenance": before,
+        }
+    try:
+        database_maintenance_service.recover_fail_closed()
+    except database_maintenance_service.MaintenanceRecoveryError as exc:
+        return {
+            "ok": False,
+            "error": str(exc) or DATABASE_RECOVERY_ERROR,
+            "maintenance": _maintenance_status(),
+        }
+    except Exception:
+        return {
+            "ok": False,
+            "error": DATABASE_RECOVERY_ERROR,
+            "maintenance": _maintenance_status(),
+        }
+    status = _maintenance_status()
+    if not bool(status.get("maintenance_restored")):
+        return {
+            "ok": False,
+            "error": DATABASE_RECOVERY_ERROR,
+            "maintenance": status,
+        }
+    return {
+        "ok": True,
+        "message": "维护恢复已确认",
+        "maintenance": status,
+    }
 
 
 def export_encrypted_backup_for_webview(
@@ -325,6 +364,7 @@ __all__ = [
     "is_paused",
     "is_user_paused",
     "preview_encrypted_backup_manifest_for_webview",
+    "recover_database_maintenance_for_webview",
     "set_clipboard_capture_enabled",
     "set_clipboard_capture_enabled_for_webview",
     "set_collector_status",
