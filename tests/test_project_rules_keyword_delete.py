@@ -47,7 +47,13 @@ def test_delete_enabled_and_disabled_keyword_rules(temp_db):
         )
         assert result == {
             "ok": True,
-            "rule": {"kind": "keyword", "id": rule_id, "deleted": True},
+            "rule": {
+                "kind": "keyword",
+                "id": rule_id,
+                "deleted": True,
+                "history_updated": False,
+                "updated_count": 0,
+            },
         }
         assert not _exists(rule_id)
 
