@@ -7,8 +7,8 @@ from unittest.mock import patch
 import pytest
 
 from tests.support.activity_factory import create_closed_activity
+from tests.support.application import build_test_bridge
 from worktrace.services import view_model_service
-from worktrace.webview_ui.bridge import WebViewBridge
 
 pytestmark = [pytest.mark.db, pytest.mark.integration, pytest.mark.contract]
 DATE = "2026-07-15"
@@ -70,7 +70,7 @@ def test_statistics_bridge_separates_display_summary_and_export_ticket(temp_db):
         "worktrace.webview_ui.bridge_statistics.statistics_api.get_statistics_export_view_model",
         return_value=envelope,
     ):
-        result = WebViewBridge().get_statistics_export_summary(DATE, DATE)
+        result = build_test_bridge().get_statistics_export_summary(DATE, DATE)
 
     assert set(result) == {"ok", "summary", "export_ticket"}
     assert result["export_ticket"] == envelope["export_ticket"]
