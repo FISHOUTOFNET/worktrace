@@ -113,7 +113,7 @@ def test_shipping_js_contains_no_retired_liveclock_alias_substrings():
 
 
 def test_current_only_schema_backup_and_database_helpers():
-    assert db.CURRENT_SCHEMA_VERSION == 12
+    assert db.CURRENT_SCHEMA_VERSION == 13
     assert secure_backup_service.PAYLOAD_VERSION == 6
     assert not hasattr(secure_backup_service, "is_secure_import_in_progress")
 
