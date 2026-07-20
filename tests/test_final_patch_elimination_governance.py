@@ -5,7 +5,12 @@ from pathlib import Path
 
 import pytest
 
-pytestmark = [pytest.mark.unit, pytest.mark.contract, pytest.mark.parallel_safe]
+pytestmark = [
+    pytest.mark.unit,
+    pytest.mark.contract,
+    pytest.mark.parallel_safe,
+    pytest.mark.db,
+]
 ROOT = Path(__file__).resolve().parents[1]
 MAINTENANCE_FIELDS = {
     "maintenance_in_progress",
