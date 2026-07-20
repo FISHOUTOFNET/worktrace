@@ -1,9 +1,9 @@
 from tests.support import runtime_state_fixture
+from tests.support.application import build_test_bridge
 import pytest
 
 from worktrace.db import get_connection
 from worktrace.services import settings_service
-from worktrace.webview_ui.bridge import WebViewBridge
 
 pytestmark = [pytest.mark.db, pytest.mark.integration, pytest.mark.contract]
 
@@ -25,7 +25,7 @@ def test_overview_read_failure_does_not_mutate_runtime_or_activity_state(temp_db
         lambda: (_ for _ in ()).throw(RuntimeError("read failed")),
     )
 
-    result = WebViewBridge().get_overview()
+    result = build_test_bridge().get_overview()
 
     assert result["ok"] is False
     assert settings_service.get_setting("collector_status") == "running"
@@ -47,7 +47,7 @@ def test_refresh_state_read_failure_does_not_mutate_runtime_or_activity_state(te
         lambda _report_date=None: (_ for _ in ()).throw(RuntimeError("read failed")),
     )
 
-    result = WebViewBridge().get_refresh_state()
+    result = build_test_bridge().get_refresh_state()
 
     assert result["ok"] is False
     assert settings_service.get_setting("collector_status") == "running"
