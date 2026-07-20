@@ -6,8 +6,9 @@ from pathlib import Path
 
 import pytest
 
+from tests.support.application import build_test_bridge
 from worktrace.api import settings_api
-from worktrace.webview_ui.bridge import SHIPPING_METHODS, WebViewBridge
+from worktrace.webview_ui.bridge import SHIPPING_METHODS
 
 pytestmark = [pytest.mark.contract, pytest.mark.parallel_safe]
 
@@ -124,7 +125,7 @@ def test_bridge_modules_import_api_not_backend_layers() -> None:
 
 def test_shipping_bridge_public_methods_equal_allowlist() -> None:
     assert SHIPPING_METHODS == EXPECTED_SHIPPING_METHODS
-    bridge = WebViewBridge()
+    bridge = build_test_bridge()
     shipping = bridge.shipping_api
     actual = {
         name
