@@ -226,13 +226,13 @@ def test_backup_export_keeps_passphrases_local_and_clears_inputs() -> None:
 
 def test_import_and_clear_replace_data_through_one_generation_reset() -> None:
     source = _settings_source()
-    for name, reason, bridge_method in (
-        ("importEncryptedBackup", "secure_import", "importEncryptedBackup"),
-        ("clearAllLocalData", "clear_all_local_data", "clearAllLocalData"),
+    for name, bridge_method in (
+        ("importEncryptedBackup", "importEncryptedBackup"),
+        ("clearAllLocalData", "clearAllLocalData"),
     ):
         body = func_body(source, name)
         assert "App.bridge." + bridge_method in body
-        assert 'App.resetClientGeneration("' + reason + '")' in body
+        assert 'App.resetClientGeneration("database_replacement")' in body
         assert "loadSettingsPrivacyStatus()" in body
         assert "App.refreshAll" in body
         assert "renderBackupManifest(null" in body
