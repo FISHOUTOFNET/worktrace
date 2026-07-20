@@ -182,7 +182,7 @@ def run_activity_resource_repair_worker(
     interval = max(0.1, float(poll_seconds))
     logging.info("activity resource repair worker loop enter")
     while not stop_event.is_set():
-        if DATABASE_WRITE_GATE.active():
+        if DATABASE_WRITE_GATE.writes_blocked():
             health.maintenance_paused(True)
             stop_event.wait(interval)
             continue
