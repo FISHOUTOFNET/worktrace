@@ -1,5 +1,10 @@
+from __future__ import annotations
+
+import threading
 from dataclasses import dataclass
 from typing import Protocol
+
+from ..worker_health import WorkerHealthReporter
 
 
 @dataclass(frozen=True)
@@ -25,12 +30,36 @@ class ClipboardTextEvent:
     sequence_number: int | None = None
 
 
-class PlatformAdapter(Protocol):
-    def get_active_window(self) -> ActiveWindow:
-        ...
+class RuntimePlatformAdapter(Protocol):
+    """Complete platform capability required by the shipping runtime."""
 
-    def get_idle_seconds(self) -> int:
-        ...
+    def get_active_window(self) -> ActiveWindow: ...
 
-    def get_clipboard_events(self) -> list[ClipboardTextEvent]:
-        ...
+    def get_idle_seconds(self) -> int: ...
+
+    def get_clipboard_events(self) -> list[ClipboardTextEvent]: ...
+
+    def set_clipboard_capture_enabled(self, enabled: bool) -> None: ...
+
+    def reset_runtime_state(self) -> None: ...
+
+    def run_clipboard_capture(
+        self,
+        stop_event: threading.Event,
+        *,
+        health: WorkerHealthReporter,
+    ) -> None: ...
+
+    def shutdown(self) -> None: ...
+
+
+# Public name retained as the current protocol name used by collector-facing code.
+PlatformAdapter = RuntimePlatformAdapter
+
+
+__all__ = [
+    "ActiveWindow",
+    "ClipboardTextEvent",
+    "PlatformAdapter",
+    "RuntimePlatformAdapter",
+]
