@@ -11,6 +11,7 @@ from typing import Any
 
 PROTOCOL = "WORKTRACE_CI_DIAGNOSTICS_V1"
 DEFAULT_MAX_BYTES = 65536
+_COLLECTION_LOG_TAIL_LINES = 80
 
 
 def _single_line(value: object, *, limit: int) -> str:
@@ -50,10 +51,26 @@ def _normalized_groups(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return groups
 
 
+def _normalized_collection_log_tail(
+    payload: dict[str, Any],
+    groups: list[dict[str, Any]],
+) -> list[str]:
+    if not any(group.get("kind") == "error" for group in groups):
+        return []
+    raw_tail = payload.get("log_tail") or []
+    if not isinstance(raw_tail, list):
+        return []
+    return [
+        _single_line(line, limit=500)
+        for line in raw_tail[-_COLLECTION_LOG_TAIL_LINES:]
+    ]
+
+
 def _render(
     payload: dict[str, Any],
     *,
     groups: list[dict[str, Any]],
+    collection_log_tail: list[str],
     truncated: bool,
 ) -> str:
     counts = payload.get("counts") or {}
@@ -74,6 +91,10 @@ def _render(
     reason = _single_line(payload.get("reason"), limit=240)
     if reason != "(none)":
         lines.append(f"reason={reason}")
+    if collection_log_tail:
+        lines.append("COLLECTION_LOG_TAIL_BEGIN")
+        lines.extend(collection_log_tail)
+        lines.append("COLLECTION_LOG_TAIL_END")
     lines.append("ROOT_CAUSE_GROUPS_BEGIN")
     lines.extend(
         "group_json=" + json.dumps(group, ensure_ascii=False, separators=(",", ":"))
@@ -94,10 +115,16 @@ def _bounded_render(payload: dict[str, Any], *, max_bytes: int) -> str:
         raise ValueError("--max-bytes must be at least 1024")
 
     groups = _normalized_groups(payload)
+    collection_log_tail = _normalized_collection_log_tail(payload, groups)
     truncated = False
 
     while True:
-        rendered = _render(payload, groups=groups, truncated=truncated)
+        rendered = _render(
+            payload,
+            groups=groups,
+            collection_log_tail=collection_log_tail,
+            truncated=truncated,
+        )
         if len(rendered.encode("utf-8")) <= max_bytes:
             return rendered
 
@@ -111,6 +138,10 @@ def _bounded_render(payload: dict[str, Any], *, max_bytes: int) -> str:
                 removed_test = True
                 break
         if removed_test:
+            continue
+
+        if collection_log_tail:
+            collection_log_tail.pop(0)
             continue
 
         for group in groups:
