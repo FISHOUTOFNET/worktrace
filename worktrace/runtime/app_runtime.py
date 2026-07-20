@@ -785,7 +785,10 @@ class AppRuntime:
                 handle.spec.name: handle for handle in surviving_workers
             }
             if self.owns_application_instance and writers_stopped:
-                if self._initialized:
+                if (
+                    self._initialized
+                    and not database_maintenance_service.MAINTENANCE_COORDINATOR.recovery_blocked()
+                ):
                     activity_lifecycle_service.close_all_open_activities()
                     set_setting("collector_status", "stopped")
                 release_single_instance()
