@@ -192,7 +192,8 @@ def test_maintenance_resume_and_status_are_current_only():
     assert retired_errors.isdisjoint(_production_string_literals())
     assert "def is_maintenance_in_progress" in backup_api
     assert "database_maintenance_service.maintenance_status()" in settings_api
-    assert '"maintenance": maintenance' in settings_api
+    assert "**maintenance" in settings_api
+    assert '"maintenance": maintenance' not in settings_api
     assert "secure_import_in_progress" not in combined_status
     assert "is_secure_import_in_progress" not in combined_status
 
