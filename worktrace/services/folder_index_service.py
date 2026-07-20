@@ -260,14 +260,14 @@ def run_folder_index_worker(
         health.succeeded()
     while not stop_event.is_set():
         try:
-            if DATABASE_WRITE_GATE.active():
+            if DATABASE_WRITE_GATE.writes_blocked():
                 health.maintenance_paused(True)
                 _wait_for_worker()
                 continue
             health.maintenance_paused(False)
             ensure_index_states_for_folder_rules()
             for rule_id in _pending_rule_ids():
-                if stop_event.is_set() or DATABASE_WRITE_GATE.active():
+                if stop_event.is_set() or DATABASE_WRITE_GATE.writes_blocked():
                     break
                 rebuild_folder_index(rule_id, stop_event)
             health.succeeded()
