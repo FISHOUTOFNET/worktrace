@@ -6,6 +6,7 @@ from typing import Any, Protocol
 
 from ..runtime.contracts import RuntimeStartResult
 from ..services import privacy_gate_service
+from ..write_gate import DATABASE_RECOVERY_ERROR
 from . import settings_api
 
 
@@ -93,7 +94,7 @@ class ApplicationControlService:
         if self._maintenance_resume_blocked():
             return {
                 "ok": False,
-                "error": "maintenance_recovery_required",
+                "error": DATABASE_RECOVERY_ERROR,
                 "message": "维护状态尚未恢复，暂不能开始记录",
             }
         try:
