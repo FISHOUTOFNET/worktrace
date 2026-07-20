@@ -68,6 +68,10 @@ def _assert_sentinel_exists(name: str) -> None:
         ).fetchone() is not None
 
 
+def _is_excluded(window: ActiveWindow) -> bool:
+    return privacy_service.evaluate_exclusion(window).excluded
+
+
 def test_import_publishes_exact_committed_replacement_generations(temp_db, tmp_path):
     output = _make_backup(tmp_path)
     for namespace in DataGenerationNamespace:
@@ -201,7 +205,7 @@ def test_first_domain_mutations_after_import_invalidate_hot_caches(
     get_setting("ui_refresh_seconds")
     folder_rule_service._enabled_folder_rules()
     project_inference_service._enabled_keyword_rules()
-    privacy_service.is_excluded(ActiveWindow("App", "app.exe", "Public"))
+    _is_excluded(ActiveWindow("App", "app.exe", "Public"))
 
     secure_backup_service.import_encrypted_backup(
         output,
@@ -235,14 +239,14 @@ def test_first_domain_mutations_after_import_invalidate_hot_caches(
     )["id"] == folder_id
 
     project_service.set_excluded_project_enabled(True)
-    privacy_service.is_excluded(ActiveWindow("App", "app.exe", "Public"))
+    _is_excluded(ActiveWindow("App", "app.exe", "Public"))
     privacy_before = generation(DataGenerationNamespace.PRIVACY_CATALOG)
     rule_catalog_command_service.create_or_update_excluded_folder_rule(
         "D:\\PostImportPrivate",
         recursive=True,
     )
     assert generation(DataGenerationNamespace.PRIVACY_CATALOG) == privacy_before + 1
-    assert privacy_service.is_excluded(
+    assert _is_excluded(
         ActiveWindow(
             "App",
             "app.exe",
