@@ -109,6 +109,15 @@ def _render(output: Path, rendered: Path) -> str:
     return rendered.read_text(encoding="utf-8")
 
 
+def _metadata(text: str) -> dict[str, object]:
+    line = next(
+        item
+        for item in text.splitlines()
+        if item.startswith("diagnostics_metadata_json=")
+    )
+    return json.loads(line.split("=", 1)[1])
+
+
 def test_artifact_preserves_all_failures_and_signature_groups(tmp_path: Path) -> None:
     output = _produce(tmp_path)
     payload = json.loads((output / "diagnostics.json").read_text(encoding="utf-8"))
@@ -123,17 +132,18 @@ def test_renderer_publishes_complete_compact_root_cause_index(tmp_path: Path) ->
     output = _produce(tmp_path)
     rendered = output / "api-summary.txt"
     text = _render(output, rendered)
+    metadata = _metadata(text)
     assert text.startswith("WORKTRACE_CI_DIAGNOSTICS_V1\n")
-    assert "summary_scope=complete_root_cause_index" in text
-    assert "machine_source=artifact:diagnostics.json" in text
-    assert "failure_signature_group_count=2" in text
-    assert "shown_signature_group_count=2" in text
-    assert "omitted_signature_group_count=0" in text
+    assert metadata["scope"] == "complete_root_cause_index"
+    assert metadata["group_count"] == 2
+    assert metadata["shown_group_count"] == 2
+    assert metadata["omitted_group_count"] == 0
     assert text.count("signature_group_json=") == 2
     assert "TRACEBACK-SENTINEL" not in text
     assert "cause_chunk_json" not in text
     assert "cause_catalog_json" not in text
-    assert "group_json=" not in text
+    assert "\ngroup_json=" not in text
+    assert "artifact_index_json=" in text
     assert len(rendered.read_bytes()) <= 8192
 
 
@@ -143,9 +153,10 @@ def test_renderer_keeps_all_realistic_root_cause_groups_under_api_limit(
     output = _produce(tmp_path, count=40, distinct=True)
     rendered = output / "api-summary.txt"
     text = _render(output, rendered)
-    assert "failure_signature_group_count=40" in text
-    assert "shown_signature_group_count=40" in text
-    assert "omitted_signature_group_count=0" in text
+    metadata = _metadata(text)
+    assert metadata["group_count"] == 40
+    assert metadata["shown_group_count"] == 40
+    assert metadata["omitted_group_count"] == 0
     assert text.count("signature_group_json=") == 40
     assert len(rendered.read_bytes()) <= 8192
 
@@ -154,7 +165,14 @@ def test_fallback_summary_is_bounded_and_points_to_artifact(tmp_path: Path) -> N
     output = _produce(tmp_path, stage="compile")
     rendered = output / "api-summary.txt"
     result = subprocess.run(
-        [sys.executable, str(RENDERER), "--input", str(output / "diagnostics.json"), "--output", str(rendered)],
+        [
+            sys.executable,
+            str(RENDERER),
+            "--input",
+            str(output / "diagnostics.json"),
+            "--output",
+            str(rendered),
+        ],
         cwd=ROOT,
         capture_output=True,
         text=True,
@@ -162,10 +180,10 @@ def test_fallback_summary_is_bounded_and_points_to_artifact(tmp_path: Path) -> N
     )
     assert result.returncode == 0, result.stderr
     text = rendered.read_text(encoding="utf-8")
-    assert "stage=compile" in text
+    assert _metadata(text)["stage"] == "compile"
     assert "LOG_EXCERPT_BEGIN" in text
     assert "SyntaxError: invalid syntax" in text
-    assert "full_failure_details=artifact:failure-details.txt" in text
+    assert '"failure_details":"failure-details.txt"' in text
 
 
 def test_ci_contract_uses_one_artifact_and_one_complete_human_relay() -> None:
