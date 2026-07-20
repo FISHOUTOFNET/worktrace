@@ -11,6 +11,11 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from worktrace import db
+from worktrace.write_gate import WriteGatePhase
+from tests.support.write_gate import (
+    reset_global_write_gate_for_test,
+    write_gate_state,
+)
 
 
 class _FastTestScrypt:
@@ -53,6 +58,23 @@ def temp_db(tmp_path: Path, _initialized_db_template: Path) -> Path:
     shutil.copyfile(_initialized_db_template, path)
     db.configure_database(path)
     return path
+
+
+@pytest.fixture(autouse=True)
+def _isolate_database_write_gate(request: pytest.FixtureRequest):
+    """Reset the process gate and report any state leaked by the preceding test."""
+
+    reset_global_write_gate_for_test()
+    yield
+    phase, reason = write_gate_state()
+    if phase is not WriteGatePhase.OPEN or reason is not None:
+        request.node.user_properties.append(
+            ("write_gate_pollution", f"phase={phase.value};reason={reason or ''}")
+        )
+    reset_global_write_gate_for_test()
+    clean_phase, clean_reason = write_gate_state()
+    assert clean_phase is WriteGatePhase.OPEN
+    assert clean_reason is None
 
 
 @pytest.fixture(autouse=True)
