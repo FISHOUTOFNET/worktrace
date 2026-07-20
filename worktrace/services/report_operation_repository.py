@@ -1,11 +1,4 @@
-"""Bulk read repository for immutable report operations.
-
-Admission revisions protect the initial write. Once an operation has durable
-member identities, replay is bound to those members rather than mutable
-open/closed duration state. The replay engine treats a legacy-shaped revision
-plus exact members as member-bound; this adapter retains admission bytes for
-audit while using that stable replay contract.
-"""
+"""Bulk read repository for immutable current-format report operations."""
 
 from __future__ import annotations
 
@@ -14,8 +7,7 @@ from collections import defaultdict
 from typing import Any
 
 from .report_projection_model import InvalidInputError
-
-_MEMBER_BOUND_REPLAY_REVISION = "0" * 40
+from .report_replay_binding import ReplayBinding
 
 
 def load_operations_by_date(
@@ -23,7 +15,7 @@ def load_operations_by_date(
     start_date: str,
     end_date: str,
 ) -> dict[str, list[dict[str, Any]]]:
-    """Load an operation range and all members with two SQL statements."""
+    """Load an operation range and all durable members with two SQL statements."""
 
     operation_rows = conn.execute(
         """
@@ -63,16 +55,21 @@ def load_operations_by_date(
     result: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for operation in operations:
         try:
-            operation["payload"] = json.loads(
-                str(operation.pop("payload_json", "{}"))
-            )
+            payload = json.loads(str(operation.pop("payload_json", "{}")))
         except json.JSONDecodeError as exc:
             raise InvalidInputError("操作负载损坏") from exc
+        if not isinstance(payload, dict):
+            raise InvalidInputError("操作负载损坏")
+        try:
+            binding = ReplayBinding(str(payload.pop("replay_binding")))
+        except (KeyError, ValueError) as exc:
+            raise InvalidInputError("操作重放绑定损坏") from exc
+        operation["payload"] = payload
+        operation["replay_binding"] = binding.value
         operation["members"] = {
             role: list(values)
             for role, values in members_by_operation[int(operation["id"])].items()
         }
-        _bind_replay_to_members(operation)
         result[str(operation["report_date"])].append(operation)
     return dict(result)
 
@@ -82,20 +79,6 @@ def load_operations(conn, report_date: str) -> list[dict[str, Any]]:
         report_date,
         [],
     )
-
-
-def _bind_replay_to_members(operation: dict[str, Any]) -> None:
-    members = operation.get("members") or {}
-    if members.get("source"):
-        operation["source_admission_revision"] = operation.get(
-            "source_expected_revision"
-        )
-        operation["source_expected_revision"] = _MEMBER_BOUND_REPLAY_REVISION
-    if members.get("target"):
-        operation["target_admission_revision"] = operation.get(
-            "target_expected_revision"
-        )
-        operation["target_expected_revision"] = _MEMBER_BOUND_REPLAY_REVISION
 
 
 __all__ = ["load_operations", "load_operations_by_date"]
