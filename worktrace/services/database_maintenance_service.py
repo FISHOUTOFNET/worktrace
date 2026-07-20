@@ -201,7 +201,7 @@ class RuntimeMaintenanceCoordinator:
             self._phase = MaintenancePhase.FAILED_CLOSED
 
     def recover_fail_closed(self) -> None:
-        """Clear the latch only after the runtime is verifiably operational."""
+        """Clear the latch only after the runtime boundary is operational."""
 
         with self._state_lock:
             if self._blocked_reason is None:
@@ -209,9 +209,8 @@ class RuntimeMaintenanceCoordinator:
             control = self._runtime_control
         if control is None or DATABASE_WRITE_GATE.active():
             raise MaintenanceRecoveryError("maintenance_recovery_not_verified")
-        running = bool(control.is_collection_running_for_maintenance())
         hold_state = control.collector_control.hold_state.value
-        if not running or hold_state != "operational":
+        if hold_state != "operational":
             raise MaintenanceRecoveryError("maintenance_recovery_not_verified")
         set_settings(
             {
