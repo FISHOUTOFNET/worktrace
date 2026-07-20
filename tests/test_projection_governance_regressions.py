@@ -264,5 +264,7 @@ def test_repository_rejects_non_current_payload_version_at_read_boundary(temp_db
             "UPDATE report_session_operation SET payload_json = ? WHERE id = ?",
             ('{"payload_version":4,"replay_binding":"members"}', int(cursor.lastrowid)),
         )
-        with pytest.raises(InvalidInputError, match="操作负载版本损坏"):
+        with pytest.raises(InvalidInputError) as captured:
             report_operation_repository.load_operations(conn, DATE)
+    assert captured.value.code == "invalid_input"
+    assert captured.value.message == "操作负载版本损坏"
