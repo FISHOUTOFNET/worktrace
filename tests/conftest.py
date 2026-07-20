@@ -10,12 +10,13 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from worktrace import db
-from worktrace.write_gate import WriteGatePhase
+from tests.support.application import TestRuntimeMaintenanceControl
 from tests.support.write_gate import (
     reset_global_write_gate_for_test,
     write_gate_state,
 )
+from worktrace import db
+from worktrace.write_gate import WriteGatePhase
 
 
 class _FastTestScrypt:
@@ -79,11 +80,12 @@ def _isolate_database_write_gate(request: pytest.FixtureRequest):
 
 @pytest.fixture(autouse=True)
 def _isolate_maintenance_coordinator(monkeypatch: pytest.MonkeyPatch):
-    """Give every test a fresh canonical maintenance state machine."""
+    """Compose every test with a fresh coordinator and explicit stopped runtime."""
 
     from worktrace.services import database_maintenance_service
 
     coordinator = database_maintenance_service.RuntimeMaintenanceCoordinator()
+    coordinator.register_runtime_control(TestRuntimeMaintenanceControl())
     monkeypatch.setattr(
         database_maintenance_service,
         "MAINTENANCE_COORDINATOR",
