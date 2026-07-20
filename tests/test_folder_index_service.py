@@ -346,9 +346,9 @@ def test_indexed_exclude_folder_anonymizes_title_only_activity(temp_db, tmp_path
     )
     _ready_index(rule_id)
 
-    assert privacy_service.is_excluded(
+    assert privacy_service.evaluate_exclusion(
         ActiveWindow("Editor", "editor.exe", "secret.txt - Editor")
-    )
+    ).excluded is True
 
 
 def test_edited_rule_filters_previous_active_generation_without_worker(
@@ -462,8 +462,3 @@ def test_public_index_candidate_cannot_prove_unresolved_private_path_safe(
     assert decision.excluded is True
     assert decision.resolution_pending is True
     assert decision.refresh_required is True
-    with pytest.raises(
-        privacy_service.PrivacyResolutionPending,
-        match="privacy_path_unresolved",
-    ):
-        privacy_service.is_excluded(window)
