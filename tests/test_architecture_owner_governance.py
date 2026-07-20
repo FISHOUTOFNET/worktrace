@@ -65,6 +65,16 @@ def _python_files(root: Path) -> list[Path]:
     return sorted(root.rglob("*.py"))
 
 
+def _top_level_function(path: Path, name: str) -> ast.FunctionDef | ast.AsyncFunctionDef:
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    return next(
+        node
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == name
+    )
+
+
 def test_retired_owner_files_are_absent() -> None:
     assert [
         path.relative_to(ROOT).as_posix()
@@ -99,18 +109,18 @@ def test_durable_job_runtime_dml_has_one_canonical_owner_each() -> None:
     assert recovery_owners == {_RECOVERY_JOB_RUNTIME_DML_OWNER}
 
 
-def test_destructive_owners_use_canonical_job_cleanup_interfaces() -> None:
+def test_destructive_owners_use_the_static_database_manifest() -> None:
     maintenance = (
         PRODUCTION / "services" / "database_maintenance_service.py"
     ).read_text(encoding="utf-8")
     backup = (
         PRODUCTION / "services" / "secure_backup_service.py"
     ).read_text(encoding="utf-8")
-    assert "activity_inference_job_repository.clear_all_jobs(conn)" in maintenance
-    assert "startup_recovery_job_repository.clear_all_jobs(conn)" in maintenance
-    assert "clear_all_worker_progress_in_transaction(live)" in backup
-    assert '"activity_inference_job",' in backup
-    assert '"startup_recovery_job",' in backup
+
+    assert "from ..database_content_manifest import DELETE_ORDER" in maintenance
+    assert "for table in DELETE_ORDER" in maintenance
+    assert "from ..database_content_manifest import BACKUP_TABLES" in backup
+    assert "for table in BACKUP_TABLES" in backup
     assert not _INFERENCE_DML_PATTERN.search(maintenance)
     assert not _INFERENCE_DML_PATTERN.search(backup)
     assert not _RECOVERY_DML_PATTERN.search(maintenance)
@@ -189,6 +199,89 @@ def test_app_runtime_has_one_registry_driven_thread_creation_site() -> None:
         assert "threading.Thread(" not in worker_source
 
 
+def test_fixed_workers_require_health_as_keyword_only_dependency() -> None:
+    workers = {
+        "services/folder_index_service.py": "run_folder_index_worker",
+        "services/history_mutation_job_service.py": "run_history_worker",
+        "services/activity_inference_job_service.py": "run_inference_worker",
+        "services/activity_fact_repair_service.py": "run_activity_resource_repair_worker",
+        "services/recovery_service.py": "run_startup_recovery_worker",
+    }
+    for relative, function_name in workers.items():
+        function = _top_level_function(PRODUCTION / relative, function_name)
+        health_index = next(
+            index
+            for index, argument in enumerate(function.args.kwonlyargs)
+            if argument.arg == "health"
+        )
+        assert function.args.kw_defaults[health_index] is None
+        assert "None" not in ast.unparse(function.args.kwonlyargs[health_index].annotation)
+
+
+def test_production_bridge_and_application_control_require_explicit_composition() -> None:
+    bridge_path = PRODUCTION / "webview_ui" / "bridge.py"
+    bridge_tree = ast.parse(bridge_path.read_text(encoding="utf-8"), filename=str(bridge_path))
+    bridge_class = next(
+        node
+        for node in bridge_tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "WebViewBridge"
+    )
+    bridge_init = next(
+        node
+        for node in bridge_class.body
+        if isinstance(node, ast.FunctionDef) and node.name == "__init__"
+    )
+    assert [argument.arg for argument in bridge_init.args.args] == ["self", "services"]
+    assert bridge_init.args.defaults == []
+
+    app_path = PRODUCTION / "api" / "app_api.py"
+    app_tree = ast.parse(app_path.read_text(encoding="utf-8"), filename=str(app_path))
+    app_class = next(
+        node
+        for node in app_tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "ApplicationControlService"
+    )
+    app_init = next(
+        node
+        for node in app_class.body
+        if isinstance(node, ast.FunctionDef) and node.name == "__init__"
+    )
+    assert [argument.arg for argument in app_init.args.args] == [
+        "self",
+        "runtime",
+        "maintenance",
+    ]
+    assert app_init.args.defaults == []
+
+
+def test_collectable_bridge_tests_do_not_construct_the_production_class() -> None:
+    offenders: list[str] = []
+    for path in sorted(TESTS.glob("test_*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        production_import_names: set[str] = set()
+        for node in tree.body:
+            if not isinstance(node, ast.ImportFrom):
+                continue
+            if node.module == "worktrace.webview_ui.bridge":
+                production_import_names.update(
+                    alias.asname or alias.name
+                    for alias in node.names
+                    if alias.name == "WebViewBridge"
+                )
+        if not production_import_names:
+            continue
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id in production_import_names
+            ):
+                offenders.append(
+                    f"{path.relative_to(ROOT).as_posix()}:{node.lineno}"
+                )
+    assert offenders == []
+
+
 def test_non_windows_production_adapter_fails_closed() -> None:
     source = (PRODUCTION / "runtime" / "app_runtime.py").read_text(encoding="utf-8")
     assert 'raise RuntimeError("unsupported_platform")' in source
@@ -227,7 +320,7 @@ def test_current_only_schema_and_backup_versions_are_explicit() -> None:
     backup_source = (
         PRODUCTION / "services" / "secure_backup_service.py"
     ).read_text(encoding="utf-8")
-    assert "CURRENT_SCHEMA_VERSION = 12" in db_source
+    assert "CURRENT_SCHEMA_VERSION = 13" in db_source
     assert "database_schema_incompatible" in db_source
     assert "PAYLOAD_VERSION = 6" in backup_source
     assert "_normalize_v4_payload" not in backup_source
