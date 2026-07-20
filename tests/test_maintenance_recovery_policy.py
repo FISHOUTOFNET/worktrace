@@ -31,10 +31,7 @@ class _StoppedRuntimeControl:
         return False
 
 
-def _blocked_coordinator(control: _StoppedRuntimeControl) -> RuntimeMaintenanceCoordinator:
-    coordinator = RuntimeMaintenanceCoordinator()
-    coordinator.register_runtime_control(control)
-    coordinator._latch_fail_closed("test_failed_closed")
+def _persist_blocked_state() -> None:
     set_settings(
         {
             "maintenance_fail_closed": "true",
@@ -43,6 +40,13 @@ def _blocked_coordinator(control: _StoppedRuntimeControl) -> RuntimeMaintenanceC
             "collector_status": "paused",
         }
     )
+
+
+def _blocked_coordinator(control: _StoppedRuntimeControl) -> RuntimeMaintenanceCoordinator:
+    _persist_blocked_state()
+    coordinator = RuntimeMaintenanceCoordinator()
+    coordinator.register_runtime_control(control)
+    assert coordinator.hydrate_fail_closed_from_durable() is True
     return coordinator
 
 
@@ -68,9 +72,12 @@ def test_non_operational_hold_state_remains_fail_closed(temp_db) -> None:
 
 
 def test_active_write_gate_prevents_fail_closed_recovery(temp_db) -> None:
-    coordinator = _blocked_coordinator(_StoppedRuntimeControl())
+    _persist_blocked_state()
+    coordinator = RuntimeMaintenanceCoordinator()
+    coordinator.register_runtime_control(_StoppedRuntimeControl())
 
     with DATABASE_WRITE_GATE.draining():
+        assert coordinator.hydrate_fail_closed_from_durable() is True
         with pytest.raises(
             MaintenanceRecoveryError,
             match="maintenance_recovery_not_verified",
@@ -78,3 +85,4 @@ def test_active_write_gate_prevents_fail_closed_recovery(temp_db) -> None:
             coordinator.recover_fail_closed()
 
     assert coordinator.phase is MaintenancePhase.FAILED_CLOSED
+    assert coordinator.blocked_reason == "test_failed_closed"
