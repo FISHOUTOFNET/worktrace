@@ -14,6 +14,14 @@ def test_settings_uses_single_client_generation_reset():
     assert "clear_all_local_data" not in source
 
 
+def test_shipping_js_has_no_retired_replacement_reset_reason():
+    source = "\n".join(
+        path.read_text(encoding="utf-8") for path in sorted(JS.glob("*.js"))
+    )
+    assert 'resetClientGeneration("secure_import")' not in source
+    assert 'resetClientGeneration("clear_all_local_data")' not in source
+
+
 def test_client_generation_reset_clears_all_runtime_owners():
     source = (JS / "init.js").read_text(encoding="utf-8")
     start = source.index("function resetClientGeneration(reason)")
