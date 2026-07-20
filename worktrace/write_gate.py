@@ -12,9 +12,11 @@ from typing import Iterator
 DATABASE_MAINTENANCE_ERROR = "database_maintenance_in_progress"
 DATABASE_RECOVERY_ERROR = "database_maintenance_recovery_required"
 _RECOVERY_WRITE_TABLE_PATTERN = re.compile(
-    r"\b(?:INTO|UPDATE|FROM)\s+(?:settings|data_generation)\b",
+    r"\b(?:INSERT(?:\s+OR\s+\w+)?\s+INTO|REPLACE\s+INTO|UPDATE|DELETE\s+FROM)"
+    r"\s+([A-Za-z_][A-Za-z0-9_]*)\b",
     re.IGNORECASE,
 )
+_RECOVERY_WRITE_TABLES = frozenset({"settings", "data_generation"})
 
 
 class WriteGatePhase(str, Enum):
@@ -133,7 +135,11 @@ class ProcessDatabaseWriteGate:
         upper = normalized.upper()
         if upper.startswith("BEGIN IMMEDIATE") or upper.startswith("BEGIN EXCLUSIVE"):
             return True
-        return bool(_RECOVERY_WRITE_TABLE_PATTERN.search(normalized))
+        tables = {
+            str(table).casefold()
+            for table in _RECOVERY_WRITE_TABLE_PATTERN.findall(normalized)
+        }
+        return bool(tables) and tables.issubset(_RECOVERY_WRITE_TABLES)
 
     @contextmanager
     def _maintenance_recovery_write_scope(self) -> Iterator[None]:
