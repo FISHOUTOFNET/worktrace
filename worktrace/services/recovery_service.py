@@ -139,7 +139,7 @@ def run_startup_recovery_worker(
     interval = max(0.1, float(poll_seconds))
     logging.info("startup recovery continuation worker loop enter")
     while not stop_event.is_set():
-        if DATABASE_WRITE_GATE.active():
+        if DATABASE_WRITE_GATE.writes_blocked():
             health.maintenance_paused(True)
             stop_event.wait(interval)
             continue
