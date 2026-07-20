@@ -7,13 +7,14 @@ import threading
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Callable
 
 from .. import db
 from ..collector import collector_health
 from ..collector.collector import run_collector
 from ..collector.runtime_control import RuntimeCollectorControl
 from ..collector.single_instance import acquire_single_instance, release_single_instance
+from ..platforms.base import RuntimePlatformAdapter
 from ..platforms.windows_adapter import WindowsAdapter
 from ..services import (
     activity_fact_repair_service,
@@ -66,8 +67,8 @@ class WorkerStartupStatus:
     def to_dict(self) -> dict[str, object]:
         return {
             "state": self.state.value,
-            "ready": bool(self.ready),
-            "started": bool(self.started),
+            "ready": self.ready,
+            "started": self.started,
             "error_code": self.error_code,
         }
 
@@ -77,7 +78,7 @@ class WorkerSpec:
     name: str
     thread_name: str
     target: Callable[..., None]
-    args_factory: Callable[[threading.Event], tuple[Any, ...]]
+    args_factory: Callable[[threading.Event], tuple[object, ...]]
     startup_timeout_seconds: float = 5.0
     critical: bool = False
 
@@ -109,9 +110,8 @@ class WorkerStartupReporter:
 
     def ready(self) -> None:
         with self._lock:
-            if self._handle.failed_event.is_set():
-                return
-            self._handle.ready_event.set()
+            if not self._handle.failed_event.is_set():
+                self._handle.ready_event.set()
 
     def failed(self, code: str) -> None:
         with self._lock:
@@ -160,16 +160,12 @@ class WorkerStartupReport:
 
     @property
     def failed_workers(self) -> tuple[str, ...]:
-        return tuple(
-            name
-            for name, status in self.workers.items()
-            if not status.ready
-        )
+        return tuple(name for name, status in self.workers.items() if not status.ready)
 
 
 @dataclass(frozen=True)
 class RuntimeStartResult:
-    """Complete result of the authorized startup sequence."""
+    """Complete and exact result of the authorized startup sequence."""
 
     ok: bool
     collector_ready: bool
@@ -180,43 +176,40 @@ class RuntimeStartResult:
 
     @property
     def failed_workers(self) -> tuple[str, ...]:
-        return tuple(
-            name
-            for name, status in self.workers.items()
-            if not status.ready
-        )
+        return tuple(name for name, status in self.workers.items() if not status.ready)
 
     def to_dict(self) -> dict[str, object]:
         return {
-            "ok": bool(self.ok),
-            "collector_ready": bool(self.collector_ready),
+            "ok": self.ok,
+            "collector_ready": self.collector_ready,
             "workers": {
                 name: status.to_dict()
                 for name, status in sorted(self.workers.items())
             },
-            "already_running": bool(self.already_running),
-            "degraded": bool(self.degraded),
+            "already_running": self.already_running,
+            "degraded": self.degraded,
             "error_code": self.error_code,
         }
 
 
-def _choose_adapter() -> WindowsAdapter:
+def _choose_adapter() -> RuntimePlatformAdapter:
     if not sys.platform.startswith("win"):
         raise RuntimeError("unsupported_platform")
     return WindowsAdapter()
 
 
-def _thread_reference_is_alive(thread: Any | None) -> bool:
-    if thread is None:
-        return False
-    checker = getattr(thread, "is_alive", None)
-    return bool(checker()) if checker is not None else False
+def _thread_is_alive(thread: threading.Thread | None) -> bool:
+    return thread is not None and thread.is_alive()
 
 
 class AppRuntime:
     """Single owner for instance, adapter, Collector and worker lifecycles."""
 
-    def __init__(self, paths: "_Paths", adapter: Any | None = None) -> None:
+    def __init__(
+        self,
+        paths: "_Paths",
+        adapter: RuntimePlatformAdapter | None = None,
+    ) -> None:
         self.paths = paths
         self.stop_event = threading.Event()
         self.owns_application_instance = False
@@ -235,6 +228,12 @@ class AppRuntime:
 
     def _build_worker_specs(self) -> dict[str, WorkerSpec]:
         return {
+            "clipboard_capture": WorkerSpec(
+                name="clipboard_capture",
+                thread_name="WorkTraceClipboardCapture",
+                target=self._adapter.run_clipboard_capture,
+                args_factory=lambda stop: (stop,),
+            ),
             "folder_index": WorkerSpec(
                 name="folder_index",
                 thread_name="WorkTraceFolderIndex",
@@ -279,9 +278,7 @@ class AppRuntime:
             self.owns_application_instance = acquire_single_instance()
             if not self.owns_application_instance:
                 self.phase = RuntimePhase.FAILED
-                logging.warning(
-                    "single application instance lock not acquired; startup aborted"
-                )
+                logging.warning("single application instance lock not acquired; startup aborted")
                 return False
             try:
                 db.initialize_database(self.paths.db_path)
@@ -314,10 +311,7 @@ class AppRuntime:
                 handle.error_code = "worker_unexpected_exit"
                 handle.failed_event.set()
                 health.failed(handle.error_code)
-                logging.error(
-                    "owned worker returned unexpectedly worker=%s",
-                    spec.name,
-                )
+                logging.error("owned worker returned unexpectedly worker=%s", spec.name)
         except Exception:
             if not startup.ready_reported:
                 startup.failed("worker_startup_failed")
@@ -333,20 +327,14 @@ class AppRuntime:
 
     @staticmethod
     def _run_owned_collector(
-        adapter: Any,
+        adapter: RuntimePlatformAdapter,
         stop_event: threading.Event,
         control: RuntimeCollectorControl,
         ready_event: threading.Event,
         failed_event: threading.Event,
     ) -> None:
         try:
-            run_collector(
-                adapter,
-                stop_event,
-                control,
-                ready_event,
-                failed_event,
-            )
+            run_collector(adapter, stop_event, control, ready_event, failed_event)
         finally:
             reason = (
                 "collector_fatal_exit"
@@ -374,8 +362,8 @@ class AppRuntime:
         *,
         started: bool,
     ) -> WorkerStartupStatus:
-        alive = _thread_reference_is_alive(handle.thread)
-        ready = bool(handle.ready_event.is_set() and alive)
+        alive = _thread_is_alive(handle.thread)
+        ready = handle.ready_event.is_set() and alive
         if ready:
             state = WorkerStartupState.READY
         elif handle.failed_event.is_set() or handle.error_code:
@@ -393,7 +381,7 @@ class AppRuntime:
 
     def _start_worker(self, spec: WorkerSpec) -> WorkerStartupStatus:
         existing = self._worker_handles.get(spec.name)
-        if existing is not None and _thread_reference_is_alive(existing.thread):
+        if existing is not None and _thread_is_alive(existing.thread):
             return self._await_worker_startup(existing, started=False)
         if existing is not None:
             self._worker_handles.pop(spec.name, None)
@@ -432,25 +420,18 @@ class AppRuntime:
         *,
         started: bool,
     ) -> WorkerStartupStatus:
-        deadline = time.monotonic() + max(
-            0.1,
-            float(handle.spec.startup_timeout_seconds),
-        )
+        deadline = time.monotonic() + max(0.1, handle.spec.startup_timeout_seconds)
         while time.monotonic() < deadline:
             if handle.ready_event.wait(timeout=0.05):
                 return self._status_for_handle(handle, started=started)
-            if (
-                handle.failed_event.is_set()
-                or not _thread_reference_is_alive(handle.thread)
-            ):
+            if handle.failed_event.is_set() or not _thread_is_alive(handle.thread):
                 return self._status_for_handle(handle, started=started)
         handle.error_code = "worker_startup_timeout"
         handle.failed_event.set()
         handle.stop_event.set()
-        joiner = getattr(handle.thread, "join", None)
-        if joiner is not None:
-            joiner(timeout=1.0)
-        if not _thread_reference_is_alive(handle.thread):
+        if handle.thread is not None:
+            handle.thread.join(timeout=1.0)
+        if not _thread_is_alive(handle.thread):
             self._worker_handles.pop(handle.spec.name, None)
         return WorkerStartupStatus(
             WorkerStartupState.FAILED,
@@ -520,9 +501,7 @@ class AppRuntime:
             collector_result = {"ok": False, "error": "collector_start_failed"}
 
         if not bool(collector_result.get("ok")):
-            error_code = str(
-                collector_result.get("error") or "collector_start_failed"
-            )
+            error_code = str(collector_result.get("error") or "collector_start_failed")
             self.phase = (
                 RuntimePhase.FAILED
                 if error_code in {"collector_stop_timeout", "runtime_stopping"}
@@ -573,11 +552,8 @@ class AppRuntime:
                 return {"ok": False, "error": "runtime_stopping"}
             if not self.owns_application_instance:
                 return {"ok": False, "error": "collector_not_owned"}
-            if _thread_reference_is_alive(self._collector_thread):
-                if (
-                    self._collector_stop_event is not None
-                    and self._collector_stop_event.is_set()
-                ):
+            if _thread_is_alive(self._collector_thread):
+                if self._collector_stop_event is not None and self._collector_stop_event.is_set():
                     return {"ok": False, "error": "collector_stopping"}
                 database_maintenance_service.register_runtime_control(self)
                 return {"ok": True, "started": False, "already_running": True}
@@ -624,7 +600,7 @@ class AppRuntime:
             if ready_event.wait(timeout=0.05):
                 startup_ready = True
                 break
-            if failed_event.is_set() or not _thread_reference_is_alive(thread):
+            if failed_event.is_set() or not thread.is_alive():
                 break
 
         if startup_ready:
@@ -634,19 +610,15 @@ class AppRuntime:
                     or self._collector_thread is not thread
                 ):
                     attempt_stop_event.set()
-                    attempt_control.terminalize_unfinished(
-                        "collector_attempt_superseded"
-                    )
+                    attempt_control.terminalize_unfinished("collector_attempt_superseded")
                     return {"ok": False, "error": "collector_attempt_superseded"}
                 database_maintenance_service.register_runtime_control(self)
                 return {"ok": True, "started": True, "already_running": False}
 
         collector_health.record_health_code("collector_startup_not_ready")
         attempt_stop_event.set()
-        joiner = getattr(thread, "join", None)
-        if joiner is not None:
-            joiner(timeout=2)
-        still_alive = _thread_reference_is_alive(thread)
+        thread.join(timeout=2)
+        still_alive = thread.is_alive()
         if still_alive:
             attempt_control.terminalize_unfinished("collector_startup_stop_timeout")
         with self._lifecycle_lock:
@@ -665,7 +637,7 @@ class AppRuntime:
             return bool(
                 self.owns_application_instance
                 and not self._shutdown
-                and _thread_reference_is_alive(self._collector_thread)
+                and _thread_is_alive(self._collector_thread)
                 and self._collector_stop_event is not None
                 and not self._collector_stop_event.is_set()
             )
@@ -680,9 +652,7 @@ class AppRuntime:
                 "pause_pending": False,
                 "collector_active": False,
             }
-        result = dict(
-            self.collector_control.request_pause(timeout_seconds=timeout_seconds)
-        )
+        result = dict(self.collector_control.request_pause(timeout_seconds=timeout_seconds))
         result["collector_active"] = True
         return result
 
@@ -708,18 +678,12 @@ class AppRuntime:
         result["collector_active"] = True
         return result
 
-    def quiesce_collection_now(
-        self,
-        timeout_seconds: float = 5.0,
-    ) -> dict[str, object]:
-        return self.quiesce_collection_for_maintenance(timeout_seconds)
-
     def reset_after_database_replacement(
         self,
         timeout_seconds: float = 5.0,
     ) -> dict[str, object]:
         if not self.is_collection_running_for_maintenance():
-            self._reset_adapter_runtime_state()
+            self._adapter.reset_runtime_state()
             return {
                 "ok": True,
                 "collector_active": False,
@@ -733,15 +697,9 @@ class AppRuntime:
             self.collector_control.request_reset(timeout_seconds=timeout_seconds)
         )
         if bool(result.get("ok")):
-            self._reset_adapter_runtime_state()
+            self._adapter.reset_runtime_state()
         result["collector_active"] = True
         return result
-
-    def reset_collection_runtime_now(
-        self,
-        timeout_seconds: float = 5.0,
-    ) -> dict[str, object]:
-        return self.reset_after_database_replacement(timeout_seconds)
 
     def restore_after_maintenance(
         self,
@@ -772,9 +730,7 @@ class AppRuntime:
                 "command_state_unknown": False,
                 "terminal_state": "operational",
             }
-        result = dict(
-            self.start_collector(startup_timeout_seconds=timeout_seconds)
-        )
+        result = dict(self.start_collector(startup_timeout_seconds=timeout_seconds))
         if bool(result.get("ok")):
             result.update(
                 {
@@ -787,25 +743,18 @@ class AppRuntime:
             )
         return result
 
-    def _reset_adapter_runtime_state(self) -> None:
-        resetter = getattr(self._adapter, "reset_runtime_state", None)
-        if resetter is not None:
-            resetter()
-
     def set_clipboard_capture_enabled(self, enabled: bool) -> bool:
-        setter = getattr(self._adapter, "set_clipboard_capture_enabled", None)
-        if setter is not None:
-            setter(bool(enabled))
+        self._adapter.set_clipboard_capture_enabled(bool(enabled))
         return True
 
     def request_shutdown(self) -> None:
         self.phase = RuntimePhase.STOPPING
         self.stop_event.set()
+        if self._collector_stop_event is not None:
+            self._collector_stop_event.set()
         folder_index_service.wake_folder_index_worker()
         for handle in self._worker_handles.values():
             handle.stop_event.set()
-        if self._collector_stop_event is not None:
-            self._collector_stop_event.set()
 
     def shutdown(self) -> None:
         with self._lifecycle_lock:
@@ -814,70 +763,60 @@ class AppRuntime:
             self._shutdown = True
             self.phase = RuntimePhase.STOPPING
             database_maintenance_service.clear_runtime_control(self)
-            self.set_clipboard_capture_enabled(False)
             self.stop_event.set()
-            folder_index_service.wake_folder_index_worker()
-            handles = list(self._worker_handles.values())
-            for handle in handles:
-                handle.stop_event.set()
-            if self._collector_stop_event is not None:
-                self._collector_stop_event.set()
             collector_thread = self._collector_thread
             collector_control = self.collector_control
+            if self._collector_stop_event is not None:
+                self._collector_stop_event.set()
 
-        adapter_shutdown = False
-        if collector_thread:
-            joiner = getattr(collector_thread, "join", None)
-            if joiner is not None:
-                joiner(timeout=5)
-            if _thread_reference_is_alive(collector_thread):
-                shutdown_adapter = getattr(self._adapter, "shutdown", None)
-                if shutdown_adapter is not None:
-                    shutdown_adapter()
-                    adapter_shutdown = True
-                if joiner is not None:
-                    joiner(timeout=5)
-            if _thread_reference_is_alive(collector_thread):
-                collector_control.terminalize_unfinished(
-                    "collector_shutdown_timeout"
-                )
+        # Collector is the primary writer and is stopped before derived workers.
+        if collector_thread is not None:
+            collector_thread.join(timeout=5)
+            if collector_thread.is_alive():
+                collector_control.terminalize_unfinished("collector_shutdown_timeout")
+
+        with self._lifecycle_lock:
+            handles = list(self._worker_handles.values())
+            folder_index_service.wake_folder_index_worker()
+            for handle in handles:
+                handle.stop_event.set()
 
         for handle in handles:
-            thread = handle.thread
-            if thread is not None:
-                joiner = getattr(thread, "join", None)
-                if joiner is not None:
-                    joiner(timeout=5)
+            if handle.thread is not None:
+                handle.thread.join(timeout=5)
+
+        # Platform resources are torn down only after all runtime worker stop signals
+        # have been delivered and their bounded joins have completed.
+        self._adapter.shutdown()
+
+        surviving_workers = [
+            handle for handle in handles if _thread_is_alive(handle.thread)
+        ]
+        collector_alive = _thread_is_alive(collector_thread)
+        writers_stopped = not collector_alive and not surviving_workers
 
         with self._lifecycle_lock:
             self._worker_handles = {
-                name: handle
-                for name, handle in self._worker_handles.items()
-                if _thread_reference_is_alive(handle.thread)
+                handle.spec.name: handle for handle in surviving_workers
             }
+            if self.owns_application_instance and writers_stopped:
+                if self._initialized:
+                    activity_lifecycle_service.close_all_open_activities()
+                    set_setting("collector_status", "stopped")
+                release_single_instance()
+                self.owns_application_instance = False
+                self.phase = RuntimePhase.STOPPED
+            elif self.owns_application_instance:
+                self.phase = RuntimePhase.FAILED
+                collector_health.record_health_code("shutdown_writer_still_alive")
+                logging.error(
+                    "app shutdown retained instance lock collector_alive=%s workers=%s",
+                    collector_alive,
+                    [handle.spec.name for handle in surviving_workers],
+                )
+            else:
+                self.phase = RuntimePhase.STOPPED
 
-        writers = [collector_thread, *(handle.thread for handle in handles)]
-        writers_stopped = not any(
-            _thread_reference_is_alive(thread) for thread in writers
-        )
-        if self.owns_application_instance and writers_stopped:
-            if self._initialized:
-                activity_lifecycle_service.close_all_open_activities()
-                set_setting("collector_status", "stopped")
-            release_single_instance()
-            self.owns_application_instance = False
-            self.phase = RuntimePhase.STOPPED
-        elif self.owns_application_instance:
-            self.phase = RuntimePhase.FAILED
-            collector_health.record_health_code("shutdown_writer_still_alive")
-            logging.error("app shutdown retained instance lock: writer alive")
-        else:
-            self.phase = RuntimePhase.STOPPED
-
-        if not adapter_shutdown:
-            shutdown_adapter = getattr(self._adapter, "shutdown", None)
-            if shutdown_adapter is not None:
-                shutdown_adapter()
         logging.info("app shutdown writers_stopped=%s", writers_stopped)
 
 
