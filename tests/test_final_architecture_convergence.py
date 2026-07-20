@@ -9,7 +9,7 @@ from worktrace import db
 from worktrace.collector.collector import CollectorControl, CollectorHoldState
 from worktrace.constants import EXCLUDED_PROJECT, UNCATEGORIZED_PROJECT
 from worktrace.platforms.base import ActiveWindow
-from worktrace.runtime.app_runtime import (
+from worktrace.runtime.contracts import (
     RuntimeStartResult,
     WorkerStartupState,
     WorkerStartupStatus,

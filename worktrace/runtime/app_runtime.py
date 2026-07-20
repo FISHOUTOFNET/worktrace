@@ -28,6 +28,9 @@ from ..services import (
 )
 from ..services.settings_service import set_setting
 from ..worker_health import WorkerHealthRegistry, WorkerHealthReporter
+from .contracts import RuntimeStartResult as _RuntimeStartResult
+from .contracts import WorkerStartupState as _WorkerStartupState
+from .contracts import WorkerStartupStatus as _WorkerStartupStatus
 
 if TYPE_CHECKING:
     class _Paths:
@@ -47,30 +50,6 @@ class RuntimePhase(str, Enum):
     STOPPING = "stopping"
     STOPPED = "stopped"
     FAILED = "failed"
-
-
-class WorkerStartupState(str, Enum):
-    STARTING = "starting"
-    READY = "ready"
-    DEGRADED = "degraded"
-    FAILED = "failed"
-    STOPPED = "stopped"
-
-
-@dataclass(frozen=True)
-class WorkerStartupStatus:
-    state: WorkerStartupState
-    ready: bool
-    started: bool = False
-    error_code: str | None = None
-
-    def to_dict(self) -> dict[str, object]:
-        return {
-            "state": self.state.value,
-            "ready": self.ready,
-            "started": self.started,
-            "error_code": self.error_code,
-        }
 
 
 @dataclass(frozen=True)
@@ -147,7 +126,7 @@ class _OwnedWorkerReporter:
 
 @dataclass(frozen=True)
 class WorkerStartupReport:
-    workers: dict[str, WorkerStartupStatus]
+    workers: dict[str, _WorkerStartupStatus]
     error_code: str | None = None
 
     @property
@@ -161,35 +140,6 @@ class WorkerStartupReport:
     @property
     def failed_workers(self) -> tuple[str, ...]:
         return tuple(name for name, status in self.workers.items() if not status.ready)
-
-
-@dataclass(frozen=True)
-class RuntimeStartResult:
-    """Complete and exact result of the authorized startup sequence."""
-
-    ok: bool
-    collector_ready: bool
-    workers: dict[str, WorkerStartupStatus]
-    already_running: bool = False
-    degraded: bool = False
-    error_code: str | None = None
-
-    @property
-    def failed_workers(self) -> tuple[str, ...]:
-        return tuple(name for name, status in self.workers.items() if not status.ready)
-
-    def to_dict(self) -> dict[str, object]:
-        return {
-            "ok": self.ok,
-            "collector_ready": self.collector_ready,
-            "workers": {
-                name: status.to_dict()
-                for name, status in sorted(self.workers.items())
-            },
-            "already_running": self.already_running,
-            "degraded": self.degraded,
-            "error_code": self.error_code,
-        }
 
 
 def _choose_adapter() -> RuntimePlatformAdapter:
@@ -349,7 +299,7 @@ class AppRuntime:
             "degraded_workers": list(self._worker_health.degraded_workers()),
         }
 
-    def worker_registry_snapshot(self) -> dict[str, WorkerStartupStatus]:
+    def worker_registry_snapshot(self) -> dict[str, _WorkerStartupStatus]:
         with self._lifecycle_lock:
             return {
                 name: self._status_for_handle(handle, started=False)
@@ -361,25 +311,25 @@ class AppRuntime:
         handle: WorkerHandle,
         *,
         started: bool,
-    ) -> WorkerStartupStatus:
+    ) -> _WorkerStartupStatus:
         alive = _thread_is_alive(handle.thread)
         ready = handle.ready_event.is_set() and alive
         if ready:
-            state = WorkerStartupState.READY
+            state = _WorkerStartupState.READY
         elif handle.failed_event.is_set() or handle.error_code:
-            state = WorkerStartupState.FAILED
+            state = _WorkerStartupState.FAILED
         elif alive:
-            state = WorkerStartupState.STARTING
+            state = _WorkerStartupState.STARTING
         else:
-            state = WorkerStartupState.STOPPED
-        return WorkerStartupStatus(
+            state = _WorkerStartupState.STOPPED
+        return _WorkerStartupStatus(
             state=state,
             ready=ready,
             started=started,
             error_code=handle.error_code,
         )
 
-    def _start_worker(self, spec: WorkerSpec) -> WorkerStartupStatus:
+    def _start_worker(self, spec: WorkerSpec) -> _WorkerStartupStatus:
         existing = self._worker_handles.get(spec.name)
         if existing is not None and _thread_is_alive(existing.thread):
             return self._await_worker_startup(existing, started=False)
@@ -406,8 +356,8 @@ class AppRuntime:
             handle.failed_event.set()
             self._worker_handles.pop(spec.name, None)
             logging.exception("worker thread start failed worker=%s", spec.name)
-            return WorkerStartupStatus(
-                WorkerStartupState.FAILED,
+            return _WorkerStartupStatus(
+                _WorkerStartupState.FAILED,
                 False,
                 started=False,
                 error_code=handle.error_code,
@@ -419,7 +369,7 @@ class AppRuntime:
         handle: WorkerHandle,
         *,
         started: bool,
-    ) -> WorkerStartupStatus:
+    ) -> _WorkerStartupStatus:
         deadline = time.monotonic() + max(0.1, handle.spec.startup_timeout_seconds)
         while time.monotonic() < deadline:
             if handle.ready_event.wait(timeout=0.05):
@@ -433,8 +383,8 @@ class AppRuntime:
             handle.thread.join(timeout=1.0)
         if not _thread_is_alive(handle.thread):
             self._worker_handles.pop(handle.spec.name, None)
-        return WorkerStartupStatus(
-            WorkerStartupState.FAILED,
+        return _WorkerStartupStatus(
+            _WorkerStartupState.FAILED,
             False,
             started=started,
             error_code=handle.error_code,
@@ -444,8 +394,8 @@ class AppRuntime:
         with self._lifecycle_lock:
             if not self._initialized or not self.owns_application_instance:
                 statuses = {
-                    name: WorkerStartupStatus(
-                        WorkerStartupState.FAILED,
+                    name: _WorkerStartupStatus(
+                        _WorkerStartupState.FAILED,
                         False,
                         error_code="runtime_not_owned",
                     )
@@ -454,8 +404,8 @@ class AppRuntime:
                 return WorkerStartupReport(statuses, "runtime_not_owned")
             if self._shutdown or self.stop_event.is_set():
                 statuses = {
-                    name: WorkerStartupStatus(
-                        WorkerStartupState.STOPPED,
+                    name: _WorkerStartupStatus(
+                        _WorkerStartupState.STOPPED,
                         False,
                         error_code="runtime_stopping",
                     )
@@ -474,10 +424,10 @@ class AppRuntime:
             )
             return WorkerStartupReport(statuses, error_code)
 
-    def start_authorized_collection(self) -> RuntimeStartResult:
+    def start_authorized_collection(self) -> _RuntimeStartResult:
         with self._lifecycle_lock:
             if not self._initialized or not self.owns_application_instance:
-                return RuntimeStartResult(
+                return _RuntimeStartResult(
                     ok=False,
                     collector_ready=False,
                     workers={},
@@ -485,7 +435,7 @@ class AppRuntime:
                     error_code="runtime_not_owned",
                 )
             if self._shutdown or self.stop_event.is_set():
-                return RuntimeStartResult(
+                return _RuntimeStartResult(
                     ok=False,
                     collector_ready=False,
                     workers={},
@@ -507,7 +457,7 @@ class AppRuntime:
                 if error_code in {"collector_stop_timeout", "runtime_stopping"}
                 else RuntimePhase.RECOVERABLE_FAILURE
             )
-            return RuntimeStartResult(
+            return _RuntimeStartResult(
                 ok=False,
                 collector_ready=False,
                 workers={},
@@ -521,8 +471,8 @@ class AppRuntime:
             logging.exception("background worker startup failed")
             report = WorkerStartupReport(
                 {
-                    name: WorkerStartupStatus(
-                        WorkerStartupState.FAILED,
+                    name: _WorkerStartupStatus(
+                        _WorkerStartupState.FAILED,
                         False,
                         error_code="worker_start_failed",
                     )
@@ -533,7 +483,7 @@ class AppRuntime:
 
         degraded = not report.ready
         self.phase = RuntimePhase.DEGRADED if degraded else RuntimePhase.RUNNING
-        return RuntimeStartResult(
+        return _RuntimeStartResult(
             ok=True,
             collector_ready=True,
             workers=report.workers,
@@ -823,11 +773,8 @@ class AppRuntime:
 __all__ = [
     "AppRuntime",
     "RuntimePhase",
-    "RuntimeStartResult",
     "WorkerHandle",
     "WorkerSpec",
     "WorkerStartupReport",
     "WorkerStartupReporter",
-    "WorkerStartupState",
-    "WorkerStartupStatus",
 ]

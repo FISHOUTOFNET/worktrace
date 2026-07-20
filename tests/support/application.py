@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 from worktrace.api.app_api import ApplicationControlService
 from worktrace.api.application_services import ApplicationServices
-from worktrace.runtime.app_runtime import RuntimeStartResult
+from worktrace.runtime.contracts import RuntimeStartResult
 from worktrace.webview_ui.bridge import WebViewBridge
 
 

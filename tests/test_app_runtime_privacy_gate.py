@@ -10,11 +10,9 @@ from tests.support.application import TestMaintenance
 from worktrace.api.app_api import ApplicationControlService
 from worktrace.platforms.fake_adapter import FakeAdapter
 from worktrace.runtime import app_runtime as runtime_module
-from worktrace.runtime.app_runtime import (
-    AppRuntime,
-    RuntimePhase,
+from worktrace.runtime.app_runtime import AppRuntime, RuntimePhase, WorkerSpec
+from worktrace.runtime.contracts import (
     RuntimeStartResult,
-    WorkerSpec,
     WorkerStartupState,
     WorkerStartupStatus,
 )

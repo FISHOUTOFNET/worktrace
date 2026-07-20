@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Protocol
 
-from ..runtime.app_runtime import RuntimeStartResult
+from ..runtime.contracts import RuntimeStartResult
 from ..services import privacy_gate_service
 from . import settings_api
 

@@ -3,13 +3,8 @@ from types import SimpleNamespace
 import pytest
 
 from worktrace.runtime import app_runtime
-from worktrace.runtime.app_runtime import (
-    AppRuntime,
-    RuntimePhase,
-    WorkerStartupReport,
-    WorkerStartupState,
-    WorkerStartupStatus,
-)
+from worktrace.runtime.app_runtime import AppRuntime, RuntimePhase, WorkerStartupReport
+from worktrace.runtime.contracts import WorkerStartupState, WorkerStartupStatus
 
 pytestmark = [pytest.mark.db, pytest.mark.collector_runtime, pytest.mark.integration]
 
