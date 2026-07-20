@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 import pytest
@@ -42,6 +43,18 @@ def test_database_connection_has_no_report_policy_or_classifier_module():
     assert "_REPORT_STRUCTURE_SETTINGS" not in source
     assert "_classify_report_structure_sql" not in source
     assert not Path("worktrace/report_generation_classifier.py").exists()
+
+
+def test_no_source_imports_retired_report_generation_classifier():
+    retired = "worktrace.report_generation_classifier"
+    for root in (Path("worktrace"), Path("tests")):
+        for path in root.rglob("*.py"):
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ImportFrom):
+                    assert node.module != retired, path
+                if isinstance(node, ast.Import):
+                    assert retired not in {alias.name for alias in node.names}, path
 
 
 def test_raw_connection_write_does_not_infer_report_generation(temp_db):
