@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from dataclasses import dataclass
 from enum import Enum
 import sqlite3
 import threading
@@ -19,25 +18,31 @@ class WriteGatePhase(str, Enum):
     EXCLUSIVE = "exclusive"
 
 
-@dataclass(frozen=True)
 class WriteDrainLease:
-    """Short-lived capability for promoting one drained window to exclusivity."""
+    """Capability owned by the thread holding one physical maintenance window."""
 
-    _gate: "ProcessDatabaseWriteGate"
-    _owner_thread_id: int
+    def __init__(self, gate: "ProcessDatabaseWriteGate", owner_thread_id: int) -> None:
+        self._gate = gate
+        self._owner_thread_id = int(owner_thread_id)
+        self._recovery_handoff_completed = False
 
     def promote(self) -> None:
         self._gate.promote_to_exclusive(self._owner_thread_id)
 
+    def handoff_to_recovery_block(self, reason: str) -> None:
+        """Atomically convert this exclusive lease into a fail-closed block."""
+
+        if self._recovery_handoff_completed:
+            raise sqlite3.OperationalError("write_gate_recovery_handoff_already_completed")
+        self._gate._handoff_exclusive_to_recovery_block(  # noqa: SLF001
+            self._owner_thread_id,
+            reason,
+        )
+        self._recovery_handoff_completed = True
+
 
 class ProcessDatabaseWriteGate:
-    """Reject ordinary writes during maintenance or failed-closed recovery.
-
-    The physical phase tracks one active drain/exclusive operation. A separate
-    recovery block remains latched after that operation has ended whenever
-    runtime restoration was not acknowledged. Only an explicit recovery writer
-    may clear the durable latch while the process remains write-blocked.
-    """
+    """Reject ordinary writes during a physical operation or recovery block."""
 
     def __init__(self) -> None:
         self._lock = threading.RLock()
@@ -47,15 +52,6 @@ class ProcessDatabaseWriteGate:
         self._recovery_block_reason: str | None = None
         self._thread_state = threading.local()
 
-    def active(self) -> bool:
-        """Return whether ordinary writes are currently blocked."""
-
-        with self._lock:
-            return (
-                self._phase is not WriteGatePhase.OPEN
-                or self._recovery_block_reason is not None
-            )
-
     def operation_active(self) -> bool:
         """Return whether a drain/exclusive operation is currently executing."""
 
@@ -63,23 +59,53 @@ class ProcessDatabaseWriteGate:
             return self._phase is not WriteGatePhase.OPEN
 
     def recovery_blocked(self) -> bool:
+        """Return whether runtime recovery still requires explicit confirmation."""
+
         with self._lock:
             return self._recovery_block_reason is not None
+
+    def writes_blocked(self) -> bool:
+        """Return whether ordinary writes are currently rejected."""
+
+        with self._lock:
+            return (
+                self._phase is not WriteGatePhase.OPEN
+                or self._recovery_block_reason is not None
+            )
 
     def recovery_block_reason(self) -> str | None:
         with self._lock:
             return self._recovery_block_reason
 
-    def latch_recovery_block(self, reason: str) -> None:
+    def _set_recovery_block(self, reason: str) -> None:
         normalized = str(reason or "").strip()
         if not normalized:
             raise ValueError("maintenance_recovery_reason_required")
         with self._lock:
             self._recovery_block_reason = normalized
 
-    def clear_recovery_block(self) -> None:
+    def _clear_recovery_block(self) -> None:
         with self._lock:
             self._recovery_block_reason = None
+
+    def _handoff_exclusive_to_recovery_block(
+        self,
+        owner_thread_id: int,
+        reason: str,
+    ) -> None:
+        normalized = str(reason or "").strip()
+        if not normalized:
+            raise ValueError("maintenance_recovery_reason_required")
+        owner = int(owner_thread_id)
+        with self._lock:
+            if (
+                self._phase is not WriteGatePhase.EXCLUSIVE
+                or self._owner_thread_id != owner
+            ):
+                raise sqlite3.OperationalError("write_gate_not_exclusive_owner")
+            if self._recovery_block_reason is not None:
+                raise sqlite3.OperationalError("write_gate_recovery_handoff_already_completed")
+            self._recovery_block_reason = normalized
 
     def phase(self) -> WriteGatePhase:
         with self._lock:
@@ -97,8 +123,8 @@ class ProcessDatabaseWriteGate:
         return int(getattr(self._thread_state, "recovery_write_depth", 0)) > 0
 
     @contextmanager
-    def allow_recovery_write(self) -> Iterator[None]:
-        """Permit only the current thread to update the durable recovery latch."""
+    def _maintenance_recovery_write_scope(self) -> Iterator[None]:
+        """Permit the maintenance owner to update only the durable recovery latch."""
 
         depth = int(getattr(self._thread_state, "recovery_write_depth", 0))
         self._thread_state.recovery_write_depth = depth + 1
