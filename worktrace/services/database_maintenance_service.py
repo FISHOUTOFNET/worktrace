@@ -13,7 +13,13 @@ from ..collector.runtime_control import RuntimeCollectorControl
 from ..database_content_manifest import DELETE_ORDER
 from ..db import get_connection, seed_defaults
 from ..domain_unit_of_work import DomainUnitOfWork
-from ..write_gate import DATABASE_WRITE_GATE, WriteDrainLease
+from ..write_gate import (
+    DATABASE_MAINTENANCE_ERROR,
+    DATABASE_RECOVERY_ERROR,
+    DATABASE_WRITE_GATE,
+    WriteDrainLease,
+    WriteGatePhase,
+)
 from . import maintenance_recovery_latch_repository
 from . import privacy_gate_service
 from .database_maintenance_barrier import drain_existing_writers
@@ -174,11 +180,6 @@ class RuntimeMaintenanceCoordinator:
             or DATABASE_WRITE_GATE.recovery_blocked()
         )
 
-    def active(self) -> bool:
-        """Return whether either a physical operation or recovery barrier exists."""
-
-        return self.operation_active() or self.recovery_blocked()
-
     def status(self) -> MaintenanceStatus:
         control, _epoch = self._control_snapshot()
         collector_running = bool(
@@ -207,13 +208,21 @@ class RuntimeMaintenanceCoordinator:
         with self._state_lock:
             return self._runtime_control, self._runtime_control_epoch
 
+    @staticmethod
+    def _runtime_control_is_operational(control: RuntimeMaintenanceControl) -> bool:
+        try:
+            return control.collector_control.hold_state.value == "operational"
+        except Exception:
+            logging.exception("runtime maintenance control state read failed")
+            return False
+
     def hydrate_fail_closed_from_durable(self) -> bool:
         """Hydrate the process barrier before any startup recovery write occurs."""
 
         latch = maintenance_recovery_latch_repository.read_latch()
         if not latch.blocked:
             return False
-        reason = latch.reason or "maintenance_recovery_required"
+        reason = latch.reason or DATABASE_RECOVERY_ERROR
         DATABASE_WRITE_GATE._set_recovery_block(reason)  # noqa: SLF001
         self._set_phase(MaintenancePhase.FAILED_CLOSED)
         return True
@@ -224,13 +233,18 @@ class RuntimeMaintenanceCoordinator:
         *,
         lease: WriteDrainLease | None = None,
     ) -> None:
-        normalized = str(reason or "maintenance_failed_closed").strip()
+        normalized = str(reason or DATABASE_RECOVERY_ERROR).strip()
         if lease is not None:
             lease.handoff_to_recovery_block(normalized)
         else:
             DATABASE_WRITE_GATE._set_recovery_block(normalized)  # noqa: SLF001
         self._set_phase(MaintenancePhase.FAILED_CLOSED)
-        clear_runtime_activity_state(f"{normalized}_fail_closed")
+        try:
+            clear_runtime_activity_state(f"{normalized}_fail_closed")
+        except Exception:
+            logging.exception(
+                "runtime activity state cleanup failed during fail-closed handoff"
+            )
         try:
             with DATABASE_WRITE_GATE._maintenance_recovery_write_scope():  # noqa: SLF001
                 maintenance_recovery_latch_repository.persist_fail_closed(normalized)
@@ -246,15 +260,17 @@ class RuntimeMaintenanceCoordinator:
         with self._operation_lock:
             if DATABASE_WRITE_GATE.operation_active():
                 raise MaintenanceRecoveryError("maintenance_recovery_not_verified")
+
             if not DATABASE_WRITE_GATE.recovery_blocked():
-                if self.phase is MaintenancePhase.FAILED_CLOSED:
-                    self._set_phase(MaintenancePhase.IDLE)
-                return
+                latch = maintenance_recovery_latch_repository.read_latch()
+                if not latch.blocked and self.phase is not MaintenancePhase.FAILED_CLOSED:
+                    return
+                reason = latch.reason or "maintenance_recovery_state_inconsistent"
+                DATABASE_WRITE_GATE._set_recovery_block(reason)  # noqa: SLF001
+                self._set_phase(MaintenancePhase.FAILED_CLOSED)
 
             control, control_epoch = self._control_snapshot()
-            if control is None:
-                raise MaintenanceRecoveryError("maintenance_recovery_not_verified")
-            if control.collector_control.hold_state.value != "operational":
+            if control is None or not self._runtime_control_is_operational(control):
                 raise MaintenanceRecoveryError("maintenance_recovery_not_verified")
 
             with DATABASE_WRITE_GATE._maintenance_recovery_write_scope():  # noqa: SLF001
@@ -265,19 +281,24 @@ class RuntimeMaintenanceCoordinator:
                     self._runtime_control is not control
                     or self._runtime_control_epoch != control_epoch
                 )
-                if not superseded:
+                operational = self._runtime_control_is_operational(control)
+                if not superseded and operational:
                     DATABASE_WRITE_GATE._clear_recovery_block()  # noqa: SLF001
                     self._phase = MaintenancePhase.IDLE
                     return
 
-            reason = "maintenance_recovery_superseded"
+            reason = (
+                "maintenance_recovery_superseded"
+                if superseded
+                else "maintenance_recovery_not_verified"
+            )
             DATABASE_WRITE_GATE._set_recovery_block(reason)  # noqa: SLF001
             self._set_phase(MaintenancePhase.FAILED_CLOSED)
             try:
                 with DATABASE_WRITE_GATE._maintenance_recovery_write_scope():  # noqa: SLF001
                     maintenance_recovery_latch_repository.persist_fail_closed(reason)
             except Exception:
-                logging.exception("superseded maintenance recovery persistence failed")
+                logging.exception("failed maintenance recovery persistence failed")
             raise MaintenanceRecoveryError(reason)
 
     @staticmethod
@@ -327,7 +348,6 @@ class RuntimeMaintenanceCoordinator:
         control: RuntimeMaintenanceControl,
         command_kind: str,
         terminal_state: str,
-        reason: str,
     ) -> None:
         resolved = dict(result)
         command_id = str(resolved.get("command_id") or "")
@@ -387,9 +407,9 @@ class RuntimeMaintenanceCoordinator:
         timeout_seconds: float,
     ) -> Iterator[RuntimeMaintenanceState]:
         if self.recovery_blocked():
-            raise MaintenanceInProgressError("maintenance_failed_closed")
+            raise MaintenanceInProgressError(DATABASE_RECOVERY_ERROR)
         if not self._operation_lock.acquire(blocking=False):
-            raise MaintenanceInProgressError("maintenance_operation_in_progress")
+            raise MaintenanceInProgressError(DATABASE_MAINTENANCE_ERROR)
 
         state: RuntimeMaintenanceState | None = None
         control: RuntimeMaintenanceControl | None = None
@@ -398,7 +418,7 @@ class RuntimeMaintenanceCoordinator:
         operation_completed = False
         try:
             if self.recovery_blocked():
-                raise MaintenanceInProgressError("maintenance_failed_closed")
+                raise MaintenanceInProgressError(DATABASE_RECOVERY_ERROR)
             control, _control_epoch = self._control_snapshot()
             state = self._capture_state(control)
             self._set_phase(MaintenancePhase.HOLD_REQUESTED)
@@ -418,7 +438,6 @@ class RuntimeMaintenanceCoordinator:
                     control=control,
                     command_kind="maintenance_hold",
                     terminal_state="held",
-                    reason=reason,
                 )
                 hold_acquired = True
             self._set_phase(MaintenancePhase.HELD)
@@ -451,7 +470,6 @@ class RuntimeMaintenanceCoordinator:
                             control=control,
                             command_kind="database_reset",
                             terminal_state="held",
-                            reason=reason,
                         )
 
                     self._set_phase(MaintenancePhase.RESTORING)
@@ -470,7 +488,6 @@ class RuntimeMaintenanceCoordinator:
                             control=control,
                             command_kind="maintenance_release",
                             terminal_state="operational",
-                            reason=reason,
                         )
                 except Exception as exc:
                     should_fail_closed = (
@@ -487,7 +504,7 @@ class RuntimeMaintenanceCoordinator:
                         failure_reason = f"{reason}_{command}"
                         exclusive_lease = (
                             lease
-                            if DATABASE_WRITE_GATE.phase().value == "exclusive"
+                            if DATABASE_WRITE_GATE.phase() is WriteGatePhase.EXCLUSIVE
                             else None
                         )
                         self._enter_fail_closed(
