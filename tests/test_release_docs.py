@@ -7,7 +7,6 @@ the documentation governance rules so the docs do not re-bloat.
 They are intentionally cross-platform: they only read text files and never
 invoke PyInstaller, start the UI, or require Windows.
 """
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -125,7 +124,7 @@ def test_ci_workflows_contain_required_release_smoke_steps():
 
     for phrase in (
         'python-version: "3.11"',
-        "pip install --disable-pip-version-check -q -r requirements.txt",
+        "pip install --disable-pip-version-check -q -r requirements-dev.txt",
         "python -m pytest",
         "node --test tests/webview/*.test.js",
         "python -m PyInstaller --noconfirm --clean WorkTrace.spec",
