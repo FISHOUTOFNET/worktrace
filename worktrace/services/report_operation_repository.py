@@ -68,11 +68,10 @@ def load_operations_by_date(
         ):
             raise InvalidInputError("操作负载版本损坏")
         try:
-            binding = ReplayBinding(str(payload.pop("replay_binding")))
+            ReplayBinding(str(payload["replay_binding"]))
         except (KeyError, ValueError) as exc:
             raise InvalidInputError("操作重放绑定损坏") from exc
         operation["payload"] = payload
-        operation["replay_binding"] = binding.value
         operation["members"] = {
             role: list(values)
             for role, values in members_by_operation[int(operation["id"])].items()
