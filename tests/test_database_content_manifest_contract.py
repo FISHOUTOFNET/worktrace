@@ -51,13 +51,15 @@ def test_backup_and_clear_sets_derive_from_manifest(temp_db) -> None:
     assert all(manifest[name].backup_rank is not None for name in BACKUP_TABLES)
 
 
-def test_delete_order_places_foreign_key_children_before_parents(temp_db) -> None:
+def test_delete_order_places_foreign_key_children_before_distinct_parents(
+    temp_db,
+) -> None:
     positions = {table: index for index, table in enumerate(DELETE_ORDER)}
     with get_connection() as conn:
         for child in DELETE_ORDER:
             for row in conn.execute(f"PRAGMA foreign_key_list({child})").fetchall():
                 parent = str(row["table"])
-                if parent in positions:
+                if parent in positions and parent != child:
                     assert positions[child] < positions[parent], (
                         f"{child} must be deleted before parent {parent}"
                     )
