@@ -7,6 +7,19 @@ import pytest
 
 pytestmark = [pytest.mark.unit, pytest.mark.contract, pytest.mark.parallel_safe]
 ROOT = Path(__file__).resolve().parents[1]
+MAINTENANCE_FIELDS = {
+    "maintenance_in_progress",
+    "maintenance_restored",
+    "recovery_blocked",
+    "blocked_reason",
+    "collector_running",
+    "collector_status",
+    "user_paused",
+}
+
+
+def _source(relative: str) -> str:
+    return (ROOT / relative).read_text(encoding="utf-8")
 
 
 def _tree(relative: str) -> ast.Module:
@@ -71,3 +84,37 @@ def test_folder_index_worker_health_is_required() -> None:
     assert worker.args.kw_defaults[health_index] is None
     annotation = ast.unparse(keyword_only[health_index].annotation)
     assert "None" not in annotation
+
+
+def test_maintenance_dto_is_single_exact_contract_across_backend_and_ui() -> None:
+    tree = _tree("worktrace/services/database_maintenance_service.py")
+    status_class = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "MaintenanceStatus"
+    )
+    backend_fields = {
+        node.target.id
+        for node in status_class.body
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
+    }
+    assert backend_fields == MAINTENANCE_FIELDS
+
+    html = _source("worktrace/webview_ui/index.html")
+    javascript = _source("worktrace/webview_ui/js/settings.js")
+    for field in MAINTENANCE_FIELDS:
+        assert f'data-settings-key="{field}"' in html
+        assert f'"{field}"' in javascript
+    assert "secure_import_in_progress" not in html
+    assert "secure_import_in_progress" not in javascript
+
+
+def test_failed_closed_is_distinct_from_active_maintenance() -> None:
+    status = _function(
+        "worktrace/services/database_maintenance_service.py",
+        "status",
+    )
+    source = ast.unparse(status)
+    assert "MaintenancePhase.FAILED_CLOSED" in source
+    assert "recovery_blocked" in source
+    assert "maintenance_in_progress" in source
