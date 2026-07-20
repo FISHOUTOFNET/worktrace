@@ -103,6 +103,250 @@ def _read_csv(path: Path) -> tuple[list[str], list[list[str]]]:
     return rows[0], rows[1:]
 
 
+def _summarize(temp_db, date_from: str, date_to: str) -> dict:
+    """Return the canonical statistics/export summary for assertions."""
+    from worktrace.services import statistics_service
+
+    return statistics_service.get_statistics_export_summary(date_from, date_to)
+
+
+def _assert_projection_contract(
+    summary: dict,
+    *,
+    activity_count: int,
+    session_count: int,
+    export_row_count: int,
+    duration_seconds: int,
+) -> None:
+    """Assert the four semantic counters maintain their current-only meaning."""
+    assert summary["activity_count"] == activity_count, (
+        f"activity_count expected {activity_count}, got {summary['activity_count']}"
+    )
+    assert summary["session_count"] == session_count, (
+        f"session_count expected {session_count}, got {summary['session_count']}"
+    )
+    assert summary["export_row_count"] == export_row_count, (
+        f"export_row_count expected {export_row_count}, "
+        f"got {summary['export_row_count']}"
+    )
+    assert summary["total_duration_seconds"] == duration_seconds, (
+        f"total_duration_seconds expected {duration_seconds}, "
+        f"got {summary['total_duration_seconds']}"
+    )
+    assert summary["export_preview"]["session_count"] == session_count, (
+        "export_preview.session_count must mirror top-level session_count"
+    )
+    assert summary["export_preview"]["export_row_count"] == export_row_count, (
+        "export_preview.export_row_count must mirror top-level export_row_count"
+    )
+    assert (
+        summary["export_preview"]["included_activity_count"] == activity_count
+    ), (
+        "export_preview.included_activity_count must mirror top-level "
+        "activity_count"
+    )
+
+
+def test_projection_empty_data_contract(temp_db):
+    """Scenario: empty range — all counters are zero and no rows are produced."""
+    summary = _summarize(temp_db, "2026-06-27", "2026-06-27")
+    _assert_projection_contract(
+        summary,
+        activity_count=0,
+        session_count=0,
+        export_row_count=0,
+        duration_seconds=0,
+    )
+    rows = export_service.build_statistics_csv_rows("2026-06-27", "2026-06-27")
+    assert rows == []
+    assert summary["by_project"] == []
+    assert summary["by_app"] == []
+    assert summary["by_status"] == []
+
+
+def test_projection_one_to_one_contract(temp_db):
+    """Scenario: one closed activity produces one session and one export row."""
+    pid = project_service.create_project("Client")
+    _seed_closed_activity(
+        day="2026-06-25",
+        project_id=pid,
+        app="Word",
+        start="09:00:00",
+        end="09:30:00",
+    )
+    summary = _summarize(temp_db, "2026-06-25", "2026-06-25")
+    _assert_projection_contract(
+        summary,
+        activity_count=1,
+        session_count=1,
+        export_row_count=1,
+        duration_seconds=1800,
+    )
+    rows = export_service.build_statistics_csv_rows("2026-06-25", "2026-06-25")
+    assert len(rows) == 1
+    assert rows[0]["duration_seconds"] == 1800
+
+
+def test_projection_two_activities_aggregated_to_one_row(temp_db):
+    """Scenario: two contiguous closed activities (normal then idle) collapse
+    into a single report session/export row while activity_count stays 2."""
+    pid = project_service.create_project("Aggregator")
+    _seed_closed_activity(
+        day="2026-06-25",
+        project_id=pid,
+        app="Word",
+        resource="normal.docx",
+        start="09:00:00",
+        end="09:30:00",
+        status="normal",
+    )
+    _seed_closed_activity(
+        day="2026-06-25",
+        project_id=pid,
+        app="Idle",
+        process="idle.exe",
+        resource="idle.docx",
+        start="09:30:00",
+        end="10:00:00",
+        status="idle",
+    )
+    summary = _summarize(temp_db, "2026-06-25", "2026-06-25")
+    _assert_projection_contract(
+        summary,
+        activity_count=2,
+        session_count=1,
+        export_row_count=1,
+        duration_seconds=3600,
+    )
+    rows = export_service.build_statistics_csv_rows("2026-06-25", "2026-06-25")
+    assert len(rows) == 1
+    assert rows[0]["duration_seconds"] == 3600
+    assert rows[0]["start_time"].endswith("09:00:00")
+    assert rows[0]["end_time"].endswith("10:00:00")
+
+
+def test_projection_single_activity_split_across_days(temp_db):
+    """Scenario: one activity crossing midnight is split into two report
+    slices / export rows, while activity_count stays 1."""
+    pid = project_service.create_project("CrossDay")
+    aid = activity_service.create_activity(
+        "Word",
+        "winword.exe",
+        "cross.docx",
+        start_time="2026-06-25 23:00:00",
+        project_id=pid,
+        file_path_hint="C:\\secret\\cross.docx",
+        note="note",
+        status="normal",
+    )
+    activity_service.finalize_created_activity(aid)
+    activity_service.close_activity(aid, "2026-06-26 01:00:00")
+    summary = _summarize(temp_db, "2026-06-25", "2026-06-26")
+    _assert_projection_contract(
+        summary,
+        activity_count=1,
+        session_count=2,
+        export_row_count=2,
+        duration_seconds=7200,
+    )
+    rows = export_service.build_statistics_csv_rows("2026-06-25", "2026-06-26")
+    assert len(rows) == 2
+    by_date = {row["date"]: row for row in rows}
+    assert sorted(by_date) == ["2026-06-25", "2026-06-26"]
+    assert by_date["2026-06-25"]["duration_seconds"] == 3600
+    assert by_date["2026-06-26"]["duration_seconds"] == 3600
+    assert by_date["2026-06-25"]["start_time"].endswith("23:00:00")
+    assert by_date["2026-06-26"]["end_time"].endswith("01:00:00")
+
+
+def test_projection_filtered_activities_keep_accurate_counts(temp_db):
+    """Scenario: hidden and in-progress activities are excluded from every
+    counter while still-closed visible activities remain accounted for."""
+    pid = project_service.create_project("Filtered")
+    visible_id = _seed_closed_activity(
+        day="2026-06-25",
+        project_id=pid,
+        app="Word",
+        resource="visible.docx",
+        start="09:00:00",
+        end="09:30:00",
+        status="normal",
+    )
+    hidden_id = _seed_closed_activity(
+        day="2026-06-25",
+        project_id=pid,
+        app="Word",
+        resource="hidden.docx",
+        start="10:00:00",
+        end="10:30:00",
+        status="normal",
+    )
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE activity_log SET is_hidden = 1 WHERE id = ?", (hidden_id,)
+        )
+    in_progress_id = activity_service.create_activity(
+        "Word",
+        "winword.exe",
+        "inprog.docx",
+        start_time="2026-06-25 11:00:00",
+        project_id=pid,
+        file_path_hint="C:\\secret\\inprog.docx",
+        note="note",
+        status="normal",
+    )
+    activity_service.finalize_created_activity(in_progress_id)
+    assert visible_id != hidden_id != in_progress_id
+    summary = _summarize(temp_db, "2026-06-25", "2026-06-25")
+    _assert_projection_contract(
+        summary,
+        activity_count=1,
+        session_count=1,
+        export_row_count=1,
+        duration_seconds=1800,
+    )
+    rows = export_service.build_statistics_csv_rows("2026-06-25", "2026-06-25")
+    assert len(rows) == 1
+    assert rows[0]["start_time"].endswith("09:00:00")
+
+
+def test_projection_all_statuses_paused_excluded_and_aggregated(temp_db):
+    """Scenario: five contiguous closed activities of every official status
+    collapse into two aggregated export rows while paused is excluded from
+    every counter (activity_count == 4)."""
+    pid = project_service.create_project("AllStatuses")
+    statuses = ("normal", "idle", "paused", "excluded", "error")
+    starts = ("09:00:00", "09:30:00", "10:00:00", "10:30:00", "11:00:00")
+    ends = ("09:30:00", "10:00:00", "10:30:00", "11:00:00", "11:30:00")
+    for status, start, end in zip(statuses, starts, ends):
+        _seed_closed_activity(
+            day="2026-06-26",
+            project_id=pid,
+            app=status.title(),
+            process=f"{status}.exe",
+            resource=f"{status}.txt",
+            start=start,
+            end=end,
+            status=status,
+        )
+    summary = _summarize(temp_db, "2026-06-26", "2026-06-26")
+    _assert_projection_contract(
+        summary,
+        activity_count=4,
+        session_count=2,
+        export_row_count=2,
+        duration_seconds=7200,
+    )
+    rows = export_service.build_statistics_csv_rows("2026-06-26", "2026-06-26")
+    assert len(rows) == 2
+    by_start = {row["start_time"][-8:]: row for row in rows}
+    assert "正常" in by_start["09:00:00"]["status"]
+    assert "空闲" in by_start["09:00:00"]["status"]
+    assert "已排除" in by_start["10:30:00"]["status"]
+    assert "异常" in by_start["10:30:00"]["status"]
+    assert "10:00:00" not in by_start  # paused is dropped
+
+
 def test_build_csv_rows_returns_display_safe_dicts(temp_db):
     pid = project_service.create_project("Client")
     _seed_closed_activity(project_id=pid, file_path_hint="C:\\secret\\A1.docx")
@@ -221,6 +465,7 @@ def test_write_csv_success_creates_utf8_bom_file(temp_db, tmp_path):
     assert out.exists()
     assert result == {
         "activity_count": 1,
+        "export_row_count": 1,
         "duration_seconds": 1800,
         "filename": "report.csv",
     }

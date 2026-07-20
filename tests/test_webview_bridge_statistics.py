@@ -306,6 +306,16 @@ def test_bridge_statistics_summary_display_safe_keys_only(bridge):
         "export_preview",
     }
     assert set(summary.keys()) <= allowed_top_keys
+    required_top_keys = {
+        "date_from", "date_to", "total_duration_seconds", "total_duration",
+        "project_duration_seconds", "project_duration", "activity_count",
+        "session_count", "export_row_count", "project_count", "app_count",
+        "by_project", "by_app", "by_status", "export_preview",
+    }
+    assert required_top_keys <= set(summary.keys()), (
+        f"missing required top-level keys: "
+        f"{required_top_keys - set(summary.keys())}"
+    )
     allowed_group_keys = {
         "key", "display_name", "duration_seconds", "duration",
         "activity_count", "percentage",
@@ -319,7 +329,78 @@ def test_bridge_statistics_summary_display_safe_keys_only(bridge):
         "session_count",
     }
     assert set(summary["export_preview"].keys()) <= allowed_preview_keys
+    required_preview_keys = {
+        "date_from", "date_to", "included_activity_count",
+        "included_duration_seconds", "included_duration", "available_formats",
+        "export_actions_enabled", "export_row_count", "session_count",
+    }
+    assert required_preview_keys <= set(summary["export_preview"].keys()), (
+        f"missing required preview keys: "
+        f"{required_preview_keys - set(summary['export_preview'].keys())}"
+    )
+    # preview and top-level summary share consistent projection counters
+    assert (
+        summary["export_preview"]["session_count"] == summary["session_count"]
+    ), "preview.session_count must match top-level session_count"
+    assert (
+        summary["export_preview"]["export_row_count"]
+        == summary["export_row_count"]
+    ), "preview.export_row_count must match top-level export_row_count"
+    assert (
+        summary["export_preview"]["included_activity_count"]
+        == summary["activity_count"]
+    ), "preview.included_activity_count must match top-level activity_count"
     _assert_no_sensitive_keys(result)
+
+
+def test_bridge_statistics_summary_matches_service_semantics(bridge):
+    """Bridge DTO numeric values must equal the service-level projection."""
+    from worktrace.services import statistics_service
+
+    pid = project_service.create_project("Client")
+    _seed_closed_activity(
+        day="2026-06-25", project_id=pid, app="Word", start="09:00:00",
+        end="09:30:00",
+    )
+    _seed_closed_activity(
+        day="2026-06-25", project_id=pid, app="Excel", process="excel.exe",
+        resource="Report.xlsx", start="10:00:00", end="10:15:00",
+    )
+    service_summary = statistics_service.get_statistics_export_summary(
+        "2026-06-25", "2026-06-25"
+    )
+    bridge_result = bridge.get_statistics_export_summary("2026-06-25", "2026-06-25")
+    assert bridge_result["ok"] is True
+    bridge_summary = bridge_result["summary"]
+    for field in (
+        "activity_count",
+        "session_count",
+        "export_row_count",
+        "total_duration_seconds",
+        "project_duration_seconds",
+        "project_count",
+        "app_count",
+    ):
+        assert bridge_summary[field] == service_summary[field], (
+            f"bridge summary {field}={bridge_summary[field]} must match "
+            f"service value {service_summary[field]}"
+        )
+    preview = bridge_summary["export_preview"]
+    service_preview = service_summary["export_preview"]
+    for field in (
+        "session_count",
+        "export_row_count",
+        "included_activity_count",
+        "included_duration_seconds",
+    ):
+        assert preview[field] == service_preview[field], (
+            f"bridge preview {field}={preview[field]} must match "
+            f"service value {service_preview[field]}"
+        )
+    assert preview["included_activity_count"] == bridge_summary["activity_count"]
+    assert preview["session_count"] == bridge_summary["session_count"]
+    assert preview["export_row_count"] == bridge_summary["export_row_count"]
+    _assert_no_sensitive_keys(bridge_result)
 
 
 def test_bridge_statistics_summary_does_not_write_db(bridge, temp_db):
