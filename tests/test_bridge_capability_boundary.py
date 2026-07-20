@@ -50,6 +50,7 @@ EXPECTED_SHIPPING_METHODS = frozenset(
         "preview_encrypted_backup_manifest",
         "preview_project_rule_impact",
         "preview_project_rules_batch_impact",
+        "recover_database_maintenance",
         "save_timeline_session_edit",
         "set_clipboard_capture_enabled",
         "set_excluded_rules_enabled",
