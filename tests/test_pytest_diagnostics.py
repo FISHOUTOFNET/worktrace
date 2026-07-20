@@ -117,15 +117,15 @@ def test_pytest_runner_streams_progress_but_keeps_test_output_in_log(tmp_path: P
     synthetic = tmp_path / "test_synthetic_progress.py"
     synthetic.write_text(
         """
-import time
+import threading
 
 
 def test_passes():
-    time.sleep(0.12)
+    threading.Event().wait(0.12)
 
 
 def test_fails():
-    time.sleep(0.12)
+    threading.Event().wait(0.12)
     assert False, "SENTINEL_FAILURE"
 """.lstrip(),
         encoding="utf-8",
