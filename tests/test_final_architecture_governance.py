@@ -260,3 +260,45 @@ def test_rule_facade_does_not_directly_execute_sql():
         assert not execute_pattern.search(source), (
             f"{relative}: rule facade must not call .execute() directly"
         )
+
+
+def test_authoritative_docs_have_current_schema_and_maintenance_markers():
+    """Stable doc markers must match the current code contract.
+
+    Checks a small set of stable markers (not full-text matching) so the
+    authoritative docs cannot drift on schema version, payload version,
+    or the core maintenance mutex/recovery contract.
+    """
+    architecture = _source("architecture.md")
+    runtime_contracts = _source("docs/runtime-contracts.md")
+    maintenance_lifecycle = _source("docs/maintenance-lifecycle.md")
+    security_design = _source("docs/v0.2-local-security-design.md")
+    current_state = _source("docs/current-state.md")
+
+    # Schema v12 must not appear as a current-state description in any
+    # authoritative doc.
+    for label, text in (
+        ("architecture.md", architecture),
+        ("docs/runtime-contracts.md", runtime_contracts),
+        ("docs/maintenance-lifecycle.md", maintenance_lifecycle),
+        ("docs/v0.2-local-security-design.md", security_design),
+        ("docs/current-state.md", current_state),
+    ):
+        assert "schema v12" not in text, f"{label}: stale schema v12 reference"
+        assert '"schema_version": "12"' not in text, (
+            f"{label}: stale schema_version 12 reference"
+        )
+
+    # Current schema/payload markers must be present where the contract
+    # is documented.
+    assert "v13" in architecture
+    assert "v13" in runtime_contracts
+    assert "schema v13" in security_design
+    assert "**v13**" in current_state
+
+    # Maintenance lifecycle must document the DRAINING/promote recovery
+    # contract and the external runtime mutation guard added in this
+    # convergence pass.
+    assert "exclusive_finalization_completed" in maintenance_lifecycle
+    assert "external_runtime_mutation_guard" in maintenance_lifecycle
+    assert "sensitive_residue_present" in maintenance_lifecycle

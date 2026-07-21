@@ -209,6 +209,27 @@ class RuntimeMaintenanceCoordinator:
             or DATABASE_WRITE_GATE.recovery_blocked()
         )
 
+    @contextmanager
+    def external_runtime_mutation_guard(self) -> Iterator[None]:
+        """Narrow guard for external user-initiated runtime start/resume.
+
+        Reuses the same operation lock as destructive/snapshot maintenance so
+        that active maintenance and external runtime mutation are mutually
+        exclusive. The guard also rejects when the coordinator is
+        recovery-blocked. Coordinator-internal recovery calls
+        (``restore_after_maintenance`` -> ``start_collector``) do not pass
+        through this guard and therefore cannot self-lock.
+        """
+
+        if not self._operation_lock.acquire(blocking=False):
+            raise MaintenanceInProgressError(DATABASE_MAINTENANCE_ERROR)
+        try:
+            if self.operation_active() or self.recovery_blocked():
+                raise MaintenanceInProgressError(DATABASE_RECOVERY_ERROR)
+            yield
+        finally:
+            self._operation_lock.release()
+
     def status(self) -> MaintenanceStatus:
         control, _epoch = self._control_snapshot()
         try:
@@ -727,7 +748,11 @@ class RuntimeMaintenanceCoordinator:
         body_returned = False
         progress = MaintenanceOperationProgress(intent=intent)
         progress_token: Token[MaintenanceOperationProgress | None] | None = None
-        lease_for_failure: WriteDrainLease | None = None
+        # Tracks whether a failure inside EXCLUSIVE scope has been
+        # finalized (via _finalize_failure_inside_exclusive or post-body
+        # fail-closed handoff). Outer except skips recovery when True;
+        # runs it when False even if draining lease was acquired.
+        exclusive_finalization_completed = False
         try:
             if self.recovery_blocked():
                 raise MaintenanceInProgressError(DATABASE_RECOVERY_ERROR)
@@ -763,7 +788,6 @@ class RuntimeMaintenanceCoordinator:
 
             self._set_phase(MaintenancePhase.DRAINING)
             with DATABASE_WRITE_GATE.draining() as lease:
-                lease_for_failure = lease
                 drain_existing_writers()
                 lease.promote()
                 self._set_phase(MaintenancePhase.EXCLUSIVE)
@@ -790,6 +814,7 @@ class RuntimeMaintenanceCoordinator:
                         lease=lease,
                         timeout_seconds=timeout_seconds,
                     )
+                    exclusive_finalization_completed = True
                     logging.warning(
                         "runtime maintenance failed intent=%s phase=%s exception=%s",
                         intent.value,
@@ -835,12 +860,14 @@ class RuntimeMaintenanceCoordinator:
                         lease=lease,
                         recovery_epoch=progress.recovery_epoch,
                     )
+                    exclusive_finalization_completed = True
                     raise post_body_exc
         except BaseException as exc:
-            # Setup failures (before EXCLUSIVE scope was entered) or drain
-            # failures that could not obtain the EXCLUSIVE lease. The lease, if
-            # any, has already been released by the with-statement.
-            if lease_for_failure is None:
+            # Setup/DRAINING/promote failures never reached EXCLUSIVE
+            # finalization, so restore collector hold, durable intent,
+            # runtime snapshot and recovery seal via the standard path.
+            # Unverifiable restore enters the existing fail-closed state.
+            if not exclusive_finalization_completed:
                 requires_block = self._requires_fail_closed(exc)
                 restored = self._restore_after_failure(
                     state=state,

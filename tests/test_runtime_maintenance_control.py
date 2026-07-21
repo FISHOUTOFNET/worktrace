@@ -529,3 +529,150 @@ def test_kdf_rejects_excessive_resource_parameters():
             b"0" * 16,
             KdfParams(n=2**19, r=8, p=1),
         )
+
+
+def test_maintenance_holding_operation_lock_blocks_external_runtime_start(
+    temp_db, monkeypatch
+):
+    coordinator = RuntimeMaintenanceCoordinator()
+    control = _RuntimeControl()
+    coordinator.register_runtime_control(control)
+    settings_service.set_setting("user_paused", "false")
+    settings_service.set_setting("collector_status", "running")
+    monkeypatch.setattr(
+        database_maintenance_service.privacy_gate_service,
+        "is_privacy_notice_accepted",
+        lambda: True,
+    )
+
+    in_exclusive = threading.Event()
+    release_exclusive = threading.Event()
+    result_box: dict = {}
+
+    def maintenance_thread():
+        try:
+            with coordinator.consistent_snapshot("external_start_race"):
+                in_exclusive.set()
+                release_exclusive.wait(timeout=5)
+        except BaseException as exc:
+            result_box["error"] = exc
+
+    thread = threading.Thread(target=maintenance_thread, daemon=True)
+    thread.start()
+    assert in_exclusive.wait(timeout=5)
+
+    with pytest.raises(MaintenanceInProgressError):
+        with coordinator.external_runtime_mutation_guard():
+            pass
+
+    release_exclusive.set()
+    thread.join(timeout=5)
+    assert "error" not in result_box
+    assert coordinator.phase is MaintenancePhase.IDLE
+
+
+def test_external_runtime_start_holding_lock_blocks_maintenance(
+    temp_db, monkeypatch
+):
+    coordinator = RuntimeMaintenanceCoordinator()
+    control = _RuntimeControl()
+    coordinator.register_runtime_control(control)
+    settings_service.set_setting("user_paused", "false")
+    settings_service.set_setting("collector_status", "running")
+    monkeypatch.setattr(
+        database_maintenance_service.privacy_gate_service,
+        "is_privacy_notice_accepted",
+        lambda: True,
+    )
+
+    in_guard = threading.Event()
+    release_guard = threading.Event()
+
+    def guard_thread():
+        with coordinator.external_runtime_mutation_guard():
+            in_guard.set()
+            release_guard.wait(timeout=5)
+
+    thread = threading.Thread(target=guard_thread, daemon=True)
+    thread.start()
+    assert in_guard.wait(timeout=5)
+
+    with pytest.raises(
+        MaintenanceInProgressError, match="database_maintenance_in_progress"
+    ):
+        with coordinator.consistent_snapshot("guard_race"):
+            pass
+
+    release_guard.set()
+    thread.join(timeout=5)
+    assert coordinator.phase is MaintenancePhase.IDLE
+
+
+def test_coordinator_internal_recovery_does_not_self_lock(temp_db, monkeypatch):
+    coordinator = RuntimeMaintenanceCoordinator()
+    restore_calls: list = []
+
+    class _RecordingControl:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+            self.quiesce_result = _ack("maintenance_hold", "held")
+            self.restore_result = _ack("maintenance_release", "operational")
+            self.restored_state = None
+            self.collector_control = _OperationalChannel()
+
+        def is_collection_running_for_maintenance(self) -> bool:
+            return True
+
+        def quiesce_collection_for_maintenance(self, timeout_seconds=5.0):
+            self.calls.append("hold")
+            return dict(self.quiesce_result)
+
+        def reset_after_database_replacement(self, timeout_seconds=5.0):
+            self.calls.append("reset")
+            return _ack("database_reset", "held")
+
+        def restore_after_maintenance(self, state, timeout_seconds=5.0):
+            restore_calls.append(("restore", coordinator.phase))
+            self.calls.append("release")
+            self.restored_state = state
+            return dict(self.restore_result)
+
+    control = _RecordingControl()
+    coordinator.register_runtime_control(control)
+    settings_service.set_setting("user_paused", "false")
+    settings_service.set_setting("collector_status", "running")
+    monkeypatch.setattr(
+        database_maintenance_service.privacy_gate_service,
+        "is_privacy_notice_accepted",
+        lambda: True,
+    )
+
+    with coordinator.consistent_snapshot("internal_recovery"):
+        pass
+
+    assert len(restore_calls) == 1
+    assert coordinator.phase is MaintenancePhase.IDLE
+
+
+def test_guard_bodies_failure_releases_lock_for_subsequent_maintenance(
+    temp_db, monkeypatch
+):
+    coordinator = RuntimeMaintenanceCoordinator()
+    control = _RuntimeControl()
+    coordinator.register_runtime_control(control)
+    settings_service.set_setting("user_paused", "false")
+    settings_service.set_setting("collector_status", "running")
+    monkeypatch.setattr(
+        database_maintenance_service.privacy_gate_service,
+        "is_privacy_notice_accepted",
+        lambda: True,
+    )
+
+    with pytest.raises(RuntimeError, match="body_failure"):
+        with coordinator.external_runtime_mutation_guard():
+            raise RuntimeError("body_failure")
+
+    with coordinator.consistent_snapshot("after_guard_failure"):
+        pass
+
+    assert coordinator.phase is MaintenancePhase.IDLE

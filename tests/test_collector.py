@@ -220,6 +220,12 @@ def test_collector_pause_does_not_poll_active_window(temp_db, monkeypatch):
         def get_idle_seconds(self):
             raise AssertionError("idle state should not be polled while paused")
 
+        def set_clipboard_capture_enabled(self, enabled: bool) -> None:
+            return None
+
+        def get_clipboard_events(self):
+            return []
+
     privacy_gate_service.accept_privacy_notice()
     settings_service.set_setting("user_paused", "true")
     settings_service.set_setting("poll_interval_seconds", "1")
@@ -261,6 +267,12 @@ def test_collector_control_pause_completes_lifecycle_before_ack(monkeypatch):
 
         def get_idle_seconds(self):
             raise AssertionError("idle state should not be polled")
+
+        def set_clipboard_capture_enabled(self, enabled: bool) -> None:
+            return None
+
+        def get_clipboard_events(self):
+            return []
 
     monkeypatch.setattr(collector_mod, "CollectorStateMachine", lambda: FakeMachine())
     monkeypatch.setattr(
@@ -347,6 +359,9 @@ def test_maintenance_hold_prevents_sampling_and_activity_writes(temp_db):
         def get_clipboard_events(self):
             raise AssertionError("clipboard must not be sampled while held")
 
+        def set_clipboard_capture_enabled(self, enabled: bool) -> None:
+            return None
+
     privacy_gate_service.accept_privacy_notice()
     settings_service.set_setting("user_paused", "false")
     control = CollectorControl()
@@ -398,6 +413,9 @@ def test_maintenance_hold_never_persists_sensitive_adapter_data(temp_db):
 
         def get_clipboard_events(self):
             return []
+
+        def set_clipboard_capture_enabled(self, enabled: bool) -> None:
+            return None
 
     privacy_gate_service.accept_privacy_notice()
     settings_service.set_setting("user_paused", "false")
@@ -451,3 +469,120 @@ def test_midnight_crossing_detects_exact_boundary():
         "2026-06-19 00:00:01",
         "2026-06-19 00:00:02",
     ) is None
+
+
+def test_privacy_gate_false_skips_active_window_and_disables_clipboard(
+    temp_db,
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        collector_mod.privacy_gate_service,
+        "is_sensitive_runtime_allowed",
+        lambda: False,
+    )
+    settings_service.set_setting("poll_interval_seconds", "1")
+    settings_service.set_setting("idle_threshold_seconds", "60")
+    adapter = FakeAdapter()
+    adapter.set_clipboard_capture_enabled(True)
+    calls = {"active_window": 0}
+    original_get_active_window = adapter.get_active_window
+
+    def tracking_get_active_window():
+        calls["active_window"] += 1
+        return original_get_active_window()
+
+    adapter.get_active_window = tracking_get_active_window
+    stop_event = threading.Event()
+    _stop_after_poll(monkeypatch, stop_event)
+    thread = threading.Thread(
+        target=run_collector,
+        args=(adapter, stop_event),
+        daemon=True,
+    )
+    thread.start()
+    thread.join(timeout=3)
+
+    assert calls["active_window"] == 0
+    assert adapter.clipboard_capture_enabled is False
+
+
+def test_privacy_gate_read_exception_disables_clipboard_and_skips_observation(
+    temp_db,
+    monkeypatch,
+):
+    def raising_gate():
+        raise RuntimeError("gate_read_failed")
+
+    monkeypatch.setattr(
+        collector_mod.privacy_gate_service,
+        "is_sensitive_runtime_allowed",
+        raising_gate,
+    )
+    settings_service.set_setting("poll_interval_seconds", "1")
+    settings_service.set_setting("idle_threshold_seconds", "60")
+    adapter = FakeAdapter()
+    adapter.set_clipboard_capture_enabled(True)
+    calls = {"active_window": 0}
+    original_get_active_window = adapter.get_active_window
+
+    def tracking_get_active_window():
+        calls["active_window"] += 1
+        return original_get_active_window()
+
+    adapter.get_active_window = tracking_get_active_window
+    stop_event = threading.Event()
+    _stop_after_poll(monkeypatch, stop_event)
+    thread = threading.Thread(
+        target=run_collector,
+        args=(adapter, stop_event),
+        daemon=True,
+    )
+    thread.start()
+    thread.join(timeout=3)
+
+    assert calls["active_window"] == 0
+    assert adapter.clipboard_capture_enabled is False
+    assert settings_service.get_setting("collector_last_failure_phase", "") != ""
+
+
+def test_privacy_state_unavailable_after_enable_closes_clipboard_monitor(
+    temp_db,
+    monkeypatch,
+):
+    state = {"calls": 0}
+
+    def stateful_gate():
+        state["calls"] += 1
+        return state["calls"] == 1
+
+    monkeypatch.setattr(
+        collector_mod.privacy_gate_service,
+        "is_sensitive_runtime_allowed",
+        stateful_gate,
+    )
+    privacy_gate_service.accept_privacy_notice()
+    settings_service.set_setting("poll_interval_seconds", "1")
+    settings_service.set_setting("idle_threshold_seconds", "60")
+    settings_service.set_setting("clipboard_capture_enabled", "true")
+    adapter = FakeAdapter()
+    adapter.set_clipboard_capture_enabled(True)
+    stop_event = threading.Event()
+    sleep_calls = {"count": 0}
+
+    def fake_poll_wait(_stop_event, _control, next_poll_deadline):
+        sleep_calls["count"] += 1
+        if sleep_calls["count"] >= 2:
+            stop_event.set()
+        return next_poll_deadline + 1.0
+
+    monkeypatch.setattr(collector_mod, "_sleep_until_next_poll", fake_poll_wait)
+    thread = threading.Thread(
+        target=run_collector,
+        args=(adapter, stop_event),
+        daemon=True,
+    )
+    thread.start()
+    thread.join(timeout=3)
+
+    assert adapter.clipboard_capture_enabled is False
+    assert state["calls"] >= 2

@@ -500,7 +500,7 @@ def run_collector(
                 update_heartbeat("running")
                 heartbeat_counter = 0
 
-            if not privacy_gate_service.is_privacy_notice_accepted():
+            if not privacy_gate_service.is_sensitive_runtime_allowed():
                 _set_clipboard_capture_enabled(adapter, False)
                 _pause_machine_then_expose(machine, now)
                 next_poll_deadline = _sleep_until_next_poll(
@@ -589,6 +589,21 @@ def run_collector(
                 phase,
                 disposition.code.value,
             )
+            # Best-effort fail-closed: stop sensitive clipboard capture before
+            # the retry sleep so a transient failure cannot keep the clipboard
+            # monitor producing observations while the collector is degraded.
+            try:
+                _set_clipboard_capture_enabled(adapter, False)
+            except Exception as clip_exc:
+                clip_disposition = classify_collector_failure(clip_exc)
+                if not clip_disposition.retryable:
+                    collector_health.record_fatal_failure(
+                        "clipboard_fail_closed",
+                        clip_disposition.code,
+                        now_str(),
+                    )
+                    fatal_stop = True
+                    break
             next_poll_deadline = _sleep_until_next_poll(
                 stop_event,
                 control,
@@ -697,11 +712,8 @@ def _set_clipboard_capture_enabled(
     adapter: PlatformAdapter,
     enabled: bool,
 ) -> None:
-    setter = getattr(adapter, "set_clipboard_capture_enabled", None)
-    if setter is None:
-        return
     try:
-        setter(bool(enabled))
+        adapter.set_clipboard_capture_enabled(bool(enabled))
     except Exception as exc:
         disposition = classify_collector_failure(exc)
         if not disposition.retryable:
@@ -716,8 +728,6 @@ def _set_clipboard_capture_enabled(
 def _clipboard_events(adapter: PlatformAdapter):
     try:
         return adapter.get_clipboard_events()
-    except AttributeError:
-        return []
     except Exception as exc:
         disposition = classify_collector_failure(exc)
         if not disposition.retryable:

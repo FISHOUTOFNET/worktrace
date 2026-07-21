@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
 
@@ -58,6 +59,17 @@ class TestMaintenance:
     """Explicit maintenance-state fake used by composed bridge tests."""
 
     blocked_reason: str | None = None
+
+    @contextmanager
+    def external_runtime_mutation_guard(self):
+        if self.blocked_reason is not None:
+            from worktrace.services.database_maintenance_service import (
+                MaintenanceInProgressError,
+            )
+            from worktrace.write_gate import DATABASE_RECOVERY_ERROR
+
+            raise MaintenanceInProgressError(DATABASE_RECOVERY_ERROR)
+        yield
 
 
 class _OperationalHoldState:

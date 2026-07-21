@@ -16,7 +16,7 @@ from ..db import dict_rows, get_connection, get_db_path, now_str
 from ..path_utils import normalize_path_key
 from ..resources.title_parsing import normalize_file_name
 from ..write_gate import DATABASE_WRITE_GATE
-from . import folder_index_state_repository
+from . import folder_index_state_repository, privacy_gate_service
 
 if TYPE_CHECKING:
     from ..worker_health import WorkerHealthReporter
@@ -209,6 +209,14 @@ def rebuild_folder_index(
         _fail_generation(rule_id, generation, "folder_index_root_unavailable")
         return False
 
+    # Filesystem scanning is a sensitive runtime observation. Fail closed
+    # without marking the generation as a build error when the privacy gate
+    # is not allowing sensitive runtime: the generation is abandoned so the
+    # next authorized iteration can rebuild it cleanly.
+    if not privacy_gate_service.is_sensitive_runtime_allowed():
+        _abandon_generation(rule_id, generation)
+        return False
+
     count = 0
     batch: list[tuple] = []
     try:
@@ -318,6 +326,14 @@ def run_folder_index_worker(
     while not stop_event.is_set():
         try:
             if DATABASE_WRITE_GATE.writes_blocked():
+                health.maintenance_paused(True)
+                _wait_for_worker()
+                continue
+            health.maintenance_paused(False)
+            # Sensitive filesystem observation requires the privacy gate to be
+            # allowed. When it is not, skip directory scanning entirely and
+            # report a paused state without surfacing a build error.
+            if not privacy_gate_service.is_sensitive_runtime_allowed():
                 health.maintenance_paused(True)
                 _wait_for_worker()
                 continue

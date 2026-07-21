@@ -35,6 +35,9 @@ class _RaisingActiveWindowAdapter:
     def get_clipboard_events(self):
         return []
 
+    def set_clipboard_capture_enabled(self, enabled: bool) -> None:
+        return None
+
 
 class _RaisingIdleAdapter:
     def get_active_window(self):
@@ -45,6 +48,9 @@ class _RaisingIdleAdapter:
 
     def get_clipboard_events(self):
         return []
+
+    def set_clipboard_capture_enabled(self, enabled: bool) -> None:
+        return None
 
 
 def _assert_no_error_activity_or_boundary_before_stop():
@@ -132,6 +138,9 @@ def test_privacy_failure_only_updates_health_not_activity_continuity(temp_db, mo
         def get_clipboard_events(self):
             return []
 
+        def set_clipboard_capture_enabled(self, enabled: bool) -> None:
+            return None
+
     monkeypatch.setattr(
         collector_mod.privacy_service,
         "evaluate_exclusion",
@@ -170,6 +179,9 @@ def test_clipboard_failure_does_not_block_normal_activity_observation(temp_db, m
 
         def get_clipboard_events(self):
             raise _transient_adapter_failure()
+
+        def set_clipboard_capture_enabled(self, enabled: bool) -> None:
+            return None
 
     def fake_wait(_stop_event, _control, next_poll_deadline):
         captured["snapshot"] = runtime_state_fixture.get_setting("current_activity_snapshot")

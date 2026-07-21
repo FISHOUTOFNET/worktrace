@@ -132,7 +132,7 @@ See [`docs/maintenance-lifecycle.md`](docs/maintenance-lifecycle.md).
 
 ## Database and transaction boundaries
 
-The current schema is v12 and is current-only. Startup accepts an empty database
+The current schema is v13 and is current-only. Startup accepts an empty database
 or the exact current schema fingerprint. It does not run compatibility
 migrations. Production `worktrace.db` owns initialization, connections, schema
 application/fingerprint and defaults; destructive reset/drop helpers are test
@@ -193,7 +193,7 @@ See [`docs/runtime-contracts.md`](docs/runtime-contracts.md).
 
 `.wtbackup` export/import is owned by `secure_backup_service`, which acquires the
 maintenance capability itself. Current payload version is v6 and requires schema
-v12 plus the exact schema fingerprint. Old payloads are rejected; there is no
+v13 plus the exact schema fingerprint. Old payloads are rejected; there is no
 backup migration path. Installation privacy consent is not backup business data
 and remains owned by installation metadata.
 

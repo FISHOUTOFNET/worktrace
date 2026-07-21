@@ -135,6 +135,46 @@ its acknowledgement is unknown, the coordinator also enters fail-closed. A
 post-commit reset/release failure remains fail-closed because replacement already
 committed and runtime identity cannot be verified.
 
+## DRAINING and promote failure recovery
+
+A failure in `drain_existing_writers()` or `lease.promote()` happens before the
+EXCLUSIVE scope is reached. The coordinator tracks an explicit
+`exclusive_finalization_completed` flag that is set `True` only when failure
+finalization has run inside the EXCLUSIVE scope (via
+`_finalize_failure_inside_exclusive` or the post-body fail-closed handoff).
+DRAINING/promote failures leave this flag `False`, so the outer exception handler
+must run `_restore_after_failure()` to recover collector hold, durable intent,
+runtime snapshot and recovery seal via the standard path. The previous "lease
+exists" check is no longer used to decide whether failure finalization has run.
+
+When restore succeeds, the coordinator returns to `IDLE` with the write gate
+`OPEN` and no recovery block. When restore fails or collector state cannot be
+verified, the coordinator enters the existing fail-closed state with the
+recovery seal present.
+
+## External runtime mutation guard
+
+External user-initiated runtime start/resume and clipboard enable pass through
+`RuntimeMaintenanceCoordinator.external_runtime_mutation_guard()`. The guard
+reuses the same `_operation_lock` as destructive/snapshot maintenance, so active
+maintenance and external runtime mutation are mutually exclusive. The guard also
+rejects when the coordinator is recovery-blocked.
+
+Coordinator-internal recovery calls (`restore_after_maintenance` ->
+`start_collector`) do not pass through this guard and therefore cannot self-lock.
+Clipboard disable always bypasses the guard, so sensitive observation can be
+stopped without waiting for the operation lock.
+
+## Sensitive staging residue and recovery seal
+
+`maintenance_recovery_latch_repository.read_latch()` always reports
+`sensitive_residue_present` on every return path, including when a marker is
+present. When a marker and residue coexist, the latch stays blocked and reports
+both. Explicit recovery (`recover_fail_closed`) must clear residue first, then
+clear the database mirror, then delete the correct-epoch marker, then clear the
+recovery block. If residue deletion fails, the coordinator stays fail-closed and
+the marker is preserved.
+
 ## Restoration and failure semantics
 
 The coordinator captures installation privacy authorization, durable user-pause

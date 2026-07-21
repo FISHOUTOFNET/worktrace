@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
+
 import pytest
 
 from worktrace.api import settings_api
 from worktrace.api.app_api import ApplicationControlService
 from worktrace.runtime.contracts import RuntimeStartResult
 from worktrace.services import privacy_gate_service
-from worktrace.write_gate import DATABASE_RECOVERY_ERROR
+from worktrace.services.database_maintenance_service import (
+    MaintenanceInProgressError,
+)
+from worktrace.write_gate import DATABASE_MAINTENANCE_ERROR, DATABASE_RECOVERY_ERROR
 
 pytestmark = [
     pytest.mark.unit,
@@ -49,11 +54,21 @@ class _Maintenance:
     def __init__(self, blocked_reason: str | None) -> None:
         self.blocked_reason = blocked_reason
 
+    @contextmanager
+    def external_runtime_mutation_guard(self):
+        if self.blocked_reason is not None:
+            raise MaintenanceInProgressError(DATABASE_RECOVERY_ERROR)
+        yield
+
 
 class _UnreadableMaintenance:
     @property
     def blocked_reason(self) -> str | None:
         raise RuntimeError("maintenance_state_unavailable")
+
+    @contextmanager
+    def external_runtime_mutation_guard(self):
+        raise MaintenanceInProgressError(DATABASE_RECOVERY_ERROR)
 
 
 class _TruthyStartupResult:
@@ -167,3 +182,59 @@ def test_toggle_does_not_clear_user_pause_while_fail_closed(monkeypatch):
     assert result["error"] == DATABASE_RECOVERY_ERROR
     assert runtime.start_calls == 0
     assert cleared == []
+
+
+class _ClipboardTrackingRuntime:
+    def __init__(self) -> None:
+        self.enable_calls = 0
+        self.disable_calls = 0
+
+    def start_authorized_collection(self) -> object:
+        return RuntimeStartResult(
+            ok=True,
+            collector_ready=True,
+            workers={},
+            already_running=False,
+            degraded=False,
+            error_code=None,
+        )
+
+    def pause_collection_now(self):
+        return {"ok": True, "pause_pending": False}
+
+    def set_clipboard_capture_enabled(self, enabled: bool) -> bool:
+        if enabled:
+            self.enable_calls += 1
+        else:
+            self.disable_calls += 1
+        return True
+
+    def request_shutdown(self) -> None:
+        return None
+
+
+def test_clipboard_enable_during_active_maintenance_is_rejected(monkeypatch):
+    runtime = _ClipboardTrackingRuntime()
+    control = ApplicationControlService(
+        runtime,
+        _Maintenance("active_maintenance"),
+    )
+    _allow_sensitive_runtime(monkeypatch)
+
+    with pytest.raises(MaintenanceInProgressError):
+        control.set_clipboard_capture_enabled(True)
+
+    assert runtime.enable_calls == 0
+
+
+def test_clipboard_disable_during_active_maintenance_still_succeeds(monkeypatch):
+    runtime = _ClipboardTrackingRuntime()
+    control = ApplicationControlService(
+        runtime,
+        _Maintenance("active_maintenance"),
+    )
+    _allow_sensitive_runtime(monkeypatch)
+
+    control.set_clipboard_capture_enabled(False)
+
+    assert runtime.disable_calls == 1

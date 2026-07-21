@@ -16,6 +16,7 @@ from tests.support.write_gate import (
     write_gate_state,
 )
 from worktrace import db
+from worktrace.services import privacy_gate_service
 from worktrace.write_gate import WriteGatePhase
 
 
@@ -58,6 +59,11 @@ def temp_db(tmp_path: Path, _initialized_db_template: Path) -> Path:
     path = tmp_path / "worktrace.db"
     shutil.copyfile(_initialized_db_template, path)
     db.configure_database(path)
+    # Accept the installation-scoped privacy notice so integration tests that
+    # exercise sensitive runtime observation (folder scans, collector loops)
+    # match the normal production state after user consent. Tests that need to
+    # verify "not accepted" behavior override the gate via monkeypatch.
+    privacy_gate_service.accept_privacy_notice()
     return path
 
 

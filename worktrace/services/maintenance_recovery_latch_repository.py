@@ -170,7 +170,16 @@ def _read_database_mirror() -> tuple[bool, str | None]:
 
 
 def read_latch() -> MaintenanceRecoveryLatch:
-    """Merge the sidecar authority with the SQLite diagnostic mirror."""
+    """Merge the sidecar authority with the SQLite diagnostic mirror.
+
+    Every return path reports the three durable evidence fields
+    (``marker_present``, ``database_mirror_present``,
+    ``sensitive_residue_present``) so that a marker present alongside an
+    unowned decrypted staging file cannot be cleared while the residue
+    remains on disk.
+    """
+
+    sensitive_residue = has_sensitive_staging_residue()
 
     try:
         marker = _read_marker()
@@ -180,6 +189,7 @@ def read_latch() -> MaintenanceRecoveryLatch:
             reason=str(exc),
             state="invalid",
             marker_present=True,
+            sensitive_residue_present=sensitive_residue,
         )
 
     try:
@@ -195,11 +205,17 @@ def read_latch() -> MaintenanceRecoveryLatch:
                 epoch=epoch,
                 state=state,
                 marker_present=True,
+                sensitive_residue_present=sensitive_residue,
             )
         return MaintenanceRecoveryLatch(
             blocked=True,
-            reason="maintenance_recovery_state_unavailable",
+            reason=(
+                _SENSITIVE_STAGING_RESIDUE_REASON
+                if sensitive_residue
+                else "maintenance_recovery_state_unavailable"
+            ),
             state="unavailable",
+            sensitive_residue_present=sensitive_residue,
         )
 
     if marker is not None:
@@ -211,9 +227,9 @@ def read_latch() -> MaintenanceRecoveryLatch:
             state=state,
             marker_present=True,
             database_mirror_present=database_blocked,
+            sensitive_residue_present=sensitive_residue,
         )
 
-    sensitive_residue = has_sensitive_staging_residue()
     if database_blocked or sensitive_residue:
         reason = database_reason or (
             _SENSITIVE_STAGING_RESIDUE_REASON if sensitive_residue else None

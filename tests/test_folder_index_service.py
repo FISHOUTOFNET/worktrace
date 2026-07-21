@@ -13,6 +13,7 @@ from worktrace.services import (
     folder_index_service,
     folder_index_state_repository,
     folder_rule_service,
+    privacy_gate_service,
     privacy_service,
     project_service,
     rule_catalog_command_service,
@@ -462,3 +463,37 @@ def test_public_index_candidate_cannot_prove_unresolved_private_path_safe(
     assert decision.excluded is True
     assert decision.resolution_pending is True
     assert decision.refresh_required is True
+
+
+def test_folder_index_rebuild_skips_scandir_when_privacy_unavailable(
+    temp_db,
+    tmp_path,
+    monkeypatch,
+):
+    project = project_service.create_project("Privacy Scan")
+    folder = tmp_path / "Privacy"
+    folder.mkdir()
+    (folder / "doc.txt").write_text("doc", encoding="utf-8")
+    rule_id = folder_rule_service.create_or_update_folder_rule(str(folder), project)
+
+    monkeypatch.setattr(
+        folder_index_service.privacy_gate_service,
+        "is_sensitive_runtime_allowed",
+        lambda: False,
+    )
+
+    def raising_scandir(path):
+        raise AssertionError("scandir must not be called when privacy unavailable")
+
+    monkeypatch.setattr(folder_index_service.os, "scandir", raising_scandir)
+
+    result = folder_index_service.rebuild_folder_index(rule_id)
+
+    assert result is False
+
+    with get_connection() as conn:
+        count = conn.execute(
+            "SELECT COUNT(*) AS c FROM folder_rule_file_index WHERE folder_rule_id = ?",
+            (rule_id,),
+        ).fetchone()["c"]
+    assert count == 0

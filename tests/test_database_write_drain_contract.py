@@ -7,13 +7,13 @@ from pathlib import Path
 import pytest
 
 from worktrace.db import get_connection
-from worktrace.services import project_service, settings_service
+from worktrace.services import database_maintenance_service, project_service, settings_service
 from worktrace.services.database_maintenance_barrier import drain_existing_writers
 from worktrace.services.database_maintenance_service import (
     MaintenancePhase,
     RuntimeMaintenanceCoordinator,
 )
-from worktrace.write_gate import DATABASE_WRITE_GATE, WriteGatePhase
+from worktrace.write_gate import DATABASE_WRITE_GATE, ProcessDatabaseWriteGate, WriteGatePhase
 
 pytestmark = [
     pytest.mark.db,
@@ -239,3 +239,144 @@ def test_secure_backup_exposes_no_second_maintenance_coordinator() -> None:
     assert "database_maintenance_service.consistent_snapshot" in backup
     assert "database_maintenance_service.database_replacement" in backup
     assert not (services / "runtime_snapshot_barrier.py").exists()
+
+
+def test_drain_existing_writers_failure_runs_restore_or_fail_closed(
+    temp_db, monkeypatch
+):
+    """Drain failure during DRAINING (before EXCLUSIVE) triggers outer-except restore.
+
+    With ``exclusive_finalization_completed`` still False, the outer except runs
+    ``_restore_after_failure``. The test double's restore succeeds, so the
+    coordinator must return to IDLE and leave the write gate OPEN/unblocked.
+    """
+    coordinator = RuntimeMaintenanceCoordinator()
+    control = _RuntimeControl(coordinator)
+    coordinator.register_runtime_control(control)
+    settings_service.set_setting("user_paused", "false")
+    settings_service.set_setting("collector_status", "running")
+
+    monkeypatch.setattr(
+        database_maintenance_service,
+        "drain_existing_writers",
+        lambda: (_ for _ in ()).throw(RuntimeError("drain_failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="drain_failed"):
+        with coordinator.consistent_snapshot("drain_boundary"):
+            pass
+
+    assert coordinator.phase is MaintenancePhase.IDLE
+    assert DATABASE_WRITE_GATE.phase() is WriteGatePhase.OPEN
+    assert DATABASE_WRITE_GATE.recovery_blocked() is False
+    assert DATABASE_WRITE_GATE.operation_active() is False
+    assert "restore" in [name for name, _, _ in control.observed]
+
+
+def test_lease_promote_failure_runs_restore_or_fail_closed(
+    temp_db, monkeypatch
+):
+    """Promote failure during DRAINING (before EXCLUSIVE) triggers outer-except restore.
+
+    Same contract as the drain-failure case: ``exclusive_finalization_completed``
+    is False, so the outer except runs ``_restore_after_failure``. Successful
+    restore returns the coordinator to IDLE with the write gate OPEN/unblocked.
+    """
+    coordinator = RuntimeMaintenanceCoordinator()
+    control = _RuntimeControl(coordinator)
+    coordinator.register_runtime_control(control)
+    settings_service.set_setting("user_paused", "false")
+    settings_service.set_setting("collector_status", "running")
+
+    monkeypatch.setattr(
+        ProcessDatabaseWriteGate,
+        "promote_to_exclusive",
+        lambda self, owner_thread_id: (_ for _ in ()).throw(
+            sqlite3.OperationalError("promote_failed")
+        ),
+    )
+
+    with pytest.raises(sqlite3.OperationalError, match="promote_failed"):
+        with coordinator.consistent_snapshot("promote_boundary"):
+            pass
+
+    assert coordinator.phase is MaintenancePhase.IDLE
+    assert DATABASE_WRITE_GATE.phase() is WriteGatePhase.OPEN
+    assert DATABASE_WRITE_GATE.recovery_blocked() is False
+    assert DATABASE_WRITE_GATE.operation_active() is False
+    assert "restore" in [name for name, _, _ in control.observed]
+
+
+def test_drain_failure_with_restore_failure_enters_failed_closed(
+    temp_db, monkeypatch
+):
+    """Drain failure during DRAINING + restore failure → FAILED_CLOSED (``_operation``).
+
+    The body never returned and no durable replacement was committed, so the
+    fail-closed command suffix is ``operation`` (not ``restore``). The original
+    drain exception is re-raised after entering FAILED_CLOSED.
+    """
+    coordinator = RuntimeMaintenanceCoordinator()
+    control = _RuntimeControl(coordinator)
+    coordinator.register_runtime_control(control)
+    settings_service.set_setting("user_paused", "false")
+    settings_service.set_setting("collector_status", "running")
+
+    monkeypatch.setattr(
+        database_maintenance_service,
+        "drain_existing_writers",
+        lambda: (_ for _ in ()).throw(RuntimeError("drain_failed")),
+    )
+    control.restore_after_maintenance = lambda state, timeout_seconds=5.0: (
+        _ for _ in ()
+    ).throw(RuntimeError("restore_failed"))
+
+    with pytest.raises(RuntimeError, match="drain_failed"):
+        with coordinator.consistent_snapshot("drain_restore_failure"):
+            pass
+
+    assert coordinator.phase is MaintenancePhase.FAILED_CLOSED
+    assert coordinator.blocked_reason == "drain_restore_failure_operation"
+    assert DATABASE_WRITE_GATE.recovery_blocked() is True
+    assert DATABASE_WRITE_GATE.writes_blocked() is True
+    assert DATABASE_WRITE_GATE.phase() is WriteGatePhase.OPEN
+    assert DATABASE_WRITE_GATE.operation_active() is False
+
+
+def test_promote_failure_with_restore_failure_enters_failed_closed(
+    temp_db, monkeypatch
+):
+    """Promote failure during DRAINING + restore failure → FAILED_CLOSED (``_operation``).
+
+    Same contract as the drain+restore double failure: the body never reached
+    EXCLUSIVE, so ``exclusive_finalization_completed`` is False and the outer
+    except runs ``_restore_after_failure``. Restore failure forces
+    ``_enter_fail_closed`` with the ``_operation`` suffix.
+    """
+    coordinator = RuntimeMaintenanceCoordinator()
+    control = _RuntimeControl(coordinator)
+    coordinator.register_runtime_control(control)
+    settings_service.set_setting("user_paused", "false")
+    settings_service.set_setting("collector_status", "running")
+
+    monkeypatch.setattr(
+        ProcessDatabaseWriteGate,
+        "promote_to_exclusive",
+        lambda self, owner_thread_id: (_ for _ in ()).throw(
+            sqlite3.OperationalError("promote_failed")
+        ),
+    )
+    control.restore_after_maintenance = lambda state, timeout_seconds=5.0: (
+        _ for _ in ()
+    ).throw(RuntimeError("restore_failed"))
+
+    with pytest.raises(sqlite3.OperationalError, match="promote_failed"):
+        with coordinator.consistent_snapshot("promote_restore_failure"):
+            pass
+
+    assert coordinator.phase is MaintenancePhase.FAILED_CLOSED
+    assert coordinator.blocked_reason == "promote_restore_failure_operation"
+    assert DATABASE_WRITE_GATE.recovery_blocked() is True
+    assert DATABASE_WRITE_GATE.writes_blocked() is True
+    assert DATABASE_WRITE_GATE.phase() is WriteGatePhase.OPEN
+    assert DATABASE_WRITE_GATE.operation_active() is False

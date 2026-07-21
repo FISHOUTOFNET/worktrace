@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import logging
+from contextlib import AbstractContextManager
 from typing import Any, Protocol
 
 from ..runtime.contracts import RuntimeStartResult
 from ..services import privacy_gate_service
+from ..services.database_maintenance_service import MaintenanceInProgressError
 from ..write_gate import DATABASE_RECOVERY_ERROR
 from . import settings_api
 
@@ -28,6 +30,8 @@ class MaintenanceStateCapability(Protocol):
     @property
     def blocked_reason(self) -> str | None: ...
 
+    def external_runtime_mutation_guard(self) -> AbstractContextManager[None]: ...
+
 
 class ApplicationControlService:
     """Bridge-facing application commands bound to explicit process capabilities."""
@@ -43,13 +47,6 @@ class ApplicationControlService:
             raise ValueError("maintenance_capability_required")
         self.runtime = runtime
         self.maintenance = maintenance
-
-    def _maintenance_resume_blocked(self) -> bool:
-        try:
-            return bool(self.maintenance.blocked_reason)
-        except Exception:
-            logging.exception("maintenance recovery state read failed")
-            return True
 
     def get_collection_status(self) -> dict[str, Any]:
         raw_status = settings_api.get_collector_status()
@@ -91,17 +88,18 @@ class ApplicationControlService:
             allowed = False
         if not allowed:
             return {"ok": False, "error": "请先确认隐私说明"}
-        if self._maintenance_resume_blocked():
+        try:
+            with self.maintenance.external_runtime_mutation_guard():
+                result = self.runtime.start_authorized_collection()
+                if not isinstance(result, RuntimeStartResult):
+                    raise TypeError("runtime_start_result_required")
+                return result.to_dict()
+        except MaintenanceInProgressError:
             return {
                 "ok": False,
                 "error": DATABASE_RECOVERY_ERROR,
                 "message": "维护状态尚未恢复，暂不能开始记录",
             }
-        try:
-            result = self.runtime.start_authorized_collection()
-            if not isinstance(result, RuntimeStartResult):
-                raise TypeError("runtime_start_result_required")
-            return result.to_dict()
         except Exception:
             logging.exception("runtime authorized startup failed")
             return {"ok": False, "error": "collector_start_failed"}
@@ -158,7 +156,13 @@ class ApplicationControlService:
     def set_clipboard_capture_enabled(self, enabled: bool) -> None:
         if enabled:
             privacy_gate_service.require_sensitive_runtime_allowed()
-        applied = self.runtime.set_clipboard_capture_enabled(bool(enabled))
+            with self.maintenance.external_runtime_mutation_guard():
+                applied = self.runtime.set_clipboard_capture_enabled(True)
+        else:
+            # Disabling clipboard capture is always allowed, including during
+            # active maintenance, so that sensitive observation can be stopped
+            # without waiting for the operation lock.
+            applied = self.runtime.set_clipboard_capture_enabled(False)
         if not applied:
             raise RuntimeError("clipboard_runtime_rejected")
 

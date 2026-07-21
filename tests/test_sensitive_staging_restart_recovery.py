@@ -8,6 +8,7 @@ from worktrace.atomic_file import OwnedTemporaryFile, TemporaryFileCleanupError
 from worktrace.services import maintenance_recovery_latch_repository
 from worktrace.services.database_maintenance_service import (
     MaintenancePhase,
+    MaintenanceRecoveryError,
     RuntimeMaintenanceCoordinator,
 )
 from worktrace.write_gate import DATABASE_WRITE_GATE
@@ -131,3 +132,102 @@ def test_explicit_recovery_can_reseal_invalid_marker(temp_db):
     assert marker.exists() is False
     assert coordinator.recovery_blocked() is False
     assert coordinator.phase is MaintenancePhase.IDLE
+
+
+def test_valid_marker_with_sensitive_residue_reports_both(temp_db):
+    directory = maintenance_recovery_latch_repository.sensitive_staging_directory()
+    directory.mkdir(parents=True, exist_ok=True)
+    residue = directory / "worktrace-import-crash.sqlite"
+    residue.write_bytes(b"plaintext-staging")
+    try:
+        sealed = maintenance_recovery_latch_repository.arm_recovery(
+            "coexistence_valid"
+        )
+        latch = maintenance_recovery_latch_repository.read_latch()
+
+        assert latch.blocked is True
+        assert latch.marker_present is True
+        assert latch.sensitive_residue_present is True
+        assert latch.epoch is not None
+        assert latch.epoch == sealed.epoch
+        assert latch.reason == "coexistence_valid"
+    finally:
+        maintenance_recovery_latch_repository.marker_path().unlink(missing_ok=True)
+        residue.unlink(missing_ok=True)
+
+
+def test_invalid_marker_with_sensitive_residue_reports_both(temp_db):
+    directory = maintenance_recovery_latch_repository.sensitive_staging_directory()
+    directory.mkdir(parents=True, exist_ok=True)
+    residue = directory / "worktrace-import-crash.sqlite"
+    residue.write_bytes(b"plaintext-staging")
+    marker = maintenance_recovery_latch_repository.marker_path()
+    marker.write_text("not-json", encoding="utf-8")
+    try:
+        latch = maintenance_recovery_latch_repository.read_latch()
+
+        assert latch.blocked is True
+        assert latch.marker_present is True
+        assert latch.sensitive_residue_present is True
+        assert latch.epoch is None
+        assert latch.state == "invalid"
+    finally:
+        marker.unlink(missing_ok=True)
+        residue.unlink(missing_ok=True)
+
+
+def test_explicit_recovery_clears_residue_then_marker_when_both_present(temp_db):
+    directory = maintenance_recovery_latch_repository.sensitive_staging_directory()
+    directory.mkdir(parents=True, exist_ok=True)
+    residue = directory / "worktrace-import-crash.sqlite"
+    residue.write_bytes(b"plaintext-staging")
+    maintenance_recovery_latch_repository.arm_recovery("coexistence_clear")
+
+    coordinator = RuntimeMaintenanceCoordinator()
+    coordinator.register_runtime_control(_OperationalControl())
+    assert coordinator.hydrate_fail_closed_from_durable() is True
+    assert coordinator.recovery_blocked() is True
+
+    coordinator.recover_fail_closed()
+
+    assert coordinator.recovery_blocked() is False
+    assert coordinator.phase is MaintenancePhase.IDLE
+    assert residue.exists() is False
+    assert maintenance_recovery_latch_repository.marker_path().exists() is False
+    assert DATABASE_WRITE_GATE.recovery_blocked() is False
+
+
+def test_explicit_recovery_residue_cleanup_failure_keeps_fail_closed(
+    temp_db,
+    monkeypatch,
+):
+    directory = maintenance_recovery_latch_repository.sensitive_staging_directory()
+    directory.mkdir(parents=True, exist_ok=True)
+    residue = directory / "worktrace-import-crash.sqlite"
+    residue.write_bytes(b"plaintext-staging")
+    maintenance_recovery_latch_repository.arm_recovery("coexistence_residue_fail")
+
+    coordinator = RuntimeMaintenanceCoordinator()
+    coordinator.register_runtime_control(_OperationalControl())
+    assert coordinator.hydrate_fail_closed_from_durable() is True
+    assert coordinator.recovery_blocked() is True
+
+    monkeypatch.setattr(
+        maintenance_recovery_latch_repository,
+        "clear_sensitive_staging_residue",
+        lambda: False,
+    )
+
+    try:
+        with pytest.raises(MaintenanceRecoveryError):
+            coordinator.recover_fail_closed()
+
+        assert coordinator.recovery_blocked() is True
+        assert coordinator.phase is MaintenancePhase.FAILED_CLOSED
+        assert maintenance_recovery_latch_repository.marker_path().exists() is True
+        assert residue.exists() is True
+        assert DATABASE_WRITE_GATE.recovery_blocked() is True
+    finally:
+        _reset_process_gate(coordinator)
+        maintenance_recovery_latch_repository.marker_path().unlink(missing_ok=True)
+        residue.unlink(missing_ok=True)
