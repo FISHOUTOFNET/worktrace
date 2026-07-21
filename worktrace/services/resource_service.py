@@ -19,7 +19,7 @@ def create_or_update_activity_resource(
 ) -> None:
     """Persist one resource, avoiding writes when semantic fields are unchanged."""
 
-    def _upsert(c: sqlite3.Connection, requested: DetectedResource) -> None:
+    def _upsert(c: sqlite3.Connection, requested: DetectedResource) -> bool:
         safe_resource = _enforce_anonymous_if_excluded(
             activity_id,
             requested,
@@ -32,7 +32,7 @@ def create_or_update_activity_resource(
             else None
         )
         metadata = safe_metadata_json(parse_metadata_json(safe_resource.metadata_json))
-        c.execute(
+        cursor = c.execute(
             """
             INSERT INTO activity_resource(
                 activity_id, resource_kind, resource_subtype, display_name, identity_key,
@@ -98,6 +98,7 @@ def create_or_update_activity_resource(
                 ts,
             ),
         )
+        return int(cursor.rowcount or 0) > 0
 
     if conn is not None:
         _upsert(conn, resource)
@@ -105,7 +106,8 @@ def create_or_update_activity_resource(
         with DomainUnitOfWork(
             (DataGenerationNamespace.REPORT_STRUCTURE,)
         ) as uow:
-            _upsert(uow.connection, resource)
+            if _upsert(uow.connection, resource):
+                uow.mark_changed(DataGenerationNamespace.REPORT_STRUCTURE)
 
 
 def get_resource_for_activity(
