@@ -16,7 +16,7 @@ from .generation_clock import publish_replacement_committed
 _REPLACEMENT_NAMESPACE = DataGenerationNamespace.DATABASE_REPLACEMENT
 
 
-class ReplacementUnitOfWorkPhase(StrEnum):
+class ReplacementUnitOfWorkState(StrEnum):
     ACQUIRING = "acquiring"
     ACTIVE = "active"
     DURABLE_COMMITTED = "durable_committed"
@@ -33,7 +33,7 @@ class DatabaseReplacementUnitOfWork:
         self._committed_values: dict[DataGenerationNamespace, int] | None = None
         self._database_key: str | None = None
         self._active = False
-        self._phase = ReplacementUnitOfWorkPhase.ACQUIRING
+        self._state = ReplacementUnitOfWorkState.ACQUIRING
         self._durable_committed = False
         self._rolled_back = False
 
@@ -50,8 +50,8 @@ class DatabaseReplacementUnitOfWork:
         return dict(self._floor)
 
     @property
-    def phase(self) -> ReplacementUnitOfWorkPhase:
-        return self._phase
+    def state(self) -> ReplacementUnitOfWorkState:
+        return self._state
 
     @property
     def committed(self) -> bool:
@@ -83,7 +83,7 @@ class DatabaseReplacementUnitOfWork:
             )
             self._connection = connection
             self._active = True
-            self._phase = ReplacementUnitOfWorkPhase.ACTIVE
+            self._state = ReplacementUnitOfWorkState.ACTIVE
             return self
         except BaseException:
             if connection is not None:
@@ -91,24 +91,24 @@ class DatabaseReplacementUnitOfWork:
                     connection.rollback()
                 except Exception:
                     logging.warning(
-                        "database replacement rollback failed phase=acquisition"
+                        "database replacement rollback failed stage=acquisition"
                     )
                 try:
                     connection.close()
                 except Exception:
                     logging.warning(
-                        "database replacement close failed phase=acquisition"
+                        "database replacement close failed stage=acquisition"
                     )
             self._connection = None
             self._active = False
-            self._phase = ReplacementUnitOfWorkPhase.FINALIZED
+            self._state = ReplacementUnitOfWorkState.FINALIZED
             raise
 
     def __exit__(self, exc_type, exc_value, traceback) -> bool:
         connection = self._connection
         if connection is None:
             self._active = False
-            self._phase = ReplacementUnitOfWorkPhase.FINALIZED
+            self._state = ReplacementUnitOfWorkState.FINALIZED
             return False
 
         try:
@@ -117,10 +117,10 @@ class DatabaseReplacementUnitOfWork:
                     connection.rollback()
                 except Exception:
                     logging.warning(
-                        "database replacement rollback failed phase=operation"
+                        "database replacement rollback failed stage=operation"
                     )
                 self._rolled_back = True
-                self._phase = ReplacementUnitOfWorkPhase.ROLLED_BACK
+                self._state = ReplacementUnitOfWorkState.ROLLED_BACK
                 return False
 
             floor_value = int(self._floor.get(_REPLACEMENT_NAMESPACE, 0))
@@ -135,15 +135,15 @@ class DatabaseReplacementUnitOfWork:
                     connection.rollback()
                 except Exception:
                     logging.warning(
-                        "database replacement rollback failed phase=commit"
+                        "database replacement rollback failed stage=commit"
                     )
                 self._rolled_back = True
-                self._phase = ReplacementUnitOfWorkPhase.ROLLED_BACK
+                self._state = ReplacementUnitOfWorkState.ROLLED_BACK
                 raise
 
             self._committed_values = dict(committed_values)
             self._durable_committed = True
-            self._phase = ReplacementUnitOfWorkPhase.DURABLE_COMMITTED
+            self._state = ReplacementUnitOfWorkState.DURABLE_COMMITTED
             from .services.database_maintenance_service import (
                 record_database_replacement_committed,
             )
@@ -156,13 +156,13 @@ class DatabaseReplacementUnitOfWork:
                 publish_replacement_committed(database_key, committed_values)
             except Exception:
                 logging.warning(
-                    "database replacement publication failed phase=post_commit"
+                    "database replacement publication failed stage=post_commit"
                 )
                 try:
                     clear_generation_clock(database_key)
                 except Exception:
                     logging.warning(
-                        "database replacement cache clear failed phase=post_commit"
+                        "database replacement cache clear failed stage=post_commit"
                     )
             return False
         finally:
@@ -170,14 +170,14 @@ class DatabaseReplacementUnitOfWork:
                 connection.close()
             except Exception:
                 logging.warning(
-                    "database replacement close failed phase=finalization"
+                    "database replacement close failed stage=finalization"
                 )
             self._connection = None
             self._active = False
-            self._phase = ReplacementUnitOfWorkPhase.FINALIZED
+            self._state = ReplacementUnitOfWorkState.FINALIZED
 
 
 __all__ = [
     "DatabaseReplacementUnitOfWork",
-    "ReplacementUnitOfWorkPhase",
+    "ReplacementUnitOfWorkState",
 ]
