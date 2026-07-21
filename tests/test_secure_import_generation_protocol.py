@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import os
 import sqlite3
+from contextlib import contextmanager
+from pathlib import Path
 
 import pytest
 
@@ -22,7 +25,11 @@ from worktrace.services import (
     secure_backup_service,
 )
 from worktrace.services import database_maintenance_service
-from worktrace.services.secure_backup_service import BackupCorruptedError
+from worktrace.services.secure_backup_service import (
+    BackupCorruptedError,
+    BackupImportInProgressError,
+    BackupReplacementError,
+)
 from worktrace.services.secure_backup_validation import BackupValidationError
 from worktrace.services.settings_service import get_setting, set_setting
 
@@ -73,6 +80,33 @@ def _is_excluded(window: ActiveWindow) -> bool:
     return privacy_service.evaluate_exclusion(window).excluded
 
 
+def _record_staging_paths(monkeypatch) -> list[str]:
+    paths: list[str] = []
+    original = secure_backup_service._build_and_validate_staging
+
+    def recording_build(staging_path: str, data: dict):
+        paths.append(staging_path)
+        return original(staging_path, data)
+
+    monkeypatch.setattr(
+        secure_backup_service,
+        "_build_and_validate_staging",
+        recording_build,
+    )
+    return paths
+
+
+def _assert_paths_removed(paths: list[str]) -> None:
+    assert paths
+    assert all(not os.path.exists(path) for path in paths)
+
+
+def _assert_maintenance_unblocked() -> None:
+    status = database_maintenance_service.maintenance_status()
+    assert status.recovery_blocked is False
+    assert status.maintenance_in_progress is False
+
+
 def test_import_publishes_exact_committed_replacement_generations(temp_db, tmp_path):
     output = _make_backup(tmp_path)
     for namespace in DataGenerationNamespace:
@@ -87,20 +121,35 @@ def test_import_publishes_exact_committed_replacement_generations(temp_db, tmp_p
     _assert_process_and_durable_generations_match()
 
 
+def test_successful_import_removes_decrypted_staging_file(
+    temp_db,
+    tmp_path,
+    monkeypatch,
+):
+    output = _make_backup(tmp_path)
+    paths = _record_staging_paths(monkeypatch)
+
+    secure_backup_service.import_encrypted_backup(
+        output,
+        "correct-passphrase",
+        mode="replace",
+    )
+
+    _assert_paths_removed(paths)
+    _assert_process_and_durable_generations_match()
+    _assert_maintenance_unblocked()
+
+
 def test_import_staging_validation_failure_does_not_fail_closed(
     temp_db,
     tmp_path,
     monkeypatch,
 ):
-    """Staging validation failure raises BackupCorruptedError without fail-closing.
-
-    Staging is built and validated BEFORE entering the maintenance scope. A
-    staging failure must never trigger durable fail-closed because the live
-    database has not been touched and no maintenance hold was acquired.
-    """
+    """Staging corruption is cleaned before maintenance and never fail-closes."""
 
     output = _make_backup(tmp_path)
     _insert_sentinel("Import Failure Sentinel")
+    paths = _record_staging_paths(monkeypatch)
 
     def fail_validation(_conn):
         raise BackupValidationError("staging validation failed")
@@ -118,11 +167,185 @@ def test_import_staging_validation_failure_does_not_fail_closed(
             mode="replace",
         )
 
+    _assert_paths_removed(paths)
     _assert_sentinel_exists("Import Failure Sentinel")
     _assert_process_and_durable_generations_match()
-    status = database_maintenance_service.maintenance_status()
-    assert status.recovery_blocked is False
-    assert status.maintenance_in_progress is False
+    _assert_maintenance_unblocked()
+
+
+def test_import_staging_insert_failure_removes_staging_and_preserves_live_db(
+    temp_db,
+    tmp_path,
+    monkeypatch,
+):
+    output = _make_backup(tmp_path)
+    _insert_sentinel("Staging Insert Failure Sentinel")
+    paths = _record_staging_paths(monkeypatch)
+
+    def fail_insert(_conn, _tables):
+        raise sqlite3.OperationalError("staging insert failed")
+
+    monkeypatch.setattr(secure_backup_service, "_load_import_tables", fail_insert)
+
+    with pytest.raises(BackupCorruptedError):
+        secure_backup_service.import_encrypted_backup(
+            output,
+            "correct-passphrase",
+            mode="replace",
+        )
+
+    _assert_paths_removed(paths)
+    _assert_sentinel_exists("Staging Insert Failure Sentinel")
+    _assert_process_and_durable_generations_match()
+    _assert_maintenance_unblocked()
+
+
+def test_import_staging_commit_failure_removes_staging_and_preserves_live_db(
+    temp_db,
+    tmp_path,
+    monkeypatch,
+):
+    output = _make_backup(tmp_path)
+    _insert_sentinel("Staging Commit Failure Sentinel")
+    paths = _record_staging_paths(monkeypatch)
+    original_connect = secure_backup_service.sqlite3.connect
+
+    class CommitFailingConnection:
+        def __init__(self, connection):
+            object.__setattr__(self, "_connection", connection)
+
+        def __getattr__(self, name):
+            return getattr(self._connection, name)
+
+        def __setattr__(self, name, value):
+            if name == "_connection":
+                object.__setattr__(self, name, value)
+            else:
+                setattr(self._connection, name, value)
+
+        def commit(self):
+            raise sqlite3.OperationalError("staging commit failed")
+
+    def connect_with_staging_commit_failure(path, *args, **kwargs):
+        connection = original_connect(path, *args, **kwargs)
+        if "worktrace-import-" in str(path):
+            return CommitFailingConnection(connection)
+        return connection
+
+    monkeypatch.setattr(
+        secure_backup_service.sqlite3,
+        "connect",
+        connect_with_staging_commit_failure,
+    )
+
+    with pytest.raises(BackupCorruptedError):
+        secure_backup_service.import_encrypted_backup(
+            output,
+            "correct-passphrase",
+            mode="replace",
+        )
+
+    _assert_paths_removed(paths)
+    _assert_sentinel_exists("Staging Commit Failure Sentinel")
+    _assert_process_and_durable_generations_match()
+    _assert_maintenance_unblocked()
+
+
+def test_import_maintenance_busy_removes_validated_staging(
+    temp_db,
+    tmp_path,
+    monkeypatch,
+):
+    output = _make_backup(tmp_path)
+    paths = _record_staging_paths(monkeypatch)
+
+    @contextmanager
+    def busy_replacement(*_args, **_kwargs):
+        raise database_maintenance_service.MaintenanceInProgressError(
+            "database_maintenance_in_progress"
+        )
+        yield
+
+    monkeypatch.setattr(
+        database_maintenance_service,
+        "database_replacement",
+        busy_replacement,
+    )
+
+    with pytest.raises(BackupImportInProgressError):
+        secure_backup_service.import_encrypted_backup(
+            output,
+            "correct-passphrase",
+            mode="replace",
+        )
+
+    _assert_paths_removed(paths)
+    _assert_process_and_durable_generations_match()
+    _assert_maintenance_unblocked()
+
+
+def test_import_live_apply_failure_removes_staging_and_uses_replacement_error(
+    temp_db,
+    tmp_path,
+    monkeypatch,
+):
+    output = _make_backup(tmp_path)
+    _insert_sentinel("Live Apply Failure Sentinel")
+    paths = _record_staging_paths(monkeypatch)
+
+    def fail_live_delete(_conn):
+        raise sqlite3.OperationalError("live delete failed")
+
+    monkeypatch.setattr(secure_backup_service, "_delete_all_rows", fail_live_delete)
+
+    with pytest.raises(BackupReplacementError):
+        secure_backup_service.import_encrypted_backup(
+            output,
+            "correct-passphrase",
+            mode="replace",
+        )
+
+    _assert_paths_removed(paths)
+    _assert_sentinel_exists("Live Apply Failure Sentinel")
+    _assert_process_and_durable_generations_match()
+    _assert_maintenance_unblocked()
+
+
+def test_staging_cleanup_failure_does_not_replace_original_error(
+    temp_db,
+    tmp_path,
+    monkeypatch,
+):
+    output = _make_backup(tmp_path)
+    paths: list[str] = []
+    real_unlink = os.unlink
+
+    def fail_build(staging_path: str, _data: dict):
+        paths.append(staging_path)
+        raise BackupCorruptedError("original_staging_error")
+
+    def fail_cleanup(_path: str):
+        raise PermissionError("cleanup denied")
+
+    monkeypatch.setattr(
+        secure_backup_service,
+        "_build_and_validate_staging",
+        fail_build,
+    )
+    monkeypatch.setattr(secure_backup_service.os, "unlink", fail_cleanup)
+
+    with pytest.raises(BackupCorruptedError, match="original_staging_error"):
+        secure_backup_service.import_encrypted_backup(
+            output,
+            "correct-passphrase",
+            mode="replace",
+        )
+
+    assert paths
+    for path in paths:
+        if Path(path).exists():
+            real_unlink(path)
+    _assert_maintenance_unblocked()
 
 
 def test_import_live_generation_failure_preserves_live_database_and_clock(
@@ -130,14 +353,7 @@ def test_import_live_generation_failure_preserves_live_database_and_clock(
     tmp_path,
     monkeypatch,
 ):
-    """Live replacement failure during generation bump preserves the live DB.
-
-    The staging succeeds before the maintenance scope; the failure is injected
-    into the live replacement step via bump_replacement. The live transaction
-    is rolled back by DatabaseReplacementUnitOfWork. Because the runtime
-    control is operational and restoration succeeds, the coordinator does NOT
-    durably fail-close. The process and durable generations remain aligned.
-    """
+    """A live generation failure is a replacement failure, never corruption."""
 
     output = _make_backup(tmp_path)
     _insert_sentinel("Import Failure Sentinel")
@@ -154,7 +370,7 @@ def test_import_live_generation_failure_preserves_live_database_and_clock(
         staticmethod(fail_generation),
     )
 
-    with pytest.raises(RuntimeError, match="failed"):
+    with pytest.raises(BackupReplacementError):
         secure_backup_service.import_encrypted_backup(
             output,
             "correct-passphrase",
@@ -163,16 +379,13 @@ def test_import_live_generation_failure_preserves_live_database_and_clock(
 
     _assert_sentinel_exists("Import Failure Sentinel")
     _assert_process_and_durable_generations_match()
-    status = database_maintenance_service.maintenance_status()
-    assert status.recovery_blocked is False
-    assert status.maintenance_in_progress is False
+    _assert_maintenance_unblocked()
 
 
 def test_import_commit_failure_rolls_back_replacement(temp_db, tmp_path, monkeypatch):
     output = _make_backup(tmp_path)
     _insert_sentinel("Commit Failure Sentinel")
     from worktrace import database_replacement_unit_of_work
-    from worktrace.services.secure_backup_service import BackupReplacementError
 
     original_get_connection = database_replacement_unit_of_work.get_connection
 
