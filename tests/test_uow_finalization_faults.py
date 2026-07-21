@@ -13,9 +13,9 @@ from worktrace.data_generation_repository import (
 )
 from worktrace.database_replacement_unit_of_work import (
     DatabaseReplacementUnitOfWork,
-    ReplacementUnitOfWorkPhase,
+    ReplacementUnitOfWorkState,
 )
-from worktrace.domain_unit_of_work import DomainUnitOfWork, UnitOfWorkPhase
+from worktrace.domain_unit_of_work import DomainUnitOfWork, UnitOfWorkState
 
 pytestmark = [
     pytest.mark.db,
@@ -64,7 +64,7 @@ def test_domain_close_failure_does_not_relabel_durable_commit(
             """
         )
 
-    assert uow.phase is UnitOfWorkPhase.FINALIZED
+    assert uow.state is UnitOfWorkState.FINALIZED
     assert uow.durable_committed is True
     assert uow.rolled_back is False
     with sqlite3.connect(temp_db) as conn:
@@ -99,7 +99,7 @@ def test_domain_rollback_and_close_failures_preserve_primary_exception(
             )
             raise RuntimeError("primary_operation_failure")
 
-    assert uow.phase is UnitOfWorkPhase.FINALIZED
+    assert uow.state is UnitOfWorkState.FINALIZED
     assert uow.durable_committed is False
     assert uow.rolled_back is True
     with sqlite3.connect(temp_db) as conn:
@@ -160,7 +160,7 @@ def test_replacement_close_failure_retains_committed_outcome(
             """
         )
 
-    assert uow.phase is ReplacementUnitOfWorkPhase.FINALIZED
+    assert uow.state is ReplacementUnitOfWorkState.FINALIZED
     assert uow.committed is True
     assert uow.rolled_back is False
     assert uow.committed_values is not None
