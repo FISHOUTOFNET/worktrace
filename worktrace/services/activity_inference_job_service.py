@@ -49,7 +49,9 @@ def process_pending_inference_jobs(
     for job in runnable:
         activity_id = int(job["activity_id"])
         try:
-            with DomainUnitOfWork() as uow:
+            with DomainUnitOfWork(
+                (DataGenerationNamespace.REPORT_STRUCTURE,)
+            ) as uow:
                 conn = uow.connection
                 current = jobs.list_runnable_jobs(
                     conn,
@@ -73,7 +75,7 @@ def process_pending_inference_jobs(
                 infer_activity(conn, activity_id)
                 after = _assignment_state(conn, activity_id)
                 if before != after:
-                    uow.add_effects(DataGenerationNamespace.REPORT_STRUCTURE)
+                    uow.mark_changed(DataGenerationNamespace.REPORT_STRUCTURE)
                 jobs.delete_job(conn, activity_id)
                 completed += 1
         except Exception as exc:
