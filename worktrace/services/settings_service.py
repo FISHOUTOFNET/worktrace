@@ -312,7 +312,10 @@ def get_list_setting(key: str, default: list[str] | None = None) -> list[str]:
 
 
 def set_list_setting(key: str, values: list[str]) -> SettingChangeResult:
-    return set_setting("key", ",".join(item.strip() for item in values if item.strip()))
+    return set_setting(
+        key,
+        ",".join(item.strip() for item in values if item.strip()),
+    )
 
 
 __all__ = [
