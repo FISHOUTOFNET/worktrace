@@ -4,7 +4,6 @@ Every durable lifecycle transition is committed in one SQLite transaction.
 Eligible closed activities receive a durable inference job in that same
 transaction and are consumed only by the AppRuntime inference worker.
 """
-
 from __future__ import annotations
 
 import logging
@@ -173,7 +172,7 @@ def pause_collection(
     current_activity_id: int | None = None,
     current_duration_seconds: int | None = None,
 ) -> list[int]:
-    """Atomically seal activity facts, record the pause, and persist pause state."""
+    """Persist pause facts while keeping operational corrections generation-free."""
 
     requested_at = str(occurred_at or now_str())
     closed_ids: list[int] = []
@@ -201,22 +200,27 @@ def pause_collection(
             paused_row
             and str(paused_row["value"] or "").strip().casefold() == "true"
         )
-        changed = bool(closed_ids)
-        if closed_ids or not already_paused:
+        boundary_inserted = bool(closed_ids or not already_paused)
+        if boundary_inserted:
             session_boundary_service.insert_boundary(conn, requested_at, reason)
-            changed = True
 
-        if set_settings_in_transaction(
+        setting_result = set_settings_in_transaction(
             uow,
             conn,
             {
                 "user_paused": "true",
                 "collector_status": "paused",
             },
-        ):
-            changed = True
-        if changed:
+        )
+        # user_paused is a SETTINGS semantic effect; collector_status is only
+        # operational. REPORT changes only for activity or boundary facts.
+        if closed_ids or boundary_inserted:
             uow.mark_changed(DataGenerationNamespace.REPORT_STRUCTURE)
+        assert not (
+            setting_result.operational_only
+            and DataGenerationNamespace.REPORT_STRUCTURE
+            in setting_result.generation_effects
+        )
 
     from .runtime_activity_state_service import clear_runtime_activity_state
 
