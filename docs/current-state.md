@@ -51,7 +51,11 @@ A successful hold closes the current activity and enqueues inference in one
 transaction, clears process-local activity state, then blocks Collector
 writes without changing durable `user_paused`. The coordinator drains
 writers, acquires exclusive ownership, performs the snapshot or replacement,
-resets identities while held, restores durable state and releases the hold.
+resets identities while held, restores durable state, releases the hold and
+verifies the terminal operational acknowledgement before leaving the exclusive
+write-gate scope. The same durable-before-release order applies to pre-commit
+failure restoration. If durable restoration fails, no release is sent and the
+Collector remains HELD while the coordinator enters fail-closed.
 Every acknowledgement matches command ID, kind, completed state, terminal
 state and `ok=true`. An unknown/taken outcome, unconfirmed reset/release,
 or failure after replacement work enters a stable fail-closed latch:
@@ -64,16 +68,25 @@ backup alias.
 
 Ordinary mutations use `DomainUnitOfWork`: a context manager that opens one
 SQLite transaction, yields the connection, commits or rolls back on exit.
-`DomainUnitOfWork` tracks per-namespace changed effects separately from
-declared effects; the root commit bumps only namespaces explicitly marked
-via `mark_changed(...)`.
+`DomainUnitOfWork` tracks declared effects separately from changed effects.
+SQL text, row counters, `total_changes` and commit hooks never infer business
+semantics. Every actual effect is explicitly marked with a declared namespace;
+missing or undeclared effects are contract errors. The root commit bumps only
+marked namespaces and each namespace at most once. No-op, rollback, worker
+progress, checkpoint and receipt-only writes publish no business generation.
+An effective report operation publishes `REPORT_STRUCTURE` once; its idempotent
+or no-effect receipt does not publish.
+
 Physical replacement uses `DatabaseReplacementUnitOfWork`, the sole owner
 of the epoch bump, the single live-database commit and process-local
-generation publication. Secure backup import builds and fully validates a
-staging database **before** entering the maintenance hold. Staging failures
-raise `BackupCorruptedError` and never trigger durable fail-closed. Live
-replacement failures raise `BackupReplacementError`; the coordinator
-fail-closes only when runtime restoration cannot be verified.
+generation publication. Secure backup import creates the decrypted staging
+SQLite file inside one `ValidatedStaging` resource scope, builds and fully
+validates it **before** maintenance, and deletes it after success, maintenance
+rejection or any failure. Staging construction/validation failures raise
+`BackupCorruptedError` and never trigger durable fail-closed. Once staging is
+valid, any ordinary live apply, generation, validation, commit or SQLite I/O
+failure is exposed as `BackupReplacementError` with the internal cause chained.
+The coordinator fail-closes only when runtime restoration cannot be verified.
 
 ## Database content manifest
 
