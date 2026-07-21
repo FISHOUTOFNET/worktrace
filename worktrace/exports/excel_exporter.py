@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from ..atomic_file import AtomicFileOutput
 from ..services import statistics_service
 from ..services.report_projection_snapshot_service import build_visible_snapshot
 from ..services.statistics_projection import build_statistics_projection
@@ -31,7 +32,9 @@ def export_excel_file(start_date: str, end_date: str, path: str) -> str:
     sheet.append([label for _, label in columns])
     for record in analytics.export_records:
         sheet.append([record.get(field, "") for field, _ in columns])
-    workbook.save(out)
+    with AtomicFileOutput(out, resource="excel_export") as output:
+        workbook.save(output.temporary_path)
+        output.commit()
     return str(out)
 
 

@@ -18,7 +18,6 @@ from worktrace.services import (
     timeline_service,
 )
 from worktrace.services.privacy_anonymization_service import anonymize_activity
-from worktrace.services.privacy_service import PrivacyResolutionPending
 
 pytestmark = [
     pytest.mark.db,
@@ -73,16 +72,19 @@ def test_unresolved_file_path_fails_closed_when_exclusion_folder_exists(
         lambda *_args, **_kwargs: None,
     )
 
-    with pytest.raises(PrivacyResolutionPending):
-        privacy_service.is_excluded(
-            ActiveWindow(
-                app_name="Word",
-                process_name="winword.exe",
-                window_title="Contract.docx",
-                file_path_hint=None,
-                privacy_path_required=True,
-            )
+    decision = privacy_service.evaluate_exclusion(
+        ActiveWindow(
+            app_name="Word",
+            process_name="winword.exe",
+            window_title="Contract.docx",
+            file_path_hint=None,
+            privacy_path_required=True,
         )
+    )
+
+    assert decision.excluded is True
+    assert decision.resolution_pending is True
+    assert decision.refresh_required is True
 
 
 def test_deleted_five_minute_project_still_splits_surrounding_sessions(temp_db):

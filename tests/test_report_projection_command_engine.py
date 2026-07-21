@@ -45,6 +45,11 @@ def _member(aid: int, start: str) -> dict:
 
 
 def _operation(op_id: int, kind: str, source: dict, **values) -> dict:
+    payload = {
+        "payload_version": engine.OPERATION_PAYLOAD_VERSION,
+        "replay_binding": "members",
+    }
+    payload.update(values.pop("payload", {}))
     return {
         "id": op_id,
         "report_date": DATE,
@@ -52,7 +57,7 @@ def _operation(op_id: int, kind: str, source: dict, **values) -> dict:
         "operation_type": kind,
         "source_instance_key": source["projection_instance_key"],
         "source_expected_revision": source["projection_revision"],
-        "payload": {"payload_version": engine.OPERATION_PAYLOAD_VERSION},
+        "payload": payload,
         "members": {"source": source["member_slices"]},
         **values,
     }
@@ -87,7 +92,7 @@ def test_replay_is_deterministic_and_does_not_modify_inputs():
         1,
         "edit_session",
         prepared,
-        payload={"payload_version": 4, "note": {"mode": "set", "value": "note"}},
+        payload={"note": {"mode": "set", "value": "note"}},
     )
     before_base, before_operation = deepcopy(base), deepcopy(operation)
     first = engine.replay_operations(base, [operation])
@@ -123,7 +128,7 @@ def test_replay_result_records_are_recursively_immutable_and_deepcopy_safe():
         result.final_entries[0]["member_slices"][0]["activity_id"] = 99
 
 
-def test_merge_revalidates_adjacency_direction_and_revisions():
+def test_merge_revalidates_adjacency_but_member_binding_survives_revision_changes():
     base = [
         _session("base:left", 1, f"{DATE} 09:00:00", 600),
         _session("base:middle", 2, f"{DATE} 09:10:00", 600),
@@ -146,7 +151,32 @@ def test_merge_revalidates_adjacency_direction_and_revisions():
     invalid["members"]["target"] = prepared["base:middle"]["member_slices"]
     invalid["target_expected_revision"] = "stale"
     result = engine.replay_operations(base, [invalid])
-    assert result.operation_diagnostics[0].reason == "target_revision_conflict"
+    assert result.operation_diagnostics[0].state == engine.APPLIED
+    assert result.operation_diagnostics[0].reason == ""
+
+
+def test_member_binding_uses_projection_key_to_disambiguate_copy_from_source():
+    base = [_session("base:a", 1, f"{DATE} 09:00:00", 600)]
+    source = engine.replay_operations(base, []).final_entries[0]
+    copy = _operation(1, "copy_session", source)
+    copied = next(
+        row
+        for row in engine.replay_operations(base, [copy]).final_entries
+        if row["projection_instance_key"] == "copy:1"
+    )
+    hide_copy = _operation(
+        2,
+        "hide_activity",
+        copied,
+        payload={"summary_id": "activity:1"},
+        members={
+            "source": copied["member_slices"],
+            "affected": copied["member_slices"],
+        },
+    )
+    result = engine.replay_operations(base, [copy, hide_copy])
+    assert [row["projection_instance_key"] for row in result.final_entries] == ["base:a"]
+    assert result.operation_diagnostics[-1].state == engine.APPLIED
 
 
 def test_strict_member_recovery_distinguishes_conflict_and_orphaned():
@@ -183,7 +213,7 @@ def test_split_supersedes_merge_and_all_descendants_without_virtual_entry():
         2,
         "edit_session",
         merged,
-        payload={"payload_version": 4, "note": {"mode": "set", "value": "descendant"}},
+        payload={"note": {"mode": "set", "value": "descendant"}},
     )
     edited = engine.replay_operations(base, [merge, edit]).final_entries[0]
     split = _operation(3, "split_session", edited, undo_of_operation_id=1)
@@ -250,3 +280,121 @@ def test_invalid_edit_payload_is_diagnostic_only():
     result = engine.replay_operations(base, [operation])
     assert result.operation_diagnostics[0].reason == "invalid_payload"
     assert "_applied_commands" not in result.final_entries[0]
+
+
+def _corrupt_payload_operation(payload_overrides: dict | None = None, *, members=None, operation_type: str = "edit_session", drop_keys: tuple[str, ...] = ()):
+    """Build an operation whose payload carries the supplied corruptions.
+
+    ``payload_overrides`` is merged into the default current payload. Keys
+    listed in ``drop_keys`` are removed after the merge so a test can
+    simulate a missing ``payload_version`` or ``replay_binding``.
+    """
+
+    base = [_session("base:a", 1, f"{DATE} 09:00:00", 600)]
+    prepared = engine.replay_operations(base, []).final_entries[0]
+    payload: dict = {
+        "payload_version": engine.OPERATION_PAYLOAD_VERSION,
+        "replay_binding": "members",
+    }
+    if payload_overrides:
+        payload.update(payload_overrides)
+    for key in drop_keys:
+        payload.pop(key, None)
+    return _operation(
+        1,
+        operation_type,
+        prepared,
+        payload=payload,
+        members=members,
+    )
+
+
+def _assert_invalid_payload_diagnostic(operation):
+    base = [_session("base:a", 1, f"{DATE} 09:00:00", 600)]
+    snapshot_before = (deepcopy(base), deepcopy(operation))
+    result = engine.replay_operations(base, [operation])
+    diagnostic = result.operation_diagnostics[0]
+    assert diagnostic.state == engine.CONFLICT
+    assert diagnostic.reason == "invalid_payload"
+    # Replay must not mutate the caller's sessions or operation records.
+    assert base == snapshot_before[0]
+    assert operation == snapshot_before[1]
+    return result
+
+
+def test_engine_does_not_raise_for_bool_payload_version():
+    operation = _corrupt_payload_operation({"payload_version": True})
+    _assert_invalid_payload_diagnostic(operation)
+
+
+def test_engine_does_not_raise_for_list_payload_version():
+    operation = _corrupt_payload_operation({"payload_version": [6]})
+    _assert_invalid_payload_diagnostic(operation)
+
+
+def test_engine_does_not_raise_for_dict_payload_version():
+    operation = _corrupt_payload_operation({"payload_version": {"v": 6}})
+    _assert_invalid_payload_diagnostic(operation)
+
+
+def test_engine_does_not_raise_for_non_numeric_string_payload_version():
+    operation = _corrupt_payload_operation({"payload_version": "six"})
+    _assert_invalid_payload_diagnostic(operation)
+
+
+def test_engine_does_not_raise_for_missing_payload_version():
+    operation = _corrupt_payload_operation(drop_keys=("payload_version",))
+    _assert_invalid_payload_diagnostic(operation)
+
+
+def test_engine_does_not_raise_for_missing_replay_binding():
+    operation = _corrupt_payload_operation(drop_keys=("replay_binding",))
+    _assert_invalid_payload_diagnostic(operation)
+
+
+def test_engine_does_not_raise_for_none_replay_binding():
+    operation = _corrupt_payload_operation({"replay_binding": None})
+    _assert_invalid_payload_diagnostic(operation)
+
+
+def test_engine_does_not_raise_for_unknown_payload_field():
+    operation = _corrupt_payload_operation({"rogue_field": 1})
+    _assert_invalid_payload_diagnostic(operation)
+
+
+def test_engine_does_not_raise_for_wrong_member_role_set():
+    base = [_session("base:a", 1, f"{DATE} 09:00:00", 600)]
+    prepared = engine.replay_operations(base, []).final_entries[0]
+    operation = _operation(
+        1,
+        "hide_session",
+        prepared,
+        members={"affected": prepared["member_slices"]},
+    )
+    _assert_invalid_payload_diagnostic(operation)
+
+
+def test_engine_does_not_raise_for_duplicate_member():
+    base = [_session("base:a", 1, f"{DATE} 09:00:00", 600)]
+    prepared = engine.replay_operations(base, []).final_entries[0]
+    duplicate = [*prepared["member_slices"], dict(prepared["member_slices"][0])]
+    operation = _operation(
+        1,
+        "hide_session",
+        prepared,
+        members={"source": duplicate},
+    )
+    _assert_invalid_payload_diagnostic(operation)
+
+
+def test_engine_does_not_raise_for_cross_report_date_member():
+    base = [_session("base:a", 1, f"{DATE} 09:00:00", 600)]
+    prepared = engine.replay_operations(base, []).final_entries[0]
+    cross_date = {**prepared["member_slices"][0], "report_date": "2026-06-26"}
+    operation = _operation(
+        1,
+        "hide_session",
+        prepared,
+        members={"source": [cross_date]},
+    )
+    _assert_invalid_payload_diagnostic(operation)

@@ -5,17 +5,19 @@ import threading
 
 import pytest
 
+from tests.support import activity_factory as activity_service
 from worktrace.api import timeline_api
 from worktrace.db import get_connection
-from tests.support import activity_factory as activity_service
 from worktrace.services import project_service
+from worktrace.services import report_operation_repository
 from worktrace.services import report_session_operation_service as mutations
 from worktrace.services import secure_backup_service
+from worktrace.services.page_read_context import page_read_scope
 from worktrace.services.report_projection_identity import DURABLE_REVISION_PREFIX
+from worktrace.services.report_projection_model import InvalidInputError
 from worktrace.services.report_projection_snapshot_service import (
     build_visible_snapshot,
 )
-from worktrace.services.page_read_context import page_read_scope
 from worktrace.services.settings_service import set_setting
 from worktrace.write_gate import DATABASE_WRITE_GATE
 
@@ -133,7 +135,7 @@ def test_global_write_gate_blocks_service_writes_from_other_threads(temp_db):
         thread.start()
         thread.join(timeout=5)
     assert not thread.is_alive()
-    assert outcome == ["secure_import_in_progress"]
+    assert outcome == ["database_maintenance_in_progress"]
     assert project_service.get_project_by_name("Blocked") is None
 
 
@@ -214,7 +216,7 @@ def test_secure_validation_replays_member_bound_operation_after_admission_revisi
                 str(source["projection_instance_key"]),
                 DURABLE_REVISION_PREFIX
                 + "0" * (40 - len(DURABLE_REVISION_PREFIX)),
-                '{"payload_version":4}',
+                '{"payload_version":6,"replay_binding":"members"}',
             ),
         )
         conn.execute(
@@ -227,3 +229,208 @@ def test_secure_validation_replays_member_bound_operation_after_admission_revisi
             (int(cursor.lastrowid), activity_id, DATE, f"{DATE} 09:00:00"),
         )
         secure_backup_service._validate_staging_database(conn)
+
+
+def test_repository_rejects_non_current_payload_version_at_read_boundary(temp_db):
+    project_id = project_service.create_project("P")
+    activity_id = _closed("10:00:00", "10:01:00", project_id)
+    source = build_visible_snapshot(DATE, DATE).final_sessions[0]
+    with get_connection() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO report_session_operation(
+                report_date, sequence, operation_type, source_instance_key,
+                source_expected_revision, payload_json, created_at
+            ) VALUES (?, 1, 'hide_session', ?, ?, ?, CURRENT_TIMESTAMP)
+            """,
+            (
+                DATE,
+                str(source["projection_instance_key"]),
+                str(source["projection_revision"]),
+                '{"payload_version":6,"replay_binding":"members"}',
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO report_session_operation_member(
+                operation_id, role, activity_id, report_date,
+                slice_start_time, display_order
+            ) VALUES (?, 'source', ?, ?, ?, 0)
+            """,
+            (int(cursor.lastrowid), activity_id, DATE, f"{DATE} 10:00:00"),
+        )
+        conn.execute("PRAGMA ignore_check_constraints = ON")
+        conn.execute(
+            "UPDATE report_session_operation SET payload_json = ? WHERE id = ?",
+            ('{"payload_version":4,"replay_binding":"members"}', int(cursor.lastrowid)),
+        )
+        with pytest.raises(InvalidInputError) as captured:
+            report_operation_repository.load_operations(conn, DATE)
+    assert captured.value.code == "invalid_input"
+    assert captured.value.message == "操作负载版本损坏"
+
+
+def test_repository_rejects_legacy_revision_binding_at_read_boundary(temp_db):
+    """The retired ``"revision"`` binding must be rejected at the read boundary."""
+
+    project_id = project_service.create_project("P")
+    activity_id = _closed("10:00:00", "10:01:00", project_id)
+    source = build_visible_snapshot(DATE, DATE).final_sessions[0]
+    with get_connection() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO report_session_operation(
+                report_date, sequence, operation_type, source_instance_key,
+                source_expected_revision, payload_json, created_at
+            ) VALUES (?, 1, 'hide_session', ?, ?, ?, CURRENT_TIMESTAMP)
+            """,
+            (
+                DATE,
+                str(source["projection_instance_key"]),
+                str(source["projection_revision"]),
+                '{"payload_version":6,"replay_binding":"members"}',
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO report_session_operation_member(
+                operation_id, role, activity_id, report_date,
+                slice_start_time, display_order
+            ) VALUES (?, 'source', ?, ?, ?, 0)
+            """,
+            (int(cursor.lastrowid), activity_id, DATE, f"{DATE} 10:00:00"),
+        )
+        conn.execute("PRAGMA ignore_check_constraints = ON")
+        conn.execute(
+            "UPDATE report_session_operation SET payload_json = ? WHERE id = ?",
+            (
+                '{"payload_version":6,"replay_binding":"revision"}',
+                int(cursor.lastrowid),
+            ),
+        )
+        with pytest.raises(InvalidInputError) as captured:
+            report_operation_repository.load_operations(conn, DATE)
+    assert captured.value.code == "invalid_input"
+    assert captured.value.message == "操作重放绑定损坏"
+
+
+def test_repository_rejects_non_members_binding_at_read_boundary(temp_db):
+    """Any binding value other than ``"members"`` must be rejected at read."""
+
+    project_id = project_service.create_project("P")
+    activity_id = _closed("10:00:00", "10:01:00", project_id)
+    source = build_visible_snapshot(DATE, DATE).final_sessions[0]
+    with get_connection() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO report_session_operation(
+                report_date, sequence, operation_type, source_instance_key,
+                source_expected_revision, payload_json, created_at
+            ) VALUES (?, 1, 'hide_session', ?, ?, ?, CURRENT_TIMESTAMP)
+            """,
+            (
+                DATE,
+                str(source["projection_instance_key"]),
+                str(source["projection_revision"]),
+                '{"payload_version":6,"replay_binding":"members"}',
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO report_session_operation_member(
+                operation_id, role, activity_id, report_date,
+                slice_start_time, display_order
+            ) VALUES (?, 'source', ?, ?, ?, 0)
+            """,
+            (int(cursor.lastrowid), activity_id, DATE, f"{DATE} 10:00:00"),
+        )
+        conn.execute("PRAGMA ignore_check_constraints = ON")
+        conn.execute(
+            "UPDATE report_session_operation SET payload_json = ? WHERE id = ?",
+            (
+                '{"payload_version":6,"replay_binding":"something_else"}',
+                int(cursor.lastrowid),
+            ),
+        )
+        with pytest.raises(InvalidInputError) as captured:
+            report_operation_repository.load_operations(conn, DATE)
+    assert captured.value.code == "invalid_input"
+    assert captured.value.message == "操作重放绑定损坏"
+
+
+def test_repository_rejects_unknown_payload_field_at_read_boundary(temp_db):
+    """Payloads must not carry unknown fields beyond the operation contract."""
+
+    project_id = project_service.create_project("P")
+    activity_id = _closed("10:00:00", "10:01:00", project_id)
+    source = build_visible_snapshot(DATE, DATE).final_sessions[0]
+    with get_connection() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO report_session_operation(
+                report_date, sequence, operation_type, source_instance_key,
+                source_expected_revision, payload_json, created_at
+            ) VALUES (?, 1, 'hide_session', ?, ?, ?, CURRENT_TIMESTAMP)
+            """,
+            (
+                DATE,
+                str(source["projection_instance_key"]),
+                str(source["projection_revision"]),
+                '{"payload_version":6,"replay_binding":"members","rogue_field":1}',
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO report_session_operation_member(
+                operation_id, role, activity_id, report_date,
+                slice_start_time, display_order
+            ) VALUES (?, 'source', ?, ?, ?, 0)
+            """,
+            (int(cursor.lastrowid), activity_id, DATE, f"{DATE} 10:00:00"),
+        )
+        with pytest.raises(InvalidInputError) as captured:
+            report_operation_repository.load_operations(conn, DATE)
+    assert captured.value.code == "invalid_input"
+    assert captured.value.message == "操作负载字段损坏"
+
+
+def test_repository_rejects_unknown_operation_type_at_read_boundary(temp_db):
+    """Unknown operation types must be rejected at the read boundary."""
+
+    project_id = project_service.create_project("P")
+    activity_id = _closed("10:00:00", "10:01:00", project_id)
+    source = build_visible_snapshot(DATE, DATE).final_sessions[0]
+    with get_connection() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO report_session_operation(
+                report_date, sequence, operation_type, source_instance_key,
+                source_expected_revision, payload_json, created_at
+            ) VALUES (?, 1, 'hide_session', ?, ?, ?, CURRENT_TIMESTAMP)
+            """,
+            (
+                DATE,
+                str(source["projection_instance_key"]),
+                str(source["projection_revision"]),
+                '{"payload_version":6,"replay_binding":"members"}',
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO report_session_operation_member(
+                operation_id, role, activity_id, report_date,
+                slice_start_time, display_order
+            ) VALUES (?, 'source', ?, ?, ?, 0)
+            """,
+            (int(cursor.lastrowid), activity_id, DATE, f"{DATE} 10:00:00"),
+        )
+        conn.execute("PRAGMA ignore_check_constraints = ON")
+        conn.execute(
+            "UPDATE report_session_operation SET operation_type = 'unknown_op' "
+            "WHERE id = ?",
+            (int(cursor.lastrowid),),
+        )
+        with pytest.raises(InvalidInputError) as captured:
+            report_operation_repository.load_operations(conn, DATE)
+    assert captured.value.code == "invalid_input"
+    assert captured.value.message == "操作类型损坏"

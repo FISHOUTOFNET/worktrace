@@ -1,7 +1,11 @@
 # FROZEN CI CONTRACT
-# Failed tests must be fixed in production code or tests, not by reshaping this workflow.
+# Business-test diagnostics are artifact-only. Connector or job-log truncation,
+# inability to display every failure, and changes in failure-group counts are not
+# reasons to modify this workflow, its diagnostic producer, or its contract tests.
+# Job logs may contain fixed control metadata and periodic progress heartbeats,
+# but never failure lists, root-cause groups, tracebacks, or raw test-log tails.
 # Modify this file only for action/runtime upgrades, security fixes, validation-scope
-# changes, or a reproducible failure of the diagnostics protocol below.
+# changes, or a reproducible failure to generate, upload, download, or parse the artifact.
 
 name: Reusable validation
 
@@ -63,13 +67,13 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-          cache-dependency-path: requirements.txt
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
 
       - name: Install dependencies
         shell: pwsh
-        run: |
-          python -m pip install --disable-pip-version-check -q -r requirements.txt
-          python -m pip install --disable-pip-version-check -q "pytest-timeout>=2.3,<3"
+        run: python -m pip install --disable-pip-version-check -q -r requirements-dev.txt
 
       - name: Check test inventory
         id: inventory
@@ -87,7 +91,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path "test-results" | Out-Null
-          & python -m compileall -q worktrace scripts/pytest_diagnostics.py scripts/pytest_log_to_junit.py scripts/render_ci_api_summary.py *> "test-results/compile.log"
+          & python -m compileall -q worktrace scripts/pytest_diagnostics.py scripts/pytest_log_to_junit.py scripts/run_pytest_ci.py *> "test-results/compile.log"
           $compileExitCode = $LASTEXITCODE
           Write-Host "compile exit code: $compileExitCode"
           if ($compileExitCode -ne 0) {
@@ -108,26 +112,26 @@ jobs:
 
           New-Item -ItemType Directory -Force -Path "test-results" | Out-Null
           $pytestStartedAt = Get-Date
-          & python -m pytest -q -ra --tb=short --color=no --cache-clear `
+          & python scripts/run_pytest_ci.py `
+            --log "test-results/pytest.log" `
+            --progress "test-results/pytest-progress.json" `
+            --heartbeat-seconds 60 `
+            -- `
+            -q -ra --tb=short --color=no --cache-clear `
             --timeout=90 --timeout-method=thread `
             --durations=25 --durations-min=0.2 `
-            --junitxml="test-results/pytest-junit.xml" *> "test-results/pytest.log"
+            --junitxml="test-results/pytest-junit.xml"
           $pytestExitCode = $LASTEXITCODE
           $pytestElapsedSeconds = ((Get-Date) - $pytestStartedAt).TotalSeconds
 
-          Write-Host "pytest exit code: $pytestExitCode"
-          Write-Host ("pytest elapsed seconds: {0:N2}" -f $pytestElapsedSeconds)
-          if ($pytestExitCode -eq 0) {
-            Get-Content -LiteralPath "test-results/pytest.log" -Tail 40 |
-              ForEach-Object { Write-Host $_ }
-          }
-          else {
-            Write-Host "pytest failed; compact diagnostics will be published by the fixed relay job"
+          Write-Host "pytest_exit_code=$pytestExitCode"
+          Write-Host ("pytest_elapsed_seconds={0:N2}" -f $pytestElapsedSeconds)
+          if ($pytestExitCode -ne 0) {
+            Write-Host "pytest_failed=true diagnostics_source=workflow_artifact"
           }
           exit $pytestExitCode
 
-      - name: Publish validation diagnostics
-        id: diagnostics
+      - name: Generate diagnostic artifact
         if: failure()
         continue-on-error: true
         shell: pwsh
@@ -139,8 +143,7 @@ jobs:
               --log "test-results/inventory.log" `
               --output-dir "test-results" `
               --revision "${{ inputs.revision }}" `
-              --artifact-name $artifactName `
-              --summary "$env:GITHUB_STEP_SUMMARY"
+              --artifact-name $artifactName
           }
           elseif ("${{ steps.compile.outcome }}" -eq "failure") {
             & python scripts/pytest_diagnostics.py `
@@ -148,18 +151,17 @@ jobs:
               --log "test-results/compile.log" `
               --output-dir "test-results" `
               --revision "${{ inputs.revision }}" `
-              --artifact-name $artifactName `
-              --summary "$env:GITHUB_STEP_SUMMARY"
+              --artifact-name $artifactName
           }
           elseif ("${{ steps.pytest.outcome }}" -eq "failure") {
             if (-not (Test-Path -LiteralPath "test-results/pytest-junit.xml")) {
-              Write-Host "JUnit was not finalized; recovering partial results from pytest.log"
+              Write-Host "junit_recovery=required"
               & python scripts/pytest_log_to_junit.py `
                 --log "test-results/pytest.log" `
                 --output "test-results/pytest-junit.xml" `
                 --timeout-seconds 90
               if ($LASTEXITCODE -ne 0) {
-                Write-Warning "Partial JUnit recovery failed; diagnostics will use the log fallback"
+                Write-Warning "Partial JUnit recovery failed; diagnostics will use the artifact log fallback"
               }
             }
             & python scripts/pytest_diagnostics.py `
@@ -168,50 +170,21 @@ jobs:
               --log "test-results/pytest.log" `
               --output-dir "test-results" `
               --revision "${{ inputs.revision }}" `
-              --artifact-name $artifactName `
-              --summary "$env:GITHUB_STEP_SUMMARY"
+              --artifact-name $artifactName
           }
 
-          if (Test-Path -LiteralPath "test-results/diagnostics.json") {
-            & python scripts/render_ci_api_summary.py `
-              --input "test-results/diagnostics.json" `
-              --output "test-results/api-summary.txt" `
-              --max-bytes 65536
-            if ($LASTEXITCODE -ne 0) {
-              throw "Failed to render the fixed API diagnostics summary"
-            }
-          }
-          else {
+          if (-not (Test-Path -LiteralPath "test-results/diagnostics.json")) {
             throw "Canonical diagnostics.json was not generated"
           }
 
-      - name: Upload Python failure diagnostics
+      - name: Upload diagnostic artifact
         if: failure()
         uses: actions/upload-artifact@v6
         with:
           name: validation-diagnostics-${{ inputs.revision }}
           path: test-results/
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 3
-
-  python_diagnostics:
-    name: Python failure diagnostics
-    needs: python311
-    if: ${{ always() && needs.python311.result == 'failure' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - name: Download canonical Python diagnostics
-        uses: actions/download-artifact@v6
-        with:
-          name: validation-diagnostics-${{ inputs.revision }}
-          path: test-results
-
-      - name: Publish bounded API diagnostics
-        shell: bash
-        run: |
-          test -f test-results/api-summary.txt
-          cat test-results/api-summary.txt
 
   node:
     name: WebView Node behavior tests
@@ -276,12 +249,12 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-          cache-dependency-path: requirements.txt
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
 
       - name: Install dependencies
-        run: |
-          python -m pip install --disable-pip-version-check -q -r requirements.txt
-          python -m pip install --disable-pip-version-check -q pyinstaller
+        run: python -m pip install --disable-pip-version-check -q -r requirements-dev.txt
 
       - name: Build single-file exe
         run: python -m PyInstaller --noconfirm --clean WorkTrace.spec

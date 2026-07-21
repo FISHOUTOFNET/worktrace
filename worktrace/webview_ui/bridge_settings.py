@@ -4,15 +4,13 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from ..api import settings_api
-
 logger = logging.getLogger(__name__)
 
 
 class SettingsBridgeMixin:
     def get_first_run_notice(self) -> dict[str, Any]:
         try:
-            return settings_api.get_first_run_notice_for_webview()
+            return self._services.settings.get_first_run_notice_for_webview()
         except Exception:
             logger.exception("webview bridge get_first_run_notice failed")
             return {"ok": False, "error": "加载隐私说明失败"}
@@ -26,10 +24,20 @@ class SettingsBridgeMixin:
 
     def get_settings_privacy_status(self) -> dict[str, Any]:
         try:
-            return settings_api.get_settings_privacy_status()
+            return self._services.settings.get_settings_privacy_status()
         except Exception:
             logger.exception("webview bridge get_settings_privacy_status failed")
             return {"ok": False, "error": "加载设置状态失败"}
+
+    def recover_database_maintenance(self) -> dict[str, Any]:
+        try:
+            return self._services.settings.recover_database_maintenance_for_webview()
+        except Exception:
+            logger.exception("webview bridge recover_database_maintenance failed")
+            return {
+                "ok": False,
+                "error": "database_maintenance_recovery_required",
+            }
 
     def set_clipboard_capture_enabled(self, enabled) -> dict[str, Any]:
         try:
@@ -38,19 +46,26 @@ class SettingsBridgeMixin:
             logger.exception("webview bridge set_clipboard_capture_enabled failed")
             return {"ok": False, "error": "设置剪贴板记录失败"}
 
-    def export_encrypted_backup(self, passphrase, confirm_passphrase) -> dict[str, Any]:
+    def export_encrypted_backup(
+        self,
+        passphrase,
+        confirm_passphrase,
+    ) -> dict[str, Any]:
         try:
             output_path = self._choose_backup_save_path()
             if output_path is None:
                 return {"ok": False, "error": "已取消导出"}
-            result = settings_api.export_encrypted_backup_for_webview(
-                output_path, passphrase, confirm_passphrase
+            result = self._services.backup.export_encrypted_backup_for_webview(
+                output_path,
+                passphrase,
+                confirm_passphrase,
             )
             if result.get("ok"):
                 return {
                     "ok": True,
                     "filename": str(result.get("filename") or ""),
                     "message": str(result.get("message") or "加密备份已导出"),
+                    "maintenance": dict(result.get("maintenance") or {}),
                 }
             return {"ok": False, "error": result.get("error") or "导出加密备份失败"}
         except Exception:
@@ -62,7 +77,7 @@ class SettingsBridgeMixin:
             input_path = self._choose_backup_open_path()
             if input_path is None:
                 return {"ok": False, "error": "已取消读取备份清单"}
-            result = settings_api.preview_encrypted_backup_manifest_for_webview(input_path)
+            result = self._services.backup.preview_encrypted_backup_manifest_for_webview(input_path)
             if result.get("ok"):
                 return {
                     "ok": True,
@@ -79,8 +94,10 @@ class SettingsBridgeMixin:
             input_path = self._choose_backup_open_path()
             if input_path is None:
                 return {"ok": False, "error": "已取消导入"}
-            result = settings_api.import_encrypted_backup_for_webview(
-                input_path, passphrase, confirm_text
+            result = self._services.backup.import_encrypted_backup_for_webview(
+                input_path,
+                passphrase,
+                confirm_text,
             )
             if result.get("ok"):
                 return {
@@ -89,6 +106,7 @@ class SettingsBridgeMixin:
                     "imported_table_count": int(result.get("imported_table_count") or 0),
                     "imported_row_count": int(result.get("imported_row_count") or 0),
                     "folder_index_reset": bool(result.get("folder_index_reset")),
+                    "maintenance": dict(result.get("maintenance") or {}),
                 }
             return {"ok": False, "error": result.get("error") or "导入加密备份失败"}
         except Exception:
@@ -97,11 +115,12 @@ class SettingsBridgeMixin:
 
     def clear_all_local_data(self, confirm_text) -> dict[str, Any]:
         try:
-            result = settings_api.clear_all_local_data_for_webview(confirm_text)
+            result = self._services.settings.clear_all_local_data_for_webview(confirm_text)
             if result.get("ok"):
                 payload: dict[str, Any] = {
                     "ok": True,
                     "message": str(result.get("message") or "本地数据已清空"),
+                    "maintenance": dict(result.get("maintenance") or {}),
                 }
                 if "status" in result:
                     payload["status"] = result["status"]

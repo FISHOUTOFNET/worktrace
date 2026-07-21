@@ -19,18 +19,13 @@ from .constants import (
     TIME_FORMAT,
     UNCATEGORIZED_PROJECT,
 )
-from .data_generation_repository import DataGenerationRepository
-from .report_generation_classifier import (
-    ReportStructureSqlClassification,
-    classify_report_structure_sql,
-    parameters_affect_report_structure,
-    report_structure_classifier_enabled,
-    report_structure_classifier_scope,
-    sql_affects_report_structure,
+from .data_generation_repository import (
+    DataGenerationNamespace,
+    DataGenerationRepository,
 )
 from .write_gate import DATABASE_WRITE_GATE
 
-CURRENT_SCHEMA_VERSION = 12
+CURRENT_SCHEMA_VERSION = 13
 
 _WRITE_TOKEN_RE = re.compile(
     r"\b(?:INSERT|UPDATE|DELETE|REPLACE|CREATE|DROP|ALTER|VACUUM|REINDEX|ATTACH|DETACH)\b",
@@ -79,56 +74,11 @@ def _sql_records_business_read(sql: str) -> bool:
 
 
 class WorkTraceConnection(sqlite3.Connection):
-    """SQLite connection enforcing write exclusion and fallback invalidation."""
-
-    def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
-        self._report_structure_dirty = False
+    """SQLite infrastructure enforcing write exclusion and read observation."""
 
     def _require_write_allowed(self, sql: str) -> None:
         if _sql_requires_write_gate(sql):
-            DATABASE_WRITE_GATE.require_current_thread_allowed()
-
-    def _report_classifier_active(self) -> bool:
-        if not report_structure_classifier_enabled():
-            return False
-        from .domain_unit_of_work import current_domain_unit_of_work
-
-        uow = current_domain_unit_of_work()
-        return uow is None or uow.connection is not self
-
-    def _mark_report_structure_dirty(
-        self,
-        sql: str,
-        parameters=(),
-        *,
-        rowcount: int | None = None,
-    ) -> None:
-        if (
-            rowcount == 0
-            or self._report_structure_dirty
-            or not self._report_classifier_active()
-        ):
-            return
-        if sql_affects_report_structure(sql, parameters):
-            self._report_structure_dirty = True
-
-    def _persist_report_structure_generation(self) -> None:
-        if not self._report_structure_dirty:
-            return
-        try:
-            from .data_generation_repository import DataGenerationNamespace
-
-            DataGenerationRepository.bump(
-                self,
-                (DataGenerationNamespace.REPORT_STRUCTURE,),
-            )
-        except sqlite3.OperationalError as exc:
-            if "no such table" not in str(exc).lower():
-                raise
-
-    def _clear_report_structure_generation(self) -> None:
-        self._report_structure_dirty = False
+            DATABASE_WRITE_GATE.require_current_thread_allowed(sql)
 
     def execute(self, sql, parameters=(), /):  # type: ignore[override]
         text = str(sql)
@@ -136,79 +86,17 @@ class WorkTraceConnection(sqlite3.Connection):
         cursor = super().execute(sql, parameters)
         if _sql_records_business_read(text):
             DATABASE_WRITE_GATE.note_current_thread_read()
-        else:
-            self._mark_report_structure_dirty(
-                text,
-                parameters,
-                rowcount=cursor.rowcount,
-            )
         return cursor
 
     def executemany(self, sql, seq_of_parameters, /):  # type: ignore[override]
         text = str(sql)
         self._require_write_allowed(text)
-        if not self._report_classifier_active():
-            return super().executemany(sql, seq_of_parameters)
-        if self._report_structure_dirty:
-            return super().executemany(sql, seq_of_parameters)
-
-        classification = classify_report_structure_sql(text)
-        if classification is ReportStructureSqlClassification.NONE:
-            return super().executemany(sql, seq_of_parameters)
-
-        if classification is ReportStructureSqlClassification.ALWAYS:
-            cursor = super().executemany(sql, seq_of_parameters)
-            if cursor.rowcount != 0:
-                self._report_structure_dirty = True
-            return cursor
-
-        affects_structure = False
-
-        def tracked_parameters():
-            nonlocal affects_structure
-            for parameters in seq_of_parameters:
-                if (
-                    not affects_structure
-                    and parameters_affect_report_structure(parameters)
-                ):
-                    affects_structure = True
-                yield parameters
-
-        cursor = super().executemany(sql, tracked_parameters())
-        if cursor.rowcount != 0 and affects_structure:
-            self._report_structure_dirty = True
-        return cursor
+        return super().executemany(sql, seq_of_parameters)
 
     def executescript(self, sql_script, /):  # type: ignore[override]
         text = str(sql_script)
         self._require_write_allowed(text)
-        cursor = super().executescript(sql_script)
-        self._mark_report_structure_dirty(text, rowcount=cursor.rowcount)
-        return cursor
-
-    def commit(self) -> None:  # type: ignore[override]
-        try:
-            self._persist_report_structure_generation()
-            super().commit()
-        except Exception:
-            self._clear_report_structure_generation()
-            raise
-        self._clear_report_structure_generation()
-
-    def rollback(self) -> None:  # type: ignore[override]
-        super().rollback()
-        self._clear_report_structure_generation()
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        try:
-            if exc_type is None:
-                self._persist_report_structure_generation()
-            result = super().__exit__(exc_type, exc_value, traceback)
-        except Exception:
-            self._clear_report_structure_generation()
-            raise
-        self._clear_report_structure_generation()
-        return result
+        return super().executescript(sql_script)
 
 
 @lru_cache(maxsize=1)
@@ -268,16 +156,40 @@ def get_db_key() -> str:
 
 
 def get_connection() -> sqlite3.Connection:
+    """Acquire a fully initialized connection or close the partial resource."""
+
     database_path = get_db_path()
-    conn = sqlite3.connect(
-        database_path,
-        timeout=5,
-        check_same_thread=False,
-        factory=WorkTraceConnection,
-    )
-    conn.row_factory = sqlite3.Row
-    apply_connection_pragmas(conn)
-    return conn
+    conn: sqlite3.Connection | None = None
+    try:
+        conn = sqlite3.connect(
+            database_path,
+            timeout=5,
+            check_same_thread=False,
+            factory=WorkTraceConnection,
+        )
+        conn.row_factory = sqlite3.Row
+        apply_connection_pragmas(conn)
+        return conn
+    except BaseException:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                logging.warning(
+                    "database connection cleanup failed phase=acquisition"
+                )
+        raise
+
+
+def active_database_epoch_key() -> tuple[str, int]:
+    """Return the process-cache identity for the currently active database."""
+
+    with get_connection() as conn:
+        replacement_epoch = DataGenerationRepository.get(
+            conn,
+            DataGenerationNamespace.DATABASE_REPLACEMENT,
+        )
+    return get_db_key(), replacement_epoch
 
 
 def apply_connection_pragmas(conn: sqlite3.Connection) -> None:
@@ -299,8 +211,7 @@ def initialize_database(path: str | Path | None = None) -> None:
     configure_database(path)
     with get_connection() as conn:
         ensure_wal(conn)
-        with report_structure_classifier_scope():
-            apply_current_schema(conn)
+        apply_current_schema(conn)
     logging.info("database initialized")
 
 
@@ -450,3 +361,28 @@ def ensure_current_indexes(conn: sqlite3.Connection) -> None:
     """Install the indexes declared by the current schema contract."""
 
     conn.executescript(read_schema_indexes_sql())
+
+
+__all__ = [
+    "CURRENT_SCHEMA_VERSION",
+    "WorkTraceConnection",
+    "active_database_epoch_key",
+    "apply_connection_pragmas",
+    "apply_current_schema",
+    "configure_database",
+    "dict_rows",
+    "ensure_current_indexes",
+    "ensure_data_generation_state",
+    "ensure_wal",
+    "expected_schema_fingerprint",
+    "get_connection",
+    "get_db_key",
+    "get_db_path",
+    "initialize_database",
+    "now_str",
+    "read_internal_schema_sql",
+    "read_schema_indexes_sql",
+    "read_schema_sql",
+    "schema_fingerprint",
+    "seed_defaults",
+]

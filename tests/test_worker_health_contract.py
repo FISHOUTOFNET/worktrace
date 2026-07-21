@@ -78,7 +78,7 @@ def test_app_runtime_marks_unexpected_worker_exit_degraded() -> None:
     spec = WorkerSpec(
         name="folder_index",
         thread_name="test-folder-index",
-        target=lambda _stop_event, *, health=None: None,
+        target=lambda _stop_event, *, health: None,
         args_factory=lambda stop: (stop,),
     )
     handle = WorkerHandle(spec=spec, thread=None, stop_event=stop_event)

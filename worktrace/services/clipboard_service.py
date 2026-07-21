@@ -91,7 +91,7 @@ def record_clipboard_event(
                 conn,
                 [int(activity_id)],
             )
-        uow.mark_changed()
+        uow.mark_changed(DataGenerationNamespace.REPORT_STRUCTURE)
 
     if not activity_closed:
         _sync_open_activity_project_safely(int(activity_id))
@@ -132,7 +132,10 @@ def prune_old_events(
             "DELETE FROM activity_clipboard_event WHERE copied_at < ?",
             (cutoff,),
         )
-        return int(cur.rowcount or 0)
+        deleted = int(cur.rowcount or 0)
+        if deleted:
+            uow.mark_changed(DataGenerationNamespace.REPORT_STRUCTURE)
+        return deleted
 
 
 def _find_duplicate_event(

@@ -3,20 +3,31 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import sqlite3
-import tempfile
+import sys
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
+from ..atomic_file import (
+    OwnedTemporaryFile,
+    TemporaryFileCleanupError,
+    TemporaryFileError,
+    atomic_write_bytes,
+)
 from ..constants import APP_VERSION
+from ..database_content_manifest import (
+    BACKUP_TABLES,
+    DELETE_ORDER,
+    TABLE_NAMES,
+)
+from ..database_replacement_unit_of_work import DatabaseReplacementUnitOfWork
 from ..db import (
     CURRENT_SCHEMA_VERSION,
     expected_schema_fingerprint,
     get_connection,
-    get_db_key,
     now_str,
     read_internal_schema_sql,
     read_schema_indexes_sql,
@@ -24,8 +35,6 @@ from ..db import (
     schema_fingerprint,
     seed_defaults,
 )
-from ..generation_clock import clear as clear_generation_clock
-from ..generation_clock import publish_replacement_committed
 from ..security.backup_format import (
     BackupFormatError,
     BackupManifest,
@@ -34,10 +43,6 @@ from ..security.backup_format import (
     parse_backup_manifest,
 )
 from . import database_maintenance_service
-from .database_replacement_generation_service import (
-    capture_replacement_generation_floor,
-    publish_database_replacement,
-)
 from .secure_backup_validation import BackupValidationError, validate_staging_database
 
 PAYLOAD_FORMAT = "worktrace-local-data"
@@ -47,32 +52,8 @@ BACKUP_FILE_SUFFIX = ".wtbackup"
 MAX_BACKUP_FILE_BYTES = 512 * 1024 * 1024
 MAX_BACKUP_PAYLOAD_BYTES = 384 * 1024 * 1024
 
-EXPORT_TABLES: tuple[str, ...] = (
-    "project",
-    "settings",
-    "session_boundary",
-    "activity_log",
-    "folder_project_rule",
-    "project_rule",
-    "folder_rule_index_state",
-    "activity_project_assignment",
-    "activity_clipboard_event",
-    "report_session_operation",
-    "report_session_operation_member",
-    "report_mutation_request",
-    "activity_resource",
-)
-EXCLUDED_TABLES: frozenset[str] = frozenset(
-    {
-        "folder_rule_file_index",
-        "history_mutation_job",
-        "history_mutation_job_rule",
-        "data_generation_state",
-        "activity_inference_job",
-        "activity_resource_repair_job",
-        "startup_recovery_job",
-    }
-)
+EXPORT_TABLES: tuple[str, ...] = BACKUP_TABLES
+EXCLUDED_TABLES: frozenset[str] = frozenset(TABLE_NAMES) - frozenset(EXPORT_TABLES)
 MIGRATABLE_SETTINGS: frozenset[str] = frozenset(
     {
         "poll_interval_seconds",
@@ -84,22 +65,6 @@ MIGRATABLE_SETTINGS: frozenset[str] = frozenset(
         "collector_stall_threshold_seconds",
         "clock_jump_threshold_seconds",
     }
-)
-_DELETE_ORDER: tuple[str, ...] = (
-    "activity_resource",
-    "report_session_operation_member",
-    "report_mutation_request",
-    "report_session_operation",
-    "activity_clipboard_event",
-    "activity_project_assignment",
-    "folder_rule_file_index",
-    "folder_rule_index_state",
-    "project_rule",
-    "folder_project_rule",
-    "activity_log",
-    "session_boundary",
-    "settings",
-    "project",
 )
 
 
@@ -113,6 +78,20 @@ class BackupDecryptionError(SecureBackupError):
 
 class BackupCorruptedError(SecureBackupError):
     """The backup is malformed or violates current schema semantics."""
+
+
+class BackupStagingInfrastructureError(SecureBackupError):
+    """Validated staging could not be built because local infrastructure failed."""
+
+
+class BackupSensitiveCleanupError(SecureBackupError):
+    """A decrypted staging resource could not be removed safely."""
+
+    requires_recovery_block = True
+
+
+class BackupReplacementError(SecureBackupError):
+    """A validated backup could not be applied to the live database."""
 
 
 class BackupVersionNotSupportedError(SecureBackupError):
@@ -144,11 +123,25 @@ class BackupManifestInfo:
         )
 
 
-@dataclass(frozen=True)
-class ImportResult:
-    mode: str
-    imported_tables: dict[str, int] = field(default_factory=dict)
-    folder_index_reset: bool = False
+@dataclass
+class ValidatedStaging:
+    """Validated decrypted database with one explicit cleanup owner."""
+
+    path: str
+    imported_counts: dict[str, int]
+    _owner: OwnedTemporaryFile = field(repr=False)
+    cleaned: bool = False
+
+    def cleanup(self) -> None:
+        if self.cleaned:
+            return
+        try:
+            self._owner.cleanup()
+        except TemporaryFileCleanupError as exc:
+            raise BackupSensitiveCleanupError(
+                "backup_staging_cleanup_failed"
+            ) from exc
+        self.cleaned = True
 
 
 def export_encrypted_backup(output_path: str | Path, passphrase: str) -> Path:
@@ -163,7 +156,10 @@ def export_encrypted_backup(output_path: str | Path, passphrase: str) -> Path:
     ):
         payload = _build_export_payload_under_snapshot()
     blob = create_encrypted_backup(payload, passphrase, APP_VERSION)
-    _atomic_write_bytes(out, blob)
+    try:
+        _atomic_write_bytes(out, blob)
+    except TemporaryFileError as exc:
+        raise SecureBackupError("backup_export_failed") from exc
     logging.info("encrypted backup export success suffix=%s", BACKUP_FILE_SUFFIX)
     return out
 
@@ -180,34 +176,73 @@ def import_encrypted_backup(
 
     input_file = Path(input_path)
     _require_bounded_backup_file(input_file)
-    blob = input_file.read_bytes()
+    try:
+        blob = input_file.read_bytes()
+    except OSError as exc:
+        raise SecureBackupError("backup_file_unavailable") from exc
     payload = _read_and_decrypt(blob, passphrase)
     data = _parse_and_validate_payload(payload)
-    try:
-        with database_maintenance_service.database_replacement("secure_import"):
-            imported_counts = _replace_import(data)
-    except database_maintenance_service.MaintenanceInProgressError as exc:
-        raise BackupImportInProgressError(
-            "another destructive operation is already in progress"
-        ) from exc
 
+    with _validated_staging_database(data) as staging:
+        imported_counts = dict(staging.imported_counts)
+        try:
+            with database_maintenance_service.database_replacement("secure_import"):
+                operation_error: BaseException | None = None
+                operation_traceback = None
+                try:
+                    _apply_validated_staging_to_live(staging.path)
+                except BaseException as exc:
+                    operation_error = exc
+                    operation_traceback = exc.__traceback__
+                try:
+                    # Cleanup is part of the replacement epoch. A failure after
+                    # durable commit therefore reaches the coordinator before it
+                    # can clear the recovery seal.
+                    staging.cleanup()
+                except BackupSensitiveCleanupError:
+                    if operation_error is not None:
+                        setattr(operation_error, "requires_recovery_block", True)
+                        raise operation_error.with_traceback(operation_traceback)
+                    raise
+                if operation_error is not None:
+                    raise operation_error.with_traceback(operation_traceback)
+        except database_maintenance_service.MaintenanceInProgressError as exc:
+            raise BackupImportInProgressError(
+                "another destructive operation is already in progress"
+            ) from exc
+
+    status = database_maintenance_service.maintenance_status().to_dict()
     logging.info(
-        "encrypted backup import success mode=%s tables=%d",
+        "encrypted backup import success mode=%s tables=%d restored=%s",
         mode,
         len(imported_counts),
+        status["maintenance_restored"],
     )
     return ImportResult(
         mode=mode,
         imported_tables=imported_counts,
         folder_index_reset=True,
+        maintenance_status=status,
     )
+
+
+@dataclass(frozen=True)
+class ImportResult:
+    mode: str
+    imported_tables: dict[str, int] = field(default_factory=dict)
+    folder_index_reset: bool = False
+    maintenance_status: dict[str, object] = field(default_factory=dict)
 
 
 def parse_encrypted_backup_manifest(input_path: str | Path) -> BackupManifestInfo:
     input_file = Path(input_path)
     _require_bounded_backup_file(input_file)
     try:
-        manifest = parse_backup_manifest(input_file.read_bytes())
+        blob = input_file.read_bytes()
+    except OSError as exc:
+        raise SecureBackupError("backup_file_unavailable") from exc
+    try:
+        manifest = parse_backup_manifest(blob)
     except BackupFormatError as exc:
         raise _classify_format_error(exc) from exc
     return BackupManifestInfo.from_manifest(manifest)
@@ -217,7 +252,7 @@ def _require_bounded_backup_file(path: Path) -> None:
     try:
         size = path.stat().st_size
     except OSError as exc:
-        raise BackupCorruptedError("backup file is invalid or corrupted") from exc
+        raise SecureBackupError("backup_file_unavailable") from exc
     if size <= 0 or size > MAX_BACKUP_FILE_BYTES:
         raise BackupCorruptedError("backup file is invalid or corrupted")
 
@@ -242,10 +277,16 @@ def _build_export_payload_under_snapshot() -> bytes:
                 tables[table] = [dict(row) for row in rows]
         conn.commit()
     except Exception:
-        conn.rollback()
+        try:
+            conn.rollback()
+        except Exception:
+            logging.warning("backup snapshot rollback failed phase=export")
         raise
     finally:
-        conn.close()
+        try:
+            conn.close()
+        except Exception:
+            logging.warning("backup snapshot close failed phase=export")
 
     payload = json.dumps(
         {
@@ -272,7 +313,7 @@ def _parse_and_validate_payload(payload: bytes) -> dict[str, Any]:
         data = json.loads(payload.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         logging.warning(
-            "encrypted backup payload json parse failed: %s",
+            "encrypted backup payload parse failed exception=%s",
             type(exc).__name__,
         )
         raise BackupCorruptedError("backup file is invalid or corrupted") from exc
@@ -295,46 +336,144 @@ def _parse_and_validate_payload(payload: bytes) -> dict[str, Any]:
     return data
 
 
-def _replace_import(data: dict[str, Any]) -> dict[str, int]:
-    """Stage and validate current data, then replace live contents atomically."""
+@contextmanager
+def _validated_staging_database(
+    data: dict[str, Any],
+) -> Iterator[ValidatedStaging]:
+    """Own creation, validation, maintenance handoff, and secure deletion."""
 
-    staging_path: str | None = None
+    owner = OwnedTemporaryFile(
+        prefix="worktrace-import-",
+        suffix=".sqlite",
+        resource="decrypted_backup_staging",
+        sensitive=True,
+        permissions=0o600,
+    )
+    staging: ValidatedStaging | None = None
     try:
-        fd, staging_path = tempfile.mkstemp(
-            prefix="worktrace-import-",
-            suffix=".sqlite",
+        try:
+            owner.__enter__()
+        except TemporaryFileError as exc:
+            raise BackupStagingInfrastructureError(
+                "backup_staging_create_failed"
+            ) from exc
+        imported = _build_and_validate_staging(str(owner.path), data)
+        staging = ValidatedStaging(
+            path=str(owner.path),
+            imported_counts=dict(imported),
+            _owner=owner,
         )
-        os.close(fd)
+        yield staging
+    except BaseException as exc:
+        if staging is None:
+            staging = ValidatedStaging(
+                path=str(owner.path) if owner._path is not None else "",
+                imported_counts={},
+                _owner=owner,
+            )
+        if not staging.cleaned and owner._path is not None:
+            try:
+                staging.cleanup()
+            except BackupSensitiveCleanupError:
+                setattr(exc, "requires_recovery_block", True)
+                if database_maintenance_service.current_maintenance_progress() is None:
+                    try:
+                        database_maintenance_service.enter_fail_closed(
+                            "secure_import_staging_cleanup"
+                        )
+                    except Exception:
+                        logging.warning(
+                            "secure staging fail-closed handoff failed phase=cleanup"
+                        )
+        raise
+    else:
+        if staging is not None and not staging.cleaned:
+            try:
+                staging.cleanup()
+            except BackupSensitiveCleanupError:
+                try:
+                    database_maintenance_service.enter_fail_closed(
+                        "secure_import_staging_cleanup"
+                    )
+                finally:
+                    raise
+
+
+def _build_and_validate_staging(
+    staging_path: str,
+    data: dict[str, Any],
+) -> dict[str, int]:
+    """Build and validate a caller-owned staging database outside maintenance."""
+
+    staging: sqlite3.Connection | None = None
+    primary_error: BaseException | None = None
+    try:
         staging = sqlite3.connect(staging_path)
         staging.row_factory = sqlite3.Row
         staging.execute("PRAGMA foreign_keys = ON")
+        staging.executescript(read_schema_sql())
+        staging.executescript(read_internal_schema_sql())
+        staging.executescript(read_schema_indexes_sql())
+        staging.execute(f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION}")
+        imported = _load_import_tables(staging, data["tables"])
+        seed_defaults(staging)
+        _reset_derived_folder_index(staging)
         try:
-            staging.executescript(read_schema_sql())
-            staging.executescript(read_internal_schema_sql())
-            staging.executescript(read_schema_indexes_sql())
-            staging.execute(f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION}")
-            imported = _load_import_tables(staging, data["tables"])
-            seed_defaults(staging)
-            _reset_derived_folder_index(staging)
-            _validate_staging_database(staging)
-            staging.commit()
-        except Exception:
-            staging.rollback()
-            raise
-        finally:
-            staging.close()
-
-        replacement_values = None
-        with get_connection() as live:
-            live.execute("BEGIN IMMEDIATE")
-            replacement_floor = capture_replacement_generation_floor(live)
-            database_maintenance_service.clear_all_worker_progress_in_transaction(live)
-            _delete_all_rows(live)
-            source = sqlite3.connect(staging_path)
-            source.row_factory = sqlite3.Row
+            validate_staging_database(staging)
+        except BackupValidationError as exc:
+            raise BackupCorruptedError(
+                "backup file is invalid or corrupted"
+            ) from exc
+        staging.commit()
+        return imported
+    except BackupCorruptedError as exc:
+        primary_error = exc
+        if staging is not None:
+            _rollback_staging_safely(staging)
+        raise
+    except Exception as exc:
+        primary_error = exc
+        if staging is not None:
+            _rollback_staging_safely(staging)
+        raise BackupStagingInfrastructureError(
+            "backup_staging_infrastructure_failed"
+        ) from exc
+    finally:
+        if staging is not None:
             try:
+                staging.close()
+            except Exception as exc:
+                logging.warning(
+                    "staging connection close failed phase=finalization"
+                )
+                if primary_error is None:
+                    raise BackupStagingInfrastructureError(
+                        "backup_staging_close_failed"
+                    ) from exc
+
+
+def _rollback_staging_safely(staging: sqlite3.Connection) -> None:
+    try:
+        staging.rollback()
+    except sqlite3.Error:
+        logging.warning("staging rollback failed phase=rollback")
+
+
+def _apply_validated_staging_to_live(staging_path: str) -> dict[str, int]:
+    """Apply validated staging; every pre-commit live failure has one stable type."""
+
+    try:
+        with DatabaseReplacementUnitOfWork() as replacement_uow:
+            live = replacement_uow.connection
+            _delete_all_rows(live)
+            source: sqlite3.Connection | None = None
+            source_error: BaseException | None = None
+            try:
+                source = sqlite3.connect(staging_path)
+                source.row_factory = sqlite3.Row
+                imported: dict[str, int] = {}
                 for table in EXPORT_TABLES:
-                    _insert_rows(
+                    imported[table] = _insert_rows(
                         live,
                         table,
                         [
@@ -342,37 +481,51 @@ def _replace_import(data: dict[str, Any]) -> dict[str, int]:
                             for row in source.execute(f"SELECT * FROM {table}")
                         ],
                     )
+            except BaseException as exc:
+                source_error = exc
+                raise
             finally:
-                source.close()
+                if source is not None:
+                    try:
+                        source.close()
+                    except Exception as exc:
+                        logging.warning(
+                            "validated staging reader close failed phase=finalization"
+                        )
+                        if source_error is None:
+                            raise BackupReplacementError(
+                                "live database replacement failed"
+                            ) from exc
             seed_defaults(live)
             _reset_derived_folder_index(live)
-            _validate_staging_database(live)
-            replacement_values = publish_database_replacement(
-                live,
-                minimum_values=replacement_floor,
-            )
-            live.commit()
-        if replacement_values is None:
-            raise RuntimeError("database_replacement_generation_missing")
-        database_key = get_db_key()
-        try:
-            publish_replacement_committed(database_key, replacement_values)
-        except Exception:
-            logging.exception("database replacement generation publication failed")
-            clear_generation_clock(database_key)
-        return imported
-    except BackupCorruptedError:
-        raise
-    except BackupValidationError as exc:
-        raise BackupCorruptedError("backup file is invalid or corrupted") from exc
-    except (sqlite3.DatabaseError, ValueError, KeyError, TypeError) as exc:
-        raise BackupCorruptedError("backup file is invalid or corrupted") from exc
-    finally:
-        if staging_path:
             try:
-                os.unlink(staging_path)
-            except FileNotFoundError:
-                pass
+                validate_staging_database(live)
+            except BackupValidationError as exc:
+                raise BackupReplacementError(
+                    "live database replacement failed"
+                ) from exc
+        return imported
+    except BackupReplacementError:
+        raise
+    except Exception as exc:
+        raise BackupReplacementError(
+            "live database replacement failed"
+        ) from exc
+
+
+def _cleanup_staging_file(staging_path: str | None) -> None:
+    """Compatibility test hook with the new explicit security failure contract."""
+
+    if not staging_path:
+        return
+    try:
+        Path(staging_path).unlink()
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        raise BackupSensitiveCleanupError(
+            "backup_staging_cleanup_failed"
+        ) from exc
 
 
 def _load_import_tables(
@@ -412,7 +565,7 @@ def _validate_staging_database(conn: sqlite3.Connection) -> None:
 
 
 def _delete_all_rows(conn: sqlite3.Connection) -> None:
-    for table in _DELETE_ORDER:
+    for table in DELETE_ORDER:
         conn.execute(f"DELETE FROM {table}")
 
 
@@ -455,7 +608,7 @@ def _read_and_decrypt(blob: bytes, passphrase: str) -> bytes:
         payload = decrypt_encrypted_backup(blob, passphrase)
     except BackupFormatError as exc:
         logging.warning(
-            "encrypted backup decrypt failed: %s",
+            "encrypted backup decrypt failed exception=%s",
             type(exc).__name__,
         )
         raise BackupDecryptionError(
@@ -473,9 +626,12 @@ def _classify_format_error(exc: BackupFormatError) -> SecureBackupError:
 
 
 def _atomic_write_bytes(path: Path, data: bytes) -> None:
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_bytes(data)
-    os.replace(tmp, path)
+    atomic_write_bytes(
+        path,
+        data,
+        resource="encrypted_backup_output",
+        permissions=0o600,
+    )
 
 
 def _utc_now() -> str:
@@ -493,6 +649,9 @@ __all__ = [
     "BackupDecryptionError",
     "BackupImportInProgressError",
     "BackupManifestInfo",
+    "BackupReplacementError",
+    "BackupSensitiveCleanupError",
+    "BackupStagingInfrastructureError",
     "BackupVersionNotSupportedError",
     "EXCLUDED_TABLES",
     "EXPORT_TABLES",
@@ -502,6 +661,7 @@ __all__ = [
     "PAYLOAD_VERSION",
     "SCHEMA_VERSION",
     "SecureBackupError",
+    "ValidatedStaging",
     "export_encrypted_backup",
     "import_encrypted_backup",
     "parse_encrypted_backup_manifest",

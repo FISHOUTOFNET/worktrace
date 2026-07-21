@@ -4,6 +4,7 @@ import threading
 
 import pytest
 
+from tests.support.application import TestMaintenance
 from worktrace.api.app_api import ApplicationControlService
 from worktrace.collector import collector as collector_module
 from worktrace.collector.collector import run_collector
@@ -58,7 +59,7 @@ def test_missing_runtime_composition_is_rejected_without_business_mutation(temp_
     )
 
     with pytest.raises(ValueError, match="application_runtime_required"):
-        ApplicationControlService(None)  # type: ignore[arg-type]
+        ApplicationControlService(None, TestMaintenance())  # type: ignore[arg-type]
 
     with get_connection() as conn:
         row = conn.execute(
@@ -97,7 +98,7 @@ def test_runtime_exception_pause_fails_without_business_fallback(temp_db):
             raise RuntimeError("runtime unavailable")
 
     activity_id = _open_activity()
-    control = ApplicationControlService(FailingRuntime())
+    control = ApplicationControlService(FailingRuntime(), TestMaintenance())
 
     result = control.pause_collection_now()
 
@@ -120,7 +121,7 @@ def test_runtime_exception_pause_fails_without_business_fallback(temp_db):
 def test_repeated_missing_runtime_composition_is_side_effect_free(temp_db):
     for _ in range(2):
         with pytest.raises(ValueError, match="application_runtime_required"):
-            ApplicationControlService(None)  # type: ignore[arg-type]
+            ApplicationControlService(None, TestMaintenance())  # type: ignore[arg-type]
 
     with get_connection() as conn:
         boundaries = conn.execute(

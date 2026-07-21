@@ -90,10 +90,10 @@ def test_history_submission_metadata_does_not_publish_business_generation(temp_d
     catalog_before = _generation(DataGenerationNamespace.CLASSIFICATION_CATALOG)
 
     submitted = history_mutation_job_service.submit_rule_job(
-        "rule_backfill",
         "keyword",
         rule_id,
-        synchronous_limit=0,
+        kind="rule_backfill",
+        synchronous_scan_limit=0,
     )
 
     assert submitted["queued"] is True
@@ -106,10 +106,10 @@ def test_history_batch_commits_assignment_and_cursor_with_one_report_generation(
     rule_id = rule_service.create_rule("history-batch", project_id)
     activity_id = _closed_activity("history-batch document", 30)
     submitted = history_mutation_job_service.submit_rule_job(
-        "rule_backfill",
         "keyword",
         rule_id,
-        synchronous_limit=0,
+        kind="rule_backfill",
+        synchronous_scan_limit=0,
     )
     before = _generation(DataGenerationNamespace.REPORT_STRUCTURE)
 

@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 from worktrace.collector import collector_health
+from worktrace.platforms.fake_adapter import FakeAdapter
 from worktrace.runtime import app_runtime
 from worktrace.runtime.app_runtime import AppRuntime
 from worktrace.services import settings_service
@@ -11,14 +12,18 @@ from worktrace.services import settings_service
 pytestmark = [pytest.mark.db, pytest.mark.collector_runtime, pytest.mark.integration]
 
 
+def _runtime() -> AppRuntime:
+    return AppRuntime(
+        SimpleNamespace(db_path="", log_path=""),
+        adapter=FakeAdapter(),
+    )
+
+
 def test_start_collector_replaces_dead_thread_and_returns_structured_success(
     temp_db,
     monkeypatch,
 ):
-    runtime = AppRuntime(
-        SimpleNamespace(db_path="", log_path=""),
-        adapter=object(),
-    )
+    runtime = _runtime()
     runtime.owns_application_instance = True
 
     dead = threading.Thread(target=lambda: None)
@@ -64,10 +69,7 @@ def test_start_collector_replaces_dead_thread_and_returns_structured_success(
 
 
 def test_start_collector_reports_not_owned_and_stopping(temp_db):
-    runtime = AppRuntime(
-        SimpleNamespace(db_path="", log_path=""),
-        adapter=object(),
-    )
+    runtime = _runtime()
 
     assert runtime.start_collector() == {
         "ok": False,
@@ -81,11 +83,12 @@ def test_start_collector_reports_not_owned_and_stopping(temp_db):
         "error": "runtime_stopping",
     }
 
+
 def test_collector_start_failure_is_retryable_without_stopping_runtime(
     temp_db,
     monkeypatch,
 ):
-    runtime = AppRuntime(SimpleNamespace(db_path="", log_path=""), adapter=object())
+    runtime = _runtime()
     runtime.owns_application_instance = True
     attempts = {"count": 0}
 

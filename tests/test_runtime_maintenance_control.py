@@ -49,6 +49,9 @@ class _OperationalHoldState:
 class _OperationalChannel:
     hold_state = _OperationalHoldState()
 
+    def query_command(self, command_id: str):
+        return None
+
 
 class _RuntimeControl:
     def __init__(self, *, running: bool = True) -> None:
@@ -350,7 +353,8 @@ def test_pending_hold_timeout_returns_to_idle_without_fail_closed(temp_db, monke
 
     assert coordinator.phase is MaintenancePhase.IDLE
     assert coordinator.blocked_reason is None
-    assert coordinator.active() is False
+    assert coordinator.operation_active() is False
+    assert coordinator.recovery_blocked() is False
     assert settings_service.get_bool_setting("user_paused", True) is False
     assert settings_service.get_setting("collector_status", "") == "running"
 
@@ -386,10 +390,14 @@ def test_replacement_reset_failure_fails_closed_and_clears_snapshot(temp_db, mon
     with pytest.raises(RuntimeError, match="collector_database_reset_not_acknowledged"):
         with coordinator.database_replacement("failure"):
             pass
-    assert coordinator.active() is True
+    assert coordinator.operation_active() is False
+    assert coordinator.recovery_blocked() is True
     assert coordinator.phase is MaintenancePhase.FAILED_CLOSED
     assert coordinator.blocked_reason
-    with pytest.raises(MaintenanceInProgressError, match="maintenance_failed_closed"):
+    with pytest.raises(
+        MaintenanceInProgressError,
+        match="database_maintenance_recovery_required",
+    ):
         with coordinator.consistent_snapshot("blocked"):
             pass
     assert settings_service.get_bool_setting("user_paused", False) is True
@@ -419,10 +427,14 @@ def test_unknown_hold_command_state_remains_fail_closed(temp_db, monkeypatch):
     with pytest.raises(RuntimeError, match="collector_maintenance_hold_not_acknowledged"):
         with coordinator.consistent_snapshot("unknown"):
             pytest.fail("operation must not start")
-    assert coordinator.active() is True
+    assert coordinator.operation_active() is False
+    assert coordinator.recovery_blocked() is True
     assert coordinator.phase is MaintenancePhase.FAILED_CLOSED
     assert coordinator.blocked_reason
-    with pytest.raises(MaintenanceInProgressError, match="maintenance_failed_closed"):
+    with pytest.raises(
+        MaintenanceInProgressError,
+        match="database_maintenance_recovery_required",
+    ):
         with coordinator.consistent_snapshot("blocked"):
             pass
     assert settings_service.get_bool_setting("user_paused", False) is True
@@ -432,7 +444,8 @@ def test_unknown_hold_command_state_remains_fail_closed(temp_db, monkeypatch):
     coordinator.recover_fail_closed()
     assert coordinator.phase is MaintenancePhase.IDLE
     assert coordinator.blocked_reason is None
-    assert coordinator.active() is False
+    assert coordinator.operation_active() is False
+    assert coordinator.recovery_blocked() is False
     assert settings_service.get_bool_setting("maintenance_fail_closed", True) is False
     assert settings_service.get_setting("maintenance_fail_closed_reason", "x") == ""
     assert settings_service.get_bool_setting("user_paused", False) is True
@@ -466,7 +479,7 @@ def test_clipboard_monitor_does_not_start_or_retain_while_disabled():
     monitor = ClipboardMonitor(_window)
     monitor.set_enabled(False)
     assert monitor.drain() == []
-    assert monitor._thread is None
+    assert not hasattr(monitor, "_thread")
 
 
 def test_clipboard_disable_waits_for_inflight_capture_and_drops_generation(monkeypatch):
@@ -488,7 +501,7 @@ def test_clipboard_disable_waits_for_inflight_capture_and_drops_generation(monke
     generation = monitor._generation
 
     def serialized_capture():
-        with monitor._lifecycle_lock:
+        with monitor._state_lock:
             monitor._capture_locked(7, generation)
 
     capture = threading.Thread(target=serialized_capture, daemon=True)

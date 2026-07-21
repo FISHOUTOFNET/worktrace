@@ -26,6 +26,10 @@ pytestmark = [
 PASSPHRASE = "maintenance-integration-passphrase"
 
 
+class _OperationalHoldState:
+    value = "operational"
+
+
 def _payload(status: str) -> dict[str, object]:
     return {
         "status": status,
@@ -55,6 +59,15 @@ class _MachineRuntimeControl:
     restore_observed: bool = False
     reset_observed: bool = False
     _next_command: int = field(default=0, init=False)
+    collector_control: object = field(init=False)
+    hold_state: object = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.collector_control = self
+        self.hold_state = _OperationalHoldState()
+
+    def query_command(self, command_id: str):
+        return None
 
     def _ack(self, command_kind: str, terminal_state: str) -> dict:
         self._next_command += 1

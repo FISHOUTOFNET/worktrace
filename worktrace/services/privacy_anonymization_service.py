@@ -56,6 +56,7 @@ def anonymize_activity(activity_id: int) -> None:
             make_system_resource(STATUS_EXCLUDED),
             conn=conn,
         )
+        uow.mark_changed(DataGenerationNamespace.REPORT_STRUCTURE)
 
 
 __all__ = [

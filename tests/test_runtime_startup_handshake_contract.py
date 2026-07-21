@@ -2,14 +2,10 @@ from types import SimpleNamespace
 
 import pytest
 
+from worktrace.platforms.fake_adapter import FakeAdapter
 from worktrace.runtime import app_runtime
-from worktrace.runtime.app_runtime import (
-    AppRuntime,
-    RuntimePhase,
-    WorkerStartupReport,
-    WorkerStartupState,
-    WorkerStartupStatus,
-)
+from worktrace.runtime.app_runtime import AppRuntime, RuntimePhase, WorkerStartupReport
+from worktrace.runtime.contracts import WorkerStartupState, WorkerStartupStatus
 
 pytestmark = [pytest.mark.db, pytest.mark.collector_runtime, pytest.mark.integration]
 
@@ -17,7 +13,7 @@ pytestmark = [pytest.mark.db, pytest.mark.collector_runtime, pytest.mark.integra
 def _owned_runtime() -> AppRuntime:
     runtime = AppRuntime(
         SimpleNamespace(db_path="", log_path=""),
-        adapter=object(),
+        adapter=FakeAdapter(),
     )
     runtime.owns_application_instance = True
     return runtime

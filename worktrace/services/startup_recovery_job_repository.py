@@ -7,12 +7,13 @@ from enum import Enum
 
 from ..constants import TIME_FORMAT
 from ..db import now_str
+from ..write_gate import DATABASE_MAINTENANCE_ERROR
 
 
 class RecoveryFailureCode(str, Enum):
     DATABASE_BUSY = "database_busy"
     DATABASE_GENERATION_CHANGED = "database_generation_changed"
-    SECURE_IMPORT_IN_PROGRESS = "secure_import_in_progress"
+    DATABASE_MAINTENANCE_IN_PROGRESS = DATABASE_MAINTENANCE_ERROR
     UNEXPECTED_FAILURE = "unexpected_failure"
 
 

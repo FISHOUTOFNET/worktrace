@@ -23,11 +23,24 @@ pytestmark = [
 ]
 
 
+class _OperationalHoldState:
+    value = "operational"
+
+
+class _OperationalChannel:
+    hold_state = _OperationalHoldState()
+
+    def query_command(self, command_id: str):
+        return None
+
+
 class _RuntimeControl:
     def __init__(self, coordinator: RuntimeMaintenanceCoordinator) -> None:
         self.coordinator = coordinator
         self.observed: list[tuple[str, MaintenancePhase, WriteGatePhase]] = []
+        self.writer_outcomes: list[tuple[str, str]] = []
         self._next_command = 0
+        self.collector_control = _OperationalChannel()
 
     def _ack(self, command_kind: str, terminal_state: str) -> dict:
         self._next_command += 1
@@ -39,6 +52,21 @@ class _RuntimeControl:
             "terminal_state": terminal_state,
             "command_state_unknown": False,
         }
+
+    def _attempt_ordinary_writer(self, label: str) -> None:
+        outcome: list[str] = []
+
+        def writer() -> None:
+            try:
+                project_service.create_project(f"BlockedDuring{label}")
+            except sqlite3.OperationalError as exc:
+                outcome.append(str(exc))
+
+        thread = threading.Thread(target=writer, daemon=True)
+        thread.start()
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+        self.writer_outcomes.append((label, outcome[0] if outcome else "allowed"))
 
     def is_collection_running_for_maintenance(self) -> bool:
         return True
@@ -53,16 +81,18 @@ class _RuntimeControl:
         self.observed.append(
             ("reset", self.coordinator.phase, DATABASE_WRITE_GATE.phase())
         )
+        self._attempt_ordinary_writer("Reset")
         return self._ack("database_reset", "held")
 
     def restore_after_maintenance(self, state, timeout_seconds=5.0):
         self.observed.append(
             ("restore", self.coordinator.phase, DATABASE_WRITE_GATE.phase())
         )
+        self._attempt_ordinary_writer("Release")
         return self._ack("maintenance_release", "operational")
 
 
-def test_maintenance_quiesces_before_draining_and_resets_after_exclusive(temp_db):
+def test_maintenance_gate_covers_operation_reset_restore_and_release(temp_db):
     coordinator = RuntimeMaintenanceCoordinator()
     control = _RuntimeControl(coordinator)
     coordinator.register_runtime_control(control)
@@ -77,11 +107,16 @@ def test_maintenance_quiesces_before_draining_and_resets_after_exclusive(temp_db
     assert control.observed == [
         ("quiesce", MaintenancePhase.HOLD_REQUESTED, WriteGatePhase.OPEN),
         ("operation", MaintenancePhase.EXCLUSIVE, WriteGatePhase.EXCLUSIVE),
-        ("reset", MaintenancePhase.RESETTING, WriteGatePhase.OPEN),
-        ("restore", MaintenancePhase.RELEASING, WriteGatePhase.OPEN),
+        ("reset", MaintenancePhase.RESETTING, WriteGatePhase.EXCLUSIVE),
+        ("restore", MaintenancePhase.RELEASING, WriteGatePhase.EXCLUSIVE),
+    ]
+    assert control.writer_outcomes == [
+        ("Reset", "database_maintenance_in_progress"),
+        ("Release", "database_maintenance_in_progress"),
     ]
     assert coordinator.phase is MaintenancePhase.IDLE
     assert DATABASE_WRITE_GATE.phase() is WriteGatePhase.OPEN
+    assert DATABASE_WRITE_GATE.writes_blocked() is False
 
 
 def test_snapshot_does_not_issue_replacement_reset(temp_db):
@@ -118,7 +153,7 @@ def test_draining_rejects_new_ordinary_writer(temp_db):
         thread.join(timeout=5)
         assert not thread.is_alive()
 
-    assert outcome == ["secure_import_in_progress"]
+    assert outcome == ["database_maintenance_in_progress"]
     assert project_service.get_project_by_name("RejectedDuringDrain") is None
     assert DATABASE_WRITE_GATE.phase() is WriteGatePhase.OPEN
 
@@ -160,7 +195,7 @@ def test_sqlite_barrier_waits_for_preexisting_writer_before_exclusive(temp_db):
     assert DATABASE_WRITE_GATE.phase() is WriteGatePhase.OPEN
 
 
-def test_failed_reset_releases_gate_and_fails_closed(temp_db):
+def test_failed_reset_hands_exclusive_ownership_to_recovery_block(temp_db):
     coordinator = RuntimeMaintenanceCoordinator()
     control = _RuntimeControl(coordinator)
     control.reset_after_database_replacement = lambda timeout_seconds=5.0: {
@@ -179,10 +214,16 @@ def test_failed_reset_releases_gate_and_fails_closed(temp_db):
         with coordinator.database_replacement("failure_contract"):
             pass
 
+    status = coordinator.status()
     assert coordinator.phase is MaintenancePhase.FAILED_CLOSED
-    assert coordinator.active() is True
     assert coordinator.blocked_reason == "failure_contract_restore"
     assert DATABASE_WRITE_GATE.phase() is WriteGatePhase.OPEN
+    assert DATABASE_WRITE_GATE.operation_active() is False
+    assert DATABASE_WRITE_GATE.recovery_blocked() is True
+    assert DATABASE_WRITE_GATE.writes_blocked() is True
+    assert status.maintenance_in_progress is False
+    assert status.recovery_blocked is True
+    assert status.maintenance_restored is False
     assert settings_service.get_bool_setting("user_paused", False) is True
     assert settings_service.get_setting("collector_status", "") == "paused"
 

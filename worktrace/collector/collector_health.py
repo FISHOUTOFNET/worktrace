@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from ..constants import TIME_FORMAT
-from ..db import get_db_path, now_str
+from ..db import active_database_epoch_key, now_str
 from ..services.settings_service import get_int_setting, get_setting, set_settings
 from .collector_failure_policy import (
     RETRYABLE_COLLECTOR_FAILURE_CODES,
@@ -33,15 +33,11 @@ class _RuntimeHealthState:
     last_success_persisted_at: str
 
 
-_STATE_BY_DATABASE: dict[str, _RuntimeHealthState] = {}
-
-
-def _database_key() -> str:
-    return str(get_db_path().resolve())
+_STATE_BY_DATABASE: dict[tuple[str, int], _RuntimeHealthState] = {}
 
 
 def _runtime_state() -> _RuntimeHealthState:
-    key = _database_key()
+    key = active_database_epoch_key()
     with _STATE_LOCK:
         state = _STATE_BY_DATABASE.get(key)
         if state is None:

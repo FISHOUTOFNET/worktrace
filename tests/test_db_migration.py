@@ -23,6 +23,7 @@ EXPECTED_TABLES = {
     "history_mutation_job",
     "history_mutation_job_rule",
     "activity_inference_job",
+    "startup_recovery_job",
     "activity_project_assignment",
     "activity_clipboard_event",
     "report_session_operation",
@@ -74,7 +75,8 @@ def test_initialize_empty_database_sets_exact_current_schema(tmp_path):
     db.initialize_database(db_path)
 
     with db.get_connection() as conn:
-        assert int(conn.execute("PRAGMA user_version").fetchone()[0]) == 12
+        assert int(conn.execute("PRAGMA user_version").fetchone()[0]) == 13
+        assert db.CURRENT_SCHEMA_VERSION == 13
         assert db.schema_fingerprint(conn) == db.expected_schema_fingerprint()
         assert EXPECTED_TABLES.issubset(_get_tables(conn))
         assert "source_rule_type" in _get_columns(
@@ -99,12 +101,12 @@ def test_current_schema_initialization_is_idempotent_and_preserves_data(tmp_path
     db.initialize_database(db_path)
 
     with db.get_connection() as conn:
-        assert int(conn.execute("PRAGMA user_version").fetchone()[0]) == 12
+        assert int(conn.execute("PRAGMA user_version").fetchone()[0]) == 13
         assert db.schema_fingerprint(conn) == db.expected_schema_fingerprint()
         assert conn.execute("SELECT COUNT(*) FROM activity_log").fetchone()[0] == 1
 
 
-@pytest.mark.parametrize("version", [1, 4, 8, 9, 10, 11])
+@pytest.mark.parametrize("version", [1, 4, 8, 9, 10, 11, 12])
 def test_initialize_rejects_every_non_current_schema(tmp_path, version):
     db_path = str(tmp_path / f"schema-{version}.db")
     conn = sqlite3.connect(db_path)
@@ -129,11 +131,11 @@ def test_initialize_rejects_every_non_current_schema(tmp_path, version):
 
 
 def test_initialize_rejects_current_version_with_wrong_fingerprint(tmp_path):
-    db_path = str(tmp_path / "invalid-v12.db")
+    db_path = str(tmp_path / "invalid-v13.db")
     conn = sqlite3.connect(db_path)
     try:
         conn.execute("CREATE TABLE incomplete(id INTEGER PRIMARY KEY)")
-        conn.execute("PRAGMA user_version = 12")
+        conn.execute("PRAGMA user_version = 13")
         conn.commit()
     finally:
         conn.close()
@@ -210,6 +212,7 @@ def test_test_reset_clears_current_business_data_and_rebuilds_defaults(temp_db):
             "activity_log",
             "activity_project_assignment",
             "activity_inference_job",
+            "startup_recovery_job",
             "activity_clipboard_event",
             "activity_resource",
             "report_session_operation",

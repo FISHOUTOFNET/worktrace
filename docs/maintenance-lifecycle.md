@@ -68,10 +68,11 @@ capture durable/runtime state
 -> drain already admitted writers
 -> promote coordinator to exclusive writer
 -> build snapshot
--> release exclusive capability
--> restore durable settings
+-> restore durable settings while Collector remains HELD
 -> request maintenance release
 -> require OPERATIONAL acknowledgement
+-> exit exclusive write-gate scope
+-> coordinator returns IDLE
 ```
 
 `secure_backup_service.export_encrypted_backup()` acquires this capability
@@ -80,25 +81,59 @@ supply an alternative barrier.
 
 ## Database replacement order
 
+For secure backup import, a single `ValidatedStaging` resource scope creates,
+builds, validates, hands off and deletes the decrypted temporary SQLite file.
+The scope is entered **before** maintenance and remains active until live apply,
+maintenance rejection or failure completes. No external caller owns an orphanable
+staging path. The destructive replacement order is:
+
 ```text
-capture durable/runtime state
+enter validated-staging resource scope
+-> create, build and fully validate staging database outside maintenance
+-> capture durable/runtime state
 -> request maintenance hold
 -> require HELD acknowledgement
 -> clear runtime snapshot
 -> enter write-gate draining
 -> drain already admitted writers
 -> promote coordinator to exclusive writer
--> replace data and publish database-replacement epoch in one transaction
--> release exclusive capability
+-> apply validated staging to live database and publish replacement epoch in one transaction
 -> request process-local database reset while Collector remains HELD
 -> require reset acknowledgement with terminal HELD
--> restore durable settings
+-> restore durable settings while Collector remains HELD
 -> request maintenance release
 -> require OPERATIONAL acknowledgement
+-> exit exclusive write-gate scope
+-> delete staging database on every success/failure path
+-> coordinator returns IDLE
 ```
+
+For `clear_all_live_data`, staging is not applicable; the delete/seed/replacement
+publish happens inside the same maintenance scope.
 
 The reset clears Collector/adaptor identities from the old database generation.
 An old persisted activity ID cannot be reused after replacement.
+
+## Pre-commit failure restoration order
+
+A failure before replacement commit uses the same restoration protocol as the
+successful path; it does not run a best-effort unordered cleanup routine:
+
+```text
+live transaction rolled back to a known state
+-> Collector remains HELD
+-> restore durable settings
+-> if durable restore succeeds, request maintenance release
+-> require terminal OPERATIONAL acknowledgement
+-> exit exclusive write-gate scope
+-> coordinator returns IDLE
+```
+
+If durable restoration fails, `maintenance_release` is never sent. Collector
+remains HELD and the coordinator enters durable fail-closed. If release raises or
+its acknowledgement is unknown, the coordinator also enters fail-closed. A
+post-commit reset/release failure remains fail-closed because replacement already
+committed and runtime identity cannot be verified.
 
 ## Restoration and failure semantics
 
@@ -110,12 +145,22 @@ maintenance.
 - A pre-existing durable user pause remains paused.
 - An unaccepted privacy notice never starts collection.
 - A previously stopped Collector remains stopped.
-- Failed replacement rolls back business data and replacement epoch.
-- Any destructive-operation exception after a verified hold keeps the coordinator
-  in stable `FAILED_CLOSED`, even when the business transaction rolled back.
-- Unknown hold/reset/release state, release failure or shutdown ambiguity fails
-  closed: durable pause/status are committed as a separate safety transition,
-  runtime activity state is cleared and collection is not resumed optimistically.
+- Failed live replacement rolls back business data and replacement epoch.
+- Fail-closed is mandatory when runtime state cannot be verified:
+  - `CollectorCommandNotAcknowledgedError` with `fail_closed=True`;
+  - replacement committed but post-commit reset/restoration cannot be verified;
+  - pre-maintenance state could not be captured;
+  - durable restoration fails; or
+  - release/terminal acknowledgement fails.
+- Live replacement failure before commit, when durable restoration and release
+  both succeed, does not enter durable fail-closed. The live transaction is
+  rolled back by `DatabaseReplacementUnitOfWork` and runtime returns to its
+  pre-maintenance state. This applies to `clear_all_live_data` failures as well.
+- Pure staging failures never enter maintenance, never alter the live database or
+  generation, and never trigger fail-closed.
+- Unknown hold/reset/release state or shutdown ambiguity fails closed: durable
+  pause/status are committed as a separate safety transition, runtime activity
+  state is cleared and collection is not resumed optimistically.
 
 The fail-closed latch remains queryable as `FAILED_CLOSED` and rejects subsequent
 destructive maintenance. It is cleared only by explicit recovery after the
@@ -125,6 +170,24 @@ preserves the safety-created durable user pause until the user explicitly resume
 
 Restoration and fail-closed settings writes publish their normal settings
 change. They do not fabricate replacement success.
+
+## Backup error classification
+
+- `BackupDecryptionError`: passphrase, authentication or decryption failure.
+- `BackupVersionNotSupportedError`: backup payload or schema version unsupported.
+- `BackupCorruptedError`: input JSON, table structure, row shape, foreign key,
+  semantic, replay graph, schema/index construction, table insert, seed/reset or
+  staging commit/validation failure. It is limited to input/staging phases.
+- `BackupReplacementError`: after staging validation succeeds, any ordinary live
+  delete/insert, seed/reset, generation-floor read, generation bump, final live
+  validation, SQLite I/O or commit failure. The original exception is chained for
+  internal diagnosis; the caller receives the stable replacement error.
+- Maintenance/recovery errors: hold, reset, release, runtime recovery and
+  fail-closed state remain dedicated maintenance errors.
+
+External error messages and cleanup logs never expose staging paths, user paths,
+SQL, tracebacks, database fields or decrypted business content. Cleanup failure
+is logged with a stable resource type and never replaces the original exception.
 
 ## Concurrency and lock order
 

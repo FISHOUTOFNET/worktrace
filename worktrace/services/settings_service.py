@@ -1,8 +1,8 @@
 """Durable settings with explicit mutation classes and one-version cache."""
-
 from __future__ import annotations
 
 import threading
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import Mapping
 
@@ -28,6 +28,33 @@ class SettingMutationClass(StrEnum):
     OPERATIONAL = "operational"
 
 
+@dataclass(frozen=True)
+class SettingChangeResult:
+    """Exact semantic classes and generation effects changed in one write."""
+
+    changed_keys: frozenset[str] = frozenset()
+    user_keys: frozenset[str] = frozenset()
+    report_keys: frozenset[str] = frozenset()
+    privacy_keys: frozenset[str] = frozenset()
+    operational_keys: frozenset[str] = frozenset()
+    generation_effects: frozenset[DataGenerationNamespace] = frozenset()
+
+    def __bool__(self) -> bool:
+        return bool(self.changed_keys)
+
+    @property
+    def changed(self) -> bool:
+        return bool(self)
+
+    @property
+    def operational_only(self) -> bool:
+        return bool(self.operational_keys) and self.changed_keys == self.operational_keys
+
+    @property
+    def semantic_changed(self) -> bool:
+        return bool(self.generation_effects)
+
+
 _REPORT_SETTING_KEYS = {
     "context_carry_minutes",
     "unrecorded_gap_boundary_seconds",
@@ -47,6 +74,8 @@ _OPERATIONAL_SETTING_KEYS = {
     "collector_last_failure_at",
     "collector_last_recovery_at",
     "collector_last_recovery_failure_at",
+    "maintenance_fail_closed",
+    "maintenance_fail_closed_reason",
 }
 _OPERATIONAL_SETTING_PREFIXES = ("maintenance.", "runtime.")
 
@@ -98,11 +127,7 @@ def _select_cache_snapshot(
 
 
 def clear_settings_cache(key: str | None = None) -> None:
-    """Test/maintenance hook; ordinary writes rely on generation change.
-
-    A full reset is also the post-commit handoff used by the exclusive encrypted
-    import path, whose low-level SQLite transaction cannot use ``DomainUnitOfWork``.
-    """
+    """Test/maintenance hook; ordinary writes rely on generation change."""
 
     global _SETTING_CACHE_DATABASE_KEY, _SETTING_CACHE_GENERATION
     reset_generation_clock = key is None
@@ -168,34 +193,35 @@ def set_setting(
     value: str,
     *,
     mutation_class: SettingMutationClass | str | None = None,
-) -> None:
-    set_settings({str(key): str(value)}, mutation_class=mutation_class)
+) -> bool:
+    return set_settings({str(key): str(value)}, mutation_class=mutation_class)
 
 
 def set_settings(
     values: Mapping[str, str],
     *,
     mutation_class: SettingMutationClass | str | None = None,
-) -> None:
+) -> bool:
     normalized = {
         str(key).strip(): str(value)
         for key, value in values.items()
         if str(key).strip()
     }
     if not normalized:
-        return
+        return False
     forced_class = (
         SettingMutationClass(str(mutation_class))
         if mutation_class is not None
         else None
     )
     with DomainUnitOfWork() as uow:
-        set_settings_in_transaction(
+        result = set_settings_in_transaction(
             uow,
             uow.connection,
             normalized,
             mutation_class=forced_class,
         )
+    return bool(result)
 
 
 def set_settings_in_transaction(
@@ -204,13 +230,8 @@ def set_settings_in_transaction(
     values: Mapping[str, str],
     *,
     mutation_class: SettingMutationClass | str | None = None,
-) -> bool:
-    """Write changed settings through a caller-owned transaction.
-
-    Effects are derived only from keys whose semantic values actually change.
-    The unit of work de-duplicates namespaces, so a batch can bump each durable
-    generation at most once when the caller commits.
-    """
+) -> SettingChangeResult:
+    """Write changed settings and return exact semantic effects."""
 
     if uow.connection is not conn:
         raise ValueError("settings_transaction_connection_mismatch")
@@ -225,7 +246,12 @@ def set_settings_in_transaction(
         if str(key).strip()
     }
     timestamp = now_str()
-    changed = False
+    changed_keys: set[str] = set()
+    keys_by_class: dict[SettingMutationClass, set[str]] = {
+        classification: set() for classification in SettingMutationClass
+    }
+    generation_effects: set[DataGenerationNamespace] = set()
+
     for key, value in normalized.items():
         row = conn.execute(
             "SELECT value FROM settings WHERE key = ?",
@@ -234,7 +260,8 @@ def set_settings_in_transaction(
         if row is not None and str(row["value"] or "") == value:
             continue
         classification = forced_class or setting_mutation_class(key)
-        uow.add_effects(*_effects_for_classification(classification))
+        effects = _effects_for_classification(classification)
+        uow.add_effects(*effects)
         conn.execute(
             """
             INSERT INTO settings(key, value, updated_at)
@@ -245,10 +272,20 @@ def set_settings_in_transaction(
             """,
             (key, value, timestamp),
         )
-        changed = True
-    if changed:
-        uow.mark_changed()
-    return changed
+        if effects:
+            uow.mark_changed(*effects)
+            generation_effects.update(effects)
+        changed_keys.add(key)
+        keys_by_class[classification].add(key)
+
+    return SettingChangeResult(
+        changed_keys=frozenset(changed_keys),
+        user_keys=frozenset(keys_by_class[SettingMutationClass.USER]),
+        report_keys=frozenset(keys_by_class[SettingMutationClass.REPORT]),
+        privacy_keys=frozenset(keys_by_class[SettingMutationClass.PRIVACY]),
+        operational_keys=frozenset(keys_by_class[SettingMutationClass.OPERATIONAL]),
+        generation_effects=frozenset(generation_effects),
+    )
 
 
 def get_bool_setting(key: str, default: bool = False, *, conn=None) -> bool:
@@ -275,11 +312,15 @@ def get_list_setting(key: str, default: list[str] | None = None) -> list[str]:
     return [item.strip() for item in raw.split(",") if item.strip()]
 
 
-def set_list_setting(key: str, values: list[str]) -> None:
-    set_setting(key, ",".join(item.strip() for item in values if item.strip()))
+def set_list_setting(key: str, values: list[str]) -> bool:
+    return set_setting(
+        key,
+        ",".join(item.strip() for item in values if item.strip()),
+    )
 
 
 __all__ = [
+    "SettingChangeResult",
     "SettingMutationClass",
     "clear_settings_cache",
     "get_bool_setting",

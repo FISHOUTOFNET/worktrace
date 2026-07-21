@@ -57,9 +57,10 @@ def _submit(kind: str, rule_type: str, rule_id: int) -> dict:
     _validate(rule_type, rule_id)
     try:
         result = history_mutation_job_service.submit_rule_job(
-            kind,
             rule_type,
             rule_id,
+            kind=kind,
+            synchronous_scan_limit=100,
         )
         if str(result.get("status") or "") == "failed" and not bool(
             result.get("queued")

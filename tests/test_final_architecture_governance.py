@@ -11,6 +11,7 @@ from worktrace.services.session_boundary_policy import ALLOWED_HARD_BOUNDARY_REA
 
 pytestmark = [pytest.mark.unit, pytest.mark.contract, pytest.mark.parallel_safe]
 ROOT = Path(__file__).resolve().parents[1]
+PRODUCTION = ROOT / "worktrace"
 
 
 def _source(relative: str) -> str:
@@ -65,6 +66,31 @@ def _boundary_reason_literals(relative: str) -> set[str]:
     return literals
 
 
+def _module_string_constant(relative: str, name: str) -> str:
+    tree = ast.parse(_source(relative), filename=relative)
+    assignment = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == name for target in node.targets)
+    )
+    assert isinstance(assignment.value, ast.Constant)
+    assert isinstance(assignment.value.value, str)
+    return assignment.value.value
+
+
+def _production_string_literals() -> set[str]:
+    literals: set[str] = set()
+    for path in sorted(PRODUCTION.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        literals.update(
+            node.value
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Constant) and isinstance(node.value, str)
+        )
+    return literals
+
+
 def test_app_runtime_is_the_only_worker_started_stopped_owner():
     workers = (
         ("worktrace/services/folder_index_service.py", "run_folder_index_worker"),
@@ -113,7 +139,7 @@ def test_shipping_js_contains_no_retired_liveclock_alias_substrings():
 
 
 def test_current_only_schema_backup_and_database_helpers():
-    assert db.CURRENT_SCHEMA_VERSION == 12
+    assert db.CURRENT_SCHEMA_VERSION == 13
     assert secure_backup_service.PAYLOAD_VERSION == 6
     assert not hasattr(secure_backup_service, "is_secure_import_in_progress")
 
@@ -149,9 +175,25 @@ def test_maintenance_resume_and_status_are_current_only():
     combined_status = backup_api + settings_api
 
     assert "application_runtime_required" in app_api
-    assert "maintenance_recovery_required" in app_api
+    assert "DATABASE_RECOVERY_ERROR" in app_api
+    assert (
+        _module_string_constant("worktrace/write_gate.py", "DATABASE_MAINTENANCE_ERROR")
+        == "database_maintenance_in_progress"
+    )
+    assert (
+        _module_string_constant("worktrace/write_gate.py", "DATABASE_RECOVERY_ERROR")
+        == "database_maintenance_recovery_required"
+    )
+    retired_errors = {
+        "maintenance_operation_in_progress",
+        "maintenance_failed_closed",
+        "maintenance_recovery_required",
+    }
+    assert retired_errors.isdisjoint(_production_string_literals())
     assert "def is_maintenance_in_progress" in backup_api
-    assert '"maintenance_in_progress"' in settings_api
+    assert "database_maintenance_service.maintenance_status()" in settings_api
+    assert "**maintenance" in settings_api
+    assert '"maintenance": maintenance' not in settings_api
     assert "secure_import_in_progress" not in combined_status
     assert "is_secure_import_in_progress" not in combined_status
 
@@ -190,3 +232,31 @@ def test_production_has_no_runtime_service_locator():
     assert "def set_runtime(" not in production
     assert "_RUNTIME =" not in production
     assert "service_registry" not in production
+
+
+def test_rule_facade_does_not_directly_execute_sql():
+    """Rule facade modules must delegate persistence to services.
+
+    ``rule_api`` and ``bridge_rules`` are facade/bridge layers. They must
+    never directly execute SQL or build DML statements; all persistence is
+    owned by ``rule_catalog_command_service`` and the manifest-gated UoW.
+    """
+    import re
+
+    dml_pattern = re.compile(
+        r"\b(?:INSERT(?:\s+OR\s+\w+)?\s+INTO|REPLACE\s+INTO|UPDATE\s+\w+\s+SET|"
+        r"DELETE\s+FROM|SELECT\s+.+\s+FROM)\b",
+        re.IGNORECASE,
+    )
+    execute_pattern = re.compile(r"\.execute\s*\(")
+    for relative in (
+        "worktrace/api/rule_api.py",
+        "worktrace/webview_ui/bridge_rules.py",
+    ):
+        source = _source(relative)
+        assert not dml_pattern.search(source), (
+            f"{relative}: rule facade must not contain DML statements"
+        )
+        assert not execute_pattern.search(source), (
+            f"{relative}: rule facade must not call .execute() directly"
+        )

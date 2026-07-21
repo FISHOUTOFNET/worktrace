@@ -6,8 +6,9 @@ from pathlib import Path
 
 import pytest
 
+from tests.support.application import build_test_bridge
 from worktrace.api import settings_api
-from worktrace.webview_ui.bridge import SHIPPING_METHODS, WebViewBridge
+from worktrace.webview_ui.bridge import SHIPPING_METHODS
 
 pytestmark = [pytest.mark.contract, pytest.mark.parallel_safe]
 
@@ -49,6 +50,7 @@ EXPECTED_SHIPPING_METHODS = frozenset(
         "preview_encrypted_backup_manifest",
         "preview_project_rule_impact",
         "preview_project_rules_batch_impact",
+        "recover_database_maintenance",
         "save_timeline_session_edit",
         "set_clipboard_capture_enabled",
         "set_excluded_rules_enabled",
@@ -87,7 +89,7 @@ def test_settings_api_has_named_capabilities_only() -> None:
             "clear_runtime_activity_state",
         }
     )
-    assert not callable(settings_api.set_setting_value)
+    assert not hasattr(settings_api, "set_setting_value")
     assert "set_setting_value" not in settings_api.__all__
 
 
@@ -124,7 +126,7 @@ def test_bridge_modules_import_api_not_backend_layers() -> None:
 
 def test_shipping_bridge_public_methods_equal_allowlist() -> None:
     assert SHIPPING_METHODS == EXPECTED_SHIPPING_METHODS
-    bridge = WebViewBridge()
+    bridge = build_test_bridge()
     shipping = bridge.shipping_api
     actual = {
         name

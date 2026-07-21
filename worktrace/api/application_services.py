@@ -2,24 +2,30 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
 
-from .app_api import (
-    ApplicationControlService,
-    ApplicationRuntimeCapability,
-    MaintenanceStateCapability,
+from .app_api import ApplicationControlService, ApplicationRuntimeCapability
+from .application_capabilities import (
+    BackupCapability,
+    OverviewCapability,
+    RulesCapability,
+    SettingsCapability,
+    StatisticsCapability,
+    TimelineCapability,
 )
 
 
 @dataclass(frozen=True)
 class ApplicationServices:
-    """Concrete bridge composition without backend implementation imports."""
+    """Bridge composition containing only consumed capabilities."""
 
     app_control: ApplicationControlService
     runtime_view: ApplicationRuntimeCapability
-    maintenance: MaintenanceStateCapability
-    backup: Any
-    runtime_state_provider: Any
+    overview: OverviewCapability
+    settings: SettingsCapability
+    backup: BackupCapability
+    statistics: StatisticsCapability
+    timeline: TimelineCapability
+    rules: RulesCapability
 
 
 __all__ = ["ApplicationServices"]

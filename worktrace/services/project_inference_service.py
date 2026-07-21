@@ -135,7 +135,7 @@ def assign_project_for_activity(activity_id: int) -> dict:
             int(activity_id),
         )
         if changed:
-            uow.mark_changed()
+            uow.mark_changed(DataGenerationNamespace.REPORT_STRUCTURE)
         return result
 
 

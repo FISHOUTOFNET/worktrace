@@ -28,7 +28,7 @@ def record_boundary(occurred_at: str | None = None, reason: str = "unknown") -> 
 
     with DomainUnitOfWork((DataGenerationNamespace.REPORT_STRUCTURE,)) as uow:
         insert_boundary(uow.connection, occurred_at, reason)
-        uow.mark_changed()
+        uow.mark_changed(DataGenerationNamespace.REPORT_STRUCTURE)
 
 
 def latest_boundary_time() -> str | None:

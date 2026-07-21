@@ -4,7 +4,6 @@ import threading
 from contextlib import contextmanager
 
 import pytest
-
 from worktrace import generation_clock
 from worktrace.collector.activity_session_recorder import ActivitySessionRecorder
 from worktrace.collector.state_machine import CollectorStateMachine
@@ -209,5 +208,8 @@ def test_privacy_cache_replaces_its_snapshot_instead_of_accumulating(temp_db):
 
     assert isinstance(privacy_service._EXCLUDE_RULE_CACHE, dict)
     assert set(privacy_service._EXCLUDE_RULE_CACHE) == {"keywords", "folders"}
-    assert privacy_service._EXCLUDE_RULE_CACHE_DATABASE_KEY is not None
-    assert privacy_service._EXCLUDE_RULE_CACHE_GENERATION is not None
+    identity = privacy_service._EXCLUDE_RULE_CACHE_IDENTITY
+    assert identity is not None
+    database_epoch, domain_generations = identity
+    assert isinstance(database_epoch, tuple) and len(database_epoch) == 2
+    assert isinstance(domain_generations, tuple) and len(domain_generations) == 1

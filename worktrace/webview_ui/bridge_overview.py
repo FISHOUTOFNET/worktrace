@@ -4,7 +4,6 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from ..api import view_model_api
 from .bridge_common import _GENERIC_ERROR
 
 logger = logging.getLogger(__name__)
@@ -27,7 +26,7 @@ class OverviewBridgeMixin:
 
     def get_overview(self) -> dict[str, Any]:
         try:
-            return view_model_api.get_overview_view_model(
+            return self._services.overview.get_overview_view_model(
                 runtime=self._runtime(),
                 collector_status=self._collector_status(),
             )
@@ -37,7 +36,7 @@ class OverviewBridgeMixin:
 
     def get_refresh_state(self, report_date=None) -> dict[str, Any]:
         try:
-            return view_model_api.get_refresh_state_view_model(
+            return self._services.overview.get_refresh_state_view_model(
                 report_date,
                 runtime=self._runtime(),
                 collector_status=self._collector_status(),

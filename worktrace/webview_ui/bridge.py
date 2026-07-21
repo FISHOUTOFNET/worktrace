@@ -28,11 +28,11 @@ SHIPPING_METHODS = frozenset(
         "hide_timeline_session_activity", "import_encrypted_backup",
         "list_projects_for_timeline", "merge_timeline_session",
         "preview_encrypted_backup_manifest", "preview_project_rule_impact",
-        "preview_project_rules_batch_impact", "save_timeline_session_edit",
-        "set_clipboard_capture_enabled", "set_excluded_rules_enabled",
-        "set_project_enabled_for_rules", "set_project_rule_enabled",
-        "set_project_rules_batch_enabled", "split_timeline_session",
-        "toggle_pause", "update_project_folder_rule",
+        "preview_project_rules_batch_impact", "recover_database_maintenance",
+        "save_timeline_session_edit", "set_clipboard_capture_enabled",
+        "set_excluded_rules_enabled", "set_project_enabled_for_rules",
+        "set_project_rule_enabled", "set_project_rules_batch_enabled",
+        "split_timeline_session", "toggle_pause", "update_project_folder_rule",
         "update_project_for_rules", "update_project_keyword_rule",
     }
 )

@@ -1,30 +1,23 @@
 """Settings / Privacy status facade + bridge tests.
 
-These tests verify the ``settings_api.get_settings_privacy_status`` facade,
-the ``settings_api.set_clipboard_capture_enabled_for_webview`` write facade,
-the ``settings_api.export_encrypted_backup_for_webview`` and
-``settings_api.preview_encrypted_backup_manifest_for_webview`` facades, the
-backup import ``settings_api.import_encrypted_backup_for_webview`` and
-``settings_api.clear_all_local_data_for_webview`` facades, the first-run notice
-``settings_api.get_first_run_notice_for_webview`` and
-``settings_api.accept_first_run_notice_for_webview`` facades, and the
-corresponding ``WebViewBridge`` methods. They assert the read-only status
-payload and the clipboard capture toggle / backup export / manifest preview
-/ backup import / clear-all / first-run notice write payloads never leak
-paths, clipboard content, passphrases, tracebacks, or any unintended
-write-side action surface.
+These tests verify the named settings/privacy capabilities and assert that
+read-only status payloads do not expose paths, clipboard content, passphrases,
+tracebacks, or unintended write-side actions.
 """
 
 from __future__ import annotations
 
 import inspect
 import json
-from unittest.mock import patch
 
 import pytest
 
 from tests.support import runtime_state_fixture
-from tests.support.application import build_test_bridge
+from tests.support.application import (
+    FakeBackupCapability,
+    FakeSettingsCapability,
+    build_test_bridge,
+)
 from worktrace.api import settings_api
 from worktrace.api.backup_api import BackupManifestInfo
 from worktrace.api.settings_api import (
@@ -35,6 +28,7 @@ from worktrace.api.settings_api import (
     get_settings_privacy_status,
     import_encrypted_backup_for_webview,
     preview_encrypted_backup_manifest_for_webview,
+    recover_database_maintenance_for_webview,
     set_clipboard_capture_enabled_for_webview,
 )
 from worktrace.services import database_maintenance_service, privacy_gate_service
@@ -47,7 +41,8 @@ from worktrace.services.secure_backup_service import (
     ImportResult,
     SecureBackupError,
 )
-from worktrace.services.settings_service import set_setting
+from worktrace.services.settings_service import set_setting, set_settings
+from worktrace.write_gate import DATABASE_RECOVERY_ERROR
 
 pytestmark = [pytest.mark.security_privacy, pytest.mark.integration, pytest.mark.db]
 
@@ -59,6 +54,16 @@ def _set_notice_accepted(accepted: bool) -> None:
 SENSITIVE_EXPORT_PATH = "C:\\TestSettings-Alpha-7Q2\\exports"
 SENSITIVE_CLIPBOARD_TOKEN = "TestClipboard-Epsilon-Secret-1W4"
 SENSITIVE_PASSPHRASE = "TestPassphrase-Delta-Secret-9XK"
+
+MAINTENANCE_KEYS = {
+    "maintenance_in_progress",
+    "maintenance_restored",
+    "recovery_blocked",
+    "blocked_reason",
+    "collector_running",
+    "collector_status",
+    "user_paused",
+}
 
 
 def test_api_returns_success_payload_with_required_keys(temp_db) -> None:
@@ -72,7 +77,7 @@ def test_api_returns_success_payload_with_required_keys(temp_db) -> None:
         "storage_model",
         "clipboard_capture_enabled",
         "export_path_configured",
-        "maintenance_in_progress",
+        *sorted(MAINTENANCE_KEYS),
         "encrypted_backup",
         "destructive_actions",
         "first_run_notice",
@@ -102,18 +107,98 @@ def test_api_export_path_configured_is_bool_and_does_not_leak_path(temp_db) -> N
     assert "TestSettings-Alpha" not in serialized
 
 
-def test_api_maintenance_in_progress_field_is_bool(temp_db) -> None:
-    assert isinstance(
-        get_settings_privacy_status()["status"]["maintenance_in_progress"],
-        bool,
-    )
+def test_api_maintenance_fields_have_exact_types(temp_db) -> None:
+    status = get_settings_privacy_status()["status"]
+    assert type(status["maintenance_in_progress"]) is bool
+    assert type(status["maintenance_restored"]) is bool
+    assert type(status["recovery_blocked"]) is bool
+    assert status["blocked_reason"] is None or isinstance(status["blocked_reason"], str)
+    assert type(status["collector_running"]) is bool
+    assert isinstance(status["collector_status"], str)
+    assert type(status["user_paused"]) is bool
 
 
 def test_api_maintenance_in_progress_reflects_canonical_gate(temp_db) -> None:
     with database_maintenance_service.consistent_snapshot("settings_status_contract"):
         status = get_settings_privacy_status()["status"]
         assert status["maintenance_in_progress"] is True
-    assert get_settings_privacy_status()["status"]["maintenance_in_progress"] is False
+        assert status["maintenance_restored"] is False
+        assert status["recovery_blocked"] is False
+    status = get_settings_privacy_status()["status"]
+    assert status["maintenance_in_progress"] is False
+    assert status["maintenance_restored"] is True
+    assert status["recovery_blocked"] is False
+
+
+def test_failed_closed_is_blocked_but_not_reported_as_in_progress(temp_db) -> None:
+    coordinator = database_maintenance_service.MAINTENANCE_COORDINATOR
+    set_settings(
+        {
+            "maintenance_fail_closed": "true",
+            "maintenance_fail_closed_reason": "test_restore_failed",
+            "user_paused": "true",
+            "collector_status": "paused",
+        }
+    )
+    assert coordinator.hydrate_fail_closed_from_durable() is True
+
+    status = get_settings_privacy_status()["status"]
+    assert status["maintenance_in_progress"] is False
+    assert status["maintenance_restored"] is False
+    assert status["recovery_blocked"] is True
+    assert status["blocked_reason"] == "test_restore_failed"
+
+    coordinator.recover_fail_closed()
+
+
+def test_explicit_recovery_api_clears_only_through_maintenance_owner(temp_db) -> None:
+    coordinator = database_maintenance_service.MAINTENANCE_COORDINATOR
+    set_settings(
+        {
+            "maintenance_fail_closed": "true",
+            "maintenance_fail_closed_reason": "explicit_recovery",
+            "user_paused": "true",
+            "collector_status": "paused",
+        }
+    )
+    assert coordinator.hydrate_fail_closed_from_durable() is True
+
+    result = recover_database_maintenance_for_webview()
+
+    assert result["ok"] is True
+    assert result["maintenance"]["maintenance_restored"] is True
+    assert result["maintenance"]["recovery_blocked"] is False
+
+
+def test_explicit_recovery_api_preserves_block_when_not_verified(
+    temp_db,
+    monkeypatch,
+) -> None:
+    coordinator = database_maintenance_service.MAINTENANCE_COORDINATOR
+    set_settings(
+        {
+            "maintenance_fail_closed": "true",
+            "maintenance_fail_closed_reason": "unverified_recovery",
+            "user_paused": "true",
+            "collector_status": "paused",
+        }
+    )
+    assert coordinator.hydrate_fail_closed_from_durable() is True
+    monkeypatch.setattr(
+        database_maintenance_service,
+        "recover_fail_closed",
+        lambda: (_ for _ in ()).throw(
+            database_maintenance_service.MaintenanceRecoveryError(
+                "maintenance_recovery_not_verified"
+            )
+        ),
+    )
+
+    result = recover_database_maintenance_for_webview()
+
+    assert result["ok"] is False
+    assert result["error"] == "maintenance_recovery_not_verified"
+    assert result["maintenance"]["recovery_blocked"] is True
 
 
 def test_api_encrypted_backup_availability_fields_are_present(temp_db) -> None:
@@ -162,25 +247,16 @@ def test_api_payload_does_not_leak_sensitive_tokens(temp_db) -> None:
         assert token not in serialized
 
 
-def test_api_does_not_call_write_actions_during_status_read(temp_db) -> None:
-    with patch.object(settings_api, "clear_all_local_data") as mock_clear, patch.object(
-        settings_api, "set_setting_value"
-    ) as mock_set_value, patch.object(
-        settings_api, "set_clipboard_capture_enabled"
-    ) as mock_set_clip, patch(
-        "worktrace.api.backup_api.export_encrypted_backup"
-    ) as mock_export, patch(
-        "worktrace.api.backup_api.import_encrypted_backup"
-    ) as mock_import, patch(
-        "worktrace.api.backup_api.parse_encrypted_backup_manifest"
-    ) as mock_manifest:
-        get_settings_privacy_status()
-        mock_clear.assert_not_called()
-        mock_set_value.assert_not_called()
-        mock_set_clip.assert_not_called()
-        mock_export.assert_not_called()
-        mock_import.assert_not_called()
-        mock_manifest.assert_not_called()
+def test_api_does_not_call_write_actions_during_status_read() -> None:
+    assert not hasattr(settings_api, "set_setting_value")
+    settings = FakeSettingsCapability()
+    backup = FakeBackupCapability()
+    bridge = build_test_bridge(settings=settings, backup=backup)
+    bridge.get_settings_privacy_status()
+    assert settings.clear_all_local_data_for_webview_calls == []
+    assert backup.export_encrypted_backup_for_webview_calls == []
+    assert backup.import_encrypted_backup_for_webview_calls == []
+    assert backup.preview_encrypted_backup_manifest_for_webview_calls == []
 
 
 def test_api_does_not_change_schema(temp_db) -> None:
@@ -205,7 +281,9 @@ def test_api_does_not_change_schema(temp_db) -> None:
 
 
 def test_bridge_method_exists_on_composed_webview_bridge() -> None:
-    assert callable(getattr(build_test_bridge(), "get_settings_privacy_status", None))
+    bridge = build_test_bridge()
+    assert callable(getattr(bridge, "get_settings_privacy_status", None))
+    assert callable(getattr(bridge.shipping_api, "recover_database_maintenance", None))
 
 
 def test_bridge_returns_narrow_success_payload(temp_db) -> None:
@@ -217,7 +295,7 @@ def test_bridge_returns_narrow_success_payload(temp_db) -> None:
         "storage_model",
         "clipboard_capture_enabled",
         "export_path_configured",
-        "maintenance_in_progress",
+        *MAINTENANCE_KEYS,
         "encrypted_backup",
         "destructive_actions",
         "first_run_notice",

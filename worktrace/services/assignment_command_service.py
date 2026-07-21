@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from ..data_generation_repository import DataGenerationNamespace
 from ..db import now_str
-from ..domain_unit_of_work import DomainUnitOfWork
+from ..domain_unit_of_work import DomainUnitOfWork, current_domain_unit_of_work
 
 
 def _normalized_rule_identity(
@@ -15,6 +15,14 @@ def _normalized_rule_identity(
     if source not in {"folder_rule", "keyword_rule"}:
         return None, None
     return source_rule_type, int(source_rule_id) if source_rule_id is not None else None
+
+
+def _mark_report_structure_changed() -> None:
+    """Publish assignment semantics through the active root UoW, if any."""
+
+    uow = current_domain_unit_of_work()
+    if uow is not None:
+        uow.mark_changed(DataGenerationNamespace.REPORT_STRUCTURE)
 
 
 def upsert_assignment(
@@ -30,7 +38,7 @@ def upsert_assignment(
     source_rule_id: int | None = None,
     protect_manual: bool = False,
 ) -> bool:
-    """Persist one assignment and report whether its durable value changed."""
+    """Persist one assignment and mark its actual report effect explicitly."""
 
     activity_id = int(activity_id)
     source_rule_type, source_rule_id = _normalized_rule_identity(
@@ -82,6 +90,7 @@ def upsert_assignment(
             """,
             (*desired, now_str(), activity_id),
         )
+        _mark_report_structure_changed()
         return True
 
     timestamp = now_str()
@@ -95,6 +104,7 @@ def upsert_assignment(
         """,
         (activity_id, *desired, timestamp, timestamp),
     )
+    _mark_report_structure_changed()
     return True
 
 
@@ -113,7 +123,7 @@ def assign_with_uow(
     """Run a standalone assignment command in the canonical report UoW."""
 
     with DomainUnitOfWork((DataGenerationNamespace.REPORT_STRUCTURE,)) as uow:
-        changed = upsert_assignment(
+        return upsert_assignment(
             uow.connection,
             activity_id=activity_id,
             project_id=project_id,
@@ -125,9 +135,6 @@ def assign_with_uow(
             source_rule_id=source_rule_id,
             protect_manual=protect_manual,
         )
-        if changed:
-            uow.mark_changed()
-        return changed
 
 
 __all__ = [

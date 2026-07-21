@@ -6,14 +6,13 @@ from pathlib import Path
 
 import pytest
 
+from tests.support.application import TestMaintenance
 from worktrace.api.app_api import ApplicationControlService
 from worktrace.platforms.fake_adapter import FakeAdapter
 from worktrace.runtime import app_runtime as runtime_module
-from worktrace.runtime.app_runtime import (
-    AppRuntime,
-    RuntimePhase,
+from worktrace.runtime.app_runtime import AppRuntime, RuntimePhase, WorkerSpec
+from worktrace.runtime.contracts import (
     RuntimeStartResult,
-    WorkerSpec,
     WorkerStartupState,
     WorkerStartupStatus,
 )
@@ -46,13 +45,11 @@ def _owned_runtime(temp_db, tmp_path, monkeypatch) -> AppRuntime:
 
 def _install_blocking_test_specs(runtime: AppRuntime, *, failing: str | None = None) -> None:
     def target_for(name):
-        def target(stop_event, *, health=None):
+        def target(stop_event, *, health):
             if name == failing:
-                if health is not None:
-                    health.failed("startup_failed")
+                health.failed("startup_failed")
                 return
-            if health is not None:
-                health.succeeded()
+            health.succeeded()
             stop_event.wait()
 
         return target
@@ -89,6 +86,7 @@ def test_worker_registry_contains_every_declared_runtime_worker(
     runtime = _owned_runtime(temp_db, tmp_path, monkeypatch)
     try:
         assert tuple(runtime._worker_specs) == (
+            "clipboard_capture",
             "folder_index",
             "history",
             "inference",
@@ -249,7 +247,7 @@ def test_privacy_gate_fails_closed_without_starting_runtime(monkeypatch):
     runtime, calls = _recording_runtime(
         RuntimeStartResult(True, True, {})
     )
-    control = ApplicationControlService(runtime)
+    control = ApplicationControlService(runtime, TestMaintenance())
     monkeypatch.setattr(
         "worktrace.services.privacy_gate_service.is_sensitive_runtime_allowed",
         lambda: False,
@@ -276,7 +274,7 @@ def test_privacy_gate_returns_structured_runtime_degradation(monkeypatch):
             degraded=True,
         )
     )
-    control = ApplicationControlService(runtime)
+    control = ApplicationControlService(runtime, TestMaintenance())
     monkeypatch.setattr(
         "worktrace.services.privacy_gate_service.is_sensitive_runtime_allowed",
         lambda: True,

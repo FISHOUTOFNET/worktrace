@@ -8,8 +8,19 @@ JS = ROOT / "worktrace" / "webview_ui" / "js"
 def test_settings_uses_single_client_generation_reset():
     source = (JS / "settings.js").read_text(encoding="utf-8")
     assert "resetFrontendAfterLocalDataReplacement" not in source
-    assert 'App.resetClientGeneration("secure_import")' in source
-    assert 'App.resetClientGeneration("clear_all_local_data")' in source
+    assert source.count('App.resetClientGeneration("database_replacement")') == 2
+    assert "database_clear" not in source
+    assert "secure_import" not in source
+    assert "clear_all_local_data" not in source
+
+
+def test_shipping_js_has_no_retired_replacement_reset_reason():
+    source = "\n".join(
+        path.read_text(encoding="utf-8") for path in sorted(JS.glob("*.js"))
+    )
+    assert 'resetClientGeneration("secure_import")' not in source
+    assert 'resetClientGeneration("clear_all_local_data")' not in source
+    assert 'resetClientGeneration("database_clear")' not in source
 
 
 def test_client_generation_reset_clears_all_runtime_owners():

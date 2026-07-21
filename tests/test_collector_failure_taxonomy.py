@@ -49,8 +49,12 @@ def test_controlled_database_contention_is_retryable():
 
 def test_internal_database_gate_codes_are_retryable():
     expected = {
-        "secure_import_in_progress": CollectorFailureCode.SECURE_IMPORT_IN_PROGRESS,
-        "database_generation_changed": CollectorFailureCode.DATABASE_GENERATION_CHANGED,
+        "database_maintenance_in_progress": (
+            CollectorFailureCode.DATABASE_MAINTENANCE_IN_PROGRESS
+        ),
+        "database_generation_changed": (
+            CollectorFailureCode.DATABASE_GENERATION_CHANGED
+        ),
     }
     for raw, code in expected.items():
         disposition = classify_collector_failure(sqlite3.OperationalError(raw))

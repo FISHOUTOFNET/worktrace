@@ -158,10 +158,8 @@ class CollectorStateMachine:
     ) -> int | None:
         if not event.text:
             return None
-        try:
-            if privacy_service.is_excluded(event.source_window):
-                return None
-        except privacy_service.PrivacyResolutionPending:
+        decision = privacy_service.evaluate_exclusion(event.source_window)
+        if decision.excluded or decision.resolution_pending:
             return None
         copied_at = event.copied_at or at_time or now_str()
         activity_id = self._current_activity_id_for_clipboard_event(

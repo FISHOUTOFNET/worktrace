@@ -5,6 +5,8 @@ from pathlib import Path
 
 import pytest
 
+from worktrace.database_content_manifest import DATABASE_CONTENT, TableCategory
+
 pytestmark = [pytest.mark.unit, pytest.mark.contract, pytest.mark.collector_runtime]
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -126,21 +128,26 @@ def test_database_replacement_is_one_independent_epoch() -> None:
     assert namespaces == {"DATABASE_REPLACEMENT"}
 
 
-def test_all_cross_database_caches_listen_to_replacement_epoch() -> None:
-    cache_modules = (
+def test_all_cross_database_caches_use_one_replacement_identity() -> None:
+    direct_generation_caches = (
         "worktrace/services/settings_service.py",
         "worktrace/services/folder_rule_service.py",
         "worktrace/services/project_inference_service.py",
-        "worktrace/services/privacy_service.py",
         "worktrace/services/report_revision_service.py",
     )
-    for relative in cache_modules:
+    for relative in direct_generation_caches:
         source = _source(relative)
         assert "DataGenerationNamespace.DATABASE_REPLACEMENT" in source, relative
         assert (
             "generation_tuple(" in source
             or "DataGenerationRepository.get_many(" in source
         ), relative
+
+    privacy = _source("worktrace/services/privacy_service.py")
+    assert "active_database_epoch_key" in privacy
+    assert "generation_tuple(" in privacy
+    assert "DataGenerationNamespace.PRIVACY_CATALOG" in privacy
+    assert "DataGenerationNamespace.DATABASE_REPLACEMENT" not in privacy
 
 
 def test_all_derived_workers_are_blocking_entrypoints_without_lifecycle_ownership() -> None:
@@ -170,10 +177,13 @@ def test_all_derived_workers_are_blocking_entrypoints_without_lifecycle_ownershi
 
 def test_worker_registry_is_declarative_and_single_owned() -> None:
     runtime = _source("worktrace/runtime/app_runtime.py")
+    contracts = _source("worktrace/runtime/contracts.py")
     assert "class WorkerSpec" in runtime
     assert "class WorkerHandle" in runtime
-    assert "class WorkerStartupState" in runtime
-    assert "class WorkerStartupStatus" in runtime
+    assert "class WorkerStartupState" not in runtime
+    assert "class WorkerStartupStatus" not in runtime
+    assert "class WorkerStartupState" in contracts
+    assert "class WorkerStartupStatus" in contracts
     assert "self._worker_specs" in runtime
     assert "self._worker_handles" in runtime
     assert "thread.is_alive()" not in runtime
@@ -194,21 +204,19 @@ def test_worker_registry_is_declarative_and_single_owned() -> None:
     assert "failed_event" in runtime
 
 
-def test_worker_progress_cleanup_uses_canonical_owners() -> None:
+def test_worker_progress_cleanup_is_owned_by_static_content_manifest() -> None:
+    manifest = _source("worktrace/database_content_manifest.py")
     maintenance = _function(
         "worktrace/services/database_maintenance_service.py",
-        "clear_all_worker_progress_in_transaction",
+        "clear_all_live_data",
     )
-    called = _called_names(maintenance)
-    assert "clear_all_jobs_in_transaction" in called
-    assert "clear_all_jobs" in called
+    maintenance_source = ast.unparse(maintenance)
+    assert "DELETE_ORDER" in maintenance_source
+    assert "seed_defaults" in _called_names(maintenance)
+    assert "DatabaseReplacementUnitOfWork" in _called_names(maintenance)
+    assert "TableCategory" in manifest
 
-    backup_source = _source("worktrace/services/secure_backup_service.py")
-    backup_replace = _function(
-        "worktrace/services/secure_backup_service.py",
-        "_replace_import",
-    )
-    assert "clear_all_worker_progress_in_transaction" in _called_names(backup_replace)
+    manifest_by_name = {item.name: item for item in DATABASE_CONTENT}
     for table_name in (
         "history_mutation_job_rule",
         "history_mutation_job",
@@ -216,4 +224,10 @@ def test_worker_progress_cleanup_uses_canonical_owners() -> None:
         "activity_resource_repair_job",
         "startup_recovery_job",
     ):
-        assert f"DELETE FROM {table_name}" not in backup_source
+        entry = manifest_by_name[table_name]
+        assert entry.category is TableCategory.WORKER_PROGRESS, table_name
+        assert entry.derived is True, table_name
+        assert entry.internal is True, table_name
+
+    backup_source = _source("worktrace/services/secure_backup_service.py")
+    assert "clear_all_worker_progress_in_transaction" not in backup_source

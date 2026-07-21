@@ -11,7 +11,7 @@ from ..constants import (
     STATUS_EXCLUDED,
 )
 from ..data_generation_repository import DataGenerationNamespace
-from ..db import dict_rows, get_connection, get_db_key
+from ..db import active_database_epoch_key, dict_rows, get_connection
 from ..generation_clock import generation_tuple
 from ..path_utils import (
     is_path_under_folder,
@@ -22,17 +22,9 @@ from ..platforms.base import ActiveWindow
 from ..resources.title_parsing import extract_file_name_from_title
 
 _EXCLUDE_RULE_CACHE_LOCK = threading.RLock()
-_EXCLUDE_RULE_CACHE_DATABASE_KEY: str | None = None
-_EXCLUDE_RULE_CACHE_GENERATION: tuple[int, int] | None = None
+_EXCLUDE_RULE_CACHE_IDENTITY: tuple[tuple[str, int], tuple[int, ...]] | None = None
 _EXCLUDE_RULE_CACHE: dict[str, list[dict]] | None = None
-_EXCLUDE_RULE_CACHE_NAMESPACES = (
-    DataGenerationNamespace.PRIVACY_CATALOG,
-    DataGenerationNamespace.DATABASE_REPLACEMENT,
-)
-
-
-class PrivacyResolutionPending(RuntimeError):
-    """A privacy-sensitive local-file window cannot yet be classified safely."""
+_EXCLUDE_RULE_CACHE_NAMESPACES = (DataGenerationNamespace.PRIVACY_CATALOG,)
 
 
 @dataclass(frozen=True)
@@ -43,14 +35,12 @@ class ExclusionDecision:
 
 
 def clear_exclude_rules_cache() -> None:
-    """Test/reconfiguration hook; privacy writes invalidate by generation."""
+    """Test/reconfiguration hook; production writes invalidate by generation."""
 
-    global _EXCLUDE_RULE_CACHE_DATABASE_KEY
-    global _EXCLUDE_RULE_CACHE_GENERATION
+    global _EXCLUDE_RULE_CACHE_IDENTITY
     global _EXCLUDE_RULE_CACHE
     with _EXCLUDE_RULE_CACHE_LOCK:
-        _EXCLUDE_RULE_CACHE_DATABASE_KEY = None
-        _EXCLUDE_RULE_CACHE_GENERATION = None
+        _EXCLUDE_RULE_CACHE_IDENTITY = None
         _EXCLUDE_RULE_CACHE = None
 
 
@@ -59,7 +49,7 @@ def evaluate_exclusion(
     *,
     conn=None,
 ) -> ExclusionDecision:
-    """Pure exclusion query; it never schedules maintenance or writes SQLite."""
+    """Pure structured exclusion query; it never schedules work or writes SQLite."""
 
     haystack = " ".join(
         [
@@ -104,15 +94,6 @@ def evaluate_exclusion(
     if active_window.privacy_path_required:
         return ExclusionDecision(True, True, True)
     return ExclusionDecision(False, False, False)
-
-
-def is_excluded(active_window: ActiveWindow, *, conn=None) -> bool:
-    """Compatibility query wrapper with no implicit write capability."""
-
-    decision = evaluate_exclusion(active_window, conn=conn)
-    if decision.resolution_pending:
-        raise PrivacyResolutionPending("privacy_path_unresolved")
-    return decision.excluded
 
 
 def is_resource_excluded(resource, *, conn=None) -> bool:
@@ -211,28 +192,30 @@ def _copy_rule_snapshot(value: dict[str, list[dict]]) -> dict[str, list[dict]]:
 
 
 def _exclude_rules(*, conn=None) -> dict[str, list[dict]]:
-    global _EXCLUDE_RULE_CACHE_DATABASE_KEY
-    global _EXCLUDE_RULE_CACHE_GENERATION
+    global _EXCLUDE_RULE_CACHE_IDENTITY
     global _EXCLUDE_RULE_CACHE
     if conn is not None:
         return _load_exclude_rules(conn)
     while True:
-        database_key = get_db_key()
-        current_generation = generation_tuple(_EXCLUDE_RULE_CACHE_NAMESPACES)
+        identity = (
+            active_database_epoch_key(),
+            generation_tuple(_EXCLUDE_RULE_CACHE_NAMESPACES),
+        )
         with _EXCLUDE_RULE_CACHE_LOCK:
             if (
-                _EXCLUDE_RULE_CACHE_DATABASE_KEY == database_key
-                and _EXCLUDE_RULE_CACHE_GENERATION == current_generation
+                _EXCLUDE_RULE_CACHE_IDENTITY == identity
                 and _EXCLUDE_RULE_CACHE is not None
             ):
                 return _copy_rule_snapshot(_EXCLUDE_RULE_CACHE)
         with get_connection() as read_conn:
             result = _load_exclude_rules(read_conn)
-        if generation_tuple(_EXCLUDE_RULE_CACHE_NAMESPACES) != current_generation:
+        if (
+            active_database_epoch_key(),
+            generation_tuple(_EXCLUDE_RULE_CACHE_NAMESPACES),
+        ) != identity:
             continue
         with _EXCLUDE_RULE_CACHE_LOCK:
-            _EXCLUDE_RULE_CACHE_DATABASE_KEY = database_key
-            _EXCLUDE_RULE_CACHE_GENERATION = current_generation
+            _EXCLUDE_RULE_CACHE_IDENTITY = identity
             _EXCLUDE_RULE_CACHE = _copy_rule_snapshot(result)
         return _copy_rule_snapshot(result)
 
@@ -267,10 +250,8 @@ def _matches_exclude_folder(file_path_hint: str | None, *, conn=None) -> bool:
 
 __all__ = [
     "ExclusionDecision",
-    "PrivacyResolutionPending",
     "clear_exclude_rules_cache",
     "evaluate_exclusion",
-    "is_excluded",
     "is_resource_excluded",
     "make_excluded_activity_payload",
 ]

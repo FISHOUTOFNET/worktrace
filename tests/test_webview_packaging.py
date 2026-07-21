@@ -1,20 +1,18 @@
-"""packaging, default WebView entry, and WebView2 runtime detection tests.
+"""Packaging, default WebView entry, and WebView2 runtime detection tests.
 
-WebView is the default and only shipping UI. These tests
-cover:
+WebView is the default and only shipping UI. These tests cover:
 
-- WorkTrace.spec bundles webview_ui static resources + retains schema.sql,
-  open_files_helper, customtkinter, win32timezone;
-- pyinstaller_entry.py forwards to worktrace.main.main (which now defaults
-  to WebView);
-- ``python -m worktrace.main`` defaults to the WebView entry point and does
-  not instantiate the Tkinter ``WorkTraceApp``;
-- importing worktrace.main does not start the GUI;
+- WorkTrace.spec bundles WebView resources, schema SQL, the Windows probe helper,
+  and the required win32timezone hidden import;
+- pyinstaller_entry.py routes the closed probe mode or forwards to
+  worktrace.main.main;
+- ``python -m worktrace.main`` defaults to the WebView entry point and does not
+  instantiate the retired Tkinter application;
+- importing worktrace.main or worktrace.webview_main does not start the GUI;
 - WebView2 runtime_check is importable, never raises, and does not block
   non-Windows;
-- the missing-runtime message does not mention Tkinter, fallback, or any
-  ``继续使用默认`` wording;
-- boundary: runtime_check stays inside webview_ui and does not import backend.
+- the missing-runtime message does not mention Tkinter or fallback behavior;
+- runtime_check stays inside webview_ui and does not import backend layers.
 """
 
 from __future__ import annotations
@@ -43,32 +41,23 @@ def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-
-
 def test_spec_bundles_webview_ui_static_resources():
-    """the spec must bundle index.html, styles.css, and every
-    ``js/`` module listed in ``static_helpers.ALL_JS_FILES`` (the single
-    source of truth). frontend JS must no longer be
-    referenced since the file was removed."""
+    """The spec bundles every static module from the shared file manifest."""
+
     spec = _read(SPEC_PATH)
     for name in ("index.html", "styles.css"):
         assert name in spec, f"WorkTrace.spec must bundle webview_ui/{name}"
-    # every JS module in ALL_JS_FILES must be bundled.
     for name in ALL_JS_FILES:
         assert name in spec, f"WorkTrace.spec must bundle webview_ui/js/{name}"
-    # The removed frontend JS must no longer be referenced.
     assert "app.js" not in spec, (
         "WorkTrace.spec must not reference the removed monolithic frontend bundle"
     )
 
 
 def test_index_html_loads_all_js_in_order():
-    """index.html must load every file in ``ALL_JS_FILES`` and in
-    the exact same order. This guards against a new JS module being added
-    to ``ALL_JS_FILES`` without being wired into ``index.html`` (or vice
-    versa)."""
+    """index.html loads every current JavaScript module in manifest order."""
+
     html = _read(INDEX_HTML_PATH)
-    # Collect every <script src="js/..."> tag in document order.
     import re
 
     scripts = re.findall(r'<script\s+src="js/([^"]+)"\s*>\s*</script>', html)
@@ -80,9 +69,6 @@ def test_index_html_loads_all_js_in_order():
 
 
 def test_all_js_files_exist_on_disk():
-    """every entry in ``ALL_JS_FILES`` must resolve to an actual
-    JS module on disk so the static-contract tests and PyInstaller spec
-    never silently reference a missing file."""
     js_dir = REPO_ROOT / "worktrace" / "webview_ui" / "js"
     for name in ALL_JS_FILES:
         path = js_dir / name
@@ -90,8 +76,7 @@ def test_all_js_files_exist_on_disk():
 
 
 def test_spec_bundles_webview_resources_under_webview_ui_dir():
-    spec = _read(SPEC_PATH)
-    assert "webview_ui" in spec
+    assert "webview_ui" in _read(SPEC_PATH)
 
 
 def test_spec_collects_pywebview():
@@ -100,59 +85,39 @@ def test_spec_collects_pywebview():
 
 
 def test_spec_retains_schema_sql():
-    spec = _read(SPEC_PATH)
-    assert "schema.sql" in spec
+    assert "schema.sql" in _read(SPEC_PATH)
 
 
-def test_spec_retains_open_files_helper():
-    spec = _read(SPEC_PATH)
-    assert "open_files_helper.py" in spec
+def test_spec_retains_windows_probe_helper():
+    assert "windows_probe_helper.py" in _read(SPEC_PATH)
 
 
 def test_spec_does_not_bundle_customtkinter():
-    """customtkinter must NOT be bundled: the worktrace.ui package was
-    removed and no production code imports customtkinter."""
-    spec = _read(SPEC_PATH)
-    assert "customtkinter" not in spec
+    assert "customtkinter" not in _read(SPEC_PATH)
 
 
 def test_spec_retains_win32timezone():
-    spec = _read(SPEC_PATH)
-    assert "win32timezone" in spec
+    assert "win32timezone" in _read(SPEC_PATH)
 
 
-def test_entry_script_forwards_to_worktrace_main():
-    """The entry script must fall through to worktrace.main.main for the
-    default invocation. WebView is the default and only UI."""
+def test_entry_script_routes_probe_or_forwards_to_worktrace_main():
     source = _read(ENTRY_PATH)
-    assert "--open-files-helper" in source
+    assert "--windows-probe-helper" in source
+    assert "_run_windows_probe_helper" in source
     assert "from worktrace.main import main" in source
 
 
-
-
 def test_main_module_does_not_import_worktrace_app():
-    """main.py must not import or instantiate the Tkinter WorkTraceApp.
-
-    The default path is the WebView UI. The
-    ``worktrace.ui`` package has been deleted entirely, so the default entry point
-    must not depend on it (and no such module exists to import).
-    """
     source = _read(MAIN_PATH)
     assert "WorkTraceApp" not in source, (
         "worktrace.main must not import or reference WorkTraceApp; "
-        "WebView is the default UI as of WebView UI."
+        "WebView is the only shipping UI."
     )
     assert "from .ui.app" not in source
     assert "from worktrace.ui.app" not in source
 
 
 def test_main_defaults_to_webview_without_flag():
-    """``main([])`` must delegate to ``webview_main.main()``.
-
-    This is the core invariant: the default entry point starts the
-    WebView UI. There is no Tkinter path in ``main``.
-    """
     import worktrace.main as main_mod
 
     called = {"count": 0}
@@ -168,9 +133,6 @@ def test_main_defaults_to_webview_without_flag():
 
 
 def test_main_ignores_extra_args():
-    """``main`` must ignore any command-line args and always delegate to
-    ``webview_main.main()``. WebView is the only UI; there is no argparse
-    layer and no flag parsing."""
     import worktrace.main as main_mod
 
     called = {"count": 0}
@@ -186,14 +148,6 @@ def test_main_ignores_extra_args():
 
 
 def test_main_does_not_instantiate_worktrace_app_on_default_path():
-    """The default ``main([])`` path must not instantiate WorkTraceApp.
-
-    Even if webview_main raises, the main module must not catch the error and
-    instantiate the Tkinter UI as a fallback. We assert that WorkTraceApp is
-    never imported by main.py (covered by
-    ``test_main_module_does_not_import_worktrace_app``) and that main()
-    returns whatever webview_main returns, including non-zero codes.
-    """
     import worktrace.main as main_mod
 
     def fake_webview_main_returning_nonzero():
@@ -205,8 +159,6 @@ def test_main_does_not_instantiate_worktrace_app_on_default_path():
 
 
 def test_main_propagates_webview_failure_without_tkinter_fallback(monkeypatch):
-    """If webview_main.main raises, main() must propagate the exception
-    instead of catching it and starting a Tkinter UI."""
     import worktrace.main as main_mod
 
     def boom():
@@ -229,12 +181,11 @@ print(json.dumps({"started": False}))
     result = subprocess.run(
         [sys.executable, "-c", code],
         cwd=REPO_ROOT,
-        check=True,
+        check=False,
         capture_output=True,
         text=True,
     )
-    # If import started the GUI, this subprocess would hang / fail.
-    assert result.returncode == 0
+    assert result.returncode == 0, result.stderr
 
 
 def test_import_webview_main_does_not_start_gui():
@@ -249,14 +200,13 @@ print(json.dumps({"started": False, "has_main": hasattr(worktrace.webview_main, 
     result = subprocess.run(
         [sys.executable, "-c", code],
         cwd=REPO_ROOT,
-        check=True,
+        check=False,
         capture_output=True,
         text=True,
     )
+    assert result.returncode == 0, result.stderr
     loaded = json.loads(result.stdout)
     assert loaded["has_main"] is True
-
-
 
 
 def test_runtime_check_module_importable():
@@ -275,23 +225,19 @@ def test_detect_webview2_runtime_returns_known_status():
 
 
 def test_detect_webview2_runtime_non_windows_returns_unknown():
-    """On non-Windows the check must not block; returns unknown."""
     from worktrace.webview_ui.runtime_check import detect_webview2_runtime
 
-    fake_platform = "linux"
     with patch("worktrace.webview_ui.runtime_check.sys") as fake_sys:
-        fake_sys.platform = fake_platform
+        fake_sys.platform = "linux"
         status = detect_webview2_runtime()
     assert status == "unknown"
 
 
 def test_detect_webview2_runtime_never_raises_on_windows():
-    """Even if winreg raises, the function must return unknown, not raise."""
     from worktrace.webview_ui.runtime_check import detect_webview2_runtime
 
     with patch("worktrace.webview_ui.runtime_check.sys") as fake_sys:
         fake_sys.platform = "win32"
-        # Force the winreg import inside the function to raise.
         with patch.dict("sys.modules", {"winreg": None}):
             status = detect_webview2_runtime()
     assert status == "unknown"
@@ -326,8 +272,6 @@ def test_missing_runtime_message_mentions_webview2():
 
 
 def test_missing_runtime_message_has_no_tkinter_or_fallback_wording():
-    """The missing-runtime message must not reference Tkinter, fallback, or
-    any ``继续使用默认`` wording. The fallback path has been removed."""
     from worktrace.webview_ui.runtime_check import missing_runtime_message
 
     msg = missing_runtime_message()
@@ -338,7 +282,6 @@ def test_missing_runtime_message_has_no_tkinter_or_fallback_wording():
 
 
 def test_runtime_check_does_not_import_backend():
-    """runtime_check must not import services/db/collector/security."""
     source = (REPO_ROOT / "worktrace" / "webview_ui" / "runtime_check.py").read_text(
         encoding="utf-8"
     )

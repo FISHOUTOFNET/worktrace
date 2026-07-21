@@ -132,7 +132,7 @@ def _persist_activity_path(
             (int(activity_id),),
         ).fetchone()
         existing = dict(current_resource_row) if current_resource_row else None
-        excluded = privacy_service.is_excluded(
+        decision = privacy_service.evaluate_exclusion(
             ActiveWindow(
                 app_name=str(activity.get("app_name") or ""),
                 process_name=str(activity.get("process_name") or ""),
@@ -142,6 +142,7 @@ def _persist_activity_path(
             ),
             conn=conn,
         )
+        excluded = decision.excluded
         # Privacy evaluation may execute policy callbacks that change this row.
         # Re-read the authoritative status before any path or resource write.
         latest_row = conn.execute(
@@ -210,7 +211,7 @@ def _persist_activity_path(
                 conn,
                 [int(activity_id)],
             )
-        uow.mark_changed()
+        uow.mark_changed(DataGenerationNamespace.REPORT_STRUCTURE)
 
     if not excluded and not activity_closed:
         _sync_open_activity_project_safely(int(activity_id))

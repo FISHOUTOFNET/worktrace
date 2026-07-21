@@ -24,6 +24,7 @@ from worktrace.services.secure_backup_service import (
     BackupCorruptedError,
     BackupDecryptionError,
     BackupImportInProgressError,
+    BackupReplacementError,
     BackupVersionNotSupportedError,
     SecureBackupError,
 )
@@ -142,10 +143,10 @@ def _seed_all_worker_progress(source_activity_id: int) -> None:
         )
     rule_id = rule_service.create_rule("Matter", project_id)
     history_mutation_job_service.submit_rule_job(
-        "rule_backfill",
         "keyword",
         rule_id,
-        synchronous_limit=0,
+        kind="rule_backfill",
+        synchronous_scan_limit=0,
     )
     timestamp = db.now_str()
     with db.get_connection() as conn:
@@ -207,7 +208,7 @@ def test_export_payload_is_exact_current_contract(temp_db):
     data = json.loads(_current_payload())
     assert data["format"] == "worktrace-local-data"
     assert data["version"] == 6
-    assert data["schema_version"] == "12"
+    assert data["schema_version"] == "13"
     assert data["schema_fingerprint"] == db.expected_schema_fingerprint()
     assert set(data["tables"]) == set(secure_backup_service.EXPORT_TABLES)
     for table in _WORKER_PROGRESS_TABLES:
@@ -303,11 +304,22 @@ def test_wrong_passphrase_and_corruption_do_not_change_live_database(
         assert conn.execute("SELECT COUNT(*) FROM activity_log").fetchone()[0] == before
 
 
-def test_replace_failure_rolls_back_and_fails_closed(
+def test_live_replace_failure_raises_replacement_error_without_fail_closed_when_restoration_succeeds(
     temp_db,
     tmp_path,
     monkeypatch,
 ):
+    """Live replacement failure with successful restoration does NOT fail-close.
+
+    Per the architecture contract (Problem 1): when the live replacement step
+    raises before commit and the runtime restoration can be verified
+    (operational control, restore ACKs succeed), the coordinator must NOT
+    enter durable fail-closed. The live transaction is rolled back by the
+    DatabaseReplacementUnitOfWork; the runtime returns to its pre-maintenance
+    state. Only when restoration cannot be verified does fail-closed become
+    mandatory.
+    """
+
     _seed_current_data()
     out = tmp_path / "rollback.wtbackup"
     secure_backup_service.export_encrypted_backup(out, PASSPHRASE)
@@ -316,22 +328,116 @@ def test_replace_failure_rolls_back_and_fails_closed(
     with db.get_connection() as conn:
         before = conn.execute("SELECT COUNT(*) FROM activity_log").fetchone()[0]
 
-    def fail(_data):
-        raise sqlite3.OperationalError("simulated replace failure")
+    def fail_live(_staging_path):
+        raise BackupReplacementError("simulated live replace failure")
 
-    monkeypatch.setattr(secure_backup_service, "_replace_import", fail)
-    with pytest.raises(sqlite3.OperationalError):
+    monkeypatch.setattr(
+        secure_backup_service, "_apply_validated_staging_to_live", fail_live
+    )
+    with pytest.raises(BackupReplacementError):
         secure_backup_service.import_encrypted_backup(out, PASSPHRASE)
 
-    assert database_maintenance_service.is_maintenance_in_progress() is True
+    status = database_maintenance_service.maintenance_status()
+    assert status.maintenance_in_progress is False
+    assert status.recovery_blocked is False
+    assert status.blocked_reason is None
     assert (
         database_maintenance_service.MAINTENANCE_COORDINATOR.phase
-        is database_maintenance_service.MaintenancePhase.FAILED_CLOSED
+        is database_maintenance_service.MaintenancePhase.IDLE
     )
-    assert get_bool_setting("user_paused", False) is True
-    assert get_setting("collector_status") == "paused"
     with db.get_connection() as conn:
         assert conn.execute("SELECT COUNT(*) FROM activity_log").fetchone()[0] == before
+
+
+def test_live_replace_failure_when_restoration_fails_must_fail_closed(
+    temp_db,
+    tmp_path,
+    monkeypatch,
+):
+    """Live replacement failure with unverifiable restoration MUST fail-close.
+
+    Per the architecture contract (Problem 1): if the live replacement step
+    raises before commit AND the collector restoration cannot be verified
+    (restore_after_maintenance raises), the coordinator MUST enter durable
+    fail-closed because the runtime state is unverifiable.
+    """
+
+    _seed_current_data()
+    out = tmp_path / "rollback.wtbackup"
+    secure_backup_service.export_encrypted_backup(out, PASSPHRASE)
+    set_setting("user_paused", "false")
+    set_setting("collector_status", "running")
+
+    from tests.support.application import TestRuntimeMaintenanceControl
+
+    class _OperationalHoldState:
+        value = "operational"
+
+    class _OperationalCollectorControl:
+        hold_state = _OperationalHoldState()
+
+        def query_command(self, command_id: str):
+            return None
+
+    class _RestorationFailingControl(TestRuntimeMaintenanceControl):
+        """Reports the collector as running so a hold is acquired, then fails
+        to release the hold during restoration."""
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.collector_control = _OperationalCollectorControl()
+
+        @staticmethod
+        def _ack(command_kind: str, terminal_state: str) -> dict[str, object]:
+            return {
+                "ok": True,
+                "command_id": f"test-{command_kind}",
+                "command_kind": command_kind,
+                "command_state": "completed",
+                "command_state_unknown": False,
+                "terminal_state": terminal_state,
+            }
+
+        def is_collection_running_for_maintenance(self) -> bool:
+            return True
+
+        def quiesce_collection_for_maintenance(self, timeout_seconds=5.0):
+            return self._ack("maintenance_hold", "held")
+
+        def restore_after_maintenance(self, state, timeout_seconds=5.0):
+            raise RuntimeError("restoration failed")
+
+    failing_control = _RestorationFailingControl()
+    database_maintenance_service.MAINTENANCE_COORDINATOR.register_runtime_control(
+        failing_control
+    )
+
+    def fail_live(_staging_path):
+        raise BackupReplacementError("simulated live replace failure")
+
+    monkeypatch.setattr(
+        secure_backup_service, "_apply_validated_staging_to_live", fail_live
+    )
+
+    try:
+        with pytest.raises(BackupReplacementError):
+            secure_backup_service.import_encrypted_backup(out, PASSPHRASE)
+
+        status = database_maintenance_service.maintenance_status()
+        assert status.maintenance_in_progress is False
+        assert status.recovery_blocked is True
+        assert status.blocked_reason
+        assert (
+            database_maintenance_service.MAINTENANCE_COORDINATOR.phase
+            is database_maintenance_service.MaintenancePhase.FAILED_CLOSED
+        )
+    finally:
+        database_maintenance_service.MAINTENANCE_COORDINATOR.clear_runtime_control(
+            failing_control
+        )
+        database_maintenance_service.MAINTENANCE_COORDINATOR._set_phase(
+            database_maintenance_service.MaintenancePhase.IDLE
+        )
 
 
 def test_secure_import_preserves_preexisting_user_pause(temp_db, tmp_path):

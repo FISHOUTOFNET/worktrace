@@ -41,10 +41,19 @@ def test_delete_enabled_and_disabled_keyword_rules(temp_db):
     rule_service.set_rule_enabled(disabled_id, False)
 
     for rule_id in (enabled_id, disabled_id):
-        result = rule_api.delete_project_keyword_rule(rule_id)
+        result = rule_api.delete_project_keyword_rule(
+            rule_id,
+            apply_to_history=False,
+        )
         assert result == {
             "ok": True,
-            "rule": {"kind": "keyword", "id": rule_id, "deleted": True},
+            "rule": {
+                "kind": "keyword",
+                "id": rule_id,
+                "deleted": True,
+                "history_updated": False,
+                "updated_count": 0,
+            },
         }
         assert not _exists(rule_id)
 
@@ -56,7 +65,10 @@ def test_delete_keyword_rule_under_excluded_project(temp_db):
     assert excluded_id > 0
 
     before = generation(DataGenerationNamespace.PRIVACY_CATALOG)
-    result = rule_api.delete_project_keyword_rule(rule_id)
+    result = rule_api.delete_project_keyword_rule(
+        rule_id,
+        apply_to_history=False,
+    )
 
     assert result["ok"] is True
     assert not _exists(rule_id)
@@ -66,7 +78,10 @@ def test_delete_keyword_rule_under_excluded_project(temp_db):
 
 @pytest.mark.parametrize("bad_id", [True, False, "1", 1.5, 0, -1, None, [], {}])
 def test_invalid_rule_id_returns_invalid_input(temp_db, bad_id):
-    assert rule_api.delete_project_keyword_rule(bad_id) == {
+    assert rule_api.delete_project_keyword_rule(
+        bad_id,
+        apply_to_history=False,
+    ) == {
         "ok": False,
         "error": "invalid_input",
     }
@@ -79,11 +94,17 @@ def test_unknown_and_cross_type_ids_return_not_found(temp_db):
         project_id,
     )
 
-    assert rule_api.delete_project_keyword_rule(9999) == {
+    assert rule_api.delete_project_keyword_rule(
+        9999,
+        apply_to_history=False,
+    ) == {
         "ok": False,
         "error": "not_found",
     }
-    assert rule_api.delete_project_keyword_rule(folder_id) == {
+    assert rule_api.delete_project_keyword_rule(
+        folder_id,
+        apply_to_history=False,
+    ) == {
         "ok": False,
         "error": "not_found",
     }
@@ -115,7 +136,10 @@ def test_delete_preserves_projects_folder_rules_and_history(temp_db):
         "operation": table_count("report_session_operation"),
     }
 
-    result = rule_api.delete_project_keyword_rule(rule_id)
+    result = rule_api.delete_project_keyword_rule(
+        rule_id,
+        apply_to_history=False,
+    )
 
     assert result["ok"] is True
     assert {
@@ -137,7 +161,10 @@ def test_delete_refreshes_keyword_cache_via_generation(temp_db):
     assert project_inference_service._enabled_keyword_rules()
     before = generation(DataGenerationNamespace.CLASSIFICATION_CATALOG)
 
-    result = rule_api.delete_project_keyword_rule(rule_id)
+    result = rule_api.delete_project_keyword_rule(
+        rule_id,
+        apply_to_history=False,
+    )
 
     assert result["ok"] is True
     assert generation(DataGenerationNamespace.CLASSIFICATION_CATALOG) == before + 1
@@ -164,7 +191,10 @@ def test_service_exception_collapses_to_privacy_safe_error(temp_db, monkeypatch)
         raise RuntimeError("SELECT traceback window_title clipboard C:\\Secret")
 
     monkeypatch.setattr(rule_history_application_service, "delete_rule", boom)
-    result = rule_api.delete_project_keyword_rule(rule_id)
+    result = rule_api.delete_project_keyword_rule(
+        rule_id,
+        apply_to_history=False,
+    )
 
     assert result == {"ok": False, "error": "operation_failed"}
     serialized = json.dumps(result).casefold()

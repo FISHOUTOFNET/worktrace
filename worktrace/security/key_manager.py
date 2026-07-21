@@ -5,17 +5,21 @@ import hashlib
 import json
 import os
 import platform
+import threading
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol
 
+from ..atomic_file import OwnedTemporaryFile, TemporaryFileCleanupError, TemporaryFileError
+
 
 DATA_KEY_BYTES = 32
 KEYRING_VERSION = 1
 DPAPI_WRAP_TYPE = "dpapi-current-user"
 FAKE_WRAP_TYPE = "fake-test-wrapper"
+_KEYRING_CREATION_LOCK = threading.RLock()
 
 
 class KeyManagerError(Exception):
@@ -33,11 +37,9 @@ class LocalKey:
 class KeyWrapper(Protocol):
     wrap_type: str
 
-    def wrap(self, data: bytes) -> bytes:
-        ...
+    def wrap(self, data: bytes) -> bytes: ...
 
-    def unwrap(self, wrapped: bytes) -> bytes:
-        ...
+    def unwrap(self, wrapped: bytes) -> bytes: ...
 
 
 class DpapiKeyWrapper:
@@ -46,24 +48,37 @@ class DpapiKeyWrapper:
     def wrap(self, data: bytes) -> bytes:
         try:
             import win32crypt
-        except ImportError as exc:  # pragma: no cover - depends on Windows runtime.
+        except ImportError as exc:  # pragma: no cover - Windows runtime dependency.
             raise KeyManagerError("Windows DPAPI is unavailable") from exc
-        return win32crypt.CryptProtectData(data, "WorkTrace local data key", None, None, None, 0)
+        return win32crypt.CryptProtectData(
+            data,
+            "WorkTrace local data key",
+            None,
+            None,
+            None,
+            0,
+        )
 
     def unwrap(self, wrapped: bytes) -> bytes:
         try:
             import win32crypt
-        except ImportError as exc:  # pragma: no cover - depends on Windows runtime.
+        except ImportError as exc:  # pragma: no cover - Windows runtime dependency.
             raise KeyManagerError("Windows DPAPI is unavailable") from exc
         try:
-            _description, data = win32crypt.CryptUnprotectData(wrapped, None, None, None, 0)
+            _description, data = win32crypt.CryptUnprotectData(
+                wrapped,
+                None,
+                None,
+                None,
+                0,
+            )
             return data
         except Exception as exc:
             raise KeyManagerError("Could not unwrap local data key") from exc
 
 
 class FakeKeyWrapper:
-    """Deterministic non-production wrapper for tests and non-Windows development."""
+    """Deterministic wrapper available only through explicit test injection."""
 
     wrap_type = FAKE_WRAP_TYPE
 
@@ -85,30 +100,72 @@ def create_or_load_local_key(
     path: Path | None = None,
     wrapper: KeyWrapper | None = None,
 ) -> LocalKey:
-    keyring_path = path or default_keyring_path()
-    active_wrapper = wrapper or _default_wrapper()
-    if keyring_path.exists():
-        return load_local_key(path=keyring_path, wrapper=active_wrapper)
+    """Create exactly one active keyring without overwriting a concurrent winner."""
 
-    key = os.urandom(DATA_KEY_BYTES)
-    created_at = _utc_now()
-    key_id = str(uuid.uuid4())
-    wrapped = active_wrapper.wrap(key)
-    keyring = {
-        "version": KEYRING_VERSION,
-        "active_key_id": key_id,
-        "keys": [
+    keyring_path = path or default_keyring_path()
+    active_wrapper = wrapper if wrapper is not None else _default_wrapper()
+    with _KEYRING_CREATION_LOCK:
+        if keyring_path.exists():
+            return load_local_key(path=keyring_path, wrapper=active_wrapper)
+
+        key = os.urandom(DATA_KEY_BYTES)
+        created_at = _utc_now()
+        key_id = str(uuid.uuid4())
+        wrapped = active_wrapper.wrap(key)
+        payload = json.dumps(
             {
-                "key_id": key_id,
-                "wrapped_data_key": _b64(wrapped),
-                "wrap_type": active_wrapper.wrap_type,
-                "created_at": created_at,
-            }
-        ],
-    }
-    keyring_path.parent.mkdir(parents=True, exist_ok=True)
-    keyring_path.write_text(json.dumps(keyring, indent=2, sort_keys=True), encoding="utf-8")
-    return LocalKey(key_id=key_id, key=key, created_at=created_at, wrap_type=active_wrapper.wrap_type)
+                "version": KEYRING_VERSION,
+                "active_key_id": key_id,
+                "keys": [
+                    {
+                        "key_id": key_id,
+                        "wrapped_data_key": _b64(wrapped),
+                        "wrap_type": active_wrapper.wrap_type,
+                        "created_at": created_at,
+                    }
+                ],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        keyring_path.parent.mkdir(parents=True, exist_ok=True)
+        owner = OwnedTemporaryFile(
+            directory=keyring_path.parent,
+            prefix=f".{keyring_path.name}.",
+            suffix=".tmp",
+            resource="keyring",
+            permissions=0o600,
+        )
+        try:
+            with owner:
+                with open(owner.path, "w", encoding="utf-8", newline="") as handle:
+                    handle.write(payload)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                try:
+                    # A hard-link publish is atomic and fails if another process
+                    # already created the keyring. It never replaces the winner.
+                    os.link(owner.path, keyring_path)
+                except FileExistsError:
+                    return load_local_key(path=keyring_path, wrapper=active_wrapper)
+                except OSError as exc:
+                    raise KeyManagerError("Could not create local keyring") from exc
+                try:
+                    os.chmod(keyring_path, 0o600)
+                except OSError:
+                    # Windows ACLs remain the authority; chmod is best effort.
+                    pass
+        except TemporaryFileCleanupError as exc:
+            raise KeyManagerError("Could not clean temporary local keyring") from exc
+        except TemporaryFileError as exc:
+            raise KeyManagerError("Could not create local keyring") from exc
+
+        return LocalKey(
+            key_id=key_id,
+            key=key,
+            created_at=created_at,
+            wrap_type=active_wrapper.wrap_type,
+        )
 
 
 def load_local_key(
@@ -117,7 +174,7 @@ def load_local_key(
     wrapper: KeyWrapper | None = None,
 ) -> LocalKey:
     keyring_path = path or default_keyring_path()
-    active_wrapper = wrapper or _default_wrapper()
+    active_wrapper = wrapper if wrapper is not None else _default_wrapper()
     try:
         keyring = json.loads(keyring_path.read_text(encoding="utf-8"))
     except FileNotFoundError as exc:
@@ -130,7 +187,7 @@ def load_local_key(
         raise KeyManagerError("Local keyring wrap type mismatch")
 
     try:
-        key = active_wrapper.unwrap(_unb64(entry["wrapped_data_key"]))
+        key = active_wrapper.unwrap(_unb64(str(entry["wrapped_data_key"])))
     except Exception as exc:
         raise KeyManagerError("Could not unwrap local data key") from exc
     if len(key) != DATA_KEY_BYTES:
@@ -158,9 +215,9 @@ def default_keyring_path() -> Path:
 
 
 def _default_wrapper() -> KeyWrapper:
-    if platform.system() == "Windows":
-        return DpapiKeyWrapper()
-    return FakeKeyWrapper()
+    if platform.system() != "Windows":
+        raise KeyManagerError("unsupported_platform")
+    return DpapiKeyWrapper()
 
 
 def _active_key_entry(keyring: object) -> dict[str, object]:
@@ -179,7 +236,10 @@ def _active_key_entry(keyring: object) -> dict[str, object]:
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace(
+        "+00:00",
+        "Z",
+    )
 
 
 def _b64(value: bytes) -> str:
@@ -192,3 +252,20 @@ def _unb64(value: str) -> bytes:
 
 def _xor(data: bytes, mask: bytes) -> bytes:
     return bytes(byte ^ mask[index % len(mask)] for index, byte in enumerate(data))
+
+
+__all__ = [
+    "DATA_KEY_BYTES",
+    "DPAPI_WRAP_TYPE",
+    "FAKE_WRAP_TYPE",
+    "KEYRING_VERSION",
+    "DpapiKeyWrapper",
+    "FakeKeyWrapper",
+    "KeyManagerError",
+    "KeyWrapper",
+    "LocalKey",
+    "create_or_load_local_key",
+    "default_keyring_path",
+    "keyring_exists",
+    "load_local_key",
+]

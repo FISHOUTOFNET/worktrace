@@ -5,9 +5,13 @@ import os
 import threading
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Iterator
 
 from ..constants import EXCLUDED_PROJECT
+from ..data_generation_repository import (
+    DataGenerationNamespace,
+    DataGenerationRepository,
+)
 from ..db import dict_rows, get_connection, get_db_path, now_str
 from ..path_utils import normalize_path_key
 from ..resources.title_parsing import normalize_file_name
@@ -26,9 +30,24 @@ INDEX_STATUS_ERROR = "error"
 _SCAN_BATCH_SIZE = 250
 _WORKER_IDLE_SECONDS = 5.0
 _MISS_REFRESH_COOLDOWN_SECONDS = 60.0
+_GC_PENDING_CODE = "folder_index_gc_pending"
 
 _WORKER_WAKE_EVENT = threading.Event()
-_MISS_REFRESH_TIMES: dict[tuple[str, bool], float] = {}
+_MISS_REFRESH_TIMES: dict[tuple[str, int, bool], float] = {}
+
+
+class FolderIndexScanError(RuntimeError):
+    """Stable path-free failure proving a scan was incomplete."""
+
+    def __init__(self, code: str) -> None:
+        normalized = str(code or "folder_index_scan_incomplete")
+        super().__init__(normalized)
+        self.code = normalized
+
+
+class FolderIndexScanInterrupted(FolderIndexScanError):
+    def __init__(self) -> None:
+        super().__init__("folder_index_scan_interrupted")
 
 
 def request_rebuild_for_rule(rule_id: int) -> None:
@@ -45,8 +64,19 @@ def delete_index_for_rule(rule_id: int, *, conn=None) -> None:
         delete_index_for_rule(rule_id, conn=own_conn)
 
 
+def _replacement_cache_identity() -> tuple[str, int]:
+    database_key = str(get_db_path().resolve())
+    with get_connection() as conn:
+        replacement_epoch = DataGenerationRepository.get(
+            conn,
+            DataGenerationNamespace.DATABASE_REPLACEMENT,
+        )
+    return database_key, replacement_epoch
+
+
 def request_refresh_for_enabled_rules(include_excluded: bool = False) -> None:
-    cache_key = (str(get_db_path().resolve()), bool(include_excluded))
+    database_key, replacement_epoch = _replacement_cache_identity()
+    cache_key = (database_key, replacement_epoch, bool(include_excluded))
     current = time.monotonic()
     if current - _MISS_REFRESH_TIMES.get(cache_key, 0.0) < _MISS_REFRESH_COOLDOWN_SECONDS:
         return
@@ -101,9 +131,10 @@ def ensure_index_states_for_folder_rules() -> None:
 
 
 def recover_interrupted_indexes() -> int:
-    """Discard incomplete staging generations under the index maintenance owner."""
+    """Discard only unfinished builds, then retry superseded generation GC."""
 
     timestamp = now_str()
+    active_generations: list[tuple[int, int]] = []
     with get_connection() as conn:
         conn.execute("BEGIN IMMEDIATE")
         states = conn.execute(
@@ -116,14 +147,16 @@ def recover_interrupted_indexes() -> int:
             """
         ).fetchall()
         for state in states:
+            rule_id = int(state["folder_rule_id"])
+            active = int(state["active_generation"] or 0)
             building = int(state["building_generation"] or 0)
-            if building > 0:
+            if building > 0 and building != active:
                 conn.execute(
                     """
                     DELETE FROM folder_rule_file_index
                     WHERE folder_rule_id = ? AND generation = ?
                     """,
-                    (int(state["folder_rule_id"]), building),
+                    (rule_id, building),
                 )
             conn.execute(
                 """
@@ -132,16 +165,34 @@ def recover_interrupted_indexes() -> int:
                         WHEN active_generation IS NULL THEN 'pending'
                         ELSE 'ready' END,
                     building_generation = NULL,
-                    build_status = 'pending',
-                    refresh_requested = 1,
-                    last_error = NULL,
-                    error_message = NULL,
+                    build_status = CASE
+                        WHEN active_generation IS NULL THEN 'pending'
+                        ELSE 'ready' END,
+                    refresh_requested = CASE
+                        WHEN active_generation IS NULL THEN 1 ELSE 0 END,
+                    last_error = CASE
+                        WHEN active_generation IS NULL THEN NULL
+                        ELSE last_error END,
+                    error_message = CASE
+                        WHEN active_generation IS NULL THEN NULL
+                        ELSE error_message END,
                     updated_at = ?
                 WHERE folder_rule_id = ?
                 """,
-                (timestamp, int(state["folder_rule_id"])),
+                (timestamp, rule_id),
             )
-        return len(states)
+            if active > 0:
+                active_generations.append((rule_id, active))
+        conn.commit()
+
+    for rule_id, active in active_generations:
+        try:
+            _cleanup_old_generations(rule_id, active)
+            _clear_gc_pending(rule_id, active)
+        except Exception:
+            _mark_gc_pending(rule_id, active)
+    _retry_pending_gc()
+    return len(states)
 
 
 def rebuild_folder_index(
@@ -155,8 +206,9 @@ def rebuild_folder_index(
     folder_path = str(rule.get("folder_path") or "").strip()
     generation, started_at = _begin_generation(rule_id)
     if not folder_path or not Path(folder_path).is_dir():
-        _fail_generation(rule_id, generation, f"folder not found: {folder_path}")
+        _fail_generation(rule_id, generation, "folder_index_root_unavailable")
         return False
+
     count = 0
     batch: list[tuple] = []
     try:
@@ -171,21 +223,39 @@ def rebuild_folder_index(
                 count += len(batch)
                 batch = []
                 if stop_event is not None and stop_event.wait(0.01):
-                    _abandon_generation(rule_id, generation)
-                    return False
-        if stop_event is not None and stop_event.is_set():
-            _abandon_generation(rule_id, generation)
-            return False
+                    raise FolderIndexScanInterrupted()
         if batch:
             _insert_entry_batch(batch)
             count += len(batch)
         _activate_generation(rule_id, generation, started_at, count)
-        _cleanup_old_generations(rule_id, generation)
-        return True
-    except Exception as exc:
-        logging.exception("folder index rebuild failed for rule %s", rule_id)
-        _fail_generation(rule_id, generation, str(exc))
+    except FolderIndexScanInterrupted:
+        _abandon_generation(rule_id, generation)
         return False
+    except FolderIndexScanError as exc:
+        _fail_generation(rule_id, generation, exc.code)
+        return False
+    except Exception as exc:
+        logging.warning(
+            "folder index build failed rule=%s exception=%s",
+            int(rule_id),
+            type(exc).__name__,
+        )
+        _fail_generation(rule_id, generation, "folder_index_build_failed")
+        return False
+
+    # Activation has committed. New generation is authoritative regardless of
+    # whether superseded rows can be reclaimed immediately.
+    try:
+        _cleanup_old_generations(rule_id, generation)
+        _clear_gc_pending(rule_id, generation)
+    except Exception as exc:
+        logging.warning(
+            "folder index generation GC deferred rule=%s exception=%s",
+            int(rule_id),
+            type(exc).__name__,
+        )
+        _mark_gc_pending(rule_id, generation)
+    return True
 
 
 def validate_ready_indexes(stop_event: threading.Event | None = None) -> None:
@@ -206,8 +276,9 @@ def validate_ready_indexes(stop_event: threading.Event | None = None) -> None:
         _validate_rule_index(int(state["folder_rule_id"]), stop_event)
 
 
-def mark_index_stale(rule_id: int, reason: str = "") -> None:
+def mark_index_stale(rule_id: int, reason: str = "folder_index_stale") -> None:
     timestamp = now_str()
+    code = _stable_error_code(reason, "folder_index_stale")
     with get_connection() as conn:
         conn.execute(
             """
@@ -219,8 +290,8 @@ def mark_index_stale(rule_id: int, reason: str = "") -> None:
             (
                 INDEX_STATUS_STALE,
                 INDEX_STATUS_STALE,
-                reason[:500],
-                reason[:500],
+                code,
+                code,
                 timestamp,
                 int(rule_id),
             ),
@@ -230,42 +301,38 @@ def mark_index_stale(rule_id: int, reason: str = "") -> None:
 def run_folder_index_worker(
     stop_event: threading.Event,
     *,
-    health: "WorkerHealthReporter | None" = None,
+    health: "WorkerHealthReporter",
 ) -> None:
     """Run iterations only; AppRuntime owns thread started/stopped state."""
 
     logging.info("folder index worker loop enter")
     try:
         ensure_index_states_for_folder_rules()
+        recover_interrupted_indexes()
         validate_ready_indexes(stop_event)
     except Exception:
         logging.exception("folder index startup validation failed")
-        if health is not None:
-            health.failed("folder_index_startup_failed")
+        health.failed("folder_index_startup_failed")
     else:
-        if health is not None:
-            health.succeeded()
+        health.succeeded()
     while not stop_event.is_set():
         try:
-            if DATABASE_WRITE_GATE.active():
-                if health is not None:
-                    health.maintenance_paused(True)
+            if DATABASE_WRITE_GATE.writes_blocked():
+                health.maintenance_paused(True)
                 _wait_for_worker()
                 continue
-            if health is not None:
-                health.maintenance_paused(False)
+            health.maintenance_paused(False)
             ensure_index_states_for_folder_rules()
+            _retry_pending_gc()
             for rule_id in _pending_rule_ids():
-                if stop_event.is_set() or DATABASE_WRITE_GATE.active():
+                if stop_event.is_set() or DATABASE_WRITE_GATE.writes_blocked():
                     break
                 rebuild_folder_index(rule_id, stop_event)
-            if health is not None:
-                health.succeeded()
+            health.succeeded()
             _wait_for_worker()
         except Exception:
             logging.exception("folder index worker error")
-            if health is not None:
-                health.failed("folder_index_iteration_failed")
+            health.failed("folder_index_iteration_failed")
             _wait_for_worker()
     logging.info("folder index worker loop exit")
 
@@ -285,12 +352,17 @@ def _pending_rule_ids(limit: int = 20) -> list[int]:
             """
             SELECT folder_rule_id
             FROM folder_rule_index_state
-            WHERE refresh_requested = 1
-               OR build_status IN (?, ?)
+            WHERE (refresh_requested = 1 OR build_status IN (?, ?))
+              AND COALESCE(last_error, '') <> ?
             ORDER BY updated_at, folder_rule_id
             LIMIT ?
             """,
-            (INDEX_STATUS_PENDING, INDEX_STATUS_STALE, int(limit)),
+            (
+                INDEX_STATUS_PENDING,
+                INDEX_STATUS_STALE,
+                _GC_PENDING_CODE,
+                int(limit),
+            ),
         ).fetchall()
     return [int(row["folder_rule_id"]) for row in rows]
 
@@ -358,7 +430,10 @@ def _begin_generation(rule_id: int) -> tuple[int, str]:
             ),
         )
         conn.execute(
-            "DELETE FROM folder_rule_file_index WHERE folder_rule_id = ? AND generation = ?",
+            """
+            DELETE FROM folder_rule_file_index
+            WHERE folder_rule_id = ? AND generation = ?
+            """,
             (int(rule_id), generation),
         )
         conn.commit()
@@ -373,73 +448,89 @@ def _activate_generation(
 ) -> None:
     timestamp = now_str()
     with get_connection() as conn:
-        conn.execute("BEGIN IMMEDIATE")
-        actual = int(
-            conn.execute(
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            actual = int(
+                conn.execute(
+                    """
+                    SELECT COUNT(*) AS value
+                    FROM folder_rule_file_index
+                    WHERE folder_rule_id = ? AND generation = ?
+                    """,
+                    (int(rule_id), int(generation)),
+                ).fetchone()["value"]
+                or 0
+            )
+            if actual != int(file_count):
+                raise ValueError("folder_index_generation_incomplete")
+            cursor = conn.execute(
                 """
-                SELECT COUNT(*) AS value
-                FROM folder_rule_file_index
-                WHERE folder_rule_id = ? AND generation = ?
+                UPDATE folder_rule_index_state
+                SET status = ?, valid_from = ?, active_generation = ?,
+                    building_generation = NULL, build_status = ?, last_error = NULL,
+                    last_indexed_at = ?, last_checked_at = ?, file_count = ?,
+                    error_message = NULL, refresh_requested = 0, updated_at = ?
+                WHERE folder_rule_id = ? AND building_generation = ?
                 """,
-                (int(rule_id), int(generation)),
-            ).fetchone()["value"]
-            or 0
-        )
-        if actual != int(file_count):
-            raise ValueError("folder_index_generation_incomplete")
-        cursor = conn.execute(
-            """
-            UPDATE folder_rule_index_state
-            SET status = ?, valid_from = ?, active_generation = ?,
-                building_generation = NULL, build_status = ?, last_error = NULL,
-                last_indexed_at = ?, last_checked_at = ?, file_count = ?,
-                error_message = NULL, refresh_requested = 0, updated_at = ?
-            WHERE folder_rule_id = ? AND building_generation = ?
-            """,
-            (
-                INDEX_STATUS_READY,
-                valid_from,
-                int(generation),
-                INDEX_STATUS_READY,
-                timestamp,
-                timestamp,
-                actual,
-                timestamp,
-                int(rule_id),
-                int(generation),
-            ),
-        )
-        if cursor.rowcount != 1:
-            raise ValueError("folder_index_generation_superseded")
-        conn.commit()
+                (
+                    INDEX_STATUS_READY,
+                    valid_from,
+                    int(generation),
+                    INDEX_STATUS_READY,
+                    timestamp,
+                    timestamp,
+                    actual,
+                    timestamp,
+                    int(rule_id),
+                    int(generation),
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("folder_index_generation_superseded")
+            conn.commit()
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                logging.warning("folder index activation rollback failed")
+            raise
 
 
 def _fail_generation(rule_id: int, generation: int, message: str) -> None:
+    """Fail and delete only the generation still owned as BUILDING."""
+
     timestamp = now_str()
+    code = _stable_error_code(message, "folder_index_build_failed")
     with get_connection() as conn:
         conn.execute("BEGIN IMMEDIATE")
-        conn.execute(
-            "DELETE FROM folder_rule_file_index WHERE folder_rule_id = ? AND generation = ?",
-            (int(rule_id), int(generation)),
-        )
-        conn.execute(
+        cursor = conn.execute(
             """
             UPDATE folder_rule_index_state
             SET status = CASE WHEN active_generation IS NULL THEN ? ELSE status END,
                 building_generation = NULL, build_status = ?, last_error = ?,
                 error_message = ?, refresh_requested = 0, updated_at = ?
             WHERE folder_rule_id = ? AND building_generation = ?
+              AND COALESCE(active_generation, -1) <> ?
             """,
             (
                 INDEX_STATUS_ERROR,
                 INDEX_STATUS_ERROR,
-                message[:500],
-                message[:500],
+                code,
+                code,
                 timestamp,
                 int(rule_id),
                 int(generation),
+                int(generation),
             ),
         )
+        if cursor.rowcount == 1:
+            conn.execute(
+                """
+                DELETE FROM folder_rule_file_index
+                WHERE folder_rule_id = ? AND generation = ?
+                """,
+                (int(rule_id), int(generation)),
+            )
         conn.commit()
 
 
@@ -447,17 +538,14 @@ def _abandon_generation(rule_id: int, generation: int) -> None:
     timestamp = now_str()
     with get_connection() as conn:
         conn.execute("BEGIN IMMEDIATE")
-        conn.execute(
-            "DELETE FROM folder_rule_file_index WHERE folder_rule_id = ? AND generation = ?",
-            (int(rule_id), int(generation)),
-        )
-        conn.execute(
+        cursor = conn.execute(
             """
             UPDATE folder_rule_index_state
             SET status = CASE WHEN active_generation IS NULL THEN ? ELSE status END,
                 building_generation = NULL, build_status = ?,
                 refresh_requested = 1, updated_at = ?
             WHERE folder_rule_id = ? AND building_generation = ?
+              AND COALESCE(active_generation, -1) <> ?
             """,
             (
                 INDEX_STATUS_PENDING,
@@ -465,9 +553,81 @@ def _abandon_generation(rule_id: int, generation: int) -> None:
                 timestamp,
                 int(rule_id),
                 int(generation),
+                int(generation),
             ),
         )
+        if cursor.rowcount == 1:
+            conn.execute(
+                """
+                DELETE FROM folder_rule_file_index
+                WHERE folder_rule_id = ? AND generation = ?
+                """,
+                (int(rule_id), int(generation)),
+            )
         conn.commit()
+
+
+def _mark_gc_pending(rule_id: int, active_generation: int) -> None:
+    timestamp = now_str()
+    with get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE folder_rule_index_state
+            SET status = ?, build_status = ?, last_error = ?,
+                error_message = ?, refresh_requested = 0, updated_at = ?
+            WHERE folder_rule_id = ? AND active_generation = ?
+            """,
+            (
+                INDEX_STATUS_READY,
+                INDEX_STATUS_READY,
+                _GC_PENDING_CODE,
+                _GC_PENDING_CODE,
+                timestamp,
+                int(rule_id),
+                int(active_generation),
+            ),
+        )
+
+
+def _clear_gc_pending(rule_id: int, active_generation: int) -> None:
+    timestamp = now_str()
+    with get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE folder_rule_index_state
+            SET last_error = NULL, error_message = NULL, updated_at = ?
+            WHERE folder_rule_id = ? AND active_generation = ?
+              AND last_error = ?
+            """,
+            (
+                timestamp,
+                int(rule_id),
+                int(active_generation),
+                _GC_PENDING_CODE,
+            ),
+        )
+
+
+def _retry_pending_gc(limit: int = 20) -> None:
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT folder_rule_id, active_generation
+            FROM folder_rule_index_state
+            WHERE last_error = ? AND active_generation IS NOT NULL
+            ORDER BY updated_at, folder_rule_id
+            LIMIT ?
+            """,
+            (_GC_PENDING_CODE, int(limit)),
+        ).fetchall()
+    for row in rows:
+        rule_id = int(row["folder_rule_id"])
+        generation = int(row["active_generation"])
+        try:
+            _cleanup_old_generations(rule_id, generation)
+            _clear_gc_pending(rule_id, generation)
+        except Exception:
+            logging.warning("folder index generation GC retry deferred rule=%s", rule_id)
 
 
 def _cleanup_old_generations(rule_id: int, active_generation: int) -> None:
@@ -536,17 +696,18 @@ def _iter_files(
     folder_path: str,
     recursive: bool,
     stop_event: threading.Event | None = None,
-):
+) -> Iterator[dict[str, object]]:
+    root = folder_path
     stack = [folder_path]
     while stack:
         if stop_event is not None and stop_event.is_set():
-            return
+            raise FolderIndexScanInterrupted()
         current = stack.pop()
         try:
             with os.scandir(current) as entries:
                 for entry in entries:
                     if stop_event is not None and stop_event.is_set():
-                        return
+                        raise FolderIndexScanInterrupted()
                     try:
                         if entry.is_dir(follow_symlinks=False):
                             if recursive:
@@ -555,16 +716,36 @@ def _iter_files(
                         if not entry.is_file(follow_symlinks=False):
                             continue
                         stat = entry.stat(follow_symlinks=False)
-                    except OSError:
+                    except FileNotFoundError:
+                        # A transiently removed entry was never part of a stable
+                        # snapshot and can be omitted without claiming I/O success.
                         continue
+                    except OSError as exc:
+                        raise FolderIndexScanError(
+                            "folder_index_entry_unreadable"
+                        ) from exc
                     yield {
                         "name": entry.name,
                         "path": entry.path,
                         "mtime": float(stat.st_mtime),
                         "size": int(stat.st_size),
                     }
-        except OSError:
-            continue
+        except FolderIndexScanError:
+            raise
+        except FileNotFoundError as exc:
+            code = (
+                "folder_index_root_unavailable"
+                if current == root
+                else "folder_index_directory_disappeared"
+            )
+            raise FolderIndexScanError(code) from exc
+        except OSError as exc:
+            code = (
+                "folder_index_root_unreadable"
+                if current == root
+                else "folder_index_directory_unreadable"
+            )
+            raise FolderIndexScanError(code) from exc
 
 
 def _validate_rule_index(
@@ -573,12 +754,35 @@ def _validate_rule_index(
 ) -> None:
     with get_connection() as conn:
         state = conn.execute(
-            "SELECT active_generation FROM folder_rule_index_state WHERE folder_rule_id = ?",
+            """
+            SELECT active_generation, file_count
+            FROM folder_rule_index_state WHERE folder_rule_id = ?
+            """,
             (int(rule_id),),
         ).fetchone()
-    generation = int(state["active_generation"] or 0) if state else 0
+        generation = int(state["active_generation"] or 0) if state else 0
+        expected_count = int(state["file_count"] or 0) if state else 0
+        actual_count = (
+            int(
+                conn.execute(
+                    """
+                    SELECT COUNT(*) AS value
+                    FROM folder_rule_file_index
+                    WHERE folder_rule_id = ? AND generation = ?
+                    """,
+                    (int(rule_id), generation),
+                ).fetchone()["value"]
+                or 0
+            )
+            if generation > 0
+            else 0
+        )
     if generation <= 0:
         return
+    if actual_count != expected_count:
+        mark_index_stale(rule_id, "folder_index_generation_count_mismatch")
+        return
+
     last_id = 0
     while True:
         if stop_event is not None and stop_event.is_set():
@@ -600,7 +804,7 @@ def _validate_rule_index(
         for row in rows:
             last_id = int(row["id"])
             if not os.path.exists(str(row.get("file_path") or "")):
-                mark_index_stale(rule_id, "indexed file path no longer exists")
+                mark_index_stale(rule_id, "folder_index_entry_missing")
                 return
         if stop_event is not None:
             stop_event.wait(0.01)
@@ -610,10 +814,19 @@ def _validate_rule_index(
             """
             UPDATE folder_rule_index_state
             SET last_checked_at = ?, updated_at = ?
-            WHERE folder_rule_id = ?
+            WHERE folder_rule_id = ? AND active_generation = ?
             """,
-            (timestamp, timestamp, int(rule_id)),
+            (timestamp, timestamp, int(rule_id), generation),
         )
+
+
+def _stable_error_code(value: str, default: str) -> str:
+    normalized = str(value or "").strip()
+    if normalized and len(normalized) <= 100 and all(
+        character.isalnum() or character == "_" for character in normalized
+    ):
+        return normalized
+    return default
 
 
 def _normalize_index_file_name(file_name: str | None) -> str:
@@ -622,6 +835,8 @@ def _normalize_index_file_name(file_name: str | None) -> str:
 
 
 __all__ = [
+    "FolderIndexScanError",
+    "FolderIndexScanInterrupted",
     "delete_index_for_rule",
     "ensure_index_states_for_folder_rules",
     "mark_index_stale",

@@ -4,6 +4,16 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 
+const MAINTENANCE_STATUS = {
+  maintenance_in_progress: false,
+  maintenance_restored: true,
+  recovery_blocked: false,
+  blocked_reason: null,
+  collector_running: true,
+  collector_status: "running",
+  user_paused: false,
+};
+
 function flush() {
   return new Promise((resolve) => setImmediate(resolve));
 }
@@ -30,6 +40,10 @@ function harness() {
     return elements.get(id);
   }
 
+  function settingsLine(key) {
+    return element(`settings-line-${key}`);
+  }
+
   const context = {
     Promise,
     Error,
@@ -40,7 +54,10 @@ function harness() {
     window: { WorkTraceApp: {} },
     document: {
       getElementById: element,
-      querySelector() { return null; },
+      querySelector(selector) {
+        const match = String(selector).match(/data-settings-key="([^"]+)"/);
+        return match ? settingsLine(match[1]) : null;
+      },
       createElement(tag) { return element(`created-${tag}-${elements.size}`); },
     },
   };
@@ -80,8 +97,8 @@ function harness() {
       status: {
         clipboard_capture_enabled: false,
         export_path_configured: false,
-        secure_import_in_progress: false,
         storage_model: "local_only",
+        ...MAINTENANCE_STATUS,
         first_run_notice: { accepted: true },
       },
     }),
@@ -103,12 +120,33 @@ function harness() {
   return {
     App,
     element,
+    settingsLine,
     generationResets,
     get refreshCount() { return refreshCount; },
   };
 }
 
-test("secure import resets the generation, reloads settings, refreshes, and clears secrets", async () => {
+test("settings renders the exact maintenance DTO without legacy aliases", () => {
+  const { App, settingsLine } = harness();
+  App.settingsLoaded = true;
+  App.renderSettingsStatus({
+    clipboard_capture_enabled: false,
+    export_path_configured: false,
+    storage_model: "local_only",
+    ...MAINTENANCE_STATUS,
+    first_run_notice: { accepted: true },
+  });
+
+  assert.equal(settingsLine("maintenance_in_progress").textContent, "数据库维护进行中：否");
+  assert.equal(settingsLine("maintenance_restored").textContent, "维护恢复完成：是");
+  assert.equal(settingsLine("recovery_blocked").textContent, "维护恢复阻断：否");
+  assert.equal(settingsLine("blocked_reason").textContent, "阻断原因：无");
+  assert.equal(settingsLine("collector_running").textContent, "采集器运行中：是");
+  assert.equal(settingsLine("collector_status").textContent, "采集器状态：running");
+  assert.equal(settingsLine("user_paused").textContent, "用户暂停：否");
+});
+
+test("secure import resets replacement generation, reloads settings, refreshes, and clears secrets", async () => {
   const state = harness();
   const { App, element, generationResets } = state;
   let statusReads = 0;
@@ -119,8 +157,8 @@ test("secure import resets the generation, reloads settings, refreshes, and clea
       status: {
         clipboard_capture_enabled: false,
         export_path_configured: false,
-        secure_import_in_progress: false,
         storage_model: "local_only",
+        ...MAINTENANCE_STATUS,
         first_run_notice: { accepted: true },
       },
     });
@@ -132,7 +170,7 @@ test("secure import resets the generation, reloads settings, refreshes, and clea
   await flush();
   await flush();
 
-  assert.deepEqual(generationResets, ["secure_import"]);
+  assert.deepEqual(generationResets, ["database_replacement"]);
   assert.equal(statusReads, 1);
   assert.equal(state.refreshCount, 1);
   assert.equal(element("settings-backup-import-passphrase").value, "");
@@ -149,7 +187,7 @@ test("clear-all uses the same replacement boundary and clears confirmation", asy
   await flush();
   await flush();
 
-  assert.deepEqual(generationResets, ["clear_all_local_data"]);
+  assert.deepEqual(generationResets, ["database_replacement"]);
   assert.equal(state.refreshCount, 1);
   assert.equal(element("settings-clear-confirm").value, "");
   assert.equal(App.settingsClearAllInProgress, false);
@@ -196,6 +234,7 @@ test("first-run acceptance refreshes status only after confirmed success", async
       status: {
         clipboard_capture_enabled: false,
         storage_model: "local_only",
+        ...MAINTENANCE_STATUS,
         first_run_notice: { accepted: true },
       },
     });

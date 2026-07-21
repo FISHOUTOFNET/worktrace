@@ -1,15 +1,8 @@
 """Excel and local-data export facade for the UI.
 
-Wraps ``export_service``. ``openpyxl`` is imported lazily inside the service
-functions, so importing this module does not load the workbook stack.
-
-``export_statistics_csv`` is the controlled CSV write path for the
-Statistics / Export page. It converts service-layer ``ValueError`` codes
-and ``OSError`` / ``PermissionError`` into stable ``StatisticsExportError``
-codes so the WebView bridge can map them to Chinese messages without
-echoing tracebacks, paths, SQL, or raw exception messages.
+The facade maps service-layer validation and infrastructure failures to stable,
+path-free codes. Raw platform error text never crosses the API boundary.
 """
-
 from __future__ import annotations
 
 from typing import Any
@@ -25,9 +18,6 @@ class StatisticsExportError(ValueError):
         self.code = code
 
 
-# Service-layer ``ValueError`` code tokens that map 1:1 to stable export
-# error codes. Any other ``ValueError`` text collapses to
-# ``operation_failed`` so internal details never reach the bridge.
 _EXPORT_VALUE_ERROR_CODES = {
     "invalid_date",
     "invalid_range",
@@ -36,42 +26,48 @@ _EXPORT_VALUE_ERROR_CODES = {
     "invalid_path",
     "stale_statistics_snapshot",
 }
+_EXPORT_FILE_ERROR_CODES = {
+    "permission_denied",
+    "file_busy",
+    "storage_unavailable",
+    "write_failed",
+    "cleanup_failed",
+    "invalid_path",
+    "operation_failed",
+}
 
 
-def export_statistics_csv(date_from: str, date_to: str, output_path, expected_snapshot_revision: str | None = None) -> dict[str, Any]:
-    """Export a display-safe CSV for the statistics date range.
-
-    Delegates date validation, row building, and file writing to
-    ``export_service.write_statistics_csv``. The service raises
-    ``ValueError`` with a stable code token for date / empty-data / path
-    failures; ``PermissionError`` and other ``OSError`` subclasses
-    propagate for the API to map.
-
-    On success returns ``{"activity_count": int, "duration_seconds": int,
-    "filename": str}`` where ``filename`` is the basename only (never the
-    full local path). On failure raises ``StatisticsExportError`` with a
-    stable ``code``.
-
-    Never writes to the DB, never opens a folder, never opens the exported
-    file, and never surfaces tracebacks, SQL, full paths, raw exception
-    text, window titles, file paths, or notes.
-    """
+def export_statistics_csv(
+    date_from: str,
+    date_to: str,
+    output_path,
+    expected_snapshot_revision: str | None = None,
+) -> dict[str, Any]:
+    """Export a display-safe CSV for the statistics date range."""
     try:
-        return export_service.write_statistics_csv(date_from, date_to, output_path, expected_snapshot_revision)
+        return export_service.write_statistics_csv(
+            date_from,
+            date_to,
+            output_path,
+            expected_snapshot_revision,
+        )
     except StatisticsExportError:
         raise
+    except export_service.ExportFileError as exc:
+        code = exc.code if exc.code in _EXPORT_FILE_ERROR_CODES else "operation_failed"
+        raise StatisticsExportError(code) from exc
+    except OSError as exc:
+        code = export_service.classify_export_os_error(exc)
+        if code not in _EXPORT_FILE_ERROR_CODES:
+            code = "operation_failed"
+        raise StatisticsExportError(code) from exc
     except ValueError as exc:
         code = str(exc)
         if code in _EXPORT_VALUE_ERROR_CODES:
-            raise StatisticsExportError(code)
-        raise StatisticsExportError("operation_failed")
-    except PermissionError:
-        raise StatisticsExportError("permission_denied")
-    except OSError:
-        # File busy / locked / disk errors collapse to ``file_busy``.
-        raise StatisticsExportError("file_busy")
-    except Exception:
-        raise StatisticsExportError("operation_failed")
+            raise StatisticsExportError(code) from exc
+        raise StatisticsExportError("operation_failed") from exc
+    except Exception as exc:
+        raise StatisticsExportError("operation_failed") from exc
 
 
 def export_excel(start_date: str, end_date: str, path: str) -> str:

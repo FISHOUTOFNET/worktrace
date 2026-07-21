@@ -58,10 +58,10 @@ def _seed_all_worker_progress() -> None:
     )
     activity_service.close_activity_row(activity_id, "2026-07-18 13:05:00")
     history_mutation_job_service.submit_rule_job(
-        "rule_backfill",
         "keyword",
         rule_id,
-        synchronous_limit=0,
+        kind="rule_backfill",
+        synchronous_scan_limit=0,
     )
     timestamp = now_str()
     with get_connection() as conn:
@@ -100,7 +100,9 @@ def _seed_all_worker_progress() -> None:
         )
 
 
-def test_clear_all_advances_replacement_and_restored_settings_once(temp_db):
+def test_clear_all_advances_only_replacement_when_restored_settings_are_unchanged(
+    temp_db,
+):
     privacy_gate_service.accept_privacy_notice()
     project_service.create_project("Replacement Source")
     before = _generations()
@@ -111,14 +113,8 @@ def test_clear_all_advances_replacement_and_restored_settings_once(temp_db):
     assert after[DataGenerationNamespace.DATABASE_REPLACEMENT] == (
         before[DataGenerationNamespace.DATABASE_REPLACEMENT] + 1
     )
-    assert after[DataGenerationNamespace.SETTINGS] == (
-        before[DataGenerationNamespace.SETTINGS] + 1
-    )
     for namespace in DataGenerationNamespace:
-        if namespace in {
-            DataGenerationNamespace.DATABASE_REPLACEMENT,
-            DataGenerationNamespace.SETTINGS,
-        }:
+        if namespace is DataGenerationNamespace.DATABASE_REPLACEMENT:
             continue
         assert after[namespace] == before[namespace]
     assert privacy_gate_service.is_privacy_notice_accepted() is True
@@ -185,35 +181,120 @@ def test_clear_all_refreshes_generation_backed_settings_cache(temp_db):
     assert settings_service.get_setting("ui_refresh_seconds") == "10"
 
 
-def test_replacement_generation_failure_rolls_back_data_and_replacement_epoch(
+def test_replacement_generation_failure_rolls_back_without_synthetic_effects(
     temp_db,
     monkeypatch,
 ):
     privacy_gate_service.accept_privacy_notice()
     project_id = project_service.create_project("Must Survive")
     before = _generations()
-    original = database_maintenance_service.publish_database_replacement
+    original_bump_replacement = DataGenerationRepository.bump_replacement
 
-    def fail_after_generation_write(conn):
-        original(conn)
+    def fail_after_generation_write(conn, *, minimum_value=None):
+        original_bump_replacement(conn, minimum_value=minimum_value)
         raise RuntimeError("generation_publish_failed")
 
     monkeypatch.setattr(
-        database_maintenance_service,
-        "publish_database_replacement",
-        fail_after_generation_write,
+        DataGenerationRepository,
+        "bump_replacement",
+        staticmethod(fail_after_generation_write),
     )
 
     with pytest.raises(RuntimeError, match="generation_publish_failed"):
         database_maintenance_service.clear_all_live_data()
 
     after = _generations()
-    for namespace in DataGenerationNamespace:
-        if namespace is DataGenerationNamespace.SETTINGS:
-            assert after[namespace] == before[namespace] + 1
-        else:
-            assert after[namespace] == before[namespace]
-    assert settings_service.get_bool_setting("user_paused", False) is True
-    assert settings_service.get_setting("collector_status", "") == "paused"
+    assert after == before
+    assert (
+        database_maintenance_service.MAINTENANCE_COORDINATOR.recovery_blocked()
+        is False
+    )
+    assert (
+        database_maintenance_service.MAINTENANCE_COORDINATOR.phase
+        is database_maintenance_service.MaintenancePhase.IDLE
+    )
     assert project_service.get_project(project_id) is not None
     assert privacy_gate_service.is_privacy_notice_accepted() is True
+
+
+def test_replacement_generation_failure_when_restoration_fails_must_fail_closed(
+    temp_db,
+    monkeypatch,
+):
+    """An unverifiable runtime restoration remains durably fail-closed."""
+
+    privacy_gate_service.accept_privacy_notice()
+    project_service.create_project("Must Survive")
+
+    from tests.support.application import TestRuntimeMaintenanceControl
+
+    class _OperationalHoldState:
+        value = "operational"
+
+    class _OperationalCollectorControl:
+        hold_state = _OperationalHoldState()
+
+        def query_command(self, command_id: str):
+            return None
+
+    class _RestorationFailingControl(TestRuntimeMaintenanceControl):
+        def __init__(self) -> None:
+            super().__init__()
+            self.collector_control = _OperationalCollectorControl()
+
+        @staticmethod
+        def _ack(command_kind: str, terminal_state: str) -> dict[str, object]:
+            return {
+                "ok": True,
+                "command_id": f"test-{command_kind}",
+                "command_kind": command_kind,
+                "command_state": "completed",
+                "command_state_unknown": False,
+                "terminal_state": terminal_state,
+            }
+
+        def is_collection_running_for_maintenance(self) -> bool:
+            return True
+
+        def quiesce_collection_for_maintenance(self, timeout_seconds=5.0):
+            return self._ack("maintenance_hold", "held")
+
+        def restore_after_maintenance(self, state, timeout_seconds=5.0):
+            raise RuntimeError("restoration failed")
+
+    failing_control = _RestorationFailingControl()
+    database_maintenance_service.MAINTENANCE_COORDINATOR.register_runtime_control(
+        failing_control
+    )
+
+    original_bump_replacement = DataGenerationRepository.bump_replacement
+
+    def fail_after_generation_write(conn, *, minimum_value=None):
+        original_bump_replacement(conn, minimum_value=minimum_value)
+        raise RuntimeError("generation_publish_failed")
+
+    monkeypatch.setattr(
+        DataGenerationRepository,
+        "bump_replacement",
+        staticmethod(fail_after_generation_write),
+    )
+
+    try:
+        with pytest.raises(RuntimeError, match="generation_publish_failed"):
+            database_maintenance_service.clear_all_live_data()
+
+        assert (
+            database_maintenance_service.MAINTENANCE_COORDINATOR.recovery_blocked()
+            is True
+        )
+        assert (
+            database_maintenance_service.MAINTENANCE_COORDINATOR.phase
+            is database_maintenance_service.MaintenancePhase.FAILED_CLOSED
+        )
+    finally:
+        database_maintenance_service.MAINTENANCE_COORDINATOR.clear_runtime_control(
+            failing_control
+        )
+        database_maintenance_service.MAINTENANCE_COORDINATOR._set_phase(
+            database_maintenance_service.MaintenancePhase.IDLE
+        )

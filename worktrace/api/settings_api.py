@@ -6,7 +6,11 @@ import os
 from typing import Any
 
 from ..constants import PRIVACY_NOTICE_TEXT
-from ..services import export_service, privacy_gate_service
+from ..services import (
+    database_maintenance_service,
+    export_service,
+    privacy_gate_service,
+)
 from ..services.secure_backup_service import (
     BackupCorruptedError,
     BackupDecryptionError,
@@ -20,9 +24,8 @@ from ..services.settings_service import (
     get_setting,
     set_setting,
 )
-from . import backup_api, view_model_api
-
-set_setting_value: object = object()
+from ..write_gate import DATABASE_RECOVERY_ERROR
+from . import backup_api
 
 
 def first_run_notice_accepted() -> bool:
@@ -89,9 +92,14 @@ def clear_all_local_data(confirm: bool) -> None:
     export_service.clear_all_local_data(confirm=confirm)
 
 
+def _maintenance_status() -> dict[str, object]:
+    return database_maintenance_service.maintenance_status().to_dict()
+
+
 def get_settings_privacy_status() -> dict[str, Any]:
     try:
         notice_accepted = first_run_notice_accepted()
+        maintenance = _maintenance_status()
         return {
             "ok": True,
             "status": {
@@ -99,9 +107,7 @@ def get_settings_privacy_status() -> dict[str, Any]:
                 "storage_model": "local_only",
                 "clipboard_capture_enabled": is_clipboard_capture_enabled(),
                 "export_path_configured": bool(get_export_path()),
-                "maintenance_in_progress": bool(
-                    backup_api.is_maintenance_in_progress()
-                ),
+                **maintenance,
                 "encrypted_backup": {
                     "supported": True,
                     "export_available_in_webview": True,
@@ -120,6 +126,44 @@ def get_settings_privacy_status() -> dict[str, Any]:
         }
     except Exception:
         return {"ok": False, "error": "加载设置状态失败"}
+
+
+def recover_database_maintenance_for_webview() -> dict[str, Any]:
+    """Run the sole explicit fail-closed recovery protocol for the UI."""
+
+    before = _maintenance_status()
+    if not bool(before.get("recovery_blocked")):
+        return {
+            "ok": True,
+            "message": "当前无需维护恢复",
+            "maintenance": before,
+        }
+    try:
+        database_maintenance_service.recover_fail_closed()
+    except database_maintenance_service.MaintenanceRecoveryError as exc:
+        return {
+            "ok": False,
+            "error": str(exc) or DATABASE_RECOVERY_ERROR,
+            "maintenance": _maintenance_status(),
+        }
+    except Exception:
+        return {
+            "ok": False,
+            "error": DATABASE_RECOVERY_ERROR,
+            "maintenance": _maintenance_status(),
+        }
+    status = _maintenance_status()
+    if not bool(status.get("maintenance_restored")):
+        return {
+            "ok": False,
+            "error": DATABASE_RECOVERY_ERROR,
+            "maintenance": status,
+        }
+    return {
+        "ok": True,
+        "message": "维护恢复已确认",
+        "maintenance": status,
+    }
 
 
 def export_encrypted_backup_for_webview(
@@ -144,6 +188,7 @@ def export_encrypted_backup_for_webview(
         "ok": True,
         "filename": os.path.basename(normalized_path),
         "message": "加密备份已导出",
+        "maintenance": _maintenance_status(),
     }
 
 
@@ -174,6 +219,18 @@ def preview_encrypted_backup_manifest_for_webview(
     }
 
 
+def _maintenance_result_message(status: dict[str, object]) -> str:
+    if not bool(status.get("maintenance_restored")):
+        return "操作已完成，但维护恢复失败，当前保持阻断"
+    if bool(status.get("user_paused")):
+        return "操作已完成；因用户此前已暂停，当前保持暂停"
+    if bool(status.get("collector_running")):
+        return "操作已完成，记录状态已恢复"
+    if str(status.get("collector_status") or "") == "stopped":
+        return "操作已完成；当前未运行记录功能"
+    return "操作已完成，运行状态已按维护前状态恢复"
+
+
 def import_encrypted_backup_for_webview(
     input_path: str,
     passphrase: str,
@@ -196,7 +253,7 @@ def import_encrypted_backup_for_webview(
             mode="replace",
         )
     except BackupImportInProgressError:
-        return {"ok": False, "error": "已有加密备份导入正在进行"}
+        return {"ok": False, "error": "已有数据库维护操作正在进行"}
     except (BackupDecryptionError, BackupCorruptedError):
         return {"ok": False, "error": "备份口令错误或文件已损坏"}
     except BackupVersionNotSupportedError:
@@ -206,12 +263,14 @@ def import_encrypted_backup_for_webview(
     except Exception:
         return {"ok": False, "error": "导入加密备份失败"}
     imported_tables = result.imported_tables or {}
+    status = dict(result.maintenance_status or _maintenance_status())
     return {
         "ok": True,
-        "message": "加密备份已导入，WorkTrace 已暂停，请检查数据后手动恢复记录",
+        "message": _maintenance_result_message(status),
         "imported_table_count": len(imported_tables),
         "imported_row_count": sum(imported_tables.values()),
         "folder_index_reset": bool(result.folder_index_reset),
+        "maintenance": status,
     }
 
 
@@ -222,7 +281,12 @@ def clear_all_local_data_for_webview(confirm_text: str) -> dict[str, Any]:
         export_service.clear_all_local_data(confirm=True)
     except Exception:
         return {"ok": False, "error": "清空本地数据失败"}
-    result: dict[str, Any] = {"ok": True, "message": "本地数据已清空"}
+    status = _maintenance_status()
+    result: dict[str, Any] = {
+        "ok": True,
+        "message": _maintenance_result_message(status),
+        "maintenance": status,
+    }
     status_result = get_settings_privacy_status()
     if status_result.get("ok"):
         result["status"] = status_result["status"]
@@ -300,6 +364,7 @@ __all__ = [
     "is_paused",
     "is_user_paused",
     "preview_encrypted_backup_manifest_for_webview",
+    "recover_database_maintenance_for_webview",
     "set_clipboard_capture_enabled",
     "set_clipboard_capture_enabled_for_webview",
     "set_collector_status",

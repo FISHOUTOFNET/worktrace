@@ -67,6 +67,20 @@ def require_excluded_project_id(conn=None) -> int:
         return require_system_project_id(read_conn, "excluded")
 
 
+def _effects_for_system_project(
+    kind: str,
+) -> tuple[DataGenerationNamespace, ...]:
+    """Return the generation namespaces affected by mutating one project."""
+
+    base = (
+        DataGenerationNamespace.CLASSIFICATION_CATALOG,
+        DataGenerationNamespace.REPORT_STRUCTURE,
+    )
+    if kind == "excluded":
+        return (*base, DataGenerationNamespace.PRIVACY_CATALOG)
+    return base
+
+
 def ensure_system_projects() -> dict[str, int]:
     """Repair mandatory system projects from an explicit command boundary."""
 
@@ -79,8 +93,8 @@ def ensure_system_projects() -> dict[str, int]:
         )
     ) as uow:
         conn = uow.connection
-        changed = False
-        for definition in _SYSTEM_PROJECTS.values():
+        changed_namespaces: set[DataGenerationNamespace] = set()
+        for kind, definition in _SYSTEM_PROJECTS.items():
             existing = conn.execute(
                 "SELECT id, created_by FROM project WHERE name = ?",
                 (definition["name"],),
@@ -91,7 +105,9 @@ def ensure_system_projects() -> dict[str, int]:
                         "UPDATE project SET created_by = 'system', updated_at = ? WHERE id = ?",
                         (timestamp, int(existing["id"])),
                     )
-                    changed = True
+                    changed_namespaces.update(
+                        _effects_for_system_project(kind)
+                    )
                 continue
             conn.execute(
                 """
@@ -108,9 +124,9 @@ def ensure_system_projects() -> dict[str, int]:
                     timestamp,
                 ),
             )
-            changed = True
-        if changed:
-            uow.mark_changed()
+            changed_namespaces.update(_effects_for_system_project(kind))
+        if changed_namespaces:
+            uow.mark_changed(*changed_namespaces)
         return {
             kind: require_system_project_id(conn, kind)
             for kind in _SYSTEM_PROJECTS

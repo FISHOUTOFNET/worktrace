@@ -15,6 +15,7 @@ from . import (
     project_lifecycle_policy,
     report_operation_repository,
 )
+from . import report_session_operation_engine as engine
 from .report_fact_query_service import get_uncategorized_project_id
 from .report_projection_identity import member_identity_key, stable_json_hash
 from .report_projection_model import (
@@ -31,7 +32,7 @@ from .report_projection_model import (
     TargetRevisionConflictError,
     project_state_from_row,
 )
-from . import report_session_operation_engine as engine
+from .report_replay_binding import ReplayBinding
 from .report_session_operation_engine import APPLIED, OPERATION_PAYLOAD_VERSION
 
 
@@ -379,7 +380,9 @@ def _run_uow(
                 None,
             )
             if applied is None or applied.state != APPLIED:
-                reason = applied.reason if applied is not None else "missing_diagnostic"
+                reason = (
+                    applied.reason if applied is not None else "missing_diagnostic"
+                )
                 raise OperationNoEffectError(reason)
             result = MutationResult(
                 request_id=request_id,
@@ -395,6 +398,7 @@ def _run_uow(
                 snapshot_revision=after.snapshot_revision,
             )
             _insert_receipt(conn, request_id, input_signature, result)
+            uow.mark_changed(DataGenerationNamespace.REPORT_STRUCTURE)
             return result
     except sqlite3.OperationalError as exc:
         if "locked" in str(exc).lower() or "busy" in str(exc).lower():
@@ -410,7 +414,8 @@ def _operation_input(
     values: dict[str, Any],
 ) -> tuple[dict[str, Any], dict[str, list[dict]], int | None]:
     payload: dict[str, Any] = {
-        "payload_version": OPERATION_PAYLOAD_VERSION
+        "payload_version": OPERATION_PAYLOAD_VERSION,
+        "replay_binding": ReplayBinding.MEMBERS.value,
     }
     roles = {"source": _members(source)}
     undo_of: int | None = None
@@ -525,9 +530,7 @@ def _candidate_operation(**values: Any) -> dict[str, Any]:
         "sequence": int(values["sequence"]),
         "operation_type": str(values["operation_type"]),
         "source_instance_key": str(values["source_instance_key"]),
-        "source_expected_revision": str(
-            values["source_expected_revision"]
-        ),
+        "source_expected_revision": str(values["source_expected_revision"]),
         "target_instance_key": values.get("target_instance_key"),
         "target_expected_revision": values.get("target_expected_revision"),
         "direction": values.get("direction"),
@@ -563,7 +566,7 @@ def _insert_operation(conn, operation: Mapping[str, Any]) -> None:
             operation.get("direction"),
             operation.get("undo_of_operation_id"),
             json.dumps(
-                operation["payload"],
+                dict(operation["payload"]),
                 ensure_ascii=False,
                 sort_keys=True,
             ),
@@ -817,6 +820,7 @@ def _expected_effect(
     after_entries: Sequence[Mapping[str, Any]],
     source: Mapping[str, Any],
 ) -> bool:
+    del before_entries
     key = str(source.get("projection_instance_key") or "")
     if operation_type == "copy_session":
         return _find_entry(after_entries, f"copy:{operation_id}") is not None

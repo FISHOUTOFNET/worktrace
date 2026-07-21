@@ -177,7 +177,10 @@ def test_delete_folder_rule_isolated_from_keyword_rules_and_history(temp_db):
         "operation": table_count("report_session_operation"),
     }
 
-    result = rule_api.delete_project_folder_rule(folder["rule"]["id"])
+    result = rule_api.delete_project_folder_rule(
+        folder["rule"]["id"],
+        apply_to_history=False,
+    )
 
     assert result["ok"] is True
     assert _folder_rule(folder["rule"]["id"]) is None
@@ -195,13 +198,19 @@ def test_delete_rejects_keyword_id_and_invalid_id(temp_db):
     project_id = project_service.create_project("Client")
     keyword_id = rule_catalog_command_service.create_keyword_rule("Spec", project_id)
 
-    assert rule_api.delete_project_folder_rule(keyword_id) == {
+    assert rule_api.delete_project_folder_rule(
+        keyword_id,
+        apply_to_history=False,
+    ) == {
         "ok": False,
         "error": "not_found",
     }
     assert _keyword_exists(keyword_id)
     for bad_id in (True, "1", 0, -1, 1.5, None, [], {}):
-        assert rule_api.delete_project_folder_rule(bad_id) == {
+        assert rule_api.delete_project_folder_rule(
+            bad_id,
+            apply_to_history=False,
+        ) == {
             "ok": False,
             "error": "invalid_input",
         }
@@ -221,7 +230,10 @@ def test_ordinary_crud_does_not_submit_history_job(temp_db, monkeypatch):
         r"D:\New",
         False,
     )["ok"] is True
-    assert rule_api.delete_project_folder_rule(created["rule"]["id"])["ok"] is True
+    assert rule_api.delete_project_folder_rule(
+        created["rule"]["id"],
+        apply_to_history=False,
+    )["ok"] is True
 
 
 def test_explicit_history_delete_returns_job_metadata(temp_db):
@@ -246,7 +258,10 @@ def test_service_exceptions_are_privacy_safe(temp_db, monkeypatch):
         raise RuntimeError("DELETE SELECT traceback C:\\Secret")
 
     monkeypatch.setattr(rule_history_application_service, "delete_rule", boom)
-    result = rule_api.delete_project_folder_rule(created["rule"]["id"])
+    result = rule_api.delete_project_folder_rule(
+        created["rule"]["id"],
+        apply_to_history=False,
+    )
 
     assert result == {"ok": False, "error": "operation_failed"}
     serialized = json.dumps(result).casefold()

@@ -1,13 +1,22 @@
-"""Process-wide write draining, exclusion, and generation tracking."""
+"""Process-wide write draining, exclusion, recovery blocking, and generations."""
 
 from __future__ import annotations
 
 from contextlib import contextmanager
-from dataclasses import dataclass
 from enum import Enum
+import re
 import sqlite3
 import threading
 from typing import Iterator
+
+DATABASE_MAINTENANCE_ERROR = "database_maintenance_in_progress"
+DATABASE_RECOVERY_ERROR = "database_maintenance_recovery_required"
+_RECOVERY_WRITE_STATEMENT_PATTERN = re.compile(
+    r"^(?:INSERT(?:\s+OR\s+\w+)?\s+INTO|REPLACE\s+INTO|UPDATE|DELETE\s+FROM)"
+    r"\s+([A-Za-z_][A-Za-z0-9_]*)\b",
+    re.IGNORECASE | re.DOTALL,
+)
+_RECOVERY_WRITE_TABLES = frozenset({"settings", "data_generation_state"})
 
 
 class WriteGatePhase(str, Enum):
@@ -16,35 +25,94 @@ class WriteGatePhase(str, Enum):
     EXCLUSIVE = "exclusive"
 
 
-@dataclass(frozen=True)
 class WriteDrainLease:
-    """Short-lived capability for promoting one drained window to exclusivity."""
+    """Capability owned by the thread holding one physical maintenance window."""
 
-    _gate: "ProcessDatabaseWriteGate"
-    _owner_thread_id: int
+    def __init__(self, gate: "ProcessDatabaseWriteGate", owner_thread_id: int) -> None:
+        self._gate = gate
+        self._owner_thread_id = int(owner_thread_id)
+        self._recovery_handoff_completed = False
 
     def promote(self) -> None:
         self._gate.promote_to_exclusive(self._owner_thread_id)
 
+    def handoff_to_recovery_block(self, reason: str) -> None:
+        """Atomically convert this exclusive lease into a fail-closed block."""
+
+        if self._recovery_handoff_completed:
+            raise sqlite3.OperationalError("write_gate_recovery_handoff_already_completed")
+        self._gate._handoff_exclusive_to_recovery_block(  # noqa: SLF001
+            self._owner_thread_id,
+            reason,
+        )
+        self._recovery_handoff_completed = True
+
 
 class ProcessDatabaseWriteGate:
-    """Reject new writes while SQLite drains, then grant one exclusive owner.
-
-    The gate never grants durable write authority to a worker identity. The
-    maintenance coordinator must quiesce the Collector while the gate is OPEN;
-    only then may the coordinator enter DRAINING and eventually EXCLUSIVE.
-    """
+    """Reject ordinary writes during a physical operation or recovery block."""
 
     def __init__(self) -> None:
         self._lock = threading.RLock()
         self._phase = WriteGatePhase.OPEN
         self._owner_thread_id: int | None = None
         self._generation = 0
+        self._recovery_block_reason: str | None = None
         self._thread_state = threading.local()
 
-    def active(self) -> bool:
+    def operation_active(self) -> bool:
+        """Return whether a drain/exclusive operation is currently executing."""
+
         with self._lock:
             return self._phase is not WriteGatePhase.OPEN
+
+    def recovery_blocked(self) -> bool:
+        """Return whether runtime recovery still requires explicit confirmation."""
+
+        with self._lock:
+            return self._recovery_block_reason is not None
+
+    def writes_blocked(self) -> bool:
+        """Return whether ordinary writes are currently rejected."""
+
+        with self._lock:
+            return (
+                self._phase is not WriteGatePhase.OPEN
+                or self._recovery_block_reason is not None
+            )
+
+    def recovery_block_reason(self) -> str | None:
+        with self._lock:
+            return self._recovery_block_reason
+
+    def _set_recovery_block(self, reason: str) -> None:
+        normalized = str(reason or "").strip()
+        if not normalized:
+            raise ValueError("maintenance_recovery_reason_required")
+        with self._lock:
+            self._recovery_block_reason = normalized
+
+    def _clear_recovery_block(self) -> None:
+        with self._lock:
+            self._recovery_block_reason = None
+
+    def _handoff_exclusive_to_recovery_block(
+        self,
+        owner_thread_id: int,
+        reason: str,
+    ) -> None:
+        normalized = str(reason or "").strip()
+        if not normalized:
+            raise ValueError("maintenance_recovery_reason_required")
+        owner = int(owner_thread_id)
+        with self._lock:
+            if (
+                self._phase is not WriteGatePhase.EXCLUSIVE
+                or self._owner_thread_id != owner
+            ):
+                raise sqlite3.OperationalError("write_gate_not_exclusive_owner")
+            if self._recovery_block_reason is not None:
+                raise sqlite3.OperationalError("write_gate_recovery_handoff_already_completed")
+            self._recovery_block_reason = normalized
 
     def phase(self) -> WriteGatePhase:
         with self._lock:
@@ -58,20 +126,65 @@ class ProcessDatabaseWriteGate:
         with self._lock:
             self._thread_state.observed_generation = self._generation
 
-    def require_current_thread_allowed(self) -> None:
+    def _recovery_write_allowed(self) -> bool:
+        return int(getattr(self._thread_state, "recovery_write_depth", 0)) > 0
+
+    @staticmethod
+    def _is_recovery_latch_sql(sql: str) -> bool:
+        statements = [
+            " ".join(statement.strip().split())
+            for statement in str(sql or "").split(";")
+            if statement.strip()
+        ]
+        if len(statements) != 1:
+            return False
+        normalized = statements[0]
+        upper = normalized.upper()
+        if upper in {"BEGIN IMMEDIATE", "BEGIN EXCLUSIVE"}:
+            return True
+        match = _RECOVERY_WRITE_STATEMENT_PATTERN.match(normalized)
+        return bool(match) and match.group(1).casefold() in _RECOVERY_WRITE_TABLES
+
+    @contextmanager
+    def _maintenance_recovery_write_scope(self) -> Iterator[None]:
+        """Permit the maintenance owner to update only the durable recovery latch."""
+
+        depth = int(getattr(self._thread_state, "recovery_write_depth", 0))
+        self._thread_state.recovery_write_depth = depth + 1
+        try:
+            yield
+        finally:
+            self._thread_state.recovery_write_depth = depth
+
+    def require_current_thread_allowed(self, sql: str = "") -> None:
         """Validate one write at statement admission time."""
 
         thread_id = threading.get_ident()
         with self._lock:
+            recovery_write = self._recovery_write_allowed()
+            if recovery_write:
+                if not self._is_recovery_latch_sql(sql):
+                    raise sqlite3.OperationalError(DATABASE_RECOVERY_ERROR)
+                if (
+                    self._phase is not WriteGatePhase.OPEN
+                    and thread_id != self._owner_thread_id
+                ):
+                    raise sqlite3.OperationalError(DATABASE_MAINTENANCE_ERROR)
+                self._thread_state.observed_generation = self._generation
+                return
+
+            if self._recovery_block_reason is not None:
+                raise sqlite3.OperationalError(DATABASE_RECOVERY_ERROR)
+
             if self._phase is WriteGatePhase.EXCLUSIVE:
                 if thread_id != self._owner_thread_id:
-                    raise sqlite3.OperationalError("secure_import_in_progress")
+                    raise sqlite3.OperationalError(DATABASE_MAINTENANCE_ERROR)
                 self._thread_state.observed_generation = self._generation
                 return
 
             if self._phase is WriteGatePhase.DRAINING:
                 if thread_id != self._owner_thread_id:
-                    raise sqlite3.OperationalError("secure_import_in_progress")
+                    raise sqlite3.OperationalError(DATABASE_MAINTENANCE_ERROR)
                 self._thread_state.observed_generation = self._generation
                 return
 
@@ -98,8 +211,10 @@ class ProcessDatabaseWriteGate:
     def draining(self) -> Iterator[WriteDrainLease]:
         owner = threading.get_ident()
         with self._lock:
+            if self._recovery_block_reason is not None:
+                raise sqlite3.OperationalError(DATABASE_RECOVERY_ERROR)
             if self._phase is not WriteGatePhase.OPEN:
-                raise sqlite3.OperationalError("secure_import_in_progress")
+                raise sqlite3.OperationalError(DATABASE_MAINTENANCE_ERROR)
             self._phase = WriteGatePhase.DRAINING
             self._owner_thread_id = owner
             self._thread_state.observed_generation = self._generation
@@ -118,6 +233,8 @@ DATABASE_WRITE_GATE = ProcessDatabaseWriteGate()
 
 
 __all__ = [
+    "DATABASE_MAINTENANCE_ERROR",
+    "DATABASE_RECOVERY_ERROR",
     "DATABASE_WRITE_GATE",
     "ProcessDatabaseWriteGate",
     "WriteDrainLease",

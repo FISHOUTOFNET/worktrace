@@ -51,14 +51,22 @@ def add_catalog_effects_for_project_ids(
     conn,
     project_ids: Iterable[int],
 ) -> None:
-    """Publish catalog effects from canonical identity, never display name."""
+    """Publish catalog effects from canonical identity, never display name.
+
+    Declares and marks the effects as changed because callers only invoke this
+    helper after a confirmed write to the rule catalog. The unit of work keeps
+    per-namespace tracking, so a no-op write path that never reaches this helper
+    will not publish unrelated generations.
+    """
 
     ids = tuple(dict.fromkeys(int(value) for value in project_ids))
     if not ids:
         return
     uow.add_effects(DataGenerationNamespace.CLASSIFICATION_CATALOG)
+    uow.mark_changed(DataGenerationNamespace.CLASSIFICATION_CATALOG)
     if require_excluded_project_id(conn) in ids:
         uow.add_effects(DataGenerationNamespace.PRIVACY_CATALOG)
+        uow.mark_changed(DataGenerationNamespace.PRIVACY_CATALOG)
 
 
 def add_catalog_effects_for_rule(

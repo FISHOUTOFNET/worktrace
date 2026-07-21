@@ -46,7 +46,7 @@ CREATE TABLE IF NOT EXISTS startup_recovery_job (
         last_error_code IS NULL OR last_error_code IN (
             'database_busy',
             'database_generation_changed',
-            'secure_import_in_progress',
+            'database_maintenance_in_progress',
             'unexpected_failure'
         )
     ),
@@ -67,7 +67,7 @@ CREATE TABLE IF NOT EXISTS activity_inference_job (
             'data_repair_required',
             'database_busy',
             'database_generation_changed',
-            'secure_import_in_progress',
+            'database_maintenance_in_progress',
             'unexpected_failure'
         )
     ),

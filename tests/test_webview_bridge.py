@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from tests.support import activity_factory as activity_service
+from tests.support.application import build_test_bridge
 from worktrace.services import project_service
 from worktrace.webview_ui.bridge import WebViewBridge
 
@@ -15,7 +16,7 @@ def test_timeline_bridge_returns_entries_and_snapshot_revision(temp_db):
     aid = activity_service.create_activity("App", "app.exe", "A", project_id=project, start_time=f"{day} 09:00:00")
     activity_service.finalize_created_activity(aid)
     activity_service.close_activity(aid, f"{day} 09:10:00")
-    result = WebViewBridge().get_timeline(day)
+    result = build_test_bridge().get_timeline(day)
     assert result["ok"] is True
     assert len(result["entries"]) == 1
     assert result["snapshot_revision"]
@@ -28,7 +29,7 @@ def test_projection_details_bridge_returns_actual_revision(temp_db):
     aid = activity_service.create_activity("App", "app.exe", "A", project_id=project, start_time=f"{day} 09:00:00")
     activity_service.finalize_created_activity(aid)
     activity_service.close_activity(aid, f"{day} 09:10:00")
-    bridge = WebViewBridge()
+    bridge = build_test_bridge()
     entry = bridge.get_timeline(day)["entries"][0]
     details = bridge.get_timeline_session_activity_summary(
         entry["projection_instance_key"], day, entry["projection_revision"]
@@ -37,7 +38,7 @@ def test_projection_details_bridge_returns_actual_revision(temp_db):
 
 
 def test_bridge_error_protocol_separates_code_and_message():
-    result = WebViewBridge().get_timeline_session_activity_summary("", "bad-date", "")
+    result = build_test_bridge().get_timeline_session_activity_summary("", "bad-date", "")
     assert result == {"ok": False, "error": "invalid_input", "message": "日期无效"}
 
 
