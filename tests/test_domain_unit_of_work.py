@@ -32,12 +32,12 @@ def test_deeply_nested_unit_of_work_commits_data_and_effect_once(temp_db):
             "VALUES (?, ?, ?)",
             ("2026-07-17 09:00:00", "test", "2026-07-17 09:00:00"),
         )
-        outer.mark_changed()
+        outer.mark_changed(DataGenerationNamespace.REPORT_STRUCTURE)
         with DomainUnitOfWork((DataGenerationNamespace.REPORT_STRUCTURE,)) as middle:
             assert middle.connection is outer.connection
             with DomainUnitOfWork((DataGenerationNamespace.REPORT_STRUCTURE,)) as inner:
                 assert inner.connection is outer.connection
-                inner.mark_changed()
+                inner.mark_changed(DataGenerationNamespace.REPORT_STRUCTURE)
 
     assert _generation(DataGenerationNamespace.REPORT_STRUCTURE) == before + 1
 
@@ -51,7 +51,7 @@ def test_nested_failure_marks_root_transaction_rollback_only(temp_db):
             "VALUES (?, ?, ?)",
             ("2026-07-17 10:00:00", "rollback", "2026-07-17 10:00:00"),
         )
-        outer.mark_changed()
+        outer.mark_changed(DataGenerationNamespace.REPORT_STRUCTURE)
         try:
             with DomainUnitOfWork() as inner:
                 assert inner.connection is outer.connection
@@ -82,7 +82,7 @@ def test_non_report_effect_is_published_explicitly(temp_db):
             """,
             ("ui_refresh_seconds", "77", "2026-07-17 10:30:00"),
         )
-        uow.mark_changed()
+        uow.mark_changed(DataGenerationNamespace.SETTINGS)
 
     assert _generation(DataGenerationNamespace.SETTINGS) == settings_before + 1
     assert _generation(DataGenerationNamespace.REPORT_STRUCTURE) == report_before
@@ -125,11 +125,6 @@ def test_no_op_close_does_not_publish_structure_generation(temp_db):
 
 
 def test_nested_no_op_inner_does_not_bump_unrelated_namespace(temp_db):
-    """Outer modifies REPORT_STRUCTURE; inner declares SETTINGS but is no-op.
-
-    Only REPORT_STRUCTURE should be bumped; SETTINGS must stay unchanged.
-    """
-
     report_before = _generation(DataGenerationNamespace.REPORT_STRUCTURE)
     settings_before = _generation(DataGenerationNamespace.SETTINGS)
 
@@ -142,18 +137,12 @@ def test_nested_no_op_inner_does_not_bump_unrelated_namespace(temp_db):
         outer.mark_changed(DataGenerationNamespace.REPORT_STRUCTURE)
         with DomainUnitOfWork((DataGenerationNamespace.SETTINGS,)) as inner:
             assert inner.connection is outer.connection
-            # inner declares SETTINGS but performs no writes and no mark_changed
 
     assert _generation(DataGenerationNamespace.REPORT_STRUCTURE) == report_before + 1
     assert _generation(DataGenerationNamespace.SETTINGS) == settings_before
 
 
 def test_nested_no_op_outer_does_not_bump_unrelated_namespace(temp_db):
-    """Outer declares REPORT_STRUCTURE but is no-op; inner modifies SETTINGS.
-
-    Only SETTINGS should be bumped; REPORT_STRUCTURE must stay unchanged.
-    """
-
     report_before = _generation(DataGenerationNamespace.REPORT_STRUCTURE)
     settings_before = _generation(DataGenerationNamespace.SETTINGS)
 
@@ -177,11 +166,6 @@ def test_nested_no_op_outer_does_not_bump_unrelated_namespace(temp_db):
 
 
 def test_nested_different_namespaces_each_bump_once(temp_db):
-    """Outer modifies REPORT_STRUCTURE; inner modifies SETTINGS.
-
-    Each namespace should bump exactly once.
-    """
-
     report_before = _generation(DataGenerationNamespace.REPORT_STRUCTURE)
     settings_before = _generation(DataGenerationNamespace.SETTINGS)
 
@@ -210,8 +194,6 @@ def test_nested_different_namespaces_each_bump_once(temp_db):
 
 
 def test_same_namespace_multi_layer_bumps_once(temp_db):
-    """Outer and inner both mark REPORT_STRUCTURE; it should bump only once."""
-
     before = _generation(DataGenerationNamespace.REPORT_STRUCTURE)
 
     with DomainUnitOfWork((DataGenerationNamespace.REPORT_STRUCTURE,)) as outer:
@@ -233,8 +215,6 @@ def test_same_namespace_multi_layer_bumps_once(temp_db):
 
 
 def test_inner_exception_rolls_back_all_generations(temp_db):
-    """Inner raises; root must roll back data and all generations."""
-
     report_before = _generation(DataGenerationNamespace.REPORT_STRUCTURE)
     settings_before = _generation(DataGenerationNamespace.SETTINGS)
 
@@ -271,8 +251,6 @@ def test_inner_exception_rolls_back_all_generations(temp_db):
 
 
 def test_declared_effect_without_mark_changed_publishes_nothing(temp_db):
-    """A scope that declares an effect but never marks it must not publish."""
-
     report_before = _generation(DataGenerationNamespace.REPORT_STRUCTURE)
     settings_before = _generation(DataGenerationNamespace.SETTINGS)
 
@@ -287,7 +265,52 @@ def test_declared_effect_without_mark_changed_publishes_nothing(temp_db):
             "VALUES (?, ?, ?)",
             ("2026-07-17 18:00:00", "declare-only", "2026-07-17 18:00:00"),
         )
-        # Deliberately do NOT call mark_changed for either namespace
 
     assert _generation(DataGenerationNamespace.REPORT_STRUCTURE) == report_before
     assert _generation(DataGenerationNamespace.SETTINGS) == settings_before
+
+
+def test_single_declared_effect_does_not_infer_change_from_sql(temp_db):
+    before = _generation(DataGenerationNamespace.REPORT_STRUCTURE)
+
+    with DomainUnitOfWork((DataGenerationNamespace.REPORT_STRUCTURE,)) as uow:
+        uow.connection.execute(
+            "INSERT INTO session_boundary(occurred_at, reason, created_at) "
+            "VALUES (?, ?, ?)",
+            ("2026-07-17 18:10:00", "explicit-only", "2026-07-17 18:10:00"),
+        )
+
+    assert _generation(DataGenerationNamespace.REPORT_STRUCTURE) == before
+
+
+def test_mark_changed_requires_explicit_namespace(temp_db):
+    with DomainUnitOfWork((DataGenerationNamespace.REPORT_STRUCTURE,)) as uow:
+        with pytest.raises(RuntimeError, match="generation_effect_required"):
+            uow.mark_changed()
+
+
+def test_undeclared_generation_effect_is_rejected(temp_db):
+    before = _generation(DataGenerationNamespace.SETTINGS)
+
+    with DomainUnitOfWork((DataGenerationNamespace.REPORT_STRUCTURE,)) as uow:
+        with pytest.raises(RuntimeError, match="undeclared_generation_effect"):
+            uow.mark_changed(DataGenerationNamespace.SETTINGS)
+
+    assert _generation(DataGenerationNamespace.SETTINGS) == before
+
+
+def test_dynamic_effect_must_be_declared_before_marking(temp_db):
+    before = _generation(DataGenerationNamespace.SETTINGS)
+
+    with DomainUnitOfWork() as uow:
+        uow.add_effects(DataGenerationNamespace.SETTINGS)
+        uow.connection.execute(
+            """
+            INSERT INTO settings(key, value, updated_at)
+            VALUES (?, ?, ?)
+            """,
+            ("dynamic_effect", "1", "2026-07-17 18:20:00"),
+        )
+        uow.mark_changed(DataGenerationNamespace.SETTINGS)
+
+    assert _generation(DataGenerationNamespace.SETTINGS) == before + 1
