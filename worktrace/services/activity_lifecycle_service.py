@@ -51,7 +51,7 @@ def start_activity(*, start_time: str, source: str, payload: dict[str, Any]) -> 
             prepared,
         )
         _enqueue_closed_inference_jobs(conn, closed_ids)
-        uow.mark_changed()
+        uow.mark_changed(DataGenerationNamespace.REPORT_STRUCTURE)
     _sync_open_row_project_safely(activity_id, status=prepared.status)
     return activity_id
 
@@ -72,7 +72,7 @@ def persist_open_activity(
             uow.connection,
             prepared,
         )
-        uow.mark_changed()
+        uow.mark_changed(DataGenerationNamespace.REPORT_STRUCTURE)
     _sync_open_row_project_safely(activity_id, status=prepared.status)
     return activity_id
 
@@ -93,15 +93,14 @@ def force_persist_open_activity_for_clipboard(
 
 
 def checkpoint_activity(activity_id: int, duration_seconds: int) -> bool:
+    # Checkpoint duration is live operational progress and deliberately does not
+    # invalidate report structure. It remains atomic without a generation effect.
     with DomainUnitOfWork() as uow:
-        changed = activity_fact_repository.checkpoint_activity_duration(
+        return activity_fact_repository.checkpoint_activity_duration(
             uow.connection,
             activity_id,
             duration_seconds,
         )
-        if changed:
-            uow.mark_changed()
-        return changed
 
 
 def close_activity(
@@ -120,7 +119,7 @@ def close_activity(
         )
         if changed:
             _enqueue_closed_inference_jobs(conn, [int(activity_id)])
-            uow.mark_changed()
+            uow.mark_changed(DataGenerationNamespace.REPORT_STRUCTURE)
 
 
 def close_all_open_activities(end_time: str | None = None) -> list[int]:
@@ -133,7 +132,7 @@ def close_all_open_activities(end_time: str | None = None) -> list[int]:
         )
         if closed_ids:
             _enqueue_closed_inference_jobs(conn, closed_ids)
-            uow.mark_changed()
+            uow.mark_changed(DataGenerationNamespace.REPORT_STRUCTURE)
     return closed_ids
 
 
@@ -163,7 +162,7 @@ def close_at_boundary(
                 closed_ids.append(activity_id)
         _enqueue_closed_inference_jobs(conn, closed_ids)
         session_boundary_service.insert_boundary(conn, requested_at, reason)
-        uow.mark_changed()
+        uow.mark_changed(DataGenerationNamespace.REPORT_STRUCTURE)
     return closed_ids
 
 
@@ -217,7 +216,7 @@ def pause_collection(
         ):
             changed = True
         if changed:
-            uow.mark_changed()
+            uow.mark_changed(DataGenerationNamespace.REPORT_STRUCTURE)
 
     from .runtime_activity_state_service import clear_runtime_activity_state
 
@@ -245,7 +244,7 @@ def persist_midnight_anchor(
             uow.connection,
             prepared,
         )
-        uow.mark_changed()
+        uow.mark_changed(DataGenerationNamespace.REPORT_STRUCTURE)
     return activity_id
 
 
@@ -264,7 +263,7 @@ def recover_activity_batch(
             boundaries,
         )
         for continuation in continuations or []:
-            inserted = startup_recovery_job_repository.enqueue_continuation(
+            startup_recovery_job_repository.enqueue_continuation(
                 conn,
                 source_activity_id=int(continuation["source_activity_id"]),
                 cursor_time=str(continuation["cursor_time"]),
@@ -277,10 +276,8 @@ def recover_activity_batch(
                 file_path_hint=continuation.get("file_path_hint"),
                 project_id=continuation.get("project_id"),
             )
-            if inserted:
-                changed = True
         if changed:
-            uow.mark_changed()
+            uow.mark_changed(DataGenerationNamespace.REPORT_STRUCTURE)
     return {"closed_ids": closed_ids, "created_ids": created_ids}
 
 
@@ -296,7 +293,7 @@ def recover_continuation_batch(
 
     with _report_uow() as uow:
         conn = uow.connection
-        closed_ids, created_ids, _changed = _apply_recovery_commands(
+        closed_ids, created_ids, changed = _apply_recovery_commands(
             conn,
             commands,
             boundaries,
@@ -307,7 +304,8 @@ def recover_continuation_batch(
             cursor_time=str(next_cursor),
             completed=bool(completed),
         )
-        uow.mark_changed()
+        if changed:
+            uow.mark_changed(DataGenerationNamespace.REPORT_STRUCTURE)
     return {"closed_ids": closed_ids, "created_ids": created_ids}
 
 
@@ -390,7 +388,7 @@ def mark_activity_error(activity_id: int) -> bool:
         )
         changed = cursor.rowcount == 1
         if changed:
-            uow.mark_changed()
+            uow.mark_changed(DataGenerationNamespace.REPORT_STRUCTURE)
         return changed
 
 
