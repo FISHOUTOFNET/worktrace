@@ -43,11 +43,61 @@ excluded from backup payloads and are rebuilt or recovered by their current
 runtime owners after replacement. See
 [`v0.2-local-security-design.md`](v0.2-local-security-design.md).
 
+### Staging resource contract
+
+The decrypted SQLite staging file is owned by one `ValidatedStaging` resource
+scope. The scope creates the file, closes the staging connection, validates the
+complete current schema/foreign-key/replay/semantic graph, hands the validated
+path to live apply, and deletes the file after success, maintenance rejection or
+any exception. The path is never delegated without its owner. Cleanup does not
+depend on object finalization or process exit and cleanup failure never replaces
+the original operation exception.
+
+Staging construction, schema/index execution, table insertion, defaults/index
+reset, validation and staging commit failures are `BackupCorruptedError` because
+they establish that the supplied current-format payload cannot form a valid
+staging database. They occur before maintenance and cannot alter the live DB,
+generation clock or recovery latch.
+
+After staging succeeds, live delete/insert, default seeding, folder-index reset,
+generation-floor read, replacement epoch bump, live final validation, SQLite I/O
+or commit failure is `BackupReplacementError`. The stable public error does not
+claim the backup is corrupt; the original exception is retained through chaining
+for internal diagnostics. Maintenance hold/reset/release failures remain their
+dedicated maintenance error types.
+
 A successful replacement publishes each committed durable generation and then
 loads the same values into the process generation clock. Pre-commit validation,
 generation-write or database-commit failure preserves the live database and its
 existing clock alignment. A process publication failure recovers by reloading the
 committed durable values; it does not invent a second replacement generation.
+
+## Explicit generation-effect contract
+
+`DomainUnitOfWork` owns ordinary domain transactions. A root transaction has two
+separate sets:
+
+- declared effects: namespaces the transaction is permitted to change; and
+- changed effects: namespaces explicitly marked after a real semantic change.
+
+`mark_changed(namespace)` is mandatory for publication. Calling it without a
+namespace or with an undeclared namespace is a stable contract error. SQL text,
+row count, `connection.total_changes`, commit hooks and declared-effect count are
+never used to infer semantics. Nested scopes reuse the root transaction, add
+declarations to the root and mark the root; nested failure makes the root
+rollback-only. A changed namespace is bumped once at most per root commit.
+
+No-op, rollback, mutation receipt only, retry cursor, worker progress,
+operational heartbeat and activity checkpoint writes do not publish a business
+generation. Assignment/resource/lifecycle/catalog owners mark their namespace
+only when their durable semantic value changes. An effective report operation
+writes operation members and receipt, verifies replay state `APPLIED` and expected
+effect, then marks `REPORT_STRUCTURE`. A no-effect or duplicate request may retain
+an idempotent receipt but does not publish.
+
+`DatabaseReplacementUnitOfWork` remains the separate and sole owner of the
+physical `DATABASE_REPLACEMENT` epoch, live commit and process-local replacement
+publication.
 
 ## Report operation payload v6
 
