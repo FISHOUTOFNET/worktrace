@@ -54,6 +54,8 @@ class DomainUnitOfWork:
         self._token: Token[DomainUnitOfWork | None] | None = None
         self._rollback_only = False
         self._phase = UnitOfWorkPhase.ACQUIRING
+        self._durable_committed = False
+        self._rolled_back = False
 
     def _owner(self) -> DomainUnitOfWork:
         return self._root or self
@@ -75,7 +77,11 @@ class DomainUnitOfWork:
 
     @property
     def durable_committed(self) -> bool:
-        return self.phase is UnitOfWorkPhase.DURABLE_COMMITTED
+        return self._owner()._durable_committed
+
+    @property
+    def rolled_back(self) -> bool:
+        return self._owner()._rolled_back
 
     def add_effects(self, *effects: DataGenerationNamespace | str) -> None:
         self._owner()._effects.update(_namespace(effect) for effect in effects)
@@ -148,6 +154,7 @@ class DomainUnitOfWork:
                     logging.warning(
                         "domain unit of work rollback failed phase=operation"
                     )
+                self._rolled_back = True
                 self._phase = UnitOfWorkPhase.ROLLED_BACK
                 return False
 
@@ -160,6 +167,7 @@ class DomainUnitOfWork:
                 DataGenerationRepository.bump(connection, self._changed_effects)
                 committed_effects = tuple(self._changed_effects)
             connection.commit()
+            self._durable_committed = True
             self._phase = UnitOfWorkPhase.DURABLE_COMMITTED
 
             if committed_effects:
@@ -180,13 +188,14 @@ class DomainUnitOfWork:
                         )
             return False
         except BaseException:
-            if self._phase is not UnitOfWorkPhase.DURABLE_COMMITTED:
+            if not self._durable_committed:
                 try:
                     connection.rollback()
                 except Exception:
                     logging.warning(
                         "domain unit of work rollback failed phase=commit"
                     )
+                self._rolled_back = True
                 self._phase = UnitOfWorkPhase.ROLLED_BACK
             raise
         finally:
@@ -199,6 +208,7 @@ class DomainUnitOfWork:
                     logging.warning(
                         "domain unit of work context reset failed phase=finalization"
                     )
+                    _CURRENT_UNIT_OF_WORK.set(None)
             try:
                 connection.close()
             except Exception:
@@ -206,11 +216,7 @@ class DomainUnitOfWork:
                     "domain unit of work connection close failed phase=finalization"
                 )
             self._connection = None
-            if self._phase not in {
-                UnitOfWorkPhase.DURABLE_COMMITTED,
-                UnitOfWorkPhase.ROLLED_BACK,
-            }:
-                self._phase = UnitOfWorkPhase.FINALIZED
+            self._phase = UnitOfWorkPhase.FINALIZED
 
 
 def current_domain_unit_of_work() -> DomainUnitOfWork | None:
