@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from worktrace.atomic_file import TemporaryFileCleanupError
 from worktrace.data_generation_repository import (
     DataGenerationNamespace,
     DataGenerationRepository,
@@ -29,6 +30,8 @@ from worktrace.services.secure_backup_service import (
     BackupCorruptedError,
     BackupImportInProgressError,
     BackupReplacementError,
+    BackupSensitiveCleanupError,
+    BackupStagingInfrastructureError,
 )
 from worktrace.services.secure_backup_validation import BackupValidationError
 from worktrace.services.settings_service import get_setting, set_setting
@@ -74,6 +77,14 @@ def _assert_sentinel_exists(name: str) -> None:
             "SELECT id FROM project WHERE name = ?",
             (name,),
         ).fetchone() is not None
+
+
+def _assert_sentinel_missing(name: str) -> None:
+    with get_connection() as conn:
+        assert conn.execute(
+            "SELECT id FROM project WHERE name = ?",
+            (name,),
+        ).fetchone() is None
 
 
 def _is_excluded(window: ActiveWindow) -> bool:
@@ -145,7 +156,7 @@ def test_import_staging_validation_failure_does_not_fail_closed(
     tmp_path,
     monkeypatch,
 ):
-    """Staging corruption is cleaned before maintenance and never fail-closes."""
+    """Semantic staging corruption is cleaned before maintenance."""
 
     output = _make_backup(tmp_path)
     _insert_sentinel("Import Failure Sentinel")
@@ -173,7 +184,7 @@ def test_import_staging_validation_failure_does_not_fail_closed(
     _assert_maintenance_unblocked()
 
 
-def test_import_staging_insert_failure_removes_staging_and_preserves_live_db(
+def test_import_staging_insert_failure_is_infrastructure_error(
     temp_db,
     tmp_path,
     monkeypatch,
@@ -187,7 +198,7 @@ def test_import_staging_insert_failure_removes_staging_and_preserves_live_db(
 
     monkeypatch.setattr(secure_backup_service, "_load_import_tables", fail_insert)
 
-    with pytest.raises(BackupCorruptedError):
+    with pytest.raises(BackupStagingInfrastructureError):
         secure_backup_service.import_encrypted_backup(
             output,
             "correct-passphrase",
@@ -200,7 +211,7 @@ def test_import_staging_insert_failure_removes_staging_and_preserves_live_db(
     _assert_maintenance_unblocked()
 
 
-def test_import_staging_commit_failure_removes_staging_and_preserves_live_db(
+def test_import_staging_commit_failure_is_infrastructure_error(
     temp_db,
     tmp_path,
     monkeypatch,
@@ -238,7 +249,7 @@ def test_import_staging_commit_failure_removes_staging_and_preserves_live_db(
         connect_with_staging_commit_failure,
     )
 
-    with pytest.raises(BackupCorruptedError):
+    with pytest.raises(BackupStagingInfrastructureError):
         secure_backup_service.import_encrypted_backup(
             output,
             "correct-passphrase",
@@ -311,28 +322,34 @@ def test_import_live_apply_failure_removes_staging_and_uses_replacement_error(
     _assert_maintenance_unblocked()
 
 
-def test_staging_cleanup_failure_does_not_replace_original_error(
+def test_staging_cleanup_failure_preserves_primary_error_and_durable_block(
     temp_db,
     tmp_path,
     monkeypatch,
 ):
     output = _make_backup(tmp_path)
     paths: list[str] = []
-    real_unlink = os.unlink
 
     def fail_build(staging_path: str, _data: dict):
         paths.append(staging_path)
         raise BackupCorruptedError("original_staging_error")
 
-    def fail_cleanup(_path: str):
-        raise PermissionError("cleanup denied")
+    def fail_sensitive_cleanup(_owner):
+        raise TemporaryFileCleanupError(
+            "decrypted_backup_staging",
+            sensitive=True,
+        )
 
     monkeypatch.setattr(
         secure_backup_service,
         "_build_and_validate_staging",
         fail_build,
     )
-    monkeypatch.setattr(secure_backup_service.os, "unlink", fail_cleanup)
+    monkeypatch.setattr(
+        secure_backup_service.OwnedTemporaryFile,
+        "cleanup",
+        fail_sensitive_cleanup,
+    )
 
     with pytest.raises(BackupCorruptedError, match="original_staging_error"):
         secure_backup_service.import_encrypted_backup(
@@ -341,11 +358,56 @@ def test_staging_cleanup_failure_does_not_replace_original_error(
             mode="replace",
         )
 
+    status = database_maintenance_service.maintenance_status()
+    assert status.recovery_blocked is True
+    latch = secure_backup_service.database_maintenance_service.current_maintenance_progress()
+    assert latch is None
     assert paths
     for path in paths:
-        if Path(path).exists():
-            real_unlink(path)
-    _assert_maintenance_unblocked()
+        Path(path).unlink(missing_ok=True)
+
+
+def test_post_commit_staging_cleanup_failure_reports_committed_and_blocks(
+    temp_db,
+    tmp_path,
+    monkeypatch,
+):
+    output = _make_backup(tmp_path)
+    _insert_sentinel("Removed By Committed Import")
+    replacement_before = generation(DataGenerationNamespace.DATABASE_REPLACEMENT)
+    paths = _record_staging_paths(monkeypatch)
+    original_cleanup = secure_backup_service.OwnedTemporaryFile.cleanup
+
+    def fail_sensitive_cleanup(owner):
+        if owner.resource == "decrypted_backup_staging":
+            raise TemporaryFileCleanupError(
+                "decrypted_backup_staging",
+                sensitive=True,
+            )
+        return original_cleanup(owner)
+
+    monkeypatch.setattr(
+        secure_backup_service.OwnedTemporaryFile,
+        "cleanup",
+        fail_sensitive_cleanup,
+    )
+
+    with pytest.raises(BackupSensitiveCleanupError):
+        secure_backup_service.import_encrypted_backup(
+            output,
+            "correct-passphrase",
+            mode="replace",
+        )
+
+    assert generation(DataGenerationNamespace.DATABASE_REPLACEMENT) == (
+        replacement_before + 1
+    )
+    _assert_sentinel_missing("Removed By Committed Import")
+    status = database_maintenance_service.maintenance_status()
+    assert status.recovery_blocked is True
+    assert status.maintenance_in_progress is False
+    for path in paths:
+        Path(path).unlink(missing_ok=True)
 
 
 def test_import_live_generation_failure_preserves_live_database_and_clock(
