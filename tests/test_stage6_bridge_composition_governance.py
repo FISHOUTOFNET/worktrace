@@ -165,6 +165,57 @@ def test_fake_capabilities_expose_explicit_signatures() -> None:
                 )
 
 
+def test_bridge_mixins_do_not_use_dynamic_capability_probes() -> None:
+    """Bridge mixins must not dynamically probe for capabilities at runtime.
+
+    Dynamic probes (``getattr(self._services, ...)`` or
+    ``hasattr(self._services, ...)``) would let a caller forget to wire a
+    capability and silently degrade the bridge surface. Every capability
+    must be a required field reached through direct attribute access.
+    """
+    forbidden_patterns = (
+        "getattr(self._services",
+        "hasattr(self._services",
+        "getattr(self.services",
+        "hasattr(self.services",
+    )
+    for filename in _BRIDGE_MIXIN_FILES:
+        source = _read_source(f"worktrace/webview_ui/{filename}")
+        for pattern in forbidden_patterns:
+            assert pattern not in source, (
+                f"{filename}: dynamic capability probe {pattern!r} is forbidden; "
+                "use a required field on ApplicationServices instead"
+            )
+
+
+def test_bridge_delete_and_archive_methods_have_no_default_parameters() -> None:
+    """Bridge delete/archive methods must require every argument explicitly.
+
+    Default parameters on delete/archive methods would allow callers to omit
+    critical arguments (e.g. ``apply_to_history``) and silently change
+    semantics. Every argument must be required.
+    """
+    for filename in _BRIDGE_MIXIN_FILES:
+        source = _read_source(f"worktrace/webview_ui/{filename}")
+        tree = ast.parse(source, filename=filename)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.FunctionDef):
+                continue
+            if not (node.name.startswith("delete_") or node.name.startswith("archive_")):
+                continue
+            args = node.args
+            defaults = list(args.defaults)
+            kw_defaults = list(args.kw_defaults)
+            assert not defaults, (
+                f"{filename}:{node.name}: positional defaults are forbidden "
+                f"on delete/archive methods (found {len(defaults)})"
+            )
+            assert not kw_defaults, (
+                f"{filename}:{node.name}: keyword-only defaults are forbidden "
+                f"on delete/archive methods (found {len(kw_defaults)})"
+            )
+
+
 def _walk_python_files(root: Path):
     for root_str, dirs, files in root.walk() if hasattr(root, "walk") else _legacy_walk(root):
         yield root_str, dirs, files

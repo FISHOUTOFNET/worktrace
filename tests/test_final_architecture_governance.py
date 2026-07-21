@@ -232,3 +232,31 @@ def test_production_has_no_runtime_service_locator():
     assert "def set_runtime(" not in production
     assert "_RUNTIME =" not in production
     assert "service_registry" not in production
+
+
+def test_rule_facade_does_not_directly_execute_sql():
+    """Rule facade modules must delegate persistence to services.
+
+    ``rule_api`` and ``bridge_rules`` are facade/bridge layers. They must
+    never directly execute SQL or build DML statements; all persistence is
+    owned by ``rule_catalog_command_service`` and the manifest-gated UoW.
+    """
+    import re
+
+    dml_pattern = re.compile(
+        r"\b(?:INSERT(?:\s+OR\s+\w+)?\s+INTO|REPLACE\s+INTO|UPDATE\s+\w+\s+SET|"
+        r"DELETE\s+FROM|SELECT\s+.+\s+FROM)\b",
+        re.IGNORECASE,
+    )
+    execute_pattern = re.compile(r"\.execute\s*\(")
+    for relative in (
+        "worktrace/api/rule_api.py",
+        "worktrace/webview_ui/bridge_rules.py",
+    ):
+        source = _source(relative)
+        assert not dml_pattern.search(source), (
+            f"{relative}: rule facade must not contain DML statements"
+        )
+        assert not execute_pattern.search(source), (
+            f"{relative}: rule facade must not call .execute() directly"
+        )

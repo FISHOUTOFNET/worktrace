@@ -7,20 +7,20 @@ there is no compatibility parser or migration layer.
 
 | Contract | Current version | Compatibility policy |
 | --- | ---: | --- |
-| SQLite schema | 12 | Empty database or exact v12 fingerprint only |
-| Encrypted backup payload | 6 | Exact v6 + schema v12 + exact fingerprint only |
+| SQLite schema | 13 | Empty database or exact v13 fingerprint only |
+| Encrypted backup payload | 6 | Exact v6 + schema v13 + exact fingerprint only |
 | Live display clock | 2 | Exact key set; LiveClock v1 aliases rejected |
 | Runtime envelope | 2 | Explicit schema version and one exact clock |
 
-## SQLite v12
+## SQLite v13
 
-`worktrace.db.CURRENT_SCHEMA_VERSION` is 12. `schema.sql`,
+`worktrace.db.CURRENT_SCHEMA_VERSION` is 13. `schema.sql`,
 `schema_internal.sql` and `schema_indexes.sql` are applied to an empty database
 and define the expected fingerprint. A non-empty database with a different user
 version or fingerprint raises `database_schema_incompatible`; no old-schema
 migration runs.
 
-Schema v12 includes the current normalized keyword-rule pattern and its
+Schema v13 includes the current normalized keyword-rule pattern and its
 concurrency-safe uniqueness constraint. Application services remain the semantic
 owners of project/rule invariants; database constraints close unavoidable
 concurrent-write races rather than duplicate service logic.
@@ -31,7 +31,7 @@ concurrent-write races rather than duplicate service logic.
 
 - `format == "worktrace-local-data"`;
 - `version == 6`;
-- `schema_version == "12"`;
+- `schema_version == "13"`;
 - exact current schema fingerprint;
 - exact current export-table set; and
 - list/object row shapes before staging and replacement.

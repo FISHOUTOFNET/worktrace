@@ -17,7 +17,7 @@ the contract.
 | Database replacement identity | database key plus durable `DATABASE_REPLACEMENT` generation |
 | Backup and clear table membership/order | `database_content_manifest.py` |
 | Projection admission | persisted admission revision |
-| Projection replay | payload v5 plus explicit `ReplayBinding.REVISION` or `ReplayBinding.MEMBERS` |
+| Projection replay | payload v6 plus `ReplayBinding.MEMBERS` only; legacy revision bindings rejected at read boundary |
 | Maintenance status | one seven-field backend DTO consumed unchanged by Bridge and JavaScript |
 | Production composition | `worktrace.webview_main` and strict `ApplicationServices` |
 | Test composition | explicit builders under `tests/support`; no optional production dependencies or global production-class replacement |
@@ -58,13 +58,14 @@ of a second epoch-based invalidation mechanism.
 
 ## Projection and transactions
 
-Current operations use payload v5 and an explicit replay binding. Missing,
+Current operations use payload v6 and members-only replay binding. Missing,
 invalid or non-current payload versions fail closed at the repository read
 boundary. Admission revision and durable replay identity are separate.
 `DomainUnitOfWork` owns business generation effects: rollback and no-op do not
 publish, nested scopes reuse the root transaction, and each namespace is bumped
-at most once per root commit. `WorkTraceConnection` retains only write-gate
-enforcement and read observation.
+at most once per root commit. `DatabaseReplacementUnitOfWork` owns the physical
+replacement epoch bump, live commit and process-local publication.
+`WorkTraceConnection` retains only write-gate enforcement and read observation.
 
 ## Manifest and current-only data contract
 
@@ -73,15 +74,13 @@ manifest is the sole source for schema membership, backup order, delete order,
 derived/internal classification and clear-time rebuild membership. Internal
 worker progress and derived indexes are not exported.
 
-## Validation checkpoints
+## Validation
 
-Only the permanent Standard CI workflow is used.
-
-1. Runtime/platform boundary: completed on the branch.
-2. Checkpoint 2 run `29718444163` proved Node validation and Windows package smoke; its Python job stopped at the inventory gate before collection. The stale current-only projection target and conservative DB-risk classification were corrected in one root-cause batch.
-3. Checkpoint 2 run `29718839199` again proved Node and Windows packaging but exposed that the fixed diagnostics relay did not surface inventory-log details through the GitHub API. The permanent relay now emits a bounded artifact-log tail for inventory and compile failures without changing validation scope or outcomes.
-4. The next Checkpoint 2 run validates the diagnostics protocol and exposes any remaining inventory root causes before Python collection/full-suite execution.
-5. Final semantic governance, documentation and packaging validation follows a successful Checkpoint 2 run.
+Only the permanent Standard CI workflow (`.github/workflows/ci.yml` and
+`_validation.yml`) is used. Business-test diagnostics are artifact-only: the
+frozen workflow uploads a structured `diagnostics.json` and JUnit XML on
+failure; job logs never contain failure lists, root-cause groups, tracebacks or
+raw test-log tails. The workflow is not modified for business-test failures.
 
 The branch remains unmerged and PR #25 remains Draft until explicit user
 confirmation.
