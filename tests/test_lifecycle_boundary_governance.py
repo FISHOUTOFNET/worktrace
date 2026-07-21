@@ -14,13 +14,18 @@ def _source(relative: str) -> str:
     return (_ROOT / relative).read_text(encoding="utf-8")
 
 
-def _function_source(relative: str, function_name: str) -> str:
+def _function_node(relative: str, function_name: str):
     source = _source(relative)
     tree = ast.parse(source)
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == function_name:
-            return ast.get_source_segment(source, node) or ""
+            return source, node
     raise AssertionError(f"function not found: {relative}:{function_name}")
+
+
+def _function_source(relative: str, function_name: str) -> str:
+    source, node = _function_node(relative, function_name)
+    return ast.get_source_segment(source, node) or ""
 
 
 def test_public_file_outputs_share_canonical_atomic_owner():
@@ -60,12 +65,20 @@ def test_fail_closed_recovery_clear_requires_exact_epoch():
 
 
 def test_folder_activation_is_committed_before_generation_gc():
-    source = _function_source(
+    _source_text, node = _function_node(
         "worktrace/services/folder_index_service.py",
         "rebuild_folder_index",
     )
-    assert source.index("_activate_generation") < source.index("_cleanup_old_generations")
-    assert "_fail_generation" not in source[source.index("_activate_generation") :]
+    calls: dict[str, list[int]] = {}
+    for child in ast.walk(node):
+        if not isinstance(child, ast.Call) or not isinstance(child.func, ast.Name):
+            continue
+        calls.setdefault(child.func.id, []).append(child.lineno)
+    activation = min(calls["_activate_generation"])
+    cleanup = min(calls["_cleanup_old_generations"])
+    build_failures = calls["_fail_generation"]
+    assert activation < cleanup
+    assert max(build_failures) < cleanup
 
 
 def test_setting_contract_exposes_semantic_and_operational_changes():
