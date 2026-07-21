@@ -56,6 +56,11 @@ def export_statistics_csv(
     except export_service.ExportFileError as exc:
         code = exc.code if exc.code in _EXPORT_FILE_ERROR_CODES else "operation_failed"
         raise StatisticsExportError(code) from exc
+    except OSError as exc:
+        code = export_service.classify_export_os_error(exc)
+        if code not in _EXPORT_FILE_ERROR_CODES:
+            code = "operation_failed"
+        raise StatisticsExportError(code) from exc
     except ValueError as exc:
         code = str(exc)
         if code in _EXPORT_VALUE_ERROR_CODES:
