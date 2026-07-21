@@ -100,7 +100,9 @@ def _seed_all_worker_progress() -> None:
         )
 
 
-def test_clear_all_advances_replacement_and_restored_settings_once(temp_db):
+def test_clear_all_advances_only_replacement_when_restored_settings_are_unchanged(
+    temp_db,
+):
     privacy_gate_service.accept_privacy_notice()
     project_service.create_project("Replacement Source")
     before = _generations()
@@ -111,14 +113,8 @@ def test_clear_all_advances_replacement_and_restored_settings_once(temp_db):
     assert after[DataGenerationNamespace.DATABASE_REPLACEMENT] == (
         before[DataGenerationNamespace.DATABASE_REPLACEMENT] + 1
     )
-    assert after[DataGenerationNamespace.SETTINGS] == (
-        before[DataGenerationNamespace.SETTINGS] + 1
-    )
     for namespace in DataGenerationNamespace:
-        if namespace in {
-            DataGenerationNamespace.DATABASE_REPLACEMENT,
-            DataGenerationNamespace.SETTINGS,
-        }:
+        if namespace is DataGenerationNamespace.DATABASE_REPLACEMENT:
             continue
         assert after[namespace] == before[namespace]
     assert privacy_gate_service.is_privacy_notice_accepted() is True
@@ -185,20 +181,10 @@ def test_clear_all_refreshes_generation_backed_settings_cache(temp_db):
     assert settings_service.get_setting("ui_refresh_seconds") == "10"
 
 
-def test_replacement_generation_failure_rolls_back_data_and_replacement_epoch(
+def test_replacement_generation_failure_rolls_back_without_synthetic_effects(
     temp_db,
     monkeypatch,
 ):
-    """Replacement generation failure rolls back data without fail-closing.
-
-    Per the architecture contract (Problem 1): when ``bump_replacement``
-    raises after the generation write but before commit, the
-    ``DatabaseReplacementUnitOfWork`` rolls back the live transaction. The
-    operation did not complete. Because the runtime restoration can be
-    verified (operational control, durable settings restored), the coordinator
-    MUST NOT enter durable fail-closed. Only when restoration cannot be
-    verified does fail-closed become mandatory.
-    """
     privacy_gate_service.accept_privacy_notice()
     project_id = project_service.create_project("Must Survive")
     before = _generations()
@@ -218,11 +204,7 @@ def test_replacement_generation_failure_rolls_back_data_and_replacement_epoch(
         database_maintenance_service.clear_all_live_data()
 
     after = _generations()
-    for namespace in DataGenerationNamespace:
-        if namespace is DataGenerationNamespace.SETTINGS:
-            assert after[namespace] == before[namespace] + 1
-        else:
-            assert after[namespace] == before[namespace]
+    assert after == before
     assert (
         database_maintenance_service.MAINTENANCE_COORDINATOR.recovery_blocked()
         is False
@@ -239,13 +221,8 @@ def test_replacement_generation_failure_when_restoration_fails_must_fail_closed(
     temp_db,
     monkeypatch,
 ):
-    """Replacement generation failure with unverifiable restoration MUST fail-close.
+    """An unverifiable runtime restoration remains durably fail-closed."""
 
-    Per the architecture contract (Problem 1): if ``bump_replacement`` raises
-    AND the collector restoration cannot be verified
-    (``restore_after_maintenance`` raises), the coordinator MUST enter durable
-    fail-closed because the runtime state is unverifiable.
-    """
     privacy_gate_service.accept_privacy_notice()
     project_service.create_project("Must Survive")
 
