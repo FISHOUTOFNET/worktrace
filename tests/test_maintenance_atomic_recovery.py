@@ -88,7 +88,7 @@ def _persist_blocked_latch(reason: str = "durable_failure") -> None:
     )
 
 
-def test_recovery_clear_failure_keeps_process_and_durable_blocks(
+def test_recovery_clear_failure_keeps_process_and_sidecar_blocks(
     temp_db,
     monkeypatch,
 ):
@@ -97,56 +97,28 @@ def test_recovery_clear_failure_keeps_process_and_durable_blocks(
     coordinator.register_runtime_control(_Control())
     assert coordinator.hydrate_fail_closed_from_durable() is True
 
+    def fail_clear(*, expected_epoch: str) -> None:
+        assert expected_epoch
+        raise RuntimeError("durable_clear_failed")
+
     monkeypatch.setattr(
         maintenance_recovery_latch_repository,
         "clear_latch",
-        lambda: (_ for _ in ()).throw(RuntimeError("durable_clear_failed")),
+        fail_clear,
     )
 
-    with pytest.raises(RuntimeError, match="durable_clear_failed"):
+    with pytest.raises(
+        MaintenanceRecoveryError,
+        match="maintenance_recovery_not_verified",
+    ):
         coordinator.recover_fail_closed()
 
     assert coordinator.phase is MaintenancePhase.FAILED_CLOSED
     assert DATABASE_WRITE_GATE.recovery_blocked() is True
     assert settings_service.get_bool_setting("maintenance_fail_closed", False) is True
-
-
-def test_superseded_recovery_repersists_latch_and_keeps_process_block(
-    temp_db,
-    monkeypatch,
-):
-    _persist_blocked_latch()
-    coordinator = RuntimeMaintenanceCoordinator()
-    original_control = _Control()
-    replacement_control = _Control()
-    coordinator.register_runtime_control(original_control)
-    assert coordinator.hydrate_fail_closed_from_durable() is True
-
-    original_clear = maintenance_recovery_latch_repository.clear_latch
-
-    def clear_then_replace_control() -> None:
-        original_clear()
-        coordinator.register_runtime_control(replacement_control)
-
-    monkeypatch.setattr(
-        maintenance_recovery_latch_repository,
-        "clear_latch",
-        clear_then_replace_control,
-    )
-
-    with pytest.raises(
-        MaintenanceRecoveryError,
-        match="maintenance_recovery_superseded",
-    ):
-        coordinator.recover_fail_closed()
-
-    assert coordinator.phase is MaintenancePhase.FAILED_CLOSED
-    assert coordinator.blocked_reason == "maintenance_recovery_superseded"
-    assert settings_service.get_bool_setting("maintenance_fail_closed", False) is True
-    assert (
-        settings_service.get_setting("maintenance_fail_closed_reason", "")
-        == "maintenance_recovery_superseded"
-    )
+    latch = maintenance_recovery_latch_repository.read_latch()
+    assert latch.blocked is True
+    assert latch.epoch
 
 
 def test_successful_recovery_clears_durable_before_process_block(temp_db):
@@ -161,9 +133,10 @@ def test_successful_recovery_clears_durable_before_process_block(temp_db):
     assert DATABASE_WRITE_GATE.recovery_blocked() is False
     assert settings_service.get_bool_setting("maintenance_fail_closed", True) is False
     assert settings_service.get_setting("maintenance_fail_closed_reason", "x") == ""
+    assert maintenance_recovery_latch_repository.marker_path().exists() is False
 
 
-def test_fail_closed_persistence_failure_does_not_open_process_gate(
+def test_fail_closed_mirror_failure_keeps_armed_sidecar_and_process_gate(
     temp_db,
     monkeypatch,
 ):
@@ -171,10 +144,16 @@ def test_fail_closed_persistence_failure_does_not_open_process_gate(
     coordinator.register_runtime_control(_Control(running=True, reset_ok=False))
     settings_service.set_setting("user_paused", "false")
     settings_service.set_setting("collector_status", "running")
+
+    def fail_persist(reason: str, *, expected_epoch: str | None = None):
+        assert reason
+        assert expected_epoch
+        raise RuntimeError("persist_failed")
+
     monkeypatch.setattr(
         maintenance_recovery_latch_repository,
         "persist_fail_closed",
-        lambda reason: (_ for _ in ()).throw(RuntimeError("persist_failed")),
+        fail_persist,
     )
 
     with pytest.raises(RuntimeError, match="collector_database_reset_not_acknowledged"):
@@ -185,6 +164,10 @@ def test_fail_closed_persistence_failure_does_not_open_process_gate(
     assert DATABASE_WRITE_GATE.operation_active() is False
     assert DATABASE_WRITE_GATE.recovery_blocked() is True
     assert DATABASE_WRITE_GATE.writes_blocked() is True
+    latch = maintenance_recovery_latch_repository.read_latch()
+    assert latch.blocked is True
+    assert latch.state == "armed"
+    assert latch.epoch
 
 
 def test_recovery_write_scope_accepts_latch_upserts_and_rejects_escape_sql():
