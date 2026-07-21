@@ -40,7 +40,7 @@ def seal_open_activity_for_maintenance(
             conn,
             [activity_id],
         )
-        uow.mark_changed()
+        uow.mark_changed(DataGenerationNamespace.REPORT_STRUCTURE)
     return [activity_id]
 
 
