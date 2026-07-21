@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
+import threading
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,6 +19,14 @@ _STATE_ARMED = "armed"
 _STATE_BLOCKED = "blocked"
 _VALID_STATES = frozenset({_STATE_ARMED, _STATE_BLOCKED})
 
+_SENSITIVE_STAGING_DIR_NAME = "sensitive-staging"
+_SENSITIVE_STAGING_PREFIX = "worktrace-import-"
+_SENSITIVE_STAGING_SUFFIX = ".sqlite"
+_SENSITIVE_STAGING_RESIDUE_REASON = "maintenance_sensitive_staging_cleanup_required"
+
+_ACTIVE_SENSITIVE_STAGING: set[Path] = set()
+_ACTIVE_SENSITIVE_STAGING_LOCK = threading.Lock()
+
 
 class MaintenanceRecoverySealError(RuntimeError):
     """The durable recovery seal could not be verified or transitioned."""
@@ -30,12 +40,80 @@ class MaintenanceRecoveryLatch:
     state: str | None = None
     marker_present: bool = False
     database_mirror_present: bool = False
+    sensitive_residue_present: bool = False
 
 
 def marker_path() -> Path:
     """Keep the recovery seal beside, but outside, the replaceable database."""
 
     return get_db_path().with_name(_MARKER_NAME)
+
+
+def sensitive_staging_directory() -> Path:
+    """Dedicated directory for decrypted backup staging beside the database."""
+
+    return get_db_path().with_name(_SENSITIVE_STAGING_DIR_NAME)
+
+
+def _sensitive_staging_residue_paths() -> list[Path]:
+    """Return staging files not currently owned by any active process."""
+
+    directory = sensitive_staging_directory()
+    if not directory.exists():
+        return []
+    with _ACTIVE_SENSITIVE_STAGING_LOCK:
+        active = {Path(path).resolve() for path in _ACTIVE_SENSITIVE_STAGING}
+    residue: list[Path] = []
+    for entry in directory.iterdir():
+        if not entry.is_file():
+            continue
+        if not entry.name.startswith(_SENSITIVE_STAGING_PREFIX):
+            continue
+        if not entry.name.endswith(_SENSITIVE_STAGING_SUFFIX):
+            continue
+        if entry.resolve() in active:
+            continue
+        residue.append(entry)
+    return residue
+
+
+def has_sensitive_staging_residue() -> bool:
+    """Return True if any unowned sensitive staging file remains on disk."""
+
+    return bool(_sensitive_staging_residue_paths())
+
+
+def register_active_sensitive_staging(path: Path) -> None:
+    """Track a staging file as actively owned by this process."""
+
+    with _ACTIVE_SENSITIVE_STAGING_LOCK:
+        _ACTIVE_SENSITIVE_STAGING.add(Path(path).resolve())
+
+
+def unregister_active_sensitive_staging(path: Path) -> None:
+    """Release a staging file so it can be detected as residue if it remains."""
+
+    with _ACTIVE_SENSITIVE_STAGING_LOCK:
+        _ACTIVE_SENSITIVE_STAGING.discard(Path(path).resolve())
+
+
+def clear_sensitive_staging_residue() -> bool:
+    """Delete all residue staging files. Return True if all were removed."""
+
+    residue = _sensitive_staging_residue_paths()
+    cleared = True
+    for entry in residue:
+        try:
+            entry.unlink()
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            logging.warning(
+                "sensitive staging residue cleanup failed exception=%s",
+                type(exc).__name__,
+            )
+            cleared = False
+    return cleared
 
 
 def _normalized_reason(reason: str) -> str:
@@ -134,12 +212,27 @@ def read_latch() -> MaintenanceRecoveryLatch:
             marker_present=True,
             database_mirror_present=database_blocked,
         )
+
+    sensitive_residue = has_sensitive_staging_residue()
+    if database_blocked or sensitive_residue:
+        reason = database_reason or (
+            _SENSITIVE_STAGING_RESIDUE_REASON if sensitive_residue else None
+        )
+        return MaintenanceRecoveryLatch(
+            blocked=True,
+            reason=reason,
+            state=_STATE_BLOCKED,
+            marker_present=False,
+            database_mirror_present=database_blocked,
+            sensitive_residue_present=sensitive_residue,
+        )
     return MaintenanceRecoveryLatch(
-        blocked=database_blocked,
-        reason=database_reason,
-        state=_STATE_BLOCKED if database_blocked else None,
+        blocked=False,
+        reason=None,
+        state=None,
         marker_present=False,
-        database_mirror_present=database_blocked,
+        database_mirror_present=False,
+        sensitive_residue_present=False,
     )
 
 
@@ -212,7 +305,22 @@ def persist_fail_closed(
 def seal_legacy_latch(reason: str) -> MaintenanceRecoveryLatch:
     """Give a database-only blocked state an epoch before explicit recovery."""
 
-    marker = _read_marker()
+    try:
+        marker = _read_marker()
+    except MaintenanceRecoverySealError:
+        # An invalid marker is durable proof of a blocked state but cannot be
+        # trusted for epoch verification. Explicit recovery may safely remove
+        # it and persist a fresh blocked epoch.
+        try:
+            marker_path().unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            raise MaintenanceRecoverySealError(
+                "maintenance_recovery_marker_cleanup_failed"
+            ) from exc
+        return persist_fail_closed(reason)
+
     if marker is not None:
         epoch, state, marker_reason = marker
         return MaintenanceRecoveryLatch(
@@ -265,6 +373,8 @@ def reset_for_tests() -> None:
         marker_path().unlink()
     except FileNotFoundError:
         pass
+    with _ACTIVE_SENSITIVE_STAGING_LOCK:
+        _ACTIVE_SENSITIVE_STAGING.clear()
 
 
 __all__ = [
@@ -272,9 +382,14 @@ __all__ = [
     "MaintenanceRecoverySealError",
     "arm_recovery",
     "clear_latch",
+    "clear_sensitive_staging_residue",
+    "has_sensitive_staging_residue",
     "marker_path",
     "persist_fail_closed",
     "read_latch",
+    "register_active_sensitive_staging",
     "reset_for_tests",
     "seal_legacy_latch",
+    "sensitive_staging_directory",
+    "unregister_active_sensitive_staging",
 ]

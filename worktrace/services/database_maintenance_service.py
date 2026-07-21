@@ -283,8 +283,16 @@ class RuntimeMaintenanceCoordinator:
                     expected_epoch=recovery_epoch,
                 )
         except Exception:
-            # The operation's armed sidecar remains authoritative even when the
-            # state transition or SQLite mirror cannot be written.
+            # The armed sidecar remains authoritative even if the SQLite mirror
+            # cannot be written. But without an armed epoch or sensitive staging
+            # residue there is no durable evidence — the exception must propagate.
+            if recovery_epoch is None:
+                evidence = maintenance_recovery_latch_repository.read_latch()
+                if (
+                    not evidence.marker_present
+                    and not evidence.sensitive_residue_present
+                ):
+                    raise
             logging.warning(
                 "maintenance fail-closed persistence failed phase=seal"
             )
@@ -335,6 +343,22 @@ class RuntimeMaintenanceCoordinator:
             reason = latch.reason or "maintenance_recovery_state_inconsistent"
             DATABASE_WRITE_GATE._set_recovery_block(reason)
             self._set_phase(MaintenancePhase.FAILED_CLOSED)
+
+            # Sensitive staging residue is durable recovery evidence on its
+            # own. Clear it first; if it cannot be removed the process remains
+            # fail-closed. Only after residue is gone do we process the
+            # sidecar/mirror.
+            if latch.sensitive_residue_present:
+                if not maintenance_recovery_latch_repository.clear_sensitive_staging_residue():
+                    raise MaintenanceRecoveryError(
+                        "maintenance_recovery_not_verified"
+                    )
+                latch = maintenance_recovery_latch_repository.read_latch()
+                if not latch.blocked:
+                    DATABASE_WRITE_GATE._clear_recovery_block()
+                    self._set_phase(MaintenancePhase.IDLE)
+                    return
+                reason = latch.reason or reason
 
             if not latch.epoch:
                 try:

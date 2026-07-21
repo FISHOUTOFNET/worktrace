@@ -46,6 +46,8 @@ CleanupFailureHandler = Callable[[TemporaryFileCleanupError], None]
 class OwnedTemporaryFile(AbstractContextManager["OwnedTemporaryFile"]):
     """Own one unpredictable temporary pathname until explicit cleanup."""
 
+    _SENSITIVE_STAGING_RESOURCE = "decrypted_backup_staging"
+
     def __init__(
         self,
         *,
@@ -57,15 +59,34 @@ class OwnedTemporaryFile(AbstractContextManager["OwnedTemporaryFile"]):
         permissions: int | None = 0o600,
         on_cleanup_failure: CleanupFailureHandler | None = None,
     ) -> None:
+        self.resource = str(resource or "temporary_file")
+        self.sensitive = bool(sensitive)
+        # Sensitive decrypted-backup staging always lives in the dedicated
+        # managed directory so that residue is detectable across restarts.
+        if (
+            directory is None
+            and self.sensitive
+            and self.resource == self._SENSITIVE_STAGING_RESOURCE
+        ):
+            directory = self._resolve_sensitive_staging_directory()
         self.directory = Path(directory) if directory is not None else None
         self.prefix = str(prefix)
         self.suffix = str(suffix)
-        self.resource = str(resource or "temporary_file")
-        self.sensitive = bool(sensitive)
         self.permissions = permissions
         self.on_cleanup_failure = on_cleanup_failure
         self._path: Path | None = None
         self._cleaned = False
+        self._registered_active = False
+
+    @staticmethod
+    def _resolve_sensitive_staging_directory() -> Path:
+        """Lazy import avoids a circular module dependency at load time."""
+
+        from .services.maintenance_recovery_latch_repository import (
+            sensitive_staging_directory,
+        )
+
+        return sensitive_staging_directory()
 
     @property
     def path(self) -> Path:
@@ -76,6 +97,41 @@ class OwnedTemporaryFile(AbstractContextManager["OwnedTemporaryFile"]):
     @property
     def cleaned(self) -> bool:
         return self._cleaned
+
+    def _register_active_if_sensitive(self) -> None:
+        if not self.sensitive or self.resource != self._SENSITIVE_STAGING_RESOURCE:
+            return
+        if self._path is None:
+            return
+        try:
+            from .services.maintenance_recovery_latch_repository import (
+                register_active_sensitive_staging,
+            )
+
+            register_active_sensitive_staging(self._path)
+            self._registered_active = True
+        except Exception:
+            logger.warning(
+                "sensitive staging active registration failed resource=%s",
+                self.resource,
+            )
+
+    def _unregister_active_if_sensitive(self) -> None:
+        if not self._registered_active or self._path is None:
+            return
+        try:
+            from .services.maintenance_recovery_latch_repository import (
+                unregister_active_sensitive_staging,
+            )
+
+            unregister_active_sensitive_staging(self._path)
+        except Exception:
+            logger.warning(
+                "sensitive staging active unregistration failed resource=%s",
+                self.resource,
+            )
+        finally:
+            self._registered_active = False
 
     def __enter__(self) -> "OwnedTemporaryFile":
         if self._path is not None:
@@ -100,6 +156,7 @@ class OwnedTemporaryFile(AbstractContextManager["OwnedTemporaryFile"]):
             os.close(fd)
             fd = None
             self._path = Path(created)
+            self._register_active_if_sensitive()
             return self
         except Exception as exc:
             if fd is not None:
@@ -130,12 +187,17 @@ class OwnedTemporaryFile(AbstractContextManager["OwnedTemporaryFile"]):
             self._path.unlink()
         except FileNotFoundError:
             self._cleaned = True
+            self._unregister_active_if_sensitive()
             return
         except OSError as exc:
             error = TemporaryFileCleanupError(
                 self.resource,
                 sensitive=self.sensitive,
             )
+            # Release active ownership so the surviving file is detectable as
+            # restart residue by read_latch(). The file itself remains on disk
+            # as durable recovery evidence.
+            self._unregister_active_if_sensitive()
             if self.on_cleanup_failure is not None:
                 try:
                     self.on_cleanup_failure(error)
@@ -146,6 +208,7 @@ class OwnedTemporaryFile(AbstractContextManager["OwnedTemporaryFile"]):
                     )
             raise error from exc
         self._cleaned = True
+        self._unregister_active_if_sensitive()
 
     def __exit__(self, exc_type, exc_value, traceback) -> bool:
         try:
