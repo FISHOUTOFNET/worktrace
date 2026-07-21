@@ -1,10 +1,10 @@
 """Single application coordinator for snapshot and replacement maintenance."""
-
 from __future__ import annotations
 
 import logging
 import threading
 from contextlib import contextmanager
+from contextvars import ContextVar, Token
 from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Iterator, Protocol
@@ -29,9 +29,6 @@ from .runtime_activity_state_service import clear_runtime_activity_state
 from .settings_service import get_bool_setting, get_setting, set_settings
 
 if TYPE_CHECKING:
-    # Avoid a collector -> services -> collector import cycle that breaks
-    # ``import worktrace.webview_main``. The symbol is only used as a type
-    # annotation; the runtime reference comes from the runtime owner.
     from ..collector.runtime_control import RuntimeCollectorControl
 
 
@@ -140,6 +137,34 @@ class MaintenanceStatus:
         }
 
 
+@dataclass
+class MaintenanceOperationProgress:
+    """Thread-local handoff from replacement commit to the coordinator."""
+
+    intent: MaintenanceIntent
+    recovery_epoch: str | None = None
+    durable_replacement_committed: bool = False
+
+
+_CURRENT_MAINTENANCE_OPERATION: ContextVar[MaintenanceOperationProgress | None] = (
+    ContextVar("worktrace_maintenance_operation", default=None)
+)
+
+
+def record_database_replacement_committed() -> bool:
+    """Record the durable commit before any post-commit publication/finalization."""
+
+    progress = _CURRENT_MAINTENANCE_OPERATION.get()
+    if progress is None or progress.intent is not MaintenanceIntent.DATABASE_REPLACEMENT:
+        return False
+    progress.durable_replacement_committed = True
+    return True
+
+
+def current_maintenance_progress() -> MaintenanceOperationProgress | None:
+    return _CURRENT_MAINTENANCE_OPERATION.get()
+
+
 class RuntimeMaintenanceCoordinator:
     """Own the only maintenance state machine, lock order and recovery protocol."""
 
@@ -186,10 +211,13 @@ class RuntimeMaintenanceCoordinator:
 
     def status(self) -> MaintenanceStatus:
         control, _epoch = self._control_snapshot()
-        collector_running = bool(
-            control is not None
-            and control.is_collection_running_for_maintenance()
-        )
+        try:
+            collector_running = bool(
+                control is not None
+                and control.is_collection_running_for_maintenance()
+            )
+        except Exception:
+            collector_running = False
         in_progress = self.operation_active()
         recovery_blocked = self.recovery_blocked()
         return MaintenanceStatus(
@@ -217,11 +245,13 @@ class RuntimeMaintenanceCoordinator:
         try:
             return control.collector_control.hold_state.value == "operational"
         except Exception:
-            logging.exception("runtime maintenance control state read failed")
+            logging.warning(
+                "runtime maintenance control state read failed phase=verification"
+            )
             return False
 
     def hydrate_fail_closed_from_durable(self) -> bool:
-        """Hydrate the process barrier before any startup recovery write occurs."""
+        """Hydrate the process barrier before recovery or writer startup."""
 
         latch = maintenance_recovery_latch_repository.read_latch()
         if not latch.blocked:
@@ -231,79 +261,117 @@ class RuntimeMaintenanceCoordinator:
         self._set_phase(MaintenancePhase.FAILED_CLOSED)
         return True
 
+    def _persist_fail_closed(
+        self,
+        reason: str,
+        *,
+        recovery_epoch: str | None,
+    ) -> None:
+        try:
+            with DATABASE_WRITE_GATE._maintenance_recovery_write_scope():
+                maintenance_recovery_latch_repository.persist_fail_closed(
+                    reason,
+                    expected_epoch=recovery_epoch,
+                )
+        except Exception:
+            # The operation's armed sidecar remains authoritative even when the
+            # state transition or SQLite mirror cannot be written.
+            logging.warning(
+                "maintenance fail-closed persistence failed phase=seal"
+            )
+
     def _enter_fail_closed(
         self,
         reason: str,
         *,
         lease: WriteDrainLease | None = None,
+        recovery_epoch: str | None = None,
     ) -> None:
         normalized = str(reason or DATABASE_RECOVERY_ERROR).strip()
         if lease is not None:
-            lease.handoff_to_recovery_block(normalized)
+            try:
+                lease.handoff_to_recovery_block(normalized)
+            except Exception:
+                DATABASE_WRITE_GATE._set_recovery_block(normalized)
         else:
             DATABASE_WRITE_GATE._set_recovery_block(normalized)
         self._set_phase(MaintenancePhase.FAILED_CLOSED)
         try:
             clear_runtime_activity_state(f"{normalized}_fail_closed")
         except Exception:
-            logging.exception(
-                "runtime activity state cleanup failed during fail-closed handoff"
+            logging.warning(
+                "runtime activity cleanup failed phase=fail_closed"
             )
-        try:
-            with DATABASE_WRITE_GATE._maintenance_recovery_write_scope():
-                maintenance_recovery_latch_repository.persist_fail_closed(normalized)
-        except Exception:
-            logging.exception(
-                "maintenance fail-closed persistence failed reason=%s",
-                normalized,
-            )
+        self._persist_fail_closed(
+            normalized,
+            recovery_epoch=recovery_epoch,
+        )
+
+    def enter_fail_closed(self, reason: str) -> None:
+        """Public handoff for a security cleanup failure outside an active scope."""
+
+        with self._operation_lock:
+            self._enter_fail_closed(str(reason or DATABASE_RECOVERY_ERROR))
 
     def recover_fail_closed(self) -> None:
-        """Clear process and durable barriers only after an exact runtime ACK."""
+        """Clear the exact durable epoch only after stable runtime verification."""
 
         with self._operation_lock:
             if DATABASE_WRITE_GATE.operation_active():
                 raise MaintenanceRecoveryError("maintenance_recovery_not_verified")
 
-            if not DATABASE_WRITE_GATE.recovery_blocked():
-                latch = maintenance_recovery_latch_repository.read_latch()
-                if not latch.blocked and self.phase is not MaintenancePhase.FAILED_CLOSED:
-                    return
-                reason = latch.reason or "maintenance_recovery_state_inconsistent"
-                DATABASE_WRITE_GATE._set_recovery_block(reason)
-                self._set_phase(MaintenancePhase.FAILED_CLOSED)
+            latch = maintenance_recovery_latch_repository.read_latch()
+            if not latch.blocked and self.phase is not MaintenancePhase.FAILED_CLOSED:
+                return
+            reason = latch.reason or "maintenance_recovery_state_inconsistent"
+            DATABASE_WRITE_GATE._set_recovery_block(reason)
+            self._set_phase(MaintenancePhase.FAILED_CLOSED)
+
+            if not latch.epoch:
+                try:
+                    with DATABASE_WRITE_GATE._maintenance_recovery_write_scope():
+                        latch = maintenance_recovery_latch_repository.seal_legacy_latch(
+                            reason
+                        )
+                except Exception as exc:
+                    raise MaintenanceRecoveryError(
+                        "maintenance_recovery_not_verified"
+                    ) from exc
+            assert latch.epoch is not None
 
             control, control_epoch = self._control_snapshot()
             if control is None or not self._runtime_control_is_operational(control):
                 raise MaintenanceRecoveryError("maintenance_recovery_not_verified")
 
-            with DATABASE_WRITE_GATE._maintenance_recovery_write_scope():
-                maintenance_recovery_latch_repository.clear_latch()
-
-            with self._state_lock:
-                superseded = (
-                    self._runtime_control is not control
-                    or self._runtime_control_epoch != control_epoch
-                )
-                operational = self._runtime_control_is_operational(control)
-                if not superseded and operational:
+            try:
+                with self._state_lock:
+                    superseded = (
+                        self._runtime_control is not control
+                        or self._runtime_control_epoch != control_epoch
+                    )
+                    operational = self._runtime_control_is_operational(control)
+                    if superseded:
+                        raise MaintenanceRecoveryError(
+                            "maintenance_recovery_superseded"
+                        )
+                    if not operational:
+                        raise MaintenanceRecoveryError(
+                            "maintenance_recovery_not_verified"
+                        )
+                    with DATABASE_WRITE_GATE._maintenance_recovery_write_scope():
+                        maintenance_recovery_latch_repository.clear_latch(
+                            expected_epoch=latch.epoch
+                        )
                     DATABASE_WRITE_GATE._clear_recovery_block()
                     self._phase = MaintenancePhase.IDLE
-                    return
-
-            reason = (
-                "maintenance_recovery_superseded"
-                if superseded
-                else "maintenance_recovery_not_verified"
-            )
-            DATABASE_WRITE_GATE._set_recovery_block(reason)
-            self._set_phase(MaintenancePhase.FAILED_CLOSED)
-            try:
-                with DATABASE_WRITE_GATE._maintenance_recovery_write_scope():
-                    maintenance_recovery_latch_repository.persist_fail_closed(reason)
-            except Exception:
-                logging.exception("failed maintenance recovery persistence failed")
-            raise MaintenanceRecoveryError(reason)
+            except MaintenanceRecoveryError:
+                raise
+            except Exception as exc:
+                # Marker deletion is the final durable step. Any failure leaves
+                # either the sidecar or process block in place.
+                raise MaintenanceRecoveryError(
+                    "maintenance_recovery_not_verified"
+                ) from exc
 
     @staticmethod
     def _replacement_epoch() -> int:
@@ -312,7 +380,12 @@ class RuntimeMaintenanceCoordinator:
             values = capture_replacement_generation_floor(conn)
             return max((int(value) for value in values.values()), default=0)
         finally:
-            conn.close()
+            try:
+                conn.close()
+            except Exception:
+                logging.warning(
+                    "maintenance state connection close failed phase=capture"
+                )
 
     def _capture_state(
         self,
@@ -397,8 +470,6 @@ class RuntimeMaintenanceCoordinator:
             {
                 "user_paused": "true" if state.user_paused else "false",
                 "collector_status": collector_status,
-                "maintenance_fail_closed": "false",
-                "maintenance_fail_closed_reason": "",
             }
         )
 
@@ -430,43 +501,97 @@ class RuntimeMaintenanceCoordinator:
             terminal_state="operational",
         )
 
-    def _attempt_restoration_and_decide_fail_closed(
+    def _reset_after_replacement(
         self,
-        exc: BaseException,
+        *,
+        control: RuntimeMaintenanceControl | None,
+        timeout_seconds: float,
+    ) -> None:
+        if control is None:
+            raise CollectorCommandNotAcknowledgedError(
+                "collector_database_reset_not_acknowledged",
+                fail_closed=True,
+            )
+        self._set_phase(MaintenancePhase.RESETTING)
+        reset_result = dict(
+            control.reset_after_database_replacement(
+                timeout_seconds=timeout_seconds
+            )
+        )
+        self._require_ack(
+            reset_result,
+            control=control,
+            command_kind="database_reset",
+            terminal_state="held",
+        )
+
+    def _verify_stable_runtime_and_clear_seal(
+        self,
+        *,
+        control: RuntimeMaintenanceControl | None,
+        control_epoch: int,
+        recovery_epoch: str | None,
+    ) -> None:
+        if recovery_epoch is None:
+            return
+        with self._state_lock:
+            if (
+                self._runtime_control is not control
+                or self._runtime_control_epoch != control_epoch
+            ):
+                raise MaintenanceRecoveryError("maintenance_recovery_superseded")
+            if control is not None and not self._runtime_control_is_operational(control):
+                raise MaintenanceRecoveryError("maintenance_recovery_not_verified")
+            with DATABASE_WRITE_GATE._maintenance_recovery_write_scope():
+                maintenance_recovery_latch_repository.clear_latch(
+                    expected_epoch=recovery_epoch
+                )
+
+    @staticmethod
+    def _requires_fail_closed(exc: BaseException) -> bool:
+        if isinstance(exc, CollectorCommandNotAcknowledgedError):
+            return exc.fail_closed
+        return bool(getattr(exc, "requires_recovery_block", False))
+
+    def _restore_after_failure(
+        self,
         *,
         state: RuntimeMaintenanceState | None,
         control: RuntimeMaintenanceControl | None,
+        control_epoch: int,
         hold_acquired: bool,
-        operation_completed: bool,
+        replacement_committed: bool,
+        recovery_epoch: str | None,
         timeout_seconds: float,
     ) -> bool:
-        """Restore durable state before any runtime release on pre-commit failure."""
+        """Return True only after reset/restoration/release/seal clear all verify."""
 
-        if (
-            isinstance(exc, CollectorCommandNotAcknowledgedError)
-            and exc.fail_closed
-        ):
-            return True
-        if operation_completed or state is None:
-            return True
-
+        if state is None:
+            return False
         try:
+            if replacement_committed:
+                self._reset_after_replacement(
+                    control=control,
+                    timeout_seconds=timeout_seconds,
+                )
             self._restore_durable_state_before_release(state)
-        except Exception:
-            # The Collector must remain HELD when durable state cannot be
-            # restored. Do not attempt maintenance_release on this path.
-            return True
-
-        if hold_acquired and control is not None:
-            try:
+            if hold_acquired and control is not None:
                 self._release_and_verify_runtime(
                     control=control,
                     state=state,
                     timeout_seconds=timeout_seconds,
                 )
-            except Exception:
-                return True
-        return False
+            self._verify_stable_runtime_and_clear_seal(
+                control=control,
+                control_epoch=control_epoch,
+                recovery_epoch=recovery_epoch,
+            )
+            return True
+        except Exception:
+            logging.warning(
+                "maintenance recovery verification failed phase=exception"
+            )
+            return False
 
     @contextmanager
     def _maintain(
@@ -483,14 +608,22 @@ class RuntimeMaintenanceCoordinator:
 
         state: RuntimeMaintenanceState | None = None
         control: RuntimeMaintenanceControl | None = None
+        control_epoch = 0
         hold_acquired = False
-        operation_completed = False
-        inner_exception_handled = False
+        body_returned = False
+        progress = MaintenanceOperationProgress(intent=intent)
+        progress_token: Token[MaintenanceOperationProgress | None] | None = None
+        lease_for_failure: WriteDrainLease | None = None
         try:
             if self.recovery_blocked():
                 raise MaintenanceInProgressError(DATABASE_RECOVERY_ERROR)
-            control, _control_epoch = self._control_snapshot()
+            control, control_epoch = self._control_snapshot()
             state = self._capture_state(control)
+            if intent is MaintenanceIntent.DATABASE_REPLACEMENT:
+                seal = maintenance_recovery_latch_repository.arm_recovery(reason)
+                progress.recovery_epoch = seal.epoch
+            progress_token = _CURRENT_MAINTENANCE_OPERATION.set(progress)
+
             self._set_phase(MaintenancePhase.HOLD_REQUESTED)
             if state.collector_running:
                 if control is None:
@@ -515,83 +648,76 @@ class RuntimeMaintenanceCoordinator:
 
             self._set_phase(MaintenancePhase.DRAINING)
             with DATABASE_WRITE_GATE.draining() as lease:
-                try:
-                    drain_existing_writers()
-                    lease.promote()
-                    self._set_phase(MaintenancePhase.EXCLUSIVE)
-                    yield state
-                    operation_completed = True
+                lease_for_failure = lease
+                drain_existing_writers()
+                lease.promote()
+                self._set_phase(MaintenancePhase.EXCLUSIVE)
+                yield state
+                body_returned = True
 
-                    if intent is MaintenanceIntent.DATABASE_REPLACEMENT:
-                        if control is None:
-                            raise CollectorCommandNotAcknowledgedError(
-                                "collector_database_reset_not_acknowledged",
-                                fail_closed=True,
-                            )
-                        self._set_phase(MaintenancePhase.RESETTING)
-                        reset_result = dict(
-                            control.reset_after_database_replacement(
-                                timeout_seconds=timeout_seconds
-                            )
-                        )
-                        self._require_ack(
-                            reset_result,
-                            control=control,
-                            command_kind="database_reset",
-                            terminal_state="held",
-                        )
-
-                    self._restore_durable_state_before_release(state)
-
-                    if hold_acquired and control is not None:
-                        self._release_and_verify_runtime(
-                            control=control,
-                            state=state,
-                            timeout_seconds=timeout_seconds,
-                        )
-                except Exception as exc:
-                    inner_exception_handled = True
-                    should_fail_closed = self._attempt_restoration_and_decide_fail_closed(
-                        exc,
-                        state=state,
+                if intent is MaintenanceIntent.DATABASE_REPLACEMENT:
+                    # A normally returned replacement scope preserves the prior
+                    # reset contract even for test/no-op bodies. A caller error
+                    # after commit uses the explicit progress handoff instead.
+                    self._reset_after_replacement(
                         control=control,
-                        hold_acquired=hold_acquired,
-                        operation_completed=operation_completed,
                         timeout_seconds=timeout_seconds,
                     )
-                    if should_fail_closed:
-                        command = "restore" if operation_completed else "operation"
-                        failure_reason = f"{reason}_{command}"
-                        exclusive_lease = (
-                            lease
-                            if DATABASE_WRITE_GATE.phase() is WriteGatePhase.EXCLUSIVE
-                            else None
-                        )
-                        self._enter_fail_closed(
-                            failure_reason,
-                            lease=exclusive_lease,
-                        )
-                    raise
-        except Exception as exc:
-            if not inner_exception_handled:
-                should_fail_closed = self._attempt_restoration_and_decide_fail_closed(
-                    exc,
-                    state=state,
+                self._restore_durable_state_before_release(state)
+                if hold_acquired and control is not None:
+                    self._release_and_verify_runtime(
+                        control=control,
+                        state=state,
+                        timeout_seconds=timeout_seconds,
+                    )
+                self._verify_stable_runtime_and_clear_seal(
                     control=control,
-                    hold_acquired=hold_acquired,
-                    operation_completed=operation_completed,
-                    timeout_seconds=timeout_seconds,
+                    control_epoch=control_epoch,
+                    recovery_epoch=progress.recovery_epoch,
                 )
-                if should_fail_closed and not DATABASE_WRITE_GATE.recovery_blocked():
-                    command = "restore" if operation_completed else "operation"
-                    self._enter_fail_closed(f"{reason}_{command}")
-            logging.exception(
-                "runtime maintenance failed intent=%s reason=%s",
+        except BaseException as exc:
+            replacement_committed = progress.durable_replacement_committed
+            restored = self._restore_after_failure(
+                state=state,
+                control=control,
+                control_epoch=control_epoch,
+                hold_acquired=hold_acquired,
+                replacement_committed=replacement_committed,
+                recovery_epoch=progress.recovery_epoch,
+                timeout_seconds=timeout_seconds,
+            )
+            must_block = self._requires_fail_closed(exc) or not restored
+            if must_block:
+                command = (
+                    "restore"
+                    if body_returned or replacement_committed
+                    else "operation"
+                )
+                exclusive_lease = (
+                    lease_for_failure
+                    if DATABASE_WRITE_GATE.phase() is WriteGatePhase.EXCLUSIVE
+                    else None
+                )
+                self._enter_fail_closed(
+                    f"{reason}_{command}",
+                    lease=exclusive_lease,
+                    recovery_epoch=progress.recovery_epoch,
+                )
+            logging.warning(
+                "runtime maintenance failed intent=%s phase=%s exception=%s",
                 intent.value,
-                reason,
+                self.phase.value,
+                type(exc).__name__,
             )
             raise
         finally:
+            if progress_token is not None:
+                try:
+                    _CURRENT_MAINTENANCE_OPERATION.reset(progress_token)
+                except Exception:
+                    logging.warning(
+                        "maintenance context reset failed phase=finalization"
+                    )
             if not self.recovery_blocked():
                 self._set_phase(MaintenancePhase.IDLE)
             self._operation_lock.release()
@@ -646,6 +772,10 @@ def recover_fail_closed() -> None:
     MAINTENANCE_COORDINATOR.recover_fail_closed()
 
 
+def enter_fail_closed(reason: str) -> None:
+    MAINTENANCE_COORDINATOR.enter_fail_closed(reason)
+
+
 def is_maintenance_in_progress() -> bool:
     return MAINTENANCE_COORDINATOR.operation_active()
 
@@ -696,6 +826,7 @@ __all__ = [
     "MAINTENANCE_COORDINATOR",
     "MaintenanceInProgressError",
     "MaintenanceIntent",
+    "MaintenanceOperationProgress",
     "MaintenancePhase",
     "MaintenanceRecoveryError",
     "MaintenanceStatus",
@@ -705,10 +836,13 @@ __all__ = [
     "clear_all_live_data",
     "clear_runtime_control",
     "consistent_snapshot",
+    "current_maintenance_progress",
     "database_replacement",
+    "enter_fail_closed",
     "hydrate_fail_closed_from_durable",
     "is_maintenance_in_progress",
     "maintenance_status",
+    "record_database_replacement_committed",
     "recover_fail_closed",
     "register_runtime_control",
 ]
