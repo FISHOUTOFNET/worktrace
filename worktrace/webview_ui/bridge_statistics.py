@@ -5,7 +5,6 @@ error codes. Statistics aggregation and display DTO shaping remain behind the
 API boundary. Unexpected failures are logged internally; no full traceback is
 returned to the WebView caller.
 """
-
 from __future__ import annotations
 
 import logging
@@ -28,10 +27,12 @@ _STATISTICS_EXPORT_ERROR_MESSAGES = {
     "range_too_large": "日期范围过大",
     "empty_data": "当前范围没有可导出的记录",
     "invalid_path": "请选择有效保存位置",
-    "permission_denied": "无法写入文件，请检查权限或文件是否被占用",
-    "file_busy": "无法写入文件，请检查权限或文件是否被占用",
+    "permission_denied": "没有写入权限，请选择其他保存位置",
+    "file_busy": "目标文件正被占用，请关闭后重试",
+    "storage_unavailable": "存储空间或设备不可用",
+    "cleanup_failed": "导出未完成，临时文件清理失败",
     "stale_statistics_snapshot": "统计数据已更新，请重新加载后导出",
-    "write_failed": "无法写入文件，请检查权限或文件是否被占用",
+    "write_failed": "文件写入失败，请选择其他保存位置",
     "operation_failed": "导出失败",
 }
 
