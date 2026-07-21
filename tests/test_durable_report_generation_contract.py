@@ -45,5 +45,6 @@ def test_structure_generation_is_durable_and_ignores_duration_checkpoint(temp_db
             "UPDATE activity_log SET status = ?, updated_at = ? WHERE id = ?",
             ("idle", now_str(), activity_id),
         )
+        uow.mark_changed(DataGenerationNamespace.REPORT_STRUCTURE)
 
     assert _generation() > after_insert
