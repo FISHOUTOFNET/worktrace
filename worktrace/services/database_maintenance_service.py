@@ -261,6 +261,15 @@ class RuntimeMaintenanceCoordinator:
         self._set_phase(MaintenancePhase.FAILED_CLOSED)
         return True
 
+    def _require_no_durable_recovery_block(self) -> None:
+        latch = maintenance_recovery_latch_repository.read_latch()
+        if not latch.blocked:
+            return
+        reason = latch.reason or DATABASE_RECOVERY_ERROR
+        DATABASE_WRITE_GATE._set_recovery_block(reason)
+        self._set_phase(MaintenancePhase.FAILED_CLOSED)
+        raise MaintenanceInProgressError(DATABASE_RECOVERY_ERROR)
+
     def _persist_fail_closed(
         self,
         reason: str,
@@ -562,9 +571,10 @@ class RuntimeMaintenanceCoordinator:
         hold_acquired: bool,
         replacement_committed: bool,
         recovery_epoch: str | None,
+        clear_recovery_seal: bool,
         timeout_seconds: float,
     ) -> bool:
-        """Return True only after reset/restoration/release/seal clear all verify."""
+        """Restore runtime, optionally clearing the exact replacement epoch."""
 
         if state is None:
             return False
@@ -581,11 +591,12 @@ class RuntimeMaintenanceCoordinator:
                     state=state,
                     timeout_seconds=timeout_seconds,
                 )
-            self._verify_stable_runtime_and_clear_seal(
-                control=control,
-                control_epoch=control_epoch,
-                recovery_epoch=recovery_epoch,
-            )
+            if clear_recovery_seal:
+                self._verify_stable_runtime_and_clear_seal(
+                    control=control,
+                    control_epoch=control_epoch,
+                    recovery_epoch=recovery_epoch,
+                )
             return True
         except Exception:
             logging.warning(
@@ -617,6 +628,7 @@ class RuntimeMaintenanceCoordinator:
         try:
             if self.recovery_blocked():
                 raise MaintenanceInProgressError(DATABASE_RECOVERY_ERROR)
+            self._require_no_durable_recovery_block()
             control, control_epoch = self._control_snapshot()
             state = self._capture_state(control)
             if intent is MaintenanceIntent.DATABASE_REPLACEMENT:
@@ -677,6 +689,7 @@ class RuntimeMaintenanceCoordinator:
                 )
         except BaseException as exc:
             replacement_committed = progress.durable_replacement_committed
+            requires_block = self._requires_fail_closed(exc)
             restored = self._restore_after_failure(
                 state=state,
                 control=control,
@@ -684,9 +697,10 @@ class RuntimeMaintenanceCoordinator:
                 hold_acquired=hold_acquired,
                 replacement_committed=replacement_committed,
                 recovery_epoch=progress.recovery_epoch,
+                clear_recovery_seal=not requires_block,
                 timeout_seconds=timeout_seconds,
             )
-            must_block = self._requires_fail_closed(exc) or not restored
+            must_block = requires_block or not restored
             if must_block:
                 command = (
                     "restore"
