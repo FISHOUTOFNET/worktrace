@@ -139,4 +139,5 @@ raw test-log tails. The workflow is not modified for business-test failures.
 The branch remains unmerged and PR #25 remains Draft until explicit user
 confirmation. Final implementation status, exact head and Standard CI run are
 recorded in the PR description only after all three validation jobs succeed on
-the same final revision.
+the same final revision. This non-skip checkpoint is the sole final validation
+revision for the four residual convergence groups.
