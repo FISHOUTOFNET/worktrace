@@ -193,7 +193,7 @@ def set_setting(
     value: str,
     *,
     mutation_class: SettingMutationClass | str | None = None,
-) -> SettingChangeResult:
+) -> bool:
     return set_settings({str(key): str(value)}, mutation_class=mutation_class)
 
 
@@ -201,26 +201,27 @@ def set_settings(
     values: Mapping[str, str],
     *,
     mutation_class: SettingMutationClass | str | None = None,
-) -> SettingChangeResult:
+) -> bool:
     normalized = {
         str(key).strip(): str(value)
         for key, value in values.items()
         if str(key).strip()
     }
     if not normalized:
-        return SettingChangeResult()
+        return False
     forced_class = (
         SettingMutationClass(str(mutation_class))
         if mutation_class is not None
         else None
     )
     with DomainUnitOfWork() as uow:
-        return set_settings_in_transaction(
+        result = set_settings_in_transaction(
             uow,
             uow.connection,
             normalized,
             mutation_class=forced_class,
         )
+    return bool(result)
 
 
 def set_settings_in_transaction(
@@ -311,7 +312,7 @@ def get_list_setting(key: str, default: list[str] | None = None) -> list[str]:
     return [item.strip() for item in raw.split(",") if item.strip()]
 
 
-def set_list_setting(key: str, values: list[str]) -> SettingChangeResult:
+def set_list_setting(key: str, values: list[str]) -> bool:
     return set_setting(
         key,
         ",".join(item.strip() for item in values if item.strip()),
