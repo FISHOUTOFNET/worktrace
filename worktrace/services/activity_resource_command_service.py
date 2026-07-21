@@ -211,7 +211,7 @@ def _persist_activity_path(
                 conn,
                 [int(activity_id)],
             )
-        uow.mark_changed()
+        uow.mark_changed(DataGenerationNamespace.REPORT_STRUCTURE)
 
     if not excluded and not activity_closed:
         _sync_open_activity_project_safely(int(activity_id))
