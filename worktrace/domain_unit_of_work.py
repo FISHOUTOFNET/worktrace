@@ -6,11 +6,11 @@ namespaces they may change and explicitly mark only the namespaces whose user-
 visible semantics actually changed. Root commit publishes each changed namespace
 at most once; no-op and rollback paths publish nothing.
 """
-
 from __future__ import annotations
 
 import logging
 from contextvars import ContextVar, Token
+from enum import StrEnum
 from typing import Iterable
 
 from .data_generation_repository import (
@@ -22,6 +22,14 @@ _CURRENT_UNIT_OF_WORK: ContextVar[DomainUnitOfWork | None] = ContextVar(
     "worktrace_domain_unit_of_work",
     default=None,
 )
+
+
+class UnitOfWorkPhase(StrEnum):
+    ACQUIRING = "acquiring"
+    ACTIVE = "active"
+    DURABLE_COMMITTED = "durable_committed"
+    ROLLED_BACK = "rolled_back"
+    FINALIZED = "finalized"
 
 
 def _namespace(value: DataGenerationNamespace | str) -> DataGenerationNamespace:
@@ -45,6 +53,7 @@ class DomainUnitOfWork:
         self._connection = None
         self._token: Token[DomainUnitOfWork | None] | None = None
         self._rollback_only = False
+        self._phase = UnitOfWorkPhase.ACQUIRING
 
     def _owner(self) -> DomainUnitOfWork:
         return self._root or self
@@ -60,6 +69,14 @@ class DomainUnitOfWork:
     def changed(self) -> bool:
         return bool(self._owner()._changed_effects)
 
+    @property
+    def phase(self) -> UnitOfWorkPhase:
+        return self._owner()._phase
+
+    @property
+    def durable_committed(self) -> bool:
+        return self.phase is UnitOfWorkPhase.DURABLE_COMMITTED
+
     def add_effects(self, *effects: DataGenerationNamespace | str) -> None:
         self._owner()._effects.update(_namespace(effect) for effect in effects)
 
@@ -67,12 +84,7 @@ class DomainUnitOfWork:
         self,
         *namespaces: DataGenerationNamespace | str,
     ) -> None:
-        """Mark explicitly declared namespaces as semantically changed.
-
-        Callers that discover a namespace dynamically must first declare it with
-        ``add_effects(namespace)``. Missing or undeclared namespaces are contract
-        violations rather than silently ignored hints.
-        """
+        """Mark explicitly declared namespaces as semantically changed."""
 
         if not namespaces:
             raise RuntimeError("generation_effect_required")
@@ -98,10 +110,25 @@ class DomainUnitOfWork:
 
         from .db import get_connection
 
-        self._connection = get_connection()
-        self._connection.execute("BEGIN IMMEDIATE")
-        self._token = _CURRENT_UNIT_OF_WORK.set(self)
-        return self
+        connection = None
+        try:
+            connection = get_connection()
+            connection.execute("BEGIN IMMEDIATE")
+            self._connection = connection
+            self._token = _CURRENT_UNIT_OF_WORK.set(self)
+            self._phase = UnitOfWorkPhase.ACTIVE
+            return self
+        except BaseException:
+            if connection is not None:
+                try:
+                    connection.close()
+                except Exception:
+                    logging.warning(
+                        "domain unit of work cleanup failed phase=acquisition"
+                    )
+            self._connection = None
+            self._phase = UnitOfWorkPhase.FINALIZED
+            raise
 
     def __exit__(self, exc_type, exc_value, traceback) -> bool:
         if self._root is not None:
@@ -110,42 +137,80 @@ class DomainUnitOfWork:
             return False
 
         connection = self.connection
-        committed = False
+        primary_error = exc_value if exc_type is not None else None
         committed_effects: tuple[DataGenerationNamespace, ...] = ()
+        database_key: str | None = None
         try:
-            if exc_type is not None or self._rollback_only:
-                connection.rollback()
+            if primary_error is not None or self._rollback_only:
+                try:
+                    connection.rollback()
+                except Exception:
+                    logging.warning(
+                        "domain unit of work rollback failed phase=operation"
+                    )
+                self._phase = UnitOfWorkPhase.ROLLED_BACK
                 return False
+
             if self._changed_effects:
+                from .db import get_db_key
+
+                # Resolve process identity before commit so a failure remains a
+                # genuine pre-commit failure and can be rolled back accurately.
+                database_key = get_db_key()
                 DataGenerationRepository.bump(connection, self._changed_effects)
                 committed_effects = tuple(self._changed_effects)
             connection.commit()
-            committed = True
-            if committed_effects:
-                from .db import get_db_key
-                from .generation_clock import publish_committed
+            self._phase = UnitOfWorkPhase.DURABLE_COMMITTED
 
-                database_key = get_db_key()
+            if committed_effects:
+                from .generation_clock import clear, publish_committed
+
                 try:
                     publish_committed(connection, committed_effects)
                 except Exception:
-                    # The durable transaction is already committed. A failed
-                    # process-local publication must degrade to a cache miss,
-                    # never misreport the command itself as failed.
-                    logging.exception("generation clock publication failed")
-                    from .generation_clock import clear
-
-                    clear(database_key)
+                    logging.warning(
+                        "generation publication failed phase=post_commit"
+                    )
+                    try:
+                        assert database_key is not None
+                        clear(database_key)
+                    except Exception:
+                        logging.warning(
+                            "generation cache invalidation failed phase=post_commit"
+                        )
             return False
-        except Exception:
-            if not committed:
-                connection.rollback()
+        except BaseException:
+            if self._phase is not UnitOfWorkPhase.DURABLE_COMMITTED:
+                try:
+                    connection.rollback()
+                except Exception:
+                    logging.warning(
+                        "domain unit of work rollback failed phase=commit"
+                    )
+                self._phase = UnitOfWorkPhase.ROLLED_BACK
             raise
         finally:
-            if self._token is not None:
-                _CURRENT_UNIT_OF_WORK.reset(self._token)
-            connection.close()
+            token = self._token
+            self._token = None
+            if token is not None:
+                try:
+                    _CURRENT_UNIT_OF_WORK.reset(token)
+                except Exception:
+                    logging.warning(
+                        "domain unit of work context reset failed phase=finalization"
+                    )
+            try:
+                connection.close()
+            except Exception:
+                logging.warning(
+                    "domain unit of work connection close failed phase=finalization"
+                )
             self._connection = None
+            if self._phase not in {
+                UnitOfWorkPhase.DURABLE_COMMITTED,
+                UnitOfWorkPhase.ROLLED_BACK,
+            }:
+                self._phase = UnitOfWorkPhase.FINALIZED
 
 
 def current_domain_unit_of_work() -> DomainUnitOfWork | None:
@@ -153,4 +218,8 @@ def current_domain_unit_of_work() -> DomainUnitOfWork | None:
     return current._owner() if current is not None else None
 
 
-__all__ = ["DomainUnitOfWork", "current_domain_unit_of_work"]
+__all__ = [
+    "DomainUnitOfWork",
+    "UnitOfWorkPhase",
+    "current_domain_unit_of_work",
+]
