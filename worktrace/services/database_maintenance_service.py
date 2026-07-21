@@ -402,6 +402,34 @@ class RuntimeMaintenanceCoordinator:
             }
         )
 
+    def _restore_durable_state_before_release(
+        self,
+        state: RuntimeMaintenanceState,
+    ) -> None:
+        self._set_phase(MaintenancePhase.RESTORING)
+        self._restore_durable_state(state)
+
+    def _release_and_verify_runtime(
+        self,
+        *,
+        control: RuntimeMaintenanceControl,
+        state: RuntimeMaintenanceState,
+        timeout_seconds: float,
+    ) -> None:
+        self._set_phase(MaintenancePhase.RELEASING)
+        release_result = dict(
+            control.restore_after_maintenance(
+                state,
+                timeout_seconds=timeout_seconds,
+            )
+        )
+        self._require_ack(
+            release_result,
+            control=control,
+            command_kind="maintenance_release",
+            terminal_state="operational",
+        )
+
     def _attempt_restoration_and_decide_fail_closed(
         self,
         exc: BaseException,
@@ -412,57 +440,33 @@ class RuntimeMaintenanceCoordinator:
         operation_completed: bool,
         timeout_seconds: float,
     ) -> bool:
-        """Attempt collector restoration and decide whether to fail-closed.
-
-        Per the architecture contract:
-        - If the operation completed (commit succeeded) but post-commit
-          restoration failed, fail-closed is mandatory because the live
-          database has been committed but the runtime state cannot be
-          verified as restored.
-        - If the operation did not complete, the caller's unit of work is
-          responsible for rolling back the live transaction. The coordinator
-          attempts to restore collector state (release hold, restore durable
-          settings). Fail-closed only if restoration cannot be verified.
-        - CollectorCommandNotAcknowledgedError with fail_closed=True always
-          fail-closes because the collector state is already known to be
-          unverifiable.
-        - Pure staging failures never reach this method because they occur
-          before the maintenance scope is entered.
-        """
+        """Restore durable state before any runtime release on pre-commit failure."""
 
         if (
             isinstance(exc, CollectorCommandNotAcknowledgedError)
             and exc.fail_closed
         ):
             return True
-        if operation_completed:
-            return True
-        if state is None:
+        if operation_completed or state is None:
             return True
 
-        restoration_failed = False
+        try:
+            self._restore_durable_state_before_release(state)
+        except Exception:
+            # The Collector must remain HELD when durable state cannot be
+            # restored. Do not attempt maintenance_release on this path.
+            return True
+
         if hold_acquired and control is not None:
             try:
-                self._set_phase(MaintenancePhase.RELEASING)
-                release_result = dict(
-                    control.restore_after_maintenance(
-                        state,
-                        timeout_seconds=timeout_seconds,
-                    )
-                )
-                self._require_ack(
-                    release_result,
+                self._release_and_verify_runtime(
                     control=control,
-                    command_kind="maintenance_release",
-                    terminal_state="operational",
+                    state=state,
+                    timeout_seconds=timeout_seconds,
                 )
             except Exception:
-                restoration_failed = True
-        try:
-            self._restore_durable_state(state)
-        except Exception:
-            restoration_failed = True
-        return restoration_failed
+                return True
+        return False
 
     @contextmanager
     def _maintain(
@@ -537,22 +541,13 @@ class RuntimeMaintenanceCoordinator:
                             terminal_state="held",
                         )
 
-                    self._set_phase(MaintenancePhase.RESTORING)
-                    self._restore_durable_state(state)
+                    self._restore_durable_state_before_release(state)
 
                     if hold_acquired and control is not None:
-                        self._set_phase(MaintenancePhase.RELEASING)
-                        release_result = dict(
-                            control.restore_after_maintenance(
-                                state,
-                                timeout_seconds=timeout_seconds,
-                            )
-                        )
-                        self._require_ack(
-                            release_result,
+                        self._release_and_verify_runtime(
                             control=control,
-                            command_kind="maintenance_release",
-                            terminal_state="operational",
+                            state=state,
+                            timeout_seconds=timeout_seconds,
                         )
                 except Exception as exc:
                     inner_exception_handled = True
