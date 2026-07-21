@@ -1,31 +1,196 @@
-"""Durable fail-closed latch owned exclusively by database maintenance."""
-
+"""Crash-safe durable fail-closed seal owned exclusively by maintenance."""
 from __future__ import annotations
 
+import json
+import os
+import uuid
 from dataclasses import dataclass
+from pathlib import Path
 
+from ..atomic_file import atomic_write_text
+from ..db import get_db_path
 from .settings_service import get_bool_setting, get_setting, set_settings
+
+_MARKER_VERSION = 1
+_MARKER_NAME = "maintenance-recovery.json"
+_STATE_ARMED = "armed"
+_STATE_BLOCKED = "blocked"
+_VALID_STATES = frozenset({_STATE_ARMED, _STATE_BLOCKED})
+
+
+class MaintenanceRecoverySealError(RuntimeError):
+    """The durable recovery seal could not be verified or transitioned."""
 
 
 @dataclass(frozen=True)
 class MaintenanceRecoveryLatch:
     blocked: bool
     reason: str | None
+    epoch: str | None = None
+    state: str | None = None
+    marker_present: bool = False
+    database_mirror_present: bool = False
 
 
-def read_latch() -> MaintenanceRecoveryLatch:
-    blocked = get_bool_setting("maintenance_fail_closed", False)
-    reason = str(get_setting("maintenance_fail_closed_reason", "") or "").strip()
-    return MaintenanceRecoveryLatch(
-        blocked=blocked,
-        reason=reason or None,
-    )
+def marker_path() -> Path:
+    """Keep the recovery seal beside, but outside, the replaceable database."""
+
+    return get_db_path().with_name(_MARKER_NAME)
 
 
-def persist_fail_closed(reason: str) -> None:
+def _normalized_reason(reason: str) -> str:
     normalized = str(reason or "").strip()
     if not normalized:
         raise ValueError("maintenance_recovery_reason_required")
+    return normalized
+
+
+def _payload(*, epoch: str, reason: str, state: str) -> str:
+    return json.dumps(
+        {
+            "version": _MARKER_VERSION,
+            "epoch": epoch,
+            "state": state,
+            "reason": reason,
+        },
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _read_marker() -> tuple[str, str, str] | None:
+    path = marker_path()
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise MaintenanceRecoverySealError(
+            "maintenance_recovery_marker_unreadable"
+        ) from exc
+    try:
+        data = json.loads(raw)
+    except (TypeError, ValueError) as exc:
+        raise MaintenanceRecoverySealError(
+            "maintenance_recovery_marker_invalid"
+        ) from exc
+    if not isinstance(data, dict) or data.get("version") != _MARKER_VERSION:
+        raise MaintenanceRecoverySealError("maintenance_recovery_marker_invalid")
+    epoch = str(data.get("epoch") or "").strip()
+    state = str(data.get("state") or "").strip()
+    reason = str(data.get("reason") or "").strip()
+    if not epoch or state not in _VALID_STATES or not reason:
+        raise MaintenanceRecoverySealError("maintenance_recovery_marker_invalid")
+    return epoch, state, reason
+
+
+def _read_database_mirror() -> tuple[bool, str | None]:
+    blocked = get_bool_setting("maintenance_fail_closed", False)
+    reason = str(get_setting("maintenance_fail_closed_reason", "") or "").strip()
+    return blocked, reason or None
+
+
+def read_latch() -> MaintenanceRecoveryLatch:
+    """Merge the sidecar authority with the SQLite diagnostic mirror."""
+
+    try:
+        marker = _read_marker()
+    except MaintenanceRecoverySealError as exc:
+        return MaintenanceRecoveryLatch(
+            blocked=True,
+            reason=str(exc),
+            state="invalid",
+            marker_present=True,
+        )
+
+    try:
+        database_blocked, database_reason = _read_database_mirror()
+    except Exception:
+        # An unreadable mirror cannot prove safety. A valid marker still gives
+        # the exact epoch; otherwise startup remains fail-closed.
+        if marker is not None:
+            epoch, state, reason = marker
+            return MaintenanceRecoveryLatch(
+                blocked=True,
+                reason=reason,
+                epoch=epoch,
+                state=state,
+                marker_present=True,
+            )
+        return MaintenanceRecoveryLatch(
+            blocked=True,
+            reason="maintenance_recovery_state_unavailable",
+            state="unavailable",
+        )
+
+    if marker is not None:
+        epoch, state, reason = marker
+        return MaintenanceRecoveryLatch(
+            blocked=True,
+            reason=reason,
+            epoch=epoch,
+            state=state,
+            marker_present=True,
+            database_mirror_present=database_blocked,
+        )
+    return MaintenanceRecoveryLatch(
+        blocked=database_blocked,
+        reason=database_reason,
+        state=_STATE_BLOCKED if database_blocked else None,
+        marker_present=False,
+        database_mirror_present=database_blocked,
+    )
+
+
+def arm_recovery(reason: str) -> MaintenanceRecoveryLatch:
+    """Persist proof of an unfinished maintenance epoch before risky work."""
+
+    normalized = _normalized_reason(reason)
+    existing = _read_marker()
+    if existing is not None:
+        raise MaintenanceRecoverySealError("maintenance_recovery_epoch_active")
+    epoch = uuid.uuid4().hex
+    atomic_write_text(
+        marker_path(),
+        _payload(epoch=epoch, reason=normalized, state=_STATE_ARMED),
+        resource="maintenance_recovery_seal",
+        permissions=0o600,
+    )
+    return MaintenanceRecoveryLatch(
+        blocked=True,
+        reason=normalized,
+        epoch=epoch,
+        state=_STATE_ARMED,
+        marker_present=True,
+    )
+
+
+def persist_fail_closed(
+    reason: str,
+    *,
+    expected_epoch: str | None = None,
+) -> MaintenanceRecoveryLatch:
+    """Make the sidecar authoritative before attempting the SQLite mirror."""
+
+    normalized = _normalized_reason(reason)
+    marker = _read_marker()
+    if marker is None:
+        if expected_epoch is not None:
+            raise MaintenanceRecoverySealError("maintenance_recovery_epoch_missing")
+        epoch = uuid.uuid4().hex
+    else:
+        epoch, _state, _old_reason = marker
+        if expected_epoch is not None and epoch != str(expected_epoch):
+            raise MaintenanceRecoverySealError("maintenance_recovery_epoch_mismatch")
+    atomic_write_text(
+        marker_path(),
+        _payload(epoch=epoch, reason=normalized, state=_STATE_BLOCKED),
+        resource="maintenance_recovery_seal",
+        permissions=0o600,
+    )
+    # This mirror is diagnostic and query-friendly. Failure is surfaced, but the
+    # sidecar already guarantees that a later process remains blocked.
     set_settings(
         {
             "maintenance_fail_closed": "true",
@@ -34,20 +199,82 @@ def persist_fail_closed(reason: str) -> None:
             "collector_status": "paused",
         }
     )
+    return MaintenanceRecoveryLatch(
+        blocked=True,
+        reason=normalized,
+        epoch=epoch,
+        state=_STATE_BLOCKED,
+        marker_present=True,
+        database_mirror_present=True,
+    )
 
 
-def clear_latch() -> None:
+def seal_legacy_latch(reason: str) -> MaintenanceRecoveryLatch:
+    """Give a database-only blocked state an epoch before explicit recovery."""
+
+    marker = _read_marker()
+    if marker is not None:
+        epoch, state, marker_reason = marker
+        return MaintenanceRecoveryLatch(
+            blocked=True,
+            reason=marker_reason,
+            epoch=epoch,
+            state=state,
+            marker_present=True,
+        )
+    return persist_fail_closed(reason)
+
+
+def clear_latch(*, expected_epoch: str) -> None:
+    """Clear the DB mirror first and delete the exact sidecar epoch last."""
+
+    expected = str(expected_epoch or "").strip()
+    if not expected:
+        raise MaintenanceRecoverySealError("maintenance_recovery_epoch_required")
+    marker = _read_marker()
+    if marker is None:
+        raise MaintenanceRecoverySealError("maintenance_recovery_epoch_missing")
+    epoch, _state, _reason = marker
+    if epoch != expected:
+        raise MaintenanceRecoverySealError("maintenance_recovery_epoch_mismatch")
+
     set_settings(
         {
             "maintenance_fail_closed": "false",
             "maintenance_fail_closed_reason": "",
         }
     )
+    try:
+        marker_path().unlink()
+    except FileNotFoundError as exc:
+        # Losing the marker between verification and deletion means this clear
+        # did not prove that it removed the expected epoch.
+        raise MaintenanceRecoverySealError(
+            "maintenance_recovery_epoch_missing"
+        ) from exc
+    except OSError as exc:
+        raise MaintenanceRecoverySealError(
+            "maintenance_recovery_marker_cleanup_failed"
+        ) from exc
+
+
+def reset_for_tests() -> None:
+    """Test-only best-effort cleanup; production recovery never calls this."""
+
+    try:
+        marker_path().unlink()
+    except FileNotFoundError:
+        pass
 
 
 __all__ = [
     "MaintenanceRecoveryLatch",
+    "MaintenanceRecoverySealError",
+    "arm_recovery",
     "clear_latch",
+    "marker_path",
     "persist_fail_closed",
     "read_latch",
+    "reset_for_tests",
+    "seal_legacy_latch",
 ]
