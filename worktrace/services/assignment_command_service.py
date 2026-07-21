@@ -126,7 +126,7 @@ def assign_with_uow(
             protect_manual=protect_manual,
         )
         if changed:
-            uow.mark_changed()
+            uow.mark_changed(DataGenerationNamespace.REPORT_STRUCTURE)
         return changed
 
 
