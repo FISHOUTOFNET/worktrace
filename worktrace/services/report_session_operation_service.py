@@ -398,6 +398,7 @@ def _run_uow(
                 snapshot_revision=after.snapshot_revision,
             )
             _insert_receipt(conn, request_id, input_signature, result)
+            uow.mark_changed(DataGenerationNamespace.REPORT_STRUCTURE)
             return result
     except sqlite3.OperationalError as exc:
         if "locked" in str(exc).lower() or "busy" in str(exc).lower():
