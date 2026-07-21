@@ -3,8 +3,11 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 PRODUCTION_ROOT = ROOT / "worktrace"
+pytestmark = [pytest.mark.unit, pytest.mark.contract, pytest.mark.parallel_safe]
 
 
 def _production_python_files() -> list[Path]:
