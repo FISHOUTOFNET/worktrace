@@ -289,15 +289,27 @@ def _validated_staging_database(
 
     staging_path: str | None = None
     try:
-        fd, staging_path = tempfile.mkstemp(
-            prefix="worktrace-import-",
-            suffix=".sqlite",
-        )
         try:
-            os.close(fd)
-        except OSError:
-            logging.warning("staging descriptor cleanup failed resource_type=staging")
-        imported = _build_and_validate_staging(staging_path, data)
+            fd, staging_path = tempfile.mkstemp(
+                prefix="worktrace-import-",
+                suffix=".sqlite",
+            )
+            try:
+                os.close(fd)
+            except OSError as exc:
+                logging.warning(
+                    "staging descriptor cleanup failed resource_type=staging"
+                )
+                raise BackupCorruptedError(
+                    "backup file is invalid or corrupted"
+                ) from exc
+            imported = _build_and_validate_staging(staging_path, data)
+        except BackupCorruptedError:
+            raise
+        except Exception as exc:
+            raise BackupCorruptedError(
+                "backup file is invalid or corrupted"
+            ) from exc
         yield ValidatedStaging(
             path=staging_path,
             imported_counts=dict(imported),
@@ -312,9 +324,11 @@ def _build_and_validate_staging(
 ) -> dict[str, int]:
     """Build and validate a caller-owned staging database outside maintenance."""
 
-    staging = sqlite3.connect(staging_path)
-    staging.row_factory = sqlite3.Row
+    staging: sqlite3.Connection | None = None
+    completed = False
     try:
+        staging = sqlite3.connect(staging_path)
+        staging.row_factory = sqlite3.Row
         staging.execute("PRAGMA foreign_keys = ON")
         staging.executescript(read_schema_sql())
         staging.executescript(read_internal_schema_sql())
@@ -330,15 +344,28 @@ def _build_and_validate_staging(
                 "backup file is invalid or corrupted"
             ) from exc
         staging.commit()
+        completed = True
         return imported
     except BackupCorruptedError:
-        _rollback_staging_safely(staging)
+        if staging is not None:
+            _rollback_staging_safely(staging)
         raise
     except Exception as exc:
-        _rollback_staging_safely(staging)
+        if staging is not None:
+            _rollback_staging_safely(staging)
         raise BackupCorruptedError("backup file is invalid or corrupted") from exc
     finally:
-        staging.close()
+        if staging is not None:
+            try:
+                staging.close()
+            except Exception as exc:
+                logging.warning(
+                    "staging connection cleanup failed resource_type=staging"
+                )
+                if completed:
+                    raise BackupCorruptedError(
+                        "backup file is invalid or corrupted"
+                    ) from exc
 
 
 def _rollback_staging_safely(staging: sqlite3.Connection) -> None:
@@ -355,9 +382,11 @@ def _apply_validated_staging_to_live(staging_path: str) -> dict[str, int]:
         with DatabaseReplacementUnitOfWork() as replacement_uow:
             live = replacement_uow.connection
             _delete_all_rows(live)
-            source = sqlite3.connect(staging_path)
-            source.row_factory = sqlite3.Row
+            source: sqlite3.Connection | None = None
+            source_completed = False
             try:
+                source = sqlite3.connect(staging_path)
+                source.row_factory = sqlite3.Row
                 imported: dict[str, int] = {}
                 for table in EXPORT_TABLES:
                     imported[table] = _insert_rows(
@@ -368,8 +397,20 @@ def _apply_validated_staging_to_live(staging_path: str) -> dict[str, int]:
                             for row in source.execute(f"SELECT * FROM {table}")
                         ],
                     )
+                source_completed = True
             finally:
-                source.close()
+                if source is not None:
+                    try:
+                        source.close()
+                    except Exception as exc:
+                        logging.warning(
+                            "validated staging reader cleanup failed "
+                            "resource_type=staging_reader"
+                        )
+                        if source_completed:
+                            raise BackupReplacementError(
+                                "live database replacement failed"
+                            ) from exc
             seed_defaults(live)
             _reset_derived_folder_index(live)
             try:
