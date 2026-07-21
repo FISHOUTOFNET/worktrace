@@ -70,7 +70,7 @@ def test_raw_connection_write_does_not_infer_report_generation(temp_db):
     assert _generation() == before
 
 
-def test_explicit_uow_publishes_declared_report_generation_once(temp_db):
+def test_explicit_uow_publishes_marked_report_generation_once(temp_db):
     activity_id = _activity()
     before = _generation()
 
@@ -79,6 +79,7 @@ def test_explicit_uow_publishes_declared_report_generation_once(temp_db):
             "UPDATE activity_log SET status = ?, updated_at = ? WHERE id = ?",
             ("idle", now_str(), activity_id),
         )
+        uow.mark_changed(DataGenerationNamespace.REPORT_STRUCTURE)
 
     assert _generation() == before + 1
 
@@ -92,6 +93,7 @@ def test_explicit_uow_rollback_publishes_nothing(temp_db):
             "UPDATE activity_log SET status = ?, updated_at = ? WHERE id = ?",
             ("idle", now_str(), activity_id),
         )
+        uow.mark_changed(DataGenerationNamespace.REPORT_STRUCTURE)
         uow.mark_rollback_only()
 
     assert _generation() == before
@@ -112,10 +114,12 @@ def test_nested_explicit_uow_coalesces_generation_publication(temp_db):
             "UPDATE activity_log SET status = ?, updated_at = ? WHERE id = ?",
             ("idle", now_str(), activity_id),
         )
+        outer.mark_changed(DataGenerationNamespace.REPORT_STRUCTURE)
         with DomainUnitOfWork((DataGenerationNamespace.REPORT_STRUCTURE,)) as inner:
             inner.connection.execute(
                 "UPDATE activity_log SET window_title = ?, updated_at = ? WHERE id = ?",
                 ("Renamed.docx", now_str(), activity_id),
             )
+            inner.mark_changed(DataGenerationNamespace.REPORT_STRUCTURE)
 
     assert _generation() == before + 1
