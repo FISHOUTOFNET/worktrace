@@ -58,6 +58,7 @@ def test_heartbeat_revision_reuses_hash_until_structural_commit(temp_db):
                 "UPDATE activity_log SET status = ?, updated_at = ? WHERE id = ?",
                 ("idle", now_str(), activity_id),
             )
+            uow.mark_changed(DataGenerationNamespace.REPORT_STRUCTURE)
             uow.mark_rollback_only()
         assert report_revision_service.get_report_structure_revision(DATE) == first
         assert build.call_count == 1
@@ -67,6 +68,7 @@ def test_heartbeat_revision_reuses_hash_until_structural_commit(temp_db):
                 "UPDATE activity_log SET status = ?, updated_at = ? WHERE id = ?",
                 ("idle", now_str(), activity_id),
             )
+            uow.mark_changed(DataGenerationNamespace.REPORT_STRUCTURE)
         changed = report_revision_service.get_report_structure_revision(DATE)
         assert changed != first
         assert build.call_count == 2
