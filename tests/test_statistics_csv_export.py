@@ -524,13 +524,28 @@ def test_write_csv_rejects_missing_parent(temp_db, tmp_path):
         )
 
 
+def _matches_atomic_temp_path(path, target: Path) -> bool:
+    """Match the unique unpredictable temp file AtomicFileOutput creates.
+
+    AtomicFileOutput uses prefix `.{target.name}.` and suffix `.tmp` inside the
+    target's parent directory. The middle segment is a random mkstemp token, so
+    tests must match by parent + prefix + suffix rather than a fixed name.
+    """
+    candidate = Path(path)
+    return (
+        candidate.parent == target.parent
+        and candidate.name.startswith(f".{target.name}.")
+        and candidate.name.endswith(".tmp")
+    )
+
+
 def test_write_csv_propagates_permission_error(temp_db, tmp_path):
     _seed_closed_activity()
     out = tmp_path / "report.csv"
     real_open = open
 
     def fake_open(path, mode, *args, **kwargs):
-        if str(path) in {str(out), str(out) + ".tmp"}:
+        if _matches_atomic_temp_path(path, out):
             raise PermissionError("denied")
         return real_open(path, mode, *args, **kwargs)
 
@@ -545,7 +560,7 @@ def test_write_csv_propagates_oserror(temp_db, tmp_path):
     real_open = open
 
     def fake_open(path, mode, *args, **kwargs):
-        if str(path) in {str(out), str(out) + ".tmp"}:
+        if _matches_atomic_temp_path(path, out):
             raise OSError("busy")
         return real_open(path, mode, *args, **kwargs)
 
@@ -829,8 +844,8 @@ def test_bridge_export_empty_data_returns_chinese(temp_db, tmp_path, bridge):
 @pytest.mark.parametrize(
     ("exception", "message"),
     [
-        (PermissionError("denied"), "无法写入文件，请检查权限或文件是否被占用"),
-        (OSError("busy"), "无法写入文件，请检查权限或文件是否被占用"),
+        (PermissionError("denied"), "导出失败，请检查保存位置和权限"),
+        (OSError("busy"), "文件可能被占用，请关闭后重试"),
     ],
 )
 def test_bridge_export_file_errors_return_chinese(
@@ -960,9 +975,12 @@ def test_bridge_export_error_messages_are_stable_chinese():
         "range_too_large": "日期范围过大",
         "empty_data": "当前范围没有可导出的记录",
         "invalid_path": "请选择有效保存位置",
-        "permission_denied": "无法写入文件，请检查权限或文件是否被占用",
-        "file_busy": "无法写入文件，请检查权限或文件是否被占用",
-        "write_failed": "无法写入文件，请检查权限或文件是否被占用",
+        "permission_denied": "导出失败，请检查保存位置和权限",
+        "file_busy": "文件可能被占用，请关闭后重试",
+        "storage_unavailable": "存储空间或设备不可用",
+        "cleanup_failed": "导出未完成，临时文件清理失败",
+        "stale_statistics_snapshot": "统计数据已更新，请重新加载后导出",
+        "write_failed": "导出失败，请检查保存位置和权限",
         "operation_failed": "导出失败",
     }
     for code, message in expected.items():
