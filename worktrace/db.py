@@ -156,16 +156,29 @@ def get_db_key() -> str:
 
 
 def get_connection() -> sqlite3.Connection:
+    """Acquire a fully initialized connection or close the partial resource."""
+
     database_path = get_db_path()
-    conn = sqlite3.connect(
-        database_path,
-        timeout=5,
-        check_same_thread=False,
-        factory=WorkTraceConnection,
-    )
-    conn.row_factory = sqlite3.Row
-    apply_connection_pragmas(conn)
-    return conn
+    conn: sqlite3.Connection | None = None
+    try:
+        conn = sqlite3.connect(
+            database_path,
+            timeout=5,
+            check_same_thread=False,
+            factory=WorkTraceConnection,
+        )
+        conn.row_factory = sqlite3.Row
+        apply_connection_pragmas(conn)
+        return conn
+    except BaseException:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                logging.warning(
+                    "database connection cleanup failed phase=acquisition"
+                )
+        raise
 
 
 def active_database_epoch_key() -> tuple[str, int]:
