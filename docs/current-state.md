@@ -10,8 +10,8 @@
 - WebView is the only shipping UI. Window close runs `AppRuntime.shutdown()`.
 - The privacy notice is fail-closed; sensitive workers and clipboard capture do
   not start before acceptance.
-- CSV is the only current public export; Excel, PDF and timesheet-template export
-  are unsupported in the shipping WebView.
+- CSV export is the only current public export; Excel, PDF and timesheet-template
+  export are unsupported in the shipping WebView.
 
 ## Composition and lifecycle
 ```text
@@ -82,7 +82,8 @@ revision replay is rejected at the read boundary. Operation payload version is
 Schema seeding alone creates system projects. Stable identity controls reserved
 behavior. Ordinary commands cannot create, rename, archive, delete or toggle
 system projects; missing system rows are reported unavailable rather than
-recreated by normal API calls.
+recreated by normal API calls. Shipped lifecycle capabilities are exactly:
+user project create / edit / enable-disable / archive.
 
 Keyword/folder mutations use the canonical rule command owner for project type,
 normalized pattern, duplicate and batch-atomicity validation. Excluded rules use
@@ -132,4 +133,5 @@ artifact-only (`diagnostics.json` and JUnit XML); logs do not replay failures,
 tracebacks or test tails. Repairs are grouped by semantic root cause. Concurrency
 tests use bounded events/joins and required risk markers. Only
 `.github/workflows/ci.yml` and `_validation.yml` are permanent workflows;
-acceptance and temporary agent workflows remain absent.
+acceptance and temporary agent workflows remain absent. Historical WebView phases
+are archived in [`history/webview-phases.md`](history/webview-phases.md).
