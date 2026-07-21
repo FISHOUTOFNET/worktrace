@@ -571,12 +571,32 @@ class RuntimeMaintenanceCoordinator:
         hold_acquired: bool,
         replacement_committed: bool,
         recovery_epoch: str | None,
-        clear_recovery_seal: bool,
+        requires_block: bool,
         timeout_seconds: float,
     ) -> bool:
-        """Restore runtime, optionally clearing the exact replacement epoch."""
+        """Restore runtime for the non-fail-closed path.
+
+        When ``requires_block`` is True the caller has already classified the
+        exception as fail-closed. Per the maintenance contract the collector
+        must remain HELD, ``restore_after_maintenance`` must not be invoked and
+        the recovery seal must not be cleared. Only the optional database reset
+        for a durably-committed replacement is permitted. This method returns
+        False so the caller enters fail-closed.
+        """
 
         if state is None:
+            return False
+        if requires_block:
+            if replacement_committed:
+                try:
+                    self._reset_after_replacement(
+                        control=control,
+                        timeout_seconds=timeout_seconds,
+                    )
+                except Exception:
+                    logging.warning(
+                        "maintenance reset failed phase=fail_closed_setup"
+                    )
             return False
         try:
             if replacement_committed:
@@ -591,18 +611,77 @@ class RuntimeMaintenanceCoordinator:
                     state=state,
                     timeout_seconds=timeout_seconds,
                 )
-            if clear_recovery_seal:
-                self._verify_stable_runtime_and_clear_seal(
-                    control=control,
-                    control_epoch=control_epoch,
-                    recovery_epoch=recovery_epoch,
-                )
+            self._verify_stable_runtime_and_clear_seal(
+                control=control,
+                control_epoch=control_epoch,
+                recovery_epoch=recovery_epoch,
+            )
             return True
         except Exception:
             logging.warning(
                 "maintenance recovery verification failed phase=exception"
             )
             return False
+
+    def _finalize_failure_inside_exclusive(
+        self,
+        *,
+        exc: BaseException,
+        reason: str,
+        state: RuntimeMaintenanceState | None,
+        control: RuntimeMaintenanceControl | None,
+        control_epoch: int,
+        hold_acquired: bool,
+        progress: MaintenanceOperationProgress,
+        lease: WriteDrainLease,
+        timeout_seconds: float,
+    ) -> None:
+        """Recover from a body exception while still inside the EXCLUSIVE scope.
+
+        The EXCLUSIVE write gate lease is still held so the recovery actions
+        (durable restore, collector release, seal verification) run under the
+        same protection as the operation body. The fail-closed path hands the
+        lease to the recovery block without releasing the collector.
+        """
+
+        requires_block = self._requires_fail_closed(exc)
+        replacement_committed = progress.durable_replacement_committed
+        recovery_epoch = progress.recovery_epoch
+
+        if requires_block:
+            if replacement_committed:
+                try:
+                    self._reset_after_replacement(
+                        control=control,
+                        timeout_seconds=timeout_seconds,
+                    )
+                except Exception:
+                    logging.warning(
+                        "maintenance reset failed phase=fail_closed_exclusive"
+                    )
+            self._enter_fail_closed(
+                f"{reason}_operation",
+                lease=lease,
+                recovery_epoch=recovery_epoch,
+            )
+            return
+
+        restored = self._restore_after_failure(
+            state=state,
+            control=control,
+            control_epoch=control_epoch,
+            hold_acquired=hold_acquired,
+            replacement_committed=replacement_committed,
+            recovery_epoch=recovery_epoch,
+            requires_block=False,
+            timeout_seconds=timeout_seconds,
+        )
+        if not restored:
+            self._enter_fail_closed(
+                f"{reason}_restore",
+                lease=lease,
+                recovery_epoch=recovery_epoch,
+            )
 
     @contextmanager
     def _maintain(
@@ -664,59 +743,103 @@ class RuntimeMaintenanceCoordinator:
                 drain_existing_writers()
                 lease.promote()
                 self._set_phase(MaintenancePhase.EXCLUSIVE)
-                yield state
-                body_returned = True
+                body_exception: BaseException | None = None
+                try:
+                    yield state
+                    body_returned = True
+                except BaseException as exc:
+                    body_exception = exc
 
-                if intent is MaintenanceIntent.DATABASE_REPLACEMENT:
-                    # A normally returned replacement scope preserves the prior
-                    # reset contract even for test/no-op bodies. A caller error
-                    # after commit uses the explicit progress handoff instead.
-                    self._reset_after_replacement(
-                        control=control,
-                        timeout_seconds=timeout_seconds,
-                    )
-                self._restore_durable_state_before_release(state)
-                if hold_acquired and control is not None:
-                    self._release_and_verify_runtime(
-                        control=control,
+                if body_exception is not None:
+                    # Finalize inside the EXCLUSIVE scope so the lease is still
+                    # held for restore/release/seal verification. The fail-closed
+                    # path hands the lease to the recovery block without
+                    # releasing the collector.
+                    self._finalize_failure_inside_exclusive(
+                        exc=body_exception,
+                        reason=reason,
                         state=state,
+                        control=control,
+                        control_epoch=control_epoch,
+                        hold_acquired=hold_acquired,
+                        progress=progress,
+                        lease=lease,
                         timeout_seconds=timeout_seconds,
                     )
-                self._verify_stable_runtime_and_clear_seal(
+                    logging.warning(
+                        "runtime maintenance failed intent=%s phase=%s exception=%s",
+                        intent.value,
+                        self.phase.value,
+                        type(body_exception).__name__,
+                    )
+                    raise body_exception
+
+                try:
+                    if intent is MaintenanceIntent.DATABASE_REPLACEMENT:
+                        # A normally returned replacement scope preserves the prior
+                        # reset contract even for test/no-op bodies. A caller error
+                        # after commit uses the explicit progress handoff instead.
+                        self._reset_after_replacement(
+                            control=control,
+                            timeout_seconds=timeout_seconds,
+                        )
+                    self._restore_durable_state_before_release(state)
+                    if hold_acquired and control is not None:
+                        self._release_and_verify_runtime(
+                            control=control,
+                            state=state,
+                            timeout_seconds=timeout_seconds,
+                        )
+                    self._verify_stable_runtime_and_clear_seal(
+                        control=control,
+                        control_epoch=control_epoch,
+                        recovery_epoch=progress.recovery_epoch,
+                    )
+                except BaseException as post_body_exc:
+                    # The body completed but the post-body recovery (reset,
+                    # restore, release or seal verification) failed. Enter
+                    # fail-closed directly with the EXCLUSIVE lease still held.
+                    # Do not re-run the recovery actions; they already failed.
+                    logging.warning(
+                        "runtime maintenance recovery failed intent=%s phase=%s exception=%s",
+                        intent.value,
+                        self.phase.value,
+                        type(post_body_exc).__name__,
+                    )
+                    self._enter_fail_closed(
+                        f"{reason}_restore",
+                        lease=lease,
+                        recovery_epoch=progress.recovery_epoch,
+                    )
+                    raise post_body_exc
+        except BaseException as exc:
+            # Setup failures (before EXCLUSIVE scope was entered) or drain
+            # failures that could not obtain the EXCLUSIVE lease. The lease, if
+            # any, has already been released by the with-statement.
+            if lease_for_failure is None:
+                requires_block = self._requires_fail_closed(exc)
+                restored = self._restore_after_failure(
+                    state=state,
                     control=control,
                     control_epoch=control_epoch,
+                    hold_acquired=hold_acquired,
+                    replacement_committed=progress.durable_replacement_committed,
                     recovery_epoch=progress.recovery_epoch,
+                    requires_block=requires_block,
+                    timeout_seconds=timeout_seconds,
                 )
-        except BaseException as exc:
-            replacement_committed = progress.durable_replacement_committed
-            requires_block = self._requires_fail_closed(exc)
-            restored = self._restore_after_failure(
-                state=state,
-                control=control,
-                control_epoch=control_epoch,
-                hold_acquired=hold_acquired,
-                replacement_committed=replacement_committed,
-                recovery_epoch=progress.recovery_epoch,
-                clear_recovery_seal=not requires_block,
-                timeout_seconds=timeout_seconds,
-            )
-            must_block = requires_block or not restored
-            if must_block:
-                command = (
-                    "restore"
-                    if body_returned or replacement_committed
-                    else "operation"
-                )
-                exclusive_lease = (
-                    lease_for_failure
-                    if DATABASE_WRITE_GATE.phase() is WriteGatePhase.EXCLUSIVE
-                    else None
-                )
-                self._enter_fail_closed(
-                    f"{reason}_{command}",
-                    lease=exclusive_lease,
-                    recovery_epoch=progress.recovery_epoch,
-                )
+                must_block = requires_block or not restored
+                if must_block:
+                    command = (
+                        "restore"
+                        if body_returned or progress.durable_replacement_committed
+                        else "operation"
+                    )
+                    self._enter_fail_closed(
+                        f"{reason}_{command}",
+                        lease=None,
+                        recovery_epoch=progress.recovery_epoch,
+                    )
             logging.warning(
                 "runtime maintenance failed intent=%s phase=%s exception=%s",
                 intent.value,
