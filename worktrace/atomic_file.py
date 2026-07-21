@@ -16,6 +16,11 @@ class TemporaryFileError(OSError):
 
     code = "temporary_file_failed"
 
+    def __init__(self, code: str | None = None) -> None:
+        normalized = str(code or self.code)
+        super().__init__(normalized)
+        self.code = normalized
+
 
 class TemporaryFileCleanupError(TemporaryFileError):
     """A caller-owned temporary resource could not be removed."""
@@ -223,16 +228,21 @@ def atomic_write_bytes(
     permissions: int | None = None,
 ) -> Path:
     destination = Path(target)
-    with AtomicFileOutput(
-        destination,
-        resource=resource,
-        permissions=permissions,
-    ) as output:
-        with open(output.temporary_path, "wb") as handle:
-            handle.write(data)
-            handle.flush()
-            os.fsync(handle.fileno())
-        output.commit()
+    try:
+        with AtomicFileOutput(
+            destination,
+            resource=resource,
+            permissions=permissions,
+        ) as output:
+            with open(output.temporary_path, "wb") as handle:
+                handle.write(data)
+                handle.flush()
+                os.fsync(handle.fileno())
+            output.commit()
+    except TemporaryFileError:
+        raise
+    except OSError as exc:
+        raise TemporaryFileError("atomic_write_failed") from exc
     return destination
 
 
@@ -245,16 +255,21 @@ def atomic_write_text(
     permissions: int | None = None,
 ) -> Path:
     destination = Path(target)
-    with AtomicFileOutput(
-        destination,
-        resource=resource,
-        permissions=permissions,
-    ) as output:
-        with open(output.temporary_path, "w", encoding=encoding, newline="") as handle:
-            handle.write(text)
-            handle.flush()
-            os.fsync(handle.fileno())
-        output.commit()
+    try:
+        with AtomicFileOutput(
+            destination,
+            resource=resource,
+            permissions=permissions,
+        ) as output:
+            with open(output.temporary_path, "w", encoding=encoding, newline="") as handle:
+                handle.write(text)
+                handle.flush()
+                os.fsync(handle.fileno())
+            output.commit()
+    except TemporaryFileError:
+        raise
+    except OSError as exc:
+        raise TemporaryFileError("atomic_write_failed") from exc
     return destination
 
 
