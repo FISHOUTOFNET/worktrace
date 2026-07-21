@@ -23,10 +23,15 @@ def _ack(command_id: str, kind: str, terminal: str) -> dict[str, object]:
     }
 
 
+class _OperationalHoldState:
+    value = "operational"
+
+
 class _Channel:
     def __init__(self, completed: dict[str, object] | None) -> None:
         self.completed = completed
         self.queries: list[str] = []
+        self.hold_state = _OperationalHoldState()
 
     def query_command(self, command_id: str):
         self.queries.append(command_id)
@@ -115,8 +120,14 @@ def _prepare_runtime_state(monkeypatch, *, paused: bool = False, privacy: bool =
 
 def _clear_test_fail_closed(coordinator: RuntimeMaintenanceCoordinator) -> None:
     if DATABASE_WRITE_GATE.recovery_blocked():
-        with DATABASE_WRITE_GATE._maintenance_recovery_write_scope():
-            database_maintenance_service.maintenance_recovery_latch_repository.clear_latch()
+        latch = (
+            database_maintenance_service.maintenance_recovery_latch_repository.read_latch()
+        )
+        if latch.epoch:
+            with DATABASE_WRITE_GATE._maintenance_recovery_write_scope():
+                database_maintenance_service.maintenance_recovery_latch_repository.clear_latch(
+                    expected_epoch=latch.epoch
+                )
         DATABASE_WRITE_GATE._clear_recovery_block()
     coordinator._set_phase(MaintenancePhase.IDLE)
 
