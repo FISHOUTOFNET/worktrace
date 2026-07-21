@@ -5,17 +5,21 @@ import hashlib
 import json
 import os
 import platform
+import threading
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol
 
+from ..atomic_file import OwnedTemporaryFile, TemporaryFileCleanupError, TemporaryFileError
+
 
 DATA_KEY_BYTES = 32
 KEYRING_VERSION = 1
 DPAPI_WRAP_TYPE = "dpapi-current-user"
 FAKE_WRAP_TYPE = "fake-test-wrapper"
+_KEYRING_CREATION_LOCK = threading.RLock()
 
 
 class KeyManagerError(Exception):
@@ -96,38 +100,72 @@ def create_or_load_local_key(
     path: Path | None = None,
     wrapper: KeyWrapper | None = None,
 ) -> LocalKey:
+    """Create exactly one active keyring without overwriting a concurrent winner."""
+
     keyring_path = path or default_keyring_path()
     active_wrapper = wrapper if wrapper is not None else _default_wrapper()
-    if keyring_path.exists():
-        return load_local_key(path=keyring_path, wrapper=active_wrapper)
+    with _KEYRING_CREATION_LOCK:
+        if keyring_path.exists():
+            return load_local_key(path=keyring_path, wrapper=active_wrapper)
 
-    key = os.urandom(DATA_KEY_BYTES)
-    created_at = _utc_now()
-    key_id = str(uuid.uuid4())
-    wrapped = active_wrapper.wrap(key)
-    keyring = {
-        "version": KEYRING_VERSION,
-        "active_key_id": key_id,
-        "keys": [
+        key = os.urandom(DATA_KEY_BYTES)
+        created_at = _utc_now()
+        key_id = str(uuid.uuid4())
+        wrapped = active_wrapper.wrap(key)
+        payload = json.dumps(
             {
-                "key_id": key_id,
-                "wrapped_data_key": _b64(wrapped),
-                "wrap_type": active_wrapper.wrap_type,
-                "created_at": created_at,
-            }
-        ],
-    }
-    keyring_path.parent.mkdir(parents=True, exist_ok=True)
-    keyring_path.write_text(
-        json.dumps(keyring, indent=2, sort_keys=True),
-        encoding="utf-8",
-    )
-    return LocalKey(
-        key_id=key_id,
-        key=key,
-        created_at=created_at,
-        wrap_type=active_wrapper.wrap_type,
-    )
+                "version": KEYRING_VERSION,
+                "active_key_id": key_id,
+                "keys": [
+                    {
+                        "key_id": key_id,
+                        "wrapped_data_key": _b64(wrapped),
+                        "wrap_type": active_wrapper.wrap_type,
+                        "created_at": created_at,
+                    }
+                ],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        keyring_path.parent.mkdir(parents=True, exist_ok=True)
+        owner = OwnedTemporaryFile(
+            directory=keyring_path.parent,
+            prefix=f".{keyring_path.name}.",
+            suffix=".tmp",
+            resource="keyring",
+            permissions=0o600,
+        )
+        try:
+            with owner:
+                with open(owner.path, "w", encoding="utf-8", newline="") as handle:
+                    handle.write(payload)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                try:
+                    # A hard-link publish is atomic and fails if another process
+                    # already created the keyring. It never replaces the winner.
+                    os.link(owner.path, keyring_path)
+                except FileExistsError:
+                    return load_local_key(path=keyring_path, wrapper=active_wrapper)
+                except OSError as exc:
+                    raise KeyManagerError("Could not create local keyring") from exc
+                try:
+                    os.chmod(keyring_path, 0o600)
+                except OSError:
+                    # Windows ACLs remain the authority; chmod is best effort.
+                    pass
+        except TemporaryFileCleanupError as exc:
+            raise KeyManagerError("Could not clean temporary local keyring") from exc
+        except TemporaryFileError as exc:
+            raise KeyManagerError("Could not create local keyring") from exc
+
+        return LocalKey(
+            key_id=key_id,
+            key=key,
+            created_at=created_at,
+            wrap_type=active_wrapper.wrap_type,
+        )
 
 
 def load_local_key(
