@@ -124,18 +124,18 @@ class DatabaseReplacementUnitOfWork:
                 return False
 
             floor_value = int(self._floor.get(_REPLACEMENT_NAMESPACE, 0))
-            committed_values = DataGenerationRepository.bump_replacement(
-                connection,
-                minimum_value=floor_value,
-            )
             try:
+                committed_values = DataGenerationRepository.bump_replacement(
+                    connection,
+                    minimum_value=floor_value,
+                )
                 connection.commit()
             except BaseException:
                 try:
                     connection.rollback()
                 except Exception:
                     logging.warning(
-                        "database replacement rollback failed stage=commit"
+                        "database replacement rollback failed stage=precommit"
                     )
                 self._rolled_back = True
                 self._state = ReplacementUnitOfWorkState.ROLLED_BACK
