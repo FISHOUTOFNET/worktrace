@@ -24,7 +24,7 @@ _CURRENT_UNIT_OF_WORK: ContextVar[DomainUnitOfWork | None] = ContextVar(
 )
 
 
-class UnitOfWorkPhase(StrEnum):
+class UnitOfWorkState(StrEnum):
     ACQUIRING = "acquiring"
     ACTIVE = "active"
     DURABLE_COMMITTED = "durable_committed"
@@ -52,8 +52,9 @@ class DomainUnitOfWork:
         self._root: DomainUnitOfWork | None = None
         self._connection = None
         self._token: Token[DomainUnitOfWork | None] | None = None
+        self._context_published = False
         self._rollback_only = False
-        self._phase = UnitOfWorkPhase.ACQUIRING
+        self._state = UnitOfWorkState.ACQUIRING
         self._durable_committed = False
         self._rolled_back = False
 
@@ -72,8 +73,8 @@ class DomainUnitOfWork:
         return bool(self._owner()._changed_effects)
 
     @property
-    def phase(self) -> UnitOfWorkPhase:
-        return self._owner()._phase
+    def state(self) -> UnitOfWorkState:
+        return self._owner()._state
 
     @property
     def durable_committed(self) -> bool:
@@ -122,7 +123,8 @@ class DomainUnitOfWork:
             connection.execute("BEGIN IMMEDIATE")
             self._connection = connection
             self._token = _CURRENT_UNIT_OF_WORK.set(self)
-            self._phase = UnitOfWorkPhase.ACTIVE
+            self._context_published = True
+            self._state = UnitOfWorkState.ACTIVE
             return self
         except BaseException:
             if connection is not None:
@@ -130,10 +132,10 @@ class DomainUnitOfWork:
                     connection.close()
                 except Exception:
                     logging.warning(
-                        "domain unit of work cleanup failed phase=acquisition"
+                        "domain unit of work cleanup failed stage=acquisition"
                     )
             self._connection = None
-            self._phase = UnitOfWorkPhase.FINALIZED
+            self._state = UnitOfWorkState.FINALIZED
             raise
 
     def __exit__(self, exc_type, exc_value, traceback) -> bool:
@@ -152,23 +154,21 @@ class DomainUnitOfWork:
                     connection.rollback()
                 except Exception:
                     logging.warning(
-                        "domain unit of work rollback failed phase=operation"
+                        "domain unit of work rollback failed stage=operation"
                     )
                 self._rolled_back = True
-                self._phase = UnitOfWorkPhase.ROLLED_BACK
+                self._state = UnitOfWorkState.ROLLED_BACK
                 return False
 
             if self._changed_effects:
                 from .db import get_db_key
 
-                # Resolve process identity before commit so a failure remains a
-                # genuine pre-commit failure and can be rolled back accurately.
                 database_key = get_db_key()
                 DataGenerationRepository.bump(connection, self._changed_effects)
                 committed_effects = tuple(self._changed_effects)
             connection.commit()
             self._durable_committed = True
-            self._phase = UnitOfWorkPhase.DURABLE_COMMITTED
+            self._state = UnitOfWorkState.DURABLE_COMMITTED
 
             if committed_effects:
                 from .generation_clock import clear, publish_committed
@@ -177,14 +177,14 @@ class DomainUnitOfWork:
                     publish_committed(connection, committed_effects)
                 except Exception:
                     logging.warning(
-                        "generation publication failed phase=post_commit"
+                        "generation publication failed stage=post_commit"
                     )
                     try:
                         assert database_key is not None
                         clear(database_key)
                     except Exception:
                         logging.warning(
-                            "generation cache invalidation failed phase=post_commit"
+                            "generation cache invalidation failed stage=post_commit"
                         )
             return False
         except BaseException:
@@ -193,30 +193,32 @@ class DomainUnitOfWork:
                     connection.rollback()
                 except Exception:
                     logging.warning(
-                        "domain unit of work rollback failed phase=commit"
+                        "domain unit of work rollback failed stage=commit"
                     )
                 self._rolled_back = True
-                self._phase = UnitOfWorkPhase.ROLLED_BACK
+                self._state = UnitOfWorkState.ROLLED_BACK
             raise
         finally:
             token = self._token
             self._token = None
-            if token is not None:
+            if self._context_published:
                 try:
-                    _CURRENT_UNIT_OF_WORK.reset(token)
+                    _CURRENT_UNIT_OF_WORK.reset(token)  # type: ignore[arg-type]
                 except Exception:
                     logging.warning(
-                        "domain unit of work context reset failed phase=finalization"
+                        "domain unit of work context reset failed stage=finalization"
                     )
                     _CURRENT_UNIT_OF_WORK.set(None)
+                finally:
+                    self._context_published = False
             try:
                 connection.close()
             except Exception:
                 logging.warning(
-                    "domain unit of work connection close failed phase=finalization"
+                    "domain unit of work connection close failed stage=finalization"
                 )
             self._connection = None
-            self._phase = UnitOfWorkPhase.FINALIZED
+            self._state = UnitOfWorkState.FINALIZED
 
 
 def current_domain_unit_of_work() -> DomainUnitOfWork | None:
@@ -226,6 +228,6 @@ def current_domain_unit_of_work() -> DomainUnitOfWork | None:
 
 __all__ = [
     "DomainUnitOfWork",
-    "UnitOfWorkPhase",
+    "UnitOfWorkState",
     "current_domain_unit_of_work",
 ]
