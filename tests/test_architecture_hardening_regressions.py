@@ -88,6 +88,7 @@ def test_structure_revision_ignores_open_duration_but_tracks_structure(temp_db):
             "UPDATE activity_log SET status = ?, updated_at = ? WHERE id = ?",
             ("idle", now_str(), activity_id),
         )
+        uow.mark_changed(DataGenerationNamespace.REPORT_STRUCTURE)
     assert report_revision_service.get_report_structure_revision(DATE) != before
 
 
@@ -99,6 +100,7 @@ def test_structure_revision_tracks_resource_display_facts(temp_db):
             "UPDATE activity_resource SET display_name = ? WHERE activity_id = ?",
             ("Renamed.docx", activity_id),
         )
+        uow.mark_changed(DataGenerationNamespace.REPORT_STRUCTURE)
     assert report_revision_service.get_report_structure_revision(DATE) != before
 
 
