@@ -15,6 +15,7 @@ the contract.
 | Database write exclusion | `ProcessDatabaseWriteGate` |
 | Business transactions and generation effects | explicit command owner plus root `DomainUnitOfWork` |
 | Database replacement identity | database key plus durable `DATABASE_REPLACEMENT` generation |
+| Decrypted import staging lifetime | one `ValidatedStaging` resource scope |
 | Backup and clear table membership/order | `database_content_manifest.py` |
 | Projection admission | persisted admission revision |
 | Projection replay | payload v6 plus `ReplayBinding.MEMBERS` only; legacy revision bindings rejected at read boundary |
@@ -43,11 +44,24 @@ The maintenance DTO contains exactly:
 - `user_paused`
 
 Active maintenance and durable fail-closed recovery blocking are distinct.
-Clear and encrypted import use the same coordinator and write gate. Restoration
-returns to the pre-maintenance running, stopped or user-paused state; an
-unverified hold/reset/release remains fail-closed.
+Clear and encrypted import use the same coordinator and write gate. Both normal
+completion and pre-commit failure restoration use one order while Collector is
+HELD and the write gate remains EXCLUSIVE:
 
-## Replacement and cache identity
+```text
+restore durable state
+-> request maintenance release
+-> require terminal OPERATIONAL acknowledgement
+-> exit EXCLUSIVE scope
+-> return IDLE
+```
+
+Durable restoration failure sends no release and enters fail-closed. Unknown or
+failed release/reset also remains fail-closed. Pre-existing user pause, stopped
+Collector and unaccepted privacy notice are preserved; restoration never starts
+collection contrary to those durable/runtime facts.
+
+## Replacement and staging identity
 
 A replacement transaction persists one `DATABASE_REPLACEMENT` generation and
 publishes only the committed value. Publication failure invalidates the process
@@ -56,14 +70,22 @@ command result. Database-derived caches use database key plus replacement
 identity. The Windows path resolver uses the single adapter reset path instead
 of a second epoch-based invalidation mechanism.
 
-Secure backup import builds and fully validates a staging database **before**
-entering the maintenance hold. Staging failures raise `BackupCorruptedError`
-and never trigger durable fail-closed because the live database has not been
-touched. Live replacement failures raise `BackupReplacementError`; the
-coordinator attempts collector restoration and fail-closes only when the
-runtime state cannot be verified.
+Secure backup import enters one `ValidatedStaging` resource scope before
+maintenance. That owner creates the decrypted temporary SQLite file, builds the
+current schema/indexes, inserts data, seeds defaults, resets derived folder-index
+state, validates foreign keys/semantics/replay graph, commits staging, hands the
+validated path to live apply and deletes it after every success or failure path.
+No caller receives an unowned staging path and cleanup never depends on object
+finalization or process exit.
 
-## Projection and transactions
+Staging construction and validation failures are `BackupCorruptedError`, occur
+outside maintenance and cannot alter live data, generations or the recovery
+latch. After staging succeeds, all ordinary live delete/insert/seed/reset,
+generation-floor/bump, validation, SQLite I/O and commit failures are
+`BackupReplacementError`; internal causes are chained without leaking them to
+the UI. Maintenance hold/reset/release and fail-closed errors remain separate.
+
+## Projection and explicit transactions
 
 Current operations use payload v6 and members-only replay binding. Missing,
 invalid or non-current payload versions fail closed at the repository read
@@ -71,21 +93,40 @@ boundary. Admission revision and durable replay identity are separate.
 Repository, replay engine and secure backup validator share one contract
 entry point in `report_operation_contract`; malformed payloads produce a
 stable `invalid_payload` diagnostic instead of raising.
-`DomainUnitOfWork` owns business generation effects: rollback and no-op do not
-publish, nested scopes reuse the root transaction, and each namespace is bumped
-at most once per root commit. `DomainUnitOfWork` tracks per-namespace changed
-effects separately from declared effects; multi-effect scopes must call
-`mark_changed(...)` explicitly so that no-op or rollback paths do not publish
-unrelated generations. `DatabaseReplacementUnitOfWork` owns the physical
-replacement epoch bump, live commit and process-local publication.
+
+`DomainUnitOfWork` owns root SQLite transaction/reuse/rollback-only propagation,
+declared generation effects and explicitly changed effects. It never examines
+SQL text, row counts, `total_changes` or commit hooks to infer semantics.
+`mark_changed(namespace)` requires a declared namespace; missing or undeclared
+namespaces are contract violations. Nested scopes update the root and each
+changed namespace bumps at most once at root commit.
+
+No-op, rollback, worker progress, retry cursor, heartbeat, checkpoint and
+receipt-only writes publish no business generation. Canonical assignment,
+resource, lifecycle, project/rule/privacy and report-operation owners mark their
+actual namespace only when user-visible semantics change. Report mutation writes
+an idempotent no-op receipt without `REPORT_STRUCTURE`; an effective operation
+marks `REPORT_STRUCTURE` only after operation/members/receipt exist and replay is
+`APPLIED` with the expected effect. `DatabaseReplacementUnitOfWork` separately
+owns the physical replacement epoch, live commit and process-local publication.
 `WorkTraceConnection` retains only write-gate enforcement and read observation.
 
 ## Manifest and current-only data contract
 
-Schema v13 and backup payload v6 are current-only. The static database content
-manifest is the sole source for schema membership, backup order, delete order,
-derived/internal classification and clear-time rebuild membership. Internal
-worker progress and derived indexes are not exported.
+Schema v13, encrypted backup payload v6, report operation payload v6 and
+LiveClock v2 are current-only. The static database content manifest is the sole
+source for schema membership, backup order, delete order, derived/internal
+classification and clear-time rebuild membership. Internal worker progress and
+derived indexes are not exported.
+
+## Permanent governance and regression coverage
+
+Permanent governance rejects `total_changes` in `DomainUnitOfWork`, zero-argument
+production `mark_changed()` calls and SQL-text generation inference. Behavioral
+coverage verifies declared/changed namespace separation, undeclared-effect
+errors, no-op/rollback/nested publication, report no-op receipt semantics,
+staging cleanup across validation/insert/commit/maintenance/live failures,
+replacement error taxonomy and durable-restore-before-release ordering.
 
 ## Validation
 
@@ -96,4 +137,6 @@ failure; job logs never contain failure lists, root-cause groups, tracebacks or
 raw test-log tails. The workflow is not modified for business-test failures.
 
 The branch remains unmerged and PR #25 remains Draft until explicit user
-confirmation.
+confirmation. Final implementation status, exact head and Standard CI run are
+recorded in the PR description only after all three validation jobs succeed on
+the same final revision.
