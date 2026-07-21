@@ -286,7 +286,7 @@ def test_originally_stopped_collector_is_not_started_by_restoration(
 
     assert events == ["live_operation"]
     assert control.restored_states == []
-    assert settings_service.get_setting("collector_status") == "running"
+    assert settings_service.get_setting("collector_status") == "stopped"
     assert coordinator.phase is MaintenancePhase.IDLE
 
 
