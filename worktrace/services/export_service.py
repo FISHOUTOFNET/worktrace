@@ -1,10 +1,17 @@
 from __future__ import annotations
 
 import csv
+import errno
 import logging
 import os
 from pathlib import Path
 
+from ..atomic_file import (
+    AtomicFileOutput,
+    AtomicReplaceError,
+    TemporaryFileCleanupError,
+    TemporaryFileError,
+)
 from ..db import get_connection, now_str
 from ..exports.excel_exporter import export_excel_file
 from . import statistics_service
@@ -27,6 +34,58 @@ _FORMULA_INJECTION_PREFIXES = ("=", "+", "-", "@", "\t")
 _DERIVED_RUNTIME_TABLES = frozenset(
     {"folder_rule_index_state", "folder_rule_file_index"}
 )
+
+
+class ExportFileError(OSError):
+    """Stable, path-free export infrastructure error."""
+
+    def __init__(self, code: str) -> None:
+        normalized = str(code or "operation_failed")
+        super().__init__(normalized)
+        self.code = normalized
+
+
+def classify_export_os_error(exc: BaseException) -> str:
+    if isinstance(exc, TemporaryFileCleanupError):
+        return "cleanup_failed"
+    if isinstance(exc, PermissionError):
+        return "permission_denied"
+    winerror = getattr(exc, "winerror", None)
+    if winerror in {32, 33}:
+        return "file_busy"
+    error_number = getattr(exc, "errno", None)
+    if error_number in {errno.EBUSY, getattr(errno, "ETXTBSY", errno.EBUSY)}:
+        return "file_busy"
+    if error_number in {
+        errno.ENOENT,
+        errno.ENOTDIR,
+        errno.EISDIR,
+        errno.EINVAL,
+        getattr(errno, "ENAMETOOLONG", errno.EINVAL),
+    }:
+        return "invalid_path"
+    if error_number in {
+        errno.ENOSPC,
+        getattr(errno, "EDQUOT", errno.ENOSPC),
+        errno.EROFS,
+        errno.EIO,
+        getattr(errno, "ENODEV", errno.EIO),
+    }:
+        return "storage_unavailable"
+    if isinstance(exc, (AtomicReplaceError, TemporaryFileError, OSError)):
+        return "write_failed"
+    return "operation_failed"
+
+
+def _raise_export_file_error(exc: BaseException, *, phase: str) -> None:
+    code = classify_export_os_error(exc)
+    logger.warning(
+        "export failed phase=%s code=%s exception=%s",
+        str(phase or "write"),
+        code,
+        type(exc).__name__,
+    )
+    raise ExportFileError(code) from exc
 
 
 def _escape_csv_cell(value) -> str:
@@ -83,13 +142,25 @@ def write_statistics_csv(
     total_seconds = sum(int(row["duration_seconds"]) for row in csv_rows)
     headers = [header for _key, header in _CSV_COLUMNS]
     keys = [key for key, _header in _CSV_COLUMNS]
-    tmp_path = path.with_name(path.name + ".tmp")
-    with open(tmp_path, "w", newline="", encoding="utf-8-sig") as handle:
-        writer = csv.writer(handle)
-        writer.writerow(headers)
-        for row in csv_rows:
-            writer.writerow([_escape_csv_cell(row.get(key, "")) for key in keys])
-    os.replace(tmp_path, path)
+    try:
+        with AtomicFileOutput(path, resource="statistics_csv") as output:
+            with open(
+                output.temporary_path,
+                "w",
+                newline="",
+                encoding="utf-8-sig",
+            ) as handle:
+                writer = csv.writer(handle)
+                writer.writerow(headers)
+                for row in csv_rows:
+                    writer.writerow(
+                        [_escape_csv_cell(row.get(key, "")) for key in keys]
+                    )
+                handle.flush()
+                os.fsync(handle.fileno())
+            output.commit()
+    except (OSError, TemporaryFileError) as exc:
+        _raise_export_file_error(exc, phase="statistics_csv")
     return {
         "activity_count": projection.activity_count,
         "export_row_count": len(csv_rows),
@@ -103,8 +174,13 @@ def export_excel(start_date: str, end_date: str, path: str) -> str:
         result = export_excel_file(start_date, end_date, path)
         logging.info("excel export success")
         return result
-    except Exception:
-        logging.exception("excel export error")
+    except (OSError, TemporaryFileError) as exc:
+        _raise_export_file_error(exc, phase="excel")
+    except Exception as exc:
+        logger.warning(
+            "excel export failed phase=render exception=%s",
+            type(exc).__name__,
+        )
         raise
 
 
@@ -143,7 +219,12 @@ def export_all_local_data(path: str) -> str:
         except Exception:
             conn.rollback()
             raise
-    workbook.save(out)
+    try:
+        with AtomicFileOutput(out, resource="local_data_export") as output:
+            workbook.save(output.temporary_path)
+            output.commit()
+    except (OSError, TemporaryFileError) as exc:
+        _raise_export_file_error(exc, phase="local_data")
     logging.info("all local data export success")
     return str(out)
 
@@ -161,3 +242,14 @@ def clear_all_local_data(confirm: bool) -> None:
     except MaintenanceInProgressError as exc:
         raise ValueError("operation_in_progress") from exc
     logging.info("all local data cleared at %s", now_str())
+
+
+__all__ = [
+    "ExportFileError",
+    "build_statistics_csv_rows",
+    "classify_export_os_error",
+    "clear_all_local_data",
+    "export_all_local_data",
+    "export_excel",
+    "write_statistics_csv",
+]
