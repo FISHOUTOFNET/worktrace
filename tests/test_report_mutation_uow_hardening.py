@@ -3,6 +3,10 @@ from __future__ import annotations
 import pytest
 
 from tests.support.activity_factory import create_closed_activity
+from worktrace.data_generation_repository import (
+    DataGenerationNamespace,
+    DataGenerationRepository,
+)
 from worktrace.db import get_connection
 from worktrace.services import (
     activity_lifecycle_service,
@@ -27,6 +31,14 @@ def _session_for(activity_id: int) -> dict:
     )
 
 
+def _report_generation() -> int:
+    with get_connection() as conn:
+        return DataGenerationRepository.get(
+            conn,
+            DataGenerationNamespace.REPORT_STRUCTURE,
+        )
+
+
 def test_open_edit_replays_after_activity_closes(temp_db):
     original_project = project_service.create_project("Open original")
     target_project = project_service.create_project("Open target")
@@ -46,6 +58,7 @@ def test_open_edit_replays_after_activity_closes(temp_db):
     # the first durable Recorder checkpoint before editing the open interval.
     activity_lifecycle_service.checkpoint_activity(activity_id, 60)
     session = _session_for(activity_id)
+    before_generation = _report_generation()
     result = report_session_operation_service.edit_session(
         DATE,
         session["projection_instance_key"],
@@ -56,6 +69,19 @@ def test_open_edit_replays_after_activity_closes(temp_db):
         note="open note",
     )
     assert result.outcome_type == "operation_committed"
+    assert _report_generation() == before_generation + 1
+
+    duplicate = report_session_operation_service.edit_session(
+        DATE,
+        session["projection_instance_key"],
+        session["projection_revision"],
+        "open-edit-survives-close",
+        project_id=target_project,
+        adjusted_duration_seconds=None,
+        note="open note",
+    )
+    assert duplicate == result
+    assert _report_generation() == before_generation + 1
 
     activity_lifecycle_service.close_activity(
         activity_id,
@@ -86,7 +112,7 @@ def test_open_edit_replays_after_activity_closes(temp_db):
     assert int(assignment["is_manual"]) == 1
 
 
-def test_no_effect_edit_writes_receipt_without_structure_change(temp_db):
+def test_no_effect_edit_writes_receipt_without_structure_generation(temp_db):
     project_id = project_service.create_project("No-op project")
     activity_id = create_closed_activity(
         day=DATE,
@@ -101,6 +127,7 @@ def test_no_effect_edit_writes_receipt_without_structure_change(temp_db):
 
     report_revision_service.clear_report_structure_revision_cache()
     before_revision = report_revision_service.get_report_structure_revision(DATE)
+    before_generation = _report_generation()
     result = report_session_operation_service.edit_session(
         DATE,
         session["projection_instance_key"],
@@ -115,6 +142,20 @@ def test_no_effect_edit_writes_receipt_without_structure_change(temp_db):
     assert result.outcome_type == "no_op"
     assert result.operation_id is None
     assert after_revision == before_revision
+    assert _report_generation() == before_generation
+
+    duplicate = report_session_operation_service.edit_session(
+        DATE,
+        session["projection_instance_key"],
+        session["projection_revision"],
+        "empty-edit-receipt",
+        project_id=None,
+        adjusted_duration_seconds=int(session["duration_seconds"]),
+        note="",
+    )
+    assert duplicate == result
+    assert _report_generation() == before_generation
+
     with get_connection() as conn:
         assert (
             conn.execute(
