@@ -72,16 +72,21 @@ def classify_export_os_error(exc: BaseException) -> str:
         getattr(errno, "ENODEV", errno.EIO),
     }:
         return "storage_unavailable"
-    if isinstance(exc, (AtomicReplaceError, TemporaryFileError, OSError)):
+    if isinstance(exc, (AtomicReplaceError, TemporaryFileError)):
         return "write_failed"
+    if isinstance(exc, OSError):
+        # Raw destination-open failures without a platform code cannot prove a
+        # storage or path cause. Treat them as an unavailable/locked target;
+        # canonical write and replace owners provide explicit write_failed codes.
+        return "file_busy"
     return "operation_failed"
 
 
-def _raise_export_file_error(exc: BaseException, *, phase: str) -> None:
+def _raise_export_file_error(exc: BaseException, *, stage: str) -> None:
     code = classify_export_os_error(exc)
     logger.warning(
-        "export failed phase=%s code=%s exception=%s",
-        str(phase or "write"),
+        "export failed stage=%s code=%s exception=%s",
+        str(stage or "write"),
         code,
         type(exc).__name__,
     )
@@ -159,8 +164,12 @@ def write_statistics_csv(
                 handle.flush()
                 os.fsync(handle.fileno())
             output.commit()
+    except PermissionError:
+        # Preserve the explicit infrastructure type for service callers. The API
+        # boundary converts it to the stable permission_denied code.
+        raise
     except (OSError, TemporaryFileError) as exc:
-        _raise_export_file_error(exc, phase="statistics_csv")
+        _raise_export_file_error(exc, stage="statistics_csv")
     return {
         "activity_count": projection.activity_count,
         "export_row_count": len(csv_rows),
@@ -174,11 +183,13 @@ def export_excel(start_date: str, end_date: str, path: str) -> str:
         result = export_excel_file(start_date, end_date, path)
         logging.info("excel export success")
         return result
+    except PermissionError:
+        raise
     except (OSError, TemporaryFileError) as exc:
-        _raise_export_file_error(exc, phase="excel")
+        _raise_export_file_error(exc, stage="excel")
     except Exception as exc:
         logger.warning(
-            "excel export failed phase=render exception=%s",
+            "excel export failed stage=render exception=%s",
             type(exc).__name__,
         )
         raise
@@ -223,8 +234,10 @@ def export_all_local_data(path: str) -> str:
         with AtomicFileOutput(out, resource="local_data_export") as output:
             workbook.save(output.temporary_path)
             output.commit()
+    except PermissionError:
+        raise
     except (OSError, TemporaryFileError) as exc:
-        _raise_export_file_error(exc, phase="local_data")
+        _raise_export_file_error(exc, stage="local_data")
     logging.info("all local data export success")
     return str(out)
 
