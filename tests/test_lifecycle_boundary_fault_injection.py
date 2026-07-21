@@ -26,7 +26,14 @@ from worktrace.services import (
 )
 from worktrace.services.database_maintenance_service import RuntimeMaintenanceCoordinator
 
-pytestmark = [pytest.mark.contract, pytest.mark.serial]
+pytestmark = [
+    pytest.mark.db,
+    pytest.mark.integration,
+    pytest.mark.collector_runtime,
+    pytest.mark.security_privacy,
+    pytest.mark.contract,
+    pytest.mark.serial,
+]
 
 
 def _generation(namespace: DataGenerationNamespace) -> int:
