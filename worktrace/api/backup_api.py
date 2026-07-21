@@ -3,7 +3,6 @@
 Backup consistency and replacement maintenance are owned by the application
 use cases in ``secure_backup_service`` rather than by this transport facade.
 """
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -15,6 +14,8 @@ from ..services.secure_backup_service import (
     BackupImportInProgressError,
     BackupManifestInfo,
     BackupReplacementError,
+    BackupSensitiveCleanupError,
+    BackupStagingInfrastructureError,
     BackupVersionNotSupportedError,
     ImportResult,
     SecureBackupError,
@@ -54,6 +55,8 @@ __all__ = [
     "BackupImportInProgressError",
     "BackupManifestInfo",
     "BackupReplacementError",
+    "BackupSensitiveCleanupError",
+    "BackupStagingInfrastructureError",
     "BackupVersionNotSupportedError",
     "ImportResult",
     "SecureBackupError",
