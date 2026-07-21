@@ -15,6 +15,7 @@ from .report_projection_identity import (
     snapshot_revision,
 )
 from .report_projection_model import (
+    InvalidInputError,
     OperationDiagnostic,
     OperationRecord,
     ProjectState,
@@ -24,8 +25,10 @@ from .report_projection_model import (
 )
 from .report_operation_contract import (
     OPERATION_PAYLOAD_VERSION,
-    allowed_payload_keys,
-    expected_roles,
+    validate_member_graph,
+    validate_operation_type,
+    validate_payload_fields,
+    validate_payload_metadata,
 )
 from .report_replay_binding import ReplayBinding
 
@@ -558,49 +561,27 @@ def _undo_closure(
     return superseded, undo_by_operation
 
 
-def _members_are_valid(operation: OperationRecord) -> bool:
-    expected = expected_roles(operation.operation_type)
-    if expected is None:
-        return False
-    roles = set(operation.members)
-    if _binding(operation) is not ReplayBinding.MEMBERS or roles != expected:
-        return False
-    for role in expected:
-        members = operation.members_for(role)
-        identities = [_identity_tuple(member) for member in members]
-        if not identities or len(identities) != len(set(identities)):
-            return False
-        if any(
-            report_date != operation.report_date
-            or activity_id <= 0
-            or not slice_start_time
-            for report_date, activity_id, slice_start_time in identities
-        ):
-            return False
-    if operation.operation_type == "hide_activity":
-        source = set(
-            _identity_tuple(member)
-            for member in operation.members_for("source")
-        )
-        affected = set(
-            _identity_tuple(member)
-            for member in operation.members_for("affected")
-        )
-        if not affected.issubset(source):
-            return False
-    return True
-
-
 def _payload_is_valid(operation: OperationRecord) -> bool:
-    payload = operation.payload
-    if int(payload.get("payload_version") or 0) != OPERATION_PAYLOAD_VERSION:
+    """Return False if the operation violates the shared current-only contract.
+
+    The engine must never raise for malformed payloads (e.g., list/dict
+    ``payload_version``, missing binding, unknown fields, malformed member
+    graph). Contract violations are converted into a stable
+    ``invalid_payload`` diagnostic by ``_apply_one`` and ``_validate_splits``.
+    """
+
+    try:
+        validate_operation_type(operation.operation_type)
+        validate_payload_metadata(operation.payload)
+        validate_payload_fields(operation.operation_type, operation.payload)
+        validate_member_graph(
+            operation.operation_type,
+            operation.report_date,
+            operation.members,
+        )
+    except InvalidInputError:
         return False
-    if _binding(operation) is None or not _members_are_valid(operation):
-        return False
-    allowed = allowed_payload_keys(operation.operation_type)
-    if allowed is None:
-        return False
-    return set(payload) <= allowed
+    return True
 
 
 def _apply_edit(

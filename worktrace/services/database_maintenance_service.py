@@ -402,6 +402,68 @@ class RuntimeMaintenanceCoordinator:
             }
         )
 
+    def _attempt_restoration_and_decide_fail_closed(
+        self,
+        exc: BaseException,
+        *,
+        state: RuntimeMaintenanceState | None,
+        control: RuntimeMaintenanceControl | None,
+        hold_acquired: bool,
+        operation_completed: bool,
+        timeout_seconds: float,
+    ) -> bool:
+        """Attempt collector restoration and decide whether to fail-closed.
+
+        Per the architecture contract:
+        - If the operation completed (commit succeeded) but post-commit
+          restoration failed, fail-closed is mandatory because the live
+          database has been committed but the runtime state cannot be
+          verified as restored.
+        - If the operation did not complete, the caller's unit of work is
+          responsible for rolling back the live transaction. The coordinator
+          attempts to restore collector state (release hold, restore durable
+          settings). Fail-closed only if restoration cannot be verified.
+        - CollectorCommandNotAcknowledgedError with fail_closed=True always
+          fail-closes because the collector state is already known to be
+          unverifiable.
+        - Pure staging failures never reach this method because they occur
+          before the maintenance scope is entered.
+        """
+
+        if (
+            isinstance(exc, CollectorCommandNotAcknowledgedError)
+            and exc.fail_closed
+        ):
+            return True
+        if operation_completed:
+            return True
+        if state is None:
+            return True
+
+        restoration_failed = False
+        if hold_acquired and control is not None:
+            try:
+                self._set_phase(MaintenancePhase.RELEASING)
+                release_result = dict(
+                    control.restore_after_maintenance(
+                        state,
+                        timeout_seconds=timeout_seconds,
+                    )
+                )
+                self._require_ack(
+                    release_result,
+                    control=control,
+                    command_kind="maintenance_release",
+                    terminal_state="operational",
+                )
+            except Exception:
+                restoration_failed = True
+        try:
+            self._restore_durable_state(state)
+        except Exception:
+            restoration_failed = True
+        return restoration_failed
+
     @contextmanager
     def _maintain(
         self,
@@ -418,8 +480,8 @@ class RuntimeMaintenanceCoordinator:
         state: RuntimeMaintenanceState | None = None
         control: RuntimeMaintenanceControl | None = None
         hold_acquired = False
-        operation_started = False
         operation_completed = False
+        inner_exception_handled = False
         try:
             if self.recovery_blocked():
                 raise MaintenanceInProgressError(DATABASE_RECOVERY_ERROR)
@@ -453,7 +515,6 @@ class RuntimeMaintenanceCoordinator:
                     drain_existing_writers()
                     lease.promote()
                     self._set_phase(MaintenancePhase.EXCLUSIVE)
-                    operation_started = intent is MaintenanceIntent.DATABASE_REPLACEMENT
                     yield state
                     operation_completed = True
 
@@ -494,14 +555,14 @@ class RuntimeMaintenanceCoordinator:
                             terminal_state="operational",
                         )
                 except Exception as exc:
-                    should_fail_closed = (
-                        hold_acquired
-                        or operation_started
-                        or operation_completed
-                        or (
-                            isinstance(exc, CollectorCommandNotAcknowledgedError)
-                            and exc.fail_closed
-                        )
+                    inner_exception_handled = True
+                    should_fail_closed = self._attempt_restoration_and_decide_fail_closed(
+                        exc,
+                        state=state,
+                        control=control,
+                        hold_acquired=hold_acquired,
+                        operation_completed=operation_completed,
+                        timeout_seconds=timeout_seconds,
                     )
                     if should_fail_closed:
                         command = "restore" if operation_completed else "operation"
@@ -517,18 +578,18 @@ class RuntimeMaintenanceCoordinator:
                         )
                     raise
         except Exception as exc:
-            should_fail_closed = (
-                hold_acquired
-                or operation_started
-                or operation_completed
-                or (
-                    isinstance(exc, CollectorCommandNotAcknowledgedError)
-                    and exc.fail_closed
+            if not inner_exception_handled:
+                should_fail_closed = self._attempt_restoration_and_decide_fail_closed(
+                    exc,
+                    state=state,
+                    control=control,
+                    hold_acquired=hold_acquired,
+                    operation_completed=operation_completed,
+                    timeout_seconds=timeout_seconds,
                 )
-            )
-            if should_fail_closed and not DATABASE_WRITE_GATE.recovery_blocked():
-                command = "restore" if operation_completed else "operation"
-                self._enter_fail_closed(f"{reason}_{command}")
+                if should_fail_closed and not DATABASE_WRITE_GATE.recovery_blocked():
+                    command = "restore" if operation_completed else "operation"
+                    self._enter_fail_closed(f"{reason}_{command}")
             logging.exception(
                 "runtime maintenance failed intent=%s reason=%s",
                 intent.value,

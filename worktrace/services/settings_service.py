@@ -234,7 +234,8 @@ def set_settings_in_transaction(
         if row is not None and str(row["value"] or "") == value:
             continue
         classification = forced_class or setting_mutation_class(key)
-        uow.add_effects(*_effects_for_classification(classification))
+        effects = _effects_for_classification(classification)
+        uow.add_effects(*effects)
         conn.execute(
             """
             INSERT INTO settings(key, value, updated_at)
@@ -245,9 +246,9 @@ def set_settings_in_transaction(
             """,
             (key, value, timestamp),
         )
+        if effects:
+            uow.mark_changed(*effects)
         changed = True
-    if changed:
-        uow.mark_changed()
     return changed
 
 

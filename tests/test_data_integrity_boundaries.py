@@ -39,7 +39,7 @@ def test_backup_operation_rejects_note_above_domain_limit():
     operation = {
         "operation_type": "edit_session",
         "payload": {
-            "payload_version": 5,
+            "payload_version": 6,
             "replay_binding": "members",
             "note": {"mode": "set", "value": "x" * (NOTE_MAX_LENGTH + 1)},
         },
@@ -58,7 +58,7 @@ def _make_valid_backup_operation() -> dict:
     return {
         "operation_type": "hide_session",
         "payload": {
-            "payload_version": 5,
+            "payload_version": 6,
             "replay_binding": "members",
         },
     }

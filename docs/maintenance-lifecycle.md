@@ -80,15 +80,20 @@ supply an alternative barrier.
 
 ## Database replacement order
 
+For secure backup import, staging is built and fully validated **before**
+entering the maintenance hold, so staging failures never trigger durable
+fail-closed. The destructive replacement order is:
+
 ```text
-capture durable/runtime state
+build and validate staging database (outside maintenance scope)
+-> capture durable/runtime state
 -> request maintenance hold
 -> require HELD acknowledgement
 -> clear runtime snapshot
 -> enter write-gate draining
 -> drain already admitted writers
 -> promote coordinator to exclusive writer
--> replace data and publish database-replacement epoch in one transaction
+-> apply validated staging to live database and publish replacement epoch in one transaction
 -> release exclusive capability
 -> request process-local database reset while Collector remains HELD
 -> require reset acknowledgement with terminal HELD
@@ -96,6 +101,9 @@ capture durable/runtime state
 -> request maintenance release
 -> require OPERATIONAL acknowledgement
 ```
+
+For `clear_all_live_data`, staging is not applicable; the delete/seed/replacement
+publish happens inside the maintenance scope as before.
 
 The reset clears Collector/adaptor identities from the old database generation.
 An old persisted activity ID cannot be reused after replacement.
@@ -110,9 +118,21 @@ maintenance.
 - A pre-existing durable user pause remains paused.
 - An unaccepted privacy notice never starts collection.
 - A previously stopped Collector remains stopped.
-- Failed replacement rolls back business data and replacement epoch.
-- Any destructive-operation exception after a verified hold keeps the coordinator
-  in stable `FAILED_CLOSED`, even when the business transaction rolled back.
+- Failed live replacement rolls back business data and replacement epoch.
+- Fail-closed is mandatory only when the runtime state cannot be verified:
+  - `CollectorCommandNotAcknowledgedError` with `fail_closed=True`
+    (collector state already known to be unverifiable);
+  - `operation_completed=True` (commit succeeded, post-commit restoration
+    cannot be verified);
+  - `state is None` (pre-maintenance state could not be captured);
+  - restoration attempt fails (`restore_after_maintenance` raises,
+    durable state restore raises).
+- Live replacement failure before commit, when restoration succeeds, does NOT
+  enter durable fail-closed: the live transaction is rolled back by
+  `DatabaseReplacementUnitOfWork` and the runtime returns to its pre-maintenance
+  state. This applies to `clear_all_live_data` failures as well.
+- Pure staging failures (backup corruption, validation, schema mismatch) never
+  enter the maintenance scope and never trigger fail-closed.
 - Unknown hold/reset/release state, release failure or shutdown ambiguity fails
   closed: durable pause/status are committed as a separate safety transition,
   runtime activity state is cleared and collection is not resumed optimistically.
@@ -125,6 +145,22 @@ preserves the safety-created durable user pause until the user explicitly resume
 
 Restoration and fail-closed settings writes publish their normal settings
 change. They do not fabricate replacement success.
+
+## Backup error classification
+
+- `BackupDecryptionError`: passphrase or authentication failure.
+- `BackupVersionNotSupportedError`: backup payload or schema version not supported.
+- `BackupCorruptedError`: input JSON, table structure, row shape, foreign key,
+  semantic or replay graph corruption. Limited to input read/parse and staging
+  validation phases. Never raised for live replacement failures.
+- `BackupReplacementError`: validated backup failed to write to the live DB,
+  commit, perform device I/O, or complete the SQLite live transaction. Never
+  claimed as backup corruption.
+- Maintenance/recovery errors: reset, release, runtime recovery or fail-closed
+  state, expressed through the existing maintenance DTO and dedicated exceptions.
+
+External error messages never leak SQL, paths, tracebacks, database internal
+fields, or user-sensitive data.
 
 ## Concurrency and lock order
 

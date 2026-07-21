@@ -98,6 +98,10 @@ def create_project(
             )
         except sqlite3.IntegrityError as exc:
             _raise_project_integrity(exc)
+        uow.mark_changed(
+            DataGenerationNamespace.CLASSIFICATION_CATALOG,
+            DataGenerationNamespace.REPORT_STRUCTURE,
+        )
         return int(cursor.lastrowid)
 
 
@@ -140,6 +144,10 @@ def update_project(
             )
         except sqlite3.IntegrityError as exc:
             _raise_project_integrity(exc)
+        uow.mark_changed(
+            DataGenerationNamespace.CLASSIFICATION_CATALOG,
+            DataGenerationNamespace.REPORT_STRUCTURE,
+        )
 
 
 def set_project_enabled(project_id: int, enabled: bool) -> None:
@@ -152,6 +160,10 @@ def set_project_enabled(project_id: int, enabled: bool) -> None:
         conn.execute(
             "UPDATE project SET enabled = ?, updated_at = ? WHERE id = ?",
             (requested, now_str(), project_id),
+        )
+        uow.mark_changed(
+            DataGenerationNamespace.CLASSIFICATION_CATALOG,
+            DataGenerationNamespace.REPORT_STRUCTURE,
         )
 
 
@@ -173,6 +185,11 @@ def set_excluded_project_enabled(enabled: bool) -> int:
             WHERE id = ? AND name = ?
             """,
             (requested, now_str(), project_id, EXCLUDED_PROJECT),
+        )
+        uow.mark_changed(
+            DataGenerationNamespace.CLASSIFICATION_CATALOG,
+            DataGenerationNamespace.REPORT_STRUCTURE,
+            DataGenerationNamespace.PRIVACY_CATALOG,
         )
     return project_id
 
@@ -344,6 +361,10 @@ def archive_project(project_id: int) -> None:
         )
         if cursor.rowcount != 1:
             raise ProjectLifecycleError("not_found")
+        uow.mark_changed(
+            DataGenerationNamespace.CLASSIFICATION_CATALOG,
+            DataGenerationNamespace.REPORT_STRUCTURE,
+        )
 
 
 def delete_project(project_id: int) -> None:
@@ -367,6 +388,10 @@ def soft_delete_project(project_id: int) -> None:
         )
         if cursor.rowcount != 1:
             raise ProjectLifecycleError("not_found")
+        uow.mark_changed(
+            DataGenerationNamespace.CLASSIFICATION_CATALOG,
+            DataGenerationNamespace.REPORT_STRUCTURE,
+        )
 
 
 __all__ = [

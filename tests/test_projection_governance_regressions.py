@@ -216,7 +216,7 @@ def test_secure_validation_replays_member_bound_operation_after_admission_revisi
                 str(source["projection_instance_key"]),
                 DURABLE_REVISION_PREFIX
                 + "0" * (40 - len(DURABLE_REVISION_PREFIX)),
-                '{"payload_version":5,"replay_binding":"members"}',
+                '{"payload_version":6,"replay_binding":"members"}',
             ),
         )
         conn.execute(
@@ -247,7 +247,7 @@ def test_repository_rejects_non_current_payload_version_at_read_boundary(temp_db
                 DATE,
                 str(source["projection_instance_key"]),
                 str(source["projection_revision"]),
-                '{"payload_version":5,"replay_binding":"members"}',
+                '{"payload_version":6,"replay_binding":"members"}',
             ),
         )
         conn.execute(
@@ -288,7 +288,7 @@ def test_repository_rejects_legacy_revision_binding_at_read_boundary(temp_db):
                 DATE,
                 str(source["projection_instance_key"]),
                 str(source["projection_revision"]),
-                '{"payload_version":5,"replay_binding":"members"}',
+                '{"payload_version":6,"replay_binding":"members"}',
             ),
         )
         conn.execute(
@@ -304,7 +304,7 @@ def test_repository_rejects_legacy_revision_binding_at_read_boundary(temp_db):
         conn.execute(
             "UPDATE report_session_operation SET payload_json = ? WHERE id = ?",
             (
-                '{"payload_version":5,"replay_binding":"revision"}',
+                '{"payload_version":6,"replay_binding":"revision"}',
                 int(cursor.lastrowid),
             ),
         )
@@ -332,7 +332,7 @@ def test_repository_rejects_non_members_binding_at_read_boundary(temp_db):
                 DATE,
                 str(source["projection_instance_key"]),
                 str(source["projection_revision"]),
-                '{"payload_version":5,"replay_binding":"members"}',
+                '{"payload_version":6,"replay_binding":"members"}',
             ),
         )
         conn.execute(
@@ -348,7 +348,7 @@ def test_repository_rejects_non_members_binding_at_read_boundary(temp_db):
         conn.execute(
             "UPDATE report_session_operation SET payload_json = ? WHERE id = ?",
             (
-                '{"payload_version":5,"replay_binding":"something_else"}',
+                '{"payload_version":6,"replay_binding":"something_else"}',
                 int(cursor.lastrowid),
             ),
         )
@@ -376,7 +376,7 @@ def test_repository_rejects_unknown_payload_field_at_read_boundary(temp_db):
                 DATE,
                 str(source["projection_instance_key"]),
                 str(source["projection_revision"]),
-                '{"payload_version":5,"replay_binding":"members","rogue_field":1}',
+                '{"payload_version":6,"replay_binding":"members","rogue_field":1}',
             ),
         )
         conn.execute(
@@ -412,7 +412,7 @@ def test_repository_rejects_unknown_operation_type_at_read_boundary(temp_db):
                 DATE,
                 str(source["projection_instance_key"]),
                 str(source["projection_revision"]),
-                '{"payload_version":5,"replay_binding":"members"}',
+                '{"payload_version":6,"replay_binding":"members"}',
             ),
         )
         conn.execute(

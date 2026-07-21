@@ -74,6 +74,15 @@ class BackupCorruptedError(SecureBackupError):
     """The backup is malformed or violates current schema semantics."""
 
 
+class BackupReplacementError(SecureBackupError):
+    """A validated backup could not be applied to the live database.
+
+    Raised when the live transaction, commit, I/O, or post-commit validation
+    fails after the backup itself has already been validated. The backup is
+    not corrupt; the live replacement could not complete.
+    """
+
+
 class BackupVersionNotSupportedError(SecureBackupError):
     """The payload or schema version is not supported by this build."""
 
@@ -143,13 +152,20 @@ def import_encrypted_backup(
     blob = input_file.read_bytes()
     payload = _read_and_decrypt(blob, passphrase)
     data = _parse_and_validate_payload(payload)
+
+    # Build and fully validate the staging database BEFORE entering the
+    # destructive maintenance scope. Staging failures must never trigger
+    # durable fail-closed because the live database has not been touched.
+    staging_path, imported_counts = _build_and_validate_staging(data)
     try:
         with database_maintenance_service.database_replacement("secure_import"):
-            imported_counts = _replace_import(data)
+            _apply_validated_staging_to_live(staging_path)
     except database_maintenance_service.MaintenanceInProgressError as exc:
         raise BackupImportInProgressError(
             "another destructive operation is already in progress"
         ) from exc
+    finally:
+        _cleanup_staging_file(staging_path)
 
     status = database_maintenance_service.maintenance_status().to_dict()
     logging.info(
@@ -258,45 +274,72 @@ def _parse_and_validate_payload(payload: bytes) -> dict[str, Any]:
     return data
 
 
-def _replace_import(data: dict[str, Any]) -> dict[str, int]:
-    """Stage and validate current data, then replace live contents atomically."""
+def _build_and_validate_staging(
+    data: dict[str, Any],
+) -> tuple[str, dict[str, int]]:
+    """Build a staging database from the backup payload and fully validate it.
 
-    staging_path: str | None = None
+    This runs OUTSIDE the destructive maintenance scope. Any failure here is a
+    backup corruption error and must never trigger durable fail-closed because
+    the live database has not been touched.
+    """
+
+    fd, staging_path = tempfile.mkstemp(
+        prefix="worktrace-import-",
+        suffix=".sqlite",
+    )
+    os.close(fd)
+    staging = sqlite3.connect(staging_path)
+    staging.row_factory = sqlite3.Row
+    staging.execute("PRAGMA foreign_keys = ON")
     try:
-        fd, staging_path = tempfile.mkstemp(
-            prefix="worktrace-import-",
-            suffix=".sqlite",
-        )
-        os.close(fd)
-        staging = sqlite3.connect(staging_path)
-        staging.row_factory = sqlite3.Row
-        staging.execute("PRAGMA foreign_keys = ON")
+        staging.executescript(read_schema_sql())
+        staging.executescript(read_internal_schema_sql())
+        staging.executescript(read_schema_indexes_sql())
+        staging.execute(f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION}")
+        imported = _load_import_tables(staging, data["tables"])
+        seed_defaults(staging)
+        _reset_derived_folder_index(staging)
         try:
-            staging.executescript(read_schema_sql())
-            staging.executescript(read_internal_schema_sql())
-            staging.executescript(read_schema_indexes_sql())
-            staging.execute(f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION}")
-            imported = _load_import_tables(staging, data["tables"])
-            seed_defaults(staging)
-            _reset_derived_folder_index(staging)
-            _validate_staging_database(staging)
-            staging.commit()
-        except Exception:
-            staging.rollback()
-            raise
-        finally:
-            staging.close()
+            validate_staging_database(staging)
+        except BackupValidationError as exc:
+            raise BackupCorruptedError(
+                "backup file is invalid or corrupted"
+            ) from exc
+        staging.commit()
+        return staging_path, imported
+    except BackupCorruptedError:
+        staging.rollback()
+        raise
+    except BackupValidationError as exc:
+        staging.rollback()
+        raise BackupCorruptedError("backup file is invalid or corrupted") from exc
+    except (sqlite3.DatabaseError, ValueError, KeyError, TypeError) as exc:
+        staging.rollback()
+        raise BackupCorruptedError("backup file is invalid or corrupted") from exc
+    finally:
+        staging.close()
 
-        # Live replacement goes through DatabaseReplacementUnitOfWork so the
-        # epoch bump, commit and process-local publication have one owner.
+
+def _apply_validated_staging_to_live(staging_path: str) -> dict[str, int]:
+    """Apply a validated staging database to the live database.
+
+    This runs INSIDE the destructive maintenance scope. The backup has already
+    been validated; any failure here is a live replacement error, not backup
+    corruption. The maintenance coordinator decides whether to fail-closed
+    based on whether the runtime state can be verified.
+    """
+
+    try:
         with DatabaseReplacementUnitOfWork() as replacement_uow:
             live = replacement_uow.connection
             _delete_all_rows(live)
             source = sqlite3.connect(staging_path)
             source.row_factory = sqlite3.Row
             try:
+                imported: dict[str, int] = {}
                 for table in EXPORT_TABLES:
-                    _insert_rows(
+                    imported[table] = _insert_rows(
                         live,
                         table,
                         [
@@ -308,20 +351,30 @@ def _replace_import(data: dict[str, Any]) -> dict[str, int]:
                 source.close()
             seed_defaults(live)
             _reset_derived_folder_index(live)
-            _validate_staging_database(live)
-        return imported
-    except BackupCorruptedError:
-        raise
-    except BackupValidationError as exc:
-        raise BackupCorruptedError("backup file is invalid or corrupted") from exc
-    except (sqlite3.DatabaseError, ValueError, KeyError, TypeError) as exc:
-        raise BackupCorruptedError("backup file is invalid or corrupted") from exc
-    finally:
-        if staging_path:
             try:
-                os.unlink(staging_path)
-            except FileNotFoundError:
-                pass
+                validate_staging_database(live)
+            except BackupValidationError as exc:
+                raise BackupReplacementError(
+                    "live replacement validation failed after applying staging"
+                ) from exc
+            return imported
+    except BackupReplacementError:
+        raise
+    except sqlite3.DatabaseError as exc:
+        raise BackupReplacementError(
+            "live database replacement failed"
+        ) from exc
+
+
+def _cleanup_staging_file(staging_path: str | None) -> None:
+    if not staging_path:
+        return
+    try:
+        os.unlink(staging_path)
+    except FileNotFoundError:
+        pass
+    except OSError:
+        logging.warning("staging file cleanup failed path_type=staging")
 
 
 def _load_import_tables(
@@ -442,6 +495,7 @@ __all__ = [
     "BackupDecryptionError",
     "BackupImportInProgressError",
     "BackupManifestInfo",
+    "BackupReplacementError",
     "BackupVersionNotSupportedError",
     "EXCLUDED_TABLES",
     "EXPORT_TABLES",

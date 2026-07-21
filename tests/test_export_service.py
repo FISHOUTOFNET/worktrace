@@ -139,10 +139,19 @@ def test_clear_all_rejects_when_another_maintenance_operation_owns_gate(
     assert any(activity["id"] == aid for activity in activities)
 
 
-def test_clear_all_failure_rolls_back_data_and_fails_closed(
+def test_clear_all_failure_rolls_back_data_without_fail_closed_when_restoration_succeeds(
     temp_db,
     monkeypatch,
 ) -> None:
+    """Live replacement failure with successful restoration does NOT fail-close.
+
+    Per the architecture contract (Problem 1): when ``seed_defaults`` raises
+    inside the ``database_replacement`` scope, the
+    ``DatabaseReplacementUnitOfWork`` rolls back the live transaction. Because
+    the runtime restoration can be verified (operational control, durable
+    settings restored), the coordinator MUST NOT enter durable fail-closed.
+    Only when restoration cannot be verified does fail-closed become mandatory.
+    """
     aid = _seed_business_data()
     set_setting("user_paused", "false")
     set_setting("collector_status", "running")
@@ -160,18 +169,102 @@ def test_clear_all_failure_rolls_back_data_and_fails_closed(
         export_service.clear_all_local_data(confirm=True)
 
     assert database_maintenance_service.is_maintenance_in_progress() is False
-    assert database_maintenance_service.MAINTENANCE_COORDINATOR.recovery_blocked() is True
+    assert (
+        database_maintenance_service.MAINTENANCE_COORDINATOR.recovery_blocked()
+        is False
+    )
     assert (
         database_maintenance_service.MAINTENANCE_COORDINATOR.phase
-        is database_maintenance_service.MaintenancePhase.FAILED_CLOSED
+        is database_maintenance_service.MaintenancePhase.IDLE
     )
-    assert get_bool_setting("user_paused", False) is True
-    assert get_setting("collector_status", "") == "paused"
     assert runtime_state_fixture.get_setting("current_activity_snapshot", "") == ""
     activities = activity_service.get_activities_by_range(
         "2026-06-18", "2026-06-18"
     )
     assert any(item["id"] == aid for item in activities)
+
+
+def test_clear_all_failure_when_restoration_fails_must_fail_closed(
+    temp_db,
+    monkeypatch,
+) -> None:
+    """Live replacement failure with unverifiable restoration MUST fail-close.
+
+    Per the architecture contract (Problem 1): if ``seed_defaults`` raises
+    inside the ``database_replacement`` scope AND the collector restoration
+    cannot be verified (``restore_after_maintenance`` raises), the coordinator
+    MUST enter durable fail-closed because the runtime state is unverifiable.
+    """
+    _seed_business_data()
+    set_setting("user_paused", "false")
+    set_setting("collector_status", "running")
+
+    from tests.support.application import TestRuntimeMaintenanceControl
+
+    class _OperationalHoldState:
+        value = "operational"
+
+    class _OperationalCollectorControl:
+        hold_state = _OperationalHoldState()
+
+        def query_command(self, command_id: str):
+            return None
+
+    class _RestorationFailingControl(TestRuntimeMaintenanceControl):
+        def __init__(self) -> None:
+            super().__init__()
+            self.collector_control = _OperationalCollectorControl()
+
+        @staticmethod
+        def _ack(command_kind: str, terminal_state: str) -> dict[str, object]:
+            return {
+                "ok": True,
+                "command_id": f"test-{command_kind}",
+                "command_kind": command_kind,
+                "command_state": "completed",
+                "command_state_unknown": False,
+                "terminal_state": terminal_state,
+            }
+
+        def is_collection_running_for_maintenance(self) -> bool:
+            return True
+
+        def quiesce_collection_for_maintenance(self, timeout_seconds=5.0):
+            return self._ack("maintenance_hold", "held")
+
+        def restore_after_maintenance(self, state, timeout_seconds=5.0):
+            raise RuntimeError("restoration failed")
+
+    failing_control = _RestorationFailingControl()
+    database_maintenance_service.MAINTENANCE_COORDINATOR.register_runtime_control(
+        failing_control
+    )
+
+    def fail_seed(_conn) -> None:
+        raise RuntimeError("post-clear failure")
+
+    monkeypatch.setattr(database_maintenance_service, "seed_defaults", fail_seed)
+
+    try:
+        with pytest.raises(RuntimeError, match="post-clear failure"):
+            export_service.clear_all_local_data(confirm=True)
+
+        assert database_maintenance_service.is_maintenance_in_progress() is False
+        assert (
+            database_maintenance_service.MAINTENANCE_COORDINATOR.recovery_blocked()
+            is True
+        )
+        assert (
+            database_maintenance_service.MAINTENANCE_COORDINATOR.phase
+            is database_maintenance_service.MaintenancePhase.FAILED_CLOSED
+        )
+    finally:
+        database_maintenance_service.MAINTENANCE_COORDINATOR.clear_runtime_control(
+            failing_control
+        )
+        database_maintenance_service.MAINTENANCE_COORDINATOR._set_phase(
+            database_maintenance_service.MaintenancePhase.IDLE
+        )
 
 
 def test_maintenance_context_clears_runtime_state_without_legacy_settings(

@@ -64,12 +64,16 @@ backup alias.
 
 Ordinary mutations use `DomainUnitOfWork`: a context manager that opens one
 SQLite transaction, yields the connection, commits or rolls back on exit.
+`DomainUnitOfWork` tracks per-namespace changed effects separately from
+declared effects; the root commit bumps only namespaces explicitly marked
+via `mark_changed(...)`.
 Physical replacement uses `DatabaseReplacementUnitOfWork`, the sole owner
 of the epoch bump, the single live-database commit and process-local
-generation publication. Secure backup import enters the maintenance hold,
-validates and stages the payload in a separate staging database, then
-routes the live replacement through `DatabaseReplacementUnitOfWork`; the
-staging database is discarded after replacement.
+generation publication. Secure backup import builds and fully validates a
+staging database **before** entering the maintenance hold. Staging failures
+raise `BackupCorruptedError` and never trigger durable fail-closed. Live
+replacement failures raise `BackupReplacementError`; the coordinator
+fail-closes only when runtime restoration cannot be verified.
 
 ## Database content manifest
 
@@ -83,12 +87,11 @@ order and schema coverage governance all derive their table sets from it.
 ## Report replay identity
 
 Report session replay is members-only. Admission revision is distinct from
-durable replay identity: admission accepts a request and returns a stable
-projection revision, while replay binds exactly the member operations that
-committed under it. Copy, merge, split and undo form a supersede graph;
-split closes the source session supersession and creates two new
-member-bound sessions. Copy identity never conflates with the source.
-Revision-based (non-members) replay is rejected at the read boundary.
+durable replay identity. Copy, merge, split and undo form a supersede
+graph. Revision-based (non-members) replay is rejected at the read
+boundary. Operation payload version is `6`
+(`report_operation_contract.OPERATION_PAYLOAD_VERSION`); repository,
+replay engine and backup validator share one contract entry point.
 
 ## Project, rule and privacy invariants
 
@@ -113,13 +116,9 @@ folder-index refresh.
 
 - Database schema: **v13**.
 - Encrypted backup payload: **v6**.
+- Report operation payload: **v6** (see Report replay identity).
 - Frontend live-time transport: **LiveClock v2**.
-- Old schemas, backup payloads and LiveClock aliases are unsupported.
-- Schema SQL files define the exact current fingerprint.
-- `database_content_manifest` is the single table inventory; backup, clear
-  and delete-order sets derive from it.
-- Production `worktrace.db` has no destructive reset/drop helper; tests use
-  `tests/support/database.py`.
+- Old schemas, backup payloads, report operation payloads and LiveClock aliases are unsupported.
 
 Exact versions and DTO keys are in
 [`runtime-contracts.md`](runtime-contracts.md).

@@ -23,7 +23,7 @@ from typing import Any, Mapping, Sequence
 from .report_projection_model import InvalidInputError, ReportMemberIdentity
 from .report_replay_binding import ReplayBinding
 
-OPERATION_PAYLOAD_VERSION = 5
+OPERATION_PAYLOAD_VERSION = 6
 
 SUPPORTED_OPERATION_TYPES: frozenset[str] = frozenset(
     {

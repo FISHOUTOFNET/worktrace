@@ -2,8 +2,11 @@
 
 The unit of work does not proxy modules, intercept nested commits, or infer
 which namespaces a SQL statement affects. Command owners declare effects and
-may mark semantic changes explicitly. A bounded connection change count also
-covers approved low-level command helpers within the same transaction.
+mark semantic changes explicitly per namespace. A bounded connection change
+count covers single-effect scopes where the lone declared namespace is the
+only possible target of any SQL in the transaction. Multi-effect scopes must
+call ``mark_changed(namespace)`` explicitly so that no-op or rollback paths
+never publish unrelated generations.
 """
 
 from __future__ import annotations
@@ -36,12 +39,14 @@ class DomainUnitOfWork:
         self,
         effects: Iterable[DataGenerationNamespace | str] = (),
     ) -> None:
-        self._effects = {_namespace(effect) for effect in effects}
+        self._effects: set[DataGenerationNamespace] = {
+            _namespace(effect) for effect in effects
+        }
+        self._changed_effects: set[DataGenerationNamespace] = set()
         self._root: DomainUnitOfWork | None = None
         self._connection = None
         self._token: Token[DomainUnitOfWork | None] | None = None
         self._initial_total_changes = 0
-        self._changed = False
         self._rollback_only = False
 
     def _owner(self) -> DomainUnitOfWork:
@@ -58,17 +63,35 @@ class DomainUnitOfWork:
     def changed(self) -> bool:
         owner = self._owner()
         if owner._connection is None:
-            return bool(owner._changed)
-        return bool(
-            owner._changed
-            or int(owner._connection.total_changes) > owner._initial_total_changes
-        )
+            return bool(owner._changed_effects)
+        if len(owner._effects) == 1:
+            single = next(iter(owner._effects))
+            if single in owner._changed_effects:
+                return True
+            return int(owner._connection.total_changes) > owner._initial_total_changes
+        return bool(owner._changed_effects)
 
     def add_effects(self, *effects: DataGenerationNamespace | str) -> None:
         self._owner()._effects.update(_namespace(effect) for effect in effects)
 
-    def mark_changed(self) -> None:
-        self._owner()._changed = True
+    def mark_changed(self, *namespaces: DataGenerationNamespace | str) -> None:
+        """Mark namespaces as actually changed by this transaction.
+
+        Without arguments, marks every declared effect as changed. This is a
+        backward-compatible convenience that must only be used when every
+        declared namespace is known to have been modified by the writes that
+        ran in this scope. Multi-effect scopes should pass explicit namespaces
+        so that no-op or rollback paths do not publish unrelated generations.
+        """
+
+        owner = self._owner()
+        if not namespaces:
+            owner._changed_effects.update(owner._effects)
+            return
+        for value in namespaces:
+            resolved = _namespace(value)
+            if resolved in owner._effects:
+                owner._changed_effects.add(resolved)
 
     def mark_rollback_only(self) -> None:
         self._owner()._rollback_only = True
@@ -102,13 +125,17 @@ class DomainUnitOfWork:
             if exc_type is not None or self._rollback_only:
                 connection.rollback()
                 return False
-            changed = bool(
-                self._changed
-                or int(connection.total_changes) > self._initial_total_changes
-            )
-            if changed and self._effects:
-                DataGenerationRepository.bump(connection, self._effects)
-                committed_effects = tuple(self._effects)
+            if len(self._effects) == 1:
+                single = next(iter(self._effects))
+                if (
+                    single not in self._changed_effects
+                    and int(connection.total_changes) > self._initial_total_changes
+                ):
+                    self._changed_effects.add(single)
+            changed_effects = self._changed_effects & self._effects
+            if changed_effects:
+                DataGenerationRepository.bump(connection, changed_effects)
+                committed_effects = tuple(changed_effects)
             connection.commit()
             committed = True
             if committed_effects:

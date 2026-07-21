@@ -17,14 +17,14 @@ pytestmark = [pytest.mark.unit, pytest.mark.contract, pytest.mark.parallel_safe]
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_projection_contract_is_current_only_v5_with_members_only_binding() -> None:
+def test_projection_contract_is_current_only_v6_with_members_only_binding() -> None:
     """ReplayBinding must accept only the single members-only contract.
 
     Legacy ``"revision"`` replay bindings are retired from the enum and from
     every ingress (repository read boundary, runtime engine payload validation,
     secure backup staging validation).
     """
-    assert OPERATION_PAYLOAD_VERSION == 5
+    assert OPERATION_PAYLOAD_VERSION == 6
     assert {binding.value for binding in ReplayBinding} == {"members"}
     assert not hasattr(ReplayBinding, "REVISION")
 
@@ -61,10 +61,18 @@ def test_contract_module_is_the_single_source_for_operation_type_role_and_field_
         ROOT / "worktrace/services/report_session_operation_engine.py"
     ).read_text(encoding="utf-8")
     assert "from .report_operation_contract import" in engine_source
-    assert "expected_roles" in engine_source
-    assert "allowed_payload_keys" in engine_source
-    # The engine must not redefine the role-set locally.
+    # The engine must delegate to the shared contract validators rather
+    # than re-deriving operation type, payload version, allowed fields or
+    # member graph semantics locally.
+    assert "validate_operation_type" in engine_source
+    assert "validate_payload_metadata" in engine_source
+    assert "validate_payload_fields" in engine_source
+    assert "validate_member_graph" in engine_source
+    # The engine must not redefine the role-set or allowed-field lookup
+    # locally; it must go through the contract's validate_* surface.
     assert "def _expected_roles" not in engine_source
+    assert "def _allowed_payload_keys" not in engine_source
+    assert "def _members_are_valid" not in engine_source
 
     backup_source = (
         ROOT / "worktrace/services/secure_backup_validation.py"
@@ -85,7 +93,7 @@ def test_contract_module_does_not_redefine_payload_version() -> None:
     engine_source = (
         ROOT / "worktrace/services/report_session_operation_engine.py"
     ).read_text(encoding="utf-8")
-    assert "OPERATION_PAYLOAD_VERSION = 5" not in engine_source
+    assert "OPERATION_PAYLOAD_VERSION = 6" not in engine_source
     assert "from .report_operation_contract import" in engine_source
     assert "OPERATION_PAYLOAD_VERSION" in engine_source
 

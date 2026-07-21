@@ -189,6 +189,16 @@ def test_replacement_generation_failure_rolls_back_data_and_replacement_epoch(
     temp_db,
     monkeypatch,
 ):
+    """Replacement generation failure rolls back data without fail-closing.
+
+    Per the architecture contract (Problem 1): when ``bump_replacement``
+    raises after the generation write but before commit, the
+    ``DatabaseReplacementUnitOfWork`` rolls back the live transaction. The
+    operation did not complete. Because the runtime restoration can be
+    verified (operational control, durable settings restored), the coordinator
+    MUST NOT enter durable fail-closed. Only when restoration cannot be
+    verified does fail-closed become mandatory.
+    """
     privacy_gate_service.accept_privacy_notice()
     project_id = project_service.create_project("Must Survive")
     before = _generations()
@@ -213,7 +223,101 @@ def test_replacement_generation_failure_rolls_back_data_and_replacement_epoch(
             assert after[namespace] == before[namespace] + 1
         else:
             assert after[namespace] == before[namespace]
-    assert settings_service.get_bool_setting("user_paused", False) is True
-    assert settings_service.get_setting("collector_status", "") == "paused"
+    assert (
+        database_maintenance_service.MAINTENANCE_COORDINATOR.recovery_blocked()
+        is False
+    )
+    assert (
+        database_maintenance_service.MAINTENANCE_COORDINATOR.phase
+        is database_maintenance_service.MaintenancePhase.IDLE
+    )
     assert project_service.get_project(project_id) is not None
     assert privacy_gate_service.is_privacy_notice_accepted() is True
+
+
+def test_replacement_generation_failure_when_restoration_fails_must_fail_closed(
+    temp_db,
+    monkeypatch,
+):
+    """Replacement generation failure with unverifiable restoration MUST fail-close.
+
+    Per the architecture contract (Problem 1): if ``bump_replacement`` raises
+    AND the collector restoration cannot be verified
+    (``restore_after_maintenance`` raises), the coordinator MUST enter durable
+    fail-closed because the runtime state is unverifiable.
+    """
+    privacy_gate_service.accept_privacy_notice()
+    project_service.create_project("Must Survive")
+
+    from tests.support.application import TestRuntimeMaintenanceControl
+
+    class _OperationalHoldState:
+        value = "operational"
+
+    class _OperationalCollectorControl:
+        hold_state = _OperationalHoldState()
+
+        def query_command(self, command_id: str):
+            return None
+
+    class _RestorationFailingControl(TestRuntimeMaintenanceControl):
+        def __init__(self) -> None:
+            super().__init__()
+            self.collector_control = _OperationalCollectorControl()
+
+        @staticmethod
+        def _ack(command_kind: str, terminal_state: str) -> dict[str, object]:
+            return {
+                "ok": True,
+                "command_id": f"test-{command_kind}",
+                "command_kind": command_kind,
+                "command_state": "completed",
+                "command_state_unknown": False,
+                "terminal_state": terminal_state,
+            }
+
+        def is_collection_running_for_maintenance(self) -> bool:
+            return True
+
+        def quiesce_collection_for_maintenance(self, timeout_seconds=5.0):
+            return self._ack("maintenance_hold", "held")
+
+        def restore_after_maintenance(self, state, timeout_seconds=5.0):
+            raise RuntimeError("restoration failed")
+
+    failing_control = _RestorationFailingControl()
+    database_maintenance_service.MAINTENANCE_COORDINATOR.register_runtime_control(
+        failing_control
+    )
+
+    original_bump_replacement = DataGenerationRepository.bump_replacement
+
+    def fail_after_generation_write(conn, *, minimum_value=None):
+        original_bump_replacement(conn, minimum_value=minimum_value)
+        raise RuntimeError("generation_publish_failed")
+
+    monkeypatch.setattr(
+        DataGenerationRepository,
+        "bump_replacement",
+        staticmethod(fail_after_generation_write),
+    )
+
+    try:
+        with pytest.raises(RuntimeError, match="generation_publish_failed"):
+            database_maintenance_service.clear_all_live_data()
+
+        assert (
+            database_maintenance_service.MAINTENANCE_COORDINATOR.recovery_blocked()
+            is True
+        )
+        assert (
+            database_maintenance_service.MAINTENANCE_COORDINATOR.phase
+            is database_maintenance_service.MaintenancePhase.FAILED_CLOSED
+        )
+    finally:
+        database_maintenance_service.MAINTENANCE_COORDINATOR.clear_runtime_control(
+            failing_control
+        )
+        database_maintenance_service.MAINTENANCE_COORDINATOR._set_phase(
+            database_maintenance_service.MaintenancePhase.IDLE
+        )

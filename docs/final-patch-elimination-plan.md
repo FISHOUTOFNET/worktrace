@@ -56,14 +56,27 @@ command result. Database-derived caches use database key plus replacement
 identity. The Windows path resolver uses the single adapter reset path instead
 of a second epoch-based invalidation mechanism.
 
+Secure backup import builds and fully validates a staging database **before**
+entering the maintenance hold. Staging failures raise `BackupCorruptedError`
+and never trigger durable fail-closed because the live database has not been
+touched. Live replacement failures raise `BackupReplacementError`; the
+coordinator attempts collector restoration and fail-closes only when the
+runtime state cannot be verified.
+
 ## Projection and transactions
 
 Current operations use payload v6 and members-only replay binding. Missing,
 invalid or non-current payload versions fail closed at the repository read
 boundary. Admission revision and durable replay identity are separate.
+Repository, replay engine and secure backup validator share one contract
+entry point in `report_operation_contract`; malformed payloads produce a
+stable `invalid_payload` diagnostic instead of raising.
 `DomainUnitOfWork` owns business generation effects: rollback and no-op do not
 publish, nested scopes reuse the root transaction, and each namespace is bumped
-at most once per root commit. `DatabaseReplacementUnitOfWork` owns the physical
+at most once per root commit. `DomainUnitOfWork` tracks per-namespace changed
+effects separately from declared effects; multi-effect scopes must call
+`mark_changed(...)` explicitly so that no-op or rollback paths do not publish
+unrelated generations. `DatabaseReplacementUnitOfWork` owns the physical
 replacement epoch bump, live commit and process-local publication.
 `WorkTraceConnection` retains only write-gate enforcement and read observation.
 

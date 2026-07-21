@@ -9,6 +9,7 @@ there is no compatibility parser or migration layer.
 | --- | ---: | --- |
 | SQLite schema | 13 | Empty database or exact v13 fingerprint only |
 | Encrypted backup payload | 6 | Exact v6 + schema v13 + exact fingerprint only |
+| Report operation payload | 6 | Exact v6; `ReplayBinding.MEMBERS` only; legacy revision rejected at read boundary |
 | Live display clock | 2 | Exact key set; LiveClock v1 aliases rejected |
 | Runtime envelope | 2 | Explicit schema version and one exact clock |
 
@@ -47,6 +48,18 @@ loads the same values into the process generation clock. Pre-commit validation,
 generation-write or database-commit failure preserves the live database and its
 existing clock alignment. A process publication failure recovers by reloading the
 committed durable values; it does not invent a second replacement generation.
+
+## Report operation payload v6
+
+`report_operation_contract.OPERATION_PAYLOAD_VERSION` is 6. Repository read
+boundary, replay engine and secure backup validator share one contract entry
+point. The contract validates operation type, payload version, replay binding
+(`ReplayBinding.MEMBERS` only), allowed fields, role set and member graph.
+Malformed payloads (e.g., list/dict `payload_version`, missing binding,
+unknown fields) produce a stable `invalid_payload` diagnostic instead of
+raising `TypeError`/`ValueError`/`KeyError`. Legacy revision-based replay is
+rejected at the read boundary. No compatibility parser or migration layer
+exists.
 
 ## RuntimeStartResult exact transport
 
