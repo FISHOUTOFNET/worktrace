@@ -8,7 +8,7 @@ from worktrace.services import (
     settings_service,
 )
 from worktrace.services.database_maintenance_service import (
-    CollectorCommandNotAcknowledgedError,
+    MaintenanceIntent,
     MaintenancePhase,
     RuntimeMaintenanceCoordinator,
 )
@@ -67,10 +67,15 @@ def _clear_block(coordinator: RuntimeMaintenanceCoordinator) -> None:
     coordinator._set_phase(MaintenancePhase.IDLE)
 
 
-def test_snapshot_unknown_hold_keeps_prearmed_seal_when_mirror_write_fails(
-    temp_db,
-    monkeypatch,
-):
+def test_snapshot_does_not_pre_arm_recovery_seal(temp_db, monkeypatch):
+    """Ordinary read-only snapshots must not arm a cross-restart recovery seal.
+
+    A consistent snapshot does not replace the database and creates no
+    irreversible durable effect; the old collector thread naturally disappears
+    on process restart. Only database replacement and sensitive staging
+    require durable recovery evidence.
+    """
+
     coordinator = RuntimeMaintenanceCoordinator()
     control = _UnknownHoldControl()
     coordinator.register_runtime_control(control)
@@ -78,60 +83,71 @@ def test_snapshot_unknown_hold_keeps_prearmed_seal_when_mirror_write_fails(
         {"user_paused": "false", "collector_status": "running"}
     )
 
-    def fail_mirror(_reason: str, *, expected_epoch: str | None = None):
-        assert expected_epoch
-        raise RuntimeError("mirror_unavailable")
+    arm_calls: list[str] = []
+    original_arm = maintenance_recovery_latch_repository.arm_recovery
 
-    monkeypatch.setattr(
-        maintenance_recovery_latch_repository,
-        "persist_fail_closed",
-        fail_mirror,
-    )
-
-    try:
-        with pytest.raises(
-            CollectorCommandNotAcknowledgedError,
-            match="collector_maintenance_hold_not_acknowledged",
-        ):
-            with coordinator.consistent_snapshot("snapshot_unknown_hold"):
-                pytest.fail("snapshot body must not run")
-
-        latch = maintenance_recovery_latch_repository.read_latch()
-        assert latch.blocked is True
-        assert latch.state == "armed"
-        assert latch.epoch
-        assert control.hold_calls == 1
-        assert coordinator.recovery_blocked() is True
-
-        restarted = RuntimeMaintenanceCoordinator()
-        assert restarted.hydrate_fail_closed_from_durable() is True
-        assert restarted.recovery_blocked() is True
-    finally:
-        _clear_block(coordinator)
-
-
-def test_recovery_seal_arm_failure_aborts_before_collector_hold(
-    temp_db,
-    monkeypatch,
-):
-    coordinator = RuntimeMaintenanceCoordinator()
-    control = _UnknownHoldControl()
-    coordinator.register_runtime_control(control)
-    settings_service.set_settings(
-        {"user_paused": "false", "collector_status": "running"}
-    )
+    def tracking_arm(reason: str):
+        arm_calls.append(reason)
+        return original_arm(reason)
 
     monkeypatch.setattr(
         maintenance_recovery_latch_repository,
         "arm_recovery",
-        lambda _reason: (_ for _ in ()).throw(RuntimeError("seal_create_failed")),
+        tracking_arm,
     )
 
-    with pytest.raises(RuntimeError, match="seal_create_failed"):
-        with coordinator.consistent_snapshot("snapshot_arm_failure"):
-            pytest.fail("snapshot body must not run")
+    try:
+        with pytest.raises(
+            database_maintenance_service.CollectorCommandNotAcknowledgedError,
+            match="collector_maintenance_hold_not_acknowledged",
+        ):
+            with coordinator.consistent_snapshot("snapshot_no_prearm"):
+                pytest.fail("snapshot body must not run")
 
-    assert control.hold_calls == 0
-    assert coordinator.phase is MaintenancePhase.IDLE
-    assert coordinator.recovery_blocked() is False
-    assert DATABASE_WRITE_GATE.writes_blocked() is False
+        # Snapshots must not pre-arm a recovery seal before hold.
+        assert arm_calls == []
+        assert control.hold_calls == 1
+        # Unknown hold still fails safely within the current process.
+        assert coordinator.recovery_blocked() is True
+        assert coordinator.phase is MaintenancePhase.FAILED_CLOSED
+    finally:
+        _clear_block(coordinator)
+
+
+def test_database_replacement_pre_arms_recovery_seal(temp_db, monkeypatch):
+    """Database replacement must arm the recovery seal before requesting hold."""
+
+    coordinator = RuntimeMaintenanceCoordinator()
+    control = _UnknownHoldControl()
+    coordinator.register_runtime_control(control)
+    settings_service.set_settings(
+        {"user_paused": "false", "collector_status": "running"}
+    )
+
+    arm_calls: list[str] = []
+    original_arm = maintenance_recovery_latch_repository.arm_recovery
+
+    def tracking_arm(reason: str):
+        arm_calls.append(reason)
+        return original_arm(reason)
+
+    monkeypatch.setattr(
+        maintenance_recovery_latch_repository,
+        "arm_recovery",
+        tracking_arm,
+    )
+
+    try:
+        with pytest.raises(
+            database_maintenance_service.CollectorCommandNotAcknowledgedError,
+            match="collector_maintenance_hold_not_acknowledged",
+        ):
+            with coordinator.database_replacement("replacement_prearm"):
+                pytest.fail("replacement body must not run")
+
+        assert arm_calls == ["replacement_prearm"]
+        assert control.hold_calls == 1
+        assert coordinator.recovery_blocked() is True
+        assert coordinator.phase is MaintenancePhase.FAILED_CLOSED
+    finally:
+        _clear_block(coordinator)
