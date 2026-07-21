@@ -334,10 +334,7 @@ def _build_and_validate_staging(
     except BackupCorruptedError:
         _rollback_staging_safely(staging)
         raise
-    except BackupValidationError as exc:
-        _rollback_staging_safely(staging)
-        raise BackupCorruptedError("backup file is invalid or corrupted") from exc
-    except (sqlite3.DatabaseError, ValueError, KeyError, TypeError) as exc:
+    except Exception as exc:
         _rollback_staging_safely(staging)
         raise BackupCorruptedError("backup file is invalid or corrupted") from exc
     finally:
