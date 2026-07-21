@@ -1,12 +1,10 @@
 """Explicit caller-owned SQLite transaction with atomic generation effects.
 
-The unit of work does not proxy modules, intercept nested commits, or infer
-which namespaces a SQL statement affects. Command owners declare effects and
-mark semantic changes explicitly per namespace. A bounded connection change
-count covers single-effect scopes where the lone declared namespace is the
-only possible target of any SQL in the transaction. Multi-effect scopes must
-call ``mark_changed(namespace)`` explicitly so that no-op or rollback paths
-never publish unrelated generations.
+The unit of work does not proxy modules, intercept nested commits, inspect SQL,
+or infer business effects from connection counters. Command owners declare the
+namespaces they may change and explicitly mark only the namespaces whose user-
+visible semantics actually changed. Root commit publishes each changed namespace
+at most once; no-op and rollback paths publish nothing.
 """
 
 from __future__ import annotations
@@ -33,7 +31,7 @@ def _namespace(value: DataGenerationNamespace | str) -> DataGenerationNamespace:
 
 
 class DomainUnitOfWork:
-    """Own one root transaction and publish declared effects exactly once."""
+    """Own one root transaction and publish explicit changed effects once."""
 
     def __init__(
         self,
@@ -46,7 +44,6 @@ class DomainUnitOfWork:
         self._root: DomainUnitOfWork | None = None
         self._connection = None
         self._token: Token[DomainUnitOfWork | None] | None = None
-        self._initial_total_changes = 0
         self._rollback_only = False
 
     def _owner(self) -> DomainUnitOfWork:
@@ -61,37 +58,32 @@ class DomainUnitOfWork:
 
     @property
     def changed(self) -> bool:
-        owner = self._owner()
-        if owner._connection is None:
-            return bool(owner._changed_effects)
-        if len(owner._effects) == 1:
-            single = next(iter(owner._effects))
-            if single in owner._changed_effects:
-                return True
-            return int(owner._connection.total_changes) > owner._initial_total_changes
-        return bool(owner._changed_effects)
+        return bool(self._owner()._changed_effects)
 
     def add_effects(self, *effects: DataGenerationNamespace | str) -> None:
         self._owner()._effects.update(_namespace(effect) for effect in effects)
 
-    def mark_changed(self, *namespaces: DataGenerationNamespace | str) -> None:
-        """Mark namespaces as actually changed by this transaction.
+    def mark_changed(
+        self,
+        *namespaces: DataGenerationNamespace | str,
+    ) -> None:
+        """Mark explicitly declared namespaces as semantically changed.
 
-        Without arguments, marks every declared effect as changed. This is a
-        backward-compatible convenience that must only be used when every
-        declared namespace is known to have been modified by the writes that
-        ran in this scope. Multi-effect scopes should pass explicit namespaces
-        so that no-op or rollback paths do not publish unrelated generations.
+        Callers that discover a namespace dynamically must first declare it with
+        ``add_effects(namespace)``. Missing or undeclared namespaces are contract
+        violations rather than silently ignored hints.
         """
 
-        owner = self._owner()
         if not namespaces:
-            owner._changed_effects.update(owner._effects)
-            return
-        for value in namespaces:
-            resolved = _namespace(value)
-            if resolved in owner._effects:
-                owner._changed_effects.add(resolved)
+            raise RuntimeError("generation_effect_required")
+        owner = self._owner()
+        resolved = tuple(_namespace(value) for value in namespaces)
+        undeclared = tuple(
+            namespace for namespace in resolved if namespace not in owner._effects
+        )
+        if undeclared:
+            raise RuntimeError("undeclared_generation_effect")
+        owner._changed_effects.update(resolved)
 
     def mark_rollback_only(self) -> None:
         self._owner()._rollback_only = True
@@ -108,7 +100,6 @@ class DomainUnitOfWork:
 
         self._connection = get_connection()
         self._connection.execute("BEGIN IMMEDIATE")
-        self._initial_total_changes = int(self._connection.total_changes)
         self._token = _CURRENT_UNIT_OF_WORK.set(self)
         return self
 
@@ -125,17 +116,9 @@ class DomainUnitOfWork:
             if exc_type is not None or self._rollback_only:
                 connection.rollback()
                 return False
-            if len(self._effects) == 1:
-                single = next(iter(self._effects))
-                if (
-                    single not in self._changed_effects
-                    and int(connection.total_changes) > self._initial_total_changes
-                ):
-                    self._changed_effects.add(single)
-            changed_effects = self._changed_effects & self._effects
-            if changed_effects:
-                DataGenerationRepository.bump(connection, changed_effects)
-                committed_effects = tuple(changed_effects)
+            if self._changed_effects:
+                DataGenerationRepository.bump(connection, self._changed_effects)
+                committed_effects = tuple(self._changed_effects)
             connection.commit()
             committed = True
             if committed_effects:
