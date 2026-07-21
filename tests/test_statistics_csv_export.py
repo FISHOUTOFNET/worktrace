@@ -10,7 +10,7 @@ from unittest.mock import patch
 import pytest
 
 from tests.support import activity_factory as activity_service
-from tests.support.application import build_test_bridge
+from tests.support.application import FakeStatisticsCapability, build_test_bridge
 from worktrace.api import export_api
 from worktrace.api.export_api import StatisticsExportError
 from worktrace.db import get_connection
@@ -783,17 +783,16 @@ def test_bridge_export_success_returns_basename_only(temp_db, tmp_path, bridge):
     _assert_no_sensitive_keys(result)
 
 
-def test_bridge_export_cancel_does_not_call_api(temp_db, tmp_path, bridge):
+def test_bridge_export_cancel_does_not_call_api(temp_db, tmp_path):
     _seed_closed_activity()
     out_dir = tmp_path / "exports"
     out_dir.mkdir()
+    statistics = FakeStatisticsCapability()
+    bridge = build_test_bridge(statistics=statistics)
     bridge.set_window(_stub_window(None))
-    with patch(
-        "worktrace.webview_ui.bridge_statistics.export_api.export_statistics_csv"
-    ) as fake_write:
-        result = bridge.export_statistics_csv("2026-06-25", "2026-06-25")
+    result = bridge.export_statistics_csv("2026-06-25", "2026-06-25")
     assert result == {"ok": False, "cancelled": True, "error": "已取消导出"}
-    assert fake_write.call_count == 0
+    assert statistics.export_statistics_csv_calls == []
     assert list(out_dir.iterdir()) == []
 
 
@@ -996,18 +995,17 @@ def test_bridge_export_dialog_returns_single_string(temp_db, tmp_path, bridge):
 
 @pytest.mark.parametrize("return_value", [(), []])
 def test_bridge_export_dialog_empty_sequence_is_cancelled(
-    temp_db, tmp_path, bridge, return_value
+    temp_db, tmp_path, return_value
 ):
     _seed_closed_activity()
     out_dir = tmp_path / "exports"
     out_dir.mkdir()
+    statistics = FakeStatisticsCapability()
+    bridge = build_test_bridge(statistics=statistics)
     bridge.set_window(_FakeDialogWindow(return_value=return_value))
-    with patch(
-        "worktrace.webview_ui.bridge_statistics.export_api.export_statistics_csv"
-    ) as fake_write:
-        result = bridge.export_statistics_csv("2026-06-25", "2026-06-25")
+    result = bridge.export_statistics_csv("2026-06-25", "2026-06-25")
     assert result == {"ok": False, "cancelled": True, "error": "已取消导出"}
-    assert fake_write.call_count == 0
+    assert statistics.export_statistics_csv_calls == []
     assert list(out_dir.iterdir()) == []
 
 

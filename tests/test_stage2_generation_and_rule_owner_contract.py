@@ -70,10 +70,77 @@ def test_generation_publication_is_owned_by_unit_of_work() -> None:
     assert "generation_clock" not in repository
     assert "generation_clock" not in replacement
 
+    # Ordinary mutations: DomainUnitOfWork owns commit and ordinary publication.
     uow = _source("worktrace/domain_unit_of_work.py")
     assert "publish_committed" in uow
-    assert "publish_replacement_committed" in uow
+    assert "publish_replacement_committed" not in uow
     assert "connection.commit()" in uow
+
+    # Physical replacement: DatabaseReplacementUnitOfWork owns commit, the
+    # replacement epoch bump, and process-local replacement publication.
+    replacement_uow = _source(
+        "worktrace/database_replacement_unit_of_work.py"
+    )
+    assert "publish_replacement_committed" in replacement_uow
+    assert "clear_generation_clock" in replacement_uow
+    assert "bump_replacement" in replacement_uow
+    assert "connection.commit()" in replacement_uow
+    assert "BEGIN IMMEDIATE" in replacement_uow
+
+
+def test_repository_does_not_commit() -> None:
+    """Repository must not call commit(); only unit-of-work owners commit."""
+    for relative in (
+        "worktrace/data_generation_repository.py",
+        "worktrace/services/database_replacement_generation_service.py",
+    ):
+        source = _source(relative)
+        assert ".commit()" not in source, relative
+
+
+def test_services_do_not_own_replacement_publication_or_bump() -> None:
+    """Services must not call replacement publication or bump_replacement.
+
+    Only DatabaseReplacementUnitOfWork is allowed to call these. Staging
+    databases may have their own commit, but they must not publish live
+    database generation or bump the replacement epoch.
+    """
+    service_files = (
+        "worktrace/services/secure_backup_service.py",
+        "worktrace/services/database_maintenance_service.py",
+        "worktrace/services/database_replacement_generation_service.py",
+        "worktrace/services/secure_backup_validation.py",
+    )
+    for relative in service_files:
+        source = _source(relative)
+        assert "publish_replacement_committed" not in source, relative
+        assert "bump_replacement" not in source, relative
+        assert "DataGenerationRepository.bump" not in source, relative
+
+
+def test_replacement_publication_lives_only_in_replacement_unit_of_work() -> None:
+    """publish_replacement_committed must only appear in the replacement UoW.
+
+    The generation_clock module is allowed to define it, but no other
+    production module may import or call it.
+    """
+    import os
+
+    worktrace_root = ROOT / "worktrace"
+    allowed_callers = {
+        "worktrace/database_replacement_unit_of_work.py",
+        "worktrace/generation_clock.py",
+    }
+    for root, _dirs, files in os.walk(worktrace_root):
+        for filename in files:
+            if not filename.endswith(".py"):
+                continue
+            path = Path(root) / filename
+            relative = path.relative_to(ROOT).as_posix()
+            if relative in allowed_callers:
+                continue
+            source = path.read_text(encoding="utf-8")
+            assert "publish_replacement_committed" not in source, relative
 
 
 def test_database_derived_caches_use_domain_and_replacement_identity() -> None:

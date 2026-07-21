@@ -9,12 +9,15 @@ from __future__ import annotations
 
 import inspect
 import json
-from unittest.mock import patch
 
 import pytest
 
 from tests.support import runtime_state_fixture
-from tests.support.application import build_test_bridge
+from tests.support.application import (
+    FakeBackupCapability,
+    FakeSettingsCapability,
+    build_test_bridge,
+)
 from worktrace.api import settings_api
 from worktrace.api.backup_api import BackupManifestInfo
 from worktrace.api.settings_api import (
@@ -244,23 +247,16 @@ def test_api_payload_does_not_leak_sensitive_tokens(temp_db) -> None:
         assert token not in serialized
 
 
-def test_api_does_not_call_write_actions_during_status_read(temp_db) -> None:
+def test_api_does_not_call_write_actions_during_status_read() -> None:
     assert not hasattr(settings_api, "set_setting_value")
-    with patch.object(settings_api, "clear_all_local_data") as mock_clear, patch.object(
-        settings_api, "set_clipboard_capture_enabled"
-    ) as mock_set_clip, patch(
-        "worktrace.api.backup_api.export_encrypted_backup"
-    ) as mock_export, patch(
-        "worktrace.api.backup_api.import_encrypted_backup"
-    ) as mock_import, patch(
-        "worktrace.api.backup_api.parse_encrypted_backup_manifest"
-    ) as mock_manifest:
-        get_settings_privacy_status()
-        mock_clear.assert_not_called()
-        mock_set_clip.assert_not_called()
-        mock_export.assert_not_called()
-        mock_import.assert_not_called()
-        mock_manifest.assert_not_called()
+    settings = FakeSettingsCapability()
+    backup = FakeBackupCapability()
+    bridge = build_test_bridge(settings=settings, backup=backup)
+    bridge.get_settings_privacy_status()
+    assert settings.clear_all_local_data_for_webview_calls == []
+    assert backup.export_encrypted_backup_for_webview_calls == []
+    assert backup.import_encrypted_backup_for_webview_calls == []
+    assert backup.preview_encrypted_backup_manifest_for_webview_calls == []
 
 
 def test_api_does_not_change_schema(temp_db) -> None:

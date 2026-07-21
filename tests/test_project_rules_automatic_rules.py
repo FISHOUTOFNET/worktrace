@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from tests.support import activity_factory as activity_service
+from tests.support.application import build_test_bridge
 from tests.support.db_helpers import assign_activity_project
 from worktrace.api import rule_history_api as rule_api
 from worktrace.db import get_connection
@@ -22,7 +23,6 @@ from worktrace.services import (
     rule_catalog_command_service,
     rule_service,
 )
-from worktrace.webview_ui.bridge_rules import ProjectRulesBridgeMixin
 
 pytestmark = [pytest.mark.db, pytest.mark.integration, pytest.mark.contract]
 
@@ -314,7 +314,7 @@ def _assert_no_sensitive_tokens(payload: dict) -> None:
 
 def test_automatic_rules_status_is_display_safe_and_serializable(temp_db):
     for result in (
-        ProjectRulesBridgeMixin().automatic_rules_status(),
+        build_test_bridge().automatic_rules_status(),
         rule_api.automatic_rules_status(),
     ):
         assert result["ok"] is True

@@ -2,12 +2,11 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 
 from tests.support.activity_factory import create_closed_activity
-from tests.support.application import build_test_bridge
+from tests.support.application import FakeStatisticsCapability, build_test_bridge
 from worktrace.services import view_model_service
 
 pytestmark = [pytest.mark.db, pytest.mark.integration, pytest.mark.contract]
@@ -43,7 +42,6 @@ def test_runtime_and_backup_facades_have_single_owners():
     assert "capture_installation_privacy_state" not in backup_api
     assert "restore_installation_privacy_state" not in backup_api
 
-
 def test_statistics_bridge_separates_display_summary_and_export_ticket(temp_db):
     envelope = {
         "summary": {
@@ -66,11 +64,9 @@ def test_statistics_bridge_separates_display_summary_and_export_ticket(temp_db):
             "revision": "export-ticket-revision",
         },
     }
-    with patch(
-        "worktrace.webview_ui.bridge_statistics.statistics_api.get_statistics_export_view_model",
-        return_value=envelope,
-    ):
-        result = build_test_bridge().get_statistics_export_summary(DATE, DATE)
+    statistics = FakeStatisticsCapability()
+    statistics.get_statistics_export_view_model_return = envelope
+    result = build_test_bridge(statistics=statistics).get_statistics_export_summary(DATE, DATE)
 
     assert set(result) == {"ok", "summary", "export_ticket"}
     assert result["export_ticket"] == envelope["export_ticket"]

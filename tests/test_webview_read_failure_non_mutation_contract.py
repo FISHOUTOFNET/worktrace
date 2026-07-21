@@ -1,5 +1,5 @@
 from tests.support import runtime_state_fixture
-from tests.support.application import build_test_bridge
+from tests.support.application import FakeOverviewCapability, build_test_bridge
 import pytest
 
 from worktrace.db import get_connection
@@ -13,19 +13,18 @@ def _boundary_count() -> int:
         return int(conn.execute("SELECT COUNT(*) AS c FROM session_boundary").fetchone()["c"])
 
 
-def test_overview_read_failure_does_not_mutate_runtime_or_activity_state(temp_db, monkeypatch):
+def test_overview_read_failure_does_not_mutate_runtime_or_activity_state(temp_db):
     settings_service.set_setting("collector_status", "running")
     settings_service.set_setting("collector_health_state", "healthy")
     runtime_state_fixture.set_setting("pending_short_seconds", "23")
     runtime_state_fixture.set_setting("current_activity_snapshot", '{"status":"normal","token":"keep"}')
     before_boundaries = _boundary_count()
 
-    monkeypatch.setattr(
-        "worktrace.webview_ui.bridge_overview.view_model_api.get_overview_view_model",
-        lambda: (_ for _ in ()).throw(RuntimeError("read failed")),
-    )
+    overview = FakeOverviewCapability()
+    overview.get_overview_view_model_side_effect = RuntimeError("read failed")
+    bridge = build_test_bridge(overview=overview)
 
-    result = build_test_bridge().get_overview()
+    result = bridge.get_overview()
 
     assert result["ok"] is False
     assert settings_service.get_setting("collector_status") == "running"
@@ -35,19 +34,18 @@ def test_overview_read_failure_does_not_mutate_runtime_or_activity_state(temp_db
     assert _boundary_count() == before_boundaries
 
 
-def test_refresh_state_read_failure_does_not_mutate_runtime_or_activity_state(temp_db, monkeypatch):
+def test_refresh_state_read_failure_does_not_mutate_runtime_or_activity_state(temp_db):
     settings_service.set_setting("collector_status", "running")
     settings_service.set_setting("collector_health_state", "degraded")
     runtime_state_fixture.set_setting("pending_short_seconds", "29")
     runtime_state_fixture.set_setting("current_activity_snapshot", '{"status":"normal","token":"keep"}')
     before_boundaries = _boundary_count()
 
-    monkeypatch.setattr(
-        "worktrace.webview_ui.bridge_overview.view_model_api.get_refresh_state_view_model",
-        lambda _report_date=None: (_ for _ in ()).throw(RuntimeError("read failed")),
-    )
+    overview = FakeOverviewCapability()
+    overview.get_refresh_state_view_model_side_effect = RuntimeError("read failed")
+    bridge = build_test_bridge(overview=overview)
 
-    result = build_test_bridge().get_refresh_state()
+    result = bridge.get_refresh_state()
 
     assert result["ok"] is False
     assert settings_service.get_setting("collector_status") == "running"

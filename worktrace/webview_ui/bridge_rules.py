@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 from typing import Any, Callable
 
-from ..api import project_api, rule_api, rule_history_api
 from .project_rules_presenter import (
     _EXCLUDED_FOLDER_RULE_CREATE_MESSAGES,
     _EXCLUDED_KEYWORD_RULE_CREATE_MESSAGES,
@@ -73,7 +72,7 @@ class ProjectRulesBridgeMixin:
         try:
             projected = [
                 _project_rules_project_payload(project)
-                for project in project_api.list_project_bindings()
+                for project in self._services.rules.list_project_bindings()
             ]
             excluded = next(
                 (project for project in projected if project.get("is_excluded")),
@@ -112,7 +111,7 @@ class ProjectRulesBridgeMixin:
         if not _valid_rule_type(rule_type) or not _valid_id(rule_id) or type(enabled) is not bool:
             return {"ok": False, "error": "操作无效"}
         try:
-            result = rule_api.set_project_rule_enabled(rule_type, rule_id, enabled)
+            result = self._services.rules.set_project_rule_enabled(rule_type, rule_id, enabled)
             if result.get("ok") is True:
                 return {
                     "ok": True,
@@ -132,7 +131,7 @@ class ProjectRulesBridgeMixin:
         if not _valid_id(project_id) or type(keyword) is not str or not keyword.strip():
             return {"ok": False, "error": "操作无效"}
         try:
-            result = rule_api.create_project_keyword_rule(project_id, keyword.strip())
+            result = self._services.rules.create_project_keyword_rule(project_id, keyword.strip())
             if result.get("ok") is True:
                 rule = dict(result.get("rule") or {})
                 summary = _keyword_summary(rule)
@@ -154,7 +153,7 @@ class ProjectRulesBridgeMixin:
         if not _valid_id(rule_id) or type(apply_to_history) is not bool:
             return {"ok": False, "error": "操作无效"}
         try:
-            result = rule_api.delete_project_keyword_rule(rule_id, apply_to_history)
+            result = self._services.rules.delete_project_keyword_rule(rule_id, apply_to_history)
             if result.get("ok") is True:
                 rule = dict(result.get("rule") or {})
                 return {
@@ -179,7 +178,7 @@ class ProjectRulesBridgeMixin:
         if not _valid_id(rule_id) or type(keyword) is not str or not keyword.strip():
             return {"ok": False, "error": "操作无效"}
         try:
-            result = rule_api.update_project_keyword_rule(rule_id, keyword.strip())
+            result = self._services.rules.update_project_keyword_rule(rule_id, keyword.strip())
             if result.get("ok") is True:
                 return {
                     "ok": True,
@@ -207,7 +206,7 @@ class ProjectRulesBridgeMixin:
         ):
             return {"ok": False, "error": "操作无效"}
         try:
-            result = rule_api.create_project_folder_rule(
+            result = self._services.rules.create_project_folder_rule(
                 project_id,
                 folder_path.strip(),
                 recursive,
@@ -233,7 +232,7 @@ class ProjectRulesBridgeMixin:
         if type(keyword) is not str or not keyword.strip():
             return {"ok": False, "error": "操作无效"}
         try:
-            result = rule_api.create_excluded_keyword_rule_for_webview(keyword.strip())
+            result = self._services.rules.create_excluded_keyword_rule_for_webview(keyword.strip())
             if result.get("ok") is True:
                 return {
                     "ok": True,
@@ -263,7 +262,7 @@ class ProjectRulesBridgeMixin:
         ):
             return {"ok": False, "error": "操作无效"}
         try:
-            result = rule_api.create_excluded_folder_rule_for_webview(
+            result = self._services.rules.create_excluded_folder_rule_for_webview(
                 folder_path.strip(),
                 recursive,
             )
@@ -298,7 +297,7 @@ class ProjectRulesBridgeMixin:
         ):
             return {"ok": False, "error": "操作无效"}
         try:
-            result = rule_api.update_project_folder_rule(
+            result = self._services.rules.update_project_folder_rule(
                 rule_id,
                 folder_path.strip(),
                 recursive,
@@ -328,7 +327,7 @@ class ProjectRulesBridgeMixin:
         if not _valid_id(rule_id) or type(apply_to_history) is not bool:
             return {"ok": False, "error": "操作无效"}
         try:
-            result = rule_api.delete_project_folder_rule(rule_id, apply_to_history)
+            result = self._services.rules.delete_project_folder_rule(rule_id, apply_to_history)
             if result.get("ok") is True:
                 rule = dict(result.get("rule") or {})
                 return {
@@ -367,7 +366,7 @@ class ProjectRulesBridgeMixin:
         ):
             return {"ok": False, "error": "操作无效"}
         try:
-            result = project_api.create_project_for_rules(
+            result = self._services.rules.create_project_for_rules(
                 name.strip(),
                 description.strip(),
                 language.strip() or "中文",
@@ -405,7 +404,7 @@ class ProjectRulesBridgeMixin:
         ):
             return {"ok": False, "error": "操作无效"}
         try:
-            result = project_api.update_project_for_rules(
+            result = self._services.rules.update_project_for_rules(
                 project_id,
                 name.strip(),
                 description.strip(),
@@ -432,7 +431,7 @@ class ProjectRulesBridgeMixin:
         if not _valid_id(project_id) or type(enabled) is not bool:
             return {"ok": False, "error": "操作无效"}
         return self._project_toggle(
-            lambda: project_api.set_project_enabled_for_rules(project_id, enabled),
+            lambda: self._services.rules.set_project_enabled_for_rules(project_id, enabled),
             "更新项目状态失败",
         )
 
@@ -440,7 +439,7 @@ class ProjectRulesBridgeMixin:
         if type(enabled) is not bool:
             return {"ok": False, "error": "操作无效"}
         return self._project_toggle(
-            lambda: project_api.set_excluded_rules_enabled(enabled),
+            lambda: self._services.rules.set_excluded_rules_enabled(enabled),
             "更新排除规则状态失败",
         )
 
@@ -468,7 +467,7 @@ class ProjectRulesBridgeMixin:
         if not _valid_id(project_id):
             return {"ok": False, "error": "操作无效"}
         try:
-            result = project_api.archive_project_for_rules(project_id)
+            result = self._services.rules.archive_project_for_rules(project_id)
             if result.get("ok") is True:
                 return {
                     "ok": True,
@@ -490,7 +489,7 @@ class ProjectRulesBridgeMixin:
         if not _valid_id(project_id):
             return {"ok": False, "error": "操作无效"}
         try:
-            result = project_api.delete_project_for_rules(project_id)
+            result = self._services.rules.delete_project_for_rules(project_id)
             if result.get("ok") is True:
                 project = dict(result.get("project") or {})
                 return {
@@ -516,7 +515,7 @@ class ProjectRulesBridgeMixin:
         return self._single_rule_history_operation(
             rule_type,
             rule_id,
-            rule_history_api.preview_project_rule_impact,
+            self._services.rules.preview_project_rule_impact,
             "impact",
             _PROJECT_RULE_IMPACT_PREVIEW_MESSAGES,
             "预览规则影响失败",
@@ -526,7 +525,7 @@ class ProjectRulesBridgeMixin:
         return self._single_rule_history_operation(
             rule_type,
             rule_id,
-            rule_history_api.backfill_project_rule,
+            self._services.rules.backfill_project_rule,
             "result",
             _PROJECT_RULE_BACKFILL_MESSAGES,
             "应用规则失败",
@@ -568,7 +567,7 @@ class ProjectRulesBridgeMixin:
     def preview_project_rules_batch_impact(self, rules) -> dict[str, Any]:
         return self._batch_rule_operation(
             rules,
-            rule_history_api.preview_project_rules_batch_impact,
+            self._services.rules.preview_project_rules_batch_impact,
             "impact",
             _PROJECT_RULE_BATCH_PREVIEW_MESSAGES,
             "批量预览失败",
@@ -577,7 +576,7 @@ class ProjectRulesBridgeMixin:
     def backfill_project_rules_batch(self, rules) -> dict[str, Any]:
         return self._batch_rule_operation(
             rules,
-            rule_history_api.backfill_project_rules_batch,
+            self._services.rules.backfill_project_rules_batch,
             "result",
             _PROJECT_RULE_BATCH_APPLY_MESSAGES,
             "批量应用失败",
@@ -588,7 +587,7 @@ class ProjectRulesBridgeMixin:
             return {"ok": False, "error": "操作无效"}
         return self._batch_rule_operation(
             rules,
-            lambda values: rule_history_api.set_project_rules_batch_enabled(
+            lambda values: self._services.rules.set_project_rules_batch_enabled(
                 values,
                 enabled,
             ),
@@ -618,7 +617,7 @@ class ProjectRulesBridgeMixin:
 
     def automatic_rules_status(self) -> dict[str, Any]:
         try:
-            result = rule_history_api.automatic_rules_status()
+            result = self._services.rules.automatic_rules_status()
             if result.get("ok") is True:
                 return {"ok": True, "status": result.get("status") or {}}
             return {"ok": False, "error": "加载自动规则状态失败"}

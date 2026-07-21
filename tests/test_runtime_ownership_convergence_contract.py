@@ -5,6 +5,8 @@ from pathlib import Path
 
 import pytest
 
+from worktrace.database_content_manifest import DATABASE_CONTENT, TableCategory
+
 pytestmark = [pytest.mark.unit, pytest.mark.contract, pytest.mark.collector_runtime]
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -211,8 +213,10 @@ def test_worker_progress_cleanup_is_owned_by_static_content_manifest() -> None:
     maintenance_source = ast.unparse(maintenance)
     assert "DELETE_ORDER" in maintenance_source
     assert "seed_defaults" in _called_names(maintenance)
-    assert "publish_database_replacement" in _called_names(maintenance)
+    assert "DatabaseReplacementUnitOfWork" in _called_names(maintenance)
+    assert "TableCategory" in manifest
 
+    manifest_by_name = {item.name: item for item in DATABASE_CONTENT}
     for table_name in (
         "history_mutation_job_rule",
         "history_mutation_job",
@@ -220,7 +224,10 @@ def test_worker_progress_cleanup_is_owned_by_static_content_manifest() -> None:
         "activity_resource_repair_job",
         "startup_recovery_job",
     ):
-        assert f'DatabaseTableContent("{table_name}"' in manifest
+        entry = manifest_by_name[table_name]
+        assert entry.category is TableCategory.WORKER_PROGRESS, table_name
+        assert entry.derived is True, table_name
+        assert entry.internal is True, table_name
 
     backup_source = _source("worktrace/services/secure_backup_service.py")
     assert "clear_all_worker_progress_in_transaction" not in backup_source

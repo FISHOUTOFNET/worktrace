@@ -192,16 +192,16 @@ def test_replacement_generation_failure_rolls_back_data_and_replacement_epoch(
     privacy_gate_service.accept_privacy_notice()
     project_id = project_service.create_project("Must Survive")
     before = _generations()
-    original = database_maintenance_service.publish_database_replacement
+    original_bump_replacement = DataGenerationRepository.bump_replacement
 
-    def fail_after_generation_write(conn):
-        original(conn)
+    def fail_after_generation_write(conn, *, minimum_value=None):
+        original_bump_replacement(conn, minimum_value=minimum_value)
         raise RuntimeError("generation_publish_failed")
 
     monkeypatch.setattr(
-        database_maintenance_service,
-        "publish_database_replacement",
-        fail_after_generation_write,
+        DataGenerationRepository,
+        "bump_replacement",
+        staticmethod(fail_after_generation_write),
     )
 
     with pytest.raises(RuntimeError, match="generation_publish_failed"):

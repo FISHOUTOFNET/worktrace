@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import sqlite3
-from contextlib import contextmanager
 
 import pytest
 
@@ -106,16 +105,16 @@ def test_import_precommit_failure_preserves_live_database_and_clock_alignment(
             fail_validation,
         )
     else:
-        original = secure_backup_service.publish_database_replacement
+        original_bump_replacement = DataGenerationRepository.bump_replacement
 
-        def fail_generation(conn, **kwargs):
-            original(conn, **kwargs)
+        def fail_generation(conn, *, minimum_value=None):
+            original_bump_replacement(conn, minimum_value=minimum_value)
             raise RuntimeError("generation write failed")
 
         monkeypatch.setattr(
-            secure_backup_service,
-            "publish_database_replacement",
-            fail_generation,
+            DataGenerationRepository,
+            "bump_replacement",
+            staticmethod(fail_generation),
         )
 
     with pytest.raises(RuntimeError, match="failed"):
@@ -132,7 +131,9 @@ def test_import_precommit_failure_preserves_live_database_and_clock_alignment(
 def test_import_commit_failure_rolls_back_replacement(temp_db, tmp_path, monkeypatch):
     output = _make_backup(tmp_path)
     _insert_sentinel("Commit Failure Sentinel")
-    original_get_connection = secure_backup_service.get_connection
+    from worktrace import database_replacement_unit_of_work
+
+    original_get_connection = database_replacement_unit_of_work.get_connection
 
     class CommitFailingConnection:
         def __init__(self, conn):
@@ -144,21 +145,13 @@ def test_import_commit_failure_rolls_back_replacement(temp_db, tmp_path, monkeyp
         def commit(self):
             raise sqlite3.OperationalError("commit failed")
 
-    @contextmanager
-    def failing_connection():
-        conn = original_get_connection()
-        try:
-            yield CommitFailingConnection(conn)
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
+    def failing_get_connection():
+        return CommitFailingConnection(original_get_connection())
 
     monkeypatch.setattr(
-        secure_backup_service,
+        database_replacement_unit_of_work,
         "get_connection",
-        failing_connection,
+        failing_get_connection,
     )
     with pytest.raises(BackupCorruptedError):
         secure_backup_service.import_encrypted_backup(
@@ -177,12 +170,13 @@ def test_import_process_publish_failure_recovers_by_durable_reload(
     monkeypatch,
 ):
     output = _make_backup(tmp_path)
+    from worktrace import database_replacement_unit_of_work
 
     def fail_publish(_database_key, _values):
         raise RuntimeError("process publish failed")
 
     monkeypatch.setattr(
-        secure_backup_service,
+        database_replacement_unit_of_work,
         "publish_replacement_committed",
         fail_publish,
     )

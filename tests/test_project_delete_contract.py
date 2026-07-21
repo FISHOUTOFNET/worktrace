@@ -5,6 +5,7 @@ import pytest
 from worktrace.services import system_project_service
 
 from tests.support.activity_factory import create_closed_activity
+from tests.support.application import FakeRulesCapability, build_test_bridge
 from tests.support.db_helpers import assign_activity_project, fetch_one, table_count
 from worktrace.api import project_api
 from worktrace.constants import EXCLUDED_PROJECT, UNCATEGORIZED_PROJECT
@@ -21,7 +22,6 @@ from worktrace.services import (
     statistics_service,
     timeline_service,
 )
-from worktrace.webview_ui.bridge_rules import ProjectRulesBridgeMixin
 
 pytestmark = [pytest.mark.db, pytest.mark.integration, pytest.mark.contract]
 
@@ -219,9 +219,7 @@ def test_archived_project_history_remains_reportable_as_delete_contrast(temp_db)
     assert statistics_service.get_summary("2026-06-18", "2026-06-18")["total_duration"] == 1800
 
 
-def test_bridge_delete_project_uses_delete_specific_safe_messages(monkeypatch):
-    bridge = ProjectRulesBridgeMixin()
-
+def test_bridge_delete_project_uses_delete_specific_safe_messages():
     for code, message in {
         "invalid_input": "操作无效",
         "not_found": "项目不存在",
@@ -229,10 +227,9 @@ def test_bridge_delete_project_uses_delete_specific_safe_messages(monkeypatch):
         "operation_failed": "删除项目失败",
         "unknown": "删除项目失败",
     }.items():
-        monkeypatch.setattr(
-            "worktrace.webview_ui.bridge_rules.project_api.delete_project_for_rules",
-            lambda project_id, code=code: {"ok": False, "error": code},
-        )
+        rules = FakeRulesCapability()
+        rules.delete_project_for_rules_return = {"ok": False, "error": code}
+        bridge = build_test_bridge(rules=rules)
         result = bridge.delete_project_for_rules(1)
         assert result == {"ok": False, "error": message}
         assert "归档项目失败" not in repr(result)

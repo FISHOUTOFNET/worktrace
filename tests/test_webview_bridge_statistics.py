@@ -18,13 +18,11 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 
 from tests.support import activity_factory as activity_service
-from tests.support.application import build_test_bridge
-from worktrace.api import statistics_api
+from tests.support.application import FakeStatisticsCapability, build_test_bridge
 from worktrace.api.statistics_api import StatisticsSummaryError
 from worktrace.services import (
     project_service,
@@ -188,78 +186,66 @@ def test_bridge_statistics_summary_range_too_large(bridge):
     _assert_no_sensitive_keys(result)
 
 
-def test_bridge_statistics_summary_invalid_date_from_api(bridge):
-    with patch.object(
-        statistics_api,
-        "get_statistics_export_summary",
-        side_effect=StatisticsSummaryError("invalid_date"),
-    ):
-        result = bridge.get_statistics_export_summary("2026-13-45", "2026-06-25")
+def test_bridge_statistics_summary_invalid_date_from_api():
+    statistics = FakeStatisticsCapability()
+    statistics.get_statistics_export_view_model_side_effect = StatisticsSummaryError("invalid_date")
+    bridge = build_test_bridge(statistics=statistics)
+    result = bridge.get_statistics_export_summary("2026-13-45", "2026-06-25")
     assert result["ok"] is False
     assert result["error"] == "请选择有效日期"
     assert result["summary"] is None
     _assert_no_sensitive_keys(result)
 
 
-def test_bridge_statistics_summary_invalid_range_from_api(bridge):
-    with patch.object(
-        statistics_api,
-        "get_statistics_export_summary",
-        side_effect=StatisticsSummaryError("invalid_range"),
-    ):
-        result = bridge.get_statistics_export_summary("2026-06-26", "2026-06-25")
+def test_bridge_statistics_summary_invalid_range_from_api():
+    statistics = FakeStatisticsCapability()
+    statistics.get_statistics_export_view_model_side_effect = StatisticsSummaryError("invalid_range")
+    bridge = build_test_bridge(statistics=statistics)
+    result = bridge.get_statistics_export_summary("2026-06-26", "2026-06-25")
     assert result["ok"] is False
     assert result["error"] == "请选择有效日期范围"
     assert result["summary"] is None
     _assert_no_sensitive_keys(result)
 
 
-def test_bridge_statistics_summary_range_too_large_from_api(bridge):
-    with patch.object(
-        statistics_api,
-        "get_statistics_export_summary",
-        side_effect=StatisticsSummaryError("range_too_large"),
-    ):
-        result = bridge.get_statistics_export_summary("2026-01-01", "2026-03-01")
+def test_bridge_statistics_summary_range_too_large_from_api():
+    statistics = FakeStatisticsCapability()
+    statistics.get_statistics_export_view_model_side_effect = StatisticsSummaryError("range_too_large")
+    bridge = build_test_bridge(statistics=statistics)
+    result = bridge.get_statistics_export_summary("2026-01-01", "2026-03-01")
     assert result["ok"] is False
     assert result["error"] == "日期范围过大"
     assert result["summary"] is None
     _assert_no_sensitive_keys(result)
 
 
-def test_bridge_statistics_summary_operation_failed_from_api(bridge):
-    with patch.object(
-        statistics_api,
-        "get_statistics_export_summary",
-        side_effect=StatisticsSummaryError("operation_failed"),
-    ):
-        result = bridge.get_statistics_export_summary("2026-06-25", "2026-06-25")
+def test_bridge_statistics_summary_operation_failed_from_api():
+    statistics = FakeStatisticsCapability()
+    statistics.get_statistics_export_view_model_side_effect = StatisticsSummaryError("operation_failed")
+    bridge = build_test_bridge(statistics=statistics)
+    result = bridge.get_statistics_export_summary("2026-06-25", "2026-06-25")
     assert result["ok"] is False
     assert result["error"] == "加载统计失败"
     assert result["summary"] is None
     _assert_no_sensitive_keys(result)
 
 
-def test_bridge_statistics_summary_unknown_error_code_collapses(bridge):
-    with patch.object(
-        statistics_api,
-        "get_statistics_export_summary",
-        side_effect=StatisticsSummaryError("unknown_code"),
-    ):
-        result = bridge.get_statistics_export_summary("2026-06-25", "2026-06-25")
+def test_bridge_statistics_summary_unknown_error_code_collapses():
+    statistics = FakeStatisticsCapability()
+    statistics.get_statistics_export_view_model_side_effect = StatisticsSummaryError("unknown_code")
+    bridge = build_test_bridge(statistics=statistics)
+    result = bridge.get_statistics_export_summary("2026-06-25", "2026-06-25")
     assert result["ok"] is False
     assert result["error"] == "加载统计失败"
     assert result["summary"] is None
     _assert_no_sensitive_keys(result)
 
 
-def test_bridge_statistics_summary_unexpected_exception_collapses(bridge):
-    with patch.object(
-        statistics_api,
-        "get_statistics_export_summary",
-        side_effect=RuntimeError("C:\\secret\\boom.sql"),
-    ):
-        result = bridge.get_statistics_export_summary("2026-06-25", "2026-06-25")
+def test_bridge_statistics_summary_unexpected_exception_collapses():
+    statistics = FakeStatisticsCapability()
+    statistics.get_statistics_export_view_model_side_effect = RuntimeError("C:\\secret\\boom.sql")
+    bridge = build_test_bridge(statistics=statistics)
+    result = bridge.get_statistics_export_summary("2026-06-25", "2026-06-25")
     assert result["ok"] is False
     assert result["error"] == "加载统计失败"
     assert result["summary"] is None

@@ -21,12 +21,11 @@ from __future__ import annotations
 
 from datetime import date as date_type
 import json
-from unittest.mock import patch
 
 import pytest
 
 from tests.support import activity_factory as activity_service
-from tests.support.application import build_test_bridge
+from tests.support.application import FakeTimelineCapability, build_test_bridge
 from worktrace.db import get_connection
 from worktrace.services import (
     project_service,
@@ -230,12 +229,11 @@ def test_list_projects_for_timeline_has_safe_fields_only(bridge):
     _assert_no_sensitive_keys(result)
 
 
-def test_list_projects_for_timeline_no_traceback_on_error(bridge):
-    with patch(
-        "worktrace.webview_ui.bridge_timeline.project_api.list_selectable_projects",
-        side_effect=RuntimeError("boom"),
-    ):
-        result = bridge.list_projects_for_timeline()
+def test_list_projects_for_timeline_no_traceback_on_error():
+    timeline = FakeTimelineCapability()
+    timeline.list_selectable_projects_side_effect = RuntimeError("boom")
+    bridge = build_test_bridge(timeline=timeline)
+    result = bridge.list_projects_for_timeline()
     assert result["ok"] is False
     assert result["error"] == "operation_failed"
     assert result["message"] == "操作失败"
@@ -506,14 +504,13 @@ def test_save_timeline_session_override_malformed_date_rejected(bridge):
 def test_save_timeline_session_override_no_traceback_on_error(bridge):
     ids = _seed_session()
     session = _session_for("2026-06-25", ids[0])
-    with patch(
-        "worktrace.webview_ui.bridge_timeline.timeline_api.save_timeline_session_edit",
-        side_effect=RuntimeError("boom"),
-    ):
-        result = _save_timeline_session_override(
-            bridge, session["activity_ids"], session["activity_member_hash"],
-            None, None, "note", "2026-06-25"
-        )
+    timeline = FakeTimelineCapability()
+    timeline.save_timeline_session_edit_side_effect = RuntimeError("boom")
+    error_bridge = build_test_bridge(timeline=timeline)
+    result = _save_timeline_session_override(
+        error_bridge, session["activity_ids"], session["activity_member_hash"],
+        None, None, "note", "2026-06-25"
+    )
     assert result == {"ok": False, "error": "操作失败"}
     assert "boom" not in str(result)
     assert "traceback" not in str(result).lower()
@@ -522,14 +519,13 @@ def test_save_timeline_session_override_no_traceback_on_error(bridge):
 def test_save_timeline_session_override_error_has_no_sensitive_keys(bridge):
     ids = _seed_session()
     session = _session_for("2026-06-25", ids[0])
-    with patch(
-        "worktrace.webview_ui.bridge_timeline.timeline_api.save_timeline_session_edit",
-        side_effect=RuntimeError("boom"),
-    ):
-        result = _save_timeline_session_override(
-            bridge, session["activity_ids"], session["activity_member_hash"],
-            None, None, "note", "2026-06-25"
-        )
+    timeline = FakeTimelineCapability()
+    timeline.save_timeline_session_edit_side_effect = RuntimeError("boom")
+    error_bridge = build_test_bridge(timeline=timeline)
+    result = _save_timeline_session_override(
+        error_bridge, session["activity_ids"], session["activity_member_hash"],
+        None, None, "note", "2026-06-25"
+    )
     _assert_no_sensitive_keys(result)
 
 
@@ -548,15 +544,14 @@ def test_save_timeline_session_override_does_not_log_note_content(bridge, caplog
     ids = _seed_session()
     session = _session_for("2026-06-25", ids[0])
     secret_note = "THIS_IS_A_SECRET_NOTE_THAT_MUST_NOT_APPEAR_IN_LOGS"
-    with patch(
-        "worktrace.webview_ui.bridge_timeline.timeline_api.save_timeline_session_edit",
-        side_effect=RuntimeError("boom"),
-    ):
-        with caplog.at_level("ERROR"):
-            _save_timeline_session_override(
-                bridge, session["activity_ids"], session["activity_member_hash"],
-                None, None, secret_note, "2026-06-25"
-            )
+    timeline = FakeTimelineCapability()
+    timeline.save_timeline_session_edit_side_effect = RuntimeError("boom")
+    error_bridge = build_test_bridge(timeline=timeline)
+    with caplog.at_level("ERROR"):
+        _save_timeline_session_override(
+            error_bridge, session["activity_ids"], session["activity_member_hash"],
+            None, None, secret_note, "2026-06-25"
+        )
     for record in caplog.records:
         assert secret_note not in record.getMessage()
         assert secret_note not in str(record.exc_info or "")
@@ -566,15 +561,16 @@ def test_save_timeline_session_override_does_not_log_sensitive_data(bridge, capl
     ids = _seed_session()
     session = _session_for("2026-06-25", ids[0])
     sensitive_markers = ["window_title", "file_path_hint", "clipboard", "traceback"]
-    with patch(
-        "worktrace.webview_ui.bridge_timeline.timeline_api.save_timeline_session_edit",
-        side_effect=RuntimeError("boom with window_title and file_path_hint"),
-    ):
-        with caplog.at_level("ERROR"):
-            _save_timeline_session_override(
-                bridge, session["activity_ids"], session["activity_member_hash"],
-                None, None, "note", "2026-06-25"
-            )
+    timeline = FakeTimelineCapability()
+    timeline.save_timeline_session_edit_side_effect = RuntimeError(
+        "boom with window_title and file_path_hint"
+    )
+    error_bridge = build_test_bridge(timeline=timeline)
+    with caplog.at_level("ERROR"):
+        _save_timeline_session_override(
+            error_bridge, session["activity_ids"], session["activity_member_hash"],
+            None, None, "note", "2026-06-25"
+        )
     for record in caplog.records:
         msg = record.getMessage()
         for marker in sensitive_markers:

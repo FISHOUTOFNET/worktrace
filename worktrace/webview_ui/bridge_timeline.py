@@ -9,12 +9,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from ..api import (
-    errors as api_errors,
-    project_api,
-    timeline_api,
-    view_model_api,
-)
+from ..api import errors as api_errors
 from .bridge_common import _DATE_SHAPE_RE
 
 logger = logging.getLogger(__name__)
@@ -25,7 +20,7 @@ class TimelineBridgeMixin:
 
     def get_timeline(self, date: str | None = None) -> dict[str, Any]:
         try:
-            return view_model_api.get_timeline_view_model(
+            return self._services.timeline.get_timeline_view_model(
                 date,
                 runtime=self._runtime(),
                 collector_status=self._collector_status(),
@@ -55,7 +50,7 @@ class TimelineBridgeMixin:
                     "error": "invalid_input",
                     "message": "请选择有效的活动时段",
                 }
-            return view_model_api.get_session_activity_summary_view_model(
+            return self._services.timeline.get_session_activity_summary_view_model(
                 report_date=report_date,
                 projection_instance_key=projection_instance_key.strip(),
                 expected_projection_revision=(
@@ -72,7 +67,7 @@ class TimelineBridgeMixin:
 
     def list_projects_for_timeline(self) -> dict[str, Any]:
         try:
-            projects = project_api.list_selectable_projects()
+            projects = self._services.timeline.list_selectable_projects()
             return {
                 "ok": True,
                 "projects": [
@@ -114,7 +109,7 @@ class TimelineBridgeMixin:
                 }
             if not isinstance(note, str):
                 return {"ok": False, "error": "invalid_input", "message": "备注内容无效"}
-            if len(note) > timeline_api.TIMELINE_NOTE_MAX_LENGTH:
+            if len(note) > self._services.timeline.TIMELINE_NOTE_MAX_LENGTH:
                 return {"ok": False, "error": "invalid_input", "message": "备注过长"}
 
             pid: int | None = None
@@ -133,7 +128,7 @@ class TimelineBridgeMixin:
                     return {"ok": False, "error": "invalid_input", "message": "时长无效"}
                 duration_value = int(adjusted_duration_seconds)
 
-            return timeline_api.save_timeline_session_edit(
+            return self._services.timeline.save_timeline_session_edit(
                 report_date,
                 projection_instance_key.strip(),
                 projection_revision.strip(),
@@ -156,7 +151,7 @@ class TimelineBridgeMixin:
         request_id: str,
     ) -> dict[str, Any]:
         return self._run_session_operation(
-            timeline_api.hide_timeline_session,
+            self._services.timeline.hide_timeline_session,
             report_date,
             projection_instance_key,
             projection_revision,
@@ -180,7 +175,7 @@ class TimelineBridgeMixin:
                 "message": "只能合并相邻时段。",
             }
         return self._run_session_operation(
-            timeline_api.merge_timeline_session,
+            self._services.timeline.merge_timeline_session,
             report_date,
             projection_instance_key,
             direction,
@@ -198,7 +193,7 @@ class TimelineBridgeMixin:
         request_id: str,
     ) -> dict[str, Any]:
         return self._run_session_operation(
-            timeline_api.split_timeline_session,
+            self._services.timeline.split_timeline_session,
             report_date,
             projection_instance_key,
             projection_revision,
@@ -213,7 +208,7 @@ class TimelineBridgeMixin:
         request_id: str,
     ) -> dict[str, Any]:
         return self._run_session_operation(
-            timeline_api.copy_timeline_session,
+            self._services.timeline.copy_timeline_session,
             report_date,
             projection_instance_key,
             projection_revision,
@@ -235,7 +230,7 @@ class TimelineBridgeMixin:
                 "message": "请选择有效的活动时段",
             }
         return self._run_session_operation(
-            timeline_api.hide_timeline_session_activity,
+            self._services.timeline.hide_timeline_session_activity,
             report_date,
             projection_instance_key,
             summary_id.strip(),

@@ -10,8 +10,8 @@ from enum import Enum
 from typing import TYPE_CHECKING, Iterator, Protocol
 
 from ..database_content_manifest import DELETE_ORDER
+from ..database_replacement_unit_of_work import DatabaseReplacementUnitOfWork
 from ..db import get_connection, seed_defaults
-from ..domain_unit_of_work import DomainUnitOfWork
 from ..write_gate import (
     DATABASE_MAINTENANCE_ERROR,
     DATABASE_RECOVERY_ERROR,
@@ -24,7 +24,6 @@ from . import privacy_gate_service
 from .database_maintenance_barrier import drain_existing_writers
 from .database_replacement_generation_service import (
     capture_replacement_generation_floor,
-    publish_database_replacement,
 )
 from .runtime_activity_state_service import clear_runtime_activity_state
 from .settings_service import get_bool_setting, get_setting, set_settings
@@ -629,12 +628,11 @@ def clear_all_live_data() -> None:
     """Delete current content and publish replacement in one maintenance transaction."""
 
     with database_replacement("clear_database"):
-        with DomainUnitOfWork() as uow:
-            conn = uow.connection
+        with DatabaseReplacementUnitOfWork() as replacement_uow:
+            conn = replacement_uow.connection
             for table in DELETE_ORDER:
                 conn.execute(f"DELETE FROM {table}")
             seed_defaults(conn)
-            publish_database_replacement(conn)
 
 
 __all__ = [

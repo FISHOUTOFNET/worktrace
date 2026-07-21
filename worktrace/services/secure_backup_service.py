@@ -17,11 +17,11 @@ from ..database_content_manifest import (
     DELETE_ORDER,
     TABLE_NAMES,
 )
+from ..database_replacement_unit_of_work import DatabaseReplacementUnitOfWork
 from ..db import (
     CURRENT_SCHEMA_VERSION,
     expected_schema_fingerprint,
     get_connection,
-    get_db_key,
     now_str,
     read_internal_schema_sql,
     read_schema_indexes_sql,
@@ -29,8 +29,6 @@ from ..db import (
     schema_fingerprint,
     seed_defaults,
 )
-from ..generation_clock import clear as clear_generation_clock
-from ..generation_clock import publish_replacement_committed
 from ..security.backup_format import (
     BackupFormatError,
     BackupManifest,
@@ -39,10 +37,6 @@ from ..security.backup_format import (
     parse_backup_manifest,
 )
 from . import database_maintenance_service
-from .database_replacement_generation_service import (
-    capture_replacement_generation_floor,
-    publish_database_replacement,
-)
 from .secure_backup_validation import BackupValidationError, validate_staging_database
 
 PAYLOAD_FORMAT = "worktrace-local-data"
@@ -293,10 +287,10 @@ def _replace_import(data: dict[str, Any]) -> dict[str, int]:
         finally:
             staging.close()
 
-        replacement_values = None
-        with get_connection() as live:
-            live.execute("BEGIN IMMEDIATE")
-            replacement_floor = capture_replacement_generation_floor(live)
+        # Live replacement goes through DatabaseReplacementUnitOfWork so the
+        # epoch bump, commit and process-local publication have one owner.
+        with DatabaseReplacementUnitOfWork() as replacement_uow:
+            live = replacement_uow.connection
             _delete_all_rows(live)
             source = sqlite3.connect(staging_path)
             source.row_factory = sqlite3.Row
@@ -315,19 +309,6 @@ def _replace_import(data: dict[str, Any]) -> dict[str, int]:
             seed_defaults(live)
             _reset_derived_folder_index(live)
             _validate_staging_database(live)
-            replacement_values = publish_database_replacement(
-                live,
-                minimum_values=replacement_floor,
-            )
-            live.commit()
-        if replacement_values is None:
-            raise RuntimeError("database_replacement_generation_missing")
-        database_key = get_db_key()
-        try:
-            publish_replacement_committed(database_key, replacement_values)
-        except Exception:
-            logging.exception("database replacement generation publication failed")
-            clear_generation_clock(database_key)
         return imported
     except BackupCorruptedError:
         raise

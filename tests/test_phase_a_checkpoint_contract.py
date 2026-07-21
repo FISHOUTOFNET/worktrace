@@ -5,6 +5,8 @@ from pathlib import Path
 
 import pytest
 
+from worktrace.database_content_manifest import DATABASE_CONTENT, TableCategory
+
 pytestmark = [pytest.mark.unit, pytest.mark.contract, pytest.mark.collector_runtime]
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -75,10 +77,14 @@ def test_current_contract_versions_and_internal_progress() -> None:
 
     assert "CURRENT_SCHEMA_VERSION = 13" in db_source
     assert "PAYLOAD_VERSION = 6" in backup_source
-    assert (
-        'DatabaseTableContent("startup_recovery_job", 50, derived=True, internal=True)'
-        in manifest
+    assert "TableCategory" in manifest
+    startup_entry = next(
+        item for item in DATABASE_CONTENT if item.name == "startup_recovery_job"
     )
+    assert startup_entry.category is TableCategory.WORKER_PROGRESS
+    assert startup_entry.delete_rank == 50
+    assert startup_entry.derived is True
+    assert startup_entry.internal is True
     assert "CREATE TABLE IF NOT EXISTS startup_recovery_job" in schema
     assert "idx_startup_recovery_job_runnable" in indexes
     assert "retry_pending_inference" not in runtime_source_for_contract()
