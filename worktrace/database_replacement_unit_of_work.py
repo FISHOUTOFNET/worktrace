@@ -1,9 +1,4 @@
-"""Sole owner of physical database replacement transactions.
-
-Clear all live data, secure backup import, and any future whole-database
-replacement must go through this owner. Durable commit is recorded before any
-process-local publication or connection finalization can fail.
-"""
+"""Sole owner of physical database replacement transactions."""
 from __future__ import annotations
 
 import logging
@@ -30,7 +25,7 @@ class ReplacementUnitOfWorkPhase(StrEnum):
 
 
 class DatabaseReplacementUnitOfWork:
-    """Own one physical database replacement transaction end-to-end."""
+    """Own one replacement transaction and retain its durable outcome."""
 
     def __init__(self) -> None:
         self._connection: sqlite3.Connection | None = None
@@ -39,6 +34,8 @@ class DatabaseReplacementUnitOfWork:
         self._database_key: str | None = None
         self._active = False
         self._phase = ReplacementUnitOfWorkPhase.ACQUIRING
+        self._durable_committed = False
+        self._rolled_back = False
 
     @property
     def connection(self) -> sqlite3.Connection:
@@ -58,7 +55,11 @@ class DatabaseReplacementUnitOfWork:
 
     @property
     def committed(self) -> bool:
-        return self._phase is ReplacementUnitOfWorkPhase.DURABLE_COMMITTED
+        return self._durable_committed
+
+    @property
+    def rolled_back(self) -> bool:
+        return self._rolled_back
 
     @property
     def committed_values(self) -> dict[DataGenerationNamespace, int] | None:
@@ -73,17 +74,14 @@ class DatabaseReplacementUnitOfWork:
             raise RuntimeError("database_replacement_unit_of_work_already_active")
         connection: sqlite3.Connection | None = None
         try:
-            # Resolve stable process identity before the transaction. Failure is
-            # therefore a genuine acquisition failure, never post-commit damage.
             self._database_key = get_db_key()
             connection = get_connection()
             connection.execute("BEGIN IMMEDIATE")
-            floor = DataGenerationRepository.get_many(
+            self._floor = DataGenerationRepository.get_many(
                 connection,
                 (_REPLACEMENT_NAMESPACE,),
             )
             self._connection = connection
-            self._floor = floor
             self._active = True
             self._phase = ReplacementUnitOfWorkPhase.ACTIVE
             return self
@@ -121,6 +119,7 @@ class DatabaseReplacementUnitOfWork:
                     logging.warning(
                         "database replacement rollback failed phase=operation"
                     )
+                self._rolled_back = True
                 self._phase = ReplacementUnitOfWorkPhase.ROLLED_BACK
                 return False
 
@@ -138,12 +137,12 @@ class DatabaseReplacementUnitOfWork:
                     logging.warning(
                         "database replacement rollback failed phase=commit"
                     )
+                self._rolled_back = True
                 self._phase = ReplacementUnitOfWorkPhase.ROLLED_BACK
                 raise
 
-            # This assignment and coordinator handoff are the first operations
-            # after sqlite commit returns. Every later failure is finalization.
             self._committed_values = dict(committed_values)
+            self._durable_committed = True
             self._phase = ReplacementUnitOfWorkPhase.DURABLE_COMMITTED
             from .services.database_maintenance_service import (
                 record_database_replacement_committed,
@@ -175,6 +174,7 @@ class DatabaseReplacementUnitOfWork:
                 )
             self._connection = None
             self._active = False
+            self._phase = ReplacementUnitOfWorkPhase.FINALIZED
 
 
 __all__ = [
