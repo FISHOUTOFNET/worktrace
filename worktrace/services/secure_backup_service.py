@@ -3,15 +3,20 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import sqlite3
-import tempfile
+import sys
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
+from ..atomic_file import (
+    OwnedTemporaryFile,
+    TemporaryFileCleanupError,
+    TemporaryFileError,
+    atomic_write_bytes,
+)
 from ..constants import APP_VERSION
 from ..database_content_manifest import (
     BACKUP_TABLES,
@@ -75,13 +80,18 @@ class BackupCorruptedError(SecureBackupError):
     """The backup is malformed or violates current schema semantics."""
 
 
-class BackupReplacementError(SecureBackupError):
-    """A validated backup could not be applied to the live database.
+class BackupStagingInfrastructureError(SecureBackupError):
+    """Validated staging could not be built because local infrastructure failed."""
 
-    Raised when the live transaction, commit, I/O, or post-commit validation
-    fails after the backup itself has already been validated. The backup is
-    not corrupt; the live replacement could not complete.
-    """
+
+class BackupSensitiveCleanupError(SecureBackupError):
+    """A decrypted staging resource could not be removed safely."""
+
+    requires_recovery_block = True
+
+
+class BackupReplacementError(SecureBackupError):
+    """A validated backup could not be applied to the live database."""
 
 
 class BackupVersionNotSupportedError(SecureBackupError):
@@ -113,20 +123,25 @@ class BackupManifestInfo:
         )
 
 
-@dataclass(frozen=True)
+@dataclass
 class ValidatedStaging:
-    """Validated temporary database owned by one explicit resource scope."""
+    """Validated decrypted database with one explicit cleanup owner."""
 
     path: str
     imported_counts: dict[str, int]
+    _owner: OwnedTemporaryFile = field(repr=False)
+    cleaned: bool = False
 
-
-@dataclass(frozen=True)
-class ImportResult:
-    mode: str
-    imported_tables: dict[str, int] = field(default_factory=dict)
-    folder_index_reset: bool = False
-    maintenance_status: dict[str, object] = field(default_factory=dict)
+    def cleanup(self) -> None:
+        if self.cleaned:
+            return
+        try:
+            self._owner.cleanup()
+        except TemporaryFileCleanupError as exc:
+            raise BackupSensitiveCleanupError(
+                "backup_staging_cleanup_failed"
+            ) from exc
+        self.cleaned = True
 
 
 def export_encrypted_backup(output_path: str | Path, passphrase: str) -> Path:
@@ -141,7 +156,10 @@ def export_encrypted_backup(output_path: str | Path, passphrase: str) -> Path:
     ):
         payload = _build_export_payload_under_snapshot()
     blob = create_encrypted_backup(payload, passphrase, APP_VERSION)
-    _atomic_write_bytes(out, blob)
+    try:
+        _atomic_write_bytes(out, blob)
+    except TemporaryFileError as exc:
+        raise SecureBackupError("backup_export_failed") from exc
     logging.info("encrypted backup export success suffix=%s", BACKUP_FILE_SUFFIX)
     return out
 
@@ -158,17 +176,36 @@ def import_encrypted_backup(
 
     input_file = Path(input_path)
     _require_bounded_backup_file(input_file)
-    blob = input_file.read_bytes()
+    try:
+        blob = input_file.read_bytes()
+    except OSError as exc:
+        raise SecureBackupError("backup_file_unavailable") from exc
     payload = _read_and_decrypt(blob, passphrase)
     data = _parse_and_validate_payload(payload)
 
-    # The resource scope owns the decrypted staging file from creation through
-    # successful/failed replacement. Maintenance never receives an unowned path.
     with _validated_staging_database(data) as staging:
         imported_counts = dict(staging.imported_counts)
         try:
             with database_maintenance_service.database_replacement("secure_import"):
-                _apply_validated_staging_to_live(staging.path)
+                operation_error: BaseException | None = None
+                operation_traceback = None
+                try:
+                    _apply_validated_staging_to_live(staging.path)
+                except BaseException as exc:
+                    operation_error = exc
+                    operation_traceback = exc.__traceback__
+                try:
+                    # Cleanup is part of the replacement epoch. A failure after
+                    # durable commit therefore reaches the coordinator before it
+                    # can clear the recovery seal.
+                    staging.cleanup()
+                except BackupSensitiveCleanupError:
+                    if operation_error is not None:
+                        setattr(operation_error, "requires_recovery_block", True)
+                        raise operation_error.with_traceback(operation_traceback)
+                    raise
+                if operation_error is not None:
+                    raise operation_error.with_traceback(operation_traceback)
         except database_maintenance_service.MaintenanceInProgressError as exc:
             raise BackupImportInProgressError(
                 "another destructive operation is already in progress"
@@ -189,11 +226,23 @@ def import_encrypted_backup(
     )
 
 
+@dataclass(frozen=True)
+class ImportResult:
+    mode: str
+    imported_tables: dict[str, int] = field(default_factory=dict)
+    folder_index_reset: bool = False
+    maintenance_status: dict[str, object] = field(default_factory=dict)
+
+
 def parse_encrypted_backup_manifest(input_path: str | Path) -> BackupManifestInfo:
     input_file = Path(input_path)
     _require_bounded_backup_file(input_file)
     try:
-        manifest = parse_backup_manifest(input_file.read_bytes())
+        blob = input_file.read_bytes()
+    except OSError as exc:
+        raise SecureBackupError("backup_file_unavailable") from exc
+    try:
+        manifest = parse_backup_manifest(blob)
     except BackupFormatError as exc:
         raise _classify_format_error(exc) from exc
     return BackupManifestInfo.from_manifest(manifest)
@@ -203,7 +252,7 @@ def _require_bounded_backup_file(path: Path) -> None:
     try:
         size = path.stat().st_size
     except OSError as exc:
-        raise BackupCorruptedError("backup file is invalid or corrupted") from exc
+        raise SecureBackupError("backup_file_unavailable") from exc
     if size <= 0 or size > MAX_BACKUP_FILE_BYTES:
         raise BackupCorruptedError("backup file is invalid or corrupted")
 
@@ -228,10 +277,16 @@ def _build_export_payload_under_snapshot() -> bytes:
                 tables[table] = [dict(row) for row in rows]
         conn.commit()
     except Exception:
-        conn.rollback()
+        try:
+            conn.rollback()
+        except Exception:
+            logging.warning("backup snapshot rollback failed phase=export")
         raise
     finally:
-        conn.close()
+        try:
+            conn.close()
+        except Exception:
+            logging.warning("backup snapshot close failed phase=export")
 
     payload = json.dumps(
         {
@@ -258,7 +313,7 @@ def _parse_and_validate_payload(payload: bytes) -> dict[str, Any]:
         data = json.loads(payload.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         logging.warning(
-            "encrypted backup payload json parse failed: %s",
+            "encrypted backup payload parse failed exception=%s",
             type(exc).__name__,
         )
         raise BackupCorruptedError("backup file is invalid or corrupted") from exc
@@ -285,37 +340,63 @@ def _parse_and_validate_payload(payload: bytes) -> dict[str, Any]:
 def _validated_staging_database(
     data: dict[str, Any],
 ) -> Iterator[ValidatedStaging]:
-    """Own creation, validation, handoff, and deletion of decrypted staging."""
+    """Own creation, validation, maintenance handoff, and secure deletion."""
 
-    staging_path: str | None = None
+    owner = OwnedTemporaryFile(
+        prefix="worktrace-import-",
+        suffix=".sqlite",
+        resource="decrypted_backup_staging",
+        sensitive=True,
+        permissions=0o600,
+    )
+    staging: ValidatedStaging | None = None
     try:
         try:
-            fd, staging_path = tempfile.mkstemp(
-                prefix="worktrace-import-",
-                suffix=".sqlite",
-            )
-            try:
-                os.close(fd)
-            except OSError as exc:
-                logging.warning(
-                    "staging descriptor cleanup failed resource_type=staging"
-                )
-                raise BackupCorruptedError(
-                    "backup file is invalid or corrupted"
-                ) from exc
-            imported = _build_and_validate_staging(staging_path, data)
-        except BackupCorruptedError:
-            raise
-        except Exception as exc:
-            raise BackupCorruptedError(
-                "backup file is invalid or corrupted"
+            owner.__enter__()
+        except TemporaryFileError as exc:
+            raise BackupStagingInfrastructureError(
+                "backup_staging_create_failed"
             ) from exc
-        yield ValidatedStaging(
-            path=staging_path,
+        imported = _build_and_validate_staging(str(owner.path), data)
+        staging = ValidatedStaging(
+            path=str(owner.path),
             imported_counts=dict(imported),
+            _owner=owner,
         )
-    finally:
-        _cleanup_staging_file(staging_path)
+        yield staging
+    except BaseException as exc:
+        if staging is None:
+            staging = ValidatedStaging(
+                path=str(owner.path) if owner._path is not None else "",
+                imported_counts={},
+                _owner=owner,
+            )
+        if not staging.cleaned and owner._path is not None:
+            try:
+                staging.cleanup()
+            except BackupSensitiveCleanupError:
+                setattr(exc, "requires_recovery_block", True)
+                if database_maintenance_service.current_maintenance_progress() is None:
+                    try:
+                        database_maintenance_service.enter_fail_closed(
+                            "secure_import_staging_cleanup"
+                        )
+                    except Exception:
+                        logging.warning(
+                            "secure staging fail-closed handoff failed phase=cleanup"
+                        )
+        raise
+    else:
+        if staging is not None and not staging.cleaned:
+            try:
+                staging.cleanup()
+            except BackupSensitiveCleanupError:
+                try:
+                    database_maintenance_service.enter_fail_closed(
+                        "secure_import_staging_cleanup"
+                    )
+                finally:
+                    raise
 
 
 def _build_and_validate_staging(
@@ -325,7 +406,7 @@ def _build_and_validate_staging(
     """Build and validate a caller-owned staging database outside maintenance."""
 
     staging: sqlite3.Connection | None = None
-    completed = False
+    primary_error: BaseException | None = None
     try:
         staging = sqlite3.connect(staging_path)
         staging.row_factory = sqlite3.Row
@@ -344,27 +425,30 @@ def _build_and_validate_staging(
                 "backup file is invalid or corrupted"
             ) from exc
         staging.commit()
-        completed = True
         return imported
-    except BackupCorruptedError:
+    except BackupCorruptedError as exc:
+        primary_error = exc
         if staging is not None:
             _rollback_staging_safely(staging)
         raise
     except Exception as exc:
+        primary_error = exc
         if staging is not None:
             _rollback_staging_safely(staging)
-        raise BackupCorruptedError("backup file is invalid or corrupted") from exc
+        raise BackupStagingInfrastructureError(
+            "backup_staging_infrastructure_failed"
+        ) from exc
     finally:
         if staging is not None:
             try:
                 staging.close()
             except Exception as exc:
                 logging.warning(
-                    "staging connection cleanup failed resource_type=staging"
+                    "staging connection close failed phase=finalization"
                 )
-                if completed:
-                    raise BackupCorruptedError(
-                        "backup file is invalid or corrupted"
+                if primary_error is None:
+                    raise BackupStagingInfrastructureError(
+                        "backup_staging_close_failed"
                     ) from exc
 
 
@@ -372,18 +456,18 @@ def _rollback_staging_safely(staging: sqlite3.Connection) -> None:
     try:
         staging.rollback()
     except sqlite3.Error:
-        logging.warning("staging rollback failed resource_type=staging")
+        logging.warning("staging rollback failed phase=rollback")
 
 
 def _apply_validated_staging_to_live(staging_path: str) -> dict[str, int]:
-    """Apply validated staging; every live-apply failure has one stable type."""
+    """Apply validated staging; every pre-commit live failure has one stable type."""
 
     try:
         with DatabaseReplacementUnitOfWork() as replacement_uow:
             live = replacement_uow.connection
             _delete_all_rows(live)
             source: sqlite3.Connection | None = None
-            source_completed = False
+            source_error: BaseException | None = None
             try:
                 source = sqlite3.connect(staging_path)
                 source.row_factory = sqlite3.Row
@@ -397,17 +481,18 @@ def _apply_validated_staging_to_live(staging_path: str) -> dict[str, int]:
                             for row in source.execute(f"SELECT * FROM {table}")
                         ],
                     )
-                source_completed = True
+            except BaseException as exc:
+                source_error = exc
+                raise
             finally:
                 if source is not None:
                     try:
                         source.close()
                     except Exception as exc:
                         logging.warning(
-                            "validated staging reader cleanup failed "
-                            "resource_type=staging_reader"
+                            "validated staging reader close failed phase=finalization"
                         )
-                        if source_completed:
+                        if source_error is None:
                             raise BackupReplacementError(
                                 "live database replacement failed"
                             ) from exc
@@ -419,7 +504,7 @@ def _apply_validated_staging_to_live(staging_path: str) -> dict[str, int]:
                 raise BackupReplacementError(
                     "live database replacement failed"
                 ) from exc
-            return imported
+        return imported
     except BackupReplacementError:
         raise
     except Exception as exc:
@@ -429,14 +514,18 @@ def _apply_validated_staging_to_live(staging_path: str) -> dict[str, int]:
 
 
 def _cleanup_staging_file(staging_path: str | None) -> None:
+    """Compatibility test hook with the new explicit security failure contract."""
+
     if not staging_path:
         return
     try:
-        os.unlink(staging_path)
+        Path(staging_path).unlink()
     except FileNotFoundError:
-        pass
-    except OSError:
-        logging.warning("staging file cleanup failed resource_type=staging")
+        return
+    except OSError as exc:
+        raise BackupSensitiveCleanupError(
+            "backup_staging_cleanup_failed"
+        ) from exc
 
 
 def _load_import_tables(
@@ -519,7 +608,7 @@ def _read_and_decrypt(blob: bytes, passphrase: str) -> bytes:
         payload = decrypt_encrypted_backup(blob, passphrase)
     except BackupFormatError as exc:
         logging.warning(
-            "encrypted backup decrypt failed: %s",
+            "encrypted backup decrypt failed exception=%s",
             type(exc).__name__,
         )
         raise BackupDecryptionError(
@@ -537,9 +626,12 @@ def _classify_format_error(exc: BackupFormatError) -> SecureBackupError:
 
 
 def _atomic_write_bytes(path: Path, data: bytes) -> None:
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_bytes(data)
-    os.replace(tmp, path)
+    atomic_write_bytes(
+        path,
+        data,
+        resource="encrypted_backup_output",
+        permissions=0o600,
+    )
 
 
 def _utc_now() -> str:
@@ -558,6 +650,8 @@ __all__ = [
     "BackupImportInProgressError",
     "BackupManifestInfo",
     "BackupReplacementError",
+    "BackupSensitiveCleanupError",
+    "BackupStagingInfrastructureError",
     "BackupVersionNotSupportedError",
     "EXCLUDED_TABLES",
     "EXPORT_TABLES",
