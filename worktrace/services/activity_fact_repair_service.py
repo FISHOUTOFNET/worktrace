@@ -142,7 +142,7 @@ def repair_missing_activity_resources(batch_size: int = DEFAULT_BATCH_SIZE) -> i
                 if failed
             )
             _write_state(conn, state)
-            uow.mark_changed()
+            uow.mark_changed(DataGenerationNamespace.REPORT_STRUCTURE)
 
         if _first_unrepaired_activity_id() is None:
             state["status"] = "completed"
@@ -227,9 +227,10 @@ def _failure_code(exc: BaseException) -> str:
 
 
 def _persist_state(state: dict[str, Any]) -> None:
+    # Worker progress is durable operational state, not a user-visible report
+    # semantic effect. The transaction commits without publishing a generation.
     with DomainUnitOfWork() as uow:
         _write_state(uow.connection, state)
-        uow.mark_changed()
 
 
 def _write_state(conn, state: dict[str, Any]) -> None:
