@@ -303,20 +303,26 @@ class RuntimeMaintenanceCoordinator:
                     reason,
                     expected_epoch=recovery_epoch,
                 )
+            return
         except Exception:
-            # The armed sidecar remains authoritative even if the SQLite mirror
-            # cannot be written. But without an armed epoch or sensitive staging
-            # residue there is no durable evidence — the exception must propagate.
-            if recovery_epoch is None:
-                evidence = maintenance_recovery_latch_repository.read_latch()
-                if (
-                    not evidence.marker_present
-                    and not evidence.sensitive_residue_present
-                ):
-                    raise
-            logging.warning(
-                "maintenance fail-closed persistence failed phase=seal"
-            )
+            # Strict persist failed; re-check durable evidence. Relying on
+            # ``recovery_epoch is not None`` alone is unsafe because
+            # ``clear_latch`` may have cleared the mirror and lost the marker.
+            evidence = maintenance_recovery_latch_repository.read_latch()
+            if evidence.blocked:
+                # Marker (valid or invalid), SQLite mirror, or sensitive
+                # staging residue still proves a cross-restart blocked state.
+                logging.warning(
+                    "maintenance fail-closed persistence failed phase=seal"
+                )
+                return
+            # No durable evidence remains. Re-establish a fresh blocked epoch
+            # so a later process stays fail-closed. If this also fails the
+            # exception propagates so the caller never claims recovery done.
+            with DATABASE_WRITE_GATE._maintenance_recovery_write_scope():
+                maintenance_recovery_latch_repository.ensure_fail_closed_evidence(
+                    reason
+                )
 
     def _enter_fail_closed(
         self,
@@ -421,8 +427,19 @@ class RuntimeMaintenanceCoordinator:
             except MaintenanceRecoveryError:
                 raise
             except Exception as exc:
-                # Marker deletion is the final durable step. Any failure leaves
-                # either the sidecar or process block in place.
+                # ``clear_latch`` clears the SQLite mirror before deleting the
+                # sidecar, so marker loss leaves no cross-restart evidence.
+                # Re-establish durable evidence before raising so a later
+                # process stays blocked; let re-establishment failure propagate.
+                try:
+                    with DATABASE_WRITE_GATE._maintenance_recovery_write_scope():
+                        maintenance_recovery_latch_repository.ensure_fail_closed_evidence(
+                            reason
+                        )
+                except Exception as evidence_exc:
+                    raise MaintenanceRecoveryError(
+                        "maintenance_recovery_durable_evidence_unavailable"
+                    ) from evidence_exc
                 raise MaintenanceRecoveryError(
                     "maintenance_recovery_not_verified"
                 ) from exc

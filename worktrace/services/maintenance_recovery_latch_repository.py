@@ -321,6 +321,48 @@ def persist_fail_closed(
     )
 
 
+def ensure_fail_closed_evidence(reason: str) -> MaintenanceRecoveryLatch:
+    """Re-establish durable fail-closed evidence if none remains on disk.
+
+    Called only after a strict ``persist_fail_closed``/``clear_latch`` failure
+    when the coordinator cannot prove the expected epoch is still durable. If
+    any durable blocking evidence already exists (valid/invalid marker, SQLite
+    mirror, or sensitive staging residue) the current latch is returned
+    unchanged so existing epochs are never overwritten. Otherwise a fresh
+    blocked marker with a new epoch is created and the SQLite mirror is
+    restored. Raises ``MaintenanceRecoverySealError`` if no durable evidence
+    can be established.
+    """
+
+    latch = read_latch()
+    if latch.blocked:
+        return latch
+    normalized = _normalized_reason(reason)
+    epoch = uuid.uuid4().hex
+    atomic_write_text(
+        marker_path(),
+        _payload(epoch=epoch, reason=normalized, state=_STATE_BLOCKED),
+        resource="maintenance_recovery_seal",
+        permissions=0o600,
+    )
+    set_settings(
+        {
+            "maintenance_fail_closed": "true",
+            "maintenance_fail_closed_reason": normalized,
+            "user_paused": "true",
+            "collector_status": "paused",
+        }
+    )
+    return MaintenanceRecoveryLatch(
+        blocked=True,
+        reason=normalized,
+        epoch=epoch,
+        state=_STATE_BLOCKED,
+        marker_present=True,
+        database_mirror_present=True,
+    )
+
+
 def seal_legacy_latch(reason: str) -> MaintenanceRecoveryLatch:
     """Give a database-only blocked state an epoch before explicit recovery."""
 
@@ -402,6 +444,7 @@ __all__ = [
     "arm_recovery",
     "clear_latch",
     "clear_sensitive_staging_residue",
+    "ensure_fail_closed_evidence",
     "has_sensitive_staging_residue",
     "marker_path",
     "persist_fail_closed",
