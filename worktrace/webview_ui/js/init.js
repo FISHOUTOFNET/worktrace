@@ -228,6 +228,9 @@
     };
 
     function resetClientGeneration(reason) {
+        if (App.timelineAutosaveTimer) window.clearTimeout(App.timelineAutosaveTimer);
+        App.timelineAutosaveTimer = null;
+        App.timelineAutosaveQueued = false;
         if (App.requestCoordinator) App.requestCoordinator.bumpDataEpoch();
         App.timelineLoaded = false;
         App.statisticsLoaded = false;
@@ -459,12 +462,15 @@
             var overview = Object.assign({}, bundle.overview || {});
             overview.date = bundle.date || overview.date;
             overview.current_activity = runtime ? runtime.currentActivity : {};
+            overview.current_session = bundle.current_session || null;
+            overview.attention = bundle.attention || [];
+            overview.attention_remaining_count = bundle.attention_remaining_count || 0;
+            overview.recent = bundle.recent || [];
             overview.kpi_live_targets = bundle.kpi_live_targets || {};
             if (overview.today_total_seconds === undefined) overview.today_total_seconds = bundle.today_total_seconds || 0;
             if (overview.classified_seconds === undefined) overview.classified_seconds = bundle.classified_seconds || 0;
             if (overview.uncategorized_seconds === undefined) overview.uncategorized_seconds = bundle.uncategorized_seconds || 0;
             App.showOverview(overview);
-            App.showRecent({ activities: bundle.activities || [] });
         }).catch(function () {
             if (App.requestCoordinator.isCurrent(token)) App.showError("刷新失败");
         });
@@ -550,11 +556,17 @@
     function switchPage(pageId) {
         var navItems = document.querySelectorAll(".nav-item");
         var pages = document.querySelectorAll(".page");
-        for (var i = 0; i < navItems.length; i++) navItems[i].classList.remove("active");
+        for (var i = 0; i < navItems.length; i++) {
+            navItems[i].classList.remove("active");
+            navItems[i].removeAttribute("aria-current");
+        }
         for (var j = 0; j < pages.length; j++) pages[j].classList.remove("active");
         var navTarget = document.querySelector('.nav-item[data-page="' + pageId + '"]');
         var pageTarget = document.getElementById("page-" + pageId);
-        if (navTarget) navTarget.classList.add("active");
+        if (navTarget) {
+            navTarget.classList.add("active");
+            navTarget.setAttribute("aria-current", "page");
+        }
         if (pageTarget) pageTarget.classList.add("active");
         App.currentPage = pageId;
         liveRuntimeStore.setScope(pageId, pageId === "timeline" ? App.timelineDate : null);
@@ -599,10 +611,7 @@
         bind("timeline-date-input", "change", function (event) {
             App.loadTimelineReport(event.target.value || null, { resetSelection: true, showLoading: true });
         });
-        bind("edit-save-btn", "click", App.saveEdit);
-        bind("edit-cancel-btn", "click", App.cancelEdit);
         [
-            ["timeline-hide-session", "hide"],
             ["timeline-merge-previous", "merge", "previous"],
             ["timeline-merge-next", "merge", "next"],
             ["timeline-split-session", "split"],
@@ -612,10 +621,21 @@
                 App.runTimelineSessionOperation(action[1], action[2] ? { direction: action[2] } : undefined);
             });
         });
-        bind("edit-note-text", "input", App.updateNoteCount);
-        bind("statistics-load-btn", "click", App.loadStatisticsExportSummary);
+        bind("timeline-hide-session", "click", function (event) {
+            App.confirmTimelineDeletion("hide", {}, event.currentTarget);
+        });
+        bind("edit-project-select", "change", function () { App.scheduleTimelineAutosave(0); });
+        bind("edit-note-text", "input", function () {
+            App.updateNoteCount();
+            App.scheduleTimelineAutosave(650);
+        });
+        bind("edit-duration-input", "change", function () { App.scheduleTimelineAutosave(0); });
+        bind("timeline-project-filter", "change", App.applyTimelineProjectFilter);
+        bind("timeline-details-close", "click", App.closeTimelineDrawer);
+        bind("timeline-drawer-backdrop", "click", App.closeTimelineDrawer);
+        bind("timeline-advanced-toggle", "click", App.toggleTimelineAdvancedMenu);
         bind("statistics-today-btn", "click", function () { App.applyStatisticsQuickRange("today"); });
-        bind("statistics-7d-btn", "click", function () { App.applyStatisticsQuickRange("7d"); });
+        bind("statistics-week-btn", "click", function () { App.applyStatisticsQuickRange("week"); });
         bind("statistics-month-btn", "click", function () { App.applyStatisticsQuickRange("month"); });
         bind("stats-export-action-btn", "click", App.exportStatisticsCsv);
         bind("settings-clipboard-toggle", "change", App.handleCaptureToggleChange);
@@ -625,6 +645,8 @@
         bind("settings-clear-local-data-btn", "click", App.clearAllLocalData);
         bind("settings-clear-all-btn", "click", App.clearAllLocalData);
         if (App.initRulesPanelEvents) App.initRulesPanelEvents();
+        if (App.initTimelineAccessibility) App.initTimelineAccessibility();
+        if (App.initSettingsCategories) App.initSettingsCategories();
         bind("first-run-notice-accept-btn", "click", App.acceptFirstRunNotice);
         bind("first-run-notice-close-btn", "click", function () {
             if (App.firstRunNoticeViewingFromSettings) App.hideFirstRunNotice();

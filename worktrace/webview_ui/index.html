@@ -1,433 +1,310 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="zh-CN">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>WorkTrace</title>
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-    <div class="app">
-        <div id="first-run-notice-overlay" class="first-run-notice-overlay" hidden>
-            <div id="first-run-notice-dialog" class="first-run-notice-dialog" role="dialog" aria-modal="true">
-                <div id="first-run-notice-title" class="first-run-notice-title"></div>
+    <div class="app-shell">
+        <div id="first-run-notice-overlay" class="modal-layer" hidden>
+            <section id="first-run-notice-dialog" class="dialog first-run-dialog" role="dialog" aria-modal="true" aria-labelledby="first-run-notice-title">
+                <h1 id="first-run-notice-title" class="dialog-title"></h1>
                 <ul id="first-run-notice-highlights" class="first-run-notice-highlights"></ul>
                 <pre id="first-run-notice-text" class="first-run-notice-text"></pre>
-                <p id="first-run-notice-error" class="first-run-notice-error" hidden></p>
-                <div class="first-run-notice-actions">
-                    <button id="first-run-notice-accept-btn" type="button" class="first-run-notice-accept-btn">我已阅读并同意</button>
-                    <button id="first-run-notice-close-btn" type="button" class="first-run-notice-close-btn" hidden>关闭</button>
+                <p id="first-run-notice-error" class="inline-alert error" role="alert" hidden></p>
+                <div class="dialog-actions">
+                    <button id="first-run-notice-close-btn" type="button" hidden>关闭</button>
+                    <button id="first-run-notice-accept-btn" type="button" class="button primary">我已阅读并同意</button>
                 </div>
-            </div>
+            </section>
         </div>
-        <aside class="sidebar">
-            <div class="sidebar-brand">WorkTrace</div>
-            <nav class="sidebar-nav">
-                <button class="nav-item active" data-page="overview">概览</button>
-                <button class="nav-item" data-page="timeline">时间详情</button>
-                <button class="nav-item" data-page="statistics">统计与导出</button>
-                <button class="nav-item" data-page="rules">项目规则</button>
-                <button class="nav-item" data-page="settings">设置与隐私</button>
+
+        <aside class="app-nav" aria-label="主导航">
+            <div class="app-brand"><span class="brand-mark" aria-hidden="true">WT</span><span class="nav-label">WorkTrace</span></div>
+            <nav class="nav-list">
+                <button type="button" class="nav-item active" data-page="overview" aria-current="page" aria-label="概览" data-tooltip="概览">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M 4 13h6V4H4v9Zm10 7h6V11h-6v9ZM 4 20h6v-3H4v3Zm10-13h6V4h-6v3Z"/></svg><span class="nav-label">概览</span>
+                </button>
+                <button type="button" class="nav-item" data-page="timeline" aria-label="时间详情" data-tooltip="时间详情">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 7v5l3 2"/></svg><span class="nav-label">时间详情</span>
+                </button>
+                <button type="button" class="nav-item" data-page="statistics" aria-label="统计与导出" data-tooltip="统计与导出">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19V9m7 10V5m7 14v-7"/></svg><span class="nav-label">统计与导出</span>
+                </button>
+                <button type="button" class="nav-item" data-page="rules" aria-label="项目规则" data-tooltip="项目规则">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M 4 7h10m-6 5h12M 4 17h10"/><circle cx="17" cy="7" r="2"/><circle cx="5" cy="12" r="2"/><circle cx="17" cy="17" r="2"/></svg><span class="nav-label">项目规则</span>
+                </button>
+                <button type="button" class="nav-item" data-page="settings" aria-label="设置与隐私" data-tooltip="设置与隐私">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1l2-1.5-2-3.4-2.4 1A8 8 0 0 0 15 6.2L14.7 4h-4l-.3 2.2a8 8 0 0 0-1.5.9l-2.4-1-2 3.4 2 1.5a7 7 0 0 0 0 2l-2 1.5 2 3.4 2.4-1a8 8 0 0 0 1.5.9l.3 2.2h4l.3-2.2a8 8 0 0 0 1.5-.9l2.4 1 2-3.4-2-1.5c.1-.3.1-.7.1-1Z"/></svg><span class="nav-label">设置与隐私</span>
+                </button>
             </nav>
-            <div class="sidebar-status">
-                <div id="status-display" class="status-display">采集器未运行</div>
-                <button id="toggle-pause-btn" class="toggle-btn">开始记录</button>
+            <div class="nav-status">
+                <div id="status-display" class="status-display"><span class="status-dot" aria-hidden="true"></span><span class="nav-label">记录未启动</span></div>
+                <button id="toggle-pause-btn" type="button" class="button nav-pause" aria-label="开始记录" data-tooltip="开始记录"><span class="nav-label">开始记录</span><span aria-hidden="true">▶</span></button>
             </div>
         </aside>
-        <main class="content">
-            <section id="page-overview" class="page active">
+
+        <main class="app-main">
+            <section id="page-overview" class="page active overview-page">
                 <header class="page-header">
-                    <h1>今日概览</h1>
-                    <button id="refresh-btn" class="refresh-btn">刷新</button>
+                    <div><h1>今日概览</h1><p>当前活动、待整理和最近活动</p></div>
+                    <div class="page-total"><span>今日总时长</span><strong id="kpi-total" data-testid="overview-total">00:00:00</strong></div>
                 </header>
-                <div id="overview-error" class="error-banner" hidden>加载失败，请稍后重试。</div>
-                <div class="kpi-grid">
-                    <div class="kpi-card">
-                        <div class="kpi-label">今日日期</div>
-                        <div id="kpi-date" class="kpi-value">--</div>
-                    </div>
-                    <div class="kpi-card">
-                        <div class="kpi-label">今日总时长</div>
-                        <div id="kpi-total" class="kpi-value">00:00:00</div>
-                    </div>
-                    <div class="kpi-card">
-                        <div class="kpi-label">今日项目数</div>
-                        <div id="kpi-projects" class="kpi-value">0</div>
-                    </div>
-                    <div class="kpi-card">
-                        <div class="kpi-label">已归类时长</div>
-                        <div id="kpi-classified" class="kpi-value">00:00:00</div>
-                    </div>
-                    <div class="kpi-card">
-                        <div class="kpi-label">未归类时长</div>
-                        <div id="kpi-uncategorized" class="kpi-value">00:00:00</div>
-                    </div>
-                </div>
-                <div class="current-card">
-                    <div class="card-title">当前活动</div>
-                    <div id="current-activity" class="current-text">当前活动：无</div>
-                </div>
-                <div class="recent-card">
-                    <div class="card-title">最近活动</div>
-                    <div id="recent-list" class="recent-list">
-                        <div class="recent-empty">暂无活动</div>
-                    </div>
+                <div id="overview-error" class="inline-alert error" role="alert" hidden>加载失败，请稍后重试。</div>
+                <button id="current-activity" type="button" class="surface current-activity" data-testid="overview-current">
+                    <span class="current-label">当前活动</span>
+                    <strong class="current-project">当前活动：无</strong>
+                    <span class="current-description">WorkTrace 开始记录后会在这里显示。</span>
+                    <strong class="current-duration numeric" aria-live="off">00:00:00</strong>
+                </button>
+                <div class="overview-grid">
+                    <section class="surface overview-section recent-section">
+                        <h2>最近活动</h2>
+                        <div id="recent-list" class="data-list"><div class="empty-state"><strong>暂无最近活动</strong><span>已结束的时间段会显示在这里。</span></div></div>
+                    </section>
+                    <section class="surface overview-section attention-section">
+                        <div class="section-heading"><h2>待整理</h2><span class="badge">今日</span></div>
+                        <div id="overview-attention-list" class="attention-list" data-testid="overview-attention">
+                            <div class="empty-compact">今日记录已整理</div>
+                        </div>
+                        <div id="overview-attention-more" class="attention-more" hidden></div>
+                    </section>
                 </div>
             </section>
-            <section id="page-timeline" class="page">
-                <header class="page-header">
-                    <h1>时间详情</h1>
-                    <div class="timeline-date-nav">
-                        <button id="timeline-prev-btn" class="date-nav-btn" type="button">&lt;</button>
-                        <input id="timeline-date-input" type="date" class="date-display date-input">
-                        <button id="timeline-next-btn" class="date-nav-btn" type="button">&gt;</button>
-                        <button id="timeline-today-btn" class="date-nav-btn today-btn" type="button">今日</button>
-                    </div>
-                </header>
-                <div id="timeline-error" class="error-banner" hidden>加载失败，请稍后重试。</div>
-                <div id="timeline-loading" class="timeline-loading" hidden>加载中…</div>
-                <div class="timeline-summary">
-                    <div class="timeline-total-card">
-                        <span class="timeline-total-label">当日总时长</span>
-                        <span id="timeline-total" class="timeline-total-value">00:00:00</span>
-                    </div>
-                    <div id="timeline-current" class="timeline-current">当前活动：无</div>
+
+            <section id="page-timeline" class="page timeline-page">
+                <header class="page-header"><div><h1>时间详情</h1><p>查看和整理当日时间段</p></div></header>
+                <div class="toolbar timeline-toolbar">
+                    <button id="timeline-prev-btn" type="button" class="icon-button" aria-label="前一天" data-tooltip="前一天">‹</button>
+                    <input id="timeline-date-input" type="date" aria-label="日期">
+                    <button id="timeline-next-btn" type="button" class="icon-button" aria-label="后一天" data-tooltip="后一天">›</button>
+                    <button id="timeline-today-btn" type="button">今日</button>
+                    <label class="sr-only" for="timeline-project-filter">项目筛选</label>
+                    <select id="timeline-project-filter" aria-label="项目筛选"><option value="">项目：全部</option></select>
+                    <span class="toolbar-spacer"></span>
+                    <strong class="toolbar-total">总计 <span id="timeline-total" class="numeric">00:00:00</span></strong>
                 </div>
-                <div class="timeline-layout">
-                    <div class="timeline-sessions">
-                        <div class="card-title">活动时段</div>
-                        <div id="timeline-sessions-list" class="timeline-list">
-                            <div class="timeline-empty">暂无活动</div>
-                        </div>
+                <div id="timeline-error" class="inline-alert error" role="alert" hidden>加载失败，请稍后重试。</div>
+                <div id="timeline-loading" class="loading-state" hidden><span class="skeleton"></span><span class="skeleton"></span><span class="skeleton"></span></div>
+                <div id="timeline-current" hidden></div>
+                <div class="timeline-workspace">
+                    <div id="timeline-sessions-list" class="surface timeline-list" role="listbox" aria-label="时间段列表" data-testid="timeline-list">
+                        <div class="empty-state"><strong>当日暂无时间记录</strong><span>WorkTrace 开始记录后，时间段会显示在这里。</span></div>
                     </div>
-                    <div class="timeline-details">
-                        <div id="timeline-details-header" class="timeline-details-header">选择左侧时段查看详情</div>
-                        <div id="timeline-details-list" class="timeline-list">
-                            <div class="timeline-empty">暂无详情</div>
-                        </div>
+                    <div id="timeline-drawer-backdrop" class="drawer-backdrop" hidden></div>
+                    <aside id="timeline-details-pane" class="surface timeline-inspector" aria-label="时间段编辑与活动详情">
+                        <button id="timeline-details-close" type="button" class="icon-button inspector-close" aria-label="关闭时间段详情" data-tooltip="关闭">×</button>
                         <div id="timeline-edit-panel" class="timeline-edit-panel" hidden>
-                            <div id="timeline-session-actions" class="timeline-session-actions">
-                                <button id="timeline-hide-session" type="button">删除该时段</button>
-                                <button id="timeline-merge-previous" type="button">合并到上一时段</button>
-                                <button id="timeline-merge-next" type="button">合并到下一时段</button>
-                                <button id="timeline-split-session" type="button">拆分合并时段</button>
-                                <button id="timeline-copy-session" type="button">复制该时段</button>
+                            <div class="edit-inline">
+                                <label class="field"><span>项目</span><select id="edit-project-select" disabled><option value="">加载中…</option></select></label>
+                                <label class="field"><span>时长（分钟）</span><input id="edit-duration-input" type="number" min="0" step="1" disabled></label>
                             </div>
-                            <div class="edit-panel-title">编辑当前时段</div>
-                            <div class="edit-section-label">项目</div>
-                            <div class="edit-field">
-                                <label for="edit-project-select" class="edit-label">项目</label>
-                                <select id="edit-project-select" class="edit-select" disabled>
-                                    <option value="">加载中…</option>
-                                </select>
+                            <span id="edit-duration-status" class="field-status"></span>
+                            <label class="field"><span>描述</span><textarea id="edit-note-text" rows="3" maxlength="2000" placeholder="暂无描述" disabled></textarea></label>
+                            <div class="edit-meta"><span id="edit-note-count">0 / 2000</span></div>
+                            <div class="editor-actions">
+                                <span id="edit-status" class="inline-status" role="status" aria-live="polite" hidden></span>
+                                <span class="toolbar-spacer"></span>
+                                <button id="timeline-advanced-toggle" type="button" aria-haspopup="menu" aria-expanded="false">高级操作</button>
+                                <button id="timeline-hide-session" type="button" class="button danger">删除时间段</button>
                             </div>
-                            <div class="edit-section-label">时长（分钟）</div>
-                            <div class="edit-field edit-duration-section">
-                                <input type="number" id="edit-duration-input" class="edit-input edit-duration-input" min="0" step="1" placeholder="留空使用真实时长" disabled>
-                                <div class="edit-duration-hint">仅修改显示/申报时长，不改变后台真实活动记录。</div>
-                                <span id="edit-duration-status" class="edit-duration-hint"></span>
+                            <div id="timeline-session-actions" class="action-menu" role="menu" hidden>
+                                <button id="timeline-split-session" type="button" role="menuitem">拆分时间段</button>
+                                <button id="timeline-merge-previous" type="button" role="menuitem">合并到上一时间段</button>
+                                <button id="timeline-merge-next" type="button" role="menuitem">合并到下一时间段</button>
+                                <button id="timeline-copy-session" type="button" role="menuitem">复制时间段</button>
                             </div>
-                            <div class="edit-section-label">备注</div>
-                            <div class="edit-field">
-                                <label for="edit-note-text" class="edit-label">备注</label>
-                                <textarea id="edit-note-text" class="edit-note" rows="3" placeholder="为该时段添加备注" disabled></textarea>
-                                <div class="edit-note-meta">
-                                    <span id="edit-note-count" class="edit-note-count">0 / 2000</span>
-                                </div>
-                            </div>
-                            <div class="edit-actions">
-                                <button id="edit-save-btn" class="edit-btn edit-save-btn" type="button" disabled>保存</button>
-                                <button id="edit-cancel-btn" class="edit-btn edit-cancel-btn" type="button" disabled>取消</button>
-                            </div>
-                            <div id="edit-status" class="edit-status" hidden></div>
                         </div>
-                    </div>
-                </div>
-            </section>
-            <section id="page-statistics" class="page">
-                <header class="page-header stats-header">
-                    <div class="stats-header-text">
-                        <h1>统计 / 导出</h1>
-                        <p class="stats-subtitle">查看统计并导出当前范围内的活动记录为 CSV 文件。</p>
-                    </div>
-                </header>
-                <div class="stats-controls">
-                    <div class="stats-date-range">
-                        <label for="statistics-date-from" class="stats-date-label">开始</label>
-                        <input type="date" id="statistics-date-from" class="stats-date-input">
-                        <label for="statistics-date-to" class="stats-date-label">结束</label>
-                        <input type="date" id="statistics-date-to" class="stats-date-input">
-                        <button id="statistics-load-btn" class="stats-load-btn" type="button">加载统计</button>
-                    </div>
-                    <div class="stats-quick-range">
-                        <button id="statistics-today-btn" class="stats-quick-btn" type="button">今天</button>
-                        <button id="statistics-7d-btn" class="stats-quick-btn" type="button">最近 7 天</button>
-                        <button id="statistics-month-btn" class="stats-quick-btn" type="button">本月</button>
-                    </div>
-                </div>
-                <div id="statistics-error" class="error-banner" hidden>加载统计失败</div>
-                <div id="statistics-loading" class="stats-loading" hidden>正在加载统计…</div>
-                <div class="stats-closed-only-hint">
-                    统计与导出预览仅包含已完成活动；当前进行中活动不会计入，结束后会进入统计。
-                </div>
-                <div class="stats-summary-grid">
-                    <div class="stats-summary-card">
-                        <div class="stats-summary-label">总时长</div>
-                        <div id="stats-total" class="stats-summary-value">00:00:00</div>
-                    </div>
-                    <div class="stats-summary-card">
-                        <div class="stats-summary-label">活动数</div>
-                        <div id="stats-activity-count" class="stats-summary-value">0</div>
-                    </div>
-                    <div class="stats-summary-card">
-                        <div class="stats-summary-label">项目数</div>
-                        <div id="stats-project-count" class="stats-summary-value">0</div>
-                    </div>
-                    <div class="stats-summary-card">
-                        <div class="stats-summary-label">应用数</div>
-                        <div id="stats-app-count" class="stats-summary-value">0</div>
-                    </div>
-                </div>
-                <div class="stats-tables">
-                    <div class="stats-table-card">
-                        <div class="card-title">按项目</div>
-                        <div class="stats-table-wrap">
-                            <table class="stats-table">
-                                <thead>
-                                    <tr>
-                                        <th>名称</th>
-                                        <th>时长</th>
-                                        <th>活动数</th>
-                                        <th>占比</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="stats-by-project"></tbody>
-                            </table>
-                        </div>
-                        <div id="stats-empty-project" class="stats-empty" hidden>暂无统计数据</div>
-                    </div>
-                    <div class="stats-table-card">
-                        <div class="card-title">按应用</div>
-                        <div class="stats-table-wrap">
-                            <table class="stats-table">
-                                <thead>
-                                    <tr>
-                                        <th>名称</th>
-                                        <th>时长</th>
-                                        <th>活动数</th>
-                                        <th>占比</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="stats-by-app"></tbody>
-                            </table>
-                        </div>
-                        <div id="stats-empty-app" class="stats-empty" hidden>暂无统计数据</div>
-                    </div>
-                    <div class="stats-table-card">
-                        <div class="card-title">按状态</div>
-                        <div class="stats-table-wrap">
-                            <table class="stats-table">
-                                <thead>
-                                    <tr>
-                                        <th>名称</th>
-                                        <th>时长</th>
-                                        <th>活动数</th>
-                                        <th>占比</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="stats-by-status"></tbody>
-                            </table>
-                        </div>
-                        <div id="stats-empty-status" class="stats-empty" hidden>暂无统计数据</div>
-                    </div>
-                </div>
-                <div id="statistics-export-preview" class="stats-export-preview">
-                    <div class="card-title">导出预览</div>
-                    <div class="stats-closed-only-hint">
-                        统计与导出预览仅包含已完成活动；当前进行中活动不会计入，结束后会进入统计。
-                    </div>
-                    <div class="stats-export-rows">
-                        <div class="stats-export-row">
-                            <span class="stats-export-label">当前范围</span>
-                            <span id="stats-export-range" class="stats-export-value">--</span>
-                        </div>
-                        <div class="stats-export-row">
-                            <span class="stats-export-label">纳入活动数</span>
-                            <span id="stats-export-count" class="stats-export-value">0</span>
-                        </div>
-                        <div class="stats-export-row">
-                            <span class="stats-export-label">纳入总时长</span>
-                            <span id="stats-export-duration" class="stats-export-value">00:00:00</span>
-                        </div>
-                        <div class="stats-export-row">
-                            <span class="stats-export-label">可导出格式</span>
-                            <span id="stats-export-formats" class="stats-export-value">--</span>
-                        </div>
-                    </div>
-                    <div class="stats-export-hint">
-                        导出当前范围内已结束、非隐藏的活动记录为 CSV；不包含窗口标题、文件路径等敏感信息。导出范围最多 31 天。
-                    </div>
-                    <div id="stats-export-status" class="stats-export-status" hidden></div>
-                    <button id="stats-export-action-btn" class="stats-export-action-btn" type="button">导出 CSV</button>
-                </div>
-            </section>
-            <section id="page-rules" class="page">
-                <header class="page-header rules-header">
-                    <div class="rules-header-text">
-                        <h1>项目规则</h1>
-                        <p class="rules-subtitle">用文件夹和关键词规则自动归类活动，首页只保留日常查看、新增和删除。</p>
-                    </div>
-                </header>
-                <div id="rules-readonly-hint" class="rules-readonly-hint">
-                    本页只通过本地 bridge 调用 Python 服务，不使用浏览器存储，也不会发起网络请求。
-                </div>
-                <div class="rules-home-toolbar">
-                    <button id="rules-open-create-rule" class="rules-primary-action" type="button">新建规则</button>
-                    <button id="rules-open-create-project" class="rules-secondary-action" type="button">新建项目</button>
-                    <label class="rules-sort-label" for="rules-sort-select">排序</label>
-                    <select id="rules-sort-select" class="rules-sort-select">
-                        <option value="last_used">按上次使用排序</option>
-                        <option value="alpha">按首字母排序</option>
-                    </select>
-                </div>
-                <div id="rules-create-panel" class="rules-create-panel" hidden>
-                    <div class="rules-create-panel-backdrop" data-rules-panel-close="1"></div>
-                    <aside class="rules-create-panel-sheet" role="dialog" aria-modal="true" aria-labelledby="rules-create-panel-title">
-                        <div class="rules-create-panel-head">
-                            <h2 id="rules-create-panel-title">新建规则</h2>
-                            <button id="rules-create-panel-close" class="rules-icon-button" type="button" aria-label="关闭">×</button>
-                        </div>
-                        <div class="rules-panel-tabs">
-                            <button id="rules-panel-rule-tab" class="rules-panel-tab is-active" type="button">规则</button>
-                            <button id="rules-panel-project-tab" class="rules-panel-tab" type="button">项目</button>
-                        </div>
-                        <div id="rules-panel-status" class="rules-panel-status" hidden></div>
-                        <section id="rules-panel-project-section" class="rules-panel-section" hidden>
-                            <label class="rules-panel-field">项目名称<input id="rules-panel-project-name" type="text" maxlength="100" autocomplete="off"></label>
-                            <label class="rules-panel-field">项目描述<input id="rules-panel-project-description" type="text" maxlength="500" autocomplete="off"></label>
-                            <label class="rules-panel-field">项目语言<select id="rules-panel-project-language"><option value="中文">中文</option><option value="英语">英语</option><option value="日语">日语</option><option value="其他">其他</option></select></label>
-                            <label id="rules-panel-project-language-other-row" class="rules-panel-field" hidden>其他语言<input id="rules-panel-project-language-other" type="text" maxlength="50" autocomplete="off"></label>
-                            <button id="rules-panel-save-project" class="rules-panel-submit" type="button">保存项目</button>
-                        </section>
-                        <section id="rules-panel-rule-section" class="rules-panel-section">
-                            <div class="rules-panel-segment">
-                                <button id="rules-panel-folder-type" class="is-active" type="button">文件夹规则</button>
-                                <button id="rules-panel-keyword-type" type="button">关键词规则</button>
-                            </div>
-                            <label class="rules-panel-field">目标项目<select id="rules-panel-target-project"></select></label>
-                            <button id="rules-panel-create-project-inline" class="rules-inline-action" type="button">在此新建项目</button>
-                            <label id="rules-panel-folder-row" class="rules-panel-field">文件夹路径<input id="rules-panel-folder-path" type="text" maxlength="512" autocomplete="off"></label>
-                            <label id="rules-panel-folder-recursive-row" class="rules-panel-check"><input id="rules-panel-folder-recursive" type="checkbox" checked> 包含子文件夹</label>
-                            <label id="rules-panel-keyword-row" class="rules-panel-field" hidden>关键词<input id="rules-panel-keyword" type="text" maxlength="200" autocomplete="off"></label>
-                            <label id="rules-panel-backfill-row" class="rules-panel-check"><input id="rules-panel-backfill" type="checkbox" checked> 同时应用到历史记录（推荐）</label>
-                            <button id="rules-panel-save-rule" class="rules-panel-submit" type="button">新增规则</button>
+                        <section class="activity-details">
+                            <h2 id="timeline-details-header">活动详情</h2>
+                            <div id="timeline-details-list" class="activity-list"><div class="empty-state"><strong>请选择时间段</strong><span>选择左侧时间段后可查看活动详情。</span></div></div>
                         </section>
                     </aside>
                 </div>
-                <div id="rules-delete-modal" class="rules-create-panel" hidden>
-                    <div class="rules-create-panel-backdrop" data-rules-delete-close="1"></div>
-                    <aside class="rules-create-panel-sheet" role="dialog" aria-modal="true" aria-labelledby="rules-delete-modal-title">
-                        <div class="rules-create-panel-head"><h2 id="rules-delete-modal-title">删除规则</h2></div>
-                        <p>删除后，这条规则不会再用于未来自动归类。</p>
-                        <label class="rules-panel-check"><input id="rules-delete-history" type="checkbox"> 同时移除历史中由此规则产生的归类</label>
-                        <div class="rules-project-actions"><button id="rules-delete-cancel" type="button">取消</button><button id="rules-delete-confirm" type="button">删除规则</button></div>
-                    </aside>
+            </section>
+
+            <section id="page-statistics" class="page statistics-page">
+                <header class="page-header">
+                    <div><h1>统计与导出</h1><p>统计仅包含已完成时间段</p></div>
+                    <button id="stats-export-action-btn" type="button" class="button primary" disabled>导出 CSV</button>
+                </header>
+                <div class="toolbar statistics-toolbar">
+                    <label for="statistics-range-mode">时间</label>
+                    <select id="statistics-range-mode"><option value="all">全部时间</option><option value="custom">自定义范围</option></select>
+                    <span id="statistics-custom-range" class="date-range" hidden>
+                        <label class="sr-only" for="statistics-date-from">开始日期</label><input id="statistics-date-from" type="date" aria-label="开始日期">
+                        <span>至</span>
+                        <label class="sr-only" for="statistics-date-to">结束日期</label><input id="statistics-date-to" type="date" aria-label="结束日期">
+                    </span>
+                    <label for="statistics-project-filter">项目</label>
+                    <select id="statistics-project-filter"><option value="">全部项目</option></select>
+                    <span class="toolbar-spacer"></span>
+                    <div class="quick-ranges" aria-label="快捷日期范围">
+                        <button id="statistics-today-btn" type="button">今天</button>
+                        <button id="statistics-week-btn" type="button">本周</button>
+                        <button id="statistics-month-btn" type="button">本月</button>
+                    </div>
                 </div>
-                <div id="rules-error" class="error-banner" hidden>加载项目规则失败</div>
-                <div id="rules-loading" class="rules-loading" hidden>正在加载项目规则…</div>
+                <div class="section-heading stats-scope-row">
+                    <span id="stats-scope" class="secondary-text">当前范围：全部时间 · 全部项目</span>
+                    <span id="statistics-update-status" class="inline-status" role="status" aria-live="polite"></span>
+                </div>
+                <div id="statistics-error" class="inline-alert error" role="alert" hidden>加载统计失败</div>
+                <div id="statistics-loading" class="inline-status" hidden>更新中…</div>
+                <div class="surface metric-strip">
+                    <div class="metric"><span>总时长</span><strong id="stats-total">00:00:00</strong></div>
+                    <div class="metric"><span>时间段</span><strong id="stats-activity-count">0</strong></div>
+                    <div class="metric"><span>项目</span><strong id="stats-project-count">0</strong></div>
+                    <div class="metric"><span>应用</span><strong id="stats-app-count">0</strong></div>
+                </div>
+                <section class="surface stats-result">
+                    <div class="tabs" role="tablist" aria-label="统计视角">
+                        <button id="stats-project-tab" type="button" role="tab" aria-selected="true" aria-controls="stats-project-panel">按项目</button>
+                        <button id="stats-app-tab" type="button" role="tab" aria-selected="false" aria-controls="stats-app-panel">按应用</button>
+                    </div>
+                    <div id="stats-project-panel" role="tabpanel"><div class="table-scroll"><table><thead><tr><th>名称</th><th class="number">时长</th><th class="number">时间段</th><th class="number">占比</th></tr></thead><tbody id="stats-by-project"></tbody></table></div><div id="stats-empty-project" class="empty-state" hidden>暂无统计数据</div></div>
+                    <div id="stats-app-panel" role="tabpanel" hidden><div class="table-scroll"><table><thead><tr><th>名称</th><th class="number">时长</th><th class="number">时间段</th><th class="number">占比</th></tr></thead><tbody id="stats-by-app"></tbody></table></div><div id="stats-empty-app" class="empty-state" hidden>暂无统计数据</div></div>
+                </section>
+                <details id="statistics-export-preview" class="surface export-disclosure">
+                    <summary>导出范围与隐私说明</summary>
+                    <div class="export-facts">
+                        <span>当前范围 <strong id="stats-export-range">--</strong></span>
+                        <span>时间段 <strong id="stats-export-count">0</strong></span>
+                        <span>总时长 <strong id="stats-export-duration">00:00:00</strong></span>
+                        <span>格式 <strong id="stats-export-formats">CSV</strong></span>
+                    </div>
+                    <p>导出只包含当前已接受快照中的用户描述，不包含派生摘要、窗口标题或文件路径。</p>
+                </details>
+                <div id="stats-export-status" class="inline-status" role="status" aria-live="polite" hidden></div>
+            </section>
+
+            <section id="page-rules" class="page rules-page">
+                <header class="page-header"><div><h1>项目规则</h1><p>管理项目及自动归类规则</p></div><button id="rules-open-create-project" type="button" class="button primary">新建项目</button></header>
+                <div id="rules-readonly-hint" class="sr-only">本页只通过本地 bridge 调用 Python 服务，不使用浏览器存储或网络。</div>
+                <div class="toolbar rules-toolbar">
+                    <label class="sr-only" for="rules-search-input">搜索项目或规则</label><input id="rules-search-input" type="search" placeholder="搜索项目或规则">
+                    <span class="toolbar-spacer"></span>
+                    <label for="rules-sort-select">排序</label>
+                    <select id="rules-sort-select"><option value="last_used">最近使用</option><option value="total_duration">累计时间</option><option value="alpha">项目名称</option></select>
+                </div>
+                <div id="rules-error" class="inline-alert error" role="alert" hidden>加载项目规则失败</div>
+                <div id="rules-loading" class="loading-state" hidden><span class="skeleton"></span><span class="skeleton"></span></div>
                 <div id="rules-list" class="rules-list"></div>
-                <div id="rules-empty" class="rules-empty" hidden>暂无项目规则。</div>
+                <div id="rules-empty" class="empty-state" hidden><strong>暂无项目</strong><span>新建项目后可添加自动归类规则。</span></div>
+
+                <div id="rules-create-panel" class="drawer-layer" hidden>
+                    <div class="drawer-scrim" data-rules-panel-close="1"></div>
+                    <aside class="drawer rules-drawer" role="dialog" aria-modal="true" aria-labelledby="rules-create-panel-title">
+                        <header class="drawer-header"><h2 id="rules-create-panel-title">新建项目</h2><button id="rules-create-panel-close" type="button" class="icon-button" aria-label="关闭" data-tooltip="关闭">×</button></header>
+                        <div id="rules-panel-status" class="inline-alert" role="status" aria-live="polite" hidden></div>
+                        <button id="rules-panel-rule-tab" type="button" hidden>规则</button><button id="rules-panel-project-tab" type="button" hidden>项目</button>
+                        <section id="rules-panel-project-section" class="drawer-form">
+                            <label class="field"><span>项目名称</span><input id="rules-panel-project-name" type="text" maxlength="100" autocomplete="off"></label>
+                            <label class="field"><span>描述</span><textarea id="rules-panel-project-description" maxlength="500" rows="4"></textarea></label>
+                            <select id="rules-panel-project-language" hidden><option value="中文">中文</option></select>
+                            <label id="rules-panel-project-language-other-row" hidden>其他语言<input id="rules-panel-project-language-other" type="text"></label>
+                            <div class="drawer-actions"><button type="button" data-rules-panel-close="1">取消</button><button id="rules-panel-save-project" type="button" class="button primary">新建项目</button></div>
+                        </section>
+                        <section id="rules-panel-rule-section" class="drawer-form" hidden>
+                            <p id="rules-panel-project-context" class="drawer-context"></p>
+                            <div class="tabs rule-type-tabs" role="tablist">
+                                <button id="rules-panel-folder-type" type="button" role="tab" aria-selected="true">文件夹规则</button>
+                                <button id="rules-panel-keyword-type" type="button" role="tab" aria-selected="false">关键词规则</button>
+                            </div>
+                            <label class="field" hidden>目标项目<select id="rules-panel-target-project"></select></label>
+                            <button id="rules-panel-create-project-inline" type="button" hidden>新建项目</button>
+                            <label id="rules-panel-folder-row" class="field"><span>文件夹路径</span><input id="rules-panel-folder-path" type="text" maxlength="512" autocomplete="off"></label>
+                            <label id="rules-panel-folder-recursive-row" hidden><input id="rules-panel-folder-recursive" type="checkbox" checked> 包含子文件夹</label>
+                            <label id="rules-panel-keyword-row" class="field" hidden><span>关键词</span><input id="rules-panel-keyword" type="text" maxlength="200" autocomplete="off"></label>
+                            <p class="field-hint">文件夹规则默认匹配该文件夹及全部子文件夹。</p>
+                            <label id="rules-panel-backfill-row" class="checkbox-row"><input id="rules-panel-backfill" type="checkbox" checked><span>同时应用到历史记录</span></label>
+                            <div class="drawer-actions"><button type="button" data-rules-panel-close="1">取消</button><button id="rules-panel-save-rule" type="button" class="button primary">新建规则</button></div>
+                        </section>
+                    </aside>
+                </div>
             </section>
-            <section id="page-settings" class="page">
-                <header class="page-header settings-header">
-                    <div class="settings-header-text">
-                        <h1>设置与隐私</h1>
-                        <p class="settings-subtitle">管理本地隐私设置、加密备份和本地数据。</p>
+
+            <section id="page-settings" class="page settings-page">
+                <header class="page-header"><div><h1>设置与隐私</h1><p>管理本地数据、采集和备份</p></div></header>
+                <div id="settings-loading" class="inline-status" hidden>正在加载设置状态…</div>
+                <div id="settings-error" class="inline-alert error" role="alert" hidden>加载设置状态失败</div>
+                <div id="settings-status" class="settings-layout" hidden>
+                    <nav class="surface settings-categories" aria-label="设置分类">
+                        <button type="button" data-settings-section="general" aria-current="true">常规</button>
+                        <button type="button" data-settings-section="collection">采集</button>
+                        <button type="button" data-settings-section="privacy">隐私</button>
+                        <button type="button" data-settings-section="data">数据与备份</button>
+                        <button type="button" data-settings-section="advanced">高级</button>
+                    </nav>
+                    <div class="surface settings-content">
+                        <section id="settings-section-general" class="settings-section active">
+                            <h2>常规</h2>
+                            <div id="settings-health-summary" class="setting-row"><span><strong>系统状态</strong><small>正在检查记录服务</small></span><span class="badge">检查中</span></div>
+                            <article id="settings-storage-card" class="setting-row"><span><strong>本地数据</strong><small data-settings-key="storage_model">所有数据仅存储在本机。</small></span><span>本机</span></article>
+                            <div class="setting-row"><span><strong>导出目录</strong><small data-settings-key="export_path_configured">导出目录：未加载</small></span><span>本地目录</span></div>
+                        </section>
+                        <section id="settings-section-collection" class="settings-section" hidden>
+                            <h2>采集</h2>
+                            <label id="settings-privacy-card" class="setting-row" for="settings-clipboard-toggle"><span><strong id="settings-clipboard-toggle-label">剪贴板记录</strong><small>默认关闭；更改后立即生效</small></span><span class="toggle-wrap"><input id="settings-clipboard-toggle" type="checkbox" disabled><span id="settings-clipboard-toggle-status">未加载</span></span></label>
+                        </section>
+                        <section id="settings-section-privacy" class="settings-section" hidden>
+                            <h2>隐私</h2>
+                            <div class="setting-row"><span><strong>隐私说明</strong><small id="settings-privacy-notice-status">隐私说明：未加载</small></span><button id="settings-privacy-notice-btn" type="button">查看隐私说明</button></div>
+                        </section>
+                        <section id="settings-section-data" class="settings-section" hidden>
+                            <h2>数据与备份</h2>
+                            <article id="settings-backup-card" class="settings-backup-card">
+                                <div class="form-grid">
+                                    <label class="field"><span>备份口令</span><input id="settings-backup-passphrase" type="password" autocomplete="off" disabled></label>
+                                    <label class="field"><span>确认口令</span><input id="settings-backup-passphrase-confirm" type="password" autocomplete="off" disabled></label>
+                                </div>
+                                <div class="button-row"><button id="settings-backup-export-btn" type="button" disabled>导出加密备份</button><button id="settings-backup-manifest-btn" type="button" disabled>预览备份清单</button></div>
+                                <p id="settings-backup-status" class="inline-status" role="status" hidden></p>
+                                <div id="settings-backup-manifest" class="backup-manifest" hidden><p class="settings-backup-manifest-filename"></p><dl class="settings-backup-manifest-fields"></dl></div>
+                                <div class="maintenance-section">
+                                    <h3>导入并替换数据</h3><p>需要备份口令和确认文字；操作期间其他维护不可用。</p>
+                                    <div class="form-grid"><label class="field"><span>备份口令</span><input id="settings-backup-import-passphrase" type="password" autocomplete="off" disabled></label><label class="field"><span>确认文字</span><input id="settings-backup-import-confirm" type="text" autocomplete="off" placeholder="导入并替换" disabled></label></div>
+                                    <div class="button-row"><button id="settings-backup-import-btn" type="button" disabled>导入加密备份</button></div><p id="settings-backup-import-status" class="inline-status" role="status" hidden></p>
+                                </div>
+                            </article>
+                            <article id="settings-danger-card" class="danger-zone">
+                                <h2>危险操作</h2><div class="setting-row"><span><strong>清空本地数据</strong><small>将清空项目、时间记录、规则与设置；需要输入确认文字。</small></span><div class="danger-inline"><input id="settings-clear-confirm" type="text" autocomplete="off" placeholder="清空本地数据" disabled><button id="settings-clear-local-data-btn" type="button" class="button danger" disabled>清空本地数据</button></div></div><p id="settings-clear-status" class="inline-status" role="status" hidden></p>
+                            </article>
+                        </section>
+                        <section id="settings-section-advanced" class="settings-section" hidden>
+                            <h2>高级</h2><details><summary>技术诊断（默认折叠）</summary>
+                                <div class="diagnostic-list">
+                                    <p data-settings-key="maintenance_in_progress">数据库维护进行中：未加载</p>
+                                    <p data-settings-key="maintenance_restored">维护恢复完成：未加载</p>
+                                    <p data-settings-key="recovery_blocked">维护恢复阻断：未加载</p>
+                                    <p data-settings-key="blocked_reason">阻断原因：无</p>
+                                    <p data-settings-key="collector_running">采集器运行中：未加载</p>
+                                    <p data-settings-key="collector_status">采集器状态：未加载</p>
+                                    <p data-settings-key="user_paused">用户暂停：未加载</p>
+                                </div>
+                            </details>
+                        </section>
                     </div>
-                </header>
-                <div id="settings-loading" class="settings-loading" hidden>正在加载设置状态…</div>
-                <div id="settings-error" class="settings-error" hidden>加载设置状态失败</div>
-                <div id="settings-status" class="settings-status" hidden>
-                    <article id="settings-storage-card" class="settings-card settings-storage-card">
-                        <h2 class="settings-card-title">本地存储</h2>
-                        <p class="settings-card-line" data-settings-key="storage_model">本地优先：所有数据仅存储在本机，不上传任何远端服务器。</p>
-                    </article>
-                    <article id="settings-privacy-card" class="settings-card settings-privacy-card">
-                        <h2 class="settings-card-title">隐私采集</h2>
-                        <div class="settings-toggle-row">
-                            <label id="settings-clipboard-toggle-label" class="settings-toggle-label" for="settings-clipboard-toggle">剪贴板记录</label>
-                            <input id="settings-clipboard-toggle" type="checkbox" class="settings-toggle-control" disabled>
-                            <span id="settings-clipboard-toggle-status" class="settings-toggle-status">未加载</span>
-                        </div>
-                        <p class="settings-card-line" data-settings-key="export_path_configured">导出目录：未加载</p>
-                        <p class="settings-card-line" data-settings-key="maintenance_in_progress">数据库维护进行中：未加载</p>
-                        <p class="settings-card-line" data-settings-key="maintenance_restored">维护恢复完成：未加载</p>
-                        <p class="settings-card-line" data-settings-key="recovery_blocked">维护恢复阻断：未加载</p>
-                        <p class="settings-card-line" data-settings-key="blocked_reason">阻断原因：无</p>
-                        <p class="settings-card-line" data-settings-key="collector_running">采集器运行中：未加载</p>
-                        <p class="settings-card-line" data-settings-key="collector_status">采集器状态：未加载</p>
-                        <p class="settings-card-line" data-settings-key="user_paused">用户暂停：未加载</p>
-                        <div class="settings-privacy-notice-row">
-                            <span id="settings-privacy-notice-status" class="settings-privacy-notice-status">隐私说明：未加载</span>
-                            <button id="settings-privacy-notice-btn" type="button" class="settings-privacy-notice-btn">查看隐私说明</button>
-                        </div>
-                    </article>
-                    <article id="settings-backup-card" class="settings-card settings-backup-card">
-                        <h2 class="settings-card-title">加密备份</h2>
-                        <div class="settings-backup-row">
-                            <label class="settings-backup-label" for="settings-backup-passphrase">备份口令</label>
-                            <input id="settings-backup-passphrase" type="password" class="settings-backup-input" autocomplete="off" disabled>
-                        </div>
-                        <div class="settings-backup-row">
-                            <label class="settings-backup-label" for="settings-backup-passphrase-confirm">确认口令</label>
-                            <input id="settings-backup-passphrase-confirm" type="password" class="settings-backup-input" autocomplete="off" disabled>
-                        </div>
-                        <div class="settings-backup-actions">
-                            <button id="settings-backup-export-btn" type="button" class="settings-backup-btn" disabled>导出加密备份</button>
-                            <button id="settings-backup-manifest-btn" type="button" class="settings-backup-btn" disabled>预览备份清单</button>
-                        </div>
-                        <p id="settings-backup-status" class="settings-backup-status" hidden></p>
-                        <div id="settings-backup-manifest" class="settings-backup-manifest" hidden>
-                            <p class="settings-backup-manifest-filename"></p>
-                            <dl class="settings-backup-manifest-fields"></dl>
-                        </div>
-                        <div class="settings-backup-import-section">
-                            <div class="settings-backup-import-title">导入加密备份（替换当前本地数据）</div>
-                            <p class="settings-backup-import-hint">操作完成后按维护前的运行状态恢复；用户此前已暂停时继续保持暂停。若恢复失败，应用将保持阻断并显示具体状态。</p>
-                            <div class="settings-backup-row">
-                                <label class="settings-backup-label" for="settings-backup-import-passphrase">备份口令</label>
-                                <input id="settings-backup-import-passphrase" type="password" class="settings-backup-input" autocomplete="off" disabled>
-                            </div>
-                            <div class="settings-backup-row">
-                                <label class="settings-backup-label" for="settings-backup-import-confirm">确认文字</label>
-                                <input id="settings-backup-import-confirm" type="text" class="settings-backup-input" autocomplete="off" placeholder="导入并替换" disabled>
-                            </div>
-                            <div class="settings-backup-actions">
-                                <button id="settings-backup-import-btn" type="button" class="settings-backup-btn settings-backup-import-btn" disabled>导入加密备份</button>
-                            </div>
-                            <p id="settings-backup-import-status" class="settings-backup-status" hidden></p>
-                        </div>
-                    </article>
-                    <article id="settings-danger-card" class="settings-card settings-danger-card">
-                        <h2 class="settings-card-title">危险操作</h2>
-                        <div class="settings-danger-clear-section">
-                            <div class="settings-danger-clear-title">清空本地数据</div>
-                            <p class="settings-danger-clear-hint">该操作将清空当前本地数据库中的所有项目、活动记录、规则与设置，并重建默认数据。操作完成后按维护前的运行状态恢复；恢复失败时应用保持阻断并显示具体状态。</p>
-                            <div class="settings-backup-row">
-                                <label class="settings-backup-label" for="settings-clear-confirm">确认文字</label>
-                                <input id="settings-clear-confirm" type="text" class="settings-backup-input settings-clear-input" autocomplete="off" placeholder="清空本地数据" disabled>
-                            </div>
-                            <div class="settings-backup-actions">
-                                <button id="settings-clear-local-data-btn" type="button" class="settings-backup-btn settings-clear-local-data-btn" disabled>清空本地数据</button>
-                            </div>
-                            <p id="settings-clear-status" class="settings-backup-status" hidden></p>
-                        </div>
-                    </article>
                 </div>
             </section>
         </main>
+
+        <div id="confirm-dialog-layer" class="modal-layer" hidden>
+            <section id="confirm-dialog" class="dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-dialog-title">
+                <h2 id="confirm-dialog-title" class="dialog-title">确认操作</h2>
+                <div id="confirm-dialog-body"></div>
+                <div class="dialog-actions">
+                    <button id="confirm-dialog-secondary" type="button">取消</button>
+                    <button id="confirm-dialog-primary" type="button">继续</button>
+                </div>
+            </section>
+        </div>
+        <div id="app-toast" class="toast" role="status" aria-live="polite" hidden></div>
     </div>
     <script src="js/core.js"></script>
+    <script src="js/ui_components.js"></script>
     <script src="js/overview.js"></script>
     <script src="js/timeline_request_state.js"></script>
     <script src="js/timeline.js"></script>

@@ -180,10 +180,14 @@
             display.classList.add("recording");
             button.textContent = "暂停记录";
             button.className = "toggle-btn pause-style";
+            button.setAttribute("aria-label", "暂停记录");
+            button.setAttribute("data-tooltip", "暂停记录");
         } else {
             display.classList.add("paused");
             button.textContent = "开始记录";
             button.className = "toggle-btn";
+            button.setAttribute("aria-label", "开始记录");
+            button.setAttribute("data-tooltip", "开始记录");
         }
     };
 
@@ -474,9 +478,20 @@
     App.renderCurrentActivityElement = function (element, current, prefix) {
         if (!element) return;
         current = current || {};
+        var structured = element.classList
+            && element.classList.contains("current-activity")
+            && element.querySelector(".current-duration");
         if (!current.active) {
-            App.clearLiveClockTarget(element);
-            element.textContent = "当前活动：无";
+            var inactiveTarget = structured ? element.querySelector(".current-duration") : element;
+            App.clearLiveClockTarget(inactiveTarget);
+            if (structured) {
+                element.querySelector(".current-project").textContent = "当前没有进行中的活动";
+                element.querySelector(".current-description").textContent = "WorkTrace 开始记录后会在这里显示。";
+                inactiveTarget.textContent = "00:00:00";
+                element.disabled = true;
+            } else {
+                element.textContent = "当前活动：无";
+            }
             return;
         }
         var clock = App.getActiveLiveClock ? App.getActiveLiveClock() : null;
@@ -489,6 +504,31 @@
             : (parseInt(current.elapsed_seconds, 10) || 0);
         var continuity = App.currentActivityContinuityKey(current, accepted, prefix);
         var parts = String(current.display || "").split("｜");
+        if (structured) {
+            var durationTarget = element.querySelector(".current-duration");
+            var session = App.lastOverviewSnapshot && App.lastOverviewSnapshot.current_session;
+            var project = session && session.project_name
+                ? App.formatProjectLabel(session.project_name, session.project_description)
+                : (parts[0] || "当前活动");
+            var description = session && session.display_description
+                ? session.display_description
+                : (parts[1] || "暂无描述");
+            var descriptionSource = session && session.description_source;
+            element.querySelector(".current-project").textContent = project;
+            var descriptionTarget = element.querySelector(".current-description");
+            descriptionTarget.textContent = description;
+            descriptionTarget.classList.toggle("derived", descriptionSource === "derived");
+            element.disabled = false;
+            if (canTick) App.setLiveClockTarget(
+                durationTarget,
+                accepted,
+                continuity,
+                (prefix || "current") + "-current"
+            );
+            else App.clearLiveClockTarget(durationTarget);
+            App.renderDurationProjected(durationTarget, seconds || 0, continuity);
+            return;
+        }
         if (parts.length < 3) {
             element.textContent = "当前活动：" + (current.display || App.displayStatusText(current));
             return;
