@@ -11,6 +11,7 @@ from worktrace.services.database_maintenance_service import (
     MaintenanceRecoveryError,
     RuntimeMaintenanceCoordinator,
 )
+from worktrace.services.settings_service import set_settings
 from worktrace.write_gate import DATABASE_WRITE_GATE
 
 pytestmark = [
@@ -231,3 +232,143 @@ def test_explicit_recovery_residue_cleanup_failure_keeps_fail_closed(
         _reset_process_gate(coordinator)
         maintenance_recovery_latch_repository.marker_path().unlink(missing_ok=True)
         residue.unlink(missing_ok=True)
+
+
+def _create_residue() -> Path:
+    directory = maintenance_recovery_latch_repository.sensitive_staging_directory()
+    directory.mkdir(parents=True, exist_ok=True)
+    residue = directory / "worktrace-import-evidence.sqlite"
+    residue.write_bytes(b"plaintext-staging")
+    return residue
+
+
+def _set_mirror(reason: str = "mirror_reason") -> None:
+    set_settings(
+        {
+            "maintenance_fail_closed": "true",
+            "maintenance_fail_closed_reason": reason,
+        }
+    )
+
+
+def _clear_mirror() -> None:
+    set_settings(
+        {
+            "maintenance_fail_closed": "false",
+            "maintenance_fail_closed_reason": "",
+        }
+    )
+
+
+def test_valid_marker_with_mirror_and_residue_reports_all_three(temp_db):
+    residue = _create_residue()
+    try:
+        maintenance_recovery_latch_repository.arm_recovery("valid_mirror_residue")
+        _set_mirror("valid_mirror_residue")
+
+        latch = maintenance_recovery_latch_repository.read_latch()
+
+        assert latch.blocked is True
+        assert latch.marker_present is True
+        assert latch.database_mirror_present is True
+        assert latch.sensitive_residue_present is True
+        assert latch.reason == "valid_mirror_residue"
+    finally:
+        _clear_mirror()
+        maintenance_recovery_latch_repository.marker_path().unlink(missing_ok=True)
+        residue.unlink(missing_ok=True)
+
+
+def test_valid_marker_without_mirror_with_residue_reports_absent_mirror(temp_db):
+    residue = _create_residue()
+    try:
+        maintenance_recovery_latch_repository.arm_recovery("valid_no_mirror")
+
+        latch = maintenance_recovery_latch_repository.read_latch()
+
+        assert latch.blocked is True
+        assert latch.marker_present is True
+        assert latch.database_mirror_present is False
+        assert latch.sensitive_residue_present is True
+        assert latch.reason == "valid_no_mirror"
+    finally:
+        maintenance_recovery_latch_repository.marker_path().unlink(missing_ok=True)
+        residue.unlink(missing_ok=True)
+
+
+def test_invalid_marker_with_mirror_and_residue_reports_all_three(temp_db):
+    residue = _create_residue()
+    marker = maintenance_recovery_latch_repository.marker_path()
+    marker.write_text("not-json", encoding="utf-8")
+    try:
+        _set_mirror("invalid_mirror_reason")
+
+        latch = maintenance_recovery_latch_repository.read_latch()
+
+        assert latch.blocked is True
+        assert latch.marker_present is True
+        assert latch.database_mirror_present is True
+        assert latch.sensitive_residue_present is True
+        assert latch.state == "invalid"
+    finally:
+        _clear_mirror()
+        marker.unlink(missing_ok=True)
+        residue.unlink(missing_ok=True)
+
+
+def test_invalid_marker_without_mirror_with_residue_reports_absent_mirror(temp_db):
+    residue = _create_residue()
+    marker = maintenance_recovery_latch_repository.marker_path()
+    marker.write_text("not-json", encoding="utf-8")
+    try:
+        latch = maintenance_recovery_latch_repository.read_latch()
+
+        assert latch.blocked is True
+        assert latch.marker_present is True
+        assert latch.database_mirror_present is False
+        assert latch.sensitive_residue_present is True
+        assert latch.state == "invalid"
+    finally:
+        marker.unlink(missing_ok=True)
+        residue.unlink(missing_ok=True)
+
+
+def test_no_marker_with_mirror_and_residue_reports_mirror_and_residue(temp_db):
+    residue = _create_residue()
+    try:
+        _set_mirror("no_marker_mirror")
+
+        latch = maintenance_recovery_latch_repository.read_latch()
+
+        assert latch.blocked is True
+        assert latch.marker_present is False
+        assert latch.database_mirror_present is True
+        assert latch.sensitive_residue_present is True
+        assert latch.reason == "no_marker_mirror"
+    finally:
+        _clear_mirror()
+        residue.unlink(missing_ok=True)
+
+
+def test_marker_present_but_mirror_read_exception_fails_closed(
+    temp_db,
+    monkeypatch,
+):
+    maintenance_recovery_latch_repository.arm_recovery("mirror_exc")
+
+    def raising_mirror_read():
+        raise RuntimeError("database mirror unreadable")
+
+    monkeypatch.setattr(
+        maintenance_recovery_latch_repository,
+        "_read_database_mirror",
+        raising_mirror_read,
+    )
+
+    try:
+        latch = maintenance_recovery_latch_repository.read_latch()
+
+        assert latch.blocked is True
+        assert latch.marker_present is True
+    finally:
+        maintenance_recovery_latch_repository.marker_path().unlink(missing_ok=True)

@@ -1,4 +1,5 @@
 from pathlib import Path
+import threading
 
 import pytest
 
@@ -118,6 +119,7 @@ def _ready_index(rule_id: int, valid_from: str = "2026-06-18 00:00:00") -> None:
 def test_folder_index_scans_all_extensions_and_casefolds_names(
     temp_db,
     tmp_path,
+    allow_sensitive_runtime,
 ):
     project = project_service.create_project("Client")
     folder = tmp_path / "Client"
@@ -143,7 +145,7 @@ def test_folder_index_scans_all_extensions_and_casefolds_names(
     assert [Path(row["file_path"]).name for row in code_matches] == ["MAIN.py"]
 
 
-def test_disabled_folder_rule_index_is_retained_but_not_used(temp_db, tmp_path):
+def test_disabled_folder_rule_index_is_retained_but_not_used(temp_db, tmp_path, allow_sensitive_runtime):
     project = project_service.create_project("Client")
     folder = tmp_path / "Client"
     folder.mkdir()
@@ -170,7 +172,7 @@ def test_disabled_folder_rule_index_is_retained_but_not_used(temp_db, tmp_path):
         )
 
 
-def test_missing_indexed_path_requires_explicit_stale_command(temp_db, tmp_path):
+def test_missing_indexed_path_requires_explicit_stale_command(temp_db, tmp_path, allow_sensitive_runtime):
     project = project_service.create_project("Client")
     folder = tmp_path / "Client"
     folder.mkdir()
@@ -204,7 +206,7 @@ def test_missing_indexed_path_requires_explicit_stale_command(temp_db, tmp_path)
     assert state["refresh_requested"] == 1
 
 
-def test_folder_index_query_never_writes_or_checks_the_filesystem(temp_db, tmp_path):
+def test_folder_index_query_never_writes_or_checks_the_filesystem(temp_db, tmp_path, allow_sensitive_runtime):
     project = project_service.create_project("Read Only Index")
     folder = tmp_path / "ReadOnly"
     folder.mkdir()
@@ -234,6 +236,7 @@ def test_folder_index_query_never_writes_or_checks_the_filesystem(temp_db, tmp_p
 def test_title_only_activity_matches_indexed_folder_rule_for_any_extension(
     temp_db,
     tmp_path,
+    allow_sensitive_runtime,
 ):
     project = project_service.create_project("Development")
     folder = tmp_path / "Repo"
@@ -254,7 +257,7 @@ def test_title_only_activity_matches_indexed_folder_rule_for_any_extension(
     assert activity_service.get_activity(activity_id)["project_id"] == project
 
 
-def test_cross_project_same_file_name_is_ambiguous(temp_db, tmp_path):
+def test_cross_project_same_file_name_is_ambiguous(temp_db, tmp_path, allow_sensitive_runtime):
     project_a = project_service.create_project("A")
     project_b = project_service.create_project("B")
     folder_a = tmp_path / "A"
@@ -281,7 +284,7 @@ def test_cross_project_same_file_name_is_ambiguous(temp_db, tmp_path):
     assert activity_service.get_activity(activity_id)["project_id"] != project_b
 
 
-def test_safe_backfill_uses_index_only_after_valid_from(temp_db, tmp_path):
+def test_safe_backfill_uses_index_only_after_valid_from(temp_db, tmp_path, allow_sensitive_runtime):
     project = project_service.create_project("Client")
     folder = tmp_path / "Client"
     folder.mkdir()
@@ -314,6 +317,7 @@ def test_safe_backfill_uses_index_only_after_valid_from(temp_db, tmp_path):
 def test_windows_resolver_returns_none_after_live_sources_miss(
     temp_db,
     tmp_path,
+    allow_sensitive_runtime,
 ):
     project = project_service.create_project("Development")
     folder = tmp_path / "Repo"
@@ -334,7 +338,7 @@ def test_windows_resolver_returns_none_after_live_sources_miss(
     assert resolved is None
 
 
-def test_indexed_exclude_folder_anonymizes_title_only_activity(temp_db, tmp_path):
+def test_indexed_exclude_folder_anonymizes_title_only_activity(temp_db, tmp_path, allow_sensitive_runtime):
     project_service.set_excluded_project_enabled(True)
     folder = tmp_path / "Private"
     folder.mkdir()
@@ -355,6 +359,7 @@ def test_indexed_exclude_folder_anonymizes_title_only_activity(temp_db, tmp_path
 def test_edited_rule_filters_previous_active_generation_without_worker(
     temp_db,
     tmp_path,
+    allow_sensitive_runtime,
 ):
     project = project_service.create_project("Moved Folder")
     old_folder = tmp_path / "Old"
@@ -395,6 +400,7 @@ def test_edited_rule_filters_previous_active_generation_without_worker(
 def test_edited_rule_preview_and_backfill_ignore_previous_generation(
     temp_db,
     tmp_path,
+    allow_sensitive_runtime,
 ):
     project = project_service.create_project("Moved History Folder")
     old_folder = tmp_path / "HistoryOld"
@@ -434,6 +440,7 @@ def test_edited_rule_preview_and_backfill_ignore_previous_generation(
 def test_public_index_candidate_cannot_prove_unresolved_private_path_safe(
     temp_db,
     tmp_path,
+    allow_sensitive_runtime,
 ):
     project_service.set_excluded_project_enabled(True)
     private_folder = tmp_path / "PrivateActual"
@@ -497,3 +504,219 @@ def test_folder_index_rebuild_skips_scandir_when_privacy_unavailable(
             (rule_id,),
         ).fetchone()["c"]
     assert count == 0
+
+
+def test_rebuild_skips_path_is_dir_when_privacy_unavailable(
+    temp_db,
+    tmp_path,
+    monkeypatch,
+):
+    project = project_service.create_project("Privacy IsDir")
+    folder = tmp_path / "PrivacyDir"
+    folder.mkdir()
+    (folder / "doc.txt").write_text("doc", encoding="utf-8")
+    rule_id = folder_rule_service.create_or_update_folder_rule(str(folder), project)
+
+    monkeypatch.setattr(
+        folder_index_service.privacy_gate_service,
+        "is_sensitive_runtime_allowed",
+        lambda: False,
+    )
+
+    class RaisingPath:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("Path construction implies filesystem observation")
+
+    monkeypatch.setattr(folder_index_service, "Path", RaisingPath)
+
+    result = folder_index_service.rebuild_folder_index(rule_id)
+
+    assert result is False
+
+
+def test_validate_rule_index_skips_os_path_exists_when_privacy_unavailable(
+    temp_db,
+    tmp_path,
+    monkeypatch,
+    allow_sensitive_runtime,
+):
+    project = project_service.create_project("Privacy Validate")
+    folder = tmp_path / "PrivacyVal"
+    folder.mkdir()
+    (folder / "doc.txt").write_text("doc", encoding="utf-8")
+    rule_id = folder_rule_service.create_or_update_folder_rule(str(folder), project)
+    assert folder_index_service.rebuild_folder_index(rule_id)
+
+    monkeypatch.setattr(
+        folder_index_service.privacy_gate_service,
+        "is_sensitive_runtime_allowed",
+        lambda: False,
+    )
+
+    def raising_exists(path):
+        raise AssertionError("os.path.exists must not be called when privacy unavailable")
+
+    monkeypatch.setattr(folder_index_service.os.path, "exists", raising_exists)
+
+    folder_index_service._validate_rule_index(rule_id)
+
+    with get_connection() as conn:
+        state = conn.execute(
+            "SELECT status, build_status FROM folder_rule_index_state WHERE folder_rule_id = ?",
+            (rule_id,),
+        ).fetchone()
+    assert state["status"] == "ready"
+    assert state["build_status"] == "ready"
+
+
+class _DummyHealth:
+    def succeeded(self) -> None:
+        pass
+
+    def failed(self, code: str) -> None:
+        pass
+
+    def maintenance_paused(self, paused: bool) -> None:
+        pass
+
+
+def test_worker_startup_skips_filesystem_when_privacy_unavailable(
+    temp_db,
+    tmp_path,
+    monkeypatch,
+    allow_sensitive_runtime,
+):
+    project = project_service.create_project("Privacy Worker")
+    folder = tmp_path / "PrivacyWorker"
+    folder.mkdir()
+    (folder / "doc.txt").write_text("doc", encoding="utf-8")
+    rule_id = folder_rule_service.create_or_update_folder_rule(str(folder), project)
+    assert folder_index_service.rebuild_folder_index(rule_id)
+
+    monkeypatch.setattr(
+        folder_index_service.privacy_gate_service,
+        "is_sensitive_runtime_allowed",
+        lambda: False,
+    )
+
+    def raising_validate(stop_event=None):
+        raise AssertionError("validate_ready_indexes must not run when privacy unavailable")
+
+    monkeypatch.setattr(folder_index_service, "validate_ready_indexes", raising_validate)
+
+    stop_event = threading.Event()
+    stop_event.set()
+    health = _DummyHealth()
+
+    folder_index_service.run_folder_index_worker(stop_event, health=health)
+
+
+def test_rebuild_treats_gate_read_exception_as_unauthorized(
+    temp_db,
+    tmp_path,
+    monkeypatch,
+):
+    project = project_service.create_project("Privacy Gate Exc")
+    folder = tmp_path / "PrivacyExc"
+    folder.mkdir()
+    (folder / "doc.txt").write_text("doc", encoding="utf-8")
+    rule_id = folder_rule_service.create_or_update_folder_rule(str(folder), project)
+
+    def raising_read():
+        raise RuntimeError("installation metadata unavailable")
+
+    monkeypatch.setattr(
+        folder_index_service.privacy_gate_service,
+        "is_privacy_notice_accepted",
+        raising_read,
+    )
+
+    class RaisingPath:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("filesystem observed despite gate exception")
+
+    monkeypatch.setattr(folder_index_service, "Path", RaisingPath)
+
+    result = folder_index_service.rebuild_folder_index(rule_id)
+
+    assert result is False
+
+
+def test_unauthorized_rebuild_preserves_existing_active_generation(
+    temp_db,
+    tmp_path,
+    monkeypatch,
+    allow_sensitive_runtime,
+):
+    project = project_service.create_project("Privacy Preserve")
+    folder = tmp_path / "PrivacyPreserve"
+    folder.mkdir()
+    (folder / "doc.txt").write_text("doc", encoding="utf-8")
+    rule_id = folder_rule_service.create_or_update_folder_rule(str(folder), project)
+    assert folder_index_service.rebuild_folder_index(rule_id)
+
+    with get_connection() as conn:
+        before = conn.execute(
+            "SELECT active_generation, status, build_status FROM folder_rule_index_state WHERE folder_rule_id = ?",
+            (rule_id,),
+        ).fetchone()
+
+    monkeypatch.setattr(
+        folder_index_service.privacy_gate_service,
+        "is_sensitive_runtime_allowed",
+        lambda: False,
+    )
+
+    result = folder_index_service.rebuild_folder_index(rule_id)
+    assert result is False
+
+    with get_connection() as conn:
+        after = conn.execute(
+            "SELECT active_generation, status, build_status FROM folder_rule_index_state WHERE folder_rule_id = ?",
+            (rule_id,),
+        ).fetchone()
+    assert after["active_generation"] == before["active_generation"]
+    assert after["status"] == before["status"]
+    assert after["build_status"] == before["build_status"]
+
+
+def test_pending_rebuild_completes_after_authorization_restored(
+    temp_db,
+    tmp_path,
+    monkeypatch,
+):
+    project = project_service.create_project("Privacy Restore")
+    folder = tmp_path / "PrivacyRestore"
+    folder.mkdir()
+    (folder / "doc.txt").write_text("doc", encoding="utf-8")
+    rule_id = folder_rule_service.create_or_update_folder_rule(str(folder), project)
+
+    monkeypatch.setattr(
+        folder_index_service.privacy_gate_service,
+        "is_sensitive_runtime_allowed",
+        lambda: False,
+    )
+
+    assert folder_index_service.rebuild_folder_index(rule_id) is False
+
+    with get_connection() as conn:
+        count_before = conn.execute(
+            "SELECT COUNT(*) AS c FROM folder_rule_file_index WHERE folder_rule_id = ?",
+            (rule_id,),
+        ).fetchone()["c"]
+    assert count_before == 0
+
+    monkeypatch.setattr(
+        folder_index_service.privacy_gate_service,
+        "is_sensitive_runtime_allowed",
+        lambda: True,
+    )
+
+    assert folder_index_service.rebuild_folder_index(rule_id) is True
+
+    with get_connection() as conn:
+        count_after = conn.execute(
+            "SELECT COUNT(*) AS c FROM folder_rule_file_index WHERE folder_rule_id = ?",
+            (rule_id,),
+        ).fetchone()["c"]
+    assert count_after == 1

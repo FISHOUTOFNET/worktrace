@@ -52,6 +52,7 @@ def test_fatal_exit_terminalizes_taken_command_and_rejects_late_completion() -> 
     assert command_id
     terminalized = control.terminalize_unfinished("collector_fatal_exit")
     thread.join(timeout=1.0)
+    assert not thread.is_alive(), "terminalization test thread did not terminate"
 
     assert terminalized == (command_id,)
     assert result["ok"] is False
@@ -79,6 +80,7 @@ def test_timeout_unknown_can_be_terminalized_after_requester_returns() -> None:
         if command_id is None:
             thread.join(timeout=0.005)
     thread.join(timeout=1.0)
+    assert not thread.is_alive(), "terminalization test thread did not terminate"
 
     assert command_id
     assert result["command_state"] == "unknown"

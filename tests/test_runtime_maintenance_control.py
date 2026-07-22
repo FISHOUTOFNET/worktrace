@@ -98,6 +98,7 @@ def _complete_hold(control: CollectorControl) -> None:
         {"ok": True, "hold_pending": False},
     )
     request.join(timeout=2)
+    assert not request.is_alive(), "maintenance request thread did not terminate"
     assert result_box["result"]["terminal_state"] == "held"
 
 
@@ -127,6 +128,7 @@ def test_taken_pause_timeout_reports_unknown_and_late_completion_is_queryable():
     command_id = control.take_pause_request()
     assert command_id is not None
     request.join(timeout=1)
+    assert not request.is_alive(), "maintenance request thread did not terminate"
     result = result_box["result"]
     assert result["command_id"] == command_id
     assert result["command_kind"] == "user_pause"
@@ -165,6 +167,7 @@ def test_reset_requires_held_state_and_is_acknowledged_once():
         {"ok": True, "reset_pending": False},
     ) is True
     request.join(timeout=2)
+    assert not request.is_alive(), "maintenance request thread did not terminate"
     assert result_box["result"]["command_kind"] == "database_reset"
     assert result_box["result"]["terminal_state"] == "held"
     assert control.take_reset_request() is None
@@ -190,6 +193,7 @@ def test_release_returns_collector_to_operational_state():
         {"ok": True, "release_pending": False},
     )
     request.join(timeout=2)
+    assert not request.is_alive(), "maintenance request thread did not terminate"
     assert result_box["result"]["command_kind"] == "maintenance_release"
     assert result_box["result"]["terminal_state"] == "operational"
 
@@ -516,7 +520,9 @@ def test_clipboard_disable_waits_for_inflight_capture_and_drops_generation(monke
     assert disabled.wait(timeout=0.05) is False
     allow_read.set()
     capture.join(timeout=2)
+    assert not capture.is_alive(), "capture thread did not terminate"
     disable_thread.join(timeout=2)
+    assert not disable_thread.is_alive(), "disable thread did not terminate"
     assert disabled.is_set()
     assert monitor.drain() == []
     monitor.shutdown()
@@ -567,6 +573,7 @@ def test_maintenance_holding_operation_lock_blocks_external_runtime_start(
 
     release_exclusive.set()
     thread.join(timeout=5)
+    assert not thread.is_alive(), "maintenance thread did not terminate"
     assert "error" not in result_box
     assert coordinator.phase is MaintenancePhase.IDLE
 
@@ -605,6 +612,7 @@ def test_external_runtime_start_holding_lock_blocks_maintenance(
 
     release_guard.set()
     thread.join(timeout=5)
+    assert not thread.is_alive(), "maintenance thread did not terminate"
     assert coordinator.phase is MaintenancePhase.IDLE
 
 

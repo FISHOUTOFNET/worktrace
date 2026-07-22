@@ -119,6 +119,7 @@ def test_folder_generation_gc_failure_keeps_new_active_generation(
     temp_db,
     tmp_path,
     monkeypatch,
+    allow_sensitive_runtime,
 ):
     project_id = project_service.create_project("GC Boundary")
     folder = tmp_path / "GC"
@@ -198,6 +199,7 @@ def test_incomplete_subdirectory_scan_never_replaces_ready_generation(
     temp_db,
     tmp_path,
     monkeypatch,
+    allow_sensitive_runtime,
 ):
     project_id = project_service.create_project("Incomplete Scan")
     folder = tmp_path / "Scan"

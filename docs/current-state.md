@@ -61,11 +61,12 @@ no-effect and duplicate receipts do not publish.
 `DatabaseReplacementUnitOfWork` solely owns the replacement epoch, live commit
 and process-local generation publication. Secure import creates decrypted staging
 inside one `ValidatedStaging` scope, fully validates it before maintenance and
-deletes it after success, maintenance rejection or any failure. Staging failures
-raise `BackupCorruptedError` without changing live data, generations or recovery
-state. Once staging is valid, ordinary live apply/generation/validation/commit/I/O
-failures raise `BackupReplacementError` with the internal cause chained.
-Maintenance/recovery errors remain separate.
+deletes it after success, maintenance rejection or any failure. Staging content
+and semantic validation failures raise `BackupCorruptedError`; local staging
+infrastructure failures raise `BackupStagingInfrastructureError`. Neither changes
+live data, generations or recovery state. Once staging is valid, ordinary live
+apply/generation/validation/commit/I/O failures raise `BackupReplacementError`
+with the internal cause chained. Maintenance/recovery errors remain separate.
 
 ## Database content manifest
 `database_content_manifest` is the only current-schema table inventory. Each table

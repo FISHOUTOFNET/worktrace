@@ -204,17 +204,16 @@ def rebuild_folder_index(
         delete_index_for_rule(rule_id)
         return False
     folder_path = str(rule.get("folder_path") or "").strip()
+
+    # Privacy gate must precede any path state query (Path.is_dir, os.scandir,
+    # entry.stat). Fail closed without creating a generation: pending state is
+    # preserved so the next authorized iteration can rebuild cleanly.
+    if not privacy_gate_service.is_sensitive_runtime_allowed():
+        return False
+
     generation, started_at = _begin_generation(rule_id)
     if not folder_path or not Path(folder_path).is_dir():
         _fail_generation(rule_id, generation, "folder_index_root_unavailable")
-        return False
-
-    # Filesystem scanning is a sensitive runtime observation. Fail closed
-    # without marking the generation as a build error when the privacy gate
-    # is not allowing sensitive runtime: the generation is abandoned so the
-    # next authorized iteration can rebuild it cleanly.
-    if not privacy_gate_service.is_sensitive_runtime_allowed():
-        _abandon_generation(rule_id, generation)
         return False
 
     count = 0
@@ -317,7 +316,11 @@ def run_folder_index_worker(
     try:
         ensure_index_states_for_folder_rules()
         recover_interrupted_indexes()
-        validate_ready_indexes(stop_event)
+        # Path existence validation is sensitive filesystem observation. Defer
+        # validate_ready_indexes until the privacy gate allows sensitive
+        # runtime. Database-internal state recovery above is not sensitive.
+        if privacy_gate_service.is_sensitive_runtime_allowed():
+            validate_ready_indexes(stop_event)
     except Exception:
         logging.exception("folder index startup validation failed")
         health.failed("folder_index_startup_failed")
@@ -797,6 +800,12 @@ def _validate_rule_index(
         return
     if actual_count != expected_count:
         mark_index_stale(rule_id, "folder_index_generation_count_mismatch")
+        return
+
+    # Privacy gate at this internal boundary prevents any caller path from
+    # observing the disk. Return without marking stale or modifying the active
+    # generation when unauthorized.
+    if not privacy_gate_service.is_sensitive_runtime_allowed():
         return
 
     last_id = 0

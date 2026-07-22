@@ -172,52 +172,42 @@ def _read_database_mirror() -> tuple[bool, str | None]:
 def read_latch() -> MaintenanceRecoveryLatch:
     """Merge the sidecar authority with the SQLite diagnostic mirror.
 
-    Every return path reports the three durable evidence fields
-    (``marker_present``, ``database_mirror_present``,
-    ``sensitive_residue_present``) so that a marker present alongside an
-    unowned decrypted staging file cannot be cleared while the residue
-    remains on disk.
+    All three durable evidence fields (``marker_present``,
+    ``database_mirror_present``, ``sensitive_residue_present``) are read
+    independently before constructing the result. An invalid marker still
+    fails closed, but the database mirror and residue evidence are reported
+    accurately so diagnostics reflect the full durable state.
     """
 
     sensitive_residue = has_sensitive_staging_residue()
 
+    marker: tuple[str, str, str] | None = None
+    marker_error: str | None = None
     try:
         marker = _read_marker()
     except MaintenanceRecoverySealError as exc:
-        return MaintenanceRecoveryLatch(
-            blocked=True,
-            reason=str(exc),
-            state="invalid",
-            marker_present=True,
-            sensitive_residue_present=sensitive_residue,
-        )
+        marker_error = str(exc)
 
+    database_blocked = False
+    database_reason: str | None = None
+    database_read_failed = False
     try:
         database_blocked, database_reason = _read_database_mirror()
     except Exception:
-        # An unreadable mirror cannot prove safety. A valid marker still gives
-        # the exact epoch; otherwise startup remains fail-closed.
-        if marker is not None:
-            epoch, state, reason = marker
-            return MaintenanceRecoveryLatch(
-                blocked=True,
-                reason=reason,
-                epoch=epoch,
-                state=state,
-                marker_present=True,
-                sensitive_residue_present=sensitive_residue,
-            )
+        database_read_failed = True
+
+    # Invalid marker: fail closed with accurate mirror/residue evidence.
+    if marker_error is not None:
         return MaintenanceRecoveryLatch(
             blocked=True,
-            reason=(
-                _SENSITIVE_STAGING_RESIDUE_REASON
-                if sensitive_residue
-                else "maintenance_recovery_state_unavailable"
-            ),
-            state="unavailable",
+            reason=marker_error,
+            state="invalid",
+            marker_present=True,
+            database_mirror_present=database_blocked,
             sensitive_residue_present=sensitive_residue,
         )
 
+    # Valid marker: authority for epoch/state/reason; mirror is diagnostic.
     if marker is not None:
         epoch, state, reason = marker
         return MaintenanceRecoveryLatch(
@@ -227,6 +217,19 @@ def read_latch() -> MaintenanceRecoveryLatch:
             state=state,
             marker_present=True,
             database_mirror_present=database_blocked,
+            sensitive_residue_present=sensitive_residue,
+        )
+
+    # No marker. An unreadable mirror cannot prove safety: fail closed.
+    if database_read_failed:
+        return MaintenanceRecoveryLatch(
+            blocked=True,
+            reason=(
+                _SENSITIVE_STAGING_RESIDUE_REASON
+                if sensitive_residue
+                else "maintenance_recovery_state_unavailable"
+            ),
+            state="unavailable",
             sensitive_residue_present=sensitive_residue,
         )
 

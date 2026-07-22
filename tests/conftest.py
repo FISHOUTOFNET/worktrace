@@ -59,12 +59,57 @@ def temp_db(tmp_path: Path, _initialized_db_template: Path) -> Path:
     path = tmp_path / "worktrace.db"
     shutil.copyfile(_initialized_db_template, path)
     db.configure_database(path)
-    # Accept the installation-scoped privacy notice so integration tests that
-    # exercise sensitive runtime observation (folder scans, collector loops)
-    # match the normal production state after user consent. Tests that need to
-    # verify "not accepted" behavior override the gate via monkeypatch.
-    privacy_gate_service.accept_privacy_notice()
     return path
+
+
+@pytest.fixture()
+def allow_sensitive_runtime(monkeypatch: pytest.MonkeyPatch):
+    """Monkeypatch the privacy gate to allow sensitive runtime without disk I/O.
+
+    Use this for tests that exercise collector loops, folder scans or other
+    sensitive runtime behavior but do not verify installation metadata
+    persistence. It performs no real SQLite writes.
+    """
+
+    monkeypatch.setattr(
+        privacy_gate_service,
+        "is_sensitive_runtime_allowed",
+        lambda: True,
+    )
+
+
+@pytest.fixture()
+def allow_privacy_runtime_state(monkeypatch: pytest.MonkeyPatch):
+    """Monkeypatch both privacy gate contracts for maintenance state capture.
+
+    Use this when a test needs both ``is_sensitive_runtime_allowed`` and
+    ``is_privacy_notice_accepted`` to return True without real metadata I/O.
+    """
+
+    monkeypatch.setattr(
+        privacy_gate_service,
+        "is_sensitive_runtime_allowed",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        privacy_gate_service,
+        "is_privacy_notice_accepted",
+        lambda: True,
+    )
+
+
+@pytest.fixture()
+def accepted_privacy_notice(temp_db: Path) -> Path:
+    """Accept the privacy notice via the real service and verify persistence.
+
+    Use this for tests that verify installation metadata persistence, clear-all
+    consent preservation or restart recovery. It performs real SQLite writes.
+    """
+
+    assert privacy_gate_service.is_privacy_notice_accepted() is False
+    privacy_gate_service.accept_privacy_notice()
+    assert privacy_gate_service.is_privacy_notice_accepted() is True
+    return temp_db
 
 
 @pytest.fixture(autouse=True)

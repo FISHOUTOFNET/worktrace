@@ -103,6 +103,7 @@ def test_failed_folder_generation_preserves_previous_active_index(
     temp_db,
     tmp_path: Path,
     monkeypatch,
+    allow_sensitive_runtime,
 ):
     project_id = project_service.create_project("Indexed Project")
     folder = tmp_path / "Indexed"

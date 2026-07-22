@@ -295,6 +295,8 @@ def test_authoritative_docs_have_current_schema_and_maintenance_markers():
     assert "v13" in runtime_contracts
     assert "schema v13" in security_design
     assert "**v13**" in current_state
+    assert "payload v6" in runtime_contracts
+    assert "**v6**" in current_state
 
     # Maintenance lifecycle must document the DRAINING/promote recovery
     # contract and the external runtime mutation guard added in this
@@ -302,3 +304,14 @@ def test_authoritative_docs_have_current_schema_and_maintenance_markers():
     assert "exclusive_finalization_completed" in maintenance_lifecycle
     assert "external_runtime_mutation_guard" in maintenance_lifecycle
     assert "sensitive_residue_present" in maintenance_lifecycle
+
+    # Maintenance order must keep reset/restore/release inside EXCLUSIVE.
+    assert "while still EXCLUSIVE" in architecture
+
+    # Backup staging error classification must distinguish infrastructure
+    # failures from content corruption.
+    assert "BackupStagingInfrastructureError" in maintenance_lifecycle
+    assert "BackupStagingInfrastructureError" in runtime_contracts
+    assert "BackupStagingInfrastructureError" in current_state
+    assert "BackupCorruptedError" in maintenance_lifecycle
+    assert "BackupCorruptedError" in runtime_contracts

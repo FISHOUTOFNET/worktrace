@@ -108,17 +108,21 @@ permanently unexplained.
 The global order is:
 
 ```text
-capture state
--> Collector hold and HELD acknowledgement
+capture durable/runtime state
+-> Collector hold
+-> require HELD acknowledgement
 -> clear runtime snapshot
--> write-gate draining
+-> enter write-gate DRAINING
 -> drain admitted writers
--> exclusive coordinator capability
--> snapshot or database replacement
--> release exclusive capability
--> reset process-local identities while still HELD (replacement only)
--> restore durable settings
--> Collector release acknowledgement
+-> promote to EXCLUSIVE
+-> run snapshot or replacement body
+-> replacement only: reset process-local identities while still EXCLUSIVE and HELD
+-> restore durable settings while still EXCLUSIVE and HELD
+-> request Collector release while still EXCLUSIVE
+-> require OPERATIONAL acknowledgement
+-> verify recovery seal/final state
+-> exit EXCLUSIVE/DRAINING scope
+-> return IDLE
 ```
 
 Only one maintenance operation can enter this sequence. Replacement publishes

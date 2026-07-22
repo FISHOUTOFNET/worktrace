@@ -74,6 +74,7 @@ def test_collector_loop_with_fake_adapter(temp_db, monkeypatch):
     )
     thread.start()
     thread.join(timeout=3)
+    assert not thread.is_alive(), "collector test thread did not terminate"
     rows = activity_service.get_activities_by_date(time.strftime("%Y-%m-%d"))
     assert len(rows) == 1
     assert rows[0]["app_name"] == "Word"
@@ -243,6 +244,7 @@ def test_collector_pause_does_not_poll_active_window(temp_db, monkeypatch):
     )
     thread.start()
     thread.join(timeout=3)
+    assert not thread.is_alive(), "collector test thread did not terminate"
 
     assert adapter.calls == 0
     rows = activity_service.get_activities_by_date(time.strftime("%Y-%m-%d"))
@@ -318,6 +320,7 @@ def test_collector_control_pause_completes_lifecycle_before_ack(monkeypatch):
     result = control.request_pause(timeout_seconds=2)
     stop_event.set()
     thread.join(timeout=2)
+    assert not thread.is_alive(), "collector test thread did not terminate"
 
     assert result["ok"] is True
     assert result["pause_pending"] is False
@@ -501,6 +504,7 @@ def test_privacy_gate_false_skips_active_window_and_disables_clipboard(
     )
     thread.start()
     thread.join(timeout=3)
+    assert not thread.is_alive(), "collector test thread did not terminate"
 
     assert calls["active_window"] == 0
     assert adapter.clipboard_capture_enabled is False
@@ -539,6 +543,7 @@ def test_privacy_gate_read_exception_disables_clipboard_and_skips_observation(
     )
     thread.start()
     thread.join(timeout=3)
+    assert not thread.is_alive(), "collector test thread did not terminate"
 
     assert calls["active_window"] == 0
     assert adapter.clipboard_capture_enabled is False
@@ -583,6 +588,7 @@ def test_privacy_state_unavailable_after_enable_closes_clipboard_monitor(
     )
     thread.start()
     thread.join(timeout=3)
+    assert not thread.is_alive(), "collector test thread did not terminate"
 
     assert adapter.clipboard_capture_enabled is False
     assert state["calls"] >= 2

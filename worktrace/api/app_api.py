@@ -82,14 +82,12 @@ class ApplicationControlService:
 
     def start_collection_after_privacy_gate(self) -> dict[str, Any]:
         try:
-            allowed = privacy_gate_service.is_sensitive_runtime_allowed()
-        except Exception:
-            logging.exception("privacy notice state read failed")
-            allowed = False
-        if not allowed:
-            return {"ok": False, "error": "请先确认隐私说明"}
-        try:
             with self.maintenance.external_runtime_mutation_guard():
+                # Privacy authorization must be verified inside the guard so
+                # that maintenance state cannot change between the check and
+                # the runtime mutation. Gate read exceptions fail closed.
+                if not privacy_gate_service.is_sensitive_runtime_allowed():
+                    return {"ok": False, "error": "请先确认隐私说明"}
                 result = self.runtime.start_authorized_collection()
                 if not isinstance(result, RuntimeStartResult):
                     raise TypeError("runtime_start_result_required")
@@ -155,8 +153,11 @@ class ApplicationControlService:
 
     def set_clipboard_capture_enabled(self, enabled: bool) -> None:
         if enabled:
-            privacy_gate_service.require_sensitive_runtime_allowed()
             with self.maintenance.external_runtime_mutation_guard():
+                # Privacy authorization must be verified inside the guard so
+                # that maintenance state cannot change between the check and
+                # the runtime mutation. Gate read exceptions fail closed.
+                privacy_gate_service.require_sensitive_runtime_allowed()
                 applied = self.runtime.set_clipboard_capture_enabled(True)
         else:
             # Disabling clipboard capture is always allowed, including during

@@ -215,9 +215,19 @@ change. They do not fabricate replacement success.
 
 - `BackupDecryptionError`: passphrase, authentication or decryption failure.
 - `BackupVersionNotSupportedError`: backup payload or schema version unsupported.
-- `BackupCorruptedError`: input JSON, table structure, row shape, foreign key,
-  semantic, replay graph, schema/index construction, table insert, seed/reset or
-  staging commit/validation failure. It is limited to input/staging phases.
+- `BackupCorruptedError`: input JSON/payload structure, table set/row shape,
+  schema fingerprint mismatch, foreign key or business semantic validation, or
+  replay graph invalidity. It is limited to input content/semantic failures.
+- `BackupStagingInfrastructureError`: local staging infrastructure failure
+  during staging construction, including temporary file creation failure, SQLite
+  connection failure, schema/index SQL execution failure, table insertion failure
+  due to local SQLite/I/O exceptions, seed/reset infrastructure failure, staging
+  commit failure, or staging connection close failure. These are not backup
+  corruption; the supplied payload may be valid but the local environment could
+  not build the staging database.
+- `BackupSensitiveCleanupError`: a decrypted staging file could not be safely
+  deleted. It triggers or maintains the recovery block and never leaks the
+  staging path.
 - `BackupReplacementError`: after staging validation succeeds, any ordinary live
   delete/insert, seed/reset, generation-floor read, generation bump, final live
   validation, SQLite I/O or commit failure. The original exception is chained for

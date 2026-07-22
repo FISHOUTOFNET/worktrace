@@ -29,6 +29,7 @@ def test_start_collector_replaces_dead_thread_and_returns_structured_success(
     dead = threading.Thread(target=lambda: None)
     dead.start()
     dead.join(timeout=1)
+    assert not dead.is_alive(), "dead collector thread did not terminate"
     runtime._collector_thread = dead
 
     def fake_run_collector(
@@ -66,6 +67,7 @@ def test_start_collector_replaces_dead_thread_and_returns_structured_success(
     finally:
         runtime.request_shutdown()
         runtime._collector_thread.join(timeout=2)
+        assert not runtime._collector_thread.is_alive(), "collector thread did not terminate on shutdown"
 
 
 def test_start_collector_reports_not_owned_and_stopping(temp_db):
@@ -125,3 +127,4 @@ def test_collector_start_failure_is_retryable_without_stopping_runtime(
         runtime.request_shutdown()
         assert runtime._collector_thread is not None
         runtime._collector_thread.join(timeout=2)
+        assert not runtime._collector_thread.is_alive(), "collector thread did not terminate on shutdown"

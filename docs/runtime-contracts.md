@@ -53,11 +53,15 @@ any exception. The path is never delegated without its owner. Cleanup does not
 depend on object finalization or process exit and cleanup failure never replaces
 the original operation exception.
 
-Staging construction, schema/index execution, table insertion, defaults/index
-reset, validation and staging commit failures are `BackupCorruptedError` because
-they establish that the supplied current-format payload cannot form a valid
-staging database. They occur before maintenance and cannot alter the live DB,
-generation clock or recovery latch.
+Staging content and semantic validation failures (invalid JSON/payload structure,
+table set/row shape, schema fingerprint mismatch, foreign key or business
+semantic validation, replay graph invalidity) are `BackupCorruptedError`. Local
+staging infrastructure failures (temporary file creation, SQLite connection,
+schema/index SQL execution, table insertion due to local SQLite/I/O exceptions,
+seed/reset infrastructure, staging commit, staging connection close) are
+`BackupStagingInfrastructureError`; the supplied payload may be valid but the
+local environment could not build the staging database. Both occur before
+maintenance and cannot alter the live DB, generation clock or recovery latch.
 
 After staging succeeds, live delete/insert, default seeding, folder-index reset,
 generation-floor read, replacement epoch bump, live final validation, SQLite I/O

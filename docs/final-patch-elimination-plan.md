@@ -78,12 +78,14 @@ validated path to live apply and deletes it after every success or failure path.
 No caller receives an unowned staging path and cleanup never depends on object
 finalization or process exit.
 
-Staging construction and validation failures are `BackupCorruptedError`, occur
-outside maintenance and cannot alter live data, generations or the recovery
-latch. After staging succeeds, all ordinary live delete/insert/seed/reset,
-generation-floor/bump, validation, SQLite I/O and commit failures are
-`BackupReplacementError`; internal causes are chained without leaking them to
-the UI. Maintenance hold/reset/release and fail-closed errors remain separate.
+Staging content and semantic validation failures are `BackupCorruptedError`;
+local staging infrastructure failures are `BackupStagingInfrastructureError`.
+Both occur outside maintenance and cannot alter live data, generations or the
+recovery latch. After staging succeeds, all ordinary live
+delete/insert/seed/reset, generation-floor/bump, validation, SQLite I/O and
+commit failures are `BackupReplacementError`; internal causes are chained
+without leaking them to the UI. Maintenance hold/reset/release and fail-closed
+errors remain separate.
 
 ## Projection and explicit transactions
 
