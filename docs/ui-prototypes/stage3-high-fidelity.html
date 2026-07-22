@@ -1,0 +1,402 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>WorkTrace 高保真交互原型</title>
+<style>
+:root{
+  --font:"Segoe UI Variable","Segoe UI","Microsoft YaHei",sans-serif;
+  --canvas:#e9edf2;--app:#f3f4f6;--nav:#f8f9fb;--surface:#fff;--subtle:#f7f8fa;
+  --selected:#eaf2ff;--hover:#f0f4fa;--text:#1f2328;--secondary:#5b6472;
+  --border:#d8dde5;--strong:#b7c0cc;--accent:#1769c2;--accent-hover:#0f5aa8;
+  --success:#237447;--success-bg:#eaf6ef;--warning:#8a5a00;--warning-bg:#fff6dd;
+  --danger:#b42318;--danger-bg:#fff0ee;--focus:#0067c0;--scrim:rgba(22,29,37,.34);
+  --s1:4px;--s2:8px;--s3:12px;--s4:16px;--s6:24px;--r:6px;--rl:8px;
+  font-family:var(--font);color:var(--text);font-size:13px
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--canvas);color:var(--text)}
+button,input,select,textarea{font:inherit;color:inherit}
+button,input,select,textarea{min-height:32px;border:1px solid var(--strong);border-radius:var(--r);background:var(--surface)}
+button{padding:5px 11px;cursor:pointer}
+button:hover:not(:disabled){background:var(--hover)}
+button:disabled{opacity:.52;cursor:not-allowed}
+input,select,textarea{padding:5px 9px}
+textarea{resize:vertical;line-height:1.45}
+:focus-visible{outline:0;box-shadow:0 0 0 2px var(--surface),0 0 0 4px var(--focus)}
+.prototype-banner{display:flex;align-items:center;gap:12px;min-height:44px;padding:7px 14px;background:#fff;border-bottom:1px solid var(--border);position:sticky;top:0;z-index:50}
+.prototype-banner strong{white-space:nowrap}
+.viewport-switch{display:flex;gap:5px}
+.viewport-switch button[aria-pressed=true]{background:var(--selected);border-color:var(--accent);color:var(--accent);font-weight:650}
+.prototype-note{margin-left:auto;color:var(--secondary);font-size:12px}
+.stage{padding:18px;overflow:auto}
+.window{position:relative;width:1080px;height:720px;margin:auto;display:grid;grid-template-columns:200px minmax(0,1fr);background:var(--app);border:1px solid #8c96a3;border-radius:9px;overflow:hidden;box-shadow:0 18px 48px rgba(31,42,55,.2)}
+.window.size-800{width:800px;height:540px;grid-template-columns:60px minmax(0,1fr)}
+.window.size-1366{width:1366px;height:768px;grid-template-columns:204px minmax(0,1fr)}
+.nav{display:flex;flex-direction:column;min-width:0;background:var(--nav);border-right:1px solid var(--border)}
+.brand{height:58px;display:flex;align-items:center;gap:10px;padding:0 17px;border-bottom:1px solid var(--border);font-size:17px;font-weight:700}
+.brand-mark{width:24px;height:24px;display:grid;place-items:center;color:#fff;background:var(--accent);border-radius:6px;font-size:11px}
+.nav-list{display:grid;gap:3px;padding:10px 8px}
+.nav-button{position:relative;display:flex;align-items:center;justify-content:flex-start;gap:10px;width:100%;border:0;background:transparent;text-align:left}
+.nav-button[aria-current=page]{background:var(--selected);color:#0d4f92;font-weight:650}
+.nav-button[aria-current=page]::before{content:"";position:absolute;left:0;top:7px;bottom:7px;width:3px;border-radius:2px;background:var(--accent)}
+.icon{width:21px;height:21px;display:grid;place-items:center;flex:none}
+.icon svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.nav-footer{margin-top:auto;padding:12px;border-top:1px solid var(--border)}
+.record-state{display:flex;align-items:center;gap:7px;margin-bottom:8px;color:var(--secondary)}
+.status-dot{width:8px;height:8px;border:2px solid var(--success);border-radius:50%;background:var(--success-bg)}
+.nav-footer button{width:100%}
+.main{min-width:0;min-height:0;position:relative}
+.page{display:none;height:100%;min-width:0;overflow:auto;padding:20px 24px 24px}
+.page.active{display:block}
+.page.timeline-page{overflow:hidden}
+.page-header{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:14px}
+.page-header h1{margin:0;font-size:20px;line-height:1.25;font-weight:650}
+.page-description{margin-top:3px;color:var(--secondary);font-size:12px}
+.page-total{text-align:right}.page-total strong{display:block;font-size:20px;font-variant-numeric:tabular-nums}
+.toolbar{display:flex;align-items:center;gap:8px;min-width:0;padding:8px 10px;margin-bottom:12px;background:var(--surface);border:1px solid var(--border);border-radius:var(--r)}
+.toolbar .spacer{flex:1}
+.primary{color:#fff;background:var(--accent);border-color:var(--accent);font-weight:600}
+.primary:hover:not(:disabled){background:var(--accent-hover)}
+.subtle{border-color:transparent;background:transparent}
+.danger{color:var(--danger);background:var(--surface);border-color:#e4aaa5}
+.danger:hover:not(:disabled){background:var(--danger-bg)}
+.danger.solid{color:#fff;background:var(--danger);border-color:var(--danger)}
+.icon-button{width:32px;padding:0;display:grid;place-items:center}
+.surface{background:var(--surface);border:1px solid var(--border);border-radius:var(--rl)}
+.section-title{font-size:15px;font-weight:650}
+.muted{color:var(--secondary)}.time{font-variant-numeric:tabular-nums;white-space:nowrap}
+.badge{display:inline-flex;align-items:center;min-height:20px;padding:1px 7px;border-radius:10px;background:var(--subtle);border:1px solid var(--border);font-size:11px;color:var(--secondary)}
+.badge.live::before{content:"";width:6px;height:6px;margin-right:5px;border-radius:50%;background:var(--success)}
+.derived{color:var(--secondary)}
+.derived .badge{margin-right:5px}
+.inline-status{color:var(--secondary);font-size:12px}
+.inline-alert{padding:9px 11px;margin-bottom:10px;border:1px solid #e4b85e;border-radius:var(--r);color:var(--warning);background:var(--warning-bg)}
+.empty-state{padding:22px;text-align:center;color:var(--secondary)}
+.empty-state strong{display:block;margin-bottom:4px;color:var(--text)}
+.current-activity{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:5px 18px;width:100%;padding:15px 17px;margin-bottom:12px;text-align:left}
+.current-activity .label{color:var(--secondary);font-size:12px}
+.current-activity .project{font-size:17px;font-weight:650}
+.current-activity .duration{grid-row:1/span 3;grid-column:2;align-self:center;font-size:25px;font-weight:650;font-variant-numeric:tabular-nums}
+.current-activity .description{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.overview-grid{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(270px,.65fr);gap:12px}
+.overview-section{padding:14px 16px}
+.section-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:6px}
+.data-row{display:grid;grid-template-columns:52px minmax(0,1fr) auto;gap:10px;align-items:center;width:100%;padding:9px 0;border:0;border-top:1px solid var(--border);border-radius:0;background:transparent;text-align:left}
+.data-row:first-of-type{border-top:0}
+.data-row .mainline{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.data-row .subline{margin-top:2px;color:var(--secondary);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.attention-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;padding:10px 0;border-top:1px solid var(--border)}
+.attention-row:first-of-type{border-top:0}
+.attention-reason{margin-top:3px;color:var(--danger);font-size:11px}
+.attention-more{display:flex;align-items:center;justify-content:space-between;padding-top:8px;border-top:1px solid var(--border)}
+.timeline-toolbar .project-filter{min-width:150px}
+.timeline-workspace{height:calc(100% - 101px);min-height:0;display:grid;grid-template-columns:minmax(340px,1fr) 380px;gap:12px}
+.segment-list,.inspector{min-height:0;overflow:auto}
+.segment-list{padding:7px}
+.segment-row{display:grid;grid-template-columns:54px minmax(0,1fr) auto;gap:10px;align-items:start;width:100%;padding:10px;border:1px solid transparent;border-radius:var(--r);background:transparent;text-align:left}
+.segment-row+.segment-row{margin-top:2px}
+.segment-row:hover{background:var(--hover)}
+.segment-row[aria-selected=true]{background:var(--selected);border-color:#87b8e7}
+.segment-project{display:flex;align-items:center;gap:6px;min-width:0;font-weight:650}.segment-project .project-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.segment-description{margin-top:3px;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.inspector{padding:14px}
+.field{display:grid;gap:4px}.field span{font-size:12px;color:var(--secondary)}
+.edit-row{display:grid;grid-template-columns:minmax(0,1fr) 112px;gap:9px;margin-bottom:10px}
+.editor-actions{display:flex;align-items:center;gap:7px;margin:8px 0 12px}
+.editor-actions .spacer{flex:1}
+.activity-details{border-top:1px solid var(--border);padding-top:12px}
+.activity-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:9px;padding:10px 0;border-top:1px solid var(--border)}
+.activity-row:first-of-type{border-top:0}
+.activity-title{font-weight:600}.activity-summary{margin-top:2px;color:var(--secondary);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.activity-side{display:grid;justify-items:end;gap:5px}
+.activity-side button{min-height:28px;padding:3px 8px}
+.stats-filter{flex-wrap:wrap}.filter-group{display:flex;align-items:center;gap:6px}.filter-group label{white-space:nowrap}.quick-ranges{display:flex;gap:5px}
+.summary-strip{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));margin-bottom:12px;overflow:hidden}
+.metric{padding:12px 14px;border-right:1px solid var(--border)}.metric:last-child{border-right:0}
+.metric-label{color:var(--secondary);font-size:12px}.metric-value{margin-top:2px;font-size:19px;font-weight:650;font-variant-numeric:tabular-nums}
+.tabs{display:flex;gap:4px;border-bottom:1px solid var(--border)}
+.tab{border:0;border-radius:0;background:transparent;border-bottom:2px solid transparent}
+.tab[aria-selected=true]{border-bottom-color:var(--accent);color:var(--accent);font-weight:650}
+.table-scroll{overflow:auto}table{width:100%;border-collapse:collapse}th,td{padding:9px 11px;border-bottom:1px solid var(--border);text-align:left;white-space:nowrap}
+th{background:var(--subtle);font-size:12px}td.number,th.number{text-align:right;font-variant-numeric:tabular-nums}
+.disclosure{margin-top:10px;padding:10px 12px;color:var(--secondary)}
+.rules-list{display:grid;gap:7px}
+.project-group{overflow:hidden}
+.project-summary{display:grid;grid-template-columns:32px minmax(0,1fr) auto;gap:9px;align-items:start;padding:11px 12px}
+.project-name{font-size:14px;font-weight:650}.project-description{margin-top:3px;color:var(--secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.project-stats{display:flex;gap:16px;flex-wrap:wrap;margin-top:4px;color:var(--secondary);font-size:12px}
+.project-actions{display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end}
+.project-rules{padding:2px 13px 8px 53px;border-top:1px solid var(--border);background:var(--subtle)}
+.rule-row{display:grid;grid-template-columns:72px minmax(0,1fr) auto;gap:8px;align-items:center;padding:8px 0;border-bottom:1px solid var(--border)}
+.rule-row:last-child{border-bottom:0}.rule-value{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.settings-layout{display:grid;grid-template-columns:158px minmax(0,1fr);gap:12px}
+.settings-nav{align-self:start;padding:7px}
+.settings-nav button{width:100%;border:0;background:transparent;text-align:left}
+.settings-nav button[aria-current=true]{background:var(--selected);color:#0d4f92;font-weight:650}
+.settings-panel{padding:16px}.setting-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:16px;align-items:center;padding:12px 0;border-bottom:1px solid var(--border)}
+.setting-row:last-child{border-bottom:0}.setting-row small{display:block;margin-top:3px;color:var(--secondary)}
+.danger-zone{margin-top:18px;padding-top:14px;border-top:1px solid #e4aaa5}.danger-zone .section-title{color:var(--danger)}
+.drawer-backdrop,.dialog-backdrop{position:absolute;inset:0;display:none;background:var(--scrim)}
+.drawer-backdrop.open,.dialog-backdrop.open{display:block}
+.drawer-backdrop{z-index:20}.dialog-backdrop{z-index:30;place-items:center;padding:18px}.dialog-backdrop.open{display:grid}
+.drawer{position:absolute;inset:0 0 0 auto;width:min(430px,calc(100% - 8px));padding:16px;overflow:auto;background:var(--surface);box-shadow:-8px 0 28px rgba(24,32,43,.18)}
+.drawer-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding-bottom:11px;margin-bottom:12px;border-bottom:1px solid var(--border)}
+.drawer-head h2{margin:0;font-size:17px}.drawer-actions{display:flex;justify-content:flex-end;gap:7px;margin-top:14px}
+.dialog{width:min(430px,100%);padding:18px;background:var(--surface);border:1px solid var(--strong);border-radius:var(--rl);box-shadow:0 16px 44px rgba(24,32,43,.24)}
+.dialog h2{margin:0 0 9px;font-size:18px}.dialog-object{padding:10px;margin:10px 0;background:var(--subtle);border:1px solid var(--border);border-radius:var(--r);line-height:1.5}
+.dialog-warning{color:var(--danger)}.dialog-actions{display:flex;justify-content:flex-end;gap:7px;margin-top:16px}
+.menu{position:absolute;right:12px;top:110px;z-index:15;display:none;width:215px;padding:6px;background:var(--surface);border:1px solid var(--strong);border-radius:var(--r);box-shadow:0 8px 28px rgba(24,32,43,.18)}
+.menu.open{display:grid}.menu button{text-align:left;border:0;background:transparent}
+.toast{position:absolute;right:16px;bottom:16px;z-index:40;display:none;max-width:320px;padding:10px 12px;background:#27313d;color:#fff;border-radius:var(--r);box-shadow:0 8px 28px rgba(24,32,43,.2)}
+.toast.open{display:block}
+.window.size-800 .brand{justify-content:center;padding:0}.window.size-800 .brand-name{display:none}
+.window.size-800 .nav-button{justify-content:center;padding-inline:0}.window.size-800 .nav-label,.window.size-800 .record-label{display:none}
+.window.size-800 .nav-footer{padding:8px;text-align:center}.window.size-800 .nav-footer button{width:36px;padding:0}
+.window.size-800 .page{padding:14px 16px 18px}.window.size-800 .page-header{margin-bottom:10px}.window.size-800 .page-description{display:none}
+.window.size-800 .overview-grid{grid-template-columns:1fr}.window.size-800 .attention-panel{order:1}.window.size-800 .recent-panel{order:2}
+.window.size-800 .current-activity{padding:11px 13px}.window.size-800 .current-activity .duration{font-size:20px}
+.window.size-800 .timeline-workspace{grid-template-columns:1fr;height:calc(100% - 91px)}.window.size-800 .inspector{display:none}
+.window.size-800 .timeline-toolbar .project-filter{min-width:0;width:112px}.window.size-800 .summary-strip{grid-template-columns:repeat(2,minmax(0,1fr))}
+.window.size-800 .metric:nth-child(2){border-right:0}.window.size-800 .metric:nth-child(-n+2){border-bottom:1px solid var(--border)}
+.window.size-800 .stats-filter{align-items:flex-start}.window.size-800 .stats-filter .spacer{display:none}.window.size-800 .filter-group{flex:1;min-width:190px}
+.window.size-800 .project-summary{grid-template-columns:32px minmax(0,1fr)}.window.size-800 .project-actions{grid-column:2;justify-content:flex-start}
+.window.size-800 .settings-layout{grid-template-columns:1fr}.window.size-800 .settings-nav{display:flex;overflow:auto}.window.size-800 .settings-nav button{width:auto;white-space:nowrap}
+@media(max-width:900px){.stage{padding:8px}.prototype-note{display:none}}
+</style>
+</head>
+<body>
+<div class="prototype-banner">
+  <strong>WorkTrace 高保真原型</strong>
+  <div class="viewport-switch" aria-label="模拟窗口尺寸">
+    <button type="button" data-size="1080" aria-pressed="true">1080×720</button>
+    <button type="button" data-size="800" aria-pressed="false">800×540</button>
+    <button type="button" data-size="1366" aria-pressed="false">1366×768</button>
+  </div>
+  <span class="prototype-note">纯本地设计验证资源；不调用 pywebview、bridge、网络或浏览器存储。</span>
+</div>
+<div class="stage">
+<div id="prototype-window" class="window">
+  <aside class="nav" aria-label="主导航">
+    <div class="brand"><span class="brand-mark" aria-hidden="true">WT</span><span class="brand-name">WorkTrace</span></div>
+    <nav class="nav-list">
+      <button type="button" class="nav-button" data-page-target="overview" aria-current="page" title="概览"><span class="icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 13h6V4H4v9Zm10 7h6V11h-6v9ZM4 20h6v-3H4v3Zm10-13h6V4h-6v3Z"/></svg></span><span class="nav-label">概览</span></button>
+      <button type="button" class="nav-button" data-page-target="timeline" title="时间详情"><span class="icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 7v5l3 2"/></svg></span><span class="nav-label">时间详情</span></button>
+      <button type="button" class="nav-button" data-page-target="statistics" title="统计与导出"><span class="icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 19V9m7 10V5m7 14v-7"/></svg></span><span class="nav-label">统计与导出</span></button>
+      <button type="button" class="nav-button" data-page-target="rules" title="项目规则"><span class="icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 7h10m-6 5h12M4 17h10"/><circle cx="17" cy="7" r="2"/><circle cx="5" cy="12" r="2"/><circle cx="17" cy="17" r="2"/></svg></span><span class="nav-label">项目规则</span></button>
+      <button type="button" class="nav-button" data-page-target="settings" title="设置与隐私"><span class="icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1l2-1.5-2-3.4-2.4 1A8 8 0 0 0 15 6.2L14.7 4h-4L10.4 6.2a8 8 0 0 0-1.5.9l-2.4-1-2 3.4 2 1.5a7 7 0 0 0 0 2l-2 1.5 2 3.4 2.4-1a8 8 0 0 0 1.5.9l.3 2.2h4l.3-2.2a8 8 0 0 0 1.5-.9l2.4 1 2-3.4-2-1.5c.1-.3.1-.7.1-1Z"/></svg></span><span class="nav-label">设置与隐私</span></button>
+    </nav>
+    <div class="nav-footer">
+      <div class="record-state"><span class="status-dot" aria-hidden="true"></span><span class="record-label">记录正常</span></div>
+      <button type="button" title="暂停记录" aria-label="暂停记录"><span class="record-label">暂停记录</span><span aria-hidden="true">Ⅱ</span></button>
+    </div>
+  </aside>
+  <main class="main">
+    <section class="page active" data-page="overview">
+      <header class="page-header"><div><h1>今日概览</h1><div class="page-description">当前活动、待整理和最近活动</div></div><div class="page-total"><span class="muted">今日总时长</span><strong>06:18:20</strong></div></header>
+      <button type="button" class="surface current-activity" data-open-segment="current"><span class="label">当前活动</span><span class="duration" aria-live="off">00:42:16</span><span class="project" title="客户 A 知识产权许可与合规长期项目">客户 A 知识产权许可与合规长期项目</span><span class="description">起草许可协议并核对目标专利清单与客户最新邮件中的修改意见</span></button>
+      <div class="overview-grid">
+        <section class="surface overview-section recent-panel"><div class="section-head"><span class="section-title">最近活动</span></div>
+          <button type="button" class="data-row" data-open-segment="recent-b"><span class="time">08:43</span><span><span class="mainline">项目 B</span><span class="subline">准备客户会议材料</span></span><strong class="time">00:36:40</strong></button>
+          <button type="button" class="data-row" data-open-segment="recent-d"><span class="time">07:32</span><span><span class="mainline">项目 D</span><span class="subline">整理证据目录和庭审笔记</span></span><strong class="time">00:24:18</strong></button>
+          <button type="button" class="data-row" data-open-segment="recent-e"><span class="time">07:05</span><span><span class="mainline">项目 E</span><span class="subline derived"><span class="badge">自动摘要</span>邮件 · PDF 阅读器 · Excel</span></span><strong class="time">00:19:06</strong></button>
+        </section>
+        <section class="surface overview-section attention-panel"><div class="section-head"><span class="section-title">待整理</span><span class="badge">今日</span></div>
+          <div class="attention-row"><div><strong>09:20 · 未选择项目</strong><div class="derived"><span class="badge">自动摘要</span>专利检索页面 · 客户邮件 · PDF 阅读器</div><div class="attention-reason">缺少项目和用户描述</div></div><button type="button" data-review-segment="unclassified">整理</button></div>
+          <div class="attention-row"><div><strong>08:05 · 项目 C</strong><div class="derived"><span class="badge">自动摘要</span>邮件 · Excel · 浏览器</div><div class="attention-reason">缺少用户描述</div></div><button type="button" data-review-segment="project-c">整理</button></div>
+          <div class="attention-more"><span class="muted">还有 2 条待整理记录</span><button type="button" class="subtle" data-page-target="timeline">查看</button></div>
+        </section>
+      </div>
+    </section>
+    <section class="page timeline-page" data-page="timeline">
+      <header class="page-header"><div><h1>时间详情</h1><div class="page-description">查看和整理当日时间段</div></div></header>
+      <div class="toolbar timeline-toolbar"><button type="button" class="icon-button" aria-label="前一天" title="前一天">‹</button><input type="date" value="2026-07-22" aria-label="日期"><button type="button" class="icon-button" aria-label="后一天" title="后一天">›</button><button type="button">今日</button><select class="project-filter" aria-label="项目筛选"><option>项目：全部</option><option>项目 A</option><option>未归类</option></select><span class="spacer"></span><strong class="time">总计 06:18:20</strong></div>
+      <div class="timeline-workspace">
+        <div class="surface segment-list" role="listbox" aria-label="时间段列表">
+          <button type="button" class="segment-row" role="option" aria-selected="true" data-segment="current" data-project="客户 A 知识产权许可与合规长期项目" data-duration="42" data-description="起草许可协议并核对目标专利清单"><span class="time">10:14</span><span><span class="segment-project"><span class="project-label">客户 A 知识产权许可与合规长期项目</span><span class="badge live">进行中</span></span><span class="segment-description">起草许可协议并核对目标专利清单</span></span><strong class="time" aria-live="off">00:42:16</strong></button>
+          <button type="button" class="segment-row" role="option" aria-selected="false" data-segment="unclassified" data-project="未归类" data-duration="18" data-description="" data-derived="专利检索页面 · 客户邮件 · PDF 阅读器"><span class="time">09:20</span><span><span class="segment-project">未归类</span><span class="segment-description derived"><span class="badge">自动摘要</span>专利检索页面 · 客户邮件 · PDF 阅读器</span></span><strong class="time">00:18:03</strong></button>
+          <button type="button" class="segment-row" role="option" aria-selected="false" data-segment="recent-b" data-project="项目 B" data-duration="36" data-description="准备客户会议材料"><span class="time">08:43</span><span><span class="segment-project">项目 B</span><span class="segment-description">准备客户会议材料</span></span><strong class="time">00:36:40</strong></button>
+          <button type="button" class="segment-row" role="option" aria-selected="false" data-segment="project-c" data-project="项目 C" data-duration="28" data-description="" data-derived="邮件 · Excel · 浏览器"><span class="time">08:05</span><span><span class="segment-project">项目 C</span><span class="segment-description derived"><span class="badge">自动摘要</span>邮件 · Excel · 浏览器</span></span><strong class="time">00:28:11</strong></button>
+          <button type="button" class="segment-row" role="option" aria-selected="false" data-segment="recent-d" data-project="项目 D" data-duration="24" data-description="整理证据目录和庭审笔记"><span class="time">07:32</span><span><span class="segment-project">项目 D</span><span class="segment-description">整理证据目录和庭审笔记</span></span><strong class="time">00:24:18</strong></button>
+        </div>
+        <aside class="surface inspector" aria-label="时间段编辑与活动详情">
+          <div id="inspector-content"></div>
+        </aside>
+      </div>
+    </section>
+    <section class="page" data-page="statistics">
+      <header class="page-header"><div><h1>统计与导出</h1><div class="page-description">统计仅包含已完成时间段</div></div><button type="button" id="export-button" class="primary">导出 CSV</button></header>
+      <div class="toolbar stats-filter">
+        <div class="filter-group"><label for="range-mode">时间</label><select id="range-mode"><option>全部时间</option><option>自定义范围</option></select><span id="custom-dates" hidden><input type="date" id="date-from" value="2026-07-01" aria-label="开始日期"> 至 <input type="date" id="date-to" value="2026-07-22" aria-label="结束日期"></span></div>
+        <div class="filter-group"><label for="stats-project">项目</label><select id="stats-project"><option>全部项目</option><option>客户 A 知识产权许可与合规长期项目</option><option>项目 B</option><option>未归类</option></select></div>
+        <div class="spacer"></div><div class="quick-ranges"><button type="button" data-range="今天">今天</button><button type="button" data-range="本周">本周</button><button type="button" data-range="本月">本月</button></div>
+      </div>
+      <div class="section-head"><span id="stats-scope" class="muted">当前范围：全部时间 · 全部项目</span><span id="stats-status" class="inline-status" role="status" aria-live="polite">已更新</span></div>
+      <div class="surface summary-strip"><div class="metric"><div class="metric-label">总时长</div><div class="metric-value">42:16:08</div></div><div class="metric"><div class="metric-label">时间段</div><div class="metric-value">48</div></div><div class="metric"><div class="metric-label">项目</div><div class="metric-value">12</div></div><div class="metric"><div class="metric-label">应用</div><div class="metric-value">18</div></div></div>
+      <div class="surface"><div class="tabs" role="tablist" aria-label="统计视角"><button type="button" class="tab" role="tab" aria-selected="true" data-stats-tab="project">按项目</button><button type="button" class="tab" role="tab" aria-selected="false" data-stats-tab="app">按应用</button></div>
+        <div class="table-scroll"><table><thead><tr><th>名称</th><th class="number">时长</th><th class="number">时间段</th><th class="number">占比</th></tr></thead><tbody id="stats-body"></tbody></table></div>
+      </div>
+      <details class="surface disclosure"><summary>导出范围与隐私说明</summary><p>导出严格使用当前已接受的时间范围、项目筛选和 export revision；描述列只包含用户描述。</p></details>
+    </section>
+    <section class="page" data-page="rules">
+      <header class="page-header"><div><h1>项目规则</h1><div class="page-description">管理项目及自动归类规则</div></div><button type="button" class="primary" data-project-drawer="create">新建项目</button></header>
+      <div class="toolbar"><input id="project-search" type="search" placeholder="搜索项目或规则" aria-label="搜索项目或规则"><span class="spacer"></span><label for="project-sort">排序</label><select id="project-sort"><option>最近使用</option><option>累计时间</option><option>项目名称</option></select></div>
+      <div class="rules-list">
+        <section class="surface project-group" data-search="客户 A 知识产权许可与合规长期项目 客户 A 专利事务 Agilent D Clients"><div class="project-summary"><button type="button" class="icon-button project-toggle" aria-expanded="true" aria-label="折叠项目">⌄</button><div><div class="project-name">客户 A 知识产权许可与合规长期项目</div><div class="project-description">客户 A 专利事务</div><div class="project-stats"><span>上次使用：今天 10:14</span><span>累计时间：125:32:10</span></div></div><div class="project-actions"><button type="button" data-rule-project="客户 A 知识产权许可与合规长期项目">新建规则</button><button type="button" data-project-drawer="edit" data-name="客户 A 知识产权许可与合规长期项目" data-description="客户 A 专利事务">编辑</button><button type="button" class="danger" data-delete-kind="project" data-delete-label="客户 A 知识产权许可与合规长期项目">删除</button></div></div><div class="project-rules"><div class="rule-row"><span>文件夹</span><span class="rule-value">D:\Clients\A\Patent（含全部子文件夹）</span><button type="button" class="danger" data-delete-kind="rule" data-delete-label="文件夹规则 D:\Clients\A\Patent">删除</button></div><div class="rule-row"><span>关键词</span><span class="rule-value">Agilent</span><button type="button" class="danger" data-delete-kind="rule" data-delete-label="关键词规则 Agilent">删除</button></div></div></section>
+        <section class="surface project-group" data-search="项目 B 诉讼项目 庭审"><div class="project-summary"><button type="button" class="icon-button project-toggle" aria-expanded="false" aria-label="展开项目">›</button><div><div class="project-name">项目 B</div><div class="project-description">诉讼项目</div><div class="project-stats"><span>上次使用：昨天</span><span>累计时间：36:18:22</span></div></div><div class="project-actions"><button type="button" data-rule-project="项目 B">新建规则</button><button type="button" data-project-drawer="edit" data-name="项目 B" data-description="诉讼项目">编辑</button><button type="button" class="danger" data-delete-kind="project" data-delete-label="项目 B">删除</button></div></div><div class="project-rules" hidden><div class="rule-row"><span>关键词</span><span class="rule-value">庭审</span><button type="button" class="danger" data-delete-kind="rule" data-delete-label="关键词规则 庭审">删除</button></div></div></section>
+        <section class="surface project-group" data-search="项目 C"><div class="project-summary"><button type="button" class="icon-button project-toggle" aria-expanded="false" aria-label="展开项目">›</button><div><div class="project-name">项目 C</div><div class="project-stats"><span>上次使用：尚未使用</span><span>累计时间：00:00:00</span></div></div><div class="project-actions"><button type="button" data-rule-project="项目 C">新建规则</button><button type="button" data-project-drawer="edit" data-name="项目 C" data-description="">编辑</button><button type="button" class="danger" data-delete-kind="project" data-delete-label="项目 C">删除</button></div></div><div class="project-rules" hidden></div></section>
+      </div>
+    </section>
+    <section class="page" data-page="settings">
+      <header class="page-header"><div><h1>设置与隐私</h1><div class="page-description">管理本地数据、采集和备份</div></div></header>
+      <div class="settings-layout">
+        <nav class="surface settings-nav" aria-label="设置分类"><button type="button" data-settings-target="general" aria-current="true">常规</button><button type="button" data-settings-target="collection">采集</button><button type="button" data-settings-target="privacy">隐私</button><button type="button" data-settings-target="data">数据与备份</button><button type="button" data-settings-target="advanced">高级</button></nav>
+        <section class="surface settings-panel" id="settings-panel"></section>
+      </div>
+    </section>
+    <div id="advanced-menu" class="menu" aria-label="高级操作"><button type="button">拆分时间段</button><button type="button">合并到上一时间段</button><button type="button">合并到下一时间段</button><button type="button">复制时间段</button><button type="button">隐藏时间段</button></div>
+    <div id="drawer-backdrop" class="drawer-backdrop"><aside id="drawer" class="drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title"></aside></div>
+    <div id="dialog-backdrop" class="dialog-backdrop"><div id="dialog" class="dialog" role="dialog" aria-modal="true" aria-labelledby="dialog-title"></div></div>
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  </main>
+</div>
+</div>
+<script>
+(function(){
+  "use strict";
+  var win=document.getElementById("prototype-window");
+  var pages=Array.prototype.slice.call(document.querySelectorAll("[data-page]"));
+  var navButtons=Array.prototype.slice.call(document.querySelectorAll(".nav-button"));
+  var inspector=document.getElementById("inspector-content");
+  var drawerBackdrop=document.getElementById("drawer-backdrop");
+  var drawer=document.getElementById("drawer");
+  var dialogBackdrop=document.getElementById("dialog-backdrop");
+  var dialog=document.getElementById("dialog");
+  var menu=document.getElementById("advanced-menu");
+  var lastFocus=null,selectedSegment=document.querySelector(".segment-row[aria-selected=true]"),saveTimer=null,statsTimer=null,deleteState=null;
+
+  function switchPage(name){
+    pages.forEach(function(page){page.classList.toggle("active",page.getAttribute("data-page")===name);});
+    navButtons.forEach(function(button){if(button.getAttribute("data-page-target")===name)button.setAttribute("aria-current","page");else button.removeAttribute("aria-current");});
+    closeDrawer();closeDialog();menu.classList.remove("open");
+  }
+  document.addEventListener("click",function(event){
+    var pageTarget=event.target.closest("[data-page-target]");
+    if(pageTarget)switchPage(pageTarget.getAttribute("data-page-target"));
+  });
+  document.querySelectorAll("[data-size]").forEach(function(button){button.addEventListener("click",function(){
+    document.querySelectorAll("[data-size]").forEach(function(item){item.setAttribute("aria-pressed",String(item===button));});
+    win.className="window"+(button.getAttribute("data-size")==="1080"?"":" size-"+button.getAttribute("data-size"));
+    closeDrawer();closeDialog();
+  });});
+  var query=new URLSearchParams(window.location.search);
+  var requestedSize=query.get("size");
+  if(requestedSize&&requestedSize!=="1080"){
+    var requestedButton=document.querySelector('[data-size="'+requestedSize+'"]');
+    if(requestedButton)requestedButton.click();
+  }
+
+  function inspectorMarkup(row,drawerMode){
+    var project=row.getAttribute("data-project"),duration=row.getAttribute("data-duration"),description=row.getAttribute("data-description")||"",derived=row.getAttribute("data-derived")||"";
+    return (drawerMode?'<div class="drawer-head"><h2 id="drawer-title">时间段编辑与活动详情</h2><button type="button" class="icon-button" data-close-layer aria-label="关闭" title="关闭">×</button></div>':"")+
+      '<div class="edit-row"><label class="field"><span>项目</span><select class="edit-project"><option>'+project+'</option><option>项目 A</option><option>项目 B</option><option>未归类</option></select></label><label class="field"><span>时长（分钟）</span><input class="edit-duration" type="number" min="1" value="'+duration+'"></label></div>'+
+      '<label class="field"><span>描述</span><textarea class="edit-description" rows="3" placeholder="'+derived+'">'+description+'</textarea></label>'+
+      '<div class="editor-actions"><span class="inline-status save-status" role="status" aria-live="polite">已保存</span><span class="spacer"></span><button type="button" data-advanced>高级操作</button><button type="button" class="danger" data-delete-kind="segment" data-delete-label="'+project+' · '+row.querySelector(".time").textContent+' · '+duration+' 分钟">删除时间段</button></div>'+
+      '<section class="activity-details"><div class="section-title">活动详情</div><div class="activity-row"><div><div class="activity-title">Word 文档编辑</div><div class="activity-summary">许可协议草稿.docx</div></div><div class="activity-side"><strong class="time">00:31:10</strong><button type="button" class="danger" data-delete-kind="activity" data-delete-label="Word 文档编辑 · 许可协议草稿.docx">删除活动</button></div></div><div class="activity-row"><div><div class="activity-title">Edge 资料查询</div><div class="activity-summary">国家知识产权局专利检索页面及一段用于检查长中文文本在紧凑布局中不会撑破页面的标题</div></div><div class="activity-side"><strong class="time">00:11:06</strong><button type="button" class="danger" data-delete-kind="activity" data-delete-label="Edge 资料查询 · 专利检索页面">删除活动</button></div></div></section>';
+  }
+  function bindEditor(root,row){
+    var status=root.querySelector(".save-status");
+    function queueSave(){status.textContent="保存中…";clearTimeout(saveTimer);saveTimer=setTimeout(function(){status.textContent="已保存";row.setAttribute("data-description",root.querySelector(".edit-description").value);},650);}
+    root.querySelector(".edit-project").addEventListener("change",queueSave);
+    root.querySelector(".edit-duration").addEventListener("change",queueSave);
+    root.querySelector(".edit-description").addEventListener("input",queueSave);
+  }
+  function selectSegment(row,focusField){
+    if(!row)return;selectedSegment=row;
+    document.querySelectorAll(".segment-row").forEach(function(item){item.setAttribute("aria-selected",String(item===row));});
+    inspector.innerHTML=inspectorMarkup(row,false);bindEditor(inspector,row);
+    if(win.classList.contains("size-800")&&document.querySelector('[data-page="timeline"]').classList.contains("active"))openDrawer(inspectorMarkup(row,true),focusField);
+    else if(focusField){var target=inspector.querySelector(focusField==="project"?".edit-project":".edit-description");if(target)target.focus();}
+  }
+  document.querySelectorAll(".segment-row").forEach(function(row){
+    row.addEventListener("click",function(){selectSegment(row);});
+    row.addEventListener("keydown",function(event){if(event.key!=="ArrowDown"&&event.key!=="ArrowUp")return;event.preventDefault();var rows=Array.prototype.slice.call(document.querySelectorAll(".segment-row"));var next=rows[Math.max(0,Math.min(rows.length-1,rows.indexOf(row)+(event.key==="ArrowDown"?1:-1)))];next.focus();selectSegment(next);});
+  });
+  document.addEventListener("click",function(event){
+    var open=event.target.closest("[data-open-segment]");if(open){switchPage("timeline");selectSegment(document.querySelector('[data-segment="'+open.getAttribute("data-open-segment")+'"]'));}
+    var review=event.target.closest("[data-review-segment]");if(review){switchPage("timeline");var row=document.querySelector('[data-segment="'+review.getAttribute("data-review-segment")+'"]');selectSegment(row,row.getAttribute("data-project")==="未归类"?"project":"description");}
+  });
+  selectSegment(selectedSegment);
+  var requestedPage=query.get("page");
+  if(requestedPage&&document.querySelector('[data-page="'+requestedPage+'"]')){
+    switchPage(requestedPage);
+    if(requestedPage==="timeline"&&query.get("drawer")==="1")selectSegment(selectedSegment);
+  }
+
+  function focusables(root){return Array.prototype.slice.call(root.querySelectorAll('button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[href],[tabindex]:not([tabindex="-1"])'));}
+  function trap(event,root){if(event.key!=="Tab")return;var list=focusables(root);if(!list.length)return;var first=list[0],last=list[list.length-1];if(event.shiftKey&&document.activeElement===first){event.preventDefault();last.focus();}else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first.focus();}}
+  function openDrawer(content,focusField){lastFocus=document.activeElement;drawer.innerHTML=content;drawerBackdrop.classList.add("open");if(selectedSegment&&drawer.querySelector(".edit-project"))bindEditor(drawer,selectedSegment);var first=focusField?drawer.querySelector(focusField==="project"?".edit-project":".edit-description"):focusables(drawer)[0];if(first)first.focus();}
+  function closeDrawer(){if(!drawerBackdrop.classList.contains("open"))return;drawerBackdrop.classList.remove("open");drawer.innerHTML="";if(lastFocus&&document.contains(lastFocus))lastFocus.focus();}
+  function closeDialog(){if(!dialogBackdrop.classList.contains("open"))return;dialogBackdrop.classList.remove("open");dialog.innerHTML="";deleteState=null;if(lastFocus&&document.contains(lastFocus))lastFocus.focus();}
+  drawerBackdrop.addEventListener("click",function(event){if(event.target===drawerBackdrop)closeDrawer();});
+  dialogBackdrop.addEventListener("click",function(event){if(event.target===dialogBackdrop)closeDialog();});
+  document.addEventListener("keydown",function(event){if(event.key==="Escape"){if(dialogBackdrop.classList.contains("open"))closeDialog();else if(drawerBackdrop.classList.contains("open"))closeDrawer();else menu.classList.remove("open");}if(dialogBackdrop.classList.contains("open"))trap(event,dialog);else if(drawerBackdrop.classList.contains("open"))trap(event,drawer);});
+  document.addEventListener("click",function(event){if(event.target.closest("[data-close-layer]")){if(dialogBackdrop.classList.contains("open"))closeDialog();else closeDrawer();}});
+
+  document.addEventListener("click",function(event){
+    var advanced=event.target.closest("[data-advanced]");if(advanced){menu.classList.toggle("open");event.stopPropagation();return;}
+    if(!menu.contains(event.target))menu.classList.remove("open");
+  });
+  function showToast(message){var toast=document.getElementById("toast");toast.textContent=message;toast.classList.add("open");setTimeout(function(){toast.classList.remove("open");},1800);}
+  function renderDeleteDialog(){
+    var labels={segment:["删除这个时间段？","该时间段及其中活动将被永久删除。","确认删除时间段"],activity:["删除这条活动？","删除后，时间段时长和自动摘要可能变化。","确认删除活动"],project:["删除这个项目？","项目定义及其规则将被删除；历史时间记录不会被删除。","确认删除项目"],rule:["删除这条规则？","该规则将不再用于后续自动归类。","确认删除规则"]};
+    var data=labels[deleteState.kind]||labels.rule;
+    dialog.innerHTML=deleteState.step===1?'<h2 id="dialog-title">'+data[0]+'</h2><div class="dialog-object">'+deleteState.label+'</div><p class="dialog-warning">'+data[1]+' 此操作无法撤销。</p><div class="dialog-actions"><button type="button" data-dialog-cancel>取消</button><button type="button" data-dialog-next>继续</button></div>':'<h2 id="dialog-title">再次确认删除</h2><p>即将永久删除：</p><div class="dialog-object">'+deleteState.label+'</div><div class="dialog-actions"><button type="button" data-dialog-back>返回</button><button type="button" class="danger solid" data-dialog-confirm>'+data[2]+'</button></div>';
+    var initial=dialog.querySelector(deleteState.step===1?"[data-dialog-cancel]":"[data-dialog-back]");if(initial)initial.focus();
+  }
+  document.addEventListener("click",function(event){
+    var trigger=event.target.closest("[data-delete-kind]");if(trigger){lastFocus=trigger;deleteState={kind:trigger.getAttribute("data-delete-kind"),label:trigger.getAttribute("data-delete-label"),step:1};dialogBackdrop.classList.add("open");renderDeleteDialog();}
+    if(event.target.closest("[data-dialog-cancel]"))closeDialog();
+    if(event.target.closest("[data-dialog-next]")){deleteState.step=2;renderDeleteDialog();}
+    if(event.target.closest("[data-dialog-back]")){deleteState.step=1;renderDeleteDialog();}
+    if(event.target.closest("[data-dialog-confirm]")){dialogBackdrop.classList.remove("open");dialog.innerHTML="";showToast("已完成删除（原型未修改真实数据）");if(lastFocus&&document.contains(lastFocus))lastFocus.focus();}
+  });
+
+  var projectRows=[["客户 A 知识产权许可与合规长期项目","12:30:10","18","29.6%"],["项目 B","09:18:22","12","22.0%"],["未归类","03:14:02","7","7.7%"]];
+  var appRows=[["Microsoft Word","15:12:40","20","36.0%"],["Microsoft Edge","10:42:18","14","25.3%"],["Microsoft Excel","04:51:03","6","11.5%"]];
+  function renderStats(kind){document.getElementById("stats-body").innerHTML=(kind==="app"?appRows:projectRows).map(function(row){return "<tr><td>"+row[0]+'</td><td class="number">'+row[1]+'</td><td class="number">'+row[2]+'</td><td class="number">'+row[3]+"</td></tr>";}).join("");}
+  function queueStats(label){var status=document.getElementById("stats-status"),exportButton=document.getElementById("export-button");status.textContent="更新中…";exportButton.disabled=true;clearTimeout(statsTimer);statsTimer=setTimeout(function(){document.getElementById("stats-scope").textContent="当前范围："+(label||document.getElementById("range-mode").value)+" · "+document.getElementById("stats-project").value;status.textContent="已更新";exportButton.disabled=false;},650);}
+  document.getElementById("range-mode").addEventListener("change",function(){document.getElementById("custom-dates").hidden=this.value!=="自定义范围";queueStats();});
+  document.getElementById("stats-project").addEventListener("change",function(){queueStats();});
+  document.querySelectorAll("#custom-dates input").forEach(function(input){input.addEventListener("change",function(){queueStats("自定义范围");});});
+  document.querySelectorAll("[data-range]").forEach(function(button){button.addEventListener("click",function(){queueStats(button.getAttribute("data-range"));});});
+  document.querySelectorAll("[data-stats-tab]").forEach(function(tab){tab.addEventListener("click",function(){document.querySelectorAll("[data-stats-tab]").forEach(function(item){item.setAttribute("aria-selected",String(item===tab));});renderStats(tab.getAttribute("data-stats-tab"));});});
+  renderStats("project");
+
+  document.querySelectorAll(".project-toggle").forEach(function(button){button.addEventListener("click",function(){var rules=button.closest(".project-group").querySelector(".project-rules"),open=button.getAttribute("aria-expanded")==="true";button.setAttribute("aria-expanded",String(!open));button.setAttribute("aria-label",open?"展开项目":"折叠项目");button.textContent=open?"›":"⌄";rules.hidden=open;});});
+  document.getElementById("project-search").addEventListener("input",function(){var value=this.value.trim().toLowerCase();document.querySelectorAll(".project-group").forEach(function(group){group.hidden=group.getAttribute("data-search").toLowerCase().indexOf(value)<0;});});
+  document.addEventListener("click",function(event){
+    var project=event.target.closest("[data-project-drawer]");if(project){var edit=project.getAttribute("data-project-drawer")==="edit";openDrawer('<div class="drawer-head"><h2 id="drawer-title">'+(edit?"编辑项目":"新建项目")+'</h2><button type="button" class="icon-button" data-close-layer aria-label="关闭" title="关闭">×</button></div><label class="field"><span>项目名称</span><input id="drawer-project-name" value="'+(edit?project.getAttribute("data-name"):"")+'"></label><label class="field" style="margin-top:10px"><span>描述</span><textarea rows="4">'+(edit?project.getAttribute("data-description"):"")+'</textarea></label><div class="drawer-actions"><button type="button" data-close-layer>取消</button><button type="button" class="primary" data-close-layer>'+(edit?"保存更改":"新建项目")+"</button></div>");}
+    var rule=event.target.closest("[data-rule-project]");if(rule){var name=rule.getAttribute("data-rule-project");openDrawer('<div class="drawer-head"><h2 id="drawer-title">为“'+name+'”新建规则</h2><button type="button" class="icon-button" data-close-layer aria-label="关闭" title="关闭">×</button></div><div class="tabs"><button type="button" class="tab" aria-selected="true">文件夹规则</button><button type="button" class="tab" aria-selected="false">关键词规则</button></div><label class="field" style="margin-top:12px"><span>文件夹</span><input value="D:\\Clients\\A\\Patent"></label><p class="muted">默认匹配该文件夹及全部子文件夹</p><label class="setting-row"><span>同时应用到历史记录</span><input type="checkbox" checked></label><div class="drawer-actions"><button type="button" data-close-layer>取消</button><button type="button" class="primary" data-close-layer>新建规则</button></div>');}
+  });
+
+  var settings={
+    general:'<div class="section-title">常规</div><div class="setting-row"><div><strong>记录状态</strong><small>WorkTrace 正在正常记录</small></div><span class="badge">记录正常</span></div><div class="setting-row"><div><strong>导出目录</strong><small>D:\\WorkTrace\\Exports</small></div><button type="button">更改</button></div>',
+    collection:'<div class="section-title">采集</div><label class="setting-row"><span><strong>剪贴板记录</strong><small>默认关闭；只记录允许的文本片段</small></span><input type="checkbox"></label><div class="setting-row"><div><strong>采集服务</strong><small>更改后可能需要重启应用</small></div><span>正常</span></div>',
+    privacy:'<div class="section-title">隐私</div><div class="setting-row"><div><strong>本地存储</strong><small>记录数据仅保存在此设备</small></div><span>本机</span></div><div class="setting-row"><div><strong>隐私说明</strong><small>查看采集范围、排除内容和首次确认</small></div><button type="button">查看</button></div>',
+    data:'<div class="section-title">数据与备份</div><div class="setting-row"><div><strong>导出加密备份</strong><small>创建受口令保护的本地备份</small></div><button type="button">导出</button></div><div class="setting-row"><div><strong>导入并替换数据</strong><small>需要口令与确认文字；操作期间其他维护不可用</small></div><button type="button">导入</button></div><div class="danger-zone"><div class="section-title">危险操作</div><div class="setting-row"><div><strong>清空本地数据</strong><small>需要输入确认文字，且无法撤销</small></div><button type="button" class="danger">清空数据</button></div></div>',
+    advanced:'<div class="section-title">高级</div><div class="inline-alert" hidden>数据维护失败，需要重试。</div><div class="setting-row"><div><strong>系统状态</strong><small>记录服务与本地数据维护均可用</small></div><span class="badge">记录正常</span></div><div class="setting-row"><div><strong>恢复状态</strong><small>没有需要处理的数据恢复任务</small></div><span>已完成</span></div><details style="margin-top:12px"><summary>技术诊断（默认折叠）</summary><div class="setting-row"><div><strong>Collector</strong><small>state=running · heartbeat=ok</small></div><span>正常</span></div><div class="setting-row"><div><strong>Maintenance</strong><small>active=false · recovery=complete</small></div><span>空闲</span></div></details>'
+  };
+  function showSettings(name){document.getElementById("settings-panel").innerHTML=settings[name];document.querySelectorAll("[data-settings-target]").forEach(function(button){button.setAttribute("aria-current",String(button.getAttribute("data-settings-target")===name));});}
+  document.querySelectorAll("[data-settings-target]").forEach(function(button){button.addEventListener("click",function(){showSettings(button.getAttribute("data-settings-target"));});});
+  showSettings("general");
+  if(query.get("settings")&&settings[query.get("settings")])showSettings(query.get("settings"));
+  if(query.get("dialog")){
+    var dialogTrigger=document.querySelector('[data-delete-kind="'+query.get("dialog")+'"]');
+    if(dialogTrigger)dialogTrigger.click();
+  }
+})();
+</script>
+</body>
+</html>
