@@ -22,6 +22,7 @@ _EXPORT_VALUE_ERROR_CODES = {
     "invalid_date",
     "invalid_range",
     "range_too_large",
+    "invalid_project",
     "empty_data",
     "invalid_path",
     "stale_statistics_snapshot",
@@ -42,6 +43,7 @@ def export_statistics_csv(
     date_to: str,
     output_path,
     expected_snapshot_revision: str | None = None,
+    project_id: str | int | None = None,
 ) -> dict[str, Any]:
     """Export a display-safe CSV for the statistics date range."""
     try:
@@ -50,6 +52,7 @@ def export_statistics_csv(
             date_to,
             output_path,
             expected_snapshot_revision,
+            project_id,
         )
     except StatisticsExportError:
         raise

@@ -47,9 +47,9 @@ class BackupCapability(Protocol):
 class StatisticsCapability(Protocol):
     StatisticsSummaryError: type
     StatisticsExportError: type
-    def get_statistics_export_view_model(self, date_from, date_to) -> dict[str, Any]: ...
+    def get_statistics_export_view_model(self, date_from, date_to, project_id=None) -> dict[str, Any]: ...
     def format_export_duration(self, duration_seconds) -> str: ...
-    def export_statistics_csv(self, date_from, date_to, output_path, expected_snapshot_revision) -> dict[str, Any]: ...
+    def export_statistics_csv(self, date_from, date_to, output_path, expected_snapshot_revision, project_id=None) -> dict[str, Any]: ...
 
 
 @runtime_checkable
@@ -145,15 +145,15 @@ class StatisticsApplicationService:
     StatisticsSummaryError = statistics_api.StatisticsSummaryError
     StatisticsExportError = export_api.StatisticsExportError
 
-    def get_statistics_export_view_model(self, date_from, date_to):
-        return statistics_api.get_statistics_export_view_model(date_from, date_to)
+    def get_statistics_export_view_model(self, date_from, date_to, project_id=None):
+        return statistics_api.get_statistics_export_view_model(date_from, date_to, project_id)
 
     def format_export_duration(self, duration_seconds):
         return statistics_api.format_export_duration(duration_seconds)
 
-    def export_statistics_csv(self, date_from, date_to, output_path, expected_snapshot_revision):
+    def export_statistics_csv(self, date_from, date_to, output_path, expected_snapshot_revision, project_id=None):
         return export_api.export_statistics_csv(
-            date_from, date_to, output_path, expected_snapshot_revision
+            date_from, date_to, output_path, expected_snapshot_revision, project_id
         )
 
 

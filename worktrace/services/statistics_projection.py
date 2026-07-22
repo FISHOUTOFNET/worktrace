@@ -35,8 +35,9 @@ class ReportAnalyticsProjection:
 
 def build_statistics_projection(
     snapshot: ReportProjectionSnapshot,
+    project_id: str | int | None = None,
 ) -> ReportAnalyticsProjection:
-    private_records = tuple(_build_export_records(snapshot))
+    private_records = tuple(_build_export_records(snapshot, project_id=project_id))
     public_records = tuple(_public_record(record) for record in private_records)
     contributions_by_entry: dict[str, list[dict]] = {}
     for contribution in snapshot.final_contributions:
@@ -125,10 +126,12 @@ def build_statistics_projection(
         activity_count=len(activity_ids),
         report_slice_count=len(members),
         session_count=sum(
-            1 for entry in snapshot.final_sessions if not bool(entry.get("is_in_progress"))
+            1 for entry in snapshot.final_sessions
+            if not bool(entry.get("is_in_progress")) and _matches_project(entry, project_id)
         ),
         entry_count=sum(
-            1 for entry in snapshot.final_entries if not bool(entry.get("is_in_progress"))
+            1 for entry in snapshot.final_entries
+            if not bool(entry.get("is_in_progress")) and _matches_project(entry, project_id)
         ),
         export_row_count=len(private_records),
         concrete_project_count=sum(
@@ -142,7 +145,25 @@ def build_statistics_projection(
     )
 
 
-def _build_export_records(snapshot: ReportProjectionSnapshot) -> list[dict[str, Any]]:
+def _matches_project(entry: dict[str, Any], project_id: str | int | None) -> bool:
+    scope = str(project_id or "").strip()
+    if not scope:
+        return True
+    entry_project_id = int(entry.get("report_project_id") or entry.get("project_id") or 0)
+    is_concrete = bool(entry_project_id > 0 and entry.get("is_report_classified"))
+    if scope == "unclassified":
+        return not is_concrete
+    try:
+        return entry_project_id == int(scope)
+    except (TypeError, ValueError):
+        return False
+
+
+def _build_export_records(
+    snapshot: ReportProjectionSnapshot,
+    *,
+    project_id: str | int | None = None,
+) -> list[dict[str, Any]]:
     contributions: dict[str, list[dict]] = {}
     for row in snapshot.final_contributions:
         contributions.setdefault(
@@ -150,6 +171,8 @@ def _build_export_records(snapshot: ReportProjectionSnapshot) -> list[dict[str, 
         ).append(row)
     result: list[dict[str, Any]] = []
     for entry in snapshot.final_entries:
+        if not _matches_project(entry, project_id):
+            continue
         if bool(entry.get("is_in_progress")) or not bool(entry.get("exportable", True)):
             continue
         duration = int(entry.get("duration_seconds") or 0)
@@ -166,12 +189,12 @@ def _build_export_records(snapshot: ReportProjectionSnapshot) -> list[dict[str, 
         project = "已排除" if standalone_excluded else str(
             entry.get("project_name") or UNCATEGORIZED_PROJECT
         )
-        project_id = int(
+        entry_project_id = int(
             entry.get("report_project_id") or entry.get("project_id") or 0
         )
         is_concrete_project = bool(
             not standalone_excluded
-            and project_id > 0
+            and entry_project_id > 0
             and project != UNCATEGORIZED_PROJECT
             and not bool(entry.get("project_is_deleted"))
         )

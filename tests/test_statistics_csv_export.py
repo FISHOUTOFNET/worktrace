@@ -446,7 +446,6 @@ def test_build_csv_rows_multi_day_range(temp_db):
     [
         ("not-a-date", "2026-06-25"),
         ("2026-06-26", "2026-06-25"),
-        ("2026-05-25", "2026-06-26"),
         (True, "2026-06-25"),
         ("2026-06-25", False),
         (None, "2026-06-25"),
@@ -676,7 +675,6 @@ def test_api_export_success_returns_payload(temp_db, tmp_path):
     [
         ("not-a-date", "2026-06-25", "invalid_date"),
         ("2026-06-26", "2026-06-25", "invalid_range"),
-        ("2026-05-25", "2026-06-26", "range_too_large"),
         (True, "2026-06-25", "invalid_date"),
         (None, "2026-06-25", "invalid_date"),
     ],
@@ -816,7 +814,6 @@ def test_bridge_export_cancel_does_not_call_api(temp_db, tmp_path):
     [
         ("not-a-date", "2026-06-25", "请选择有效日期"),
         ("2026-06-26", "2026-06-25", "请选择有效日期范围"),
-        ("2026-05-25", "2026-06-26", "日期范围过大"),
         (True, "2026-06-25", "请选择有效日期"),
         (None, "2026-06-25", "请选择有效日期"),
     ],

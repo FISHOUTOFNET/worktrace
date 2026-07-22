@@ -100,11 +100,13 @@ def _escape_csv_cell(value) -> str:
     return text
 
 
-def _statistics_projection(date_from: str, date_to: str):
+def _statistics_projection(date_from: str, date_to: str, project_id=None):
     from .report_projection_snapshot_service import build_visible_snapshot
     from .statistics_projection import build_statistics_projection
 
-    return build_statistics_projection(build_visible_snapshot(date_from, date_to))
+    return build_statistics_projection(
+        build_visible_snapshot(date_from, date_to), project_id=project_id
+    )
 
 
 def build_statistics_csv_rows(date_from: str, date_to: str) -> list[dict]:
@@ -117,10 +119,12 @@ def write_statistics_csv(
     date_to: str,
     output_path,
     expected_snapshot_revision: str | None = None,
+    project_id: str | int | None = None,
 ) -> dict:
     """Write the exact accepted closed-record projection to CSV."""
 
-    statistics_service.validate_statistics_date_range(date_from, date_to)
+    date_from, date_to = statistics_service.resolve_statistics_date_range(date_from, date_to)
+    statistics_service.validate_statistics_project_scope(project_id)
     path = Path(output_path)
     if path.exists() and path.is_dir():
         raise ValueError("invalid_path")
@@ -132,7 +136,7 @@ def write_statistics_csv(
     if not parent.exists() or not parent.is_dir():
         raise ValueError("invalid_path")
 
-    projection = _statistics_projection(date_from, date_to)
+    projection = _statistics_projection(date_from, date_to, project_id)
     if expected_snapshot_revision is not None:
         expected = str(expected_snapshot_revision or "")
         if expected not in {

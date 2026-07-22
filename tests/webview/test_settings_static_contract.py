@@ -60,7 +60,9 @@ def test_settings_page_resources_and_controls_are_complete() -> None:
     assert (WEBVIEW_UI_DIR / "js" / "settings.js").is_file()
     assert 'src="js/settings.js"' in index
     assert "设置与隐私" in section
-    assert "管理本地隐私设置" in section
+    assert "管理本地数据、采集和备份" in section
+    for category in ("常规", "采集", "隐私", "数据与备份", "高级"):
+        assert category in section
 
     required_ids = (
         "settings-error",
@@ -303,17 +305,14 @@ def test_settings_buttons_are_bound_to_named_capabilities() -> None:
 def test_settings_styles_are_scoped() -> None:
     styles = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
     for selector in (
-        ".settings-header",
-        ".settings-loading",
-        ".settings-error",
-        ".settings-card",
-        ".settings-backup-row",
-        ".settings-backup-input",
-        ".settings-backup-status",
-        ".settings-backup-manifest",
-        ".first-run-notice-overlay",
-        ".first-run-notice-dialog",
-        ".first-run-notice-error",
-        ".settings-privacy-notice-btn",
+        ".settings-layout",
+        ".settings-categories",
+        ".settings-content",
+        ".settings-section",
+        ".setting-row",
+        ".settings-backup-card",
+        ".backup-manifest",
+        ".first-run-dialog",
+        ".danger-zone",
     ):
         assert selector in styles

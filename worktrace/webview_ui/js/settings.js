@@ -135,6 +135,27 @@
             "user_paused",
             "用户暂停：" + boolLabel(!!status.user_paused)
         );
+        var health = element("settings-health-summary");
+        if (health) {
+            var title = "记录正常";
+            var detail = "采集和本地存储可用";
+            if (status.recovery_blocked) {
+                title = "恢复尚未完成";
+                detail = "请在高级诊断中查看阻断原因";
+            } else if (status.maintenance_in_progress && !status.maintenance_restored) {
+                title = "数据维护失败";
+                detail = "维护尚未完成，其他数据操作已锁定";
+            } else if (!status.collector_running && !status.user_paused) {
+                title = "需要重启";
+                detail = "记录服务当前未运行";
+            }
+            var strong = health.querySelector("strong");
+            var small = health.querySelector("small");
+            var badge = health.querySelector(".badge");
+            if (strong) strong.textContent = title;
+            if (small) small.textContent = detail;
+            if (badge) badge.textContent = title;
+        }
         if (status.storage_model === "local_only") {
             setLineText("storage_model", "本地优先：所有数据仅存储在本机，不上传任何远端服务器。");
         }
@@ -149,6 +170,24 @@
         if (statusEl) statusEl.hidden = false;
     }
     App.renderSettingsStatus = renderSettingsStatus;
+
+    function initSettingsCategories() {
+        var buttons = document.querySelectorAll("[data-settings-section]");
+        for (var index = 0; index < buttons.length; index++) {
+            buttons[index].addEventListener("click", function () {
+                var section = this.getAttribute("data-settings-section");
+                for (var i = 0; i < buttons.length; i++) {
+                    buttons[i].removeAttribute("aria-current");
+                    var panel = element("settings-section-" + buttons[i].getAttribute("data-settings-section"));
+                    if (panel) { panel.hidden = true; panel.classList.remove("active"); }
+                }
+                this.setAttribute("aria-current", "true");
+                var target = element("settings-section-" + section);
+                if (target) { target.hidden = false; target.classList.add("active"); }
+            });
+        }
+    }
+    App.initSettingsCategories = initSettingsCategories;
 
     function loadSettingsPrivacyStatus() {
         if (App.settingsLoading) return Promise.resolve();

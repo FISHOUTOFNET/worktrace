@@ -59,19 +59,27 @@ def get_uncategorized_duration(start_date: str, end_date: str) -> int:
     )
 
 
-def _build_projection(start_date: str, end_date: str):
+def _build_projection(start_date: str, end_date: str, project_id=None):
     from .report_projection_snapshot_service import build_visible_snapshot
     from .statistics_projection import build_statistics_projection
 
-    return build_statistics_projection(build_visible_snapshot(start_date, end_date))
+    return build_statistics_projection(
+        build_visible_snapshot(start_date, end_date), project_id=project_id
+    )
 
 
-def get_statistics_export_summary(date_from: str, date_to: str) -> dict:
-    validate_statistics_date_range(date_from, date_to)
-    projection = _build_projection(date_from, date_to)
+def get_statistics_export_summary(
+    date_from: str,
+    date_to: str,
+    project_id: str | int | None = None,
+) -> dict:
+    date_from, date_to = resolve_statistics_date_range(date_from, date_to)
+    validate_statistics_project_scope(project_id)
+    projection = _build_projection(date_from, date_to, project_id)
     return {
         "date_from": date_from,
         "date_to": date_to,
+        "project_id": str(project_id or ""),
         "snapshot_revision": projection.snapshot_revision,
         "export_revision": projection.export_revision,
         "total_duration_seconds": projection.total_duration_seconds,
@@ -114,8 +122,25 @@ def validate_statistics_date_range(date_from: str, date_to: str) -> None:
         raise ValueError("invalid_date")
     if start > end:
         raise ValueError("invalid_range")
-    if (end - start).days > STATISTICS_SUMMARY_MAX_RANGE_DAYS - 1:
-        raise ValueError("range_too_large")
+
+
+def resolve_statistics_date_range(date_from: str, date_to: str) -> tuple[str, str]:
+    if date_from == "" and date_to == "":
+        return "1970-01-01", date.today().isoformat()
+    validate_statistics_date_range(date_from, date_to)
+    return date_from, date_to
+
+
+def validate_statistics_project_scope(project_id) -> None:
+    scope = str(project_id or "").strip()
+    if not scope or scope == "unclassified":
+        return
+    try:
+        if int(scope) > 0:
+            return
+    except (TypeError, ValueError):
+        pass
+    raise ValueError("invalid_project")
 
 
 _validate_summary_date_range = validate_statistics_date_range
