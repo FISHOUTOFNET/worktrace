@@ -95,7 +95,9 @@ def test_project_rules_summary_builds_exactly_one_authoritative_snapshot(temp_db
         for row in project_service.list_project_rule_summaries()
         if row["id"] == project_id
     )
-    assert calls == [("1970-01-01", calls[0][1])]
+    assert len(calls) == 1
+    assert calls[0][0] == "1970-01-01"
+    assert calls[0][1]
     assert project["description"] == "Shown in search"
     assert project["last_used_at"]
     assert project["total_duration_seconds"] == 15 * 60
