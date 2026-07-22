@@ -6,6 +6,12 @@
     "use strict";
     var App = window.WorkTraceApp = window.WorkTraceApp || {};
 
+    App.iconMarkup = function (name) {
+        var safeName = String(name || "").replace(/[^a-z-]/g, "");
+        return '<svg class="icon" aria-hidden="true"><use href="#icon-'
+            + safeName + '"></use></svg>';
+    };
+
     App.HEARTBEAT_INTERVAL_MS = 1000;
     App.NOTE_MAX_LENGTH = 2000;
     App.heartbeatTimer = null;
@@ -174,17 +180,18 @@
         var display = document.getElementById("status-display");
         var button = document.getElementById("toggle-pause-btn");
         if (!display || !button) return;
-        display.textContent = statusResult.display || "未知";
+        display.innerHTML = '<span class="status-label">'
+            + App.escapeHtml(statusResult.display || "未知") + '</span>';
         display.className = "status-display";
         if (statusResult.status === "running" && !statusResult.paused) {
             display.classList.add("recording");
-            button.textContent = "暂停记录";
+            button.innerHTML = App.iconMarkup("pause") + '<span class="nav-label">暂停记录</span>';
             button.className = "toggle-btn pause-style";
             button.setAttribute("aria-label", "暂停记录");
             button.setAttribute("data-tooltip", "暂停记录");
         } else {
             display.classList.add("paused");
-            button.textContent = "开始记录";
+            button.innerHTML = App.iconMarkup("play") + '<span class="nav-label">开始记录</span>';
             button.className = "toggle-btn";
             button.setAttribute("aria-label", "开始记录");
             button.setAttribute("data-tooltip", "开始记录");

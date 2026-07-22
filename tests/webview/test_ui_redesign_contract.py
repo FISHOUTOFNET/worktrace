@@ -78,3 +78,14 @@ def test_frontend_resources_are_local_and_do_not_create_second_runtime_store() -
     for forbidden in ("fetch(", "XMLHttpRequest", "localStorage", "sessionStorage", "indexedDB"):
         assert forbidden not in source
     assert source.count("setInterval(") == 1
+
+
+def test_compact_desktop_tokens_and_single_icon_sprite_are_shared() -> None:
+    html = read_resource("index.html")
+    styles = read_resource("styles.css")
+    assert '--control-height: 30px' in styles
+    assert '--sidebar-width: 188px' in styles
+    assert '--page-padding-x: 18px' in styles
+    for icon in ("icon-plus", "icon-pencil", "icon-trash", "icon-download"):
+        assert f'id="{icon}"' in html
+    assert "https://" not in html and "http://" not in html

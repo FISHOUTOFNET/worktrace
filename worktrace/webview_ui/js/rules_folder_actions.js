@@ -43,8 +43,11 @@
         var buttons = document.querySelectorAll(".rules-folder-delete-button");
         Array.prototype.forEach.call(buttons, function (button) {
             var currentKey = "folder:" + button.getAttribute("data-rule-id");
+            var busy = currentKey === App.rulesDeletingFolderKey;
             button.disabled = !!App.rulesDeletingFolderKey;
-            button.textContent = currentKey === App.rulesDeletingFolderKey ? "正在删除..." : "删除";
+            button.classList.toggle("is-busy", busy);
+            button.setAttribute("aria-label", busy ? "正在删除规则" : "删除规则");
+            button.setAttribute("data-tooltip", busy ? "正在删除" : "删除规则");
         });
     }
     App.setFolderDeleting = setFolderDeleting;

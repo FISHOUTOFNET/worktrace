@@ -568,6 +568,11 @@
             navTarget.setAttribute("aria-current", "page");
         }
         if (pageTarget) pageTarget.classList.add("active");
+        var topbarTitle = document.getElementById("app-topbar-title");
+        if (topbarTitle && navTarget) {
+            topbarTitle.textContent = navTarget.getAttribute("data-title")
+                || navTarget.getAttribute("aria-label") || "WorkTrace";
+        }
         App.currentPage = pageId;
         liveRuntimeStore.setScope(pageId, pageId === "timeline" ? App.timelineDate : null);
         if (pageId === "timeline" && !App.timelineLoaded && !App.timelineLoading) {

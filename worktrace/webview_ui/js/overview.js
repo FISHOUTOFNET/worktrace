@@ -143,6 +143,13 @@
     function showOverview(bundle) {
         if (!bundle) return;
         App.lastOverviewSnapshot = bundle;
+        document.getElementById("overview-project-count").textContent = String(
+            Math.max(0, parseInt(bundle.project_count, 10) || 0)
+        );
+        document.getElementById("overview-classified-duration").textContent =
+            bundle.classified_duration || App.formatDuration(bundle.classified_seconds || 0);
+        document.getElementById("overview-uncategorized-duration").textContent =
+            bundle.uncategorized_duration || App.formatDuration(bundle.uncategorized_seconds || 0);
         renderKpi(
             document.getElementById("kpi-total"),
             bundle.today_total_seconds,

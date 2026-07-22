@@ -68,7 +68,9 @@
             if (rows) {
                 rows.hidden = !rows.hidden;
                 button.setAttribute("aria-expanded", rows.hidden ? "false" : "true");
-                button.textContent = rows.hidden ? "›" : "⌄";
+                button.classList.toggle("is-expanded", !rows.hidden);
+                button.setAttribute("aria-label", (rows.hidden ? "展开" : "收起") + "项目规则");
+                button.setAttribute("data-tooltip", rows.hidden ? "展开规则" : "收起规则");
             }
         } else if (button.classList.contains("rules-project-edit-button")) {
             openProjectEdit(button);

@@ -17,20 +17,25 @@
         return '<article class="rules-project-card" data-project-id="' + count(id)
             + '" data-rules-search="' + text(searchable, "") + '">'
             + '<div class="rules-project-head">'
-            + '<button type="button" class="rules-project-toggle icon-button" aria-expanded="false"'
-            + ' aria-label="展开 ' + text(project && project.name, "项目") + ' 的规则">›</button>'
+            + '<button type="button" class="rules-project-toggle" aria-expanded="false"'
+            + ' aria-label="展开 ' + text(project && project.name, "项目") + ' 的规则" data-tooltip="展开规则">'
+            + App.iconMarkup("chevron-right") + '</button>'
             + '<div class="rules-project-title-group"><div class="rules-project-title">'
             + text(project && project.name, "未命名项目") + '</div>'
             + (project && project.description ? '<div class="rules-project-description">'
                 + text(project.description, "") + '</div>' : '')
-            + '<div class="rules-project-meta"><span>上次使用：'
+            + '</div><div class="rules-project-actions"><div class="rules-project-button-row">'
+            + '<button class="rules-project-add-rule-button icon-button" type="button" data-project-id="' + count(id)
+            + '" aria-label="新建规则" data-tooltip="新建规则">' + App.iconMarkup("plus") + '</button>'
+            + '<button class="rules-project-edit-button icon-button" type="button" data-project-id="' + count(id)
+            + '" aria-label="编辑项目" data-tooltip="编辑项目">' + App.iconMarkup("pencil") + '</button>'
+            + '<button class="rules-project-delete-button icon-button danger-icon-button" type="button" data-project-id="' + count(id)
+            + '" aria-label="删除项目" data-tooltip="删除项目">' + App.iconMarkup("trash") + '</button>'
+            + '</div><div class="rules-project-meta"><span>上次使用：'
             + text(project && project.last_used_at, "暂无使用记录") + '</span><span>累计时间：'
-            + text(App.formatDuration(project && project.total_duration_seconds || 0), "00:00:00")
-            + '</span></div></div><div class="rules-project-actions">'
-            + '<button class="rules-project-add-rule-button" type="button" data-project-id="' + count(id) + '">新建规则</button>'
-            + '<button class="rules-project-edit-button" type="button" data-project-id="' + count(id) + '">编辑</button>'
-            + '<button class="rules-project-delete-button" type="button" data-project-id="' + count(id) + '">删除</button>'
-            + '</div></div><div class="rules-row-list" hidden>' + rows + '</div></article>';
+            + (project && project.total_duration_seconds != null
+                ? text(App.formatDuration(project.total_duration_seconds), "00:00:00") : '—')
+            + '</span></div></div></div><div class="rules-row-list" hidden>' + rows + '</div></article>';
     }
     App.renderProjectRuleProject = renderProjectRuleProject;
 
@@ -41,8 +46,9 @@
             + text(rule && rule.kind_label, "规则") + '</span><div class="rules-row-main"><div class="rules-target">'
             + text(rule && rule.target, "未设置") + '</div>'
             + (rule && rule.detail ? '<div class="rules-detail">' + text(rule.detail, "") + '</div>' : '')
-            + '</div><button class="rules-' + ruleKind + '-delete-button" type="button" data-rule-kind="'
-            + ruleKind + '" data-rule-id="' + count(id) + '">删除</button></div>';
+            + '</div><button class="rules-' + ruleKind + '-delete-button icon-button danger-icon-button" type="button" data-rule-kind="'
+            + ruleKind + '" data-rule-id="' + count(id) + '" aria-label="删除规则" data-tooltip="删除规则">'
+            + App.iconMarkup("trash") + '</button></div>';
     }
     App.renderProjectRuleRow = renderProjectRuleRow;
     App.renderExcludedRuleRow = renderProjectRuleRow;

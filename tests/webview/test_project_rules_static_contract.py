@@ -126,6 +126,21 @@ def test_project_rules_home_render_only_exposes_edit_project_add_rule_and_delete
         assert forbidden not in row_body
 
 
+def test_project_rules_collapsed_row_uses_accessible_icons_without_rule_count():
+    source = read_rules_module_js()
+    project_body = func_body(source, "renderProjectRuleProject")
+    row_body = func_body(source, "renderProjectRuleRow")
+    toggle_body = func_body(source, "handleProjectCardPanelClick")
+    assert 'App.iconMarkup("chevron-right")' in project_body
+    assert 'App.iconMarkup("trash")' in project_body
+    assert 'App.iconMarkup("trash")' in row_body
+    assert 'aria-label="删除项目"' in project_body
+    assert 'aria-label="删除规则"' in row_body
+    assert "rule_count" not in project_body
+    assert "textContent = rows.hidden" not in toggle_body
+    assert 'classList.toggle("is-expanded"' in toggle_body
+
+
 def test_project_rules_show_does_not_bind_removed_home_actions():
     body = func_body(read_rules_module_js(), "showProjectRules")
     for forbidden in (

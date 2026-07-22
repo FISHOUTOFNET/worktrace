@@ -58,8 +58,12 @@
         App.rulesDeletingRuleKey = ruleKey || null;
         var buttons = document.querySelectorAll(".rules-keyword-delete-button");
         Array.prototype.forEach.call(buttons, function (button) {
+            var currentKey = "keyword:" + button.getAttribute("data-rule-id");
+            var busy = currentKey === App.rulesDeletingRuleKey;
             button.disabled = !!App.rulesDeletingRuleKey;
-            button.textContent = "删除";
+            button.classList.toggle("is-busy", busy);
+            button.setAttribute("aria-label", busy ? "正在删除规则" : "删除规则");
+            button.setAttribute("data-tooltip", busy ? "正在删除" : "删除规则");
         });
     }
     App.setRuleDeleting = setRuleDeleting;

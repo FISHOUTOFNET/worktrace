@@ -167,6 +167,8 @@ def main() -> int:
 
     environment = os.environ.copy()
     environment[_PROGRESS_ENV] = str(args.progress.resolve())
+    environment["PYTHONIOENCODING"] = "utf-8"
+    environment["PYTHONUTF8"] = "1"
     command = [
         sys.executable,
         "-m",

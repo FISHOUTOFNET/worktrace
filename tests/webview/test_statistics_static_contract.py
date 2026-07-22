@@ -99,3 +99,10 @@ def test_statistics_styles_are_responsive_local_surfaces() -> None:
     styles = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
     for selector in (".statistics-toolbar", ".metric-strip", ".stats-result", ".table-scroll"):
         assert selector in styles
+
+
+def test_statistics_table_adds_visual_comparison_without_changing_values() -> None:
+    body = func_body(source(), "renderStatsTable")
+    assert 'class="stats-share-bar"' in body
+    assert "Math.max(0, Math.min(100" in body
+    assert "group.duration" in body and "group.activity_count" in body and "group.percentage" in body

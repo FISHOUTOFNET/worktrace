@@ -7,6 +7,20 @@
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+    <svg class="icon-sprite" aria-hidden="true">
+        <symbol id="icon-grid" viewBox="0 0 24 24"><rect x="4" y="4" width="6" height="6" rx="1"/><rect x="14" y="4" width="6" height="6" rx="1"/><rect x="4" y="14" width="6" height="6" rx="1"/><rect x="14" y="14" width="6" height="6" rx="1"/></symbol>
+        <symbol id="icon-chevron-left" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></symbol>
+        <symbol id="icon-chevron-right" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+        <symbol id="icon-chevron-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+        <symbol id="icon-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+        <symbol id="icon-pencil" viewBox="0 0 24 24"><path d="m4 20 4.2-1 10.6-10.6a2 2 0 0 0-2.8-2.8L5.4 16.2 4 20Z"/><path d="m14.8 6.8 2.8 2.8"/></symbol>
+        <symbol id="icon-trash" viewBox="0 0 24 24"><path d="M 4 7h16 M 9 7V4h6v3m3 0-1 13H7L6 7m4 4v5m4-5v5"/></symbol>
+        <symbol id="icon-download" viewBox="0 0 24 24"><path d="M12 4v11m0 0 4-4m-4 4-4-4M5 19h14"/></symbol>
+        <symbol id="icon-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+        <symbol id="icon-play" viewBox="0 0 24 24"><path d="m9 6 9 6-9 6V6Z"/></symbol>
+        <symbol id="icon-pause" viewBox="0 0 24 24"><path d="M9 6v12M15 6v12"/></symbol>
+        <symbol id="icon-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></symbol>
+    </svg>
     <div class="app-shell">
         <div id="first-run-notice-overlay" class="modal-layer" hidden>
             <section id="first-run-notice-dialog" class="dialog first-run-dialog" role="dialog" aria-modal="true" aria-labelledby="first-run-notice-title">
@@ -23,30 +37,36 @@
 
         <aside class="app-nav" aria-label="主导航">
             <div class="app-brand"><span class="brand-mark" aria-hidden="true">WT</span><span class="nav-label">WorkTrace</span></div>
+            <div class="nav-status">
+                <div id="status-display" class="status-display"><span class="status-dot" aria-hidden="true"></span><span class="status-label">记录未启动</span></div>
+            </div>
             <nav class="nav-list">
-                <button type="button" class="nav-item active" data-page="overview" aria-current="page" aria-label="概览" data-tooltip="概览">
-                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M 4 13h6V4H4v9Zm10 7h6V11h-6v9ZM 4 20h6v-3H4v3Zm10-13h6V4h-6v3Z"/></svg><span class="nav-label">概览</span>
+                <button type="button" class="nav-item active" data-page="overview" data-title="今日概览" aria-current="page" aria-label="概览" data-tooltip="概览">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-grid"/></svg><span class="nav-label">概览</span>
                 </button>
-                <button type="button" class="nav-item" data-page="timeline" aria-label="时间详情" data-tooltip="时间详情">
+                <button type="button" class="nav-item" data-page="timeline" data-title="时间详情" aria-label="时间详情" data-tooltip="时间详情">
                     <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 7v5l3 2"/></svg><span class="nav-label">时间详情</span>
                 </button>
-                <button type="button" class="nav-item" data-page="statistics" aria-label="统计与导出" data-tooltip="统计与导出">
+                <button type="button" class="nav-item" data-page="statistics" data-title="统计与导出" aria-label="统计与导出" data-tooltip="统计与导出">
                     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19V9m7 10V5m7 14v-7"/></svg><span class="nav-label">统计与导出</span>
                 </button>
-                <button type="button" class="nav-item" data-page="rules" aria-label="项目规则" data-tooltip="项目规则">
+                <button type="button" class="nav-item" data-page="rules" data-title="项目规则" aria-label="项目规则" data-tooltip="项目规则">
                     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M 4 7h10m-6 5h12M 4 17h10"/><circle cx="17" cy="7" r="2"/><circle cx="5" cy="12" r="2"/><circle cx="17" cy="17" r="2"/></svg><span class="nav-label">项目规则</span>
                 </button>
-                <button type="button" class="nav-item" data-page="settings" aria-label="设置与隐私" data-tooltip="设置与隐私">
+                <button type="button" class="nav-item" data-page="settings" data-title="设置与隐私" aria-label="设置与隐私" data-tooltip="设置与隐私">
                     <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1l2-1.5-2-3.4-2.4 1A8 8 0 0 0 15 6.2L14.7 4h-4l-.3 2.2a8 8 0 0 0-1.5.9l-2.4-1-2 3.4 2 1.5a7 7 0 0 0 0 2l-2 1.5 2 3.4 2.4-1a8 8 0 0 0 1.5.9l.3 2.2h4l.3-2.2a8 8 0 0 0 1.5-.9l2.4 1 2-3.4-2-1.5c.1-.3.1-.7.1-1Z"/></svg><span class="nav-label">设置与隐私</span>
                 </button>
             </nav>
-            <div class="nav-status">
-                <div id="status-display" class="status-display"><span class="status-dot" aria-hidden="true"></span><span class="nav-label">记录未启动</span></div>
-                <button id="toggle-pause-btn" type="button" class="button nav-pause" aria-label="开始记录" data-tooltip="开始记录"><span class="nav-label">开始记录</span><span aria-hidden="true">▶</span></button>
+            <div class="nav-footer">
+                <button id="toggle-pause-btn" type="button" class="toggle-btn" aria-label="开始记录" data-tooltip="开始记录"><svg class="icon" aria-hidden="true"><use href="#icon-play"/></svg><span class="nav-label">开始记录</span></button>
             </div>
         </aside>
 
         <main class="app-main">
+            <header class="app-topbar">
+                <div class="topbar-context"><span>LOCAL WORKSPACE</span><strong id="app-topbar-title">今日概览</strong></div>
+                <div class="topbar-local"><span aria-hidden="true"></span>所有数据只存于本机</div>
+            </header>
             <section id="page-overview" class="page active overview-page">
                 <header class="page-header">
                     <div><h1>今日概览</h1><p>当前活动、待整理和最近活动</p></div>
@@ -59,6 +79,11 @@
                     <span class="current-description">WorkTrace 开始记录后会在这里显示。</span>
                     <strong class="current-duration numeric" aria-live="off">00:00:00</strong>
                 </button>
+                <section class="overview-summary" aria-label="今日记录摘要">
+                    <div><span>涉及项目</span><strong id="overview-project-count">0</strong></div>
+                    <div><span>已归类</span><strong id="overview-classified-duration" class="numeric">00:00:00</strong></div>
+                    <div><span>待归类</span><strong id="overview-uncategorized-duration" class="numeric">00:00:00</strong></div>
+                </section>
                 <div class="overview-grid">
                     <section class="surface overview-section recent-section">
                         <h2>最近活动</h2>
@@ -77,9 +102,9 @@
             <section id="page-timeline" class="page timeline-page">
                 <header class="page-header"><div><h1>时间详情</h1><p>查看和整理当日时间段</p></div></header>
                 <div class="toolbar timeline-toolbar">
-                    <button id="timeline-prev-btn" type="button" class="icon-button" aria-label="前一天" data-tooltip="前一天">‹</button>
+                    <button id="timeline-prev-btn" type="button" class="icon-button" aria-label="前一天" data-tooltip="前一天"><svg class="icon" aria-hidden="true"><use href="#icon-chevron-left"/></svg></button>
                     <input id="timeline-date-input" type="date" aria-label="日期">
-                    <button id="timeline-next-btn" type="button" class="icon-button" aria-label="后一天" data-tooltip="后一天">›</button>
+                    <button id="timeline-next-btn" type="button" class="icon-button" aria-label="后一天" data-tooltip="后一天"><svg class="icon" aria-hidden="true"><use href="#icon-chevron-right"/></svg></button>
                     <button id="timeline-today-btn" type="button">今日</button>
                     <label class="sr-only" for="timeline-project-filter">项目筛选</label>
                     <select id="timeline-project-filter" aria-label="项目筛选"><option value="">项目：全部</option></select>
@@ -95,7 +120,7 @@
                     </div>
                     <div id="timeline-drawer-backdrop" class="drawer-backdrop" hidden></div>
                     <aside id="timeline-details-pane" class="surface timeline-inspector" aria-label="时间段编辑与活动详情">
-                        <button id="timeline-details-close" type="button" class="icon-button inspector-close" aria-label="关闭时间段详情" data-tooltip="关闭">×</button>
+                        <button id="timeline-details-close" type="button" class="icon-button inspector-close" aria-label="关闭时间段详情" data-tooltip="关闭"><svg class="icon" aria-hidden="true"><use href="#icon-close"/></svg></button>
                         <div id="timeline-edit-panel" class="timeline-edit-panel" hidden>
                             <div class="edit-inline">
                                 <label class="field"><span>项目</span><select id="edit-project-select" disabled><option value="">加载中…</option></select></label>
@@ -107,14 +132,14 @@
                             <div class="editor-actions">
                                 <span id="edit-status" class="inline-status" role="status" aria-live="polite" hidden></span>
                                 <span class="toolbar-spacer"></span>
-                                <button id="timeline-advanced-toggle" type="button" aria-haspopup="menu" aria-expanded="false">高级操作</button>
-                                <button id="timeline-hide-session" type="button" class="button danger">删除时间段</button>
-                            </div>
-                            <div id="timeline-session-actions" class="action-menu" role="menu" hidden>
-                                <button id="timeline-split-session" type="button" role="menuitem">拆分时间段</button>
-                                <button id="timeline-merge-previous" type="button" role="menuitem">合并到上一时间段</button>
-                                <button id="timeline-merge-next" type="button" role="menuitem">合并到下一时间段</button>
-                                <button id="timeline-copy-session" type="button" role="menuitem">复制时间段</button>
+                                <button id="timeline-advanced-toggle" type="button" class="icon-button" aria-haspopup="menu" aria-expanded="false" aria-label="高级操作" data-tooltip="高级操作"><svg class="icon" aria-hidden="true"><use href="#icon-more"/></svg></button>
+                                <button id="timeline-hide-session" type="button" class="icon-button danger-icon-button" aria-label="删除时间段" data-tooltip="删除时间段"><svg class="icon" aria-hidden="true"><use href="#icon-trash"/></svg></button>
+                                <div id="timeline-session-actions" class="action-menu" role="menu" hidden>
+                                    <button id="timeline-split-session" type="button" role="menuitem">拆分时间段</button>
+                                    <button id="timeline-merge-previous" type="button" role="menuitem">合并到上一时间段</button>
+                                    <button id="timeline-merge-next" type="button" role="menuitem">合并到下一时间段</button>
+                                    <button id="timeline-copy-session" type="button" role="menuitem">复制时间段</button>
+                                </div>
                             </div>
                         </div>
                         <section class="activity-details">
@@ -128,7 +153,7 @@
             <section id="page-statistics" class="page statistics-page">
                 <header class="page-header">
                     <div><h1>统计与导出</h1><p>统计仅包含已完成时间段</p></div>
-                    <button id="stats-export-action-btn" type="button" class="button primary" disabled>导出 CSV</button>
+                    <button id="stats-export-action-btn" type="button" class="button primary" disabled><svg class="icon" aria-hidden="true"><use href="#icon-download"/></svg><span>导出 CSV</span></button>
                 </header>
                 <div class="toolbar statistics-toolbar">
                     <label for="statistics-range-mode">时间</label>
@@ -181,7 +206,7 @@
             </section>
 
             <section id="page-rules" class="page rules-page">
-                <header class="page-header"><div><h1>项目规则</h1><p>管理项目及自动归类规则</p></div><button id="rules-open-create-project" type="button" class="button primary">新建项目</button></header>
+                <header class="page-header"><div><h1>项目规则</h1><p>管理项目及自动归类规则</p></div><button id="rules-open-create-project" type="button" class="button primary"><svg class="icon" aria-hidden="true"><use href="#icon-plus"/></svg><span>新建项目</span></button></header>
                 <div id="rules-readonly-hint" class="sr-only">本页只通过本地 bridge 调用 Python 服务，不使用浏览器存储或网络。</div>
                 <div class="toolbar rules-toolbar">
                     <label class="sr-only" for="rules-search-input">搜索项目或规则</label><input id="rules-search-input" type="search" placeholder="搜索项目或规则">
@@ -197,7 +222,7 @@
                 <div id="rules-create-panel" class="drawer-layer" hidden>
                     <div class="drawer-scrim" data-rules-panel-close="1"></div>
                     <aside class="drawer rules-drawer" role="dialog" aria-modal="true" aria-labelledby="rules-create-panel-title">
-                        <header class="drawer-header"><h2 id="rules-create-panel-title">新建项目</h2><button id="rules-create-panel-close" type="button" class="icon-button" aria-label="关闭" data-tooltip="关闭">×</button></header>
+                        <header class="drawer-header"><h2 id="rules-create-panel-title">新建项目</h2><button id="rules-create-panel-close" type="button" class="icon-button" aria-label="关闭" data-tooltip="关闭"><svg class="icon" aria-hidden="true"><use href="#icon-close"/></svg></button></header>
                         <div id="rules-panel-status" class="inline-alert" role="status" aria-live="polite" hidden></div>
                         <button id="rules-panel-rule-tab" type="button" hidden>规则</button><button id="rules-panel-project-tab" type="button" hidden>项目</button>
                         <section id="rules-panel-project-section" class="drawer-form">

@@ -132,9 +132,11 @@
         App.currentSessions = allSessions;
         var sessions = filteredTimelineSessions(allSessions);
         if (sessions.length === 0) {
-            listEl.innerHTML = '<div class="timeline-empty">'
-                + (allSessions.length ? "当前项目筛选下没有时间段" : "当日暂无活动记录")
-                + '</div>';
+            listEl.innerHTML = '<div class="empty-state timeline-empty"><strong>'
+                + (allSessions.length ? "当前筛选下没有时间段" : "当日暂无时间记录")
+                + '</strong><span>'
+                + (allSessions.length ? "可切换项目筛选查看其他时间段。" : "选择其他日期，或开始记录新的工作活动。")
+                + '</span></div>';
             resetEmptyTimeline();
             return;
         }
@@ -479,7 +481,8 @@
                 + (row.can_hide_activity || row.can_delete
                     ? '<button type="button" class="summary-hide-activity" data-summary-id="'
                         + App.escapeHtml(String(row.summary_id || ""))
-                        + '">删除活动</button>'
+                        + '" aria-label="删除活动" data-tooltip="删除活动">'
+                        + App.iconMarkup("trash") + '</button>'
                     : '')
                 + '</div>';
         }

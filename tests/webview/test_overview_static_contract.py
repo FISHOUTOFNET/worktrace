@@ -26,3 +26,11 @@ def test_derived_description_has_explicit_non_color_label():
     source = read_js("overview.js")
     assert 'description_source === "derived"' in source
     assert 'content: "自动摘要"' in read_resource("styles.css")
+
+
+def test_overview_summary_reads_the_accepted_overview_payload_directly():
+    show = func_body(read_js("overview.js"), "showOverview")
+    assert "bundle.project_count" in show
+    assert "bundle.classified_duration" in show
+    assert "bundle.uncategorized_duration" in show
+    assert "bundle.overview" not in show

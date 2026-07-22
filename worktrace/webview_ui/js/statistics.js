@@ -116,8 +116,11 @@
         if (!groups.length) { body.innerHTML = ""; empty.hidden = false; return; }
         empty.hidden = true;
         body.innerHTML = groups.map(function (group) {
-            return '<tr><td title="' + App.escapeHtml(group.display_name || "未知") + '">'
-                + App.escapeHtml(group.display_name || "未知") + '</td><td class="number">'
+            var percentage = Math.max(0, Math.min(100, parseFloat(group.percentage) || 0));
+            return '<tr><td title="' + App.escapeHtml(group.display_name || "未知") + '"><div class="stats-name">'
+                + '<span>' + App.escapeHtml(group.display_name || "未知") + '</span>'
+                + '<span class="stats-share-bar" aria-hidden="true"><i style="width:' + percentage + '%"></i></span>'
+                + '</div></td><td class="number">'
                 + App.escapeHtml(group.duration || App.formatDuration(group.duration_seconds || 0))
                 + '</td><td class="number">' + App.escapeHtml(String(group.activity_count || 0))
                 + '</td><td class="number">' + App.escapeHtml(String(group.percentage || 0)) + '%</td></tr>';
