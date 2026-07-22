@@ -99,6 +99,11 @@
                     App.safeText(b && b.name, ""), "zh-Hans-CN"
                 );
             }
+            if (mode === "total_duration") {
+                var durationDelta = (parseInt(b && b.total_duration_seconds, 10) || 0)
+                    - (parseInt(a && a.total_duration_seconds, 10) || 0);
+                if (durationDelta) return durationDelta;
+            }
             var aUsed = App.safeText(a && a.last_used_at, "");
             var bUsed = App.safeText(b && b.last_used_at, "");
             if (aUsed && bUsed && aUsed !== bUsed) return aUsed < bUsed ? 1 : -1;
@@ -131,6 +136,7 @@
         }).join("");
         App.bindProjectRuleDelete();
         App.bindProjectRuleFolderEvents();
+        applyRulesSearch();
     }
     App.showProjectRules = showProjectRules;
 
@@ -148,7 +154,19 @@
         }).join("");
         App.bindProjectRuleDelete();
         App.bindProjectRuleFolderEvents();
+        applyRulesSearch();
     };
+
+    function applyRulesSearch() {
+        var input = document.getElementById("rules-search-input");
+        var query = App.safeText(input && input.value, "").trim().toLocaleLowerCase();
+        var cards = document.querySelectorAll("#rules-list .rules-project-card");
+        for (var index = 0; index < cards.length; index++) {
+            cards[index].hidden = !!query
+                && String(cards[index].getAttribute("data-rules-search") || "").indexOf(query) < 0;
+        }
+    }
+    App.applyRulesSearch = applyRulesSearch;
 
     App.setRulesLoading = function (loading) {
         App.rulesLoading = loading;

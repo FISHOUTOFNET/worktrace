@@ -34,7 +34,7 @@
             App.showRulesError("删除文件夹规则失败");
             return;
         }
-        if (App.openProjectRuleDeleteModal) App.openProjectRuleDeleteModal("folder", ruleId);
+        if (App.openProjectRuleDeleteModal) App.openProjectRuleDeleteModal("folder", ruleId, button);
     }
     App.handleFolderDelete = handleFolderDelete;
 

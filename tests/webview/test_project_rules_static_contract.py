@@ -38,11 +38,13 @@ def _rules_section() -> str:
 def test_project_rules_home_keeps_lightweight_entry_points():
     section = _rules_section()
     assert "项目规则" in section
-    assert 'id="rules-open-create-rule"' in section
     assert 'id="rules-open-create-project"' in section
+    assert 'id="rules-search-input"' in section
     assert 'id="rules-sort-select"' in section
-    assert "按上次使用排序" in section
-    assert "按首字母排序" in section
+    assert "最近使用" in section
+    assert "累计时间" in section
+    assert "项目名称" in section
+    assert 'id="rules-open-create-rule"' not in section
     assert 'id="rules-advanced"' not in section
     assert "高级功能" not in section
 
@@ -70,17 +72,21 @@ def test_project_rules_unified_panel_contains_project_and_rule_flows():
     assert 'id="rules-panel-keyword-type"' in section
     assert 'id="rules-panel-backfill"' in section
     assert 'id="rules-panel-project-language"' in section
-    assert "中文" in section and "英语" in section and "日语" in section and "其他" in section
-    assert re.search(r'id="rules-panel-folder-type"[^>]*class="[^"]*is-active', section)
+    assert re.search(r'id="rules-panel-project-language"[^>]*hidden', section)
     assert re.search(r'id="rules-panel-backfill"[^>]*checked', section)
+    assert re.search(r'id="rules-panel-folder-recursive-row"[^>]*hidden', section)
+    assert re.search(r'id="rules-panel-folder-recursive"[^>]*checked', section)
 
 
-def test_project_rules_delete_modal_keeps_history_choice_opt_in():
+def test_project_rules_deletion_uses_shared_dialog_and_explicit_history_policy():
     section = _rules_section()
-    assert 'id="rules-delete-modal"' in section
-    assert "删除后，这条规则不会再用于未来自动归类。" in section
-    assert "同时移除历史中由此规则产生的归类" in section
-    assert 'id="rules-delete-history" type="checkbox"' in section
+    index = read_resource("index.html")
+    assert 'id="rules-delete-modal"' not in section
+    assert 'id="confirm-dialog"' in index
+    delete = func_body(read_js("rules_keyword_actions.js"), "deleteRule")
+    assert "deleteProjectFolderRule(ruleId, applyToHistory)" in delete
+    assert "deleteProjectKeywordRule(ruleId, applyToHistory)" in delete
+    assert "deleteRule(kind, ruleId, false)" in read_js("rules_keyword_actions.js")
 
 
 def test_project_rules_script_order_includes_create_panel_before_actions():
@@ -105,10 +111,9 @@ def test_project_rules_home_render_only_exposes_edit_project_add_rule_and_delete
     assert "rules-project-add-rule-button" in project_body
     assert "rules-project-delete-button" in project_body
     assert "rules-count-grid" not in project_body
-    assert "rules-project-toggle-button" not in project_body
+    assert "rules-project-toggle" in project_body
     assert "rules-project-archive-button" not in project_body
-    assert "rules-keyword-delete-button" in row_body
-    assert "rules-folder-delete-button" in row_body
+    assert "rules-" in row_body and "-delete-button" in row_body
     for forbidden in (
         "rules-toggle-btn",
         "rules-keyword-edit-button",
@@ -143,7 +148,7 @@ def test_project_rules_panel_create_backfill_contract_is_stable():
     assert "App.bridge.createProjectKeywordRule" in body
     assert "App.backfillCreatedRule" in body
     assert "规则已新增，但应用到历史记录失败" in body
-    assert "同时应用到历史记录（推荐）" in _rules_section()
+    assert "同时应用到历史记录" in _rules_section()
     assert ".catch(function ()" in body
     for forbidden in ("err.message", "error.message", "reason.message", ".toString"):
         assert forbidden not in body
