@@ -3,565 +3,613 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>WorkTrace Stage 2 Low-Fidelity Prototype</title>
+<title>WorkTrace 最终低保真原型</title>
 <style>
 :root {
-  --canvas: #e8e8e8;
-  --window: #f7f7f7;
-  --surface: #ffffff;
-  --surface-subtle: #f1f1f1;
-  --line: #c8c8c8;
-  --line-strong: #969696;
-  --text: #222222;
-  --muted: #666666;
-  --selected: #dedede;
-  --danger: #7a2d2d;
-  --radius: 5px;
-  --space: 8px;
-  font-family: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei", sans-serif;
+  --canvas:#e7e7e7;
+  --window:#f6f6f6;
+  --surface:#fff;
+  --surface-2:#f1f1f1;
+  --line:#c7c7c7;
+  --line-strong:#8f8f8f;
+  --text:#202020;
+  --muted:#666;
+  --selected:#dedede;
+  --danger:#7a2d2d;
+  --danger-bg:#f8eeee;
+  --radius:5px;
+  --space:8px;
+  font-family:"Segoe UI Variable","Segoe UI","Microsoft YaHei",sans-serif;
 }
-* { box-sizing: border-box; }
-body {
-  margin: 0;
-  background: var(--canvas);
-  color: var(--text);
-  font-size: 13px;
-}
-button, input, select, textarea { font: inherit; }
-button, input, select, textarea {
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius);
-  background: var(--surface);
-  color: var(--text);
-}
-button { min-height: 30px; padding: 5px 10px; cursor: pointer; }
-button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
-  outline: 2px solid #444;
-  outline-offset: 2px;
-}
-.prototype-note {
-  padding: 10px 14px;
-  border-bottom: 1px solid var(--line-strong);
-  background: #fff7d6;
-  line-height: 1.5;
-}
-.review-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 14px;
-  border-bottom: 1px solid var(--line);
-  background: var(--surface);
-}
-.review-toolbar strong { margin-right: 8px; }
-.review-toolbar button.is-active { background: var(--selected); font-weight: 600; }
-.viewport-stage {
-  padding: 18px;
-  overflow: auto;
-  min-height: calc(100vh - 94px);
-}
-.prototype-window {
-  width: 1080px;
-  height: 720px;
-  margin: 0 auto;
-  border: 2px solid #4c4c4c;
-  background: var(--window);
-  display: grid;
-  grid-template-columns: 200px minmax(0, 1fr);
-  overflow: hidden;
-  box-shadow: 0 8px 20px rgba(0,0,0,.12);
-}
-.prototype-window.compact {
-  width: 800px;
-  height: 540px;
-  grid-template-columns: 60px minmax(0, 1fr);
-}
-.app-nav {
-  border-right: 1px solid var(--line);
-  background: var(--surface);
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-.brand {
-  height: 56px;
-  display: flex;
-  align-items: center;
-  padding: 0 16px;
-  border-bottom: 1px solid var(--line);
-  font-size: 17px;
-  font-weight: 700;
-}
-.nav-list { display: grid; gap: 4px; padding: 10px 8px; }
-.nav-button {
-  border: 0;
-  display: flex;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 9px;
-  min-height: 38px;
-  background: transparent;
-  text-align: left;
-}
-.nav-button.is-active { background: var(--selected); font-weight: 600; }
-.nav-icon {
-  width: 22px;
-  height: 22px;
-  border: 1px solid var(--line-strong);
-  border-radius: 4px;
-  display: grid;
-  place-items: center;
-  flex: 0 0 auto;
-  font-size: 10px;
-}
-.nav-footer {
-  margin-top: auto;
-  border-top: 1px solid var(--line);
-  padding: 10px;
-}
-.collector-state { margin-bottom: 7px; color: var(--muted); }
-.collector-dot { display: inline-block; width: 8px; height: 8px; border: 1px solid #333; border-radius: 50%; margin-right: 6px; }
-.prototype-window.compact .brand { justify-content: center; padding: 0; font-size: 0; }
-.prototype-window.compact .brand::after { content: "WT"; font-size: 14px; }
-.prototype-window.compact .nav-button { justify-content: center; padding: 0; }
-.prototype-window.compact .nav-label,
-.prototype-window.compact .collector-label { display: none; }
-.prototype-window.compact .nav-footer { padding: 8px; text-align: center; }
-.prototype-window.compact .nav-footer button { width: 38px; padding: 0; }
-.app-main { min-width: 0; overflow: hidden; }
-.page {
-  height: 100%;
-  display: none;
-  overflow: auto;
-  padding: 18px 22px 24px;
-}
-.page.is-active { display: block; }
-.page-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 16px;
-  margin-bottom: 14px;
-}
-.page-header h1 { margin: 0 0 3px; font-size: 21px; }
-.page-description { color: var(--muted); }
-.toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 7px;
-  padding: 9px;
-  border: 1px solid var(--line);
-  background: var(--surface);
-  margin-bottom: 12px;
-}
-.toolbar .spacer { flex: 1; }
-.surface { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
-.section-title { font-weight: 650; margin-bottom: 8px; }
-.muted { color: var(--muted); }
-.metric-value { font-size: 19px; font-weight: 700; font-variant-numeric: tabular-nums; }
-.time { font-variant-numeric: tabular-nums; white-space: nowrap; }
-.status-line { display: flex; align-items: center; gap: 6px; color: var(--muted); }
-.status-dot { width: 8px; height: 8px; border: 1px solid #222; border-radius: 50%; }
-.current-activity {
-  padding: 15px 16px;
-  display: grid;
-  grid-template-columns: minmax(0,1fr) auto;
-  gap: 8px 20px;
-  margin-bottom: 12px;
-}
-.current-activity .activity-name { font-size: 16px; font-weight: 650; }
-.current-activity .activity-time { grid-row: 1 / span 2; grid-column: 2; align-self: center; font-size: 24px; font-weight: 700; font-variant-numeric: tabular-nums; }
-.metrics-strip {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0,1fr));
-  border: 1px solid var(--line);
-  background: var(--surface);
-  margin-bottom: 12px;
-}
-.metric { padding: 12px 14px; border-right: 1px solid var(--line); }
-.metric:last-child { border-right: 0; }
-.overview-grid { display: grid; grid-template-columns: 1.05fr .95fr; gap: 12px; }
-.panel { padding: 13px; }
-.row-list { display: grid; }
-.data-row {
-  min-height: 38px;
-  display: grid;
-  grid-template-columns: minmax(0,1fr) auto;
-  gap: 12px;
-  align-items: center;
-  border-top: 1px solid var(--line);
-  padding: 7px 2px;
-}
-.data-row:first-child { border-top: 0; }
-.data-row small { display: block; color: var(--muted); margin-top: 2px; }
-.timeline-page { overflow: hidden; }
-.timeline-page .page-header { margin-bottom: 10px; }
-.timeline-toolbar { margin-bottom: 10px; }
-.timeline-workspace {
-  height: calc(100% - 112px);
-  min-height: 0;
-  display: grid;
-  grid-template-columns: minmax(0,1fr) 310px;
-  gap: 10px;
-}
-.timeline-list, .inspector { min-height: 0; overflow: auto; }
-.timeline-list { padding: 10px 12px; }
-.hour-marker { color: var(--muted); margin: 10px 0 4px; display: flex; align-items: center; gap: 8px; }
-.hour-marker::after { content: ""; height: 1px; background: var(--line); flex: 1; }
-.timeline-row {
-  width: 100%;
-  display: grid;
-  grid-template-columns: 62px minmax(0,1fr) auto;
-  align-items: center;
-  gap: 10px;
-  border: 1px solid transparent;
-  border-radius: var(--radius);
-  padding: 8px;
-  background: transparent;
-  text-align: left;
-}
-.timeline-row:hover, .timeline-row.is-selected { background: var(--selected); border-color: var(--line-strong); }
-.timeline-row .live { font-size: 11px; color: var(--muted); }
-.inspector { padding: 13px; }
-.inspector-head { display: flex; justify-content: space-between; gap: 8px; border-bottom: 1px solid var(--line); padding-bottom: 10px; margin-bottom: 10px; }
-.summary-row { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 8px; padding: 7px 0; border-bottom: 1px solid var(--line); }
-.form-grid { display: grid; gap: 9px; margin-top: 12px; }
-.form-grid label { display: grid; gap: 4px; }
-.form-grid input, .form-grid select, .form-grid textarea { width: 100%; padding: 6px 8px; }
-.form-actions { display: flex; align-items: center; gap: 7px; margin-top: 11px; }
-.form-actions .spacer { flex: 1; }
-.primary { background: #dedede; font-weight: 650; }
-.danger { color: var(--danger); border-color: #a97878; }
-.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 8px; }
-.tab { border: 0; border-radius: 0; background: transparent; border-bottom: 2px solid transparent; }
-.tab.is-active { border-bottom-color: #333; font-weight: 650; }
-.summary-strip { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); margin-bottom: 12px; border: 1px solid var(--line); background: var(--surface); }
-.table-wrap { overflow: auto; }
-table { width: 100%; border-collapse: collapse; background: var(--surface); }
-th, td { padding: 9px 10px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
-th { background: var(--surface-subtle); font-size: 12px; }
-.disclosure { margin-top: 12px; padding: 11px 13px; }
-.rules-list { display: grid; gap: 7px; }
-.project-group { overflow: hidden; }
-.project-head {
-  display: grid;
-  grid-template-columns: auto minmax(0,1fr) auto auto;
-  gap: 9px;
-  align-items: center;
-  min-height: 48px;
-  padding: 8px 10px;
-}
-.project-rules { border-top: 1px solid var(--line); padding: 0 12px 7px 42px; }
-.rule-row { display: grid; grid-template-columns: 72px minmax(0,1fr) auto; gap: 8px; align-items: center; padding: 7px 0; border-bottom: 1px solid var(--line); }
-.rule-row:last-child { border-bottom: 0; }
-.settings-layout { display: grid; grid-template-columns: 150px minmax(0,1fr); gap: 12px; }
-.settings-nav { padding: 7px; align-self: start; }
-.settings-nav button { width: 100%; border: 0; text-align: left; background: transparent; }
-.settings-nav button.is-active { background: var(--selected); font-weight: 650; }
-.settings-content { padding: 14px; }
-.setting-row { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 16px; padding: 11px 0; border-bottom: 1px solid var(--line); align-items: center; }
-.setting-row:last-child { border-bottom: 0; }
-.setting-row small { color: var(--muted); display: block; margin-top: 3px; }
-.advanced-block { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 12px; }
-.compact-only { display: none; }
-.drawer {
-  display: none;
-  position: absolute;
-  inset: 0 0 0 auto;
-  width: min(420px, calc(100% - 20px));
-  height: 100%;
-  background: var(--surface);
-  border-left: 1px solid var(--line-strong);
-  padding: 14px;
-  overflow: auto;
-  z-index: 10;
-  box-shadow: -8px 0 16px rgba(0,0,0,.15);
-}
-.drawer.is-open { display: block; }
-.drawer-backdrop {
-  display: none;
-  position: absolute;
-  inset: 0;
-  background: rgba(0,0,0,.15);
-  z-index: 9;
-}
-.drawer-backdrop.is-open { display: block; }
-.app-main { position: relative; }
-.prototype-window.compact .page { padding: 12px 14px 18px; }
-.prototype-window.compact .page-header h1 { font-size: 18px; }
-.prototype-window.compact .page-description { display: none; }
-.prototype-window.compact .page-header { align-items: center; margin-bottom: 9px; }
-.prototype-window.compact .metrics-strip,
-.prototype-window.compact .summary-strip { grid-template-columns: repeat(2, minmax(0,1fr)); }
-.prototype-window.compact .metric:nth-child(2) { border-right: 0; }
-.prototype-window.compact .metric:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
-.prototype-window.compact .overview-grid { grid-template-columns: 1fr; }
-.prototype-window.compact .current-activity { padding: 11px 12px; }
-.prototype-window.compact .current-activity .activity-time { font-size: 19px; }
-.prototype-window.compact .timeline-workspace { grid-template-columns: 1fr; height: calc(100% - 92px); }
-.prototype-window.compact .timeline-workspace .inspector { display: none; }
-.prototype-window.compact .timeline-toolbar .wide-filter { display: none; }
-.prototype-window.compact .compact-only { display: inline-flex; }
-.prototype-window.compact .settings-layout { grid-template-columns: 1fr; }
-.prototype-window.compact .settings-nav { display: flex; overflow-x: auto; }
-.prototype-window.compact .settings-nav button { width: auto; white-space: nowrap; }
-.prototype-window.compact .project-head { grid-template-columns: auto minmax(0,1fr) auto; }
-.prototype-window.compact .project-head .project-secondary { display: none; }
-.prototype-window.compact .summary-strip .metric { min-width: 0; }
-.prototype-window.compact .page[data-page="overview"] { overflow: auto; }
-@media (max-width: 900px) {
-  .viewport-stage { padding: 8px; }
-}
+*{box-sizing:border-box}
+body{margin:0;background:var(--canvas);color:var(--text);font-size:13px}
+button,input,select,textarea{font:inherit;color:inherit}
+button,input,select,textarea{border:1px solid var(--line-strong);border-radius:var(--radius);background:var(--surface)}
+button{min-height:30px;padding:5px 10px;cursor:pointer}
+button:hover{background:var(--surface-2)}
+button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid #333;outline-offset:2px}
+button[disabled]{opacity:.5;cursor:not-allowed}
+textarea{resize:vertical}
+.prototype-note{padding:9px 14px;border-bottom:1px solid var(--line-strong);background:#fff7d6;line-height:1.5}
+.review-toolbar{display:flex;align-items:center;gap:8px;padding:9px 14px;border-bottom:1px solid var(--line);background:var(--surface);flex-wrap:wrap}
+.review-toolbar strong{margin-right:6px}
+.review-toolbar button.is-active{background:var(--selected);font-weight:650}
+.viewport-stage{padding:18px;overflow:auto;min-height:calc(100vh - 92px)}
+.prototype-window{position:relative;width:1080px;height:720px;margin:0 auto;border:2px solid #4b4b4b;background:var(--window);display:grid;grid-template-columns:200px minmax(0,1fr);overflow:hidden;box-shadow:0 8px 20px rgba(0,0,0,.12)}
+.prototype-window.compact{width:800px;height:540px;grid-template-columns:60px minmax(0,1fr)}
+.app-nav{border-right:1px solid var(--line);background:var(--surface);display:flex;flex-direction:column;min-width:0}
+.brand{height:56px;display:flex;align-items:center;padding:0 16px;border-bottom:1px solid var(--line);font-size:17px;font-weight:700}
+.nav-list{display:grid;gap:4px;padding:10px 8px}
+.nav-button{border:0;display:flex;align-items:center;justify-content:flex-start;gap:9px;min-height:38px;background:transparent;text-align:left}
+.nav-button.is-active{background:var(--selected);font-weight:650}
+.nav-icon{width:22px;height:22px;border:1px solid var(--line-strong);border-radius:4px;display:grid;place-items:center;flex:0 0 auto;font-size:10px}
+.nav-footer{margin-top:auto;border-top:1px solid var(--line);padding:10px}
+.collector-state{margin-bottom:7px;color:var(--muted)}
+.collector-dot,.status-dot{display:inline-block;width:8px;height:8px;border:1px solid #333;border-radius:50%;margin-right:6px}
+.app-main{position:relative;min-width:0;overflow:hidden}
+.page{height:100%;display:none;overflow:auto;padding:18px 22px 24px}
+.page.is-active{display:block}
+.page-header{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:12px}
+.page-header h1{margin:0 0 3px;font-size:21px}
+.page-description,.muted{color:var(--muted)}
+.page-total{font-size:18px;font-weight:700;font-variant-numeric:tabular-nums}
+.toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:7px;padding:9px;border:1px solid var(--line);background:var(--surface);margin-bottom:10px}
+.toolbar .spacer{flex:1}
+.surface{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius)}
+.panel{padding:13px}
+.section-title{font-weight:650;margin-bottom:8px}
+.section-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px}
+.time{font-variant-numeric:tabular-nums;white-space:nowrap}
+.primary{background:#dedede;font-weight:650}
+.danger{color:var(--danger);border-color:#a97878;background:var(--danger-bg)}
+.text-button{border:0;background:transparent;min-height:26px;padding:3px 5px;text-decoration:underline;text-underline-offset:2px}
+.icon-button{width:30px;padding:0;display:grid;place-items:center}
+.badge{display:inline-flex;align-items:center;min-height:20px;padding:1px 6px;border:1px solid var(--line);border-radius:999px;font-size:11px;color:var(--muted);background:var(--surface-2)}
+.derived{color:var(--muted)}
+.derived::before{content:"自动摘要：";font-size:11px}
+.empty-line{padding:9px 0;color:var(--muted)}
+.row-list{display:grid}
+.data-row{min-height:50px;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center;border-top:1px solid var(--line);padding:7px 2px}
+.data-row:first-child{border-top:0}
+.data-row small{display:block;color:var(--muted);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.current-activity{padding:14px 16px;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:5px 20px;margin-bottom:10px}
+.current-activity .current-project{font-size:16px;font-weight:650}
+.current-activity .current-time{grid-row:1 / span 2;grid-column:2;align-self:center;font-size:24px;font-weight:700;font-variant-numeric:tabular-nums}
+.overview-grid{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(280px,.75fr);gap:10px}
+.review-item{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;padding:8px 0;border-top:1px solid var(--line)}
+.review-item:first-child{border-top:0}
+.review-reason{font-size:11px;color:var(--danger);margin-top:3px}
+.review-more{display:flex;align-items:center;justify-content:space-between;border-top:1px solid var(--line);padding-top:8px;margin-top:3px}
+.timeline-page{overflow:hidden}
+.timeline-page .page-header{margin-bottom:9px}
+.timeline-workspace{height:calc(100% - 104px);min-height:0;display:grid;grid-template-columns:minmax(0,1fr) 350px;gap:10px}
+.segment-list,.inspector{min-height:0;overflow:auto}
+.segment-list{padding:8px}
+.segment-row{width:100%;display:grid;grid-template-columns:58px minmax(0,1fr) auto;gap:10px;align-items:start;border:1px solid transparent;border-radius:var(--radius);padding:9px;background:transparent;text-align:left}
+.segment-row+.segment-row{margin-top:3px}
+.segment-row:hover,.segment-row.is-selected{background:var(--selected);border-color:var(--line-strong)}
+.segment-main{min-width:0}
+.segment-title{display:flex;align-items:center;gap:6px;font-weight:650}
+.segment-description{margin-top:3px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}
+.live-label{font-size:11px;color:var(--muted);font-weight:400}
+.inspector{padding:12px}
+.edit-inline{display:grid;grid-template-columns:minmax(0,1fr) 98px;gap:8px;margin-bottom:9px}
+.field{display:grid;gap:4px}
+.field input,.field select,.field textarea{width:100%;padding:6px 8px}
+.editor-state-row{display:flex;align-items:center;gap:7px;margin:7px 0 11px}
+.editor-state-row .spacer{flex:1}
+.inline-status{color:var(--muted);min-width:64px}
+.activity-details{border-top:1px solid var(--line);padding-top:10px}
+.activity-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;padding:8px 0;border-top:1px solid var(--line)}
+.activity-row:first-of-type{border-top:0}
+.activity-title{font-weight:600}
+.activity-subtitle{color:var(--muted);font-size:12px;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.activity-actions{display:flex;align-items:center;gap:6px}
+.tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin-bottom:8px}
+.tab{border:0;border-radius:0;background:transparent;border-bottom:2px solid transparent}
+.tab.is-active{border-bottom-color:#333;font-weight:650}
+.summary-strip{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));margin-bottom:10px;border:1px solid var(--line);background:var(--surface)}
+.metric{padding:11px 13px;border-right:1px solid var(--line)}
+.metric:last-child{border-right:0}
+.metric-value{font-size:18px;font-weight:700;font-variant-numeric:tabular-nums}
+.filter-grid{display:grid;grid-template-columns:auto minmax(150px,1fr) auto minmax(145px,1fr);gap:7px;align-items:center;flex:1}
+.quick-ranges{display:flex;gap:5px}
+.table-wrap{overflow:auto}
+table{width:100%;border-collapse:collapse;background:var(--surface)}
+th,td{padding:9px 10px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap}
+th{background:var(--surface-2);font-size:12px}
+.disclosure{margin-top:10px;padding:10px 12px}
+.rules-list{display:grid;gap:7px}
+.project-group{overflow:hidden}
+.project-summary{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:9px;align-items:start;padding:10px}
+.project-meta{min-width:0}
+.project-name{font-weight:650}
+.project-description{color:var(--muted);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.project-stats{font-size:12px;color:var(--muted);margin-top:4px;display:flex;gap:14px;flex-wrap:wrap}
+.project-actions{display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end}
+.project-rules{border-top:1px solid var(--line);padding:0 12px 7px 43px}
+.rule-row{display:grid;grid-template-columns:72px minmax(0,1fr) auto;gap:8px;align-items:center;padding:7px 0;border-bottom:1px solid var(--line)}
+.rule-row:last-child{border-bottom:0}
+.settings-layout{display:grid;grid-template-columns:150px minmax(0,1fr);gap:10px}
+.settings-nav{padding:7px;align-self:start}
+.settings-nav button{width:100%;border:0;text-align:left;background:transparent}
+.settings-nav button.is-active{background:var(--selected);font-weight:650}
+.settings-content{padding:14px}
+.setting-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:16px;padding:11px 0;border-bottom:1px solid var(--line);align-items:center}
+.setting-row:last-child{border-bottom:0}
+.setting-row small{color:var(--muted);display:block;margin-top:3px}
+.advanced-block{margin-top:12px;border-top:1px solid var(--line);padding-top:12px}
+.drawer-backdrop{display:none;position:absolute;inset:0;background:rgba(0,0,0,.18);z-index:20}
+.drawer-backdrop.is-open{display:block}
+.drawer{display:none;position:absolute;inset:0 0 0 auto;width:min(430px,calc(100% - 20px));height:100%;background:var(--surface);border-left:1px solid var(--line-strong);padding:14px;overflow:auto;z-index:21;box-shadow:-8px 0 16px rgba(0,0,0,.15)}
+.drawer.is-open{display:block}
+.drawer-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding-bottom:10px;border-bottom:1px solid var(--line);margin-bottom:11px}
+.drawer-head strong{font-size:16px}
+.drawer-actions{display:flex;justify-content:flex-end;gap:7px;margin-top:12px}
+.drawer-tabs{display:flex;gap:5px;margin-bottom:10px}
+.drawer-tab.is-active{background:var(--selected);font-weight:650}
+.modal-backdrop{display:none;position:absolute;inset:0;background:rgba(0,0,0,.28);z-index:30;align-items:center;justify-content:center;padding:20px}
+.modal-backdrop.is-open{display:flex}
+.modal{width:min(430px,100%);background:var(--surface);border:1px solid var(--line-strong);border-radius:var(--radius);padding:16px;box-shadow:0 10px 30px rgba(0,0,0,.25)}
+.modal h2{margin:0 0 9px;font-size:18px}
+.modal-object{padding:9px 10px;background:var(--surface-2);border:1px solid var(--line);margin:10px 0;line-height:1.5}
+.modal-warning{color:var(--danger)}
+.modal-actions{display:flex;justify-content:flex-end;gap:7px;margin-top:14px}
+.menu{display:none;position:absolute;right:12px;top:116px;width:210px;background:var(--surface);border:1px solid var(--line-strong);z-index:16;padding:6px;box-shadow:0 6px 18px rgba(0,0,0,.18)}
+.menu.is-open{display:grid}
+.menu button{text-align:left;border:0;background:transparent}
+.compact-only{display:none}
+.prototype-window.compact .brand{justify-content:center;padding:0;font-size:0}
+.prototype-window.compact .brand::after{content:"WT";font-size:14px}
+.prototype-window.compact .nav-button{justify-content:center;padding:0}
+.prototype-window.compact .nav-label,.prototype-window.compact .collector-label{display:none}
+.prototype-window.compact .nav-footer{padding:8px;text-align:center}
+.prototype-window.compact .nav-footer button{width:38px;padding:0}
+.prototype-window.compact .page{padding:12px 14px 18px}
+.prototype-window.compact .page-header{align-items:center;margin-bottom:9px}
+.prototype-window.compact .page-header h1{font-size:18px}
+.prototype-window.compact .page-description{display:none}
+.prototype-window.compact .overview-grid{grid-template-columns:1fr}
+.prototype-window.compact .overview-grid .recent-panel{order:2}
+.prototype-window.compact .overview-grid .review-panel{order:1}
+.prototype-window.compact .current-activity{padding:11px 12px}
+.prototype-window.compact .current-activity .current-time{font-size:19px}
+.prototype-window.compact .timeline-workspace{grid-template-columns:1fr;height:calc(100% - 90px)}
+.prototype-window.compact .timeline-workspace .inspector{display:none}
+.prototype-window.compact .timeline-toolbar .wide-only{display:none}
+.prototype-window.compact .compact-only{display:inline-flex}
+.prototype-window.compact .summary-strip{grid-template-columns:repeat(2,minmax(0,1fr))}
+.prototype-window.compact .metric:nth-child(2){border-right:0}
+.prototype-window.compact .metric:nth-child(-n+2){border-bottom:1px solid var(--line)}
+.prototype-window.compact .filter-grid{grid-template-columns:auto minmax(0,1fr)}
+.prototype-window.compact .filter-grid .date-label,.prototype-window.compact .filter-grid .date-range{display:none}
+.prototype-window.compact .quick-ranges{width:100%}
+.prototype-window.compact .quick-ranges button{flex:1;padding-inline:5px}
+.prototype-window.compact .project-summary{grid-template-columns:auto minmax(0,1fr)}
+.prototype-window.compact .project-actions{grid-column:2;justify-content:flex-start}
+.prototype-window.compact .settings-layout{grid-template-columns:1fr}
+.prototype-window.compact .settings-nav{display:flex;overflow-x:auto}
+.prototype-window.compact .settings-nav button{width:auto;white-space:nowrap}
+.prototype-window.compact .drawer{width:min(430px,calc(100% - 10px))}
+@media(max-width:900px){.viewport-stage{padding:8px}}
 </style>
 </head>
 <body>
 <div class="prototype-note">
-  <strong>阶段 2 低保真设计稿。</strong>
-  本文件位于 <code>docs/</code>，不调用 pywebview、bridge、API 或浏览器存储，不属于正式应用资源。灰度样式只用于检查信息架构、空间分配和交互层级，不代表最终视觉设计。
+  <strong>最终静态低保真原型。</strong>
+  仅用于验证信息架构、空间分配和交互层级；不调用 pywebview、bridge、API 或浏览器存储，不代表最终视觉设计。
 </div>
 <div class="review-toolbar" aria-label="原型审查工具">
   <strong>模拟窗口</strong>
   <button type="button" class="viewport-button is-active" data-mode="standard">1080×720</button>
   <button type="button" class="viewport-button" data-mode="compact">800×540</button>
-  <span class="muted">可通过左侧导航切换五个页面；Timeline 在紧凑模式下点击时段打开 Drawer。</span>
+  <span class="muted">可切换五个页面；Timeline、删除确认、统计筛选和项目 Drawer 均可操作。</span>
 </div>
 <div class="viewport-stage">
-  <div id="prototype-window" class="prototype-window">
-    <aside class="app-nav" aria-label="主导航">
-      <div class="brand">WorkTrace</div>
-      <nav class="nav-list">
-        <button type="button" class="nav-button is-active" data-target="overview" aria-current="page"><span class="nav-icon">O</span><span class="nav-label">概览</span></button>
-        <button type="button" class="nav-button" data-target="timeline"><span class="nav-icon">T</span><span class="nav-label">时间详情</span></button>
-        <button type="button" class="nav-button" data-target="statistics"><span class="nav-icon">S</span><span class="nav-label">统计与导出</span></button>
-        <button type="button" class="nav-button" data-target="rules"><span class="nav-icon">R</span><span class="nav-label">项目规则</span></button>
-        <button type="button" class="nav-button" data-target="settings"><span class="nav-icon">P</span><span class="nav-label">设置与隐私</span></button>
-      </nav>
-      <div class="nav-footer">
-        <div class="collector-state"><span class="collector-dot"></span><span class="collector-label">记录正常</span></div>
-        <button type="button" title="暂停记录"><span class="collector-label">暂停记录</span><span aria-hidden="true">Ⅱ</span></button>
+<div id="prototype-window" class="prototype-window">
+  <aside class="app-nav" aria-label="主导航">
+    <div class="brand">WorkTrace</div>
+    <nav class="nav-list">
+      <button type="button" class="nav-button is-active" data-target="overview" aria-current="page"><span class="nav-icon">O</span><span class="nav-label">概览</span></button>
+      <button type="button" class="nav-button" data-target="timeline"><span class="nav-icon">T</span><span class="nav-label">时间详情</span></button>
+      <button type="button" class="nav-button" data-target="statistics"><span class="nav-icon">S</span><span class="nav-label">统计与导出</span></button>
+      <button type="button" class="nav-button" data-target="rules"><span class="nav-icon">R</span><span class="nav-label">项目规则</span></button>
+      <button type="button" class="nav-button" data-target="settings"><span class="nav-icon">P</span><span class="nav-label">设置与隐私</span></button>
+    </nav>
+    <div class="nav-footer">
+      <div class="collector-state"><span class="collector-dot"></span><span class="collector-label">记录正常</span></div>
+      <button type="button" title="暂停记录"><span class="collector-label">暂停记录</span><span aria-hidden="true">Ⅱ</span></button>
+    </div>
+  </aside>
+
+  <main class="app-main">
+    <section class="page is-active" data-page="overview">
+      <header class="page-header">
+        <div><h1>今日概览</h1><div class="page-description">当前活动、待整理和最近活动</div></div>
+        <div><div class="muted">今日总时长</div><div class="page-total">06:18:20</div></div>
+      </header>
+      <div class="surface current-activity" data-open-segment="current">
+        <div class="section-title">当前活动</div>
+        <div class="current-time">00:42:16</div>
+        <div><div class="current-project">项目 A</div><div>起草许可协议并核对目标专利清单</div></div>
       </div>
-    </aside>
-
-    <main class="app-main">
-      <section class="page is-active" data-page="overview">
-        <header class="page-header">
-          <div><h1>今日概览</h1><div class="page-description">2026-07-22 · 记录正常</div></div>
-          <button type="button">刷新</button>
-        </header>
-        <div class="surface current-activity">
-          <div class="section-title">当前活动</div>
-          <div class="activity-time">00:42:16</div>
-          <div><div class="activity-name">Microsoft Word · 项目 A</div><div class="muted">文档编辑 · 10:14 开始</div></div>
-        </div>
-        <div class="metrics-strip">
-          <div class="metric"><div class="muted">今日总时长</div><div class="metric-value">06:18:20</div></div>
-          <div class="metric"><div class="muted">已归类</div><div class="metric-value">05:47:10</div></div>
-          <div class="metric"><div class="muted">未归类</div><div class="metric-value">00:31:10</div></div>
-          <div class="metric"><div class="muted">项目数</div><div class="metric-value">5</div></div>
-        </div>
-        <div class="overview-grid">
-          <div class="surface panel">
-            <div class="section-title">今日项目</div>
-            <div class="row-list">
-              <div class="data-row"><div>项目 A<small>主要文档工作</small></div><strong class="time">02:41:10</strong></div>
-              <div class="data-row"><div>项目 B</div><strong class="time">01:56:22</strong></div>
-              <div class="data-row"><div>未归类 <button type="button">查看</button></div><strong class="time">00:31:10</strong></div>
-              <div class="data-row"><div>其他</div><strong class="time">01:09:38</strong></div>
-            </div>
-          </div>
-          <div class="surface panel">
-            <div class="section-title">最近活动</div>
-            <div class="row-list">
-              <div class="data-row"><div>项目 A<small>10:14 · 进行中</small></div><strong class="time">00:42:16</strong></div>
-              <div class="data-row"><div>未归类<small>09:20</small></div><strong class="time">00:18:03</strong></div>
-              <div class="data-row"><div>项目 B<small>08:43</small></div><strong class="time">00:36:40</strong></div>
-            </div>
+      <div class="overview-grid">
+        <div class="surface panel recent-panel">
+          <div class="section-title">最近活动</div>
+          <div class="row-list">
+            <button type="button" class="data-row text-button" data-open-segment="recent-b"><div style="text-align:left"><strong>08:43 · 项目 B</strong><small>准备客户会议材料</small></div><strong class="time">00:36:40</strong></button>
+            <button type="button" class="data-row text-button" data-open-segment="recent-d"><div style="text-align:left"><strong>07:32 · 项目 D</strong><small>整理证据目录和庭审笔记</small></div><strong class="time">00:24:18</strong></button>
+            <button type="button" class="data-row text-button" data-open-segment="recent-e"><div style="text-align:left"><strong>07:05 · 项目 E</strong><small class="derived">邮件 · PDF 阅读器 · Excel</small></div><strong class="time">00:19:06</strong></button>
           </div>
         </div>
-      </section>
-
-      <section class="page timeline-page" data-page="timeline">
-        <header class="page-header">
-          <div><h1>时间详情</h1><div class="page-description">查看和修正当日活动</div></div>
-        </header>
-        <div class="toolbar timeline-toolbar">
-          <button type="button" aria-label="前一天">‹</button>
-          <input type="date" value="2026-07-22" aria-label="日期">
-          <button type="button" aria-label="后一天">›</button>
-          <button type="button">今日</button>
-          <select class="wide-filter" aria-label="项目筛选"><option>项目：全部</option></select>
-          <select class="wide-filter" aria-label="状态筛选"><option>状态：全部</option></select>
-          <button type="button" class="compact-only">筛选</button>
-          <span class="spacer"></span>
-          <strong class="time">总计 06:18:20</strong>
-        </div>
-        <div class="timeline-workspace">
-          <div class="surface timeline-list" role="listbox" aria-label="活动时段">
-            <div class="hour-marker">08:00</div>
-            <button type="button" class="timeline-row" role="option">
-              <span class="time">08:43</span><span><strong>项目 B</strong><small class="muted">4 条活动</small></span><strong class="time">00:36:40</strong>
-            </button>
-            <div class="hour-marker">09:00</div>
-            <button type="button" class="timeline-row" role="option">
-              <span class="time">09:20</span><span><strong>未归类</strong><small class="muted">2 条活动</small></span><strong class="time">00:18:03</strong>
-            </button>
-            <div class="hour-marker">10:00</div>
-            <button type="button" class="timeline-row is-selected" role="option" aria-selected="true">
-              <span class="time">10:14</span><span><strong>项目 A</strong><small class="live">● 进行中 · 3 条活动</small></span><strong class="time">00:42:16</strong>
-            </button>
-            <div class="hour-marker">11:00</div>
-            <button type="button" class="timeline-row" role="option">
-              <span class="time">11:08</span><span><strong>项目 C</strong><small class="muted">已修正 · 5 条活动</small></span><strong class="time">00:27:00</strong>
-            </button>
+        <div class="surface panel review-panel">
+          <div class="section-head"><div class="section-title" style="margin:0">待整理</div><span class="badge">今日</span></div>
+          <div class="review-item">
+            <div><strong>09:20 · 未归类</strong><div class="derived">专利检索页面 · 客户邮件 · PDF 阅读器</div><div class="review-reason">缺少项目和用户描述</div></div>
+            <button type="button" data-review-target="unclassified">整理</button>
           </div>
-          <aside class="surface inspector" aria-label="时段详情">
-            <div class="inspector-head"><div><strong>时段详情</strong><div class="muted">10:14–进行中 · 00:42:16</div></div><button type="button" aria-label="关闭详情">×</button></div>
-            <div class="section-title">活动耗时</div>
-            <div class="summary-row"><span>Word 文档编辑</span><strong class="time">00:31:10</strong></div>
-            <div class="summary-row"><span>Edge 资料查询</span><strong class="time">00:11:06</strong></div>
-            <div class="form-grid">
-              <label>项目<select><option>项目 A</option></select></label>
-              <label>申报时长（分钟）<input type="number" value="42"></label>
-              <label>备注<textarea rows="3">准备客户会议材料</textarea></label>
-            </div>
-            <div class="form-actions"><button type="button" class="primary">保存</button><button type="button">取消</button><span class="spacer"></span><button type="button">更多 ▾</button></div>
-          </aside>
-        </div>
-      </section>
-
-      <section class="page" data-page="statistics">
-        <header class="page-header">
-          <div><h1>统计与导出</h1><div class="page-description">统计仅包含已完成活动</div></div>
-          <button type="button" class="primary">导出 CSV</button>
-        </header>
-        <div class="toolbar">
-          <input type="date" value="2026-07-01" aria-label="开始日期"><span>至</span><input type="date" value="2026-07-22" aria-label="结束日期"><button type="button">加载</button>
-          <span class="spacer"></span><button type="button">今天</button><button type="button">最近 7 天</button><button type="button">本月</button>
-        </div>
-        <div class="summary-strip">
-          <div class="metric"><div class="muted">总时长</div><div class="metric-value">42:16:08</div></div>
-          <div class="metric"><div class="muted">活动数</div><div class="metric-value">286</div></div>
-          <div class="metric"><div class="muted">项目数</div><div class="metric-value">12</div></div>
-          <div class="metric"><div class="muted">应用数</div><div class="metric-value">18</div></div>
-        </div>
-        <div class="surface panel">
-          <div class="tabs" role="tablist"><button type="button" class="tab is-active" role="tab" aria-selected="true">按项目</button><button type="button" class="tab" role="tab">按应用</button><button type="button" class="tab" role="tab">按状态</button></div>
-          <div class="table-wrap">
-            <table><thead><tr><th>名称</th><th>时长</th><th>活动数</th><th>占比</th></tr></thead><tbody>
-              <tr><td>项目 A</td><td class="time">12:30:10</td><td>48</td><td>29.6%</td></tr>
-              <tr><td>项目 B</td><td class="time">09:18:22</td><td>35</td><td>22.0%</td></tr>
-              <tr><td>未归类</td><td class="time">03:11:40</td><td>29</td><td>7.5%</td></tr>
-              <tr><td>项目 C</td><td class="time">02:55:05</td><td>21</td><td>6.9%</td></tr>
-            </tbody></table>
+          <div class="review-item">
+            <div><strong>08:05 · 项目 C</strong><div class="derived">邮件 · Excel · 浏览器</div><div class="review-reason">缺少用户描述</div></div>
+            <button type="button" data-review-target="project-c">整理</button>
           </div>
+          <div class="review-more"><span class="muted">还有 2 条待整理记录</span><button type="button" data-target-page="timeline">查看全部</button></div>
         </div>
-        <div class="surface disclosure"><strong>导出范围与隐私说明</strong><span class="muted"> · 2026-07-01 至 2026-07-22，286 条活动，不包含窗口标题和文件路径</span><button type="button" style="float:right">展开 ▾</button></div>
-      </section>
+      </div>
+    </section>
 
-      <section class="page" data-page="rules">
-        <header class="page-header">
-          <div><h1>项目规则</h1><div class="page-description">自动将活动归入项目</div></div>
-          <div><button type="button" class="primary">新建规则</button> <button type="button">新建项目</button></div>
-        </header>
-        <div class="toolbar"><input type="search" placeholder="搜索项目或规则" style="min-width:260px"><span class="spacer"></span><label>排序 <select><option>最近使用</option><option>首字母</option></select></label></div>
-        <div class="rules-list">
-          <article class="surface project-group">
-            <div class="project-head"><button type="button" aria-label="折叠项目 A">⌄</button><div><strong>项目 A</strong><div class="muted">客户 A 专利事务 · 中文 · 上次使用 10:14</div></div><button type="button">编辑</button><button type="button" class="project-secondary">更多 ▾</button></div>
-            <div class="project-rules"><div class="rule-row"><span>文件夹</span><span>D:\Clients\A\...</span><button type="button" class="danger">删除</button></div><div class="rule-row"><span>关键词</span><span>Agilent</span><button type="button" class="danger">删除</button></div></div>
-          </article>
-          <article class="surface project-group"><div class="project-head"><button type="button" aria-label="展开项目 B">›</button><div><strong>项目 B</strong><div class="muted">诉讼项目 · 中文 · 昨日使用</div></div><button type="button">编辑</button><button type="button" class="project-secondary">更多 ▾</button></div></article>
-          <article class="surface project-group"><div class="project-head"><button type="button" aria-label="展开项目 C">›</button><div><strong>项目 C</strong><div class="muted">内部事务 · 英语 · 7 天前使用</div></div><button type="button">编辑</button><button type="button" class="project-secondary">更多 ▾</button></div></article>
+    <section class="page timeline-page" data-page="timeline">
+      <header class="page-header">
+        <div><h1>时间详情</h1><div class="page-description">查看和整理当日时间段</div></div>
+      </header>
+      <div class="toolbar timeline-toolbar">
+        <button type="button" aria-label="前一天">‹</button>
+        <input type="date" value="2026-07-22" aria-label="日期">
+        <button type="button" aria-label="后一天">›</button>
+        <button type="button">今日</button>
+        <select class="wide-only" aria-label="项目筛选"><option>项目：全部</option><option>项目 A</option><option>未归类</option></select>
+        <button type="button" class="compact-only">项目 ▾</button>
+        <span class="spacer"></span>
+        <strong class="time">总计 06:18:20</strong>
+      </div>
+      <div class="timeline-workspace">
+        <div class="surface segment-list" role="listbox" aria-label="时间段列表">
+          <button type="button" class="segment-row is-selected" role="option" aria-selected="true" data-segment="current" data-project="项目 A" data-duration="42" data-description="起草许可协议并核对目标专利清单">
+            <span class="time">10:14</span><span class="segment-main"><span class="segment-title">项目 A <span class="live-label">● 进行中</span></span><span class="segment-description">起草许可协议并核对目标专利清单</span></span><strong class="time">00:42:16</strong>
+          </button>
+          <button type="button" class="segment-row" role="option" data-segment="unclassified" data-project="未归类" data-duration="18" data-description="" data-derived="专利检索页面 · 客户邮件 · PDF 阅读器">
+            <span class="time">09:20</span><span class="segment-main"><span class="segment-title">未归类</span><span class="segment-description derived">专利检索页面 · 客户邮件 · PDF 阅读器</span></span><strong class="time">00:18:03</strong>
+          </button>
+          <button type="button" class="segment-row" role="option" data-segment="recent-b" data-project="项目 B" data-duration="36" data-description="准备客户会议材料">
+            <span class="time">08:43</span><span class="segment-main"><span class="segment-title">项目 B</span><span class="segment-description">准备客户会议材料</span></span><strong class="time">00:36:40</strong>
+          </button>
+          <button type="button" class="segment-row" role="option" data-segment="project-c" data-project="项目 C" data-duration="28" data-description="" data-derived="邮件 · Excel · 浏览器">
+            <span class="time">08:05</span><span class="segment-main"><span class="segment-title">项目 C</span><span class="segment-description derived">邮件 · Excel · 浏览器</span></span><strong class="time">00:28:11</strong>
+          </button>
+          <button type="button" class="segment-row" role="option" data-segment="recent-d" data-project="项目 D" data-duration="24" data-description="整理证据目录和庭审笔记">
+            <span class="time">07:32</span><span class="segment-main"><span class="segment-title">项目 D</span><span class="segment-description">整理证据目录和庭审笔记</span></span><strong class="time">00:24:18</strong>
+          </button>
         </div>
-      </section>
-
-      <section class="page" data-page="settings">
-        <header class="page-header"><div><h1>设置与隐私</h1><div class="page-description">管理本地数据、采集和备份</div></div></header>
-        <div class="settings-layout">
-          <nav class="surface settings-nav" aria-label="设置分类"><button type="button" class="is-active">常规</button><button type="button">采集</button><button type="button">隐私</button><button type="button">数据与备份</button><button type="button">高级</button></nav>
-          <div class="surface settings-content">
-            <div class="section-title">常规</div>
-            <div class="setting-row"><div><strong>本地存储</strong><small>所有数据仅保存在本机，不上传远端服务器。</small></div><span>正常</span></div>
-            <div class="setting-row"><div><strong>导出目录</strong><small>用于保存 CSV 导出结果。</small></div><span>已配置</span></div>
-            <div class="setting-row"><div><strong>隐私说明</strong><small>首次确认后才启动敏感采集。</small></div><button type="button">查看隐私说明</button></div>
-            <div class="setting-row"><div><strong>剪贴板记录</strong><small>默认关闭；开启后仍受排除规则保护。</small></div><button type="button" aria-pressed="false">关闭 ○</button></div>
-            <div class="advanced-block"><div class="section-title">记录状态</div><div class="status-line"><span class="status-dot"></span><strong>记录正常</strong><span>· 无需处理</span></div><p><button type="button">显示技术详情 ▾</button></p></div>
+        <aside class="surface inspector" aria-label="时间段编辑与活动详情">
+          <div class="edit-inline">
+            <label class="field">项目<select id="segment-project"><option>项目 A</option><option>项目 B</option><option>项目 C</option><option>项目 D</option><option>未归类</option></select></label>
+            <label class="field">时长<input id="segment-duration" type="number" value="42" min="1" aria-label="时长（分钟）"></label>
           </div>
-        </div>
-      </section>
+          <label class="field">描述<textarea id="segment-description" rows="3" placeholder=""></textarea></label>
+          <div class="editor-state-row"><span id="autosave-status" class="inline-status">已保存</span><span class="spacer"></span><button type="button" id="advanced-button">高级操作</button><button type="button" class="danger" data-delete-segment>删除时间段</button></div>
+          <div class="activity-details">
+            <div class="section-title">活动详情</div>
+            <div class="activity-row" data-activity-id="word"><div><div class="activity-title">Word 文档编辑</div><div class="activity-subtitle">许可协议草稿.docx</div></div><div class="activity-actions"><strong class="time">00:31:10</strong><button type="button" class="danger" data-delete-activity="Word 文档编辑 · 许可协议草稿.docx">删除活动</button></div></div>
+            <div class="activity-row" data-activity-id="edge"><div><div class="activity-title">Edge 资料查询</div><div class="activity-subtitle">国家知识产权局专利检索页面</div></div><div class="activity-actions"><strong class="time">00:11:06</strong><button type="button" class="danger" data-delete-activity="Edge 资料查询 · 专利检索页面">删除活动</button></div></div>
+          </div>
+        </aside>
+      </div>
+    </section>
 
-      <div id="drawer-backdrop" class="drawer-backdrop"></div>
-      <aside id="compact-drawer" class="drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title">
-        <div class="inspector-head"><div><strong id="drawer-title">时段详情</strong><div class="muted">10:14–进行中 · 00:42:16</div></div><button id="drawer-close" type="button" aria-label="关闭详情">×</button></div>
-        <div class="section-title">活动耗时</div>
-        <div class="summary-row"><span>Word 文档编辑</span><strong class="time">00:31:10</strong></div>
-        <div class="summary-row"><span>Edge 资料查询</span><strong class="time">00:11:06</strong></div>
-        <div class="form-grid"><label>项目<select><option>项目 A</option></select></label><label>申报时长（分钟）<input type="number" value="42"></label><label>备注<textarea rows="4">准备客户会议材料</textarea></label></div>
-        <div class="form-actions"><button type="button" class="primary">保存</button><button type="button">取消</button><span class="spacer"></span><button type="button">更多 ▾</button></div>
-      </aside>
-    </main>
-  </div>
+    <section class="page" data-page="statistics">
+      <header class="page-header">
+        <div><h1>统计与导出</h1><div class="page-description">统计仅包含已完成时间段</div></div>
+        <button type="button" id="export-button" class="primary">导出 CSV</button>
+      </header>
+      <div class="toolbar">
+        <div class="filter-grid">
+          <label class="date-label">时间</label>
+          <div class="date-range"><input id="stats-start" type="date" value="2026-07-20" aria-label="开始日期"> 至 <input id="stats-end" type="date" value="2026-07-22" aria-label="结束日期"></div>
+          <label>项目</label>
+          <select id="stats-project"><option>全部项目</option><option>项目 A</option><option>项目 B</option><option>未归类</option></select>
+        </div>
+        <span class="spacer"></span>
+        <div class="quick-ranges"><button type="button" data-range="today">今天</button><button type="button" data-range="week">本周</button><button type="button" data-range="month">本月</button></div>
+      </div>
+      <div class="section-head"><div id="stats-scope" class="muted">当前范围：本周 · 全部项目</div><div id="stats-status" class="muted">已更新</div></div>
+      <div class="summary-strip">
+        <div class="metric"><div class="muted">总时长</div><div class="metric-value">42:16:08</div></div>
+        <div class="metric"><div class="muted">时间段</div><div class="metric-value">48</div></div>
+        <div class="metric"><div class="muted">项目</div><div class="metric-value">12</div></div>
+        <div class="metric"><div class="muted">应用</div><div class="metric-value">18</div></div>
+      </div>
+      <div class="surface panel">
+        <div class="tabs" role="tablist"><button type="button" class="tab is-active" data-stats-tab="project" role="tab" aria-selected="true">按项目</button><button type="button" class="tab" data-stats-tab="app" role="tab" aria-selected="false">按应用</button></div>
+        <div class="table-wrap"><table><thead><tr><th>名称</th><th>时长</th><th>时间段</th><th>占比</th></tr></thead><tbody id="stats-body"><tr><td>项目 A</td><td>12:30:10</td><td>18</td><td>29.6%</td></tr><tr><td>项目 B</td><td>09:18:22</td><td>12</td><td>22.0%</td></tr><tr><td>未归类</td><td>03:14:02</td><td>7</td><td>7.7%</td></tr></tbody></table></div>
+      </div>
+      <div class="surface disclosure">导出严格使用当前已接受的时间范围和项目筛选快照。查询更新中时导出不可用。</div>
+    </section>
+
+    <section class="page" data-page="rules">
+      <header class="page-header">
+        <div><h1>项目规则</h1><div class="page-description">管理项目及自动归类规则</div></div>
+        <button type="button" class="primary" data-project-drawer="create">新建项目</button>
+      </header>
+      <div class="toolbar"><input id="project-search" type="search" placeholder="搜索项目或规则" aria-label="搜索项目或规则"><span class="spacer"></span><label>排序 <select><option>最近使用</option><option>累计时间</option><option>项目名称</option></select></label></div>
+      <div class="rules-list">
+        <section class="surface project-group" data-project-name="项目 A 客户 A 专利事务 Agilent">
+          <div class="project-summary"><button type="button" class="icon-button project-toggle" aria-expanded="true">▾</button><div class="project-meta"><div class="project-name">项目 A</div><div class="project-description">客户 A 专利事务</div><div class="project-stats"><span>上次使用：今天 10:14</span><span>累计时间：125:32:10</span></div></div><div class="project-actions"><button type="button" data-rule-project="项目 A">新建规则</button><button type="button" data-project-drawer="edit" data-project-name-value="项目 A" data-project-description-value="客户 A 专利事务">编辑</button><button type="button" class="danger" data-delete-project="项目 A">删除</button></div></div>
+          <div class="project-rules"><div class="rule-row"><span>文件夹</span><span>D:\Clients\A\Patent（含全部子文件夹）</span><button type="button">删除</button></div><div class="rule-row"><span>关键词</span><span>Agilent</span><button type="button">删除</button></div></div>
+        </section>
+        <section class="surface project-group" data-project-name="项目 B 诉讼项目">
+          <div class="project-summary"><button type="button" class="icon-button project-toggle" aria-expanded="false">▸</button><div class="project-meta"><div class="project-name">项目 B</div><div class="project-description">诉讼项目</div><div class="project-stats"><span>上次使用：昨天</span><span>累计时间：36:18:22</span></div></div><div class="project-actions"><button type="button" data-rule-project="项目 B">新建规则</button><button type="button" data-project-drawer="edit" data-project-name-value="项目 B" data-project-description-value="诉讼项目">编辑</button><button type="button" class="danger" data-delete-project="项目 B">删除</button></div></div>
+          <div class="project-rules" hidden><div class="rule-row"><span>关键词</span><span>庭审</span><button type="button">删除</button></div></div>
+        </section>
+        <section class="surface project-group" data-project-name="项目 C">
+          <div class="project-summary"><button type="button" class="icon-button project-toggle" aria-expanded="false">▸</button><div class="project-meta"><div class="project-name">项目 C</div><div class="project-stats"><span>上次使用：尚未使用</span><span>累计时间：00:00:00</span></div></div><div class="project-actions"><button type="button" data-rule-project="项目 C">新建规则</button><button type="button" data-project-drawer="edit" data-project-name-value="项目 C" data-project-description-value="">编辑</button><button type="button" class="danger" data-delete-project="项目 C">删除</button></div></div>
+          <div class="project-rules" hidden></div>
+        </section>
+      </div>
+    </section>
+
+    <section class="page" data-page="settings">
+      <header class="page-header"><div><h1>设置与隐私</h1><div class="page-description">管理本地数据、采集和备份</div></div></header>
+      <div class="settings-layout">
+        <nav class="surface settings-nav"><button type="button" class="is-active">常规</button><button type="button">采集</button><button type="button">隐私</button><button type="button">数据与备份</button><button type="button">高级</button></nav>
+        <div class="surface settings-content">
+          <div class="section-title">常规</div>
+          <div class="setting-row"><div><strong>本地数据</strong><small>WorkTrace 数据仅保存在本机</small></div><span>正常</span></div>
+          <div class="setting-row"><div><strong>导出目录</strong><small>D:\WorkTrace\Exports</small></div><button type="button">更改</button></div>
+          <div class="setting-row"><div><strong>隐私说明</strong><small>查看采集范围和本地存储方式</small></div><button type="button">查看</button></div>
+          <div class="setting-row"><div><strong>剪贴板记录</strong><small>默认关闭</small></div><button type="button">关闭</button></div>
+          <div class="advanced-block"><div class="section-title">高级诊断</div><div class="muted">记录服务正常 · 数据维护未进行 · 恢复状态正常</div><button type="button" style="margin-top:8px">显示技术详情</button></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <div id="drawer-backdrop" class="drawer-backdrop"></div>
+  <aside id="timeline-drawer" class="drawer" aria-label="时间段编辑与活动详情"></aside>
+  <aside id="project-drawer" class="drawer" aria-label="项目编辑"></aside>
+  <aside id="rule-drawer" class="drawer" aria-label="新建规则"></aside>
+  <div id="advanced-menu" class="menu" aria-label="高级操作"><button type="button">拆分时间段</button><button type="button">合并到上一时间段</button><button type="button">合并到下一时间段</button><button type="button">复制时间段</button><button type="button">隐藏时间段</button></div>
+  <div id="modal-backdrop" class="modal-backdrop"><div id="modal" class="modal" role="dialog" aria-modal="true"></div></div>
+</div>
 </div>
 <script>
-(function () {
-  "use strict";
-  var windowEl = document.getElementById("prototype-window");
-  var drawer = document.getElementById("compact-drawer");
-  var backdrop = document.getElementById("drawer-backdrop");
-  var lastTimelineButton = null;
+(() => {
+  const win = document.getElementById('prototype-window');
+  const navButtons = [...document.querySelectorAll('.nav-button')];
+  const pages = [...document.querySelectorAll('.page')];
+  const timelineDrawer = document.getElementById('timeline-drawer');
+  const projectDrawer = document.getElementById('project-drawer');
+  const ruleDrawer = document.getElementById('rule-drawer');
+  const drawerBackdrop = document.getElementById('drawer-backdrop');
+  const modalBackdrop = document.getElementById('modal-backdrop');
+  const modal = document.getElementById('modal');
+  const advancedMenu = document.getElementById('advanced-menu');
+  const projectInput = document.getElementById('segment-project');
+  const durationInput = document.getElementById('segment-duration');
+  const descriptionInput = document.getElementById('segment-description');
+  const autosaveStatus = document.getElementById('autosave-status');
+  let selectedSegment = document.querySelector('.segment-row.is-selected');
+  let autosaveTimer = null;
+  let statsTimer = null;
+  let activeDelete = null;
 
-  function closeDrawer() {
-    drawer.classList.remove("is-open");
-    backdrop.classList.remove("is-open");
-    if (lastTimelineButton) lastTimelineButton.focus();
+  function switchPage(name) {
+    pages.forEach(page => page.classList.toggle('is-active', page.dataset.page === name));
+    navButtons.forEach(button => {
+      const active = button.dataset.target === name;
+      button.classList.toggle('is-active', active);
+      if (active) button.setAttribute('aria-current', 'page'); else button.removeAttribute('aria-current');
+    });
+    closeDrawers();
   }
 
-  document.querySelectorAll(".viewport-button").forEach(function (button) {
-    button.addEventListener("click", function () {
-      document.querySelectorAll(".viewport-button").forEach(function (item) { item.classList.remove("is-active"); });
-      button.classList.add("is-active");
-      windowEl.classList.toggle("compact", button.getAttribute("data-mode") === "compact");
-      closeDrawer();
-    });
-  });
+  navButtons.forEach(button => button.addEventListener('click', () => switchPage(button.dataset.target)));
+  document.querySelectorAll('[data-target-page]').forEach(button => button.addEventListener('click', () => switchPage(button.dataset.targetPage)));
 
-  document.querySelectorAll(".nav-button").forEach(function (button) {
-    button.addEventListener("click", function () {
-      var target = button.getAttribute("data-target");
-      document.querySelectorAll(".nav-button").forEach(function (item) {
-        item.classList.remove("is-active");
-        item.removeAttribute("aria-current");
-      });
-      button.classList.add("is-active");
-      button.setAttribute("aria-current", "page");
-      document.querySelectorAll(".page").forEach(function (page) {
-        page.classList.toggle("is-active", page.getAttribute("data-page") === target);
-      });
-      closeDrawer();
-    });
-  });
+  document.querySelectorAll('.viewport-button').forEach(button => button.addEventListener('click', () => {
+    document.querySelectorAll('.viewport-button').forEach(item => item.classList.remove('is-active'));
+    button.classList.add('is-active');
+    win.classList.toggle('compact', button.dataset.mode === 'compact');
+    closeDrawers();
+  }));
 
-  document.querySelectorAll(".timeline-row").forEach(function (button) {
-    button.addEventListener("click", function () {
-      document.querySelectorAll(".timeline-row").forEach(function (item) {
-        item.classList.remove("is-selected");
-        item.removeAttribute("aria-selected");
-      });
-      button.classList.add("is-selected");
-      button.setAttribute("aria-selected", "true");
-      if (windowEl.classList.contains("compact")) {
-        lastTimelineButton = button;
-        drawer.classList.add("is-open");
-        backdrop.classList.add("is-open");
-        document.getElementById("drawer-close").focus();
+  function loadSegment(row, focusField = null) {
+    selectedSegment = row;
+    document.querySelectorAll('.segment-row').forEach(item => {
+      const active = item === row;
+      item.classList.toggle('is-selected', active);
+      item.setAttribute('aria-selected', String(active));
+    });
+    projectInput.value = row.dataset.project;
+    durationInput.value = row.dataset.duration;
+    descriptionInput.value = row.dataset.description || '';
+    descriptionInput.placeholder = row.dataset.derived || '';
+    autosaveStatus.textContent = '已保存';
+    if (win.classList.contains('compact')) openTimelineDrawer(focusField);
+    else if (focusField === 'project') projectInput.focus(); else if (focusField === 'description') descriptionInput.focus();
+  }
+
+  document.querySelectorAll('.segment-row').forEach(row => row.addEventListener('click', () => loadSegment(row)));
+
+  document.querySelectorAll('[data-open-segment]').forEach(item => item.addEventListener('click', () => {
+    switchPage('timeline');
+    const row = document.querySelector(`[data-segment="${item.dataset.openSegment}"]`) || document.querySelector('[data-segment="current"]');
+    loadSegment(row);
+  }));
+
+  document.querySelectorAll('[data-review-target]').forEach(button => button.addEventListener('click', () => {
+    switchPage('timeline');
+    const row = document.querySelector(`[data-segment="${button.dataset.reviewTarget}"]`);
+    const focus = row.dataset.project === '未归类' ? 'project' : 'description';
+    loadSegment(row, focus);
+  }));
+
+  function queueAutosave() {
+    autosaveStatus.textContent = '保存中…';
+    clearTimeout(autosaveTimer);
+    autosaveTimer = setTimeout(() => {
+      if (selectedSegment) {
+        selectedSegment.dataset.project = projectInput.value;
+        selectedSegment.dataset.duration = durationInput.value;
+        selectedSegment.dataset.description = descriptionInput.value;
+        selectedSegment.querySelector('.segment-title').childNodes[0].nodeValue = `${projectInput.value} `;
+        const description = selectedSegment.querySelector('.segment-description');
+        if (descriptionInput.value.trim()) {
+          description.textContent = descriptionInput.value.trim();
+          description.classList.remove('derived');
+        } else {
+          description.textContent = selectedSegment.dataset.derived || '暂无描述';
+          description.classList.add('derived');
+        }
       }
-    });
+      autosaveStatus.textContent = '已保存';
+    }, 650);
+  }
+  projectInput.addEventListener('change', queueAutosave);
+  durationInput.addEventListener('change', queueAutosave);
+  descriptionInput.addEventListener('input', queueAutosave);
+
+  document.getElementById('advanced-button').addEventListener('click', event => {
+    advancedMenu.classList.toggle('is-open');
+    event.stopPropagation();
+  });
+  document.addEventListener('click', event => {
+    if (!advancedMenu.contains(event.target) && event.target.id !== 'advanced-button') advancedMenu.classList.remove('is-open');
   });
 
-  document.getElementById("drawer-close").addEventListener("click", closeDrawer);
-  backdrop.addEventListener("click", closeDrawer);
-  document.addEventListener("keydown", function (event) {
-    if (event.key === "Escape" && drawer.classList.contains("is-open")) closeDrawer();
+  function openTimelineDrawer(focusField = null) {
+    timelineDrawer.innerHTML = `
+      <div class="drawer-head"><strong>时间段</strong><button type="button" class="icon-button" data-close-drawer aria-label="关闭">×</button></div>
+      <div class="edit-inline"><label class="field">项目<select id="drawer-project"><option>项目 A</option><option>项目 B</option><option>项目 C</option><option>项目 D</option><option>未归类</option></select></label><label class="field">时长<input id="drawer-duration" type="number" min="1"></label></div>
+      <label class="field">描述<textarea id="drawer-description" rows="3"></textarea></label>
+      <div class="editor-state-row"><span class="inline-status">已保存</span><span class="spacer"></span><button type="button">高级操作</button><button type="button" class="danger" data-delete-segment>删除时间段</button></div>
+      <div class="activity-details"><div class="section-title">活动详情</div><div class="activity-row"><div><div class="activity-title">Word 文档编辑</div><div class="activity-subtitle">许可协议草稿.docx</div></div><div class="activity-actions"><strong class="time">00:31:10</strong><button type="button" class="danger" data-delete-activity="Word 文档编辑 · 许可协议草稿.docx">删除活动</button></div></div><div class="activity-row"><div><div class="activity-title">Edge 资料查询</div><div class="activity-subtitle">国家知识产权局专利检索页面</div></div><div class="activity-actions"><strong class="time">00:11:06</strong><button type="button" class="danger" data-delete-activity="Edge 资料查询 · 专利检索页面">删除活动</button></div></div></div>`;
+    timelineDrawer.querySelector('#drawer-project').value = projectInput.value;
+    timelineDrawer.querySelector('#drawer-duration').value = durationInput.value;
+    timelineDrawer.querySelector('#drawer-description').value = descriptionInput.value;
+    timelineDrawer.querySelector('#drawer-description').placeholder = descriptionInput.placeholder;
+    timelineDrawer.querySelectorAll('select,input,textarea').forEach(control => control.addEventListener('input', () => {
+      timelineDrawer.querySelector('.inline-status').textContent = '保存中…';
+      setTimeout(() => timelineDrawer.querySelector('.inline-status').textContent = '已保存', 550);
+    }));
+    openDrawer(timelineDrawer);
+    if (focusField === 'project') timelineDrawer.querySelector('#drawer-project').focus();
+    if (focusField === 'description') timelineDrawer.querySelector('#drawer-description').focus();
+  }
+
+  function openDrawer(drawer) {
+    [timelineDrawer, projectDrawer, ruleDrawer].forEach(item => item.classList.remove('is-open'));
+    drawer.classList.add('is-open');
+    drawerBackdrop.classList.add('is-open');
+  }
+  function closeDrawers() {
+    [timelineDrawer, projectDrawer, ruleDrawer].forEach(item => item.classList.remove('is-open'));
+    drawerBackdrop.classList.remove('is-open');
+    advancedMenu.classList.remove('is-open');
+  }
+  drawerBackdrop.addEventListener('click', closeDrawers);
+  document.addEventListener('click', event => { if (event.target.matches('[data-close-drawer]')) closeDrawers(); });
+
+  function showDeleteDialog(kind, label) {
+    activeDelete = {kind, label, step:1};
+    renderDeleteDialog();
+    modalBackdrop.classList.add('is-open');
+  }
+  function renderDeleteDialog() {
+    const isSegment = activeDelete.kind === 'segment';
+    if (activeDelete.step === 1) {
+      modal.innerHTML = `<h2>${isSegment ? '删除这个时间段？' : '删除这条活动？'}</h2><div class="modal-object">${activeDelete.label}</div><div class="modal-warning">${isSegment ? '该时间段及其中活动将被永久删除。' : '删除后，时间段时长和自动摘要可能变化。'} 此操作无法撤销。</div><div class="modal-actions"><button type="button" data-modal-cancel>取消</button><button type="button" data-modal-next>继续</button></div>`;
+    } else {
+      modal.innerHTML = `<h2>再次确认删除</h2><p>即将永久删除：</p><div class="modal-object">${activeDelete.label}</div><div class="modal-actions"><button type="button" data-modal-back>返回</button><button type="button" class="danger" data-modal-confirm>${isSegment ? '确认删除时间段' : '确认删除活动'}</button></div>`;
+    }
+  }
+  document.addEventListener('click', event => {
+    const segmentButton = event.target.closest('[data-delete-segment]');
+    if (segmentButton) {
+      const label = selectedSegment ? `${selectedSegment.dataset.project} · ${selectedSegment.querySelector('.time').textContent} · ${selectedSegment.dataset.duration} 分钟` : '当前时间段';
+      showDeleteDialog('segment', label);
+    }
+    const activityButton = event.target.closest('[data-delete-activity]');
+    if (activityButton) showDeleteDialog('activity', activityButton.dataset.deleteActivity);
+    const projectButton = event.target.closest('[data-delete-project]');
+    if (projectButton) showDeleteDialog('project', `项目：${projectButton.dataset.deleteProject}\n仅演示确认层级，不执行真实删除。`);
+    if (event.target.matches('[data-modal-cancel]')) modalBackdrop.classList.remove('is-open');
+    if (event.target.matches('[data-modal-next]')) { activeDelete.step = 2; renderDeleteDialog(); }
+    if (event.target.matches('[data-modal-back]')) { activeDelete.step = 1; renderDeleteDialog(); }
+    if (event.target.matches('[data-modal-confirm]')) {
+      modal.innerHTML = '<h2>删除完成</h2><p>原型仅演示状态协调，未修改真实数据。</p><div class="modal-actions"><button type="button" data-modal-cancel>关闭</button></div>';
+    }
+  });
+  modalBackdrop.addEventListener('click', event => { if (event.target === modalBackdrop) modalBackdrop.classList.remove('is-open'); });
+
+  function queueStatsUpdate(label = null) {
+    const status = document.getElementById('stats-status');
+    const exportButton = document.getElementById('export-button');
+    status.textContent = '更新中…';
+    exportButton.disabled = true;
+    clearTimeout(statsTimer);
+    statsTimer = setTimeout(() => {
+      const project = document.getElementById('stats-project').value;
+      document.getElementById('stats-scope').textContent = `当前范围：${label || '自定义范围'} · ${project}`;
+      status.textContent = '已更新';
+      exportButton.disabled = false;
+    }, 700);
+  }
+  document.getElementById('stats-project').addEventListener('change', () => queueStatsUpdate());
+  document.getElementById('stats-start').addEventListener('change', () => queueStatsUpdate());
+  document.getElementById('stats-end').addEventListener('change', () => queueStatsUpdate());
+  document.querySelectorAll('[data-range]').forEach(button => button.addEventListener('click', () => {
+    const labels = {today:'今天',week:'本周',month:'本月'};
+    queueStatsUpdate(labels[button.dataset.range]);
+  }));
+  document.querySelectorAll('[data-stats-tab]').forEach(button => button.addEventListener('click', () => {
+    document.querySelectorAll('[data-stats-tab]').forEach(tab => { tab.classList.toggle('is-active', tab === button); tab.setAttribute('aria-selected', String(tab === button)); });
+    document.getElementById('stats-body').innerHTML = button.dataset.statsTab === 'project'
+      ? '<tr><td>项目 A</td><td>12:30:10</td><td>18</td><td>29.6%</td></tr><tr><td>项目 B</td><td>09:18:22</td><td>12</td><td>22.0%</td></tr><tr><td>未归类</td><td>03:14:02</td><td>7</td><td>7.7%</td></tr>'
+      : '<tr><td>Microsoft Word</td><td>15:12:40</td><td>20</td><td>36.0%</td></tr><tr><td>Microsoft Edge</td><td>10:42:18</td><td>14</td><td>25.3%</td></tr><tr><td>Microsoft Excel</td><td>04:51:03</td><td>6</td><td>11.5%</td></tr>';
+  }));
+
+  document.querySelectorAll('.project-toggle').forEach(button => button.addEventListener('click', () => {
+    const rules = button.closest('.project-group').querySelector('.project-rules');
+    const expanded = button.getAttribute('aria-expanded') === 'true';
+    button.setAttribute('aria-expanded', String(!expanded));
+    button.textContent = expanded ? '▸' : '▾';
+    rules.hidden = expanded;
+  }));
+  document.getElementById('project-search').addEventListener('input', event => {
+    const value = event.target.value.trim().toLowerCase();
+    document.querySelectorAll('.project-group').forEach(group => group.hidden = !group.dataset.projectName.toLowerCase().includes(value));
+  });
+
+  document.addEventListener('click', event => {
+    const projectTrigger = event.target.closest('[data-project-drawer]');
+    if (projectTrigger) {
+      const edit = projectTrigger.dataset.projectDrawer === 'edit';
+      projectDrawer.innerHTML = `<div class="drawer-head"><strong>${edit ? '编辑项目' : '新建项目'}</strong><button type="button" class="icon-button" data-close-drawer aria-label="关闭">×</button></div><label class="field">项目名称<input id="drawer-project-name" value="${edit ? projectTrigger.dataset.projectNameValue : ''}"></label><label class="field" style="margin-top:9px">描述<textarea id="drawer-project-description" rows="4">${edit ? projectTrigger.dataset.projectDescriptionValue : ''}</textarea></label><div class="drawer-actions"><button type="button" data-close-drawer>取消</button><button type="button" class="primary">${edit ? '保存更改' : '新建项目'}</button></div>`;
+      openDrawer(projectDrawer);
+      projectDrawer.querySelector('#drawer-project-name').focus();
+    }
+    const ruleTrigger = event.target.closest('[data-rule-project]');
+    if (ruleTrigger) {
+      const project = ruleTrigger.dataset.ruleProject;
+      ruleDrawer.innerHTML = `<div class="drawer-head"><strong>为“${project}”新建规则</strong><button type="button" class="icon-button" data-close-drawer aria-label="关闭">×</button></div><div class="drawer-tabs"><button type="button" class="drawer-tab is-active" data-rule-type="folder">文件夹规则</button><button type="button" class="drawer-tab" data-rule-type="keyword">关键词规则</button></div><div id="rule-fields"><label class="field">文件夹<input value="D:\\Clients\\A\\Patent"></label><div class="muted" style="margin-top:5px">默认匹配该文件夹及全部子文件夹</div></div><label class="setting-row" style="margin-top:9px"><span>同时应用到历史记录</span><input type="checkbox" checked></label><div class="drawer-actions"><button type="button" data-close-drawer>取消</button><button type="button" class="primary">新建规则</button></div>`;
+      openDrawer(ruleDrawer);
+    }
+    const ruleType = event.target.closest('[data-rule-type]');
+    if (ruleType && ruleDrawer.classList.contains('is-open')) {
+      ruleDrawer.querySelectorAll('[data-rule-type]').forEach(button => button.classList.toggle('is-active', button === ruleType));
+      ruleDrawer.querySelector('#rule-fields').innerHTML = ruleType.dataset.ruleType === 'folder'
+        ? '<label class="field">文件夹<input value="D:\\Clients\\A\\Patent"></label><div class="muted" style="margin-top:5px">默认匹配该文件夹及全部子文件夹</div>'
+        : '<label class="field">关键词<input value="Agilent"></label>';
+    }
   });
 })();
 </script>
