@@ -113,11 +113,19 @@ new identity. Invalid clocks stop ticking, retain durable seconds and request
 bounded reconciliation.
 
 ## Pages and writes
-- Overview: KPIs, current activity, Recent and pause/resume.
-- Timeline: navigation, sessions, summaries and permitted edits.
-- Statistics/Export: canonical summaries and display-safe CSV.
-- Project Rules: transactional project/rule management.
-- Settings/Privacy: privacy status, clipboard control, backup/import and clear-all.
+- Overview: today total, current activity, at most three disjoint attention
+  items, and deduplicated recent sessions; editing hands off to Timeline.
+- Timeline: reverse chronological sessions, authoritative project filtering,
+  debounced autosave, always-visible activity details, direct two-step deletion,
+  and a compact-window focus-trapped Drawer.
+- Statistics/Export: all-time or custom authoritative summaries, optional project
+  scope, automatic latest-request acceptance, and display-safe CSV bound to the
+  accepted export ticket.
+- Project Rules: searchable/sortable project summaries with backend-owned last
+  use and total duration, three direct project actions, and contextual Drawers.
+- Settings/Privacy: five user-facing categories, plain-language health summary,
+  collapsed diagnostics, privacy status, clipboard control, backup/import and
+  clear-all. Secret inputs remain local and are cleared after use.
 
 Open sessions allow project and note edits; duration and structural edits wait for
 closure. Rule batches are atomic, manual assignments are preserved, and
