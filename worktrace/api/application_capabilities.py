@@ -260,7 +260,7 @@ class RulesApplicationService:
     """Concrete rules capability delegating to project_api, rule_api, rule_history_api."""
 
     def list_project_bindings(self):
-        return project_api.list_project_bindings()
+        return project_api.list_project_rule_summaries()
 
     def create_project_for_rules(self, name, description, language):
         return project_api.create_project_for_rules(name, description, language)
