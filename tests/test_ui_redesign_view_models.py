@@ -4,7 +4,13 @@ from __future__ import annotations
 import pytest
 
 from tests.support import activity_factory as activity_service
-from worktrace.services import project_service, statistics_service
+from worktrace.api import project_api
+from worktrace.api.application_capabilities import RulesApplicationService
+from worktrace.services import (
+    project_service,
+    report_projection_snapshot_service,
+    statistics_service,
+)
 from worktrace.services.view_model_service import get_overview_view_model
 
 pytestmark = [pytest.mark.db, pytest.mark.contract, pytest.mark.webview_static]
@@ -50,10 +56,63 @@ def test_statistics_all_time_and_project_scope_use_one_authoritative_projection(
     assert only_a["project_id"] == str(project_a)
 
 
-def test_project_rules_summary_is_backend_owned(temp_db):
+def test_project_catalog_read_does_not_build_full_history_snapshot(temp_db, monkeypatch):
+    project_id = project_service.create_project("Catalog Project")
+
+    def forbidden_snapshot(*args, **kwargs):
+        raise AssertionError("project catalog must not build the all-time report snapshot")
+
+    monkeypatch.setattr(
+        report_projection_snapshot_service,
+        "build_visible_snapshot",
+        forbidden_snapshot,
+    )
+
+    project = next(
+        row for row in project_service.list_project_bindings() if row["id"] == project_id
+    )
+    assert project["total_duration_seconds"] == 0
+
+
+def test_project_rules_summary_builds_exactly_one_authoritative_snapshot(temp_db, monkeypatch):
     project_id = project_service.create_project("Summary Project", "Shown in search")
     _closed(project_id, "2026-07-22 11:00:00", "2026-07-22 11:15:00", "summary.txt")
-    project = next(row for row in project_service.list_project_bindings() if row["id"] == project_id)
+    original = report_projection_snapshot_service.build_visible_snapshot
+    calls: list[tuple[str, str]] = []
+
+    def tracked_snapshot(start_date, end_date, *, conn=None):
+        calls.append((start_date, end_date))
+        return original(start_date, end_date, conn=conn)
+
+    monkeypatch.setattr(
+        report_projection_snapshot_service,
+        "build_visible_snapshot",
+        tracked_snapshot,
+    )
+
+    project = next(
+        row
+        for row in project_service.list_project_rule_summaries()
+        if row["id"] == project_id
+    )
+    assert calls == [("1970-01-01", calls[0][1])]
     assert project["description"] == "Shown in search"
     assert project["last_used_at"]
     assert project["total_duration_seconds"] == 15 * 60
+
+
+def test_rules_application_service_uses_page_specific_summary_read(monkeypatch):
+    expected = [{"id": 1, "total_duration_seconds": 60}]
+
+    monkeypatch.setattr(
+        project_api,
+        "list_project_rule_summaries",
+        lambda: expected,
+    )
+
+    def forbidden_catalog():
+        raise AssertionError("rules page must use the page-specific summary read")
+
+    monkeypatch.setattr(project_api, "list_project_bindings", forbidden_catalog)
+
+    assert RulesApplicationService().list_project_bindings() == expected
