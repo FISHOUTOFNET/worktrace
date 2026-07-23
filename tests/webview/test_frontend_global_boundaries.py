@@ -234,13 +234,15 @@ def test_overview_uses_exact_aggregate_clocks_and_safe_error_surface() -> None:
 
 
 def test_startup_waits_for_privacy_notice_before_refresh_and_heartbeat() -> None:
-    body = func_body(read_js("init.js"), "init()")
-    notice = body.index("App.loadFirstRunNotice()")
-    refresh = body.index("refreshCurrentPageData(state")
-    heartbeat = body.index("startHeartbeat()")
-    assert notice < refresh
-    assert notice < heartbeat
-    assert ".then(function" in body[notice:refresh]
+    init_body = func_body(read_js("init.js"), "init()")
+    notice = init_body.index("App.loadFirstRunNotice()")
+    continue_entry = init_body.index("continueStartupAfterPrivacyGate()")
+    assert notice < continue_entry
+    assert ".then(function" in init_body[notice:continue_entry]
+    startup_body = func_body(read_js("init.js"), "continueStartupAfterPrivacyGate")
+    refresh = startup_body.index("refreshCurrentPageData(")
+    heartbeat = startup_body.index("startHeartbeat()")
+    assert refresh < heartbeat
 
 
 def test_local_ticker_never_calls_backend() -> None:

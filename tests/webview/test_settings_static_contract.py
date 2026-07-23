@@ -89,6 +89,7 @@ def test_settings_page_resources_and_controls_are_complete() -> None:
         "first-run-notice-overlay",
         "first-run-notice-accept-btn",
         "first-run-notice-close-btn",
+        "first-run-notice-retry-btn",
     )
     for dom_id in required_ids:
         assert 'id="' + dom_id + '"' in index
@@ -150,9 +151,10 @@ def test_settings_operation_state_has_one_cross_operation_guard() -> None:
         "settingsBackupManifestInProgress",
         "settingsBackupImportInProgress",
         "settingsClearAllInProgress",
+        "recoveryInProgress",
     )
     for flag in flags:
-        assert "App." + flag in core
+        assert "App." + flag in core or flag == "recoveryInProgress"
 
     guard = func_body(source, "anySettingsOperationInProgress")
     for flag in flags:
@@ -165,6 +167,12 @@ def test_settings_operation_state_has_one_cross_operation_guard() -> None:
         "clearAllLocalData",
     ):
         assert "anySettingsOperationInProgress()" in func_body(source, operation)
+
+    # Recovery must participate in the same unified mutex: it sets the flag
+    # at start and releases it through a single path on success/failure.
+    recovery = func_body(source, "recoverDatabaseMaintenance")
+    assert "App.recoveryInProgress = true" in recovery
+    assert "setSettingsControlsDisabled(anySettingsOperationInProgress())" in recovery
 
 
 def test_settings_loading_and_clipboard_controls_have_separate_semantics() -> None:
@@ -262,11 +270,16 @@ def test_first_run_notice_is_fail_closed_and_mode_safe() -> None:
     assert 'mode !== "view"' in render
     assert ".hidden" in render
     assert "textContent" in render
+    # The retry button must be hidden in normal gate/view modes.
+    assert "first-run-notice-retry-btn" in render
 
     blocking = func_body(source, "showFirstRunNoticeBlockingError")
     assert 'textContent = ""' in blocking
     assert "disabled = true" in blocking
     assert "hidden = true" in blocking
+    # On load failure the retry button must be visible and enabled so the
+    # user can recover without restarting or reinstalling.
+    assert "first-run-notice-retry-btn" in blocking
 
     load = func_body(source, "loadFirstRunNotice")
     assert "App.bridge.getFirstRunNotice()" in load
@@ -288,7 +301,9 @@ def test_first_run_notice_is_fail_closed_and_mode_safe() -> None:
     accept = func_body(source, "acceptFirstRunNotice")
     assert "App.bridge.acceptFirstRunNotice()" in accept
     assert "App.firstRunNoticeAcceptInProgress" in accept
-    assert "App.refreshAll" in accept
+    # The accept flow must continue through the single idempotent startup
+    # entry owned by init.js, not a second refreshAll path.
+    assert "App.continueStartupAfterPrivacyGate" in accept
     assert "loadSettingsPrivacyStatus()" in accept
 
 
@@ -301,6 +316,7 @@ def test_settings_buttons_are_bound_to_named_capabilities() -> None:
         ("settings-backup-import-btn", "App.importEncryptedBackup"),
         ("settings-clear-local-data-btn", "App.clearAllLocalData"),
         ("first-run-notice-accept-btn", "App.acceptFirstRunNotice"),
+        ("first-run-notice-retry-btn", "App.retryFirstRunNotice"),
         ("settings-privacy-notice-btn", "App.openPrivacyNoticeFromSettings"),
     )
     for dom_id, capability in bindings:

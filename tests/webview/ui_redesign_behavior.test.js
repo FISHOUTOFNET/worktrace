@@ -112,6 +112,12 @@ function privacyHarness() {
   App.stopHeartbeat = () => { App.heartbeatTimer = null; };
   let refreshCount = 0;
   App.refreshAll = () => { refreshCount += 1; return Promise.resolve(); };
+  // Stub the single idempotent startup entry owned by init.js. The privacy
+  // gate (settings.js) delegates to this entry instead of calling refreshAll
+  // directly, so the harness tracks it to verify the gate hands off to the
+  // unique startup path rather than a second refresh path.
+  let startupContinues = 0;
+  App.continueStartupAfterPrivacyGate = () => { startupContinues += 1; return Promise.resolve(true); };
   App.bridge = {
     getFirstRunNotice: () => Promise.resolve({ ok: true }),
     acceptFirstRunNotice: () => Promise.resolve({ ok: true }),
@@ -119,7 +125,13 @@ function privacyHarness() {
   };
   loadJs(context, "core.js");
   loadJs(context, "settings.js");
-  return { App, element, heartbeatStarts: () => heartbeatStarts, refreshCount: () => refreshCount };
+  return {
+    App,
+    element,
+    heartbeatStarts: () => heartbeatStarts,
+    refreshCount: () => refreshCount,
+    startupContinues: () => startupContinues,
+  };
 }
 
 test("1. privacy first launch: unaccepted notice is fail-closed, no heartbeat", async () => {
@@ -160,8 +172,8 @@ test("1b. privacy notice load failure is fail-closed with visible error", async 
   assert.equal(element("first-run-notice-accept-btn").hidden, true);
 });
 
-test("2. privacy confirmation success closes gate, refreshes, single heartbeat", async () => {
-  const { App, element, heartbeatStarts, refreshCount } = privacyHarness();
+test("2. privacy confirmation success closes gate, continues via single startup entry", async () => {
+  const { App, element, heartbeatStarts, startupContinues } = privacyHarness();
   App.bridge.getFirstRunNotice = () => Promise.resolve({
     ok: true,
     notice: { title: "T", text: "x", highlights: [], accepted: false },
@@ -184,15 +196,15 @@ test("2. privacy confirmation success closes gate, refreshes, single heartbeat",
   assert.equal(App.privacyGateState, "accepted_ready");
   assert.equal(App.firstRunNoticeRequired, false);
   assert.equal(element("first-run-notice-overlay").hidden, true);
-  assert.equal(refreshCount(), 1);
-  // Heartbeat is owned by init.js / refreshAll; the gate itself does not
-  // start a second heartbeat. The contract: gate closure -> refreshAll ->
-  // single heartbeat start.
-  assert.ok(heartbeatStarts() <= 1, "heartbeat must start at most once via refreshAll");
+  // The gate must hand off to the single idempotent startup entry, not a
+  // second refreshAll path.
+  assert.equal(startupContinues(), 1);
+  // The gate itself must NOT start a heartbeat; that is owned by init.js.
+  assert.equal(heartbeatStarts(), 0, "gate must not start heartbeat directly");
 });
 
 test("3. privacy partial success: accepted but collector failed does not lock UI", async () => {
-  const { App, element } = privacyHarness();
+  const { App, element, startupContinues } = privacyHarness();
   App.bridge.getFirstRunNotice = () => Promise.resolve({
     ok: true,
     notice: { title: "T", text: "x", highlights: [], accepted: false },
@@ -220,6 +232,9 @@ test("3. privacy partial success: accepted but collector failed does not lock UI
   // Global alert must surface the real failure reason.
   assert.equal(element("global-alert").hidden, false);
   assert.match(element("global-alert").textContent, /记录功能未能启动/);
+  // Authorization is durable, so the UI must still enter the app via the
+  // single startup entry (heartbeat + settings usable for recovery).
+  assert.equal(startupContinues(), 1, "partial success must still continue startup");
 });
 
 // ---------------------------------------------------------------------------
@@ -292,6 +307,14 @@ test("4b. maintenance recovery failure keeps blocked flag and shows public error
       ok: false,
       error_code: "recovery_failed",
       message: "恢复失败：维护锁仍被持有",
+      // The backend returns maintenance state even on failure so the
+      // frontend can re-render the recovery card from authoritative state.
+      maintenance: {
+        maintenance_in_progress: false,
+        maintenance_restored: false,
+        recovery_blocked: true,
+        blocked_reason: "maintenance_recovery_not_verified",
+      },
     }),
     getSettingsPrivacyStatus: () => Promise.resolve({ ok: true, status: {} }),
   };
@@ -307,6 +330,8 @@ test("4b. maintenance recovery failure keeps blocked flag and shows public error
 
   assert.equal(ok, false);
   assert.equal(App.recoveryInProgress, false);
+  // Button is re-enabled because the backend still reports recovery_blocked;
+  // the frontend never clears the blocked flag locally.
   assert.equal(element("settings-recovery-btn").disabled, false);
   assert.match(element("settings-recovery-status").textContent, /恢复失败：维护锁仍被持有/);
 });
