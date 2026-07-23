@@ -240,3 +240,98 @@ def test_accept_and_start_privacy_gate_still_required_dto(monkeypatch):
     assert result["collector_started"] is False
     assert result["error_code"] == "privacy_gate_required"
     json.loads(json.dumps(result))
+
+
+# ---------------------------------------------------------------------------
+# 6. RuntimeStartResult.error_code must reach the public DTO (not be
+#    downgraded to collector_start_failed).
+# ---------------------------------------------------------------------------
+
+def test_accept_and_start_runtime_maintenance_error_code_preserved(monkeypatch):
+    """RuntimeStartResult.error_code=database_maintenance_recovery_required
+    must surface that exact code on the public DTO, not collector_start_failed."""
+    _patch_accept_success(monkeypatch)
+    _allow_privacy(monkeypatch)
+    _patch_collector_status(monkeypatch)
+    runtime_result = RuntimeStartResult(
+        ok=False,
+        collector_ready=False,
+        workers={},
+        already_running=False,
+        degraded=True,
+        error_code="database_maintenance_recovery_required",
+    )
+    control = ApplicationControlService(
+        _Runtime(start_side_effect=runtime_result), _Maintenance()
+    )
+
+    result = control.accept_privacy_notice_and_start()
+
+    assert set(result) == _DTO_KEYS
+    assert result["ok"] is False
+    assert result["accepted"] is True
+    assert result["collector_started"] is False
+    # The authoritative runtime error_code must be preserved, not downgraded
+    # to collector_start_failed.
+    assert result["error_code"] == "database_maintenance_recovery_required"
+    assert isinstance(result["message"], str) and result["message"]
+    json.loads(json.dumps(result))
+
+
+def test_accept_and_start_runtime_unknown_error_code_maps_to_collector_start_failed(monkeypatch):
+    """A RuntimeStartResult carrying an unrecognized error_code (e.g.
+    runtime_stopping) must map to the public collector_start_failed code.
+
+    The public error code system is not expanded here; unrecognized runtime
+    start errors collapse to collector_start_failed so the DTO stays stable.
+    """
+    _patch_accept_success(monkeypatch)
+    _allow_privacy(monkeypatch)
+    _patch_collector_status(monkeypatch)
+    runtime_result = RuntimeStartResult(
+        ok=False,
+        collector_ready=False,
+        workers={},
+        already_running=False,
+        degraded=True,
+        error_code="runtime_stopping",
+    )
+    control = ApplicationControlService(
+        _Runtime(start_side_effect=runtime_result), _Maintenance()
+    )
+
+    result = control.accept_privacy_notice_and_start()
+
+    assert set(result) == _DTO_KEYS
+    assert result["ok"] is False
+    assert result["accepted"] is True
+    assert result["collector_started"] is False
+    assert result["error_code"] == "collector_start_failed"
+    assert isinstance(result["message"], str) and result["message"]
+    json.loads(json.dumps(result))
+
+
+def test_accept_and_start_runtime_worker_start_failed_maps_to_collector_start_failed(monkeypatch):
+    """A RuntimeStartResult carrying worker_start_failed must also map to
+    collector_start_failed (no new public error code is introduced)."""
+    _patch_accept_success(monkeypatch)
+    _allow_privacy(monkeypatch)
+    _patch_collector_status(monkeypatch)
+    runtime_result = RuntimeStartResult(
+        ok=False,
+        collector_ready=False,
+        workers={},
+        already_running=False,
+        degraded=True,
+        error_code="worker_start_failed",
+    )
+    control = ApplicationControlService(
+        _Runtime(start_side_effect=runtime_result), _Maintenance()
+    )
+
+    result = control.accept_privacy_notice_and_start()
+
+    assert set(result) == _DTO_KEYS
+    assert result["ok"] is False
+    assert result["error_code"] == "collector_start_failed"
+    json.loads(json.dumps(result))

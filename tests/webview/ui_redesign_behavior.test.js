@@ -337,6 +337,348 @@ test("4b. maintenance recovery failure keeps blocked flag and shows public error
 });
 
 // ---------------------------------------------------------------------------
+// Category 4c: Symmetric Settings mutex — any operation blocks recovery
+// ---------------------------------------------------------------------------
+
+// Parameterized: every Settings busy flag must prevent recovery from starting.
+// This is the reverse direction of the guard the other operations already
+// perform (recovery → blocks others). Without it, a user could trigger
+// recovery while a backup import is mid-flight and corrupt the write gate.
+const RECOVERY_BLOCKING_FLAGS = [
+  ["settingsLoading", "settings status load"],
+  ["settingsWriteInProgress", "clipboard setting write"],
+  ["settingsBackupExportInProgress", "backup export"],
+  ["settingsBackupManifestInProgress", "manifest preview"],
+  ["settingsBackupImportInProgress", "backup import"],
+  ["settingsClearAllInProgress", "clear-all"],
+  ["recoveryInProgress", "recovery already running"],
+];
+
+for (const [flag, label] of RECOVERY_BLOCKING_FLAGS) {
+  test(`4c. ${label} (${flag}) blocks recovery — symmetric mutex`, async () => {
+    const { context, element } = makeBaseContext();
+    const App = context.window.WorkTraceApp;
+    Object.assign(App, {
+      settingsLoaded: true,
+      settingsLoading: false,
+      settingsRequestToken: 0,
+      settingsWriteInProgress: false,
+      settingsBackupExportInProgress: false,
+      settingsBackupManifestInProgress: false,
+      settingsBackupImportInProgress: false,
+      settingsClearAllInProgress: false,
+      recoveryInProgress: false,
+      handleResult(result, onError) {
+        if (!result || result.ok === false) { onError((result && result.message) || "操作失败"); return null; }
+        return result;
+      },
+    });
+    let recoverCalls = 0;
+    App.bridge = {
+      recoverDatabaseMaintenance: () => { recoverCalls += 1; return Promise.resolve({ ok: true }); },
+      getSettingsPrivacyStatus: () => Promise.resolve({ ok: true, status: {} }),
+    };
+    loadJs(context, "core.js");
+    loadJs(context, "settings.js");
+    App.refreshAll = () => Promise.resolve();
+    App.loadSettingsPrivacyStatus = () => Promise.resolve();
+    App.showToast = () => {};
+
+    // Set the busy flag AFTER loading settings.js so it is not overwritten.
+    App[flag] = true;
+
+    const ok = await App.recoverDatabaseMaintenance();
+    await flush();
+    await flush();
+
+    assert.equal(ok, false, `recovery must be rejected when ${flag} is true`);
+    assert.equal(recoverCalls, 0, `recovery Bridge must not be called when ${flag} is true`);
+    assert.equal(App[flag], true, `${flag} must not be cleared by the rejected recovery`);
+    // For the recoveryInProgress case the flag was already true and must stay
+    // true (early return does not touch it). For every other flag, the
+    // rejected path must not set recoveryInProgress.
+    if (flag !== "recoveryInProgress") {
+      assert.equal(App.recoveryInProgress, false, "recovery flag must not be set by the rejected path");
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Category 4d: Recovery in progress blocks every other Settings operation
+// ---------------------------------------------------------------------------
+
+test("4d. recovery in progress blocks backup export, manifest, import, clear, and clipboard write", async () => {
+  const { context, element } = makeBaseContext();
+  const App = context.window.WorkTraceApp;
+  Object.assign(App, {
+    settingsLoaded: true,
+    settingsLoading: false,
+    settingsRequestToken: 0,
+    settingsWriteInProgress: false,
+    settingsBackupExportInProgress: false,
+    settingsBackupManifestInProgress: false,
+    settingsBackupImportInProgress: false,
+    settingsClearAllInProgress: false,
+    recoveryInProgress: false,
+    handleResult(result, onError) {
+      if (!result || result.ok === false) { onError((result && result.message) || "操作失败"); return null; }
+      return result;
+    },
+  });
+  // Recovery Bridge call stays pending so recoveryInProgress stays true for
+  // the duration of the test. Every other operation must observe the busy
+  // flag and bail out without calling its own Bridge method.
+  const recoveryGate = deferred();
+  const bridgeCalls = {
+    exportEncryptedBackup: 0,
+    previewEncryptedBackupManifest: 0,
+    importEncryptedBackup: 0,
+    clearAllLocalData: 0,
+    setClipboardCaptureEnabled: 0,
+    recoverDatabaseMaintenance: 0,
+  };
+  App.bridge = {
+    recoverDatabaseMaintenance: () => { bridgeCalls.recoverDatabaseMaintenance += 1; return recoveryGate.promise; },
+    exportEncryptedBackup: () => { bridgeCalls.exportEncryptedBackup += 1; return Promise.resolve({ ok: true }); },
+    previewEncryptedBackupManifest: () => { bridgeCalls.previewEncryptedBackupManifest += 1; return Promise.resolve({ ok: true, manifest: {} }); },
+    importEncryptedBackup: () => { bridgeCalls.importEncryptedBackup += 1; return Promise.resolve({ ok: true }); },
+    clearAllLocalData: () => { bridgeCalls.clearAllLocalData += 1; return Promise.resolve({ ok: true }); },
+    setClipboardCaptureEnabled: () => { bridgeCalls.setClipboardCaptureEnabled += 1; return Promise.resolve({ ok: true }); },
+    getSettingsPrivacyStatus: () => Promise.resolve({ ok: true, status: {} }),
+  };
+  loadJs(context, "core.js");
+  loadJs(context, "settings.js");
+  App.refreshAll = () => Promise.resolve();
+  App.loadSettingsPrivacyStatus = () => Promise.resolve();
+  App.showToast = () => {};
+  App.lastSettingsStatus = { recovery_blocked: true };
+
+  // Kick off recovery (pending). Do not await — it must stay in flight.
+  App.recoverDatabaseMaintenance();
+  await flush();
+  assert.equal(App.recoveryInProgress, true, "recovery must be in progress");
+
+  // Every other operation must be rejected by the symmetric mutex.
+  App.exportEncryptedBackup();
+  App.previewEncryptedBackupManifest();
+  element("settings-backup-import-confirm").value = "导入并替换";
+  App.importEncryptedBackup();
+  element("settings-clear-confirm").value = "清空本地数据";
+  App.clearAllLocalData();
+  App.setCaptureEnabled(true);
+  await flush();
+  await flush();
+
+  assert.equal(bridgeCalls.exportEncryptedBackup, 0, "export must not run during recovery");
+  assert.equal(bridgeCalls.previewEncryptedBackupManifest, 0, "manifest must not run during recovery");
+  assert.equal(bridgeCalls.importEncryptedBackup, 0, "import must not run during recovery");
+  assert.equal(bridgeCalls.clearAllLocalData, 0, "clear must not run during recovery");
+  assert.equal(bridgeCalls.setClipboardCaptureEnabled, 0, "clipboard write must not run during recovery");
+  assert.equal(bridgeCalls.recoverDatabaseMaintenance, 1, "recovery itself runs exactly once");
+  assert.equal(App.recoveryInProgress, true, "recovery flag must remain set while pending");
+
+  // The recovery button itself must be disabled while recovery is in flight.
+  assert.equal(element("settings-recovery-btn").disabled, true, "recovery button disabled during recovery");
+
+  // Release the pending recovery so the test can clean up.
+  recoveryGate.resolve({ ok: true });
+  await flush();
+  await flush();
+  assert.equal(App.recoveryInProgress, false, "recovery flag released after completion");
+});
+
+// ---------------------------------------------------------------------------
+// Category 4e: Transport rejection re-reads authoritative backend state
+// ---------------------------------------------------------------------------
+
+test("4e. recovery transport rejection re-reads authoritative state (blocked=false → button disabled)", async () => {
+  const { context, element } = makeBaseContext();
+  const App = context.window.WorkTraceApp;
+  Object.assign(App, {
+    settingsLoaded: true,
+    settingsLoading: false,
+    settingsRequestToken: 0,
+    settingsWriteInProgress: false,
+    settingsBackupExportInProgress: false,
+    settingsBackupManifestInProgress: false,
+    settingsBackupImportInProgress: false,
+    settingsClearAllInProgress: false,
+    recoveryInProgress: false,
+    handleResult(result, onError) {
+      if (!result || result.ok === false) { onError((result && result.message) || "操作失败"); return null; }
+      return result;
+    },
+  });
+  let recoverCalls = 0;
+  let statusReads = 0;
+  App.bridge = {
+    // Transport rejection: the frontend cannot know whether recovery applied.
+    recoverDatabaseMaintenance: () => { recoverCalls += 1; return Promise.reject(new Error("webview transport disconnected")); },
+    // Authoritative backend status reports recovery is no longer needed.
+    getSettingsPrivacyStatus: () => Promise.resolve({
+      ok: true,
+      status: {
+        maintenance_in_progress: false,
+        maintenance_restored: true,
+        recovery_blocked: false,
+        blocked_reason: null,
+        collector_running: true,
+        collector_status: "running",
+        user_paused: false,
+      },
+    }),
+  };
+  loadJs(context, "core.js");
+  loadJs(context, "settings.js");
+  App.refreshAll = () => Promise.resolve();
+  // Stub the real status loader so the count is observable; the production
+  // catch path calls App.loadSettingsPrivacyStatus, which in turn invokes
+  // bridge.getSettingsPrivacyStatus.
+  App.loadSettingsPrivacyStatus = async function () {
+    statusReads += 1;
+    const result = await App.bridge.getSettingsPrivacyStatus();
+    if (result && result.ok && result.status) {
+      App.lastSettingsStatus = result.status;
+    }
+    return result;
+  };
+  App.showToast = () => {};
+  App.lastSettingsStatus = { recovery_blocked: true };
+
+  const ok = await App.recoverDatabaseMaintenance();
+  await flush();
+  await flush();
+  await flush();
+
+  assert.equal(ok, false, "transport rejection must not be reported as success");
+  assert.equal(recoverCalls, 1, "recovery Bridge called exactly once");
+  assert.equal(statusReads, 1, "authoritative status must be re-read exactly once after rejection");
+  assert.equal(App.recoveryInProgress, false, "recovery busy flag must be released after state refresh");
+  // Backend reports recovery_blocked=false, so the button must be disabled:
+  // no recovery is needed. The frontend never clears the blocked flag locally.
+  assert.equal(element("settings-recovery-btn").disabled, true, "button disabled when backend reports no recovery needed");
+  // The stale blocked=true status must NOT be reused as the final answer.
+  assert.equal(App.lastSettingsStatus.recovery_blocked, false, "lastSettingsStatus refreshed to authoritative state");
+  assert.match(element("settings-recovery-status").textContent, /恢复结果未知/);
+});
+
+test("4f. recovery transport rejection re-reads authoritative state (blocked=true → button re-enabled)", async () => {
+  const { context, element } = makeBaseContext();
+  const App = context.window.WorkTraceApp;
+  Object.assign(App, {
+    settingsLoaded: true,
+    settingsLoading: false,
+    settingsRequestToken: 0,
+    settingsWriteInProgress: false,
+    settingsBackupExportInProgress: false,
+    settingsBackupManifestInProgress: false,
+    settingsBackupImportInProgress: false,
+    settingsClearAllInProgress: false,
+    recoveryInProgress: false,
+    handleResult(result, onError) {
+      if (!result || result.ok === false) { onError((result && result.message) || "操作失败"); return null; }
+      return result;
+    },
+  });
+  let recoverCalls = 0;
+  let statusReads = 0;
+  App.bridge = {
+    recoverDatabaseMaintenance: () => { recoverCalls += 1; return Promise.reject(new Error("webview transport disconnected")); },
+    getSettingsPrivacyStatus: () => Promise.resolve({
+      ok: true,
+      status: {
+        maintenance_in_progress: false,
+        maintenance_restored: false,
+        recovery_blocked: true,
+        blocked_reason: "maintenance_recovery_not_verified",
+        collector_running: false,
+        collector_status: "stopped",
+        user_paused: false,
+      },
+    }),
+  };
+  loadJs(context, "core.js");
+  loadJs(context, "settings.js");
+  App.refreshAll = () => Promise.resolve();
+  App.loadSettingsPrivacyStatus = async function () {
+    statusReads += 1;
+    const result = await App.bridge.getSettingsPrivacyStatus();
+    if (result && result.ok && result.status) {
+      App.lastSettingsStatus = result.status;
+    }
+    return result;
+  };
+  App.showToast = () => {};
+  App.lastSettingsStatus = { recovery_blocked: true };
+
+  const ok = await App.recoverDatabaseMaintenance();
+  await flush();
+  await flush();
+  await flush();
+
+  assert.equal(ok, false, "transport rejection must not be reported as success");
+  assert.equal(recoverCalls, 1, "recovery Bridge called exactly once");
+  assert.equal(statusReads, 1, "authoritative status must be re-read exactly once after rejection");
+  assert.equal(App.recoveryInProgress, false, "recovery busy flag must be released after state refresh");
+  // Backend still reports recovery_blocked=true, so the button must be
+  // re-enabled: the user can attempt recovery again.
+  assert.equal(element("settings-recovery-btn").disabled, false, "button re-enabled when backend still reports blocked");
+  assert.equal(App.lastSettingsStatus.recovery_blocked, true, "lastSettingsStatus refreshed to authoritative state");
+  assert.match(element("settings-recovery-status").textContent, /恢复结果未知/);
+});
+
+test("4g. recovery transport rejection when status read also fails still releases busy flag", async () => {
+  const { context, element } = makeBaseContext();
+  const App = context.window.WorkTraceApp;
+  Object.assign(App, {
+    settingsLoaded: true,
+    settingsLoading: false,
+    settingsRequestToken: 0,
+    settingsWriteInProgress: false,
+    settingsBackupExportInProgress: false,
+    settingsBackupManifestInProgress: false,
+    settingsBackupImportInProgress: false,
+    settingsClearAllInProgress: false,
+    recoveryInProgress: false,
+    handleResult(result, onError) {
+      if (!result || result.ok === false) { onError((result && result.message) || "操作失败"); return null; }
+      return result;
+    },
+  });
+  let recoverCalls = 0;
+  let statusReads = 0;
+  App.bridge = {
+    recoverDatabaseMaintenance: () => { recoverCalls += 1; return Promise.reject(new Error("webview transport disconnected")); },
+    getSettingsPrivacyStatus: () => Promise.reject(new Error("status read failed")),
+  };
+  loadJs(context, "core.js");
+  loadJs(context, "settings.js");
+  App.refreshAll = () => Promise.resolve();
+  App.loadSettingsPrivacyStatus = async function () {
+    statusReads += 1;
+    await App.bridge.getSettingsPrivacyStatus();
+  };
+  App.showToast = () => {};
+  // Pre-existing authoritative state: still blocked. The frontend must NOT
+  // clear this flag locally when the status re-read itself fails.
+  App.lastSettingsStatus = { recovery_blocked: true, blocked_reason: "prior_failure" };
+
+  const ok = await App.recoverDatabaseMaintenance();
+  await flush();
+  await flush();
+  await flush();
+
+  assert.equal(ok, false, "must not be reported as success when both recovery and status read fail");
+  assert.equal(recoverCalls, 1);
+  assert.equal(statusReads, 1, "status must still be attempted once");
+  // Critical: the busy flag must be released to avoid a permanent UI deadlock,
+  // even though the status read failed.
+  assert.equal(App.recoveryInProgress, false, "busy flag released even on double failure");
+  // The frontend must not clear the prior blocked flag locally.
+  assert.equal(App.lastSettingsStatus.recovery_blocked, true, "prior blocked state preserved");
+});
+
+// ---------------------------------------------------------------------------
 // Category 5: Global collection feedback visible on every page
 // ---------------------------------------------------------------------------
 

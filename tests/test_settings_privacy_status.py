@@ -300,3 +300,39 @@ def test_bridge_returns_narrow_success_payload(temp_db) -> None:
         "destructive_actions",
         "first_run_notice",
     }
+
+
+def test_bridge_accept_first_run_notice_exception_fallback_keeps_six_field_dto(
+    monkeypatch,
+) -> None:
+    """SettingsBridgeMixin.accept_first_run_notice exception fallback must
+    return the complete six-field privacy DTO, not a partial/error dict.
+
+    Regression for the contract that every accept-first-run-notice response
+    (success, structured failure, and transport/exception fallback) carries
+    the same key set so the frontend never has to guess field presence.
+    """
+    bridge = build_test_bridge()
+
+    def _raise() -> dict:
+        raise RuntimeError("simulated app-control failure")
+
+    monkeypatch.setattr(settings_api, "accept_first_run_notice_for_webview", _raise)
+
+    result = bridge.accept_first_run_notice()
+
+    assert set(result) == {
+        "ok",
+        "accepted",
+        "collector_started",
+        "collector_status",
+        "error_code",
+        "message",
+    }
+    assert result["ok"] is False
+    assert result["accepted"] is False
+    assert result["collector_started"] is False
+    assert result["collector_status"] is None
+    assert result["error_code"] == "privacy_accept_failed"
+    assert isinstance(result["message"], str) and result["message"]
+    json.loads(json.dumps(result))

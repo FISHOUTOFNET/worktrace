@@ -321,6 +321,81 @@ test("S6. load failure then retry: fail-closed, retry succeeds, startup continue
   assert.equal(loadAttempts, 2, "retry issued a new request");
   assert.equal(bridgeCalls.getRefreshState, 1, "startup continued after retry");
   assert.equal(intervalsCreated(), 1, "heartbeat created after retry");
+  // The blocking overlay from the prior load failure must be fully closed
+  // and the retry/error UI cleared so the app is not left under a stuck mask.
+  assert.equal(element("first-run-notice-overlay").hidden, true, "overlay must close after retry accepted");
+  assert.equal(element("first-run-notice-retry-btn").hidden, true, "retry must hide after retry accepted");
+  assert.equal(element("first-run-notice-error").hidden, true, "error line must hide after retry accepted");
+  assert.equal(element("first-run-notice-error").textContent, "", "error text must clear after retry accepted");
+  assert.equal(element("first-run-notice-accept-btn").disabled, false, "accept button re-enabled");
+});
+
+test("S6b. load failure then retry returns unaccepted: gate restored, no startup", async () => {
+  const { App, element, bridgeCalls, intervalsCreated, pywebviewApi } = startupHarness();
+  let loadAttempts = 0;
+  pywebviewApi.get_first_run_notice = () => {
+    loadAttempts += 1;
+    if (loadAttempts === 1) return Promise.resolve({ ok: false, error: "load_failed" });
+    return Promise.resolve({
+      ok: true,
+      notice: { accepted: false, title: "T", text: "x", highlights: [] },
+    });
+  };
+
+  App.init();
+  await flush();
+  await flush();
+
+  // First load failed — fail-closed with retry visible.
+  assert.equal(App.privacyGateState, "load_failed");
+  assert.equal(element("first-run-notice-retry-btn").hidden, false);
+
+  // Retry returns unaccepted — gate must be restored, not startup.
+  await App.retryFirstRunNotice();
+  await flush();
+  await flush();
+
+  assert.equal(App.privacyGateState, "acceptance_required");
+  assert.equal(loadAttempts, 2);
+  assert.equal(element("first-run-notice-overlay").hidden, false, "overlay must stay open");
+  assert.equal(element("first-run-notice-retry-btn").hidden, true, "retry must hide");
+  assert.equal(element("first-run-notice-accept-btn").hidden, false, "accept must show");
+  assert.equal(element("first-run-notice-accept-btn").disabled, false, "accept must be enabled");
+  assert.equal(element("first-run-notice-close-btn").hidden, true, "close must hide");
+  assert.equal(element("first-run-notice-error").textContent, "", "error must clear");
+  assert.equal(bridgeCalls.getRefreshState, 0, "no startup on unaccepted retry");
+  assert.equal(intervalsCreated(), 0, "no heartbeat on unaccepted retry");
+  assert.equal(App.startupAfterPrivacyState, "idle");
+});
+
+test("S6c. load failure then retry fails again: stays fail-closed", async () => {
+  const { App, element, bridgeCalls, intervalsCreated, pywebviewApi } = startupHarness();
+  let loadAttempts = 0;
+  pywebviewApi.get_first_run_notice = () => {
+    loadAttempts += 1;
+    return Promise.resolve({ ok: false, error: "load_failed" });
+  };
+
+  App.init();
+  await flush();
+  await flush();
+
+  assert.equal(App.privacyGateState, "load_failed");
+  assert.equal(element("first-run-notice-retry-btn").hidden, false);
+
+  // Retry fails again — must stay fail-closed.
+  await App.retryFirstRunNotice();
+  await flush();
+  await flush();
+
+  assert.equal(App.privacyGateState, "load_failed");
+  assert.equal(loadAttempts, 2);
+  assert.equal(element("first-run-notice-overlay").hidden, false, "overlay must stay open");
+  assert.equal(element("first-run-notice-retry-btn").hidden, false, "retry must stay visible");
+  assert.equal(element("first-run-notice-accept-btn").hidden, true, "accept must stay hidden");
+  assert.equal(bridgeCalls.getRefreshState, 0, "no startup on second failure");
+  assert.equal(intervalsCreated(), 0, "no heartbeat on second failure");
+  assert.notEqual(App.startupAfterPrivacyState, "ready");
 });
 
 test("S7. concurrent continueStartup: catalog loaded once, single heartbeat", async () => {

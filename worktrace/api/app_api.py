@@ -124,7 +124,14 @@ class ApplicationControlService:
             }
         start_result = self.start_collection_after_privacy_gate()
         if not start_result.get("ok"):
-            raw_error = str(start_result.get("error") or COLLECTOR_START_FAILED)
+            # RuntimeStartResult.to_dict() emits ``error_code``; the legacy
+            # ``error`` key is only on the maintenance/privacy/exception
+            # fallback dicts. Prefer the runtime's authoritative error_code.
+            raw_error = str(
+                start_result.get("error_code")
+                or start_result.get("error")
+                or COLLECTOR_START_FAILED
+            )
             error_code = _map_collector_start_error_code(raw_error)
             message = str(
                 start_result.get("message")

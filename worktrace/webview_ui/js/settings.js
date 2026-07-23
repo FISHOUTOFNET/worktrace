@@ -62,11 +62,27 @@
     }
     App.setSettingsDangerControlsDisabled = setSettingsDangerControlsDisabled;
 
+    // Recovery button enabled = backend reports recovery_blocked AND no
+    // Settings operation in progress. The frontend never clears
+    // recovery_blocked locally; it reads the latest authoritative status.
+    function syncRecoveryButtonState(status) {
+        var button = element("settings-recovery-btn");
+        if (!button) return;
+        var authoritative = status || App.lastSettingsStatus || {};
+        button.disabled = anySettingsOperationInProgress()
+            || authoritative.recovery_blocked !== true;
+    }
+    App.syncRecoveryButtonState = syncRecoveryButtonState;
+
     function setSettingsControlsDisabled(disabled) {
         var toggle = element("settings-clipboard-toggle");
         if (toggle) toggle.disabled = !!disabled || !App.settingsLoaded;
         setSettingsBackupControlsDisabled(disabled);
         setSettingsDangerControlsDisabled(disabled);
+        // The recovery button participates in the unified control sync,
+        // but its final state is derived from the authoritative backend
+        // status, not the generic ``disabled`` flag.
+        syncRecoveryButtonState();
     }
     App.setSettingsControlsDisabled = setSettingsControlsDisabled;
 
@@ -183,8 +199,7 @@
     function renderRecoveryCard(status) {
         var card = element("settings-recovery-card");
         var reason = element("settings-recovery-reason");
-        var button = element("settings-recovery-btn");
-        if (!card || !button) return;
+        if (!card) return;
         var blocked = !!status.recovery_blocked;
         var inProgress = !!status.maintenance_in_progress;
         card.hidden = !blocked && !inProgress;
@@ -192,15 +207,18 @@
             reason.textContent = "阻断原因："
                 + (status.blocked_reason ? String(status.blocked_reason) : (inProgress ? "维护进行中" : "无"));
         }
-        // The button is enabled only when the backend explicitly signals
-        // recovery_blocked. During active maintenance the recovery protocol
-        // is not safe to invoke; the user must wait for completion.
-        button.disabled = blocked ? !!App.recoveryInProgress : true;
+        // The button enabled state is derived solely from the authoritative
+        // backend status and the unified busy flag via syncRecoveryButtonState.
+        // The frontend never clears recovery_blocked locally.
+        syncRecoveryButtonState(status);
     }
     App.renderRecoveryCard = renderRecoveryCard;
 
     function recoverDatabaseMaintenance() {
-        if (App.recoveryInProgress) return Promise.resolve(false);
+        // Symmetric mutex: any Settings operation in progress blocks
+        // recovery, not only recovery itself. This is the reverse direction
+        // of the guard the other operations already perform.
+        if (anySettingsOperationInProgress()) return Promise.resolve(false);
         App.recoveryInProgress = true;
         // Disable all settings controls via the unified mutex during recovery.
         setSettingsControlsDisabled(anySettingsOperationInProgress());
@@ -222,7 +240,9 @@
                 var maintenance = result && result.maintenance;
                 if (maintenance) {
                     App.lastSettingsStatus = maintenance;
-                } else if (typeof App.loadSettingsPrivacyStatus === "function") {
+                    return false;
+                }
+                if (typeof App.loadSettingsPrivacyStatus === "function") {
                     return App.loadSettingsPrivacyStatus().then(function () { return false; });
                 }
                 return false;
@@ -239,15 +259,25 @@
                 return true;
             });
         }).catch(function () {
-            var message = "数据库维护恢复失败，请稍后重试或联系支持。";
+            // Transport rejection: frontend cannot know if recovery applied.
+            // Re-read authoritative backend status before releasing busy.
+            var message = "恢复结果未知，正在重新读取状态……";
             setRecoveryStatus(message);
             if (App.showGlobalAlert) App.showGlobalAlert(message);
-            return false;
+            if (typeof App.loadSettingsPrivacyStatus !== "function") {
+                return false;
+            }
+            return App.loadSettingsPrivacyStatus().then(function () {
+                return false;
+            }, function () {
+                // Status read itself failed: keep the conservative error,
+                // but still release the busy flag downstream to avoid a
+                // permanent UI deadlock. Do not claim success.
+                return false;
+            });
         }).then(function (ok) {
-            // Single release path for success, failure, and exception: clear
-            // the busy flag and re-render controls from the latest backend
-            // status so the recovery button is re-enabled only when the
-            // backend still reports recovery_blocked.
+            // Single release path: clear busy flag and re-render controls
+            // from the latest authoritative backend status.
             App.recoveryInProgress = false;
             setSettingsControlsDisabled(anySettingsOperationInProgress());
             if (App.lastSettingsStatus) renderRecoveryCard(App.lastSettingsStatus);
@@ -298,6 +328,9 @@
     App.loadSettingsPrivacyStatus = loadSettingsPrivacyStatus;
 
     function setCaptureEnabled(enabled) {
+        // Symmetric mutex: gate direct programmatic callers and tests so
+        // clipboard writes cannot bypass the unified Settings mutex.
+        if (anySettingsOperationInProgress()) return Promise.resolve();
         App.settingsWriteInProgress = true;
         setSettingsControlsDisabled(true);
         var toggle = element("settings-clipboard-toggle");
@@ -576,6 +609,32 @@
     }
     App.hideFirstRunNotice = hideFirstRunNotice;
 
+    // Single accepted-UI settlement helper: closes the blocking overlay and
+    // clears residual load-failure UI. Does NOT start heartbeat, load
+    // projects, call the Bridge, or change persisted authorization.
+    function settleFirstRunNoticeAcceptedUi() {
+        var retry = element("first-run-notice-retry-btn");
+        var accept = element("first-run-notice-accept-btn");
+        var close = element("first-run-notice-close-btn");
+
+        setFirstRunNoticeError("");
+
+        if (retry) {
+            retry.hidden = true;
+            retry.disabled = false;
+        }
+
+        if (accept) {
+            accept.hidden = false;
+            accept.disabled = false;
+        }
+
+        if (close) close.hidden = true;
+
+        hideFirstRunNotice();
+    }
+    App.settleFirstRunNoticeAcceptedUi = settleFirstRunNoticeAcceptedUi;
+
     function setPrivacyGateState(state) {
         App.privacyGateState = state;
         App.firstRunNoticeRequired = state === "acceptance_required";
@@ -604,6 +663,10 @@
             var accepted = notice.accepted === true;
             if (accepted) {
                 setPrivacyGateState("accepted_ready");
+                // Close any residual blocking overlay from a prior load
+                // failure and clear retry/error UI. The post-privacy startup
+                // entry (init.js) continues startup based on this state.
+                settleFirstRunNoticeAcceptedUi();
                 return true;
             }
             setPrivacyGateState("acceptance_required");
@@ -634,7 +697,7 @@
                 // are owned by init.js — no second startup path here.
                 setPrivacyGateState("accepted_ready");
                 App.firstRunNoticeRequired = false;
-                hideFirstRunNotice();
+                settleFirstRunNoticeAcceptedUi();
                 if (typeof App.continueStartupAfterPrivacyGate === "function") {
                     App.continueStartupAfterPrivacyGate();
                 }
@@ -645,7 +708,7 @@
                 // Authorization persisted but collector failed; close gate, enter app.
                 setPrivacyGateState("accepted_start_failed");
                 App.firstRunNoticeRequired = false;
-                hideFirstRunNotice();
+                settleFirstRunNoticeAcceptedUi();
                 var message = App.extractBridgeError(
                     result,
                     "隐私说明已确认，但记录功能未能启动。可前往设置查看原因或重试。"
