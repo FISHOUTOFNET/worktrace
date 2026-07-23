@@ -15,8 +15,8 @@ using a real database, real ticket computation, or real file output:
 - set_window does not start GUI
 - error message table stability
 
-Uses FakeStatisticsCapability and explicit fake windows. No temp_db, no
-_valid_ticket, no real service, no real CSV.
+Uses FakeStatisticsCapability and explicit fake windows. No SQLite fixture,
+real ticket computation, service database access, or CSV output.
 """
 
 from __future__ import annotations

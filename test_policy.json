@@ -167,11 +167,6 @@
       "path": "tests/test_webview_bridge_statistics_export.py",
       "signal": "collector_runtime",
       "reason": "Bridge export contract tests scan runtime import strings statically for boundary checks; they do not start collector or runtime threads."
-    },
-    {
-      "path": "tests/test_webview_bridge_statistics_export.py",
-      "signal": "db",
-      "reason": "Bridge export contract tests reference temp_db in docstrings to document its absence; they do not open WorkTrace SQLite."
     }
   ],
   "marker_requirements": [

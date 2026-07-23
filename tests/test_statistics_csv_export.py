@@ -678,21 +678,6 @@ def test_api_export_success_returns_payload(temp_db, tmp_path):
     assert out.exists()
 
 
-@pytest.mark.parametrize(
-    ("date_from", "date_to", "code"),
-    [
-        ("not-a-date", "2026-06-25", "invalid_date"),
-        ("2026-06-26", "2026-06-25", "invalid_range"),
-        (True, "2026-06-25", "invalid_date"),
-        (None, "2026-06-25", "invalid_date"),
-    ],
-)
-def test_api_export_rejects_invalid_inputs(temp_db, tmp_path, date_from, date_to, code):
-    with pytest.raises(StatisticsExportError) as exc:
-        export_api.export_statistics_csv(date_from, date_to, tmp_path / "report.csv", "ignored")
-    assert exc.value.code == code
-
-
 def test_api_export_empty_data_raises(temp_db, tmp_path):
     out = tmp_path / "report.csv"
     with pytest.raises(StatisticsExportError) as exc:

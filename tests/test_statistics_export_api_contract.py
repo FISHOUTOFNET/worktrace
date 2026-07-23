@@ -184,3 +184,34 @@ def test_api_export_passes_none_project_id(tmp_path):
             "2026-06-25", "2026-06-25", out, _TICKET
         )
     mock.assert_called_once_with("2026-06-25", "2026-06-25", out, _TICKET, None)
+
+
+# -- Pre-validation contract (real service, no database) --------------------
+
+
+@pytest.mark.parametrize(
+    ("date_from", "date_to", "code"),
+    [
+        ("not-a-date", "2026-06-25", "invalid_date"),
+        ("2026-06-26", "2026-06-25", "invalid_range"),
+        (True, "2026-06-25", "invalid_date"),
+        (None, "2026-06-25", "invalid_date"),
+    ],
+)
+def test_api_export_rejects_invalid_inputs_before_side_effects(
+    tmp_path, date_from, date_to, code
+):
+    """Invalid dates, ranges, and types are rejected at the validation stage
+    before any snapshot build, ticket computation, or file output.
+
+    This is a real pre-validation contract: the test calls the live API →
+    service path without a database fixture and without patching the service.
+    If validation did not short-circuit before persistence access, the service
+    would raise an infrastructure error rather than the expected validation
+    code. The output path is also checked to prove no file was created.
+    """
+    out = tmp_path / "report.csv"
+    with pytest.raises(StatisticsExportError) as exc:
+        export_api.export_statistics_csv(date_from, date_to, out, "ignored")
+    assert exc.value.code == code
+    assert not out.exists()
