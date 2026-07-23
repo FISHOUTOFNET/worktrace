@@ -79,7 +79,7 @@ class StatisticsBridgeMixin:
         self,
         date_from,
         date_to,
-        expected_snapshot_revision=None,
+        expected_export_ticket_revision,
         project_id=None,
     ) -> dict[str, Any]:
         try:
@@ -90,10 +90,12 @@ class StatisticsBridgeMixin:
                 not _DATE_SHAPE_RE.match(date_from) or not _DATE_SHAPE_RE.match(date_to)
             ):
                 return {"ok": False, "error": "请选择有效日期", "cancelled": False}
-            if expected_snapshot_revision is not None and (
-                not isinstance(expected_snapshot_revision, str)
-                or not expected_snapshot_revision.strip()
-            ):
+            if project_id is not None and not isinstance(project_id, (str, int)):
+                return {"ok": False, "error": "请选择有效项目", "cancelled": False}
+            # The export ticket is a mandatory backend contract. Validate it
+            # before opening the save dialog so a stale or missing ticket never
+            # creates a target file or temp residue.
+            if not isinstance(expected_export_ticket_revision, str) or not expected_export_ticket_revision.strip():
                 return {
                     "ok": False,
                     "error": "统计数据已更新，请重新加载后导出",
@@ -102,7 +104,7 @@ class StatisticsBridgeMixin:
             output_path = self._choose_csv_save_path()
             if output_path is None:
                 return {"ok": False, "cancelled": True, "error": "已取消导出"}
-            revision = expected_snapshot_revision.strip() if isinstance(expected_snapshot_revision, str) else None
+            revision = expected_export_ticket_revision.strip()
             if project_id in (None, ""):
                 result = self._services.statistics.export_statistics_csv(
                     date_from, date_to, output_path, revision

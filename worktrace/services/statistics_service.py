@@ -21,6 +21,7 @@ from .report_projection_identity import stable_json_hash
 from .statistics_scope_policy import normalize_statistics_project_scope
 
 STATISTICS_SUMMARY_MAX_RANGE_DAYS = 31
+STATISTICS_ALL_TIME_START_DATE = "1970-01-01"
 _UNKNOWN_APP_LABEL = "未知应用"
 _EXPORT_TICKET_SCHEMA_VERSION = 1
 
@@ -163,10 +164,18 @@ def validate_statistics_date_range(date_from: str, date_to: str) -> None:
 
 
 def resolve_statistics_date_range(date_from: str, date_to: str) -> tuple[str, str]:
+    """Resolve transport-level dates to a canonical date range.
+
+    Empty ``date_from`` and ``date_to`` together mean *all time* and resolve
+    to a canonical range from ``STATISTICS_ALL_TIME_START_DATE`` through today.
+    One empty and one non-empty is invalid. Both non-empty are validated and
+    returned as-is.
+    """
+
     if date_from == "" and date_to == "":
-        today = date.today()
-        first_of_month = today.replace(day=1)
-        return first_of_month.isoformat(), today.isoformat()
+        return STATISTICS_ALL_TIME_START_DATE, date.today().isoformat()
+    if date_from == "" or date_to == "":
+        raise ValueError("invalid_date")
     validate_statistics_date_range(date_from, date_to)
     return date_from, date_to
 

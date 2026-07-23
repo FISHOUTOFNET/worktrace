@@ -101,37 +101,29 @@ def _escape_csv_cell(value) -> str:
     return text
 
 
-def _statistics_summary_projection(date_from: str, date_to: str, project_id=None):
-    from .report_projection_snapshot_service import build_visible_snapshot
-    from .statistics_projection import build_statistics_summary_projection
-
-    return build_statistics_summary_projection(
-        build_visible_snapshot(date_from, date_to), project_id=project_id
-    )
-
-
-def _iter_export_records(date_from: str, date_to: str, project_id=None):
+def build_statistics_csv_rows(date_from: str, date_to: str) -> list[dict]:
     from .report_projection_snapshot_service import build_visible_snapshot
     from .statistics_projection import iter_statistics_export_records
 
-    return iter_statistics_export_records(
-        build_visible_snapshot(date_from, date_to), project_id=project_id
-    )
-
-
-def build_statistics_csv_rows(date_from: str, date_to: str) -> list[dict]:
     statistics_service.validate_statistics_date_range(date_from, date_to)
-    return list(_iter_export_records(date_from, date_to))
+    snapshot = build_visible_snapshot(date_from, date_to)
+    return list(iter_statistics_export_records(snapshot))
 
 
 def write_statistics_csv(
     date_from: str,
     date_to: str,
     output_path,
-    expected_snapshot_revision: str | None = None,
+    expected_export_ticket_revision: str,
     project_id: str | int | None = None,
 ) -> dict:
-    """Write the exact accepted closed-record projection to CSV."""
+    """Write the exact accepted closed-record projection to CSV.
+
+    Builds exactly one canonical snapshot and uses it for both the export
+    ticket validation and the CSV record iteration so that the checked state
+    and the written state are the same object. Records are streamed row by
+    row instead of being fully materialised in memory.
+    """
 
     date_from, date_to = statistics_service.resolve_statistics_date_range(date_from, date_to)
     statistics_service.validate_statistics_project_scope(project_id)
@@ -146,25 +138,30 @@ def write_statistics_csv(
     if not parent.exists() or not parent.is_dir():
         raise ValueError("invalid_path")
 
-    summary_projection = _statistics_summary_projection(date_from, date_to, project_id)
-    if expected_snapshot_revision is not None:
-        normalized_scope = normalize_statistics_project_scope(project_id)
-        current_ticket = statistics_service.compute_statistics_export_ticket_revision(
-            summary_projection.snapshot_revision,
-            date_from,
-            date_to,
-            normalized_scope,
-        )
-        if str(expected_snapshot_revision or "") != current_ticket:
-            raise ValueError("stale_statistics_snapshot")
+    from .report_projection_snapshot_service import build_visible_snapshot
+    from .statistics_projection import (
+        build_statistics_summary_projection,
+        iter_statistics_export_records,
+    )
 
-    csv_rows = list(_iter_export_records(date_from, date_to, project_id))
-    if not csv_rows:
-        raise ValueError("empty_data")
+    snapshot = build_visible_snapshot(date_from, date_to)
+    summary_projection = build_statistics_summary_projection(
+        snapshot, project_id=project_id
+    )
+    normalized_scope = normalize_statistics_project_scope(project_id)
+    current_ticket = statistics_service.compute_statistics_export_ticket_revision(
+        summary_projection.snapshot_revision,
+        date_from,
+        date_to,
+        normalized_scope,
+    )
+    if str(expected_export_ticket_revision or "") != current_ticket:
+        raise ValueError("stale_statistics_snapshot")
 
-    total_seconds = sum(int(row["duration_seconds"]) for row in csv_rows)
     headers = [header for _key, header in _CSV_COLUMNS]
     keys = [key for key, _header in _CSV_COLUMNS]
+    row_count = 0
+    total_seconds = 0
     try:
         with AtomicFileOutput(path, resource="statistics_csv") as output:
             with open(
@@ -175,10 +172,16 @@ def write_statistics_csv(
             ) as handle:
                 writer = csv.writer(handle)
                 writer.writerow(headers)
-                for row in csv_rows:
+                for row in iter_statistics_export_records(
+                    snapshot, project_id=project_id
+                ):
                     writer.writerow(
                         [_escape_csv_cell(row.get(key, "")) for key in keys]
                     )
+                    row_count += 1
+                    total_seconds += int(row.get("duration_seconds") or 0)
+                if row_count == 0:
+                    raise ValueError("empty_data")
                 handle.flush()
                 os.fsync(handle.fileno())
             output.commit()
@@ -190,7 +193,7 @@ def write_statistics_csv(
         _raise_export_file_error(exc, stage="statistics_csv")
     return {
         "activity_count": summary_projection.activity_count,
-        "export_row_count": len(csv_rows),
+        "export_row_count": row_count,
         "duration_seconds": total_seconds,
         "filename": path.name,
     }
