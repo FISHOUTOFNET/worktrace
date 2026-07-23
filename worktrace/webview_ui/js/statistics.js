@@ -36,10 +36,25 @@
     App.validateStatisticsDateRange = validateStatisticsDateRange;
 
     function selectedFilters() {
-        var all = !element("statistics-range-mode") || element("statistics-range-mode").value === "all";
+        var mode = element("statistics-range-mode") ? element("statistics-range-mode").value : "month";
+        var all = mode === "all";
+        var dateFrom = "";
+        var dateTo = "";
+        if (all) {
+            dateFrom = "";
+            dateTo = "";
+        } else if (mode === "month") {
+            var today = new Date();
+            var start = new Date(today.getFullYear(), today.getMonth(), 1);
+            dateFrom = localDate(start);
+            dateTo = localDate(today);
+        } else {
+            dateFrom = element("statistics-date-from").value;
+            dateTo = element("statistics-date-to").value;
+        }
         return {
-            dateFrom: all ? "" : element("statistics-date-from").value,
-            dateTo: all ? "" : element("statistics-date-to").value,
+            dateFrom: dateFrom,
+            dateTo: dateTo,
             projectId: element("statistics-project-filter") ? element("statistics-project-filter").value : "",
             allTime: all
         };
@@ -179,6 +194,10 @@
     function initStatisticsDefaults() {
         if (App.statisticsControlsBound) return;
         App.statisticsControlsBound = true;
+        var today = new Date();
+        var monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+        if (element("statistics-date-from")) element("statistics-date-from").value = localDate(monthStart);
+        if (element("statistics-date-to")) element("statistics-date-to").value = localDate(today);
         element("statistics-range-mode").addEventListener("change", function () {
             var custom = this.value === "custom";
             element("statistics-custom-range").hidden = !custom;

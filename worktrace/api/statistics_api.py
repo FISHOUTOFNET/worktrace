@@ -70,7 +70,7 @@ def get_statistics_export_view_model(
     """Return the complete bridge-facing Statistics display envelope."""
 
     summary = get_statistics_export_summary(date_from, date_to, project_id)
-    revision = str(summary.get("export_revision") or "")
+    revision = str(summary.get("ticket_revision") or "")
     return {
         "summary": _statistics_summary_payload(summary),
         "export_ticket": {

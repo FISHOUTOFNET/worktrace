@@ -157,7 +157,7 @@
                 </header>
                 <div class="toolbar statistics-toolbar">
                     <label for="statistics-range-mode">时间</label>
-                    <select id="statistics-range-mode"><option value="all">全部时间</option><option value="custom">自定义范围</option></select>
+                    <select id="statistics-range-mode"><option value="month" selected>本月</option><option value="all">全部时间</option><option value="custom">自定义范围</option></select>
                     <span id="statistics-custom-range" class="date-range" hidden>
                         <label class="sr-only" for="statistics-date-from">开始日期</label><input id="statistics-date-from" type="date" aria-label="开始日期">
                         <span>至</span>
@@ -173,7 +173,7 @@
                     </div>
                 </div>
                 <div class="section-heading stats-scope-row">
-                    <span id="stats-scope" class="secondary-text">当前范围：全部时间 · 全部项目</span>
+                    <span id="stats-scope" class="secondary-text">当前范围：本月 · 全部项目</span>
                     <span id="statistics-update-status" class="inline-status" role="status" aria-live="polite"></span>
                 </div>
                 <div id="statistics-error" class="inline-alert error" role="alert" hidden>加载统计失败</div>
@@ -212,7 +212,7 @@
                     <label class="sr-only" for="rules-search-input">搜索项目或规则</label><input id="rules-search-input" type="search" placeholder="搜索项目或规则">
                     <span class="toolbar-spacer"></span>
                     <label for="rules-sort-select">排序</label>
-                    <select id="rules-sort-select"><option value="last_used">最近使用</option><option value="total_duration">累计时间</option><option value="alpha">项目名称</option></select>
+                    <select id="rules-sort-select"><option value="last_used">最近使用</option><option value="alpha">项目名称</option></select>
                 </div>
                 <div id="rules-error" class="inline-alert error" role="alert" hidden>加载项目规则失败</div>
                 <div id="rules-loading" class="loading-state" hidden><span class="skeleton"></span><span class="skeleton"></span></div>

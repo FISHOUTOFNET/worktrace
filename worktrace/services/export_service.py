@@ -15,6 +15,7 @@ from ..atomic_file import (
 from ..db import get_connection, now_str
 from ..exports.excel_exporter import export_excel_file
 from . import statistics_service
+from .statistics_scope_policy import normalize_statistics_project_scope
 
 logger = logging.getLogger(__name__)
 
@@ -100,18 +101,27 @@ def _escape_csv_cell(value) -> str:
     return text
 
 
-def _statistics_projection(date_from: str, date_to: str, project_id=None):
+def _statistics_summary_projection(date_from: str, date_to: str, project_id=None):
     from .report_projection_snapshot_service import build_visible_snapshot
-    from .statistics_projection import build_statistics_projection
+    from .statistics_projection import build_statistics_summary_projection
 
-    return build_statistics_projection(
+    return build_statistics_summary_projection(
+        build_visible_snapshot(date_from, date_to), project_id=project_id
+    )
+
+
+def _iter_export_records(date_from: str, date_to: str, project_id=None):
+    from .report_projection_snapshot_service import build_visible_snapshot
+    from .statistics_projection import iter_statistics_export_records
+
+    return iter_statistics_export_records(
         build_visible_snapshot(date_from, date_to), project_id=project_id
     )
 
 
 def build_statistics_csv_rows(date_from: str, date_to: str) -> list[dict]:
     statistics_service.validate_statistics_date_range(date_from, date_to)
-    return list(_statistics_projection(date_from, date_to).export_records)
+    return list(_iter_export_records(date_from, date_to))
 
 
 def write_statistics_csv(
@@ -136,15 +146,19 @@ def write_statistics_csv(
     if not parent.exists() or not parent.is_dir():
         raise ValueError("invalid_path")
 
-    projection = _statistics_projection(date_from, date_to, project_id)
+    summary_projection = _statistics_summary_projection(date_from, date_to, project_id)
     if expected_snapshot_revision is not None:
-        expected = str(expected_snapshot_revision or "")
-        if expected not in {
-            projection.export_revision,
-            projection.snapshot_revision,
-        }:
+        normalized_scope = normalize_statistics_project_scope(project_id)
+        current_ticket = statistics_service.compute_statistics_export_ticket_revision(
+            summary_projection.snapshot_revision,
+            date_from,
+            date_to,
+            normalized_scope,
+        )
+        if str(expected_snapshot_revision or "") != current_ticket:
             raise ValueError("stale_statistics_snapshot")
-    csv_rows = projection.export_records
+
+    csv_rows = list(_iter_export_records(date_from, date_to, project_id))
     if not csv_rows:
         raise ValueError("empty_data")
 
@@ -175,7 +189,7 @@ def write_statistics_csv(
     except (OSError, TemporaryFileError) as exc:
         _raise_export_file_error(exc, stage="statistics_csv")
     return {
-        "activity_count": projection.activity_count,
+        "activity_count": summary_projection.activity_count,
         "export_row_count": len(csv_rows),
         "duration_seconds": total_seconds,
         "filename": path.name,
