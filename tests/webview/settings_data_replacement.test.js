@@ -108,7 +108,7 @@ function harness() {
     importEncryptedBackup: () => Promise.resolve({ ok: true, message: "已导入" }),
     clearAllLocalData: () => Promise.resolve({ ok: true, message: "已清空" }),
     getFirstRunNotice: () => Promise.resolve({ ok: true, accepted: true, highlights: [] }),
-    acceptFirstRunNotice: () => Promise.resolve({ ok: true }),
+    acceptFirstRunNotice: () => Promise.resolve({ ok: true, accepted: true, collector_started: true }),
   };
 
   vm.runInContext(

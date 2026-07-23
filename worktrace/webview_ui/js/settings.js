@@ -135,6 +135,7 @@
             "user_paused",
             "用户暂停：" + boolLabel(!!status.user_paused)
         );
+        renderRecoveryCard(status);
         var health = element("settings-health-summary");
         if (health) {
             var title = "记录正常";
@@ -170,6 +171,75 @@
         if (statusEl) statusEl.hidden = false;
     }
     App.renderSettingsStatus = renderSettingsStatus;
+
+    function setRecoveryStatus(message) {
+        var statusEl = element("settings-recovery-status");
+        if (!statusEl) return;
+        statusEl.hidden = !message;
+        statusEl.textContent = message || "";
+    }
+
+    function renderRecoveryCard(status) {
+        var card = element("settings-recovery-card");
+        var reason = element("settings-recovery-reason");
+        var button = element("settings-recovery-btn");
+        if (!card || !button) return;
+        var blocked = !!status.recovery_blocked;
+        var inProgress = !!status.maintenance_in_progress;
+        card.hidden = !blocked && !inProgress;
+        if (reason) {
+            reason.textContent = "阻断原因："
+                + (status.blocked_reason ? String(status.blocked_reason) : (inProgress ? "维护进行中" : "无"));
+        }
+        // The button is enabled only when the backend explicitly signals
+        // recovery_blocked. During active maintenance the recovery protocol
+        // is not safe to invoke; the user must wait for completion.
+        button.disabled = blocked ? !!App.recoveryInProgress : true;
+    }
+    App.renderRecoveryCard = renderRecoveryCard;
+
+    function recoverDatabaseMaintenance() {
+        if (App.recoveryInProgress) return Promise.resolve(false);
+        App.recoveryInProgress = true;
+        var button = element("settings-recovery-btn");
+        if (button) button.disabled = true;
+        setRecoveryStatus("正在尝试恢复，请勿关闭应用……");
+        App.clearGlobalAlert();
+        return App.bridge.recoverDatabaseMaintenance().then(function (result) {
+            App.recoveryInProgress = false;
+            if (!result || result.ok === false) {
+                // Do NOT clear the blocked flag locally — only the backend
+                // authoritative status can declare recovery complete.
+                var message = App.extractBridgeError(
+                    result,
+                    "数据库维护恢复失败，请稍后重试或联系支持。"
+                );
+                setRecoveryStatus(message);
+                if (App.showGlobalAlert) App.showGlobalAlert(message);
+                if (button) button.disabled = false;
+                return false;
+            }
+            setRecoveryStatus("恢复已提交，正在重新加载状态……");
+            // Refresh settings status, runtime status, and current page so
+            // the user sees authoritative state without manual reload.
+            return Promise.all([
+                App.loadSettingsPrivacyStatus(),
+                App.refreshAll ? App.refreshAll() : Promise.resolve()
+            ]).then(function () {
+                setRecoveryStatus("数据库维护恢复已完成，状态已刷新。");
+                if (App.showToast) App.showToast("数据库维护恢复已完成");
+                return true;
+            });
+        }).catch(function () {
+            App.recoveryInProgress = false;
+            var message = "数据库维护恢复失败，请稍后重试或联系支持。";
+            setRecoveryStatus(message);
+            if (App.showGlobalAlert) App.showGlobalAlert(message);
+            if (button) button.disabled = false;
+            return false;
+        });
+    }
+    App.recoverDatabaseMaintenance = recoverDatabaseMaintenance;
 
     function initSettingsCategories() {
         var buttons = document.querySelectorAll("[data-settings-section]");
@@ -425,32 +495,32 @@
         while (target.firstChild) target.removeChild(target.firstChild);
     }
 
-    function renderFirstRunNotice(data, mode) {
-        if (!data) return;
+    function renderFirstRunNotice(notice, mode) {
+        if (!notice) return;
         var title = element("first-run-notice-title");
         var highlights = element("first-run-notice-highlights");
         var text = element("first-run-notice-text");
         var accept = element("first-run-notice-accept-btn");
         var close = element("first-run-notice-close-btn");
-        if (title) title.textContent = String(data.title || "WorkTrace 隐私说明");
+        if (title) title.textContent = String(notice.title || "WorkTrace 隐私说明");
         clearChildren(highlights);
-        if (highlights && Array.isArray(data.highlights)) {
-            data.highlights.forEach(function (item) {
+        if (highlights && Array.isArray(notice.highlights)) {
+            notice.highlights.forEach(function (item) {
                 var li = document.createElement("li");
                 li.textContent = String(item || "");
                 highlights.appendChild(li);
             });
         }
-        if (text) text.textContent = String(data.notice_text || "");
+        if (text) text.textContent = String(notice.text || "");
         if (accept) accept.hidden = mode === "view";
         if (close) close.hidden = mode !== "view";
         setFirstRunNoticeError("");
     }
     App.renderFirstRunNotice = renderFirstRunNotice;
 
-    function showFirstRunNotice(data, mode) {
+    function showFirstRunNotice(notice, mode) {
         App.firstRunNoticeViewingFromSettings = mode === "view";
-        renderFirstRunNotice(data, mode);
+        renderFirstRunNotice(notice, mode);
         var overlay = element("first-run-notice-overlay");
         if (overlay) overlay.hidden = false;
     }
@@ -480,23 +550,38 @@
     }
     App.hideFirstRunNotice = hideFirstRunNotice;
 
+    function setPrivacyGateState(state) {
+        App.privacyGateState = state;
+        App.firstRunNoticeRequired = state === "acceptance_required";
+    }
+    App.setPrivacyGateState = setPrivacyGateState;
+
     function loadFirstRunNotice() {
         if (App.firstRunNoticeLoading || App.firstRunNoticeLoaded) return Promise.resolve(true);
         App.firstRunNoticeLoading = true;
+        setPrivacyGateState("loading");
         return App.bridge.getFirstRunNotice().then(function (result) {
             App.firstRunNoticeLoading = false;
             if (!result || result.ok === false) {
-                App.firstRunNoticeRequired = true;
-                showFirstRunNoticeBlockingError((result && result.error) || FIRST_RUN_NOTICE_LOAD_ERROR);
+                setPrivacyGateState("load_failed");
+                showFirstRunNoticeBlockingError(
+                    (result && result.error) || FIRST_RUN_NOTICE_LOAD_ERROR
+                );
                 return false;
             }
             App.firstRunNoticeLoaded = true;
-            App.firstRunNoticeRequired = result.accepted === false;
-            if (App.firstRunNoticeRequired) showFirstRunNotice(result, "gate");
+            var notice = result.notice || {};
+            var accepted = notice.accepted === true;
+            if (accepted) {
+                setPrivacyGateState("accepted_ready");
+                return true;
+            }
+            setPrivacyGateState("acceptance_required");
+            showFirstRunNotice(notice, "gate");
             return true;
         }).catch(function () {
             App.firstRunNoticeLoading = false;
-            App.firstRunNoticeRequired = true;
+            setPrivacyGateState("load_failed");
             showFirstRunNoticeBlockingError(FIRST_RUN_NOTICE_LOAD_ERROR);
             return false;
         });
@@ -509,16 +594,36 @@
         var accept = element("first-run-notice-accept-btn");
         if (accept) accept.disabled = true;
         setFirstRunNoticeError("");
+        setPrivacyGateState("accepted_starting");
         App.bridge.acceptFirstRunNotice().then(function (result) {
-            var data = App.handleResult(result, function (message) {
-                setFirstRunNoticeError(message || FIRST_RUN_NOTICE_ACCEPT_ERROR);
-            });
-            if (!data) return;
-            App.firstRunNoticeRequired = false;
-            hideFirstRunNotice();
-            if (typeof App.refreshAll === "function") App.refreshAll();
-            loadSettingsPrivacyStatus();
+            var accepted = !!(result && result.accepted === true);
+            if (accepted && result.ok === true) {
+                setPrivacyGateState("accepted_ready");
+                App.firstRunNoticeRequired = false;
+                hideFirstRunNotice();
+                if (typeof App.refreshAll === "function") App.refreshAll();
+                loadSettingsPrivacyStatus();
+                return;
+            }
+            if (accepted && result.ok === false) {
+                setPrivacyGateState("accepted_start_failed");
+                App.firstRunNoticeRequired = false;
+                hideFirstRunNotice();
+                var message = App.extractBridgeError(
+                    result,
+                    "隐私说明已确认，但记录功能未能启动。可前往设置查看原因或重试。"
+                );
+                if (App.showGlobalAlert) App.showGlobalAlert(message);
+                loadSettingsPrivacyStatus();
+                if (typeof App.refreshAll === "function") App.refreshAll();
+                return;
+            }
+            setPrivacyGateState("acceptance_required");
+            setFirstRunNoticeError(
+                App.extractBridgeError(result, FIRST_RUN_NOTICE_ACCEPT_ERROR)
+            );
         }).catch(function () {
+            setPrivacyGateState("acceptance_required");
             setFirstRunNoticeError(FIRST_RUN_NOTICE_ACCEPT_ERROR);
         }).then(function () {
             App.firstRunNoticeAcceptInProgress = false;
@@ -530,7 +635,9 @@
     function openPrivacyNoticeFromSettings() {
         App.bridge.getFirstRunNotice().then(function (result) {
             if (!result || result.ok === false) {
-                showFirstRunNoticeBlockingError((result && result.error) || FIRST_RUN_NOTICE_LOAD_ERROR);
+                showFirstRunNoticeBlockingError(
+                    (result && result.error) || FIRST_RUN_NOTICE_LOAD_ERROR
+                );
                 var accept = element("first-run-notice-accept-btn");
                 var close = element("first-run-notice-close-btn");
                 if (accept) accept.hidden = true;
@@ -538,7 +645,7 @@
                 App.firstRunNoticeViewingFromSettings = true;
                 return;
             }
-            showFirstRunNotice(result, "view");
+            showFirstRunNotice(result.notice || {}, "view");
         }).catch(function () {
             showFirstRunNoticeBlockingError(FIRST_RUN_NOTICE_LOAD_ERROR);
             var accept = element("first-run-notice-accept-btn");

@@ -34,6 +34,7 @@ SETTINGS_BRIDGE_METHODS = {
     "getSettingsPrivacyStatus",
     "importEncryptedBackup",
     "previewEncryptedBackupManifest",
+    "recoverDatabaseMaintenance",
     "setClipboardCaptureEnabled",
 }
 
@@ -270,7 +271,15 @@ def test_first_run_notice_is_fail_closed_and_mode_safe() -> None:
     load = func_body(source, "loadFirstRunNotice")
     assert "App.bridge.getFirstRunNotice()" in load
     assert "showFirstRunNoticeBlockingError" in load
-    assert "App.firstRunNoticeRequired = true" in load
+    # The privacy gate is now driven by an explicit state machine. The
+    # ``acceptance_required`` state must set ``firstRunNoticeRequired`` via
+    # ``setPrivacyGateState`` so that fail-closed semantics remain while the
+    # notice is loaded but unaccepted.
+    assert 'setPrivacyGateState("acceptance_required")' in load
+
+    gate = func_body(source, "setPrivacyGateState")
+    assert "App.privacyGateState = state" in gate
+    assert 'App.firstRunNoticeRequired = state === "acceptance_required"' in gate
 
     hide = func_body(source, "hideFirstRunNotice")
     assert "App.bridge" not in hide

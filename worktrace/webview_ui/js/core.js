@@ -67,6 +67,7 @@
     App.firstRunNoticeRequired = false;
     App.firstRunNoticeAcceptInProgress = false;
     App.firstRunNoticeViewingFromSettings = false;
+    App.privacyGateState = "loading";
     App.rulesLoaded = false;
     App.rulesLoading = false;
     App.rulesRequestToken = 0;
@@ -96,6 +97,34 @@
     }
     App.showError = showError;
     App.clearError = function () { showError(""); };
+
+    function showGlobalAlert(message) {
+        var banner = document.getElementById("global-alert");
+        if (!banner) return;
+        banner.hidden = !message;
+        banner.textContent = message || "";
+    }
+    App.showGlobalAlert = showGlobalAlert;
+    App.clearGlobalAlert = function () { showGlobalAlert(""); };
+
+    function extractBridgeError(result, fallback) {
+        if (!result) return fallback || "操作失败";
+        var message = result.message;
+        if (typeof message === "string" && message.trim()) return message;
+        var code = result.error;
+        if (typeof code !== "string" || !code.trim()) return fallback || "操作失败";
+        var lookup = BRIDGE_ERROR_MESSAGES[code];
+        return lookup || fallback || code;
+    }
+    App.extractBridgeError = extractBridgeError;
+
+    var BRIDGE_ERROR_MESSAGES = {
+        collector_start_failed: "记录功能未能启动，请稍后重试或在设置中恢复",
+        collector_pause_failed: "暂停记录失败，请稍后重试",
+        database_maintenance_recovery_required: "数据库维护尚未恢复，请前往设置执行恢复",
+        privacy_gate_required: "请先确认隐私说明",
+        maintenance_in_progress: "维护操作进行中，请等待完成后再试"
+    };
 
     function showTimelineError(message) {
         var banner = document.getElementById("timeline-error");
@@ -575,10 +604,12 @@
     };
 
     App._timelineEditingActive = function () {
-        return App.editSaving || !!(
-            App.editingSession
-            && typeof App.isEditDirty === "function"
-            && App.isEditDirty()
-        );
+        return App.editSaving
+            || App.mutationState === "unknown"
+            || !!(
+                App.editingSession
+                && typeof App.isEditDirty === "function"
+                && App.isEditDirty()
+            );
     };
 })();

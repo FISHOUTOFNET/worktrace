@@ -53,6 +53,7 @@
         previewEncryptedBackupManifest: fixedBridgeMethod("preview_encrypted_backup_manifest"),
         previewProjectRuleImpact: fixedBridgeMethod("preview_project_rule_impact"),
         previewProjectRulesBatchImpact: fixedBridgeMethod("preview_project_rules_batch_impact"),
+        recoverDatabaseMaintenance: fixedBridgeMethod("recover_database_maintenance"),
         saveTimelineSessionEdit: fixedBridgeMethod("save_timeline_session_edit"),
         setClipboardCaptureEnabled: fixedBridgeMethod("set_clipboard_capture_enabled"),
         setExcludedRulesEnabled: fixedBridgeMethod("set_excluded_rules_enabled"),
@@ -240,6 +241,13 @@
         App.selectedProjectionInstanceKey = null;
         App.selectedProjectionRevision = null;
         App.editingSession = null;
+        // Discard any in-flight draft snapshot and queued context change:
+        // a generation reset (database replacement / clear) invalidates the
+        // old baseline, so the old draft must not be re-submitted against
+        // the new generation.
+        App.submittedDraft = null;
+        App.pendingContextChange = null;
+        App.editSaving = false;
         App.detailsOwner = null;
         App.timelineOwner = null;
         App.mutationOwner = null;
@@ -545,10 +553,14 @@
 
     function togglePause() {
         App.bridge.togglePause().then(function (result) {
-            var status = App.handleResult(result, function (msg) { App.showError(msg); });
-            App.showStatus(status);
+            if (!result || result.ok === false) {
+                App.showGlobalAlert(App.extractBridgeError(result, "切换暂停状态失败，请稍后重试。"));
+                return;
+            }
+            App.clearGlobalAlert();
+            App.showStatus(result);
         }).catch(function () {
-            App.showError("切换暂停状态失败，请稍后重试。");
+            App.showGlobalAlert("切换暂停状态失败，请稍后重试。");
         });
     }
     App.togglePause = togglePause;
@@ -614,7 +626,7 @@
         bind("timeline-next-btn", "click", App.goNextDay);
         bind("timeline-today-btn", "click", App.goToday);
         bind("timeline-date-input", "change", function (event) {
-            App.loadTimelineReport(event.target.value || null, { resetSelection: true, showLoading: true });
+            App.goToDate(event.target.value || null);
         });
         [
             ["timeline-merge-previous", "merge", "previous"],
@@ -657,6 +669,7 @@
             if (App.firstRunNoticeViewingFromSettings) App.hideFirstRunNotice();
         });
         bind("settings-privacy-notice-btn", "click", App.openPrivacyNoticeFromSettings);
+        bind("settings-recovery-btn", "click", App.recoverDatabaseMaintenance);
     }
     App.initButtons = initButtons;
 

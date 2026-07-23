@@ -299,7 +299,13 @@
                             </article>
                         </section>
                         <section id="settings-section-advanced" class="settings-section" hidden>
-                            <h2>高级</h2><details><summary>技术诊断（默认折叠）</summary>
+                            <h2>高级</h2>
+                            <article id="settings-recovery-card" class="setting-row" hidden>
+                                <span><strong>数据库维护未完成</strong><small id="settings-recovery-reason">阻断原因：未加载</small></span>
+                                <button id="settings-recovery-btn" type="button" class="button primary" disabled>尝试恢复</button>
+                            </article>
+                            <p id="settings-recovery-status" class="inline-status" role="status" aria-live="polite" hidden></p>
+                            <details><summary>技术诊断（默认折叠）</summary>
                                 <div class="diagnostic-list">
                                     <p data-settings-key="maintenance_in_progress">数据库维护进行中：未加载</p>
                                     <p data-settings-key="maintenance_restored">维护恢复完成：未加载</p>
@@ -326,6 +332,7 @@
                 </div>
             </section>
         </div>
+        <div id="global-alert" class="inline-alert error global-alert" role="alert" hidden></div>
         <div id="app-toast" class="toast" role="status" aria-live="polite" hidden></div>
     </div>
     <script src="js/core.js"></script>
