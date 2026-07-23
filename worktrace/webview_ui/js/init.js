@@ -665,6 +665,7 @@
         if (App.initTimelineAccessibility) App.initTimelineAccessibility();
         if (App.initSettingsCategories) App.initSettingsCategories();
         bind("first-run-notice-accept-btn", "click", App.acceptFirstRunNotice);
+        bind("first-run-notice-retry-btn", "click", App.retryFirstRunNotice);
         bind("first-run-notice-close-btn", "click", function () {
             if (App.firstRunNoticeViewingFromSettings) App.hideFirstRunNotice();
         });
@@ -768,7 +769,11 @@
     App.runRevisionCheck = runRevisionCheck;
 
     function startHeartbeat() {
-        if (App.heartbeatTimer !== null) clearInterval(App.heartbeatTimer);
+        // Idempotent: the single startup entry (continueStartupAfterPrivacyGate)
+        // is the only path that creates the heartbeat interval. Repeated calls
+        // are no-ops so concurrent or duplicate startup requests never spawn a
+        // second timer. Use restartHeartbeat() for an explicit teardown+rebuild.
+        if (App.heartbeatTimer !== null) return;
         App.heartbeatTimer = setInterval(function () {
             try { App.applyLocalTicker(); } catch (error) {}
             try { runRevisionCheck(); } catch (error) {}
@@ -776,24 +781,101 @@
     }
     App.startHeartbeat = startHeartbeat;
 
-    function init() {
-        initNav();
-        initButtons();
-        App.loadFirstRunNotice().then(function (noticeConfirmed) {
-            if (!noticeConfirmed) return;
-            var preload = typeof App.loadProjects === "function" ? App.loadProjects() : Promise.resolve();
-            return preload.then(function () {
+    App.restartHeartbeat = function () {
+        if (App.heartbeatTimer !== null) clearInterval(App.heartbeatTimer);
+        App.heartbeatTimer = null;
+        startHeartbeat();
+    };
+
+    // Single idempotent post-privacy-gate startup entry: only this function
+    // may run catalog -> refresh state -> page refresh -> heartbeat.
+    App.startupAfterPrivacyState = "idle";
+    App.startupAfterPrivacyPromise = null;
+
+    function showPublicStartupError(error) {
+        var message = "应用启动失败，请稍后重试或重启应用。";
+        if (error && typeof error.message === "string" && error.message.trim()) {
+            message = error.message;
+        } else if (typeof error === "string" && error.trim()) {
+            message = error;
+        }
+        if (App.showGlobalAlert) App.showGlobalAlert(message);
+    }
+    App.showPublicStartupError = showPublicStartupError;
+
+    function continueStartupAfterPrivacyGate() {
+        if (App.startupAfterPrivacyState === "ready") {
+            return Promise.resolve(true);
+        }
+        if (App.startupAfterPrivacyPromise) {
+            return App.startupAfterPrivacyPromise;
+        }
+
+        App.startupAfterPrivacyState = "starting";
+
+        App.startupAfterPrivacyPromise = Promise.resolve()
+            .then(function () {
+                return typeof App.loadProjects === "function"
+                    ? App.loadProjects()
+                    : Promise.resolve();
+            })
+            .then(function () {
                 return App.bridge.getRefreshState(
                     App.currentPage === "timeline" ? App.timelineDate : null
                 );
-            }).then(function (result) {
+            })
+            .then(function (result) {
                 var state = App.handleResult(result, function () { return null; });
                 if (state) App.acceptRefreshStateRuntime(state);
                 return refreshCurrentPageData(state);
-            }).then(function () {
+            })
+            .then(function () {
                 App.lastReconcileAtEpochMs = Date.now();
                 startHeartbeat();
-            }, startHeartbeat);
+            })
+            .then(function () {
+                App.startupAfterPrivacyState = "ready";
+                return true;
+            })
+            .catch(function (error) {
+                App.startupAfterPrivacyState = "failed";
+                showPublicStartupError(error);
+                return false;
+            })
+            .then(function (result) {
+                App.startupAfterPrivacyPromise = null;
+                return result;
+            });
+
+        return App.startupAfterPrivacyPromise;
+    }
+    App.continueStartupAfterPrivacyGate = continueStartupAfterPrivacyGate;
+
+    // Retry for privacy notice load failure; cannot bypass authorization.
+    function retryFirstRunNotice() {
+        if (App.firstRunNoticeLoading) return Promise.resolve(false);
+        App.firstRunNoticeLoaded = false;
+        return App.loadFirstRunNotice({ force: true }).then(function () {
+            if (App.privacyGateState === "accepted_ready") {
+                return continueStartupAfterPrivacyGate();
+            }
+            // acceptance_required: the gate is shown again by loadFirstRunNotice.
+            // load_failed: the blocking error is shown again. Either way, do
+            // not continue startup.
+            return false;
+        });
+    }
+    App.retryFirstRunNotice = retryFirstRunNotice;
+
+    function init() {
+        initNav();
+        initButtons();
+        App.loadFirstRunNotice().then(function () {
+            // Only accepted_ready continues startup; other states stay fail-closed.
+            if (App.privacyGateState === "accepted_ready") {
+                return continueStartupAfterPrivacyGate();
+            }
+            return null;
         });
     }
     App.init = init;

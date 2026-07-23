@@ -111,10 +111,12 @@
         if (!result) return fallback || "操作失败";
         var message = result.message;
         if (typeof message === "string" && message.trim()) return message;
-        var code = result.error;
+        // Prefer the stable public error_code over the legacy internal error.
+        var code = result.error_code;
+        if (typeof code !== "string" || !code.trim()) code = result.error;
         if (typeof code !== "string" || !code.trim()) return fallback || "操作失败";
         var lookup = BRIDGE_ERROR_MESSAGES[code];
-        return lookup || fallback || code;
+        return lookup || fallback || "操作失败";
     }
     App.extractBridgeError = extractBridgeError;
 
@@ -123,6 +125,7 @@
         collector_pause_failed: "暂停记录失败，请稍后重试",
         database_maintenance_recovery_required: "数据库维护尚未恢复，请前往设置执行恢复",
         privacy_gate_required: "请先确认隐私说明",
+        privacy_accept_failed: "确认隐私说明失败，请稍后重试",
         maintenance_in_progress: "维护操作进行中，请等待完成后再试"
     };
 

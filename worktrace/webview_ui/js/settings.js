@@ -9,7 +9,7 @@
     var BACKUP_MANIFEST_ERROR_MESSAGE = "读取备份清单失败";
     var BACKUP_IMPORT_ERROR_MESSAGE = "导入加密备份失败";
     var CLEAR_ALL_ERROR_MESSAGE = "清空本地数据失败";
-    var FIRST_RUN_NOTICE_LOAD_ERROR = "隐私说明加载失败。为保护隐私，WorkTrace 暂不会启动记录。请重启应用或重新安装。";
+    var FIRST_RUN_NOTICE_LOAD_ERROR = "隐私说明加载失败。为保护隐私，WorkTrace 暂不会启动记录。请点击“重新加载”重试。";
     var FIRST_RUN_NOTICE_ACCEPT_ERROR = "确认隐私说明失败";
     var IMPORT_CONFIRM_LITERAL = "导入并替换";
     var CLEAR_CONFIRM_LITERAL = "清空本地数据";
@@ -33,6 +33,7 @@
             || App.settingsBackupManifestInProgress
             || App.settingsBackupImportInProgress
             || App.settingsClearAllInProgress
+            || App.recoveryInProgress
         );
     }
     App.anySettingsOperationInProgress = anySettingsOperationInProgress;
@@ -201,27 +202,34 @@
     function recoverDatabaseMaintenance() {
         if (App.recoveryInProgress) return Promise.resolve(false);
         App.recoveryInProgress = true;
+        // Disable all settings controls via the unified mutex during recovery.
+        setSettingsControlsDisabled(anySettingsOperationInProgress());
         var button = element("settings-recovery-btn");
         if (button) button.disabled = true;
         setRecoveryStatus("正在尝试恢复，请勿关闭应用……");
         App.clearGlobalAlert();
         return App.bridge.recoverDatabaseMaintenance().then(function (result) {
-            App.recoveryInProgress = false;
             if (!result || result.ok === false) {
-                // Do NOT clear the blocked flag locally — only the backend
-                // authoritative status can declare recovery complete.
                 var message = App.extractBridgeError(
                     result,
                     "数据库维护恢复失败，请稍后重试或联系支持。"
                 );
                 setRecoveryStatus(message);
                 if (App.showGlobalAlert) App.showGlobalAlert(message);
-                if (button) button.disabled = false;
+                // On failure, prefer the maintenance status embedded in the
+                // response to refresh the recovery card; otherwise reload the
+                // full settings status. Never clear recovery_blocked here.
+                var maintenance = result && result.maintenance;
+                if (maintenance) {
+                    App.lastSettingsStatus = maintenance;
+                } else if (typeof App.loadSettingsPrivacyStatus === "function") {
+                    return App.loadSettingsPrivacyStatus().then(function () { return false; });
+                }
                 return false;
             }
             setRecoveryStatus("恢复已提交，正在重新加载状态……");
-            // Refresh settings status, runtime status, and current page so
-            // the user sees authoritative state without manual reload.
+            // Refresh settings status and current page so the user sees
+            // authoritative state without manual reload.
             return Promise.all([
                 App.loadSettingsPrivacyStatus(),
                 App.refreshAll ? App.refreshAll() : Promise.resolve()
@@ -231,12 +239,19 @@
                 return true;
             });
         }).catch(function () {
-            App.recoveryInProgress = false;
             var message = "数据库维护恢复失败，请稍后重试或联系支持。";
             setRecoveryStatus(message);
             if (App.showGlobalAlert) App.showGlobalAlert(message);
-            if (button) button.disabled = false;
             return false;
+        }).then(function (ok) {
+            // Single release path for success, failure, and exception: clear
+            // the busy flag and re-render controls from the latest backend
+            // status so the recovery button is re-enabled only when the
+            // backend still reports recovery_blocked.
+            App.recoveryInProgress = false;
+            setSettingsControlsDisabled(anySettingsOperationInProgress());
+            if (App.lastSettingsStatus) renderRecoveryCard(App.lastSettingsStatus);
+            return ok;
         });
     }
     App.recoverDatabaseMaintenance = recoverDatabaseMaintenance;
@@ -271,6 +286,7 @@
             });
             if (!data) return;
             App.settingsLoaded = true;
+            App.lastSettingsStatus = data.status;
             renderSettingsStatus(data.status);
             App.clearSettingsError();
         }).catch(function () {
@@ -502,6 +518,7 @@
         var text = element("first-run-notice-text");
         var accept = element("first-run-notice-accept-btn");
         var close = element("first-run-notice-close-btn");
+        var retry = element("first-run-notice-retry-btn");
         if (title) title.textContent = String(notice.title || "WorkTrace 隐私说明");
         clearChildren(highlights);
         if (highlights && Array.isArray(notice.highlights)) {
@@ -512,8 +529,11 @@
             });
         }
         if (text) text.textContent = String(notice.text || "");
-        if (accept) accept.hidden = mode === "view";
+        if (accept) { accept.hidden = mode === "view"; accept.disabled = false; }
         if (close) close.hidden = mode !== "view";
+        // The retry button is only for load-failure recovery; hide it in
+        // normal gate and view modes.
+        if (retry) retry.hidden = true;
         setFirstRunNoticeError("");
     }
     App.renderFirstRunNotice = renderFirstRunNotice;
@@ -532,11 +552,17 @@
         var text = element("first-run-notice-text");
         var accept = element("first-run-notice-accept-btn");
         var close = element("first-run-notice-close-btn");
+        var retry = element("first-run-notice-retry-btn");
         if (title) title.textContent = "";
         clearChildren(highlights);
         if (text) text.textContent = "";
         if (accept) { accept.hidden = true; accept.disabled = true; }
         if (close) close.hidden = true;
+        // On load failure the overlay stays open (fail-closed) and only the
+        // retry button is available — the user cannot close the overlay or
+        // bypass authorization. The retry button re-issues the real
+        // getFirstRunNotice without clearing any persisted authorization.
+        if (retry) { retry.hidden = false; retry.disabled = false; }
         setFirstRunNoticeError(message || FIRST_RUN_NOTICE_LOAD_ERROR);
         var overlay = element("first-run-notice-overlay");
         if (overlay) overlay.hidden = false;
@@ -556,8 +582,12 @@
     }
     App.setPrivacyGateState = setPrivacyGateState;
 
-    function loadFirstRunNotice() {
-        if (App.firstRunNoticeLoading || App.firstRunNoticeLoaded) return Promise.resolve(true);
+    function loadFirstRunNotice(options) {
+        var force = !!(options && options.force);
+        if (App.firstRunNoticeLoading) return Promise.resolve(App.privacyGateState === "accepted_ready");
+        if (App.firstRunNoticeLoaded && !force) {
+            return Promise.resolve(App.privacyGateState === "accepted_ready");
+        }
         App.firstRunNoticeLoading = true;
         setPrivacyGateState("loading");
         return App.bridge.getFirstRunNotice().then(function (result) {
@@ -565,7 +595,7 @@
             if (!result || result.ok === false) {
                 setPrivacyGateState("load_failed");
                 showFirstRunNoticeBlockingError(
-                    (result && result.error) || FIRST_RUN_NOTICE_LOAD_ERROR
+                    App.extractBridgeError(result, FIRST_RUN_NOTICE_LOAD_ERROR)
                 );
                 return false;
             }
@@ -598,14 +628,21 @@
         App.bridge.acceptFirstRunNotice().then(function (result) {
             var accepted = !!(result && result.accepted === true);
             if (accepted && result.ok === true) {
+                // Full success: authorization persisted and collector started.
+                // Continue through the single idempotent startup entry so that
+                // project catalog, refresh state, page refresh, and heartbeat
+                // are owned by init.js — no second startup path here.
                 setPrivacyGateState("accepted_ready");
                 App.firstRunNoticeRequired = false;
                 hideFirstRunNotice();
-                if (typeof App.refreshAll === "function") App.refreshAll();
+                if (typeof App.continueStartupAfterPrivacyGate === "function") {
+                    App.continueStartupAfterPrivacyGate();
+                }
                 loadSettingsPrivacyStatus();
                 return;
             }
             if (accepted && result.ok === false) {
+                // Authorization persisted but collector failed; close gate, enter app.
                 setPrivacyGateState("accepted_start_failed");
                 App.firstRunNoticeRequired = false;
                 hideFirstRunNotice();
@@ -614,10 +651,14 @@
                     "隐私说明已确认，但记录功能未能启动。可前往设置查看原因或重试。"
                 );
                 if (App.showGlobalAlert) App.showGlobalAlert(message);
+                if (typeof App.continueStartupAfterPrivacyGate === "function") {
+                    App.continueStartupAfterPrivacyGate();
+                }
                 loadSettingsPrivacyStatus();
-                if (typeof App.refreshAll === "function") App.refreshAll();
                 return;
             }
+            // Authorization persistence failed: keep the gate open and let the
+            // user retry. Do not continue startup or start heartbeat.
             setPrivacyGateState("acceptance_required");
             setFirstRunNoticeError(
                 App.extractBridgeError(result, FIRST_RUN_NOTICE_ACCEPT_ERROR)
