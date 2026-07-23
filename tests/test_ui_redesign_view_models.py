@@ -71,50 +71,18 @@ def test_project_catalog_read_does_not_build_full_history_snapshot(temp_db, monk
     project = next(
         row for row in project_service.list_project_bindings() if row["id"] == project_id
     )
-    assert project["total_duration_seconds"] == 0
+    assert "total_duration_seconds" not in project
+    assert project["name"] == "Catalog Project"
 
 
-def test_project_rules_summary_builds_exactly_one_authoritative_snapshot(temp_db, monkeypatch):
-    project_id = project_service.create_project("Summary Project", "Shown in search")
-    _closed(project_id, "2026-07-22 11:00:00", "2026-07-22 11:15:00", "summary.txt")
-    original = report_projection_snapshot_service.build_visible_snapshot
-    calls: list[tuple[str, str]] = []
-
-    def tracked_snapshot(start_date, end_date, *, conn=None):
-        calls.append((start_date, end_date))
-        return original(start_date, end_date, conn=conn)
-
-    monkeypatch.setattr(
-        report_projection_snapshot_service,
-        "build_visible_snapshot",
-        tracked_snapshot,
-    )
-
-    project = next(
-        row
-        for row in project_service.list_project_rule_summaries()
-        if row["id"] == project_id
-    )
-    assert len(calls) == 1
-    assert calls[0][0] == "1970-01-01"
-    assert calls[0][1]
-    assert project["description"] == "Shown in search"
-    assert project["last_used_at"]
-    assert project["total_duration_seconds"] == 15 * 60
-
-
-def test_rules_application_service_uses_page_specific_summary_read(monkeypatch):
-    expected = [{"id": 1, "total_duration_seconds": 60}]
+def test_rules_application_service_routes_to_lightweight_catalog(monkeypatch):
+    expected = [{"id": 1, "name": "Lightweight Project"}]
 
     monkeypatch.setattr(
         project_api,
-        "list_project_rule_summaries",
+        "list_project_bindings",
         lambda: expected,
     )
 
-    def forbidden_catalog():
-        raise AssertionError("rules page must use the page-specific summary read")
-
-    monkeypatch.setattr(project_api, "list_project_bindings", forbidden_catalog)
-
+    assert not hasattr(project_api, "list_project_rule_summaries")
     assert RulesApplicationService().list_project_bindings() == expected

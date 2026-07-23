@@ -42,7 +42,6 @@ def test_project_rules_home_keeps_lightweight_entry_points():
     assert 'id="rules-search-input"' in section
     assert 'id="rules-sort-select"' in section
     assert "最近使用" in section
-    assert "累计时间" in section
     assert "项目名称" in section
     assert 'id="rules-open-create-rule"' not in section
     assert 'id="rules-advanced"' not in section

@@ -32,9 +32,7 @@
             + '<button class="rules-project-delete-button icon-button danger-icon-button" type="button" data-project-id="' + count(id)
             + '" aria-label="删除项目" data-tooltip="删除项目">' + App.iconMarkup("trash") + '</button>'
             + '</div><div class="rules-project-meta"><span>上次使用：'
-            + text(project && project.last_used_at, "暂无使用记录") + '</span><span>累计时间：'
-            + (project && project.total_duration_seconds != null
-                ? text(App.formatDuration(project.total_duration_seconds), "00:00:00") : '—')
+            + text(project && project.last_used_at, "暂无使用记录")
             + '</span></div></div></div><div class="rules-row-list" hidden>' + rows + '</div></article>';
     }
     App.renderProjectRuleProject = renderProjectRuleProject;

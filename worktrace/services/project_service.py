@@ -269,29 +269,13 @@ def list_rule_target_projects() -> list[dict]:
     ]
 
 
-def _project_duration_totals(conn) -> dict[int, int]:
-    """Build the authoritative all-time project totals once for Project Rules."""
+def list_project_bindings(include_system_special: bool = True) -> list[dict]:
+    """Return the lightweight project/rule catalog without historical projection.
 
-    from .report_projection_snapshot_service import build_visible_snapshot
+    This read stays bounded to the current catalog state (projects, rules, last
+    used timestamps) and never rebuilds the all-time report projection.
+    """
 
-    snapshot = build_visible_snapshot("1970-01-01", now_str()[:10], conn=conn)
-    totals: dict[int, int] = {}
-    for entry in snapshot.final_entries:
-        if bool(entry.get("is_in_progress")):
-            continue
-        project_id = int(entry.get("report_project_id") or entry.get("project_id") or 0)
-        if project_id > 0:
-            totals[project_id] = totals.get(project_id, 0) + int(
-                entry.get("duration_seconds") or 0
-            )
-    return totals
-
-
-def _list_project_bindings(
-    include_system_special: bool,
-    *,
-    include_total_duration: bool,
-) -> list[dict]:
     with get_connection() as conn:
         conn.execute("BEGIN")
         rows = conn.execute(
@@ -339,9 +323,6 @@ def _list_project_bindings(
                 """
             ).fetchall()
         )
-        total_duration_by_project = (
-            _project_duration_totals(conn) if include_total_duration else {}
-        )
 
     projects = [
         row
@@ -361,9 +342,6 @@ def _list_project_bindings(
             **project,
             **project_lifecycle_policy.project_rules_capabilities(project),
             "last_used_at": last_used_by_project.get(int(project["id"])),
-            "total_duration_seconds": total_duration_by_project.get(
-                int(project["id"]), 0
-            ),
             "folder_rules": [],
             "keyword_rules": [],
         }
@@ -378,26 +356,6 @@ def _list_project_bindings(
         if project is not None:
             project["keyword_rules"].append(row)
     return list(by_project.values())
-
-
-def list_project_bindings(include_system_special: bool = True) -> list[dict]:
-    """Return the lightweight project/rule catalog without historical projection."""
-
-    return _list_project_bindings(
-        include_system_special,
-        include_total_duration=False,
-    )
-
-
-def list_project_rule_summaries(
-    include_system_special: bool = True,
-) -> list[dict]:
-    """Return Project Rules page rows with one authoritative all-time projection."""
-
-    return _list_project_bindings(
-        include_system_special,
-        include_total_duration=True,
-    )
 
 
 def archive_project(project_id: int) -> None:
@@ -453,7 +411,6 @@ __all__ = [
     "is_concrete_project_id",
     "list_active_projects",
     "list_project_bindings",
-    "list_project_rule_summaries",
     "list_rule_target_projects",
     "list_selectable_projects",
     "list_user_projects",

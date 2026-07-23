@@ -11,13 +11,36 @@
     var dialogState = null;
     var toastTimer = null;
 
+    function isWithinHiddenAncestor(element) {
+        var node = element;
+        while (node && node !== document.body) {
+            if (node.hidden) return true;
+            if (node.getAttribute && node.getAttribute("aria-hidden") === "true") return true;
+            node = node.parentNode;
+        }
+        return false;
+    }
+
+    function hasVisibleLayoutBox(element) {
+        if (typeof element.getClientRects === "function") {
+            try {
+                if (element.getClientRects().length === 0) return false;
+            } catch (error) {
+                // Fall through to offsetParent fallback for test environments.
+            }
+        } else if (typeof element.offsetParent !== "undefined") {
+            return element.offsetParent !== null;
+        }
+        return true;
+    }
+
     function focusable(container) {
         if (!container) return [];
         return Array.prototype.slice.call(container.querySelectorAll(
             'button:not([disabled]), input:not([disabled]), select:not([disabled]), '
             + 'textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])'
         )).filter(function (element) {
-            return !element.hidden && element.getAttribute("aria-hidden") !== "true";
+            return !isWithinHiddenAncestor(element) && hasVisibleLayoutBox(element);
         });
     }
     App.focusableElements = focusable;

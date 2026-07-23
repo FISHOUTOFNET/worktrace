@@ -34,7 +34,7 @@
         if (sortSelect && sortSelect.getAttribute("data-rules-sort-bound") !== "1") {
             sortSelect.setAttribute("data-rules-sort-bound", "1");
             sortSelect.addEventListener("change", function () {
-                App.rulesSortMode = ["alpha", "total_duration"].indexOf(sortSelect.value) >= 0
+                App.rulesSortMode = ["alpha"].indexOf(sortSelect.value) >= 0
                     ? sortSelect.value : "last_used";
                 App.rerenderProjectRulesList();
             });

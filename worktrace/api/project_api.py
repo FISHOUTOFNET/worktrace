@@ -28,10 +28,6 @@ def list_project_bindings() -> list[dict[str, Any]]:
     return project_service.list_project_bindings()
 
 
-def list_project_rule_summaries() -> list[dict[str, Any]]:
-    return project_service.list_project_rule_summaries()
-
-
 def list_rule_target_projects() -> list[dict[str, Any]]:
     return project_service.list_rule_target_projects()
 
@@ -207,7 +203,6 @@ __all__ = [
     "get_project_by_name",
     "list_active_projects",
     "list_project_bindings",
-    "list_project_rule_summaries",
     "list_rule_target_projects",
     "list_selectable_projects",
     "list_user_projects",

@@ -99,11 +99,6 @@
                     App.safeText(b && b.name, ""), "zh-Hans-CN"
                 );
             }
-            if (mode === "total_duration") {
-                var durationDelta = (parseInt(b && b.total_duration_seconds, 10) || 0)
-                    - (parseInt(a && a.total_duration_seconds, 10) || 0);
-                if (durationDelta) return durationDelta;
-            }
             var aUsed = App.safeText(a && a.last_used_at, "");
             var bUsed = App.safeText(b && b.last_used_at, "");
             if (aUsed && bUsed && aUsed !== bUsed) return aUsed < bUsed ? 1 : -1;

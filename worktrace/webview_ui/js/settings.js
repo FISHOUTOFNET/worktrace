@@ -142,12 +142,12 @@
             if (status.recovery_blocked) {
                 title = "恢复尚未完成";
                 detail = "请在高级诊断中查看阻断原因";
-            } else if (status.maintenance_in_progress && !status.maintenance_restored) {
-                title = "数据维护失败";
-                detail = "维护尚未完成，其他数据操作已锁定";
+            } else if (status.maintenance_in_progress) {
+                title = "正在维护数据";
+                detail = "维护期间其他数据操作暂时不可用";
             } else if (!status.collector_running && !status.user_paused) {
-                title = "需要重启";
-                detail = "记录服务当前未运行";
+                title = "记录服务未运行";
+                detail = "请重启应用后再次检查";
             }
             var strong = health.querySelector("strong");
             var small = health.querySelector("small");

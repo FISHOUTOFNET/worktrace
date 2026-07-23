@@ -118,11 +118,11 @@ bounded reconciliation.
 - Timeline: reverse chronological sessions, authoritative project filtering,
   debounced autosave, always-visible activity details, direct two-step deletion,
   and a compact-window focus-trapped Drawer.
-- Statistics/Export: all-time or custom authoritative summaries, optional project
-  scope, automatic latest-request acceptance, and display-safe CSV bound to the
-  accepted export ticket.
+- Statistics/Export: this-month default with all-time/custom options, optional
+  project scope, automatic latest-request acceptance, and display-safe CSV bound
+  to the accepted export ticket.
 - Project Rules: searchable/sortable project summaries with backend-owned last
-  use and total duration, three direct project actions, and contextual Drawers.
+  use, three direct project actions, and contextual Drawers.
 - Settings/Privacy: five user-facing categories, plain-language health summary,
   collapsed diagnostics, privacy status, clipboard control, backup/import and
   clear-all. Secret inputs remain local and are cleared after use.
