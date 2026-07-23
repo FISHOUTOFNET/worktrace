@@ -127,18 +127,31 @@ def test_summary_does_not_return_export_records(temp_db):
     assert "ticket_revision" in summary
 
 
-def test_default_statistics_range_is_this_month():
-    """Empty date inputs resolve to first-of-month through today."""
+def test_empty_dates_resolve_to_all_time_range():
+    """Empty ``date_from`` and ``date_to`` together mean all time.
+
+    The backend resolves them to a canonical range from
+    ``STATISTICS_ALL_TIME_START_DATE`` (1970-01-01) through today, not to the
+    current month. This is the only valid interpretation of the empty pair.
+    """
 
     today = date.today()
-    first = today.replace(day=1)
     date_from, date_to = statistics_service.resolve_statistics_date_range("", "")
-    assert date_from == first.isoformat()
+    assert date_from == statistics_service.STATISTICS_ALL_TIME_START_DATE
     assert date_to == today.isoformat()
 
 
-def test_explicit_all_time_range_still_allowed():
-    """Explicitly selecting all-time is valid when dates are non-empty."""
+def test_one_empty_one_nonempty_date_raises_invalid():
+    """One empty and one non-empty date must raise ``invalid_date``."""
+
+    with pytest.raises(ValueError, match="invalid_date"):
+        statistics_service.resolve_statistics_date_range("", "2026-07-15")
+    with pytest.raises(ValueError, match="invalid_date"):
+        statistics_service.resolve_statistics_date_range("2026-01-01", "")
+
+
+def test_custom_nonempty_date_range_passes_through():
+    """A fully non-empty custom date range is validated and returned as-is."""
 
     date_from, date_to = statistics_service.resolve_statistics_date_range(
         "2026-01-01", "2026-07-15"
@@ -172,6 +185,106 @@ def test_iter_export_records_yields_display_safe_rows(temp_db):
     for record in records:
         assert "window_title" not in record
         assert "file_path_hint" not in record
+
+
+def test_month_scope_excludes_other_months(temp_db):
+    """A current-month date range must not include last-month records."""
+
+    today = date.today()
+    first_of_month = today.replace(day=1).isoformat()
+    # Create one activity last month and one this month.
+    if today.month == 1:
+        last_month_date = today.replace(year=today.year - 1, month=12, day=15)
+    else:
+        last_month_date = today.replace(month=today.month - 1, day=15)
+    last_month_iso = last_month_date.isoformat()
+    create_closed_activity(day=last_month_iso, start="09:00:00", end="09:30:00")
+    create_closed_activity(day=today.isoformat(), start="10:00:00", end="10:15:00")
+    month_summary = statistics_service.get_statistics_export_summary(
+        first_of_month, today.isoformat()
+    )
+    assert month_summary["activity_count"] == 1
+    assert month_summary["date_from"] == first_of_month
+    assert month_summary["date_to"] == today.isoformat()
+
+
+def test_all_time_scope_includes_cross_month_records(temp_db):
+    """All-time (empty dates) must include records from multiple months."""
+
+    today = date.today()
+    if today.month == 1:
+        last_month_date = today.replace(year=today.year - 1, month=12, day=15)
+    else:
+        last_month_date = today.replace(month=today.month - 1, day=15)
+    last_month_iso = last_month_date.isoformat()
+    create_closed_activity(day=last_month_iso, start="09:00:00", end="09:30:00")
+    create_closed_activity(day=today.isoformat(), start="10:00:00", end="10:15:00")
+    all_time_summary = statistics_service.get_statistics_export_summary("", "")
+    assert all_time_summary["activity_count"] == 2
+    assert all_time_summary["date_from"] == statistics_service.STATISTICS_ALL_TIME_START_DATE
+    assert all_time_summary["date_to"] == today.isoformat()
+
+
+def test_all_time_ticket_saves_normalized_dates(temp_db):
+    """The all-time ticket must bind the canonical non-empty dates, not empties."""
+
+    create_closed_activity(day=DATE, start="09:00:00", end="09:30:00")
+    summary = statistics_service.get_statistics_export_summary("", "")
+    ticket = summary["ticket_revision"]
+    # The ticket is a hash of snapshot_revision + date_from + date_to + scope.
+    # Verify that the summary returns the canonical non-empty dates.
+    assert summary["date_from"] == statistics_service.STATISTICS_ALL_TIME_START_DATE
+    assert summary["date_to"] == date.today().isoformat()
+    assert summary["date_from"] != ""
+    assert summary["date_to"] != ""
+    # A ticket computed with empty dates must differ from the canonical ticket.
+    empty_dates_ticket = statistics_service.compute_statistics_export_ticket_revision(
+        summary["snapshot_revision"], "", "", ""
+    )
+    assert empty_dates_ticket != ticket
+
+
+def test_all_time_csv_export_includes_cross_month_records(temp_db, tmp_path):
+    """CSV export with all-time transport must include cross-month records."""
+
+    today = date.today()
+    if today.month == 1:
+        last_month_date = today.replace(year=today.year - 1, month=12, day=15)
+    else:
+        last_month_date = today.replace(month=today.month - 1, day=15)
+    last_month_iso = last_month_date.isoformat()
+    create_closed_activity(day=last_month_iso, start="09:00:00", end="09:30:00")
+    create_closed_activity(day=today.isoformat(), start="10:00:00", end="10:15:00")
+    summary = statistics_service.get_statistics_export_summary("", "")
+    ticket = summary["ticket_revision"]
+    output = tmp_path / "all_time.csv"
+    result = export_service.write_statistics_csv(
+        "", "", str(output), ticket
+    )
+    assert result["export_row_count"] == 2
+    assert output.exists()
+
+
+def test_statistics_range_label_matches_data(temp_db):
+    """The returned ``date_from``/``date_to`` must match the selected mode.
+
+    For all-time mode the dates are the canonical all-time start and today;
+    for an explicit month range the dates are the first-of-month and today.
+    """
+
+    today = date.today()
+    first_of_month = today.replace(day=1).isoformat()
+    create_closed_activity(day=today.isoformat(), start="09:00:00", end="09:30:00")
+    # All-time mode
+    all_time = statistics_service.get_statistics_export_summary("", "")
+    assert all_time["date_from"] == statistics_service.STATISTICS_ALL_TIME_START_DATE
+    assert all_time["date_to"] == today.isoformat()
+    # Month mode
+    month = statistics_service.get_statistics_export_summary(
+        first_of_month, today.isoformat()
+    )
+    assert month["date_from"] == first_of_month
+    assert month["date_to"] == today.isoformat()
 
 
 # -- Problem 3: Canonical project-scope policy -------------------------------
@@ -266,7 +379,12 @@ def test_summary_and_export_use_same_scope_results(temp_db):
 
 
 def test_unclassified_excludes_excluded_in_real_projection(temp_db):
-    """Excluded activity does not appear in the unclassified summary."""
+    """Excluded activity does not appear in the unclassified summary.
+
+    The unclassified scope only includes ordinary unclassified records; the
+    excluded activity's duration must not leak into ``excluded_duration_seconds``
+    or ``total_duration_seconds``.
+    """
 
     create_closed_activity(
         day=DATE,
@@ -286,7 +404,10 @@ def test_unclassified_excludes_excluded_in_real_projection(temp_db):
         DATE, DATE, project_id="unclassified"
     )
     assert summary["activity_count"] > 0
-    assert summary["excluded_duration_seconds"] == 0 or summary["total_duration_seconds"] > 0
+    assert summary["excluded_duration_seconds"] == 0
+    # The unclassified total must equal only the ordinary unclassified record
+    # (09:00-09:30 = 1800 seconds), not the excluded record (11:00-11:05 = 300s).
+    assert summary["total_duration_seconds"] == 1800
 
 
 # -- Problem 4: Export ticket contract ---------------------------------------

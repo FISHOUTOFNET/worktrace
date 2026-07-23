@@ -248,8 +248,8 @@ class FakeStatisticsCapability:
             raise self.format_export_duration_side_effect
         return self.format_export_duration_return
 
-    def export_statistics_csv(self, date_from, date_to, output_path, expected_snapshot_revision, project_id=None):
-        call = (date_from, date_to, output_path, expected_snapshot_revision)
+    def export_statistics_csv(self, date_from, date_to, output_path, expected_export_ticket_revision, project_id=None):
+        call = (date_from, date_to, output_path, expected_export_ticket_revision)
         if project_id is not None:
             call = (*call, project_id)
         self.export_statistics_csv_calls.append(call)

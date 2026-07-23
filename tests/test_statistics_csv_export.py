@@ -110,6 +110,15 @@ def _summarize(temp_db, date_from: str, date_to: str) -> dict:
     return statistics_service.get_statistics_export_summary(date_from, date_to)
 
 
+def _valid_ticket(date_from: str, date_to: str, project_id=None) -> str:
+    """Compute a valid export ticket for the given date range and scope."""
+    from worktrace.services import statistics_service
+
+    return statistics_service.get_statistics_export_summary(
+        date_from, date_to, project_id
+    )["ticket_revision"]
+
+
 def _assert_projection_contract(
     summary: dict,
     *,
@@ -460,7 +469,7 @@ def test_build_csv_rows_rejects_invalid_ranges(temp_db, date_from, date_to):
 def test_write_csv_success_creates_utf8_bom_file(temp_db, tmp_path):
     _seed_closed_activity(file_path_hint="C:\\secret\\A1.docx")
     out = tmp_path / "report.csv"
-    result = export_service.write_statistics_csv("2026-06-25", "2026-06-25", out)
+    result = export_service.write_statistics_csv("2026-06-25", "2026-06-25", out, _valid_ticket("2026-06-25", "2026-06-25"))
     assert out.exists()
     assert result == {
         "activity_count": 1,
@@ -489,14 +498,14 @@ def test_write_csv_success_creates_utf8_bom_file(temp_db, tmp_path):
 
 def test_write_csv_auto_appends_csv_extension(temp_db, tmp_path):
     _seed_closed_activity()
-    result = export_service.write_statistics_csv("2026-06-25", "2026-06-25", tmp_path / "report")
+    result = export_service.write_statistics_csv("2026-06-25", "2026-06-25", tmp_path / "report", _valid_ticket("2026-06-25", "2026-06-25"))
     assert (tmp_path / "report.csv").exists()
     assert result["filename"] == "report.csv"
 
 
 def test_write_csv_replaces_non_csv_extension(temp_db, tmp_path):
     _seed_closed_activity()
-    result = export_service.write_statistics_csv("2026-06-25", "2026-06-25", tmp_path / "report.txt")
+    result = export_service.write_statistics_csv("2026-06-25", "2026-06-25", tmp_path / "report.txt", _valid_ticket("2026-06-25", "2026-06-25"))
     assert (tmp_path / "report.csv").exists()
     assert not (tmp_path / "report.txt").exists()
     assert result["filename"] == "report.csv"
@@ -505,7 +514,7 @@ def test_write_csv_replaces_non_csv_extension(temp_db, tmp_path):
 def test_write_csv_empty_data_returns_empty_data_no_file(temp_db, tmp_path):
     out = tmp_path / "empty.csv"
     with pytest.raises(ValueError, match="empty_data"):
-        export_service.write_statistics_csv("2026-06-25", "2026-06-25", out)
+        export_service.write_statistics_csv("2026-06-25", "2026-06-25", out, _valid_ticket("2026-06-25", "2026-06-25"))
     assert not out.exists()
 
 
@@ -513,13 +522,14 @@ def test_write_csv_rejects_directory_path(temp_db, tmp_path):
     directory = tmp_path / "subdir"
     directory.mkdir()
     with pytest.raises(ValueError, match="invalid_path"):
-        export_service.write_statistics_csv("2026-06-25", "2026-06-25", directory)
+        export_service.write_statistics_csv("2026-06-25", "2026-06-25", directory, _valid_ticket("2026-06-25", "2026-06-25"))
 
 
 def test_write_csv_rejects_missing_parent(temp_db, tmp_path):
     with pytest.raises(ValueError, match="invalid_path"):
         export_service.write_statistics_csv(
-            "2026-06-25", "2026-06-25", tmp_path / "missing" / "report.csv"
+            "2026-06-25", "2026-06-25", tmp_path / "missing" / "report.csv",
+            _valid_ticket("2026-06-25", "2026-06-25"),
         )
 
 
@@ -550,7 +560,7 @@ def test_write_csv_propagates_permission_error(temp_db, tmp_path):
 
     with patch("worktrace.services.export_service.open", fake_open):
         with pytest.raises(PermissionError):
-            export_service.write_statistics_csv("2026-06-25", "2026-06-25", out)
+            export_service.write_statistics_csv("2026-06-25", "2026-06-25", out, _valid_ticket("2026-06-25", "2026-06-25"))
 
 
 def test_write_csv_propagates_oserror(temp_db, tmp_path):
@@ -565,7 +575,7 @@ def test_write_csv_propagates_oserror(temp_db, tmp_path):
 
     with patch("worktrace.services.export_service.open", fake_open):
         with pytest.raises(OSError):
-            export_service.write_statistics_csv("2026-06-25", "2026-06-25", out)
+            export_service.write_statistics_csv("2026-06-25", "2026-06-25", out, _valid_ticket("2026-06-25", "2026-06-25"))
 
 
 def test_write_csv_no_db_write(temp_db, tmp_path):
@@ -574,7 +584,7 @@ def test_write_csv_no_db_write(temp_db, tmp_path):
         updated_at_before = conn.execute(
             "SELECT updated_at FROM activity_log WHERE id = ?", (aid,)
         ).fetchone()[0]
-    export_service.write_statistics_csv("2026-06-25", "2026-06-25", tmp_path / "report.csv")
+    export_service.write_statistics_csv("2026-06-25", "2026-06-25", tmp_path / "report.csv", _valid_ticket("2026-06-25", "2026-06-25"))
     with get_connection() as conn:
         after = conn.execute(
             "SELECT updated_at FROM activity_log WHERE id = ?", (aid,)
@@ -596,7 +606,7 @@ def test_write_csv_no_resource_or_assignment_mutation(temp_db, tmp_path):
                 "report_session_operation",
             )
         )
-    export_service.write_statistics_csv("2026-06-25", "2026-06-25", tmp_path / "report.csv")
+    export_service.write_statistics_csv("2026-06-25", "2026-06-25", tmp_path / "report.csv", _valid_ticket("2026-06-25", "2026-06-25"))
     with get_connection() as conn:
         after = tuple(
             conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
@@ -612,7 +622,7 @@ def test_write_csv_no_resource_or_assignment_mutation(temp_db, tmp_path):
 def test_write_csv_no_raw_sensitive_fields_in_output(temp_db, tmp_path):
     _seed_closed_activity(file_path_hint="C:\\Users\\secret\\A1.docx")
     out = tmp_path / "report.csv"
-    export_service.write_statistics_csv("2026-06-25", "2026-06-25", out)
+    export_service.write_statistics_csv("2026-06-25", "2026-06-25", out, _valid_ticket("2026-06-25", "2026-06-25"))
     _assert_no_sensitive_text(out.read_text(encoding="utf-8-sig"), "csv content")
 
 
@@ -650,7 +660,7 @@ def test_write_csv_escapes_formula_injection(temp_db, tmp_path):
             prefix + "SUM(A1:A2)",
         )
     out = tmp_path / "report.csv"
-    export_service.write_statistics_csv("2026-06-25", "2026-06-25", out)
+    export_service.write_statistics_csv("2026-06-25", "2026-06-25", out, _valid_ticket("2026-06-25", "2026-06-25"))
     headers, rows = _read_csv(out)
     assert len(rows) == 4
     assert "资源名称" not in headers
@@ -663,7 +673,7 @@ def test_write_csv_escapes_formula_injection(temp_db, tmp_path):
 def test_api_export_success_returns_payload(temp_db, tmp_path):
     _seed_closed_activity()
     out = tmp_path / "report.csv"
-    result = export_api.export_statistics_csv("2026-06-25", "2026-06-25", out)
+    result = export_api.export_statistics_csv("2026-06-25", "2026-06-25", out, _valid_ticket("2026-06-25", "2026-06-25"))
     assert result["activity_count"] == 1
     assert result["duration_seconds"] == 1800
     assert result["filename"] == "report.csv"
@@ -681,14 +691,14 @@ def test_api_export_success_returns_payload(temp_db, tmp_path):
 )
 def test_api_export_rejects_invalid_inputs(temp_db, tmp_path, date_from, date_to, code):
     with pytest.raises(StatisticsExportError) as exc:
-        export_api.export_statistics_csv(date_from, date_to, tmp_path / "report.csv")
+        export_api.export_statistics_csv(date_from, date_to, tmp_path / "report.csv", "ignored")
     assert exc.value.code == code
 
 
 def test_api_export_empty_data_raises(temp_db, tmp_path):
     out = tmp_path / "report.csv"
     with pytest.raises(StatisticsExportError) as exc:
-        export_api.export_statistics_csv("2026-06-25", "2026-06-25", out)
+        export_api.export_statistics_csv("2026-06-25", "2026-06-25", out, _valid_ticket("2026-06-25", "2026-06-25"))
     assert exc.value.code == "empty_data"
     assert not out.exists()
 
@@ -698,11 +708,12 @@ def test_api_export_invalid_paths_raise(temp_db, tmp_path):
     directory = tmp_path / "subdir"
     directory.mkdir()
     with pytest.raises(StatisticsExportError) as exc:
-        export_api.export_statistics_csv("2026-06-25", "2026-06-25", directory)
+        export_api.export_statistics_csv("2026-06-25", "2026-06-25", directory, _valid_ticket("2026-06-25", "2026-06-25"))
     assert exc.value.code == "invalid_path"
     with pytest.raises(StatisticsExportError) as exc:
         export_api.export_statistics_csv(
-            "2026-06-25", "2026-06-25", tmp_path / "missing" / "report.csv"
+            "2026-06-25", "2026-06-25", tmp_path / "missing" / "report.csv",
+            _valid_ticket("2026-06-25", "2026-06-25"),
         )
     assert exc.value.code == "invalid_path"
 
@@ -716,7 +727,8 @@ def test_api_export_maps_file_errors(temp_db, tmp_path, exception, code):
     with patch("worktrace.services.export_service.open", side_effect=exception):
         with pytest.raises(StatisticsExportError) as exc:
             export_api.export_statistics_csv(
-                "2026-06-25", "2026-06-25", tmp_path / "report.csv"
+                "2026-06-25", "2026-06-25", tmp_path / "report.csv",
+                _valid_ticket("2026-06-25", "2026-06-25"),
             )
     assert exc.value.code == code
 
@@ -729,7 +741,8 @@ def test_api_export_unknown_exception_maps_to_operation_failed(temp_db, tmp_path
     ):
         with pytest.raises(StatisticsExportError) as exc:
             export_api.export_statistics_csv(
-                "2026-06-25", "2026-06-25", tmp_path / "report.csv"
+                "2026-06-25", "2026-06-25", tmp_path / "report.csv",
+                "ignored",
             )
     assert exc.value.code == "operation_failed"
 
@@ -744,7 +757,8 @@ def test_api_export_error_message_never_leaks_internals(temp_db, tmp_path):
     ):
         with pytest.raises(StatisticsExportError) as exc:
             export_api.export_statistics_csv(
-                "2026-06-25", "2026-06-25", tmp_path / "report.csv"
+                "2026-06-25", "2026-06-25", tmp_path / "report.csv",
+                _valid_ticket("2026-06-25", "2026-06-25"),
             )
     lowered = str(exc.value).lower()
     for token in (
@@ -784,7 +798,7 @@ def test_bridge_export_success_returns_basename_only(temp_db, tmp_path, bridge):
     out = tmp_path / "deep" / "nested" / "report.csv"
     out.parent.mkdir(parents=True)
     bridge.set_window(_stub_window(str(out)))
-    result = bridge.export_statistics_csv("2026-06-25", "2026-06-25")
+    result = bridge.export_statistics_csv("2026-06-25", "2026-06-25", _valid_ticket("2026-06-25", "2026-06-25"))
     assert result["ok"] is True
     assert result["cancelled"] is False
     assert result["filename"] == "report.csv"
@@ -803,7 +817,7 @@ def test_bridge_export_cancel_does_not_call_api(temp_db, tmp_path):
     statistics = FakeStatisticsCapability()
     bridge = build_test_bridge(statistics=statistics)
     bridge.set_window(_stub_window(None))
-    result = bridge.export_statistics_csv("2026-06-25", "2026-06-25")
+    result = bridge.export_statistics_csv("2026-06-25", "2026-06-25", "valid-ticket")
     assert result == {"ok": False, "cancelled": True, "error": "已取消导出"}
     assert statistics.export_statistics_csv_calls == []
     assert list(out_dir.iterdir()) == []
@@ -822,7 +836,7 @@ def test_bridge_export_invalid_inputs_return_chinese(
     temp_db, tmp_path, bridge, date_from, date_to, message
 ):
     bridge.set_window(_stub_window(str(tmp_path / "x.csv")))
-    result = bridge.export_statistics_csv(date_from, date_to)
+    result = bridge.export_statistics_csv(date_from, date_to, "valid-ticket")
     assert result["ok"] is False
     assert result["cancelled"] is False
     assert result["error"] == message
@@ -831,7 +845,7 @@ def test_bridge_export_invalid_inputs_return_chinese(
 def test_bridge_export_empty_data_returns_chinese(temp_db, tmp_path, bridge):
     out = tmp_path / "x.csv"
     bridge.set_window(_stub_window(str(out)))
-    result = bridge.export_statistics_csv("2026-06-25", "2026-06-25")
+    result = bridge.export_statistics_csv("2026-06-25", "2026-06-25", _valid_ticket("2026-06-25", "2026-06-25"))
     assert result["ok"] is False
     assert result["cancelled"] is False
     assert result["error"] == "当前范围没有可导出的记录"
@@ -851,7 +865,7 @@ def test_bridge_export_file_errors_return_chinese(
     _seed_closed_activity()
     bridge.set_window(_stub_window(str(tmp_path / "report.csv")))
     with patch("worktrace.services.export_service.open", side_effect=exception):
-        result = bridge.export_statistics_csv("2026-06-25", "2026-06-25")
+        result = bridge.export_statistics_csv("2026-06-25", "2026-06-25", _valid_ticket("2026-06-25", "2026-06-25"))
     assert result["ok"] is False
     assert result["cancelled"] is False
     assert result["error"] == message
@@ -860,7 +874,7 @@ def test_bridge_export_file_errors_return_chinese(
 def test_bridge_export_invalid_path_returns_chinese(temp_db, tmp_path, bridge):
     _seed_closed_activity()
     bridge.set_window(_stub_window(str(tmp_path / "missing" / "report.csv")))
-    result = bridge.export_statistics_csv("2026-06-25", "2026-06-25")
+    result = bridge.export_statistics_csv("2026-06-25", "2026-06-25", _valid_ticket("2026-06-25", "2026-06-25"))
     assert result["ok"] is False
     assert result["error"] == "请选择有效保存位置"
 
@@ -872,7 +886,7 @@ def test_bridge_export_unknown_exception_collapses_to_chinese(temp_db, tmp_path,
         "worktrace.services.export_service.write_statistics_csv",
         side_effect=RuntimeError("Traceback SELECT FROM C:\\secret"),
     ):
-        result = bridge.export_statistics_csv("2026-06-25", "2026-06-25")
+        result = bridge.export_statistics_csv("2026-06-25", "2026-06-25", _valid_ticket("2026-06-25", "2026-06-25"))
     assert result["ok"] is False
     assert result["error"] == "导出失败"
     lowered = str(result).lower()
@@ -891,7 +905,7 @@ def test_bridge_export_unknown_exception_collapses_to_chinese(temp_db, tmp_path,
 
 def test_bridge_export_no_window_returns_operation_failed(temp_db, bridge):
     _seed_closed_activity()
-    result = bridge.export_statistics_csv("2026-06-25", "2026-06-25")
+    result = bridge.export_statistics_csv("2026-06-25", "2026-06-25", _valid_ticket("2026-06-25", "2026-06-25"))
     assert result["ok"] is False
     assert result["error"] == "导出失败"
 
@@ -901,7 +915,7 @@ def test_bridge_export_payload_never_contains_full_path(temp_db, tmp_path, bridg
     nested = tmp_path / "very" / "deep" / "nested" / "report.csv"
     nested.parent.mkdir(parents=True)
     bridge.set_window(_stub_window(str(nested)))
-    result = bridge.export_statistics_csv("2026-06-25", "2026-06-25")
+    result = bridge.export_statistics_csv("2026-06-25", "2026-06-25", _valid_ticket("2026-06-25", "2026-06-25"))
     assert result["ok"] is True
     assert str(nested) not in str(result)
     assert "very" not in str(result)
@@ -1001,7 +1015,7 @@ def test_bridge_export_dialog_returns_single_string(temp_db, tmp_path, bridge):
     _seed_closed_activity()
     out = tmp_path / "report.csv"
     bridge.set_window(_FakeDialogWindow(return_value=str(out)))
-    result = bridge.export_statistics_csv("2026-06-25", "2026-06-25")
+    result = bridge.export_statistics_csv("2026-06-25", "2026-06-25", _valid_ticket("2026-06-25", "2026-06-25"))
     assert result["ok"] is True
     assert result["cancelled"] is False
     assert result["filename"] == "report.csv"
@@ -1018,7 +1032,7 @@ def test_bridge_export_dialog_empty_sequence_is_cancelled(
     statistics = FakeStatisticsCapability()
     bridge = build_test_bridge(statistics=statistics)
     bridge.set_window(_FakeDialogWindow(return_value=return_value))
-    result = bridge.export_statistics_csv("2026-06-25", "2026-06-25")
+    result = bridge.export_statistics_csv("2026-06-25", "2026-06-25", "valid-ticket")
     assert result == {"ok": False, "cancelled": True, "error": "已取消导出"}
     assert statistics.export_statistics_csv_calls == []
     assert list(out_dir.iterdir()) == []
@@ -1028,7 +1042,7 @@ def test_bridge_export_dialog_returns_list_with_path(temp_db, tmp_path, bridge):
     _seed_closed_activity()
     out = tmp_path / "report.csv"
     bridge.set_window(_FakeDialogWindow(return_value=[str(out)]))
-    result = bridge.export_statistics_csv("2026-06-25", "2026-06-25")
+    result = bridge.export_statistics_csv("2026-06-25", "2026-06-25", _valid_ticket("2026-06-25", "2026-06-25"))
     assert result["ok"] is True
     assert result["filename"] == "report.csv"
     assert out.exists()
@@ -1039,7 +1053,7 @@ def test_bridge_export_dialog_raises_exception(temp_db, bridge):
     bridge.set_window(
         _FakeDialogWindow(raise_exc=RuntimeError("Traceback SELECT C:\\secret"))
     )
-    result = bridge.export_statistics_csv("2026-06-25", "2026-06-25")
+    result = bridge.export_statistics_csv("2026-06-25", "2026-06-25", _valid_ticket("2026-06-25", "2026-06-25"))
     assert result["ok"] is False
     assert result["error"] == "导出失败"
     lowered = str(result).lower()
@@ -1058,7 +1072,7 @@ def test_bridge_export_dialog_missing_file_dialog_constant(
         pass
 
     monkeypatch.setitem(sys.modules, "webview", _BareWebview())
-    result = bridge.export_statistics_csv("2026-06-25", "2026-06-25")
+    result = bridge.export_statistics_csv("2026-06-25", "2026-06-25", _valid_ticket("2026-06-25", "2026-06-25"))
     assert result["ok"] is False
     assert result["error"] == "导出失败"
     assert window.dialog_calls == 0
@@ -1078,7 +1092,7 @@ def test_bridge_export_dialog_file_dialog_without_save_constant(
         FileDialog = _FileDialogNoSave
 
     monkeypatch.setitem(sys.modules, "webview", _WebviewNoSave())
-    result = bridge.export_statistics_csv("2026-06-25", "2026-06-25")
+    result = bridge.export_statistics_csv("2026-06-25", "2026-06-25", _valid_ticket("2026-06-25", "2026-06-25"))
     assert result["ok"] is False
     assert result["error"] == "导出失败"
     assert window.dialog_calls == 0
@@ -1096,7 +1110,7 @@ def test_bridge_export_dialog_uses_deprecated_save_dialog_fallback(
         SAVE_DIALOG = 10
 
     monkeypatch.setitem(sys.modules, "webview", _LegacyWebview())
-    result = bridge.export_statistics_csv("2026-06-25", "2026-06-25")
+    result = bridge.export_statistics_csv("2026-06-25", "2026-06-25", _valid_ticket("2026-06-25", "2026-06-25"))
     assert result["ok"] is True
     assert result["filename"] == "report.csv"
     assert window.dialog_calls == 1
@@ -1107,7 +1121,7 @@ def test_bridge_export_dialog_uses_deprecated_save_dialog_fallback(
 def test_write_csv_preserves_csv_extension_case(temp_db, tmp_path, suffix):
     _seed_closed_activity()
     out = tmp_path / f"report{suffix}"
-    result = export_service.write_statistics_csv("2026-06-25", "2026-06-25", out)
+    result = export_service.write_statistics_csv("2026-06-25", "2026-06-25", out, _valid_ticket("2026-06-25", "2026-06-25"))
     assert result["filename"] == f"report{suffix}"
     assert out.exists()
     assert not (tmp_path / f"report{suffix}.csv").exists()
@@ -1116,7 +1130,7 @@ def test_write_csv_preserves_csv_extension_case(temp_db, tmp_path, suffix):
 def test_api_export_uppercase_csv_extension(temp_db, tmp_path):
     _seed_closed_activity()
     out = tmp_path / "report.CSV"
-    result = export_api.export_statistics_csv("2026-06-25", "2026-06-25", out)
+    result = export_api.export_statistics_csv("2026-06-25", "2026-06-25", out, _valid_ticket("2026-06-25", "2026-06-25"))
     assert result["filename"] == "report.CSV"
     assert out.exists()
 
@@ -1125,8 +1139,230 @@ def test_write_csv_chinese_and_space_path(temp_db, tmp_path):
     _seed_closed_activity()
     nested = tmp_path / "导出 目录" / "报表 文件.csv"
     nested.parent.mkdir(parents=True)
-    result = export_service.write_statistics_csv("2026-06-25", "2026-06-25", nested)
+    result = export_service.write_statistics_csv("2026-06-25", "2026-06-25", nested, _valid_ticket("2026-06-25", "2026-06-25"))
     assert result["filename"] == "报表 文件.csv"
     assert nested.exists()
     _, rows = _read_csv(nested)
     assert len(rows) == 1
+
+
+# -- Single-snapshot and streaming contract tests ----------------------------
+
+
+def test_single_export_builds_one_snapshot(temp_db, tmp_path):
+    """One CSV export must call ``build_visible_snapshot`` exactly once."""
+
+    _seed_closed_activity()
+    out = tmp_path / "report.csv"
+    from worktrace.services import report_projection_snapshot_service as snapshots
+
+    # Compute the ticket BEFORE installing the counting wrapper so the wrapper
+    # only observes calls made inside write_statistics_csv itself.
+    ticket = _valid_ticket("2026-06-25", "2026-06-25")
+    original = snapshots.build_visible_snapshot
+    call_count = 0
+
+    def counting_wrapper(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        return original(*args, **kwargs)
+
+    with patch.object(snapshots, "build_visible_snapshot", counting_wrapper):
+        export_service.write_statistics_csv(
+            "2026-06-25", "2026-06-25", out, ticket
+        )
+    assert call_count == 1
+
+
+def test_ticket_failure_does_not_create_temp_file(temp_db, tmp_path):
+    """A stale ticket must not create the target file or any temp residue."""
+
+    _seed_closed_activity()
+    out = tmp_path / "stale.csv"
+    with pytest.raises(ValueError, match="stale_statistics_snapshot"):
+        export_service.write_statistics_csv(
+            "2026-06-25", "2026-06-25", out, "wrong-ticket-revision"
+        )
+    assert not out.exists()
+    temp_files = list(tmp_path.glob("*.tmp")) + list(
+        tmp_path.glob(f".{out.name}.*")
+    )
+    assert not temp_files
+
+
+def test_ticket_failure_does_not_iterate_records(temp_db, tmp_path):
+    """A stale ticket must not call the export record iterator."""
+
+    _seed_closed_activity()
+    out = tmp_path / "no_iter.csv"
+    # iter_statistics_export_records is imported lazily from statistics_projection
+    # inside write_statistics_csv, so patch it at its source module.
+    with patch(
+        "worktrace.services.statistics_projection.iter_statistics_export_records"
+    ) as mock_iter:
+        mock_iter.return_value = []
+        with pytest.raises(ValueError, match="stale_statistics_snapshot"):
+            export_service.write_statistics_csv(
+                "2026-06-25", "2026-06-25", out, "wrong-ticket"
+            )
+        assert mock_iter.call_count == 0
+
+
+def test_zero_records_no_target_file_or_temp(temp_db, tmp_path):
+    """Zero records must not leave a target file or temp residue."""
+
+    out = tmp_path / "empty.csv"
+    ticket = _valid_ticket("2026-06-25", "2026-06-25")
+    with pytest.raises(ValueError, match="empty_data"):
+        export_service.write_statistics_csv("2026-06-25", "2026-06-25", out, ticket)
+    assert not out.exists()
+    temp_files = list(tmp_path.glob("*.tmp")) + list(
+        tmp_path.glob(f".{out.name}.*")
+    )
+    assert not temp_files
+
+
+def test_streaming_write_returns_correct_counts(temp_db, tmp_path):
+    """Streaming write returns correct row count and total duration."""
+
+    _seed_closed_activity(start="09:00:00", end="09:30:00")
+    _seed_closed_activity(
+        resource="B.docx", start="10:00:00", end="10:15:00"
+    )
+    out = tmp_path / "stream.csv"
+    result = export_service.write_statistics_csv(
+        "2026-06-25", "2026-06-25", out, _valid_ticket("2026-06-25", "2026-06-25")
+    )
+    assert result["export_row_count"] == 2
+    assert result["duration_seconds"] == 1800 + 900
+
+
+def test_csv_formula_injection_still_protected(temp_db, tmp_path):
+    """Formula injection protection remains effective after streaming change."""
+
+    from worktrace.api import timeline_api
+
+    aid = activity_service.create_activity(
+        "App",
+        "app.exe",
+        "r.txt",
+        start_time="2026-06-25 09:00:00",
+        note="top secret note",
+        file_path_hint="C:\\secret\\r.txt",
+    )
+    activity_service.finalize_created_activity(aid)
+    activity_service.close_activity(aid, "2026-06-25 09:30:00")
+    session = next(
+        item
+        for item in timeline_service.get_project_sessions_by_date("2026-06-25")
+        if aid in item["activity_ids"]
+    )
+    timeline_api.save_timeline_session_edit(
+        "2026-06-25",
+        session["projection_instance_key"],
+        session["projection_revision"],
+        "req-formula-stream",
+        None,
+        None,
+        "=SUM(A1:A2)",
+    )
+    out = tmp_path / "formula.csv"
+    export_service.write_statistics_csv(
+        "2026-06-25", "2026-06-25", out, _valid_ticket("2026-06-25", "2026-06-25")
+    )
+    headers, rows = _read_csv(out)
+    note_column = headers.index("备注")
+    assert rows[0][note_column].startswith("'")
+    assert rows[0][note_column][1:2] == "="
+
+
+def test_all_time_export_with_valid_ticket_succeeds(temp_db, tmp_path):
+    """All-time export with a valid all-time ticket succeeds and includes data."""
+
+    _seed_closed_activity(day="2026-06-25")
+    out = tmp_path / "all_time.csv"
+    ticket = _valid_ticket("", "")
+    result = export_service.write_statistics_csv("", "", out, ticket)
+    assert result["export_row_count"] == 1
+    assert out.exists()
+
+
+# -- Bridge ticket validation tests ------------------------------------------
+
+
+def test_bridge_export_none_ticket_does_not_open_dialog(temp_db, tmp_path, bridge):
+    """A missing (None) ticket must not open the save dialog."""
+
+    _seed_closed_activity()
+    window = _FakeDialogWindow(return_value=str(tmp_path / "x.csv"))
+    bridge.set_window(window)
+    result = bridge.export_statistics_csv("2026-06-25", "2026-06-25", None)
+    assert result["ok"] is False
+    assert result["error"] == "统计数据已更新，请重新加载后导出"
+    assert window.dialog_calls == 0
+
+
+def test_bridge_export_empty_string_ticket_does_not_open_dialog(
+    temp_db, tmp_path, bridge
+):
+    """An empty-string ticket must not open the save dialog."""
+
+    _seed_closed_activity()
+    window = _FakeDialogWindow(return_value=str(tmp_path / "x.csv"))
+    bridge.set_window(window)
+    result = bridge.export_statistics_csv("2026-06-25", "2026-06-25", "")
+    assert result["ok"] is False
+    assert result["error"] == "统计数据已更新，请重新加载后导出"
+    assert window.dialog_calls == 0
+
+
+def test_bridge_export_whitespace_ticket_does_not_open_dialog(
+    temp_db, tmp_path, bridge
+):
+    """A whitespace-only ticket must not open the save dialog."""
+
+    _seed_closed_activity()
+    window = _FakeDialogWindow(return_value=str(tmp_path / "x.csv"))
+    bridge.set_window(window)
+    result = bridge.export_statistics_csv("2026-06-25", "2026-06-25", "   ")
+    assert result["ok"] is False
+    assert result["error"] == "统计数据已更新，请重新加载后导出"
+    assert window.dialog_calls == 0
+
+
+def test_bridge_export_wrong_ticket_rejected_by_service(temp_db, tmp_path, bridge):
+    """A syntactically valid but semantically wrong ticket is rejected."""
+
+    _seed_closed_activity()
+    out = tmp_path / "wrong.csv"
+    bridge.set_window(_FakeDialogWindow(return_value=str(out)))
+    result = bridge.export_statistics_csv("2026-06-25", "2026-06-25", "wrong-revision")
+    assert result["ok"] is False
+    assert result["error"] == "统计数据已更新，请重新加载后导出"
+    assert not out.exists()
+
+
+def test_bridge_export_missing_ticket_does_not_call_service(temp_db, tmp_path):
+    """A missing ticket must not call the export service at all."""
+
+    _seed_closed_activity()
+    statistics = FakeStatisticsCapability()
+    bridge = build_test_bridge(statistics=statistics)
+    bridge.set_window(_FakeDialogWindow(return_value=str(tmp_path / "x.csv")))
+    result = bridge.export_statistics_csv("2026-06-25", "2026-06-25", None)
+    assert result["ok"] is False
+    assert statistics.export_statistics_csv_calls == []
+
+
+def test_wrong_date_range_ticket_rejected(temp_db, tmp_path):
+    """A ticket issued for one date range must not export a different range."""
+
+    _seed_closed_activity(day="2026-06-25")
+    _seed_closed_activity(day="2026-06-26", start="10:00:00", end="10:30:00")
+    june_25_ticket = _valid_ticket("2026-06-25", "2026-06-25")
+    out = tmp_path / "wrong_range.csv"
+    with pytest.raises(ValueError, match="stale_statistics_snapshot"):
+        export_service.write_statistics_csv(
+            "2026-06-26", "2026-06-26", out, june_25_ticket
+        )
+    assert not out.exists()

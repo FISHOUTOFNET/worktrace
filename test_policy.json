@@ -62,6 +62,10 @@
       {
         "path": "tests/webview/test_timeline_static_contract.py",
         "reason": "Timeline WebView static owner matrix covering display labels, live display, privacy, and editing contracts."
+      },
+      {
+        "path": "tests/test_statistics_csv_export.py",
+        "reason": "Statistics/export owner matrix covering single-snapshot, streaming CSV, mandatory export ticket, atomic write, and all-time range contracts."
       }
     ]
   },
