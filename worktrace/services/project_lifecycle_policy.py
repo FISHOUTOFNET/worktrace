@@ -63,6 +63,25 @@ def project_selectable_for_editing(project: dict[str, Any] | None) -> bool:
     )
 
 
+def project_selectable_for_filter(project: dict[str, Any] | None) -> bool:
+    """Filter catalog policy: concrete user projects only.
+
+    The system ``未归类`` project is excluded because the filter UI adds its
+    own ``unclassified`` pseudo-option that maps to the backend's
+    ``is_report_uncategorized`` scope. Including the system project would
+    produce a duplicate ``未归类`` entry in the dropdown.
+    """
+    return bool(
+        project
+        and not project_is_deleted(project)
+        and not project_is_archived(project)
+        and int(project.get("enabled") or 0) == 1
+        and project.get("created_by") == "user"
+        and project.get("name") != EXCLUDED_PROJECT
+        and project.get("name") != UNCATEGORIZED_PROJECT
+    )
+
+
 def project_available_for_inference(project: dict[str, Any] | None) -> bool:
     return bool(
         project

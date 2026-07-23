@@ -4,6 +4,29 @@
     var App = window.WorkTraceApp = window.WorkTraceApp || {};
 
     function installProjectCatalogCoordinator() {
+        // Unified project catalog coordinator. One bridge call returns the
+        // editing catalog (includes system ``未归类``) and the filter
+        // catalog (excludes the system project to avoid duplicate
+        // ``未归类`` entries).
+        function applyCatalogResult(result) {
+            if (!result || result.ok === false) return null;
+            var editing = result.editing_projects || result.projects || [];
+            var filter = result.filter_projects || result.projects || [];
+            App.editingProjectsCache = editing;
+            App.filterProjectsCache = filter;
+            // Backward compatibility: legacy consumers read ``projectsCache``
+            // expecting the editing catalog.
+            App.projectsCache = editing;
+            // Render every consumer from the single authoritative load.
+            if (typeof App.renderTimelineProjectFilter === "function") {
+                App.renderTimelineProjectFilter(filter);
+            }
+            if (typeof App.populateStatisticsProjectFilter === "function") {
+                App.populateStatisticsProjectFilter(filter);
+            }
+            return editing;
+        }
+
         App.loadProjects = function () {
             if (App.projectsCache) return Promise.resolve(App.projectsCache);
             if (App.projectsLoadPromise) return App.projectsLoadPromise;
@@ -11,10 +34,7 @@
             var epoch = App.dataEpoch || 0;
             var request = App.bridge.listProjectsForTimeline().then(function (result) {
                 if (epoch !== (App.dataEpoch || 0)) return null;
-                if (result && result.ok !== false && result.projects) {
-                    App.projectsCache = result.projects;
-                }
-                return App.projectsCache;
+                return applyCatalogResult(result);
             }).catch(function () {
                 return null;
             }).finally(function () {
@@ -25,6 +45,17 @@
             });
             App.projectsLoadPromise = request;
             return request;
+        };
+
+        // Force a fresh load (used after project add/update/delete/generation
+        // reset). Clears the cache and re-renders all consumers.
+        App.refreshProjectCatalogs = function () {
+            App.projectsCache = null;
+            App.editingProjectsCache = null;
+            App.filterProjectsCache = null;
+            App.projectsLoading = false;
+            App.projectsLoadPromise = null;
+            return App.loadProjects();
         };
     }
     installProjectCatalogCoordinator();
@@ -57,6 +88,9 @@
     installTimelineProjectLoadGate();
 
     function refreshSharedProjectCatalog() {
+        if (typeof App.refreshProjectCatalogs === "function") {
+            return App.refreshProjectCatalogs();
+        }
         App.projectsCache = null;
         App.projectsLoading = false;
         App.projectsLoadPromise = null;

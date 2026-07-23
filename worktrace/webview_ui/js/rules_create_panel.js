@@ -149,6 +149,7 @@
         if (panel && App.closeManagedDrawer) App.closeManagedDrawer(panel);
         else if (panel) panel.hidden = true;
         App.rulesPanelEditingProjectId = null;
+        App.rulesPanelOriginalLanguage = null;
         clearPanelStatus();
     }
     App.closeRulesPanel = closeRulesPanel;
@@ -214,7 +215,13 @@
             return;
         }
         var description = descInput ? (descInput.value || "").trim() : "";
-        var language = readPanelLanguage();
+        // When editing an existing project, pass back the original language
+        // verbatim instead of reading from the hidden select (which only
+        // offers ``中文`` and would overwrite non-中文 projects). New
+        // projects default to ``中文`` via readPanelLanguage().
+        var language = App.rulesPanelEditingProjectId
+            ? (App.rulesPanelOriginalLanguage || "中文")
+            : readPanelLanguage();
         App.rulesCreatingPanelProject = true;
         refreshPanelWriteState();
         clearPanelStatus();
@@ -245,6 +252,7 @@
             refreshPanelWriteState();
         });
     }
+    App.savePanelProject = savePanelProject;
 
     function savePanelRule() {
         if (App.rulesCreatingPanelRule) return;
@@ -302,6 +310,15 @@
     function fillProjectFields(project) {
         setValue("rules-panel-project-name", project ? App.safeText(project.name, "") : "");
         setValue("rules-panel-project-description", project ? App.safeText(project.description, "") : "");
+        // Preserve the original language when editing. The hidden select
+        // only offers ``中文``; reading from it on save would overwrite
+        // non-中文 projects. We store the original language and pass it
+        // back verbatim on update. New projects default to ``中文``.
+        if (project && App.rulesPanelEditingProjectId) {
+            App.rulesPanelOriginalLanguage = App.safeText(project.language, "中文");
+        } else {
+            App.rulesPanelOriginalLanguage = null;
+        }
         setLanguage(project ? App.safeText(project.language, "中文") : "中文");
     }
 

@@ -279,6 +279,10 @@ def list_selectable_projects() -> list[dict[str, Any]]:
     return project_service.list_selectable_projects()
 
 
+def list_filter_projects() -> list[dict[str, Any]]:
+    return project_service.list_filter_projects()
+
+
 __all__ = [
     "TIMELINE_ADJUSTED_DURATION_MAX_SECONDS",
     "TIMELINE_NOTE_MAX_LENGTH",
@@ -288,6 +292,7 @@ __all__ = [
     "get_project_sessions_by_range",
     "hide_timeline_session",
     "hide_timeline_session_activity",
+    "list_filter_projects",
     "list_selectable_projects",
     "merge_timeline_session",
     "save_timeline_session_edit",

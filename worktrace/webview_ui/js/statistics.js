@@ -190,6 +190,7 @@
             }).join("");
         select.value = current;
     }
+    App.populateStatisticsProjectFilter = populateProjectFilter;
 
     function initStatisticsDefaults() {
         if (App.statisticsControlsBound) return;
