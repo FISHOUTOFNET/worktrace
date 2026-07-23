@@ -66,7 +66,12 @@
         var value = filter ? String(filter.value || "") : "";
         return (Array.isArray(entries) ? entries.slice() : []).filter(function (session) {
             if (!value) return true;
-            if (value === "unclassified") return !session.project_id;
+            if (value === "unclassified") {
+                // Use the backend authoritative field instead of
+                // ``!project_id`` so standalone, privacy-redacted, and
+                // deleted-project rows are excluded.
+                return session.is_report_uncategorized === true;
+            }
             return String(session.project_id || "") === value;
         }).sort(timelineSessionOrder);
     }
@@ -84,6 +89,7 @@
         select.value = previous;
         if (select.value !== previous) select.value = "";
     }
+    App.renderTimelineProjectFilter = renderTimelineProjectFilter;
 
     function openTimelineDrawer(focusTarget) {
         if (!window.matchMedia || !window.matchMedia("(max-width: 959px)").matches) return;
@@ -110,7 +116,12 @@
     App.closeTimelineDrawer = closeTimelineDrawer;
 
     App.applyTimelineProjectFilter = function () {
-        if (App.lastTimelineData) showTimeline(App.lastTimelineData);
+        // Changing the filter can hide the currently-edited session, which
+        // would orphan the draft. Gate the re-render through the context
+        // change flow so a dirty draft is saved first.
+        requestTimelineContextChange(function () {
+            if (App.lastTimelineData) showTimeline(App.lastTimelineData);
+        }, "应用筛选");
     };
 
     function showTimeline(data) {
@@ -294,9 +305,15 @@
 
     function selectTimelineSession(projectionInstanceKey, sessions) {
         if (projectionInstanceKey !== App.selectedProjectionInstanceKey
-                && (App.editSaving || isEditDirty())) {
-            scheduleTimelineAutosave(0);
-            showEditStatus("正在保存当前更改，保存后可切换时间段", false);
+                && (App.editSaving || isEditDirty() || App.mutationState === "unknown")) {
+            // Gate the session switch through the context change flow so a
+            // dirty draft is saved first and the switch is queued if a save
+            // is in flight. On failure or unknown mutation the draft is
+            // preserved and the switch is blocked.
+            requestTimelineContextChange(function () {
+                App.selectedProjectionInstanceKey = projectionInstanceKey;
+                showTimeline(App.lastTimelineData);
+            }, "切换时间段");
             return;
         }
         App.selectedProjectionInstanceKey = projectionInstanceKey;
@@ -501,16 +518,25 @@
     App.renderSessionActivitySummary = renderSessionDetails;
 
     function loadProjects() {
+        // Delegate to the unified catalog coordinator (installed by
+        // rules.js). The coordinator stores both editing and filter
+        // catalogs and renders every consumer from a single bridge call.
+        if (typeof App.loadProjects === "function" && App.loadProjects !== loadProjects) {
+            return App.loadProjects();
+        }
+        // Fallback: direct load (only used if the coordinator has not been
+        // installed yet, e.g. during early init).
         if (App.projectsCache) {
-            renderTimelineProjectFilter(App.projectsCache);
+            renderTimelineProjectFilter(App.filterProjectsCache || App.projectsCache);
             return Promise.resolve(App.projectsCache);
         }
-        if (App.projectsLoading) return App.projectsLoadPromise || Promise.resolve(null);
         App.projectsLoading = true;
         App.projectsLoadPromise = App.bridge.listProjectsForTimeline().then(function (result) {
-            if (result && result.ok !== false && Array.isArray(result.projects)) {
-                App.projectsCache = result.projects;
-                renderTimelineProjectFilter(App.projectsCache);
+            if (result && result.ok !== false) {
+                App.editingProjectsCache = result.editing_projects || result.projects || [];
+                App.filterProjectsCache = result.filter_projects || result.projects || [];
+                App.projectsCache = App.editingProjectsCache;
+                renderTimelineProjectFilter(App.filterProjectsCache);
             }
             return App.projectsCache;
         }).catch(function () {
@@ -521,7 +547,6 @@
         });
         return App.projectsLoadPromise;
     }
-    App.loadProjects = loadProjects;
 
     function confirmTimelineDeletion(operation, options, trigger) {
         if (!App.openDeleteDialog) return runTimelineSessionOperation(operation, options);
@@ -695,6 +720,7 @@
         App.timelineAutosaveQueued = false;
         App.editingSession = null;
         App.editSaving = false;
+        App.submittedDraft = null;
         var panel = document.getElementById("timeline-edit-panel");
         if (panel) panel.hidden = true;
         updateSessionActionButtons(null);
@@ -845,6 +871,24 @@
         });
     }
 
+    // Rebase the editing session to the refreshed authoritative baseline.
+    // After a save + refresh the projection revision advances (R1 -> R2).
+    // If the user typed during the in-flight request, populateEditPanel is
+    // skipped, leaving App.editingSession at the OLD baseline.
+    function rebaseEditingSessionAfterRefresh() {
+        if (!App.editingSession || !App.selectedProjectionInstanceKey) return;
+        var refreshed = findSessionByProjectionKey(App.selectedProjectionInstanceKey);
+        if (!refreshed) return;
+        if (refreshed.projection_instance_key !== App.editingSession.projection_instance_key) return;
+        App.editingSession = refreshed;
+        App.selectedProjectionRevision = refreshed.projection_revision || "";
+        // Re-apply capability flags (e.g. can_edit_note) in case the
+        // mutation changed the session's editability, but never overwrite
+        // the user's current DOM input.
+        applyEditCapabilities(refreshed);
+    }
+    App.rebaseEditingSessionAfterRefresh = rebaseEditingSessionAfterRefresh;
+
     function saveEdit() {
         if (!App.editingSession) return;
         if (App.editSaving) {
@@ -933,6 +977,18 @@
             blockDifferentMutationIntent();
             return;
         }
+        // Snapshot the submitted draft + authoritative revision. This
+        // decouples the in-flight request from the live DOM so post-submit
+        // input is never overwritten by a stale response, and the queued
+        // autosave can rebase onto the post-success revision.
+        App.submittedDraft = {
+            projectionInstanceKey: key,
+            projectionRevision: revision,
+            requestId: owner.requestId,
+            projectId: overrideProjectId,
+            note: note,
+            adjustedDurationSeconds: adjustedDurationSeconds
+        };
         owner.payload = [
             reportDate,
             key,
@@ -948,6 +1004,7 @@
                 setEditSaving(false);
                 showEditStatus(result && result.message ? result.message : "保存失败", true);
                 App.timelineRequestState.releaseMutationOwner(owner, "confirmed_failure", result);
+                drainPendingContextChange(false);
                 return;
             }
             App.timelineRequestState.transitionMutation(owner, "confirmed_success", result);
@@ -956,6 +1013,11 @@
             showEditStatus("已自动保存", false);
             return refreshAfterConfirmedMutation().catch(function () {
                 showEditStatus("操作已保存，但刷新失败", true);
+            }).then(function () {
+                // Rebase to the refreshed baseline (with the new
+                // projection_revision) BEFORE evaluating the queued
+                // autosave so the next save uses the new revision.
+                rebaseEditingSessionAfterRefresh();
             }).finally(function () {
                 setEditSaving(false);
                 if (App.timelineAutosaveQueued && isEditDirty()) {
@@ -963,10 +1025,17 @@
                     scheduleTimelineAutosave(0);
                 } else {
                     App.timelineAutosaveQueued = false;
+                    if (!isEditDirty()) App.submittedDraft = null;
                 }
+                // Drain any queued context change now that the save has
+                // resolved. The draft is either persisted (success) or
+                // preserved (the success path above ran), so switching is
+                // safe.
+                drainPendingContextChange(true);
             });
         }).catch(function () {
             if (App.timelineRequestState.isCurrentMutationOwner(owner)) markMutationUnknown(owner);
+            drainPendingContextChange(false);
         });
     }
     App.saveEdit = saveEdit;
@@ -1108,16 +1177,30 @@
     }
     App.findSessionByProjectionKey = findSessionByProjectionKey;
 
-    function findMergeTarget(sourceKey, direction) {
-        var sessions = App.currentSessions || [];
-        for (var i = 0; i < sessions.length; i++) {
-            if ((sessions[i].projection_instance_key || "") !== sourceKey) continue;
+    // Find the chronological merge target. The UI renders newest-first but
+    // the backend defines previous = time-earlier, next = time-later.
+    function findChronologicalMergeTarget(sessions, sourceKey, direction) {
+        if (!sessions || !sourceKey) return null;
+        var sorted = sessions.slice().sort(function (left, right) {
+            var leftTime = String(left.start_time || "");
+            var rightTime = String(right.start_time || "");
+            if (leftTime < rightTime) return -1;
+            if (leftTime > rightTime) return 1;
+            return String(left.projection_instance_key || "")
+                .localeCompare(String(right.projection_instance_key || ""));
+        });
+        for (var i = 0; i < sorted.length; i++) {
+            if ((sorted[i].projection_instance_key || "") !== sourceKey) continue;
             var targetIndex = direction === "previous" ? i - 1 : i + 1;
-            return targetIndex >= 0 && targetIndex < sessions.length
-                ? sessions[targetIndex]
-                : null;
+            if (targetIndex < 0 || targetIndex >= sorted.length) return null;
+            return sorted[targetIndex];
         }
         return null;
+    }
+    App.findChronologicalMergeTarget = findChronologicalMergeTarget;
+
+    function findMergeTarget(sourceKey, direction) {
+        return findChronologicalMergeTarget(App.currentSessions, sourceKey, direction);
     }
 
     function normalizeTimelineReportDate(date) {
@@ -1208,6 +1291,51 @@
         });
     };
     App.loadTimelineReport = timelineReportRequest;
+
+    // Single entry point for context changes that could destroy the current
+    // edit context (date switch, filter change, session switch).
+    function requestTimelineContextChange(actionFn, label) {
+        var reason = label || "切换";
+        if (App.mutationState === "unknown") {
+            showEditStatus("操作结果尚未确认，请先重试或刷新核对后再" + reason + "。", true);
+            return Promise.resolve(false);
+        }
+        if (App.editSaving) {
+            App.pendingContextChange = { action: actionFn, reason: reason };
+            showEditStatus("正在保存当前更改，保存完成后自动" + reason + "。", false);
+            return Promise.resolve(false);
+        }
+        // Dirty draft with no save in flight: save first, then switch.
+        if (isEditDirty()) {
+            showEditStatus("正在保存当前更改，保存完成后自动" + reason + "。", false);
+            App.pendingContextChange = { action: actionFn, reason: reason };
+            saveEdit();
+            return Promise.resolve(false);
+        }
+        // No dirty draft: switch immediately.
+        return Promise.resolve().then(actionFn);
+    }
+    App.requestTimelineContextChange = requestTimelineContextChange;
+
+    // Drains a pending context change after a save completes. Called from
+    // the saveEdit finally block. On confirmed failure or unknown result
+    // the pending change is cancelled (draft preserved).
+    function drainPendingContextChange(saveSucceeded) {
+        var pending = App.pendingContextChange;
+        if (!pending) return;
+        App.pendingContextChange = null;
+        if (!saveSucceeded) {
+            showEditStatus("保存失败，未" + pending.reason + "，请重试或刷新核对。", true);
+            return;
+        }
+        // Save succeeded — execute the queued context change.
+        try {
+            pending.action();
+        } catch (error) {
+            // Swallow; the action is best-effort and the user can retry.
+        }
+    }
+    App.drainPendingContextChange = drainPendingContextChange;
     App.refreshTimeline = function () {
         return App.loadTimelineReport(currentTimelineReportDate(), {
             showLoading: false,
@@ -1224,23 +1352,40 @@
     App.goPrevDay = function () {
         var input = document.getElementById("timeline-date-input");
         var current = App.timelineDate || (input ? input.value : null);
-        App.loadTimelineReport(App.shiftDate(current, -1), {
-            showLoading: true,
-            resetSelection: true
-        });
+        var target = App.shiftDate(current, -1);
+        return requestTimelineContextChange(function () {
+            App.loadTimelineReport(target, {
+                showLoading: true,
+                resetSelection: true
+            });
+        }, "切换到前一天");
     };
     App.goNextDay = function () {
         var input = document.getElementById("timeline-date-input");
         var current = App.timelineDate || (input ? input.value : null);
-        App.loadTimelineReport(App.shiftDate(current, 1), {
-            showLoading: true,
-            resetSelection: true
-        });
+        var target = App.shiftDate(current, 1);
+        return requestTimelineContextChange(function () {
+            App.loadTimelineReport(target, {
+                showLoading: true,
+                resetSelection: true
+            });
+        }, "切换到后一天");
     };
     App.goToday = function () {
-        App.loadTimelineReport(null, {
-            showLoading: true,
-            resetSelection: true
-        });
+        return requestTimelineContextChange(function () {
+            App.loadTimelineReport(null, {
+                showLoading: true,
+                resetSelection: true
+            });
+        }, "切换到今天");
+    };
+    App.goToDate = function (date) {
+        var target = date || null;
+        return requestTimelineContextChange(function () {
+            App.loadTimelineReport(target, {
+                showLoading: true,
+                resetSelection: true
+            });
+        }, "切换日期");
     };
 })();
