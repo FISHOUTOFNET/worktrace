@@ -21,6 +21,7 @@ from .activity_row_overlay import (
     apply_live_span_to_row,
 )
 from .page_view_model_common import enable_safe_open_edit
+from .projection_performance import stage
 from .report_projection_identity import stable_json_hash
 from .report_revision_service import get_report_structure_revision
 from .runtime_activity_state_service import sample_runtime_activity_state
@@ -354,41 +355,42 @@ def get_overview_view_model(today: str | None = None) -> dict[str, Any]:
     from .report_status_policy import decide_report_status
 
     projection = build_visible_snapshot(scoped_today, scoped_today)
-    sessions = list(projection.final_sessions)
-    standalone_entries = [
-        entry
-        for entry in projection.final_entries
-        if str(entry.get("row_kind") or "") == "standalone_status"
-        and not bool(entry.get("is_in_progress"))
-    ]
-    project_count = len(
-        {
-            int(row.get("report_project_id") or row.get("project_id") or 0)
-            for row in projection.final_contributions
-            if bool(row.get("is_report_project"))
-            and int(row.get("report_project_id") or row.get("project_id") or 0) > 0
-        }
-    )
-
-    recent_rows: list[dict[str, Any]] = []
-    for session in sessions:
-        contributions = list(session.get("_projection_contributions") or [])
-        if contributions and not any(
-            decide_report_status(
-                str(item.get("status") or ""),
-                has_project_attribution=bool(item.get("is_report_project")),
-            ).visible_in_recent
-            for item in contributions
-        ):
-            continue
-        recent_rows.append(
-            _base_session_row(session, row_kind="project_session")
+    with stage("view_model_transform"):
+        sessions = list(projection.final_sessions)
+        standalone_entries = [
+            entry
+            for entry in projection.final_entries
+            if str(entry.get("row_kind") or "") == "standalone_status"
+            and not bool(entry.get("is_in_progress"))
+        ]
+        project_count = len(
+            {
+                int(row.get("report_project_id") or row.get("project_id") or 0)
+                for row in projection.final_contributions
+                if bool(row.get("is_report_project"))
+                and int(row.get("report_project_id") or row.get("project_id") or 0) > 0
+            }
         )
-    _apply_live_span_to_rows(
-        recent_rows,
-        model,
-        row_kind=ROW_KIND_RECENT_PROJECT_SESSION_ROW,
-    )
+
+        recent_rows: list[dict[str, Any]] = []
+        for session in sessions:
+            contributions = list(session.get("_projection_contributions") or [])
+            if contributions and not any(
+                decide_report_status(
+                    str(item.get("status") or ""),
+                    has_project_attribution=bool(item.get("is_report_project")),
+                ).visible_in_recent
+                for item in contributions
+            ):
+                continue
+            recent_rows.append(
+                _base_session_row(session, row_kind="project_session")
+            )
+        _apply_live_span_to_rows(
+            recent_rows,
+            model,
+            row_kind=ROW_KIND_RECENT_PROJECT_SESSION_ROW,
+        )
     # Stable business order: in-progress report sessions first, then by
     # start time descending. A pure string sort would let a closed session
     # leapfrog an in-progress one when start times tie, so in-progress is
@@ -486,21 +488,22 @@ def get_timeline_view_model(report_date: str | None = None) -> dict[str, Any]:
     from .report_projection_snapshot_service import build_visible_snapshot
 
     projection = build_visible_snapshot(scoped_report_date, scoped_report_date)
-    sessions = [
-        _base_session_row(
-            session,
-            row_kind=str(session.get("row_kind") or "project_session"),
+    with stage("view_model_transform"):
+        sessions = [
+            _base_session_row(
+                session,
+                row_kind=str(session.get("row_kind") or "project_session"),
+            )
+            for session in projection.final_entries
+        ]
+        _apply_live_span_to_rows(
+            sessions,
+            report_model,
+            row_kind=ROW_KIND_PROJECT_SESSION_ROW,
         )
-        for session in projection.final_entries
-    ]
-    _apply_live_span_to_rows(
-        sessions,
-        report_model,
-        row_kind=ROW_KIND_PROJECT_SESSION_ROW,
-    )
-    _set_summary_activity_ids(sessions)
-    for row in sessions:
-        enable_safe_open_edit(row)
+        _set_summary_activity_ids(sessions)
+        for row in sessions:
+            enable_safe_open_edit(row)
 
     display_total_seconds = sum(
         int(row.get("duration_seconds") or 0) for row in sessions
@@ -554,13 +557,14 @@ def get_session_activity_summary_view_model(
             snapshot=snapshot,
         )
     )
-    detail_projection = (
-        project_activity_summary_service.get_projection_session_activity_summary(
-            projection_instance_key,
-            date,
-            expected_projection_revision=expected_projection_revision,
+    with stage("detail_lookup"):
+        detail_projection = (
+            project_activity_summary_service.get_projection_session_activity_summary(
+                projection_instance_key,
+                date,
+                expected_projection_revision=expected_projection_revision,
+            )
         )
-    )
     rows = [dict(row) for row in detail_projection["summary_rows"]]
     for row in rows:
         row.update(_detail_report_attribution_fields(row))

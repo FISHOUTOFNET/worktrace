@@ -9,6 +9,7 @@ from ..db import get_connection
 from . import project_lifecycle_policy, report_operation_repository
 from . import report_session_operation_engine as engine
 from .page_read_context import current_page_read_context
+from .projection_performance import record_cache_hit, record_counts, stage
 from .report_fact_query_service import (
     boundary_times_for_rows,
     get_uncategorized_project_id,
@@ -50,6 +51,7 @@ def build_visible_snapshot(
     if context is not None:
         cached = context.snapshot_cache.get(key)
         if cached is not None:
+            record_cache_hit(True)
             return cached
         result = _build_snapshot(context.conn, start_date, end_date)
         context.snapshot_cache[key] = result
@@ -119,11 +121,12 @@ def _mutable_record(value) -> dict[str, Any]:
 def _build_snapshot(conn, start_date: str, end_date: str) -> ReportProjectionSnapshot:
     uncategorized_id = get_uncategorized_project_id(conn)
     project_states = _load_project_states(conn, uncategorized_id)
-    rows = load_report_activity_rows(
-        start_date,
-        end_date,
-        conn=conn,
-    )
+    with stage("fact_query"):
+        rows = load_report_activity_rows(
+            start_date,
+            end_date,
+            conn=conn,
+        )
 
     # Visibility is applied after continuity is established. A soft-deleted
     # project remains a real interval in the fact layer and must split the
@@ -152,24 +155,26 @@ def _build_snapshot(conn, start_date: str, end_date: str) -> ReportProjectionSna
             conn=conn,
         ),
     )
-    base_sessions = build_report_sessions(
-        reportable_rows,
-        uncategorized_id,
-        boundary_times=boundaries,
-        unrecorded_gap_boundary_seconds=gap_threshold,
-    )
-    base_projection = build_base_projection(
-        base_sessions,
-        reportable_rows,
-        uncategorized_id,
-    )
-    base_sessions = list(base_projection.sessions)
+    with stage("session_build"):
+        base_sessions = build_report_sessions(
+            reportable_rows,
+            uncategorized_id,
+            boundary_times=boundaries,
+            unrecorded_gap_boundary_seconds=gap_threshold,
+        )
+        base_projection = build_base_projection(
+            base_sessions,
+            reportable_rows,
+            uncategorized_id,
+        )
+        base_sessions = list(base_projection.sessions)
 
-    operations_by_date = report_operation_repository.load_operations_by_date(
-        conn,
-        start_date,
-        end_date,
-    )
+    with stage("operation_load"):
+        operations_by_date = report_operation_repository.load_operations_by_date(
+            conn,
+            start_date,
+            end_date,
+        )
     dates = {
         str(session.get("report_date") or "")
         for session in base_sessions
@@ -180,160 +185,168 @@ def _build_snapshot(conn, start_date: str, end_date: str) -> ReportProjectionSna
     final_sessions: list[dict[str, Any]] = []
     final_contributions: list[dict[str, Any]] = []
     diagnostics: list[OperationDiagnostic] = []
-    for report_date in sorted(dates):
-        date_base = [
-            item
-            for item in base_sessions
-            if str(item.get("report_date") or "") == report_date
-        ]
-        replay = engine.replay_operations(
-            date_base,
-            operations_by_date.get(report_date, []),
-            project_states,
-        )
-        final_sessions.extend(
-            dict(item)
-            for item in replay.final_entries
-            if not bool(item.get("project_is_deleted"))
-        )
-        final_contributions.extend(
-            dict(item)
-            for item in replay.final_contributions
-            if not bool(item.get("project_is_deleted"))
-        )
-        diagnostics.extend(replay.operation_diagnostics)
+    with stage("operation_replay"):
+        for report_date in sorted(dates):
+            date_base = [
+                item
+                for item in base_sessions
+                if str(item.get("report_date") or "") == report_date
+            ]
+            replay = engine.replay_operations(
+                date_base,
+                operations_by_date.get(report_date, []),
+                project_states,
+            )
+            final_sessions.extend(
+                dict(item)
+                for item in replay.final_entries
+                if not bool(item.get("project_is_deleted"))
+            )
+            final_contributions.extend(
+                dict(item)
+                for item in replay.final_contributions
+                if not bool(item.get("project_is_deleted"))
+            )
+            diagnostics.extend(replay.operation_diagnostics)
 
-    standalone_entries: list[dict[str, Any]] = []
-    for row in reportable_rows:
-        decision = decide_report_status(
-            str(row.get("status") or ""),
-            has_project_attribution=bool(row.get("is_report_project")),
+    with stage("snapshot_finalize"):
+        standalone_entries: list[dict[str, Any]] = []
+        for row in reportable_rows:
+            decision = decide_report_status(
+                str(row.get("status") or ""),
+                has_project_attribution=bool(row.get("is_report_project")),
+            )
+            if decision.decision in {SUPPRESSED, "session_contribution"}:
+                continue
+            if decision.decision != STANDALONE_STATUS:
+                continue
+            contribution = display_safe_contribution(row)
+            contribution.update(
+                {
+                    "app_name": "已排除",
+                    "process_name": "",
+                    "activity_display_name": "已排除",
+                    "activity_identity_key": (
+                        f"excluded:{contribution['activity_id']}"
+                    ),
+                    "resource_identity_key": "",
+                    "resource_display_name": "",
+                    "privacy_redacted": True,
+                }
+            )
+            key = (
+                f"status:{contribution['report_date']}:"
+                f"{contribution['activity_id']}:"
+                f"{contribution['slice_start_time']}"
+            )
+            contribution["projection_instance_key"] = key
+            revision = stable_json_hash(
+                {
+                    "key": key,
+                    "member": (
+                        contribution["report_date"],
+                        contribution["activity_id"],
+                        contribution["slice_start_time"],
+                    ),
+                    "duration": contribution["duration_seconds"],
+                    "status": contribution["status"],
+                    "in_progress": contribution["is_in_progress"],
+                }
+            )
+            contribution["projection_revision"] = revision
+            final_contributions.append(contribution)
+            standalone_entries.append(
+                {
+                    "row_kind": "standalone_status",
+                    "report_date": contribution["report_date"],
+                    "projection_instance_key": key,
+                    "projection_revision": revision,
+                    "projection_kind": "status",
+                    "project_id": 0,
+                    "project_name": "已排除",
+                    "project_description": "",
+                    "start_time": contribution["start_time"],
+                    "end_time": contribution["end_time"],
+                    "duration_seconds": contribution["duration_seconds"],
+                    "closed_duration_seconds": (
+                        0
+                        if contribution["is_in_progress"]
+                        else contribution["duration_seconds"]
+                    ),
+                    "status": contribution["status"],
+                    "status_code": contribution["status"],
+                    "status_summary": contribution["status"],
+                    "is_in_progress": contribution["is_in_progress"],
+                    "editable": False,
+                    "exportable": not contribution["is_in_progress"],
+                    "privacy_redacted": True,
+                    "activity_ids": [contribution["activity_id"]],
+                    "member_slices": [
+                        {
+                            "report_date": contribution["report_date"],
+                            "activity_id": contribution["activity_id"],
+                            "slice_start_time": contribution["slice_start_time"],
+                        }
+                    ],
+                }
+            )
+
+        final_sessions = sorted(final_sessions, key=session_sort_key)
+        standalone_entries = sorted(
+            standalone_entries,
+            key=lambda item: (
+                str(item.get("start_time") or ""),
+                str(item.get("projection_instance_key") or ""),
+            ),
         )
-        if decision.decision in {SUPPRESSED, "session_contribution"}:
-            continue
-        if decision.decision != STANDALONE_STATUS:
-            continue
-        contribution = display_safe_contribution(row)
-        contribution.update(
-            {
-                "app_name": "已排除",
-                "process_name": "",
-                "activity_display_name": "已排除",
-                "activity_identity_key": (
-                    f"excluded:{contribution['activity_id']}"
-                ),
-                "resource_identity_key": "",
-                "resource_display_name": "",
-                "privacy_redacted": True,
-            }
+        final_entries = sorted(
+            [*final_sessions, *standalone_entries],
+            key=lambda item: (
+                str(item.get("start_time") or ""),
+                str(item.get("projection_instance_key") or ""),
+            ),
         )
-        key = (
-            f"status:{contribution['report_date']}:"
-            f"{contribution['activity_id']}:"
-            f"{contribution['slice_start_time']}"
-        )
-        contribution["projection_instance_key"] = key
+    with stage("snapshot_hash"):
         revision = stable_json_hash(
             {
-                "key": key,
-                "member": (
-                    contribution["report_date"],
-                    contribution["activity_id"],
-                    contribution["slice_start_time"],
-                ),
-                "duration": contribution["duration_seconds"],
-                "status": contribution["status"],
-                "in_progress": contribution["is_in_progress"],
-            }
-        )
-        contribution["projection_revision"] = revision
-        final_contributions.append(contribution)
-        standalone_entries.append(
-            {
-                "row_kind": "standalone_status",
-                "report_date": contribution["report_date"],
-                "projection_instance_key": key,
-                "projection_revision": revision,
-                "projection_kind": "status",
-                "project_id": 0,
-                "project_name": "已排除",
-                "project_description": "",
-                "start_time": contribution["start_time"],
-                "end_time": contribution["end_time"],
-                "duration_seconds": contribution["duration_seconds"],
-                "closed_duration_seconds": (
-                    0
-                    if contribution["is_in_progress"]
-                    else contribution["duration_seconds"]
-                ),
-                "status": contribution["status"],
-                "status_code": contribution["status"],
-                "status_summary": contribution["status"],
-                "is_in_progress": contribution["is_in_progress"],
-                "editable": False,
-                "exportable": not contribution["is_in_progress"],
-                "privacy_redacted": True,
-                "activity_ids": [contribution["activity_id"]],
-                "member_slices": [
-                    {
-                        "report_date": contribution["report_date"],
-                        "activity_id": contribution["activity_id"],
-                        "slice_start_time": contribution["slice_start_time"],
-                    }
+                "range": [start_date, end_date],
+                "projects": [
+                    state.to_dict()
+                    for state in sorted(
+                        project_states,
+                        key=lambda item: item.project_id,
+                    )
                 ],
+                "entries": [
+                    {
+                        "key": item.get("projection_instance_key"),
+                        "revision": item.get("projection_revision"),
+                        "duration": item.get("duration_seconds"),
+                        "in_progress": item.get("is_in_progress"),
+                    }
+                    for item in final_entries
+                ],
+                "contributions": [
+                    {
+                        "key": item.get("projection_instance_key"),
+                        "member": [
+                            item.get("report_date"),
+                            item.get("activity_id"),
+                            item.get("slice_start_time"),
+                        ],
+                        "duration": item.get("duration_seconds"),
+                        "status": item.get("status"),
+                        "project_id": item.get("project_id"),
+                    }
+                    for item in final_contributions
+                ],
+                "diagnostics": [item.to_dict() for item in diagnostics],
             }
         )
-
-    final_sessions = sorted(final_sessions, key=session_sort_key)
-    standalone_entries = sorted(
-        standalone_entries,
-        key=lambda item: (
-            str(item.get("start_time") or ""),
-            str(item.get("projection_instance_key") or ""),
-        ),
-    )
-    final_entries = sorted(
-        [*final_sessions, *standalone_entries],
-        key=lambda item: (
-            str(item.get("start_time") or ""),
-            str(item.get("projection_instance_key") or ""),
-        ),
-    )
-    revision = stable_json_hash(
-        {
-            "range": [start_date, end_date],
-            "projects": [
-                state.to_dict()
-                for state in sorted(
-                    project_states,
-                    key=lambda item: item.project_id,
-                )
-            ],
-            "entries": [
-                {
-                    "key": item.get("projection_instance_key"),
-                    "revision": item.get("projection_revision"),
-                    "duration": item.get("duration_seconds"),
-                    "in_progress": item.get("is_in_progress"),
-                }
-                for item in final_entries
-            ],
-            "contributions": [
-                {
-                    "key": item.get("projection_instance_key"),
-                    "member": [
-                        item.get("report_date"),
-                        item.get("activity_id"),
-                        item.get("slice_start_time"),
-                    ],
-                    "duration": item.get("duration_seconds"),
-                    "status": item.get("status"),
-                    "project_id": item.get("project_id"),
-                }
-                for item in final_contributions
-            ],
-            "diagnostics": [item.to_dict() for item in diagnostics],
-        }
+    record_counts(
+        activity_count=len(rows),
+        entry_count=len(final_entries),
+        contribution_count=len(final_contributions),
     )
     return ReportProjectionSnapshot(
         start_date=start_date,
