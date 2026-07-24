@@ -1,8 +1,29 @@
-"""Stable report revisions for refresh and export boundaries."""
+"""Stable report revisions for refresh and export boundaries.
+
+This module defines three revision concepts that must not be conflated:
+
+* :class:`ProjectionSourceVersion` — a cheap O(1) token derived from durable
+  generation counters and the database replacement epoch. It is the sole
+  cache-validity and heartbeat structure signal for page read paths.
+
+* ``snapshot_revision`` (built inside :mod:`report_projection_snapshot_service`)
+  — a content hash of the complete projection output. It is computed once
+  during projection build and used for mutation receipts and export
+  consistency. It is NOT recomputed for cache lookups.
+
+* ``projection_revision`` (per-session, from
+  :mod:`report_projection_identity`) — a per-session identity used for
+  optimistic write admission on merge/split/copy/edit.
+
+The heavyweight content hash (:func:`_build_report_structure_revision`) is
+retained only for transaction-bound callers that need to hash an uncommitted
+view. Page and heartbeat paths use the source-version token exclusively.
+"""
 
 from __future__ import annotations
 
 import threading
+from dataclasses import dataclass
 from datetime import date as date_type, timedelta
 from typing import Any
 
@@ -12,7 +33,13 @@ from ..data_generation_repository import (
 )
 from ..db import get_connection, get_db_key
 from .page_read_context import current_page_read_context
+from .projection_performance import record_source_version
 from .report_projection_identity import stable_json_hash
+
+# Bump this when the projection algorithm changes shape (new fields, different
+# sorting, different context attribution rules, etc.). All cached day
+# projections are invalidated when this changes.
+PROJECTION_SCHEMA_VERSION = 1
 
 _STRUCTURE_CACHE_LOCK = threading.Lock()
 _STRUCTURE_REVISION_CACHE: dict[
@@ -25,8 +52,92 @@ _STRUCTURE_GENERATION_NAMESPACES = (
 )
 
 
+@dataclass(frozen=True)
+class ProjectionSourceVersion:
+    """Cheap O(1) cache-validity token for day-level projections.
+
+    Composed entirely from durable generation counters and the database
+    replacement epoch — never from scanning activity rows. Two projections
+    for the same ``(database_key, report_date)`` are interchangeable iff
+    their source versions are equal.
+
+    Future extension point: add ``report_day_generation`` when date-level
+    generation is introduced (currently a global ``REPORT_STRUCTURE``
+    counter is used, which conservatively invalidates all dates on any
+    structural change).
+    """
+
+    database_key: str
+    report_date: str
+    report_structure_generation: int
+    database_replacement_epoch: int
+    projection_schema_version: int
+
+    def token(self) -> str:
+        """Stable hash token suitable for use as ``structure_revision``."""
+
+        return stable_json_hash(
+            {
+                "db": self.database_key,
+                "date": self.report_date,
+                "gen": self.report_structure_generation,
+                "epoch": self.database_replacement_epoch,
+                "schema": self.projection_schema_version,
+            }
+        )
+
+
+def get_projection_source_version(report_date: str) -> ProjectionSourceVersion:
+    """Read the current source version for ``report_date`` in O(1).
+
+    Inside a :func:`page_read_scope` the generations are reused from the
+    request context (already captured). Outside, a lightweight SELECT from
+    ``data_generation_state`` is used — no activity/resource/clipboard scan.
+    """
+
+    page_context = current_page_read_context()
+    if page_context is not None:
+        return ProjectionSourceVersion(
+            database_key=page_context.database_key,
+            report_date=report_date,
+            report_structure_generation=int(
+                page_context.report_generations.get(
+                    DataGenerationNamespace.REPORT_STRUCTURE, 0
+                )
+            ),
+            database_replacement_epoch=int(
+                page_context.report_generations.get(
+                    DataGenerationNamespace.DATABASE_REPLACEMENT, 0
+                )
+            ),
+            projection_schema_version=PROJECTION_SCHEMA_VERSION,
+        )
+
+    with get_connection() as conn:
+        generations = DataGenerationRepository.get_many(
+            conn,
+            _STRUCTURE_GENERATION_NAMESPACES,
+        )
+    return ProjectionSourceVersion(
+        database_key=get_db_key(),
+        report_date=report_date,
+        report_structure_generation=int(
+            generations.get(DataGenerationNamespace.REPORT_STRUCTURE, 0)
+        ),
+        database_replacement_epoch=int(
+            generations.get(DataGenerationNamespace.DATABASE_REPLACEMENT, 0)
+        ),
+        projection_schema_version=PROJECTION_SCHEMA_VERSION,
+    )
+
+
 def clear_report_structure_revision_cache(database_key: str | None = None) -> None:
-    """Drop cached hashes, normally after tests or explicit DB reconfiguration."""
+    """No-op retained for backward compatibility.
+
+    The source-version token is O(1) and needs no cache. The heavyweight
+    content-hash cache (:data:`_STRUCTURE_REVISION_CACHE`) is kept only for
+    the transaction path and is cleared here for test isolation.
+    """
 
     with _STRUCTURE_CACHE_LOCK:
         if database_key is None:
@@ -186,45 +297,23 @@ def _build_report_structure_revision(
 
 
 def get_report_structure_revision(report_date: str, *, conn=None) -> str:
-    """Return the single structural revision used by pages and heartbeat.
+    """Return the structural revision used by pages and heartbeat.
 
-    Transaction-bound callers receive an immediate hash of their uncommitted
-    view. Page requests reuse the request-level read transaction. Ordinary
-    refresh callers read both durable generations and the revision from one
-    SQLite snapshot, so a committed structure and its cache key cannot diverge.
+    Page and heartbeat paths receive the cheap :class:`ProjectionSourceVersion`
+    token — an O(1) value derived from durable generation counters, never
+    from scanning activity rows. Transaction-bound callers (``conn`` provided)
+    receive the heavyweight content hash of their uncommitted view, which is
+    needed for write-admission tests that must see uncommitted state.
     """
 
     date_type.fromisoformat(report_date)
     if conn is not None:
         return _build_report_structure_revision(report_date, conn)
 
-    page_context = current_page_read_context()
-    if page_context is not None:
-        return _build_report_structure_revision(report_date, page_context.conn)
-
-    database_key = get_db_key()
-    cache_key = (database_key, report_date)
-    own_conn = get_connection()
-    own_conn.execute("BEGIN")
-    try:
-        generations = _read_durable_generations(own_conn)
-        with _STRUCTURE_CACHE_LOCK:
-            cached = _STRUCTURE_REVISION_CACHE.get(cache_key)
-        if cached is not None and cached[0] == generations:
-            own_conn.commit()
-            return cached[1]
-
-        value = _build_report_structure_revision(report_date, own_conn)
-        own_conn.commit()
-    except Exception:
-        own_conn.rollback()
-        raise
-    finally:
-        own_conn.close()
-
-    with _STRUCTURE_CACHE_LOCK:
-        _STRUCTURE_REVISION_CACHE[cache_key] = (generations, value)
-    return value
+    source_version = get_projection_source_version(report_date)
+    token = source_version.token()
+    record_source_version(token)
+    return token
 
 
 def export_revision(date_from: str, date_to: str, records) -> str:
@@ -239,7 +328,10 @@ def export_revision(date_from: str, date_to: str, records) -> str:
 
 
 __all__ = [
+    "PROJECTION_SCHEMA_VERSION",
+    "ProjectionSourceVersion",
     "clear_report_structure_revision_cache",
     "export_revision",
+    "get_projection_source_version",
     "get_report_structure_revision",
 ]

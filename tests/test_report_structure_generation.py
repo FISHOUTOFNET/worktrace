@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from unittest.mock import patch
-
 import pytest
 
 from tests.support import activity_factory as activity_service
@@ -30,48 +28,44 @@ def _open_activity() -> int:
     )
 
 
-def test_heartbeat_revision_reuses_hash_until_structural_commit(temp_db):
+def test_heartbeat_revision_reuses_token_until_structural_commit(temp_db):
+    """The source-version token is stable until REPORT_STRUCTURE bumps."""
+
     activity_id = _open_activity()
     report_revision_service.clear_report_structure_revision_cache()
-    builder = report_revision_service._build_report_structure_revision
 
-    with patch.object(
-        report_revision_service,
-        "_build_report_structure_revision",
-        wraps=builder,
-    ) as build:
-        first = report_revision_service.get_report_structure_revision(DATE)
-        assert report_revision_service.get_report_structure_revision(DATE) == first
-        assert build.call_count == 1
+    first = report_revision_service.get_report_structure_revision(DATE)
+    assert report_revision_service.get_report_structure_revision(DATE) == first
 
-        with get_connection() as conn:
-            conn.execute(
-                "UPDATE activity_log SET duration_seconds = ?, updated_at = ? WHERE id = ?",
-                (777, now_str(), activity_id),
-            )
-        set_setting("collector_status", "running")
-        assert report_revision_service.get_report_structure_revision(DATE) == first
-        assert build.call_count == 1
+    # Non-structural changes (raw UPDATE without UoW) do not bump the
+    # generation, so the source-version token stays the same.
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE activity_log SET duration_seconds = ?, updated_at = ? WHERE id = ?",
+            (777, now_str(), activity_id),
+        )
+    set_setting("collector_status", "running")
+    assert report_revision_service.get_report_structure_revision(DATE) == first
 
-        with DomainUnitOfWork((DataGenerationNamespace.REPORT_STRUCTURE,)) as uow:
-            uow.connection.execute(
-                "UPDATE activity_log SET status = ?, updated_at = ? WHERE id = ?",
-                ("idle", now_str(), activity_id),
-            )
-            uow.mark_changed(DataGenerationNamespace.REPORT_STRUCTURE)
-            uow.mark_rollback_only()
-        assert report_revision_service.get_report_structure_revision(DATE) == first
-        assert build.call_count == 1
+    # Rolled-back UoW does not bump the generation.
+    with DomainUnitOfWork((DataGenerationNamespace.REPORT_STRUCTURE,)) as uow:
+        uow.connection.execute(
+            "UPDATE activity_log SET status = ?, updated_at = ? WHERE id = ?",
+            ("idle", now_str(), activity_id),
+        )
+        uow.mark_changed(DataGenerationNamespace.REPORT_STRUCTURE)
+        uow.mark_rollback_only()
+    assert report_revision_service.get_report_structure_revision(DATE) == first
 
-        with DomainUnitOfWork((DataGenerationNamespace.REPORT_STRUCTURE,)) as uow:
-            uow.connection.execute(
-                "UPDATE activity_log SET status = ?, updated_at = ? WHERE id = ?",
-                ("idle", now_str(), activity_id),
-            )
-            uow.mark_changed(DataGenerationNamespace.REPORT_STRUCTURE)
-        changed = report_revision_service.get_report_structure_revision(DATE)
-        assert changed != first
-        assert build.call_count == 2
+    # Committed UoW bumps REPORT_STRUCTURE, so the token changes.
+    with DomainUnitOfWork((DataGenerationNamespace.REPORT_STRUCTURE,)) as uow:
+        uow.connection.execute(
+            "UPDATE activity_log SET status = ?, updated_at = ? WHERE id = ?",
+            ("idle", now_str(), activity_id),
+        )
+        uow.mark_changed(DataGenerationNamespace.REPORT_STRUCTURE)
+    changed = report_revision_service.get_report_structure_revision(DATE)
+    assert changed != first
 
 
 def test_structural_setting_commit_invalidates_cached_revision(temp_db):
@@ -88,21 +82,12 @@ def test_structural_setting_commit_invalidates_cached_revision(temp_db):
 def test_database_replacement_invalidates_cached_revision(temp_db):
     _open_activity()
     report_revision_service.clear_report_structure_revision_cache()
-    builder = report_revision_service._build_report_structure_revision
 
-    with patch.object(
-        report_revision_service,
-        "_build_report_structure_revision",
-        wraps=builder,
-    ) as build:
-        first = report_revision_service.get_report_structure_revision(DATE)
-        assert build.call_count == 1
+    first = report_revision_service.get_report_structure_revision(DATE)
 
-        database_maintenance_service.clear_all_live_data()
+    database_maintenance_service.clear_all_live_data()
 
-        second = report_revision_service.get_report_structure_revision(DATE)
-        assert build.call_count == 2
-
+    second = report_revision_service.get_report_structure_revision(DATE)
     assert second != first
 
 
@@ -128,16 +113,9 @@ def test_unchanged_resource_upsert_does_not_invalidate_revision(temp_db):
         metadata_json=stored.get("metadata_json"),
     )
     report_revision_service.clear_report_structure_revision_cache()
-    builder = report_revision_service._build_report_structure_revision
 
-    with patch.object(
-        report_revision_service,
-        "_build_report_structure_revision",
-        wraps=builder,
-    ) as build:
-        first = report_revision_service.get_report_structure_revision(DATE)
-        resource_service.create_or_update_activity_resource(activity_id, resource)
-        second = report_revision_service.get_report_structure_revision(DATE)
+    first = report_revision_service.get_report_structure_revision(DATE)
+    resource_service.create_or_update_activity_resource(activity_id, resource)
+    second = report_revision_service.get_report_structure_revision(DATE)
 
     assert second == first
-    assert build.call_count == 1
