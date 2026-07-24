@@ -13,6 +13,7 @@ from ..constants import (
 )
 from ..formatters import format_status_label
 from ..resources.title_parsing import extract_anchor_file_name
+from .context_service import BoundaryIndex
 from .report_projection_identity import member_set_hash
 from .report_status_policy import SESSION_CONTRIBUTION, decide_report_status
 
@@ -32,6 +33,7 @@ def build_report_sessions(
     from depending on Timeline adapter internals.
     """
     threshold = max(60, int(unrecorded_gap_boundary_seconds))
+    boundary_index = BoundaryIndex(boundary_times)
     sessions: list[dict] = []
     current: list[dict] = []
     for row in rows:
@@ -43,7 +45,7 @@ def build_report_sessions(
         if not current:
             current = [row]
             continue
-        if _can_merge(current[-1], row, boundary_times, threshold):
+        if _can_merge(current[-1], row, boundary_index, threshold):
             current.append(row)
         else:
             sessions.append(_build_session(current, uncategorized_id))
@@ -261,7 +263,7 @@ def _is_session_contribution(row: Mapping) -> bool:
 def _can_merge(
     previous: Mapping,
     current: Mapping,
-    boundary_times: Sequence[str],
+    boundary_index: BoundaryIndex,
     gap_threshold_seconds: int,
 ) -> bool:
     if not (
@@ -273,7 +275,7 @@ def _can_merge(
         current.get("report_date") or ""
     ):
         return False
-    if _crosses_explicit_boundary(previous, current, boundary_times):
+    if _crosses_explicit_boundary(previous, current, boundary_index):
         return False
     if _has_unrecorded_gap(previous, current, gap_threshold_seconds):
         return False
@@ -285,13 +287,11 @@ def _can_merge(
 def _crosses_explicit_boundary(
     previous: Mapping,
     current: Mapping,
-    boundary_times: Sequence[str],
+    boundary_index: BoundaryIndex,
 ) -> bool:
     start = str(previous.get("end_time") or previous.get("start_time") or "")
     end = str(current.get("start_time") or "")
-    if not start or not end or start > end:
-        return False
-    return any(start <= value <= end for value in boundary_times)
+    return boundary_index.crosses(start, end)
 
 
 def _has_unrecorded_gap(

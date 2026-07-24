@@ -3,10 +3,21 @@
 Direct assignments are durable collection/business facts. Context attribution
 is reconstructed from those facts for every canonical snapshot; this module
 has no database or process-cache dependency.
+
+The attribution algorithm runs in O(N). The forward anchor (next anchor) is
+precomputed in a single backward pass over the original (unmutated) rows. The
+backward anchor (previous anchor) is tracked at runtime during the forward
+build pass, because the former O(N²) algorithm's backward walk saw rows
+already mutated by ``_copy_project`` — a row with a direct-assignment source
+that received context became a new effective anchor (propagation effect).
+Re-evaluating ``_context_role`` on the mutated previous row reproduces this
+exactly while keeping the per-row cost O(1). A shared :class:`BoundaryIndex`
+provides O(log B) boundary-crossing checks.
 """
 
 from __future__ import annotations
 
+from bisect import bisect_left, bisect_right
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -58,6 +69,34 @@ class ContextRowRole:
     blocks_context_search: bool
 
 
+class BoundaryIndex:
+    """Sorted-array boundary lookup shared by context and session builder.
+
+    Provides O(log B) ``crosses`` queries via :mod:`bisect`, replacing the
+    O(B) ``any(start <= b <= end for b in boundaries)`` scan previously
+    duplicated in :mod:`context_service` and :mod:`report_session_builder`.
+    """
+
+    __slots__ = ("_sorted",)
+
+    def __init__(self, boundary_times: Iterable[str] = ()) -> None:
+        self._sorted: tuple[str, ...] = tuple(
+            sorted(str(value) for value in boundary_times if value)
+        )
+
+    def crosses(self, start: str, end: str) -> bool:
+        """Return True if any boundary falls in the inclusive range [start, end]."""
+
+        if not start or not end or not self._sorted or start > end:
+            return False
+        lo = bisect_left(self._sorted, start)
+        hi = bisect_right(self._sorted, end)
+        return lo < hi
+
+    def __bool__(self) -> bool:
+        return bool(self._sorted)
+
+
 @dataclass(frozen=True)
 class ReportContextProjection:
     rows: tuple[dict[str, Any], ...]
@@ -73,29 +112,59 @@ class ReportContextProjection:
         clipboard_times: Mapping[int, Sequence[str]] | None = None,
     ) -> "ReportContextProjection":
         projected = [deepcopy(dict(row)) for row in rows]
-        boundaries = tuple(sorted(str(value) for value in boundary_times if value))
+        boundary_index = BoundaryIndex(boundary_times)
         copies = clipboard_times or {}
         carry_seconds = min(
             max(0, int(carry_minutes)) * 60,
             REPORT_CONTEXT_SHORT_MERGE_SECONDS,
         )
-        attributions: list[ReportContextAttribution] = []
 
         for row in projected:
             if str(row.get("assignment_source") or "") in DERIVED_CONTEXT_SOURCES:
                 _clear_project(row)
 
+        roles = [_context_role(row, carry_seconds) for row in projected]
+        next_anchor = _precompute_next_anchors(
+            projected, roles, boundary_index
+        )
+
+        attributions: list[ReportContextAttribution] = []
+        prev_effective_anchor: int | None = None
         for index, row in enumerate(projected):
-            role = _context_role(row, carry_seconds)
+            # Update prev_effective_anchor for the current row based on the
+            # previous row's *mutated* state. The old O(N²) algorithm's
+            # backward walk saw rows already modified by _copy_project: a row
+            # with assignment_source in DIRECT_ASSIGNMENT_SOURCES that received
+            # context became a new effective anchor (propagation effect).
+            # Re-evaluating _context_role on the mutated row reproduces this.
+            if index > 0:
+                prev_row = projected[index - 1]
+                prev_role = _context_role(prev_row, carry_seconds)
+                left_end = str(
+                    prev_row.get("end_time") or prev_row.get("start_time") or ""
+                )
+                right_start = str(row.get("start_time") or "")
+                if boundary_index.crosses(left_end, right_start):
+                    prev_effective_anchor = None
+                elif prev_role.can_anchor_context:
+                    prev_effective_anchor = index - 1
+                elif prev_role.blocks_context_search:
+                    prev_effective_anchor = None
+                # else: carry forward unchanged
+
+            role = roles[index]
             if not role.can_receive_context:
                 continue
-            attribution = _clipboard_attribution(projected, index, copies, boundaries)
+            attribution = _clipboard_attribution(
+                projected, index, copies, boundary_index
+            )
             if attribution is None and carry_seconds > 0:
-                attribution = _neighbour_attribution(
+                attribution = _neighbour_attribution_linear(
                     projected,
                     index,
                     carry_seconds,
-                    boundaries,
+                    prev_effective_anchor,
+                    next_anchor[index],
                 )
             if attribution is None:
                 continue
@@ -109,6 +178,32 @@ class ReportContextProjection:
                 )
             )
         return cls(tuple(projected), tuple(attributions))
+
+
+def _precompute_next_anchors(
+    rows: Sequence[dict[str, Any]],
+    roles: Sequence[ContextRowRole],
+    boundary_index: BoundaryIndex,
+) -> list[int | None]:
+    """Backward pass: for each row, the index of the nearest reachable next anchor."""
+
+    n = len(rows)
+    result: list[int | None] = [None] * n
+    for i in range(n - 1, -1, -1):
+        if roles[i].can_anchor_context:
+            result[i] = i
+        elif roles[i].blocks_context_search:
+            result[i] = None
+        elif i == n - 1:
+            result[i] = None
+        else:
+            left_end = str(rows[i].get("end_time") or rows[i].get("start_time") or "")
+            right_start = str(rows[i + 1].get("start_time") or "")
+            if boundary_index.crosses(left_end, right_start):
+                result[i] = None
+            else:
+                result[i] = result[i + 1]
+    return result
 
 
 def _context_role(row: Mapping[str, Any], carry_seconds: int) -> ContextRowRole:
@@ -181,7 +276,7 @@ def _clipboard_attribution(
     rows: Sequence[dict[str, Any]],
     index: int,
     clipboard_times: Mapping[int, Sequence[str]],
-    boundaries: Sequence[str],
+    boundary_index: BoundaryIndex,
 ) -> tuple[dict[str, Any], str] | None:
     if index <= 0:
         return None
@@ -194,7 +289,7 @@ def _clipboard_attribution(
             previous,
             REPORT_CONTEXT_SHORT_MERGE_SECONDS,
         ).can_anchor_context
-        or _crosses_boundary(previous, current, boundaries)
+        or _crosses_boundary_indexed(previous, current, boundary_index)
     ):
         return None
     current_start = _parse(current.get("start_time"))
@@ -213,51 +308,58 @@ def _clipboard_attribution(
     return None
 
 
-def _neighbour_attribution(
+def _neighbour_attribution_linear(
     rows: Sequence[dict[str, Any]],
     index: int,
     carry_seconds: int,
-    boundaries: Sequence[str],
+    prev_anchor_idx: int | None,
+    next_anchor_idx: int | None,
 ) -> tuple[dict[str, Any], str] | None:
-    previous = _find_anchor(rows, index, -1, carry_seconds, boundaries)
-    following = _find_anchor(rows, index, 1, carry_seconds, boundaries)
-    if previous and following:
-        if int(previous.get("report_project_id") or 0) != int(
-            following.get("report_project_id") or 0
+    """O(1) neighbour attribution using runtime-tracked and precomputed anchors.
+
+    ``prev_anchor_idx`` is tracked at runtime during the forward pass because
+    the old algorithm's backward walk saw mutated rows (propagation effect).
+    ``next_anchor_idx`` is precomputed from original rows because the forward
+    walk only encounters unmutated rows. The carry-distance check is applied
+    here because it depends on the origin row's timestamps.
+    """
+
+    prev_idx = _resolve_anchor_within_carry(
+        rows, index, prev_anchor_idx, carry_seconds, step=-1
+    )
+    next_idx = _resolve_anchor_within_carry(
+        rows, index, next_anchor_idx, carry_seconds, step=1
+    )
+    if prev_idx is not None and next_idx is not None:
+        if int(rows[prev_idx].get("report_project_id") or 0) != int(
+            rows[next_idx].get("report_project_id") or 0
         ):
             return None
-        return previous, _context_kind(previous)
-    anchor = previous or following
-    return (anchor, _context_kind(anchor)) if anchor else None
+        return rows[prev_idx], _context_kind(rows[prev_idx])
+    anchor_idx = prev_idx if prev_idx is not None else next_idx
+    if anchor_idx is None:
+        return None
+    return rows[anchor_idx], _context_kind(rows[anchor_idx])
 
 
-def _find_anchor(
+def _resolve_anchor_within_carry(
     rows: Sequence[dict[str, Any]],
     origin: int,
-    step: int,
+    anchor_idx: int | None,
     carry_seconds: int,
-    boundaries: Sequence[str],
-) -> dict[str, Any] | None:
-    cursor = origin + step
-    while 0 <= cursor < len(rows):
-        left, right = (
-            (rows[cursor], rows[cursor - step])
-            if step < 0
-            else (rows[cursor - step], rows[cursor])
-        )
-        if _crosses_boundary(left, right, boundaries):
-            return None
-        role = _context_role(rows[cursor], carry_seconds)
-        if role.can_anchor_context:
-            if (
-                _context_distance_seconds(rows[origin], rows[cursor], step)
-                <= carry_seconds
-            ):
-                return rows[cursor]
-            return None
-        if role.blocks_context_search:
-            return None
-        cursor += step
+    step: int,
+) -> int | None:
+    """Check carry distance for a precomputed anchor index.
+
+    The precomputed index is the nearest reachable anchor ignoring distance.
+    If it is beyond the carry window, no anchor is usable (matching the
+    original ``_find_anchor`` which stops at the first anchor).
+    """
+
+    if anchor_idx is None or anchor_idx == origin:
+        return None
+    if _context_distance_seconds(rows[origin], rows[anchor_idx], step) <= carry_seconds:
+        return anchor_idx
     return None
 
 
@@ -362,16 +464,14 @@ def _clear_project(row: dict[str, Any]) -> None:
     )
 
 
-def _crosses_boundary(
+def _crosses_boundary_indexed(
     left: Mapping[str, Any],
     right: Mapping[str, Any],
-    boundaries: Sequence[str],
+    boundary_index: BoundaryIndex,
 ) -> bool:
     start = str(left.get("end_time") or left.get("start_time") or "")
     end = str(right.get("start_time") or "")
-    return bool(
-        start and end and any(start <= boundary <= end for boundary in boundaries)
-    )
+    return boundary_index.crosses(start, end)
 
 
 def _parse(value: Any) -> datetime | None:
@@ -383,6 +483,7 @@ def _parse(value: Any) -> datetime | None:
 
 __all__ = [
     "CONTEXT_ATTRIBUTABLE_STATUSES",
+    "BoundaryIndex",
     "ContextRowRole",
     "DERIVED_CONTEXT_SOURCES",
     "DIRECT_ASSIGNMENT_SOURCES",
