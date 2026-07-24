@@ -148,7 +148,6 @@ def test_overview_api_exposes_one_v2_runtime_transport(temp_db):
         "live_report_date",
         "snapshot",
         "current_activity",
-        "recent_first_row",
         "clock",
         "current_project",
         "collector",
@@ -174,15 +173,11 @@ def test_overview_api_exposes_one_v2_runtime_transport(temp_db):
         "stable_live_key_hash",
     }
     current = envelope["current_activity"] or {}
-    recent = envelope["recent_first_row"] or {}
-    if current.get("active") and current.get("is_in_progress"):
-        assert recent
+    if current.get("active") and current.get("is_persisted"):
         assert envelope["clock"]["display_span_id"]
         assert envelope["clock"]["stable_live_key_hash"]
         assert "display_span_id" not in current
         assert "stable_live_key_hash" not in current
-        assert "display_span_id" not in recent
-        assert "stable_live_key_hash" not in recent
 
 
 def test_schema_trigger_surface_is_constraint_only(temp_db):

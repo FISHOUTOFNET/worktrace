@@ -142,11 +142,12 @@ th.number, td.number { text-align: right; font-variant-numeric: tabular-nums; }
 .overview-page { background: transparent; }
 .current-activity { position: relative; width: 100%; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 3px 18px; padding: 13px 16px 13px 18px; margin-bottom: 9px; overflow: hidden; text-align: left; }
 .current-activity::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 3px; background: var(--color-accent); }
-.current-activity:hover { border-color: var(--color-border-strong); background: var(--color-surface-raised); }
+.current-activity:hover:not(:disabled) { border-color: var(--color-border-strong); background: var(--color-surface-raised); }
+.current-activity:disabled { cursor: default; opacity: .85; }
 .current-label { color: var(--color-success); font-size: var(--font-size-xs); font-weight: 650; }
-.current-project { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 16px; letter-spacing: -.01em; }
-.current-description { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-text-secondary); }
-.current-description.derived::before, .recent-description.derived::before { content: "自动摘要"; display: inline-block; margin-right: 6px; padding: 0 5px; border: 1px solid var(--color-border); border-radius: 9px; color: var(--color-text-secondary); font-size: var(--font-size-xs); }
+.current-resource { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 16px; letter-spacing: -.01em; }
+.current-context { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-text-secondary); }
+.recent-description.derived::before { content: "自动摘要"; display: inline-block; margin-right: 6px; padding: 0 5px; border: 1px solid var(--color-border); border-radius: 9px; color: var(--color-text-secondary); font-size: var(--font-size-xs); }
 .current-duration { grid-column: 2; grid-row: 1 / span 3; align-self: center; font-size: var(--font-size-2xl); line-height: 1; }
 .overview-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin-bottom: 9px; border-top: 1px solid var(--color-border); border-bottom: 1px solid var(--color-border); }
 .overview-summary > div { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 7px 12px; border-right: 1px solid var(--color-border); }
@@ -157,7 +158,7 @@ th.number, td.number { text-align: right; font-variant-numeric: tabular-nums; }
 .overview-section { min-width: 0; height: fit-content; align-self: start; padding: 11px 13px; }
 .overview-section h2 { margin: 0 0 4px; font-size: var(--font-size-lg); }
 .data-list { display: grid; }
-.recent-row { width: 100%; display: grid; grid-template-columns: 45px minmax(0, 1fr) auto; gap: 9px; align-items: center; min-height: 46px; padding: 6px 0; border: 0; border-top: 1px solid var(--color-border); border-radius: 0; background: transparent; text-align: left; }
+.recent-row { width: 100%; display: grid; grid-template-columns: 45px minmax(0, 1fr) auto auto; gap: 9px; align-items: center; min-height: 46px; padding: 6px 0; border: 0; border-top: 1px solid var(--color-border); border-radius: 0; background: transparent; text-align: left; }
 .recent-row:first-child { border-top: 0; }
 .recent-row:hover { background: transparent; }
 .recent-row:hover .recent-project { color: var(--color-accent); }
@@ -165,6 +166,9 @@ th.number, td.number { text-align: right; font-variant-numeric: tabular-nums; }
 .recent-project, .recent-description { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .recent-project { font-weight: 650; }
 .recent-description { color: var(--color-text-secondary); font-size: var(--font-size-xs); }
+.recent-status { font-size: var(--font-size-xs); padding: 0 6px; border-radius: 9px; border: 1px solid var(--color-border); white-space: nowrap; }
+.recent-status.badge-live { color: var(--color-success); border-color: var(--color-success); }
+.recent-status.badge-attention { color: var(--color-danger); border-color: var(--color-danger); }
 .recent-duration { align-self: center; font-size: var(--font-size-xs); }
 .attention-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding: 7px 0; border-top: 1px solid var(--color-border); }
 .attention-item:first-child { border-top: 0; }

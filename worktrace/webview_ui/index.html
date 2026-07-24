@@ -70,14 +70,14 @@
             </header>
             <section id="page-overview" class="page active overview-page">
                 <header class="page-header">
-                    <div><h1>今日概览</h1><p>当前活动、待整理和最近活动</p></div>
+                    <div><h1>今日概览</h1><p>当前活动、最近记录和待整理</p></div>
                     <div class="page-total"><span>今日总时长</span><strong id="kpi-total" data-testid="overview-total">00:00:00</strong></div>
                 </header>
                 <div id="overview-error" class="inline-alert error" role="alert" hidden>加载失败，请稍后重试。</div>
-                <button id="current-activity" type="button" class="surface current-activity" data-testid="overview-current">
+                <button id="current-activity" type="button" class="surface current-activity" data-testid="overview-current" disabled>
                     <span class="current-label">当前活动</span>
-                    <strong class="current-project">当前活动：无</strong>
-                    <span class="current-description">WorkTrace 开始记录后会在这里显示。</span>
+                    <strong class="current-resource">当前没有活动</strong>
+                    <span class="current-context">开始记录后，当前窗口、文件或网页会显示在这里。</span>
                     <strong class="current-duration numeric" aria-live="off">00:00:00</strong>
                 </button>
                 <section class="overview-summary" aria-label="今日记录摘要">
@@ -87,8 +87,8 @@
                 </section>
                 <div class="overview-grid">
                     <section class="surface overview-section recent-section">
-                        <h2>最近活动</h2>
-                        <div id="recent-list" class="data-list"><div class="empty-state"><strong>暂无最近活动</strong><span>已结束的时间段会显示在这里。</span></div></div>
+                        <h2>最近记录</h2>
+                        <div id="recent-list" class="data-list"><div class="empty-state"><strong>暂无最近记录</strong><span>形成可报告的时间段后会显示在这里。</span></div></div>
                     </section>
                     <section class="surface overview-section attention-section">
                         <div class="section-heading"><h2>待整理</h2><span class="badge">今日</span></div>

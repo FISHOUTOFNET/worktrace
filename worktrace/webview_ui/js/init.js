@@ -83,7 +83,7 @@
         if (!value || typeof value !== "object") return null;
         var copy = Object.assign({}, value);
         [
-            "liveClock", "currentActivity", "recentFirstRow", "currentProject",
+            "liveClock", "currentActivity", "currentProject",
             "collector", "workers", "generations", "revisions"
         ].forEach(function (field) {
             if (copy[field] && typeof copy[field] === "object") {
@@ -149,9 +149,6 @@
             pageRevision: String(revisions.page || ""),
             sampleId: String(snapshot.id || ""),
             currentActivity: objectValue(envelope.current_activity),
-            recentFirstRow: envelope.recent_first_row && typeof envelope.recent_first_row === "object"
-                ? envelope.recent_first_row
-                : null,
             currentProject: envelope.current_project && typeof envelope.current_project === "object"
                 ? envelope.current_project
                 : null,

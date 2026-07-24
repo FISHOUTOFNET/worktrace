@@ -35,11 +35,6 @@ function runtimePayload(overrides = {}) {
       persisted_activity_id: 41,
       is_in_progress: true,
     },
-    recent_first_row: {
-      activity_id: 41,
-      persisted_activity_id: 41,
-      is_in_progress: true,
-    },
     clock: liveClock(),
     current_project: { id: 7, name: "Matter" },
     collector: { status: "running", paused: false, display: "记录中" },

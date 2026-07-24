@@ -113,8 +113,10 @@ new identity. Invalid clocks stop ticking, retain durable seconds and request
 bounded reconciliation.
 
 ## Pages and writes
-- Overview: today total, current activity, at most three disjoint attention
-  items, and deduplicated recent sessions; editing hands off to Timeline.
+- Overview: today total, current atomic activity snapshot, recent records
+  (merged report sessions including in-progress and needs-attention items),
+  and an attention subset of recent records (at most three); editing hands
+  off to Timeline. Attention is a subset of recent, not a disjoint partition.
 - Timeline: reverse chronological sessions, authoritative project filtering,
   debounced autosave, always-visible activity details, direct two-step deletion,
   and a compact-window focus-trapped Drawer.

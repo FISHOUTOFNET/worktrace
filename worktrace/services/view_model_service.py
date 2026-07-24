@@ -326,7 +326,16 @@ def get_overview_view_model(today: str | None = None) -> dict[str, Any]:
         model,
         row_kind=ROW_KIND_RECENT_PROJECT_SESSION_ROW,
     )
-    recent_rows.sort(key=lambda row: str(row.get("start_time") or ""), reverse=True)
+    # Stable business order: in-progress report sessions first, then by
+    # start time descending. A pure string sort would let a closed session
+    # leapfrog an in-progress one when start times tie, so in-progress is
+    # promoted explicitly via a second stable sort.
+    recent_rows.sort(
+        key=lambda row: str(row.get("start_time") or ""), reverse=True
+    )
+    recent_rows.sort(
+        key=lambda row: bool(row.get("is_in_progress")), reverse=True
+    )
 
     total_rows = [
         row for row in recent_rows if row.get("contributes_to_totals") is not False
@@ -356,17 +365,6 @@ def get_overview_view_model(today: str | None = None) -> dict[str, Any]:
     attention_candidates = [
         row for row in recent_rows if bool(row.get("needs_attention"))
     ]
-    current_key = str((current_session or {}).get("projection_instance_key") or "")
-    attention_keys = {
-        str(row.get("projection_instance_key") or "")
-        for row in attention_candidates
-    }
-    recent_visible = [
-        row
-        for row in recent_rows
-        if str(row.get("projection_instance_key") or "") != current_key
-        and str(row.get("projection_instance_key") or "") not in attention_keys
-    ]
     return {
         "ok": True,
         "date": scoped_today,
@@ -389,7 +387,7 @@ def get_overview_view_model(today: str | None = None) -> dict[str, Any]:
         "current_session": current_session,
         "attention": attention_candidates[:3],
         "attention_remaining_count": max(0, len(attention_candidates) - 3),
-        "recent": recent_visible[:_RECENT_LIMIT],
+        "recent": recent_rows[:_RECENT_LIMIT],
         "today_total_seconds": today_total_seconds,
         "classified_seconds": classified_seconds,
         "uncategorized_seconds": uncategorized_seconds,

@@ -169,9 +169,16 @@ viewport emulation.
 
 ### J. Basic UI Usability
 
-- [ ] Overview shows total time, classified time, unclassified time, current activity, and recent projects.
+- [ ] Overview shows today summary bar (total/classified/unclassified/project count), current activity, recent records, and attention items.
+- [ ] Current activity shows the real resource (file/webpage/window/app name), not the project name.
+- [ ] Current activity and recent record durations are allowed to differ (current_live vs aggregate_live).
+- [ ] Attention items also appear in recent records (subset relationship, not disjoint).
+- [ ] In-progress report session appears as the first recent record.
+- [ ] Excluded state does not leak real window titles, paths, files, webpages or projects.
+- [ ] Paused and error states do not retain stale activity content.
+- [ ] Clicking current activity, a recent record, or an attention item locates the correct Timeline session.
 - [ ] Clicking unclassified activity opens Time Details with the expected filter.
-- [ ] Clicking a recent project locates the corresponding session.
+- [ ] Clicking a recent record locates the corresponding session.
 - [ ] Time Details column widths, selection, copy, notes, and project correction work.
 - [ ] Statistics/Export page statistics are reasonable.
 - [ ] Settings/Privacy can show the privacy notice, toggle clipboard recording, and clear data.

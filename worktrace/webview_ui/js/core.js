@@ -514,25 +514,21 @@
         ].forEach(function (name) { element.removeAttribute(name); });
     };
 
+    function currentContextLine(current) {
+        var appName = String(current.app_name || "").trim();
+        var resourceName = String(current.resource_name || "").trim();
+        var projectName = String(current.project_name || "").trim();
+        var isUncategorized = current.is_uncategorized !== false;
+        var projectPart = (isUncategorized || !projectName) ? "未归类" : "项目：" + projectName;
+        if (appName && appName !== resourceName) {
+            return appName + " · " + projectPart;
+        }
+        return projectPart;
+    }
+
     App.renderCurrentActivityElement = function (element, current, prefix) {
         if (!element) return;
         current = current || {};
-        var structured = element.classList
-            && element.classList.contains("current-activity")
-            && element.querySelector(".current-duration");
-        if (!current.active) {
-            var inactiveTarget = structured ? element.querySelector(".current-duration") : element;
-            App.clearLiveClockTarget(inactiveTarget);
-            if (structured) {
-                element.querySelector(".current-project").textContent = "当前没有进行中的活动";
-                element.querySelector(".current-description").textContent = "WorkTrace 开始记录后会在这里显示。";
-                inactiveTarget.textContent = "00:00:00";
-                element.disabled = true;
-            } else {
-                element.textContent = "当前活动：无";
-            }
-            return;
-        }
         var clock = App.getActiveLiveClock ? App.getActiveLiveClock() : null;
         var accepted = App.validateLiveClock(clock);
         var canTick = !!(accepted
@@ -542,45 +538,91 @@
             ? App.computeClockDurationNow(accepted, Date.now())
             : (parseInt(current.elapsed_seconds, 10) || 0);
         var continuity = App.currentActivityContinuityKey(current, accepted, prefix);
-        var parts = String(current.display || "").split("｜");
-        if (structured) {
-            var durationTarget = element.querySelector(".current-duration");
-            var session = App.lastOverviewSnapshot && App.lastOverviewSnapshot.current_session;
-            var project = session && session.project_name
-                ? App.formatProjectLabel(session.project_name, session.project_description)
-                : (parts[0] || "当前活动");
-            var description = session && session.display_description
-                ? session.display_description
-                : (parts[1] || "暂无描述");
-            var descriptionSource = session && session.description_source;
-            element.querySelector(".current-project").textContent = project;
-            var descriptionTarget = element.querySelector(".current-description");
-            descriptionTarget.textContent = description;
-            descriptionTarget.classList.toggle("derived", descriptionSource === "derived");
-            element.disabled = false;
-            if (canTick) App.setLiveClockTarget(
-                durationTarget,
-                accepted,
-                continuity,
-                (prefix || "current") + "-current"
-            );
-            else App.clearLiveClockTarget(durationTarget);
-            App.renderDurationProjected(durationTarget, seconds || 0, continuity);
+        var structured = element.classList
+            && element.classList.contains("current-activity")
+            && element.querySelector(".current-duration");
+        if (!structured) {
+            // Unstructured path (Timeline current-activity summary): the
+            // combined display string remains the supported transport for
+            // this non-Overview surface and does not parse Overview state.
+            var parts = String(current.display || "").split("｜");
+            if (!current.active) {
+                element.textContent = "当前活动：无";
+                return;
+            }
+            if (parts.length < 3) {
+                element.textContent = "当前活动：" + (current.display || App.displayStatusText(current));
+                return;
+            }
+            var tlAttributes = canTick
+                ? App.liveClockDataAttributes(accepted, continuity, (prefix || "current") + "-current")
+                : "";
+            var tlHtml = "当前活动：" + escapeHtml(parts[0]) + "｜" + escapeHtml(parts[1]) + "｜"
+                + '<span class="current-activity-duration"' + tlAttributes
+                + ' data-duration-seconds="' + String(seconds || 0) + '">'
+                + escapeHtml(formatDuration(seconds || 0)) + '</span>';
+            for (var index = 3; index < parts.length; index++) tlHtml += "｜" + escapeHtml(parts[index]);
+            element.innerHTML = tlHtml;
             return;
         }
-        if (parts.length < 3) {
-            element.textContent = "当前活动：" + (current.display || App.displayStatusText(current));
+
+        // Structured Overview card: the sole source of truth is the structured
+        // current-activity DTO. The combined display string and current_session
+        // are never parsed for card content.
+        var durationTarget = element.querySelector(".current-duration");
+        var resourceTarget = element.querySelector(".current-resource");
+        var contextTarget = element.querySelector(".current-context");
+        var status = String(current.status || "");
+        var active = current.active !== false;
+
+        function renderInactiveState(title, hint) {
+            App.clearLiveClockTarget(durationTarget);
+            if (resourceTarget) resourceTarget.textContent = title;
+            if (contextTarget) {
+                contextTarget.textContent = hint;
+                contextTarget.classList.remove("derived");
+            }
+            durationTarget.textContent = "00:00:00";
+        }
+
+        if (!active) {
+            renderInactiveState("当前没有活动", "开始记录后，当前窗口、文件或网页会显示在这里。");
             return;
         }
-        var attributes = canTick
-            ? App.liveClockDataAttributes(accepted, continuity, (prefix || "current") + "-current")
-            : "";
-        var html = "当前活动：" + escapeHtml(parts[0]) + "｜" + escapeHtml(parts[1]) + "｜"
-            + '<span class="current-activity-duration"' + attributes
-            + ' data-duration-seconds="' + String(seconds || 0) + '">'
-            + escapeHtml(formatDuration(seconds || 0)) + '</span>';
-        for (var index = 3; index < parts.length; index++) html += "｜" + escapeHtml(parts[index]);
-        element.innerHTML = html;
+        if (status === "paused") {
+            renderInactiveState("已暂停", "恢复记录后将显示当前活动。");
+            return;
+        }
+        if (status === "idle") {
+            renderInactiveState("空闲中", "检测到操作后将继续记录。");
+            return;
+        }
+        if (status === "excluded") {
+            renderInactiveState("当前活动已排除", "该活动内容不会显示。");
+            return;
+        }
+        if (status === "error") {
+            renderInactiveState("暂时无法识别当前活动", "请检查记录服务状态。");
+            return;
+        }
+
+        // Normal active state: resource name is the main title, app + project
+        // attribution is secondary context. Project name never overrides the
+        // resource, and derived/user descriptions never appear here.
+        var resourceName = String(current.resource_name || "").trim() || "当前活动";
+        if (resourceTarget) resourceTarget.textContent = resourceName;
+        if (contextTarget) {
+            contextTarget.textContent = currentContextLine(current);
+            contextTarget.classList.remove("derived");
+        }
+        if (canTick) App.setLiveClockTarget(
+            durationTarget,
+            accepted,
+            continuity,
+            (prefix || "current") + "-current"
+        );
+        else App.clearLiveClockTarget(durationTarget);
+        App.renderDurationProjected(durationTarget, seconds || 0, continuity);
     };
 
     App.renderLiveDurationTarget = function (target, clock, nowMs) {

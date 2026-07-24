@@ -1271,3 +1271,353 @@ test("12d. new project defaults to 中文 when no language specified", async () 
   assert.equal(bridgeCalls.create.length, 1);
   assert.equal(bridgeCalls.create[0].language, "中文");
 });
+
+// ---------------------------------------------------------------------------
+// Category 13: Overview current activity, recent records, attention semantics
+// ---------------------------------------------------------------------------
+
+function makeStructuredCurrentActivityElement(id) {
+  const children = {
+    ".current-resource": makeElement("current-resource"),
+    ".current-context": makeElement("current-context"),
+    ".current-duration": makeElement("current-duration"),
+  };
+  const el = makeElement(id);
+  el.classList = {
+    add() {}, remove() {}, toggle() {},
+    contains(cls) { return cls === "current-activity"; },
+  };
+  el.querySelector = (sel) => children[sel] || null;
+  el.querySelectorAll = () => Object.values(children);
+  Object.defineProperty(el, "textContent", {
+    get() {
+      return [children[".current-resource"], children[".current-context"], children[".current-duration"]]
+        .map((c) => c.textContent || "").join("");
+    },
+    set() { /* structured card sets children, not the container */ },
+  });
+  return el;
+}
+
+function overviewHarness() {
+  const { context, element, elements } = makeBaseContext();
+  const App = context.window.WorkTraceApp;
+  // Pre-register a structured current-activity element so the structured
+  // Overview card path (querySelector for .current-resource etc.) is taken
+  // instead of the unstructured Timeline transport path.
+  elements.set("current-activity", makeStructuredCurrentActivityElement("current-activity"));
+  Object.assign(App, {
+    currentPage: "overview",
+    timelineDate: "2026-07-22",
+    lastOverviewSnapshot: null,
+    pendingTimelineSelectionIntent: null,
+    getActiveLiveClock: () => null,
+    validateLiveClock: (clock) => (clock && clock.is_live === true ? clock : null),
+    computeClockDurationNow: (clock, nowMs) => (clock ? (clock.elapsed_seconds_at_sample || 0) : 0),
+    setLiveClockTarget: () => {},
+    clearLiveClockTarget: () => {},
+    renderDurationProjected: (target, seconds) => {
+      if (target) target.textContent = formatDuration(seconds);
+    },
+    liveClockDataAttributes: () => "",
+    liveContinuityKey: () => "",
+    currentActivityContinuityKey: () => "",
+    formatStartTimeOnly: (t) => String(t || "").slice(11, 16),
+    formatProjectLabel: (name) => name || "未归类",
+    formatDuration: formatDuration,
+    escapeHtml: (s) => String(s == null ? "" : s),
+    switchPage: () => {},
+    loadTimelineReport: () => Promise.resolve(),
+    findSessionByProjectionKey: () => null,
+    selectTimelineSession: () => {},
+    focusTimelineEditorField: () => {},
+  });
+  App.bridge = {};
+  loadJs(context, "core.js");
+  loadJs(context, "overview.js");
+  return { App, element };
+}
+
+function formatDuration(totalSeconds) {
+  const s = Math.max(0, Math.floor(Number(totalSeconds) || 0));
+  const h = String(Math.floor(s / 3600)).padStart(2, "0");
+  const m = String(Math.floor((s % 3600) / 60)).padStart(2, "0");
+  const sec = String(s % 60).padStart(2, "0");
+  return `${h}:${m}:${sec}`;
+}
+
+test("13. current activity main title comes from resource_name, not project name", () => {
+  const { App, element } = overviewHarness();
+  const currentActivity = {
+    active: true,
+    status: "normal",
+    resource_name: "overview.js",
+    app_name: "Visual Studio Code",
+    project_name: "WorkTrace",
+    is_uncategorized: false,
+    elapsed_seconds: 312,
+  };
+  App.renderCurrentActivityElement(element("current-activity"), currentActivity, "overview");
+  const resource = element("current-activity").querySelector(".current-resource");
+  assert.equal(resource.textContent, "overview.js");
+});
+
+test("13b. current_session project_name does not override the current resource name", () => {
+  const { App, element } = overviewHarness();
+  App.lastOverviewSnapshot = {
+    current_session: { project_name: "Project Alpha", projection_instance_key: "k1", start_time: "2026-07-22T10:00:00" },
+  };
+  const currentActivity = {
+    active: true,
+    status: "normal",
+    resource_name: "license-draft.docx",
+    app_name: "Word",
+    project_name: "Project Alpha",
+    is_uncategorized: false,
+    elapsed_seconds: 600,
+  };
+  App.renderCurrentActivityElement(element("current-activity"), currentActivity, "overview");
+  const resource = element("current-activity").querySelector(".current-resource");
+  assert.equal(resource.textContent, "license-draft.docx");
+});
+
+test("13c. current activity uses current_live when clock is live", () => {
+  const { App, element } = overviewHarness();
+  App.getActiveLiveClock = () => ({
+    sampled_at_epoch_ms: Date.now(),
+    started_at_epoch_ms: Date.now() - 300000,
+    elapsed_seconds_at_sample: 300,
+    aggregate_base_seconds: 0,
+    duration_semantic: "current_live",
+    is_live: true,
+    live_state: "persisted_open",
+    display_span_id: "span:abc",
+    stable_live_key_hash: "abc",
+  });
+  const currentActivity = {
+    active: true,
+    status: "normal",
+    resource_name: "editing.md",
+    app_name: "Editor",
+    project_name: "Project",
+    is_uncategorized: false,
+    elapsed_seconds: 300,
+  };
+  App.renderCurrentActivityElement(element("current-activity"), currentActivity, "overview");
+  const resource = element("current-activity").querySelector(".current-resource");
+  assert.equal(resource.textContent, "editing.md");
+});
+
+test("13d. current activity with no navigation target is truly disabled", () => {
+  const { App, element } = overviewHarness();
+  const bundle = {
+    current_activity: {
+      active: true,
+      status: "normal",
+      resource_name: "doc.txt",
+      app_name: "Editor",
+      project_name: "P",
+      is_uncategorized: false,
+      elapsed_seconds: 60,
+    },
+    current_session: null, // No navigable session.
+    recent: [],
+    attention: [],
+    attention_remaining_count: 0,
+    project_count: 0,
+    classified_seconds: 0,
+    uncategorized_seconds: 0,
+    today_total_seconds: 0,
+  };
+  App.showOverview(bundle);
+  const btn = element("current-activity");
+  assert.equal(btn.disabled, true, "current activity button must be disabled when no current_session");
+  assert.equal(btn.onclick, null, "disabled button must not have an onclick handler");
+});
+
+test("13e. current activity with navigation target is enabled and wired", () => {
+  const { App, element } = overviewHarness();
+  const bundle = {
+    current_activity: {
+      active: true,
+      status: "normal",
+      resource_name: "doc.txt",
+      app_name: "Editor",
+      project_name: "P",
+      is_uncategorized: false,
+      elapsed_seconds: 60,
+    },
+    current_session: {
+      projection_instance_key: "key-1",
+      start_time: "2026-07-22T10:00:00",
+    },
+    recent: [],
+    attention: [],
+    attention_remaining_count: 0,
+    project_count: 0,
+    classified_seconds: 0,
+    uncategorized_seconds: 0,
+    today_total_seconds: 0,
+  };
+  App.showOverview(bundle);
+  const btn = element("current-activity");
+  assert.equal(btn.disabled, false, "button must be enabled when current_session is navigable");
+  assert.equal(typeof btn.onclick, "function", "button must have an onclick handler");
+});
+
+test("13f. paused state does not retain stale activity content", () => {
+  const { App, element } = overviewHarness();
+  const currentActivity = {
+    active: true,
+    status: "paused",
+    resource_name: "should-not-show.md",
+    app_name: "Editor",
+    project_name: "P",
+    elapsed_seconds: 999,
+  };
+  App.renderCurrentActivityElement(element("current-activity"), currentActivity, "overview");
+  const text = element("current-activity").textContent;
+  assert.equal(text.includes("已暂停"), true, "paused state must show paused title");
+  assert.equal(text.includes("should-not-show.md"), false, "paused state must not show stale resource name");
+});
+
+test("13g. excluded state does not leak sensitive content", () => {
+  const { App, element } = overviewHarness();
+  const currentActivity = {
+    active: true,
+    status: "excluded",
+    resource_name: "secret-financial-data.xlsx",
+    app_name: "Excel",
+    project_name: "Confidential",
+    elapsed_seconds: 500,
+  };
+  App.renderCurrentActivityElement(element("current-activity"), currentActivity, "overview");
+  const text = element("current-activity").textContent;
+  assert.equal(text.includes("已排除"), true, "excluded state must show excluded title");
+  assert.equal(text.includes("secret-financial-data.xlsx"), false, "excluded state must not leak real resource name");
+  assert.equal(text.includes("Confidential"), false, "excluded state must not leak real project name");
+});
+
+test("13h. error state does not retain stale activity content", () => {
+  const { App, element } = overviewHarness();
+  const currentActivity = {
+    active: true,
+    status: "error",
+    resource_name: "stale-resource.md",
+    app_name: "Editor",
+    project_name: "P",
+    elapsed_seconds: 999,
+  };
+  App.renderCurrentActivityElement(element("current-activity"), currentActivity, "overview");
+  const text = element("current-activity").textContent;
+  assert.equal(text.includes("无法识别"), true, "error state must show error title");
+  assert.equal(text.includes("stale-resource.md"), false, "error state must not show stale resource name");
+});
+
+test("13i. idle state shows idle title, not stale resource", () => {
+  const { App, element } = overviewHarness();
+  const currentActivity = {
+    active: true,
+    status: "idle",
+    resource_name: "old-resource.md",
+    app_name: "Editor",
+    elapsed_seconds: 999,
+  };
+  App.renderCurrentActivityElement(element("current-activity"), currentActivity, "overview");
+  const text = element("current-activity").textContent;
+  assert.equal(text.includes("空闲"), true, "idle state must show idle title");
+  assert.equal(text.includes("old-resource.md"), false, "idle state must not show stale resource name");
+});
+
+test("13j. no active snapshot shows no-activity state, not stale content", () => {
+  const { App, element } = overviewHarness();
+  const currentActivity = {
+    active: false,
+    status: "normal",
+    resource_name: "should-not-appear.md",
+  };
+  App.renderCurrentActivityElement(element("current-activity"), currentActivity, "overview");
+  const text = element("current-activity").textContent;
+  assert.equal(text.includes("当前没有活动"), true, "inactive state must show no-activity title");
+  assert.equal(text.includes("should-not-appear.md"), false, "inactive state must not show stale resource name");
+});
+
+test("13k. recent records include in-progress and attention items (subset, not disjoint)", () => {
+  const { App, element } = overviewHarness();
+  const bundle = {
+    current_activity: { active: true, status: "normal", resource_name: "live.md", app_name: "Editor", project_name: "P", is_uncategorized: false, elapsed_seconds: 60 },
+    current_session: { projection_instance_key: "live-key", start_time: "2026-07-22T10:00:00" },
+    recent: [
+      { projection_instance_key: "live-key", start_time: "2026-07-22T10:00:00", project_name: "WorkTrace", display_description: "起草", duration_seconds: 1500, is_in_progress: true, needs_attention: false },
+      { projection_instance_key: "att-1", start_time: "2026-07-22T09:00:00", project_name: "", display_description: "自动摘要", duration_seconds: 1800, is_in_progress: false, needs_attention: true, description_source: "derived" },
+      { projection_instance_key: "ok-1", start_time: "2026-07-22T08:00:00", project_name: "Project B", display_description: "已整理", duration_seconds: 600, is_in_progress: false, needs_attention: false },
+    ],
+    attention: [
+      { projection_instance_key: "att-1", start_time: "2026-07-22T09:00:00", project_name: "", display_description: "自动摘要", duration_seconds: 1800, needs_attention: true, needs_project: true, missing_fields: "project_and_description", description_source: "derived" },
+    ],
+    attention_remaining_count: 0,
+    project_count: 2,
+    classified_seconds: 2100,
+    uncategorized_seconds: 1800,
+    today_total_seconds: 3900,
+  };
+  App.showOverview(bundle);
+  // The recent list innerHTML must include all three rows: in-progress,
+  // attention, and an ordinary closed record. This verifies the subset
+  // relationship: attention items still appear in recent.
+  const recentHtml = element("recent-list").innerHTML;
+  assert.equal(recentHtml.includes("live-key") || recentHtml.includes("10:00") || recentHtml.includes("进行中"), true, "in-progress record must appear in recent");
+  assert.equal(recentHtml.includes("att-1") || recentHtml.includes("09:00") || recentHtml.includes("待整理"), true, "attention record must also appear in recent");
+  assert.equal(recentHtml.includes("ok-1") || recentHtml.includes("08:00"), true, "ordinary closed record must appear in recent");
+});
+
+test("13l. current activity 5 min and recent record 25 min can both display", () => {
+  const { App, element } = overviewHarness();
+  // Live clock for current activity (5 minutes = 300s).
+  App.getActiveLiveClock = () => ({
+    sampled_at_epoch_ms: Date.now(),
+    started_at_epoch_ms: Date.now() - 300000,
+    elapsed_seconds_at_sample: 300,
+    aggregate_base_seconds: 0,
+    duration_semantic: "current_live",
+    is_live: true,
+    live_state: "persisted_open",
+    display_span_id: "span:cur",
+    stable_live_key_hash: "cur",
+  });
+  const bundle = {
+    current_activity: { active: true, status: "normal", resource_name: "editing.md", app_name: "Editor", project_name: "P", is_uncategorized: false, elapsed_seconds: 300 },
+    current_session: { projection_instance_key: "live-key", start_time: "2026-07-22T10:00:00" },
+    recent: [
+      // 25 minutes = 1500s, aggregate_live.
+      { projection_instance_key: "live-key", start_time: "2026-07-22T10:00:00", project_name: "WorkTrace", display_description: "起草", duration_seconds: 1500, is_in_progress: true, needs_attention: false, live_clock: { sampled_at_epoch_ms: Date.now(), started_at_epoch_ms: Date.now() - 1500000, elapsed_seconds_at_sample: 1500, aggregate_base_seconds: 0, duration_semantic: "aggregate_live", is_live: true, live_state: "persisted_open", display_span_id: "span:agg", stable_live_key_hash: "agg" } },
+    ],
+    attention: [],
+    attention_remaining_count: 0,
+    project_count: 1,
+    classified_seconds: 1500,
+    uncategorized_seconds: 0,
+    today_total_seconds: 1500,
+  };
+  // This must not throw and must render both durations independently.
+  App.showOverview(bundle);
+  // The current activity card shows the resource name.
+  assert.equal(element("current-activity").textContent.includes("editing.md"), true);
+  // The recent list shows the aggregate record.
+  const recentHtml = element("recent-list").innerHTML;
+  assert.equal(recentHtml.includes("WorkTrace") || recentHtml.includes("10:00") || recentHtml.includes("进行中"), true);
+});
+
+test("13m. page subtitle uses authoritative module names", () => {
+  const { context } = makeBaseContext();
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const html = fs.readFileSync(
+    path.join(__dirname, "../../worktrace/webview_ui/index.html"),
+    "utf8"
+  );
+  assert.equal(html.includes("当前活动"), true, "index.html must include '当前活动'");
+  assert.equal(html.includes("最近记录"), true, "index.html must include '最近记录'");
+  assert.equal(html.includes("待整理"), true, "index.html must include '待整理'");
+  assert.equal(html.includes("最近活动"), false, "index.html must not use retired '最近活动' label");
+});

@@ -81,11 +81,17 @@
         var list = document.getElementById("recent-list");
         items = Array.isArray(items) ? items : [];
         if (!items.length) {
-            list.innerHTML = '<div class="empty-state"><strong>暂无最近活动</strong>'
-                + '<span>已结束且无需整理的时间段会显示在这里。</span></div>';
+            list.innerHTML = '<div class="empty-state"><strong>暂无最近记录</strong>'
+                + '<span>形成可报告的时间段后会显示在这里。</span></div>';
             return;
         }
         list.innerHTML = items.map(function (item, index) {
+            var statusBadge = "";
+            if (item.is_in_progress) {
+                statusBadge = '<span class="recent-status badge-live">进行中</span>';
+            } else if (item.needs_attention) {
+                statusBadge = '<span class="recent-status badge-attention">待整理</span>';
+            }
             return '<button type="button" class="recent-row" data-recent-index="' + index + '">'
                 + '<span class="numeric">' + App.escapeHtml(App.formatStartTimeOnly(item.start_time)) + '</span>'
                 + '<span class="recent-main"><span class="recent-project" title="'
@@ -93,6 +99,7 @@
                 + '">' + App.escapeHtml(item.project_name || "未归类") + '</span>'
                 + '<span class="' + descriptionClass(item, "recent-description") + '">'
                 + App.escapeHtml(item.display_description || "暂无描述") + '</span></span>'
+                + statusBadge
                 + durationMarkup(item, "overview-recent") + '</button>';
         }).join("");
         bindIntentButtons(list, items, "data-recent-index");
@@ -161,9 +168,17 @@
             bundle.current_activity || {},
             "overview"
         );
+        // The current-activity button is clickable only when a navigable
+        // current_session with a stable projection identity exists. Otherwise
+        // it must be truly disabled, not merely lacking an onclick handler.
         var currentButton = document.getElementById("current-activity");
-        currentButton.onclick = bundle.current_session
-            ? function () { timelineIntent(bundle.current_session, ""); }
+        var currentSession = bundle.current_session;
+        var canNavigate = !!(currentSession
+            && currentSession.projection_instance_key
+            && currentSession.start_time);
+        currentButton.disabled = !canNavigate;
+        currentButton.onclick = canNavigate
+            ? function () { timelineIntent(currentSession, ""); }
             : null;
         renderAttention(bundle.attention, bundle.attention_remaining_count);
         renderRecent(bundle.recent);
@@ -171,6 +186,6 @@
     App.showOverview = showOverview;
 
     App.showRecent = function (payload) {
-        renderRecent((payload && (payload.recent || payload.activities)) || []);
+        renderRecent((payload && payload.recent) || []);
     };
 })();
