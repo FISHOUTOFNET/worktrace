@@ -1465,6 +1465,120 @@ test("13e. current activity with navigation target is enabled and wired", () => 
   assert.equal(typeof btn.onclick, "function", "button must have an onclick handler");
 });
 
+test("13e2. paused state disables current button even with a current_session", () => {
+  const { App, element } = overviewHarness();
+  const bundle = {
+    current_activity: {
+      active: true,
+      status: "paused",
+      resource_name: "stale.md",
+      app_name: "Editor",
+      project_name: "P",
+      elapsed_seconds: 999,
+    },
+    current_session: {
+      projection_instance_key: "key-1",
+      start_time: "2026-07-22T10:00:00",
+    },
+    recent: [],
+    attention: [],
+    attention_remaining_count: 0,
+    project_count: 0,
+    classified_seconds: 0,
+    uncategorized_seconds: 0,
+    today_total_seconds: 0,
+  };
+  App.showOverview(bundle);
+  const btn = element("current-activity");
+  assert.equal(btn.disabled, true, "button must be disabled when status is paused");
+  assert.equal(btn.onclick, null, "paused button must not have an onclick handler");
+});
+
+test("13e3. idle state disables current button even with a current_session", () => {
+  const { App, element } = overviewHarness();
+  const bundle = {
+    current_activity: {
+      active: true,
+      status: "idle",
+      resource_name: "old.md",
+      app_name: "Editor",
+      elapsed_seconds: 999,
+    },
+    current_session: {
+      projection_instance_key: "key-1",
+      start_time: "2026-07-22T10:00:00",
+    },
+    recent: [],
+    attention: [],
+    attention_remaining_count: 0,
+    project_count: 0,
+    classified_seconds: 0,
+    uncategorized_seconds: 0,
+    today_total_seconds: 0,
+  };
+  App.showOverview(bundle);
+  const btn = element("current-activity");
+  assert.equal(btn.disabled, true, "button must be disabled when status is idle");
+  assert.equal(btn.onclick, null, "idle button must not have an onclick handler");
+});
+
+test("13e4. excluded state disables current button even with a current_session", () => {
+  const { App, element } = overviewHarness();
+  const bundle = {
+    current_activity: {
+      active: true,
+      status: "excluded",
+      resource_name: "secret.xlsx",
+      app_name: "Excel",
+      project_name: "Confidential",
+      elapsed_seconds: 500,
+    },
+    current_session: {
+      projection_instance_key: "key-1",
+      start_time: "2026-07-22T10:00:00",
+    },
+    recent: [],
+    attention: [],
+    attention_remaining_count: 0,
+    project_count: 0,
+    classified_seconds: 0,
+    uncategorized_seconds: 0,
+    today_total_seconds: 0,
+  };
+  App.showOverview(bundle);
+  const btn = element("current-activity");
+  assert.equal(btn.disabled, true, "button must be disabled when status is excluded");
+  assert.equal(btn.onclick, null, "excluded button must not have an onclick handler");
+});
+
+test("13e5. error state disables current button even with a current_session", () => {
+  const { App, element } = overviewHarness();
+  const bundle = {
+    current_activity: {
+      active: true,
+      status: "error",
+      resource_name: "stale.md",
+      app_name: "Editor",
+      elapsed_seconds: 999,
+    },
+    current_session: {
+      projection_instance_key: "key-1",
+      start_time: "2026-07-22T10:00:00",
+    },
+    recent: [],
+    attention: [],
+    attention_remaining_count: 0,
+    project_count: 0,
+    classified_seconds: 0,
+    uncategorized_seconds: 0,
+    today_total_seconds: 0,
+  };
+  App.showOverview(bundle);
+  const btn = element("current-activity");
+  assert.equal(btn.disabled, true, "button must be disabled when status is error");
+  assert.equal(btn.onclick, null, "error button must not have an onclick handler");
+});
+
 test("13f. paused state does not retain stale activity content", () => {
   const { App, element } = overviewHarness();
   const currentActivity = {
@@ -1562,21 +1676,34 @@ test("13k. recent records include in-progress and attention items (subset, not d
     today_total_seconds: 3900,
   };
   App.showOverview(bundle);
-  // The recent list innerHTML must include all three rows: in-progress,
-  // attention, and an ordinary closed record. This verifies the subset
-  // relationship: attention items still appear in recent.
+  // Precise assertions: each expected visual element must be present
+  // independently. OR-based assertions are too weak — a single shared
+  // substring (e.g. "10:00") would satisfy all three branches even if
+  // the actual record types are missing.
   const recentHtml = element("recent-list").innerHTML;
-  assert.equal(recentHtml.includes("live-key") || recentHtml.includes("10:00") || recentHtml.includes("进行中"), true, "in-progress record must appear in recent");
-  assert.equal(recentHtml.includes("att-1") || recentHtml.includes("09:00") || recentHtml.includes("待整理"), true, "attention record must also appear in recent");
-  assert.equal(recentHtml.includes("ok-1") || recentHtml.includes("08:00"), true, "ordinary closed record must appear in recent");
+  assert.equal(recentHtml.includes("进行中"), true, "in-progress badge must appear in recent");
+  assert.equal(recentHtml.includes("待整理"), true, "attention badge must appear in recent");
+  assert.equal(recentHtml.includes("WorkTrace"), true, "WorkTrace project name must appear in recent");
+  assert.equal(recentHtml.includes("未归类"), true, "uncategorized project label must appear for attention row");
+  assert.equal(recentHtml.includes("Project B"), true, "ordinary closed record project must appear in recent");
 });
 
 test("13l. current activity 5 min and recent record 25 min can both display", () => {
   const { App, element } = overviewHarness();
+  // Deterministic clock stub: returns elapsed_seconds_at_sample directly
+  // without real-time delta so the test does not depend on wall-clock drift.
+  App.computeClockDurationNow = function (clock) {
+    var accepted = App.validateLiveClock(clock);
+    if (!accepted || accepted.duration_semantic === "static_closed") return null;
+    var elapsed = accepted.elapsed_seconds_at_sample;
+    return accepted.duration_semantic === "aggregate_live"
+      ? accepted.aggregate_base_seconds + elapsed
+      : elapsed;
+  };
   // Live clock for current activity (5 minutes = 300s).
   App.getActiveLiveClock = () => ({
-    sampled_at_epoch_ms: Date.now(),
-    started_at_epoch_ms: Date.now() - 300000,
+    sampled_at_epoch_ms: 1000000,
+    started_at_epoch_ms: 700000,
     elapsed_seconds_at_sample: 300,
     aggregate_base_seconds: 0,
     duration_semantic: "current_live",
@@ -1590,7 +1717,7 @@ test("13l. current activity 5 min and recent record 25 min can both display", ()
     current_session: { projection_instance_key: "live-key", start_time: "2026-07-22T10:00:00" },
     recent: [
       // 25 minutes = 1500s, aggregate_live.
-      { projection_instance_key: "live-key", start_time: "2026-07-22T10:00:00", project_name: "WorkTrace", display_description: "起草", duration_seconds: 1500, is_in_progress: true, needs_attention: false, live_clock: { sampled_at_epoch_ms: Date.now(), started_at_epoch_ms: Date.now() - 1500000, elapsed_seconds_at_sample: 1500, aggregate_base_seconds: 0, duration_semantic: "aggregate_live", is_live: true, live_state: "persisted_open", display_span_id: "span:agg", stable_live_key_hash: "agg" } },
+      { projection_instance_key: "live-key", start_time: "2026-07-22T10:00:00", project_name: "WorkTrace", display_description: "起草", duration_seconds: 1500, is_in_progress: true, needs_attention: false, live_clock: { sampled_at_epoch_ms: 1000000, started_at_epoch_ms: 0, elapsed_seconds_at_sample: 1500, aggregate_base_seconds: 0, duration_semantic: "aggregate_live", is_live: true, live_state: "persisted_open", display_span_id: "span:agg", stable_live_key_hash: "agg" } },
     ],
     attention: [],
     attention_remaining_count: 0,
@@ -1599,13 +1726,14 @@ test("13l. current activity 5 min and recent record 25 min can both display", ()
     uncategorized_seconds: 0,
     today_total_seconds: 1500,
   };
-  // This must not throw and must render both durations independently.
+  // This must render both durations independently on different DOM targets.
   App.showOverview(bundle);
-  // The current activity card shows the resource name.
-  assert.equal(element("current-activity").textContent.includes("editing.md"), true);
-  // The recent list shows the aggregate record.
+  // Current activity card: 5 minutes (current_live).
+  const currentDuration = element("current-activity").querySelector(".current-duration");
+  assert.equal(currentDuration.textContent, "00:05:00", "current activity card must show 5 minutes");
+  // Recent record: 25 minutes (aggregate_live).
   const recentHtml = element("recent-list").innerHTML;
-  assert.equal(recentHtml.includes("WorkTrace") || recentHtml.includes("10:00") || recentHtml.includes("进行中"), true);
+  assert.equal(recentHtml.includes("00:25:00"), true, "recent record must show 25 minutes");
 });
 
 test("13m. page subtitle uses authoritative module names", () => {

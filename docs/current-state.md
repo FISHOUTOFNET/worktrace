@@ -117,6 +117,9 @@ bounded reconciliation.
   (merged report sessions including in-progress and needs-attention items),
   and an attention subset of recent records (at most three); editing hands
   off to Timeline. Attention is a subset of recent, not a disjoint partition.
+  The subset constraint holds at the payload level: every visible attention
+  item is also present in the visible recent list, even after both are
+  truncated to their display limits.
 - Timeline: reverse chronological sessions, authoritative project filtering,
   debounced autosave, always-visible activity details, direct two-step deletion,
   and a compact-window focus-trapped Drawer.

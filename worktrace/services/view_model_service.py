@@ -26,6 +26,69 @@ from .report_revision_service import get_report_structure_revision
 from .runtime_activity_state_service import sample_runtime_activity_state
 
 _RECENT_LIMIT = 20
+_ATTENTION_LIMIT = 3
+
+
+def _select_overview_recent_rows(
+    recent_rows: list[dict[str, Any]],
+    attention_rows: list[dict[str, Any]],
+    *,
+    limit: int,
+) -> list[dict[str, Any]]:
+    """Select the visible recent window so every displayed attention row is
+    also present in the displayed recent list.
+
+    The authoritative ``recent_rows`` is already filtered, merged, and sorted
+    (in-progress first, then start time descending). We take the first
+    ``limit`` rows as the base window, then promote any attention row that
+    fell beyond the truncation boundary by replacing the tail-most ordinary
+    (non-in-progress, non-attention) row. The result is re-sorted so
+    in-progress stays first and start-time descending order is preserved.
+    """
+    if limit <= 0:
+        return []
+
+    selected = list(recent_rows[:limit])
+    selected_keys = {
+        str(row.get("projection_instance_key") or "")
+        for row in selected
+    }
+
+    required_rows = [
+        row
+        for row in attention_rows
+        if str(row.get("projection_instance_key") or "") not in selected_keys
+    ]
+
+    for required in required_rows:
+        required_key = str(required.get("projection_instance_key") or "")
+        if not required_key:
+            continue
+
+        replace_index = next(
+            (
+                index
+                for index in range(len(selected) - 1, -1, -1)
+                if not bool(selected[index].get("is_in_progress"))
+                and not bool(selected[index].get("needs_attention"))
+            ),
+            None,
+        )
+
+        if replace_index is None:
+            break
+
+        selected[replace_index] = required
+        selected_keys.add(required_key)
+
+    selected.sort(
+        key=lambda row: (
+            bool(row.get("is_in_progress")),
+            str(row.get("start_time") or ""),
+        ),
+        reverse=True,
+    )
+    return selected
 
 
 def _get_current_activity_snapshot() -> ActivitySnapshotContract | None:
@@ -365,6 +428,12 @@ def get_overview_view_model(today: str | None = None) -> dict[str, Any]:
     attention_candidates = [
         row for row in recent_rows if bool(row.get("needs_attention"))
     ]
+    attention_rows = attention_candidates[:_ATTENTION_LIMIT]
+    visible_recent_rows = _select_overview_recent_rows(
+        recent_rows,
+        attention_rows,
+        limit=_RECENT_LIMIT,
+    )
     return {
         "ok": True,
         "date": scoped_today,
@@ -385,9 +454,9 @@ def get_overview_view_model(today: str | None = None) -> dict[str, Any]:
         },
         "current_activity": current_activity,
         "current_session": current_session,
-        "attention": attention_candidates[:3],
-        "attention_remaining_count": max(0, len(attention_candidates) - 3),
-        "recent": recent_rows[:_RECENT_LIMIT],
+        "attention": attention_rows,
+        "attention_remaining_count": max(0, len(attention_candidates) - _ATTENTION_LIMIT),
+        "recent": visible_recent_rows,
         "today_total_seconds": today_total_seconds,
         "classified_seconds": classified_seconds,
         "uncategorized_seconds": uncategorized_seconds,

@@ -168,12 +168,17 @@
             bundle.current_activity || {},
             "overview"
         );
-        // The current-activity button is clickable only when a navigable
-        // current_session with a stable projection identity exists. Otherwise
-        // it must be truly disabled, not merely lacking an onclick handler.
+        // Navigation requires a normal active state plus a stable current_session;
+        // paused/idle/excluded/error must not show a clickable card even with a
+        // stale backend current_session.
         var currentButton = document.getElementById("current-activity");
+        var currentActivity = bundle.current_activity || {};
         var currentSession = bundle.current_session;
-        var canNavigate = !!(currentSession
+        var statusAllowsNavigation =
+            currentActivity.active !== false
+            && String(currentActivity.status || "") === "normal";
+        var canNavigate = !!(statusAllowsNavigation
+            && currentSession
             && currentSession.projection_instance_key
             && currentSession.start_time);
         currentButton.disabled = !canNavigate;

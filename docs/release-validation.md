@@ -172,7 +172,7 @@ viewport emulation.
 - [ ] Overview shows today summary bar (total/classified/unclassified/project count), current activity, recent records, and attention items.
 - [ ] Current activity shows the real resource (file/webpage/window/app name), not the project name.
 - [ ] Current activity and recent record durations are allowed to differ (current_live vs aggregate_live).
-- [ ] Attention items also appear in recent records (subset relationship, not disjoint).
+- [ ] Attention items also appear in recent records (subset relationship, not disjoint); the subset holds at the payload level even after both lists are truncated to their display limits.
 - [ ] In-progress report session appears as the first recent record.
 - [ ] Excluded state does not leak real window titles, paths, files, webpages or projects.
 - [ ] Paused and error states do not retain stale activity content.

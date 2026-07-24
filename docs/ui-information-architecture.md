@@ -341,6 +341,12 @@ Overview 保留：
   当前进行中的报告时间段可以同时既出现在“当前活动”背后的 current_session
   中，也作为最近记录的第一条显示。
 
+该子集关系同时约束实际 payload：Overview 返回给前端的可见 attention 项
+必须全部包含在当前可见 recent 列表中，即使两者分别被截断到各自的展示上限
+（recent 上限 20，attention 上限 3）。ViewModel 选择展示窗口时优先保留
+进行中记录，再以尾部普通已整理记录替换为超出截断边界的待整理项，从而
+保证 visible attention ⊆ visible recent。
+
 不得重新引入“三组互斥”或“去重展示”的过滤分支。底层页面模型保持
 current_session 与 recent 第一条使用既有身份语义，UI 不通过互斥过滤改变
 它们的可见性。
