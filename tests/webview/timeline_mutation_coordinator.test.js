@@ -78,6 +78,13 @@ function harness() {
     if (result && result.ok === false) { onError(result.message || "操作失败", result.error); return null; }
     return result;
   };
+  App.runtimeReportDateForPage = () => "";
+  App.payloadReportDate = () => "";
+  App.isPagePayloadCompatibleWithRuntime = () => true;
+  App.escapeHtml = (s) => String(s || "");
+  App.formatDuration = (s) => String(s || "");
+  App.formatStartTimeOnly = (s) => String(s || "");
+  App.formatProjectLabel = () => "";
   return { App, element };
 }
 
@@ -215,4 +222,140 @@ test("an out-of-order Details response cannot write after selection changes", as
   oldRequest.resolve({ ok: true, summary_rows: [{ activity_name: "stale" }] });
   await pending;
   assert.equal(element("timeline-details-list").innerHTML, before);
+});
+
+test("stale_selection triggers one timeline refresh and retry", async () => {
+  const { App, element } = harness();
+  App.lastTimelineData = {
+    date: "2026-07-12",
+    structure_revision: "sv-1",
+    entries: [{ projection_instance_key: "base:a", projection_revision: "rev-a" }],
+  };
+  App.currentSessions = App.lastTimelineData.entries;
+  let detailCalls = 0;
+  const firstDetail = deferred();
+  App.callBridge = (method) => {
+    if (method === "get_timeline_session_activity_summary") {
+      detailCalls++;
+      if (detailCalls === 1) return firstDetail.promise;
+      return Promise.resolve({ ok: true, summary_rows: [{ activity_name: "Doc1" }] });
+    }
+    return Promise.resolve({ ok: true });
+  };
+  App.loadTimelineReport = () => {
+    App.timelineRequestState.nextTimelineOwner("2026-07-12");
+    App.lastTimelineData = {
+      date: "2026-07-12",
+      structure_revision: "sv-2",
+      entries: [{ projection_instance_key: "base:a", projection_revision: "rev-a" }],
+    };
+    App.currentSessions = App.lastTimelineData.entries;
+    return Promise.resolve();
+  };
+
+  const pending = App.loadSessionDetails("base:a", "2026-07-12", "rev-a", false);
+  firstDetail.resolve({ ok: false, error: "stale_selection", message: "活动时段已更新，请重新确认。" });
+  await pending;
+
+  assert.equal(detailCalls, 2, "exactly one retry after stale_selection");
+  assert.ok(element("timeline-details-list").innerHTML.length > 0,
+    "retry result should render");
+});
+
+test("stale_selection retry does not loop when session disappears", async () => {
+  const { App } = harness();
+  App.lastTimelineData = {
+    date: "2026-07-12",
+    structure_revision: "sv-1",
+    entries: [{ projection_instance_key: "base:a", projection_revision: "rev-a" }],
+  };
+  App.currentSessions = App.lastTimelineData.entries;
+  let detailCalls = 0;
+  const firstDetail = deferred();
+  App.callBridge = (method) => {
+    if (method === "get_timeline_session_activity_summary") {
+      detailCalls++;
+      return firstDetail.promise;
+    }
+    return Promise.resolve({ ok: true });
+  };
+  App.loadTimelineReport = () => {
+    App.timelineRequestState.nextTimelineOwner("2026-07-12");
+    App.lastTimelineData = {
+      date: "2026-07-12",
+      structure_revision: "sv-2",
+      entries: [],
+    };
+    App.currentSessions = [];
+    return Promise.resolve();
+  };
+
+  const pending = App.loadSessionDetails("base:a", "2026-07-12", "rev-a", false);
+  firstDetail.resolve({ ok: false, error: "stale_selection", message: "活动时段已更新，请重新确认。" });
+  await pending;
+
+  assert.equal(detailCalls, 1, "no retry when session disappears after refresh");
+  assert.equal(App.selectedProjectionInstanceKey, null, "selection cleared");
+  assert.equal(App.selectedProjectionRevision, null, "revision cleared");
+});
+
+test("stale_selection does not retry a second time", async () => {
+  const { App } = harness();
+  App.lastTimelineData = {
+    date: "2026-07-12",
+    structure_revision: "sv-1",
+    entries: [{ projection_instance_key: "base:a", projection_revision: "rev-a" }],
+  };
+  App.currentSessions = App.lastTimelineData.entries;
+  let detailCalls = 0;
+  const firstDetail = deferred();
+  const secondDetail = deferred();
+  App.callBridge = (method) => {
+    if (method === "get_timeline_session_activity_summary") {
+      detailCalls++;
+      if (detailCalls === 1) return firstDetail.promise;
+      return secondDetail.promise;
+    }
+    return Promise.resolve({ ok: true });
+  };
+  App.loadTimelineReport = () => {
+    App.timelineRequestState.nextTimelineOwner("2026-07-12");
+    App.lastTimelineData = {
+      date: "2026-07-12",
+      structure_revision: "sv-2",
+      entries: [{ projection_instance_key: "base:a", projection_revision: "rev-a" }],
+    };
+    App.currentSessions = App.lastTimelineData.entries;
+    return Promise.resolve();
+  };
+
+  const pending = App.loadSessionDetails("base:a", "2026-07-12", "rev-a", false);
+  firstDetail.resolve({ ok: false, error: "stale_selection", message: "活动时段已更新，请重新确认。" });
+  secondDetail.resolve({ ok: false, error: "stale_selection", message: "活动时段已更新，请重新确认。" });
+  await pending;
+
+  assert.equal(detailCalls, 2, "exactly one retry, no infinite loop");
+});
+
+test("detail call passes source version from timeline payload", async () => {
+  const { App } = harness();
+  App.lastTimelineData = {
+    date: "2026-07-12",
+    structure_revision: "sv-from-timeline",
+    entries: [{ projection_instance_key: "base:a", projection_revision: "rev-a" }],
+  };
+  App.currentSessions = App.lastTimelineData.entries;
+  let capturedArgs = null;
+  App.callBridge = (method, ...args) => {
+    if (method === "get_timeline_session_activity_summary") {
+      capturedArgs = args;
+      return Promise.resolve({ ok: true, summary_rows: [] });
+    }
+    return Promise.resolve({ ok: true });
+  };
+
+  await App.loadSessionDetails("base:a", "2026-07-12", "rev-a", false);
+  assert.ok(capturedArgs, "detail bridge call was made");
+  assert.equal(capturedArgs[3], "sv-from-timeline",
+    "4th argument should be structure_revision from timeline payload");
 });

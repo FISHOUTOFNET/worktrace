@@ -304,6 +304,7 @@ class FakeTimelineCapability:
         report_date,
         projection_instance_key,
         expected_projection_revision,
+        expected_source_version,
         runtime,
         collector_status,
     ):
@@ -312,6 +313,7 @@ class FakeTimelineCapability:
                 report_date,
                 projection_instance_key,
                 expected_projection_revision,
+                expected_source_version,
                 runtime,
                 collector_status,
             )

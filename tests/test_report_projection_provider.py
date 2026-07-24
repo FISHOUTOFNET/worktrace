@@ -302,3 +302,104 @@ def test_clear_cache_forces_rebuild(temp_db):
     assert len(build_calls) == 1, "clear_cache should force a rebuild"
     assert proj2 is not proj1
     assert proj2.snapshot_revision == proj1.snapshot_revision
+
+
+# --- expected_source_version stale guard ---
+
+
+def test_detail_with_matching_source_version_succeeds(temp_db):
+    """Detail call with the current source version must succeed."""
+    _seed_activities(count=5)
+    with page_read_scope():
+        projection = get_day_projection(DATE)
+    session = projection.final_sessions[0]
+    key = str(session.get("projection_instance_key") or "")
+    revision = str(session.get("projection_revision") or "")
+    source_version = projection.source_version_token
+
+    with page_read_scope():
+        result = view_model_service.get_session_activity_summary_view_model(
+            report_date=DATE,
+            projection_instance_key=key,
+            expected_projection_revision=revision,
+            expected_source_version=source_version,
+        )
+    assert result["ok"] is True
+    assert result["resolved_projection_revision"] == revision
+
+
+def test_detail_with_stale_source_version_raises_stale_selection(temp_db):
+    """Detail call with an outdated source version must raise stale_selection."""
+    _seed_activities(count=5)
+    with page_read_scope():
+        projection = get_day_projection(DATE)
+    session = projection.final_sessions[0]
+    key = str(session.get("projection_instance_key") or "")
+    revision = str(session.get("projection_revision") or "")
+
+    with pytest.raises(ValueError, match="stale_selection"):
+        with page_read_scope():
+            view_model_service.get_session_activity_summary_view_model(
+                report_date=DATE,
+                projection_instance_key=key,
+                expected_projection_revision=revision,
+                expected_source_version="0" * 40,
+            )
+
+
+def test_detail_without_source_version_still_works(temp_db):
+    """Omitting expected_source_version (backward compat) must succeed."""
+    _seed_activities(count=5)
+    with page_read_scope():
+        projection = get_day_projection(DATE)
+    session = projection.final_sessions[0]
+    key = str(session.get("projection_instance_key") or "")
+    revision = str(session.get("projection_revision") or "")
+
+    with page_read_scope():
+        result = view_model_service.get_session_activity_summary_view_model(
+            report_date=DATE,
+            projection_instance_key=key,
+            expected_projection_revision=revision,
+        )
+    assert result["ok"] is True
+
+
+def test_consecutive_detail_clicks_with_source_version_do_not_rebuild(temp_db):
+    """20 detail clicks passing expected_source_version must not rebuild."""
+    _seed_activities(count=10)
+    clear_cache()
+
+    with page_read_scope():
+        projection = get_day_projection(DATE)
+        assert len(projection.entries) >= 1
+
+    sessions = projection.final_sessions
+    assert len(sessions) >= 1
+    key = str(sessions[0].get("projection_instance_key") or "")
+    revision = str(sessions[0].get("projection_revision") or "")
+    source_version = projection.source_version_token
+
+    build_calls = []
+    original = report_projection_snapshot_service._build_snapshot
+
+    def tracking_build(conn, start_date, end_date):
+        build_calls.append((start_date, end_date))
+        return original(conn, start_date, end_date)
+
+    with patch(
+        "worktrace.services.report_projection_provider._build_snapshot",
+        side_effect=tracking_build,
+    ):
+        for _ in range(20):
+            with page_read_scope():
+                view_model_service.get_session_activity_summary_view_model(
+                    report_date=DATE,
+                    projection_instance_key=key,
+                    expected_projection_revision=revision,
+                    expected_source_version=source_version,
+                )
+
+    assert len(build_calls) == 0, (
+        f"detail clicks triggered {len(build_calls)} projection rebuilds"
+    )

@@ -78,12 +78,14 @@ def test_session_summary_api_calls_keyword_only_service(monkeypatch):
         report_date: str | None = None,
         projection_instance_key: str,
         expected_projection_revision: str | None = None,
+        expected_source_version: str | None = None,
     ) -> dict[str, object]:
         captured.update(
             {
                 "report_date": report_date,
                 "projection_instance_key": projection_instance_key,
                 "expected_projection_revision": expected_projection_revision,
+                "expected_source_version": expected_source_version,
             }
         )
         return {
@@ -128,6 +130,7 @@ def test_session_summary_api_calls_keyword_only_service(monkeypatch):
         "report_date": "2026-07-16",
         "projection_instance_key": "session:1",
         "expected_projection_revision": "a" * 40,
+        "expected_source_version": None,
     }
 
 

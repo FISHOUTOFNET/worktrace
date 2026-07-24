@@ -89,6 +89,7 @@ def get_session_activity_summary_view_model(
     report_date: str | None = None,
     projection_instance_key: str,
     expected_projection_revision: str | None = None,
+    expected_source_version: str | None = None,
     runtime: "AppRuntime | None" = None,
     collector_status: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -100,6 +101,7 @@ def get_session_activity_summary_view_model(
                     report_date=report_date,
                     projection_instance_key=projection_instance_key,
                     expected_projection_revision=expected_projection_revision,
+                    expected_source_version=expected_source_version,
                 )
         with stage("bridge_attach"):
             return _attach_runtime(

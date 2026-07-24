@@ -539,6 +539,7 @@ def get_session_activity_summary_view_model(
     report_date: str | None = None,
     projection_instance_key: str,
     expected_projection_revision: str | None = None,
+    expected_source_version: str | None = None,
 ) -> dict[str, Any]:
     date = report_date or timeline_service.get_default_report_date()
     today = timeline_service.get_default_report_date()
@@ -563,6 +564,7 @@ def get_session_activity_summary_view_model(
                 projection_instance_key,
                 date,
                 expected_projection_revision=expected_projection_revision,
+                expected_source_version=expected_source_version,
             )
         )
     rows = [dict(row) for row in detail_projection["summary_rows"]]

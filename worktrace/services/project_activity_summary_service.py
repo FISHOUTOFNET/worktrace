@@ -75,13 +75,25 @@ def get_projection_session_activity_summary(
     report_date: str,
     *,
     expected_projection_revision: str | None = None,
+    expected_source_version: str | None = None,
 ) -> dict[str, Any]:
     """Return right-panel summaries from the canonical final contribution set.
 
     Uses the shared :class:`DayProjection` from the provider so the detail
     lookup is O(1) per session — no full-day rebuild, no linear scan.
+
+    ``expected_source_version`` is the source-version token
+    (``structure_revision``) the frontend received with the Timeline payload.
+    If it no longer matches the current source version the whole day changed
+    and we return ``stale_selection`` before touching the projection.
     """
     from .report_projection_provider import get_day_projection
+    from .report_revision_service import get_projection_source_version
+
+    if expected_source_version is not None:
+        current_source_version = get_projection_source_version(report_date).token()
+        if current_source_version != str(expected_source_version or ""):
+            raise ValueError("stale_selection")
 
     projection = get_day_projection(report_date)
     session = projection.entry_by_key.get(str(projection_instance_key or ""))

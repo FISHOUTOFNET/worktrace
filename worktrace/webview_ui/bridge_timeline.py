@@ -34,6 +34,7 @@ class TimelineBridgeMixin:
         projection_instance_key: str,
         report_date: str | None = None,
         expected_projection_revision: str | None = None,
+        expected_source_version: str | None = None,
     ) -> dict[str, Any]:
         try:
             if report_date is not None and (
@@ -55,6 +56,9 @@ class TimelineBridgeMixin:
                 projection_instance_key=projection_instance_key.strip(),
                 expected_projection_revision=(
                     (expected_projection_revision or "").strip() or None
+                ),
+                expected_source_version=(
+                    (expected_source_version or "").strip() or None
                 ),
                 runtime=self._runtime(),
                 collector_status=self._collector_status(),

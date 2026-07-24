@@ -387,10 +387,16 @@
         } else {
             detailsHeader.textContent = "正在刷新活动详情…";
         }
+        var sourceVersion = (
+            App.lastTimelineData
+                ? String(App.lastTimelineData.structure_revision || "")
+                : ""
+        );
         var request = App.bridge.getTimelineSessionActivitySummary(
             projectionInstanceKey || "",
             date,
-            revision
+            revision,
+            sourceVersion
         ).then(function (result) {
             if (!App.timelineRequestState.isCurrentDetailsOwner(owner)) return null;
             if (result && result.ok === false && result.error === "stale_selection" && !retriedStale) {

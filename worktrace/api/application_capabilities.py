@@ -56,7 +56,7 @@ class StatisticsCapability(Protocol):
 class TimelineCapability(Protocol):
     TIMELINE_NOTE_MAX_LENGTH: int
     def get_timeline_view_model(self, date, *, runtime, collector_status) -> dict[str, Any]: ...
-    def get_session_activity_summary_view_model(self, *, report_date, projection_instance_key, expected_projection_revision, runtime, collector_status) -> dict[str, Any]: ...
+    def get_session_activity_summary_view_model(self, *, report_date, projection_instance_key, expected_projection_revision, expected_source_version, runtime, collector_status) -> dict[str, Any]: ...
     def list_selectable_projects(self) -> list[dict[str, Any]]: ...
     def list_filter_projects(self) -> list[dict[str, Any]]: ...
     def save_timeline_session_edit(self, report_date, projection_instance_key, projection_revision, request_id, project_id, adjusted_duration_seconds, note) -> dict[str, Any]: ...
@@ -174,6 +174,7 @@ class TimelineApplicationService:
         report_date,
         projection_instance_key,
         expected_projection_revision,
+        expected_source_version,
         runtime,
         collector_status,
     ):
@@ -181,6 +182,7 @@ class TimelineApplicationService:
             report_date=report_date,
             projection_instance_key=projection_instance_key,
             expected_projection_revision=expected_projection_revision,
+            expected_source_version=expected_source_version,
             runtime=runtime,
             collector_status=collector_status,
         )
