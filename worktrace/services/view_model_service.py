@@ -485,16 +485,16 @@ def get_timeline_view_model(report_date: str | None = None) -> dict[str, Any]:
         )
     )
 
-    from .report_projection_snapshot_service import build_visible_snapshot
+    from .report_projection_provider import get_day_projection
 
-    projection = build_visible_snapshot(scoped_report_date, scoped_report_date)
+    projection = get_day_projection(scoped_report_date)
     with stage("view_model_transform"):
         sessions = [
             _base_session_row(
                 session,
                 row_kind=str(session.get("row_kind") or "project_session"),
             )
-            for session in projection.final_entries
+            for session in projection.entries
         ]
         _apply_live_span_to_rows(
             sessions,

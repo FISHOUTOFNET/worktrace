@@ -11,7 +11,8 @@ These tests do two jobs:
 The benchmark records ``uncached`` projection, ``cached`` projection (within
 the same page-read scope), and ``detail_lookup`` durations as captured by
 :mod:`worktrace.services.projection_performance`. Absolute thresholds are
-intentionally loose; the hard acceptance gates live in later phases.
+intentionally loose; the hard acceptance gates are enforced in
+``test_report_projection_provider.py`` and downstream suites.
 """
 
 from __future__ import annotations
@@ -28,6 +29,12 @@ from worktrace.services import (
 )
 from worktrace.services.page_read_context import page_read_scope
 from worktrace.services.projection_performance import projection_perf_scope
+from worktrace.services.report_projection_provider import (
+    cached_dates,
+    cache_size,
+    clear_cache as clear_projection_cache,
+    get_day_projection,
+)
 
 pytestmark = [pytest.mark.db, pytest.mark.slow, pytest.mark.serial]
 
@@ -171,14 +178,14 @@ def test_perf_scope_does_not_log_privacy_data(temp_db, caplog):
 
 @pytest.mark.parametrize("size", BENCHMARK_SIZES)
 def test_projection_benchmark_baseline(temp_db, size):
-    """Record before-fix projection timings for each benchmark size.
+    """Record projection timings for each benchmark size.
 
-    This is a baseline benchmark, not a pass/fail gate. It asserts only that
-    the projection completes and the perf record captures the expected shape.
-    Absolute timings are printed via the record for human inspection.
+    Measures uncached build, cached build (cross-request cache hit), and
+    detail lookup (cache hit + O(1) entry/contribution lookup).
     """
 
     _reset_perf_capture()
+    clear_projection_cache()
     projection_benchmark.build_benchmark_dataset(
         activity_count=size,
         seed_session_operation=True,
@@ -186,36 +193,29 @@ def test_projection_benchmark_baseline(temp_db, size):
     )
     report_date = projection_benchmark.DEFAULT_REPORT_DATE
 
-    # Uncached build: fresh page-read scope so the per-request snapshot cache
-    # is empty.
+    # Uncached build: fresh page-read scope so the per-request cache is empty.
+    # The cross-request cache was cleared above, so this is a true cold build.
     with _perf_page_scope(report_date):
-        snapshot = report_projection_snapshot_service.build_visible_snapshot(
-            report_date, report_date
-        )
+        projection = get_day_projection(report_date)
     uncached_record = _last_record_or_fail()
     assert uncached_record.activity_count >= size
     assert uncached_record.entry_count >= 1
     assert uncached_record.contribution_count >= 1
 
-    # Cached build: pre-populate the request cache, then measure only the
-    # cached hit inside its own perf scope so stage timings reflect a single
-    # cache-hit call rather than the sum of build + hit.
+    # Cached build: new page-read scope (empty request cache) but the
+    # cross-request cache should have the projection from the uncached build.
     _reset_perf_capture()
-    with page_read_scope():
-        report_projection_snapshot_service.build_visible_snapshot(
-            report_date, report_date
-        )
-        with projection_perf_scope(report_date, surface="cached"):
-            cached = report_projection_snapshot_service.build_visible_snapshot(
-                report_date, report_date
-            )
+    with _perf_page_scope(report_date):
+        cached = get_day_projection(report_date)
     cached_record = _last_record_or_fail()
     assert cached_record.cache_hit is True
+    assert cached is projection
 
     # Detail lookup: pick the first session and request its activity summary
-    # through the view model layer so the detail_lookup stage is captured.
+    # through the view model layer. The provider cache should be hit and the
+    # session/contributions looked up in O(1).
     _reset_perf_capture()
-    first_session = snapshot.final_sessions[0]
+    first_session = projection.final_sessions[0]
     projection_key = str(first_session.get("projection_instance_key") or "")
     projection_revision = str(first_session.get("projection_revision") or "")
     assert projection_key and projection_revision
@@ -227,6 +227,7 @@ def test_projection_benchmark_baseline(temp_db, size):
         )
     detail_record = _last_record_or_fail()
     assert "detail_lookup" in detail_record.stages
+    assert detail_record.cache_hit is True
 
     # Print for human inspection in CI logs (not an assertion).
     print(
@@ -256,13 +257,12 @@ def test_timeline_view_model_records_view_model_transform_stage(temp_db):
 
 def test_detail_view_model_records_detail_lookup_stage(temp_db):
     _reset_perf_capture()
+    clear_projection_cache()
     info = projection_benchmark.build_benchmark_dataset(activity_count=30)
     # Build once to discover a projection key for the detail request.
     with _perf_page_scope(info["report_date"]):
-        snapshot = report_projection_snapshot_service.build_visible_snapshot(
-            info["report_date"], info["report_date"]
-        )
-    first_session = snapshot.final_sessions[0]
+        projection = get_day_projection(info["report_date"])
+    first_session = projection.final_sessions[0]
     projection_key = str(first_session.get("projection_instance_key") or "")
     projection_revision = str(first_session.get("projection_revision") or "")
     _reset_perf_capture()

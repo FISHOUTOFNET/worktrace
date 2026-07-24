@@ -76,20 +76,16 @@ def get_projection_session_activity_summary(
     *,
     expected_projection_revision: str | None = None,
 ) -> dict[str, Any]:
-    """Return right-panel summaries from the canonical final contribution set."""
-    from .report_projection_snapshot_service import build_visible_snapshot
+    """Return right-panel summaries from the canonical final contribution set.
 
-    snapshot = build_visible_snapshot(report_date, report_date)
-    session = next(
-        (
-            item
-            for item in snapshot.final_entries
-            if str(item.get("projection_instance_key") or "")
-            == str(projection_instance_key or "")
-        ),
-        None,
-    )
-    if not session:
+    Uses the shared :class:`DayProjection` from the provider so the detail
+    lookup is O(1) per session — no full-day rebuild, no linear scan.
+    """
+    from .report_projection_provider import get_day_projection
+
+    projection = get_day_projection(report_date)
+    session = projection.entry_by_key.get(str(projection_instance_key or ""))
+    if session is None:
         raise ValueError("stale_selection")
     resolved_revision = str(session.get("projection_revision") or "")
     if (
@@ -100,9 +96,9 @@ def get_projection_session_activity_summary(
 
     contributions = [
         dict(row)
-        for row in snapshot.final_contributions
-        if str(row.get("projection_instance_key") or "")
-        == str(projection_instance_key or "")
+        for row in projection.contributions_by_key.get(
+            str(projection_instance_key or ""), ()
+        )
     ]
     summaries = build_activity_summary_rows(
         contributions,

@@ -35,6 +35,7 @@ class PageReadContext:
     runtime_consistent: bool
     needs_full_refresh: bool
     snapshot_cache: dict[tuple[str, str], Any] = field(default_factory=dict)
+    day_projection_cache: dict[str, Any] = field(default_factory=dict)
 
 
 _CURRENT_PAGE_READ_CONTEXT: ContextVar[PageReadContext | None] = ContextVar(
