@@ -34,9 +34,15 @@
         if (sortSelect && sortSelect.getAttribute("data-rules-sort-bound") !== "1") {
             sortSelect.setAttribute("data-rules-sort-bound", "1");
             sortSelect.addEventListener("change", function () {
-                App.rulesSortMode = sortSelect.value === "alpha" ? "alpha" : "last_used";
+                App.rulesSortMode = ["alpha"].indexOf(sortSelect.value) >= 0
+                    ? sortSelect.value : "last_used";
                 App.rerenderProjectRulesList();
             });
+        }
+        var searchInput = document.getElementById("rules-search-input");
+        if (searchInput && searchInput.getAttribute("data-rules-search-bound") !== "1") {
+            searchInput.setAttribute("data-rules-search-bound", "1");
+            searchInput.addEventListener("input", App.applyRulesSearch);
         }
         var list = document.getElementById("rules-list");
         if (list && list.getAttribute("data-rules-panel-open-bound") !== "1") {
@@ -56,12 +62,23 @@
     function handleProjectCardPanelClick(event) {
         var button = event.target && event.target.closest ? event.target.closest("button") : null;
         if (!button) return;
-        if (button.classList.contains("rules-project-edit-button")) {
+        if (button.classList.contains("rules-project-toggle")) {
+            var card = button.closest(".rules-project-card");
+            var rows = card && card.querySelector(".rules-row-list");
+            if (rows) {
+                rows.hidden = !rows.hidden;
+                button.setAttribute("aria-expanded", rows.hidden ? "false" : "true");
+                button.classList.toggle("is-expanded", !rows.hidden);
+                button.setAttribute("aria-label", (rows.hidden ? "展开" : "收起") + "项目规则");
+                button.setAttribute("data-tooltip", rows.hidden ? "展开规则" : "收起规则");
+            }
+        } else if (button.classList.contains("rules-project-edit-button")) {
             openProjectEdit(button);
         } else if (button.classList.contains("rules-project-add-rule-button")) {
             openRulesPanel("rule", {
                 projectId: parsePositiveInt(button.getAttribute("data-project-id")),
-                ruleType: "folder"
+                ruleType: "folder",
+                trigger: button
             });
         } else if (button.classList.contains("rules-project-delete-button")) {
             deleteProject(button);
@@ -75,18 +92,33 @@
             App.showRulesError("保存项目失败");
             return;
         }
-        openRulesPanel("project", { project: project });
+        openRulesPanel("project", { project: project, trigger: button });
     }
 
     function deleteProject(button) {
         var projectId = parsePositiveInt(button.getAttribute("data-project-id"));
-        if (!projectId || !window.confirm("确定删除项目吗？项目将不再显示，历史活动记录不会被删除。")) return;
-        App.bridge.deleteProjectForRules(projectId).then(function (result) {
+        var project = findProject(projectId);
+        if (!projectId || !App.openDeleteDialog) return;
+        App.openDeleteDialog({
+            trigger: button,
+            title: "删除项目",
+            objectLabel: App.safeText(project && project.name, "当前项目"),
+            warning: "项目会从项目规则中移除，既有活动事实不会被删除。",
+            twoStep: false,
+            confirmLabel: "删除项目"
+        }).then(function (confirmed) {
+            if (!confirmed) return null;
+            return App.bridge.deleteProjectForRules(projectId);
+        }).then(function (result) {
+            if (!result) return;
             if (result && result.ok === false) {
                 App.showRulesError(result.error || "删除项目失败");
                 return;
             }
-            return App.loadProjectRules().then(function () { App.showRulesError("项目已删除"); });
+            return App.loadProjectRules().then(function () {
+                App.clearRulesError();
+                if (App.showToast) App.showToast("项目已删除");
+            });
         }).catch(function () { App.showRulesError("删除项目失败"); });
     }
 
@@ -94,19 +126,30 @@
         options = options || {};
         App.rulesPanelEditingProjectId = options.project ? parsePositiveInt(options.project.id) : null;
         var panel = document.getElementById("rules-create-panel");
-        if (panel) panel.hidden = false;
         fillProjectFields(options.project || null);
         setRuleType(options.ruleType || "folder");
         setPanelMode(mode === "project" ? "project" : "rule");
         refreshRulesPanelTargets(options.projectId || App.rulesPanelLastCreatedProjectId || null);
+        var contextProject = findProject(options.projectId || 0);
+        var context = document.getElementById("rules-panel-project-context");
+        if (context) context.textContent = contextProject
+            ? "将绑定到项目：“" + App.safeText(contextProject.name, "未命名项目") + "”"
+            : "";
         clearPanelStatus();
+        if (panel && App.openManagedDrawer) {
+            var focus = document.getElementById(mode === "project"
+                ? "rules-panel-project-name" : "rules-panel-folder-path");
+            App.openManagedDrawer(panel, options.trigger || document.activeElement, focus);
+        } else if (panel) panel.hidden = false;
     }
     App.openRulesPanel = openRulesPanel;
 
     function closeRulesPanel() {
         var panel = document.getElementById("rules-create-panel");
-        if (panel) panel.hidden = true;
+        if (panel && App.closeManagedDrawer) App.closeManagedDrawer(panel);
+        else if (panel) panel.hidden = true;
         App.rulesPanelEditingProjectId = null;
+        App.rulesPanelOriginalLanguage = null;
         clearPanelStatus();
     }
     App.closeRulesPanel = closeRulesPanel;
@@ -137,7 +180,9 @@
         if (folderBtn) folderBtn.classList.toggle("is-active", App.rulesPanelRuleType === "folder");
         if (keywordBtn) keywordBtn.classList.toggle("is-active", App.rulesPanelRuleType === "keyword");
         if (folderRow) folderRow.hidden = App.rulesPanelRuleType !== "folder";
-        if (recursiveRow) recursiveRow.hidden = App.rulesPanelRuleType !== "folder";
+        if (recursiveRow) recursiveRow.hidden = true;
+        var recursive = document.getElementById("rules-panel-folder-recursive");
+        if (recursive) recursive.checked = true;
         if (keywordRow) keywordRow.hidden = App.rulesPanelRuleType !== "keyword";
     }
 
@@ -170,7 +215,13 @@
             return;
         }
         var description = descInput ? (descInput.value || "").trim() : "";
-        var language = readPanelLanguage();
+        // When editing an existing project, pass back the original language
+        // verbatim instead of reading from the hidden select (which only
+        // offers ``中文`` and would overwrite non-中文 projects). New
+        // projects default to ``中文`` via readPanelLanguage().
+        var language = App.rulesPanelEditingProjectId
+            ? (App.rulesPanelOriginalLanguage || "中文")
+            : readPanelLanguage();
         App.rulesCreatingPanelProject = true;
         refreshPanelWriteState();
         clearPanelStatus();
@@ -201,6 +252,7 @@
             refreshPanelWriteState();
         });
     }
+    App.savePanelProject = savePanelProject;
 
     function savePanelRule() {
         if (App.rulesCreatingPanelRule) return;
@@ -258,6 +310,15 @@
     function fillProjectFields(project) {
         setValue("rules-panel-project-name", project ? App.safeText(project.name, "") : "");
         setValue("rules-panel-project-description", project ? App.safeText(project.description, "") : "");
+        // Preserve the original language when editing. The hidden select
+        // only offers ``中文``; reading from it on save would overwrite
+        // non-中文 projects. We store the original language and pass it
+        // back verbatim on update. New projects default to ``中文``.
+        if (project && App.rulesPanelEditingProjectId) {
+            App.rulesPanelOriginalLanguage = App.safeText(project.language, "中文");
+        } else {
+            App.rulesPanelOriginalLanguage = null;
+        }
         setLanguage(project ? App.safeText(project.language, "中文") : "中文");
     }
 

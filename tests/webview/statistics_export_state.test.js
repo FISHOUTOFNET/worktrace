@@ -123,11 +123,11 @@ test("accepted statistics payload is the sole export ticket", async () => {
   await App.loadStatisticsExportSummary();
 
   assert.deepEqual(
-    JSON.parse(JSON.stringify(App.statisticsAcceptedPayload)),
+    JSON.parse(JSON.stringify(App.statisticsAcceptedPayload.exportTicket)),
     {
-      dateFrom: "2026-07-01",
-      dateTo: "2026-07-17",
-      exportRevision: "revision-1",
+      date_from: "2026-07-01",
+      date_to: "2026-07-17",
+      revision: "revision-1",
     }
   );
   assert.equal(App.statisticsSnapshotRevision, "revision-1");
@@ -139,9 +139,7 @@ test("export passes only the accepted date range and revision", async () => {
   const { App } = harness();
   const calls = [];
   App.statisticsAcceptedPayload = {
-    dateFrom: "2026-07-01",
-    dateTo: "2026-07-17",
-    exportRevision: "revision-1",
+    exportTicket: { date_from: "2026-07-01", date_to: "2026-07-17", revision: "revision-1", project_id: "7" },
   };
   App.bridge.exportStatisticsCsv = (...args) => {
     calls.push(args);
@@ -152,7 +150,7 @@ test("export passes only the accepted date range and revision", async () => {
   await flush();
   await flush();
 
-  assert.deepEqual(calls, [["2026-07-01", "2026-07-17", "revision-1"]]);
+  assert.deepEqual(calls, [["2026-07-01", "2026-07-17", "revision-1", "7"]]);
   assert.equal(App.statisticsExportSaving, false);
 });
 
@@ -160,9 +158,7 @@ test("loading blocks export without discarding the accepted snapshot", () => {
   const { App } = harness();
   let calls = 0;
   const accepted = {
-    dateFrom: "2026-07-01",
-    dateTo: "2026-07-17",
-    exportRevision: "revision-1",
+    exportTicket: { date_from: "2026-07-01", date_to: "2026-07-17", revision: "revision-1" },
   };
   App.statisticsAcceptedPayload = accepted;
   App.statisticsLoading = true;
@@ -182,9 +178,7 @@ test("in-flight export guard suppresses duplicate clicks", async () => {
   const pending = deferred();
   let calls = 0;
   App.statisticsAcceptedPayload = {
-    dateFrom: "2026-07-01",
-    dateTo: "2026-07-17",
-    exportRevision: "revision-1",
+    exportTicket: { date_from: "2026-07-01", date_to: "2026-07-17", revision: "revision-1" },
   };
   App.bridge.exportStatisticsCsv = () => {
     calls += 1;
@@ -206,9 +200,7 @@ test("changing the selected range invalidates the previous export ticket", () =>
   const { App } = harness();
   App.statisticsLoaded = true;
   App.statisticsAcceptedPayload = {
-    dateFrom: "2026-07-01",
-    dateTo: "2026-07-17",
-    exportRevision: "revision-1",
+    exportTicket: { date_from: "2026-07-01", date_to: "2026-07-17", revision: "revision-1" },
   };
   App.statisticsSnapshotRevision = "revision-1";
 

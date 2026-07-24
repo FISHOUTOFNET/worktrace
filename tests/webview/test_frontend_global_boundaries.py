@@ -206,12 +206,9 @@ def test_overview_surface_has_required_user_contracts() -> None:
     for label in ("概览", "时间详情", "统计与导出", "项目规则", "设置与隐私"):
         assert label in index
     for dom_id in (
-        "kpi-date",
         "kpi-total",
-        "kpi-projects",
-        "kpi-classified",
-        "kpi-uncategorized",
         "current-activity",
+        "overview-attention-list",
         "recent-list",
         "overview-error",
         "toggle-pause-btn",
@@ -228,24 +225,24 @@ def test_overview_uses_exact_aggregate_clocks_and_safe_error_surface() -> None:
     assert "kpi_live_targets" in source
     assert 'duration_semantic === "aggregate_live"' in source
     assert "kpi_live_base" not in source
-    assert "classified_seconds" in source
-    assert "uncategorized_seconds" in source
+    assert "attention_remaining_count" in source
 
     body = func_body(read_js("overview.js"), "showOverview")
-    assert "classified_seconds" in body
-    assert "uncategorized_seconds" in body
-    assert "classified_duration" not in body
-    assert "uncategorized_duration" not in body
+    assert "bundle.current_session" in body
+    assert "renderAttention" in body
+    assert "renderRecent" in body
 
 
 def test_startup_waits_for_privacy_notice_before_refresh_and_heartbeat() -> None:
-    body = func_body(read_js("init.js"), "init()")
-    notice = body.index("App.loadFirstRunNotice()")
-    refresh = body.index("refreshCurrentPageData(state")
-    heartbeat = body.index("startHeartbeat()")
-    assert notice < refresh
-    assert notice < heartbeat
-    assert ".then(function" in body[notice:refresh]
+    init_body = func_body(read_js("init.js"), "init()")
+    notice = init_body.index("App.loadFirstRunNotice()")
+    continue_entry = init_body.index("continueStartupAfterPrivacyGate()")
+    assert notice < continue_entry
+    assert ".then(function" in init_body[notice:continue_entry]
+    startup_body = func_body(read_js("init.js"), "continueStartupAfterPrivacyGate")
+    refresh = startup_body.index("refreshCurrentPageData(")
+    heartbeat = startup_body.index("startHeartbeat()")
+    assert refresh < heartbeat
 
 
 def test_local_ticker_never_calls_backend() -> None:

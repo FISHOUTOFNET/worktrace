@@ -11,6 +11,15 @@ from ..services.database_maintenance_service import MaintenanceInProgressError
 from ..write_gate import DATABASE_RECOVERY_ERROR
 from . import settings_api
 
+PRIVACY_ACCEPT_FAILED = "privacy_accept_failed"
+PRIVACY_GATE_REQUIRED = "privacy_gate_required"
+COLLECTOR_START_FAILED = "collector_start_failed"
+DATABASE_MAINTENANCE_RECOVERY_REQUIRED = "database_maintenance_recovery_required"
+
+_COLLECTOR_FAILED_MESSAGE = (
+    "隐私说明已确认，但记录功能未能启动，请稍后重试或在设置中恢复"
+)
+
 
 class ApplicationRuntimeCapability(Protocol):
     """Narrow runtime capability consumed by API-facing application commands."""
@@ -103,28 +112,62 @@ class ApplicationControlService:
             return {"ok": False, "error": "collector_start_failed"}
 
     def accept_privacy_notice_and_start(self) -> dict[str, Any]:
-        result = settings_api.accept_first_run_notice_for_webview()
-        if not result.get("ok"):
-            return result
+        accept_result = settings_api.accept_first_run_notice_for_webview()
+        if not accept_result.get("ok"):
+            return {
+                "ok": False,
+                "accepted": False,
+                "collector_started": False,
+                "collector_status": None,
+                "error_code": PRIVACY_ACCEPT_FAILED,
+                "message": str(accept_result.get("error") or "确认隐私说明失败"),
+            }
         start_result = self.start_collection_after_privacy_gate()
         if not start_result.get("ok"):
+            # RuntimeStartResult.to_dict() emits ``error_code``; the legacy
+            # ``error`` key is only on the maintenance/privacy/exception
+            # fallback dicts. Prefer the runtime's authoritative error_code.
+            raw_error = str(
+                start_result.get("error_code")
+                or start_result.get("error")
+                or COLLECTOR_START_FAILED
+            )
+            error_code = _map_collector_start_error_code(raw_error)
+            message = str(
+                start_result.get("message")
+                or _COLLECTOR_FAILED_MESSAGE
+            )
             return {
                 "ok": False,
                 "accepted": True,
-                "error": str(start_result.get("error") or "collector_start_failed"),
-                "message": str(
-                    start_result.get("message")
-                    or "隐私说明已确认，但记录功能未能启动，请点击恢复记录重试"
-                ),
+                "collector_started": False,
+                "collector_status": self._safe_collector_status(),
+                "error_code": error_code,
+                "message": message,
             }
-        payload: dict[str, Any] = {
+        return {
             "ok": True,
             "accepted": True,
+            "collector_started": True,
+            "collector_status": self._slim_collector_status(),
+            "error_code": None,
             "message": "已确认隐私说明",
-            "degraded": bool(start_result.get("degraded")),
         }
-        payload["status"] = self.get_collection_status()
-        return payload
+
+    def _slim_collector_status(self) -> dict[str, Any]:
+        full = self.get_collection_status()
+        return {
+            "status": str(full.get("status") or ""),
+            "paused": bool(full.get("paused")),
+            "display": str(full.get("display") or ""),
+        }
+
+    def _safe_collector_status(self) -> dict[str, Any] | None:
+        try:
+            return self._slim_collector_status()
+        except Exception:
+            logging.exception("collector status read after failed start failed")
+            return None
 
     def pause_collection_now(self) -> dict[str, Any]:
         try:
@@ -197,8 +240,21 @@ class ApplicationControlService:
         self.runtime.request_shutdown()
 
 
+def _map_collector_start_error_code(raw_error: str) -> str:
+    """Map an internal start error string to a stable public error code."""
+    if raw_error == DATABASE_RECOVERY_ERROR:
+        return DATABASE_MAINTENANCE_RECOVERY_REQUIRED
+    if raw_error == "请先确认隐私说明":
+        return PRIVACY_GATE_REQUIRED
+    return COLLECTOR_START_FAILED
+
+
 __all__ = [
     "ApplicationControlService",
     "ApplicationRuntimeCapability",
     "MaintenanceStateCapability",
+    "PRIVACY_ACCEPT_FAILED",
+    "PRIVACY_GATE_REQUIRED",
+    "COLLECTOR_START_FAILED",
+    "DATABASE_MAINTENANCE_RECOVERY_REQUIRED",
 ]

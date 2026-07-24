@@ -235,8 +235,9 @@ class FakeStatisticsCapability:
         self.export_statistics_csv_side_effect: BaseException | None = None
         self.export_statistics_csv_calls: list[tuple] = []
 
-    def get_statistics_export_view_model(self, date_from, date_to):
-        self.get_statistics_export_view_model_calls.append((date_from, date_to))
+    def get_statistics_export_view_model(self, date_from, date_to, project_id=None):
+        call = (date_from, date_to) if project_id is None else (date_from, date_to, project_id)
+        self.get_statistics_export_view_model_calls.append(call)
         if self.get_statistics_export_view_model_side_effect is not None:
             raise self.get_statistics_export_view_model_side_effect
         return self.get_statistics_export_view_model_return
@@ -247,10 +248,11 @@ class FakeStatisticsCapability:
             raise self.format_export_duration_side_effect
         return self.format_export_duration_return
 
-    def export_statistics_csv(self, date_from, date_to, output_path, expected_snapshot_revision):
-        self.export_statistics_csv_calls.append(
-            (date_from, date_to, output_path, expected_snapshot_revision)
-        )
+    def export_statistics_csv(self, date_from, date_to, output_path, expected_export_ticket_revision, project_id=None):
+        call = (date_from, date_to, output_path, expected_export_ticket_revision)
+        if project_id is not None:
+            call = (*call, project_id)
+        self.export_statistics_csv_calls.append(call)
         if self.export_statistics_csv_side_effect is not None:
             raise self.export_statistics_csv_side_effect
         return self.export_statistics_csv_return

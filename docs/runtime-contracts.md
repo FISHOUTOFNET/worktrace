@@ -204,10 +204,15 @@ server elapsed.
 ## Runtime envelope v2
 
 The envelope may contain schema version, surface/date scope, verified snapshot
-metadata, current static metadata, Recent first row, Collector/runtime phase,
-worker mapping, generations, database replacement epoch, errors, consistency and
-full-refresh request. It contains one `clock`. It does not duplicate the clock's
-span identity, stable hash, sample timestamp or live flags through aliases.
+metadata, current static metadata, Collector/runtime phase, worker mapping,
+generations, database replacement epoch, errors, consistency and full-refresh
+request. It contains one `clock`. It does not duplicate the clock's span
+identity, stable hash, sample timestamp or live flags through aliases. The retired `recent_first_row` alias is no longer transported; Overview reads recent
+records only from the Overview payload's `recent` field (current-only contract).
+The Overview payload also carries an `attention` field whose visible items must all
+be present in the visible `recent` list, even after both are truncated to their
+display limits (`recent` ≤ 20, `attention` ≤ 3); the ViewModel selects the visible
+recent window to preserve this subset guarantee.
 
 Every production bridge caller supplies explicit runtime and Collector status.
 Missing required dependencies produce a contract error that the bridge logs and
@@ -233,3 +238,50 @@ identity. The affected target then:
 
 Continuity keys may prevent unnecessary DOM reconstruction but cannot retain a
 maximum duration, carry prior seconds or modify the formula.
+
+## Statistics export ticket v2
+
+Statistics CSV export requires a mandatory `expected_export_ticket_revision`
+parameter across the WebView bridge, protocol, API and service layers. There
+is no optional or `None` default. The ticket is a stable hash of:
+
+- snapshot revision;
+- normalized date range (post-resolution);
+- normalized project scope;
+- CSV format; and
+- schema version.
+
+The bridge validates the ticket is a non-empty string before opening the save
+dialog. A missing, empty, or whitespace-only ticket returns
+`统计数据已更新，请重新加载后导出` without calling the export service or
+creating any file.
+
+The service unconditionally compares `expected_export_ticket_revision` to the
+current ticket computed from a single canonical snapshot. A mismatch raises
+`stale_statistics_snapshot`. There is no `if ticket is not None` guard.
+
+## Statistics date-range transport
+
+Empty `date_from` and `date_to` together mean canonical all-time
+(1970-01-01 to today). One empty and one non-empty date returns
+`invalid_date`. Both non-empty dates are validated for format and order.
+
+The frontend explicitly sends the first day of the current month and today on
+default Statistics entry. The backend never infers "default this month" from
+empty strings.
+
+## Single-snapshot CSV export
+
+One `write_statistics_csv` call builds exactly one canonical snapshot via
+`build_visible_snapshot`. That snapshot is used for:
+
+1. building the lightweight summary projection;
+2. computing the current export ticket;
+3. validating the supplied ticket;
+4. iterating export records; and
+5. writing CSV rows.
+
+CSV records are streamed row-by-row inside the `AtomicFileOutput` context.
+They are never fully materialized as a list. Zero records raise `empty_data`
+inside the context so no target file or temp residue is committed. Ticket
+validation occurs before the atomic file context is entered.

@@ -56,6 +56,74 @@
         clearEditPanel();
     }
 
+    function timelineSessionOrder(left, right) {
+        if (!!left.is_in_progress !== !!right.is_in_progress) return left.is_in_progress ? -1 : 1;
+        return String(right.start_time || "").localeCompare(String(left.start_time || ""));
+    }
+
+    function filteredTimelineSessions(entries) {
+        var filter = document.getElementById("timeline-project-filter");
+        var value = filter ? String(filter.value || "") : "";
+        return (Array.isArray(entries) ? entries.slice() : []).filter(function (session) {
+            if (!value) return true;
+            if (value === "unclassified") {
+                // Use the backend authoritative field instead of
+                // ``!project_id`` so standalone, privacy-redacted, and
+                // deleted-project rows are excluded.
+                return session.is_report_uncategorized === true;
+            }
+            return String(session.project_id || "") === value;
+        }).sort(timelineSessionOrder);
+    }
+
+    function renderTimelineProjectFilter(projects) {
+        var select = document.getElementById("timeline-project-filter");
+        if (!select) return;
+        var previous = select.value;
+        var html = '<option value="">项目：全部</option><option value="unclassified">未归类</option>';
+        (projects || []).forEach(function (project) {
+            html += '<option value="' + App.escapeHtml(String(project.id || "")) + '">'
+                + App.escapeHtml(project.name || "未命名项目") + '</option>';
+        });
+        select.innerHTML = html;
+        select.value = previous;
+        if (select.value !== previous) select.value = "";
+    }
+    App.renderTimelineProjectFilter = renderTimelineProjectFilter;
+
+    function openTimelineDrawer(focusTarget) {
+        if (!window.matchMedia || !window.matchMedia("(max-width: 959px)").matches) return;
+        var pane = document.getElementById("timeline-details-pane");
+        var backdrop = document.getElementById("timeline-drawer-backdrop");
+        if (!pane) return;
+        App.timelineDrawerRestoreFocus = document.activeElement;
+        pane.classList.add("drawer-open");
+        if (backdrop) { backdrop.hidden = false; backdrop.classList.add("open"); }
+        var target = focusTarget || document.getElementById("timeline-details-close");
+        if (target && target.focus) target.focus();
+    }
+    App.openTimelineDrawer = openTimelineDrawer;
+
+    function closeTimelineDrawer() {
+        var pane = document.getElementById("timeline-details-pane");
+        var backdrop = document.getElementById("timeline-drawer-backdrop");
+        if (pane) pane.classList.remove("drawer-open");
+        if (backdrop) { backdrop.classList.remove("open"); backdrop.hidden = true; }
+        var restore = App.timelineDrawerRestoreFocus;
+        App.timelineDrawerRestoreFocus = null;
+        if (restore && restore.focus) restore.focus();
+    }
+    App.closeTimelineDrawer = closeTimelineDrawer;
+
+    App.applyTimelineProjectFilter = function () {
+        // Changing the filter can hide the currently-edited session, which
+        // would orphan the draft. Gate the re-render through the context
+        // change flow so a dirty draft is saved first.
+        requestTimelineContextChange(function () {
+            if (App.lastTimelineData) showTimeline(App.lastTimelineData);
+        }, "应用筛选");
+    };
+
     function showTimeline(data) {
         if (!data) return;
         if (data.date) App.timelineDate = data.date;
@@ -63,6 +131,7 @@
         var dateInput = document.getElementById("timeline-date-input");
         if (dateInput) dateInput.value = data.date || "";
         renderTimelineTotal(data);
+        loadProjects();
         App.renderCurrentActivityElement(
             document.getElementById("timeline-current"),
             data.current_activity || {},
@@ -70,10 +139,15 @@
         );
 
         var listEl = document.getElementById("timeline-sessions-list");
-        var sessions = Array.isArray(data.entries) ? data.entries : [];
-        App.currentSessions = sessions;
+        var allSessions = Array.isArray(data.entries) ? data.entries.slice().sort(timelineSessionOrder) : [];
+        App.currentSessions = allSessions;
+        var sessions = filteredTimelineSessions(allSessions);
         if (sessions.length === 0) {
-            listEl.innerHTML = '<div class="timeline-empty">当日暂无活动记录</div>';
+            listEl.innerHTML = '<div class="empty-state timeline-empty"><strong>'
+                + (allSessions.length ? "当前筛选下没有时间段" : "当日暂无时间记录")
+                + '</strong><span>'
+                + (allSessions.length ? "可切换项目筛选查看其他时间段。" : "选择其他日期，或开始记录新的工作活动。")
+                + '</span></div>';
             resetEmptyTimeline();
             return;
         }
@@ -108,21 +182,24 @@
             var clockAttributes = canTick
                 ? App.liveClockDataAttributes(clock, continuityKey, "timeline-session")
                 : "";
-            html += '<div class="' + classes + '" data-projection-instance-key="'
+            html += '<button type="button" role="option" aria-selected="'
+                + (session.projection_instance_key === App.selectedProjectionInstanceKey ? "true" : "false")
+                + '" class="' + classes + '" data-projection-instance-key="'
                 + App.escapeHtml(session.projection_instance_key || "") + '" title="'
                 + App.escapeHtml(projectLabel) + '｜' + App.escapeHtml(startText) + '｜'
                 + App.escapeHtml(durationText) + '">'
                 + '<div class="timeline-item-main">'
                 + '<div class="timeline-item-project">' + App.escapeHtml(projectLabel) + '</div>'
                 + '<div class="timeline-item-time">' + App.escapeHtml(startText) + '</div>'
-                + (session.has_duration_override ? '<div class="timeline-item-adjusted">已修正</div>' : '')
+                + '<div class="timeline-item-description'
+                + (session.description_source === "derived" ? ' derived' : '') + '">'
+                + App.escapeHtml(session.display_description || "暂无描述") + '</div>'
                 + '</div><div class="timeline-item-side">'
                 + '<div class="timeline-item-duration"' + clockAttributes
                 + ' data-duration-seconds="' + String(seconds) + '">'
                 + App.escapeHtml(durationText) + '</div>'
-                + '<div class="timeline-item-count">'
-                + App.escapeHtml(String(session.event_count || 0) + " 条")
-                + '</div></div></div>';
+                + (session.is_in_progress ? '<span class="badge live">进行中</span>' : '')
+                + '</div></button>';
         }
         listEl.innerHTML = html;
         var items = listEl.querySelectorAll(".timeline-item");
@@ -134,7 +211,23 @@
                         sessions
                     );
                 });
+                itemEl.addEventListener("keydown", function (event) {
+                    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+                    event.preventDefault();
+                    var candidates = Array.prototype.slice.call(items);
+                    var target = candidates[Math.max(0, Math.min(candidates.length - 1,
+                        candidates.indexOf(itemEl) + (event.key === "ArrowDown" ? 1 : -1)))];
+                    if (target) target.focus();
+                });
             })(items[j]);
+        }
+
+        if (App.selectedProjectionInstanceKey && !sessions.some(function (session) {
+            return session.projection_instance_key === App.selectedProjectionInstanceKey;
+        })) {
+            resetEmptyTimeline();
+            closeTimelineDrawer();
+            return;
         }
 
         if (!App.selectedProjectionInstanceKey) return;
@@ -211,6 +304,18 @@
     App.acceptTimelineDetailsPayload = acceptTimelineDetailsPayload;
 
     function selectTimelineSession(projectionInstanceKey, sessions) {
+        if (projectionInstanceKey !== App.selectedProjectionInstanceKey
+                && (App.editSaving || isEditDirty() || App.mutationState === "unknown")) {
+            // Gate the session switch through the context change flow so a
+            // dirty draft is saved first and the switch is queued if a save
+            // is in flight. On failure or unknown mutation the draft is
+            // preserved and the switch is blocked.
+            requestTimelineContextChange(function () {
+                App.selectedProjectionInstanceKey = projectionInstanceKey;
+                showTimeline(App.lastTimelineData);
+            }, "切换时间段");
+            return;
+        }
         App.selectedProjectionInstanceKey = projectionInstanceKey;
         var items = document.querySelectorAll("#timeline-sessions-list .timeline-item");
         var found = null;
@@ -222,8 +327,10 @@
         }
         for (var i = 0; i < items.length; i++) {
             items[i].classList.remove("selected");
+            items[i].setAttribute("aria-selected", "false");
             if (items[i].getAttribute("data-projection-instance-key") === projectionInstanceKey) {
                 items[i].classList.add("selected");
+                items[i].setAttribute("aria-selected", "true");
             }
         }
         if (!found) return;
@@ -242,6 +349,7 @@
         if (found.edit_disabled === true) clearEditPanel();
         else populateEditPanel(found);
         updateSessionActionButtons(found);
+        openTimelineDrawer(document.getElementById("timeline-details-close"));
     }
     App.selectTimelineSession = selectTimelineSession;
 
@@ -274,10 +382,10 @@
         var requestKey = App.timelineRequestState.detailRequestKey(owner);
         if (App.detailsInFlight[requestKey]) return App.detailsInFlight[requestKey];
         if (!detailsList.innerHTML.trim()) {
-            detailsHeader.textContent = "加载项目活动耗时…";
+            detailsHeader.textContent = "加载活动详情…";
             detailsList.innerHTML = "";
         } else {
-            detailsHeader.textContent = "正在刷新项目活动耗时…";
+            detailsHeader.textContent = "正在刷新活动详情…";
         }
         var request = App.bridge.getTimelineSessionActivitySummary(
             projectionInstanceKey || "",
@@ -314,7 +422,7 @@
             }
             var data = App.handleResult(result, function (message) {
                 if (!App.timelineRequestState.isCurrentDetailsOwner(owner)) return;
-                detailsHeader.textContent = "加载项目活动耗时失败";
+                detailsHeader.textContent = "加载活动详情失败";
                 detailsList.innerHTML = '<div class="timeline-empty">'
                     + App.escapeHtml(message) + '</div>';
             });
@@ -324,8 +432,8 @@
             return data;
         }).catch(function () {
             if (!App.timelineRequestState.isCurrentDetailsOwner(owner)) return null;
-            detailsHeader.textContent = "加载项目活动耗时失败";
-            detailsList.innerHTML = '<div class="timeline-empty">无法加载项目活动耗时，请稍后重试。</div>';
+            detailsHeader.textContent = "加载活动详情失败";
+            detailsList.innerHTML = '<div class="timeline-empty">无法加载活动详情，请稍后重试。</div>';
             return null;
         }).finally(function () {
             if (App.detailsInFlight[requestKey] === request) {
@@ -350,11 +458,11 @@
         var list = document.getElementById("timeline-details-list");
         var rows = Array.isArray(data.summary_rows) ? data.summary_rows : [];
         if (rows.length === 0) {
-            header.textContent = "项目活动耗时";
-            list.innerHTML = '<div class="timeline-empty">该时段暂无活动耗时</div>';
+            header.textContent = "活动详情";
+            list.innerHTML = '<div class="timeline-empty">该时段暂无活动详情</div>';
             return;
         }
-        header.textContent = "项目活动耗时";
+        header.textContent = "活动详情";
         var html = "";
         for (var i = 0; i < rows.length; i++) {
             var row = rows[i];
@@ -387,10 +495,11 @@
                 + App.escapeHtml(displayName) + '</div>'
                 + '<div class="summary-item-project" title="' + App.escapeHtml(projectLabel) + '">'
                 + App.escapeHtml(projectLabel) + '</div>'
-                + (row.can_hide_activity
+                + (row.can_hide_activity || row.can_delete
                     ? '<button type="button" class="summary-hide-activity" data-summary-id="'
                         + App.escapeHtml(String(row.summary_id || ""))
-                        + '">从该时段移除该活动</button>'
+                        + '" aria-label="删除活动" data-tooltip="删除活动">'
+                        + App.iconMarkup("trash") + '</button>'
                     : '')
                 + '</div>';
         }
@@ -399,9 +508,9 @@
         for (var index = 0; index < buttons.length; index++) {
             buttons[index].addEventListener("click", function (event) {
                 event.stopPropagation();
-                App.runTimelineSessionOperation("hideActivity", {
+                App.confirmTimelineDeletion("hideActivity", {
                     summaryId: this.getAttribute("data-summary-id")
-                });
+                }, this);
             });
         }
     }
@@ -409,12 +518,25 @@
     App.renderSessionActivitySummary = renderSessionDetails;
 
     function loadProjects() {
-        if (App.projectsCache) return Promise.resolve(App.projectsCache);
-        if (App.projectsLoading) return App.projectsLoadPromise || Promise.resolve(null);
+        // Delegate to the unified catalog coordinator (installed by
+        // rules.js). The coordinator stores both editing and filter
+        // catalogs and renders every consumer from a single bridge call.
+        if (typeof App.loadProjects === "function" && App.loadProjects !== loadProjects) {
+            return App.loadProjects();
+        }
+        // Fallback: direct load (only used if the coordinator has not been
+        // installed yet, e.g. during early init).
+        if (App.projectsCache) {
+            renderTimelineProjectFilter(App.filterProjectsCache || App.projectsCache);
+            return Promise.resolve(App.projectsCache);
+        }
         App.projectsLoading = true;
         App.projectsLoadPromise = App.bridge.listProjectsForTimeline().then(function (result) {
-            if (result && result.ok !== false && Array.isArray(result.projects)) {
-                App.projectsCache = result.projects;
+            if (result && result.ok !== false) {
+                App.editingProjectsCache = result.editing_projects || result.projects || [];
+                App.filterProjectsCache = result.filter_projects || result.projects || [];
+                App.projectsCache = App.editingProjectsCache;
+                renderTimelineProjectFilter(App.filterProjectsCache);
             }
             return App.projectsCache;
         }).catch(function () {
@@ -425,7 +547,59 @@
         });
         return App.projectsLoadPromise;
     }
-    App.loadProjects = loadProjects;
+
+    function confirmTimelineDeletion(operation, options, trigger) {
+        if (!App.openDeleteDialog) return runTimelineSessionOperation(operation, options);
+        var activity = operation === "hideActivity";
+        return App.openDeleteDialog({
+            trigger: trigger,
+            title: activity ? "删除活动" : "删除时间段",
+            objectLabel: activity ? "当前时间段中的这个活动" : "当前选中的时间段",
+            warning: activity
+                ? "活动会从当前时间段移除；页面会在后端确认成功后刷新。"
+                : "时间段会从报表中移除；原始采集事实不会在前端被改写。",
+            confirmLabel: activity ? "再次确认删除活动" : "再次确认删除时间段",
+            twoStep: true
+        }).then(function (confirmed) {
+            return confirmed ? runTimelineSessionOperation(operation, options) : null;
+        });
+    }
+    App.confirmTimelineDeletion = confirmTimelineDeletion;
+
+    App.toggleTimelineAdvancedMenu = function () {
+        var menu = document.getElementById("timeline-session-actions");
+        var button = document.getElementById("timeline-advanced-toggle");
+        if (!menu || !button) return;
+        menu.hidden = !menu.hidden;
+        button.setAttribute("aria-expanded", menu.hidden ? "false" : "true");
+        if (!menu.hidden) {
+            var first = menu.querySelector("button:not([hidden]):not([disabled])");
+            if (first) first.focus();
+        }
+    };
+
+    App.initTimelineAccessibility = function () {
+        if (document.documentElement.getAttribute("data-timeline-a11y-bound") === "1") return;
+        document.documentElement.setAttribute("data-timeline-a11y-bound", "1");
+        document.addEventListener("keydown", function (event) {
+            var pane = document.getElementById("timeline-details-pane");
+            var menu = document.getElementById("timeline-session-actions");
+            if (event.key === "Escape" && menu && !menu.hidden) {
+                event.preventDefault();
+                menu.hidden = true;
+                var toggle = document.getElementById("timeline-advanced-toggle");
+                if (toggle) { toggle.setAttribute("aria-expanded", "false"); toggle.focus(); }
+                return;
+            }
+            if (!pane || !pane.classList.contains("drawer-open")) return;
+            if (event.key === "Escape") {
+                event.preventDefault();
+                closeTimelineDrawer();
+                return;
+            }
+            if (App.trapFocus) App.trapFocus(event, pane);
+        });
+    };
 
     function findCachedProject(projectId) {
         var projects = App.projectsCache || [];
@@ -541,8 +715,12 @@
     App.populateEditPanel = populateEditPanel;
 
     function clearEditPanel() {
+        if (App.timelineAutosaveTimer) window.clearTimeout(App.timelineAutosaveTimer);
+        App.timelineAutosaveTimer = null;
+        App.timelineAutosaveQueued = false;
         App.editingSession = null;
         App.editSaving = false;
+        App.submittedDraft = null;
         var panel = document.getElementById("timeline-edit-panel");
         if (panel) panel.hidden = true;
         updateSessionActionButtons(null);
@@ -624,6 +802,35 @@
     }
     App.showEditStatus = showEditStatus;
 
+    function scheduleTimelineAutosave(delay) {
+        if (!App.editingSession) return;
+        if (App.timelineAutosaveTimer) window.clearTimeout(App.timelineAutosaveTimer);
+        App.timelineAutosaveTimer = null;
+        if (App.editSaving) {
+            App.timelineAutosaveQueued = true;
+            showEditStatus("有新更改，等待保存", false);
+            return;
+        }
+        if (!isEditDirty()) {
+            showEditStatus("已保存", false);
+            return;
+        }
+        showEditStatus("等待自动保存", false);
+        App.timelineAutosaveTimer = window.setTimeout(function () {
+            App.timelineAutosaveTimer = null;
+            saveEdit();
+        }, Math.max(0, parseInt(delay, 10) || 0));
+    }
+    App.scheduleTimelineAutosave = scheduleTimelineAutosave;
+
+    App.focusTimelineEditorField = function (target) {
+        var id = target === "project" ? "edit-project-select"
+            : target === "description" ? "edit-note-text" : "timeline-details-close";
+        var element = document.getElementById(id);
+        openTimelineDrawer(element);
+        if (element && element.focus) element.focus();
+    };
+
     function setEditSaving(saving) {
         App.editSaving = saving;
         applyEditCapabilities(App.editingSession);
@@ -636,6 +843,7 @@
 
     function markMutationUnknown(owner) {
         App.timelineRequestState.markMutationUnknown(owner);
+        App.timelineAutosaveQueued = false;
         setEditSaving(false);
         showEditStatus("操作结果尚未确认，可重试同一操作或刷新核对。", true);
     }
@@ -663,8 +871,30 @@
         });
     }
 
+    // Rebase the editing session to the refreshed authoritative baseline.
+    // After a save + refresh the projection revision advances (R1 -> R2).
+    // If the user typed during the in-flight request, populateEditPanel is
+    // skipped, leaving App.editingSession at the OLD baseline.
+    function rebaseEditingSessionAfterRefresh() {
+        if (!App.editingSession || !App.selectedProjectionInstanceKey) return;
+        var refreshed = findSessionByProjectionKey(App.selectedProjectionInstanceKey);
+        if (!refreshed) return;
+        if (refreshed.projection_instance_key !== App.editingSession.projection_instance_key) return;
+        App.editingSession = refreshed;
+        App.selectedProjectionRevision = refreshed.projection_revision || "";
+        // Re-apply capability flags (e.g. can_edit_note) in case the
+        // mutation changed the session's editability, but never overwrite
+        // the user's current DOM input.
+        applyEditCapabilities(refreshed);
+    }
+    App.rebaseEditingSessionAfterRefresh = rebaseEditingSessionAfterRefresh;
+
     function saveEdit() {
-        if (!App.editingSession || App.editSaving) return;
+        if (!App.editingSession) return;
+        if (App.editSaving) {
+            App.timelineAutosaveQueued = true;
+            return;
+        }
         var session = App.editingSession;
         var canProject = canEditField(session, "can_edit_project");
         var canNote = canEditField(session, "can_edit_note");
@@ -721,7 +951,7 @@
             if (isNaN(adjustedDurationSeconds)) adjustedDurationSeconds = null;
         }
         if (!projectChanged && !noteChanged && !durationChanged) {
-            showEditStatus("没有需要保存的更改", false);
+            showEditStatus("已保存", false);
             return;
         }
         var reportDate = currentTimelineReportDate();
@@ -747,6 +977,18 @@
             blockDifferentMutationIntent();
             return;
         }
+        // Snapshot the submitted draft + authoritative revision. This
+        // decouples the in-flight request from the live DOM so post-submit
+        // input is never overwritten by a stale response, and the queued
+        // autosave can rebase onto the post-success revision.
+        App.submittedDraft = {
+            projectionInstanceKey: key,
+            projectionRevision: revision,
+            requestId: owner.requestId,
+            projectId: overrideProjectId,
+            note: note,
+            adjustedDurationSeconds: adjustedDurationSeconds
+        };
         owner.payload = [
             reportDate,
             key,
@@ -762,18 +1004,38 @@
                 setEditSaving(false);
                 showEditStatus(result && result.message ? result.message : "保存失败", true);
                 App.timelineRequestState.releaseMutationOwner(owner, "confirmed_failure", result);
+                drainPendingContextChange(false);
                 return;
             }
             App.timelineRequestState.transitionMutation(owner, "confirmed_success", result);
             consumeMutationResult(result);
-            setEditSaving(false);
             App.timelineRequestState.releaseMutationOwner(owner, "confirmed_success", result);
-            showEditStatus("保存成功", false);
+            showEditStatus("已自动保存", false);
             return refreshAfterConfirmedMutation().catch(function () {
                 showEditStatus("操作已保存，但刷新失败", true);
+            }).then(function () {
+                // Rebase to the refreshed baseline (with the new
+                // projection_revision) BEFORE evaluating the queued
+                // autosave so the next save uses the new revision.
+                rebaseEditingSessionAfterRefresh();
+            }).finally(function () {
+                setEditSaving(false);
+                if (App.timelineAutosaveQueued && isEditDirty()) {
+                    App.timelineAutosaveQueued = false;
+                    scheduleTimelineAutosave(0);
+                } else {
+                    App.timelineAutosaveQueued = false;
+                    if (!isEditDirty()) App.submittedDraft = null;
+                }
+                // Drain any queued context change now that the save has
+                // resolved. The draft is either persisted (success) or
+                // preserved (the success path above ran), so switching is
+                // safe.
+                drainPendingContextChange(true);
             });
         }).catch(function () {
             if (App.timelineRequestState.isCurrentMutationOwner(owner)) markMutationUnknown(owner);
+            drainPendingContextChange(false);
         });
     }
     App.saveEdit = saveEdit;
@@ -915,16 +1177,30 @@
     }
     App.findSessionByProjectionKey = findSessionByProjectionKey;
 
-    function findMergeTarget(sourceKey, direction) {
-        var sessions = App.currentSessions || [];
-        for (var i = 0; i < sessions.length; i++) {
-            if ((sessions[i].projection_instance_key || "") !== sourceKey) continue;
+    // Find the chronological merge target. The UI renders newest-first but
+    // the backend defines previous = time-earlier, next = time-later.
+    function findChronologicalMergeTarget(sessions, sourceKey, direction) {
+        if (!sessions || !sourceKey) return null;
+        var sorted = sessions.slice().sort(function (left, right) {
+            var leftTime = String(left.start_time || "");
+            var rightTime = String(right.start_time || "");
+            if (leftTime < rightTime) return -1;
+            if (leftTime > rightTime) return 1;
+            return String(left.projection_instance_key || "")
+                .localeCompare(String(right.projection_instance_key || ""));
+        });
+        for (var i = 0; i < sorted.length; i++) {
+            if ((sorted[i].projection_instance_key || "") !== sourceKey) continue;
             var targetIndex = direction === "previous" ? i - 1 : i + 1;
-            return targetIndex >= 0 && targetIndex < sessions.length
-                ? sessions[targetIndex]
-                : null;
+            if (targetIndex < 0 || targetIndex >= sorted.length) return null;
+            return sorted[targetIndex];
         }
         return null;
+    }
+    App.findChronologicalMergeTarget = findChronologicalMergeTarget;
+
+    function findMergeTarget(sourceKey, direction) {
+        return findChronologicalMergeTarget(App.currentSessions, sourceKey, direction);
     }
 
     function normalizeTimelineReportDate(date) {
@@ -1015,6 +1291,51 @@
         });
     };
     App.loadTimelineReport = timelineReportRequest;
+
+    // Single entry point for context changes that could destroy the current
+    // edit context (date switch, filter change, session switch).
+    function requestTimelineContextChange(actionFn, label) {
+        var reason = label || "切换";
+        if (App.mutationState === "unknown") {
+            showEditStatus("操作结果尚未确认，请先重试或刷新核对后再" + reason + "。", true);
+            return Promise.resolve(false);
+        }
+        if (App.editSaving) {
+            App.pendingContextChange = { action: actionFn, reason: reason };
+            showEditStatus("正在保存当前更改，保存完成后自动" + reason + "。", false);
+            return Promise.resolve(false);
+        }
+        // Dirty draft with no save in flight: save first, then switch.
+        if (isEditDirty()) {
+            showEditStatus("正在保存当前更改，保存完成后自动" + reason + "。", false);
+            App.pendingContextChange = { action: actionFn, reason: reason };
+            saveEdit();
+            return Promise.resolve(false);
+        }
+        // No dirty draft: switch immediately.
+        return Promise.resolve().then(actionFn);
+    }
+    App.requestTimelineContextChange = requestTimelineContextChange;
+
+    // Drains a pending context change after a save completes. Called from
+    // the saveEdit finally block. On confirmed failure or unknown result
+    // the pending change is cancelled (draft preserved).
+    function drainPendingContextChange(saveSucceeded) {
+        var pending = App.pendingContextChange;
+        if (!pending) return;
+        App.pendingContextChange = null;
+        if (!saveSucceeded) {
+            showEditStatus("保存失败，未" + pending.reason + "，请重试或刷新核对。", true);
+            return;
+        }
+        // Save succeeded — execute the queued context change.
+        try {
+            pending.action();
+        } catch (error) {
+            // Swallow; the action is best-effort and the user can retry.
+        }
+    }
+    App.drainPendingContextChange = drainPendingContextChange;
     App.refreshTimeline = function () {
         return App.loadTimelineReport(currentTimelineReportDate(), {
             showLoading: false,
@@ -1031,23 +1352,40 @@
     App.goPrevDay = function () {
         var input = document.getElementById("timeline-date-input");
         var current = App.timelineDate || (input ? input.value : null);
-        App.loadTimelineReport(App.shiftDate(current, -1), {
-            showLoading: true,
-            resetSelection: true
-        });
+        var target = App.shiftDate(current, -1);
+        return requestTimelineContextChange(function () {
+            App.loadTimelineReport(target, {
+                showLoading: true,
+                resetSelection: true
+            });
+        }, "切换到前一天");
     };
     App.goNextDay = function () {
         var input = document.getElementById("timeline-date-input");
         var current = App.timelineDate || (input ? input.value : null);
-        App.loadTimelineReport(App.shiftDate(current, 1), {
-            showLoading: true,
-            resetSelection: true
-        });
+        var target = App.shiftDate(current, 1);
+        return requestTimelineContextChange(function () {
+            App.loadTimelineReport(target, {
+                showLoading: true,
+                resetSelection: true
+            });
+        }, "切换到后一天");
     };
     App.goToday = function () {
-        App.loadTimelineReport(null, {
-            showLoading: true,
-            resetSelection: true
-        });
+        return requestTimelineContextChange(function () {
+            App.loadTimelineReport(null, {
+                showLoading: true,
+                resetSelection: true
+            });
+        }, "切换到今天");
+    };
+    App.goToDate = function (date) {
+        var target = date || null;
+        return requestTimelineContextChange(function () {
+            App.loadTimelineReport(target, {
+                showLoading: true,
+                resetSelection: true
+            });
+        }, "切换日期");
     };
 })();

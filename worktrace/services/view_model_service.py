@@ -3,9 +3,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..constants import UNCATEGORIZED_PROJECT
+from ..constants import STATUS_NORMAL, UNCATEGORIZED_PROJECT
 from ..contracts.live_display_contracts import ActivitySnapshotContract, DisplaySpanContract
 from ..formatters import format_duration
+from ..resources.title_parsing import extract_anchor_file_name
 from . import (
     page_revision_service,
     project_activity_summary_service,
@@ -25,6 +26,69 @@ from .report_revision_service import get_report_structure_revision
 from .runtime_activity_state_service import sample_runtime_activity_state
 
 _RECENT_LIMIT = 20
+_ATTENTION_LIMIT = 3
+
+
+def _select_overview_recent_rows(
+    recent_rows: list[dict[str, Any]],
+    attention_rows: list[dict[str, Any]],
+    *,
+    limit: int,
+) -> list[dict[str, Any]]:
+    """Select the visible recent window so every displayed attention row is
+    also present in the displayed recent list.
+
+    The authoritative ``recent_rows`` is already filtered, merged, and sorted
+    (in-progress first, then start time descending). We take the first
+    ``limit`` rows as the base window, then promote any attention row that
+    fell beyond the truncation boundary by replacing the tail-most ordinary
+    (non-in-progress, non-attention) row. The result is re-sorted so
+    in-progress stays first and start-time descending order is preserved.
+    """
+    if limit <= 0:
+        return []
+
+    selected = list(recent_rows[:limit])
+    selected_keys = {
+        str(row.get("projection_instance_key") or "")
+        for row in selected
+    }
+
+    required_rows = [
+        row
+        for row in attention_rows
+        if str(row.get("projection_instance_key") or "") not in selected_keys
+    ]
+
+    for required in required_rows:
+        required_key = str(required.get("projection_instance_key") or "")
+        if not required_key:
+            continue
+
+        replace_index = next(
+            (
+                index
+                for index in range(len(selected) - 1, -1, -1)
+                if not bool(selected[index].get("is_in_progress"))
+                and not bool(selected[index].get("needs_attention"))
+            ),
+            None,
+        )
+
+        if replace_index is None:
+            break
+
+        selected[replace_index] = required
+        selected_keys.add(required_key)
+
+    selected.sort(
+        key=lambda row: (
+            bool(row.get("is_in_progress")),
+            str(row.get("start_time") or ""),
+        ),
+        reverse=True,
+    )
+    return selected
 
 
 def _get_current_activity_snapshot() -> ActivitySnapshotContract | None:
@@ -145,7 +209,7 @@ def _base_session_row(session: dict[str, Any], *, row_kind: str) -> dict[str, An
         session.get("is_report_uncategorized", not is_report_project)
     )
     first_activity_id = int(session.get("first_activity_id") or 0) or None
-    return {
+    row = {
         "row_kind": row_kind,
         "project_name": str(session.get("project_name") or UNCATEGORIZED_PROJECT),
         "project_description": str(session.get("project_description") or ""),
@@ -212,6 +276,68 @@ def _base_session_row(session: dict[str, Any], *, row_kind: str) -> dict[str, An
         "can_hide_activity": bool(session.get("can_hide_activity")),
         "display_project": session.get("display_project"),
     }
+    row.update(_description_display_fields(session))
+    return row
+
+
+def _description_display_fields(session: dict[str, Any]) -> dict[str, Any]:
+    user_description = str(session.get("session_note") or "").strip()
+    labels: list[str] = []
+    contributions = sorted(
+        list(session.get("_projection_contributions") or []),
+        key=lambda item: -int(item.get("duration_seconds") or 0),
+    )
+    for contribution in contributions:
+        if bool(contribution.get("privacy_redacted")):
+            continue
+        if str(contribution.get("status") or STATUS_NORMAL) != STATUS_NORMAL:
+            continue
+        activity_name = str(contribution.get("activity_display_name") or "").strip()
+        if contribution.get("resource_is_anchor") and activity_name:
+            label = activity_name
+        else:
+            label = extract_anchor_file_name(contribution.get("window_title")) or str(
+                contribution.get("app_name") or contribution.get("process_name") or ""
+            ).strip()
+        if label and label not in labels:
+            labels.append(label)
+        if len(labels) >= 3:
+            break
+    derived_summary = " · ".join(labels)
+    if user_description:
+        display_description = user_description
+        description_source = "user"
+    elif derived_summary:
+        display_description = derived_summary
+        description_source = "derived"
+    else:
+        display_description = "暂无描述"
+        description_source = "none"
+    needs_project = not bool(session.get("is_report_project"))
+    needs_user_description = not bool(user_description)
+    missing_fields = (
+        "project_and_description"
+        if needs_project and needs_user_description
+        else "project"
+        if needs_project
+        else "description"
+        if needs_user_description
+        else ""
+    )
+    return {
+        "user_description": user_description,
+        "display_description": display_description,
+        "description_source": description_source,
+        "needs_project": needs_project,
+        "needs_user_description": needs_user_description,
+        "needs_attention": bool(
+            not session.get("is_in_progress")
+            and (needs_project or needs_user_description)
+        ),
+        "missing_fields": missing_fields,
+        "can_delete": bool(session.get("can_hide")),
+        "delete_blocked_reason": "" if session.get("can_hide") else "当前时间段不可删除",
+    }
 
 
 def get_overview_view_model(today: str | None = None) -> dict[str, Any]:
@@ -263,9 +389,16 @@ def get_overview_view_model(today: str | None = None) -> dict[str, Any]:
         model,
         row_kind=ROW_KIND_RECENT_PROJECT_SESSION_ROW,
     )
-    status_display_item = model.get("status_display_item")
-    if isinstance(status_display_item, dict):
-        recent_rows.insert(0, dict(status_display_item))
+    # Stable business order: in-progress report sessions first, then by
+    # start time descending. A pure string sort would let a closed session
+    # leapfrog an in-progress one when start times tie, so in-progress is
+    # promoted explicitly via a second stable sort.
+    recent_rows.sort(
+        key=lambda row: str(row.get("start_time") or ""), reverse=True
+    )
+    recent_rows.sort(
+        key=lambda row: bool(row.get("is_in_progress")), reverse=True
+    )
 
     total_rows = [
         row for row in recent_rows if row.get("contributes_to_totals") is not False
@@ -288,6 +421,19 @@ def get_overview_view_model(today: str | None = None) -> dict[str, Any]:
         total_rows,
         model.get("live_clock") or {},
     )
+    current_session = next(
+        (row for row in recent_rows if bool(row.get("is_in_progress"))),
+        None,
+    )
+    attention_candidates = [
+        row for row in recent_rows if bool(row.get("needs_attention"))
+    ]
+    attention_rows = attention_candidates[:_ATTENTION_LIMIT]
+    visible_recent_rows = _select_overview_recent_rows(
+        recent_rows,
+        attention_rows,
+        limit=_RECENT_LIMIT,
+    )
     return {
         "ok": True,
         "date": scoped_today,
@@ -307,7 +453,10 @@ def get_overview_view_model(today: str | None = None) -> dict[str, Any]:
             "uncategorized_seconds": uncategorized_seconds,
         },
         "current_activity": current_activity,
-        "activities": recent_rows[:_RECENT_LIMIT],
+        "current_session": current_session,
+        "attention": attention_rows,
+        "attention_remaining_count": max(0, len(attention_candidates) - _ATTENTION_LIMIT),
+        "recent": visible_recent_rows,
         "today_total_seconds": today_total_seconds,
         "classified_seconds": classified_seconds,
         "uncategorized_seconds": uncategorized_seconds,
@@ -415,6 +564,10 @@ def get_session_activity_summary_view_model(
     rows = [dict(row) for row in detail_projection["summary_rows"]]
     for row in rows:
         row.update(_detail_report_attribution_fields(row))
+        row["can_delete"] = bool(row.get("can_hide_activity"))
+        row["delete_blocked_reason"] = (
+            "" if row.get("can_hide_activity") else "当前活动不可删除"
+        )
     _apply_live_span_to_rows(
         rows,
         report_model,

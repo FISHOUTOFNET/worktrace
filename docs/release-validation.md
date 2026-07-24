@@ -96,7 +96,20 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_windows_instal
 - [ ] Database is created at `%LOCALAPPDATA%\WorkTrace\data\worktrace.db`.
 - [ ] Log file is created at `%LOCALAPPDATA%\WorkTrace\logs\worktrace.log`.
 
-### B. Normal Collection
+### B. Responsive UI And Windows Scaling
+
+Before functional collection checks, validate the redesigned WebView on a real
+Windows 10/11 desktop. These scaling checks cannot be substituted by browser
+viewport emulation.
+
+- [ ] At 100% scaling, verify 1080×720 and 800×540 with no page-level horizontal scrolling.
+- [ ] At 125% scaling, verify navigation rail, Timeline project/duration row, Drawer, and two-step delete Dialog are not clipped.
+- [ ] At 150% scaling, verify long Chinese project names, long descriptions, Statistics filters, and Settings danger controls remain keyboard reachable.
+- [ ] At 1366×768 and 1920×1080, verify page balance and local table scrolling.
+- [ ] Verify focus rings, Escape close, focus trapping, and focus restoration for Drawer and Dialog.
+- [ ] Verify current activity and LiveClock update once per second without screen-reader announcements.
+
+### C. Normal Collection
 
 - [ ] Open Notepad, Word, WPS, browser, or similar windows.
 - [ ] Activity records appear in Time Details.
@@ -105,7 +118,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_windows_instal
 - [ ] Activities below 30 seconds do not immediately pollute history.
 - [ ] Activities enter history normally after reaching the threshold.
 
-### C. Projects And Rules
+### D. Projects And Rules
 
 - [ ] Create a normal project.
 - [ ] Add a keyword rule.
@@ -115,7 +128,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_windows_instal
 - [ ] Disabled projects no longer participate in automatic classification.
 - [ ] The exclusion-rule project is disabled by default and has no default rules.
 
-### D. File Paths And Resource Recognition
+### E. File Paths And Resource Recognition
 
 - [ ] A full local path in a window title can be used as an anchor.
 - [ ] A full local file path with any extension can be used as an anchor.
@@ -124,7 +137,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_windows_instal
 - [ ] WPS, Office, PDF, IDE, browser, and email resource types are represented reasonably in the UI.
 - [ ] File body, email body, and webpage body are not read.
 
-### E. Exclusion Rules And Privacy
+### F. Exclusion Rules And Privacy
 
 - [ ] Enable the `排除规则` project.
 - [ ] Add a keyword or folder exclusion rule.
@@ -133,32 +146,39 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_windows_instal
 - [ ] Excluded records are not included in normal exports by default.
 - [ ] Logs do not record the real title or path of excluded windows.
 
-### F. Pause And Resume
+### G. Pause And Resume
 
 - [ ] Clicking pause stops recording real window titles.
 - [ ] Paused state displays correctly.
 - [ ] Resuming records the current window again.
 - [ ] UI state and collector state are consistent.
 
-### G. Idle
+### H. Idle
 
 - [ ] Reaching the idle threshold enters idle state.
 - [ ] Idle does not continuously generate many short history records.
 - [ ] User activity restores normal state.
 - [ ] Idle records are handled in statistics and export according to README and architecture documentation.
 
-### H. Abnormal Recovery
+### I. Abnormal Recovery
 
 - [ ] Startup closes the previous abnormal-exit open record.
 - [ ] Recovered record duration is not negative.
 - [ ] Records that cannot be confirmed are marked as `error`.
 - [ ] Records crossing midnight are handled under the correct report date.
 
-### I. Basic UI Usability
+### J. Basic UI Usability
 
-- [ ] Overview shows total time, classified time, unclassified time, current activity, and recent projects.
+- [ ] Overview shows today summary bar (total/classified/unclassified/project count), current activity, recent records, and attention items.
+- [ ] Current activity shows the real resource (file/webpage/window/app name), not the project name.
+- [ ] Current activity and recent record durations are allowed to differ (current_live vs aggregate_live).
+- [ ] Attention items also appear in recent records (subset relationship, not disjoint); the subset holds at the payload level even after both lists are truncated to their display limits.
+- [ ] In-progress report session appears as the first recent record.
+- [ ] Excluded state does not leak real window titles, paths, files, webpages or projects.
+- [ ] Paused and error states do not retain stale activity content.
+- [ ] Clicking current activity, a recent record, or an attention item locates the correct Timeline session.
 - [ ] Clicking unclassified activity opens Time Details with the expected filter.
-- [ ] Clicking a recent project locates the corresponding session.
+- [ ] Clicking a recent record locates the corresponding session.
 - [ ] Time Details column widths, selection, copy, notes, and project correction work.
 - [ ] Statistics/Export page statistics are reasonable.
 - [ ] Settings/Privacy can show the privacy notice, toggle clipboard recording, and clear data.
@@ -166,7 +186,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_windows_instal
 - [ ] Minimize, restore, and resize do not crash the app.
 - [ ] Closing the WebView main window exits WorkTrace and shuts down runtime cleanly.
 
-### J. CSV Export
+### K. CSV Export
 
 CSV export is the current public export capability.
 
@@ -184,7 +204,7 @@ CSV export is the current public export capability.
       note / clipboard text beyond the documented display-safe CSV boundary.
 - [ ] Excel / PDF / timesheet-template export remain unsupported.
 
-### K. Packaged Exe
+### L. Packaged Exe
 
 - [ ] `dist\WorkTrace.exe` starts.
 - [ ] First-run privacy notice works.
@@ -193,7 +213,7 @@ CSV export is the current public export capability.
 - [ ] Closing the WebView main window exits WorkTrace and shuts down runtime cleanly.
 - [ ] Administrator privileges are not required.
 
-### L. Installer
+### M. Installer
 
 - [ ] `dist\WorkTrace-Setup.exe` runs.
 - [ ] App installs to `%LOCALAPPDATA%\Programs\WorkTrace`.

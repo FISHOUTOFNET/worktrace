@@ -162,6 +162,11 @@
       "path": "tests/webview/",
       "signal": "collector_runtime",
       "reason": "WebView static contract tests read frontend/runtime source strings but do not start collector or runtime threads."
+    },
+    {
+      "path": "tests/test_webview_bridge_statistics_export.py",
+      "signal": "collector_runtime",
+      "reason": "Bridge export contract tests scan runtime import strings statically for boundary checks; they do not start collector or runtime threads."
     }
   ],
   "marker_requirements": [
@@ -266,6 +271,7 @@
         "tests/test_export_",
         "tests/test_project_activity_summary_contract.py",
         "tests/test_webview_bridge_statistics.py",
+        "tests/test_webview_bridge_statistics_export.py",
         "tests/webview/test_statistics_static_contract.py"
       ]
     },

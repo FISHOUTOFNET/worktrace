@@ -44,16 +44,18 @@ def get_uncategorized_duration(start_date: str, end_date: str) -> int:
     return statistics_service.get_uncategorized_duration(start_date, end_date)
 
 
-def get_statistics_export_summary(date_from: str, date_to: str) -> dict[str, Any]:
+def get_statistics_export_summary(
+    date_from: str, date_to: str, project_id: str | int | None = None
+) -> dict[str, Any]:
     """Return the canonical read-only statistics and export-preview facts."""
 
     try:
-        return statistics_service.get_statistics_export_summary(date_from, date_to)
+        return statistics_service.get_statistics_export_summary(date_from, date_to, project_id)
     except StatisticsSummaryError:
         raise
     except ValueError as exc:
         code = str(exc)
-        if code in ("invalid_date", "invalid_range", "range_too_large"):
+        if code in ("invalid_date", "invalid_range", "range_too_large", "invalid_project"):
             raise StatisticsSummaryError(code)
         raise StatisticsSummaryError("operation_failed")
     except Exception:
@@ -63,17 +65,19 @@ def get_statistics_export_summary(date_from: str, date_to: str) -> dict[str, Any
 def get_statistics_export_view_model(
     date_from: str,
     date_to: str,
+    project_id: str | int | None = None,
 ) -> dict[str, Any]:
     """Return the complete bridge-facing Statistics display envelope."""
 
-    summary = get_statistics_export_summary(date_from, date_to)
-    revision = str(summary.get("export_revision") or "")
+    summary = get_statistics_export_summary(date_from, date_to, project_id)
+    revision = str(summary.get("ticket_revision") or "")
     return {
         "summary": _statistics_summary_payload(summary),
         "export_ticket": {
             "date_from": str(summary.get("date_from") or date_from),
             "date_to": str(summary.get("date_to") or date_to),
             "revision": revision,
+            "project_id": str(summary.get("project_id") or ""),
         },
     }
 

@@ -6,6 +6,12 @@
     "use strict";
     var App = window.WorkTraceApp = window.WorkTraceApp || {};
 
+    App.iconMarkup = function (name) {
+        var safeName = String(name || "").replace(/[^a-z-]/g, "");
+        return '<svg class="icon" aria-hidden="true"><use href="#icon-'
+            + safeName + '"></use></svg>';
+    };
+
     App.HEARTBEAT_INTERVAL_MS = 1000;
     App.NOTE_MAX_LENGTH = 2000;
     App.heartbeatTimer = null;
@@ -61,6 +67,7 @@
     App.firstRunNoticeRequired = false;
     App.firstRunNoticeAcceptInProgress = false;
     App.firstRunNoticeViewingFromSettings = false;
+    App.privacyGateState = "loading";
     App.rulesLoaded = false;
     App.rulesLoading = false;
     App.rulesRequestToken = 0;
@@ -90,6 +97,37 @@
     }
     App.showError = showError;
     App.clearError = function () { showError(""); };
+
+    function showGlobalAlert(message) {
+        var banner = document.getElementById("global-alert");
+        if (!banner) return;
+        banner.hidden = !message;
+        banner.textContent = message || "";
+    }
+    App.showGlobalAlert = showGlobalAlert;
+    App.clearGlobalAlert = function () { showGlobalAlert(""); };
+
+    function extractBridgeError(result, fallback) {
+        if (!result) return fallback || "操作失败";
+        var message = result.message;
+        if (typeof message === "string" && message.trim()) return message;
+        // Prefer the stable public error_code over the legacy internal error.
+        var code = result.error_code;
+        if (typeof code !== "string" || !code.trim()) code = result.error;
+        if (typeof code !== "string" || !code.trim()) return fallback || "操作失败";
+        var lookup = BRIDGE_ERROR_MESSAGES[code];
+        return lookup || fallback || "操作失败";
+    }
+    App.extractBridgeError = extractBridgeError;
+
+    var BRIDGE_ERROR_MESSAGES = {
+        collector_start_failed: "记录功能未能启动，请稍后重试或在设置中恢复",
+        collector_pause_failed: "暂停记录失败，请稍后重试",
+        database_maintenance_recovery_required: "数据库维护尚未恢复，请前往设置执行恢复",
+        privacy_gate_required: "请先确认隐私说明",
+        privacy_accept_failed: "确认隐私说明失败，请稍后重试",
+        maintenance_in_progress: "维护操作进行中，请等待完成后再试"
+    };
 
     function showTimelineError(message) {
         var banner = document.getElementById("timeline-error");
@@ -174,16 +212,21 @@
         var display = document.getElementById("status-display");
         var button = document.getElementById("toggle-pause-btn");
         if (!display || !button) return;
-        display.textContent = statusResult.display || "未知";
+        display.innerHTML = '<span class="status-label">'
+            + App.escapeHtml(statusResult.display || "未知") + '</span>';
         display.className = "status-display";
         if (statusResult.status === "running" && !statusResult.paused) {
             display.classList.add("recording");
-            button.textContent = "暂停记录";
+            button.innerHTML = App.iconMarkup("pause") + '<span class="nav-label">暂停记录</span>';
             button.className = "toggle-btn pause-style";
+            button.setAttribute("aria-label", "暂停记录");
+            button.setAttribute("data-tooltip", "暂停记录");
         } else {
             display.classList.add("paused");
-            button.textContent = "开始记录";
+            button.innerHTML = App.iconMarkup("play") + '<span class="nav-label">开始记录</span>';
             button.className = "toggle-btn";
+            button.setAttribute("aria-label", "开始记录");
+            button.setAttribute("data-tooltip", "开始记录");
         }
     };
 
@@ -471,14 +514,21 @@
         ].forEach(function (name) { element.removeAttribute(name); });
     };
 
+    function currentContextLine(current) {
+        var appName = String(current.app_name || "").trim();
+        var resourceName = String(current.resource_name || "").trim();
+        var projectName = String(current.project_name || "").trim();
+        var isUncategorized = current.is_uncategorized !== false;
+        var projectPart = (isUncategorized || !projectName) ? "未归类" : "项目：" + projectName;
+        if (appName && appName !== resourceName) {
+            return appName + " · " + projectPart;
+        }
+        return projectPart;
+    }
+
     App.renderCurrentActivityElement = function (element, current, prefix) {
         if (!element) return;
         current = current || {};
-        if (!current.active) {
-            App.clearLiveClockTarget(element);
-            element.textContent = "当前活动：无";
-            return;
-        }
         var clock = App.getActiveLiveClock ? App.getActiveLiveClock() : null;
         var accepted = App.validateLiveClock(clock);
         var canTick = !!(accepted
@@ -488,20 +538,91 @@
             ? App.computeClockDurationNow(accepted, Date.now())
             : (parseInt(current.elapsed_seconds, 10) || 0);
         var continuity = App.currentActivityContinuityKey(current, accepted, prefix);
-        var parts = String(current.display || "").split("｜");
-        if (parts.length < 3) {
-            element.textContent = "当前活动：" + (current.display || App.displayStatusText(current));
+        var structured = element.classList
+            && element.classList.contains("current-activity")
+            && element.querySelector(".current-duration");
+        if (!structured) {
+            // Unstructured path (Timeline current-activity summary): the
+            // combined display string remains the supported transport for
+            // this non-Overview surface and does not parse Overview state.
+            var parts = String(current.display || "").split("｜");
+            if (!current.active) {
+                element.textContent = "当前活动：无";
+                return;
+            }
+            if (parts.length < 3) {
+                element.textContent = "当前活动：" + (current.display || App.displayStatusText(current));
+                return;
+            }
+            var tlAttributes = canTick
+                ? App.liveClockDataAttributes(accepted, continuity, (prefix || "current") + "-current")
+                : "";
+            var tlHtml = "当前活动：" + escapeHtml(parts[0]) + "｜" + escapeHtml(parts[1]) + "｜"
+                + '<span class="current-activity-duration"' + tlAttributes
+                + ' data-duration-seconds="' + String(seconds || 0) + '">'
+                + escapeHtml(formatDuration(seconds || 0)) + '</span>';
+            for (var index = 3; index < parts.length; index++) tlHtml += "｜" + escapeHtml(parts[index]);
+            element.innerHTML = tlHtml;
             return;
         }
-        var attributes = canTick
-            ? App.liveClockDataAttributes(accepted, continuity, (prefix || "current") + "-current")
-            : "";
-        var html = "当前活动：" + escapeHtml(parts[0]) + "｜" + escapeHtml(parts[1]) + "｜"
-            + '<span class="current-activity-duration"' + attributes
-            + ' data-duration-seconds="' + String(seconds || 0) + '">'
-            + escapeHtml(formatDuration(seconds || 0)) + '</span>';
-        for (var index = 3; index < parts.length; index++) html += "｜" + escapeHtml(parts[index]);
-        element.innerHTML = html;
+
+        // Structured Overview card: the sole source of truth is the structured
+        // current-activity DTO. The combined display string and current_session
+        // are never parsed for card content.
+        var durationTarget = element.querySelector(".current-duration");
+        var resourceTarget = element.querySelector(".current-resource");
+        var contextTarget = element.querySelector(".current-context");
+        var status = String(current.status || "");
+        var active = current.active !== false;
+
+        function renderInactiveState(title, hint) {
+            App.clearLiveClockTarget(durationTarget);
+            if (resourceTarget) resourceTarget.textContent = title;
+            if (contextTarget) {
+                contextTarget.textContent = hint;
+                contextTarget.classList.remove("derived");
+            }
+            durationTarget.textContent = "00:00:00";
+        }
+
+        if (!active) {
+            renderInactiveState("当前没有活动", "开始记录后，当前窗口、文件或网页会显示在这里。");
+            return;
+        }
+        if (status === "paused") {
+            renderInactiveState("已暂停", "恢复记录后将显示当前活动。");
+            return;
+        }
+        if (status === "idle") {
+            renderInactiveState("空闲中", "检测到操作后将继续记录。");
+            return;
+        }
+        if (status === "excluded") {
+            renderInactiveState("当前活动已排除", "该活动内容不会显示。");
+            return;
+        }
+        if (status === "error") {
+            renderInactiveState("暂时无法识别当前活动", "请检查记录服务状态。");
+            return;
+        }
+
+        // Normal active state: resource name is the main title, app + project
+        // attribution is secondary context. Project name never overrides the
+        // resource, and derived/user descriptions never appear here.
+        var resourceName = String(current.resource_name || "").trim() || "当前活动";
+        if (resourceTarget) resourceTarget.textContent = resourceName;
+        if (contextTarget) {
+            contextTarget.textContent = currentContextLine(current);
+            contextTarget.classList.remove("derived");
+        }
+        if (canTick) App.setLiveClockTarget(
+            durationTarget,
+            accepted,
+            continuity,
+            (prefix || "current") + "-current"
+        );
+        else App.clearLiveClockTarget(durationTarget);
+        App.renderDurationProjected(durationTarget, seconds || 0, continuity);
     };
 
     App.renderLiveDurationTarget = function (target, clock, nowMs) {
@@ -528,10 +649,12 @@
     };
 
     App._timelineEditingActive = function () {
-        return App.editSaving || !!(
-            App.editingSession
-            && typeof App.isEditDirty === "function"
-            && App.isEditDirty()
-        );
+        return App.editSaving
+            || App.mutationState === "unknown"
+            || !!(
+                App.editingSession
+                && typeof App.isEditDirty === "function"
+                && App.isEditDirty()
+            );
     };
 })();

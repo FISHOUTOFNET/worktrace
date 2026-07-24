@@ -91,7 +91,8 @@ def test_frontend_generation_and_coalescing_contracts_are_shipping():
     assert "resetClientGeneration" in init
     assert "statisticsAcceptedPayload" in statistics
     assert "statisticsLoadPromise" in statistics
-    assert "exportRevision" in statistics
+    assert "exportTicket" in statistics
+    assert "ticket.revision" in statistics
     assert "projectsLoadPromise" in rules
     assert "data-project-load-gate" in rules
     assert "stopImmediatePropagation" in rules

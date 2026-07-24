@@ -9,7 +9,7 @@
     var BACKUP_MANIFEST_ERROR_MESSAGE = "读取备份清单失败";
     var BACKUP_IMPORT_ERROR_MESSAGE = "导入加密备份失败";
     var CLEAR_ALL_ERROR_MESSAGE = "清空本地数据失败";
-    var FIRST_RUN_NOTICE_LOAD_ERROR = "隐私说明加载失败。为保护隐私，WorkTrace 暂不会启动记录。请重启应用或重新安装。";
+    var FIRST_RUN_NOTICE_LOAD_ERROR = "隐私说明加载失败。为保护隐私，WorkTrace 暂不会启动记录。请点击“重新加载”重试。";
     var FIRST_RUN_NOTICE_ACCEPT_ERROR = "确认隐私说明失败";
     var IMPORT_CONFIRM_LITERAL = "导入并替换";
     var CLEAR_CONFIRM_LITERAL = "清空本地数据";
@@ -33,6 +33,7 @@
             || App.settingsBackupManifestInProgress
             || App.settingsBackupImportInProgress
             || App.settingsClearAllInProgress
+            || App.recoveryInProgress
         );
     }
     App.anySettingsOperationInProgress = anySettingsOperationInProgress;
@@ -61,11 +62,27 @@
     }
     App.setSettingsDangerControlsDisabled = setSettingsDangerControlsDisabled;
 
+    // Recovery button enabled = backend reports recovery_blocked AND no
+    // Settings operation in progress. The frontend never clears
+    // recovery_blocked locally; it reads the latest authoritative status.
+    function syncRecoveryButtonState(status) {
+        var button = element("settings-recovery-btn");
+        if (!button) return;
+        var authoritative = status || App.lastSettingsStatus || {};
+        button.disabled = anySettingsOperationInProgress()
+            || authoritative.recovery_blocked !== true;
+    }
+    App.syncRecoveryButtonState = syncRecoveryButtonState;
+
     function setSettingsControlsDisabled(disabled) {
         var toggle = element("settings-clipboard-toggle");
         if (toggle) toggle.disabled = !!disabled || !App.settingsLoaded;
         setSettingsBackupControlsDisabled(disabled);
         setSettingsDangerControlsDisabled(disabled);
+        // The recovery button participates in the unified control sync,
+        // but its final state is derived from the authoritative backend
+        // status, not the generic ``disabled`` flag.
+        syncRecoveryButtonState();
     }
     App.setSettingsControlsDisabled = setSettingsControlsDisabled;
 
@@ -135,6 +152,28 @@
             "user_paused",
             "用户暂停：" + boolLabel(!!status.user_paused)
         );
+        renderRecoveryCard(status);
+        var health = element("settings-health-summary");
+        if (health) {
+            var title = "记录正常";
+            var detail = "采集和本地存储可用";
+            if (status.recovery_blocked) {
+                title = "恢复尚未完成";
+                detail = "请在高级诊断中查看阻断原因";
+            } else if (status.maintenance_in_progress) {
+                title = "正在维护数据";
+                detail = "维护期间其他数据操作暂时不可用";
+            } else if (!status.collector_running && !status.user_paused) {
+                title = "记录服务未运行";
+                detail = "请重启应用后再次检查";
+            }
+            var strong = health.querySelector("strong");
+            var small = health.querySelector("small");
+            var badge = health.querySelector(".badge");
+            if (strong) strong.textContent = title;
+            if (small) small.textContent = detail;
+            if (badge) badge.textContent = title;
+        }
         if (status.storage_model === "local_only") {
             setLineText("storage_model", "本地优先：所有数据仅存储在本机，不上传任何远端服务器。");
         }
@@ -150,6 +189,121 @@
     }
     App.renderSettingsStatus = renderSettingsStatus;
 
+    function setRecoveryStatus(message) {
+        var statusEl = element("settings-recovery-status");
+        if (!statusEl) return;
+        statusEl.hidden = !message;
+        statusEl.textContent = message || "";
+    }
+
+    function renderRecoveryCard(status) {
+        var card = element("settings-recovery-card");
+        var reason = element("settings-recovery-reason");
+        if (!card) return;
+        var blocked = !!status.recovery_blocked;
+        var inProgress = !!status.maintenance_in_progress;
+        card.hidden = !blocked && !inProgress;
+        if (reason) {
+            reason.textContent = "阻断原因："
+                + (status.blocked_reason ? String(status.blocked_reason) : (inProgress ? "维护进行中" : "无"));
+        }
+        // The button enabled state is derived solely from the authoritative
+        // backend status and the unified busy flag via syncRecoveryButtonState.
+        // The frontend never clears recovery_blocked locally.
+        syncRecoveryButtonState(status);
+    }
+    App.renderRecoveryCard = renderRecoveryCard;
+
+    function recoverDatabaseMaintenance() {
+        // Symmetric mutex: any Settings operation in progress blocks
+        // recovery, not only recovery itself. This is the reverse direction
+        // of the guard the other operations already perform.
+        if (anySettingsOperationInProgress()) return Promise.resolve(false);
+        App.recoveryInProgress = true;
+        // Disable all settings controls via the unified mutex during recovery.
+        setSettingsControlsDisabled(anySettingsOperationInProgress());
+        var button = element("settings-recovery-btn");
+        if (button) button.disabled = true;
+        setRecoveryStatus("正在尝试恢复，请勿关闭应用……");
+        App.clearGlobalAlert();
+        return App.bridge.recoverDatabaseMaintenance().then(function (result) {
+            if (!result || result.ok === false) {
+                var message = App.extractBridgeError(
+                    result,
+                    "数据库维护恢复失败，请稍后重试或联系支持。"
+                );
+                setRecoveryStatus(message);
+                if (App.showGlobalAlert) App.showGlobalAlert(message);
+                // On failure, prefer the maintenance status embedded in the
+                // response to refresh the recovery card; otherwise reload the
+                // full settings status. Never clear recovery_blocked here.
+                var maintenance = result && result.maintenance;
+                if (maintenance) {
+                    App.lastSettingsStatus = maintenance;
+                    return false;
+                }
+                if (typeof App.loadSettingsPrivacyStatus === "function") {
+                    return App.loadSettingsPrivacyStatus().then(function () { return false; });
+                }
+                return false;
+            }
+            setRecoveryStatus("恢复已提交，正在重新加载状态……");
+            // Refresh settings status and current page so the user sees
+            // authoritative state without manual reload.
+            return Promise.all([
+                App.loadSettingsPrivacyStatus(),
+                App.refreshAll ? App.refreshAll() : Promise.resolve()
+            ]).then(function () {
+                setRecoveryStatus("数据库维护恢复已完成，状态已刷新。");
+                if (App.showToast) App.showToast("数据库维护恢复已完成");
+                return true;
+            });
+        }).catch(function () {
+            // Transport rejection: frontend cannot know if recovery applied.
+            // Re-read authoritative backend status before releasing busy.
+            var message = "恢复结果未知，正在重新读取状态……";
+            setRecoveryStatus(message);
+            if (App.showGlobalAlert) App.showGlobalAlert(message);
+            if (typeof App.loadSettingsPrivacyStatus !== "function") {
+                return false;
+            }
+            return App.loadSettingsPrivacyStatus().then(function () {
+                return false;
+            }, function () {
+                // Status read itself failed: keep the conservative error,
+                // but still release the busy flag downstream to avoid a
+                // permanent UI deadlock. Do not claim success.
+                return false;
+            });
+        }).then(function (ok) {
+            // Single release path: clear busy flag and re-render controls
+            // from the latest authoritative backend status.
+            App.recoveryInProgress = false;
+            setSettingsControlsDisabled(anySettingsOperationInProgress());
+            if (App.lastSettingsStatus) renderRecoveryCard(App.lastSettingsStatus);
+            return ok;
+        });
+    }
+    App.recoverDatabaseMaintenance = recoverDatabaseMaintenance;
+
+    function initSettingsCategories() {
+        var buttons = document.querySelectorAll("[data-settings-section]");
+        for (var index = 0; index < buttons.length; index++) {
+            buttons[index].addEventListener("click", function () {
+                var section = this.getAttribute("data-settings-section");
+                for (var i = 0; i < buttons.length; i++) {
+                    buttons[i].removeAttribute("aria-current");
+                    var panel = element("settings-section-" + buttons[i].getAttribute("data-settings-section"));
+                    if (panel) { panel.hidden = true; panel.classList.remove("active"); }
+                }
+                this.setAttribute("aria-current", "true");
+                var target = element("settings-section-" + section);
+                if (target) { target.hidden = false; target.classList.add("active"); }
+            });
+        }
+    }
+    App.initSettingsCategories = initSettingsCategories;
+
     function loadSettingsPrivacyStatus() {
         if (App.settingsLoading) return Promise.resolve();
         setSettingsLoading(true);
@@ -162,6 +316,7 @@
             });
             if (!data) return;
             App.settingsLoaded = true;
+            App.lastSettingsStatus = data.status;
             renderSettingsStatus(data.status);
             App.clearSettingsError();
         }).catch(function () {
@@ -173,6 +328,9 @@
     App.loadSettingsPrivacyStatus = loadSettingsPrivacyStatus;
 
     function setCaptureEnabled(enabled) {
+        // Symmetric mutex: gate direct programmatic callers and tests so
+        // clipboard writes cannot bypass the unified Settings mutex.
+        if (anySettingsOperationInProgress()) return Promise.resolve();
         App.settingsWriteInProgress = true;
         setSettingsControlsDisabled(true);
         var toggle = element("settings-clipboard-toggle");
@@ -386,32 +544,36 @@
         while (target.firstChild) target.removeChild(target.firstChild);
     }
 
-    function renderFirstRunNotice(data, mode) {
-        if (!data) return;
+    function renderFirstRunNotice(notice, mode) {
+        if (!notice) return;
         var title = element("first-run-notice-title");
         var highlights = element("first-run-notice-highlights");
         var text = element("first-run-notice-text");
         var accept = element("first-run-notice-accept-btn");
         var close = element("first-run-notice-close-btn");
-        if (title) title.textContent = String(data.title || "WorkTrace 隐私说明");
+        var retry = element("first-run-notice-retry-btn");
+        if (title) title.textContent = String(notice.title || "WorkTrace 隐私说明");
         clearChildren(highlights);
-        if (highlights && Array.isArray(data.highlights)) {
-            data.highlights.forEach(function (item) {
+        if (highlights && Array.isArray(notice.highlights)) {
+            notice.highlights.forEach(function (item) {
                 var li = document.createElement("li");
                 li.textContent = String(item || "");
                 highlights.appendChild(li);
             });
         }
-        if (text) text.textContent = String(data.notice_text || "");
-        if (accept) accept.hidden = mode === "view";
+        if (text) text.textContent = String(notice.text || "");
+        if (accept) { accept.hidden = mode === "view"; accept.disabled = false; }
         if (close) close.hidden = mode !== "view";
+        // The retry button is only for load-failure recovery; hide it in
+        // normal gate and view modes.
+        if (retry) retry.hidden = true;
         setFirstRunNoticeError("");
     }
     App.renderFirstRunNotice = renderFirstRunNotice;
 
-    function showFirstRunNotice(data, mode) {
+    function showFirstRunNotice(notice, mode) {
         App.firstRunNoticeViewingFromSettings = mode === "view";
-        renderFirstRunNotice(data, mode);
+        renderFirstRunNotice(notice, mode);
         var overlay = element("first-run-notice-overlay");
         if (overlay) overlay.hidden = false;
     }
@@ -423,11 +585,17 @@
         var text = element("first-run-notice-text");
         var accept = element("first-run-notice-accept-btn");
         var close = element("first-run-notice-close-btn");
+        var retry = element("first-run-notice-retry-btn");
         if (title) title.textContent = "";
         clearChildren(highlights);
         if (text) text.textContent = "";
         if (accept) { accept.hidden = true; accept.disabled = true; }
         if (close) close.hidden = true;
+        // On load failure the overlay stays open (fail-closed) and only the
+        // retry button is available — the user cannot close the overlay or
+        // bypass authorization. The retry button re-issues the real
+        // getFirstRunNotice without clearing any persisted authorization.
+        if (retry) { retry.hidden = false; retry.disabled = false; }
         setFirstRunNoticeError(message || FIRST_RUN_NOTICE_LOAD_ERROR);
         var overlay = element("first-run-notice-overlay");
         if (overlay) overlay.hidden = false;
@@ -441,23 +609,72 @@
     }
     App.hideFirstRunNotice = hideFirstRunNotice;
 
-    function loadFirstRunNotice() {
-        if (App.firstRunNoticeLoading || App.firstRunNoticeLoaded) return Promise.resolve(true);
+    // Single accepted-UI settlement helper: closes the blocking overlay and
+    // clears residual load-failure UI. Does NOT start heartbeat, load
+    // projects, call the Bridge, or change persisted authorization.
+    function settleFirstRunNoticeAcceptedUi() {
+        var retry = element("first-run-notice-retry-btn");
+        var accept = element("first-run-notice-accept-btn");
+        var close = element("first-run-notice-close-btn");
+
+        setFirstRunNoticeError("");
+
+        if (retry) {
+            retry.hidden = true;
+            retry.disabled = false;
+        }
+
+        if (accept) {
+            accept.hidden = false;
+            accept.disabled = false;
+        }
+
+        if (close) close.hidden = true;
+
+        hideFirstRunNotice();
+    }
+    App.settleFirstRunNoticeAcceptedUi = settleFirstRunNoticeAcceptedUi;
+
+    function setPrivacyGateState(state) {
+        App.privacyGateState = state;
+        App.firstRunNoticeRequired = state === "acceptance_required";
+    }
+    App.setPrivacyGateState = setPrivacyGateState;
+
+    function loadFirstRunNotice(options) {
+        var force = !!(options && options.force);
+        if (App.firstRunNoticeLoading) return Promise.resolve(App.privacyGateState === "accepted_ready");
+        if (App.firstRunNoticeLoaded && !force) {
+            return Promise.resolve(App.privacyGateState === "accepted_ready");
+        }
         App.firstRunNoticeLoading = true;
+        setPrivacyGateState("loading");
         return App.bridge.getFirstRunNotice().then(function (result) {
             App.firstRunNoticeLoading = false;
             if (!result || result.ok === false) {
-                App.firstRunNoticeRequired = true;
-                showFirstRunNoticeBlockingError((result && result.error) || FIRST_RUN_NOTICE_LOAD_ERROR);
+                setPrivacyGateState("load_failed");
+                showFirstRunNoticeBlockingError(
+                    App.extractBridgeError(result, FIRST_RUN_NOTICE_LOAD_ERROR)
+                );
                 return false;
             }
             App.firstRunNoticeLoaded = true;
-            App.firstRunNoticeRequired = result.accepted === false;
-            if (App.firstRunNoticeRequired) showFirstRunNotice(result, "gate");
+            var notice = result.notice || {};
+            var accepted = notice.accepted === true;
+            if (accepted) {
+                setPrivacyGateState("accepted_ready");
+                // Close any residual blocking overlay from a prior load
+                // failure and clear retry/error UI. The post-privacy startup
+                // entry (init.js) continues startup based on this state.
+                settleFirstRunNoticeAcceptedUi();
+                return true;
+            }
+            setPrivacyGateState("acceptance_required");
+            showFirstRunNotice(notice, "gate");
             return true;
         }).catch(function () {
             App.firstRunNoticeLoading = false;
-            App.firstRunNoticeRequired = true;
+            setPrivacyGateState("load_failed");
             showFirstRunNoticeBlockingError(FIRST_RUN_NOTICE_LOAD_ERROR);
             return false;
         });
@@ -470,16 +687,47 @@
         var accept = element("first-run-notice-accept-btn");
         if (accept) accept.disabled = true;
         setFirstRunNoticeError("");
+        setPrivacyGateState("accepted_starting");
         App.bridge.acceptFirstRunNotice().then(function (result) {
-            var data = App.handleResult(result, function (message) {
-                setFirstRunNoticeError(message || FIRST_RUN_NOTICE_ACCEPT_ERROR);
-            });
-            if (!data) return;
-            App.firstRunNoticeRequired = false;
-            hideFirstRunNotice();
-            if (typeof App.refreshAll === "function") App.refreshAll();
-            loadSettingsPrivacyStatus();
+            var accepted = !!(result && result.accepted === true);
+            if (accepted && result.ok === true) {
+                // Full success: authorization persisted and collector started.
+                // Continue through the single idempotent startup entry so that
+                // project catalog, refresh state, page refresh, and heartbeat
+                // are owned by init.js — no second startup path here.
+                setPrivacyGateState("accepted_ready");
+                App.firstRunNoticeRequired = false;
+                settleFirstRunNoticeAcceptedUi();
+                if (typeof App.continueStartupAfterPrivacyGate === "function") {
+                    App.continueStartupAfterPrivacyGate();
+                }
+                loadSettingsPrivacyStatus();
+                return;
+            }
+            if (accepted && result.ok === false) {
+                // Authorization persisted but collector failed; close gate, enter app.
+                setPrivacyGateState("accepted_start_failed");
+                App.firstRunNoticeRequired = false;
+                settleFirstRunNoticeAcceptedUi();
+                var message = App.extractBridgeError(
+                    result,
+                    "隐私说明已确认，但记录功能未能启动。可前往设置查看原因或重试。"
+                );
+                if (App.showGlobalAlert) App.showGlobalAlert(message);
+                if (typeof App.continueStartupAfterPrivacyGate === "function") {
+                    App.continueStartupAfterPrivacyGate();
+                }
+                loadSettingsPrivacyStatus();
+                return;
+            }
+            // Authorization persistence failed: keep the gate open and let the
+            // user retry. Do not continue startup or start heartbeat.
+            setPrivacyGateState("acceptance_required");
+            setFirstRunNoticeError(
+                App.extractBridgeError(result, FIRST_RUN_NOTICE_ACCEPT_ERROR)
+            );
         }).catch(function () {
+            setPrivacyGateState("acceptance_required");
             setFirstRunNoticeError(FIRST_RUN_NOTICE_ACCEPT_ERROR);
         }).then(function () {
             App.firstRunNoticeAcceptInProgress = false;
@@ -491,7 +739,9 @@
     function openPrivacyNoticeFromSettings() {
         App.bridge.getFirstRunNotice().then(function (result) {
             if (!result || result.ok === false) {
-                showFirstRunNoticeBlockingError((result && result.error) || FIRST_RUN_NOTICE_LOAD_ERROR);
+                showFirstRunNoticeBlockingError(
+                    (result && result.error) || FIRST_RUN_NOTICE_LOAD_ERROR
+                );
                 var accept = element("first-run-notice-accept-btn");
                 var close = element("first-run-notice-close-btn");
                 if (accept) accept.hidden = true;
@@ -499,7 +749,7 @@
                 App.firstRunNoticeViewingFromSettings = true;
                 return;
             }
-            showFirstRunNotice(result, "view");
+            showFirstRunNotice(result.notice || {}, "view");
         }).catch(function () {
             showFirstRunNoticeBlockingError(FIRST_RUN_NOTICE_LOAD_ERROR);
             var accept = element("first-run-notice-accept-btn");

@@ -123,6 +123,22 @@ def test_bridge_statistics_summary_success(bridge):
     _assert_no_sensitive_keys(result)
 
 
+def test_bridge_statistics_project_filter_reaches_authoritative_query(bridge):
+    project_a = project_service.create_project("Filtered A")
+    project_b = project_service.create_project("Filtered B")
+    _seed_closed_activity(project_id=project_a, start="09:00:00", end="09:20:00")
+    _seed_closed_activity(project_id=project_b, start="10:00:00", end="10:10:00")
+
+    result = bridge.get_statistics_export_summary(
+        "2026-06-25", "2026-06-25", str(project_a)
+    )
+
+    assert result["ok"] is True
+    assert result["summary"]["total_duration_seconds"] == 20 * 60
+    assert {row["display_name"] for row in result["summary"]["by_project"]} == {"Filtered A"}
+    assert result["export_ticket"]["project_id"] == str(project_a)
+
+
 def test_bridge_statistics_summary_empty_range(bridge):
     result = bridge.get_statistics_export_summary("2026-06-25", "2026-06-25")
     assert result["ok"] is True
@@ -173,16 +189,15 @@ def test_bridge_statistics_summary_invalid_range(bridge):
     _assert_no_sensitive_keys(result)
 
 
-def test_bridge_statistics_summary_range_too_large(bridge):
+def test_bridge_statistics_summary_supports_ranges_longer_than_31_days(bridge):
     from datetime import date, timedelta
 
     max_days = 31
     start = date(2026, 1, 1)
     end = start + timedelta(days=max_days)
     result = bridge.get_statistics_export_summary(start.isoformat(), end.isoformat())
-    assert result["ok"] is False
-    assert result["error"] == "日期范围过大"
-    assert result["summary"] is None
+    assert result["ok"] is True
+    assert result["summary"] is not None
     _assert_no_sensitive_keys(result)
 
 

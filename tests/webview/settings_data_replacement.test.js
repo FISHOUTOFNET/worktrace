@@ -108,7 +108,7 @@ function harness() {
     importEncryptedBackup: () => Promise.resolve({ ok: true, message: "已导入" }),
     clearAllLocalData: () => Promise.resolve({ ok: true, message: "已清空" }),
     getFirstRunNotice: () => Promise.resolve({ ok: true, accepted: true, highlights: [] }),
-    acceptFirstRunNotice: () => Promise.resolve({ ok: true }),
+    acceptFirstRunNotice: () => Promise.resolve({ ok: true, accepted: true, collector_started: true }),
   };
 
   vm.runInContext(
@@ -227,6 +227,12 @@ test("first-run acceptance refreshes status only after confirmed success", async
   const state = harness();
   const { App } = state;
   let statusReads = 0;
+  let startupContinued = 0;
+  // In the new architecture, acceptFirstRunNotice delegates page refresh to
+  // continueStartupAfterPrivacyGate (owned by init.js) instead of calling
+  // refreshAll directly. This harness only loads settings.js, so we stub the
+  // startup entry to verify it is invoked.
+  App.continueStartupAfterPrivacyGate = () => { startupContinued += 1; return Promise.resolve(true); };
   App.bridge.getSettingsPrivacyStatus = () => {
     statusReads += 1;
     return Promise.resolve({
@@ -246,6 +252,6 @@ test("first-run acceptance refreshes status only after confirmed success", async
 
   assert.equal(App.firstRunNoticeRequired, false);
   assert.equal(App.firstRunNoticeAcceptInProgress, false);
-  assert.equal(state.refreshCount, 1);
+  assert.equal(startupContinued, 1, "continueStartupAfterPrivacyGate called once");
   assert.equal(statusReads, 1);
 });

@@ -360,8 +360,7 @@ def test_service_summary_invalid_range_raises(temp_db):
     assert "invalid_range" in str(exc.value)
 
 
-def test_service_summary_range_too_large_raises(temp_db):
-    """A span wider than STATISTICS_SUMMARY_MAX_RANGE_DAYS is rejected."""
+def test_service_summary_supports_ranges_longer_than_31_days(temp_db):
     max_days = statistics_service.STATISTICS_SUMMARY_MAX_RANGE_DAYS
     start = date(2026, 1, 1)
     end = start.replace(day=1)
@@ -370,11 +369,11 @@ def test_service_summary_range_too_large_raises(temp_db):
     from datetime import timedelta
 
     end_too_large = start + timedelta(days=max_days)
-    with pytest.raises(ValueError) as exc:
-        statistics_service.get_statistics_export_summary(
-            start.isoformat(), end_too_large.isoformat()
-        )
-    assert "range_too_large" in str(exc.value)
+    summary = statistics_service.get_statistics_export_summary(
+        start.isoformat(), end_too_large.isoformat()
+    )
+    assert summary["date_from"] == start.isoformat()
+    assert summary["date_to"] == end_too_large.isoformat()
 
 
 def test_service_summary_max_allowed_range_succeeds(temp_db):
@@ -453,15 +452,15 @@ def test_api_summary_invalid_range_raises_error(temp_db):
     assert exc.value.code == "invalid_range"
 
 
-def test_api_summary_range_too_large_raises_error(temp_db):
+def test_api_summary_supports_ranges_longer_than_31_days(temp_db):
     max_days = statistics_service.STATISTICS_SUMMARY_MAX_RANGE_DAYS
     from datetime import timedelta
 
     start = date(2026, 1, 1)
     end = start + timedelta(days=max_days)
-    with pytest.raises(StatisticsSummaryError) as exc:
-        statistics_api.get_statistics_export_summary(start.isoformat(), end.isoformat())
-    assert exc.value.code == "range_too_large"
+    summary = statistics_api.get_statistics_export_summary(start.isoformat(), end.isoformat())
+    assert summary["date_from"] == start.isoformat()
+    assert summary["date_to"] == end.isoformat()
 
 
 def test_api_summary_non_string_input_raises_error(temp_db):

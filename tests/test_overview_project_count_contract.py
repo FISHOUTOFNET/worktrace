@@ -38,4 +38,9 @@ def test_deleted_project_does_not_increase_overview_project_count(temp_db):
 
     after = view_model_service.get_overview_view_model(DATE)
     assert after["overview"]["project_count"] == 1
-    assert "Deleted Project" not in repr(after["activities"])
+    visible = [
+        *(after.get("attention") or []),
+        *(after.get("recent") or []),
+        *([after["current_session"]] if after.get("current_session") else []),
+    ]
+    assert "Deleted Project" not in repr(visible)

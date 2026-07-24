@@ -20,7 +20,14 @@ class SettingsBridgeMixin:
             return self._app_control.accept_privacy_notice_and_start()
         except Exception:
             logger.exception("webview bridge accept_first_run_notice failed")
-            return {"ok": False, "error": "确认隐私说明失败"}
+            return {
+                "ok": False,
+                "accepted": False,
+                "collector_started": False,
+                "collector_status": None,
+                "error_code": "privacy_accept_failed",
+                "message": "确认隐私说明失败",
+            }
 
     def get_settings_privacy_status(self) -> dict[str, Any]:
         try:
@@ -36,7 +43,9 @@ class SettingsBridgeMixin:
             logger.exception("webview bridge recover_database_maintenance failed")
             return {
                 "ok": False,
-                "error": "database_maintenance_recovery_required",
+                "error_code": "database_maintenance_recovery_required",
+                "message": "数据库维护恢复失败，请稍后重试或联系支持。",
+                "maintenance": None,
             }
 
     def set_clipboard_capture_enabled(self, enabled) -> dict[str, Any]:

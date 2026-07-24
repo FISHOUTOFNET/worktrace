@@ -216,6 +216,29 @@ facts. Natural live-second growth is DOM-local and does not trigger heavy page
 reload. Structural/replacement changes flow through explicit revisions and the
 existing refresh coordinator.
 
+Statistics date-range transport uses a single semantic: empty `date_from` and
+`date_to` together mean canonical all-time (1970-01-01 to today); any other
+combination must be non-empty ISO dates. The frontend explicitly computes and
+sends the first day of the current month and today on default entry, so the
+backend never infers "default this month" from empty strings. A single
+`resolve_statistics_date_range` function owns this resolution; one empty and
+one non-empty date returns `invalid_date`.
+
+Statistics CSV export is a mandatory-ticket contract: the bridge, protocol,
+API and service all require a non-empty `expected_export_ticket_revision`
+that matches the current snapshot revision, normalized date range, project
+scope, CSV format, and schema version. There is no optional or `None` path.
+The bridge validates the ticket before opening the save dialog. The service
+unconditionally raises `stale_statistics_snapshot` on any mismatch.
+
+One CSV export operation builds exactly one canonical snapshot via
+`build_visible_snapshot`. That single snapshot object is used for both the
+export ticket computation/validation and the CSV record iteration, closing
+the check-then-use time window. CSV records are streamed row-by-row inside
+the atomic file output context; they are never fully materialized as a list.
+Zero records raise `empty_data` inside the context, so no target file or
+temp residue is committed.
+
 ## Governance
 
 The permanent validation path is Standard CI only: Python 3.11 full suite,

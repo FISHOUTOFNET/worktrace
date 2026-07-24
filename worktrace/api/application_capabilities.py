@@ -47,9 +47,9 @@ class BackupCapability(Protocol):
 class StatisticsCapability(Protocol):
     StatisticsSummaryError: type
     StatisticsExportError: type
-    def get_statistics_export_view_model(self, date_from, date_to) -> dict[str, Any]: ...
+    def get_statistics_export_view_model(self, date_from, date_to, project_id=None) -> dict[str, Any]: ...
     def format_export_duration(self, duration_seconds) -> str: ...
-    def export_statistics_csv(self, date_from, date_to, output_path, expected_snapshot_revision) -> dict[str, Any]: ...
+    def export_statistics_csv(self, date_from, date_to, output_path, expected_export_ticket_revision, project_id=None) -> dict[str, Any]: ...
 
 
 @runtime_checkable
@@ -58,6 +58,7 @@ class TimelineCapability(Protocol):
     def get_timeline_view_model(self, date, *, runtime, collector_status) -> dict[str, Any]: ...
     def get_session_activity_summary_view_model(self, *, report_date, projection_instance_key, expected_projection_revision, runtime, collector_status) -> dict[str, Any]: ...
     def list_selectable_projects(self) -> list[dict[str, Any]]: ...
+    def list_filter_projects(self) -> list[dict[str, Any]]: ...
     def save_timeline_session_edit(self, report_date, projection_instance_key, projection_revision, request_id, project_id, adjusted_duration_seconds, note) -> dict[str, Any]: ...
     def hide_timeline_session(self, report_date, projection_instance_key, projection_revision, request_id) -> dict[str, Any]: ...
     def merge_timeline_session(self, report_date, projection_instance_key, direction, projection_revision, request_id, target_projection_instance_key, target_projection_revision) -> dict[str, Any]: ...
@@ -145,15 +146,15 @@ class StatisticsApplicationService:
     StatisticsSummaryError = statistics_api.StatisticsSummaryError
     StatisticsExportError = export_api.StatisticsExportError
 
-    def get_statistics_export_view_model(self, date_from, date_to):
-        return statistics_api.get_statistics_export_view_model(date_from, date_to)
+    def get_statistics_export_view_model(self, date_from, date_to, project_id=None):
+        return statistics_api.get_statistics_export_view_model(date_from, date_to, project_id)
 
     def format_export_duration(self, duration_seconds):
         return statistics_api.format_export_duration(duration_seconds)
 
-    def export_statistics_csv(self, date_from, date_to, output_path, expected_snapshot_revision):
+    def export_statistics_csv(self, date_from, date_to, output_path, expected_export_ticket_revision, project_id=None):
         return export_api.export_statistics_csv(
-            date_from, date_to, output_path, expected_snapshot_revision
+            date_from, date_to, output_path, expected_export_ticket_revision, project_id
         )
 
 
@@ -186,6 +187,9 @@ class TimelineApplicationService:
 
     def list_selectable_projects(self):
         return project_api.list_selectable_projects()
+
+    def list_filter_projects(self):
+        return timeline_api.list_filter_projects()
 
     def save_timeline_session_edit(
         self,
