@@ -1,0 +1,313 @@
+# Standard timing validation — manual workflow for baseline vs HEAD comparison.
+#
+# Runs the Standard pytest suite (``-m "not benchmark"``) three times on the
+# baseline revision and three times on the HEAD revision inside the *same* job
+# and runner, then reports the median elapsed time and percentage improvement.
+#
+# The baseline defaults to the merge-base of the PR head and the base branch
+# so the comparison reflects only the PR's changes. Both inputs can be
+# overridden via workflow_dispatch for ad-hoc comparisons.
+#
+# This workflow does NOT gate pull requests — it is a measurement tool. The
+# acceptance criteria (HEAD median <= 240s, improvement >= 20%) are reported
+# as structured output but do not fail the job; the human reviewing the PR
+# makes the final call based on the raw data.
+
+name: Standard timing validation
+
+on:
+  workflow_dispatch:
+    inputs:
+      baseline_revision:
+        description: Baseline revision (defaults to merge-base with base branch)
+        required: false
+        type: string
+      head_revision:
+        description: Head revision (defaults to PR head or current SHA)
+        required: false
+        type: string
+      base_branch:
+        description: Base branch for merge-base resolution
+        required: false
+        type: string
+        default: main
+
+permissions:
+  contents: read
+
+env:
+  PYTHONUTF8: "1"
+  PYTHONIOENCODING: utf-8
+  PYTHONFAULTHANDLER: "1"
+
+jobs:
+  compare:
+    name: Baseline vs HEAD timing
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out repository (full history)
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          show-progress: false
+          persist-credentials: false
+
+      - name: Resolve revisions
+        id: revs
+        shell: pwsh
+        run: |
+          $baseBranch = "${{ inputs.base_branch || 'main' }}"
+          $headSha = "${{ inputs.head_revision || github.event.pull_request.head.sha || github.sha }}"
+          if ([string]::IsNullOrWhiteSpace($headSha)) {
+            $headSha = (git rev-parse HEAD).Trim()
+          }
+
+          $baselineSha = "${{ inputs.baseline_revision }}"
+          if ([string]::IsNullOrWhiteSpace($baselineSha)) {
+            # Resolve merge-base of head and base branch
+            git fetch origin $baseBranch --depth=1 2>$null
+            $baselineSha = (git merge-base $headSha origin/$baseBranch).Trim()
+          }
+
+          if ([string]::IsNullOrWhiteSpace($baselineSha)) {
+            throw "Could not resolve baseline revision"
+          }
+
+          Write-Host "baseline_sha=$baselineSha"
+          Write-Host "head_sha=$headSha"
+          "baseline_sha=$baselineSha" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
+          "head_sha=$headSha" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install dependencies
+        shell: pwsh
+        run: python -m pip install --disable-pip-version-check -q -r requirements-dev.txt
+
+      - name: Compile Python
+        shell: pwsh
+        run: |
+          & python -m compileall -q worktrace scripts/pytest_diagnostics.py scripts/pytest_log_to_junit.py scripts/run_pytest_ci.py scripts/pytest_timing_summary.py
+          if ($LASTEXITCODE -ne 0) { throw "compile failed" }
+
+      # ---------------------------------------------------------------------------
+      # Baseline runs (3x)
+      # ---------------------------------------------------------------------------
+      - name: Run baseline pytest (3x)
+        shell: pwsh
+        run: |
+          $baseline = "${{ steps.revs.outputs.baseline_sha }}"
+          git checkout $baseline 2>$null
+          git submodule update --init --recursive 2>$null
+
+          # Recompile because checkout may have changed source files
+          & python -m compileall -q worktrace scripts/pytest_diagnostics.py scripts/pytest_log_to_junit.py scripts/run_pytest_ci.py scripts/pytest_timing_summary.py
+
+          $baselines = @()
+          for ($i = 1; $i -le 3; $i++) {
+            Write-Host ""
+            Write-Host "=== baseline run $i/3 ==="
+            # Clean state between runs
+            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue test-results
+            New-Item -ItemType Directory -Force -Path test-results | Out-Null
+            Get-ChildItem -Recurse -Force -Filter "__pycache__" -Directory -ErrorAction SilentlyContinue |
+              Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+
+            $utf8 = [System.Text.UTF8Encoding]::new($false)
+            [Console]::InputEncoding = $utf8
+            [Console]::OutputEncoding = $utf8
+            $PSNativeCommandUseErrorActionPreference = $false
+
+            $t1 = Get-Date
+            & python scripts/run_pytest_ci.py `
+              --log "test-results/pytest-baseline-$i.log" `
+              --progress "test-results/pytest-baseline-$i-progress.json" `
+              --heartbeat-seconds 60 `
+              -- `
+              -q -ra --tb=short --color=no --cache-clear `
+              -m "not benchmark" `
+              --timeout=90 --timeout-method=thread `
+              --junitxml="test-results/pytest-baseline-$i.xml"
+            $exitCode = $LASTEXITCODE
+            $t2 = Get-Date
+            $elapsed = ($t2 - $t1).TotalSeconds
+            $baselines += $elapsed
+            Write-Host ("baseline_run_{0}_elapsed={1:N2}s exit_code={2}" -f $i, $elapsed, $exitCode)
+
+            # Save JUnit for test-count diff
+            if ($exitCode -ne 0 -and -not (Test-Path "test-results/pytest-baseline-$i.xml")) {
+              & python scripts/pytest_log_to_junit.py `
+                --log "test-results/pytest-baseline-$i.log" `
+                --output "test-results/pytest-baseline-$i.xml" `
+                --timeout-seconds 90
+            }
+          }
+          # Persist for later steps
+          $baselines -join "," | Set-Content -LiteralPath "test-results/baseline-times.txt" -Encoding UTF8
+
+      # ---------------------------------------------------------------------------
+      # HEAD runs (3x)
+      # ---------------------------------------------------------------------------
+      - name: Run HEAD pytest (3x)
+        shell: pwsh
+        run: |
+          $head = "${{ steps.revs.outputs.head_sha }}"
+          git checkout $head 2>$null
+          git submodule update --init --recursive 2>$null
+
+          # Recompile because checkout may have changed source files
+          & python -m compileall -q worktrace scripts/pytest_diagnostics.py scripts/pytest_log_to_junit.py scripts/run_pytest_ci.py scripts/pytest_timing_summary.py
+
+          $heads = @()
+          for ($i = 1; $i -le 3; $i++) {
+            Write-Host ""
+            Write-Host "=== HEAD run $i/3 ==="
+            # Clean state between runs
+            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue test-results
+            New-Item -ItemType Directory -Force -Path test-results | Out-Null
+            Get-ChildItem -Recurse -Force -Filter "__pycache__" -Directory -ErrorAction SilentlyContinue |
+              Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+
+            $utf8 = [System.Text.UTF8Encoding]::new($false)
+            [Console]::InputEncoding = $utf8
+            [Console]::OutputEncoding = $utf8
+            $PSNativeCommandUseErrorActionPreference = $false
+
+            $t1 = Get-Date
+            & python scripts/run_pytest_ci.py `
+              --log "test-results/pytest-head-$i.log" `
+              --progress "test-results/pytest-head-$i-progress.json" `
+              --heartbeat-seconds 60 `
+              -- `
+              -q -ra --tb=short --color=no --cache-clear `
+              -m "not benchmark" `
+              --timeout=90 --timeout-method=thread `
+              --junitxml="test-results/pytest-head-$i.xml"
+            $exitCode = $LASTEXITCODE
+            $t2 = Get-Date
+            $elapsed = ($t2 - $t1).TotalSeconds
+            $heads += $elapsed
+            Write-Host ("head_run_{0}_elapsed={1:N2}s exit_code={2}" -f $i, $elapsed, $exitCode)
+
+            # Save JUnit for test-count diff
+            if ($exitCode -ne 0 -and -not (Test-Path "test-results/pytest-head-$i.xml")) {
+              & python scripts/pytest_log_to_junit.py `
+                --log "test-results/pytest-head-$i.log" `
+                --output "test-results/pytest-head-$i.xml" `
+                --timeout-seconds 90
+            }
+          }
+          $heads -join "," | Set-Content -LiteralPath "test-results/head-times.txt" -Encoding UTF8
+
+      # ---------------------------------------------------------------------------
+      # Compute comparison
+      # ---------------------------------------------------------------------------
+      - name: Compute timing comparison
+        id: comparison
+        shell: pwsh
+        run: |
+          $baselineRaw = (Get-Content "test-results/baseline-times.txt" -Raw).Trim() -split ","
+          $headRaw = (Get-Content "test-results/head-times.txt" -Raw).Trim() -split ","
+
+          $baselineNums = $baselineRaw | ForEach-Object { [double]::Parse($_) } | Sort-Object
+          $headNums = $headRaw | ForEach-Object { [double]::Parse($_) } | Sort-Object
+
+          $baselineMedian = $baselineNums[[int]($baselineNums.Count / 2)]
+          $headMedian = $headNums[[int]($headNums.Count / 2)]
+          $absDiff = $headMedian - $baselineMedian
+          $pctImprovement = if ($baselineMedian -gt 0) { ($baselineMedian - $headMedian) / $baselineMedian * 100 } else { 0 }
+
+          # Test count diff from JUnit (use last run of each)
+          $baselineTests = 0; $headTests = 0
+          $baselineFailures = 0; $headFailures = 0
+          $baselineSkipped = 0; $headSkipped = 0
+          if (Test-Path "test-results/pytest-baseline-3.xml") {
+            $xml = [xml](Get-Content "test-results/pytest-baseline-3.xml" -Raw)
+            $suite = $xml.testsuites.testsuite
+            if (-not $suite) { $suite = $xml.testsuite }
+            if ($suite) {
+              $baselineTests = [int]$suite.tests
+              $baselineFailures = [int]$suite.failures + [int]$suite.errors
+              $baselineSkipped = [int]$suite.skipped
+            }
+          }
+          if (Test-Path "test-results/pytest-head-3.xml") {
+            $xml = [xml](Get-Content "test-results/pytest-head-3.xml" -Raw)
+            $suite = $xml.testsuites.testsuite
+            if (-not $suite) { $suite = $xml.testsuite }
+            if ($suite) {
+              $headTests = [int]$suite.tests
+              $headFailures = [int]$suite.failures + [int]$suite.errors
+              $headSkipped = [int]$suite.skipped
+            }
+          }
+
+          $report = @{
+            baseline_sha = "${{ steps.revs.outputs.baseline_sha }}"
+            head_sha = "${{ steps.revs.outputs.head_sha }}"
+            baseline_runs = $baselineNums
+            head_runs = $headNums
+            baseline_median_seconds = [math]::Round($baselineMedian, 2)
+            head_median_seconds = [math]::Round($headMedian, 2)
+            absolute_diff_seconds = [math]::Round($absDiff, 2)
+            percentage_improvement = [math]::Round($pctImprovement, 1)
+            baseline_test_count = $baselineTests
+            head_test_count = $headTests
+            test_count_diff = $headTests - $baselineTests
+            baseline_failures = $baselineFailures
+            head_failures = $headFailures
+            baseline_skipped = $baselineSkipped
+            head_skipped = $headSkipped
+            head_median_under_240s = ($headMedian -le 240)
+            improvement_at_least_20pct = ($pctImprovement -ge 20)
+          }
+
+          $reportJson = $report | ConvertTo-Json -Depth 5
+          $reportJson | Set-Content -LiteralPath "test-results/timing-comparison.json" -Encoding UTF8
+
+          # Write to step summary
+          $summary = @()
+          $summary += "## Standard timing validation"
+          $summary += ""
+          $summary += "| metric | baseline | HEAD |"
+          $summary += "|---|---|---|"
+          $summary += "| median (s) | $([math]::Round($baselineMedian, 2)) | $([math]::Round($headMedian, 2)) |"
+          $summary += "| test count | $baselineTests | $headTests |"
+          $summary += "| failures | $baselineFailures | $headFailures |"
+          $summary += "| skipped | $baselineSkipped | $headSkipped |"
+          $summary += ""
+          $summary += "| run | baseline (s) | HEAD (s) |"
+          $summary += "|---|---|---|"
+          for ($i = 0; $i -lt $baselineNums.Count; $i++) {
+            $summary += "| $($i+1) | $([math]::Round($baselineNums[$i], 2)) | $([math]::Round($headNums[$i], 2)) |"
+          }
+          $summary += ""
+          $summary += "- absolute diff: $([math]::Round($absDiff, 2))s"
+          $summary += "- percentage improvement: $([math]::Round($pctImprovement, 1))%"
+          $summary += "- HEAD median <= 240s: $($report.head_median_under_240s)"
+          $summary += "- improvement >= 20%: $($report.improvement_at_least_20pct)"
+          $summary += ""
+          $summary += "baseline_sha=$($report.baseline_sha)"
+          $summary += "head_sha=$($report.head_sha)"
+
+          $summaryText = $summary -join "`n"
+          Write-Host $summaryText
+          $summaryText | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding UTF8 -Append
+
+      - name: Upload timing comparison artifact
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: standard-timing-validation-${{ github.run_id }}
+          path: test-results/
+          if-no-files-found: warn
+          retention-days: 7
