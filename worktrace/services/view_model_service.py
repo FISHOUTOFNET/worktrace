@@ -1,7 +1,8 @@
 """Page ViewModel projection over the unified Activity Display Model."""
 from __future__ import annotations
 
-from typing import Any
+import heapq
+from typing import Any, Mapping
 
 from ..constants import STATUS_NORMAL, UNCATEGORIZED_PROJECT
 from ..contracts.live_display_contracts import ActivitySnapshotContract, DisplaySpanContract
@@ -284,15 +285,21 @@ def _base_session_row(session: dict[str, Any], *, row_kind: str) -> dict[str, An
 def _description_display_fields(session: dict[str, Any]) -> dict[str, Any]:
     user_description = str(session.get("session_note") or "").strip()
     labels: list[str] = []
-    contributions = sorted(
-        list(session.get("_projection_contributions") or []),
-        key=lambda item: -int(item.get("duration_seconds") or 0),
+    # Only top-3 labels are needed; use heapq.nlargest to avoid a full sort.
+    # Filter ineligible contributions first so nlargest operates on the
+    # same set the previous sorted()+break loop consumed.
+    eligible = (
+        item
+        for item in (session.get("_projection_contributions") or [])
+        if not bool(item.get("privacy_redacted"))
+        and str(item.get("status") or STATUS_NORMAL) == STATUS_NORMAL
     )
-    for contribution in contributions:
-        if bool(contribution.get("privacy_redacted")):
-            continue
-        if str(contribution.get("status") or STATUS_NORMAL) != STATUS_NORMAL:
-            continue
+    top_contributions = heapq.nlargest(
+        3,
+        eligible,
+        key=lambda item: int(item.get("duration_seconds") or 0),
+    )
+    for contribution in top_contributions:
         activity_name = str(contribution.get("activity_display_name") or "").strip()
         if contribution.get("resource_is_anchor") and activity_name:
             label = activity_name
@@ -302,8 +309,6 @@ def _description_display_fields(session: dict[str, Any]) -> dict[str, Any]:
             ).strip()
         if label and label not in labels:
             labels.append(label)
-        if len(labels) >= 3:
-            break
     derived_summary = " · ".join(labels)
     if user_description:
         display_description = user_description
@@ -341,6 +346,40 @@ def _description_display_fields(session: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _session_display_seconds(session: Mapping[str, Any]) -> int:
+    """Lightweight duration extraction matching _base_session_row's logic."""
+    base = int(session.get("duration_seconds") or 0)
+    adjusted = session.get("adjusted_duration_seconds")
+    if adjusted is not None:
+        return int(adjusted)
+    return base
+
+
+def _session_needs_attention(session: Mapping[str, Any]) -> bool:
+    """Lightweight needs_attention matching _description_display_fields's logic."""
+    if bool(session.get("is_in_progress")):
+        return False
+    needs_project = not bool(session.get("is_report_project"))
+    needs_description = not str(session.get("session_note") or "").strip()
+    return needs_project or needs_description
+
+
+def _session_visible_in_recent(
+    session: Mapping[str, Any], decide_report_status
+) -> bool:
+    """Lightweight visibility check without building a full DTO."""
+    contributions = session.get("_projection_contributions") or []
+    if not contributions:
+        return True
+    return any(
+        decide_report_status(
+            str(item.get("status") or ""),
+            has_project_attribution=bool(item.get("is_report_project")),
+        ).visible_in_recent
+        for item in contributions
+    )
+
+
 def get_overview_view_model(today: str | None = None) -> dict[str, Any]:
     scoped_today = today or timeline_service.get_default_report_date()
     snapshot = _get_current_activity_snapshot()
@@ -372,65 +411,123 @@ def get_overview_view_model(today: str | None = None) -> dict[str, Any]:
             }
         )
 
-        recent_rows: list[dict[str, Any]] = []
+        # Select-then-transform: compute lightweight selection keys for all
+        # sessions, pick the visible 20 recent + 3 attention, then build full
+        # DTOs only for the surviving ~23 sessions.
+        candidates: list[dict[str, Any]] = []
         for session in sessions:
-            contributions = list(session.get("_projection_contributions") or [])
-            if contributions and not any(
-                decide_report_status(
-                    str(item.get("status") or ""),
-                    has_project_attribution=bool(item.get("is_report_project")),
-                ).visible_in_recent
-                for item in contributions
-            ):
+            if not _session_visible_in_recent(session, decide_report_status):
                 continue
-            recent_rows.append(
-                _base_session_row(session, row_kind="project_session")
+            display_seconds = _session_display_seconds(session)
+            candidates.append(
+                {
+                    "session": session,
+                    "start_time": str(session.get("start_time") or ""),
+                    "is_in_progress": bool(session.get("is_in_progress")),
+                    "display_seconds": display_seconds,
+                    "contributes_to_totals": bool(
+                        session.get("contributes_to_totals", True)
+                    ),
+                    "is_classified": bool(
+                        session.get("is_report_classified")
+                        or session.get("is_report_project")
+                        or session.get("is_classified")
+                    ),
+                    "is_uncategorized": bool(
+                        session.get("is_report_uncategorized")
+                        or (
+                            not bool(session.get("is_report_project"))
+                            and not bool(session.get("is_classified"))
+                        )
+                    ),
+                    "needs_attention": _session_needs_attention(session),
+                }
             )
+
+        # KPI must be computed from the full projection, not the truncated
+        # visible set, so it is calculated from candidates (pre-truncation).
+        total_candidates = [
+            c for c in candidates if c["contributes_to_totals"]
+        ]
+        today_total_seconds = sum(
+            c["display_seconds"] for c in total_candidates
+        )
+        classified_seconds = sum(
+            c["display_seconds"]
+            for c in total_candidates
+            if c["is_classified"]
+        )
+        uncategorized_seconds = sum(
+            c["display_seconds"]
+            for c in total_candidates
+            if c["is_uncategorized"]
+        )
+        today_total_seconds += sum(
+            int(entry.get("duration_seconds") or 0) for entry in standalone_entries
+        )
+
+        # Sort: in-progress first, then start_time descending.
+        candidates.sort(
+            key=lambda c: c["start_time"], reverse=True
+        )
+        candidates.sort(
+            key=lambda c: c["is_in_progress"], reverse=True
+        )
+
+        attention_candidates = [
+            c for c in candidates if c["needs_attention"]
+        ]
+        attention_selection = {
+            str(c["session"].get("projection_instance_key") or "")
+            for c in attention_candidates[:_ATTENTION_LIMIT]
+        }
+
+        # Build full DTOs only for the visible window.
+        visible_sessions = [
+            c["session"]
+            for c in candidates[:_RECENT_LIMIT]
+        ]
+        # Ensure attention rows are in the visible window.
+        for c in attention_candidates[:_ATTENTION_LIMIT]:
+            key = str(c["session"].get("projection_instance_key") or "")
+            if key and not any(
+                str(s.get("projection_instance_key") or "") == key
+                for s in visible_sessions
+            ):
+                visible_sessions.append(c["session"])
+
+        recent_rows = [
+            _base_session_row(s, row_kind="project_session")
+            for s in visible_sessions
+        ]
         _apply_live_span_to_rows(
             recent_rows,
             model,
             row_kind=ROW_KIND_RECENT_PROJECT_SESSION_ROW,
         )
-    # Stable business order: in-progress report sessions first, then by
-    # start time descending. A pure string sort would let a closed session
-    # leapfrog an in-progress one when start times tie, so in-progress is
-    # promoted explicitly via a second stable sort.
-    recent_rows.sort(
-        key=lambda row: str(row.get("start_time") or ""), reverse=True
-    )
-    recent_rows.sort(
-        key=lambda row: bool(row.get("is_in_progress")), reverse=True
-    )
 
-    total_rows = [
-        row for row in recent_rows if row.get("contributes_to_totals") is not False
-    ]
-    today_total_seconds = sum(int(row.get("duration_seconds") or 0) for row in total_rows)
-    classified_seconds = sum(
-        int(row.get("duration_seconds") or 0)
-        for row in total_rows
-        if bool(row.get("is_classified"))
-    )
-    uncategorized_seconds = sum(
-        int(row.get("duration_seconds") or 0)
-        for row in total_rows
-        if bool(row.get("is_uncategorized"))
-    )
-    today_total_seconds += sum(
-        int(entry.get("duration_seconds") or 0) for entry in standalone_entries
-    )
+        # Re-sort the visible rows (same business order).
+        recent_rows.sort(
+            key=lambda row: str(row.get("start_time") or ""), reverse=True
+        )
+        recent_rows.sort(
+            key=lambda row: bool(row.get("is_in_progress")), reverse=True
+        )
+
     kpi_live_targets = build_kpi_live_targets(
-        total_rows,
+        [row for row in recent_rows if row.get("contributes_to_totals") is not False],
         model.get("live_clock") or {},
     )
     current_session = next(
         (row for row in recent_rows if bool(row.get("is_in_progress"))),
         None,
     )
-    attention_candidates = [
-        row for row in recent_rows if bool(row.get("needs_attention"))
-    ]
-    attention_rows = attention_candidates[:_ATTENTION_LIMIT]
+    attention_rows = [
+        row
+        for row in recent_rows
+        if bool(row.get("needs_attention"))
+        and str(row.get("projection_instance_key") or "") in attention_selection
+    ][:_ATTENTION_LIMIT]
     visible_recent_rows = _select_overview_recent_rows(
         recent_rows,
         attention_rows,

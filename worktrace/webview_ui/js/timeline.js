@@ -64,7 +64,7 @@
     function filteredTimelineSessions(entries) {
         var filter = document.getElementById("timeline-project-filter");
         var value = filter ? String(filter.value || "") : "";
-        return (Array.isArray(entries) ? entries.slice() : []).filter(function (session) {
+        return (Array.isArray(entries) ? entries : []).filter(function (session) {
             if (!value) return true;
             if (value === "unclassified") {
                 // Use the backend authoritative field instead of
@@ -73,7 +73,7 @@
                 return session.is_report_uncategorized === true;
             }
             return String(session.project_id || "") === value;
-        }).sort(timelineSessionOrder);
+        });
     }
 
     function renderTimelineProjectFilter(projects) {
@@ -139,7 +139,7 @@
         );
 
         var listEl = document.getElementById("timeline-sessions-list");
-        var allSessions = Array.isArray(data.entries) ? data.entries.slice().sort(timelineSessionOrder) : [];
+        var allSessions = Array.isArray(data.entries) ? data.entries : [];
         App.currentSessions = allSessions;
         var sessions = filteredTimelineSessions(allSessions);
         if (sessions.length === 0) {
@@ -202,24 +202,31 @@
                 + '</div></button>';
         }
         listEl.innerHTML = html;
-        var items = listEl.querySelectorAll(".timeline-item");
-        for (var j = 0; j < items.length; j++) {
-            (function (itemEl) {
-                itemEl.addEventListener("click", function () {
-                    selectTimelineSession(
-                        itemEl.getAttribute("data-projection-instance-key"),
-                        sessions
-                    );
-                });
-                itemEl.addEventListener("keydown", function (event) {
-                    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
-                    event.preventDefault();
-                    var candidates = Array.prototype.slice.call(items);
-                    var target = candidates[Math.max(0, Math.min(candidates.length - 1,
-                        candidates.indexOf(itemEl) + (event.key === "ArrowDown" ? 1 : -1)))];
-                    if (target) target.focus();
-                });
-            })(items[j]);
+        // Event delegation: a single click + keydown listener on the
+        // container handles all timeline items, avoiding per-item listener
+        // churn on every re-render.
+        if (!listEl._timelineDelegationBound) {
+            listEl.addEventListener("click", function (event) {
+                var itemEl = event.target.closest(".timeline-item");
+                if (!itemEl) return;
+                selectTimelineSession(
+                    itemEl.getAttribute("data-projection-instance-key"),
+                    App.currentSessions || []
+                );
+            });
+            listEl.addEventListener("keydown", function (event) {
+                if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+                var itemEl = event.target.closest(".timeline-item");
+                if (!itemEl) return;
+                event.preventDefault();
+                var candidates = Array.prototype.slice.call(
+                    listEl.querySelectorAll(".timeline-item")
+                );
+                var target = candidates[Math.max(0, Math.min(candidates.length - 1,
+                    candidates.indexOf(itemEl) + (event.key === "ArrowDown" ? 1 : -1)))];
+                if (target) target.focus();
+            });
+            listEl._timelineDelegationBound = true;
         }
 
         if (App.selectedProjectionInstanceKey && !sessions.some(function (session) {
@@ -510,14 +517,18 @@
                 + '</div>';
         }
         list.innerHTML = html;
-        var buttons = list.querySelectorAll(".summary-hide-activity");
-        for (var index = 0; index < buttons.length; index++) {
-            buttons[index].addEventListener("click", function (event) {
+        // Event delegation: a single click listener on the details container
+        // handles all delete buttons, avoiding per-render listener churn.
+        if (!list._detailsDelegationBound) {
+            list.addEventListener("click", function (event) {
+                var btn = event.target.closest(".summary-hide-activity");
+                if (!btn) return;
                 event.stopPropagation();
                 App.confirmTimelineDeletion("hideActivity", {
-                    summaryId: this.getAttribute("data-summary-id")
-                }, this);
+                    summaryId: btn.getAttribute("data-summary-id")
+                }, btn);
             });
+            list._detailsDelegationBound = true;
         }
     }
     App.renderSessionDetails = renderSessionDetails;
