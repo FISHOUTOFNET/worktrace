@@ -215,7 +215,12 @@ def test_no_acceptance_temporary_workflow_or_agent_script():
 
     workflow_names = {path.name for path in workflows.glob("*.yml")}
     workflow_names.update(path.name for path in workflows.glob("*.yaml"))
-    assert workflow_names == {"ci.yml", "_validation.yml", "performance-validation.yml"}
+    assert workflow_names == {
+        "ci.yml",
+        "_validation.yml",
+        "performance-validation.yml",
+        "standard-timing-validation.yml",
+    }
 
 
 def test_production_has_no_runtime_service_locator():

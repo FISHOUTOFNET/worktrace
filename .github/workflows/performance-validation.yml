@@ -157,12 +157,10 @@ jobs:
           retention-days: 1
 
   webview-render:
-    # Real WebView2 frontend render measurement.  Runs on Windows so WebView2
-    # is available, but GitHub-hosted runners may lack an interactive desktop
-    # session — in that case the harness records the real failure reason and
-    # the job is allowed to continue so the benchmark job is not blocked.
-    # The authoritative successful measurement may come from a local run;
-    # see the artifact for the actual result.
+    # Real WebView2 frontend render measurement on Windows.  Hosted runners
+    # may lack an interactive desktop session; the harness records the real
+    # failure reason and continues so the benchmark job is not blocked.
+    # Authoritative success may come from a local run; see the artifact.
     name: WebView render perf
     runs-on: windows-latest
     timeout-minutes: 15

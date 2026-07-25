@@ -80,14 +80,10 @@ def _populate_dataset(activity_count: int) -> dict[str, Any]:
     )
 
 
-# JS injected into the WebView2 window to perform the full measurement
-# sequence.  Uses real performance.mark/measure and requestAnimationFrame.
-# Stores results in window.__perfResults when done.
-#
-# The JS calls App.bridge.getOverview / getTimeline /
-# getTimelineSessionActivitySummary — the same shipping bridge surface the
-# real UI uses — so the measurement covers the real frontend render path,
-# not a synthetic Python-side timing.
+# JS injected into WebView2 to run the full measurement sequence using real
+# performance.mark/measure and requestAnimationFrame.  Calls the same shipping
+# bridge surface (getOverview / getTimeline / getTimelineSessionActivitySummary)
+# as the real UI, so this measures the real frontend render path, not Python.
 _MEASURE_JS = r"""
 (function () {
     "use strict";

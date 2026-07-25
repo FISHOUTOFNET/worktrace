@@ -392,19 +392,15 @@ def materialize_day_projection(
     Pure function: no SQLite, no cross-request cache, no module-level state.
     ``report_date`` defaults to ``computation.start_date``.
 
-    Contributions are frozen exactly once and referenced by both
-    ``contributions`` and ``contributions_by_key`` (same objects, no
-    duplicate freeze). Compact entries have ``_projection_contributions``
-    stripped before freezing; page paths use ``contributions_by_key``.
-    Both this materializer and the full snapshot materializer depend on
-    the same :class:`ProjectionComputation` from
-    :mod:`report_projection_builder` — neither duplicates business rules.
+    Contributions are frozen once and referenced by both ``contributions``
+    and ``contributions_by_key`` (same objects, no duplicate freeze).
+    Compact entries strip ``_projection_contributions`` before freezing;
+    page paths use ``contributions_by_key``.  Both this materializer and
+    the full snapshot materializer share the same
+    :class:`ProjectionComputation` from :mod:`report_projection_builder`.
 
-    This public entry point composes the three pure steps
-    (:func:`freeze_projection_data`, :func:`build_projection_indexes`,
-    :func:`assemble_day_projection`) without per-step timing.  The
-    Builder path (:func:`_build_day_projection`) calls the steps
-    directly so each stage is measured independently.
+    Composes the three pure steps without per-step timing; the Builder
+    path calls the steps directly so each stage is measured independently.
     """
     frozen_data = freeze_projection_data(computation)
     indexes = build_projection_indexes(frozen_data)
@@ -506,30 +502,21 @@ def _single_flight_build(
 ) -> DayProjection:
     """Ensure only one thread builds a given (db, date, version) triple.
 
-    Uses a :class:`concurrent.futures.Future` for result coordination.
-    The builder publishes to the cross-request cache only if the cache
-    epoch hasn't changed since the build started.  Waiters wait with a
-    bounded timeout; on timeout :class:`ProjectionWaitTimeout` is raised
-    but the builder continues running for other waiters.
+    Uses a :class:`~concurrent.futures.Future` for coordination.  The
+    builder publishes to the cross-request cache only if the cache epoch
+    hasn't changed since the build started.  Waiters wait with a bounded
+    timeout; on timeout :class:`ProjectionWaitTimeout` is raised but the
+    builder keeps running for other waiters.
 
     Waiter lifecycle contract:
 
-    * ``waiter_count`` counts waiters that have joined an in-flight build
-      but have not yet exited.  It is incremented exactly once (under the
-      state lock) when a waiter joins the Future, and decremented exactly
-      once in the single ``finally`` exit path (success, timeout, or
-      owner-exception).
-    * The waiter captures a reference to the specific ``_InFlight`` entry
-      it joined (``joined_inflight``).  The decrement targets that exact
-      object — never ``_in_flight.get(flight_key)`` — so a cache-epoch
-      change that replaces the dict entry cannot cause a cross-entry
-      decrement or underflow.
-    * The timeout diagnostic snapshot is read from ``joined_inflight``
-      *before* the decrement and includes the timing-out waiter in the
-      count (it has not been decremented yet).
-    * ``waiter_count`` must never go negative.  An underflow indicates a
-      state-machine bug and raises :class:`AssertionError` rather than
-      being silently clamped.
+    * ``waiter_count`` is incremented once under the state lock when a
+      waiter joins and decremented once in the single ``finally`` exit.
+    * Each waiter captures its ``_InFlight`` entry (``joined_inflight``);
+      the decrement targets that exact object, never a fresh dict lookup,
+      so an epoch change can't cause a cross-entry decrement or underflow.
+    * The timeout snapshot is read before the decrement and includes the
+      timing-out waiter; underflow raises :class:`AssertionError`.
     """
     flight_key = (database_key, report_date, source_version.token())
 
