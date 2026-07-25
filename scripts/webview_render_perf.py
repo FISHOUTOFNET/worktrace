@@ -119,6 +119,9 @@ _MEASURE_JS = r"""
         var results = { label: label, stages: {} };
 
         // Overview cold render
+        // Set the page context the navigation function would normally set
+        // so runtime-envelope compatibility checks accept the payload.
+        App.currentPage = "overview";
         mark(label + "_overview_start");
         var overviewBundle = await App.bridge.getOverview();
         mark(label + "_overview_payload");
@@ -148,6 +151,9 @@ _MEASURE_JS = r"""
         }
 
         // Timeline render
+        // Switch the page context to timeline so runtime-envelope
+        // compatibility checks accept the timeline and detail payloads.
+        App.currentPage = "timeline";
         // Prefer the overview's report_date; fall back to the injected
         // benchmark date (window.__perfReportDate) and finally today.
         var reportDate = results.overview_report_date
@@ -312,6 +318,7 @@ _MEASURE_JS = r"""
         }
 
         // Warm-cache overview re-render
+        App.currentPage = "overview";
         mark(label + "_warm_overview_start");
         var warmOverview = await App.bridge.getOverview();
         mark(label + "_warm_overview_payload");
@@ -533,6 +540,41 @@ def _run_harness(activity_count: int, runs: int) -> dict[str, Any]:
             "runtime_detection": runtime_status,
         }
 
+    runs = parsed.get("runs", [])
+
+    # Enforce realism assertions on every run.  A run with ``detail_error``
+    # or missing detail payload means the real Detail render path did not
+    # complete, so the harness must report failure — never mask it with
+    # ``status: ok``.
+    detail_failures: list[str] = []
+    for run in runs:
+        stages = run.get("stages", {}) if isinstance(run, dict) else {}
+        detail_error = stages.get("detail_error")
+        if detail_error:
+            detail_failures.append(
+                f"{run.get('label', '?')}: {detail_error}"
+            )
+        elif "detail_payload_ms" not in stages:
+            detail_failures.append(
+                f"{run.get('label', '?')}: detail_payload_ms missing"
+            )
+
+    if detail_failures:
+        return {
+            "status": "failed",
+            "failure_reason": (
+                "Detail render did not complete in one or more runs: "
+                + "; ".join(detail_failures)
+            ),
+            "failure_category": "detail_render_failure",
+            "runtime_detection": runtime_status,
+            "dataset": {
+                "activity_count": dataset_info.get("activity_count", activity_count),
+                "report_date": dataset_info.get("report_date", ""),
+            },
+            "runs": runs,
+        }
+
     return {
         "status": "ok",
         "runtime_detection": runtime_status,
@@ -540,7 +582,7 @@ def _run_harness(activity_count: int, runs: int) -> dict[str, Any]:
             "activity_count": dataset_info.get("activity_count", activity_count),
             "report_date": dataset_info.get("report_date", ""),
         },
-        "runs": parsed.get("runs", []),
+        "runs": runs,
     }
 
 
@@ -689,6 +731,14 @@ def main() -> int:
         summary["failure_category"] = result.get("failure_category", "")
         if "js_stack" in result:
             summary["js_stack"] = result["js_stack"]
+        # Preserve raw runs, dataset, and cold/warm summary even on failure
+        # so the artifact has full diagnostic data for the failure cause.
+        runs = result.get("runs", [])
+        if runs:
+            summary["dataset"] = result.get("dataset", {})
+            summary["raw_runs"] = runs
+            summary["cold_warm"] = _build_cold_warm_summary(runs)
+            summary["summary"] = _median_over_runs(runs)
 
     out_dir = _REPO_ROOT / "test-results"
     out_dir.mkdir(parents=True, exist_ok=True)
