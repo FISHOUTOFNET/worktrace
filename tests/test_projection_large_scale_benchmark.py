@@ -42,7 +42,7 @@ from worktrace.services.report_projection_provider import (
     get_day_projection,
 )
 
-pytestmark = [pytest.mark.db, pytest.mark.benchmark, pytest.mark.serial]
+pytestmark = [pytest.mark.db, pytest.mark.benchmark, pytest.mark.serial, pytest.mark.integration]
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _PROBE_PATH = _REPO_ROOT / "tests" / "support" / "peak_memory_probe.py"
