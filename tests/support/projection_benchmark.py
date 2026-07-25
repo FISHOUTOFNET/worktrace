@@ -244,4 +244,68 @@ def _find_session_by_activity(snapshot, activity_id: int):
     return None
 
 
-__all__ = ["DEFAULT_REPORT_DATE", "build_benchmark_dataset"]
+def build_concentrated_contributions_dataset(
+    *,
+    contribution_count: int,
+    report_date: str = DEFAULT_REPORT_DATE,
+) -> dict[str, Any]:
+    """Insert ``contribution_count`` contiguous activities forming one session.
+
+    All activities are back-to-back (5s each, no gaps) in the uncategorized
+    project, so the session builder merges them into a single session with
+    ``contribution_count`` member contributions.  This stresses the O(N)
+    contribution index build and the single-session contribution lookup.
+
+    Privacy: synthetic ``AppN``/``DocN`` names, opaque resource keys.
+    """
+
+    if contribution_count < 1:
+        raise ValueError("contribution_count must be >= 1")
+
+    projects = _ensure_benchmark_projects()
+    day_start_seconds = 9 * 3600  # 09:00:00
+    duration = 5
+
+    activity_ids: list[int] = []
+    with get_connection() as conn:
+        uncategorized_id = get_uncategorized_project_id(conn)
+
+    for index in range(contribution_count):
+        start_offset = day_start_seconds + index * duration
+        end_offset = start_offset + duration
+        start_time = _format_time(report_date, start_offset)
+        end_time = _format_time(report_date, end_offset)
+
+        resource = _build_resource(index)
+        prepared = _prepare_activity(
+            app_name=f"App{index % 4}",
+            process_name="app.exe",
+            window_title=f"Doc{index}",
+            start_time=start_time,
+            status=STATUS_NORMAL,
+            source=SOURCE_AUTO,
+            project_id=None,
+            resource=resource,
+        )
+        with get_connection() as conn:
+            activity_id = activity_fact_repository.insert_open_activity(
+                conn, prepared
+            )
+            activity_fact_repository.close_activity(conn, activity_id, end_time)
+        activity_ids.append(activity_id)
+
+    return {
+        "report_date": report_date,
+        "contribution_count": contribution_count,
+        "activity_ids": activity_ids,
+        "anchor_project_id": projects["anchor"],
+        "other_project_id": projects["other"],
+        "uncategorized_project_id": uncategorized_id,
+    }
+
+
+__all__ = [
+    "DEFAULT_REPORT_DATE",
+    "build_benchmark_dataset",
+    "build_concentrated_contributions_dataset",
+]

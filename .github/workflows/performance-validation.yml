@@ -24,7 +24,9 @@ on:
       - "worktrace/services/projection_performance.py"
       - "worktrace/services/view_model_service.py"
       - "tests/support/projection_benchmark.py"
+      - "tests/support/peak_memory_probe.py"
       - "tests/test_projection_performance_baseline.py"
+      - "tests/test_projection_large_scale_benchmark.py"
       - ".github/workflows/performance-validation.yml"
 
 permissions:
