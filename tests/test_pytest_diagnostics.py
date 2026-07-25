@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
@@ -250,17 +251,25 @@ def test_ci_contract_is_artifact_only_with_bounded_progress() -> None:
     assert '*> "test-results/pytest.log"' not in workflow
     assert 'Get-Content -LiteralPath "test-results/pytest.log"' not in workflow
 
-    # Three upload-artifact steps are expected:
+    # Standard CI owns the minimal stable responsibility set: test inventory,
+    # Python compile, Standard pytest, failure diagnostics, Node behavior
+    # tests, Windows package smoke.  It must NOT generate or upload a
+    # success-state timing summary artifact (reserved for perf workflows).
+    assert '-m "not benchmark"' in workflow
+    assert "name: Generate pytest timing summary" not in workflow
+    assert "name: Upload pytest timing summary" not in workflow
+    assert "pytest-timing-summary-${{ inputs.revision }}" not in workflow
+    assert "scripts/pytest_timing_summary.py" not in workflow
+
+    # Two upload-artifact steps remain:
     #   1. validation-diagnostics (failure-only, 3-day retention)
-    #   2. pytest-timing-summary  (success-only, 1-day retention, ignore-missing)
-    #   3. worktrace-windows-smoke (release tags only, 1-day retention)
-    assert workflow.count("actions/upload-artifact@v6") == 3
-    assert "pytest-timing-summary-${{ inputs.revision }}" in workflow
-    assert "if-no-files-found: ignore" in workflow
-    assert "name: Generate pytest timing summary" in workflow
-    assert "name: Upload pytest timing summary" in workflow
+    #   2. worktrace-windows-smoke (release tags only, 1-day retention)
+    assert workflow.count("actions/upload-artifact@v6") == 2
+    assert "if-no-files-found: error" in workflow
+    assert "if-no-files-found: ignore" not in workflow
+    # continue-on-error remains only on the diagnostic-artifact generation
+    # step so a diagnostics failure cannot mask the real pytest exit code.
     assert "continue-on-error: true" in workflow
-    assert "scripts/pytest_timing_summary.py" in workflow
     assert "actions/download-artifact@" not in workflow
     assert "python_diagnostics:" not in workflow
     assert "name: Python failure diagnostics" not in workflow
@@ -270,7 +279,6 @@ def test_ci_contract_is_artifact_only_with_bounded_progress() -> None:
 
     assert "name: Generate diagnostic artifact" in workflow
     assert "name: Upload diagnostic artifact" in workflow
-    assert "if-no-files-found: error" in workflow
     assert "retention-days: 3" in workflow
     assert "retention-days: 1" in workflow
     assert '--summary "$env:GITHUB_STEP_SUMMARY"' not in workflow
@@ -358,24 +366,39 @@ def test_timing_summary_produces_structured_json(tmp_path: Path) -> None:
             "3.11",
             "--suite",
             "standard",
+            "--commit-sha",
+            "deadbeef",
         ],
         cwd=ROOT,
         capture_output=True,
         text=True,
         check=False,
+        env={**os.environ, "GITHUB_ACTIONS": ""},
     )
     assert result.returncode == 0, result.stderr
     assert "timing_summary_status=ready" in result.stdout
     assert "suite=standard" in result.stdout
 
     payload = json.loads(output.read_text(encoding="utf-8"))
-    assert payload["schema_version"] == 1
+    assert payload["schema_version"] == 2
+    assert payload["generation_status"] == "ok"
     assert payload["revision"] == "abc123"
+    assert payload["commit_sha"] == "deadbeef"
     assert payload["runner"] == "windows-latest"
     assert payload["python_version"] == "3.11"
     assert payload["suite"] == "standard"
     assert payload["test_count"] == 3
+    assert payload["failure_count"] == 0
+    assert payload["error_count"] == 0
+    assert payload["skipped_count"] == 0
     assert payload["pytest_elapsed_seconds"] == 2.5
+    assert payload["source_junit_exists"] is True
+    assert payload["source_log_exists"] is True
+    # Runner metadata is null when not on GitHub Actions.
+    assert payload["runner_os"] is None
+    assert payload["runner_arch"] is None
+    assert payload["runner_image"] is None
+    assert payload["runner_image_version"] is None
     # top_tests sorted descending; the slowest test must be first.
     assert payload["top_tests"][0]["test_id"] == "tests.test_alpha::test_slow"
     assert payload["top_tests"][0]["time_seconds"] == 1.2
@@ -391,8 +414,8 @@ def test_timing_summary_produces_structured_json(tmp_path: Path) -> None:
     assert payload["teardown_seconds"] == 0.02
 
 
-def test_timing_summary_never_masks_test_result_on_missing_inputs(tmp_path: Path) -> None:
-    """Missing inputs must not fail the script: it returns 0 and prints fallback."""
+def test_timing_summary_exit_code_2_on_missing_inputs(tmp_path: Path) -> None:
+    """Missing input files must produce exit code 2, not a silent success."""
     output = tmp_path / "timing-summary.json"
     result = subprocess.run(
         [
@@ -416,7 +439,341 @@ def test_timing_summary_never_masks_test_result_on_missing_inputs(tmp_path: Path
         text=True,
         check=False,
     )
-    assert result.returncode == 0
-    # Output file may or may not be created; the script must not crash.
-    # Either a ready status (with zeros) or a fallback status is acceptable.
-    assert "timing_summary_status=" in result.stdout
+    assert result.returncode == 2
+    assert "timing_summary_status=input_missing" in result.stdout
+    # The summary file must not be written when inputs are missing.
+    assert not output.exists()
+
+
+def test_timing_summary_exit_code_3_on_malformed_junit(tmp_path: Path) -> None:
+    """Malformed JUnit XML must produce exit code 3."""
+    junit = tmp_path / "pytest-junit.xml"
+    log = tmp_path / "pytest.log"
+    output = tmp_path / "timing-summary.json"
+    junit.write_text("<testsuite><testcase></testsuite>", encoding="utf-8")
+    _write_timing_log(log)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(TIMING_SUMMARY),
+            "--junit",
+            str(junit),
+            "--log",
+            str(log),
+            "--output",
+            str(output),
+            "--revision",
+            "abc123",
+            "--runner",
+            "windows-latest",
+            "--python-version",
+            "3.11",
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 3
+    assert "timing_summary_status=junit_parse_error" in result.stdout
+
+
+def test_timing_summary_exit_code_3_on_empty_testsuite_root(tmp_path: Path) -> None:
+    """A JUnit XML with no testsuite element must produce exit code 3."""
+    junit = tmp_path / "pytest-junit.xml"
+    log = tmp_path / "pytest.log"
+    output = tmp_path / "timing-summary.json"
+    # Root element is not a testsuite and contains no testsuite child.
+    root = ET.Element("not_a_testsuite")
+    ET.ElementTree(root).write(junit, encoding="utf-8", xml_declaration=True)
+    _write_timing_log(log)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(TIMING_SUMMARY),
+            "--junit",
+            str(junit),
+            "--log",
+            str(log),
+            "--output",
+            str(output),
+            "--revision",
+            "abc123",
+            "--runner",
+            "windows-latest",
+            "--python-version",
+            "3.11",
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 3
+    assert "timing_summary_status=junit_parse_error" in result.stdout
+    assert "no_testsuite" in result.stdout
+
+
+def _write_timing_junit_with_results(path: Path) -> None:
+    """Write a JUnit XML with failures, errors, and skipped tests."""
+    suite = ET.Element(
+        "testsuite",
+        tests="5",
+        failures="1",
+        errors="1",
+        skipped="1",
+        time="3.00",
+    )
+    # passing
+    ET.SubElement(suite, "testcase", classname="tests.alpha", name="test_ok", time="0.5")
+    # failure
+    tc_fail = ET.SubElement(suite, "testcase", classname="tests.alpha", name="test_fail", time="0.5")
+    ET.SubElement(tc_fail, "failure", message="assertion").text = "trace"
+    # error
+    tc_err = ET.SubElement(suite, "testcase", classname="tests.beta", name="test_err", time="0.5")
+    ET.SubElement(tc_err, "error", message="exception").text = "trace"
+    # skipped
+    tc_skip = ET.SubElement(suite, "testcase", classname="tests.beta", name="test_skip", time="0.0")
+    ET.SubElement(tc_skip, "skipped", message="reason")
+    # passing
+    ET.SubElement(suite, "testcase", classname="tests.gamma", name="test_ok2", time="1.0")
+    ET.ElementTree(suite).write(path, encoding="utf-8", xml_declaration=True)
+
+
+def test_timing_summary_counts_failures_errors_skipped(tmp_path: Path) -> None:
+    """The summary must correctly count failures, errors, and skipped tests."""
+    junit = tmp_path / "pytest-junit.xml"
+    log = tmp_path / "pytest.log"
+    output = tmp_path / "timing-summary.json"
+    _write_timing_junit_with_results(junit)
+    _write_timing_log(log)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(TIMING_SUMMARY),
+            "--junit",
+            str(junit),
+            "--log",
+            str(log),
+            "--output",
+            str(output),
+            "--revision",
+            "abc123",
+            "--runner",
+            "windows-latest",
+            "--python-version",
+            "3.11",
+            "--suite",
+            "standard",
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+        env={**os.environ, "GITHUB_ACTIONS": ""},
+    )
+    assert result.returncode == 0, result.stderr
+
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["test_count"] == 5
+    assert payload["failure_count"] == 1
+    assert payload["error_count"] == 1
+    assert payload["skipped_count"] == 1
+
+
+def test_timing_summary_exit_code_4_on_output_write_failure(tmp_path: Path) -> None:
+    """Output write failure must produce exit code 4."""
+    junit = tmp_path / "pytest-junit.xml"
+    log = tmp_path / "pytest.log"
+    _write_timing_junit(junit)
+    _write_timing_log(log)
+
+    # Point output at a path whose parent is a regular file, causing OSError.
+    blocking_file = tmp_path / "blocker"
+    blocking_file.write_text("x", encoding="utf-8")
+    output = blocking_file / "timing-summary.json"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(TIMING_SUMMARY),
+            "--junit",
+            str(junit),
+            "--log",
+            str(log),
+            "--output",
+            str(output),
+            "--revision",
+            "abc123",
+            "--runner",
+            "windows-latest",
+            "--python-version",
+            "3.11",
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 4
+    assert "timing_summary_status=output_error" in result.stdout
+
+
+def test_timing_summary_durations_log_missing_section(tmp_path: Path) -> None:
+    """When the log has no durations section, setup/call/teardown are null."""
+    junit = tmp_path / "pytest-junit.xml"
+    log = tmp_path / "pytest.log"
+    output = tmp_path / "timing-summary.json"
+    _write_timing_junit(junit)
+    log.write_text("collected 3 items\n... no durations here ...\n", encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(TIMING_SUMMARY),
+            "--junit",
+            str(junit),
+            "--log",
+            str(log),
+            "--output",
+            str(output),
+            "--revision",
+            "abc123",
+            "--runner",
+            "windows-latest",
+            "--python-version",
+            "3.11",
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+        env={**os.environ, "GITHUB_ACTIONS": ""},
+    )
+    assert result.returncode == 0, result.stderr
+
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    # No pseudo data — unavailable fields are null.
+    assert payload["setup_seconds"] is None
+    assert payload["call_seconds"] is None
+    assert payload["teardown_seconds"] is None
+
+
+def test_timing_summary_durations_line_parsing(tmp_path: Path) -> None:
+    """The durations parser must correctly sum setup/call/teardown seconds."""
+    junit = tmp_path / "pytest-junit.xml"
+    log = tmp_path / "pytest.log"
+    output = tmp_path / "timing-summary.json"
+    _write_timing_junit(junit)
+    log.write_text(
+        "0.30s setup    tests/test_alpha.py::test_slow\n"
+        "1.20s call     tests/test_alpha.py::test_slow\n"
+        "0.10s call     tests/test_beta.py::test_medium\n"
+        "0.05s teardown tests/test_alpha.py::test_slow\n"
+        "0.02s call     tests/test_alpha.py::test_fast\n",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(TIMING_SUMMARY),
+            "--junit",
+            str(junit),
+            "--log",
+            str(log),
+            "--output",
+            str(output),
+            "--revision",
+            "abc123",
+            "--runner",
+            "windows-latest",
+            "--python-version",
+            "3.11",
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+        env={**os.environ, "GITHUB_ACTIONS": ""},
+    )
+    assert result.returncode == 0, result.stderr
+
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    # setup = 0.30, call = 1.20 + 0.10 + 0.02 = 1.32, teardown = 0.05
+    assert payload["setup_seconds"] == 0.30
+    assert payload["call_seconds"] == 1.32
+    assert payload["teardown_seconds"] == 0.05
+
+
+def test_timing_summary_exit_code_matches_generation_status(tmp_path: Path) -> None:
+    """Exit code and generation_status must be consistent across scenarios."""
+    junit_ok = tmp_path / "junit-ok.xml"
+    log_ok = tmp_path / "log-ok.txt"
+    _write_timing_junit(junit_ok)
+    _write_timing_log(log_ok)
+
+    # Success → exit 0, generation_status "ok"
+    result_ok = subprocess.run(
+        [
+            sys.executable,
+            str(TIMING_SUMMARY),
+            "--junit", str(junit_ok),
+            "--log", str(log_ok),
+            "--output", str(tmp_path / "out-ok.json"),
+            "--revision", "r",
+            "--runner", "r",
+            "--python-version", "3.11",
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+        env={**os.environ, "GITHUB_ACTIONS": ""},
+    )
+    assert result_ok.returncode == 0
+    payload = json.loads((tmp_path / "out-ok.json").read_text(encoding="utf-8"))
+    assert payload["generation_status"] == "ok"
+
+    # Missing input → exit 2, no summary written
+    result_missing = subprocess.run(
+        [
+            sys.executable,
+            str(TIMING_SUMMARY),
+            "--junit", str(tmp_path / "no.xml"),
+            "--log", str(tmp_path / "no.txt"),
+            "--output", str(tmp_path / "out-missing.json"),
+            "--revision", "r",
+            "--runner", "r",
+            "--python-version", "3.11",
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result_missing.returncode == 2
+
+    # Malformed XML → exit 3
+    bad_junit = tmp_path / "bad.xml"
+    bad_junit.write_text("<broken>", encoding="utf-8")
+    result_bad = subprocess.run(
+        [
+            sys.executable,
+            str(TIMING_SUMMARY),
+            "--junit", str(bad_junit),
+            "--log", str(log_ok),
+            "--output", str(tmp_path / "out-bad.json"),
+            "--revision", "r",
+            "--runner", "r",
+            "--python-version", "3.11",
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result_bad.returncode == 3

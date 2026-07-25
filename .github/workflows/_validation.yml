@@ -91,7 +91,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path "test-results" | Out-Null
-          & python -m compileall -q worktrace scripts/pytest_diagnostics.py scripts/pytest_log_to_junit.py scripts/run_pytest_ci.py scripts/pytest_timing_summary.py *> "test-results/compile.log"
+          & python -m compileall -q worktrace scripts/pytest_diagnostics.py scripts/pytest_log_to_junit.py scripts/run_pytest_ci.py *> "test-results/compile.log"
           $compileExitCode = $LASTEXITCODE
           Write-Host "compile exit code: $compileExitCode"
           if ($compileExitCode -ne 0) {
@@ -131,34 +131,6 @@ jobs:
             Write-Host "pytest_failed=true diagnostics_source=workflow_artifact"
           }
           exit $pytestExitCode
-
-      - name: Generate pytest timing summary
-        id: timing_summary
-        if: success() && steps.pytest.outcome == 'success'
-        continue-on-error: true
-        shell: pwsh
-        run: |
-          $revision = "${{ inputs.revision }}"
-          & python scripts/pytest_timing_summary.py `
-            --junit "test-results/pytest-junit.xml" `
-            --log "test-results/pytest.log" `
-            --output "test-results/pytest-timing-summary.json" `
-            --revision $revision `
-            --runner "windows-latest" `
-            --python-version "3.11" `
-            --suite "standard"
-          if ($LASTEXITCODE -ne 0) {
-            Write-Warning "timing_summary_status=fallback reason=nonzero_exit"
-          }
-
-      - name: Upload pytest timing summary
-        if: success() && steps.pytest.outcome == 'success' && always()
-        uses: actions/upload-artifact@v6
-        with:
-          name: pytest-timing-summary-${{ inputs.revision }}
-          path: test-results/pytest-timing-summary.json
-          if-no-files-found: ignore
-          retention-days: 1
 
       - name: Generate diagnostic artifact
         if: failure()

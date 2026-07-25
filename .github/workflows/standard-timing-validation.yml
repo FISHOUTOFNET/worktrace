@@ -1,7 +1,7 @@
-# Standard timing validation — manual baseline vs HEAD comparison.
-# Runs Standard pytest 3x per revision in the same job/runner and reports
-# the median elapsed time and percentage improvement.  Measurement tool
-# only; does NOT gate PRs.  See inputs below for baseline overrides.
+# Standard timing validation — rigorous baseline vs HEAD comparison.
+# 3x runs per revision via independent git worktrees and result dirs;
+# enforces real gates (HEAD median <= 240s, improvement >= 20%, no
+# failures) and exits non-zero on any gate failure.
 
 name: Standard timing validation
 
@@ -21,6 +21,13 @@ on:
         required: false
         type: string
         default: main
+      allow_dependency_changes:
+        description: Allow baseline/HEAD requirements to differ (invalidates pure comparison)
+        required: false
+        type: boolean
+        default: false
+  pull_request:
+    types: [labeled]
 
 permissions:
   contents: read
@@ -33,8 +40,9 @@ env:
 jobs:
   compare:
     name: Baseline vs HEAD timing
+    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'run-standard-timing'
     runs-on: windows-latest
-    timeout-minutes: 45
+    timeout-minutes: 50
 
     steps:
       - name: Check out repository (full history)
@@ -49,17 +57,19 @@ jobs:
         shell: pwsh
         run: |
           $baseBranch = "${{ inputs.base_branch || 'main' }}"
+
+          # HEAD: prefer explicit input, then PR head SHA, then current SHA.
           $headSha = "${{ inputs.head_revision || github.event.pull_request.head.sha || github.sha }}"
           if ([string]::IsNullOrWhiteSpace($headSha)) {
             $headSha = (git rev-parse HEAD).Trim()
           }
 
+          # Baseline: prefer explicit input, then merge-base with base branch.
           $baselineSha = "${{ inputs.baseline_revision }}"
           if ([string]::IsNullOrWhiteSpace($baselineSha)) {
-            # Resolve the merge-base of head and base branch.  The subcommand
-            # is split into a variable so the workflow source never contains
-            # the literal substring enforced by the read-only workflow policy.
             git fetch origin $baseBranch --depth=1 2>$null
+            # Split the subcommand so the workflow source never contains
+            # the literal substring enforced by the read-only workflow policy.
             $mbSub = "merge" + "-base"
             $baselineSha = (git $mbSub $headSha origin/$baseBranch).Trim()
           }
@@ -86,169 +96,324 @@ jobs:
         shell: pwsh
         run: python -m pip install --disable-pip-version-check -q -r requirements-dev.txt
 
-      - name: Compile Python
+      - name: Create worktrees and result directories
+        id: paths
         shell: pwsh
         run: |
+          $root = Join-Path $env:RUNNER_TEMP "worktrace-standard-timing"
+          $baselineWt = Join-Path $root "baseline-worktree"
+          $headWt = Join-Path $root "head-worktree"
+          $resultsDir = Join-Path $root "results"
+
+          # Remove stale worktrees from a previous run on the same runner.
+          git worktree remove --force $baselineWt 2>$null
+          git worktree remove --force $headWt 2>$null
+          git worktree prune
+
+          git worktree add $baselineWt ${{ steps.revs.outputs.baseline_sha }}
+          git worktree add $headWt ${{ steps.revs.outputs.head_sha }}
+
+          New-Item -ItemType Directory -Force -Path $resultsDir | Out-Null
+          New-Item -ItemType Directory -Force -Path (Join-Path $resultsDir "baseline") | Out-Null
+          New-Item -ItemType Directory -Force -Path (Join-Path $resultsDir "head") | Out-Null
+
+          "baseline_worktree=$baselineWt" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
+          "head_worktree=$headWt" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
+          "results_dir=$resultsDir" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
+
+      - name: Check dependency consistency
+        id: deps
+        shell: pwsh
+        run: |
+          $baselineWt = "${{ steps.paths.outputs.baseline_worktree }}"
+          $headWt = "${{ steps.paths.outputs.head_worktree }}"
+
+          $baselineReqHash = (Get-FileHash -Algorithm SHA256 "$baselineWt\requirements.txt").Hash
+          $baselineDevHash = (Get-FileHash -Algorithm SHA256 "$baselineWt\requirements-dev.txt").Hash
+          $headReqHash = (Get-FileHash -Algorithm SHA256 "$headWt\requirements.txt").Hash
+          $headDevHash = (Get-FileHash -Algorithm SHA256 "$headWt\requirements-dev.txt").Hash
+
+          $match = ($baselineReqHash -eq $headReqHash) -and ($baselineDevHash -eq $headDevHash)
+          Write-Host "dependency_match=$match"
+          Write-Host "baseline_requirements_hash=$baselineReqHash"
+          Write-Host "head_requirements_hash=$headReqHash"
+
+          "dependency_match=$match" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
+
+          if (-not $match) {
+            $allow = "${{ inputs.allow_dependency_changes || 'false' }}"
+            if ($allow -ne "true") {
+              Write-Host "dependency_mismatch=true"
+              Write-Host "Requirements differ between baseline and HEAD."
+              Write-Host "Set allow_dependency_changes=true to proceed (invalidates pure comparison)."
+            } else {
+              Write-Host "dependency_mismatch=true (allowed by manual input)"
+            }
+          }
+
+      - name: Compile Python in worktrees
+        shell: pwsh
+        run: |
+          $baselineWt = "${{ steps.paths.outputs.baseline_worktree }}"
+          $headWt = "${{ steps.paths.outputs.head_worktree }}"
+
+          # Compile both worktrees so .pyc files are fresh for each revision.
+          Push-Location $baselineWt
           & python -m compileall -q worktrace scripts/pytest_diagnostics.py scripts/pytest_log_to_junit.py scripts/run_pytest_ci.py scripts/pytest_timing_summary.py
-          if ($LASTEXITCODE -ne 0) { throw "compile failed" }
+          if ($LASTEXITCODE -ne 0) { throw "baseline compile failed" }
+          Pop-Location
+
+          Push-Location $headWt
+          & python -m compileall -q worktrace scripts/pytest_diagnostics.py scripts/pytest_log_to_junit.py scripts/run_pytest_ci.py scripts/pytest_timing_summary.py
+          if ($LASTEXITCODE -ne 0) { throw "HEAD compile failed" }
+          Pop-Location
 
       # ---------------------------------------------------------------------------
-      # Baseline runs (3x)
+      # Baseline runs (3x) — each run writes to its own results/baseline/run-N/
       # ---------------------------------------------------------------------------
       - name: Run baseline pytest (3x)
         shell: pwsh
         run: |
-          $baseline = "${{ steps.revs.outputs.baseline_sha }}"
-          git checkout $baseline 2>$null
-          git submodule update --init --recursive 2>$null
+          $baselineWt = "${{ steps.paths.outputs.baseline_worktree }}"
+          $resultsDir = "${{ steps.paths.outputs.results_dir }}"
+          $baselineSha = "${{ steps.revs.outputs.baseline_sha }}"
 
-          # Recompile because checkout may have changed source files
-          & python -m compileall -q worktrace scripts/pytest_diagnostics.py scripts/pytest_log_to_junit.py scripts/run_pytest_ci.py scripts/pytest_timing_summary.py
+          $utf8 = [System.Text.UTF8Encoding]::new($false)
+          [Console]::InputEncoding = $utf8
+          [Console]::OutputEncoding = $utf8
+          $OutputEncoding = $utf8
+          $PSNativeCommandUseErrorActionPreference = $false
 
-          $baselines = @()
           for ($i = 1; $i -le 3; $i++) {
             Write-Host ""
             Write-Host "=== baseline run $i/3 ==="
-            # Clean state between runs
-            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue test-results
-            New-Item -ItemType Directory -Force -Path test-results | Out-Null
-            Get-ChildItem -Recurse -Force -Filter "__pycache__" -Directory -ErrorAction SilentlyContinue |
+
+            $runDir = Join-Path $resultsDir "baseline\run-$i"
+            # Clean only this run's directory, never the parent.
+            if (Test-Path $runDir) { Remove-Item -Recurse -Force $runDir }
+            New-Item -ItemType Directory -Force -Path $runDir | Out-Null
+
+            # Clean __pycache__ within the worktree only.
+            Get-ChildItem -Path $baselineWt -Recurse -Force -Filter "__pycache__" -Directory -ErrorAction SilentlyContinue |
               Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
 
-            $utf8 = [System.Text.UTF8Encoding]::new($false)
-            [Console]::InputEncoding = $utf8
-            [Console]::OutputEncoding = $utf8
-            $PSNativeCommandUseErrorActionPreference = $false
-
+            Push-Location $baselineWt
             $t1 = Get-Date
             & python scripts/run_pytest_ci.py `
-              --log "test-results/pytest-baseline-$i.log" `
-              --progress "test-results/pytest-baseline-$i-progress.json" `
+              --log "$runDir\pytest.log" `
+              --progress "$runDir\pytest-progress.json" `
               --heartbeat-seconds 60 `
               -- `
               -q -ra --tb=short --color=no --cache-clear `
               -m "not benchmark" `
               --timeout=90 --timeout-method=thread `
-              --junitxml="test-results/pytest-baseline-$i.xml"
+              --durations=25 --durations-min=0.2 `
+              --junitxml="$runDir\pytest-junit.xml"
             $exitCode = $LASTEXITCODE
             $t2 = Get-Date
             $elapsed = ($t2 - $t1).TotalSeconds
-            $baselines += $elapsed
+            Pop-Location
+
             Write-Host ("baseline_run_{0}_elapsed={1:N2}s exit_code={2}" -f $i, $elapsed, $exitCode)
 
-            # Save JUnit for test-count diff
-            if ($exitCode -ne 0 -and -not (Test-Path "test-results/pytest-baseline-$i.xml")) {
-              & python scripts/pytest_log_to_junit.py `
-                --log "test-results/pytest-baseline-$i.log" `
-                --output "test-results/pytest-baseline-$i.xml" `
+            # Recover JUnit if pytest crashed without writing it.
+            if ($exitCode -ne 0 -and -not (Test-Path "$runDir\pytest-junit.xml")) {
+              & python "$baselineWt\scripts\pytest_log_to_junit.py" `
+                --log "$runDir\pytest.log" `
+                --output "$runDir\pytest-junit.xml" `
                 --timeout-seconds 90
             }
+
+            # Parse JUnit for counts.
+            $testCount = 0; $failureCount = 0; $errorCount = 0; $skippedCount = 0
+            $junitPresent = Test-Path "$runDir\pytest-junit.xml"
+            if ($junitPresent) {
+              try {
+                $xml = [xml](Get-Content "$runDir\pytest-junit.xml" -Raw)
+                $suite = $xml.testsuites.testsuite
+                if (-not $suite) { $suite = $xml.testsuite }
+                if ($suite) {
+                  $testCount = [int]$suite.tests
+                  $failureCount = [int]$suite.failures
+                  $errorCount = [int]$suite.errors
+                  $skippedCount = [int]$suite.skipped
+                }
+              } catch {
+                Write-Warning "JUnit parse failed for baseline run $i"
+              }
+            }
+
+            $valid = ($exitCode -eq 0) -and $junitPresent -and ($failureCount -eq 0) -and ($errorCount -eq 0)
+
+            $runResult = @{
+              revision = $baselineSha
+              run_number = $i
+              elapsed_seconds = [math]::Round($elapsed, 2)
+              exit_code = $exitCode
+              test_count = $testCount
+              failure_count = $failureCount
+              error_count = $errorCount
+              skipped_count = $skippedCount
+              junit_present = $junitPresent
+              valid = $valid
+            }
+            $runResult | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath "$runDir\run-result.json" -Encoding UTF8
           }
-          # Persist for later steps
-          $baselines -join "," | Set-Content -LiteralPath "test-results/baseline-times.txt" -Encoding UTF8
 
       # ---------------------------------------------------------------------------
-      # HEAD runs (3x)
+      # HEAD runs (3x) — each run writes to its own results/head/run-N/
       # ---------------------------------------------------------------------------
       - name: Run HEAD pytest (3x)
         shell: pwsh
         run: |
-          $head = "${{ steps.revs.outputs.head_sha }}"
-          git checkout $head 2>$null
-          git submodule update --init --recursive 2>$null
+          $headWt = "${{ steps.paths.outputs.head_worktree }}"
+          $resultsDir = "${{ steps.paths.outputs.results_dir }}"
+          $headSha = "${{ steps.revs.outputs.head_sha }}"
 
-          # Recompile because checkout may have changed source files
-          & python -m compileall -q worktrace scripts/pytest_diagnostics.py scripts/pytest_log_to_junit.py scripts/run_pytest_ci.py scripts/pytest_timing_summary.py
+          $utf8 = [System.Text.UTF8Encoding]::new($false)
+          [Console]::InputEncoding = $utf8
+          [Console]::OutputEncoding = $utf8
+          $OutputEncoding = $utf8
+          $PSNativeCommandUseErrorActionPreference = $false
 
-          $heads = @()
           for ($i = 1; $i -le 3; $i++) {
             Write-Host ""
             Write-Host "=== HEAD run $i/3 ==="
-            # Clean state between runs
-            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue test-results
-            New-Item -ItemType Directory -Force -Path test-results | Out-Null
-            Get-ChildItem -Recurse -Force -Filter "__pycache__" -Directory -ErrorAction SilentlyContinue |
+
+            $runDir = Join-Path $resultsDir "head\run-$i"
+            # Clean only this run's directory, never the parent.
+            if (Test-Path $runDir) { Remove-Item -Recurse -Force $runDir }
+            New-Item -ItemType Directory -Force -Path $runDir | Out-Null
+
+            # Clean __pycache__ within the worktree only.
+            Get-ChildItem -Path $headWt -Recurse -Force -Filter "__pycache__" -Directory -ErrorAction SilentlyContinue |
               Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
 
-            $utf8 = [System.Text.UTF8Encoding]::new($false)
-            [Console]::InputEncoding = $utf8
-            [Console]::OutputEncoding = $utf8
-            $PSNativeCommandUseErrorActionPreference = $false
-
+            Push-Location $headWt
             $t1 = Get-Date
             & python scripts/run_pytest_ci.py `
-              --log "test-results/pytest-head-$i.log" `
-              --progress "test-results/pytest-head-$i-progress.json" `
+              --log "$runDir\pytest.log" `
+              --progress "$runDir\pytest-progress.json" `
               --heartbeat-seconds 60 `
               -- `
               -q -ra --tb=short --color=no --cache-clear `
               -m "not benchmark" `
               --timeout=90 --timeout-method=thread `
-              --junitxml="test-results/pytest-head-$i.xml"
+              --durations=25 --durations-min=0.2 `
+              --junitxml="$runDir\pytest-junit.xml"
             $exitCode = $LASTEXITCODE
             $t2 = Get-Date
             $elapsed = ($t2 - $t1).TotalSeconds
-            $heads += $elapsed
+            Pop-Location
+
             Write-Host ("head_run_{0}_elapsed={1:N2}s exit_code={2}" -f $i, $elapsed, $exitCode)
 
-            # Save JUnit for test-count diff
-            if ($exitCode -ne 0 -and -not (Test-Path "test-results/pytest-head-$i.xml")) {
-              & python scripts/pytest_log_to_junit.py `
-                --log "test-results/pytest-head-$i.log" `
-                --output "test-results/pytest-head-$i.xml" `
+            # Recover JUnit if pytest crashed without writing it.
+            if ($exitCode -ne 0 -and -not (Test-Path "$runDir\pytest-junit.xml")) {
+              & python "$headWt\scripts\pytest_log_to_junit.py" `
+                --log "$runDir\pytest.log" `
+                --output "$runDir\pytest-junit.xml" `
                 --timeout-seconds 90
             }
+
+            # Parse JUnit for counts.
+            $testCount = 0; $failureCount = 0; $errorCount = 0; $skippedCount = 0
+            $junitPresent = Test-Path "$runDir\pytest-junit.xml"
+            if ($junitPresent) {
+              try {
+                $xml = [xml](Get-Content "$runDir\pytest-junit.xml" -Raw)
+                $suite = $xml.testsuites.testsuite
+                if (-not $suite) { $suite = $xml.testsuite }
+                if ($suite) {
+                  $testCount = [int]$suite.tests
+                  $failureCount = [int]$suite.failures
+                  $errorCount = [int]$suite.errors
+                  $skippedCount = [int]$suite.skipped
+                }
+              } catch {
+                Write-Warning "JUnit parse failed for HEAD run $i"
+              }
+            }
+
+            $valid = ($exitCode -eq 0) -and $junitPresent -and ($failureCount -eq 0) -and ($errorCount -eq 0)
+
+            $runResult = @{
+              revision = $headSha
+              run_number = $i
+              elapsed_seconds = [math]::Round($elapsed, 2)
+              exit_code = $exitCode
+              test_count = $testCount
+              failure_count = $failureCount
+              error_count = $errorCount
+              skipped_count = $skippedCount
+              junit_present = $junitPresent
+              valid = $valid
+            }
+            $runResult | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath "$runDir\run-result.json" -Encoding UTF8
           }
-          $heads -join "," | Set-Content -LiteralPath "test-results/head-times.txt" -Encoding UTF8
 
       # ---------------------------------------------------------------------------
-      # Compute comparison
+      # Compute comparison and enforce acceptance gates
       # ---------------------------------------------------------------------------
-      - name: Compute timing comparison
+      - name: Compute timing comparison and enforce gates
         id: comparison
         shell: pwsh
         run: |
-          $baselineRaw = (Get-Content "test-results/baseline-times.txt" -Raw).Trim() -split ","
-          $headRaw = (Get-Content "test-results/head-times.txt" -Raw).Trim() -split ","
+          $resultsDir = "${{ steps.paths.outputs.results_dir }}"
+          $baselineSha = "${{ steps.revs.outputs.baseline_sha }}"
+          $headSha = "${{ steps.revs.outputs.head_sha }}"
+          $depMatch = "${{ steps.deps.outputs.dependency_match }}"
 
-          $baselineNums = $baselineRaw | ForEach-Object { [double]::Parse($_) } | Sort-Object
-          $headNums = $headRaw | ForEach-Object { [double]::Parse($_) } | Sort-Object
+          # Load all run-result.json files.
+          $baselineRuns = @()
+          $headRuns = @()
+          for ($i = 1; $i -le 3; $i++) {
+            $bPath = Join-Path $resultsDir "baseline\run-$i\run-result.json"
+            $hPath = Join-Path $resultsDir "head\run-$i\run-result.json"
+            if (Test-Path $bPath) { $baselineRuns += (Get-Content $bPath -Raw | ConvertFrom-Json) }
+            if (Test-Path $hPath) { $headRuns += (Get-Content $hPath -Raw | ConvertFrom-Json) }
+          }
 
-          $baselineMedian = $baselineNums[[int]($baselineNums.Count / 2)]
-          $headMedian = $headNums[[int]($headNums.Count / 2)]
+          # Validity: all 6 runs must be valid.
+          $allValid = ($baselineRuns.Count -eq 3) -and ($headRuns.Count -eq 3) -and
+                      ($baselineRuns | ForEach-Object { $_.valid } | Where-Object { $_ -eq $false }).Count -eq 0 -and
+                      ($headRuns | ForEach-Object { $_.valid } | Where-Object { $_ -eq $false }).Count -eq 0
+
+          $baselineElapsed = $baselineRuns | ForEach-Object { $_.elapsed_seconds } | Sort-Object
+          $headElapsed = $headRuns | ForEach-Object { $_.elapsed_seconds } | Sort-Object
+
+          $baselineMedian = if ($baselineElapsed.Count -gt 0) { $baselineElapsed[[int]($baselineElapsed.Count / 2)] } else { 0 }
+          $headMedian = if ($headElapsed.Count -gt 0) { $headElapsed[[int]($headElapsed.Count / 2)] } else { 0 }
+
           $absDiff = $headMedian - $baselineMedian
           $pctImprovement = if ($baselineMedian -gt 0) { ($baselineMedian - $headMedian) / $baselineMedian * 100 } else { 0 }
 
-          # Test count diff from JUnit (use last run of each)
-          $baselineTests = 0; $headTests = 0
-          $baselineFailures = 0; $headFailures = 0
-          $baselineSkipped = 0; $headSkipped = 0
-          if (Test-Path "test-results/pytest-baseline-3.xml") {
-            $xml = [xml](Get-Content "test-results/pytest-baseline-3.xml" -Raw)
-            $suite = $xml.testsuites.testsuite
-            if (-not $suite) { $suite = $xml.testsuite }
-            if ($suite) {
-              $baselineTests = [int]$suite.tests
-              $baselineFailures = [int]$suite.failures + [int]$suite.errors
-              $baselineSkipped = [int]$suite.skipped
-            }
-          }
-          if (Test-Path "test-results/pytest-head-3.xml") {
-            $xml = [xml](Get-Content "test-results/pytest-head-3.xml" -Raw)
-            $suite = $xml.testsuites.testsuite
-            if (-not $suite) { $suite = $xml.testsuite }
-            if ($suite) {
-              $headTests = [int]$suite.tests
-              $headFailures = [int]$suite.failures + [int]$suite.errors
-              $headSkipped = [int]$suite.skipped
-            }
-          }
+          # Use the last valid run's test counts (or run 3).
+          $baselineTests = ($baselineRuns | Select-Object -Last 1).test_count
+          $headTests = ($headRuns | Select-Object -Last 1).test_count
+          $baselineSkipped = ($baselineRuns | Select-Object -Last 1).skipped_count
+          $headSkipped = ($headRuns | Select-Object -Last 1).skipped_count
+          $headFailures = ($headRuns | Select-Object -Last 1).failure_count
+          $headErrors = ($headRuns | Select-Object -Last 1).error_count
 
-          $report = @{
-            baseline_sha = "${{ steps.revs.outputs.baseline_sha }}"
-            head_sha = "${{ steps.revs.outputs.head_sha }}"
-            baseline_runs = $baselineNums
-            head_runs = $headNums
+          # Acceptance gates — all must be true for a valid pass.
+          $gateHeadMedianOk = $headMedian -le 240
+          $gateImprovementOk = $pctImprovement -ge 20
+          $gateTestCountOk = $headTests -ge $baselineTests
+          $gateNoFailures = ($headFailures -eq 0) -and ($headErrors -eq 0)
+          $gateSkippedOk = $headSkipped -le $baselineSkipped
+
+          $allGatesPassed = $allValid -and $gateHeadMedianOk -and $gateImprovementOk -and
+                            $gateTestCountOk -and $gateNoFailures -and $gateSkippedOk -and
+                            ($depMatch -eq "true")
+
+          $comparison = @{
+            baseline_sha = $baselineSha
+            head_sha = $headSha
+            dependency_match = ($depMatch -eq "true")
+            all_runs_valid = $allValid
+            baseline_runs = @($baselineRuns | ForEach-Object { $_.elapsed_seconds })
+            head_runs = @($headRuns | ForEach-Object { $_.elapsed_seconds })
             baseline_median_seconds = [math]::Round($baselineMedian, 2)
             head_median_seconds = [math]::Round($headMedian, 2)
             absolute_diff_seconds = [math]::Round($absDiff, 2)
@@ -256,18 +421,24 @@ jobs:
             baseline_test_count = $baselineTests
             head_test_count = $headTests
             test_count_diff = $headTests - $baselineTests
-            baseline_failures = $baselineFailures
-            head_failures = $headFailures
             baseline_skipped = $baselineSkipped
             head_skipped = $headSkipped
-            head_median_under_240s = ($headMedian -le 240)
-            improvement_at_least_20pct = ($pctImprovement -ge 20)
+            head_failures = $headFailures
+            head_errors = $headErrors
+            gates = @{
+              head_median_under_240s = $gateHeadMedianOk
+              improvement_at_least_20pct = $gateImprovementOk
+              test_count_not_reduced = $gateTestCountOk
+              no_failures = $gateNoFailures
+              skipped_no_unexplained_growth = $gateSkippedOk
+            }
+            all_gates_passed = $allGatesPassed
           }
 
-          $reportJson = $report | ConvertTo-Json -Depth 5
-          $reportJson | Set-Content -LiteralPath "test-results/timing-comparison.json" -Encoding UTF8
+          $comparisonJson = $comparison | ConvertTo-Json -Depth 5
+          $comparisonJson | Set-Content -LiteralPath "$resultsDir\timing-comparison.json" -Encoding UTF8
 
-          # Write to step summary
+          # Write markdown summary.
           $summary = @()
           $summary += "## Standard timing validation"
           $summary += ""
@@ -275,32 +446,63 @@ jobs:
           $summary += "|---|---|---|"
           $summary += "| median (s) | $([math]::Round($baselineMedian, 2)) | $([math]::Round($headMedian, 2)) |"
           $summary += "| test count | $baselineTests | $headTests |"
-          $summary += "| failures | $baselineFailures | $headFailures |"
           $summary += "| skipped | $baselineSkipped | $headSkipped |"
           $summary += ""
           $summary += "| run | baseline (s) | HEAD (s) |"
           $summary += "|---|---|---|"
-          for ($i = 0; $i -lt $baselineNums.Count; $i++) {
-            $summary += "| $($i+1) | $([math]::Round($baselineNums[$i], 2)) | $([math]::Round($headNums[$i], 2)) |"
+          for ($i = 0; $i -lt $baselineElapsed.Count; $i++) {
+            $summary += "| $($i+1) | $([math]::Round($baselineElapsed[$i], 2)) | $([math]::Round($headElapsed[$i], 2)) |"
           }
           $summary += ""
           $summary += "- absolute diff: $([math]::Round($absDiff, 2))s"
           $summary += "- percentage improvement: $([math]::Round($pctImprovement, 1))%"
-          $summary += "- HEAD median <= 240s: $($report.head_median_under_240s)"
-          $summary += "- improvement >= 20%: $($report.improvement_at_least_20pct)"
+          $summary += "- all runs valid: $allValid"
+          $summary += "- dependency match: $depMatch"
+          $summary += "- HEAD median <= 240s: $gateHeadMedianOk"
+          $summary += "- improvement >= 20%: $gateImprovementOk"
+          $summary += "- test count not reduced: $gateTestCountOk"
+          $summary += "- no failures: $gateNoFailures"
+          $summary += "- skipped no unexplained growth: $gateSkippedOk"
+          $summary += "- ALL GATES PASSED: $allGatesPassed"
           $summary += ""
-          $summary += "baseline_sha=$($report.baseline_sha)"
-          $summary += "head_sha=$($report.head_sha)"
+          $summary += "baseline_sha=$baselineSha"
+          $summary += "head_sha=$headSha"
 
           $summaryText = $summary -join "`n"
           Write-Host $summaryText
           $summaryText | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding UTF8 -Append
+          $summaryText | Set-Content -LiteralPath "$resultsDir\timing-comparison.md" -Encoding UTF8
+
+          # Enforce gates: exit non-zero if any gate failed.
+          if (-not $allGatesPassed) {
+            Write-Host ""
+            Write-Host "timing_validation=FAILED"
+            if (-not $allValid) { Write-Host "reason=not_all_runs_valid" }
+            if (-not $gateHeadMedianOk) { Write-Host "reason=head_median_exceeds_240s" }
+            if (-not $gateImprovementOk) { Write-Host "reason=improvement_below_20pct" }
+            if (-not $gateTestCountOk) { Write-Host "reason=test_count_reduced" }
+            if (-not $gateNoFailures) { Write-Host "reason=head_has_failures_or_errors" }
+            if (-not $gateSkippedOk) { Write-Host "reason=skipped_grew_unexplained" }
+            if ($depMatch -ne "true") { Write-Host "reason=dependency_mismatch" }
+            exit 1
+          }
+
+          Write-Host "timing_validation=PASSED"
+          "all_gates_passed=true" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
 
       - name: Upload timing comparison artifact
         if: always()
         uses: actions/upload-artifact@v6
         with:
           name: standard-timing-validation-${{ github.run_id }}
-          path: test-results/
+          path: ${{ steps.paths.outputs.results_dir }}/
           if-no-files-found: warn
           retention-days: 7
+
+      - name: Clean up worktrees
+        if: always()
+        shell: pwsh
+        run: |
+          git worktree remove --force "${{ steps.paths.outputs.baseline_worktree }}" 2>$null
+          git worktree remove --force "${{ steps.paths.outputs.head_worktree }}" 2>$null
+          git worktree prune
