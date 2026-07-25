@@ -1,7 +1,6 @@
 """Page ViewModel projection over the unified Activity Display Model."""
 from __future__ import annotations
 
-import heapq
 from typing import Any, Mapping
 
 from ..constants import STATUS_NORMAL, UNCATEGORIZED_PROJECT
@@ -282,33 +281,49 @@ def _base_session_row(session: dict[str, Any], *, row_kind: str) -> dict[str, An
     return row
 
 
+def _contribution_label(contribution: Mapping[str, Any]) -> str:
+    """Extract the display label from a single contribution row."""
+    activity_name = str(contribution.get("activity_display_name") or "").strip()
+    if contribution.get("resource_is_anchor") and activity_name:
+        return activity_name
+    return extract_anchor_file_name(contribution.get("window_title")) or str(
+        contribution.get("app_name") or contribution.get("process_name") or ""
+    ).strip()
+
+
+def _top3_distinct_labels(contributions: list[dict[str, Any]]) -> list[str]:
+    """Return up to 3 distinct labels by the original sort rule.
+
+    Original semantic: sort contributions by duration descending (stable),
+    iterate, extract label, skip duplicates, break at 3 distinct labels.
+    Equivalent O(n) implementation: keep the best (duration, position) per
+    label (first wins on ties = stable secondary sort), then rank labels
+    by (-duration, position) — identical to the sorted()+break order.
+    """
+    best_per_label: dict[str, tuple[int, int]] = {}
+    for pos, item in enumerate(contributions):
+        if bool(item.get("privacy_redacted")):
+            continue
+        if str(item.get("status") or STATUS_NORMAL) != STATUS_NORMAL:
+            continue
+        label = _contribution_label(item)
+        if not label:
+            continue
+        duration = int(item.get("duration_seconds") or 0)
+        existing = best_per_label.get(label)
+        if existing is None or duration > existing[0]:
+            best_per_label[label] = (duration, pos)
+    ranked = sorted(
+        best_per_label,
+        key=lambda lbl: (-best_per_label[lbl][0], best_per_label[lbl][1]),
+    )
+    return ranked[:3]
+
+
 def _description_display_fields(session: dict[str, Any]) -> dict[str, Any]:
     user_description = str(session.get("session_note") or "").strip()
-    labels: list[str] = []
-    # Only top-3 labels are needed; use heapq.nlargest to avoid a full sort.
-    # Filter ineligible contributions first so nlargest operates on the
-    # same set the previous sorted()+break loop consumed.
-    eligible = (
-        item
-        for item in (session.get("_projection_contributions") or [])
-        if not bool(item.get("privacy_redacted"))
-        and str(item.get("status") or STATUS_NORMAL) == STATUS_NORMAL
-    )
-    top_contributions = heapq.nlargest(
-        3,
-        eligible,
-        key=lambda item: int(item.get("duration_seconds") or 0),
-    )
-    for contribution in top_contributions:
-        activity_name = str(contribution.get("activity_display_name") or "").strip()
-        if contribution.get("resource_is_anchor") and activity_name:
-            label = activity_name
-        else:
-            label = extract_anchor_file_name(contribution.get("window_title")) or str(
-                contribution.get("app_name") or contribution.get("process_name") or ""
-            ).strip()
-        if label and label not in labels:
-            labels.append(label)
+    contributions = list(session.get("_projection_contributions") or [])
+    labels = _top3_distinct_labels(contributions)
     derived_summary = " · ".join(labels)
     if user_description:
         display_description = user_description
@@ -390,22 +405,21 @@ def get_overview_view_model(today: str | None = None) -> dict[str, Any]:
     )
     current_activity = model.get("current_activity") or {}
 
-    from .report_projection_snapshot_service import build_visible_snapshot
+    from .report_projection_provider import get_day_projection
     from .report_status_policy import decide_report_status
 
-    projection = build_visible_snapshot(scoped_today, scoped_today)
-    with stage("view_model_transform"):
+    projection = get_day_projection(scoped_today)
+    with stage("overview_assemble"):
         sessions = list(projection.final_sessions)
         standalone_entries = [
             entry
-            for entry in projection.final_entries
-            if str(entry.get("row_kind") or "") == "standalone_status"
-            and not bool(entry.get("is_in_progress"))
+            for entry in projection.standalone_status_entries
+            if not bool(entry.get("is_in_progress"))
         ]
         project_count = len(
             {
                 int(row.get("report_project_id") or row.get("project_id") or 0)
-                for row in projection.final_contributions
+                for row in projection.contributions
                 if bool(row.get("is_report_project"))
                 and int(row.get("report_project_id") or row.get("project_id") or 0) > 0
             }
@@ -585,7 +599,7 @@ def get_timeline_view_model(report_date: str | None = None) -> dict[str, Any]:
     from .report_projection_provider import get_day_projection
 
     projection = get_day_projection(scoped_report_date)
-    with stage("view_model_transform"):
+    with stage("timeline_assemble"):
         sessions = [
             _base_session_row(
                 session,

@@ -14,6 +14,7 @@ from ..db import get_connection
 from . import clipboard_fact_query_service, session_boundary_service
 from .context_service import ReportContextProjection
 from .project_attribution_policy import official_project_fields, report_project_fields
+from .projection_performance import stage
 from .settings_service import get_int_setting
 
 
@@ -70,12 +71,13 @@ def load_report_activity_rows(
         conn,
         activity_ids,
     )
-    attributed = ReportContextProjection.build(
-        rows,
-        carry_minutes=carry_minutes,
-        boundary_times=boundaries,
-        clipboard_times=clipboard_times,
-    ).rows
+    with stage("context_projection"):
+        attributed = ReportContextProjection.build(
+            rows,
+            carry_minutes=carry_minutes,
+            boundary_times=boundaries,
+            clipboard_times=clipboard_times,
+        ).rows
     result: list[dict] = []
     for row in attributed:
         result.extend(_split_calendar_rows(dict(row)))

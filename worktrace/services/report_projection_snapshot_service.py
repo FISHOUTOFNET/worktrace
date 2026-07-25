@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from typing import Any
 
 from ..constants import DEFAULT_UNRECORDED_GAP_BOUNDARY_SECONDS
@@ -33,6 +34,28 @@ from .report_session_projection_service import (
 )
 from .report_status_policy import STANDALONE_STATUS, SUPPRESSED, decide_report_status
 from .settings_service import get_int_setting
+
+
+@dataclass
+class _ProjectionComputation:
+    """Internal result of the single projection computation path.
+
+    Holds raw mutable lists (not yet frozen). Materializers freeze the
+    appropriate subsets for their target representation (compact
+    DayProjection vs. full ReportProjectionSnapshot). This type is
+    module-private and never exported across module boundaries.
+    """
+
+    start_date: str
+    end_date: str
+    base_sessions: list[dict[str, Any]]
+    final_entries: list[dict[str, Any]]
+    final_sessions: list[dict[str, Any]]
+    standalone_status_entries: list[dict[str, Any]]
+    final_contributions: list[dict[str, Any]]
+    operation_diagnostics: list[OperationDiagnostic]
+    snapshot_revision: str
+    activity_count: int
 
 
 def build_visible_snapshot(
@@ -118,7 +141,19 @@ def _mutable_record(value) -> dict[str, Any]:
     return result
 
 
-def _build_snapshot(conn, start_date: str, end_date: str) -> ReportProjectionSnapshot:
+def _compute_projection(
+    conn,
+    start_date: str,
+    end_date: str,
+) -> _ProjectionComputation:
+    """Run the single projection computation path and return raw results.
+
+    This is the sole owner of projection business logic (fact query, session
+    build, operation replay, standalone status, sorting, content hash). Both
+    the full ReportProjectionSnapshot materializer and the compact
+    DayProjection materializer consume this result — neither duplicates
+    business rules.
+    """
     uncategorized_id = get_uncategorized_project_id(conn)
     project_states = _load_project_states(conn, uncategorized_id)
     with stage("fact_query"):
@@ -348,16 +383,41 @@ def _build_snapshot(conn, start_date: str, end_date: str) -> ReportProjectionSna
         entry_count=len(final_entries),
         contribution_count=len(final_contributions),
     )
-    return ReportProjectionSnapshot(
+    return _ProjectionComputation(
         start_date=start_date,
         end_date=end_date,
-        base_sessions=tuple(base_sessions),
-        final_entries=tuple(final_entries),
-        final_sessions=tuple(final_sessions),
-        standalone_status_entries=tuple(standalone_entries),
-        final_contributions=tuple(final_contributions),
-        operation_diagnostics=tuple(diagnostics),
+        base_sessions=base_sessions,
+        final_entries=final_entries,
+        final_sessions=final_sessions,
+        standalone_status_entries=standalone_entries,
+        final_contributions=final_contributions,
+        operation_diagnostics=diagnostics,
         snapshot_revision=revision,
+        activity_count=len(rows),
+    )
+
+
+def _build_snapshot(conn, start_date: str, end_date: str) -> ReportProjectionSnapshot:
+    """Materialize a full ReportProjectionSnapshot from the shared computation.
+
+    The computation runs once via :func:`_compute_projection`; this wrapper
+    freezes all record collections (including base_sessions and the mutually
+    exclusive subsets) into the recursively-immutable snapshot required by
+    mutation, export, and debug paths. Page-read paths that only need the
+    compact DayProjection must call the provider instead so the full freeze
+    is skipped.
+    """
+    comp = _compute_projection(conn, start_date, end_date)
+    return ReportProjectionSnapshot(
+        start_date=comp.start_date,
+        end_date=comp.end_date,
+        base_sessions=tuple(comp.base_sessions),
+        final_entries=comp.final_entries,
+        final_sessions=comp.final_sessions,
+        standalone_status_entries=comp.standalone_status_entries,
+        final_contributions=comp.final_contributions,
+        operation_diagnostics=comp.operation_diagnostics,
+        snapshot_revision=comp.snapshot_revision,
     )
 
 

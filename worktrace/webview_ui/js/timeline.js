@@ -152,6 +152,8 @@
             return;
         }
 
+        var _renderStart = (typeof performance !== "undefined" && performance.now)
+            ? performance.now() : 0;
         var html = "";
         for (var i = 0; i < sessions.length; i++) {
             var session = sessions[i];
@@ -201,7 +203,23 @@
                 + (session.is_in_progress ? '<span class="badge live">进行中</span>' : '')
                 + '</div></button>';
         }
+        var _htmlBuildMs = _renderStart
+            ? (performance.now() - _renderStart) : 0;
+        var _commitStart = _renderStart ? performance.now() : 0;
         listEl.innerHTML = html;
+        var _commitMs = _commitStart
+            ? (performance.now() - _commitStart) : 0;
+        // frontend_render_ms: HTML string generation + DOM commit.
+        // Exposed for diagnostics; no user content is recorded.
+        App.lastTimelineRenderMs = {
+            html_build_ms: Math.round(_htmlBuildMs * 100) / 100,
+            dom_commit_ms: Math.round(_commitMs * 100) / 100,
+            total_ms: Math.round((_htmlBuildMs + _commitMs) * 100) / 100,
+            session_count: sessions.length
+        };
+        if (App.lastTimelineRenderMs.total_ms >= 50 && window.console && console.debug) {
+            console.debug("timeline_render_ms", App.lastTimelineRenderMs);
+        }
         // Event delegation: a single click + keydown listener on the
         // container handles all timeline items, avoiding per-item listener
         // churn on every re-render.

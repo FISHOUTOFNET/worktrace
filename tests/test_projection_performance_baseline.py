@@ -243,7 +243,7 @@ def test_projection_benchmark_baseline(temp_db, size):
     )
 
 
-def test_timeline_view_model_records_view_model_transform_stage(temp_db):
+def test_timeline_view_model_records_timeline_assemble_stage(temp_db):
     _reset_perf_capture()
     projection_benchmark.build_benchmark_dataset(activity_count=40)
     with _perf_page_scope(projection_benchmark.DEFAULT_REPORT_DATE):
@@ -251,7 +251,7 @@ def test_timeline_view_model_records_view_model_transform_stage(temp_db):
             projection_benchmark.DEFAULT_REPORT_DATE
         )
     record = _last_record_or_fail()
-    assert "view_model_transform" in record.stages
+    assert "timeline_assemble" in record.stages
     assert record.entry_count >= 1
 
 

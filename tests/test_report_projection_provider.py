@@ -63,15 +63,15 @@ def _clear_projection_cache():
 def test_first_timeline_open_builds_projection_once(temp_db):
     _seed_activities()
     build_calls = []
-    original = report_projection_snapshot_service._build_snapshot
+    original = report_projection_snapshot_service._compute_projection
 
-    def tracking_build(conn, start_date, end_date):
+    def tracking_compute(conn, start_date, end_date):
         build_calls.append((start_date, end_date))
         return original(conn, start_date, end_date)
 
     with patch(
-        "worktrace.services.report_projection_provider._build_snapshot",
-        side_effect=tracking_build,
+        "worktrace.services.report_projection_provider._compute_projection",
+        side_effect=tracking_compute,
     ):
         with page_read_scope():
             proj1 = get_day_projection(DATE)
@@ -96,9 +96,9 @@ def test_consecutive_detail_clicks_do_not_rebuild(temp_db):
 
     # Simulate 20 detail clicks in separate page-read scopes.
     build_calls = []
-    original = report_projection_snapshot_service._build_snapshot
+    original = report_projection_snapshot_service._compute_projection
 
-    def tracking_build(conn, start_date, end_date):
+    def tracking_compute(conn, start_date, end_date):
         build_calls.append((start_date, end_date))
         return original(conn, start_date, end_date)
 
@@ -108,8 +108,8 @@ def test_consecutive_detail_clicks_do_not_rebuild(temp_db):
     revision = str(sessions[0].get("projection_revision") or "")
 
     with patch(
-        "worktrace.services.report_projection_provider._build_snapshot",
-        side_effect=tracking_build,
+        "worktrace.services.report_projection_provider._compute_projection",
+        side_effect=tracking_compute,
     ):
         for _ in range(20):
             with page_read_scope():
@@ -286,15 +286,15 @@ def test_clear_cache_forces_rebuild(temp_db):
     assert cache_size() == 0
 
     build_calls = []
-    original = report_projection_snapshot_service._build_snapshot
+    original = report_projection_snapshot_service._compute_projection
 
-    def tracking_build(conn, start_date, end_date):
+    def tracking_compute(conn, start_date, end_date):
         build_calls.append((start_date, end_date))
         return original(conn, start_date, end_date)
 
     with patch(
-        "worktrace.services.report_projection_provider._build_snapshot",
-        side_effect=tracking_build,
+        "worktrace.services.report_projection_provider._compute_projection",
+        side_effect=tracking_compute,
     ):
         with page_read_scope():
             proj2 = get_day_projection(DATE)
@@ -381,15 +381,15 @@ def test_consecutive_detail_clicks_with_source_version_do_not_rebuild(temp_db):
     source_version = projection.source_version_token
 
     build_calls = []
-    original = report_projection_snapshot_service._build_snapshot
+    original = report_projection_snapshot_service._compute_projection
 
-    def tracking_build(conn, start_date, end_date):
+    def tracking_compute(conn, start_date, end_date):
         build_calls.append((start_date, end_date))
         return original(conn, start_date, end_date)
 
     with patch(
-        "worktrace.services.report_projection_provider._build_snapshot",
-        side_effect=tracking_build,
+        "worktrace.services.report_projection_provider._compute_projection",
+        side_effect=tracking_compute,
     ):
         for _ in range(20):
             with page_read_scope():
@@ -403,3 +403,272 @@ def test_consecutive_detail_clicks_with_source_version_do_not_rebuild(temp_db):
     assert len(build_calls) == 0, (
         f"detail clicks triggered {len(build_calls)} projection rebuilds"
     )
+
+
+# --- Cross-page integration: Overview ↔ Timeline ↔ Detail ---
+
+
+def test_overview_timeline_detail_share_single_build(temp_db):
+    """Overview → Timeline → 20 Detail must build the day projection exactly once."""
+    _seed_activities(count=10)
+    clear_cache()
+
+    build_calls = []
+    original = report_projection_snapshot_service._compute_projection
+
+    def tracking_compute(conn, start_date, end_date):
+        build_calls.append((start_date, end_date))
+        return original(conn, start_date, end_date)
+
+    with patch(
+        "worktrace.services.report_projection_provider._compute_projection",
+        side_effect=tracking_compute,
+    ):
+        # 1. Load Overview in its own page-read scope.
+        with page_read_scope():
+            overview = view_model_service.get_overview_view_model(DATE)
+            assert overview["ok"] is True
+        assert len(build_calls) == 1, "Overview should trigger first build"
+
+        # 2. Switch to Timeline in a separate page-read scope.
+        with page_read_scope():
+            timeline = view_model_service.get_timeline_view_model(DATE)
+            assert timeline["ok"] is True
+        assert len(build_calls) == 1, "Timeline must not rebuild after Overview"
+
+        # 3. Open 20 Details in separate page-read scopes.
+        sessions = timeline["entries"]
+        assert len(sessions) >= 1
+        key = str(sessions[0]["projection_instance_key"] or "")
+        revision = str(sessions[0]["projection_revision"] or "")
+        with page_read_scope():
+            proj = get_day_projection(DATE)
+            source_version = proj.source_version_token
+
+        for _ in range(20):
+            with page_read_scope():
+                view_model_service.get_session_activity_summary_view_model(
+                    report_date=DATE,
+                    projection_instance_key=key,
+                    expected_projection_revision=revision,
+                    expected_source_version=source_version,
+                )
+        assert len(build_calls) == 1, (
+            f"20 detail clicks triggered {len(build_calls) - 1} rebuilds"
+        )
+
+
+def test_timeline_overview_share_single_build(temp_db):
+    """Timeline → Overview must build the day projection exactly once (reverse path)."""
+    _seed_activities(count=5)
+    clear_cache()
+
+    build_calls = []
+    original = report_projection_snapshot_service._compute_projection
+
+    def tracking_compute(conn, start_date, end_date):
+        build_calls.append((start_date, end_date))
+        return original(conn, start_date, end_date)
+
+    with patch(
+        "worktrace.services.report_projection_provider._compute_projection",
+        side_effect=tracking_compute,
+    ):
+        with page_read_scope():
+            timeline = view_model_service.get_timeline_view_model(DATE)
+            assert timeline["ok"] is True
+        assert len(build_calls) == 1
+
+        with page_read_scope():
+            overview = view_model_service.get_overview_view_model(DATE)
+            assert overview["ok"] is True
+        assert len(build_calls) == 1, "Overview must not rebuild after Timeline"
+
+
+# --- DayProjection recursive immutability ---
+
+
+def test_day_projection_entry_by_key_is_immutable(temp_db):
+    _seed_activities(count=3)
+    with page_read_scope():
+        projection = get_day_projection(DATE)
+
+    with pytest.raises(TypeError):
+        projection.entry_by_key.clear()
+    with pytest.raises(TypeError):
+        projection.entry_by_key["x"] = projection.entries[0]
+    with pytest.raises(TypeError):
+        del projection.entry_by_key["x"]
+
+
+def test_day_projection_contributions_by_key_is_immutable(temp_db):
+    _seed_activities(count=3)
+    with page_read_scope():
+        projection = get_day_projection(DATE)
+
+    with pytest.raises(TypeError):
+        projection.contributions_by_key["x"] = ()
+    with pytest.raises(TypeError):
+        del projection.contributions_by_key["x"]
+    # Each value must also be immutable (tuple, not list).
+    for key in projection.contributions_by_key:
+        assert isinstance(projection.contributions_by_key[key], tuple)
+
+
+def test_day_projection_entries_and_contributions_are_immutable(temp_db):
+    _seed_activities(count=3)
+    with page_read_scope():
+        projection = get_day_projection(DATE)
+
+    assert isinstance(projection.entries, tuple)
+    assert isinstance(projection.contributions, tuple)
+    # Entry records must be FrozenDict, not mutable dict.
+    for entry in projection.entries:
+        with pytest.raises(TypeError):
+            entry["project_name"] = "mutated"
+
+
+def test_caller_cannot_pollute_shared_cache(temp_db):
+    """A caller's mutation attempt must not affect subsequent cache reads."""
+    _seed_activities(count=3)
+    with page_read_scope():
+        proj1 = get_day_projection(DATE)
+
+    # Attempt to mutate (should raise, but even if caught, cache must be clean).
+    try:
+        proj1.entry_by_key.clear()
+    except TypeError:
+        pass
+
+    with page_read_scope():
+        proj2 = get_day_projection(DATE)
+    assert proj2 is proj1, "cache should return the same object"
+    assert len(proj2.entry_by_key) > 0, "cache was polluted by caller mutation"
+
+
+# --- Top-3 distinct label regression ---
+
+
+def test_top3_distinct_labels_with_duplicate_labels():
+    """A:100, A:90, B:80, C:70, D:60 → [A, B, C] (not [A, B])."""
+    from worktrace.services.view_model_service import _top3_distinct_labels
+
+    contributions = [
+        {"duration_seconds": 100, "activity_display_name": "A",
+         "status": "normal", "resource_is_anchor": True,
+         "app_name": "", "process_name": "", "window_title": ""},
+        {"duration_seconds": 90, "activity_display_name": "A",
+         "status": "normal", "resource_is_anchor": True,
+         "app_name": "", "process_name": "", "window_title": ""},
+        {"duration_seconds": 80, "activity_display_name": "B",
+         "status": "normal", "resource_is_anchor": True,
+         "app_name": "", "process_name": "", "window_title": ""},
+        {"duration_seconds": 70, "activity_display_name": "C",
+         "status": "normal", "resource_is_anchor": True,
+         "app_name": "", "process_name": "", "window_title": ""},
+        {"duration_seconds": 60, "activity_display_name": "D",
+         "status": "normal", "resource_is_anchor": True,
+         "app_name": "", "process_name": "", "window_title": ""},
+    ]
+    labels = _top3_distinct_labels(contributions)
+    assert labels == ["A", "B", "C"]
+
+
+def test_top3_distinct_labels_fewer_than_three():
+    from worktrace.services.view_model_service import _top3_distinct_labels
+
+    contributions = [
+        {"duration_seconds": 100, "activity_display_name": "A",
+         "status": "normal", "resource_is_anchor": True,
+         "app_name": "", "process_name": "", "window_title": ""},
+        {"duration_seconds": 50, "activity_display_name": "B",
+         "status": "normal", "resource_is_anchor": True,
+         "app_name": "", "process_name": "", "window_title": ""},
+    ]
+    labels = _top3_distinct_labels(contributions)
+    assert labels == ["A", "B"]
+
+
+def test_top3_distinct_labels_empty_contributions():
+    from worktrace.services.view_model_service import _top3_distinct_labels
+
+    assert _top3_distinct_labels([]) == []
+
+
+def test_top3_distinct_labels_skips_privacy_redacted_and_non_normal():
+    from worktrace.services.view_model_service import _top3_distinct_labels
+
+    contributions = [
+        {"duration_seconds": 999, "activity_display_name": "Redacted",
+         "status": "normal", "privacy_redacted": True,
+         "resource_is_anchor": True, "app_name": "", "process_name": "",
+         "window_title": ""},
+        {"duration_seconds": 998, "activity_display_name": "Idle",
+         "status": "idle", "privacy_redacted": False,
+         "resource_is_anchor": True, "app_name": "", "process_name": "",
+         "window_title": ""},
+        {"duration_seconds": 100, "activity_display_name": "A",
+         "status": "normal", "privacy_redacted": False,
+         "resource_is_anchor": True, "app_name": "", "process_name": "",
+         "window_title": ""},
+    ]
+    labels = _top3_distinct_labels(contributions)
+    assert labels == ["A"]
+
+
+def test_top3_distinct_labels_ties_preserve_original_order():
+    """Equal-duration ties must preserve the original contribution order."""
+    from worktrace.services.view_model_service import _top3_distinct_labels
+
+    contributions = [
+        {"duration_seconds": 100, "activity_display_name": "B",
+         "status": "normal", "resource_is_anchor": True,
+         "app_name": "", "process_name": "", "window_title": ""},
+        {"duration_seconds": 100, "activity_display_name": "A",
+         "status": "normal", "resource_is_anchor": True,
+         "app_name": "", "process_name": "", "window_title": ""},
+        {"duration_seconds": 100, "activity_display_name": "C",
+         "status": "normal", "resource_is_anchor": True,
+         "app_name": "", "process_name": "", "window_title": ""},
+    ]
+    labels = _top3_distinct_labels(contributions)
+    assert labels == ["B", "A", "C"]
+
+
+# --- Compact / Full equivalence ---
+
+
+def test_compact_day_projection_matches_full_snapshot(temp_db):
+    """DayProjection (compact) must match ReportProjectionSnapshot (full) for
+    entries, contributions, and snapshot_revision."""
+    _seed_activities(count=5)
+    # Also seed an idle activity to exercise standalone status path.
+    activity_factory.create_closed_activity(
+        day=DATE, start="10:00:00", end="10:30:00", status="idle",
+    )
+
+    with page_read_scope():
+        compact = get_day_projection(DATE)
+    full = build_visible_snapshot(DATE, DATE)
+
+    assert compact.snapshot_revision == full.snapshot_revision
+    # Entries: compact.entries includes both sessions and standalone entries,
+    # same as full.final_entries.
+    assert len(compact.entries) == len(full.final_entries)
+    for compact_entry, full_entry in zip(compact.entries, full.final_entries):
+        assert str(compact_entry.get("projection_instance_key") or "") == str(
+            full_entry.get("projection_instance_key") or ""
+        )
+        assert int(compact_entry.get("duration_seconds") or 0) == int(
+            full_entry.get("duration_seconds") or 0
+        )
+
+    # Contributions.
+    assert len(compact.contributions) == len(full.final_contributions)
+    for compact_c, full_c in zip(compact.contributions, full.final_contributions):
+        assert str(compact_c.get("projection_instance_key") or "") == str(
+            full_c.get("projection_instance_key") or ""
+        )
+        assert int(compact_c.get("duration_seconds") or 0) == int(
+            full_c.get("duration_seconds") or 0
+        )
