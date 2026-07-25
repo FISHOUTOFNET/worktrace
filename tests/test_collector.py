@@ -257,11 +257,34 @@ def test_collector_control_pause_completes_lifecycle_before_ack(monkeypatch):
     calls: list[str] = []
 
     class FakeMachine:
+        """Fake machine aligned with the CollectorStateMachine interface.
+
+        Records all lifecycle calls so tests can verify ordering.  The
+        production pause path calls ``pause()``, not ``stop()`` —
+        ``stop()`` is only called on fatal collector failure.  Both
+        methods are present here for interface completeness.
+        """
+
         def pause(self, at_time=None):
             calls.append("machine.pause")
 
         def transition_to(self, state, at_time=None):
             calls.append("machine.transition_to:" + state)
+
+        def stop(self, at_time=None, reason="user_stop"):
+            calls.append("machine.stop:" + reason)
+
+        def reset_runtime_state(self, reason):
+            calls.append("machine.reset_runtime_state:" + reason)
+
+        def quiesce_for_maintenance(self, at_time=None):
+            calls.append("machine.quiesce_for_maintenance")
+
+        def split_at_midnight(self, midnight):
+            calls.append("machine.split_at_midnight")
+
+        def record_clipboard_event(self, event, at_time=None):
+            calls.append("machine.record_clipboard_event")
 
     class RaisingAdapter:
         def get_active_window(self):
@@ -330,6 +353,231 @@ def test_collector_control_pause_completes_lifecycle_before_ack(monkeypatch):
     pause_index = calls.index("machine.pause")
     heartbeat_index = calls.index("heartbeat:paused")
     assert pause_index < heartbeat_index
+    # Pause path must NOT call stop() — stop is for fatal failures only.
+    assert not any(c.startswith("machine.stop") for c in calls), (
+        f"pause path must not call machine.stop(), calls={calls}"
+    )
+
+
+def test_collector_fatal_stop_calls_machine_stop_once(monkeypatch):
+    """Fatal collector failure must call machine.stop() exactly once.
+
+    The production shutdown path (collector.py lines 622-628) calls
+    ``machine.stop(at_time=..., reason='fatal_collector_stop')`` when
+    ``fatal_stop`` is True.  This test verifies the lifecycle contract:
+    stop is called once with the correct reason, and the collector
+    records stopped after the machine lifecycle completes.
+    """
+    calls: list[str] = []
+    stop_reasons: list[str] = []
+
+    class FakeMachine:
+        def __init__(self) -> None:
+            self.stop_error: Exception | None = None
+
+        def pause(self, at_time=None):
+            calls.append("machine.pause")
+
+        def transition_to(self, state, at_time=None):
+            calls.append("machine.transition_to:" + state)
+
+        def stop(self, at_time=None, reason="user_stop"):
+            calls.append("machine.stop:" + reason)
+            stop_reasons.append(reason)
+            if self.stop_error is not None:
+                raise self.stop_error
+
+        def reset_runtime_state(self, reason):
+            calls.append("machine.reset_runtime_state:" + reason)
+
+        def quiesce_for_maintenance(self, at_time=None):
+            calls.append("machine.quiesce_for_maintenance")
+
+        def split_at_midnight(self, midnight):
+            calls.append("machine.split_at_midnight")
+
+        def record_clipboard_event(self, event, at_time=None):
+            calls.append("machine.record_clipboard_event")
+
+    class FatalAdapter:
+        """Adapter that raises a non-retryable error on first poll."""
+
+        def get_active_window(self):
+            raise RuntimeError("fatal_adapter_failure")
+
+        def get_idle_seconds(self):
+            raise AssertionError("should not reach idle after fatal")
+
+        def set_clipboard_capture_enabled(self, enabled: bool) -> None:
+            return None
+
+        def get_clipboard_events(self):
+            return []
+
+    fake_machine = FakeMachine()
+    monkeypatch.setattr(collector_mod, "CollectorStateMachine", lambda: fake_machine)
+    monkeypatch.setattr(
+        collector_mod,
+        "get_setting",
+        lambda key, default=None: default or "1",
+    )
+    monkeypatch.setattr(collector_mod, "get_int_setting", lambda key, default=1: 1)
+    monkeypatch.setattr(
+        collector_mod,
+        "get_bool_setting",
+        lambda key, default=False: False,
+    )
+    monkeypatch.setattr(
+        collector_mod.privacy_gate_service,
+        "is_privacy_notice_accepted",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        collector_mod.clipboard_service,
+        "prune_old_events",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        collector_mod,
+        "update_heartbeat",
+        lambda status: calls.append("heartbeat:" + status),
+    )
+    monkeypatch.setattr(
+        collector_mod.collector_health,
+        "record_collector_stopped",
+        lambda at_time: calls.append("record_collector_stopped"),
+    )
+    monkeypatch.setattr(
+        collector_mod.collector_health,
+        "record_fatal_failure",
+        lambda phase, code, at_time: calls.append("record_fatal_failure"),
+    )
+
+    stop_event = threading.Event()
+    thread = threading.Thread(
+        target=run_collector,
+        args=(FatalAdapter(), stop_event),
+        daemon=True,
+    )
+    thread.start()
+    thread.join(timeout=5)
+    assert not thread.is_alive(), "collector thread did not terminate after fatal"
+
+    # machine.stop() called exactly once with fatal reason.
+    stop_calls = [c for c in calls if c.startswith("machine.stop:")]
+    assert len(stop_calls) == 1, f"expected 1 stop call, got {stop_calls}"
+    assert "fatal_collector_stop" in stop_calls[0]
+
+    # Lifecycle ordering: stop before record_collector_stopped.
+    stop_index = calls.index(stop_calls[0])
+    stopped_index = calls.index("record_collector_stopped")
+    assert stop_index < stopped_index, (
+        f"machine.stop must precede record_collector_stopped, calls={calls}"
+    )
+
+
+def test_collector_fatal_stop_survives_stop_failure(monkeypatch):
+    """If machine.stop() raises during fatal shutdown, the collector must
+    still record stopped (via the finally block) and terminate cleanly.
+    """
+    calls: list[str] = []
+
+    class FakeMachine:
+        def __init__(self) -> None:
+            self.stop_error: Exception | None = RuntimeError("stop_failed")
+
+        def pause(self, at_time=None):
+            calls.append("machine.pause")
+
+        def transition_to(self, state, at_time=None):
+            calls.append("machine.transition_to:" + state)
+
+        def stop(self, at_time=None, reason="user_stop"):
+            calls.append("machine.stop:" + reason)
+            if self.stop_error is not None:
+                raise self.stop_error
+
+        def reset_runtime_state(self, reason):
+            calls.append("machine.reset_runtime_state:" + reason)
+
+        def quiesce_for_maintenance(self, at_time=None):
+            calls.append("machine.quiesce_for_maintenance")
+
+        def split_at_midnight(self, midnight):
+            calls.append("machine.split_at_midnight")
+
+        def record_clipboard_event(self, event, at_time=None):
+            calls.append("machine.record_clipboard_event")
+
+    class FatalAdapter:
+        def get_active_window(self):
+            raise RuntimeError("fatal_adapter_failure")
+
+        def get_idle_seconds(self):
+            raise AssertionError("should not reach idle")
+
+        def set_clipboard_capture_enabled(self, enabled: bool) -> None:
+            return None
+
+        def get_clipboard_events(self):
+            return []
+
+    monkeypatch.setattr(
+        collector_mod, "CollectorStateMachine", lambda: FakeMachine()
+    )
+    monkeypatch.setattr(
+        collector_mod,
+        "get_setting",
+        lambda key, default=None: default or "1",
+    )
+    monkeypatch.setattr(collector_mod, "get_int_setting", lambda key, default=1: 1)
+    monkeypatch.setattr(
+        collector_mod,
+        "get_bool_setting",
+        lambda key, default=False: False,
+    )
+    monkeypatch.setattr(
+        collector_mod.privacy_gate_service,
+        "is_privacy_notice_accepted",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        collector_mod.clipboard_service,
+        "prune_old_events",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        collector_mod,
+        "update_heartbeat",
+        lambda status: calls.append("heartbeat:" + status),
+    )
+    monkeypatch.setattr(
+        collector_mod.collector_health,
+        "record_collector_stopped",
+        lambda at_time: calls.append("record_collector_stopped"),
+    )
+    monkeypatch.setattr(
+        collector_mod.collector_health,
+        "record_fatal_failure",
+        lambda phase, code, at_time: calls.append("record_fatal_failure"),
+    )
+
+    stop_event = threading.Event()
+    thread = threading.Thread(
+        target=run_collector,
+        args=(FatalAdapter(), stop_event),
+        daemon=True,
+    )
+    thread.start()
+    thread.join(timeout=5)
+    assert not thread.is_alive(), "collector thread did not terminate"
+
+    # stop() was called (and raised), but record_collector_stopped still ran.
+    assert any(c.startswith("machine.stop") for c in calls)
+    assert "record_collector_stopped" in calls
+    stop_index = next(i for i, c in enumerate(calls) if c.startswith("machine.stop"))
+    stopped_index = calls.index("record_collector_stopped")
+    assert stop_index < stopped_index
 
 
 def test_collector_paused_branch_delegates_to_lifecycle_machine(monkeypatch):
