@@ -158,13 +158,11 @@ jobs:
 
   webview-render:
     # Real WebView2 frontend render measurement on Windows.  Hosted runners
-    # may lack an interactive desktop session; the harness records the real
-    # failure reason and continues so the benchmark job is not blocked.
-    # Authoritative success may come from a local run; see the artifact.
+    # have successfully run WebView2, so the harness result is authoritative.
+    # A harness failure fails this job; the artifact is still uploaded.
     name: WebView render perf
     runs-on: windows-latest
     timeout-minutes: 15
-    continue-on-error: true
 
     steps:
       - name: Resolve revision

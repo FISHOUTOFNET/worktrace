@@ -182,31 +182,133 @@ _MEASURE_JS = r"""
             results.stages.timeline_error = (timelineData && timelineData.error) || "unknown";
         }
 
-        // Detail open (if timeline has sessions)
-        if (timelineData && timelineData.entries && timelineData.entries.length > 0) {
-            var firstSession = timelineData.entries[0];
-            var key = firstSession.projection_instance_key || "";
-            var rev = firstSession.projection_revision || "";
-            if (key && rev) {
-                mark(label + "_detail_start");
-                var detail = await App.bridge.getTimelineSessionActivitySummary(
-                    key, reportDate, rev, ""
-                );
-                mark(label + "_detail_payload");
-                if (detail && detail.ok !== false) {
+        // Detail open via real user selection path.
+        // After Timeline render, find the first .timeline-item in the DOM,
+        // read its projection_instance_key, and trigger selection through
+        // the public App.selectTimelineSession entry point.  This exercises
+        // the real detail load + DOM render path, not just the bridge API.
+        var firstItem = document.querySelector(
+            "#timeline-sessions-list .timeline-item"
+        );
+        var detailKey = firstItem
+            ? (firstItem.getAttribute("data-projection-instance-key") || "")
+            : "";
+        if (detailKey) {
+            mark(label + "_detail_start");
+
+            // Instrument the bridge to capture the payload-arrival moment
+            // without modifying production business semantics.  The bridge
+            // object is frozen, but App.bridge is reassignable, so we swap
+            // in a shallow copy that wraps the detail method.
+            var originalBridge = App.bridge;
+            var wrappedBridge = {};
+            var bridgeKeys = Object.keys(originalBridge);
+            for (var bi = 0; bi < bridgeKeys.length; bi++) {
+                wrappedBridge[bridgeKeys[bi]] = originalBridge[bridgeKeys[bi]];
+            }
+            var detailPayloadMarked = false;
+            wrappedBridge.getTimelineSessionActivitySummary = function () {
+                var args = Array.prototype.slice.call(arguments);
+                return originalBridge.getTimelineSessionActivitySummary
+                    .apply(originalBridge, args)
+                    .then(function (result) {
+                        if (!detailPayloadMarked) {
+                            mark(label + "_detail_payload");
+                            detailPayloadMarked = true;
+                        }
+                        return result;
+                    });
+            };
+            App.bridge = wrappedBridge;
+
+            // Reset the view-model so we can detect the fresh render.
+            App.lastSessionActivitySummaryViewModel = null;
+
+            // Trigger real selection through the public entry point.
+            try {
+                App.selectTimelineSession(detailKey, App.currentSessions || []);
+            } catch (selErr) {
+                App.bridge = originalBridge;
+                results.stages.detail_error = "select_exception:" + String(selErr);
+            }
+
+            if (!results.stages.detail_error) {
+                // Wait for real completion: view-model updated, header not
+                // loading, DOM has .summary-item rows, no in-flight request.
+                var detailDeadline = Date.now() + 15000;
+                var detailCompleted = false;
+                var detailFailureCat = "";
+                var detailHeader = "";
+                var detailDomRows = 0;
+
+                while (Date.now() < detailDeadline) {
+                    var dHeader = document.getElementById("timeline-details-header");
+                    detailHeader = dHeader ? dHeader.textContent.trim() : "";
+                    var dList = document.getElementById("timeline-details-list");
+                    detailDomRows = dList
+                        ? dList.querySelectorAll(".summary-item").length : 0;
+                    var dVm = App.lastSessionActivitySummaryViewModel;
+                    var dInFlight = Object.keys(App.detailsInFlight || {}).length;
+
+                    if (dVm !== null
+                        && detailHeader === "活动详情"
+                        && detailDomRows > 0
+                        && dInFlight === 0) {
+                        detailCompleted = true;
+                        break;
+                    }
+                    if (detailHeader.indexOf("失败") !== -1) {
+                        detailFailureCat = "detail_load_failed";
+                        break;
+                    }
+                    await sleep(10);
+                }
+
+                // Restore the original bridge before measuring.
+                App.bridge = originalBridge;
+
+                if (detailCompleted) {
                     await onFrame();
                     mark(label + "_detail_first_frame");
+                    results.stages.detail_payload_ms = measure(
+                        label + "_detail_payload_ms",
+                        label + "_detail_start",
+                        label + "_detail_payload"
+                    );
+                    results.stages.detail_render_ms = measure(
+                        label + "_detail_render_ms",
+                        label + "_detail_payload",
+                        label + "_detail_first_frame"
+                    );
                     results.stages.detail_total_ms = measure(
                         label + "_detail_total_ms",
                         label + "_detail_start",
                         label + "_detail_first_frame"
                     );
-                    results.detail_row_count = detail.summary_rows
-                        ? detail.summary_rows.length : 0;
+                    var dVm2 = App.lastSessionActivitySummaryViewModel;
+                    results.detail_row_count = (dVm2 && dVm2.summary_rows)
+                        ? dVm2.summary_rows.length : 0;
+                    results.detail_dom_row_count = detailDomRows;
+                    results.detail_header_text = detailHeader;
+
+                    // Realism assertions.
+                    if (results.detail_row_count === 0) {
+                        results.stages.detail_error = "detail_row_count_zero";
+                    } else if (results.detail_dom_row_count === 0) {
+                        results.stages.detail_error = "detail_dom_row_count_zero";
+                    } else if (results.detail_dom_row_count
+                               !== results.detail_row_count) {
+                        results.stages.detail_error = "detail_row_count_mismatch";
+                    }
                 } else {
-                    results.stages.detail_error = (detail && detail.error) || "unknown";
+                    results.stages.detail_error = detailFailureCat
+                        || "detail_timeout";
+                    results.detail_header_text = detailHeader;
+                    results.detail_dom_row_count = detailDomRows;
                 }
             }
+        } else {
+            results.stages.detail_error = "no_timeline_item_key";
         }
 
         // Warm-cache overview re-render
@@ -442,28 +544,103 @@ def _run_harness(activity_count: int, runs: int) -> dict[str, Any]:
     }
 
 
-def _summarize(runs: list[dict[str, Any]]) -> dict[str, Any]:
-    """Compute medians across runs for each stage."""
+def _stage_medians(run: dict[str, Any]) -> dict[str, float]:
+    """Return the numeric stages for a single run."""
+    out: dict[str, float] = {}
+    for name, value in run.get("stages", {}).items():
+        if isinstance(value, (int, float)):
+            out[name] = float(value)
+    return out
+
+
+def _median_over_runs(runs: list[dict[str, Any]]) -> dict[str, float]:
+    """Compute per-stage medians across the supplied runs."""
+    stages: dict[str, list[float]] = {}
+    for run in runs:
+        for name, value in _stage_medians(run).items():
+            stages.setdefault(name, []).append(value)
+    return {name: statistics.median(values) for name, values in stages.items() if values}
+
+
+def _build_cold_warm_summary(runs: list[dict[str, Any]]) -> dict[str, Any]:
+    """Split runs into cold (run 0) and warm (runs 1..N) summaries.
+
+    The first run inside a fresh WebView process pays cold-cache costs that
+    subsequent runs do not, so reporting a single overall median would mask
+    the cold-start behaviour.  We expose the cold run as-is and compute a
+    median over the remaining warm runs.
+    """
     if not runs:
         return {}
 
-    stages: dict[str, list[float]] = {}
-    for run in runs:
-        run_stages = run.get("stages", {})
-        for name, value in run_stages.items():
-            if isinstance(value, (int, float)):
-                stages.setdefault(name, []).append(float(value))
+    cold_run = runs[0]
+    warm_runs = runs[1:]
 
-    medians = {}
-    for name, values in stages.items():
-        if values:
-            medians[name] = statistics.median(values)
+    cold = {
+        "overview": {
+            "payload_ms": cold_run.get("stages", {}).get("overview_payload_ms"),
+            "render_ms": cold_run.get("stages", {}).get("overview_render_ms"),
+            "total_ms": cold_run.get("stages", {}).get("overview_total_ms"),
+        },
+        "timeline": {
+            "payload_ms": cold_run.get("stages", {}).get("timeline_payload_ms"),
+            "render_ms": cold_run.get("stages", {}).get("timeline_render_ms"),
+            "total_ms": cold_run.get("stages", {}).get("timeline_total_ms"),
+        },
+        "detail": {
+            "payload_ms": cold_run.get("stages", {}).get("detail_payload_ms"),
+            "render_ms": cold_run.get("stages", {}).get("detail_render_ms"),
+            "total_ms": cold_run.get("stages", {}).get("detail_total_ms"),
+            "row_count": cold_run.get("detail_row_count", 0),
+            "dom_row_count": cold_run.get("detail_dom_row_count", 0),
+            "header_text": cold_run.get("detail_header_text", ""),
+        },
+    }
+
+    warm_median = _median_over_runs(warm_runs)
+    warm = {
+        "run_count": len(warm_runs),
+        "median": {
+            "overview": {
+                "payload_ms": warm_median.get("overview_payload_ms"),
+                "render_ms": warm_median.get("overview_render_ms"),
+                "total_ms": warm_median.get("overview_total_ms"),
+            },
+            "timeline": {
+                "payload_ms": warm_median.get("timeline_payload_ms"),
+                "render_ms": warm_median.get("timeline_render_ms"),
+                "total_ms": warm_median.get("timeline_total_ms"),
+            },
+            "detail": {
+                "payload_ms": warm_median.get("detail_payload_ms"),
+                "render_ms": warm_median.get("detail_render_ms"),
+                "total_ms": warm_median.get("detail_total_ms"),
+            },
+        },
+    }
+
+    return {"cold": cold, "warm": warm}
+
+
+def _runner_metadata() -> dict[str, Any]:
+    """Collect honest runner metadata from the GitHub Actions environment.
+
+    Only reports ``execution_environment = "local"`` when not running on
+    GitHub Actions.  On GitHub Actions, exposes the real runner env vars
+    so the artifact cannot mislabel a hosted runner as "local".
+    """
+    on_github = os.environ.get("GITHUB_ACTIONS", "").lower() == "true"
+    if not on_github:
+        return {"execution_environment": "local"}
 
     return {
-        "run_count": len(runs),
-        "median_ms": medians,
-        "timeline_entry_count": runs[0].get("timeline_entry_count", 0),
-        "detail_row_count": runs[0].get("detail_row_count", 0),
+        "execution_environment": "github_actions",
+        "github_sha": os.environ.get("GITHUB_SHA") or None,
+        "github_run_id": os.environ.get("GITHUB_RUN_ID") or None,
+        "runner_os": os.environ.get("RUNNER_OS") or None,
+        "runner_arch": os.environ.get("RUNNER_ARCH") or None,
+        "runner_image": os.environ.get("ImageOS") or None,
+        "runner_image_version": os.environ.get("ImageVersion") or None,
     }
 
 
@@ -489,11 +666,12 @@ def main() -> int:
 
     result = _run_harness(args.activity_count, args.runs)
 
+    runner_meta = _runner_metadata()
     summary: dict[str, Any] = {
         "commit_sha": _get_git_sha(),
         "platform": platform.platform(),
         "python_version": sys.version,
-        "runner_image": os.environ.get("RUNNER_IMAGE", "local"),
+        "runner_metadata": runner_meta,
         "webview2_runtime": result.get("runtime_detection", "unknown"),
         "activity_count": args.activity_count,
         "runs_requested": args.runs,
@@ -504,7 +682,8 @@ def main() -> int:
         runs = result.get("runs", [])
         summary["dataset"] = result.get("dataset", {})
         summary["raw_runs"] = runs
-        summary["summary"] = _summarize(runs)
+        summary["cold_warm"] = _build_cold_warm_summary(runs)
+        summary["summary"] = _median_over_runs(runs)
     else:
         summary["failure_reason"] = result.get("failure_reason", "")
         summary["failure_category"] = result.get("failure_category", "")
