@@ -194,7 +194,12 @@ def _detail_report_attribution_fields(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _base_session_row(session: dict[str, Any], *, row_kind: str) -> dict[str, Any]:
+def _base_session_row(
+    session: dict[str, Any],
+    *,
+    row_kind: str,
+    contributions: tuple[Mapping[str, Any], ...] = (),
+) -> dict[str, Any]:
     base_seconds = int(session.get("duration_seconds") or 0)
     adjusted = session.get("adjusted_duration_seconds")
     adjusted = int(adjusted) if adjusted is not None else None
@@ -277,7 +282,7 @@ def _base_session_row(session: dict[str, Any], *, row_kind: str) -> dict[str, An
         "can_hide_activity": bool(session.get("can_hide_activity")),
         "display_project": session.get("display_project"),
     }
-    row.update(_description_display_fields(session))
+    row.update(_description_display_fields(session, contributions))
     return row
 
 
@@ -320,10 +325,12 @@ def _top3_distinct_labels(contributions: list[dict[str, Any]]) -> list[str]:
     return ranked[:3]
 
 
-def _description_display_fields(session: dict[str, Any]) -> dict[str, Any]:
+def _description_display_fields(
+    session: dict[str, Any],
+    contributions: tuple[Mapping[str, Any], ...] = (),
+) -> dict[str, Any]:
     user_description = str(session.get("session_note") or "").strip()
-    contributions = list(session.get("_projection_contributions") or [])
-    labels = _top3_distinct_labels(contributions)
+    labels = _top3_distinct_labels(list(contributions))
     derived_summary = " · ".join(labels)
     if user_description:
         display_description = user_description
@@ -380,10 +387,11 @@ def _session_needs_attention(session: Mapping[str, Any]) -> bool:
 
 
 def _session_visible_in_recent(
-    session: Mapping[str, Any], decide_report_status
+    session: Mapping[str, Any],
+    decide_report_status,
+    contributions: tuple[Mapping[str, Any], ...] = (),
 ) -> bool:
     """Lightweight visibility check without building a full DTO."""
-    contributions = session.get("_projection_contributions") or []
     if not contributions:
         return True
     return any(
@@ -430,12 +438,19 @@ def get_overview_view_model(today: str | None = None) -> dict[str, Any]:
         # DTOs only for the surviving ~23 sessions.
         candidates: list[dict[str, Any]] = []
         for session in sessions:
-            if not _session_visible_in_recent(session, decide_report_status):
+            session_key = str(session.get("projection_instance_key") or "")
+            session_contributions = projection.contributions_by_key.get(
+                session_key, ()
+            )
+            if not _session_visible_in_recent(
+                session, decide_report_status, session_contributions
+            ):
                 continue
             display_seconds = _session_display_seconds(session)
             candidates.append(
                 {
                     "session": session,
+                    "contributions": session_contributions,
                     "start_time": str(session.get("start_time") or ""),
                     "is_in_progress": bool(session.get("is_in_progress")),
                     "display_seconds": display_seconds,
@@ -497,22 +512,23 @@ def get_overview_view_model(today: str | None = None) -> dict[str, Any]:
         }
 
         # Build full DTOs only for the visible window.
-        visible_sessions = [
-            c["session"]
-            for c in candidates[:_RECENT_LIMIT]
-        ]
+        visible_candidates = list(candidates[:_RECENT_LIMIT])
         # Ensure attention rows are in the visible window.
         for c in attention_candidates[:_ATTENTION_LIMIT]:
             key = str(c["session"].get("projection_instance_key") or "")
             if key and not any(
-                str(s.get("projection_instance_key") or "") == key
-                for s in visible_sessions
+                str(cand["session"].get("projection_instance_key") or "") == key
+                for cand in visible_candidates
             ):
-                visible_sessions.append(c["session"])
+                visible_candidates.append(c)
 
         recent_rows = [
-            _base_session_row(s, row_kind="project_session")
-            for s in visible_sessions
+            _base_session_row(
+                c["session"],
+                row_kind="project_session",
+                contributions=c["contributions"],
+            )
+            for c in visible_candidates
         ]
         _apply_live_span_to_rows(
             recent_rows,
@@ -604,6 +620,9 @@ def get_timeline_view_model(report_date: str | None = None) -> dict[str, Any]:
             _base_session_row(
                 session,
                 row_kind=str(session.get("row_kind") or "project_session"),
+                contributions=projection.contributions_by_key.get(
+                    str(session.get("projection_instance_key") or ""), ()
+                ),
             )
             for session in projection.entries
         ]
