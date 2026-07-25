@@ -218,27 +218,167 @@ def _build_day_projection(
     """Build a compact, recursively-immutable DayProjection.
 
     Uses the shared projection computation (no duplicated business rules),
-    then calls the pure :func:`materialize_day_projection` to freeze only
-    the entries and contributions needed by page-read paths. Indexes are
-    built in O(N) and reference the same frozen objects. The full
-    :class:`ReportProjectionSnapshot` freeze (base_sessions,
-    mutually-exclusive subsets) is skipped.
+    then freezes entries/contributions, builds O(N) indexes, and assembles
+    the :class:`DayProjection` as three distinct measured steps so timing
+    artifacts reflect real work. The full :class:`ReportProjectionSnapshot`
+    freeze (base_sessions, mutually-exclusive subsets) is skipped.
     """
     with stage("projection_compute"):
         comp = compute_projection(conn, report_date, report_date)
     with stage("projection_materialize"):
-        projection = materialize_day_projection(
-            comp,
+        frozen_data = freeze_projection_data(comp)
+    with stage("index_build"):
+        indexes = build_projection_indexes(frozen_data)
+    with stage("projection_assemble"):
+        projection = assemble_day_projection(
+            frozen_data,
+            indexes,
             source_version,
             report_date=report_date,
         )
-    with stage("index_build"):
-        # Indexes are already built inside materialize_day_projection;
-        # this stage is retained for perf-scope continuity so callers
-        # can observe the index-build step separately from the entry
-        # freeze. The work is done; the stage is a no-op timer.
-        pass
     return projection
+
+
+@dataclass(frozen=True, slots=True)
+class FrozenProjectionData:
+    """Frozen entries, contributions, and pass-through metadata.
+
+    The single immutable input to index construction and assembly.
+    Entries have ``_projection_contributions`` stripped before freezing;
+    contributions are frozen exactly once.  Pass-through fields
+    (``operation_diagnostics``, ``snapshot_revision``, ``start_date``)
+    are already immutable and carried verbatim so :func:`assemble_day_projection`
+    is a pure function of frozen inputs.
+    """
+
+    entries: tuple[Mapping[str, Any], ...]
+    contributions: tuple[Mapping[str, Any], ...]
+    operation_diagnostics: tuple[OperationDiagnostic, ...]
+    snapshot_revision: str
+    start_date: str
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectionIndexes:
+    """O(1) lookup indexes referencing the same frozen objects.
+
+    ``entry_by_key`` and ``contributions_by_key`` reference the exact
+    same immutable objects stored in :class:`FrozenProjectionData` —
+    no duplicate freeze, no deep copy.
+    """
+
+    entry_by_key: Mapping[str, Mapping[str, Any]]
+    contributions_by_key: Mapping[str, tuple[Mapping[str, Any], ...]]
+
+
+def freeze_projection_data(
+    computation: ProjectionComputation,
+) -> FrozenProjectionData:
+    """Freeze entries and contributions exactly once.
+
+    Strips ``_projection_contributions`` from compact entries before
+    freezing — page-read paths use ``contributions_by_key`` instead.
+    The full :class:`ReportProjectionSnapshot` keeps the inline field
+    for mutation and export compatibility.
+
+    Pure function: no SQLite, no cache, no telemetry, no module state.
+    """
+
+    # Strip _projection_contributions from compact entries before
+    # freezing. Page-read paths use contributions_by_key instead. The
+    # full ReportProjectionSnapshot keeps the field for mutation and
+    # export compatibility.
+    compact_entries: list[Mapping[str, Any]] = []
+    for raw_entry in computation.final_entries:
+        item = dict(raw_entry)
+        item.pop("_projection_contributions", None)
+        compact_entries.append(freeze_value(item))
+    entries = tuple(compact_entries)
+
+    # Freeze contributions exactly once.
+    contributions = tuple(
+        freeze_value(contribution)
+        for contribution in computation.final_contributions
+    )
+
+    return FrozenProjectionData(
+        entries=entries,
+        contributions=contributions,
+        operation_diagnostics=tuple(computation.operation_diagnostics),
+        snapshot_revision=computation.snapshot_revision,
+        start_date=computation.start_date,
+    )
+
+
+def build_projection_indexes(
+    frozen_data: FrozenProjectionData,
+) -> ProjectionIndexes:
+    """Build O(1) lookup indexes from frozen data.
+
+    Indexes reference the SAME immutable objects (no duplicate freeze,
+    no deep copy).  O(N) accumulation into lists, frozen once at the
+    end — avoids the O(K^2) tuple-rebuild pattern (``*existing, item``).
+
+    Pure function: no SQLite, no cache, no telemetry, no module state.
+    """
+
+    # contributions_by_key — O(N) accumulation into lists, frozen once.
+    mutable_contributions_by_key: dict[str, list[Mapping[str, Any]]] = {}
+    for contribution in frozen_data.contributions:
+        key = str(contribution.get("projection_instance_key") or "")
+        if key:
+            mutable_contributions_by_key.setdefault(key, []).append(
+                contribution
+            )
+    contributions_by_key = FrozenDict(
+        {
+            key: tuple(values)
+            for key, values in mutable_contributions_by_key.items()
+        }
+    )
+
+    # entry_by_key referencing the SAME frozen entry objects.
+    entry_by_key = FrozenDict(
+        {
+            str(entry.get("projection_instance_key") or ""): entry
+            for entry in frozen_data.entries
+            if str(entry.get("projection_instance_key") or "")
+        }
+    )
+
+    return ProjectionIndexes(
+        entry_by_key=entry_by_key,
+        contributions_by_key=contributions_by_key,
+    )
+
+
+def assemble_day_projection(
+    frozen_data: FrozenProjectionData,
+    indexes: ProjectionIndexes,
+    source_version: ProjectionSourceVersion,
+    *,
+    report_date: str | None = None,
+) -> DayProjection:
+    """Assemble the final :class:`DayProjection` from frozen data + indexes.
+
+    Pure function: no SQLite, no cache, no telemetry, no module state.
+    ``report_date`` defaults to ``frozen_data.start_date``.
+    """
+
+    resolved_report_date = (
+        report_date if report_date is not None else frozen_data.start_date
+    )
+
+    return DayProjection(
+        report_date=resolved_report_date,
+        source_version=source_version,
+        entries=frozen_data.entries,
+        contributions=frozen_data.contributions,
+        operation_diagnostics=frozen_data.operation_diagnostics,
+        snapshot_revision=frozen_data.snapshot_revision,
+        entry_by_key=indexes.entry_by_key,
+        contributions_by_key=indexes.contributions_by_key,
+    )
 
 
 def materialize_day_projection(
@@ -259,64 +399,20 @@ def materialize_day_projection(
     Both this materializer and the full snapshot materializer depend on
     the same :class:`ProjectionComputation` from
     :mod:`report_projection_builder` — neither duplicates business rules.
+
+    This public entry point composes the three pure steps
+    (:func:`freeze_projection_data`, :func:`build_projection_indexes`,
+    :func:`assemble_day_projection`) without per-step timing.  The
+    Builder path (:func:`_build_day_projection`) calls the steps
+    directly so each stage is measured independently.
     """
-    # Freeze contributions exactly once.
-    contributions = tuple(
-        freeze_value(contribution)
-        for contribution in computation.final_contributions
-    )
-
-    # Build contributions_by_key from the frozen contributions so the
-    # index references the SAME immutable objects (no duplicate freeze,
-    # no deep copy). O(N) accumulation into lists, frozen once at the
-    # end — avoids the O(K^2) tuple-rebuild pattern (*existing, item).
-    mutable_contributions_by_key: dict[str, list[Mapping[str, Any]]] = {}
-    for contribution in contributions:
-        key = str(contribution.get("projection_instance_key") or "")
-        if key:
-            mutable_contributions_by_key.setdefault(key, []).append(
-                contribution
-            )
-    contributions_by_key = FrozenDict(
-        {
-            key: tuple(values)
-            for key, values in mutable_contributions_by_key.items()
-        }
-    )
-
-    # Strip _projection_contributions from compact entries before
-    # freezing. Page-read paths use contributions_by_key instead. The
-    # full ReportProjectionSnapshot keeps the field for mutation and
-    # export compatibility.
-    compact_entries: list[Mapping[str, Any]] = []
-    for raw_entry in computation.final_entries:
-        item = dict(raw_entry)
-        item.pop("_projection_contributions", None)
-        compact_entries.append(freeze_value(item))
-    entries = tuple(compact_entries)
-
-    # Build entry_by_key referencing the SAME frozen entry objects.
-    entry_by_key = FrozenDict(
-        {
-            str(entry.get("projection_instance_key") or ""): entry
-            for entry in entries
-            if str(entry.get("projection_instance_key") or "")
-        }
-    )
-
-    resolved_report_date = (
-        report_date if report_date is not None else computation.start_date
-    )
-
-    return DayProjection(
-        report_date=resolved_report_date,
-        source_version=source_version,
-        entries=entries,
-        contributions=contributions,
-        operation_diagnostics=tuple(computation.operation_diagnostics),
-        snapshot_revision=computation.snapshot_revision,
-        entry_by_key=entry_by_key,
-        contributions_by_key=contributions_by_key,
+    frozen_data = freeze_projection_data(computation)
+    indexes = build_projection_indexes(frozen_data)
+    return assemble_day_projection(
+        frozen_data,
+        indexes,
+        source_version,
+        report_date=report_date,
     )
 
 

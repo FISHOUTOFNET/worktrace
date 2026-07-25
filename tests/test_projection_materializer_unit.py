@@ -22,10 +22,20 @@ from __future__ import annotations
 
 import pytest
 
+from worktrace.services.projection_performance import (
+    get_last_record,
+    projection_perf_scope,
+    reset_last_record,
+)
 from worktrace.services.report_projection_builder import ProjectionComputation
 from worktrace.services.report_projection_model import OperationDiagnostic
 from worktrace.services.report_projection_provider import (
     DayProjection,
+    FrozenProjectionData,
+    ProjectionIndexes,
+    assemble_day_projection,
+    build_projection_indexes,
+    freeze_projection_data,
     materialize_day_projection,
 )
 from worktrace.services.report_revision_service import ProjectionSourceVersion
@@ -418,3 +428,253 @@ def test_materialize_report_date_override_takes_precedence():
         comp, _source_version(date=other), report_date=other
     )
     assert projection.report_date == other
+
+
+# --- Split step: freeze_projection_data ---
+
+
+def test_freeze_projection_data_strips_inline_contributions():
+    """freeze_projection_data must strip _projection_contributions from entries."""
+    entries = [
+        {"projection_instance_key": "k1", "_projection_contributions": [{"x": 1}]},
+    ]
+    comp = _computation(entries=entries, contributions=[_contribution("k1")])
+    frozen = freeze_projection_data(comp)
+    assert len(frozen.entries) == 1
+    assert "_projection_contributions" not in frozen.entries[0]
+
+
+def test_freeze_projection_data_produces_immutable_entries_and_contributions():
+    comp = _computation()
+    frozen = freeze_projection_data(comp)
+    assert isinstance(frozen.entries, tuple)
+    assert isinstance(frozen.contributions, tuple)
+    with pytest.raises(TypeError):
+        frozen.entries[0]["project_name"] = "mutated"
+    with pytest.raises(TypeError):
+        frozen.contributions[0]["duration_seconds"] = 0
+
+
+def test_freeze_projection_data_carries_pass_through_metadata():
+    diagnostics = [
+        OperationDiagnostic(
+            operation_id=1,
+            sequence=1,
+            operation_type="copy_session",
+            state="applied",
+            reason="",
+            source_instance_key="k1",
+        )
+    ]
+    comp = _computation(diagnostics=diagnostics)
+    frozen = freeze_projection_data(comp)
+    assert frozen.snapshot_revision == comp.snapshot_revision
+    assert frozen.start_date == comp.start_date
+    assert frozen.operation_diagnostics == tuple(diagnostics)
+
+
+# --- Split step: build_projection_indexes ---
+
+
+def test_build_projection_indexes_references_same_frozen_objects():
+    """Indexes must reference the SAME objects as frozen_data — not copies."""
+    contributions = [
+        _contribution("k1", activity_id=1),
+        _contribution("k1", activity_id=2),
+        _contribution("k2", activity_id=3),
+    ]
+    comp = _computation(
+        entries=[_entry("k1"), _entry("k2")],
+        contributions=contributions,
+    )
+    frozen = freeze_projection_data(comp)
+    indexes = build_projection_indexes(frozen)
+
+    # entry_by_key identity
+    for entry in frozen.entries:
+        key = str(entry.get("projection_instance_key") or "")
+        if key:
+            assert indexes.entry_by_key[key] is entry
+
+    # contributions_by_key identity
+    contribution_ids = {id(c) for c in frozen.contributions}
+    for indexed_tuple in indexes.contributions_by_key.values():
+        for indexed in indexed_tuple:
+            assert id(indexed) in contribution_ids
+
+
+def test_build_projection_indexes_empty_data_produces_immutable_empty_indexes():
+    """Empty projection must produce immutable empty indexes."""
+    comp = _computation(entries=[], contributions=[])
+    frozen = freeze_projection_data(comp)
+    indexes = build_projection_indexes(frozen)
+    assert len(indexes.entry_by_key) == 0
+    assert len(indexes.contributions_by_key) == 0
+    with pytest.raises(TypeError):
+        indexes.entry_by_key["x"] = {}
+    with pytest.raises(TypeError):
+        indexes.contributions_by_key["x"] = ()
+
+
+# --- Split step: assemble_day_projection ---
+
+
+def test_assemble_day_projection_uses_frozen_data_and_indexes():
+    comp = _computation()
+    frozen = freeze_projection_data(comp)
+    indexes = build_projection_indexes(frozen)
+    projection = assemble_day_projection(frozen, indexes, _source_version())
+    assert isinstance(projection, DayProjection)
+    assert projection.entries is frozen.entries
+    assert projection.contributions is frozen.contributions
+    assert projection.entry_by_key is indexes.entry_by_key
+    assert projection.contributions_by_key is indexes.contributions_by_key
+
+
+def test_assemble_day_projection_report_date_defaults_to_start_date():
+    comp = _computation()
+    frozen = freeze_projection_data(comp)
+    indexes = build_projection_indexes(frozen)
+    projection = assemble_day_projection(frozen, indexes, _source_version())
+    assert projection.report_date == frozen.start_date
+
+
+def test_assemble_day_projection_report_date_override_takes_precedence():
+    comp = _computation()
+    frozen = freeze_projection_data(comp)
+    indexes = build_projection_indexes(frozen)
+    other = "2026-09-01"
+    projection = assemble_day_projection(
+        frozen, indexes, _source_version(date=other), report_date=other
+    )
+    assert projection.report_date == other
+
+
+# --- Split compose equivalence ---
+
+
+def test_split_steps_match_materialize_day_projection():
+    """The three split steps must produce the same result as the public wrapper."""
+    comp = _computation()
+    direct = materialize_day_projection(comp, _source_version())
+    frozen = freeze_projection_data(comp)
+    indexes = build_projection_indexes(frozen)
+    via_split = assemble_day_projection(frozen, indexes, _source_version())
+    assert direct.report_date == via_split.report_date
+    assert direct.snapshot_revision == via_split.snapshot_revision
+    assert direct.entries == via_split.entries
+    assert direct.contributions == via_split.contributions
+    assert direct.entry_by_key == via_split.entry_by_key
+    assert direct.contributions_by_key == via_split.contributions_by_key
+
+
+# --- Timing stage semantics: index_build measures real work, not a no-op ---
+
+
+def test_timing_index_build_measures_real_index_construction():
+    """index_build stage must record real work (building indexes), not be a no-op.
+
+    Uses projection_perf_scope + stage() the same way the Builder does,
+    with a large enough dataset that index construction produces a
+    measurable duration.  We assert the stage was recorded with a
+    non-negative value and that index_build work actually happened
+    (indexes are populated), not that the duration exceeds some threshold.
+    """
+    contributions = [
+        _contribution(f"k{i}", activity_id=i) for i in range(200)
+    ]
+    entries = [_entry(f"k{i}") for i in range(200)]
+    comp = _computation(entries=entries, contributions=contributions)
+    reset_last_record()
+    with projection_perf_scope(DATE, surface="test"):
+        from worktrace.services.projection_performance import stage
+
+        with stage("projection_materialize"):
+            frozen = freeze_projection_data(comp)
+        with stage("index_build"):
+            indexes = build_projection_indexes(frozen)
+        with stage("projection_assemble"):
+            projection = assemble_day_projection(frozen, indexes, _source_version())
+    record = get_last_record()
+    reset_last_record()
+    assert record is not None
+    # index_build was recorded (not a missing/no-op stage).
+    assert "index_build" in record.stages, (
+        f"index_build stage missing from record; stages={list(record.stages)}"
+    )
+    # Real work happened: indexes are populated.
+    assert len(indexes.entry_by_key) == 200
+    assert len(indexes.contributions_by_key) == 200
+    assert len(projection.entries) == 200
+    # Duration is non-negative (we do NOT assert a minimum magnitude —
+    # timing assertions on tiny values are flaky on CI).
+    assert record.stage_total("index_build") >= 0.0
+
+
+def test_timing_projection_materialize_does_not_include_index_work():
+    """projection_materialize must NOT include index construction work.
+
+    After splitting, projection_materialize only covers freeze_projection_data.
+    We verify by checking that build_projection_indexes is NOT called inside
+    the projection_materialize stage — the indexes appear only after the
+    stage exits.  This is a structural call-boundary test, not a duration
+    comparison (duration comparisons on small deltas are flaky).
+    """
+    comp = _computation()
+    reset_last_record()
+    frozen_holder: dict[str, FrozenProjectionData | None] = {"frozen": None}
+    indexes_holder: dict[str, ProjectionIndexes | None] = {"indexes": None}
+
+    with projection_perf_scope(DATE, surface="test"):
+        from worktrace.services.projection_performance import stage
+
+        with stage("projection_materialize"):
+            frozen = freeze_projection_data(comp)
+            frozen_holder["frozen"] = frozen
+            # At this point, inside projection_materialize stage, indexes
+            # have NOT been built yet — they don't exist.
+            assert indexes_holder["indexes"] is None
+        with stage("index_build"):
+            indexes = build_projection_indexes(frozen)
+            indexes_holder["indexes"] = indexes
+    record = get_last_record()
+    reset_last_record()
+    assert record is not None
+    assert frozen_holder["frozen"] is not None
+    assert indexes_holder["indexes"] is not None
+    # Both stages were recorded separately.
+    assert "projection_materialize" in record.stages
+    assert "index_build" in record.stages
+
+
+def test_timing_split_stages_recorded_in_correct_order():
+    """The three stages must be recorded in call order: materialize → index → assemble."""
+    comp = _computation()
+    reset_last_record()
+    with projection_perf_scope(DATE, surface="test"):
+        from worktrace.services.projection_performance import stage
+
+        with stage("projection_materialize"):
+            frozen = freeze_projection_data(comp)
+        with stage("index_build"):
+            indexes = build_projection_indexes(frozen)
+        with stage("projection_assemble"):
+            assemble_day_projection(frozen, indexes, _source_version())
+    record = get_last_record()
+    reset_last_record()
+    assert record is not None
+    # All three stages present.
+    assert set(record.stages.keys()) >= {
+        "projection_materialize",
+        "index_build",
+        "projection_assemble",
+    }
+    # Python dict preserves insertion order — verify stages were inserted
+    # in the expected sequence.
+    stage_names = list(record.stages.keys())
+    materialize_idx = stage_names.index("projection_materialize")
+    index_idx = stage_names.index("index_build")
+    assemble_idx = stage_names.index("projection_assemble")
+    assert materialize_idx < index_idx < assemble_idx, (
+        f"stage order wrong: {stage_names}"
+    )
