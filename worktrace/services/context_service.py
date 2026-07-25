@@ -131,12 +131,10 @@ class ReportContextProjection:
         attributions: list[ReportContextAttribution] = []
         prev_effective_anchor: int | None = None
         for index, row in enumerate(projected):
-            # Update prev_effective_anchor for the current row based on the
-            # previous row's *mutated* state. The old O(N²) algorithm's
-            # backward walk saw rows already modified by _copy_project: a row
-            # with assignment_source in DIRECT_ASSIGNMENT_SOURCES that received
-            # context became a new effective anchor (propagation effect).
-            # Re-evaluating _context_role on the mutated row reproduces this.
+            # Track prev_effective_anchor against the previous row's *mutated*
+            # state: the former backward walk saw rows already modified by
+            # _copy_project, so a direct row that received context became a
+            # new anchor (propagation effect).
             if index > 0:
                 prev_row = projected[index - 1]
                 prev_role = _context_role(prev_row, carry_seconds)
