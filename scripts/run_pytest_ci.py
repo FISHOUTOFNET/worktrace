@@ -14,9 +14,25 @@ from pathlib import Path
 from typing import Any
 
 _PROGRESS_ENV = "WORKTRACE_PYTEST_PROGRESS_FILE"
+
+# Throttle thresholds. Writing the progress JSON on every test start and
+# finish produced roughly 2 * <test count> Windows file writes per session
+# (≈5000 for a 2500-test suite). Heartbeat accuracy does not require that
+# frequency: collectors only need to know roughly how far along we are.
+_PROGRESS_ITEM_INTERVAL = 25
+_PROGRESS_TIME_INTERVAL = 1.0
+
+# Environment override used by contract tests to force every write through
+# the throttled path deterministically (e.g. to assert write-count bounds
+# even with very fast synthetic tests). Recognised truthy values: "1", "true".
+_PROGRESS_FORCE_WRITE_ENV = "WORKTRACE_PYTEST_PROGRESS_FORCE_WRITE"
+
 _completed = 0
 _total = 0
 _current = ""
+_write_count = 0
+_last_write_monotonic = 0.0
+_last_written_completed = 0
 
 
 def _progress_path() -> Path | None:
@@ -24,7 +40,12 @@ def _progress_path() -> Path | None:
     return Path(value) if value else None
 
 
+def _force_write_requested() -> bool:
+    return os.environ.get(_PROGRESS_FORCE_WRITE_ENV, "").strip().lower() in {"1", "true"}
+
+
 def _write_progress(*, status: str) -> None:
+    global _write_count, _last_write_monotonic, _last_written_completed
     path = _progress_path()
     if path is None:
         return
@@ -34,6 +55,7 @@ def _write_progress(*, status: str) -> None:
         "total": _total,
         "current": _current,
         "updated_at_epoch": time.time(),
+        "write_count": _write_count + 1,
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
@@ -42,6 +64,28 @@ def _write_progress(*, status: str) -> None:
         encoding="utf-8",
     )
     _replace_progress_file(temporary, path)
+    _write_count += 1
+    _last_write_monotonic = time.monotonic()
+    _last_written_completed = _completed
+
+
+def _maybe_write_progress(*, status: str, force: bool = False) -> None:
+    """Write the progress file subject to throttling.
+
+    Forced writes always persist (collection done, session finish). Otherwise
+    the write happens only when at least ``_PROGRESS_ITEM_INTERVAL`` items
+    have completed since the last write, or ``_PROGRESS_TIME_INTERVAL``
+    seconds have elapsed. The runner's heartbeat loop reads the file
+    independently, so a coarse-grained write cadence still produces a useful
+    "roughly N/M tests done" signal.
+    """
+    if force or _force_write_requested():
+        _write_progress(status=status)
+        return
+    completed_delta = _completed - _last_written_completed
+    elapsed = time.monotonic() - _last_write_monotonic if _last_write_monotonic else 0.0
+    if completed_delta >= _PROGRESS_ITEM_INTERVAL or elapsed >= _PROGRESS_TIME_INTERVAL:
+        _write_progress(status=status)
 
 
 def _replace_progress_file(temporary: Path, target: Path) -> None:
@@ -74,14 +118,16 @@ def _replace_progress_file(temporary: Path, target: Path) -> None:
 def pytest_collection_finish(session: Any) -> None:
     global _total
     _total = len(session.items)
-    _write_progress(status="running")
+    # Collection done is a real state transition; always force-write so the
+    # very first heartbeat reports a known total instead of "unknown".
+    _maybe_write_progress(status="running", force=True)
 
 
 def pytest_runtest_logstart(nodeid: str, location: tuple[str, int | None, str]) -> None:
     del location
     global _current
     _current = nodeid
-    _write_progress(status="running")
+    _maybe_write_progress(status="running")
 
 
 def pytest_runtest_logfinish(nodeid: str, location: tuple[str, int | None, str]) -> None:
@@ -89,14 +135,16 @@ def pytest_runtest_logfinish(nodeid: str, location: tuple[str, int | None, str])
     global _completed, _current
     _completed += 1
     _current = nodeid
-    _write_progress(status="running")
+    _maybe_write_progress(status="running")
 
 
 def pytest_sessionfinish(session: Any, exitstatus: int) -> None:
     del session, exitstatus
     global _current
     _current = ""
-    _write_progress(status="finished")
+    # Session finish is a real state transition; always force-write the
+    # final "finished" payload so consumers see the terminal state.
+    _maybe_write_progress(status="finished", force=True)
 
 
 def _parse_args() -> argparse.Namespace:
