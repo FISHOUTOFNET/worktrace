@@ -167,6 +167,11 @@
       "path": "tests/test_webview_bridge_statistics_export.py",
       "signal": "collector_runtime",
       "reason": "Bridge export contract tests scan runtime import strings statically for boundary checks; they do not start collector or runtime threads."
+    },
+    {
+      "path": "tests/test_projection_single_flight_unit.py",
+      "signal": "collector_runtime",
+      "reason": "Pure state-machine unit test for single-flight concurrency correctness; uses threads as test fixtures, does not start collector or runtime."
     }
   ],
   "marker_requirements": [

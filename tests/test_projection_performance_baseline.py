@@ -176,12 +176,18 @@ def test_perf_scope_does_not_log_privacy_data(temp_db, caplog):
         )
 
 
+@pytest.mark.benchmark
 @pytest.mark.parametrize("size", BENCHMARK_SIZES)
 def test_projection_benchmark_baseline(temp_db, size):
     """Record projection timings for each benchmark size.
 
     Measures uncached build, cached build (cross-request cache hit), and
     detail lookup (cache hit + O(1) entry/contribution lookup).
+
+    Marked ``benchmark`` so it is excluded from Standard CI (``-m "not
+    benchmark"``) and runs in the Performance Validation workflow. The
+    perf-scope contract tests above remain in Standard CI because they
+    verify instrumentation correctness, not raw speed.
     """
 
     _reset_perf_capture()

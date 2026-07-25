@@ -19,7 +19,7 @@ from worktrace.services import (
 pytestmark = [pytest.mark.db, pytest.mark.integration, pytest.mark.serial]
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-WORKFLOW_ALLOWLIST = {"_validation.yml", "ci.yml"}
+WORKFLOW_ALLOWLIST = {"_validation.yml", "ci.yml", "performance-validation.yml"}
 FORBIDDEN_WORKFLOW_COMMANDS = (
     "git push",
     "git merge",
