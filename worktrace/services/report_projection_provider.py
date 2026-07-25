@@ -416,8 +416,24 @@ def _single_flight_build(
     bounded timeout; on timeout :class:`ProjectionWaitTimeout` is raised
     but the builder continues running for other waiters.
 
-    Waiter count is tracked in ``_InFlight.waiter_count`` — incremented
-    before joining a Future and decremented in a ``finally`` block.
+    Waiter lifecycle contract:
+
+    * ``waiter_count`` counts waiters that have joined an in-flight build
+      but have not yet exited.  It is incremented exactly once (under the
+      state lock) when a waiter joins the Future, and decremented exactly
+      once in the single ``finally`` exit path (success, timeout, or
+      owner-exception).
+    * The waiter captures a reference to the specific ``_InFlight`` entry
+      it joined (``joined_inflight``).  The decrement targets that exact
+      object — never ``_in_flight.get(flight_key)`` — so a cache-epoch
+      change that replaces the dict entry cannot cause a cross-entry
+      decrement or underflow.
+    * The timeout diagnostic snapshot is read from ``joined_inflight``
+      *before* the decrement and includes the timing-out waiter in the
+      count (it has not been decremented yet).
+    * ``waiter_count`` must never go negative.  An underflow indicates a
+      state-machine bug and raises :class:`AssertionError` rather than
+      being silently clamped.
     """
     flight_key = (database_key, report_date, source_version.token())
 
@@ -425,9 +441,13 @@ def _single_flight_build(
         current_epoch = _cache_epoch
         existing = _in_flight.get(flight_key)
         if existing is not None and existing.epoch == current_epoch:
-            # Join an in-flight build from the same epoch.
+            # Join an in-flight build from the same epoch.  Capture the
+            # specific entry reference so the finally decrement targets
+            # exactly the object we incremented — not whatever sits at
+            # flight_key after a possible epoch change.
             future = existing.future
             existing.waiter_count += 1
+            joined_inflight: _InFlight | None = existing
             builder_started_at = existing.started_at_monotonic
             is_builder = False
         else:
@@ -439,30 +459,25 @@ def _single_flight_build(
                 future=future,
                 epoch=current_epoch,
             )
+            joined_inflight = None
             is_builder = True
 
     if not is_builder:
         try:
             return future.result(timeout=_PROJECTION_WAIT_TIMEOUT)
         except concurrent.futures.TimeoutError:
-            # Gather diagnostics for the timeout exception (under lock).
+            # Snapshot diagnostics BEFORE the single decrement in
+            # finally.  The count includes the current (timing-out)
+            # waiter because it has not been decremented yet.
             with _state_lock:
-                inflight_entry = _in_flight.get(flight_key)
                 current_waiters = (
-                    inflight_entry.waiter_count
-                    if inflight_entry is not None
+                    joined_inflight.waiter_count
+                    if joined_inflight is not None
                     else 0
                 )
                 total_in_flight = len(_in_flight)
                 build_epoch = current_epoch
                 elapsed = time.monotonic() - builder_started_at
-            # Decrement waiter count on timeout exit (under lock).
-            with _state_lock:
-                inflight_entry = _in_flight.get(flight_key)
-                if inflight_entry is not None:
-                    inflight_entry.waiter_count = max(
-                        0, inflight_entry.waiter_count - 1
-                    )
             raise ProjectionWaitTimeout(
                 report_date=report_date,
                 source_version_token=source_version.token(),
@@ -473,13 +488,19 @@ def _single_flight_build(
                 total_in_flight_count=total_in_flight,
             )
         finally:
-            # Decrement waiter count on normal exit (under lock).
+            # Single decrement path for ALL waiter exits (success,
+            # timeout, owner-exception).  Targets the exact entry the
+            # waiter joined so an epoch change cannot contaminate a
+            # different entry's count.
             with _state_lock:
-                inflight_entry = _in_flight.get(flight_key)
-                if inflight_entry is not None:
-                    inflight_entry.waiter_count = max(
-                        0, inflight_entry.waiter_count - 1
-                    )
+                if joined_inflight is not None:
+                    if joined_inflight.waiter_count <= 0:
+                        raise AssertionError(
+                            f"waiter_count underflow for {flight_key}: "
+                            f"count={joined_inflight.waiter_count} "
+                            f"(expected >= 1 before waiter exit)"
+                        )
+                    joined_inflight.waiter_count -= 1
 
     # Builder path — runs outside the lock so different dates can build
     # in parallel.

@@ -559,3 +559,363 @@ def test_waiter_count_returns_to_zero_after_successful_build():
     assert results[0] is results[1] is results[2]
     assert get_waiter_count(DB_KEY, DATE_A, sv.token()) == 0
     assert in_flight_count() == 0
+
+
+# --- Scenario A: two waiters, one times out, intermediate counts correct ---
+
+
+def test_two_waiters_one_timeout_intermediate_counts_correct():
+    """Scenario A: waiter A times out while waiter B still waits.
+
+    Sequence:
+      1. owner enters computation (blocked);
+      2. waiter A registers (short timeout) → count == 1;
+      3. waiter B registers (long timeout) → count == 2;
+      4. waiter A times out;
+      5. after waiter A exits, waiter B is still waiting → count == 1;
+      6. owner completes;
+      7. waiter B gets the result;
+      8. final count == 0, no underflow, no erroneous cleanup.
+
+    Uses staggered timeouts: waiter A gets a short timeout so it fires
+    while waiter B (with a long timeout) is still waiting.  The global
+    ``_PROJECTION_WAIT_TIMEOUT`` is read at ``future.result()`` call
+    time, so changing it between waiter starts gives each waiter a
+    different deadline.
+    """
+    sv = _make_source_version(DATE_A)
+    build_started = threading.Event()
+    build_can_finish = threading.Event()
+
+    def builder():
+        build_started.set()
+        build_can_finish.wait(timeout=5)
+        return _fake_projection(DATE_A)
+
+    builder_error: list[BaseException | None] = [None]
+
+    def builder_thread_fn():
+        try:
+            _single_flight_build(DB_KEY, DATE_A, sv, builder)
+        except BaseException as exc:
+            builder_error[0] = exc
+
+    builder_thread = threading.Thread(target=builder_thread_fn)
+    builder_thread.start()
+    assert build_started.wait(timeout=5)
+
+    # Waiter A — short timeout, will time out.
+    set_wait_timeout(0.3)
+    waiter_a_result: list[BaseException | None] = [None]
+    waiter_a_done = threading.Event()
+
+    def waiter_a():
+        try:
+            _single_flight_build(DB_KEY, DATE_A, sv, lambda: _fake_projection(DATE_A))
+        except BaseException as exc:
+            waiter_a_result[0] = exc
+        finally:
+            waiter_a_done.set()
+
+    t_a = threading.Thread(target=waiter_a)
+    t_a.start()
+    _wait_for_waiters(DB_KEY, DATE_A, sv.token(), 1)
+
+    # Waiter B — long timeout, should still be waiting when A times out.
+    set_wait_timeout(30.0)
+    waiter_b_result: list[DayProjection | None] = [None]
+    waiter_b_error: list[BaseException | None] = [None]
+    waiter_b_done = threading.Event()
+
+    def waiter_b():
+        try:
+            waiter_b_result[0] = _single_flight_build(
+                DB_KEY, DATE_A, sv, lambda: _fake_projection(DATE_A)
+            )
+        except BaseException as exc:
+            waiter_b_error[0] = exc
+        finally:
+            waiter_b_done.set()
+
+    t_b = threading.Thread(target=waiter_b)
+    t_b.start()
+    _wait_for_waiters(DB_KEY, DATE_A, sv.token(), 2)
+    assert get_waiter_count(DB_KEY, DATE_A, sv.token()) == 2
+
+    # Waiter A times out (short timeout).
+    assert waiter_a_done.wait(timeout=5), "waiter A did not exit"
+    assert isinstance(waiter_a_result[0], ProjectionWaitTimeout)
+
+    # After waiter A exits, waiter B is still waiting → count == 1.
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline:
+        if get_waiter_count(DB_KEY, DATE_A, sv.token()) == 1:
+            break
+        threading.Event().wait(0.01)
+    assert get_waiter_count(DB_KEY, DATE_A, sv.token()) == 1, (
+        "waiter B should still be waiting after waiter A timed out"
+    )
+    assert not waiter_b_done.is_set(), "waiter B should still be blocked"
+
+    # Owner completes → waiter B gets the result.
+    build_can_finish.set()
+    builder_thread.join(timeout=5)
+    assert builder_error[0] is None, f"builder got error: {builder_error[0]}"
+    assert waiter_b_done.wait(timeout=5), "waiter B did not complete"
+
+    assert waiter_b_error[0] is None, f"waiter B got error: {waiter_b_error[0]}"
+    assert waiter_b_result[0] is not None
+    assert waiter_b_result[0].snapshot_revision == "rev-" + DATE_A
+
+    t_a.join(timeout=5)
+    t_b.join(timeout=5)
+
+    assert get_waiter_count(DB_KEY, DATE_A, sv.token()) == 0
+    assert in_flight_count() == 0
+
+
+# --- Scenario B: timeout diagnostic snapshot includes timing-out waiter ---
+
+
+def test_timeout_diagnostic_snapshot_includes_timing_out_waiter():
+    """Scenario B: the waiter_count in the timeout diagnostic is read
+    BEFORE the decrement and includes the timing-out waiter.
+
+    Semantics: ``waiter_count`` in :class:`ProjectionWaitTimeout` counts
+    all waiters that had joined at the moment of the timeout, including
+    the one that is timing out.  This is consistent with the code: the
+    snapshot is taken before the single ``finally`` decrement.
+
+    Uses staggered timeouts so waiter A times out first while waiter B
+    is still waiting.  Waiter A's snapshot should then show count == 2.
+    """
+    sv = _make_source_version(DATE_A)
+    build_started = threading.Event()
+    build_can_finish = threading.Event()
+
+    def builder():
+        build_started.set()
+        build_can_finish.wait(timeout=5)
+        return _fake_projection(DATE_A)
+
+    builder_error: list[BaseException | None] = [None]
+
+    def builder_thread_fn():
+        try:
+            _single_flight_build(DB_KEY, DATE_A, sv, builder)
+        except BaseException as exc:
+            builder_error[0] = exc
+
+    builder_thread = threading.Thread(target=builder_thread_fn)
+    builder_thread.start()
+    assert build_started.wait(timeout=5)
+
+    # Waiter A — short timeout, will time out first.
+    set_wait_timeout(0.3)
+    waiter_a_error: list[BaseException | None] = [None]
+    waiter_a_done = threading.Event()
+
+    def waiter_a():
+        try:
+            _single_flight_build(DB_KEY, DATE_A, sv, lambda: _fake_projection(DATE_A))
+        except BaseException as exc:
+            waiter_a_error[0] = exc
+        finally:
+            waiter_a_done.set()
+
+    t_a = threading.Thread(target=waiter_a)
+    t_a.start()
+    _wait_for_waiters(DB_KEY, DATE_A, sv.token(), 1)
+
+    # Waiter B — long timeout, still waiting when A times out.
+    set_wait_timeout(30.0)
+    waiter_b_error: list[BaseException | None] = [None]
+    waiter_b_done = threading.Event()
+
+    def waiter_b():
+        try:
+            _single_flight_build(DB_KEY, DATE_A, sv, lambda: _fake_projection(DATE_A))
+        except BaseException as exc:
+            waiter_b_error[0] = exc
+        finally:
+            waiter_b_done.set()
+
+    t_b = threading.Thread(target=waiter_b)
+    t_b.start()
+    _wait_for_waiters(DB_KEY, DATE_A, sv.token(), 2)
+
+    # Waiter A times out first (short timeout).
+    assert waiter_a_done.wait(timeout=5), "waiter A did not time out"
+    assert isinstance(waiter_a_error[0], ProjectionWaitTimeout)
+
+    # The snapshot was taken before the decrement, so it includes the
+    # timing-out waiter A → count must be 2 (both waiters joined).
+    assert waiter_a_error[0].waiter_count == 2, (
+        f"expected snapshot waiter_count==2 (includes timing-out waiter), "
+        f"got {waiter_a_error[0].waiter_count}"
+    )
+
+    # Waiter B should still be waiting.
+    assert not waiter_b_done.is_set(), "waiter B should still be blocked"
+
+    build_can_finish.set()
+    builder_thread.join(timeout=5)
+    assert builder_error[0] is None, f"builder got error: {builder_error[0]}"
+    assert waiter_b_done.wait(timeout=5), "waiter B did not complete"
+    assert waiter_b_error[0] is None, f"waiter B got error: {waiter_b_error[0]}"
+
+    t_a.join(timeout=5)
+    t_b.join(timeout=5)
+    assert in_flight_count() == 0
+
+
+# --- Scenario C: owner exception, two waiters, each exits once ---
+
+
+def test_owner_exception_two_waiters_single_exit_no_underflow():
+    """Scenario C: owner raises, both waiters receive the exception,
+    each waiter exits exactly once, and waiter_count returns to 0
+    without going negative.
+    """
+    sv = _make_source_version(DATE_A)
+    build_started = threading.Event()
+    build_can_fail = threading.Event()
+
+    def builder():
+        build_started.set()
+        build_can_fail.wait(timeout=5)
+        raise RuntimeError("owner_build_failed")
+
+    builder_error: list[BaseException | None] = [None]
+
+    def builder_thread_fn():
+        try:
+            _single_flight_build(DB_KEY, DATE_A, sv, builder)
+        except BaseException as exc:
+            builder_error[0] = exc
+
+    builder_thread = threading.Thread(target=builder_thread_fn)
+    builder_thread.start()
+    assert build_started.wait(timeout=5)
+
+    errors: list[BaseException | None] = [None, None]
+    done_count = {"count": 0}
+    done_lock = threading.Lock()
+
+    def waiter(idx: int):
+        try:
+            _single_flight_build(DB_KEY, DATE_A, sv, lambda: _fake_projection(DATE_A))
+        except BaseException as exc:
+            errors[idx] = exc
+        finally:
+            with done_lock:
+                done_count["count"] += 1
+
+    t0 = threading.Thread(target=waiter, args=(0,))
+    t1 = threading.Thread(target=waiter, args=(1,))
+    t0.start()
+    t1.start()
+    _wait_for_waiters(DB_KEY, DATE_A, sv.token(), 2)
+    assert get_waiter_count(DB_KEY, DATE_A, sv.token()) == 2
+
+    build_can_fail.set()
+    builder_thread.join(timeout=5)
+    t0.join(timeout=5)
+    t1.join(timeout=5)
+
+    # Builder received its own exception (expected).
+    assert isinstance(builder_error[0], RuntimeError)
+
+    # Both waiters received the owner's exception.
+    for i, exc in enumerate(errors):
+        assert isinstance(exc, RuntimeError), (
+            f"waiter {i} expected RuntimeError, got {type(exc).__name__}: {exc}"
+        )
+        assert str(exc) == "owner_build_failed"
+
+    # Each waiter exited exactly once.
+    assert done_count["count"] == 2
+
+    # No underflow — count back to 0.
+    assert get_waiter_count(DB_KEY, DATE_A, sv.token()) == 0
+    assert in_flight_count() == 0
+
+
+# --- Scenario D: owner completion vs timeout race ---
+
+
+def test_owner_completion_vs_timeout_race_state_closes():
+    """Scenario D: owner completes near the timeout boundary.
+
+    Regardless of whether the waiter sees success or timeout, the state
+    must close cleanly: no double decrement, no double in-flight removal,
+    no invalid state.  Run the race multiple times to exercise both
+    branches.
+    """
+    sv = _make_source_version(DATE_A)
+    set_wait_timeout(0.15)
+
+    for iteration in range(8):
+        clear_cache()
+        build_started = threading.Event()
+        build_can_finish = threading.Event()
+
+        def builder():
+            build_started.set()
+            build_can_finish.wait(timeout=5)
+            return _fake_projection(DATE_A)
+
+        builder_error: list[BaseException | None] = [None]
+
+        def builder_thread_fn():
+            try:
+                _single_flight_build(DB_KEY, DATE_A, sv, builder)
+            except BaseException as exc:
+                builder_error[0] = exc
+
+        builder_thread = threading.Thread(target=builder_thread_fn)
+        builder_thread.start()
+        assert build_started.wait(timeout=5)
+
+        waiter_error: list[BaseException | None] = [None]
+        waiter_result: list[DayProjection | None] = [None]
+        waiter_done = threading.Event()
+
+        def waiter():
+            try:
+                waiter_result[0] = _single_flight_build(
+                    DB_KEY, DATE_A, sv, lambda: _fake_projection(DATE_A)
+                )
+            except BaseException as exc:
+                waiter_error[0] = exc
+            finally:
+                waiter_done.set()
+
+        t = threading.Thread(target=waiter)
+        t.start()
+        # Wait for the waiter to join the in-flight Future.
+        _wait_for_waiters(DB_KEY, DATE_A, sv.token(), 1)
+
+        # Release the builder near the timeout boundary.  The waiter
+        # either gets the result (success) or times out — both are
+        # valid.  The invariant is that the state closes cleanly.
+        build_can_finish.set()
+        builder_thread.join(timeout=5)
+        assert builder_error[0] is None, f"builder got error: {builder_error[0]}"
+        assert waiter_done.wait(timeout=5), "waiter did not exit"
+
+        t.join(timeout=5)
+
+        # Either success or ProjectionWaitTimeout is acceptable.
+        if waiter_error[0] is not None:
+            assert isinstance(waiter_error[0], ProjectionWaitTimeout), (
+                f"unexpected error: {waiter_error[0]}"
+            )
+        else:
+            assert waiter_result[0] is not None
+
+        # State must close: no leaked in-flight entry, no negative count.
+        assert in_flight_count() == 0, (
+            f"iteration {iteration}: in_flight_count={in_flight_count()}"
+        )
+        assert get_waiter_count(DB_KEY, DATE_A, sv.token()) == 0
