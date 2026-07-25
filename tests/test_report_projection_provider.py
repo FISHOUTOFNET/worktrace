@@ -23,6 +23,7 @@ from worktrace.data_generation_repository import DataGenerationNamespace
 from worktrace.db import get_connection, now_str
 from worktrace.domain_unit_of_work import DomainUnitOfWork
 from worktrace.services import (
+    report_projection_builder,
     report_projection_snapshot_service,
     view_model_service,
 )
@@ -63,14 +64,14 @@ def _clear_projection_cache():
 def test_first_timeline_open_builds_projection_once(temp_db):
     _seed_activities()
     build_calls = []
-    original = report_projection_snapshot_service._compute_projection
+    original = report_projection_builder.compute_projection
 
     def tracking_compute(conn, start_date, end_date):
         build_calls.append((start_date, end_date))
         return original(conn, start_date, end_date)
 
     with patch(
-        "worktrace.services.report_projection_provider._compute_projection",
+        "worktrace.services.report_projection_provider.compute_projection",
         side_effect=tracking_compute,
     ):
         with page_read_scope():
@@ -96,7 +97,7 @@ def test_consecutive_detail_clicks_do_not_rebuild(temp_db):
 
     # Simulate 20 detail clicks in separate page-read scopes.
     build_calls = []
-    original = report_projection_snapshot_service._compute_projection
+    original = report_projection_builder.compute_projection
 
     def tracking_compute(conn, start_date, end_date):
         build_calls.append((start_date, end_date))
@@ -108,7 +109,7 @@ def test_consecutive_detail_clicks_do_not_rebuild(temp_db):
     revision = str(sessions[0].get("projection_revision") or "")
 
     with patch(
-        "worktrace.services.report_projection_provider._compute_projection",
+        "worktrace.services.report_projection_provider.compute_projection",
         side_effect=tracking_compute,
     ):
         for _ in range(20):
@@ -255,6 +256,54 @@ def test_day_projection_indexes_reference_same_objects(temp_db):
             )
 
 
+def test_day_projection_contributions_by_key_references_exact_objects(temp_db):
+    """contributions_by_key values must be the SAME objects (identity, not equality)."""
+    _seed_activities(count=5)
+    activity_factory.create_closed_activity(
+        day=DATE, start="10:00:00", end="10:30:00", status="idle",
+    )
+    with page_read_scope():
+        projection = get_day_projection(DATE)
+
+    # Build a map from id(contribution) → contribution for the main collection.
+    contributions_by_id = {id(c): c for c in projection.contributions}
+
+    for key, indexed_contributions in projection.contributions_by_key.items():
+        for indexed in indexed_contributions:
+            assert id(indexed) in contributions_by_id, (
+                f"contributions_by_key[{key!r}] contains an object not in "
+                f"the main contributions collection (identity check failed)"
+            )
+            assert indexed is contributions_by_id[id(indexed)], (
+                f"contributions_by_key[{key!r}] must reference the exact same "
+                f"object, not a copy"
+            )
+
+
+def test_day_projection_entries_do_not_contain_projection_contributions(temp_db):
+    """Compact entries must NOT contain _projection_contributions.
+
+    The compact DayProjection stores contributions exactly once in the
+    ``contributions`` collection. Page-read paths use ``contributions_by_key``
+    to look them up. The ``_projection_contributions`` inline field is
+    kept only in the full ReportProjectionSnapshot for mutation/export.
+    """
+    _seed_activities(count=5)
+    activity_factory.create_closed_activity(
+        day=DATE, start="10:00:00", end="10:30:00", status="idle",
+    )
+    with page_read_scope():
+        projection = get_day_projection(DATE)
+
+    assert len(projection.entries) > 0, "expected at least one entry"
+    for entry in projection.entries:
+        assert "_projection_contributions" not in entry, (
+            f"compact entry {entry.get('projection_instance_key')!r} must not "
+            f"contain _projection_contributions — it is stored only in the "
+            f"contributions collection"
+        )
+
+
 def test_day_projection_does_not_store_duplicate_collections(temp_db):
     """DayProjection must not store final_sessions/standalone separately."""
     _seed_activities(count=3)
@@ -286,14 +335,14 @@ def test_clear_cache_forces_rebuild(temp_db):
     assert cache_size() == 0
 
     build_calls = []
-    original = report_projection_snapshot_service._compute_projection
+    original = report_projection_builder.compute_projection
 
     def tracking_compute(conn, start_date, end_date):
         build_calls.append((start_date, end_date))
         return original(conn, start_date, end_date)
 
     with patch(
-        "worktrace.services.report_projection_provider._compute_projection",
+        "worktrace.services.report_projection_provider.compute_projection",
         side_effect=tracking_compute,
     ):
         with page_read_scope():
@@ -381,14 +430,14 @@ def test_consecutive_detail_clicks_with_source_version_do_not_rebuild(temp_db):
     source_version = projection.source_version_token
 
     build_calls = []
-    original = report_projection_snapshot_service._compute_projection
+    original = report_projection_builder.compute_projection
 
     def tracking_compute(conn, start_date, end_date):
         build_calls.append((start_date, end_date))
         return original(conn, start_date, end_date)
 
     with patch(
-        "worktrace.services.report_projection_provider._compute_projection",
+        "worktrace.services.report_projection_provider.compute_projection",
         side_effect=tracking_compute,
     ):
         for _ in range(20):
@@ -414,14 +463,14 @@ def test_overview_timeline_detail_share_single_build(temp_db):
     clear_cache()
 
     build_calls = []
-    original = report_projection_snapshot_service._compute_projection
+    original = report_projection_builder.compute_projection
 
     def tracking_compute(conn, start_date, end_date):
         build_calls.append((start_date, end_date))
         return original(conn, start_date, end_date)
 
     with patch(
-        "worktrace.services.report_projection_provider._compute_projection",
+        "worktrace.services.report_projection_provider.compute_projection",
         side_effect=tracking_compute,
     ):
         # 1. Load Overview in its own page-read scope.
@@ -464,14 +513,14 @@ def test_timeline_overview_share_single_build(temp_db):
     clear_cache()
 
     build_calls = []
-    original = report_projection_snapshot_service._compute_projection
+    original = report_projection_builder.compute_projection
 
     def tracking_compute(conn, start_date, end_date):
         build_calls.append((start_date, end_date))
         return original(conn, start_date, end_date)
 
     with patch(
-        "worktrace.services.report_projection_provider._compute_projection",
+        "worktrace.services.report_projection_provider.compute_projection",
         side_effect=tracking_compute,
     ):
         with page_read_scope():
@@ -638,11 +687,81 @@ def test_top3_distinct_labels_ties_preserve_original_order():
 # --- Compact / Full equivalence ---
 
 
+def _normalize_entry(value):
+    """Normalize a projection entry for compact/full comparison.
+
+    Strips ``_projection_contributions`` (compact never stores it; full
+    keeps it for mutation/export). Everything else must match exactly.
+    """
+    from worktrace.services.report_projection_model import thaw_value
+
+    item = thaw_value(value)
+    if isinstance(item, dict):
+        item.pop("_projection_contributions", None)
+    return item
+
+
+def _assert_compact_matches_full(compact, full):
+    """Full structural equivalence between compact DayProjection and full snapshot."""
+    from worktrace.services.report_projection_model import thaw_value
+
+    # snapshot_revision (content hash) must be identical.
+    assert compact.snapshot_revision == full.snapshot_revision, (
+        f"snapshot_revision mismatch: compact={compact.snapshot_revision} "
+        f"full={full.snapshot_revision}"
+    )
+
+    # operation_diagnostics must match exactly (to_dict for deep comparison).
+    assert len(compact.operation_diagnostics) == len(full.operation_diagnostics)
+    for compact_diag, full_diag in zip(
+        compact.operation_diagnostics, full.operation_diagnostics
+    ):
+        assert compact_diag.to_dict() == full_diag.to_dict(), (
+            "operation_diagnostics mismatch"
+        )
+
+    # Entries: full structural comparison after normalizing _projection_contributions.
+    compact_entries = [_normalize_entry(e) for e in compact.entries]
+    full_entries = [_normalize_entry(e) for e in full.final_entries]
+    assert len(compact_entries) == len(full_entries), (
+        f"entry count mismatch: compact={len(compact_entries)} "
+        f"full={len(full_entries)}"
+    )
+    for idx, (compact_entry, full_entry) in enumerate(
+        zip(compact_entries, full_entries)
+    ):
+        assert compact_entry == full_entry, (
+            f"entry[{idx}] mismatch: "
+            f"compact_key={compact_entry.get('projection_instance_key')!r} "
+            f"full_key={full_entry.get('projection_instance_key')!r}"
+        )
+
+    # Contributions: full structural comparison (thawed for deep equality).
+    compact_contributions = [thaw_value(c) for c in compact.contributions]
+    full_contributions = [thaw_value(c) for c in full.final_contributions]
+    assert len(compact_contributions) == len(full_contributions), (
+        f"contribution count mismatch: compact={len(compact_contributions)} "
+        f"full={len(full_contributions)}"
+    )
+    for idx, (compact_c, full_c) in enumerate(
+        zip(compact_contributions, full_contributions)
+    ):
+        assert compact_c == full_c, (
+            f"contribution[{idx}] mismatch: "
+            f"compact_key={compact_c.get('projection_instance_key')!r} "
+            f"full_key={full_c.get('projection_instance_key')!r}"
+        )
+
+
 def test_compact_day_projection_matches_full_snapshot(temp_db):
-    """DayProjection (compact) must match ReportProjectionSnapshot (full) for
-    entries, contributions, and snapshot_revision."""
+    """Compact DayProjection must be structurally identical to full snapshot.
+
+    Compares every entry field (not just key/duration), every contribution
+    field, snapshot_revision, and operation_diagnostics. The only allowed
+    difference is _projection_contributions on entries (compact strips it;
+    full keeps it for mutation/export compatibility).
+    """
     _seed_activities(count=5)
-    # Also seed an idle activity to exercise standalone status path.
     activity_factory.create_closed_activity(
         day=DATE, start="10:00:00", end="10:30:00", status="idle",
     )
@@ -651,24 +770,213 @@ def test_compact_day_projection_matches_full_snapshot(temp_db):
         compact = get_day_projection(DATE)
     full = build_visible_snapshot(DATE, DATE)
 
-    assert compact.snapshot_revision == full.snapshot_revision
-    # Entries: compact.entries includes both sessions and standalone entries,
-    # same as full.final_entries.
-    assert len(compact.entries) == len(full.final_entries)
-    for compact_entry, full_entry in zip(compact.entries, full.final_entries):
-        assert str(compact_entry.get("projection_instance_key") or "") == str(
-            full_entry.get("projection_instance_key") or ""
-        )
-        assert int(compact_entry.get("duration_seconds") or 0) == int(
-            full_entry.get("duration_seconds") or 0
-        )
+    _assert_compact_matches_full(compact, full)
 
-    # Contributions.
-    assert len(compact.contributions) == len(full.final_contributions)
-    for compact_c, full_c in zip(compact.contributions, full.final_contributions):
-        assert str(compact_c.get("projection_instance_key") or "") == str(
-            full_c.get("projection_instance_key") or ""
-        )
-        assert int(compact_c.get("duration_seconds") or 0) == int(
-            full_c.get("duration_seconds") or 0
-        )
+
+def test_compact_full_equivalence_normal_and_idle(temp_db):
+    """Scenario: normal activities + idle (standalone status)."""
+    _seed_activities(count=5)
+    activity_factory.create_closed_activity(
+        day=DATE, start="10:00:00", end="10:30:00", status="idle",
+    )
+    with page_read_scope():
+        compact = get_day_projection(DATE)
+    full = build_visible_snapshot(DATE, DATE)
+    _assert_compact_matches_full(compact, full)
+
+
+def test_compact_full_equivalence_open_activity(temp_db):
+    """Scenario: open (in-progress) activity at end of day."""
+    _seed_activities(count=3)
+    activity_factory.create_open_activity(
+        start_time=f"{DATE} 14:00:00",
+        app_name="App",
+    )
+    with page_read_scope():
+        compact = get_day_projection(DATE)
+    full = build_visible_snapshot(DATE, DATE)
+    _assert_compact_matches_full(compact, full)
+
+
+def test_compact_full_equivalence_excluded_activity(temp_db):
+    """Scenario: excluded (paused) activity → standalone status row."""
+    _seed_activities(count=3)
+    activity_factory.create_closed_activity(
+        day=DATE, start="10:00:00", end="10:30:00", status="excluded",
+    )
+    with page_read_scope():
+        compact = get_day_projection(DATE)
+    full = build_visible_snapshot(DATE, DATE)
+    _assert_compact_matches_full(compact, full)
+
+
+def test_compact_full_equivalence_manual_attribution(temp_db):
+    """Scenario: direct manual project attribution."""
+    from worktrace.services import project_service
+
+    project_id = project_service.create_project("ManualProject")
+    _seed_activities(count=3)
+    activity_factory.create_closed_activity(
+        day=DATE,
+        start="11:00:00",
+        end="11:30:00",
+        project_id=project_id,
+    )
+    with page_read_scope():
+        compact = get_day_projection(DATE)
+    full = build_visible_snapshot(DATE, DATE)
+    _assert_compact_matches_full(compact, full)
+
+
+def test_compact_full_equivalence_with_merge_operation(temp_db):
+    """Scenario: session merge operation replay."""
+    # Space activities far apart so they form separate sessions.
+    activity_factory.create_closed_activity(
+        day=DATE, start="09:00:00", end="09:30:00", window_title="Doc0",
+    )
+    activity_factory.create_closed_activity(
+        day=DATE, start="10:00:00", end="10:30:00", window_title="Doc1",
+    )
+    from worktrace.services.report_session_operation_service import (
+        merge_session,
+    )
+
+    with page_read_scope():
+        projection = get_day_projection(DATE)
+    sessions = projection.final_sessions
+    assert len(sessions) >= 2, f"expected >=2 sessions, got {len(sessions)}"
+    source_key = str(sessions[0].get("projection_instance_key") or "")
+    source_rev = str(sessions[0].get("projection_revision") or "")
+    target_key = str(sessions[1].get("projection_instance_key") or "")
+    target_rev = str(sessions[1].get("projection_revision") or "")
+
+    merge_session(
+        report_date=DATE,
+        projection_instance_key=source_key,
+        direction="next",
+        request_id="req-merge-1",
+        expected_projection_revision=source_rev,
+        target_projection_instance_key=target_key,
+        target_expected_projection_revision=target_rev,
+    )
+
+    clear_cache()
+    with page_read_scope():
+        compact = get_day_projection(DATE)
+    full = build_visible_snapshot(DATE, DATE)
+    _assert_compact_matches_full(compact, full)
+
+
+def test_compact_full_equivalence_with_split_operation(temp_db):
+    """Scenario: merge then split (split requires a merged session)."""
+    # Create two separate sessions, merge them, then split the merged result.
+    activity_factory.create_closed_activity(
+        day=DATE, start="09:00:00", end="09:30:00", window_title="Doc0",
+    )
+    activity_factory.create_closed_activity(
+        day=DATE, start="10:00:00", end="10:30:00", window_title="Doc1",
+    )
+    from worktrace.services.report_session_operation_service import (
+        merge_session,
+        split_session,
+    )
+
+    with page_read_scope():
+        projection = get_day_projection(DATE)
+    sessions = projection.final_sessions
+    assert len(sessions) >= 2
+    source_key = str(sessions[0].get("projection_instance_key") or "")
+    source_rev = str(sessions[0].get("projection_revision") or "")
+    target_key = str(sessions[1].get("projection_instance_key") or "")
+    target_rev = str(sessions[1].get("projection_revision") or "")
+
+    # Merge first — this creates a session with can_split=True.
+    merge_session(
+        report_date=DATE,
+        projection_instance_key=source_key,
+        direction="next",
+        request_id="req-merge-1",
+        expected_projection_revision=source_rev,
+        target_projection_instance_key=target_key,
+        target_expected_projection_revision=target_rev,
+    )
+
+    clear_cache()
+    with page_read_scope():
+        projection = get_day_projection(DATE)
+    merged_sessions = projection.final_sessions
+    assert len(merged_sessions) >= 1
+    merged = merged_sessions[0]
+    assert bool(merged.get("can_split")), "merged session must be splittable"
+    merged_key = str(merged.get("projection_instance_key") or "")
+    merged_rev = str(merged.get("projection_revision") or "")
+
+    # Now split the merged session.
+    split_session(
+        report_date=DATE,
+        projection_instance_key=merged_key,
+        expected_projection_revision=merged_rev,
+        request_id="req-split-1",
+    )
+
+    clear_cache()
+    with page_read_scope():
+        compact = get_day_projection(DATE)
+    full = build_visible_snapshot(DATE, DATE)
+    _assert_compact_matches_full(compact, full)
+
+
+def test_compact_full_equivalence_with_copy_operation(temp_db):
+    """Scenario: session copy operation replay."""
+    _seed_activities(count=4)
+    from worktrace.services.report_session_operation_service import (
+        copy_session,
+    )
+
+    with page_read_scope():
+        projection = get_day_projection(DATE)
+    sessions = projection.final_sessions
+    assert len(sessions) >= 1
+    key = str(sessions[0].get("projection_instance_key") or "")
+    rev = str(sessions[0].get("projection_revision") or "")
+
+    copy_session(
+        report_date=DATE,
+        projection_instance_key=key,
+        expected_projection_revision=rev,
+        request_id="req-copy-1",
+    )
+
+    clear_cache()
+    with page_read_scope():
+        compact = get_day_projection(DATE)
+    full = build_visible_snapshot(DATE, DATE)
+    _assert_compact_matches_full(compact, full)
+
+
+def test_compact_full_equivalence_with_hide_operation(temp_db):
+    """Scenario: session hide operation replay."""
+    _seed_activities(count=4)
+    from worktrace.services.report_session_operation_service import (
+        hide_session,
+    )
+
+    with page_read_scope():
+        projection = get_day_projection(DATE)
+    sessions = projection.final_sessions
+    assert len(sessions) >= 1
+    key = str(sessions[0].get("projection_instance_key") or "")
+    rev = str(sessions[0].get("projection_revision") or "")
+
+    hide_session(
+        report_date=DATE,
+        projection_instance_key=key,
+        expected_projection_revision=rev,
+        request_id="req-hide-1",
+    )
+
+    clear_cache()
+    with page_read_scope():
+        compact = get_day_projection(DATE)
+    full = build_visible_snapshot(DATE, DATE)
+    _assert_compact_matches_full(compact, full)

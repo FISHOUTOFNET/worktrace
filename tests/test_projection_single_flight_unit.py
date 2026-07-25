@@ -1,7 +1,9 @@
-"""Concurrency tests for the ReportProjectionProvider single-flight mechanism.
+"""Pure state-machine unit tests for the ReportProjectionProvider single-flight.
 
-These tests use barriers, events, and fake builders to verify deterministic
-behavior without relying on sleep-based race conditions.
+These tests verify the single-flight concurrency mechanism using barriers,
+events, and fake builders — no database fixture, no page-read scope.
+They run as pure unit tests so they can execute quickly in Standard CI
+without the database fixture overhead.
 
 Coverage:
 * 20 threads → same date → builder called exactly once.
@@ -13,40 +15,64 @@ Coverage:
 * Wait timeout → waiter gets ProjectionWaitTimeout, builder continues.
 * Timeout does not remove in-flight for other waiters.
 * All completion paths leave _inflight empty.
+* ProjectionWaitTimeout carries structured diagnostics (no privacy data).
+* waiter_count returns to zero after successful build.
+
+The tests use deterministic waiter-count polling instead of fixed timing
+waits — see ``_wait_for_waiters``.
 """
 
 from __future__ import annotations
 
 import threading
-from unittest.mock import patch
+import time
 
 import pytest
 
-from worktrace.services import report_projection_snapshot_service
-from worktrace.services.page_read_context import page_read_scope
 from worktrace.services.report_projection_provider import (
     DayProjection,
     ProjectionWaitTimeout,
     _single_flight_build,
     cache_size,
     clear_cache,
-    get_day_projection,
     get_wait_timeout,
+    get_waiter_count,
     in_flight_count,
     set_wait_timeout,
 )
 from worktrace.services.report_revision_service import ProjectionSourceVersion
 
-pytestmark = [pytest.mark.db, pytest.mark.integration]
+pytestmark = [pytest.mark.unit, pytest.mark.parallel_safe]
 
 DB_KEY = "test_db"
 DATE_A = "2026-07-20"
 DATE_B = "2026-07-21"
 
 
-def _brief_settle(seconds: float) -> None:
-    """Brief scheduling settle using Event.wait (deterministic, no wall-clock sleep)."""
-    threading.Event().wait(seconds)
+def _wait_for_waiters(
+    database_key: str,
+    report_date: str,
+    source_version_token: str,
+    expected_count: int,
+    *,
+    timeout: float = 5.0,
+) -> None:
+    """Poll get_waiter_count until it reaches ``expected_count``.
+
+    Deterministic replacement for _brief_settle: no fixed timing waits,
+    just polls until all waiters have joined the in-flight Future.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        count = get_waiter_count(
+            database_key, report_date, source_version_token
+        )
+        if count >= expected_count:
+            return
+        threading.Event().wait(0.005)
+    raise TimeoutError(
+        f"waiter count did not reach {expected_count} within {timeout}s"
+    )
 
 
 def _make_source_version(date: str) -> ProjectionSourceVersion:
@@ -86,7 +112,7 @@ def _fake_projection(date: str) -> DayProjection:
 # --- 20 threads, single build ---
 
 
-def test_twenty_threads_same_date_single_build(temp_db):
+def test_twenty_threads_same_date_single_build():
     """20 concurrent threads requesting the same date → builder called once."""
     sv = _make_source_version(DATE_A)
     build_count = 0
@@ -117,10 +143,10 @@ def test_twenty_threads_same_date_single_build(temp_db):
         t.start()
     # Wait for the builder to register and block.
     assert build_started.wait(timeout=5)
-    # Give the 19 waiters a moment to join the in-flight future. The builder
-    # is blocked on build_can_finish so the in-flight entry cannot be cleaned
-    # up yet — no thread can miss the join window.
-    _brief_settle(0.05)
+    # Wait until all 19 waiters have joined the in-flight Future.
+    # The builder is blocked on build_can_finish so the in-flight entry
+    # cannot be cleaned up yet — no thread can miss the join window.
+    _wait_for_waiters(DB_KEY, DATE_A, sv.token(), 19)
     build_can_finish.set()
     for t in threads:
         t.join(timeout=10)
@@ -137,7 +163,7 @@ def test_twenty_threads_same_date_single_build(temp_db):
 # --- Builder exception propagation ---
 
 
-def test_builder_exception_propagates_to_all_waiters(temp_db):
+def test_builder_exception_propagates_to_all_waiters():
     """Builder raises → all waiters receive the exception."""
     sv = _make_source_version(DATE_A)
     build_started = threading.Event()
@@ -168,9 +194,10 @@ def test_builder_exception_propagates_to_all_waiters(temp_db):
     # Start remaining threads → they become waiters on the in-flight future.
     for t in threads[1:]:
         t.start()
-    # Give waiters a moment to reach future.result(). The builder is blocked
-    # on build_can_fail so the in-flight entry cannot be cleaned up yet.
-    _brief_settle(0.05)
+    # Wait until all 4 waiters have joined the in-flight Future.
+    # The builder is blocked on build_can_fail so the in-flight entry
+    # cannot be cleaned up yet.
+    _wait_for_waiters(DB_KEY, DATE_A, sv.token(), 4)
     # Let the builder fail — all waiters should receive the exception.
     build_can_fail.set()
     for t in threads:
@@ -183,7 +210,7 @@ def test_builder_exception_propagates_to_all_waiters(temp_db):
     assert in_flight_count() == 0
 
 
-def test_rebuild_after_exception_succeeds(temp_db):
+def test_rebuild_after_exception_succeeds():
     """After a builder exception, the next request must be able to rebuild."""
     sv = _make_source_version(DATE_A)
     call_count = 0
@@ -212,7 +239,7 @@ def test_rebuild_after_exception_succeeds(temp_db):
 # --- clear_cache during build ---
 
 
-def test_clear_during_build_prevents_cache_publish(temp_db):
+def test_clear_during_build_prevents_cache_publish():
     """Builder finishes after clear_cache → result not published to cache."""
     sv = _make_source_version(DATE_A)
     build_started = threading.Event()
@@ -249,7 +276,7 @@ def test_clear_during_build_prevents_cache_publish(temp_db):
     assert in_flight_count() == 0
 
 
-def test_clear_during_build_new_request_does_not_wait(temp_db):
+def test_clear_during_build_new_request_does_not_wait():
     """After clear_cache, a new request for the same key starts a new build."""
     sv = _make_source_version(DATE_A)
     first_started = threading.Event()
@@ -295,7 +322,7 @@ def test_clear_during_build_new_request_does_not_wait(temp_db):
 # --- Different dates build in parallel ---
 
 
-def test_different_dates_build_in_parallel(temp_db):
+def test_different_dates_build_in_parallel():
     """Two different dates must be able to build concurrently."""
     sv_a = _make_source_version(DATE_A)
     sv_b = _make_source_version(DATE_B)
@@ -345,7 +372,7 @@ def test_different_dates_build_in_parallel(temp_db):
 # --- Wait timeout ---
 
 
-def test_wait_timeout_raises_projection_wait_timeout(temp_db):
+def test_wait_timeout_raises_projection_wait_timeout():
     """Waiter that exceeds timeout gets ProjectionWaitTimeout."""
     sv = _make_source_version(DATE_A)
     set_wait_timeout(0.1)
@@ -375,7 +402,7 @@ def test_wait_timeout_raises_projection_wait_timeout(temp_db):
     assert in_flight_count() == 0
 
 
-def test_timeout_does_not_remove_inflight_for_other_waiters(temp_db):
+def test_timeout_does_not_remove_inflight_for_other_waiters():
     """One waiter's timeout must not break other waiters."""
     sv = _make_source_version(DATE_A)
     set_wait_timeout(0.1)
@@ -432,13 +459,13 @@ def test_timeout_does_not_remove_inflight_for_other_waiters(temp_db):
 # --- In-flight cleanup on all paths ---
 
 
-def test_inflight_empty_after_successful_build(temp_db):
+def test_inflight_empty_after_successful_build():
     sv = _make_source_version(DATE_A)
     _single_flight_build(DB_KEY, DATE_A, sv, lambda: _fake_projection(DATE_A))
     assert in_flight_count() == 0
 
 
-def test_inflight_empty_after_exception(temp_db):
+def test_inflight_empty_after_exception():
     sv = _make_source_version(DATE_A)
 
     def fail():
@@ -446,4 +473,89 @@ def test_inflight_empty_after_exception(temp_db):
 
     with pytest.raises(ValueError):
         _single_flight_build(DB_KEY, DATE_A, sv, fail)
+    assert in_flight_count() == 0
+
+
+# --- Diagnostic fields on ProjectionWaitTimeout ---
+
+
+def test_timeout_exception_carries_diagnostics():
+    """ProjectionWaitTimeout must carry report_date, epoch, waiter_count, etc.
+
+    Privacy: the exception must NOT carry window titles, paths, or
+    project names — only structured diagnostic fields.
+    """
+    sv = _make_source_version(DATE_A)
+    set_wait_timeout(0.1)
+    build_started = threading.Event()
+    build_can_finish = threading.Event()
+
+    def builder():
+        build_started.set()
+        build_can_finish.wait(timeout=5)
+        return _fake_projection(DATE_A)
+
+    builder_thread = threading.Thread(
+        target=lambda: _single_flight_build(DB_KEY, DATE_A, sv, builder)
+    )
+    builder_thread.start()
+    assert build_started.wait(timeout=5)
+
+    timeout_error: list[BaseException | None] = [None]
+    try:
+        _single_flight_build(DB_KEY, DATE_A, sv, lambda: _fake_projection(DATE_A))
+    except BaseException as exc:
+        timeout_error[0] = exc
+
+    assert isinstance(timeout_error[0], ProjectionWaitTimeout)
+    exc = timeout_error[0]
+    assert exc.report_date == DATE_A
+    assert exc.source_version_token == sv.token()
+    assert exc.timeout_seconds == 0.1
+    assert exc.builder_elapsed_seconds >= 0.0
+    assert exc.waiter_count >= 0
+    assert exc.total_in_flight_count >= 1
+    # No privacy-sensitive data in the exception message.
+    message = str(exc)
+    for forbidden in ("window_title", "path_hint", "project_name", "Doc"):
+        assert forbidden not in message, (
+            f"ProjectionWaitTimeout message leaked {forbidden!r}: {message}"
+        )
+
+    build_can_finish.set()
+    builder_thread.join(timeout=5)
+    assert in_flight_count() == 0
+
+
+def test_waiter_count_returns_to_zero_after_successful_build():
+    """After a successful build with waiters, waiter_count must be 0."""
+    sv = _make_source_version(DATE_A)
+    build_started = threading.Event()
+    build_can_finish = threading.Event()
+
+    def builder():
+        build_started.set()
+        build_can_finish.wait(timeout=5)
+        return _fake_projection(DATE_A)
+
+    results: list[DayProjection | None] = [None] * 3
+
+    def worker(idx: int):
+        results[idx] = _single_flight_build(DB_KEY, DATE_A, sv, builder)
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(3)]
+    threads[0].start()  # becomes builder
+    assert build_started.wait(timeout=5)
+    threads[1].start()  # waiter 1
+    threads[2].start()  # waiter 2
+    _wait_for_waiters(DB_KEY, DATE_A, sv.token(), 2)
+    assert get_waiter_count(DB_KEY, DATE_A, sv.token()) == 2
+
+    build_can_finish.set()
+    for t in threads:
+        t.join(timeout=5)
+
+    assert all(r is not None for r in results)
+    assert results[0] is results[1] is results[2]
+    assert get_waiter_count(DB_KEY, DATE_A, sv.token()) == 0
     assert in_flight_count() == 0

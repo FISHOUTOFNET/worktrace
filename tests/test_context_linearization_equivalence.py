@@ -299,44 +299,50 @@ def _extract_attribution_key(row: dict) -> tuple:
     )
 
 
-@pytest.mark.parametrize("seed", range(50))
-def test_random_sequence_equivalence(seed: int):
-    """New O(N) algorithm must produce identical results to the old O(N²) on random data."""
+@pytest.mark.parametrize("seed_start", [0, 10, 20, 30, 40])
+def test_random_sequence_equivalence(seed_start: int):
+    """New O(N) algorithm must produce identical results to the old O(N²) on random data.
 
-    rng = random.Random(seed)
-    count = rng.randint(5, 40)
-    rows, boundaries, clipboard = _generate_random_sequence(rng, count)
-    carry_minutes = rng.choice([0, 5, 10, 15])
+    Batches 10 seeds per pytest item to reduce collection, JUnit, and
+    progress-hook overhead while preserving full 50-seed coverage.
+    Each failure surfaces the failing ``seed`` in the assertion message.
+    """
 
-    old_rows, old_attrs = _reference_build(
-        rows,
-        carry_minutes=carry_minutes,
-        boundary_times=boundaries,
-        clipboard_times=clipboard,
-    )
-    new_proj = ReportContextProjection.build(
-        rows,
-        carry_minutes=carry_minutes,
-        boundary_times=boundaries,
-        clipboard_times=clipboard,
-    )
+    for seed in range(seed_start, seed_start + 10):
+        rng = random.Random(seed)
+        count = rng.randint(5, 40)
+        rows, boundaries, clipboard = _generate_random_sequence(rng, count)
+        carry_minutes = rng.choice([0, 5, 10, 15])
 
-    old_keys = [_extract_attribution_key(r) for r in old_rows]
-    new_keys = [_extract_attribution_key(r) for r in new_proj.rows]
-    assert old_keys == new_keys, (
-        f"Seed {seed}: attribution mismatch.\n"
-        f"Old: {old_keys}\nNew: {new_keys}"
-    )
+        old_rows, old_attrs = _reference_build(
+            rows,
+            carry_minutes=carry_minutes,
+            boundary_times=boundaries,
+            clipboard_times=clipboard,
+        )
+        new_proj = ReportContextProjection.build(
+            rows,
+            carry_minutes=carry_minutes,
+            boundary_times=boundaries,
+            clipboard_times=clipboard,
+        )
 
-    old_attr_tuples = [(a[0], a[1], a[2]) for a in old_attrs]
-    new_attr_tuples = [
-        (a.activity_id, a.project_id, a.attribution_kind)
-        for a in new_proj.attributions
-    ]
-    assert old_attr_tuples == new_attr_tuples, (
-        f"Seed {seed}: attribution list mismatch.\n"
-        f"Old: {old_attr_tuples}\nNew: {new_attr_tuples}"
-    )
+        old_keys = [_extract_attribution_key(r) for r in old_rows]
+        new_keys = [_extract_attribution_key(r) for r in new_proj.rows]
+        assert old_keys == new_keys, (
+            f"Seed {seed}: attribution mismatch.\n"
+            f"Old: {old_keys}\nNew: {new_keys}"
+        )
+
+        old_attr_tuples = [(a[0], a[1], a[2]) for a in old_attrs]
+        new_attr_tuples = [
+            (a.activity_id, a.project_id, a.attribution_kind)
+            for a in new_proj.attributions
+        ]
+        assert old_attr_tuples == new_attr_tuples, (
+            f"Seed {seed}: attribution list mismatch.\n"
+            f"Old: {old_attr_tuples}\nNew: {new_attr_tuples}"
+        )
 
 
 # --- Specific scenario equivalence tests ---
