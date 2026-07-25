@@ -27,6 +27,7 @@ on:
       - "tests/support/peak_memory_probe.py"
       - "tests/test_projection_performance_baseline.py"
       - "tests/test_projection_large_scale_benchmark.py"
+      - "scripts/webview_render_perf.py"
       - ".github/workflows/performance-validation.yml"
 
 permissions:
@@ -87,7 +88,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path "test-results" | Out-Null
-          & python -m compileall -q worktrace scripts/pytest_diagnostics.py scripts/pytest_log_to_junit.py scripts/run_pytest_ci.py scripts/pytest_timing_summary.py *> "test-results/compile.log"
+          & python -m compileall -q worktrace scripts/pytest_diagnostics.py scripts/pytest_log_to_junit.py scripts/run_pytest_ci.py scripts/pytest_timing_summary.py scripts/webview_render_perf.py *> "test-results/compile.log"
           $compileExitCode = $LASTEXITCODE
           Write-Host "compile exit code: $compileExitCode"
           if ($compileExitCode -ne 0) {
@@ -154,3 +155,67 @@ jobs:
           path: test-results/
           if-no-files-found: warn
           retention-days: 1
+
+  webview-render:
+    # Real WebView2 frontend render measurement.  Runs on Windows so WebView2
+    # is available, but GitHub-hosted runners may lack an interactive desktop
+    # session — in that case the harness records the real failure reason and
+    # the job is allowed to continue so the benchmark job is not blocked.
+    # The authoritative successful measurement may come from a local run;
+    # see the artifact for the actual result.
+    name: WebView render perf
+    runs-on: windows-latest
+    timeout-minutes: 15
+    continue-on-error: true
+
+    steps:
+      - name: Resolve revision
+        shell: pwsh
+        run: |
+          $revision = "${{ inputs.revision || github.event.pull_request.head.sha || github.sha }}"
+          if ([string]::IsNullOrWhiteSpace($revision)) {
+            $revision = "${{ github.sha }}"
+          }
+          "resolved_revision=$revision" | Add-Content -LiteralPath $env:GITHUB_ENV -Encoding UTF8
+          Write-Host "resolved_revision=$revision"
+
+      - name: Check out revision
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ env.resolved_revision }}
+          clean: true
+          show-progress: false
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install dependencies
+        shell: pwsh
+        run: python -m pip install --disable-pip-version-check -q -r requirements-dev.txt
+
+      - name: Run WebView render harness
+        id: webview_perf
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "test-results" | Out-Null
+          & python scripts/webview_render_perf.py --activity-count 20000 --runs 3
+          $exitCode = $LASTEXITCODE
+          Write-Host "webview_perf_exit_code=$exitCode"
+          # Record the real result; do not mask failures as success.
+          exit $exitCode
+
+      - name: Upload WebView render artifact
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: webview-render-perf-${{ github.run_id }}
+          path: test-results/webview-render-perf.json
+          if-no-files-found: warn
+          retention-days: 7
