@@ -382,8 +382,12 @@ jobs:
           $baselineElapsed = $baselineRuns | ForEach-Object { $_.elapsed_seconds } | Sort-Object
           $headElapsed = $headRuns | ForEach-Object { $_.elapsed_seconds } | Sort-Object
 
-          $baselineMedian = if ($baselineElapsed.Count -gt 0) { $baselineElapsed[[int]($baselineElapsed.Count / 2)] } else { 0 }
-          $headMedian = if ($headElapsed.Count -gt 0) { $headElapsed[[int]($headElapsed.Count / 2)] } else { 0 }
+          # Floor((n-1)/2) gives the middle index for odd-length arrays and the
+          # lower-middle index for even-length arrays, matching the standard
+          # median definition.  PowerShell's [int] cast uses banker's rounding,
+          # so [int](3/2) = 2 (the max), not 1 (the median) — use Floor instead.
+          $baselineMedian = if ($baselineElapsed.Count -gt 0) { $baselineElapsed[[math]::Floor(($baselineElapsed.Count - 1) / 2)] } else { 0 }
+          $headMedian = if ($headElapsed.Count -gt 0) { $headElapsed[[math]::Floor(($headElapsed.Count - 1) / 2)] } else { 0 }
 
           $absDiff = $headMedian - $baselineMedian
           $pctImprovement = if ($baselineMedian -gt 0) { ($baselineMedian - $headMedian) / $baselineMedian * 100 } else { 0 }
