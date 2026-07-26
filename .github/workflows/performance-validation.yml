@@ -232,17 +232,23 @@ jobs:
           retention-days: 7
 
   benchmark-comparison:
-    # Baseline vs HEAD product benchmark comparison.
+    # Baseline vs HEAD product benchmark comparison via a HEAD-owned driver.
     #
-    # Runs the ``@pytest.mark.benchmark`` suite on both the merge-base and
-    # the PR HEAD in independent git worktrees, captures the per-benchmark
-    # JSON artifacts (20k activities, 10k contributions, peak memory), and
-    # compares them with ``scripts/benchmark_comparison.py``.
+    # The driver (``scripts/ci/product_benchmark_driver.py``) is HEAD-owned:
+    # it lives in the HEAD workspace and is invoked once per revision with
+    # ``--target-root`` pointing at the worktree under test.  The driver
+    # measures the COMMON public API (``build_visible_snapshot``) that
+    # exists in both baseline and HEAD, so baseline is NOT required to
+    # contain the PR's new benchmark tests or test-support modules.
     #
-    # Gates: no-regression (HEAD <= baseline * (1 + tolerance)) on the
-    # originally-targeted product metrics.  This replaces the previous
-    # blanket "20% improvement on full pytest" gate, which conflated
-    # added-test cost with product performance.
+    # Each revision runs in an independent subprocess (separate ``python``
+    # invocation) so baseline and HEAD product modules are never imported
+    # in the same process.  The driver creates an isolated temp database
+    # per invocation so fixture data never leaks between revisions.
+    #
+    # Gates: no-regression (HEAD median <= baseline median * (1 + tolerance))
+    # on the three product metrics.  Fail-closed: missing artifact, schema
+    # mismatch, fixture hash mismatch, or gate failure all fail the job.
     name: Baseline vs HEAD benchmark
     runs-on: windows-latest
     timeout-minutes: 40
@@ -259,6 +265,8 @@ jobs:
         id: revs
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
+          Set-StrictMode -Version Latest
           $baseBranch = "${{ inputs.base_branch || 'main' }}"
           $headSha = "${{ inputs.revision || github.event.pull_request.head.sha || github.sha }}"
           if ([string]::IsNullOrWhiteSpace($headSha)) {
@@ -298,12 +306,15 @@ jobs:
         id: paths
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
+          Set-StrictMode -Version Latest
           $root = Join-Path $env:RUNNER_TEMP "worktrace-benchmark-comparison"
           $baselineWt = Join-Path $root "baseline-worktree"
           $headWt = Join-Path $root "head-worktree"
           $resultsDir = Join-Path $root "results"
           $baselineResults = Join-Path $resultsDir "baseline"
           $headResults = Join-Path $resultsDir "head"
+          $comparisonResults = Join-Path $resultsDir "comparison"
 
           git worktree remove --force $baselineWt 2>$null
           git worktree remove --force $headWt 2>$null
@@ -314,108 +325,79 @@ jobs:
 
           New-Item -ItemType Directory -Force -Path $baselineResults | Out-Null
           New-Item -ItemType Directory -Force -Path $headResults | Out-Null
+          New-Item -ItemType Directory -Force -Path $comparisonResults | Out-Null
 
           "baseline_worktree=$baselineWt" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
           "head_worktree=$headWt" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
+          "results_dir=$resultsDir" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
           "baseline_results=$baselineResults" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
           "head_results=$headResults" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
+          "comparison_results=$comparisonResults" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
 
       - name: Compile Python in worktrees
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
+          Set-StrictMode -Version Latest
           $baselineWt = "${{ steps.paths.outputs.baseline_worktree }}"
           $headWt = "${{ steps.paths.outputs.head_worktree }}"
           foreach ($wt in @($baselineWt, $headWt)) {
             Push-Location $wt
-            & python -m compileall -q worktrace scripts/pytest_diagnostics.py scripts/pytest_log_to_junit.py scripts/run_pytest_ci.py scripts/pytest_timing_summary.py
+            # Only compile the product package — the HEAD-owned driver
+            # scripts may not exist in the baseline worktree.
+            & python -m compileall -q worktrace
             if ($LASTEXITCODE -ne 0) { throw "compile failed in $wt" }
             Pop-Location
           }
 
-      - name: Run benchmark suite on baseline
+      - name: Run HEAD-owned benchmark driver on baseline
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
+          Set-StrictMode -Version Latest
           $baselineWt = "${{ steps.paths.outputs.baseline_worktree }}"
           $baselineResults = "${{ steps.paths.outputs.baseline_results }}"
 
-          $utf8 = [System.Text.UTF8Encoding]::new($false)
-          [Console]::InputEncoding = $utf8
-          [Console]::OutputEncoding = $utf8
-          $OutputEncoding = $utf8
-          $PSNativeCommandUseErrorActionPreference = $false
-
-          Push-Location $baselineWt
-          # The benchmark tests write JSON artifacts to test-results/ inside
-          # the worktree.  We run only the benchmark-marked tests.
-          & python scripts/run_pytest_ci.py `
-            --log "$baselineResults\pytest.log" `
-            --progress "$baselineResults\pytest-progress.json" `
-            --heartbeat-seconds 120 `
-            -- `
-            -q -ra --tb=short --color=no --cache-clear `
-            -m "benchmark" `
-            --timeout=600 --timeout-method=thread `
-            --junitxml="$baselineResults\pytest-junit.xml"
-          $exitCode = $LASTEXITCODE
-          Pop-Location
-          Write-Host "baseline_benchmark_exit_code=$exitCode"
-          if ($exitCode -ne 0) {
-            throw "baseline benchmark suite failed (exit $exitCode)"
+          # The driver is HEAD-owned (lives in the HEAD workspace, NOT in
+          # the baseline worktree).  --target-root points at the baseline
+          # worktree so the driver imports baseline's product code.
+          # Each invocation is a separate subprocess, so baseline and HEAD
+          # product modules are never imported in the same process.
+          & python scripts/ci/product_benchmark_driver.py `
+            --target-root $baselineWt `
+            --revision "${{ steps.revs.outputs.baseline_sha }}" `
+            --output "$baselineResults\product-benchmark.json"
+          if ($LASTEXITCODE -ne 0) {
+            throw "baseline benchmark driver failed (exit $LASTEXITCODE)"
           }
-          # Copy benchmark JSON artifacts from the worktree's test-results/
-          # into the baseline results directory for the comparison step.
-          $baselineTestResults = Join-Path $baselineWt "test-results"
-          if (Test-Path $baselineTestResults) {
-            Get-ChildItem -Path $baselineTestResults -Filter "benchmark-*.json" |
-              ForEach-Object {
-                Copy-Item -Force -LiteralPath $_.FullName -Destination $baselineResults
-                Write-Host "copied $($_.Name) to baseline results"
-              }
-          }
+          Write-Host "baseline benchmark driver completed"
 
-      - name: Run benchmark suite on HEAD
+      - name: Run HEAD-owned benchmark driver on HEAD
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
+          Set-StrictMode -Version Latest
           $headWt = "${{ steps.paths.outputs.head_worktree }}"
           $headResults = "${{ steps.paths.outputs.head_results }}"
 
-          $utf8 = [System.Text.UTF8Encoding]::new($false)
-          [Console]::InputEncoding = $utf8
-          [Console]::OutputEncoding = $utf8
-          $OutputEncoding = $utf8
-          $PSNativeCommandUseErrorActionPreference = $false
-
-          Push-Location $headWt
-          & python scripts/run_pytest_ci.py `
-            --log "$headResults\pytest.log" `
-            --progress "$headResults\pytest-progress.json" `
-            --heartbeat-seconds 120 `
-            -- `
-            -q -ra --tb=short --color=no --cache-clear `
-            -m "benchmark" `
-            --timeout=600 --timeout-method=thread `
-            --junitxml="$headResults\pytest-junit.xml"
-          $exitCode = $LASTEXITCODE
-          Pop-Location
-          Write-Host "head_benchmark_exit_code=$exitCode"
-          if ($exitCode -ne 0) {
-            throw "HEAD benchmark suite failed (exit $exitCode)"
+          & python scripts/ci/product_benchmark_driver.py `
+            --target-root $headWt `
+            --revision "${{ steps.revs.outputs.head_sha }}" `
+            --output "$headResults\product-benchmark.json"
+          if ($LASTEXITCODE -ne 0) {
+            throw "HEAD benchmark driver failed (exit $LASTEXITCODE)"
           }
-          $headTestResults = Join-Path $headWt "test-results"
-          if (Test-Path $headTestResults) {
-            Get-ChildItem -Path $headTestResults -Filter "benchmark-*.json" |
-              ForEach-Object {
-                Copy-Item -Force -LiteralPath $_.FullName -Destination $headResults
-                Write-Host "copied $($_.Name) to HEAD results"
-              }
-          }
+          Write-Host "HEAD benchmark driver completed"
 
       - name: Compare benchmarks and enforce no-regression gates
         id: comparison
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
+          Set-StrictMode -Version Latest
           $baselineResults = "${{ steps.paths.outputs.baseline_results }}"
           $headResults = "${{ steps.paths.outputs.head_results }}"
+          $comparisonResults = "${{ steps.paths.outputs.comparison_results }}"
           $tolerance = "${{ inputs.benchmark_comparison_tolerance_pct || '10' }}"
 
           & python scripts/benchmark_comparison.py `
@@ -424,11 +406,11 @@ jobs:
             --baseline-sha "${{ steps.revs.outputs.baseline_sha }}" `
             --head-sha "${{ steps.revs.outputs.head_sha }}" `
             --tolerance-pct $tolerance `
-            --output "benchmark-comparison.json"
+            --output "$comparisonResults\product-comparison.json"
 
           $exitCode = $LASTEXITCODE
           if ($exitCode -ne 0) {
-            Write-Host "benchmark_comparison=FAILED"
+            Write-Host "benchmark_comparison=FAILED (exit $exitCode)"
             exit 1
           }
           Write-Host "benchmark_comparison=PASSED"
@@ -438,10 +420,8 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: benchmark-comparison-${{ github.run_id }}
-          path: |
-            ${{ steps.paths.outputs.results_dir }}/
-            benchmark-comparison.json
-          if-no-files-found: warn
+          path: ${{ steps.paths.outputs.results_dir }}/
+          if-no-files-found: error
           retention-days: 7
 
       - name: Clean up worktrees

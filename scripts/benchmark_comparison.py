@@ -1,115 +1,210 @@
 #!/usr/bin/env python3
 """Compare product benchmark results between baseline and HEAD revisions.
 
-Reads the JSON artifacts produced by the benchmark suite
-(``benchmark-20k-activities.json``, ``benchmark-10k-contributions.json``,
-``benchmark-peak-memory.json``) from baseline and HEAD result directories,
-computes per-metric deltas, and enforces no-regression gates.
+Reads the JSON artifacts produced by the HEAD-owned
+``scripts/ci/product_benchmark_driver.py`` from baseline and HEAD result
+directories, validates schema/fixture/driver consistency, computes
+per-metric deltas, and enforces no-regression gates.
+
+The driver measures three metrics via the COMMON public API
+(``build_visible_snapshot``) that exists in both baseline and HEAD:
+
+  * ``projection_20k_total_seconds`` — 20k activities projection total
+  * ``projection_10k_contributions_seconds`` — 10k contributions projection total
+  * ``projection_peak_memory_bytes`` — peak memory of the projection build
 
 Gates (all must pass):
-  * 20k activities projection_total_ms: HEAD <= baseline * (1 + tolerance)
-  * 10k contributions projection_total_ms: HEAD <= baseline * (1 + tolerance)
-  * compact peak memory: HEAD <= baseline * (1 + tolerance)
+  * Each metric: HEAD median <= baseline median * (1 + tolerance/100)
+  * tolerance defaults to 10% — Windows runners have ~5-10% noise.
 
-The tolerance defaults to 10% — product benchmarks on Windows runners have
-~5-10% noise, so a tighter gate would fire on runner jitter, not real
-regressions.  The tolerance can be overridden via ``--tolerance-pct``.
+Fail-closed contract:
+  * Missing artifact, schema mismatch, fixture hash mismatch, driver
+    version mismatch, Python version mismatch, or missing metric →
+    exit 2 (input/schema error).
+  * Sample count mismatch or zero samples → exit 3 (execution incomplete).
+  * Performance gate failure → exit 4.
+  * All gates pass → exit 0.
 
-This script does NOT apply a blanket "20% improvement" gate.  The original
-PR #26 performance targets (detail path does not rebuild day projection,
-compact memory does not regress, cold Timeline improves) are enforced as
-specific no-regression gates on the relevant metrics.  Absolute correctness
-gates (hash consistency, non-zero times, compact < expanded) are already
-asserted inside the benchmark tests themselves.
-
-Exit code is non-zero if any gate fails or any required artifact is missing.
+Exit codes
+----------
+* 0 — success (all gates passed)
+* 2 — input/schema error (missing file, schema mismatch, fixture mismatch)
+* 3 — execution incomplete (sample count mismatch, zero samples)
+* 4 — performance gate failure (regression exceeds tolerance)
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
+import sys
 from pathlib import Path
 from typing import Any
 
+_SCHEMA_VERSION = 1
+_EXIT_OK = 0
+_EXIT_INPUT_SCHEMA = 2
+_EXIT_INCOMPLETE = 3
+_EXIT_GATE_FAILED = 4
+
 
 # ---------------------------------------------------------------------------
-# Artifact loading
+# Loading & validation
 # ---------------------------------------------------------------------------
 
-def _load_json(path: Path) -> dict[str, Any]:
+class ComparisonError(Exception):
+    """Input/schema error (exit code 2)."""
+
+
+class IncompleteError(Exception):
+    """Execution incomplete error (exit code 3)."""
+
+
+class GateFailure(Exception):
+    """Performance gate failure (exit code 4)."""
+
+
+def _load_driver_result(path: Path) -> dict[str, Any]:
+    """Load and validate a single driver result JSON."""
     if not path.is_file():
-        raise FileNotFoundError(f"required artifact missing: {path}")
-    return json.loads(path.read_text(encoding="utf-8"))
+        raise ComparisonError(f"required artifact missing: {path}")
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ComparisonError(f"cannot parse {path}: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise ComparisonError(f"{path}: root is not an object")
+    if payload.get("schema_version") != _SCHEMA_VERSION:
+        raise ComparisonError(
+            f"{path}: schema_version {payload.get('schema_version')} "
+            f"!= expected {_SCHEMA_VERSION}"
+        )
+    metrics = payload.get("metrics")
+    if not isinstance(metrics, dict):
+        raise ComparisonError(f"{path}: metrics is not an object")
+    return payload
 
 
-def _load_benchmark_artifacts(result_dir: Path) -> dict[str, dict[str, Any]]:
-    """Load all known benchmark JSON artifacts from one revision's result dir."""
-    return {
-        "20k_activities": _load_json(result_dir / "benchmark-20k-activities.json"),
-        "10k_contributions": _load_json(result_dir / "benchmark-10k-contributions.json"),
-        "peak_memory": _load_json(result_dir / "benchmark-peak-memory.json"),
-    }
+def _validate_consistency(
+    baseline: dict[str, Any],
+    head: dict[str, Any],
+    *,
+    expected_baseline_sha: str,
+    expected_head_sha: str,
+) -> None:
+    """Cross-check driver version, fixture hash, Python version, revision."""
+    b_driver = baseline.get("driver_version", "")
+    h_driver = head.get("driver_version", "")
+    if b_driver != h_driver:
+        raise ComparisonError(
+            f"driver_version mismatch: baseline={b_driver!r} head={h_driver!r} — "
+            f"baseline and HEAD must use the same driver"
+        )
+
+    b_fixture = baseline.get("fixture_hash", "")
+    h_fixture = head.get("fixture_hash", "")
+    if b_fixture != h_fixture:
+        raise ComparisonError(
+            f"fixture_hash mismatch: baseline={b_fixture!r} head={h_fixture!r} — "
+            f"baseline and HEAD must use the same fixture"
+        )
+
+    # Python major.minor version must match (patch may differ).
+    b_py = baseline.get("python_version", "")
+    h_py = head.get("python_version", "")
+    b_py_mm = ".".join(b_py.split(".")[:2]) if b_py else ""
+    h_py_mm = ".".join(h_py.split(".")[:2]) if h_py else ""
+    if b_py_mm != h_py_mm:
+        raise ComparisonError(
+            f"python_version mismatch: baseline={b_py_mm!r} head={h_py_mm!r} — "
+            f"baseline and HEAD must use the same Python major.minor"
+        )
+
+    b_rev = baseline.get("revision", "")
+    h_rev = head.get("revision", "")
+    if b_rev != expected_baseline_sha:
+        raise ComparisonError(
+            f"baseline revision {b_rev!r} != expected {expected_baseline_sha!r}"
+        )
+    if h_rev != expected_head_sha:
+        raise ComparisonError(
+            f"HEAD revision {h_rev!r} != expected {expected_head_sha!r}"
+        )
 
 
 # ---------------------------------------------------------------------------
 # Metric extraction
 # ---------------------------------------------------------------------------
 
-def _extract_metrics(artifacts: dict[str, dict[str, Any]]) -> dict[str, float]:
-    """Pull the gated metrics out of the artifact dicts.
-
-    Returns a flat ``{metric_name: value}`` dict.  All values are in the
-    unit recorded by the benchmark (ms for timings, bytes for memory).
-    """
-    a20 = artifacts["20k_activities"]
-    a10 = artifacts["10k_contributions"]
-    peak = artifacts["peak_memory"]
-
-    metrics: dict[str, float] = {
-        "20k_projection_total_ms": float(a20["median"]["projection_total_ms"]),
-        "20k_fact_query_ms": float(a20["median"]["fact_query_ms"]),
-        "20k_session_build_ms": float(a20["median"]["session_build_ms"]),
-        "20k_operation_replay_ms": float(a20["median"]["operation_replay_ms"]),
-        "20k_index_build_ms": float(a20["median"]["index_build_ms"]),
-        "20k_assemble_ms": float(a20["median"]["projection_assemble_ms"]),
-        "10k_projection_total_ms": float(a10["median"]["projection_total_ms"]),
-        "10k_fact_query_ms": float(a10["median"]["fact_query_ms"]),
-        "10k_session_build_ms": float(a10["median"]["session_build_ms"]),
-        "10k_operation_replay_ms": float(a10["median"]["operation_replay_ms"]),
-        "10k_index_build_ms": float(a10["median"]["index_build_ms"]),
-        "10k_assemble_ms": float(a10["median"]["projection_assemble_ms"]),
-        "compact_peak_bytes": float(peak["compact_median_peak_bytes"]),
-        "expanded_peak_bytes": float(peak["expanded_median_peak_bytes"]),
-    }
-    # Consistency hash is a string — keep it separately for the report.
-    return metrics
-
-
-# ---------------------------------------------------------------------------
-# Gated metrics
-# ---------------------------------------------------------------------------
-
-# Metrics that must not regress (HEAD slower/larger than baseline by more
-# than tolerance_pct).  These are the product performance indicators that
-# PR #26 targeted: projection total time at scale, and compact memory.
-GATED_METRICS: tuple[tuple[str, str], ...] = (
-    # (metric_key, human description)
-    ("20k_projection_total_ms", "20k activities projection total"),
-    ("10k_projection_total_ms", "10k contributions projection total"),
-    ("compact_peak_bytes", "compact peak memory"),
+# (metric_key, human description, value_field, sample_field, unit)
+GATED_METRICS: tuple[tuple[str, str, str, str, str], ...] = (
+    (
+        "projection_20k_total_seconds",
+        "20k activities projection total",
+        "median_seconds",
+        "samples_seconds",
+        "seconds",
+    ),
+    (
+        "projection_10k_contributions_seconds",
+        "10k contributions projection total",
+        "median_seconds",
+        "samples_seconds",
+        "seconds",
+    ),
+    (
+        "projection_peak_memory_bytes",
+        "projection peak memory",
+        "median_bytes",
+        "samples_bytes",
+        "bytes",
+    ),
 )
 
 
-# ---------------------------------------------------------------------------
-# Comparison
-# ---------------------------------------------------------------------------
+def _extract_metric(
+    payload: dict[str, Any],
+    metric_key: str,
+    value_field: str,
+    sample_field: str,
+    label: str,
+) -> tuple[float, list[float]]:
+    """Extract (median, samples) for one metric from a driver result."""
+    metrics = payload.get("metrics", {})
+    entry = metrics.get(metric_key)
+    if not isinstance(entry, dict):
+        raise ComparisonError(f"{label}: metric {metric_key!r} missing or not object")
+    if value_field not in entry:
+        raise ComparisonError(
+            f"{label}: metric {metric_key!r} missing {value_field!r}"
+        )
+    if sample_field not in entry:
+        raise ComparisonError(
+            f"{label}: metric {metric_key!r} missing {sample_field!r}"
+        )
+    samples = entry[sample_field]
+    if not isinstance(samples, list):
+        raise ComparisonError(
+            f"{label}: metric {metric_key!r} {sample_field!r} is not a list"
+        )
+    if not samples:
+        raise IncompleteError(
+            f"{label}: metric {metric_key!r} has zero samples"
+        )
+    median = float(entry[value_field])
+    return median, [float(s) for s in samples]
+
 
 def _percent_delta(baseline: float, head: float) -> float:
     if baseline == 0:
         return 0.0 if head == 0 else 100.0
     return (head - baseline) / baseline * 100.0
 
+
+# ---------------------------------------------------------------------------
+# Comparison
+# ---------------------------------------------------------------------------
 
 def _build_comparison(
     baseline_dir: Path,
@@ -119,76 +214,103 @@ def _build_comparison(
     head_sha: str,
     tolerance_pct: float,
 ) -> dict[str, Any]:
-    baseline_artifacts = _load_benchmark_artifacts(baseline_dir)
-    head_artifacts = _load_benchmark_artifacts(head_dir)
-    baseline_metrics = _extract_metrics(baseline_artifacts)
-    head_metrics = _extract_metrics(head_artifacts)
+    baseline = _load_driver_result(baseline_dir / "product-benchmark.json")
+    head = _load_driver_result(head_dir / "product-benchmark.json")
 
-    metric_rows: list[dict[str, Any]] = []
+    _validate_consistency(
+        baseline,
+        head,
+        expected_baseline_sha=baseline_sha,
+        expected_head_sha=head_sha,
+    )
+
     gated_results: list[dict[str, Any]] = []
     all_gates_passed = True
 
-    for key, description in GATED_METRICS:
-        b_val = baseline_metrics[key]
-        h_val = head_metrics[key]
-        delta_pct = _percent_delta(b_val, h_val)
+    for metric_key, description, value_field, sample_field, unit in GATED_METRICS:
+        b_median, b_samples = _extract_metric(
+            baseline, metric_key, value_field, sample_field, "baseline"
+        )
+        h_median, h_samples = _extract_metric(
+            head, metric_key, value_field, sample_field, "head"
+        )
+
+        if len(b_samples) != len(h_samples):
+            raise IncompleteError(
+                f"{metric_key}: sample count mismatch "
+                f"baseline={len(b_samples)} head={len(h_samples)}"
+            )
+
+        delta_pct = _percent_delta(b_median, h_median)
         # No-regression gate: HEAD must not exceed baseline by more than
-        # tolerance_pct.  For memory metrics (compact_peak_bytes), a lower
-        # HEAD is an improvement (negative delta is good).
+        # tolerance_pct.  For memory, lower HEAD is an improvement.
         passed = delta_pct <= tolerance_pct
         if not passed:
             all_gates_passed = False
+
         gated_results.append(
             {
-                "metric": key,
+                "metric": metric_key,
                 "description": description,
-                "baseline": round(b_val, 2),
-                "head": round(h_val, 2),
-                "delta": round(h_val - b_val, 2),
+                "unit": unit,
+                "baseline_median": round(b_median, 4),
+                "head_median": round(h_median, 4),
+                "delta": round(h_median - b_median, 4),
                 "delta_pct": round(delta_pct, 1),
                 "tolerance_pct": tolerance_pct,
+                "baseline_samples": b_samples,
+                "head_samples": h_samples,
+                "baseline_min": round(min(b_samples), 4),
+                "baseline_max": round(max(b_samples), 4),
+                "head_min": round(min(h_samples), 4),
+                "head_max": round(max(h_samples), 4),
                 "gate_passed": passed,
             }
         )
 
-    # Also report all non-gated metrics for visibility.
-    gated_keys = {k for k, _ in GATED_METRICS}
-    for key, b_val in baseline_metrics.items():
-        if key in gated_keys:
-            continue
-        h_val = head_metrics[key]
-        metric_rows.append(
-            {
-                "metric": key,
-                "baseline": round(b_val, 2),
-                "head": round(h_val, 2),
-                "delta": round(h_val - b_val, 2),
-                "delta_pct": round(_percent_delta(b_val, h_val), 1),
-            }
-        )
-
-    # Consistency hash check (informational — already asserted in tests).
-    baseline_hash_20k = baseline_artifacts["20k_activities"].get("consistency_hash")
-    head_hash_20k = head_artifacts["20k_activities"].get("consistency_hash")
-    baseline_hash_10k = baseline_artifacts["10k_contributions"].get("consistency_hash")
-    head_hash_10k = head_artifacts["10k_contributions"].get("consistency_hash")
+    # Consistency hashes (informational — already asserted in driver).
+    b_hash_20k = (
+        baseline.get("metrics", {})
+        .get("projection_20k_total_seconds", {})
+        .get("consistency_hash", "")
+    )
+    h_hash_20k = (
+        head.get("metrics", {})
+        .get("projection_20k_total_seconds", {})
+        .get("consistency_hash", "")
+    )
+    b_hash_10k = (
+        baseline.get("metrics", {})
+        .get("projection_10k_contributions_seconds", {})
+        .get("consistency_hash", "")
+    )
+    h_hash_10k = (
+        head.get("metrics", {})
+        .get("projection_10k_contributions_seconds", {})
+        .get("consistency_hash", "")
+    )
 
     return {
         "baseline_revision": baseline_sha,
         "head_revision": head_sha,
+        "baseline_target_root": baseline.get("target_root", ""),
+        "head_target_root": head.get("target_root", ""),
+        "driver_version": baseline.get("driver_version", ""),
+        "fixture_hash": baseline.get("fixture_hash", ""),
+        "baseline_python_version": baseline.get("python_version", ""),
+        "head_python_version": head.get("python_version", ""),
         "tolerance_pct": tolerance_pct,
         "gated_metrics": gated_results,
-        "informational_metrics": metric_rows,
         "consistency": {
             "20k_activities": {
-                "baseline_hash": baseline_hash_20k,
-                "head_hash": head_hash_20k,
-                "match": baseline_hash_20k == head_hash_20k,
+                "baseline_hash": b_hash_20k,
+                "head_hash": h_hash_20k,
+                "match": b_hash_20k == h_hash_20k,
             },
             "10k_contributions": {
-                "baseline_hash": baseline_hash_10k,
-                "head_hash": head_hash_10k,
-                "match": baseline_hash_10k == head_hash_10k,
+                "baseline_hash": b_hash_10k,
+                "head_hash": h_hash_10k,
+                "match": b_hash_10k == h_hash_10k,
             },
         },
         "all_gates_passed": all_gates_passed,
@@ -207,6 +329,8 @@ def _build_markdown(report: dict[str, Any]) -> str:
         f"- baseline: `{report['baseline_revision']}`  "
         f"HEAD: `{report['head_revision']}`"
     )
+    lines.append(f"- driver version: `{report['driver_version']}`")
+    lines.append(f"- fixture hash: `{report['fixture_hash'][:16]}…`")
     lines.append(f"- no-regression tolerance: {report['tolerance_pct']}%")
     lines.append("")
 
@@ -219,21 +343,25 @@ def _build_markdown(report: dict[str, Any]) -> str:
     for row in report["gated_metrics"]:
         verdict = "PASS" if row["gate_passed"] else "FAIL"
         lines.append(
-            f"| {row['description']} | {row['baseline']:.2f} | "
-            f"{row['head']:.2f} | {row['delta']:+.2f} | "
+            f"| {row['description']} | {row['baseline_median']:.4f} | "
+            f"{row['head_median']:.4f} | {row['delta']:+.4f} | "
             f"{row['delta_pct']:+.1f}% | {verdict} |"
         )
     lines.append("")
 
-    lines.append("### Informational metrics")
+    lines.append("### Raw samples")
     lines.append("")
-    lines.append("| metric | baseline | HEAD | delta | delta (%) |")
-    lines.append("|---|---|---|---|---|")
-    for row in report["informational_metrics"]:
+    for row in report["gated_metrics"]:
         lines.append(
-            f"| `{row['metric']}` | {row['baseline']:.2f} | "
-            f"{row['head']:.2f} | {row['delta']:+.2f} | "
-            f"{row['delta_pct']:+.1f}% |"
+            f"- **{row['description']}** ({row['unit']}):"
+        )
+        lines.append(
+            f"  - baseline: {row['baseline_samples']} "
+            f"(min={row['baseline_min']}, max={row['baseline_max']})"
+        )
+        lines.append(
+            f"  - HEAD: {row['head_samples']} "
+            f"(min={row['head_min']}, max={row['head_max']})"
         )
     lines.append("")
 
@@ -242,8 +370,8 @@ def _build_markdown(report: dict[str, Any]) -> str:
     for scenario, info in report["consistency"].items():
         match_str = "match" if info["match"] else "DIFFER"
         lines.append(
-            f"- {scenario}: baseline `{info['baseline_hash']}` vs "
-            f"HEAD `{info['head_hash']}` — {match_str}"
+            f"- {scenario}: baseline `{info['baseline_hash'][:16]}…` vs "
+            f"HEAD `{info['head_hash'][:16]}…` — {match_str}"
         )
     lines.append("")
 
@@ -257,8 +385,8 @@ def _build_markdown(report: dict[str, Any]) -> str:
         for row in report["gated_metrics"]:
             if not row["gate_passed"]:
                 lines.append(
-                    f"- {row['description']}: HEAD {row['head']:.2f} vs "
-                    f"baseline {row['baseline']:.2f} "
+                    f"- {row['description']}: HEAD {row['head_median']:.4f} vs "
+                    f"baseline {row['baseline_median']:.4f} "
                     f"({row['delta_pct']:+.1f}% > {row['tolerance_pct']}%)"
                 )
     return "\n".join(lines) + "\n"
@@ -274,13 +402,13 @@ def main() -> int:
         "--baseline-dir",
         type=Path,
         required=True,
-        help="Directory containing baseline benchmark JSON artifacts",
+        help="Directory containing baseline product-benchmark.json",
     )
     parser.add_argument(
         "--head-dir",
         type=Path,
         required=True,
-        help="Directory containing HEAD benchmark JSON artifacts",
+        help="Directory containing HEAD product-benchmark.json",
     )
     parser.add_argument("--baseline-sha", required=True)
     parser.add_argument("--head-sha", required=True)
@@ -298,35 +426,39 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    report = _build_comparison(
-        args.baseline_dir,
-        args.head_dir,
-        baseline_sha=args.baseline_sha,
-        head_sha=args.head_sha,
-        tolerance_pct=args.tolerance_pct,
-    )
+    try:
+        report = _build_comparison(
+            args.baseline_dir,
+            args.head_dir,
+            baseline_sha=args.baseline_sha,
+            head_sha=args.head_sha,
+            tolerance_pct=args.tolerance_pct,
+        )
+    except ComparisonError as exc:
+        print(f"comparison_error (input/schema): {exc}", file=sys.stderr)
+        return _EXIT_INPUT_SCHEMA
+    except IncompleteError as exc:
+        print(f"comparison_error (incomplete): {exc}", file=sys.stderr)
+        return _EXIT_INCOMPLETE
 
     json_text = json.dumps(report, indent=2, sort_keys=False)
     if args.output:
-        args.output.write_text(json_text, encoding="utf-8")
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(json_text + "\n", encoding="utf-8")
     else:
         print(json_text)
 
     md_text = _build_markdown(report)
-    step_summary = __import__("os").environ.get("GITHUB_STEP_SUMMARY")
+    step_summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if step_summary:
         with open(step_summary, "a", encoding="utf-8") as fh:
             fh.write(md_text)
 
-    print(f"benchmark_comparison={'PASSED' if report['all_gates_passed'] else 'FAILED'}")
-    for row in report["gated_metrics"]:
-        print(
-            f"  {row['description']}: baseline={row['baseline']:.2f} "
-            f"head={row['head']:.2f} delta={row['delta_pct']:+.1f}% "
-            f"{'PASS' if row['gate_passed'] else 'FAIL'}"
-        )
+    print(md_text)
 
-    return 0 if report["all_gates_passed"] else 1
+    if not report["all_gates_passed"]:
+        return _EXIT_GATE_FAILED
+    return _EXIT_OK
 
 
 if __name__ == "__main__":
