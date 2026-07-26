@@ -29,6 +29,7 @@ status reports "not running" which is a valid state for the UI.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import platform
@@ -42,6 +43,183 @@ from typing import Any
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
+
+# ---------------------------------------------------------------------------
+# Target-root isolation (for baseline-vs-HEAD comparison)
+# ---------------------------------------------------------------------------
+
+_DRIVER_VERSION = "1.0"
+_WEBVIEW_SCHEMA_VERSION = 1
+_EXIT_INPUT_SCHEMA = 2
+_EXIT_EXECUTION = 3
+
+# Fixed deterministic fixture parameters — must match
+# product_benchmark_driver.py so baseline and HEAD use the same dataset.
+_WV_REPORT_DATE = "2026-07-15"
+_WV_DAY_START_SECONDS = 9 * 3600  # 09:00:00
+_WV_SPAN_SECONDS = 13 * 3600     # 09:00:00 -> 22:00:00
+
+
+def _setup_target_path(target_root: Path) -> None:
+    """Prepend ``target_root`` to ``sys.path`` so ``worktrace.*`` resolves
+    to the target revision, not the HEAD workspace.
+    """
+    target_str = str(target_root)
+    cleaned: list[str] = []
+    for entry in sys.path:
+        if entry == target_str:
+            continue
+        cleaned.append(entry)
+    sys.path = [target_str] + cleaned
+
+
+def _verify_module_at_target(module_name: str, target_root: Path) -> str:
+    """Import ``module_name`` and verify its ``__file__`` is under target_root."""
+    try:
+        module = __import__(module_name, fromlist=["_"])
+    except Exception as exc:
+        print(
+            f"driver_error: cannot import {module_name} from "
+            f"{target_root}: {exc}",
+            file=sys.stderr,
+        )
+        raise SystemExit(_EXIT_INPUT_SCHEMA)
+
+    file_attr = getattr(module, "__file__", None)
+    if not file_attr:
+        print(
+            f"driver_error: {module_name} has no __file__ attribute",
+            file=sys.stderr,
+        )
+        raise SystemExit(_EXIT_INPUT_SCHEMA)
+
+    resolved = str(Path(file_attr).resolve())
+    target_resolved = str(target_root.resolve())
+    if not resolved.startswith(target_resolved + os.sep) and resolved != target_resolved:
+        print(
+            f"driver_error: {module_name} loaded from {resolved}, "
+            f"expected under {target_resolved}",
+            file=sys.stderr,
+        )
+        raise SystemExit(_EXIT_INPUT_SCHEMA)
+    return resolved
+
+
+def _wv_fixture_hash(activity_count: int) -> str:
+    """Compute a deterministic hash of the WebView benchmark fixture."""
+    payload = hashlib.sha256(
+        json.dumps(
+            {
+                "report_date": _WV_REPORT_DATE,
+                "activity_count": activity_count,
+                "day_start_seconds": _WV_DAY_START_SECONDS,
+                "span_seconds": _WV_SPAN_SECONDS,
+            },
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
+    return payload
+
+
+def _wv_format_time(day: str, seconds_into_day: int) -> str:
+    hours, rem = divmod(seconds_into_day, 3600)
+    minutes, secs = divmod(rem, 60)
+    return f"{day} {hours:02d}:{minutes:02d}:{secs:02d}"
+
+
+def _populate_dataset_self_contained(activity_count: int) -> dict[str, Any]:
+    """Self-contained fixture builder — no dependency on tests.support.*
+
+    Mirrors the dataset shape from product_benchmark_driver.build_20k_dataset
+    so baseline and HEAD see the same data distribution.
+    """
+    from worktrace.constants import SOURCE_AUTO, STATUS_NORMAL, STATUS_PAUSED
+    from worktrace.db import get_connection
+    from worktrace.resources.types import DetectedResource
+    from worktrace.services import activity_fact_repository, project_service
+    from worktrace.services.report_fact_query_service import (
+        get_uncategorized_project_id,
+    )
+
+    anchor_project = project_service.create_project("BenchAnchor")
+    other_project = project_service.create_project("BenchOther")
+
+    step = max(5, _WV_SPAN_SECONDS // max(activity_count, 1))
+    activity_ids: list[int] = []
+
+    with get_connection() as conn:
+        uncategorized_id = get_uncategorized_project_id(conn)
+
+    for index in range(activity_count):
+        start_offset = _WV_DAY_START_SECONDS + index * step
+        if start_offset >= _WV_DAY_START_SECONDS + _WV_SPAN_SECONDS:
+            start_offset = _WV_DAY_START_SECONDS + _WV_SPAN_SECONDS - step
+        if index % 5 == 0:
+            duration = 10
+        else:
+            duration = max(5, step - (index % 7))
+        end_offset = start_offset + duration
+        start_time = _wv_format_time(_WV_REPORT_DATE, start_offset)
+        end_time = _wv_format_time(_WV_REPORT_DATE, end_offset)
+
+        status = STATUS_NORMAL
+        project_id: int | None = None
+        if index % 23 == 5 and index != 0:
+            status = STATUS_NORMAL
+            project_id = anchor_project
+        elif index % 31 == 0 and index != 0:
+            project_id = other_project
+        elif index == max(0, activity_count - 1):
+            status = STATUS_PAUSED
+            project_id = None
+
+        resource = DetectedResource(
+            resource_kind="local_file",
+            resource_subtype="document",
+            display_name=f"Doc{index}",
+            identity_key=f"resource:doc:{index}",
+            is_anchor=(index % 17 == 0),
+            confidence=80,
+            source="auto",
+            app_name="App",
+            process_name="app.exe",
+            window_title=f"Doc{index}",
+            path_hint=f"D:\\Bench\\Doc{index}.txt",
+            path_key=f"path:doc:{index}",
+            uri_scheme="",
+            uri_host="",
+            uri_hint="",
+            metadata_json="",
+        )
+        prepared = activity_fact_repository.prepare_activity(
+            start_time=start_time,
+            source=SOURCE_AUTO,
+            payload={
+                "app_name": f"App{index % 4}",
+                "process_name": "app.exe",
+                "window_title": f"Doc{index}",
+                "status": status,
+                "project_id": project_id,
+                "file_path_hint": None,
+                "resource": resource,
+            },
+        )
+        with get_connection() as conn:
+            activity_id = activity_fact_repository.insert_open_activity(
+                conn, prepared
+            )
+            if status != STATUS_PAUSED:
+                activity_fact_repository.close_activity(conn, activity_id, end_time)
+        activity_ids.append(activity_id)
+
+    return {
+        "report_date": _WV_REPORT_DATE,
+        "activity_count": activity_count,
+        "activity_ids": activity_ids,
+        "anchor_project_id": anchor_project,
+        "other_project_id": other_project,
+        "uncategorized_project_id": uncategorized_id,
+    }
 
 
 def _check_webview2_available() -> str:
@@ -382,8 +560,18 @@ _MEASURE_JS = r"""
 """
 
 
-def _run_harness(activity_count: int, runs: int) -> dict[str, Any]:
-    """Launch WebView2, inject measurement JS, collect results."""
+def _run_harness(
+    activity_count: int,
+    runs: int,
+    *,
+    target_root: Path | None = None,
+) -> dict[str, Any]:
+    """Launch WebView2, inject measurement JS, collect results.
+
+    When ``target_root`` is specified, the harness uses a self-contained
+    fixture builder (no ``tests.support`` dependency) and loads the
+    frontend from the target root, enabling baseline-vs-HEAD comparison.
+    """
     try:
         import webview
     except ImportError as exc:
@@ -434,7 +622,12 @@ def _run_harness(activity_count: int, runs: int) -> dict[str, Any]:
         dataset_info: dict[str, Any] = {}
         try:
             try:
-                dataset_info = _populate_dataset(activity_count)
+                if target_root is not None:
+                    dataset_info = _populate_dataset_self_contained(
+                        activity_count
+                    )
+                else:
+                    dataset_info = _populate_dataset(activity_count)
             except Exception as exc:
                 return {
                     "status": "failed",
@@ -446,7 +639,10 @@ def _run_harness(activity_count: int, runs: int) -> dict[str, Any]:
             services = build_application_services(runtime)
             bridge = WebViewBridge(services)
 
-            index_path = _REPO_ROOT / "worktrace" / "webview_ui" / "index.html"
+            if target_root is not None:
+                index_path = target_root / "worktrace" / "webview_ui" / "index.html"
+            else:
+                index_path = _REPO_ROOT / "worktrace" / "webview_ui" / "index.html"
 
             results_holder: dict[str, Any] = {"results": None, "error": None}
 
@@ -664,6 +860,74 @@ def _build_cold_warm_summary(runs: list[dict[str, Any]]) -> dict[str, Any]:
     return {"cold": cold, "warm": warm}
 
 
+def _extract_webview_metrics(runs: list[dict[str, Any]]) -> dict[str, Any]:
+    """Extract the 4 gated WebView metrics from raw runs.
+
+    Metrics:
+      * ``cold_timeline_seconds`` — cold run (run 0) timeline total.
+      * ``warm_timeline_seconds`` — median of warm runs (1..N) timeline total.
+      * ``detail_payload_seconds`` — median of all runs' detail payload.
+      * ``detail_total_seconds`` — median of all runs' detail total.
+
+    Each metric has ``samples_seconds`` and ``median_seconds``.
+    """
+    if not runs:
+        raise ValueError("no runs to extract metrics from")
+
+    cold_run = runs[0]
+    warm_runs = runs[1:]
+
+    def _stage_ms(run: dict[str, Any], name: str) -> float | None:
+        val = run.get("stages", {}).get(name)
+        if isinstance(val, (int, float)):
+            return float(val) / 1000.0
+        return None
+
+    # cold_timeline_seconds: single sample from the cold run.
+    cold_timeline = _stage_ms(cold_run, "timeline_total_ms")
+    cold_timeline_samples = [cold_timeline] if cold_timeline is not None else []
+
+    # warm_timeline_seconds: samples from warm runs.
+    warm_timeline_samples = [
+        s for s in (_stage_ms(r, "timeline_total_ms") for r in warm_runs)
+        if s is not None
+    ]
+
+    # detail_payload_seconds and detail_total_seconds: all runs.
+    detail_payload_samples = [
+        s for s in (_stage_ms(r, "detail_payload_ms") for r in runs)
+        if s is not None
+    ]
+    detail_total_samples = [
+        s for s in (_stage_ms(r, "detail_total_ms") for r in runs)
+        if s is not None
+    ]
+
+    def _metric(samples: list[float]) -> dict[str, Any]:
+        return {
+            "samples_seconds": [round(s, 6) for s in samples],
+            "median_seconds": round(statistics.median(samples), 6) if samples else 0.0,
+        }
+
+    return {
+        "cold_timeline_seconds": _metric(cold_timeline_samples),
+        "warm_timeline_seconds": _metric(warm_timeline_samples),
+        "detail_payload_seconds": _metric(detail_payload_samples),
+        "detail_total_seconds": _metric(detail_total_samples),
+    }
+
+
+def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+    """Write JSON to ``path`` atomically via temp file + replace."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=False) + "\n",
+        encoding="utf-8",
+    )
+    tmp.replace(path)
+
+
 def _runner_metadata() -> dict[str, Any]:
     """Collect honest runner metadata from the GitHub Actions environment.
 
@@ -704,11 +968,100 @@ def main() -> int:
     )
     parser.add_argument("--activity-count", type=int, default=20000)
     parser.add_argument("--runs", type=int, default=3)
+    parser.add_argument(
+        "--target-root",
+        type=Path,
+        default=None,
+        help=(
+            "Path to the target revision's worktree root for baseline-vs-HEAD "
+            "comparison.  When set, the harness isolates imports to the target "
+            "root and uses a self-contained fixture builder."
+        ),
+    )
+    parser.add_argument(
+        "--revision",
+        default=None,
+        help=(
+            "Git SHA of the target revision (recorded in output for audit). "
+            "Required when --target-root is set."
+        ),
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help=(
+            "Path to write the structured JSON result artifact.  When set, "
+            "the output uses the comparable schema (schema_version, "
+            "driver_version, metrics) for baseline-vs-HEAD comparison."
+        ),
+    )
     args = parser.parse_args()
 
-    result = _run_harness(args.activity_count, args.runs)
+    target_root: Path | None = None
+    if args.target_root is not None:
+        target_root = args.target_root.resolve()
+        if not target_root.is_dir():
+            print(
+                f"driver_error: --target-root does not exist: {target_root}",
+                file=sys.stderr,
+            )
+            return _EXIT_INPUT_SCHEMA
+        if not args.revision:
+            print(
+                "driver_error: --revision is required when --target-root is set",
+                file=sys.stderr,
+            )
+            return _EXIT_INPUT_SCHEMA
+        # Set up target-root isolation so worktrace.* imports resolve to the
+        # target revision, not the HEAD workspace.
+        _setup_target_path(target_root)
+        _verify_module_at_target(
+            "worktrace.services.report_projection_snapshot_service", target_root
+        )
+        print(f"verified: target root isolated to {target_root}")
+
+    result = _run_harness(args.activity_count, args.runs, target_root=target_root)
 
     runner_meta = _runner_metadata()
+    runs = result.get("runs", []) if result["status"] == "ok" else result.get("runs", [])
+
+    # ---- Structured output (for baseline-vs-HEAD comparison) ----
+    if args.output is not None:
+        payload: dict[str, Any] = {
+            "schema_version": _WEBVIEW_SCHEMA_VERSION,
+            "driver_version": _DRIVER_VERSION,
+            "revision": args.revision or _get_git_sha(),
+            "target_root": str(target_root) if target_root else "",
+            "fixture_hash": _wv_fixture_hash(args.activity_count),
+            "python_version": sys.version,
+            "platform": platform.platform(),
+            "runner_metadata": runner_meta,
+            "webview2_runtime": result.get("runtime_detection", "unknown"),
+            "activity_count": args.activity_count,
+            "runs_requested": args.runs,
+            "status": result["status"],
+        }
+
+        if result["status"] == "ok" and runs:
+            payload["metrics"] = _extract_webview_metrics(runs)
+            payload["raw_runs"] = runs
+            payload["cold_warm"] = _build_cold_warm_summary(runs)
+        else:
+            payload["failure_reason"] = result.get("failure_reason", "")
+            payload["failure_category"] = result.get("failure_category", "")
+            if "js_stack" in result:
+                payload["js_stack"] = result["js_stack"]
+            if runs:
+                payload["raw_runs"] = runs
+                payload["cold_warm"] = _build_cold_warm_summary(runs)
+            # No metrics key — comparison layer treats missing metrics as
+            # a fail-closed input/schema error.
+
+        _atomic_write_json(args.output, payload)
+        print(f"\nstructured result written to {args.output}")
+
+    # ---- Legacy summary (always written to test-results/) ----
     summary: dict[str, Any] = {
         "commit_sha": _get_git_sha(),
         "platform": platform.platform(),
@@ -721,7 +1074,6 @@ def main() -> int:
     }
 
     if result["status"] == "ok":
-        runs = result.get("runs", [])
         summary["dataset"] = result.get("dataset", {})
         summary["raw_runs"] = runs
         summary["cold_warm"] = _build_cold_warm_summary(runs)
@@ -731,9 +1083,6 @@ def main() -> int:
         summary["failure_category"] = result.get("failure_category", "")
         if "js_stack" in result:
             summary["js_stack"] = result["js_stack"]
-        # Preserve raw runs, dataset, and cold/warm summary even on failure
-        # so the artifact has full diagnostic data for the failure cause.
-        runs = result.get("runs", [])
         if runs:
             summary["dataset"] = result.get("dataset", {})
             summary["raw_runs"] = runs

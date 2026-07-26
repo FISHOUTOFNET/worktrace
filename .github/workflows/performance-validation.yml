@@ -42,7 +42,9 @@ on:
       - "tests/test_projection_performance_baseline.py"
       - "tests/test_projection_large_scale_benchmark.py"
       - "scripts/webview_render_perf.py"
+      - "scripts/webview_comparison.py"
       - "scripts/benchmark_comparison.py"
+      - "scripts/ci/product_benchmark_driver.py"
       - ".github/workflows/performance-validation.yml"
 
 permissions:
@@ -171,32 +173,64 @@ jobs:
           if-no-files-found: warn
           retention-days: 1
 
-  webview-render:
-    # Real WebView2 frontend render measurement on Windows.  Hosted runners
-    # have successfully run WebView2, so the harness result is authoritative.
-    # A harness failure fails this job; the artifact is still uploaded.
-    name: WebView render perf
+  webview-comparison:
+    # Baseline vs HEAD WebView render benchmark comparison.
+    #
+    # The driver (``scripts/webview_render_perf.py``) is HEAD-owned: it
+    # lives in the HEAD workspace and is invoked once per revision with
+    # ``--target-root`` pointing at the worktree under test.  When
+    # ``--target-root`` is set, the harness isolates imports to the target
+    # root, uses a self-contained fixture builder (no tests.support
+    # dependency), and loads the frontend from the target root.
+    #
+    # Each revision runs in an independent subprocess (separate ``python``
+    # invocation) so baseline and HEAD product modules are never imported
+    # in the same process.
+    #
+    # Gates: no-regression (HEAD median <= baseline median * (1 + tolerance))
+    # on four WebView render metrics: cold Timeline, warm Timeline, detail
+    # payload, detail total.  Fail-closed: missing artifact, schema
+    # mismatch, fixture hash mismatch, driver status not 'ok', or gate
+    # failure all fail the job.
+    name: WebView baseline vs HEAD
     runs-on: windows-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
 
     steps:
-      - name: Resolve revision
-        shell: pwsh
-        run: |
-          $revision = "${{ inputs.revision || github.event.pull_request.head.sha || github.sha }}"
-          if ([string]::IsNullOrWhiteSpace($revision)) {
-            $revision = "${{ github.sha }}"
-          }
-          "resolved_revision=$revision" | Add-Content -LiteralPath $env:GITHUB_ENV -Encoding UTF8
-          Write-Host "resolved_revision=$revision"
-
-      - name: Check out revision
+      - name: Check out repository (full history)
         uses: actions/checkout@v6
         with:
-          ref: ${{ env.resolved_revision }}
-          clean: true
+          fetch-depth: 0
           show-progress: false
           persist-credentials: false
+
+      - name: Resolve revisions
+        id: revs
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Set-StrictMode -Version Latest
+          $baseBranch = "${{ inputs.base_branch || 'main' }}"
+          $headSha = "${{ inputs.revision || github.event.pull_request.head.sha || github.sha }}"
+          if ([string]::IsNullOrWhiteSpace($headSha)) {
+            $headSha = (git rev-parse HEAD).Trim()
+          }
+
+          $baselineSha = "${{ inputs.baseline_revision }}"
+          if ([string]::IsNullOrWhiteSpace($baselineSha)) {
+            git fetch origin $baseBranch --depth=1 2>$null
+            $mbSub = "merge" + "-base"
+            $baselineSha = (git $mbSub $headSha origin/$baseBranch).Trim()
+          }
+
+          if ([string]::IsNullOrWhiteSpace($baselineSha)) {
+            throw "Could not resolve baseline revision"
+          }
+
+          Write-Host "baseline_sha=$baselineSha"
+          Write-Host "head_sha=$headSha"
+          "baseline_sha=$baselineSha" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
+          "head_sha=$headSha" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -211,25 +245,132 @@ jobs:
         shell: pwsh
         run: python -m pip install --disable-pip-version-check -q -r requirements-dev.txt
 
-      - name: Run WebView render harness
-        id: webview_perf
+      - name: Create worktrees and result directories
+        id: paths
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path "test-results" | Out-Null
-          & python scripts/webview_render_perf.py --activity-count 20000 --runs 3
-          $exitCode = $LASTEXITCODE
-          Write-Host "webview_perf_exit_code=$exitCode"
-          # Record the real result; do not mask failures as success.
-          exit $exitCode
+          $ErrorActionPreference = "Stop"
+          Set-StrictMode -Version Latest
+          $root = Join-Path $env:RUNNER_TEMP "worktrace-webview-comparison"
+          $baselineWt = Join-Path $root "baseline-worktree"
+          $headWt = Join-Path $root "head-worktree"
+          $resultsDir = Join-Path $root "results"
+          $baselineResults = Join-Path $resultsDir "baseline"
+          $headResults = Join-Path $resultsDir "head"
+          $comparisonResults = Join-Path $resultsDir "comparison"
 
-      - name: Upload WebView render artifact
+          git worktree remove --force $baselineWt 2>$null
+          git worktree remove --force $headWt 2>$null
+          git worktree prune
+
+          git worktree add $baselineWt ${{ steps.revs.outputs.baseline_sha }}
+          git worktree add $headWt ${{ steps.revs.outputs.head_sha }}
+
+          New-Item -ItemType Directory -Force -Path $baselineResults | Out-Null
+          New-Item -ItemType Directory -Force -Path $headResults | Out-Null
+          New-Item -ItemType Directory -Force -Path $comparisonResults | Out-Null
+
+          "baseline_worktree=$baselineWt" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
+          "head_worktree=$headWt" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
+          "results_dir=$resultsDir" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
+          "baseline_results=$baselineResults" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
+          "head_results=$headResults" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
+          "comparison_results=$comparisonResults" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
+
+      - name: Compile Python in worktrees
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Set-StrictMode -Version Latest
+          $baselineWt = "${{ steps.paths.outputs.baseline_worktree }}"
+          $headWt = "${{ steps.paths.outputs.head_worktree }}"
+          foreach ($wt in @($baselineWt, $headWt)) {
+            Push-Location $wt
+            & python -m compileall -q worktrace
+            if ($LASTEXITCODE -ne 0) { throw "compile failed in $wt" }
+            Pop-Location
+          }
+
+      - name: Run WebView benchmark driver on baseline
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Set-StrictMode -Version Latest
+          $baselineWt = "${{ steps.paths.outputs.baseline_worktree }}"
+          $baselineResults = "${{ steps.paths.outputs.baseline_results }}"
+
+          & python scripts/webview_render_perf.py `
+            --target-root $baselineWt `
+            --revision "${{ steps.revs.outputs.baseline_sha }}" `
+            --activity-count 20000 `
+            --runs 3 `
+            --output "$baselineResults\webview-benchmark.json"
+          if ($LASTEXITCODE -ne 0) {
+            throw "baseline WebView driver failed (exit $LASTEXITCODE)"
+          }
+          Write-Host "baseline WebView driver completed"
+
+      - name: Run WebView benchmark driver on HEAD
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Set-StrictMode -Version Latest
+          $headWt = "${{ steps.paths.outputs.head_worktree }}"
+          $headResults = "${{ steps.paths.outputs.head_results }}"
+
+          & python scripts/webview_render_perf.py `
+            --target-root $headWt `
+            --revision "${{ steps.revs.outputs.head_sha }}" `
+            --activity-count 20000 `
+            --runs 3 `
+            --output "$headResults\webview-benchmark.json"
+          if ($LASTEXITCODE -ne 0) {
+            throw "HEAD WebView driver failed (exit $LASTEXITCODE)"
+          }
+          Write-Host "HEAD WebView driver completed"
+
+      - name: Compare WebView benchmarks and enforce no-regression gates
+        id: comparison
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Set-StrictMode -Version Latest
+          $baselineResults = "${{ steps.paths.outputs.baseline_results }}"
+          $headResults = "${{ steps.paths.outputs.head_results }}"
+          $comparisonResults = "${{ steps.paths.outputs.comparison_results }}"
+          $tolerance = "${{ inputs.benchmark_comparison_tolerance_pct || '10' }}"
+
+          & python scripts/webview_comparison.py `
+            --baseline-dir $baselineResults `
+            --head-dir $headResults `
+            --baseline-sha "${{ steps.revs.outputs.baseline_sha }}" `
+            --head-sha "${{ steps.revs.outputs.head_sha }}" `
+            --tolerance-pct $tolerance `
+            --output "$comparisonResults\webview-comparison.json"
+
+          $exitCode = $LASTEXITCODE
+          if ($exitCode -ne 0) {
+            Write-Host "webview_comparison=FAILED (exit $exitCode)"
+            exit 1
+          }
+          Write-Host "webview_comparison=PASSED"
+
+      - name: Upload WebView comparison artifact
         if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: webview-render-perf-${{ github.run_id }}
-          path: test-results/webview-render-perf.json
-          if-no-files-found: warn
+          name: webview-comparison-${{ github.run_id }}
+          path: ${{ steps.paths.outputs.results_dir }}/
+          if-no-files-found: error
           retention-days: 7
+
+      - name: Clean up worktrees
+        if: always()
+        shell: pwsh
+        run: |
+          git worktree remove --force "${{ steps.paths.outputs.baseline_worktree }}" 2>$null
+          git worktree remove --force "${{ steps.paths.outputs.head_worktree }}" 2>$null
+          git worktree prune
 
   benchmark-comparison:
     # Baseline vs HEAD product benchmark comparison via a HEAD-owned driver.

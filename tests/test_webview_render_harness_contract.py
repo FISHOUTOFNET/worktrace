@@ -24,20 +24,20 @@ WEBVIEW_HARNESS = ROOT / "scripts" / "webview_render_perf.py"
 
 
 def test_performance_validation_webview_job_has_no_continue_on_error() -> None:
-    """The WebView render job must NOT use ``continue-on-error: true``.
+    """The WebView comparison job must NOT use ``continue-on-error: true``.
     A harness failure must fail the job and the overall workflow; the
     artifact is still uploaded via ``if: always()``.
     """
     workflow = PERFORMANCE_WORKFLOW.read_text(encoding="utf-8")
-    assert "name: WebView render perf" in workflow or "webview-render:" in workflow
+    assert "name: WebView baseline vs HEAD" in workflow or "webview-comparison:" in workflow
     lines = workflow.splitlines()
     webview_job_start = None
     for index, line in enumerate(lines):
         stripped = line.lstrip()
-        if stripped.startswith("name: WebView render perf") or stripped == "webview-render:":
+        if stripped.startswith("name: WebView baseline vs HEAD") or stripped == "webview-comparison:":
             webview_job_start = index
             break
-    assert webview_job_start is not None, "WebView render job not found"
+    assert webview_job_start is not None, "WebView comparison job not found"
     for line in lines[webview_job_start + 1:]:
         if line.startswith("  ") and line.rstrip().endswith(":") and not line.startswith("    "):
             stripped = line.strip()
@@ -49,16 +49,38 @@ def test_performance_validation_webview_job_has_no_continue_on_error() -> None:
             indent = len(line) - len(line.lstrip())
             if indent <= 2:
                 pytest.fail(
-                    "WebView render job must not have job-level continue-on-error: true"
+                    "WebView comparison job must not have job-level continue-on-error: true"
                 )
 
 
 def test_performance_validation_webview_artifact_uses_if_always() -> None:
-    """The WebView render artifact must still upload on failure."""
+    """The WebView comparison artifact must still upload on failure."""
     workflow = PERFORMANCE_WORKFLOW.read_text(encoding="utf-8")
-    assert "Upload WebView render artifact" in workflow
+    assert "Upload WebView comparison artifact" in workflow
     assert "if: always()" in workflow
-    assert "webview-render-perf-" in workflow
+    assert "webview-comparison-" in workflow
+
+
+def test_performance_validation_webview_comparison_uses_head_owned_driver() -> None:
+    """The WebView comparison job must use the HEAD-owned driver
+    (``scripts/webview_render_perf.py``) with ``--target-root`` for both
+    baseline and HEAD, and compare via ``scripts/webview_comparison.py``.
+    """
+    workflow = PERFORMANCE_WORKFLOW.read_text(encoding="utf-8")
+    assert "scripts/webview_render_perf.py" in workflow
+    assert "--target-root" in workflow
+    assert "scripts/webview_comparison.py" in workflow
+    assert "--baseline-dir" in workflow
+    assert "--head-dir" in workflow
+
+
+def test_performance_validation_webview_comparison_outputs_results_dir() -> None:
+    """The WebView comparison job must output ``results_dir`` so the
+    artifact upload path is reliable (fail-closed on missing path).
+    """
+    workflow = PERFORMANCE_WORKFLOW.read_text(encoding="utf-8")
+    assert "results_dir=" in workflow
+    assert "if-no-files-found: error" in workflow
 
 
 def test_performance_validation_benchmark_uses_benchmark_marker() -> None:
