@@ -187,13 +187,89 @@ def test_timing_workflow_supports_pr_label_trigger() -> None:
 
 def test_timing_workflow_uses_same_pytest_contract_as_standard_ci() -> None:
     """Both baseline and HEAD must use the same pytest arguments as
-    Standard CI, including ``-m "not benchmark"`` and ``--cache-clear``.
+    Standard CI, including ``-m not benchmark`` and ``--cache-clear``.
+
+    The marker expression is tokenised as two separate array elements
+    (``"-m"``, ``"not benchmark"``) so PowerShell passes them as two
+    independent arguments.  The previous single-string form
+    ``'-m "not benchmark"'`` was passed as one argument and silently
+    dropped by pytest.
     """
     workflow = TIMING_WORKFLOW.read_text(encoding="utf-8")
-    assert '-m "not benchmark"' in workflow
+    assert '"-m", "not benchmark"' in workflow
     assert "--cache-clear" in workflow
     assert "--timeout=90" in workflow
     assert "--junitxml=" in workflow
+
+
+def test_timing_workflow_uses_head_owned_external_harness() -> None:
+    """The timing and selection plugins must load from a HEAD-owned
+    harness directory via PYTHONPATH, NOT from the worktree under test.
+
+    This guarantees baseline and HEAD run against the exact same plugin
+    implementation, so the measurement instrument is not the variable
+    being compared.  The harness directory is populated from the HEAD
+    workspace's ``.ci-harness/`` and ``scripts/`` directories.
+    """
+    workflow = TIMING_WORKFLOW.read_text(encoding="utf-8")
+    assert "harness_dir" in workflow
+    assert "harness" in workflow
+    assert ".ci-harness" in workflow
+    assert "pytest_timing_plugin.py" in workflow
+    assert "pytest_select_from_file.py" in workflow
+    # PYTHONPATH must be set so the plugins load from the harness dir.
+    assert "PYTHONPATH" in workflow
+    assert "$harnessDir" in workflow
+
+
+def test_timing_workflow_loads_timing_plugin_via_dash_p() -> None:
+    """The timing plugin must be loaded via ``-p pytest_timing_plugin``
+    so per-test timing is recorded with the exact ``report.nodeid``.
+    """
+    workflow = TIMING_WORKFLOW.read_text(encoding="utf-8")
+    assert '"-p", "pytest_timing_plugin"' in workflow
+    assert '"--timing-json"' in workflow
+    assert "WORKTRACE_TIMING_REVISION" in workflow
+
+
+def test_timing_workflow_uses_explicit_prepare_and_compare_modes() -> None:
+    """The workflow must use ``--write-selection-only`` (prepare) and
+    ``--compare`` (compare) as explicit modes.  Prepare runs before any
+    pytest run and exits 0 on success — it does NOT read timing/JUnit
+    results.  Compare runs after all pytest runs and enforces the gates.
+    Neither mode relies on exception side effects.
+    """
+    workflow = TIMING_WORKFLOW.read_text(encoding="utf-8")
+    assert "--write-selection-only" in workflow
+    assert "--compare" in workflow
+    # Prepare must fail-closed on non-zero exit.
+    assert "selection prepare failed" in workflow
+
+
+def test_timing_workflow_does_not_copy_plugin_into_worktrees() -> None:
+    """The workflow must NOT copy the selection plugin into the worktrees'
+    ``scripts/`` directories.  Both plugins load from the HEAD-owned
+    harness directory, so the worktree under test never needs to contain
+    the plugin source.
+    """
+    workflow = TIMING_WORKFLOW.read_text(encoding="utf-8")
+    assert "Copy selection plugin into worktrees" not in workflow
+    # The old step copied pytest_select_from_file.py into the worktree's
+    # scripts/ directory.  The new harness step copies it into the
+    # harness dir instead.
+    assert "Copy-Item -Force -LiteralPath $plugin" not in workflow
+
+
+def test_timing_workflow_records_exact_nodeid_timing() -> None:
+    """Each run must produce a ``timing.json`` with per-test timing
+    keyed by the exact pytest ``report.nodeid``.  The comparison layer
+    reads this JSON and never infers node IDs from JUnit classname/name
+    pairs (which are ambiguous for parametrised tests).
+    """
+    workflow = TIMING_WORKFLOW.read_text(encoding="utf-8")
+    assert "timing.json" in workflow
+    assert "timing_present" in workflow
+    assert "selected_count" in workflow
 
 
 def test_timing_workflow_checks_dependency_consistency() -> None:
