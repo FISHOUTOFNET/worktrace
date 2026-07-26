@@ -83,12 +83,18 @@ def test_performance_validation_webview_comparison_outputs_results_dir() -> None
     assert "if-no-files-found: error" in workflow
 
 
-def test_performance_validation_benchmark_uses_benchmark_marker() -> None:
-    """The benchmark job must run only ``@pytest.mark.benchmark`` tests
-    (the inverse of Standard CI's ``-m "not benchmark"``).
+def test_performance_validation_benchmark_uses_head_owned_driver() -> None:
+    """The benchmark comparison job must use the HEAD-owned driver
+    (``scripts/ci/product_benchmark_driver.py``) with ``--target-root``
+    for both baseline and HEAD, and compare via ``scripts/benchmark_comparison.py``.
+    The old ``pytest -m benchmark`` approach must NOT be present.
     """
     workflow = PERFORMANCE_WORKFLOW.read_text(encoding="utf-8")
-    assert '-m "benchmark"' in workflow
+    assert "scripts/ci/product_benchmark_driver.py" in workflow
+    assert "--target-root" in workflow
+    assert "scripts/benchmark_comparison.py" in workflow
+    assert "benchmark-comparison:" in workflow
+    assert '-m "benchmark"' not in workflow
 
 
 def test_webview_harness_measures_real_detail_dom_render() -> None:

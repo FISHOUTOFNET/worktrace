@@ -1,6 +1,7 @@
-# Performance Validation — runs projection benchmarks outside Standard CI.
-# Standard CI excludes ``@pytest.mark.benchmark`` so large-scale timing tests
-# do not gate pull requests. Privacy: synthetic facts only, no real titles/paths.
+# Performance Validation — baseline vs HEAD benchmark and WebView comparison
+# via HEAD-owned drivers.  Standard CI excludes ``@pytest.mark.benchmark`` so
+# large-scale timing tests do not gate pull requests.  Privacy: synthetic
+# facts only, no real titles/paths.
 
 name: Performance validation
 
@@ -56,123 +57,6 @@ env:
   PYTHONFAULTHANDLER: "1"
 
 jobs:
-  benchmark:
-    name: Projection benchmark
-    runs-on: windows-latest
-    timeout-minutes: 20
-
-    steps:
-      - name: Resolve revision
-        shell: pwsh
-        run: |
-          $revision = "${{ inputs.revision || github.event.pull_request.head.sha || github.sha }}"
-          if ([string]::IsNullOrWhiteSpace($revision)) {
-            $revision = "${{ github.sha }}"
-          }
-          "resolved_revision=$revision" | Add-Content -LiteralPath $env:GITHUB_ENV -Encoding UTF8
-          "resolved_revision=$revision" | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding UTF8
-          Write-Host "resolved_revision=$revision"
-
-      - name: Check out revision
-        uses: actions/checkout@v6
-        with:
-          ref: ${{ env.resolved_revision }}
-          clean: true
-          show-progress: false
-          persist-credentials: false
-
-      - name: Capture tested revision
-        shell: pwsh
-        run: |
-          $testedSha = (git rev-parse HEAD).Trim()
-          "tested_sha=$testedSha" | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding UTF8
-          Write-Host "tested_sha=$testedSha"
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-          cache: pip
-          cache-dependency-path: |
-            requirements.txt
-            requirements-dev.txt
-
-      - name: Install dependencies
-        shell: pwsh
-        run: python -m pip install --disable-pip-version-check -q -r requirements-dev.txt
-
-      - name: Compile benchmark sources
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path "test-results" | Out-Null
-          & python -m compileall -q worktrace scripts/pytest_diagnostics.py scripts/pytest_log_to_junit.py scripts/run_pytest_ci.py scripts/pytest_timing_summary.py scripts/webview_render_perf.py *> "test-results/compile.log"
-          $compileExitCode = $LASTEXITCODE
-          Write-Host "compile exit code: $compileExitCode"
-          if ($compileExitCode -ne 0) {
-            Get-Content -LiteralPath "test-results/compile.log" -Tail 120 |
-              ForEach-Object { Write-Host $_ }
-          }
-          exit $compileExitCode
-
-      - name: Run benchmark suite
-        id: benchmark
-        shell: pwsh
-        run: |
-          $utf8 = [System.Text.UTF8Encoding]::new($false)
-          [Console]::InputEncoding = $utf8
-          [Console]::OutputEncoding = $utf8
-          $OutputEncoding = $utf8
-          $PSNativeCommandUseErrorActionPreference = $false
-
-          New-Item -ItemType Directory -Force -Path "test-results" | Out-Null
-          $benchmarkStartedAt = Get-Date
-          & python scripts/run_pytest_ci.py `
-            --log "test-results/pytest.log" `
-            --progress "test-results/pytest-progress.json" `
-            --heartbeat-seconds 120 `
-            -- `
-            -q -ra --tb=short --color=no --cache-clear `
-            -m "benchmark" `
-            --timeout=600 --timeout-method=thread `
-            --durations=50 --durations-min=0.1 `
-            --junitxml="test-results/pytest-junit.xml"
-          $benchmarkExitCode = $LASTEXITCODE
-          $benchmarkElapsedSeconds = ((Get-Date) - $benchmarkStartedAt).TotalSeconds
-
-          Write-Host "benchmark_exit_code=$benchmarkExitCode"
-          Write-Host ("benchmark_elapsed_seconds={0:N2}" -f $benchmarkElapsedSeconds)
-          exit $benchmarkExitCode
-
-      - name: Generate benchmark summary
-        if: always()
-        continue-on-error: true
-        shell: pwsh
-        run: |
-          $revision = (git rev-parse HEAD).Trim()
-          & python scripts/pytest_timing_summary.py `
-            --junit "test-results/pytest-junit.xml" `
-            --log "test-results/pytest.log" `
-            --output "test-results/timing-summary.json" `
-            --revision $revision `
-            --runner "windows-latest" `
-            --python-version "3.11" `
-            --suite "benchmark"
-          if ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath "test-results/timing-summary.json")) {
-            $payload = Get-Content -LiteralPath "test-results/timing-summary.json" -Raw
-            "benchmark_summary=$payload" | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding UTF8
-          } else {
-            Write-Warning "timing summary generation failed; benchmark result is not masked"
-          }
-
-      - name: Upload benchmark artifact
-        if: always()
-        uses: actions/upload-artifact@v6
-        with:
-          name: performance-validation-${{ github.run_id }}
-          path: test-results/
-          if-no-files-found: warn
-          retention-days: 1
-
   webview-comparison:
     # Baseline vs HEAD WebView render benchmark comparison.  The HEAD-owned
     # driver runs once per revision in an independent subprocess.  Gates:

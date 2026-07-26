@@ -444,6 +444,11 @@ def test_collector_fatal_stop_calls_machine_stop_once(monkeypatch):
     )
     monkeypatch.setattr(
         collector_mod.collector_health,
+        "record_collector_started",
+        lambda at_time=None: calls.append("record_collector_started"),
+    )
+    monkeypatch.setattr(
+        collector_mod.collector_health,
         "record_collector_stopped",
         lambda at_time: calls.append("record_collector_stopped"),
     )
@@ -550,6 +555,11 @@ def test_collector_fatal_stop_survives_stop_failure(monkeypatch):
         collector_mod,
         "update_heartbeat",
         lambda status: calls.append("heartbeat:" + status),
+    )
+    monkeypatch.setattr(
+        collector_mod.collector_health,
+        "record_collector_started",
+        lambda at_time=None: calls.append("record_collector_started"),
     )
     monkeypatch.setattr(
         collector_mod.collector_health,
