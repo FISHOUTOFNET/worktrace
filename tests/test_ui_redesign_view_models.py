@@ -114,15 +114,28 @@ def _organize_session(row, index, report_date):
     )
 
 
-def test_overview_attention_subset_preserved_across_recent_truncation(temp_db):
+def test_overview_attention_subset_preserved_across_recent_truncation(temp_db, monkeypatch):
     """When recent is truncated to _RECENT_LIMIT, an older attention record
     that falls beyond the truncation window must still appear in visible
     recent. This verifies the selection function promotes required attention
     rows into the visible recent window so visible attention ⊆ visible recent.
+
+    This is the integration wiring test for the invariant that
+    ``test_overview_recent_selection_unit.py`` covers at the pure-function
+    level.  ``_RECENT_LIMIT`` is monkeypatched to a small value so the
+    boundary scenario is exercised with 5 mutations instead of 20 — the
+    selection algorithm's behavior depends on the relationship between
+    ``num_sessions`` and ``_RECENT_LIMIT``, not on their absolute values.
     """
     from worktrace.services import view_model_service
 
-    recent_limit = view_model_service._RECENT_LIMIT
+    # Use a small recent limit so we need fewer sessions and mutations to
+    # reach the boundary.  The pure-function unit tests cover the algorithm
+    # at the production limit; this test verifies the DB → projection →
+    # ViewModel → selection wiring.
+    small_recent_limit = 5
+    monkeypatch.setattr(view_model_service, "_RECENT_LIMIT", small_recent_limit)
+    recent_limit = small_recent_limit
     attention_limit = view_model_service._ATTENTION_LIMIT
     report_date = "2026-07-22"
     project_a = project_service.create_project("Alpha")
@@ -166,16 +179,23 @@ def test_overview_attention_subset_preserved_across_recent_truncation(temp_db):
     assert len(model["recent"]) == recent_limit
 
 
-def test_overview_attention_promotion_replaces_tail_ordinary_rows(temp_db):
+def test_overview_attention_promotion_replaces_tail_ordinary_rows(temp_db, monkeypatch):
     """Verify the replacement strategy: to accommodate older attention rows
     that fell beyond the truncation boundary, the selection function replaces
     tail-most ordinary (non-in-progress, non-attention) rows. The in-progress
     session (if present) stays first and is never replaced, and the remaining
     newer ordinary rows keep their relative order.
+
+    This is the integration wiring test for the replacement invariant that
+    ``test_overview_recent_selection_unit.py`` covers at the pure-function
+    level.  ``_RECENT_LIMIT`` is monkeypatched to a small value so the
+    boundary scenario is exercised with 4 mutations instead of 19.
     """
     from worktrace.services import view_model_service
 
-    recent_limit = view_model_service._RECENT_LIMIT
+    small_recent_limit = 5
+    monkeypatch.setattr(view_model_service, "_RECENT_LIMIT", small_recent_limit)
+    recent_limit = small_recent_limit
     report_date = "2026-07-22"
     project_a = project_service.create_project("Promo-A")
     project_b = project_service.create_project("Promo-B")
