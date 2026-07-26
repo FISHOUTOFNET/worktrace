@@ -1,8 +1,10 @@
-"""Unit tests for the pytest_select_from_file plugin.
+"""Integration tests for the pytest_select_from_file plugin.
 
-Verifies the fail-closed contract: a missing or mismatched selection file
-must raise ``pytest.UsageError`` so a test rename cannot silently reduce
-the common-suite to a partial subset.
+Each test spawns pytest in a subprocess with the selection plugin loaded,
+so the file is classified as integration (subprocess risk signal) rather
+than unit.  Verifies the fail-closed contract: a missing or mismatched
+selection file must raise ``pytest.UsageError`` so a test rename cannot
+silently reduce the common-suite to a partial subset.
 """
 
 from __future__ import annotations
@@ -14,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-pytestmark = [pytest.mark.unit, pytest.mark.contract, pytest.mark.parallel_safe]
+pytestmark = [pytest.mark.integration, pytest.mark.contract, pytest.mark.parallel_safe]
 
 ROOT = Path(__file__).resolve().parents[1]
 PLUGIN = ROOT / "scripts" / "pytest_select_from_file.py"
