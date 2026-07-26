@@ -581,13 +581,9 @@ def main() -> int:
             f"hash={metric_proj['consistency_hash']})"
         )
 
-        # Scenario 2: 10k contributions
-        # The 20k scenario intentionally leaves one paused (unclosed) activity
-        # to exercise the projection's paused-row path.  The single-open
-        # invariant (uq_activity_log_single_open) would reject the first
-        # insert_open_activity of the 10k scenario, so close any lingering
-        # open activity first.  close_all_open_activities exists in both
-        # baseline and HEAD, so this is a safe common-API call.
+        # Scenario 2: 10k contributions.
+        # Close the paused activity left by the 20k scenario so the
+        # single-open invariant does not reject the first 10k insert.
         from worktrace.db import get_connection
         from worktrace.services import activity_fact_repository
         with get_connection() as conn:
