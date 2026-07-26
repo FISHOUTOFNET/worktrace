@@ -152,12 +152,18 @@ def _build_resource(index: int) -> Any:
 
 
 def _ensure_benchmark_projects() -> dict[str, int]:
-    """Create two benchmark projects, returning their IDs."""
+    """Create two benchmark projects if absent, returning their IDs."""
     from worktrace.services import project_service
 
+    def _ensure(name: str) -> int:
+        existing = project_service.get_project_by_name(name)
+        if existing is not None:
+            return int(existing["id"])
+        return project_service.create_project(name)
+
     return {
-        "anchor": project_service.create_project("BenchAnchor"),
-        "other": project_service.create_project("BenchOther"),
+        "anchor": _ensure("BenchAnchor"),
+        "other": _ensure("BenchOther"),
     }
 
 
