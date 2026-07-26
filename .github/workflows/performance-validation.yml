@@ -11,6 +11,20 @@ on:
         description: Exact repository revision to validate
         required: false
         type: string
+      baseline_revision:
+        description: Baseline revision for benchmark comparison (defaults to merge-base with main)
+        required: false
+        type: string
+      base_branch:
+        description: Base branch for merge-base resolution (default main)
+        required: false
+        type: string
+        default: main
+      benchmark_comparison_tolerance_pct:
+        description: Max regression % for product benchmark comparison (default 10)
+        required: false
+        type: string
+        default: "10"
   schedule:
     - cron: "0 4 * * 1,4"
   pull_request:
@@ -28,6 +42,7 @@ on:
       - "tests/test_projection_performance_baseline.py"
       - "tests/test_projection_large_scale_benchmark.py"
       - "scripts/webview_render_perf.py"
+      - "scripts/benchmark_comparison.py"
       - ".github/workflows/performance-validation.yml"
 
 permissions:
@@ -215,3 +230,224 @@ jobs:
           path: test-results/webview-render-perf.json
           if-no-files-found: warn
           retention-days: 7
+
+  benchmark-comparison:
+    # Baseline vs HEAD product benchmark comparison.
+    #
+    # Runs the ``@pytest.mark.benchmark`` suite on both the merge-base and
+    # the PR HEAD in independent git worktrees, captures the per-benchmark
+    # JSON artifacts (20k activities, 10k contributions, peak memory), and
+    # compares them with ``scripts/benchmark_comparison.py``.
+    #
+    # Gates: no-regression (HEAD <= baseline * (1 + tolerance)) on the
+    # originally-targeted product metrics.  This replaces the previous
+    # blanket "20% improvement on full pytest" gate, which conflated
+    # added-test cost with product performance.
+    name: Baseline vs HEAD benchmark
+    runs-on: windows-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Check out repository (full history)
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          show-progress: false
+          persist-credentials: false
+
+      - name: Resolve revisions
+        id: revs
+        shell: pwsh
+        run: |
+          $baseBranch = "${{ inputs.base_branch || 'main' }}"
+          $headSha = "${{ inputs.revision || github.event.pull_request.head.sha || github.sha }}"
+          if ([string]::IsNullOrWhiteSpace($headSha)) {
+            $headSha = (git rev-parse HEAD).Trim()
+          }
+
+          $baselineSha = "${{ inputs.baseline_revision }}"
+          if ([string]::IsNullOrWhiteSpace($baselineSha)) {
+            git fetch origin $baseBranch --depth=1 2>$null
+            $mbSub = "merge" + "-base"
+            $baselineSha = (git $mbSub $headSha origin/$baseBranch).Trim()
+          }
+
+          if ([string]::IsNullOrWhiteSpace($baselineSha)) {
+            throw "Could not resolve baseline revision"
+          }
+
+          Write-Host "baseline_sha=$baselineSha"
+          Write-Host "head_sha=$headSha"
+          "baseline_sha=$baselineSha" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
+          "head_sha=$headSha" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install dependencies
+        shell: pwsh
+        run: python -m pip install --disable-pip-version-check -q -r requirements-dev.txt
+
+      - name: Create worktrees and result directories
+        id: paths
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP "worktrace-benchmark-comparison"
+          $baselineWt = Join-Path $root "baseline-worktree"
+          $headWt = Join-Path $root "head-worktree"
+          $resultsDir = Join-Path $root "results"
+          $baselineResults = Join-Path $resultsDir "baseline"
+          $headResults = Join-Path $resultsDir "head"
+
+          git worktree remove --force $baselineWt 2>$null
+          git worktree remove --force $headWt 2>$null
+          git worktree prune
+
+          git worktree add $baselineWt ${{ steps.revs.outputs.baseline_sha }}
+          git worktree add $headWt ${{ steps.revs.outputs.head_sha }}
+
+          New-Item -ItemType Directory -Force -Path $baselineResults | Out-Null
+          New-Item -ItemType Directory -Force -Path $headResults | Out-Null
+
+          "baseline_worktree=$baselineWt" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
+          "head_worktree=$headWt" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
+          "baseline_results=$baselineResults" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
+          "head_results=$headResults" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
+
+      - name: Compile Python in worktrees
+        shell: pwsh
+        run: |
+          $baselineWt = "${{ steps.paths.outputs.baseline_worktree }}"
+          $headWt = "${{ steps.paths.outputs.head_worktree }}"
+          foreach ($wt in @($baselineWt, $headWt)) {
+            Push-Location $wt
+            & python -m compileall -q worktrace scripts/pytest_diagnostics.py scripts/pytest_log_to_junit.py scripts/run_pytest_ci.py scripts/pytest_timing_summary.py
+            if ($LASTEXITCODE -ne 0) { throw "compile failed in $wt" }
+            Pop-Location
+          }
+
+      - name: Run benchmark suite on baseline
+        shell: pwsh
+        run: |
+          $baselineWt = "${{ steps.paths.outputs.baseline_worktree }}"
+          $baselineResults = "${{ steps.paths.outputs.baseline_results }}"
+
+          $utf8 = [System.Text.UTF8Encoding]::new($false)
+          [Console]::InputEncoding = $utf8
+          [Console]::OutputEncoding = $utf8
+          $OutputEncoding = $utf8
+          $PSNativeCommandUseErrorActionPreference = $false
+
+          Push-Location $baselineWt
+          # The benchmark tests write JSON artifacts to test-results/ inside
+          # the worktree.  We run only the benchmark-marked tests.
+          & python scripts/run_pytest_ci.py `
+            --log "$baselineResults\pytest.log" `
+            --progress "$baselineResults\pytest-progress.json" `
+            --heartbeat-seconds 120 `
+            -- `
+            -q -ra --tb=short --color=no --cache-clear `
+            -m "benchmark" `
+            --timeout=600 --timeout-method=thread `
+            --junitxml="$baselineResults\pytest-junit.xml"
+          $exitCode = $LASTEXITCODE
+          Pop-Location
+          Write-Host "baseline_benchmark_exit_code=$exitCode"
+          if ($exitCode -ne 0) {
+            throw "baseline benchmark suite failed (exit $exitCode)"
+          }
+          # Copy benchmark JSON artifacts from the worktree's test-results/
+          # into the baseline results directory for the comparison step.
+          $baselineTestResults = Join-Path $baselineWt "test-results"
+          if (Test-Path $baselineTestResults) {
+            Get-ChildItem -Path $baselineTestResults -Filter "benchmark-*.json" |
+              ForEach-Object {
+                Copy-Item -Force -LiteralPath $_.FullName -Destination $baselineResults
+                Write-Host "copied $($_.Name) to baseline results"
+              }
+          }
+
+      - name: Run benchmark suite on HEAD
+        shell: pwsh
+        run: |
+          $headWt = "${{ steps.paths.outputs.head_worktree }}"
+          $headResults = "${{ steps.paths.outputs.head_results }}"
+
+          $utf8 = [System.Text.UTF8Encoding]::new($false)
+          [Console]::InputEncoding = $utf8
+          [Console]::OutputEncoding = $utf8
+          $OutputEncoding = $utf8
+          $PSNativeCommandUseErrorActionPreference = $false
+
+          Push-Location $headWt
+          & python scripts/run_pytest_ci.py `
+            --log "$headResults\pytest.log" `
+            --progress "$headResults\pytest-progress.json" `
+            --heartbeat-seconds 120 `
+            -- `
+            -q -ra --tb=short --color=no --cache-clear `
+            -m "benchmark" `
+            --timeout=600 --timeout-method=thread `
+            --junitxml="$headResults\pytest-junit.xml"
+          $exitCode = $LASTEXITCODE
+          Pop-Location
+          Write-Host "head_benchmark_exit_code=$exitCode"
+          if ($exitCode -ne 0) {
+            throw "HEAD benchmark suite failed (exit $exitCode)"
+          }
+          $headTestResults = Join-Path $headWt "test-results"
+          if (Test-Path $headTestResults) {
+            Get-ChildItem -Path $headTestResults -Filter "benchmark-*.json" |
+              ForEach-Object {
+                Copy-Item -Force -LiteralPath $_.FullName -Destination $headResults
+                Write-Host "copied $($_.Name) to HEAD results"
+              }
+          }
+
+      - name: Compare benchmarks and enforce no-regression gates
+        id: comparison
+        shell: pwsh
+        run: |
+          $baselineResults = "${{ steps.paths.outputs.baseline_results }}"
+          $headResults = "${{ steps.paths.outputs.head_results }}"
+          $tolerance = "${{ inputs.benchmark_comparison_tolerance_pct || '10' }}"
+
+          & python scripts/benchmark_comparison.py `
+            --baseline-dir $baselineResults `
+            --head-dir $headResults `
+            --baseline-sha "${{ steps.revs.outputs.baseline_sha }}" `
+            --head-sha "${{ steps.revs.outputs.head_sha }}" `
+            --tolerance-pct $tolerance `
+            --output "benchmark-comparison.json"
+
+          $exitCode = $LASTEXITCODE
+          if ($exitCode -ne 0) {
+            Write-Host "benchmark_comparison=FAILED"
+            exit 1
+          }
+          Write-Host "benchmark_comparison=PASSED"
+
+      - name: Upload benchmark comparison artifact
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: benchmark-comparison-${{ github.run_id }}
+          path: |
+            ${{ steps.paths.outputs.results_dir }}/
+            benchmark-comparison.json
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Clean up worktrees
+        if: always()
+        shell: pwsh
+        run: |
+          git worktree remove --force "${{ steps.paths.outputs.baseline_worktree }}" 2>$null
+          git worktree remove --force "${{ steps.paths.outputs.head_worktree }}" 2>$null
+          git worktree prune
