@@ -70,13 +70,18 @@ def test_timing_workflow_uses_git_worktree_for_isolation() -> None:
 
 
 def test_timing_workflow_uses_independent_result_directories() -> None:
-    """Each run writes to its own ``results/<baseline|head>/run-N/``
+    """Each run writes to its own ``results/pair-N/<baseline|head>/``,
+    ``results/head-only/run-N/``, or ``results/head-full/run-N/``
     directory.  The workflow must NOT delete the shared parent.
     """
     workflow = TIMING_WORKFLOW.read_text(encoding="utf-8")
     assert "results" in workflow
-    assert r"baseline\run-" in workflow
-    assert r"head\run-" in workflow
+    # Interleaved paired execution uses pair-N/baseline and pair-N/head.
+    assert r"pair-1\baseline" in workflow
+    assert r"pair-1\head" in workflow
+    # HEAD-only and full-suite runs use run-N subdirectories.
+    assert r"head-only\run-" in workflow
+    assert r"head-full\run-" in workflow
     assert "Remove-Item -Recurse test-results" not in workflow
     assert "Remove-Item -Recurse -Force $resultsDir" not in workflow
 
@@ -100,26 +105,38 @@ def test_timing_workflow_writes_run_result_json_per_run() -> None:
 def test_timing_workflow_enforces_real_acceptance_gates() -> None:
     """Acceptance gates must actually affect the job exit status.
 
-    Gates (``exit 1`` on failure): HEAD median <= 240s, improvement >=
-    20%, test count not reduced, no failures, no unexplained skipped
-    growth, dependency match.  A workflow that only prints booleans and
-    never exits non-zero is a contract violation.
+    The layered gates (enforced by ``scripts/timing_comparison.py`` and
+    surfaced via ``exit 1`` in the workflow) are:
+      - common-suite paired median regression <= 10%
+      - HEAD full-suite median <= 240s
+      - test count not reduced, no failures, dependency match
+
+    A workflow that only prints booleans and never exits non-zero is a
+    contract violation.
     """
     workflow = TIMING_WORKFLOW.read_text(encoding="utf-8")
-    assert "head_median" in workflow
     assert "240" in workflow
-    assert "pctImprovement" in workflow
-    assert "20" in workflow
+    assert "common_regression_threshold" in workflow
+    assert "10" in workflow
     assert "test_count" in workflow
     assert "all_gates_passed" in workflow
     assert "exit 1" in workflow
     assert "timing_validation=FAILED" in workflow
+    # The gate enforcement is delegated to timing_comparison.py, which
+    # must be invoked from the workflow and its exit code respected.
+    assert "scripts/timing_comparison.py" in workflow
+    assert "timing_validation=PASSED" in workflow
 
 
 def test_timing_workflow_any_pytest_failure_fails_job() -> None:
     """Any pytest failure (non-zero exit, missing JUnit, or non-zero
     failure/error counts) must mark the run as ``valid=false`` and the
     final gate check must fail the job.
+
+    The per-run validity is computed in PowerShell (``$valid``), written
+    to ``run-result.json``, and the overall gate enforcement is delegated
+    to ``scripts/timing_comparison.py`` which reads those JSON files and
+    exits non-zero if any run is invalid or any gate fails.
     """
     workflow = TIMING_WORKFLOW.read_text(encoding="utf-8")
     assert "$exitCode -eq 0" in workflow
@@ -127,8 +144,10 @@ def test_timing_workflow_any_pytest_failure_fails_job() -> None:
     assert "$errorCount -eq 0" in workflow
     assert "$junitPresent" in workflow
     assert "$valid =" in workflow or "$valid=" in workflow
-    assert "allValid" in workflow
-    assert "$allGatesPassed" in workflow
+    assert "valid" in workflow
+    # The comparison script reads run-result.json and enforces gates.
+    assert "scripts/timing_comparison.py" in workflow
+    assert "all_gates_passed" in workflow
 
 
 def test_timing_workflow_head_cleanup_does_not_delete_baseline() -> None:
@@ -198,3 +217,46 @@ def test_timing_workflow_uploads_artifact_always() -> None:
     assert "Upload timing comparison artifact" in workflow
     assert "if: always()" in workflow
     assert "standard-timing-validation-" in workflow
+
+
+def test_timing_workflow_uses_interleaved_paired_execution() -> None:
+    """Baseline and HEAD runs must be interleaved (not baseline×3 then
+    HEAD×3) so runner fatigue does not systematically favour one revision.
+
+    The deterministic order is:
+      Pair 1: baseline → HEAD
+      Pair 2: HEAD → baseline
+      Pair 3: baseline → HEAD
+    """
+    workflow = TIMING_WORKFLOW.read_text(encoding="utf-8")
+    # The execution order manifest must be written and the pairs must
+    # alternate which revision runs first.
+    assert "execution-order.json" in workflow
+    assert "pair-1" in workflow
+    assert "pair-2" in workflow
+    assert "pair-3" in workflow
+    # Pair 1 starts with baseline; pair 2 starts with HEAD.
+    assert "pair-1/baseline" in workflow
+    assert "pair-2/head" in workflow
+
+
+def test_timing_workflow_implements_three_tier_measurement() -> None:
+    """The workflow must measure three separate tiers:
+      1. Common-suite (tests present in both baseline and HEAD)
+      2. HEAD-only (tests added in HEAD)
+      3. HEAD full suite (complete Standard CI pytest)
+
+    The selection plugin must be used to run only the common or HEAD-only
+    subsets without passing thousands of node IDs on the command line.
+    """
+    workflow = TIMING_WORKFLOW.read_text(encoding="utf-8")
+    assert "head-only" in workflow
+    assert "head-full" in workflow
+    assert "WORKTRACE_SELECT_FILE" in workflow
+    assert "pytest_select_from_file" in workflow
+    assert "common.txt" in workflow
+    assert "head-only.txt" in workflow
+    # Collection must be performed on both revisions to compute the sets.
+    assert "collect-only" in workflow
+    assert "baseline-node-ids.txt" in workflow
+    assert "head-node-ids.txt" in workflow
