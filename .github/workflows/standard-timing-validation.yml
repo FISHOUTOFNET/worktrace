@@ -147,7 +147,7 @@ jobs:
           Write-Host "baseline_requirements_hash=$baselineReqHash"
           Write-Host "head_requirements_hash=$headReqHash"
 
-          "dependency_match=$match" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
+          "dependency_match=$($match.ToString().ToLower())" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
 
           if (-not $match) {
             $allow = "${{ inputs.allow_dependency_changes || 'false' }}"

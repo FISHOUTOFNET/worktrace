@@ -582,6 +582,21 @@ def main() -> int:
         )
 
         # Scenario 2: 10k contributions
+        # The 20k scenario intentionally leaves one paused (unclosed) activity
+        # to exercise the projection's paused-row path.  The single-open
+        # invariant (uq_activity_log_single_open) would reject the first
+        # insert_open_activity of the 10k scenario, so close any lingering
+        # open activity first.  close_all_open_activities exists in both
+        # baseline and HEAD, so this is a safe common-API call.
+        from worktrace.db import get_connection
+        from worktrace.services import activity_fact_repository
+        with get_connection() as conn:
+            closed_ids = activity_fact_repository.close_all_open_activities(
+                conn, _format_time(_REPORT_DATE, _DAY_START_SECONDS)
+            )
+        if closed_ids:
+            print(f"  closed {len(closed_ids)} lingering open activity before 10k scenario")
+
         print("building 10k contributions fixture...")
         info_contrib = build_10k_contributions_dataset(10000)
         print(

@@ -435,7 +435,9 @@ _MEASURE_JS = r"""
                     var dInFlight = Object.keys(App.detailsInFlight || {}).length;
 
                     if (dVm !== null
-                        && detailHeader === "活动详情"
+                        && detailHeader !== "选择左侧时段查看详情"
+                        && detailHeader.indexOf("加载") === -1
+                        && detailHeader.indexOf("正在刷新") === -1
                         && detailDomRows > 0
                         && dInFlight === 0) {
                         detailCompleted = true;
