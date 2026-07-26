@@ -62,6 +62,10 @@
       {
         "path": "tests/webview/test_timeline_static_contract.py",
         "reason": "Timeline WebView static owner matrix covering display labels, live display, privacy, and editing contracts."
+      },
+      {
+        "path": "tests/test_timing_comparison_unit.py",
+        "reason": "Owner matrix for Standard timing validation comparison layer: prepare/compare modes, common/head-only/baseline-only set computation, gate thresholds, fail-closed exit codes, and exact-node-ID attribution."
       }
     ]
   },

@@ -40,11 +40,9 @@ def _run_pytest_with_selection(
         ),
         encoding="utf-8",
     )
-    # Anchor pytest's rootdir to tmp_path so collected node IDs are
-    # relative (e.g. ``test_synthetic_select.py::test_alpha``) and match
-    # the selection file format.  Without this, pytest walks up and
-    # finds the repo's pytest.ini, producing node IDs prefixed with the
-    # temp subdirectory path.
+    # Anchor pytest's rootdir to tmp_path so collected node IDs are relative
+    # (e.g. ``test_synthetic_select.py::test_alpha``) and match the selection
+    # file format; otherwise pytest finds the repo's pytest.ini and prefixes paths.
     (tmp_path / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
     env = dict(os.environ)
     # The plugin is loaded by module name, so scripts/ must be on sys.path.

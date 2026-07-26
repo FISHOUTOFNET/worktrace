@@ -49,12 +49,11 @@ def pytest_collection_modifyitems(session, config, items):  # noqa: D401
     """Filter collected items to those listed in the selection file."""
     raw_path = os.environ.get(_SELECT_ENV, "").strip()
     if not raw_path:
-        return  # No selection requested; run everything.
+        return
 
     path = Path(raw_path)
     if not path.is_file():
-        # Fail closed: a missing selection file is a configuration error,
-        # not an implicit "run everything".
+        # Fail closed: a missing selection file is a configuration error.
         raise _usage_error(
             f"{_SELECT_ENV} points to a missing file: {path}"
         )
@@ -75,9 +74,7 @@ def pytest_collection_modifyitems(session, config, items):  # noqa: D401
 
     missing = wanted - seen
     if missing:
-        # Fail closed: every requested test must be collected. A rename or
-        # removal that desynchronises the selection file from the worktree
-        # must surface as an explicit failure, not a silent subset run.
+        # Fail closed: every requested test must be collected.
         sample = sorted(missing)[:5]
         raise _usage_error(
             f"{_SELECT_ENV} listed {len(missing)} test(s) not collected. "

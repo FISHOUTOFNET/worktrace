@@ -1,36 +1,7 @@
-# Standard timing validation — layered baseline vs HEAD comparison.
-#
-# Three-tier measurement:
-#   1. Common-suite: tests present in both baseline and HEAD, run in 3
-#      interleaved pairs (baseline/HEAD adjacent, order alternates) so
-#      runner fatigue does not systematically favour one revision.
-#   2. HEAD-only: tests added in HEAD, run 3x on HEAD only.
-#   3. HEAD full suite: the complete Standard CI pytest run, 3x.
-#
-# Gates (all must pass):
-#   - common-suite paired median regression <= 10%
-#   - HEAD full-suite median <= 240s
-#   - all runs valid, no failures, test count not reduced, dependency match
-#
-# HEAD-owned harness:
-#   The pytest_timing_plugin (per-test timing JSON) and
-#   pytest_select_from_file (selection filter) plugins are loaded from a
-#   single harness directory owned by the HEAD workspace, NOT from the
-#   worktree under test.  Both baseline and HEAD runs load the same plugin
-#   files so the measurement instrument is identical across revisions.
-#
-# Exact node ID:
-#   Per-test timing is recorded by ``pytest_runtest_logreport(report)``
-#   using ``report.nodeid`` — the same identifier emitted by
-#   ``--collect-only -q``.  The comparison layer never infers node IDs
-#   from JUnit classname/name pairs, which are ambiguous for parametrised
-#   tests.
-#
-# Explicit prepare/compare modes:
-#   ``timing_comparison.py --write-selection-only`` runs before any pytest
-#   run and exits 0 on success — it does NOT read timing/JUnit results.
-#   ``timing_comparison.py --compare`` runs after all pytest runs and
-#   enforces the gates.  Neither mode relies on exception side effects.
+# Standard timing validation — baseline vs HEAD comparison.  Tiers: common
+# (3 interleaved pairs), HEAD-only (3x), HEAD full (3x).  Gates: common
+# median <= 10%, full <= 240s, all valid, no failures, dep match.  Plugins
+# load from HEAD-owned harness; timing keyed by pytest report.nodeid.
 
 name: Standard timing validation
 
@@ -209,18 +180,13 @@ jobs:
       - name: Set up HEAD-owned validation harness
         shell: pwsh
         run: |
-          # The timing and selection plugins are HEAD-owned: they load
-          # from this harness directory (populated from the HEAD workspace)
-          # via PYTHONPATH, NOT from the worktree under test.  This guarantees
-          # baseline and HEAD use the exact same plugin implementation, so
-          # the measurement instrument is not the variable being compared.
+          # HEAD-owned harness: plugins load from this harness dir (populated
+          # from HEAD workspace) via PYTHONPATH, not the worktree under test.
           $harnessDir = "${{ steps.paths.outputs.harness_dir }}"
           $workspace = $env:GITHUB_WORKSPACE
 
-          # The timing plugin lives in .ci-harness/ in the HEAD workspace.
           Copy-Item -Force -LiteralPath "$workspace\.ci-harness\pytest_timing_plugin.py" `
             -Destination (Join-Path $harnessDir "pytest_timing_plugin.py")
-          # The selection plugin lives in scripts/ in the HEAD workspace.
           Copy-Item -Force -LiteralPath "$workspace\scripts\pytest_select_from_file.py" `
             -Destination (Join-Path $harnessDir "pytest_select_from_file.py")
 
@@ -300,24 +266,9 @@ jobs:
           $headOnlyCount = (Get-Content -LiteralPath (Join-Path $selectionDir "head-only.txt") -ErrorAction SilentlyContinue | Where-Object { $_.Trim() }).Count
           Write-Host "common=$commonCount head_only=$headOnlyCount"
 
-      # ---------------------------------------------------------------------------
-      # Interleaved paired runs.
-      #
-      # Execution order (deterministic, interleaved):
-      #   Pair 1: baseline -> HEAD
-      #   Pair 2: HEAD -> baseline
-      #   Pair 3: baseline -> HEAD
-      #
-      # Each run uses the common test selection file.  After the 3 common pairs,
-      # we run 3 HEAD-only runs (HEAD-only selection file) and 3 full HEAD runs
-      # (no selection file).  Each run writes to its own results subdirectory.
-      #
-      # Every run loads the HEAD-owned pytest_timing_plugin via -p, with
-      # PYTHONPATH pointing at the harness directory so the plugin source is
-      # the HEAD workspace's .ci-harness/ — never the worktree under test.
-      # The plugin writes structured per-test timing JSON keyed by the exact
-      # pytest report.nodeid.
-      # ---------------------------------------------------------------------------
+      # Interleaved paired runs: pair-1 b→h, pair-2 h→b, pair-3 b→h, then 3
+      # HEAD-only and 3 full HEAD runs.  Each loads the HEAD-owned timing plugin
+      # via -p with PYTHONPATH at the harness dir; timing JSON keyed by report.nodeid.
       - name: Run interleaved paired timing
         shell: pwsh
         run: |
@@ -507,11 +458,9 @@ jobs:
           Invoke-TimingRun -Label "pair-3/head (common)" -Worktree $headWt `
             -RunDir (Join-Path $resultsDir "pair-3\head") -SelectionFile $commonSel -Revision $headSha
 
-          # HEAD-only runs (3x).  Skip if the HEAD-only selection is empty
-          # (head_only_count == 0): an empty selection file fails-closed in
-          # the selection plugin, and there are no tests to measure.  The
-          # comparison layer treats an empty head-only suite as vacuously
-          # passed.
+          # HEAD-only runs (3x).  Skip if HEAD-only selection is empty: an empty
+          # file fails-closed in the selection plugin; comparison treats it as
+          # vacuously passed.
           $headOnlySelPath = Join-Path $resultsDir "selection\head-only.txt"
           $headOnlyLineCount = 0
           if (Test-Path $headOnlySelPath) {

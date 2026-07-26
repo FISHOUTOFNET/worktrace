@@ -24,13 +24,6 @@ Fail-closed contract:
   * Sample count mismatch or zero samples → exit 3 (execution incomplete).
   * Performance gate failure → exit 4.
   * All gates pass → exit 0.
-
-Exit codes
-----------
-* 0 — success (all gates passed)
-* 2 — input/schema error (missing file, schema mismatch, fixture mismatch)
-* 3 — execution incomplete (sample count mismatch, zero samples)
-* 4 — performance gate failure (regression exceeds tolerance)
 """
 
 from __future__ import annotations
@@ -269,22 +262,22 @@ def _build_comparison(
         )
 
     # Consistency hashes (informational — already asserted in driver).
-    b_hash_20k = (
+    b_proj_hash = (
         baseline.get("metrics", {})
         .get("projection_20k_total_seconds", {})
         .get("consistency_hash", "")
     )
-    h_hash_20k = (
+    h_proj_hash = (
         head.get("metrics", {})
         .get("projection_20k_total_seconds", {})
         .get("consistency_hash", "")
     )
-    b_hash_10k = (
+    b_contrib_hash = (
         baseline.get("metrics", {})
         .get("projection_10k_contributions_seconds", {})
         .get("consistency_hash", "")
     )
-    h_hash_10k = (
+    h_contrib_hash = (
         head.get("metrics", {})
         .get("projection_10k_contributions_seconds", {})
         .get("consistency_hash", "")
@@ -303,14 +296,14 @@ def _build_comparison(
         "gated_metrics": gated_results,
         "consistency": {
             "20k_activities": {
-                "baseline_hash": b_hash_20k,
-                "head_hash": h_hash_20k,
-                "match": b_hash_20k == h_hash_20k,
+                "baseline_hash": b_proj_hash,
+                "head_hash": h_proj_hash,
+                "match": b_proj_hash == h_proj_hash,
             },
             "10k_contributions": {
-                "baseline_hash": b_hash_10k,
-                "head_hash": h_hash_10k,
-                "match": b_hash_10k == h_hash_10k,
+                "baseline_hash": b_contrib_hash,
+                "head_hash": h_contrib_hash,
+                "match": b_contrib_hash == h_contrib_hash,
             },
         },
         "all_gates_passed": all_gates_passed,

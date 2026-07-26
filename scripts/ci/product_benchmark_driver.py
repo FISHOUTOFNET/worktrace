@@ -2,50 +2,22 @@
 """HEAD-owned product benchmark driver.
 
 Measures projection performance against a target revision (baseline or HEAD)
-using the COMMON public API (``build_visible_snapshot``) that exists in both
-revisions.  The driver itself is HEAD-owned; the product code under test is
-loaded from ``--target-root``.
+via the COMMON ``build_visible_snapshot`` API that exists in both revisions.
+The driver is HEAD-owned and self-contained (own deterministic fixture builder,
+no ``tests.support.*``); only ``worktrace.*`` loads from ``--target-root``.
+Each revision runs in an independent process; baseline and HEAD never share one.
 
-Each revision is measured in an independent process (the workflow invokes
-the driver once per revision with a different ``--target-root``).  The
-driver never imports baseline and HEAD product code in the same process.
-
-The driver is fully self-contained: it embeds its own deterministic fixture
-builder and does NOT import from ``tests.support.*``.  This guarantees the
-fixture is identical across revisions regardless of whether the target
-worktree contains the HEAD test-support modules.  Only ``worktrace.*``
-product modules are loaded from ``--target-root``.
+``build_visible_snapshot`` is used (not the HEAD-only ``get_day_projection``)
+because it returns a ``ReportProjectionSnapshot`` in both revisions, delegating
+to each revision's projection path for a fair same-semantics comparison.
 
 Measured metrics
 ----------------
-* ``projection_20k_total_seconds``
-    Wall-clock time to build a ``ReportProjectionSnapshot`` for a day with
-    20,000 activities (sparse project anchors, one paused standalone,
-    synthetic resources).  Exercises fact query, session build, context
-    attribution, and snapshot assembly.
-
-* ``projection_10k_contributions_seconds``
-    Wall-clock time to build a ``ReportProjectionSnapshot`` for a day with
-    10,000 back-to-back activities forming one large session.  Stresses the
-    contribution index build and single-session lookup.
-
-* ``projection_peak_memory_bytes``
-    ``tracemalloc`` peak memory for building the 20k-activity snapshot.
-    Measures the Python allocation peak of the projection build path
-    (not RSS/working set).  Comparable across revisions because both use
-    the same ``build_visible_snapshot`` API.
-
-Why ``build_visible_snapshot`` and not ``get_day_projection``
--------------------------------------------------------------
-``get_day_projection`` (returning the compact ``DayProjection``) is
-HEAD-only — the baseline does not have ``report_projection_provider.py``.
-``build_visible_snapshot`` returns a ``ReportProjectionSnapshot`` in BOTH
-revisions and internally delegates to the revision's projection
-computation path.  In HEAD this path uses the new
-``compute_projection`` builder, so the measurement reflects the new
-architecture's performance.  In baseline it uses the old computation
-path.  This is a fair same-semantics comparison of the projection build
-performance.
+* ``projection_20k_total_seconds`` — wall-clock to build a 20,000-activity
+  snapshot (sparse anchors, one paused standalone).
+* ``projection_10k_contributions_seconds`` — wall-clock for 10,000
+  back-to-back activities forming one large session.
+* ``projection_peak_memory_bytes`` — ``tracemalloc`` peak for the 20k build.
 
 Exit codes
 ----------
@@ -568,12 +540,9 @@ def main() -> int:
     print(f"verified: report_projection_snapshot_service loaded from {module_path}")
 
     # ---- Isolate the database ----
-    # The driver MUST NOT use the shared user-level database
-    # (LOCALAPPDATA/WorkTrace/data/worktrace.db).  Each revision gets its
-    # own fresh temp database so baseline and HEAD runs do not pollute
-    # each other's fixture data.  The schema is initialised from the
-    # target revision's own schema.sql (loaded via importlib.resources
-    # from the target root's worktrace package).
+    # Each revision gets a fresh temp database (never the shared user-level
+    # one) so baseline and HEAD don't pollute each other's fixtures.  Schema
+    # is loaded from the target revision's own schema.sql via importlib.resources.
     import worktrace.db as db
 
     db_tempdir = tempfile.mkdtemp(prefix="worktrace-bench-db-")
@@ -587,50 +556,50 @@ def main() -> int:
 
         # Scenario 1: 20k activities
         print("building 20k activities fixture...")
-        info_20k = build_20k_dataset(20000)
+        info_proj = build_20k_dataset(20000)
         print(
-            f"  inserted {info_20k['activity_count']} activities "
-            f"on {info_20k['report_date']}"
+            f"  inserted {info_proj['activity_count']} activities "
+            f"on {info_proj['report_date']}"
         )
-        metric_20k = _measure_scenario(
-            info_20k["report_date"],
+        metric_proj = _measure_scenario(
+            info_proj["report_date"],
             runs=args.runs,
             warmup_runs=args.warmup_runs,
             label="20k_activities",
         )
         print(
-            f"  20k projection median: {metric_20k['median_seconds']:.3f}s "
-            f"(entries={metric_20k['entry_count']}, "
-            f"contributions={metric_20k['contribution_count']}, "
-            f"sessions={metric_20k['session_count']}, "
-            f"hash={metric_20k['consistency_hash']})"
+            f"  20k projection median: {metric_proj['median_seconds']:.3f}s "
+            f"(entries={metric_proj['entry_count']}, "
+            f"contributions={metric_proj['contribution_count']}, "
+            f"sessions={metric_proj['session_count']}, "
+            f"hash={metric_proj['consistency_hash']})"
         )
 
         # Scenario 2: 10k contributions
         print("building 10k contributions fixture...")
-        info_10k = build_10k_contributions_dataset(10000)
+        info_contrib = build_10k_contributions_dataset(10000)
         print(
-            f"  inserted {info_10k['contribution_count']} contributions "
-            f"on {info_10k['report_date']}"
+            f"  inserted {info_contrib['contribution_count']} contributions "
+            f"on {info_contrib['report_date']}"
         )
-        metric_10k = _measure_scenario(
-            info_10k["report_date"],
+        metric_contrib = _measure_scenario(
+            info_contrib["report_date"],
             runs=args.runs,
             warmup_runs=args.warmup_runs,
             label="10k_contributions",
         )
         print(
-            f"  10k contributions median: {metric_10k['median_seconds']:.3f}s "
-            f"(entries={metric_10k['entry_count']}, "
-            f"contributions={metric_10k['contribution_count']}, "
-            f"sessions={metric_10k['session_count']}, "
-            f"hash={metric_10k['consistency_hash']})"
+            f"  10k contributions median: {metric_contrib['median_seconds']:.3f}s "
+            f"(entries={metric_contrib['entry_count']}, "
+            f"contributions={metric_contrib['contribution_count']}, "
+            f"sessions={metric_contrib['session_count']}, "
+            f"hash={metric_contrib['consistency_hash']})"
         )
 
         # Scenario 3: peak memory (reuses 20k fixture, fresh measurement)
         print("measuring peak memory...")
         metric_peak = _measure_peak_memory(
-            info_20k["report_date"],
+            info_proj["report_date"],
             runs=args.runs,
             label="peak_memory",
         )
@@ -656,8 +625,8 @@ def main() -> int:
             "runs": args.runs,
             "warmup_runs": args.warmup_runs,
             "metrics": {
-                "projection_20k_total_seconds": metric_20k,
-                "projection_10k_contributions_seconds": metric_10k,
+                "projection_20k_total_seconds": metric_proj,
+                "projection_10k_contributions_seconds": metric_contrib,
                 "projection_peak_memory_bytes": metric_peak,
             },
         }

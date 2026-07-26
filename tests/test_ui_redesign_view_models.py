@@ -89,8 +89,6 @@ def test_overview_recent_truncation_does_not_affect_kpi_totals(temp_db):
         )
 
     model = get_overview_view_model("2026-07-22")
-    # Truncation must actually happen: exactly _RECENT_LIMIT rows, not fewer.
-    # If sessions merged, this would be less than recent_limit.
     assert len(model["recent"]) == recent_limit
     # KPI totals are computed from the full projection, not the truncated list.
     expected_total = num_sessions * 10 * 60
@@ -161,7 +159,6 @@ def test_overview_attention_subset_preserved_across_recent_truncation(temp_db, m
     # All sessions currently need attention (no user description). Set notes
     # on the newest recent_limit sessions so only the 2 oldest need attention.
     model = get_overview_view_model(report_date)
-    # recent is sorted newest-first; organize the first recent_limit rows.
     for index, row in enumerate(model["recent"][:recent_limit]):
         _organize_session(row, index, report_date)
 
@@ -205,7 +202,6 @@ def test_overview_attention_promotion_replaces_tail_ordinary_rows(temp_db, monke
     num_organized_closed = recent_limit - 1  # reserve 1 slot for in-progress
     num_unorganized = 2
     total_closed = num_organized_closed + num_unorganized
-    # Closed sessions first (oldest to newest), then the open one.
     for index in range(total_closed):
         start_minute = index * 10
         start_hour = 8 + start_minute // 60
@@ -224,14 +220,11 @@ def test_overview_attention_promotion_replaces_tail_ordinary_rows(temp_db, monke
     # Organize the newest num_organized_closed closed sessions (all except
     # the 2 oldest). The 2 oldest remain unorganized → need attention.
     model = get_overview_view_model(report_date)
-    # recent is sorted: in-progress first (if any), then closed newest-first.
-    # Organize all closed sessions except the last 2 (which are the oldest).
     closed_rows = [row for row in model["recent"] if not row.get("is_in_progress")]
     rows_to_organize = closed_rows[:num_organized_closed]
     for index, row in enumerate(rows_to_organize):
         _organize_session(row, index, report_date)
 
-    # Create an in-progress session as the newest activity.
     live_activity_id = activity_service.create_activity(
         "Editor", "editor.exe", "live-doc.md", project_id=project_a,
         start_time=f"{report_date} 12:00:00",
@@ -241,13 +234,10 @@ def test_overview_attention_promotion_replaces_tail_ordinary_rows(temp_db, monke
     attention_keys = {row["projection_instance_key"] for row in model["attention"]}
     recent_keys = {row["projection_instance_key"] for row in model["recent"]}
 
-    # In-progress session is still first and was not replaced.
     assert model["recent"][0]["is_in_progress"] is True
-    # Attention rows are promoted into visible recent.
     assert attention_keys, "there must be attention rows"
     assert attention_keys <= recent_keys, "attention must be subset of recent"
     assert len(model["recent"]) == recent_limit
-    # No duplicate rows in recent.
     assert len(recent_keys) == len(model["recent"])
     # The attention rows have earlier start times than the organized rows
     # that remain — they were promoted from beyond the truncation boundary.

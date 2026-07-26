@@ -240,8 +240,15 @@ def pytest_runtest_logreport(report: Any) -> None:
         entry["outcome"] = "skipped"
     # Record xfail/xpass attributes so the comparison layer can decide
     # whether to include them in performance samples.
+    # For xfail tests, pytest reports:
+    #   - call outcome="skipped" + wasxfail → expected failure (xfailed)
+    #   - call outcome="passed"  + wasxfail → unexpected pass (xpassed)
+    #   - call outcome="failed"  + wasxfail + strict → unexpected pass, strict
+    # The old code checked ``outcome == "failed"`` which never matches an
+    # expected failure (pytest reports those as "skipped"), causing every
+    # xfail to be misclassified as xpassed.
     if hasattr(report, "wasxfail"):
-        entry["outcome"] = "xfailed" if outcome == "failed" else "xpassed"
+        entry["outcome"] = "xpassed" if outcome == "passed" else "xfailed"
     entry["total_seconds"] = round(
         entry["setup_seconds"] + entry["call_seconds"] + entry["teardown_seconds"],
         6,

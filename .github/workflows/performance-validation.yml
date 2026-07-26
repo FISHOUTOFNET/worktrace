@@ -174,24 +174,10 @@ jobs:
           retention-days: 1
 
   webview-comparison:
-    # Baseline vs HEAD WebView render benchmark comparison.
-    #
-    # The driver (``scripts/webview_render_perf.py``) is HEAD-owned: it
-    # lives in the HEAD workspace and is invoked once per revision with
-    # ``--target-root`` pointing at the worktree under test.  When
-    # ``--target-root`` is set, the harness isolates imports to the target
-    # root, uses a self-contained fixture builder (no tests.support
-    # dependency), and loads the frontend from the target root.
-    #
-    # Each revision runs in an independent subprocess (separate ``python``
-    # invocation) so baseline and HEAD product modules are never imported
-    # in the same process.
-    #
-    # Gates: no-regression (HEAD median <= baseline median * (1 + tolerance))
-    # on four WebView render metrics: cold Timeline, warm Timeline, detail
-    # payload, detail total.  Fail-closed: missing artifact, schema
-    # mismatch, fixture hash mismatch, driver status not 'ok', or gate
-    # failure all fail the job.
+    # Baseline vs HEAD WebView render benchmark comparison.  The HEAD-owned
+    # driver runs once per revision in an independent subprocess.  Gates:
+    # no-regression on cold/warm Timeline, detail payload, and detail total.
+    # Fail-closed: missing artifact, schema/fixture/driver mismatch, or gate failure.
     name: WebView baseline vs HEAD
     runs-on: windows-latest
     timeout-minutes: 30
@@ -374,22 +360,9 @@ jobs:
 
   benchmark-comparison:
     # Baseline vs HEAD product benchmark comparison via a HEAD-owned driver.
-    #
-    # The driver (``scripts/ci/product_benchmark_driver.py``) is HEAD-owned:
-    # it lives in the HEAD workspace and is invoked once per revision with
-    # ``--target-root`` pointing at the worktree under test.  The driver
-    # measures the COMMON public API (``build_visible_snapshot``) that
-    # exists in both baseline and HEAD, so baseline is NOT required to
-    # contain the PR's new benchmark tests or test-support modules.
-    #
-    # Each revision runs in an independent subprocess (separate ``python``
-    # invocation) so baseline and HEAD product modules are never imported
-    # in the same process.  The driver creates an isolated temp database
-    # per invocation so fixture data never leaks between revisions.
-    #
-    # Gates: no-regression (HEAD median <= baseline median * (1 + tolerance))
-    # on the three product metrics.  Fail-closed: missing artifact, schema
-    # mismatch, fixture hash mismatch, or gate failure all fail the job.
+    # The driver runs once per revision in an independent subprocess with an
+    # isolated temp DB, measuring COMMON ``build_visible_snapshot``.  Gates:
+    # no-regression on three metrics; fail-closed on missing artifact or mismatch.
     name: Baseline vs HEAD benchmark
     runs-on: windows-latest
     timeout-minutes: 40
@@ -499,11 +472,9 @@ jobs:
           $baselineWt = "${{ steps.paths.outputs.baseline_worktree }}"
           $baselineResults = "${{ steps.paths.outputs.baseline_results }}"
 
-          # The driver is HEAD-owned (lives in the HEAD workspace, NOT in
-          # the baseline worktree).  --target-root points at the baseline
-          # worktree so the driver imports baseline's product code.
-          # Each invocation is a separate subprocess, so baseline and HEAD
-          # product modules are never imported in the same process.
+          # The driver is HEAD-owned (lives in HEAD workspace, not baseline
+          # worktree).  --target-root points at baseline worktree so the
+          # driver imports baseline's product code in a separate subprocess.
           & python scripts/ci/product_benchmark_driver.py `
             --target-root $baselineWt `
             --revision "${{ steps.revs.outputs.baseline_sha }}" `

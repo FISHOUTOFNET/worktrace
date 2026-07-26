@@ -15,10 +15,8 @@ Gates (all must pass):
   * Each metric: HEAD median <= baseline median * (1 + tolerance/100)
   * tolerance defaults to 10%.
 
-No formal absolute cold Timeline target exists in the repository.  The
-gate is therefore purely relative (no-regression against baseline).  The
-comparison does NOT claim the original severe cold-Timeline performance
-issue is fully validated — it only confirms HEAD does not regress.
+Gate is purely relative (no-regression against baseline); no absolute cold
+Timeline target exists in the repository.
 
 Fail-closed contract:
   * Missing artifact, schema mismatch, fixture hash mismatch, driver
@@ -27,13 +25,6 @@ Fail-closed contract:
   * Sample count mismatch or zero samples → exit 3 (execution incomplete).
   * Performance gate failure → exit 4.
   * All gates pass → exit 0.
-
-Exit codes
-----------
-* 0 — success (all gates passed)
-* 2 — input/schema error (missing file, schema mismatch, fixture mismatch)
-* 3 — execution incomplete (sample count mismatch, zero samples)
-* 4 — performance gate failure (regression exceeds tolerance)
 """
 
 from __future__ import annotations
