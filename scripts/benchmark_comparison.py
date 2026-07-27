@@ -138,10 +138,11 @@ class SideResult:
                 )
 
         if not self.result_present and not self.progress_present:
-            raise ComparisonError(
-                f"{label}: neither result.json nor progress.json present in "
-                f"{output_dir}"
-            )
+            # Don't raise — let _build_comparison classify this side as
+            # invalid and produce a baseline_invalid/head_invalid/both_invalid
+            # artifact so the workflow's if: always() upload has something
+            # to surface.
+            pass
 
     # ----- accessors -----------------------------------------------------
 

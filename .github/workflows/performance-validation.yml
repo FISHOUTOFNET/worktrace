@@ -286,22 +286,11 @@ jobs:
   product-benchmark:
     name: Product latency - ${{ matrix.scenario }}
     if: |
-      (
+      github.event_name == 'schedule'
+      || github.event_name == 'workflow_dispatch'
+      || (
         github.event_name == 'pull_request'
         && github.event.label.name == 'run-performance-validation'
-        && matrix.runs_in == 'realistic'
-      )
-      || (
-        github.event_name == 'schedule'
-      )
-      || (
-        github.event_name == 'workflow_dispatch'
-        && github.event.inputs.mode == 'stress'
-      )
-      || (
-        github.event_name == 'workflow_dispatch'
-        && github.event.inputs.mode != 'stress'
-        && matrix.runs_in == 'realistic'
       )
     runs-on: windows-latest
     timeout-minutes: ${{ matrix.timeout_minutes }}
@@ -330,7 +319,23 @@ jobs:
           show-progress: false
           persist-credentials: false
 
+      - name: Check if scenario should run in this mode
+        id: guard
+        shell: pwsh
+        run: |
+          $mode = "${{ github.event.inputs.mode }}"
+          if ($env:GITHUB_EVENT_NAME -eq 'schedule') { $mode = 'stress' }
+          if ($env:GITHUB_EVENT_NAME -eq 'pull_request') { $mode = 'realistic' }
+          $runsIn = "${{ matrix.runs_in }}"
+          if ($mode -eq 'stress' -or $runsIn -eq 'realistic') {
+            "should_run=true" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
+            Write-Host "scenario=${{ matrix.scenario }} runs_in=$runsIn mode=$mode -> RUN"
+          } else {
+            "should_run=false" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
+            Write-Host "scenario=${{ matrix.scenario }} runs_in=$runsIn mode=$mode -> SKIP"
+
       - name: Resolve revisions
+        if: steps.guard.outputs.should_run == 'true'
         id: revs
         shell: pwsh
         run: |
@@ -359,6 +364,7 @@ jobs:
           "head_sha=$headSha" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
 
       - name: Set up Python
+        if: steps.guard.outputs.should_run == 'true'
         uses: actions/setup-python@v6
         with:
           python-version: "3.11"
@@ -368,10 +374,12 @@ jobs:
             requirements-dev.txt
 
       - name: Install dependencies
+        if: steps.guard.outputs.should_run == 'true'
         shell: pwsh
         run: python -m pip install --disable-pip-version-check -q -r requirements-dev.txt
 
       - name: Create worktrees and result directories
+        if: steps.guard.outputs.should_run == 'true'
         id: paths
         shell: pwsh
         run: |
@@ -418,6 +426,7 @@ jobs:
           "comparison_results=$comparisonResults" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
 
       - name: Compile Python in worktrees
+        if: steps.guard.outputs.should_run == 'true'
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -434,6 +443,7 @@ jobs:
           }
 
       - name: Run HEAD-owned benchmark driver on baseline
+        if: steps.guard.outputs.should_run == 'true'
         id: baseline_driver
         shell: pwsh
         continue-on-error: true
@@ -461,6 +471,7 @@ jobs:
           }
 
       - name: Run HEAD-owned benchmark driver on HEAD
+        if: steps.guard.outputs.should_run == 'true'
         id: head_driver
         shell: pwsh
         continue-on-error: true
@@ -485,7 +496,7 @@ jobs:
 
       - name: Compare benchmarks and enforce no-regression gates
         id: comparison
-        if: always()
+        if: always() && steps.guard.outputs.should_run == 'true'
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -515,7 +526,7 @@ jobs:
           Write-Host "benchmark_comparison=PASSED"
 
       - name: Upload product comparison artifact
-        if: always()
+        if: always() && steps.guard.outputs.should_run == 'true'
         uses: actions/upload-artifact@v6
         with:
           name: product-${{ matrix.scenario }}-${{ github.run_id }}
@@ -524,7 +535,7 @@ jobs:
           retention-days: 7
 
       - name: Clean up worktrees
-        if: always()
+        if: always() && steps.guard.outputs.should_run == 'true'
         shell: pwsh
         run: |
           git worktree remove --force "${{ steps.paths.outputs.baseline_worktree }}" 2>$null

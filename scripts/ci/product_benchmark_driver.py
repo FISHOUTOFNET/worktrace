@@ -938,11 +938,12 @@ def main() -> int:
     )
     parser.add_argument(
         "--profile",
-        choices=("smoke", "full"),
+        choices=("smoke", "realistic", "full"),
         default="full",
         help=(
             "smoke: small data sizes for infrastructure validation. "
-            "full: real data sizes for the performance gate (default)."
+            "realistic: ordinary PR gate profile (2000 activities). "
+            "full: stress-level data sizes (default)."
         ),
     )
     parser.add_argument(

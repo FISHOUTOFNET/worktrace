@@ -97,30 +97,42 @@ class TestSideResult:
         assert side.progress_present is True
         assert side.last_phase == "warmup"
 
-    def test_neither_result_nor_progress_raises(
+    def test_neither_result_nor_progress_creates_invalid_side(
         self, comparison_module, tmp_path: Path
     ) -> None:
-        with pytest.raises(comparison_module.ComparisonError, match="neither"):
-            comparison_module.SideResult(
-                label="baseline",
-                output_dir=tmp_path / "empty",
-                expected_sha=BASELINE_SHA,
-                scenario="20k_activities",
-            )
+        """When neither result.json nor progress.json is present, SideResult
+        is created with valid=False so _build_comparison can produce a
+        baseline_invalid/head_invalid/both_invalid artifact."""
+        side = comparison_module.SideResult(
+            label="baseline",
+            output_dir=tmp_path / "empty",
+            expected_sha=BASELINE_SHA,
+            scenario="20k_activities",
+        )
+        assert side.valid is False
+        assert side.result_present is False
+        assert side.progress_present is False
+        assert side.invalid_reason == "no result.json and no diagnostics"
 
-    def test_failure_only_without_progress_raises(
+    def test_failure_only_without_progress_creates_invalid_side(
         self, comparison_module, tmp_path: Path
     ) -> None:
-        # failure.json alone is not enough — need result.json or progress.json.
+        """failure.json alone (without result.json or progress.json) creates
+        an invalid side that still surfaces the failure category in
+        invalid_reason."""
         d = tmp_path / "baseline"
         write_json(d / "failure.json", make_product_failure())
-        with pytest.raises(comparison_module.ComparisonError, match="neither"):
-            comparison_module.SideResult(
-                label="baseline",
-                output_dir=d,
-                expected_sha=BASELINE_SHA,
-                scenario="20k_activities",
-            )
+        side = comparison_module.SideResult(
+            label="baseline",
+            output_dir=d,
+            expected_sha=BASELINE_SHA,
+            scenario="20k_activities",
+        )
+        assert side.valid is False
+        assert side.result_present is False
+        assert side.progress_present is False
+        assert side.failure_present is True
+        assert side.invalid_reason != "no result.json and no diagnostics"
 
     def test_invalid_result_json_raises(
         self, comparison_module, tmp_path: Path

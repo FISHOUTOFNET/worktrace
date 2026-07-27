@@ -237,12 +237,12 @@ class TestExitCodes:
         artifact = json.loads(output.read_text(encoding="utf-8"))
         assert artifact["outcome"] == "both_invalid"
 
-    def test_main_returns_2_and_writes_artifact_on_input_error(
+    def test_main_returns_0_on_baseline_invalid_when_no_artifacts(
         self, comparison_module, tmp_path: Path, monkeypatch
     ) -> None:
-        """When _build_comparison raises (e.g. no result.json and no
-        progress.json on a side), main() writes a failure artifact and
-        exits 2."""
+        """When baseline has no result.json and no progress.json (driver
+        crashed before writing artifacts), main() writes a fail-closed
+        artifact with outcome=baseline_invalid and exits 0."""
         baseline_dir = tmp_path / "baseline"
         head_dir = tmp_path / "head"
         output = tmp_path / "out" / "comparison.json"
@@ -260,18 +260,19 @@ class TestExitCodes:
             "--tolerance-pct", "10",
             "--output", str(output),
         ])
-        assert exit_code == 2
-        # Fail-closed: artifact is still written.
+        assert exit_code == 0
         assert output.is_file()
         artifact = json.loads(output.read_text(encoding="utf-8"))
-        assert artifact["outcome"] == "both_invalid"
-        assert "comparison_error" in artifact
+        assert artifact["outcome"] == "baseline_invalid"
+        assert artifact["baseline"]["valid"] is False
+        assert artifact["head"]["valid"] is True
 
-    def test_artifact_always_written_even_on_error(
+    def test_artifact_always_written_even_when_both_sides_empty(
         self, comparison_module, tmp_path: Path, monkeypatch
     ) -> None:
-        """The comparison always writes an artifact, even on input/schema
-        errors — the workflow's if: always() upload step relies on this."""
+        """The comparison always writes an artifact, even when both sides
+        have no artifacts — the workflow's if: always() upload step relies
+        on this."""
         baseline_dir = tmp_path / "baseline"
         head_dir = tmp_path / "head"
         output = tmp_path / "out" / "comparison.json"
@@ -287,11 +288,12 @@ class TestExitCodes:
             "--tolerance-pct", "10",
             "--output", str(output),
         ])
-        assert exit_code == 2
+        assert exit_code == 0
         assert output.is_file()
         artifact = json.loads(output.read_text(encoding="utf-8"))
         assert artifact["outcome"] == "both_invalid"
-        assert "comparison_error" in artifact
+        assert artifact["baseline"]["valid"] is False
+        assert artifact["head"]["valid"] is False
 
     def test_scenario_required(
         self, comparison_module, tmp_path: Path, monkeypatch
