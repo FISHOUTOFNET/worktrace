@@ -33,7 +33,7 @@ import hashlib
 import json
 import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 # Fixed deterministic fixture parameters — no RNG, so the fixture is
 # identical across revisions and runs.  These mirror the historical
@@ -250,6 +250,7 @@ def _count_existing_activities(conn: Any, report_date: str) -> int:
 def build_activity_fixture(
     *,
     spec: BenchmarkFixtureSpec,
+    chunk_callback: Callable[[int, int], None] | None = None,
 ) -> BenchmarkFixtureResult:
     """Insert ``spec.activity_count`` synthetic facts on ``spec.report_date``.
 
@@ -264,6 +265,11 @@ def build_activity_fixture(
       * one ``get_connection()`` call,
       * commit every ``spec.chunk_size`` rows,
       * one final commit for the remainder.
+
+    ``chunk_callback`` (optional, benchmark-only): invoked after every
+    chunk commit with ``(chunk_index, inserted_so_far)`` so a driver can
+    persist ``fixture_chunk_committed`` progress checkpoints.  Production
+    callers leave this ``None``.
     """
 
     from worktrace.constants import SOURCE_AUTO, STATUS_NORMAL, STATUS_PAUSED
@@ -284,6 +290,7 @@ def build_activity_fixture(
     commit_count = 0
     preexisting_activity_count = 0
     uncategorized_id = 0
+    chunk_index = -1
 
     with get_connection() as conn:
         connection_count += 1
@@ -351,10 +358,18 @@ def build_activity_fixture(
             if (index + 1) % spec.chunk_size == 0:
                 conn.commit()
                 commit_count += 1
+                chunk_index += 1
+                if chunk_callback is not None:
+                    chunk_callback(chunk_index, len(activity_ids))
 
         # Final commit for any remainder rows.
         conn.commit()
         commit_count += 1
+        if chunk_callback is not None and (
+            spec.activity_count % spec.chunk_size != 0
+        ):
+            chunk_index += 1
+            chunk_callback(chunk_index, len(activity_ids))
 
     elapsed = time.perf_counter() - started
     return BenchmarkFixtureResult(
@@ -378,6 +393,7 @@ def build_activity_fixture(
 def build_contribution_fixture(
     *,
     spec: BenchmarkFixtureSpec,
+    chunk_callback: Callable[[int, int], None] | None = None,
 ) -> BenchmarkFixtureResult:
     """Insert ``spec.activity_count`` back-to-back activities forming one session.
 
@@ -390,6 +406,9 @@ def build_contribution_fixture(
       * one ``get_connection()`` call,
       * commit every ``spec.chunk_size`` rows,
       * one final commit for the remainder.
+
+    ``chunk_callback`` (optional, benchmark-only): invoked after every
+    chunk commit with ``(chunk_index, inserted_so_far)``.
     """
 
     from worktrace.constants import SOURCE_AUTO, STATUS_NORMAL
@@ -410,6 +429,7 @@ def build_contribution_fixture(
     commit_count = 0
     preexisting_activity_count = 0
     uncategorized_id = 0
+    chunk_index = -1
 
     with get_connection() as conn:
         connection_count += 1
@@ -450,9 +470,17 @@ def build_contribution_fixture(
             if (index + 1) % spec.chunk_size == 0:
                 conn.commit()
                 commit_count += 1
+                chunk_index += 1
+                if chunk_callback is not None:
+                    chunk_callback(chunk_index, len(activity_ids))
 
         conn.commit()
         commit_count += 1
+        if chunk_callback is not None and (
+            spec.activity_count % spec.chunk_size != 0
+        ):
+            chunk_index += 1
+            chunk_callback(chunk_index, len(activity_ids))
 
     elapsed = time.perf_counter() - started
     return BenchmarkFixtureResult(

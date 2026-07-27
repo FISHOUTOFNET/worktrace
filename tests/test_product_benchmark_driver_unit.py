@@ -1,8 +1,10 @@
 """Unit tests for the HEAD-owned product benchmark driver.
 
 Covers the pure-Python functions in ``scripts/ci/product_benchmark_driver.py``:
-target-root path isolation, module verification, deterministic fixture hash,
-time formatting, atomic JSON writes, runner metadata, and argument parsing.
+target-root path isolation, module verification, atomic checkpoint writes via
+``ProgressRecorder``, error category constants, scenario registry, time
+formatting, atomic JSON writes, runner metadata, argument parsing, and
+single-scenario vs local-wrapper routing.
 
 The driver's full benchmark execution path (which imports ``worktrace.*``
 and builds a real database) is NOT exercised here — that is the
@@ -18,11 +20,10 @@ a Python package; using ``importlib`` keeps the test hermetic.
 from __future__ import annotations
 
 import importlib.util
+import inspect
 import json
-import os
 import sys
 from pathlib import Path
-from typing import Any
 
 import pytest
 
@@ -60,10 +61,14 @@ def driver():
 class TestSchemaConstants:
     """Verify the driver's schema and exit-code constants are stable."""
 
-    def test_schema_version_is_2(self, driver) -> None:
-        # Schema v2 adds requested_revision / actual_target_revision
-        # identity, fixture_audit per scenario, and profile support.
-        assert driver._SCHEMA_VERSION == 2
+    def test_schema_version_is_3(self, driver) -> None:
+        # Schema v3 splits the compact-storage memory gate into its own
+        # driver (compact_memory_driver.py) so product_benchmark_driver
+        # only owns the two cross-revision latency scenarios.
+        assert driver._SCHEMA_VERSION == 3
+
+    def test_driver_version_is_3(self, driver) -> None:
+        assert driver._DRIVER_VERSION == "3.0"
 
     def test_driver_version_is_string(self, driver) -> None:
         assert isinstance(driver._DRIVER_VERSION, str)
@@ -80,12 +85,15 @@ class TestSchemaConstants:
         assert "smoke" in driver._PROFILES
         assert "full" in driver._PROFILES
         # Smoke uses small data sizes for infrastructure validation.
-        assert driver._PROFILES["smoke"]["activity_count"] <= 1000
-        assert driver._PROFILES["smoke"]["contribution_count"] <= 1000
+        assert driver._PROFILES["smoke"]["activity_count"] == 200
+        assert driver._PROFILES["smoke"]["contribution_count"] == 200
+        assert driver._PROFILES["smoke"]["runs"] == 1
+        assert driver._PROFILES["smoke"]["warmup_runs"] == 0
         # Full uses the real performance-gate data sizes.
         assert driver._PROFILES["full"]["activity_count"] == 20000
         assert driver._PROFILES["full"]["contribution_count"] == 10000
-        assert driver._PROFILES["full"]["runs"] >= 1
+        assert driver._PROFILES["full"]["runs"] == 3
+        assert driver._PROFILES["full"]["warmup_runs"] == 1
 
     def test_fixture_parameters_are_fixed_in_shared_module(self, driver) -> None:
         """The fixture parameters now live in the shared benchmark_fixture
@@ -99,6 +107,88 @@ class TestSchemaConstants:
         assert DEFAULT_DAY_START_SECONDS == 9 * 3600
         assert DEFAULT_SPAN_SECONDS == 13 * 3600
 
+
+# ---------------------------------------------------------------------------
+# Error category constants
+# ---------------------------------------------------------------------------
+
+class TestErrorCategories:
+    """Verify the error category constants are defined and distinct."""
+
+    def test_all_error_categories_defined(self, driver) -> None:
+        """All 10 error categories must be defined as module constants."""
+        assert driver.ERROR_INPUT_SCHEMA == "input_schema_error"
+        assert driver.ERROR_REVISION_MISMATCH == "revision_mismatch"
+        assert driver.ERROR_DATABASE_INIT == "database_init_error"
+        assert driver.ERROR_FIXTURE == "fixture_error"
+        assert driver.ERROR_FIXTURE_VALIDATION == "fixture_validation_error"
+        assert driver.ERROR_WARMUP == "warmup_error"
+        assert driver.ERROR_SAMPLE == "sample_error"
+        assert driver.ERROR_RESULT_VALIDATION == "result_validation_error"
+        assert driver.ERROR_INTERRUPTED == "interrupted"
+        assert driver.ERROR_UNEXPECTED == "unexpected_error"
+
+    def test_error_categories_are_distinct(self, driver) -> None:
+        """Each error category must be a unique non-empty string."""
+        categories = [
+            driver.ERROR_INPUT_SCHEMA,
+            driver.ERROR_REVISION_MISMATCH,
+            driver.ERROR_DATABASE_INIT,
+            driver.ERROR_FIXTURE,
+            driver.ERROR_FIXTURE_VALIDATION,
+            driver.ERROR_WARMUP,
+            driver.ERROR_SAMPLE,
+            driver.ERROR_RESULT_VALIDATION,
+            driver.ERROR_INTERRUPTED,
+            driver.ERROR_UNEXPECTED,
+        ]
+        assert len(categories) == len(set(categories))
+        for cat in categories:
+            assert isinstance(cat, str)
+            assert len(cat) > 0
+
+
+# ---------------------------------------------------------------------------
+# Scenario registry
+# ---------------------------------------------------------------------------
+
+class TestScenarios:
+    """Tests for the ``_SCENARIOS`` dict — only cross-revision latency
+    scenarios live here.  The compact-storage memory gate has its own
+    driver (``compact_memory_driver.py``) and must NOT appear in this
+    driver's scenarios.
+    """
+
+    def test_scenarios_dict_has_exactly_two_entries(self, driver) -> None:
+        assert len(driver._SCENARIOS) == 2
+
+    def test_scenarios_include_20k_activities(self, driver) -> None:
+        assert "20k_activities" in driver._SCENARIOS
+        assert (
+            driver._SCENARIOS["20k_activities"]
+            == "projection_20k_total_seconds"
+        )
+
+    def test_scenarios_include_10k_contributions(self, driver) -> None:
+        assert "10k_contributions" in driver._SCENARIOS
+        assert (
+            driver._SCENARIOS["10k_contributions"]
+            == "projection_10k_contributions_seconds"
+        )
+
+    def test_no_peak_memory_scenario_in_product_driver(self, driver) -> None:
+        """The product driver must NOT include any peak_memory scenario —
+        memory measurement lives in ``compact_memory_driver.py``."""
+        for scenario_key, metric_key in driver._SCENARIOS.items():
+            assert "peak_memory" not in scenario_key
+            assert "memory" not in metric_key.lower()
+        assert "peak_memory" not in driver._SCENARIOS
+        assert "compact_memory" not in driver._SCENARIOS
+
+
+# ---------------------------------------------------------------------------
+# Target-root isolation
+# ---------------------------------------------------------------------------
 
 class TestSetupTargetPath:
     """Tests for the target-root sys.path isolation."""
@@ -182,86 +272,146 @@ class TestVerifyModuleAtTarget:
         assert exc_info.value.code == driver._EXIT_INPUT_SCHEMA
 
 
-class TestFixtureHash:
-    """Tests for the deterministic controller-level fixture hash.
+# ---------------------------------------------------------------------------
+# ProgressRecorder (atomic checkpoint writer)
+# ---------------------------------------------------------------------------
 
-    The controller-level ``_fixture_hash(activity_count, contribution_count)``
-    composes the per-scenario hashes from the shared ``benchmark_fixture``
-    module so product and WebView drivers share the same per-scenario
-    identity, then wraps them with the driver version so any drift in
-    driver version invalidates cross-revision comparisons.
-    """
+class TestProgressRecorder:
+    """Tests for the ``ProgressRecorder`` atomic checkpoint writer."""
 
-    def test_hash_is_deterministic(self, driver) -> None:
-        """The fixture hash must be the same across calls with the same args."""
-        h1 = driver._fixture_hash(20000, 10000)
-        h2 = driver._fixture_hash(20000, 10000)
-        assert h1 == h2
+    @staticmethod
+    def _make_recorder(driver, output_dir: Path, **overrides):
+        kwargs = {
+            "output_dir": output_dir,
+            "scenario": "20k_activities",
+            "profile": "full",
+            "requested_revision": "abc123",
+            "actual_target_revision": "abc123",
+            "schema_version": driver._SCHEMA_VERSION,
+            "driver_version": driver._DRIVER_VERSION,
+            "runner_metadata": {"execution_environment": "local"},
+        }
+        kwargs.update(overrides)
+        return driver.ProgressRecorder(**kwargs)
 
-    def test_hash_is_sha256_hex(self, driver) -> None:
-        """The fixture hash must be a 64-character hex string."""
-        h = driver._fixture_hash(20000, 10000)
-        assert len(h) == 64
-        assert all(c in "0123456789abcdef" for c in h)
+    def test_initial_state_is_initialized(self, driver, tmp_path: Path) -> None:
+        recorder = self._make_recorder(driver, tmp_path)
+        snapshot = recorder.snapshot()
+        assert snapshot["phase"] == "initialized"
+        assert snapshot["schema_version"] == driver._SCHEMA_VERSION
+        assert snapshot["driver_version"] == driver._DRIVER_VERSION
+        assert snapshot["scenario"] == "20k_activities"
+        assert snapshot["profile"] == "full"
+        assert snapshot["requested_revision"] == "abc123"
+        assert snapshot["actual_target_revision"] == "abc123"
+        assert snapshot["runner_metadata"] == {"execution_environment": "local"}
 
-    def test_hash_changes_with_activity_count(self, driver) -> None:
-        """Different activity counts must produce different hashes so
-        smoke (200) and full (20000) cannot accidentally compare as the
-        same fixture."""
-        h_smoke = driver._fixture_hash(200, 200)
-        h_full = driver._fixture_hash(20000, 10000)
-        assert h_smoke != h_full
+    def test_checkpoint_advances_phase(self, driver, tmp_path: Path) -> None:
+        recorder = self._make_recorder(driver, tmp_path)
+        recorder.checkpoint("revision_verified")
+        assert recorder.snapshot()["phase"] == "revision_verified"
 
-    def test_hash_encodes_per_scenario_hashes_and_driver_version(
-        self, driver
+    def test_checkpoint_persists_progress_json(
+        self, driver, tmp_path: Path
     ) -> None:
-        """The controller hash wraps the per-scenario hashes from the
-        shared benchmark_fixture module and the driver version."""
-        import hashlib
-        from scripts.ci.benchmark_fixture import (
-            build_10k_contribution_spec,
-            build_20k_activity_spec,
-            fixture_hash as _fixture_hash,
+        recorder = self._make_recorder(driver, tmp_path)
+        recorder.checkpoint("revision_verified")
+        progress_path = tmp_path / "progress.json"
+        assert progress_path.is_file()
+        loaded = json.loads(progress_path.read_text(encoding="utf-8"))
+        assert loaded["phase"] == "revision_verified"
+        assert loaded["schema_version"] == driver._SCHEMA_VERSION
+
+    def test_checkpoint_updates_counters(self, driver, tmp_path: Path) -> None:
+        recorder = self._make_recorder(driver, tmp_path)
+        recorder.checkpoint(
+            "fixture_completed",
+            inserted_count=20000,
+            requested_count=20000,
+            chunk_index=39,
+            completed_samples=0,
+            current_sample_index=-1,
         )
-        activity_spec = build_20k_activity_spec(activity_count=20000)
-        contribution_spec = build_10k_contribution_spec(contribution_count=10000)
-        expected_payload = json.dumps(
-            {
-                "activity_spec": _fixture_hash(activity_spec),
-                "contribution_spec": _fixture_hash(contribution_spec),
-                "builder_version": driver._DRIVER_VERSION,
-            },
-            sort_keys=True,
-        ).encode("utf-8")
-        expected = hashlib.sha256(expected_payload).hexdigest()
-        assert driver._fixture_hash(20000, 10000) == expected
+        snapshot = recorder.snapshot()
+        assert snapshot["inserted_count"] == 20000
+        assert snapshot["requested_count"] == 20000
+        assert snapshot["chunk_index"] == 39
+        assert snapshot["completed_samples"] == 0
 
+    def test_checkpoint_persists_fixture_audit(
+        self, driver, tmp_path: Path
+    ) -> None:
+        recorder = self._make_recorder(driver, tmp_path)
+        audit = {"scenario": "20k_activities", "inserted_count": 20000}
+        recorder.checkpoint("fixture_completed", fixture_audit=audit)
+        snapshot = recorder.snapshot()
+        assert snapshot["fixture_audit"] == audit
 
-class TestFormatTime:
-    """Tests for the time formatting helper in the shared fixture module.
+    def test_checkpoint_writes_atomically(self, driver, tmp_path: Path) -> None:
+        """No .tmp file left after a checkpoint."""
+        recorder = self._make_recorder(driver, tmp_path)
+        recorder.checkpoint("revision_verified")
+        tmp_files = list(tmp_path.glob("*.tmp"))
+        assert len(tmp_files) == 0
 
-    ``format_time`` moved from the driver to ``benchmark_fixture`` so both
-    product and WebView drivers share the same formatting logic.
-    """
-
-    def test_midnight(self, driver) -> None:
-        from scripts.ci.benchmark_fixture import format_time
-        assert format_time("2026-07-15", 0) == "2026-07-15 00:00:00"
-
-    def test_nine_am(self, driver) -> None:
-        from scripts.ci.benchmark_fixture import format_time
-        assert format_time("2026-07-15", 32400) == "2026-07-15 09:00:00"
-
-    def test_ten_pm(self, driver) -> None:
-        from scripts.ci.benchmark_fixture import format_time
-        assert format_time("2026-07-15", 79200) == "2026-07-15 22:00:00"
-
-    def test_with_minutes_and_seconds(self, driver) -> None:
-        from scripts.ci.benchmark_fixture import format_time
-        assert (
-            format_time("2026-07-15", 36665)
-            == "2026-07-15 10:11:05"
+    def test_mark_failed_advances_to_failed_phase(
+        self, driver, tmp_path: Path
+    ) -> None:
+        recorder = self._make_recorder(driver, tmp_path)
+        recorder.checkpoint("revision_verified")
+        recorder.mark_failed(
+            failure_category=driver.ERROR_FIXTURE,
+            failure_message="fixture build failed",
+            failure_traceback="trace",
         )
+        snapshot = recorder.snapshot()
+        assert snapshot["phase"] == "failed"
+        assert snapshot["failure_category"] == driver.ERROR_FIXTURE
+        assert snapshot["failure_message"] == "fixture build failed"
+        assert snapshot["failure_traceback"] == "trace"
+
+    def test_mark_failed_persists_failure_metadata(
+        self, driver, tmp_path: Path
+    ) -> None:
+        recorder = self._make_recorder(driver, tmp_path)
+        recorder.checkpoint("revision_verified")
+        recorder.mark_failed(
+            failure_category=driver.ERROR_FIXTURE,
+            failure_message="fixture build failed",
+        )
+        progress_path = tmp_path / "progress.json"
+        loaded = json.loads(progress_path.read_text(encoding="utf-8"))
+        assert loaded["phase"] == "failed"
+        assert loaded["failure_category"] == driver.ERROR_FIXTURE
+        assert loaded["failure_message"] == "fixture build failed"
+        # failure_traceback was not set, so it must be absent.
+        assert "failure_traceback" not in loaded
+
+    def test_snapshot_returns_copy(self, driver, tmp_path: Path) -> None:
+        """snapshot() returns a copy; mutating it doesn't affect the
+        recorder's internal state."""
+        recorder = self._make_recorder(driver, tmp_path)
+        recorder.checkpoint("revision_verified")
+        snapshot = recorder.snapshot()
+        snapshot["phase"] = "tampered"
+        assert recorder.snapshot()["phase"] == "revision_verified"
+
+    def test_phase_elapsed_seconds_resets_per_phase(
+        self, driver, tmp_path: Path
+    ) -> None:
+        """Each checkpoint resets phase_started_at so phase_elapsed_seconds
+        measures only the current phase."""
+        import time
+
+        recorder = self._make_recorder(driver, tmp_path)
+        recorder.checkpoint("revision_verified")
+        time.sleep(0.05)
+        recorder.checkpoint("database_initialized")
+        snapshot = recorder.snapshot()
+        # phase_elapsed_seconds is for the new phase, should be near zero.
+        assert snapshot["phase_elapsed_seconds"] >= 0.0
+        # total_elapsed_seconds is anchored to recorder creation.
+        assert snapshot["total_elapsed_seconds"] >= snapshot["phase_elapsed_seconds"]
 
 
 # ---------------------------------------------------------------------------
@@ -344,6 +494,37 @@ class TestRunnerMetadata:
 
 
 # ---------------------------------------------------------------------------
+# Format time helper (lives in the shared benchmark_fixture module)
+# ---------------------------------------------------------------------------
+
+class TestFormatTime:
+    """Tests for the time formatting helper in the shared fixture module.
+
+    ``format_time`` moved from the driver to ``benchmark_fixture`` so both
+    product and WebView drivers share the same formatting logic.
+    """
+
+    def test_midnight(self, driver) -> None:
+        from scripts.ci.benchmark_fixture import format_time
+        assert format_time("2026-07-15", 0) == "2026-07-15 00:00:00"
+
+    def test_nine_am(self, driver) -> None:
+        from scripts.ci.benchmark_fixture import format_time
+        assert format_time("2026-07-15", 32400) == "2026-07-15 09:00:00"
+
+    def test_ten_pm(self, driver) -> None:
+        from scripts.ci.benchmark_fixture import format_time
+        assert format_time("2026-07-15", 79200) == "2026-07-15 22:00:00"
+
+    def test_with_minutes_and_seconds(self, driver) -> None:
+        from scripts.ci.benchmark_fixture import format_time
+        assert (
+            format_time("2026-07-15", 36665)
+            == "2026-07-15 10:11:05"
+        )
+
+
+# ---------------------------------------------------------------------------
 # main() — argument validation
 # ---------------------------------------------------------------------------
 
@@ -356,14 +537,38 @@ class TestMainArguments:
     modules, so these tests are hermetic.
     """
 
-    def test_missing_required_args_raises_system_exit(
-        self, driver, monkeypatch
+    def test_missing_target_root_raises_system_exit(
+        self, driver, tmp_path: Path, monkeypatch
     ) -> None:
         """Missing --target-root must cause argparse to exit."""
         monkeypatch.setattr(sys, "argv", [
             "product_benchmark_driver.py",
             "--revision", "abc123",
-            "--output", "out.json",
+            "--output-dir", str(tmp_path / "out"),
+        ])
+        with pytest.raises(SystemExit):
+            driver.main()
+
+    def test_missing_revision_raises_system_exit(
+        self, driver, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Missing --revision must cause argparse to exit."""
+        monkeypatch.setattr(sys, "argv", [
+            "product_benchmark_driver.py",
+            "--target-root", str(tmp_path),
+            "--output-dir", str(tmp_path / "out"),
+        ])
+        with pytest.raises(SystemExit):
+            driver.main()
+
+    def test_missing_output_dir_raises_system_exit(
+        self, driver, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Missing --output-dir must cause argparse to exit."""
+        monkeypatch.setattr(sys, "argv", [
+            "product_benchmark_driver.py",
+            "--target-root", str(tmp_path),
+            "--revision", "abc123",
         ])
         with pytest.raises(SystemExit):
             driver.main()
@@ -384,7 +589,7 @@ class TestMainTargetRootValidation:
             "product_benchmark_driver.py",
             "--target-root", str(nonexistent),
             "--revision", "abc123",
-            "--output", str(tmp_path / "out.json"),
+            "--output-dir", str(tmp_path / "out"),
         ])
         exit_code = driver.main()
         assert exit_code == driver._EXIT_INPUT_SCHEMA
@@ -398,7 +603,187 @@ class TestMainTargetRootValidation:
             "product_benchmark_driver.py",
             "--target-root", str(file_path),
             "--revision", "abc123",
-            "--output", str(tmp_path / "out.json"),
+            "--output-dir", str(tmp_path / "out"),
         ])
         exit_code = driver.main()
         assert exit_code == driver._EXIT_INPUT_SCHEMA
+
+
+# ---------------------------------------------------------------------------
+# main() — --scenario routing
+# ---------------------------------------------------------------------------
+
+class TestScenarioRouting:
+    """Tests for the ``--scenario`` argument and its routing.
+
+    ``--scenario`` is NOT required (defaults to ``None``).  When provided,
+    ``main()`` runs a single scenario in-process (CI path).  When omitted,
+    ``main()`` runs the local-only convenience wrapper (NOT used by CI).
+    """
+
+    def test_scenario_arg_routes_to_single_scenario(
+        self, driver, tmp_path: Path, monkeypatch
+    ) -> None:
+        """When --scenario is provided, _run_single_scenario is called."""
+        calls: dict[str, dict] = {}
+
+        def stub_single(**kwargs):
+            calls["single"] = kwargs
+            return 0
+
+        def stub_wrapper(**kwargs):
+            calls["wrapper"] = kwargs
+            return 0
+
+        monkeypatch.setattr(driver, "_run_single_scenario", stub_single)
+        monkeypatch.setattr(driver, "_run_local_wrapper", stub_wrapper)
+        monkeypatch.setattr(sys, "argv", [
+            "product_benchmark_driver.py",
+            "--target-root", str(tmp_path),
+            "--revision", "abc123",
+            "--output-dir", str(tmp_path / "out"),
+            "--scenario", "20k_activities",
+        ])
+        exit_code = driver.main()
+        assert exit_code == 0
+        assert "single" in calls
+        assert "wrapper" not in calls
+        assert calls["single"]["scenario"] == "20k_activities"
+        assert calls["single"]["profile"] == "full"
+
+    def test_no_scenario_arg_routes_to_local_wrapper(
+        self, driver, tmp_path: Path, monkeypatch
+    ) -> None:
+        """When --scenario is NOT provided, _run_local_wrapper is called.
+
+        ``--scenario`` defaults to ``None``; CI never uses this path.
+        """
+        calls: dict[str, dict] = {}
+
+        def stub_single(**kwargs):
+            calls["single"] = kwargs
+            return 0
+
+        def stub_wrapper(**kwargs):
+            calls["wrapper"] = kwargs
+            return 0
+
+        monkeypatch.setattr(driver, "_run_single_scenario", stub_single)
+        monkeypatch.setattr(driver, "_run_local_wrapper", stub_wrapper)
+        monkeypatch.setattr(sys, "argv", [
+            "product_benchmark_driver.py",
+            "--target-root", str(tmp_path),
+            "--revision", "abc123",
+            "--output-dir", str(tmp_path / "out"),
+        ])
+        exit_code = driver.main()
+        assert exit_code == 0
+        assert "wrapper" in calls
+        assert "single" not in calls
+        # The wrapper receives the full scenario tuple.
+        assert tuple(calls["wrapper"]["scenarios"]) == tuple(
+            driver._SCENARIOS.keys()
+        )
+
+    def test_invalid_scenario_choice_rejected_by_argparse(
+        self, driver, tmp_path: Path, monkeypatch
+    ) -> None:
+        """An unknown --scenario value must be rejected by argparse."""
+        monkeypatch.setattr(sys, "argv", [
+            "product_benchmark_driver.py",
+            "--target-root", str(tmp_path),
+            "--revision", "abc123",
+            "--output-dir", str(tmp_path / "out"),
+            "--scenario", "not_a_real_scenario",
+        ])
+        with pytest.raises(SystemExit):
+            driver.main()
+
+    def test_invalid_profile_choice_rejected_by_argparse(
+        self, driver, tmp_path: Path, monkeypatch
+    ) -> None:
+        """An unknown --profile value must be rejected by argparse."""
+        monkeypatch.setattr(sys, "argv", [
+            "product_benchmark_driver.py",
+            "--target-root", str(tmp_path),
+            "--revision", "abc123",
+            "--output-dir", str(tmp_path / "out"),
+            "--profile", "ultra",
+        ])
+        with pytest.raises(SystemExit):
+            driver.main()
+
+    def test_default_profile_is_full(
+        self, driver, tmp_path: Path, monkeypatch
+    ) -> None:
+        """The default --profile is 'full' (the real performance gate)."""
+        captured: dict[str, object] = {}
+
+        def stub_single(**kwargs):
+            captured.update(kwargs)
+            return 0
+
+        monkeypatch.setattr(driver, "_run_single_scenario", stub_single)
+        monkeypatch.setattr(sys, "argv", [
+            "product_benchmark_driver.py",
+            "--target-root", str(tmp_path),
+            "--revision", "abc123",
+            "--output-dir", str(tmp_path / "out"),
+            "--scenario", "20k_activities",
+        ])
+        driver.main()
+        assert captured["profile"] == "full"
+
+
+# ---------------------------------------------------------------------------
+# Local wrapper — exists but is NOT CI
+# ---------------------------------------------------------------------------
+
+class TestLocalWrapper:
+    """The local wrapper exists for developer convenience only.
+
+    CI uses matrix jobs so each scenario runs as an independent runner
+    with its own progress/result/failure contract.  The local wrapper
+    does NOT own any artifact used by the comparison layer.
+    """
+
+    def test_local_wrapper_function_exists(self, driver) -> None:
+        assert hasattr(driver, "_run_local_wrapper")
+        assert callable(driver._run_local_wrapper)
+
+    def test_local_wrapper_writes_only_convenience_summary(
+        self, driver
+    ) -> None:
+        """The wrapper writes only ``local-wrapper-summary.json`` —
+        it never writes ``result.json`` (that is owned by single-scenario
+        invocations).  The wrapper may CHECK for result.json to detect
+        whether a scenario succeeded, but it never produces one itself.
+        """
+        source = inspect.getsource(driver._run_local_wrapper)
+        assert "local-wrapper-summary.json" in source
+        # The only _atomic_write_json call in the wrapper is for the
+        # convenience summary — never for result.json or failure.json.
+        assert '_atomic_write_json(output_dir / "result.json"' not in source
+        assert '_atomic_write_json(output_dir / "failure.json"' not in source
+        assert (
+            '_atomic_write_json(output_dir / "local-wrapper-summary.json"'
+            in source
+        )
+
+    def test_local_wrapper_documents_non_ci_status(self, driver) -> None:
+        """The wrapper must be documented as NOT used by CI."""
+        source = inspect.getsource(driver._run_local_wrapper)
+        assert (
+            "CI does NOT use this artifact" in source
+            or "CI never" in source
+            or "NOT used by CI" in source
+        ), "local wrapper must document that CI does not use it"
+
+    def test_local_wrapper_does_not_call_run_single_scenario_in_process(
+        self, driver
+    ) -> None:
+        """The wrapper runs scenarios in subprocesses, not in-process —
+        so a scenario crash cannot corrupt the wrapper's process state."""
+        source = inspect.getsource(driver._run_local_wrapper)
+        assert "subprocess.run" in source
+        assert "_run_single_scenario(" not in source
