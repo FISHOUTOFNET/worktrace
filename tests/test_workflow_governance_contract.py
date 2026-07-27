@@ -16,9 +16,22 @@ Governance contract:
     cannot waste runner minutes.
   * Both workflows use the ``--profile full`` driver invocation (the
     workflow never runs smoke — smoke is for local validation only).
-  * Neither workflow uses ``continue-on-error`` on the gate steps,
-    neither increases timeout above the historical ceiling, and
-    neither lowers the data scale or the tolerance to pass.
+  * Neither workflow uses ``continue-on-error`` on the gate/comparison
+    steps. It IS allowed on ``baseline_driver``/``head_driver`` steps
+    so baseline failure does not block HEAD execution; the
+    comparison/finalize step always runs via ``if: always()`` and is
+    the sole determinant of job success.
+  * The product-benchmark job uses a matrix strategy with two
+    cross-revision latency scenarios (``20k_activities`` and
+    ``10k_contributions``), each with its own timeout.
+    ``fail-fast: false`` ensures one scenario's failure does not cancel
+    the other.
+  * A HEAD-only ``compact-memory`` job runs the compact-storage memory
+    gate at 5000 entries — NOT a baseline-vs-HEAD comparison.
+  * The Standard CI workflow (``_validation.yml``) excludes benchmark
+    tests via ``-m "not benchmark"``.
+  * Neither workflow increases timeout above the historical ceiling,
+    and neither lowers the data scale or the tolerance to pass.
 
 These tests parse the YAML files as text (not via ``yaml.safe_load``)
 to avoid depending on PyYAML and to make the assertions robust against
@@ -41,8 +54,69 @@ PERF_VALIDATION_YML = (
 STANDARD_TIMING_YML = (
     ROOT / ".github" / "workflows" / "standard-timing-validation.yml"
 )
+STANDARD_CI_YML = (
+    ROOT / ".github" / "workflows" / "_validation.yml"
+)
 PRODUCT_DRIVER_PATH = ROOT / "scripts" / "ci" / "product_benchmark_driver.py"
 WEBVIEW_DRIVER_PATH = ROOT / "scripts" / "webview_render_perf.py"
+
+# Step ids that are permitted to use ``continue-on-error`` so baseline
+# failure does not block HEAD driver execution.
+_ALLOWED_CONTINUE_ON_ERROR_STEP_IDS = {"baseline_driver", "head_driver"}
+
+
+# ---------------------------------------------------------------------------
+# Module-level YAML helpers
+# ---------------------------------------------------------------------------
+
+def _extract_job_section(source: str, job_name: str) -> str | None:
+    """Extract the YAML text of one job by job key.
+
+    Returns the job's body (from the job key to the next top-level
+    key at the same indentation, or end of file).
+    """
+    pattern = re.compile(
+        r"^  " + re.escape(job_name) + r":\s*\n((?:(?:    |\n).*\n)*)",
+        re.MULTILINE,
+    )
+    match = pattern.search(source)
+    if match is None:
+        return None
+    body = match.group(1)
+    return body.rstrip() + "\n"
+
+
+def _find_steps_with_continue_on_error(
+    source: str,
+) -> list[dict[str, str | None]]:
+    """Find all steps that set ``continue-on-error``.
+
+    Returns a list of dicts with keys ``id``, ``name``, ``value``.
+    ``id`` and ``name`` are ``None`` if not found in the step block.
+    """
+    results: list[dict[str, str | None]] = []
+    lines = source.split("\n")
+    for i, line in enumerate(lines):
+        coe_match = re.match(r"^        continue-on-error:\s*(.+)", line)
+        if not coe_match:
+            continue
+        value = coe_match.group(1).strip()
+        step_id: str | None = None
+        step_name: str | None = None
+        for j in range(i - 1, max(i - 30, -1), -1):
+            prev = lines[j]
+            if re.match(r"^      - ", prev):
+                name_match = re.match(r"^      - name:\s*(.+)", prev)
+                if name_match:
+                    step_name = name_match.group(1).strip()
+                break
+            id_match = re.match(r"^        id:\s*(\S+)", prev)
+            if id_match and step_id is None:
+                step_id = id_match.group(1)
+        results.append(
+            {"id": step_id, "name": step_name, "value": value}
+        )
+    return results
 
 
 # ---------------------------------------------------------------------------
@@ -141,8 +215,9 @@ class TestPerformanceValidationConcurrency:
 
 class TestPerformanceValidationProfileAndGates:
     """The workflow must run the ``full`` profile (never smoke), must
-    NOT use ``continue-on-error`` on the gate steps, and must NOT
-    increase timeout above the historical ceiling."""
+    NOT use ``continue-on-error`` on the gate/comparison steps (it IS
+    allowed on driver steps so baseline failure does not block HEAD),
+    and must NOT increase timeout above the historical ceiling."""
 
     def test_workflow_runs_full_profile(self) -> None:
         """Both baseline and HEAD driver invocations must pass
@@ -166,25 +241,47 @@ class TestPerformanceValidationProfileAndGates:
         )
 
     def test_no_continue_on_error_on_gate_steps(self) -> None:
-        """Gate steps must NOT use ``continue-on-error`` — that would
-        mask failures and let regressions through."""
+        """``continue-on-error: true`` is only allowed on driver steps
+        (id: baseline_driver, head_driver) so baseline failure does not
+        block HEAD execution. Gate/comparison steps must NOT use it."""
         source = PERF_VALIDATION_YML.read_text(encoding="utf-8")
-        assert "continue-on-error: true" not in source, (
-            "performance-validation.yml must not use continue-on-error: true — "
-            "that would mask gate failures"
+        steps_with_coe = _find_steps_with_continue_on_error(source)
+        for step in steps_with_coe:
+            if step["value"] != "true":
+                continue
+            assert step["id"] in _ALLOWED_CONTINUE_ON_ERROR_STEP_IDS, (
+                "continue-on-error: true is only allowed on driver steps "
+                f"(id: baseline_driver or head_driver), but found on step "
+                f"'{step.get('name', step.get('id'))}'"
+            )
+        # Job-level continue-on-error (4-space indent) is prohibited.
+        job_level_coe = re.findall(
+            r"^    continue-on-error:", source, re.MULTILINE
+        )
+        assert len(job_level_coe) == 0, (
+            "continue-on-error at job level is prohibited"
         )
 
     def test_no_continue_on_error_with_bool_shorthand(self) -> None:
-        """Same check for the YAML boolean shorthand."""
+        """Same check for the YAML boolean shorthand — only allowed on
+        driver steps."""
         source = PERF_VALIDATION_YML.read_text(encoding="utf-8")
-        assert "continue-on-error: ${{" not in source
+        steps_with_coe = _find_steps_with_continue_on_error(source)
+        for step in steps_with_coe:
+            if "${{" not in (step["value"] or ""):
+                continue
+            assert step["id"] in _ALLOWED_CONTINUE_ON_ERROR_STEP_IDS, (
+                "continue-on-error with ${{...}} shorthand is only allowed "
+                "on driver steps (id: baseline_driver or head_driver), but "
+                f"found on step '{step.get('name', step.get('id'))}'"
+            )
 
     def test_webview_job_timeout_within_ceiling(self) -> None:
         """The WebView comparison job's ``timeout-minutes`` must NOT
         exceed 30 — increasing timeout to bypass a slow workflow is
         explicitly prohibited."""
         source = PERF_VALIDATION_YML.read_text(encoding="utf-8")
-        webview_section = self._extract_job_section(
+        webview_section = _extract_job_section(
             source, "webview-comparison"
         )
         assert webview_section is not None, (
@@ -204,45 +301,30 @@ class TestPerformanceValidationProfileAndGates:
         )
 
     def test_benchmark_job_timeout_within_ceiling(self) -> None:
-        """The benchmark comparison job's ``timeout-minutes`` must NOT
-        exceed 40."""
+        """The product-benchmark job's per-matrix ``timeout_minutes``
+        must NOT exceed 40 — increasing timeout to bypass a slow
+        workflow is explicitly prohibited."""
         source = PERF_VALIDATION_YML.read_text(encoding="utf-8")
-        benchmark_section = self._extract_job_section(
-            source, "benchmark-comparison"
+        benchmark_section = _extract_job_section(
+            source, "product-benchmark"
         )
         assert benchmark_section is not None, (
-            "benchmark-comparison job not found"
+            "product-benchmark job not found"
         )
-        timeout_match = re.search(
-            r"timeout-minutes:\s*(\d+)", benchmark_section
+        timeout_matches = re.findall(
+            r"timeout_minutes:\s*(\d+)", benchmark_section
         )
-        assert timeout_match is not None, (
-            "benchmark-comparison job must specify timeout-minutes"
+        assert timeout_matches, (
+            "product-benchmark matrix must specify timeout_minutes "
+            "per scenario"
         )
-        timeout = int(timeout_match.group(1))
-        assert timeout <= 40, (
-            f"benchmark-comparison timeout-minutes={timeout} exceeds the "
-            f"40-minute ceiling — increasing timeout to bypass a slow "
-            f"workflow is prohibited"
-        )
-
-    def _extract_job_section(
-        self, source: str, job_name: str
-    ) -> str | None:
-        """Extract the YAML text of one job by job key.
-
-        Returns the job's body (from the job key to the next top-level
-        key at the same indentation, or end of file).
-        """
-        pattern = re.compile(
-            r"^  " + re.escape(job_name) + r":\s*\n((?:(?:    |\n).*\n)*)",
-            re.MULTILINE,
-        )
-        match = pattern.search(source)
-        if match is None:
-            return None
-        body = match.group(1)
-        return body.rstrip() + "\n"
+        for timeout_str in timeout_matches:
+            timeout = int(timeout_str)
+            assert timeout <= 40, (
+                f"product-benchmark timeout_minutes={timeout} exceeds the "
+                f"40-minute ceiling — increasing timeout to bypass a slow "
+                f"workflow is prohibited"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -478,12 +560,28 @@ class TestWorkflowDoesNotWeakenMergeGate:
     or marking failing steps as continue-on-error."""
 
     def test_no_continue_on_error_anywhere(self) -> None:
-        """Neither workflow may use ``continue-on-error: true`` on any
-        gate step."""
+        """``continue-on-error: true`` is only allowed on driver steps
+        (id: baseline_driver, head_driver). Gate/comparison steps must
+        NOT use it, and job-level continue-on-error is prohibited."""
         for yml_path in (PERF_VALIDATION_YML, STANDARD_TIMING_YML):
             source = yml_path.read_text(encoding="utf-8")
-            assert "continue-on-error: true" not in source, (
-                f"{yml_path.name} must not use continue-on-error: true"
+            steps_with_coe = _find_steps_with_continue_on_error(source)
+            for step in steps_with_coe:
+                if step["value"] != "true":
+                    continue
+                assert step["id"] in _ALLOWED_CONTINUE_ON_ERROR_STEP_IDS, (
+                    f"{yml_path.name}: continue-on-error: true is only "
+                    f"allowed on driver steps (id: baseline_driver or "
+                    f"head_driver), but found on step "
+                    f"'{step.get('name', step.get('id'))}'"
+                )
+            # Job-level continue-on-error (4-space indent) is prohibited.
+            job_level_coe = re.findall(
+                r"^    continue-on-error:", source, re.MULTILINE
+            )
+            assert len(job_level_coe) == 0, (
+                f"{yml_path.name}: continue-on-error at job level is "
+                f"prohibited"
             )
 
     def test_no_lowered_tolerance_default(self) -> None:
@@ -507,8 +605,14 @@ class TestWorkflowDoesNotWeakenMergeGate:
         """The workflow must still run the baseline driver and the
         comparison step — deleting baseline comparison is prohibited."""
         source = PERF_VALIDATION_YML.read_text(encoding="utf-8")
-        assert "baseline benchmark driver" in source or \
-               "baseline WebView driver" in source
+        assert (
+            "baseline benchmark driver" in source
+            or "baseline WebView driver" in source
+            or "baseline_driver" in source
+        ), (
+            "workflow must retain a baseline driver invocation — "
+            "deleting baseline comparison is prohibited"
+        )
         assert "benchmark_comparison" in source
         assert "webview_comparison" in source
 
@@ -528,7 +632,7 @@ class TestWorkflowDoesNotWeakenMergeGate:
         run the full 20k/10k data sizes via ``--profile full``."""
         source = PERF_VALIDATION_YML.read_text(encoding="utf-8")
         driver_invocations = re.findall(
-            r"python\s+scripts/(?:ci/product_benchmark_driver|webview_render_perf)\.py",
+            r"python(?:\s+-u)?\s+scripts/(?:ci/product_benchmark_driver|webview_render_perf)\.py",
             source,
         )
         assert len(driver_invocations) >= 4, (
@@ -583,3 +687,266 @@ class TestWorkflowUploadsArtifacts:
                 f"retention-days={days} exceeds 30 — old artifacts "
                 f"should not accumulate indefinitely"
             )
+
+
+# ---------------------------------------------------------------------------
+# Product benchmark matrix structure
+# ---------------------------------------------------------------------------
+
+class TestProductBenchmarkMatrix:
+    """The ``product-benchmark`` job must use a matrix strategy with
+    two cross-revision latency scenarios, each with its own timeout."""
+
+    def test_product_benchmark_uses_matrix(self) -> None:
+        source = PERF_VALIDATION_YML.read_text(encoding="utf-8")
+        product_section = _extract_job_section(source, "product-benchmark")
+        assert product_section is not None, (
+            "product-benchmark job not found"
+        )
+        assert "strategy:" in product_section, (
+            "product-benchmark job must use a matrix strategy"
+        )
+        assert "matrix:" in product_section, (
+            "product-benchmark job must define a matrix"
+        )
+
+    def test_matrix_fail_fast_false(self) -> None:
+        source = PERF_VALIDATION_YML.read_text(encoding="utf-8")
+        product_section = _extract_job_section(source, "product-benchmark")
+        assert product_section is not None, (
+            "product-benchmark job not found"
+        )
+        assert "fail-fast: false" in product_section, (
+            "product-benchmark matrix must use fail-fast: false so one "
+            "scenario's failure does not cancel the other"
+        )
+
+    def test_matrix_has_two_scenarios(self) -> None:
+        source = PERF_VALIDATION_YML.read_text(encoding="utf-8")
+        product_section = _extract_job_section(source, "product-benchmark")
+        assert product_section is not None, (
+            "product-benchmark job not found"
+        )
+        assert "20k_activities" in product_section, (
+            "product-benchmark matrix must include the 20k_activities scenario"
+        )
+        assert "10k_contributions" in product_section, (
+            "product-benchmark matrix must include the 10k_contributions scenario"
+        )
+
+    def test_matrix_scenarios_are_cross_revision_latency_only(self) -> None:
+        """The product-benchmark matrix must only include cross-revision
+        latency scenarios — NOT peak_memory or compact_memory."""
+        source = PERF_VALIDATION_YML.read_text(encoding="utf-8")
+        product_section = _extract_job_section(source, "product-benchmark")
+        assert product_section is not None, (
+            "product-benchmark job not found"
+        )
+        assert "scenario: peak_memory" not in product_section, (
+            "product-benchmark matrix must NOT include a peak_memory "
+            "scenario — peak_memory is not a cross-revision latency gate"
+        )
+        assert "scenario: compact_memory" not in product_section, (
+            "product-benchmark matrix must NOT include a compact_memory "
+            "scenario — compact-memory is a HEAD-only job"
+        )
+
+    def test_matrix_has_per_scenario_timeout(self) -> None:
+        """Each matrix item must specify its own ``timeout_minutes`` so
+        scenarios with different data scales have appropriate ceilings."""
+        source = PERF_VALIDATION_YML.read_text(encoding="utf-8")
+        product_section = _extract_job_section(source, "product-benchmark")
+        assert product_section is not None, (
+            "product-benchmark job not found"
+        )
+        timeout_matches = re.findall(
+            r"timeout_minutes:\s*(\d+)", product_section
+        )
+        assert len(timeout_matches) >= 2, (
+            f"expected at least 2 per-scenario timeout_minutes values, "
+            f"found {len(timeout_matches)}"
+        )
+        for timeout_str in timeout_matches:
+            timeout = int(timeout_str)
+            assert timeout > 0, (
+                f"timeout_minutes={timeout} must be a positive integer"
+            )
+
+
+# ---------------------------------------------------------------------------
+# HEAD-only compact-storage memory gate job
+# ---------------------------------------------------------------------------
+
+class TestCompactMemoryJob:
+    """The ``compact-memory`` job is a HEAD-only compact-storage memory
+    gate at 5000 entries. It is NOT a baseline-vs-HEAD comparison."""
+
+    def test_compact_memory_job_exists(self) -> None:
+        source = PERF_VALIDATION_YML.read_text(encoding="utf-8")
+        compact_section = _extract_job_section(source, "compact-memory")
+        assert compact_section is not None, (
+            "compact-memory job must exist in performance-validation.yml"
+        )
+
+    def test_compact_memory_job_is_head_only(self) -> None:
+        """The compact-memory job must NOT create a baseline worktree
+        or resolve a baseline revision — it is HEAD-only."""
+        source = PERF_VALIDATION_YML.read_text(encoding="utf-8")
+        compact_section = _extract_job_section(source, "compact-memory")
+        assert compact_section is not None, (
+            "compact-memory job not found"
+        )
+        assert "baseline-worktree" not in compact_section, (
+            "compact-memory job must NOT create a baseline worktree — "
+            "it is HEAD-only"
+        )
+        assert "baseline_sha" not in compact_section, (
+            "compact-memory job must NOT resolve a baseline revision — "
+            "it is HEAD-only"
+        )
+
+    def test_compact_memory_uses_compact_memory_driver(self) -> None:
+        source = PERF_VALIDATION_YML.read_text(encoding="utf-8")
+        compact_section = _extract_job_section(source, "compact-memory")
+        assert compact_section is not None, (
+            "compact-memory job not found"
+        )
+        assert "scripts/ci/compact_memory_driver.py" in compact_section, (
+            "compact-memory job must invoke scripts/ci/compact_memory_driver.py"
+        )
+
+    def test_compact_memory_size_is_5000(self) -> None:
+        """The compact-memory gate must target 5000 entries (either in
+        the workflow-state.json or the driver default)."""
+        source = PERF_VALIDATION_YML.read_text(encoding="utf-8")
+        assert "5000" in source, (
+            "compact-memory job must reference size 5000 — the gate "
+            "target is 5000 entries"
+        )
+
+    def test_compact_memory_no_baseline_comparison(self) -> None:
+        """The compact-memory job must NOT invoke
+        ``benchmark_comparison.py`` or any baseline driver — it is
+        a HEAD-only structural acceptance gate."""
+        source = PERF_VALIDATION_YML.read_text(encoding="utf-8")
+        compact_section = _extract_job_section(source, "compact-memory")
+        assert compact_section is not None, (
+            "compact-memory job not found"
+        )
+        assert "benchmark_comparison.py" not in compact_section, (
+            "compact-memory job must NOT invoke benchmark_comparison.py — "
+            "it is not a baseline-vs-HEAD comparison"
+        )
+        assert "baseline_driver" not in compact_section, (
+            "compact-memory job must NOT have a baseline_driver step — "
+            "it is HEAD-only"
+        )
+
+    def test_compact_memory_has_artifact_upload(self) -> None:
+        """The compact-memory job must upload an artifact with
+        ``if: always()`` and ``if-no-files-found: error`` so the
+        memory gate result is always auditable."""
+        source = PERF_VALIDATION_YML.read_text(encoding="utf-8")
+        compact_section = _extract_job_section(source, "compact-memory")
+        assert compact_section is not None, (
+            "compact-memory job not found"
+        )
+        assert "actions/upload-artifact" in compact_section, (
+            "compact-memory job must upload an artifact"
+        )
+        assert "if: always()" in compact_section, (
+            "compact-memory artifact upload must use if: always() so the "
+            "artifact is uploaded even on gate failure"
+        )
+        assert "if-no-files-found: error" in compact_section, (
+            "compact-memory artifact upload must use if-no-files-found: error"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Scenario and workflow-state structure
+# ---------------------------------------------------------------------------
+
+class TestScenarioAndWorkflowState:
+    """The workflow must pass ``--scenario`` to the product driver,
+    pre-create ``workflow-state.json``, use ``python -u`` for
+    unbuffered output, and must NOT invoke a serial controller."""
+
+    def test_product_driver_invocations_include_scenario(self) -> None:
+        """The product driver invocations must include ``--scenario``
+        so each matrix job runs exactly one scenario."""
+        source = PERF_VALIDATION_YML.read_text(encoding="utf-8")
+        product_section = _extract_job_section(source, "product-benchmark")
+        assert product_section is not None, (
+            "product-benchmark job not found"
+        )
+        assert "--scenario ${{ matrix.scenario }}" in product_section, (
+            "product driver invocations must include "
+            "--scenario ${{ matrix.scenario }}"
+        )
+
+    def test_workflow_state_pre_created(self) -> None:
+        """Each job must pre-create ``workflow-state.json`` in the
+        results directory before any driver runs, so
+        ``upload-artifact`` with ``if-no-files-found: error`` always
+        has at least one file."""
+        source = PERF_VALIDATION_YML.read_text(encoding="utf-8")
+        assert "workflow-state.json" in source, (
+            "workflow must pre-create workflow-state.json before driver "
+            "execution so upload-artifact always has at least one file"
+        )
+
+    def test_python_unbuffered(self) -> None:
+        """All Python driver invocations must use ``python -u``
+        (unbuffered output) so driver progress is visible in job logs
+        without buffering delays."""
+        source = PERF_VALIDATION_YML.read_text(encoding="utf-8")
+        bare_python_pattern = re.compile(r"python\s+scripts/")
+        bare_matches = bare_python_pattern.findall(source)
+        assert len(bare_matches) == 0, (
+            f"found {len(bare_matches)} Python invocations without -u "
+            f"(unbuffered) flag — all driver invocations must use "
+            f"'python -u'"
+        )
+        unbuffered_count = source.count("python -u")
+        assert unbuffered_count >= 4, (
+            f"expected at least 4 'python -u' invocations, found "
+            f"{unbuffered_count} — all driver invocations must use "
+            f"unbuffered output"
+        )
+
+    def test_no_product_controller_invocation(self) -> None:
+        """The workflow must NOT invoke a controller that runs all
+        scenarios serially — the matrix strategy runs each scenario
+        as an independent job."""
+        source = PERF_VALIDATION_YML.read_text(encoding="utf-8")
+        assert "--scenario all" not in source, (
+            "workflow must not invoke a controller that runs all "
+            "scenarios serially — use the matrix strategy instead"
+        )
+        assert "benchmark_controller" not in source, (
+            "workflow must not invoke a benchmark controller script — "
+            "use the matrix strategy instead"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Standard CI excludes benchmark tests
+# ---------------------------------------------------------------------------
+
+class TestStandardCIExcludesBenchmark:
+    """The Standard CI workflow (``_validation.yml``) must exclude
+    benchmark tests via ``-m "not benchmark"`` so the standard CI run
+    does not execute the expensive performance-gate benchmarks."""
+
+    def test_standard_ci_file_exists(self) -> None:
+        assert STANDARD_CI_YML.is_file(), (
+            "_validation.yml must exist"
+        )
+
+    def test_standard_ci_excludes_benchmark(self) -> None:
+        source = STANDARD_CI_YML.read_text(encoding="utf-8")
+        assert "not benchmark" in source, (
+            "_validation.yml must use '-m \"not benchmark\"' to exclude "
+            "benchmark tests from the standard CI run"
+        )
