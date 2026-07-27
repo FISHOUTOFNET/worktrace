@@ -2,40 +2,28 @@
 """Compare WebView render benchmark results between baseline and HEAD.
 
 Reads JSON artifacts from ``webview_render_perf.py``, validates
-schema/fixture/driver/revision consistency, computes per-metric deltas,
-and enforces no-regression gates (HEAD median <= baseline median * 1.1)
-on ``cold_timeline_seconds``, ``warm_timeline_seconds``,
+schema/fixture/driver/revision consistency, computes per-metric deltas, and
+enforces no-regression gates (HEAD median <= baseline median * 1.1) on
+``cold_timeline_seconds``, ``warm_timeline_seconds``,
 ``detail_payload_seconds``, ``detail_total_seconds``.
 
-Revision identity: artifacts must record matching ``requested_revision``
-and ``actual_target_revision`` (``git rev-parse``); ``github_workflow_sha``
-is diagnostics-only.  Scenario isolation: ``fixture_audit`` must report
-``preexisting_activity_count == 0`` and ``inserted_count == requested_count``.
+Revision identity: ``requested_revision`` == ``actual_target_revision``
+(``git rev-parse``); ``github_workflow_sha`` is diagnostics-only.  Scenario
+isolation: ``fixture_audit.preexisting_activity_count == 0`` and
+``inserted_count == requested_count``.  Valid only when ``status == "ok"``
+and every run has ``detail_payload_resolved == true`` and
+``detail_dom_row_count > 0``.
 
-Completion: artifact valid only when ``status == "ok"`` and every run has
-``detail_payload_resolved == true`` and ``detail_dom_row_count > 0``.
+Fail-closed: ALWAYS writes a JSON artifact to ``--output`` (uploaded via
+``if: always()``).  When baseline/HEAD is missing, unparseable, or reports a
+driver failure, the artifact records ``outcome`` ∈ {``comparison_passed``,
+``comparison_gate_failed``, ``baseline_invalid``, ``head_invalid``,
+``both_invalid``}, per-side diagnostics (``result_present``, ``status``,
+``failure_category``, ``failure_reason``, ``last_step``), revisions, tolerance —
+so finalization surfaces the real reason instead of a "missing artifact" error.
 
-Fail-closed artifact contract
------------------------------
-The comparison ALWAYS writes a JSON artifact to ``--output`` (the workflow
-uploads it via ``if: always()``).  When baseline or HEAD is missing,
-unparseable, or reports a driver failure, the artifact records:
-
-* ``outcome`` ∈ {``comparison_passed``, ``comparison_gate_failed``,
-  ``baseline_invalid``, ``head_invalid``, ``both_invalid``}
-* per-side diagnostics: ``result_present``, ``status``,
-  ``failure_category``, ``failure_reason``, ``last_phase``
-* the expected and actual revisions
-* the tolerance percentage
-
-This lets the workflow's ``if: always()`` finalization step surface the
-real reason instead of masking it with a "missing artifact" error.
-
-Exit codes
-----------
-0  comparison passed, or one/both sides invalid (artifact written)
-2  input/schema error (e.g. --output path unwritable)
-4  gate failure (both sides valid but HEAD regressed beyond tolerance)
+Exit codes: 0 = passed or invalid (artifact written); 2 = input/schema error;
+4 = gate failure (both valid, HEAD regressed beyond tolerance).
 """
 
 from __future__ import annotations

@@ -1,56 +1,29 @@
 #!/usr/bin/env python3
 """Compare ONE product benchmark scenario between baseline and HEAD.
 
-The comparison layer is scenario-scoped: each invocation compares exactly
-one scenario (``--scenario``), reading ``result.json`` from the baseline
-and HEAD driver output directories.  When ``result.json`` is missing on
-either side, the comparison reads ``progress.json`` and ``failure.json``
-so the artifact can still report the last completed phase, the failure
-category, and any partial samples — instead of just "required artifact
-missing".
+Scenario-scoped (``--scenario``): reads ``result.json`` from baseline and
+HEAD driver dirs; when missing, reads ``progress.json``/``failure.json``
+to report the last completed step, failure category, and partial samples
+instead of "required artifact missing".
 
-Scenario → metric mapping
--------------------------
-* ``20k_activities``         → ``projection_20k_total_seconds``
-* ``10k_contributions``      → ``projection_10k_contributions_seconds``
+Scenario → metric: ``20k_activities`` → ``projection_20k_total_seconds``;
+``10k_contributions`` → ``projection_10k_contributions_seconds``.
 
-Cross-revision consistency checks
----------------------------------
-* driver_version matches between baseline and HEAD
-* fixture_hash matches between baseline and HEAD
-* requested_revision == actual_target_revision within each artifact
-* actual_target_revision matches the expected SHA from the CLI
-* Python major.minor matches between baseline and HEAD
-* fixture_audit.preexisting_activity_count == 0
-* fixture_audit.inserted_count == requested_count
-* fixture_audit.connection_count >= 1, commit_count >= 1
-* sample count matches between baseline and HEAD (when both have results)
-* consistency_hash matches between baseline and HEAD (when both have results)
+Cross-revision consistency (baseline↔HEAD): driver_version, fixture_hash,
+requested_revision == actual_target_revision == expected SHA, Python
+major.minor, sample count + consistency_hash (when both have results);
+``fixture_audit.preexisting_activity_count == 0``,
+``inserted_count == requested_count``, ``connection_count >= 1``,
+``commit_count >= 1``.
 
-Final comparison artifact
--------------------------
-The comparison ALWAYS writes a JSON artifact to ``--output`` (the workflow
-uploads it via ``if: always()``).  The artifact records:
+Always writes a JSON artifact to ``--output`` (uploaded via ``if: always()``)
+recording ``outcome`` ∈ {``comparison_passed``, ``comparison_gate_failed``,
+``baseline_invalid``, ``head_invalid``, ``both_invalid``}, per-metric gate
+results, last step/failure diagnostics, fixture audit, revisions, tolerance.
 
-* ``outcome`` ∈ {``comparison_passed``, ``comparison_gate_failed``,
-  ``baseline_invalid``, ``head_invalid``, ``both_invalid``}
-* per-metric gate results (when both sides have valid results)
-* last phase, failure category, failure message, completed samples,
-  fixture audit, and result-missing flag for each side
-* the expected and actual revisions
-* the tolerance percentage
-
-Exit codes
-----------
-0  comparison passed (or one side invalid but artifact written)
-2  input/schema error (e.g. scenario unknown, output path unwritable)
-4  gate failure (both sides valid but HEAD regressed beyond tolerance)
-
-When one or both sides are invalid, the comparison writes the artifact
-and exits 0 — the gate cannot run when inputs are invalid, and the
-artifact's ``outcome`` field already records the failure mode.  This
-lets the workflow's ``if: always()`` finalization step surface the
-real reason instead of masking it with a "missing artifact" error.
+Exit codes: 0 = passed or one side invalid (artifact written); 2 = input/
+schema error; 4 = gate failure (both valid, HEAD regressed beyond tolerance).
+When inputs are invalid, exits 0 with the failure recorded in ``outcome``.
 """
 
 from __future__ import annotations
@@ -70,6 +43,13 @@ _EXIT_GATE_FAILED = 4
 
 # Scenario → (metric_key, description, value_field, sample_field, unit).
 _SCENARIO_METRICS: dict[str, tuple[str, str, str, str, str]] = {
+    "realistic_heavy_day": (
+        "projection_realistic_heavy_day_seconds",
+        "realistic heavy-day projection total",
+        "median_seconds",
+        "samples_seconds",
+        "seconds",
+    ),
     "20k_activities": (
         "projection_20k_total_seconds",
         "20k activities projection total",

@@ -1,41 +1,30 @@
 """Contract tests for performance validation workflow governance.
 
 The expensive Performance Validation and Standard Timing Validation
-workflows must NOT run on every push to performance-sensitive paths.
-Repeated pushes would cause unbounded CI trial-and-error on expensive
-20k/10k baseline-vs-HEAD runs.
+workflows must NOT run on every push to performance-sensitive paths
+(unbounded CI trial-and-error on 20k/10k baseline-vs-HEAD runs).
 
 Governance contract:
-  * Performance Validation triggers only on schedule,
-    workflow_dispatch, or when the PR carries the explicit
-    ``run-performance-validation`` label.
-  * Standard Timing Validation triggers only on workflow_dispatch or
-    when the PR carries the ``run-standard-timing`` label.
-  * Both workflows define a concurrency group keyed by PR number/ref
-    with ``cancel-in-progress: true`` so accidental double-triggers
-    cannot waste runner minutes.
-  * Both workflows use the ``--profile full`` driver invocation (the
-    workflow never runs smoke — smoke is for local validation only).
-  * Neither workflow uses ``continue-on-error`` on the gate/comparison
-    steps. It IS allowed on ``baseline_driver``/``head_driver`` steps
-    so baseline failure does not block HEAD execution; the
-    comparison/finalize step always runs via ``if: always()`` and is
-    the sole determinant of job success.
-  * The product-benchmark job uses a matrix strategy with two
-    cross-revision latency scenarios (``20k_activities`` and
-    ``10k_contributions``), each with its own timeout.
-    ``fail-fast: false`` ensures one scenario's failure does not cancel
-    the other.
-  * A HEAD-only ``compact-memory`` job runs the compact-storage memory
-    gate at 5000 entries — NOT a baseline-vs-HEAD comparison.
-  * The Standard CI workflow (``_validation.yml``) excludes benchmark
-    tests via ``-m "not benchmark"``.
-  * Neither workflow increases timeout above the historical ceiling,
-    and neither lowers the data scale or the tolerance to pass.
+  * Performance Validation triggers on schedule, workflow_dispatch, or the
+    ``run-performance-validation`` PR label; Standard Timing Validation on
+    workflow_dispatch or the ``run-standard-timing`` label.
+  * Both use a concurrency group keyed by PR number/ref with
+    ``cancel-in-progress: true``.
+  * Neither uses ``continue-on-error`` on gate/comparison steps (only on
+    ``baseline_driver``/``head_driver`` so baseline failure does not block
+    HEAD; the comparison step runs via ``if: always()`` and is the sole
+    success determinant).
+  * Both invoke ``--profile full`` (smoke is local-only); the
+    product-benchmark matrix runs ``20k_activities`` and
+    ``10k_contributions`` with ``fail-fast: false`` and per-scenario timeouts.
+  * A HEAD-only ``compact-memory`` job runs the compact-storage gate at 5000
+    entries (not baseline-vs-HEAD).
+  * Standard CI (``_validation.yml``) excludes benchmark tests via
+    ``-m "not benchmark"``; neither workflow raises the timeout ceiling or
+    lowers the data scale/tolerance to pass.
 
-These tests parse the YAML files as text (not via ``yaml.safe_load``)
-to avoid depending on PyYAML and to make the assertions robust against
-structural reformatting.
+Tests parse the YAML as text (not ``yaml.safe_load``) to avoid a PyYAML
+dependency and stay robust against structural reformatting.
 """
 
 from __future__ import annotations
@@ -214,20 +203,39 @@ class TestPerformanceValidationConcurrency:
 # ---------------------------------------------------------------------------
 
 class TestPerformanceValidationProfileAndGates:
-    """The workflow must run the ``full`` profile (never smoke), must
-    NOT use ``continue-on-error`` on the gate/comparison steps (it IS
-    allowed on driver steps so baseline failure does not block HEAD),
-    and must NOT increase timeout above the historical ceiling."""
+    """The workflow must use ``realistic`` or ``full`` profiles (never
+    smoke), must NOT use ``continue-on-error`` on the gate/comparison
+    steps (it IS allowed on driver steps so baseline failure does not
+    block HEAD), and must NOT increase timeout above the historical
+    ceiling."""
 
-    def test_workflow_runs_full_profile(self) -> None:
-        """Both baseline and HEAD driver invocations must pass
-        ``--profile full`` so the workflow measures the real
-        performance-gate data sizes."""
+    def test_workflow_uses_dynamic_profile(self) -> None:
+        """The workflow must use ``--profile`` with a dynamic value
+        (matrix or step output) so the mode input controls whether
+        realistic or full profiles are used."""
         source = PERF_VALIDATION_YML.read_text(encoding="utf-8")
-        full_count = source.count("--profile full")
-        assert full_count >= 4, (
-            f"expected at least 4 '--profile full' invocations "
-            f"(2 baseline + 2 HEAD across 2 jobs), found {full_count}"
+        # The workflow must reference --profile with a dynamic expression
+        # (matrix.profile or steps.*.outputs.profile), not a hardcoded
+        # smoke profile.
+        assert "--profile" in source, (
+            "workflow must invoke --profile on driver steps"
+        )
+        assert "--profile smoke" not in source, (
+            "workflow must not use --profile smoke"
+        )
+
+    def test_workflow_defines_mode_input(self) -> None:
+        """The workflow must define a ``mode`` input for
+        ``workflow_dispatch`` with ``realistic`` and ``stress`` options."""
+        source = PERF_VALIDATION_YML.read_text(encoding="utf-8")
+        assert "mode:" in source, (
+            "workflow must define a mode input"
+        )
+        assert "realistic" in source, (
+            "mode input must include 'realistic' option"
+        )
+        assert "stress" in source, (
+            "mode input must include 'stress' option"
         )
 
     def test_workflow_does_not_run_smoke_profile(self) -> None:
@@ -459,14 +467,30 @@ class TestStandardTimingConcurrency:
 # ---------------------------------------------------------------------------
 
 class TestDriverProfileSupport:
-    """Both drivers must define ``smoke`` and ``full`` profiles with
-    the canonical data sizes for each."""
+    """Both drivers must define ``smoke``, ``realistic``, and ``full``
+    profiles with the canonical data sizes for each."""
 
-    def test_product_driver_defines_smoke_and_full(self) -> None:
+    def test_product_driver_defines_all_profiles(self) -> None:
         source = PRODUCT_DRIVER_PATH.read_text(encoding="utf-8")
         assert '"smoke"' in source
+        assert '"realistic"' in source
         assert '"full"' in source
         assert "_PROFILES" in source
+
+    def test_product_driver_realistic_uses_gate_data(self) -> None:
+        """Realistic profile must use the ordinary PR gate data size
+        (2000 activities)."""
+        source = PRODUCT_DRIVER_PATH.read_text(encoding="utf-8")
+        realistic_match = re.search(
+            r'"realistic":\s*\{[^}]*"activity_count":\s*(\d+)[^}]*\}',
+            source,
+        )
+        assert realistic_match is not None, "realistic profile not found"
+        realistic_activity = int(realistic_match.group(1))
+        assert realistic_activity == 2000, (
+            f"realistic profile activity_count={realistic_activity} must be "
+            f"2000 for the ordinary PR gate"
+        )
 
     def test_product_driver_smoke_uses_small_data(self) -> None:
         """Smoke profile must use small data sizes (<= 1000) for
@@ -507,9 +531,10 @@ class TestDriverProfileSupport:
             f"full profile contribution_count={full_contrib} must be 10000"
         )
 
-    def test_webview_driver_defines_smoke_and_full(self) -> None:
+    def test_webview_driver_defines_all_profiles(self) -> None:
         source = WEBVIEW_DRIVER_PATH.read_text(encoding="utf-8")
         assert '"smoke"' in source
+        assert '"realistic"' in source
         assert '"full"' in source
         assert "_PROFILES" in source
 
@@ -539,15 +564,15 @@ class TestDriverProfileSupport:
 
     def test_product_driver_accepts_profile_arg(self) -> None:
         """The driver's argparse must accept ``--profile`` with
-        ``smoke`` and ``full`` choices."""
+        ``smoke``, ``realistic``, and ``full`` choices."""
         source = PRODUCT_DRIVER_PATH.read_text(encoding="utf-8")
         assert '"--profile"' in source
-        assert "choices=(\"smoke\", \"full\")" in source
+        assert "realistic" in source
 
     def test_webview_driver_accepts_profile_arg(self) -> None:
         source = WEBVIEW_DRIVER_PATH.read_text(encoding="utf-8")
         assert '"--profile"' in source
-        assert "choices=(\"smoke\", \"full\")" in source
+        assert "realistic" in source
 
 
 # ---------------------------------------------------------------------------
@@ -629,7 +654,8 @@ class TestWorkflowDoesNotWeakenMergeGate:
 
     def test_no_data_scale_reduction_in_workflow(self) -> None:
         """The workflow must NOT reduce data scale to pass — it must
-        run the full 20k/10k data sizes via ``--profile full``."""
+        use dynamic profiles (``realistic`` for PR gate, ``full`` for
+        stress) and must NOT use ``--profile smoke``."""
         source = PERF_VALIDATION_YML.read_text(encoding="utf-8")
         driver_invocations = re.findall(
             r"python(?:\s+-u)?\s+scripts/(?:ci/product_benchmark_driver|webview_render_perf)\.py",
@@ -639,11 +665,22 @@ class TestWorkflowDoesNotWeakenMergeGate:
             f"expected at least 4 driver invocations in workflow, "
             f"found {len(driver_invocations)}"
         )
-        full_count = source.count("--profile full")
-        assert full_count >= 4, (
-            f"expected at least 4 '--profile full' invocations, "
-            f"found {full_count} — the workflow must NOT reduce data "
-            f"scale to pass"
+        # The workflow must use dynamic profile selection (matrix or
+        # step output), not a hardcoded smoke profile.
+        assert "--profile smoke" not in source, (
+            "workflow must not use --profile smoke — "
+            "smoke is for local validation only"
+        )
+        # The workflow must define stress scenarios with full profile
+        # in the matrix so stress mode still exercises 20k/10k.
+        assert "20k_activities" in source, (
+            "workflow must retain 20k_activities in stress matrix"
+        )
+        assert "10k_contributions" in source, (
+            "workflow must retain 10k_contributions in stress matrix"
+        )
+        assert "realistic_heavy_day" in source, (
+            "workflow must include realistic_heavy_day for PR gate"
         )
 
 

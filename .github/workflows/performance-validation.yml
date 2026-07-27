@@ -1,26 +1,7 @@
-# Performance Validation — baseline vs HEAD benchmark, WebView comparison,
-# and HEAD-only compact-storage memory gate via HEAD-owned drivers.
-# Privacy: synthetic facts only.  Triggers: schedule (twice weekly), manual
-# dispatch, or PR labeled ``run-performance-validation`` (job-level ``if``
-# re-checks the label; concurrency cancels superseded runs).
-#
-# Architecture
-# ------------
-# 1. ``webview-comparison`` — baseline vs HEAD WebView render benchmark.
-# 2. ``product-benchmark`` — matrix of cross-revision latency scenarios:
-#    ``20k_activities`` and ``10k_contributions``.  Each scenario is an
-#    independent GitHub Actions job with its own timeout, worktree, and
-#    artifact.  baseline and HEAD run sequentially in the same job so
-#    runner variance is minimised.
-# 3. ``compact-memory`` — HEAD-only compact-storage memory gate at 5000
-#    entries.  NOT a baseline-vs-HEAD comparison; it is an internal
-#    structural acceptance gate.
-#
-# All jobs pre-create ``workflow-state.json`` in the results directory so
-# ``upload-artifact`` with ``if-no-files-found: error`` always succeeds.
-# baseline driver failure does NOT block HEAD driver execution; the
-# comparison/finalize step always runs via ``if: always()`` and is the
-# sole determinant of job success.
+# Performance Validation: baseline-vs-HEAD benchmark, WebView comparison,
+# and HEAD-only compact-storage memory gate.  Triggers: schedule (twice
+# weekly), manual dispatch, or PR labeled ``run-performance-validation``.
+# Modes: realistic (PR gate) vs stress (20k/10k); jobs: webview-comparison, product-benchmark, compact-memory.
 
 name: Performance validation
 
@@ -40,6 +21,14 @@ on:
         required: false
         type: string
         default: main
+      mode:
+        description: Validation mode — realistic (PR gate) or stress (full 10k/20k matrix)
+        required: false
+        type: choice
+        options:
+          - realistic
+          - stress
+        default: realistic
       benchmark_comparison_tolerance_pct:
         description: Max regression % for product benchmark comparison (default 10)
         required: false
@@ -88,6 +77,18 @@ jobs:
           fetch-depth: 0
           show-progress: false
           persist-credentials: false
+
+      - name: Resolve mode and profile
+        id: mode
+        shell: pwsh
+        run: |
+          $mode = "realistic"
+          if ($env:GITHUB_EVENT_NAME -eq "schedule") { $mode = "stress" }
+          if ($env:GITHUB_EVENT_NAME -eq "workflow_dispatch" -and "${{ github.event.inputs.mode }}" -eq "stress") { $mode = "stress" }
+          $profile = if ($mode -eq "stress") { "full" } else { "realistic" }
+          Write-Host "mode=$mode  profile=$profile"
+          "mode=$mode" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
+          "profile=$profile" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
 
       - name: Resolve revisions
         id: revs
@@ -197,11 +198,12 @@ jobs:
           $ErrorActionPreference = "Continue"
           $baselineWt = "${{ steps.paths.outputs.baseline_worktree }}"
           $baselineResults = "${{ steps.paths.outputs.baseline_results }}"
+          $profile = "${{ steps.mode.outputs.profile }}"
 
           & python -u scripts/webview_render_perf.py `
             --target-root $baselineWt `
             --revision "${{ steps.revs.outputs.baseline_sha }}" `
-            --profile full `
+            --profile $profile `
             --output "$baselineResults\webview-benchmark.json"
           $exitCode = $LASTEXITCODE
           "baseline_exit_code=$exitCode" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
@@ -219,11 +221,12 @@ jobs:
           $ErrorActionPreference = "Continue"
           $headWt = "${{ steps.paths.outputs.head_worktree }}"
           $headResults = "${{ steps.paths.outputs.head_results }}"
+          $profile = "${{ steps.mode.outputs.profile }}"
 
           & python -u scripts/webview_render_perf.py `
             --target-root $headWt `
             --revision "${{ steps.revs.outputs.head_sha }}" `
-            --profile full `
+            --profile $profile `
             --output "$headResults\webview-benchmark.json"
           $exitCode = $LASTEXITCODE
           "head_exit_code=$exitCode" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
@@ -278,16 +281,27 @@ jobs:
           git worktree prune
 
   # ===========================================================================
-  # Job 2: Product latency matrix (20k_activities, 10k_contributions)
+  # Job 2: Product latency matrix
   # ===========================================================================
   product-benchmark:
     name: Product latency - ${{ matrix.scenario }}
     if: |
-      github.event_name == 'schedule'
-      || github.event_name == 'workflow_dispatch'
-      || (
+      (
         github.event_name == 'pull_request'
         && github.event.label.name == 'run-performance-validation'
+        && matrix.runs_in == 'realistic'
+      )
+      || (
+        github.event_name == 'schedule'
+      )
+      || (
+        github.event_name == 'workflow_dispatch'
+        && github.event.inputs.mode == 'stress'
+      )
+      || (
+        github.event_name == 'workflow_dispatch'
+        && github.event.inputs.mode != 'stress'
+        && matrix.runs_in == 'realistic'
       )
     runs-on: windows-latest
     timeout-minutes: ${{ matrix.timeout_minutes }}
@@ -295,10 +309,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - scenario: realistic_heavy_day
+            profile: realistic
+            timeout_minutes: 15
+            runs_in: realistic
           - scenario: 20k_activities
+            profile: full
             timeout_minutes: 25
+            runs_in: stress
           - scenario: 10k_contributions
+            profile: full
             timeout_minutes: 20
+            runs_in: stress
 
     steps:
       - name: Check out repository (full history)
@@ -427,7 +449,7 @@ jobs:
           & python -u scripts/ci/product_benchmark_driver.py `
             --target-root $baselineWt `
             --revision "${{ steps.revs.outputs.baseline_sha }}" `
-            --profile full `
+            --profile ${{ matrix.profile }} `
             --scenario ${{ matrix.scenario }} `
             --output-dir $baselineResults
           $exitCode = $LASTEXITCODE
@@ -450,7 +472,7 @@ jobs:
           & python -u scripts/ci/product_benchmark_driver.py `
             --target-root $headWt `
             --revision "${{ steps.revs.outputs.head_sha }}" `
-            --profile full `
+            --profile ${{ matrix.profile }} `
             --scenario ${{ matrix.scenario }} `
             --output-dir $headResults
           $exitCode = $LASTEXITCODE

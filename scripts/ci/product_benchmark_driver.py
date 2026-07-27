@@ -2,57 +2,28 @@
 """HEAD-owned product benchmark driver — single-scenario execution.
 
 Measures projection performance against a target revision (baseline or HEAD)
-via the COMMON ``build_visible_snapshot`` API that exists in both revisions.
-The driver is HEAD-owned and self-contained; only ``worktrace.*`` loads from
-``--target-root``.  Each revision runs in an independent process; baseline
-and HEAD never share one.
+via ``build_visible_snapshot`` (exists in both revisions for fair comparison).
+Each invocation runs ONE scenario with its own isolated temp database; CI uses
+matrix jobs for isolation.  Revision identity verified via ``git rev-parse``;
+``GITHUB_SHA`` is diagnostics-only.
 
-``build_visible_snapshot`` is used (not the HEAD-only ``get_day_projection``)
-because it returns a ``ReportProjectionSnapshot`` in both revisions for a
-fair same-semantics comparison.
+Output contract (``--output-dir``):
+* ``progress.json`` — atomic checkpoint, updated at every step transition.
+  Always present after start, even on failure.
+* ``result.json`` — full result payload.  Only on success.
+* ``failure.json`` — only on failure (never pre-created).
 
-Scenario isolation: each driver invocation runs exactly ONE scenario in
-this process with its own isolated temp database.  The controller that
-previously serialised multiple scenarios has been removed — CI now uses
-matrix jobs so each scenario gets an independent runner, an independent
-artifact, and an independent timeout.  A thin local wrapper remains for
-developer convenience but is NOT used by CI and does not own any artifact.
+Checkpoint fields: schema_version, driver_version, scenario, profile,
+requested_revision, actual_target_revision, phase, phase_started_at,
+phase_elapsed_seconds, total_elapsed_seconds, inserted_count, fixture_audit,
+runner_metadata, pid.
 
-The driver verifies revision identity via ``git rev-parse HEAD`` on the
-target worktree; ``GITHUB_SHA`` is diagnostics-only (can be a merge
-commit SHA in pull_request workflows).
-
-Output contract (written to ``--output-dir``)
----------------------------------------------
-* ``progress.json``  — atomic checkpoint, updated at every phase transition
-  (initialized → revision_verified → database_initialized → fixture_started
-  → fixture_chunk_committed → fixture_completed → warmup_started →
-  warmup_completed → sample_started → sample_completed → result_completed
-  | failed).  Always present after the driver starts, even on failure.
-* ``result.json``    — full result payload.  Only written on success.
-* ``failure.json``   — only written on failure (never pre-created).
-
-Phases & checkpoints
---------------------
-Each checkpoint records at least: schema_version, driver_version, scenario,
-profile, requested_revision, actual_target_revision, phase, phase_started_at,
-updated_at, phase_elapsed_seconds, total_elapsed_seconds, inserted_count,
-requested_count, chunk_index, completed_samples, current_sample_index,
-fixture_audit, runner_metadata, pid.
-
-Error categories
-----------------
-input_schema_error, revision_mismatch, database_init_error, fixture_error,
-fixture_validation_error, warmup_error, sample_error,
+Error categories: input_schema_error, revision_mismatch, database_init_error,
+fixture_error, fixture_validation_error, warmup_error, sample_error,
 result_validation_error, interrupted, unexpected_error.
 
-Profiles: ``--profile smoke`` (small sizes, 1 sample, infrastructure
-validation, NOT a performance gate); ``--profile full`` (20000 / 10000, 3
-samples, real performance gate).  The workflow only ever runs ``full``.
-
-Exit codes: 0 success; 2 input/schema error (target root missing, module
-import failed, ``__file__`` not at target root, revision mismatch); 3
-execution error (fixture build / measurement / consistency / isolation).
+Profiles: ``smoke`` (infra validation, NOT a gate); ``realistic`` (PR gate);
+``full`` (stress).  Exit: 0 success; 2 input/schema; 3 execution error.
 """
 
 from __future__ import annotations
@@ -93,6 +64,8 @@ from scripts.ci.benchmark_fixture import (  # noqa: E402
     build_20k_activity_spec,
     build_activity_fixture,
     build_contribution_fixture,
+    build_realistic_heavy_day_fixture,
+    build_realistic_heavy_day_spec,
     fixture_hash,
 )
 
@@ -101,22 +74,28 @@ _SCHEMA_VERSION = 3
 _EXIT_INPUT_SCHEMA = 2
 _EXIT_EXECUTION = 3
 
-# Scenario → metric key.  Only cross-revision latency scenarios live here.
-# The compact-storage memory gate has its own driver (compact_memory_driver.py)
-# because it is HEAD-only and not a baseline-vs-HEAD comparison.
+# Scenario → metric key.  ``realistic_heavy_day`` is the PR gate;
+# ``10k_contributions`` and ``20k_activities`` are stress/diagnostic only.
+# The compact-memory gate has its own driver (HEAD-only, not cross-revision).
 _SCENARIOS: dict[str, str] = {
+    "realistic_heavy_day": "projection_realistic_heavy_day_seconds",
     "20k_activities": "projection_20k_total_seconds",
     "10k_contributions": "projection_10k_contributions_seconds",
 }
 
 # Profile data sizes.  Smoke is for infrastructure validation; full is for
-# the real performance gate.  The workflow only ever runs full.
+# the real performance gate.  ``realistic`` is the ordinary PR gate profile.
 _PROFILES: dict[str, dict[str, Any]] = {
     "smoke": {
         "activity_count": 200,
         "contribution_count": 200,
         "runs": 1,
         "warmup_runs": 0,
+    },
+    "realistic": {
+        "activity_count": 2000,
+        "runs": 3,
+        "warmup_runs": 1,
     },
     "full": {
         "activity_count": 20000,
@@ -256,14 +235,11 @@ class ProgressRecorder:
     """Atomic progress checkpoint writer.
 
     Writes ``progress.json`` via temp-file + ``os.replace`` so a crash
-    mid-write never leaves a truncated file.  Each phase transition calls
-    :meth:`checkpoint` with the new phase and per-phase bookkeeping; the
+    mid-write never leaves a truncated file.  Each step transition calls
+    :meth:`checkpoint` with the new step and per-step bookkeeping; the
     recorder tracks ``phase_started_at`` and ``total_elapsed_seconds``
-    automatically.
-
-    The recorder is the SOLE source of truth for driver progress.  Buffered
-    stdout/stderr logs are diagnostics only and MUST NOT be used as a
-    replacement for the checkpoint file.
+    automatically.  The recorder is the SOLE source of truth for driver
+    progress; buffered stdout/stderr logs are diagnostics only.
     """
 
     def __init__(
@@ -394,7 +370,7 @@ class ProgressRecorder:
         failure_message: str,
         failure_traceback: str | None = None,
     ) -> None:
-        """Advance to the ``failed`` phase and persist failure metadata."""
+        """Advance to the ``failed`` step and persist failure metadata."""
         now = time.time()
         self._phase = "failed"
         self._phase_started_at = now
@@ -564,7 +540,14 @@ def _build_fixture_for_scenario(
     """
     progress.checkpoint("fixture_started")
 
-    if scenario == "20k_activities":
+    if scenario == "realistic_heavy_day":
+        spec = build_realistic_heavy_day_spec(
+            activity_count=profile_cfg["activity_count"]
+        )
+        fixture_result = build_realistic_heavy_day_fixture(
+            spec=spec, chunk_callback=chunk_callback,
+        )
+    elif scenario == "20k_activities":
         spec = build_20k_activity_spec(
             activity_count=profile_cfg["activity_count"]
         )

@@ -1,50 +1,29 @@
 #!/usr/bin/env python3
 """HEAD-owned compact-storage memory gate driver.
 
-Measures peak memory of the compact vs expanded projection storage shape
-at a single target revision (HEAD).  Unlike ``product_benchmark_driver``,
-this driver is HEAD-only — there is no baseline comparison.  It runs the
-gate entirely against ``--target-root`` / ``--revision`` and emits the
+Measures peak memory of compact vs expanded projection storage at a single
+target revision (HEAD).  HEAD-only — no baseline comparison.  Emits the
 standard progress/result/failure artifact triple.
 
-Contract
---------
-* size = 5000 (override via ``--size``)
-* 3 independent compact subprocesses
-* 3 independent expanded subprocesses
-* Each subprocess is a fresh ``python -u tests/support/peak_memory_probe.py``
-  invocation with a 120-second timeout.  tracemalloc is the ONLY memory
-  source — RSS is never used.
+Contract: size = 5000 (override via ``--size``); 3 compact + 3 expanded
+subprocesses, each a fresh ``python -u tests/support/peak_memory_probe.py``
+with 120s timeout.  tracemalloc is the ONLY memory source — RSS never used.
 
-Output contract (written to ``--output-dir``)
-----------------------------------------------
-* ``progress.json``  — atomic checkpoint, updated at every phase transition
-  (initialized → revision_verified → compact_started → compact_run_completed
-  (per run) → expanded_started → expanded_run_completed (per run) →
-  result_completed | failed).  Always present after the recorder is created,
-  even on failure (``mark_failed`` rewrites it).
-* ``result.json``    — full result payload.  Only written on success.
-* ``failure.json``   — only written on failure (never pre-created).
+Output contract (``--output-dir``):
+* ``progress.json`` — atomic checkpoint, updated at every step transition.
+  Always present after recorder creation, even on failure.
+* ``result.json`` — full result payload.  Only on success.
+* ``failure.json`` — only on failure (never pre-created).
 
-Gate (all must pass)
---------------------
-* Every compact run: ``duplicated_contribution_count == 0``.
-* Every expanded run: ``duplicated_contribution_count > 0``.
-* ``compact_median_peak_bytes < expanded_median_peak_bytes``.
-* NO fixed MB threshold.
-* NO fixed reduction-percentage gate.
-* NOT RSS (tracemalloc peak bytes only).
-* NOT 20000 — size is 5000.
+Gate (all must pass): compact runs have ``duplicated_contribution_count == 0``;
+expanded runs have ``duplicated_contribution_count > 0``;
+``compact_median_peak_bytes < expanded_median_peak_bytes``.  NO fixed MB
+threshold, NO fixed reduction-percentage gate.
 
-Error categories
-----------------
-input_schema_error, revision_mismatch, compact_run_error,
+Error categories: input_schema_error, revision_mismatch, compact_run_error,
 expanded_run_error, result_validation_error, interrupted, unexpected_error.
 
-Exit codes: 0 success; 2 input/schema (bad target root, missing probe,
-module not at target, git failure, revision mismatch); 3 execution
-(probe run failure, gate failure, result construction failure, interrupt,
-unexpected error).
+Exit: 0 success; 2 input/schema; 3 execution error.
 """
 
 from __future__ import annotations
@@ -236,8 +215,8 @@ class ProgressRecorder:
     """Atomic progress checkpoint writer for the compact-memory gate.
 
     Writes ``progress.json`` via temp-file + ``os.replace`` so a crash
-    mid-write never leaves a truncated file.  Each phase transition calls
-    :meth:`checkpoint` with the new phase and per-phase bookkeeping; the
+    mid-write never leaves a truncated file.  Each step transition calls
+    :meth:`checkpoint` with the new step and per-step bookkeeping; the
     recorder tracks ``phase_started_at`` and ``total_elapsed_seconds``
     automatically.  The recorder is the SOLE source of truth for driver
     progress; buffered stdout/stderr logs are diagnostics only.
@@ -362,7 +341,7 @@ class ProgressRecorder:
         failure_message: str,
         failure_traceback: str | None = None,
     ) -> None:
-        """Advance to the ``failed`` phase and persist failure metadata."""
+        """Advance to the ``failed`` step and persist failure metadata."""
         now = time.time()
         self._phase = "failed"
         self._phase_started_at = now

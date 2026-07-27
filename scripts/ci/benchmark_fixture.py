@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import random
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
@@ -254,22 +255,17 @@ def build_activity_fixture(
 ) -> BenchmarkFixtureResult:
     """Insert ``spec.activity_count`` synthetic facts on ``spec.report_date``.
 
-    Distribution mirrors the historical inline builder:
-      * continuous uncategorized normal activities (the majority);
-      * multi-project alternation via sparse manual anchors;
-      * short sessions (10s) interleaved with longer ones;
-      * sparse context anchors so context attribution must walk neighbours;
-      * one paused standalone status row.
+    Distribution mirrors the historical inline builder: continuous uncategorized
+    normal activities (majority), multi-project alternation via sparse manual
+    anchors, short 10s sessions interleaved with longer ones, sparse context
+    anchors so attribution walks neighbours, and one paused standalone status row.
 
-    Connection / transaction contract:
-      * one ``get_connection()`` call,
-      * commit every ``spec.chunk_size`` rows,
-      * one final commit for the remainder.
+    Connection/transaction contract: one ``get_connection()`` call, commit every
+    ``spec.chunk_size`` rows, one final commit for the remainder.
 
-    ``chunk_callback`` (optional, benchmark-only): invoked after every
-    chunk commit with ``(chunk_index, inserted_so_far)`` so a driver can
-    persist ``fixture_chunk_committed`` progress checkpoints.  Production
-    callers leave this ``None``.
+    ``chunk_callback`` (optional, benchmark-only): invoked after every chunk
+    commit with ``(chunk_index, inserted_so_far)`` so a driver can persist
+    ``fixture_chunk_committed`` checkpoints.  Production callers leave ``None``.
     """
 
     from worktrace.constants import SOURCE_AUTO, STATUS_NORMAL, STATUS_PAUSED
@@ -541,6 +537,272 @@ def build_10k_contribution_spec(
     )
 
 
+# ---------------------------------------------------------------------------
+# Realistic heavy-day fixture
+# ---------------------------------------------------------------------------
+
+# Provisional synthetic values for expected heavy-day load (seeded RNG,
+# fully deterministic).  Target: ~2000 activities, ~300 sessions, ~2000
+# contributions, max ~120/session, 13h span (09:00→22:00).  Avoids
+# pathological shapes: uneven spacing, varied sessions/projects, no stacked times.
+
+_REALISTIC_APPS = ["IDE", "Browser", "Terminal", "Editor", "Mail", "Docs"]
+_REALISTIC_PROCESS_NAMES = {
+    "IDE": "ide.exe",
+    "Browser": "browser.exe",
+    "Terminal": "terminal.exe",
+    "Editor": "editor.exe",
+    "Mail": "mail.exe",
+    "Docs": "docs.exe",
+}
+
+
+def _generate_session_plan(
+    rng: random.Random,
+    *,
+    target_activities: int,
+    span_seconds: int,
+) -> list[tuple[int, int]]:
+    """Plan session lengths and inter-session gaps.
+
+    Returns a list of ``(session_length, gap_seconds)`` pairs.  Session
+    lengths follow a realistic distribution: most sessions are short
+    (1-8 activities), a few are long (40-120).  Gaps vary from 30s to
+    600s so sessions do not merge.
+
+    The plan is deterministic given the same RNG state.
+    """
+
+    plan: list[tuple[int, int]] = []
+    remaining = target_activities
+    consumed_span = 0
+
+    while remaining > 0:
+        # 85% short sessions (1-8), 15% long sessions (40-120).
+        if rng.random() < 0.85:
+            length = rng.randint(1, 8)
+        else:
+            length = rng.randint(40, 120)
+        length = min(length, remaining)
+
+        # Gap between sessions: 30-600s, weighted toward shorter gaps.
+        gap = rng.randint(30, 600) if plan else 0
+        # Estimate time consumed: ~15s per activity + gap.
+        consumed_span += length * 15 + gap
+        if consumed_span > span_seconds:
+            # If we've exceeded the span, reduce remaining sessions to
+            # short ones only so we stay within the day.
+            length = min(length, max(1, remaining))
+            gap = 0
+
+        plan.append((length, gap))
+        remaining -= length
+
+    return plan
+
+
+def build_realistic_heavy_day_fixture(
+    *,
+    spec: BenchmarkFixtureSpec,
+    chunk_callback: Callable[[int, int], None] | None = None,
+) -> BenchmarkFixtureResult:
+    """Insert a realistic heavy-day workload on ``spec.report_date``.
+
+    Distribution:
+      * ~300 sessions with varied lengths (most short, few long);
+      * ~2000 activities with 5-60s durations;
+      * multiple app/resource identities (6 apps);
+      * normal (~70%), idle (~15%), excluded (~10%), paused (~5%);
+      * ~40% uncategorized, ~35% anchor project, ~25% other project;
+      * inter-session gaps prevent session merging;
+      * deterministic seeded RNG (``spec.seed``).
+
+    All activities are closed (historical fixture).  The ``paused``
+    status is a classification, not an open-state; the single-open
+    constraint (``uq_activity_log_single_open``) prohibits multiple
+    concurrent open activities.
+    """
+
+    from worktrace.constants import (
+        SOURCE_AUTO,
+        STATUS_EXCLUDED,
+        STATUS_IDLE,
+        STATUS_NORMAL,
+        STATUS_PAUSED,
+    )
+    from worktrace.db import get_connection, now_str
+    from worktrace.services import activity_fact_repository
+    from worktrace.services.report_fact_query_service import (
+        get_uncategorized_project_id,
+    )
+
+    if spec.activity_count < 1:
+        raise ValueError("activity_count must be >= 1")
+
+    rng = random.Random(spec.seed)
+    session_plan = _generate_session_plan(
+        rng,
+        target_activities=spec.activity_count,
+        span_seconds=spec.span_seconds,
+    )
+
+    activity_ids: list[int] = []
+    started = time.perf_counter()
+    connection_count = 0
+    commit_count = 0
+    preexisting_activity_count = 0
+    uncategorized_id = 0
+    chunk_index = -1
+
+    with get_connection() as conn:
+        connection_count += 1
+        activity_fact_repository.close_all_open_activities(conn, now_str())
+        preexisting_activity_count = _count_existing_activities(
+            conn, spec.report_date
+        )
+        uncategorized_id = get_uncategorized_project_id(conn)
+        projects = _ensure_benchmark_projects(conn)
+        anchor_project = projects["anchor"]
+        other_project = projects["other"]
+
+        current_offset = spec.day_start_seconds
+        activity_global_index = 0
+
+        for session_idx, (session_length, gap) in enumerate(session_plan):
+            current_offset += gap
+
+            # Pick an app for this session.
+            app_name = rng.choice(_REALISTIC_APPS)
+            process_name = _REALISTIC_PROCESS_NAMES[app_name]
+
+            for _ in range(session_length):
+                if activity_global_index >= spec.activity_count:
+                    break
+
+                # Activity duration: 5-60s, weighted toward shorter.
+                duration = rng.randint(5, 60)
+
+                start_offset = current_offset
+                end_offset = start_offset + duration
+
+                # Clamp to span.
+                max_offset = spec.day_start_seconds + spec.span_seconds
+                if end_offset > max_offset:
+                    end_offset = max_offset
+                    if start_offset >= max_offset:
+                        break
+
+                start_time = format_time(spec.report_date, start_offset)
+                end_time = format_time(spec.report_date, end_offset)
+
+                # Status distribution: 70% normal, 15% idle, 10% excluded, 5% paused.
+                roll = rng.random()
+                if roll < 0.70:
+                    status = STATUS_NORMAL
+                elif roll < 0.85:
+                    status = STATUS_IDLE
+                elif roll < 0.95:
+                    status = STATUS_EXCLUDED
+                else:
+                    status = STATUS_PAUSED
+
+                # Project distribution: 40% uncategorized, 35% anchor, 25% other.
+                proj_roll = rng.random()
+                if proj_roll < 0.40:
+                    project_id = None
+                elif proj_roll < 0.75:
+                    project_id = anchor_project
+                else:
+                    project_id = other_project
+
+                # Paused activities are standalone (no project).
+                if status == STATUS_PAUSED:
+                    project_id = None
+
+                resource = _build_resource(activity_global_index)
+                prepared = _prepare_activity(
+                    app_name=app_name,
+                    process_name=process_name,
+                    window_title=f"Doc{activity_global_index}",
+                    start_time=start_time,
+                    status=status,
+                    source=SOURCE_AUTO,
+                    project_id=project_id,
+                    resource=resource,
+                )
+                activity_id = activity_fact_repository.insert_open_activity(
+                    conn, prepared
+                )
+                # All activities are closed regardless of status — the
+                # uq_activity_log_single_open index allows only ONE open
+                # activity globally, and this is a historical fixture.
+                activity_fact_repository.close_activity(
+                    conn, activity_id, end_time
+                )
+                activity_ids.append(activity_id)
+
+                current_offset = end_offset
+                activity_global_index += 1
+
+                # Chunk commit strategy.
+                if len(activity_ids) % spec.chunk_size == 0:
+                    conn.commit()
+                    commit_count += 1
+                    chunk_index += 1
+                    if chunk_callback is not None:
+                        chunk_callback(chunk_index, len(activity_ids))
+
+        # Final commit for remainder.
+        conn.commit()
+        commit_count += 1
+        if chunk_callback is not None and (
+            len(activity_ids) % spec.chunk_size != 0
+        ):
+            chunk_index += 1
+            chunk_callback(chunk_index, len(activity_ids))
+
+    elapsed = time.perf_counter() - started
+    return BenchmarkFixtureResult(
+        report_date=spec.report_date,
+        scenario=spec.scenario,
+        requested_count=spec.activity_count,
+        inserted_count=len(activity_ids),
+        preexisting_activity_count=preexisting_activity_count,
+        activity_ids=activity_ids,
+        anchor_project_id=anchor_project,
+        other_project_id=other_project,
+        uncategorized_project_id=uncategorized_id,
+        fixture_build_seconds=elapsed,
+        connection_count=connection_count,
+        commit_count=commit_count,
+        chunk_size=spec.chunk_size,
+        builder_version=_BUILDER_VERSION,
+    )
+
+
+def build_realistic_heavy_day_spec(
+    *,
+    activity_count: int = 2000,
+    chunk_size: int = DEFAULT_CHUNK_SIZE,
+) -> BenchmarkFixtureSpec:
+    """Build the canonical ``realistic_heavy_day`` spec.
+
+    Uses a fixed seed (42) so baseline and HEAD produce identical fixtures.
+    The seed is encoded in the fixture hash, so any change invalidates
+    cross-revision comparisons.
+    """
+
+    return BenchmarkFixtureSpec(
+        report_date=DEFAULT_REPORT_DATE,
+        activity_count=activity_count,
+        day_start_seconds=DEFAULT_DAY_START_SECONDS,
+        span_seconds=DEFAULT_SPAN_SECONDS,
+        scenario="realistic_heavy_day",
+        seed=42,
+        chunk_size=chunk_size,
+    )
+
+
 __all__ = [
     "DEFAULT_CHUNK_SIZE",
     "DEFAULT_DAY_START_SECONDS",
@@ -552,6 +814,8 @@ __all__ = [
     "build_20k_activity_spec",
     "build_activity_fixture",
     "build_contribution_fixture",
+    "build_realistic_heavy_day_fixture",
+    "build_realistic_heavy_day_spec",
     "fixture_hash",
     "format_time",
 ]

@@ -57,8 +57,8 @@ _WEBVIEW_SCHEMA_VERSION = 2
 _EXIT_INPUT_SCHEMA = 2
 _EXIT_EXECUTION = 3
 
-# Profile data sizes.  Smoke is for infrastructure validation; full is for
-# the real performance gate.  The workflow only ever runs full.
+# Profile data sizes.  Smoke is for infrastructure validation; realistic is
+# the ordinary PR gate; full is the stress-level performance gate.
 _PROFILES: dict[str, dict[str, Any]] = {
     # Smoke uses 2 runs so cold/warm split yields at least one warm sample;
     # runs=1 would give zero warm samples and fail "incomplete" in comparison.
@@ -66,26 +66,31 @@ _PROFILES: dict[str, dict[str, Any]] = {
         "activity_count": 200,
         "runs": 2,
     },
+    "realistic": {
+        "activity_count": 2000,
+        "runs": 3,
+    },
     "full": {
         "activity_count": 20000,
         "runs": 3,
     },
 }
 
-# Timeout configuration per profile.  These are "can it complete" execution
-# guards, NOT performance gates.  The deadlines must be generous enough that
-# a correctly-functioning UI never hits them, but narrow enough that a hung
-# UI is detected and reported with a specific failure category.
-#
-# Payload timeout = how long to wait for the bridge Promise to settle
-#   (resolve, reject, or ok:false).
-# DOM timeout = how long to wait for DOM rows to appear and stabilize
-#   AFTER the payload has resolved.
+# Timeout profiles are "can it complete" execution guards, NOT performance
+# gates: generous enough that a healthy UI never hits them, narrow enough to
+# report a hung UI with a specific failure category.  Payload timeout waits
+# for the bridge Promise to settle; DOM timeout waits for rows AFTER that.
 _TIMEOUT_PROFILES: dict[str, dict[str, int]] = {
     "smoke": {
         "overview_payload_timeout_ms": 15000,
         "timeline_payload_timeout_ms": 30000,
         "detail_payload_timeout_ms": 30000,
+        "detail_dom_timeout_ms": 10000,
+    },
+    "realistic": {
+        "overview_payload_timeout_ms": 20000,
+        "timeline_payload_timeout_ms": 45000,
+        "detail_payload_timeout_ms": 45000,
         "detail_dom_timeout_ms": 10000,
     },
     "full": {
@@ -234,7 +239,7 @@ def _verify_revision_identity(
     return actual
 
 
-def _wv_fixture_hash(activity_count: int) -> str:
+def _wv_fixture_hash(activity_count: int, *, profile: str = "full") -> str:
     """Compute a deterministic hash of the WebView benchmark fixture.
 
     The hash covers the same parameters as the product benchmark fixture
@@ -247,27 +252,36 @@ def _wv_fixture_hash(activity_count: int) -> str:
         DEFAULT_REPORT_DATE,
         DEFAULT_SPAN_SECONDS,
         BenchmarkFixtureSpec,
+        build_realistic_heavy_day_spec,
         fixture_hash as _fixture_hash,
     )
 
-    spec = BenchmarkFixtureSpec(
-        report_date=DEFAULT_REPORT_DATE,
-        activity_count=activity_count,
-        day_start_seconds=DEFAULT_DAY_START_SECONDS,
-        span_seconds=DEFAULT_SPAN_SECONDS,
-        scenario="webview_render",
-        seed=0,
-        chunk_size=DEFAULT_CHUNK_SIZE,
-    )
+    if profile == "realistic":
+        spec = build_realistic_heavy_day_spec(activity_count=activity_count)
+    else:
+        spec = BenchmarkFixtureSpec(
+            report_date=DEFAULT_REPORT_DATE,
+            activity_count=activity_count,
+            day_start_seconds=DEFAULT_DAY_START_SECONDS,
+            span_seconds=DEFAULT_SPAN_SECONDS,
+            scenario="webview_render",
+            seed=0,
+            chunk_size=DEFAULT_CHUNK_SIZE,
+        )
     return _fixture_hash(spec)
 
 
-def _populate_dataset_self_contained(activity_count: int) -> dict[str, Any]:
+def _populate_dataset_self_contained(
+    activity_count: int,
+    *,
+    profile: str = "full",
+) -> dict[str, Any]:
     """Self-contained fixture builder using the shared benchmark_fixture module.
 
-    Delegates to ``scripts.ci.benchmark_fixture.build_activity_fixture`` so
-    the WebView driver and the product benchmark driver share the exact
-    same fixture construction code.  No more duplicated inline builder.
+    Delegates to ``scripts.ci.benchmark_fixture`` so the WebView driver and
+    the product benchmark driver share the exact same fixture construction
+    code.  When ``profile == "realistic"``, uses the realistic-heavy-day
+    fixture builder for a more product-like distribution.
     """
     from scripts.ci.benchmark_fixture import (
         DEFAULT_CHUNK_SIZE,
@@ -276,18 +290,24 @@ def _populate_dataset_self_contained(activity_count: int) -> dict[str, Any]:
         DEFAULT_SPAN_SECONDS,
         BenchmarkFixtureSpec,
         build_activity_fixture,
+        build_realistic_heavy_day_fixture,
+        build_realistic_heavy_day_spec,
     )
 
-    spec = BenchmarkFixtureSpec(
-        report_date=DEFAULT_REPORT_DATE,
-        activity_count=activity_count,
-        day_start_seconds=DEFAULT_DAY_START_SECONDS,
-        span_seconds=DEFAULT_SPAN_SECONDS,
-        scenario="webview_render",
-        seed=0,
-        chunk_size=DEFAULT_CHUNK_SIZE,
-    )
-    result = build_activity_fixture(spec=spec)
+    if profile == "realistic":
+        spec = build_realistic_heavy_day_spec(activity_count=activity_count)
+        result = build_realistic_heavy_day_fixture(spec=spec)
+    else:
+        spec = BenchmarkFixtureSpec(
+            report_date=DEFAULT_REPORT_DATE,
+            activity_count=activity_count,
+            day_start_seconds=DEFAULT_DAY_START_SECONDS,
+            span_seconds=DEFAULT_SPAN_SECONDS,
+            scenario="webview_render",
+            seed=0,
+            chunk_size=DEFAULT_CHUNK_SIZE,
+        )
+        result = build_activity_fixture(spec=spec)
 
     # Scenario isolation contracts — fail-closed on any violation.
     if result.preexisting_activity_count != 0:
@@ -388,8 +408,8 @@ _MEASURE_JS = r"""
     }
 
     // Two-phase detail completion: payload first, then DOM stabilization.
-    // Phase 1 waits for the bridge Promise to settle (resolve, reject,
-    // ok:false, or timeout).  Phase 2 waits for DOM rows to appear and
+    // Step 1 waits for the bridge Promise to settle (resolve, reject,
+    // ok:false, or timeout).  Step 2 waits for DOM rows to appear and
     // stabilize across two frames AFTER the payload has resolved.
     //
     // Failure categories (replaces the old unified ``detail_timeout``):
@@ -412,7 +432,7 @@ _MEASURE_JS = r"""
         var headerTransitions = [];
         var maxTransitions = 50;
 
-        // ---- Phase 1: wait for payload to settle ----
+        // ---- Step 1: wait for payload to settle ----
         var payloadStart = Date.now();
         while (Date.now() < payloadDeadline) {
             try {
@@ -484,7 +504,7 @@ _MEASURE_JS = r"""
             };
         }
 
-        // ---- Phase 2: wait for DOM to be non-empty and stable ----
+        // ---- Step 2: wait for DOM to be non-empty and stable ----
         var domStart = Date.now();
         var prevHeader = readDetailHeader();
         while (Date.now() < domDeadline) {
@@ -986,7 +1006,8 @@ def _run_harness(
                 # without depending on test-only modules that may not exist in
                 # the baseline worktree.
                 dataset_info = _populate_dataset_self_contained(
-                    activity_count
+                    activity_count,
+                    profile=profile_name,
                 )
             except Exception as exc:
                 return {
@@ -1013,10 +1034,9 @@ def _run_harness(
                     # date to query (the benchmark dataset is inserted on a
                     # fixed date, not today).
                     report_date = str(dataset_info.get("report_date", ""))[:10]
-                    # Inject the timeout config so the JS-side per-stage
-                    # deadlines match the Python-side outer timeout budget.
-                    # The deadlines are "can it complete" execution guards,
-                    # NOT performance gates — they must be generous enough
+                    # Inject the timeout config so JS-side per-stage deadlines
+                    # match the Python outer budget.  These are "can it complete"
+                    # execution guards, NOT performance gates — generous enough
                     # that a correctly-functioning UI never hits them.
                     timeout_cfg = _TIMEOUT_PROFILES[profile_name]
                     window.evaluate_js(
@@ -1392,11 +1412,12 @@ def main() -> int:
     )
     parser.add_argument(
         "--profile",
-        choices=("smoke", "full"),
+        choices=("smoke", "realistic", "full"),
         default="full",
         help=(
             "smoke: small data sizes for infrastructure validation. "
-            "full: real data sizes for the performance gate (default)."
+            "realistic: ordinary PR gate data sizes. "
+            "full: stress-level data sizes for the performance gate (default)."
         ),
     )
     parser.add_argument(
@@ -1481,7 +1502,7 @@ def main() -> int:
             "actual_target_revision": actual_revision,
             "github_workflow_sha": os.environ.get("GITHUB_SHA"),
             "target_root": str(target_root) if target_root else "",
-            "fixture_hash": _wv_fixture_hash(activity_count),
+            "fixture_hash": _wv_fixture_hash(activity_count, profile=args.profile),
             "python_version": sys.version,
             "platform": platform.platform(),
             "runner_metadata": runner_meta,
