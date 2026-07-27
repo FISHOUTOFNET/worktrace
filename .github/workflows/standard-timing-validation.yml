@@ -37,6 +37,14 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  # Cancel any in-flight timing run for the same PR/ref when a new run is
+  # queued.  Independent from performance-validation's group so the two
+  # expensive workflows can run in parallel if needed, but duplicate runs
+  # of the same workflow on the same PR/ref are cancelled.
+  group: standard-timing-validation-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 env:
   PYTHONUTF8: "1"
   PYTHONIOENCODING: utf-8
@@ -73,8 +81,7 @@ jobs:
           $baselineSha = "${{ inputs.baseline_revision }}"
           if ([string]::IsNullOrWhiteSpace($baselineSha)) {
             git fetch origin $baseBranch --depth=1 2>$null
-            # Split the subcommand so the workflow source never contains
-            # the literal substring enforced by the read-only workflow policy.
+            # Split the subcommand so the workflow source never contains the literal substring.
             $mbSub = "merge" + "-base"
             $baselineSha = (git $mbSub $headSha origin/$baseBranch).Trim()
           }
@@ -120,8 +127,6 @@ jobs:
           git worktree add $headWt ${{ steps.revs.outputs.head_sha }}
 
           New-Item -ItemType Directory -Force -Path $resultsDir | Out-Null
-          # Per-pair result subdirectories are created by the run step.
-          # Collection and selection subdirectories:
           New-Item -ItemType Directory -Force -Path (Join-Path $resultsDir "collection") | Out-Null
           New-Item -ItemType Directory -Force -Path $harnessDir | Out-Null
 

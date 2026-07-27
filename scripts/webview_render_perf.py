@@ -1,29 +1,29 @@
 """Windows WebView render performance harness.
 
 Launches a real WebView2 window with a large projection dataset, injects
-``performance.mark`` / ``performance.measure`` /
-``requestAnimationFrame`` instrumentation via ``evaluate_js``, and
-collects cold/warm render timings for Overview, Timeline, and detail.
+``performance.mark`` / ``performance.measure`` / ``requestAnimationFrame``
+instrumentation via ``evaluate_js``, and collects cold/warm render timings
+for Overview, Timeline, and detail.  Windows only; requires WebView2 Runtime.
 
-Usage (Windows only, requires WebView2 Runtime)::
+Outputs a JSON artifact to ``--output`` so baseline-vs-HEAD comparison is
+possible.  If WebView2 cannot start, records the failure reason and exits
+non-zero — never fakes a successful measurement.  Does NOT modify shipped
+frontend files; all instrumentation is injected at runtime via
+``window.evaluate_js``.  The runtime is constructed exactly like
+``worktrace.webview_main.main()`` with a temp data directory, so the bridge
+serves real projection data from a real SQLite database.  Collector startup
+is skipped (render measurement only reads persisted data; "not running" is
+a valid UI state).
 
-    python scripts/webview_render_perf.py --activity-count 20000 --runs 3
-
-Outputs a JSON artifact to ``test-results/webview-render-perf.json``.
-
-If WebView2 cannot start (missing runtime, headless CI, no desktop
-session), the harness records the actual failure reason and exits with a
-non-zero code — it never fakes a successful measurement.
-
-This harness does NOT modify shipped frontend files.  All performance
-instrumentation is injected at runtime via ``window.evaluate_js`` so
-static contract tests are unaffected.
-
-The runtime is constructed exactly like ``worktrace.webview_main.main()``
-using a temp data directory, so the bridge serves real projection data
-from a real SQLite database.  Collector startup is intentionally skipped
-because render measurement only reads persisted data; the collector
-status reports "not running" which is a valid state for the UI.
+Completion contract
+-------------------
+Detail measurement waits for an observable completion condition compatible
+across baseline and HEAD: (1) the bridge's detail Promise resolved, (2)
+detail DOM has at least one ``.summary-item`` row, (3) DOM row count stable
+across two consecutive animation frames, (4) no error element or bridge
+error present.  HEAD-private internals
+(``lastSessionActivitySummaryViewModel``, ``detailsInFlight``, header text)
+are diagnostics-only, never completion gates.
 """
 
 from __future__ import annotations
@@ -34,6 +34,7 @@ import json
 import os
 import platform
 import statistics
+import subprocess
 import sys
 import tempfile
 import time
@@ -41,23 +42,35 @@ from pathlib import Path
 from typing import Any
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
+_CI_DIR = _REPO_ROOT / "scripts" / "ci"
+for path in (_REPO_ROOT, _CI_DIR):
+    path_str = str(path)
+    if path_str not in sys.path:
+        sys.path.insert(0, path_str)
 
 # ---------------------------------------------------------------------------
 # Target-root isolation (for baseline-vs-HEAD comparison)
 # ---------------------------------------------------------------------------
 
-_DRIVER_VERSION = "1.0"
-_WEBVIEW_SCHEMA_VERSION = 1
+_DRIVER_VERSION = "2.0"
+_WEBVIEW_SCHEMA_VERSION = 2
 _EXIT_INPUT_SCHEMA = 2
 _EXIT_EXECUTION = 3
 
-# Fixed deterministic fixture parameters — must match
-# product_benchmark_driver.py so baseline and HEAD use the same dataset.
-_WV_REPORT_DATE = "2026-07-15"
-_WV_DAY_START_SECONDS = 9 * 3600  # 09:00:00
-_WV_SPAN_SECONDS = 13 * 3600     # 09:00:00 -> 22:00:00
+# Profile data sizes.  Smoke is for infrastructure validation; full is for
+# the real performance gate.  The workflow only ever runs full.
+_PROFILES: dict[str, dict[str, Any]] = {
+    # Smoke uses 2 runs so cold/warm split yields at least one warm sample;
+    # runs=1 would give zero warm samples and fail "incomplete" in comparison.
+    "smoke": {
+        "activity_count": 200,
+        "runs": 2,
+    },
+    "full": {
+        "activity_count": 20000,
+        "runs": 3,
+    },
+}
 
 
 def _setup_target_path(target_root: Path) -> None:
@@ -105,120 +118,130 @@ def _verify_module_at_target(module_name: str, target_root: Path) -> str:
     return resolved
 
 
+# ---------------------------------------------------------------------------
+# Revision identity
+# ---------------------------------------------------------------------------
+
+def _read_actual_target_revision(target_root: Path) -> str:
+    """Return the actual HEAD SHA of the target worktree.
+
+    Runs ``git rev-parse HEAD`` inside ``target_root``.  This is the only
+    value used for revision identity comparison — never ``GITHUB_SHA``,
+    which can be a merge commit SHA in pull_request workflows.
+    """
+    try:
+        output = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            cwd=str(target_root),
+            text=True,
+            stderr=subprocess.STDOUT,
+        )
+        return output.strip()
+    except (OSError, subprocess.CalledProcessError) as exc:
+        print(
+            f"driver_error: cannot read actual target revision from "
+            f"{target_root}: {exc}",
+            file=sys.stderr,
+        )
+        raise SystemExit(_EXIT_INPUT_SCHEMA)
+
+
+def _verify_revision_identity(
+    requested_revision: str,
+    target_root: Path,
+) -> str:
+    """Verify ``requested_revision`` matches the actual target worktree SHA.
+
+    Returns the actual SHA on success.  Raises ``SystemExit(2)`` on mismatch
+    so the comparison layer never sees an artifact whose recorded revision
+    was guessed instead of verified.
+    """
+    actual = _read_actual_target_revision(target_root)
+    if actual != requested_revision:
+        print(
+            f"driver_error: requested_revision {requested_revision!r} != "
+            f"actual_target_revision {actual!r} (target_root={target_root})",
+            file=sys.stderr,
+        )
+        raise SystemExit(_EXIT_INPUT_SCHEMA)
+    return actual
+
+
 def _wv_fixture_hash(activity_count: int) -> str:
-    """Compute a deterministic hash of the WebView benchmark fixture."""
-    payload = hashlib.sha256(
-        json.dumps(
-            {
-                "report_date": _WV_REPORT_DATE,
-                "activity_count": activity_count,
-                "day_start_seconds": _WV_DAY_START_SECONDS,
-                "span_seconds": _WV_SPAN_SECONDS,
-            },
-            sort_keys=True,
-        ).encode("utf-8")
-    ).hexdigest()
-    return payload
+    """Compute a deterministic hash of the WebView benchmark fixture.
 
+    The hash covers the same parameters as the product benchmark fixture
+    (via ``benchmark_fixture.fixture_hash``) so cross-driver fixture
+    consistency can be audited.
+    """
+    from scripts.ci.benchmark_fixture import (
+        DEFAULT_CHUNK_SIZE,
+        DEFAULT_DAY_START_SECONDS,
+        DEFAULT_REPORT_DATE,
+        DEFAULT_SPAN_SECONDS,
+        BenchmarkFixtureSpec,
+        fixture_hash as _fixture_hash,
+    )
 
-def _wv_format_time(day: str, seconds_into_day: int) -> str:
-    hours, rem = divmod(seconds_into_day, 3600)
-    minutes, secs = divmod(rem, 60)
-    return f"{day} {hours:02d}:{minutes:02d}:{secs:02d}"
+    spec = BenchmarkFixtureSpec(
+        report_date=DEFAULT_REPORT_DATE,
+        activity_count=activity_count,
+        day_start_seconds=DEFAULT_DAY_START_SECONDS,
+        span_seconds=DEFAULT_SPAN_SECONDS,
+        scenario="webview_render",
+        seed=0,
+        chunk_size=DEFAULT_CHUNK_SIZE,
+    )
+    return _fixture_hash(spec)
 
 
 def _populate_dataset_self_contained(activity_count: int) -> dict[str, Any]:
-    """Self-contained fixture builder — no dependency on tests.support.*
+    """Self-contained fixture builder using the shared benchmark_fixture module.
 
-    Mirrors the dataset shape from product_benchmark_driver.build_20k_dataset
-    so baseline and HEAD see the same data distribution.
+    Delegates to ``scripts.ci.benchmark_fixture.build_activity_fixture`` so
+    the WebView driver and the product benchmark driver share the exact
+    same fixture construction code.  No more duplicated inline builder.
     """
-    from worktrace.constants import SOURCE_AUTO, STATUS_NORMAL, STATUS_PAUSED
-    from worktrace.db import get_connection
-    from worktrace.resources.types import DetectedResource
-    from worktrace.services import activity_fact_repository, project_service
-    from worktrace.services.report_fact_query_service import (
-        get_uncategorized_project_id,
+    from scripts.ci.benchmark_fixture import (
+        DEFAULT_CHUNK_SIZE,
+        DEFAULT_DAY_START_SECONDS,
+        DEFAULT_REPORT_DATE,
+        DEFAULT_SPAN_SECONDS,
+        BenchmarkFixtureSpec,
+        build_activity_fixture,
     )
 
-    anchor_project = project_service.create_project("BenchAnchor")
-    other_project = project_service.create_project("BenchOther")
+    spec = BenchmarkFixtureSpec(
+        report_date=DEFAULT_REPORT_DATE,
+        activity_count=activity_count,
+        day_start_seconds=DEFAULT_DAY_START_SECONDS,
+        span_seconds=DEFAULT_SPAN_SECONDS,
+        scenario="webview_render",
+        seed=0,
+        chunk_size=DEFAULT_CHUNK_SIZE,
+    )
+    result = build_activity_fixture(spec=spec)
 
-    step = max(5, _WV_SPAN_SECONDS // max(activity_count, 1))
-    activity_ids: list[int] = []
-
-    with get_connection() as conn:
-        uncategorized_id = get_uncategorized_project_id(conn)
-
-    for index in range(activity_count):
-        start_offset = _WV_DAY_START_SECONDS + index * step
-        if start_offset >= _WV_DAY_START_SECONDS + _WV_SPAN_SECONDS:
-            start_offset = _WV_DAY_START_SECONDS + _WV_SPAN_SECONDS - step
-        if index % 5 == 0:
-            duration = 10
-        else:
-            duration = max(5, step - (index % 7))
-        end_offset = start_offset + duration
-        start_time = _wv_format_time(_WV_REPORT_DATE, start_offset)
-        end_time = _wv_format_time(_WV_REPORT_DATE, end_offset)
-
-        status = STATUS_NORMAL
-        project_id: int | None = None
-        if index % 23 == 5 and index != 0:
-            status = STATUS_NORMAL
-            project_id = anchor_project
-        elif index % 31 == 0 and index != 0:
-            project_id = other_project
-        elif index == max(0, activity_count - 1):
-            status = STATUS_PAUSED
-            project_id = None
-
-        resource = DetectedResource(
-            resource_kind="local_file",
-            resource_subtype="document",
-            display_name=f"Doc{index}",
-            identity_key=f"resource:doc:{index}",
-            is_anchor=(index % 17 == 0),
-            confidence=80,
-            source="auto",
-            app_name="App",
-            process_name="app.exe",
-            window_title=f"Doc{index}",
-            path_hint=f"D:\\Bench\\Doc{index}.txt",
-            path_key=f"path:doc:{index}",
-            uri_scheme="",
-            uri_host="",
-            uri_hint="",
-            metadata_json="",
+    # Scenario isolation contracts — fail-closed on any violation.
+    if result.preexisting_activity_count != 0:
+        raise RuntimeError(
+            f"webview fixture started with preexisting_activity_count="
+            f"{result.preexisting_activity_count} (expected 0)"
         )
-        prepared = activity_fact_repository.prepare_activity(
-            start_time=start_time,
-            source=SOURCE_AUTO,
-            payload={
-                "app_name": f"App{index % 4}",
-                "process_name": "app.exe",
-                "window_title": f"Doc{index}",
-                "status": status,
-                "project_id": project_id,
-                "file_path_hint": None,
-                "resource": resource,
-            },
+    if result.inserted_count != result.requested_count:
+        raise RuntimeError(
+            f"webview fixture inserted {result.inserted_count} activities "
+            f"but requested {result.requested_count}"
         )
-        with get_connection() as conn:
-            activity_id = activity_fact_repository.insert_open_activity(
-                conn, prepared
-            )
-            if status != STATUS_PAUSED:
-                activity_fact_repository.close_activity(conn, activity_id, end_time)
-        activity_ids.append(activity_id)
 
     return {
-        "report_date": _WV_REPORT_DATE,
-        "activity_count": activity_count,
-        "activity_ids": activity_ids,
-        "anchor_project_id": anchor_project,
-        "other_project_id": other_project,
-        "uncategorized_project_id": uncategorized_id,
+        "report_date": result.report_date,
+        "activity_count": result.inserted_count,
+        "activity_ids": result.activity_ids,
+        "anchor_project_id": result.anchor_project_id,
+        "other_project_id": result.other_project_id,
+        "uncategorized_project_id": result.uncategorized_project_id,
+        "fixture_audit": result.to_audit_dict(),
     }
 
 
@@ -245,23 +268,10 @@ def _build_paths(data_dir: Path):
     )
 
 
-def _populate_dataset(activity_count: int) -> dict[str, Any]:
-    """Insert ``activity_count`` synthetic activities into the configured DB.
-
-    Must be called after ``AppRuntime.initialize()`` so the global DB path
-    is set and the schema is applied.
-    """
-    from tests.support import projection_benchmark
-
-    return projection_benchmark.build_benchmark_dataset(
-        activity_count=activity_count,
-    )
-
-
-# JS injected into WebView2 to run the full measurement sequence using real
-# performance.mark/measure and requestAnimationFrame.  Calls the same shipping
-# bridge surface (getOverview / getTimeline / getTimelineSessionActivitySummary)
-# as the real UI, so this measures the real frontend render path, not Python.
+# JS injected into WebView2 to measure the real frontend render path via the
+# shipping bridge surface (getOverview / getTimeline / getTimelineSessionActivitySummary).
+# Completion: detail waits for an external observable condition compatible across
+# baseline and HEAD (Promise resolved, DOM rows present and stable, no error).
 _MEASURE_JS = r"""
 (function () {
     "use strict";
@@ -292,9 +302,123 @@ _MEASURE_JS = r"""
 
     function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
 
+    function readDetailDomRows() {
+        var dList = document.getElementById("timeline-details-list");
+        return dList ? dList.querySelectorAll(".summary-item").length : 0;
+    }
+
+    function readDetailHeader() {
+        var dHeader = document.getElementById("timeline-details-header");
+        return dHeader ? dHeader.textContent.trim() : "";
+    }
+
+    function hasExplicitError(headerText) {
+        if (!headerText) return null;
+        if (headerText.indexOf("失败") !== -1) return "detail_load_failed";
+        if (headerText.indexOf("error") !== -1
+            || headerText.indexOf("Error") !== -1) return "detail_error_text";
+        return null;
+    }
+
+    async function waitForDetailCompletion(deadline, isPayloadResolved) {
+        // Wait for external observable completion: payload resolved, DOM
+        // non-empty, DOM stable across two animation frames, no explicit
+        // error.  HEAD-private fields are recorded as diagnostics only.
+        // ``isPayloadResolved`` is a no-arg callback that returns true when
+        // the wrapped bridge's detail Promise has resolved — passing it in
+        // (instead of reading an outer-scope variable) keeps the helper
+        // self-contained and testable.
+        var firstRowCount = 0;
+        var stableFrames = 0;
+        var lastDiag = {};
+
+        while (Date.now() < deadline) {
+            var headerText = readDetailHeader();
+            var domRows = readDetailDomRows();
+            var explicitError = hasExplicitError(headerText);
+            var payloadResolved = false;
+            try {
+                payloadResolved = !!isPayloadResolved();
+            } catch (e) { payloadResolved = false; }
+
+            // Diagnostic fields — recorded but never used as gates.
+            var vm = null;
+            try {
+                vm = window.WorkTraceApp.lastSessionActivitySummaryViewModel;
+            } catch (e) { vm = null; }
+            var inFlight = 0;
+            try {
+                inFlight = Object.keys(
+                    window.WorkTraceApp.detailsInFlight || {}
+                ).length;
+            } catch (e) { inFlight = 0; }
+
+            lastDiag = {
+                header_text: headerText,
+                dom_rows: domRows,
+                view_model_present: vm !== null && vm !== undefined,
+                details_in_flight: inFlight
+            };
+
+            if (explicitError) {
+                return {
+                    completed: false,
+                    failureCategory: explicitError,
+                    diagnostics: lastDiag
+                };
+            }
+
+            if (payloadResolved && domRows > 0) {
+                if (domRows === firstRowCount) {
+                    stableFrames += 1;
+                    if (stableFrames >= 2) {
+                        return {
+                            completed: true,
+                            failureCategory: "",
+                            diagnostics: lastDiag
+                        };
+                    }
+                } else {
+                    firstRowCount = domRows;
+                    stableFrames = 0;
+                }
+            } else {
+                firstRowCount = domRows;
+                stableFrames = 0;
+            }
+
+            await sleep(10);
+        }
+
+        return {
+            completed: false,
+            failureCategory: "detail_timeout",
+            diagnostics: lastDiag
+        };
+    }
+
     async function runOnce(label) {
         var App = window.WorkTraceApp;
         var results = { label: label, stages: {} };
+
+        // Reset any prior timeline/detail selection so this run starts
+        // clean.  Without this, on the SECOND and subsequent runs
+        // App.selectedProjectionInstanceKey is still set from the prior
+        // run, and App.showTimeline() auto-triggers loadSessionActivitySummary
+        // through the UNWRAPPED bridge (before the detail-instrumentation
+        // wrapper is installed).  That in-flight request then deduplicates
+        // against the later explicit selectTimelineSession call, so the
+        // wrapped bridge method is never invoked and detailPayloadMarked
+        // never becomes true — causing a false detail_timeout.
+        //
+        // resetTimelineReportSelection is a public App method that clears
+        // selectedProjectionInstanceKey, the detail view models, and the
+        // detail DOM.  This does NOT modify product code; it uses an
+        // existing public API to ensure each run's detail measurement
+        // is triggered through the instrumented bridge path.
+        if (typeof App.resetTimelineReportSelection === "function") {
+            App.resetTimelineReportSelection();
+        }
 
         // Overview cold render
         // Set the page context the navigation function would normally set
@@ -405,9 +529,6 @@ _MEASURE_JS = r"""
             };
             App.bridge = wrappedBridge;
 
-            // Reset the view-model so we can detect the fresh render.
-            App.lastSessionActivitySummaryViewModel = null;
-
             // Trigger real selection through the public entry point.
             try {
                 App.selectTimelineSession(detailKey, App.currentSessions || []);
@@ -417,43 +538,29 @@ _MEASURE_JS = r"""
             }
 
             if (!results.stages.detail_error) {
-                // Wait for real completion: view-model updated, header not
-                // loading, DOM has .summary-item rows, no in-flight request.
+                // External observable completion contract: payload resolved
+                // + DOM non-empty + DOM stable across two frames + no
+                // explicit error.  HEAD-private fields are diagnostics.
                 var detailDeadline = Date.now() + 15000;
-                var detailCompleted = false;
-                var detailFailureCat = "";
-                var detailHeader = "";
-                var detailDomRows = 0;
+                var completionState = {
+                    completed: false,
+                    failureCategory: "detail_timeout",
+                    diagnostics: {}
+                };
 
-                while (Date.now() < detailDeadline) {
-                    var dHeader = document.getElementById("timeline-details-header");
-                    detailHeader = dHeader ? dHeader.textContent.trim() : "";
-                    var dList = document.getElementById("timeline-details-list");
-                    detailDomRows = dList
-                        ? dList.querySelectorAll(".summary-item").length : 0;
-                    var dVm = App.lastSessionActivitySummaryViewModel;
-                    var dInFlight = Object.keys(App.detailsInFlight || {}).length;
-
-                    if (dVm !== null
-                        && detailHeader !== "选择左侧时段查看详情"
-                        && detailHeader.indexOf("加载") === -1
-                        && detailHeader.indexOf("正在刷新") === -1
-                        && detailDomRows > 0
-                        && dInFlight === 0) {
-                        detailCompleted = true;
-                        break;
-                    }
-                    if (detailHeader.indexOf("失败") !== -1) {
-                        detailFailureCat = "detail_load_failed";
-                        break;
-                    }
-                    await sleep(10);
-                }
+                // Poll loop with the shared helper.  Pass a no-arg callback
+                // that returns true once the wrapped bridge's detail Promise
+                // has resolved — this is the external observable payload
+                // completion signal that is compatible across revisions.
+                completionState = await waitForDetailCompletion(
+                    detailDeadline,
+                    function () { return detailPayloadMarked; }
+                );
 
                 // Restore the original bridge before measuring.
                 App.bridge = originalBridge;
 
-                if (detailCompleted) {
+                if (completionState.completed) {
                     await onFrame();
                     mark(label + "_detail_first_frame");
                     results.stages.detail_payload_ms = measure(
@@ -471,26 +578,51 @@ _MEASURE_JS = r"""
                         label + "_detail_start",
                         label + "_detail_first_frame"
                     );
-                    var dVm2 = App.lastSessionActivitySummaryViewModel;
-                    results.detail_row_count = (dVm2 && dVm2.summary_rows)
-                        ? dVm2.summary_rows.length : 0;
-                    results.detail_dom_row_count = detailDomRows;
-                    results.detail_header_text = detailHeader;
 
-                    // Realism assertions.
+                    // Diagnostic fields — recorded but never used as gates.
+                    // Per the cross-version completion contract, only
+                    // payloadResolved + DOM non-empty + DOM stable + no
+                    // explicit error may fail a run.  ViewModel-derived row
+                    // counts are diagnostic only because baseline may not
+                    // expose the same ViewModel field.
+                    var dVm = null;
+                    try {
+                        dVm = window.WorkTraceApp.lastSessionActivitySummaryViewModel;
+                    } catch (e) { dVm = null; }
+                    results.detail_row_count = (dVm && dVm.summary_rows)
+                        ? dVm.summary_rows.length : 0;
+                    results.detail_dom_row_count = completionState.diagnostics.dom_rows || 0;
+                    results.detail_header_text = completionState.diagnostics.header_text || "";
+                    results.detail_view_model_present = completionState.diagnostics.view_model_present || false;
+                    results.detail_in_flight = completionState.diagnostics.details_in_flight || 0;
+                    results.detail_payload_resolved = detailPayloadMarked;
+
+                    // ViewModel-row diagnostics (NOT gates).  Recorded so a
+                    // missing/mismatched ViewModel row count shows up in the
+                    // artifact without failing the run — the external
+                    // completion contract already gates on DOM rows.
+                    results.detail_row_diagnostic = null;
                     if (results.detail_row_count === 0) {
-                        results.stages.detail_error = "detail_row_count_zero";
-                    } else if (results.detail_dom_row_count === 0) {
+                        results.detail_row_diagnostic = "detail_row_count_zero";
+                    } else if (results.detail_dom_row_count > 0
+                        && results.detail_row_count !== results.detail_dom_row_count) {
+                        results.detail_row_diagnostic = "detail_row_count_mismatch";
+                    }
+
+                    // Realism assertion: DOM must have at least one row.
+                    // (payloadResolved + DOM stable already verified by the
+                    // completion contract.)
+                    if (results.detail_dom_row_count === 0) {
                         results.stages.detail_error = "detail_dom_row_count_zero";
-                    } else if (results.detail_dom_row_count
-                               !== results.detail_row_count) {
-                        results.stages.detail_error = "detail_row_count_mismatch";
                     }
                 } else {
-                    results.stages.detail_error = detailFailureCat
+                    results.stages.detail_error = completionState.failureCategory
                         || "detail_timeout";
-                    results.detail_header_text = detailHeader;
-                    results.detail_dom_row_count = detailDomRows;
+                    results.detail_header_text = completionState.diagnostics.header_text || "";
+                    results.detail_dom_row_count = completionState.diagnostics.dom_rows || 0;
+                    results.detail_view_model_present = completionState.diagnostics.view_model_present || false;
+                    results.detail_in_flight = completionState.diagnostics.details_in_flight || 0;
+                    results.detail_payload_resolved = detailPayloadMarked;
                 }
             }
         } else {
@@ -570,9 +702,10 @@ def _run_harness(
 ) -> dict[str, Any]:
     """Launch WebView2, inject measurement JS, collect results.
 
-    When ``target_root`` is specified, the harness uses a self-contained
-    fixture builder (no ``tests.support`` dependency) and loads the
-    frontend from the target root, enabling baseline-vs-HEAD comparison.
+    When ``target_root`` is specified, the harness uses the shared
+    self-contained fixture builder (no ``tests.support`` dependency) and
+    loads the frontend from the target root, enabling baseline-vs-HEAD
+    comparison.
     """
     try:
         import webview
@@ -624,12 +757,13 @@ def _run_harness(
         dataset_info: dict[str, Any] = {}
         try:
             try:
-                if target_root is not None:
-                    dataset_info = _populate_dataset_self_contained(
-                        activity_count
-                    )
-                else:
-                    dataset_info = _populate_dataset(activity_count)
+                # Both target_root and HEAD paths use the shared self-contained
+                # fixture builder so baseline and HEAD use the exact same code,
+                # without depending on test-only modules that may not exist in
+                # the baseline worktree.
+                dataset_info = _populate_dataset_self_contained(
+                    activity_count
+                )
             except Exception as exc:
                 return {
                     "status": "failed",
@@ -676,7 +810,15 @@ def _run_harness(
                             "timed out waiting for window.__perfResults"
                         )
                 except Exception as exc:
-                    results_holder["error"] = f"evaluation failed: {exc}"
+                    # ObjectDisposedException after window.destroy() is a cleanup-stage
+                    # side effect, not the primary failure.  Preserve any real measurement
+                    # failure; only record the cleanup error as a diagnostic.
+                    exc_name = type(exc).__name__
+                    if "ObjectDisposed" in exc_name or "disposed" in str(exc).lower():
+                        if results_holder["error"] is None:
+                            results_holder["cleanup_diagnostic"] = str(exc)
+                    else:
+                        results_holder["error"] = f"evaluation failed: {exc}"
                 finally:
                     try:
                         window.destroy()
@@ -738,14 +880,14 @@ def _run_harness(
             "runtime_detection": runtime_status,
         }
 
-    runs = parsed.get("runs", [])
+    runs_data = parsed.get("runs", [])
 
     # Enforce realism assertions on every run.  A run with ``detail_error``
     # or missing detail payload means the real Detail render path did not
     # complete, so the harness must report failure — never mask it with
     # ``status: ok``.
     detail_failures: list[str] = []
-    for run in runs:
+    for run in runs_data:
         stages = run.get("stages", {}) if isinstance(run, dict) else {}
         detail_error = stages.get("detail_error")
         if detail_error:
@@ -770,7 +912,7 @@ def _run_harness(
                 "activity_count": dataset_info.get("activity_count", activity_count),
                 "report_date": dataset_info.get("report_date", ""),
             },
-            "runs": runs,
+            "runs": runs_data,
         }
 
     return {
@@ -779,8 +921,9 @@ def _run_harness(
         "dataset": {
             "activity_count": dataset_info.get("activity_count", activity_count),
             "report_date": dataset_info.get("report_date", ""),
+            "fixture_audit": dataset_info.get("fixture_audit", {}),
         },
-        "runs": runs,
+        "runs": runs_data,
     }
 
 
@@ -834,6 +977,9 @@ def _build_cold_warm_summary(runs: list[dict[str, Any]]) -> dict[str, Any]:
             "row_count": cold_run.get("detail_row_count", 0),
             "dom_row_count": cold_run.get("detail_dom_row_count", 0),
             "header_text": cold_run.get("detail_header_text", ""),
+            "view_model_present": cold_run.get("detail_view_model_present", False),
+            "in_flight": cold_run.get("detail_in_flight", 0),
+            "payload_resolved": cold_run.get("detail_payload_resolved", False),
         },
     }
 
@@ -952,9 +1098,30 @@ def _runner_metadata() -> dict[str, Any]:
     }
 
 
+def _resolve_requested_revision(args: argparse.Namespace) -> str:
+    """Resolve the requested revision SHA for the artifact.
+
+    When ``--target-root`` is set, the requested revision must be supplied
+    via ``--revision`` and is verified against the actual target worktree
+    HEAD.  When ``--target-root`` is not set (local smoke), the current
+    workspace HEAD is used as a diagnostic-only value.
+    """
+    if args.target_root is not None:
+        if not args.revision:
+            print(
+                "driver_error: --revision is required when --target-root is set",
+                file=sys.stderr,
+            )
+            raise SystemExit(_EXIT_INPUT_SCHEMA)
+        return args.revision
+    # Local smoke: record the workspace HEAD as a diagnostic.  Comparison
+    # is only meaningful when --target-root is set, so this value is not
+    # used for cross-revision identity checks.
+    return _get_git_sha()
+
+
 def _get_git_sha() -> str:
     try:
-        import subprocess
         return subprocess.check_output(
             ["git", "rev-parse", "HEAD"],
             cwd=str(_REPO_ROOT),
@@ -968,8 +1135,33 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="WebView2 render performance harness"
     )
-    parser.add_argument("--activity-count", type=int, default=20000)
-    parser.add_argument("--runs", type=int, default=3)
+    parser.add_argument(
+        "--activity-count",
+        type=int,
+        default=None,
+        help=(
+            "Override the activity count for the chosen profile.  When "
+            "provided, takes precedence over --profile's activity count."
+        ),
+    )
+    parser.add_argument(
+        "--runs",
+        type=int,
+        default=None,
+        help=(
+            "Override the run count for the chosen profile.  When provided, "
+            "takes precedence over --profile's run count."
+        ),
+    )
+    parser.add_argument(
+        "--profile",
+        choices=("smoke", "full"),
+        default="full",
+        help=(
+            "smoke: small data sizes for infrastructure validation. "
+            "full: real data sizes for the performance gate (default)."
+        ),
+    )
     parser.add_argument(
         "--target-root",
         type=Path,
@@ -977,7 +1169,7 @@ def main() -> int:
         help=(
             "Path to the target revision's worktree root for baseline-vs-HEAD "
             "comparison.  When set, the harness isolates imports to the target "
-            "root and uses a self-contained fixture builder."
+            "root and uses the shared self-contained fixture builder."
         ),
     )
     parser.add_argument(
@@ -1000,18 +1192,24 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    profile_cfg = _PROFILES[args.profile]
+    activity_count = (
+        args.activity_count if args.activity_count is not None
+        else profile_cfg["activity_count"]
+    )
+    runs = (
+        args.runs if args.runs is not None
+        else profile_cfg["runs"]
+    )
+
     target_root: Path | None = None
+    actual_revision: str | None = None
+    requested_revision = _resolve_requested_revision(args)
     if args.target_root is not None:
         target_root = args.target_root.resolve()
         if not target_root.is_dir():
             print(
                 f"driver_error: --target-root does not exist: {target_root}",
-                file=sys.stderr,
-            )
-            return _EXIT_INPUT_SCHEMA
-        if not args.revision:
-            print(
-                "driver_error: --revision is required when --target-root is set",
                 file=sys.stderr,
             )
             return _EXIT_INPUT_SCHEMA
@@ -1021,42 +1219,60 @@ def main() -> int:
         _verify_module_at_target(
             "worktrace.services.report_projection_snapshot_service", target_root
         )
+        actual_revision = _verify_revision_identity(
+            requested_revision, target_root
+        )
         print(f"verified: target root isolated to {target_root}")
+        print(f"verified: actual target revision = {actual_revision}")
 
-    result = _run_harness(args.activity_count, args.runs, target_root=target_root)
+    result = _run_harness(activity_count, runs, target_root=target_root)
 
     runner_meta = _runner_metadata()
-    runs = result.get("runs", []) if result["status"] == "ok" else result.get("runs", [])
+    runs_data = result.get("runs", []) if result["status"] == "ok" else result.get("runs", [])
 
     # ---- Structured output (for baseline-vs-HEAD comparison) ----
     if args.output is not None:
         payload: dict[str, Any] = {
             "schema_version": _WEBVIEW_SCHEMA_VERSION,
             "driver_version": _DRIVER_VERSION,
-            "revision": args.revision or _get_git_sha(),
+            "requested_revision": requested_revision,
+            "actual_target_revision": actual_revision,
+            "github_workflow_sha": os.environ.get("GITHUB_SHA"),
             "target_root": str(target_root) if target_root else "",
-            "fixture_hash": _wv_fixture_hash(args.activity_count),
+            "fixture_hash": _wv_fixture_hash(activity_count),
             "python_version": sys.version,
             "platform": platform.platform(),
             "runner_metadata": runner_meta,
             "webview2_runtime": result.get("runtime_detection", "unknown"),
-            "activity_count": args.activity_count,
-            "runs_requested": args.runs,
+            "activity_count": activity_count,
+            "runs_requested": runs,
+            "profile": args.profile,
             "status": result["status"],
         }
 
-        if result["status"] == "ok" and runs:
-            payload["metrics"] = _extract_webview_metrics(runs)
-            payload["raw_runs"] = runs
-            payload["cold_warm"] = _build_cold_warm_summary(runs)
+        # Include fixture audit so the comparison layer can verify scenario
+        # isolation (preexisting_activity_count == 0, etc.).
+        dataset = result.get("dataset", {})
+        if isinstance(dataset, dict) and "fixture_audit" in dataset:
+            payload["fixture_audit"] = dataset["fixture_audit"]
+            payload["preexisting_activity_count"] = (
+                dataset.get("fixture_audit", {}).get(
+                    "preexisting_activity_count", 0
+                )
+            )
+
+        if result["status"] == "ok" and runs_data:
+            payload["metrics"] = _extract_webview_metrics(runs_data)
+            payload["raw_runs"] = runs_data
+            payload["cold_warm"] = _build_cold_warm_summary(runs_data)
         else:
             payload["failure_reason"] = result.get("failure_reason", "")
             payload["failure_category"] = result.get("failure_category", "")
             if "js_stack" in result:
                 payload["js_stack"] = result["js_stack"]
-            if runs:
-                payload["raw_runs"] = runs
-                payload["cold_warm"] = _build_cold_warm_summary(runs)
+            if runs_data:
+                payload["raw_runs"] = runs_data
+                payload["cold_warm"] = _build_cold_warm_summary(runs_data)
             # No metrics key — comparison layer treats missing metrics as
             # a fail-closed input/schema error.
 
@@ -1070,26 +1286,27 @@ def main() -> int:
         "python_version": sys.version,
         "runner_metadata": runner_meta,
         "webview2_runtime": result.get("runtime_detection", "unknown"),
-        "activity_count": args.activity_count,
-        "runs_requested": args.runs,
+        "activity_count": activity_count,
+        "runs_requested": runs,
+        "profile": args.profile,
         "status": result["status"],
     }
 
     if result["status"] == "ok":
         summary["dataset"] = result.get("dataset", {})
-        summary["raw_runs"] = runs
-        summary["cold_warm"] = _build_cold_warm_summary(runs)
-        summary["summary"] = _median_over_runs(runs)
+        summary["raw_runs"] = runs_data
+        summary["cold_warm"] = _build_cold_warm_summary(runs_data)
+        summary["summary"] = _median_over_runs(runs_data)
     else:
         summary["failure_reason"] = result.get("failure_reason", "")
         summary["failure_category"] = result.get("failure_category", "")
         if "js_stack" in result:
             summary["js_stack"] = result["js_stack"]
-        if runs:
+        if runs_data:
             summary["dataset"] = result.get("dataset", {})
-            summary["raw_runs"] = runs
-            summary["cold_warm"] = _build_cold_warm_summary(runs)
-            summary["summary"] = _median_over_runs(runs)
+            summary["raw_runs"] = runs_data
+            summary["cold_warm"] = _build_cold_warm_summary(runs_data)
+            summary["summary"] = _median_over_runs(runs_data)
 
     out_dir = _REPO_ROOT / "test-results"
     out_dir.mkdir(parents=True, exist_ok=True)

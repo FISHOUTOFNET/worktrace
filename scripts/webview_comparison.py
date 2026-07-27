@@ -1,30 +1,22 @@
 #!/usr/bin/env python3
 """Compare WebView render benchmark results between baseline and HEAD.
 
-Reads the JSON artifacts produced by ``scripts/webview_render_perf.py
---output`` from baseline and HEAD result directories, validates
-schema/fixture/driver consistency, computes per-metric deltas, and
-enforces no-regression gates on the four WebView render metrics:
+Reads JSON artifacts from ``webview_render_perf.py``, validates
+schema/fixture/driver/revision consistency, computes per-metric deltas,
+and enforces no-regression gates (HEAD median <= baseline median * 1.1)
+on ``cold_timeline_seconds``, ``warm_timeline_seconds``,
+``detail_payload_seconds``, ``detail_total_seconds``.
 
-  * ``cold_timeline_seconds`` — cold-cache Timeline render total
-  * ``warm_timeline_seconds`` — warm-cache Timeline render total
-  * ``detail_payload_seconds`` — detail payload arrival time
-  * ``detail_total_seconds`` — detail total render time
+Revision identity: artifacts must record matching ``requested_revision``
+and ``actual_target_revision`` (``git rev-parse``); ``github_workflow_sha``
+is diagnostics-only.  Scenario isolation: ``fixture_audit`` must report
+``preexisting_activity_count == 0`` and ``inserted_count == requested_count``.
 
-Gates (all must pass):
-  * Each metric: HEAD median <= baseline median * (1 + tolerance/100)
-  * tolerance defaults to 10%.
+Completion: artifact valid only when ``status == "ok"`` and every run has
+``detail_payload_resolved == true`` and ``detail_dom_row_count > 0``.
 
-Gate is purely relative (no-regression against baseline); no absolute cold
-Timeline target exists in the repository.
-
-Fail-closed contract:
-  * Missing artifact, schema mismatch, fixture hash mismatch, driver
-    version mismatch, Python version mismatch, missing ``metrics`` key,
-    or missing metric → exit 2 (input/schema error).
-  * Sample count mismatch or zero samples → exit 3 (execution incomplete).
-  * Performance gate failure → exit 4.
-  * All gates pass → exit 0.
+Exit codes: 0 ok; 2 input/schema (missing artifact/metric or mismatch); 3
+incomplete (sample count mismatch); 4 gate failure.
 """
 
 from __future__ import annotations
@@ -36,7 +28,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-_SCHEME_VERSION = 1
+_SCHEME_VERSION = 2
 _EXIT_OK = 0
 _EXIT_INPUT_SCHEMA = 2
 _EXIT_INCOMPLETE = 3
@@ -85,6 +77,89 @@ def _load_driver_result(path: Path) -> dict[str, Any]:
     return payload
 
 
+def _validate_revision_identity(
+    payload: dict[str, Any],
+    *,
+    expected_sha: str,
+    label: str,
+) -> None:
+    """Verify the artifact's revision identity contract.
+
+    The artifact must record both ``requested_revision`` (the value passed
+    to ``--revision``) and ``actual_target_revision`` (read from
+    ``git rev-parse HEAD`` on the target worktree).  The two must match
+    within the artifact, and ``actual_target_revision`` must equal the
+    expected SHA supplied on the CLI.  The workflow SHA is recorded
+    elsewhere for diagnostics only and is never used for identity
+    comparison — in pull_request workflows it can be a merge commit SHA.
+    """
+
+    requested = payload.get("requested_revision", "")
+    actual = payload.get("actual_target_revision", "")
+    if not requested or not actual:
+        raise ComparisonError(
+            f"{label}: missing requested_revision or actual_target_revision "
+            f"(requested={requested!r}, actual={actual!r})"
+        )
+    if requested != actual:
+        raise ComparisonError(
+            f"{label}: requested_revision {requested!r} != "
+            f"actual_target_revision {actual!r} — driver did not verify "
+            f"target worktree identity"
+        )
+    if actual != expected_sha:
+        raise ComparisonError(
+            f"{label}: actual_target_revision {actual!r} != "
+            f"expected {expected_sha!r}"
+        )
+
+
+def _validate_scenario_isolation(
+    payload: dict[str, Any],
+    *,
+    label: str,
+) -> None:
+    """Verify the WebView fixture's audit reports clean isolation.
+
+    The WebView driver runs a single scenario, so ``fixture_audit`` is a
+    single object (not keyed by scenario name like the product driver).
+    It must report:
+      * ``preexisting_activity_count == 0`` (no carryover),
+      * ``inserted_count == requested_count`` (every row inserted),
+      * ``connection_count >= 1`` (the O(1) connection contract held),
+      * ``commit_count >= 1`` (at least one commit happened).
+    """
+
+    audit = payload.get("fixture_audit")
+    if not isinstance(audit, dict):
+        raise ComparisonError(
+            f"{label}: fixture_audit missing or not an object"
+        )
+    if not audit:
+        raise ComparisonError(f"{label}: fixture_audit is empty")
+    preexisting = audit.get("preexisting_activity_count")
+    if preexisting != 0:
+        raise ComparisonError(
+            f"{label}: fixture_audit.preexisting_activity_count="
+            f"{preexisting} (expected 0) — scenario isolation violated"
+        )
+    requested = audit.get("requested_count", 0)
+    inserted = audit.get("inserted_count", 0)
+    if inserted != requested:
+        raise ComparisonError(
+            f"{label}: fixture_audit.inserted_count={inserted} "
+            f"!= requested_count={requested}"
+        )
+    if audit.get("connection_count", 0) < 1:
+        raise ComparisonError(
+            f"{label}: fixture_audit.connection_count < 1"
+        )
+    if audit.get("commit_count", 0) < 1:
+        raise ComparisonError(
+            f"{label}: fixture_audit.commit_count < 1"
+        )
+
+
 def _validate_consistency(
     baseline: dict[str, Any],
     head: dict[str, Any],
@@ -116,16 +191,21 @@ def _validate_consistency(
             f"python_version mismatch: baseline={b_py_mm!r} head={h_py_mm!r}"
         )
 
-    b_rev = baseline.get("revision", "")
-    h_rev = head.get("revision", "")
-    if b_rev != expected_baseline_sha:
-        raise ComparisonError(
-            f"baseline revision {b_rev!r} != expected {expected_baseline_sha!r}"
-        )
-    if h_rev != expected_head_sha:
-        raise ComparisonError(
-            f"HEAD revision {h_rev!r} != expected {expected_head_sha!r}"
-        )
+    # Revision identity: verify each artifact's requested/actual revisions
+    # match internally AND match the expected SHAs from the CLI.  This
+    # prevents a merge-commit SHA (GITHUB_SHA) from masquerading as the
+    # target revision.
+    _validate_revision_identity(
+        baseline, expected_sha=expected_baseline_sha, label="baseline"
+    )
+    _validate_revision_identity(
+        head, expected_sha=expected_head_sha, label="head"
+    )
+
+    # Scenario isolation: each artifact's fixture_audit must report clean
+    # isolation.
+    _validate_scenario_isolation(baseline, label="baseline")
+    _validate_scenario_isolation(head, label="head")
 
     b_ac = baseline.get("activity_count", 0)
     h_ac = head.get("activity_count", 0)
@@ -242,6 +322,14 @@ def _build_comparison(
     return {
         "baseline_revision": baseline_sha,
         "head_revision": head_sha,
+        "baseline_requested_revision": baseline.get("requested_revision", ""),
+        "head_requested_revision": head.get("requested_revision", ""),
+        "baseline_actual_target_revision": baseline.get(
+            "actual_target_revision", ""
+        ),
+        "head_actual_target_revision": head.get("actual_target_revision", ""),
+        "baseline_github_workflow_sha": baseline.get("github_workflow_sha"),
+        "head_github_workflow_sha": head.get("github_workflow_sha"),
         "baseline_target_root": baseline.get("target_root", ""),
         "head_target_root": head.get("target_root", ""),
         "driver_version": baseline.get("driver_version", ""),
@@ -251,6 +339,8 @@ def _build_comparison(
         "head_python_version": head.get("python_version", ""),
         "tolerance_pct": tolerance_pct,
         "gated_metrics": gated_results,
+        "baseline_fixture_audit": baseline.get("fixture_audit", {}),
+        "head_fixture_audit": head.get("fixture_audit", {}),
         "all_gates_passed": all_gates_passed,
         "note": (
             "No formal absolute cold Timeline target exists in the repository. "

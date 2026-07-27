@@ -60,8 +60,10 @@ def driver():
 class TestSchemaConstants:
     """Verify the driver's schema and exit-code constants are stable."""
 
-    def test_schema_version_is_1(self, driver) -> None:
-        assert driver._SCHEMA_VERSION == 1
+    def test_schema_version_is_2(self, driver) -> None:
+        # Schema v2 adds requested_revision / actual_target_revision
+        # identity, fixture_audit per scenario, and profile support.
+        assert driver._SCHEMA_VERSION == 2
 
     def test_driver_version_is_string(self, driver) -> None:
         assert isinstance(driver._DRIVER_VERSION, str)
@@ -72,11 +74,30 @@ class TestSchemaConstants:
         assert driver._EXIT_EXECUTION == 3
         assert driver._EXIT_INPUT_SCHEMA != driver._EXIT_EXECUTION
 
-    def test_fixture_parameters_are_fixed(self, driver) -> None:
-        """The fixture parameters must be deterministic (no RNG)."""
-        assert driver._REPORT_DATE == "2026-07-15"
-        assert driver._DAY_START_SECONDS == 9 * 3600
-        assert driver._SPAN_SECONDS == 13 * 3600
+    def test_profiles_define_smoke_and_full(self, driver) -> None:
+        """The driver must define smoke and full profiles with the
+        canonical data sizes for each."""
+        assert "smoke" in driver._PROFILES
+        assert "full" in driver._PROFILES
+        # Smoke uses small data sizes for infrastructure validation.
+        assert driver._PROFILES["smoke"]["activity_count"] <= 1000
+        assert driver._PROFILES["smoke"]["contribution_count"] <= 1000
+        # Full uses the real performance-gate data sizes.
+        assert driver._PROFILES["full"]["activity_count"] == 20000
+        assert driver._PROFILES["full"]["contribution_count"] == 10000
+        assert driver._PROFILES["full"]["runs"] >= 1
+
+    def test_fixture_parameters_are_fixed_in_shared_module(self, driver) -> None:
+        """The fixture parameters now live in the shared benchmark_fixture
+        module so product and WebView drivers use the exact same constants."""
+        from scripts.ci.benchmark_fixture import (
+            DEFAULT_DAY_START_SECONDS,
+            DEFAULT_REPORT_DATE,
+            DEFAULT_SPAN_SECONDS,
+        )
+        assert DEFAULT_REPORT_DATE == "2026-07-15"
+        assert DEFAULT_DAY_START_SECONDS == 9 * 3600
+        assert DEFAULT_SPAN_SECONDS == 13 * 3600
 
 
 class TestSetupTargetPath:
@@ -162,56 +183,83 @@ class TestVerifyModuleAtTarget:
 
 
 class TestFixtureHash:
-    """Tests for the deterministic fixture hash."""
+    """Tests for the deterministic controller-level fixture hash.
+
+    The controller-level ``_fixture_hash(activity_count, contribution_count)``
+    composes the per-scenario hashes from the shared ``benchmark_fixture``
+    module so product and WebView drivers share the same per-scenario
+    identity, then wraps them with the driver version so any drift in
+    driver version invalidates cross-revision comparisons.
+    """
 
     def test_hash_is_deterministic(self, driver) -> None:
-        """The fixture hash must be the same across calls."""
-        h1 = driver._fixture_hash()
-        h2 = driver._fixture_hash()
+        """The fixture hash must be the same across calls with the same args."""
+        h1 = driver._fixture_hash(20000, 10000)
+        h2 = driver._fixture_hash(20000, 10000)
         assert h1 == h2
 
     def test_hash_is_sha256_hex(self, driver) -> None:
         """The fixture hash must be a 64-character hex string."""
-        h = driver._fixture_hash()
+        h = driver._fixture_hash(20000, 10000)
         assert len(h) == 64
         assert all(c in "0123456789abcdef" for c in h)
 
-    def test_hash_encodes_fixture_parameters(self, driver) -> None:
-        """The hash encodes the report date, day start, span, and scenario
-        sizes so any change to the fixture parameters produces a
-        different hash."""
+    def test_hash_changes_with_activity_count(self, driver) -> None:
+        """Different activity counts must produce different hashes so
+        smoke (200) and full (20000) cannot accidentally compare as the
+        same fixture."""
+        h_smoke = driver._fixture_hash(200, 200)
+        h_full = driver._fixture_hash(20000, 10000)
+        assert h_smoke != h_full
+
+    def test_hash_encodes_per_scenario_hashes_and_driver_version(
+        self, driver
+    ) -> None:
+        """The controller hash wraps the per-scenario hashes from the
+        shared benchmark_fixture module and the driver version."""
         import hashlib
+        from scripts.ci.benchmark_fixture import (
+            build_10k_contribution_spec,
+            build_20k_activity_spec,
+            fixture_hash as _fixture_hash,
+        )
+        activity_spec = build_20k_activity_spec(activity_count=20000)
+        contribution_spec = build_10k_contribution_spec(contribution_count=10000)
         expected_payload = json.dumps(
             {
-                "report_date": driver._REPORT_DATE,
-                "day_start_seconds": driver._DAY_START_SECONDS,
-                "span_seconds": driver._SPAN_SECONDS,
-                "scenarios": {
-                    "20k_activities": {"activity_count": 20000},
-                    "10k_contributions": {"contribution_count": 10000},
-                },
+                "activity_spec": _fixture_hash(activity_spec),
+                "contribution_spec": _fixture_hash(contribution_spec),
+                "builder_version": driver._DRIVER_VERSION,
             },
             sort_keys=True,
         ).encode("utf-8")
         expected = hashlib.sha256(expected_payload).hexdigest()
-        assert driver._fixture_hash() == expected
+        assert driver._fixture_hash(20000, 10000) == expected
 
 
 class TestFormatTime:
-    """Tests for the time formatting helper."""
+    """Tests for the time formatting helper in the shared fixture module.
+
+    ``format_time`` moved from the driver to ``benchmark_fixture`` so both
+    product and WebView drivers share the same formatting logic.
+    """
 
     def test_midnight(self, driver) -> None:
-        assert driver._format_time("2026-07-15", 0) == "2026-07-15 00:00:00"
+        from scripts.ci.benchmark_fixture import format_time
+        assert format_time("2026-07-15", 0) == "2026-07-15 00:00:00"
 
     def test_nine_am(self, driver) -> None:
-        assert driver._format_time("2026-07-15", 32400) == "2026-07-15 09:00:00"
+        from scripts.ci.benchmark_fixture import format_time
+        assert format_time("2026-07-15", 32400) == "2026-07-15 09:00:00"
 
     def test_ten_pm(self, driver) -> None:
-        assert driver._format_time("2026-07-15", 79200) == "2026-07-15 22:00:00"
+        from scripts.ci.benchmark_fixture import format_time
+        assert format_time("2026-07-15", 79200) == "2026-07-15 22:00:00"
 
     def test_with_minutes_and_seconds(self, driver) -> None:
+        from scripts.ci.benchmark_fixture import format_time
         assert (
-            driver._format_time("2026-07-15", 36665)
+            format_time("2026-07-15", 36665)
             == "2026-07-15 10:11:05"
         )
 

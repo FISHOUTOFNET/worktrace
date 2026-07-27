@@ -1,7 +1,7 @@
 # Performance Validation — baseline vs HEAD benchmark and WebView comparison
-# via HEAD-owned drivers.  Standard CI excludes ``@pytest.mark.benchmark`` so
-# large-scale timing tests do not gate pull requests.  Privacy: synthetic
-# facts only, no real titles/paths.
+# via HEAD-owned drivers.  Privacy: synthetic facts only.  Triggers: schedule
+# (twice weekly), manual dispatch, or PR labeled ``run-performance-validation``
+# (job-level ``if`` re-checks the label; concurrency cancels superseded runs).
 
 name: Performance validation
 
@@ -29,27 +29,17 @@ on:
   schedule:
     - cron: "0 4 * * 1,4"
   pull_request:
-    paths:
-      - "worktrace/services/report_projection_builder.py"
-      - "worktrace/services/report_projection_provider.py"
-      - "worktrace/services/report_projection_snapshot_service.py"
-      - "worktrace/services/report_session_operation_engine.py"
-      - "worktrace/services/report_session_projection_service.py"
-      - "worktrace/services/context_service.py"
-      - "worktrace/services/projection_performance.py"
-      - "worktrace/services/view_model_service.py"
-      - "tests/support/projection_benchmark.py"
-      - "tests/support/peak_memory_probe.py"
-      - "tests/test_projection_performance_baseline.py"
-      - "tests/test_projection_large_scale_benchmark.py"
-      - "scripts/webview_render_perf.py"
-      - "scripts/webview_comparison.py"
-      - "scripts/benchmark_comparison.py"
-      - "scripts/ci/product_benchmark_driver.py"
-      - ".github/workflows/performance-validation.yml"
+    types: [labeled]
 
 permissions:
   contents: read
+
+concurrency:
+  # Cancel any in-flight run for the same PR/ref when a new run is queued.
+  # This prevents parallel waste from accidental double-triggers while
+  # preserving one active run per PR/ref.
+  group: performance-validation-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 env:
   PYTHONUTF8: "1"
@@ -63,6 +53,16 @@ jobs:
     # no-regression on cold/warm Timeline, detail payload, and detail total.
     # Fail-closed: missing artifact, schema/fixture/driver mismatch, or gate failure.
     name: WebView baseline vs HEAD
+    # Only run on schedule, manual dispatch, or when the PR carries the
+    # explicit ``run-performance-validation`` label.  The label check is
+    # repeated here so an unrelated label cannot launch the expensive run.
+    if: |
+      github.event_name == 'schedule'
+      || github.event_name == 'workflow_dispatch'
+      || (
+        github.event_name == 'pull_request'
+        && github.event.label.name == 'run-performance-validation'
+      )
     runs-on: windows-latest
     timeout-minutes: 30
 
@@ -172,8 +172,7 @@ jobs:
           & python scripts/webview_render_perf.py `
             --target-root $baselineWt `
             --revision "${{ steps.revs.outputs.baseline_sha }}" `
-            --activity-count 20000 `
-            --runs 3 `
+            --profile full `
             --output "$baselineResults\webview-benchmark.json"
           if ($LASTEXITCODE -ne 0) {
             throw "baseline WebView driver failed (exit $LASTEXITCODE)"
@@ -191,8 +190,7 @@ jobs:
           & python scripts/webview_render_perf.py `
             --target-root $headWt `
             --revision "${{ steps.revs.outputs.head_sha }}" `
-            --activity-count 20000 `
-            --runs 3 `
+            --profile full `
             --output "$headResults\webview-benchmark.json"
           if ($LASTEXITCODE -ne 0) {
             throw "HEAD WebView driver failed (exit $LASTEXITCODE)"
@@ -248,6 +246,16 @@ jobs:
     # isolated temp DB, measuring COMMON ``build_visible_snapshot``.  Gates:
     # no-regression on three metrics; fail-closed on missing artifact or mismatch.
     name: Baseline vs HEAD benchmark
+    # Only run on schedule, manual dispatch, or when the PR carries the
+    # explicit ``run-performance-validation`` label.  The label check is
+    # repeated here so an unrelated label cannot launch the expensive run.
+    if: |
+      github.event_name == 'schedule'
+      || github.event_name == 'workflow_dispatch'
+      || (
+        github.event_name == 'pull_request'
+        && github.event.label.name == 'run-performance-validation'
+      )
     runs-on: windows-latest
     timeout-minutes: 40
 
@@ -357,11 +365,12 @@ jobs:
           $baselineResults = "${{ steps.paths.outputs.baseline_results }}"
 
           # The driver is HEAD-owned (lives in HEAD workspace, not baseline
-          # worktree).  --target-root points at baseline worktree so the
-          # driver imports baseline's product code in a separate subprocess.
+          # worktree).  --target-root points at baseline worktree so the driver
+          # imports baseline's product code in a separate subprocess via --profile full.
           & python scripts/ci/product_benchmark_driver.py `
             --target-root $baselineWt `
             --revision "${{ steps.revs.outputs.baseline_sha }}" `
+            --profile full `
             --output "$baselineResults\product-benchmark.json"
           if ($LASTEXITCODE -ne 0) {
             throw "baseline benchmark driver failed (exit $LASTEXITCODE)"
@@ -379,6 +388,7 @@ jobs:
           & python scripts/ci/product_benchmark_driver.py `
             --target-root $headWt `
             --revision "${{ steps.revs.outputs.head_sha }}" `
+            --profile full `
             --output "$headResults\product-benchmark.json"
           if ($LASTEXITCODE -ne 0) {
             throw "HEAD benchmark driver failed (exit $LASTEXITCODE)"

@@ -79,6 +79,29 @@ def harness_module():
 # Helpers
 # ---------------------------------------------------------------------------
 
+def _make_fixture_audit(
+    *,
+    requested_count: int = 20000,
+    inserted_count: int | None = None,
+    preexisting_activity_count: int = 0,
+    connection_count: int = 1,
+    commit_count: int = 41,
+) -> dict[str, Any]:
+    """Build a synthetic but contract-valid WebView fixture_audit entry."""
+    return {
+        "scenario": "webview_render",
+        "requested_count": requested_count,
+        "inserted_count": inserted_count if inserted_count is not None else requested_count,
+        "preexisting_activity_count": preexisting_activity_count,
+        "fixture_build_seconds": 1.0,
+        "connection_count": connection_count,
+        "commit_count": commit_count,
+        "chunk_size": 500,
+        "builder_version": "1.0",
+        "report_date": "2026-07-15",
+    }
+
+
 def _make_driver_payload(
     *,
     revision: str,
@@ -89,8 +112,18 @@ def _make_driver_payload(
     python_version: str = "3.11.5",
     activity_count: int = 20000,
     target_root: str = "/tmp/worktree",
+    fixture_audit: dict[str, Any] | None = None,
+    actual_target_revision: str | None = None,
+    github_workflow_sha: str | None = None,
 ) -> dict[str, Any]:
-    """Build a synthetic but schema-valid WebView driver result."""
+    """Build a synthetic but schema-valid WebView driver result.
+
+    Schema v2 records both ``requested_revision`` (from ``--revision``) and
+    ``actual_target_revision`` (from ``git rev-parse HEAD`` on the target
+    worktree).  The two must match within an artifact and must match the
+    expected SHA supplied on the CLI.  ``github_workflow_sha`` is recorded
+    for diagnostics only and is never used for identity comparison.
+    """
     if metrics is None:
         metrics = {
             "cold_timeline_seconds": {
@@ -110,15 +143,20 @@ def _make_driver_payload(
                 "median_seconds": 0.21,
             },
         }
+    if fixture_audit is None:
+        fixture_audit = _make_fixture_audit(requested_count=activity_count)
     return {
-        "schema_version": 1,
-        "revision": revision,
+        "schema_version": 2,
+        "requested_revision": revision,
+        "actual_target_revision": actual_target_revision or revision,
+        "github_workflow_sha": github_workflow_sha,
         "status": status,
         "driver_version": driver_version,
         "fixture_hash": fixture_hash,
         "python_version": python_version,
         "activity_count": activity_count,
         "target_root": target_root,
+        "fixture_audit": fixture_audit,
         "metrics": metrics,
     }
 
@@ -324,9 +362,11 @@ class TestLoadDriverResult:
         payload = _make_driver_payload(revision=_BASELINE_SHA)
         path = _write_driver_result(tmp_path / "webview-benchmark.json", payload)
         result = comparison_module._load_driver_result(path)
-        assert result["revision"] == _BASELINE_SHA
+        assert result["requested_revision"] == _BASELINE_SHA
+        assert result["actual_target_revision"] == _BASELINE_SHA
         assert result["status"] == "ok"
         assert "metrics" in result
+        assert "fixture_audit" in result
 
 
 # ---------------------------------------------------------------------------
@@ -395,9 +435,12 @@ class TestValidateConsistency:
     def test_baseline_revision_mismatch_raises(
         self, comparison_module
     ) -> None:
-        baseline = _make_driver_payload(revision="wrong")
+        """Baseline's actual_target_revision must match expected_baseline_sha."""
+        baseline = _make_driver_payload(
+            revision=_BASELINE_SHA, actual_target_revision="wrongsha"
+        )
         head = _make_driver_payload(revision=_HEAD_SHA)
-        with pytest.raises(comparison_module.ComparisonError, match="baseline revision"):
+        with pytest.raises(comparison_module.ComparisonError, match="baseline"):
             comparison_module._validate_consistency(
                 baseline, head,
                 expected_baseline_sha=_BASELINE_SHA,
@@ -407,14 +450,54 @@ class TestValidateConsistency:
     def test_head_revision_mismatch_raises(
         self, comparison_module
     ) -> None:
+        """HEAD's actual_target_revision must match expected_head_sha."""
         baseline = _make_driver_payload(revision=_BASELINE_SHA)
-        head = _make_driver_payload(revision="wrong")
-        with pytest.raises(comparison_module.ComparisonError, match="HEAD revision"):
+        head = _make_driver_payload(
+            revision=_HEAD_SHA, actual_target_revision="wrongsha"
+        )
+        with pytest.raises(comparison_module.ComparisonError, match="head"):
             comparison_module._validate_consistency(
                 baseline, head,
                 expected_baseline_sha=_BASELINE_SHA,
                 expected_head_sha=_HEAD_SHA,
             )
+
+    def test_baseline_requested_actual_mismatch_raises(
+        self, comparison_module
+    ) -> None:
+        """requested_revision != actual_target_revision within an artifact
+        means the driver did not verify target worktree identity."""
+        baseline = _make_driver_payload(
+            revision=_BASELINE_SHA,
+            actual_target_revision=_BASELINE_SHA + "deadbeef",
+        )
+        head = _make_driver_payload(revision=_HEAD_SHA)
+        with pytest.raises(comparison_module.ComparisonError, match="requested_revision"):
+            comparison_module._validate_consistency(
+                baseline, head,
+                expected_baseline_sha=_BASELINE_SHA,
+                expected_head_sha=_HEAD_SHA,
+            )
+
+    def test_github_workflow_sha_not_used_for_identity(
+        self, comparison_module
+    ) -> None:
+        """github_workflow_sha may differ from actual_target_revision
+        (it can be a merge commit SHA in pull_request workflows) and must
+        NOT cause an identity mismatch."""
+        baseline = _make_driver_payload(
+            revision=_BASELINE_SHA,
+            github_workflow_sha="mergecommitsha1234",
+        )
+        head = _make_driver_payload(
+            revision=_HEAD_SHA,
+            github_workflow_sha="differentmergesha5678",
+        )
+        comparison_module._validate_consistency(
+            baseline, head,
+            expected_baseline_sha=_BASELINE_SHA,
+            expected_head_sha=_HEAD_SHA,
+        )
 
     def test_activity_count_mismatch_raises(
         self, comparison_module
@@ -437,6 +520,102 @@ class TestValidateConsistency:
             baseline, head,
             expected_baseline_sha=_BASELINE_SHA,
             expected_head_sha=_HEAD_SHA,
+        )
+
+
+# ---------------------------------------------------------------------------
+# _validate_scenario_isolation (webview_comparison.py)
+# ---------------------------------------------------------------------------
+
+class TestValidateScenarioIsolation:
+    """Tests for the WebView fixture_audit isolation contract.
+
+    The WebView driver runs a single scenario, so ``fixture_audit`` is a
+    single object (not keyed by scenario name like the product driver).
+    It must report:
+      * ``preexisting_activity_count == 0`` (no carryover),
+      * ``inserted_count == requested_count`` (every row inserted),
+      * ``connection_count >= 1`` (the O(1) connection contract held),
+      * ``commit_count >= 1`` (at least one commit happened).
+    """
+
+    def test_missing_fixture_audit_raises(self, comparison_module) -> None:
+        payload = _make_driver_payload(revision=_BASELINE_SHA)
+        del payload["fixture_audit"]
+        with pytest.raises(comparison_module.ComparisonError, match="fixture_audit"):
+            comparison_module._validate_scenario_isolation(
+                payload, label="baseline"
+            )
+
+    def test_fixture_audit_not_object_raises(self, comparison_module) -> None:
+        payload = _make_driver_payload(revision=_BASELINE_SHA)
+        payload["fixture_audit"] = "not-an-object"
+        with pytest.raises(comparison_module.ComparisonError, match="fixture_audit"):
+            comparison_module._validate_scenario_isolation(
+                payload, label="baseline"
+            )
+
+    def test_empty_fixture_audit_raises(self, comparison_module) -> None:
+        payload = _make_driver_payload(revision=_BASELINE_SHA)
+        payload["fixture_audit"] = {}
+        with pytest.raises(comparison_module.ComparisonError, match="empty"):
+            comparison_module._validate_scenario_isolation(
+                payload, label="baseline"
+            )
+
+    def test_preexisting_activity_count_nonzero_raises(
+        self, comparison_module
+    ) -> None:
+        """A non-zero preexisting_activity_count means the WebView fixture
+        inherited data from a prior run — isolation violated."""
+        payload = _make_driver_payload(revision=_BASELINE_SHA)
+        payload["fixture_audit"]["preexisting_activity_count"] = 5
+        with pytest.raises(
+            comparison_module.ComparisonError,
+            match="preexisting_activity_count",
+        ):
+            comparison_module._validate_scenario_isolation(
+                payload, label="baseline"
+            )
+
+    def test_inserted_count_mismatch_raises(self, comparison_module) -> None:
+        """inserted_count != requested_count means the builder dropped rows."""
+        payload = _make_driver_payload(revision=_BASELINE_SHA)
+        payload["fixture_audit"]["inserted_count"] = 19999
+        with pytest.raises(
+            comparison_module.ComparisonError,
+            match="inserted_count",
+        ):
+            comparison_module._validate_scenario_isolation(
+                payload, label="baseline"
+            )
+
+    def test_connection_count_zero_raises(self, comparison_module) -> None:
+        payload = _make_driver_payload(revision=_BASELINE_SHA)
+        payload["fixture_audit"]["connection_count"] = 0
+        with pytest.raises(
+            comparison_module.ComparisonError,
+            match="connection_count",
+        ):
+            comparison_module._validate_scenario_isolation(
+                payload, label="baseline"
+            )
+
+    def test_commit_count_zero_raises(self, comparison_module) -> None:
+        payload = _make_driver_payload(revision=_BASELINE_SHA)
+        payload["fixture_audit"]["commit_count"] = 0
+        with pytest.raises(
+            comparison_module.ComparisonError,
+            match="commit_count",
+        ):
+            comparison_module._validate_scenario_isolation(
+                payload, label="baseline"
+            )
+
+    def test_clean_fixture_audit_passes(self, comparison_module) -> None:
+        payload = _make_driver_payload(revision=_BASELINE_SHA)
+        comparison_module._validate_scenario_isolation(
+            payload, label="baseline"
         )
 
 

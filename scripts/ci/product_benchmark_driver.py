@@ -3,29 +3,30 @@
 
 Measures projection performance against a target revision (baseline or HEAD)
 via the COMMON ``build_visible_snapshot`` API that exists in both revisions.
-The driver is HEAD-owned and self-contained (own deterministic fixture builder,
-no ``tests.support.*``); only ``worktrace.*`` loads from ``--target-root``.
-Each revision runs in an independent process; baseline and HEAD never share one.
+The driver is HEAD-owned and self-contained; only ``worktrace.*`` loads from
+``--target-root``.  Each revision runs in an independent process; baseline
+and HEAD never share one.
 
 ``build_visible_snapshot`` is used (not the HEAD-only ``get_day_projection``)
-because it returns a ``ReportProjectionSnapshot`` in both revisions, delegating
-to each revision's projection path for a fair same-semantics comparison.
+because it returns a ``ReportProjectionSnapshot`` in both revisions for a
+fair same-semantics comparison.
 
-Measured metrics
-----------------
-* ``projection_20k_total_seconds`` — wall-clock to build a 20,000-activity
-  snapshot (sparse anchors, one paused standalone).
-* ``projection_10k_contributions_seconds`` — wall-clock for 10,000
-  back-to-back activities forming one large session.
-* ``projection_peak_memory_bytes`` — ``tracemalloc`` peak for the 20k build.
+Scenario isolation: each scenario runs in its own subprocess with its own
+isolated temp database.  The controller verifies revision identity via
+``git rev-parse HEAD`` on the target worktree; ``GITHUB_SHA`` is
+diagnostics-only (can be a merge commit SHA in pull_request workflows).
 
-Exit codes
-----------
-* 0 — success
-* 2 — input/schema error (target root missing, module import failed,
-       ``__file__`` not at target root)
-* 3 — execution error (fixture build failed, measurement failed,
-       consistency check failed)
+Measured metrics: ``projection_20k_total_seconds`` (20k-activity snapshot),
+``projection_10k_contributions_seconds`` (10k back-to-back activities in one
+session), ``projection_peak_memory_bytes`` (``tracemalloc`` peak for 20k).
+
+Profiles: ``--profile smoke`` (small sizes, 1 sample, infrastructure
+validation, NOT a performance gate); ``--profile full`` (20000 / 10000, 3
+samples, real performance gate).  The workflow only ever runs ``full``.
+
+Exit codes: 0 success; 2 input/schema error (target root missing, module
+import failed, ``__file__`` not at target root, revision mismatch); 3
+execution error (fixture build / measurement / consistency / isolation).
 """
 
 from __future__ import annotations
@@ -38,6 +39,7 @@ import os
 import platform
 import shutil
 import statistics
+import subprocess
 import sys
 import tempfile
 import time
@@ -45,18 +47,49 @@ import tracemalloc
 from pathlib import Path
 from typing import Any
 
-_DRIVER_VERSION = "1.0"
-_SCHEMA_VERSION = 1
+# Make scripts/ci importable so the subprocess can import benchmark_fixture.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_CI_DIR = Path(__file__).resolve().parent
+for path in (_REPO_ROOT, _CI_DIR):
+    path_str = str(path)
+    if path_str not in sys.path:
+        sys.path.insert(0, path_str)
+
+from scripts.ci.benchmark_fixture import (  # noqa: E402
+    DEFAULT_CHUNK_SIZE,
+    DEFAULT_DAY_START_SECONDS,
+    DEFAULT_REPORT_DATE,
+    DEFAULT_SPAN_SECONDS,
+    BenchmarkFixtureResult,
+    BenchmarkFixtureSpec,
+    build_10k_contribution_spec,
+    build_20k_activity_spec,
+    build_activity_fixture,
+    build_contribution_fixture,
+    fixture_hash,
+)
+
+_DRIVER_VERSION = "2.0"
+_SCHEMA_VERSION = 2
 _EXIT_INPUT_SCHEMA = 2
 _EXIT_EXECUTION = 3
 
-# Fixed deterministic fixture parameters — no RNG, so the fixture is
-# identical across revisions and runs.  The dataset shape mirrors the
-# existing ``tests/support/projection_benchmark.py`` but is embedded here
-# so the driver does not depend on HEAD-only test-support modules.
-_REPORT_DATE = "2026-07-15"
-_DAY_START_SECONDS = 9 * 3600  # 09:00:00
-_SPAN_SECONDS = 13 * 3600     # 09:00:00 -> 22:00:00
+# Profile data sizes.  Smoke is for infrastructure validation; full is for
+# the real performance gate.  The workflow only ever runs full.
+_PROFILES: dict[str, dict[str, Any]] = {
+    "smoke": {
+        "activity_count": 200,
+        "contribution_count": 200,
+        "runs": 1,
+        "warmup_runs": 0,
+    },
+    "full": {
+        "activity_count": 20000,
+        "contribution_count": 10000,
+        "runs": 3,
+        "warmup_runs": 1,
+    },
+}
 
 
 # ---------------------------------------------------------------------------
@@ -68,9 +101,6 @@ def _setup_target_path(target_root: Path) -> None:
     to the target revision, not the HEAD workspace.
     """
     target_str = str(target_root)
-    # Remove any existing entries that point at the HEAD workspace root or
-    # other worktrees so only the target root is on the front.
-    # Keep entries that are not the target root and not the HEAD workspace.
     cleaned: list[str] = []
     for entry in sys.path:
         if entry == target_str:
@@ -118,211 +148,79 @@ def _verify_module_at_target(module_name: str, target_root: Path) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Deterministic fixture builder (self-contained, common API only)
+# Revision identity
 # ---------------------------------------------------------------------------
 
-def _format_time(day: str, seconds_into_day: int) -> str:
-    hours, rem = divmod(seconds_into_day, 3600)
-    minutes, secs = divmod(rem, 60)
-    return f"{day} {hours:02d}:{minutes:02d}:{secs:02d}"
+def _read_actual_target_revision(target_root: Path) -> str:
+    """Return the actual HEAD SHA of the target worktree.
 
-
-def _build_resource(index: int) -> Any:
-    """Build a synthetic DetectedResource using the target revision's type."""
-    from worktrace.resources.types import DetectedResource
-
-    return DetectedResource(
-        resource_kind="local_file",
-        resource_subtype="document",
-        display_name=f"Doc{index}",
-        identity_key=f"resource:doc:{index}",
-        is_anchor=(index % 17 == 0),
-        confidence=80,
-        source="auto",
-        app_name="App",
-        process_name="app.exe",
-        window_title=f"Doc{index}",
-        path_hint=f"D:\\Bench\\Doc{index}.txt",
-        path_key=f"path:doc:{index}",
-        uri_scheme="",
-        uri_host="",
-        uri_hint="",
-        metadata_json="",
-    )
-
-
-def _ensure_benchmark_projects() -> dict[str, int]:
-    """Create two benchmark projects if absent, returning their IDs."""
-    from worktrace.services import project_service
-
-    def _ensure(name: str) -> int:
-        existing = project_service.get_project_by_name(name)
-        if existing is not None:
-            return int(existing["id"])
-        return project_service.create_project(name)
-
-    return {
-        "anchor": _ensure("BenchAnchor"),
-        "other": _ensure("BenchOther"),
-    }
-
-
-def _prepare_activity(
-    *,
-    app_name: str,
-    process_name: str,
-    window_title: str,
-    start_time: str,
-    status: str,
-    source: str,
-    project_id: int | None,
-    resource: Any,
-) -> Any:
-    from worktrace.services import activity_fact_repository
-
-    return activity_fact_repository.prepare_activity(
-        start_time=start_time,
-        source=source,
-        payload={
-            "app_name": app_name,
-            "process_name": process_name,
-            "window_title": window_title,
-            "status": status,
-            "project_id": project_id,
-            "file_path_hint": None,
-            "resource": resource,
-        },
-    )
-
-
-def build_20k_dataset(activity_count: int) -> dict[str, Any]:
-    """Insert ``activity_count`` synthetic facts on the fixed report date.
-
-    Distribution mirrors ``projection_benchmark.build_benchmark_dataset``:
-    continuous uncategorized normal activities, sparse manual anchors,
-    short sessions interleaved with longer ones, sparse context anchors,
-    and one paused standalone status row.
+    Runs ``git rev-parse HEAD`` inside ``target_root``.  This is the only
+    value used for revision identity comparison — never ``GITHUB_SHA``,
+    which can be a merge commit SHA in pull_request workflows.
     """
-    from worktrace.constants import SOURCE_AUTO, STATUS_NORMAL, STATUS_PAUSED
-    from worktrace.db import get_connection
-    from worktrace.services import activity_fact_repository
-    from worktrace.services.report_fact_query_service import (
-        get_uncategorized_project_id,
-    )
-
-    projects = _ensure_benchmark_projects()
-    anchor_project = projects["anchor"]
-    other_project = projects["other"]
-
-    step = max(5, _SPAN_SECONDS // max(activity_count, 1))
-    activity_ids: list[int] = []
-    anchor_activity_ids: list[int] = []
-
-    with get_connection() as conn:
-        uncategorized_id = get_uncategorized_project_id(conn)
-
-    for index in range(activity_count):
-        start_offset = _DAY_START_SECONDS + index * step
-        if start_offset >= _DAY_START_SECONDS + _SPAN_SECONDS:
-            start_offset = _DAY_START_SECONDS + _SPAN_SECONDS - step
-        if index % 5 == 0:
-            duration = 10
-        else:
-            duration = max(5, step - (index % 7))
-        end_offset = start_offset + duration
-        start_time = _format_time(_REPORT_DATE, start_offset)
-        end_time = _format_time(_REPORT_DATE, end_offset)
-
-        status = STATUS_NORMAL
-        project_id: int | None = None
-        if index % 23 == 5 and index != 0:
-            status = STATUS_NORMAL
-            project_id = anchor_project
-        elif index % 31 == 0 and index != 0:
-            project_id = other_project
-        elif index == max(0, activity_count - 1):
-            status = STATUS_PAUSED
-            project_id = None
-
-        resource = _build_resource(index)
-        prepared = _prepare_activity(
-            app_name=f"App{index % 4}",
-            process_name="app.exe",
-            window_title=f"Doc{index}",
-            start_time=start_time,
-            status=status,
-            source=SOURCE_AUTO,
-            project_id=project_id,
-            resource=resource,
+    try:
+        output = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            cwd=str(target_root),
+            text=True,
+            stderr=subprocess.STDOUT,
         )
-        with get_connection() as conn:
-            activity_id = activity_fact_repository.insert_open_activity(
-                conn, prepared
-            )
-            if status != STATUS_PAUSED:
-                activity_fact_repository.close_activity(conn, activity_id, end_time)
-        activity_ids.append(activity_id)
-        if project_id == anchor_project:
-            anchor_activity_ids.append(activity_id)
-
-    return {
-        "report_date": _REPORT_DATE,
-        "activity_count": activity_count,
-        "activity_ids": activity_ids,
-        "anchor_project_id": anchor_project,
-        "other_project_id": other_project,
-        "uncategorized_project_id": uncategorized_id,
-    }
-
-
-def build_10k_contributions_dataset(contribution_count: int) -> dict[str, Any]:
-    """Insert ``contribution_count`` back-to-back activities forming one session."""
-    from worktrace.constants import SOURCE_AUTO, STATUS_NORMAL
-    from worktrace.db import get_connection
-    from worktrace.services import activity_fact_repository
-    from worktrace.services.report_fact_query_service import (
-        get_uncategorized_project_id,
-    )
-
-    projects = _ensure_benchmark_projects()
-    duration = 5
-    activity_ids: list[int] = []
-
-    with get_connection() as conn:
-        uncategorized_id = get_uncategorized_project_id(conn)
-
-    for index in range(contribution_count):
-        start_offset = _DAY_START_SECONDS + index * duration
-        end_offset = start_offset + duration
-        start_time = _format_time(_REPORT_DATE, start_offset)
-        end_time = _format_time(_REPORT_DATE, end_offset)
-
-        resource = _build_resource(index)
-        prepared = _prepare_activity(
-            app_name=f"App{index % 4}",
-            process_name="app.exe",
-            window_title=f"Doc{index}",
-            start_time=start_time,
-            status=STATUS_NORMAL,
-            source=SOURCE_AUTO,
-            project_id=None,
-            resource=resource,
+        return output.strip()
+    except (OSError, subprocess.CalledProcessError) as exc:
+        print(
+            f"driver_error: cannot read actual target revision from "
+            f"{target_root}: {exc}",
+            file=sys.stderr,
         )
-        with get_connection() as conn:
-            activity_id = activity_fact_repository.insert_open_activity(
-                conn, prepared
-            )
-            activity_fact_repository.close_activity(conn, activity_id, end_time)
-        activity_ids.append(activity_id)
+        raise SystemExit(_EXIT_INPUT_SCHEMA)
 
-    return {
-        "report_date": _REPORT_DATE,
-        "contribution_count": contribution_count,
-        "activity_ids": activity_ids,
-        "anchor_project_id": projects["anchor"],
-        "other_project_id": projects["other"],
-        "uncategorized_project_id": uncategorized_id,
-    }
+
+def _verify_revision_identity(
+    requested_revision: str,
+    target_root: Path,
+) -> str:
+    """Verify ``requested_revision`` matches the actual target worktree SHA.
+
+    Returns the actual SHA on success.  Raises ``SystemExit(2)`` on mismatch
+    so the comparison layer never sees a baseline artifact whose recorded
+    revision was guessed instead of verified.
+    """
+    actual = _read_actual_target_revision(target_root)
+    if actual != requested_revision:
+        print(
+            f"driver_error: requested_revision {requested_revision!r} != "
+            f"actual_target_revision {actual!r} (target_root={target_root})",
+            file=sys.stderr,
+        )
+        raise SystemExit(_EXIT_INPUT_SCHEMA)
+    return actual
+
+
+# ---------------------------------------------------------------------------
+# Fixture hash (controller-level, covers all scenarios in the run)
+# ---------------------------------------------------------------------------
+
+def _fixture_hash(activity_count: int, contribution_count: int) -> str:
+    """Compute a deterministic hash covering all scenarios in the run.
+
+    Both baseline and HEAD must produce the same hash, which the comparison
+    layer cross-checks.  The hash covers the scenario sizes, the chunk
+    strategy, and the builder version so any drift invalidates the
+    comparison.
+    """
+    activity_spec = build_20k_activity_spec(activity_count=activity_count)
+    contribution_spec = build_10k_contribution_spec(
+        contribution_count=contribution_count
+    )
+    payload = json.dumps(
+        {
+            "activity_spec": fixture_hash(activity_spec),
+            "contribution_spec": fixture_hash(contribution_spec),
+            "builder_version": _DRIVER_VERSION,
+        },
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 # ---------------------------------------------------------------------------
@@ -338,6 +236,18 @@ def _build_snapshot_once(report_date: str) -> Any:
     return build_visible_snapshot(report_date, report_date)
 
 
+def _assert_snapshot_real(snapshot: Any, *, label: str) -> None:
+    """Assert the snapshot has real data (not empty)."""
+    entry_count = len(snapshot.final_entries)
+    if entry_count < 1:
+        print(
+            f"driver_error: {label} snapshot has {entry_count} entries; "
+            f"fixture build likely failed",
+            file=sys.stderr,
+        )
+        raise SystemExit(_EXIT_EXECUTION)
+
+
 def _measure_scenario(
     report_date: str,
     *,
@@ -346,7 +256,6 @@ def _measure_scenario(
     label: str,
 ) -> dict[str, Any]:
     """Run warmup + ``runs`` measured iterations, return samples + median."""
-    # Warmup runs (not recorded).
     for _ in range(warmup_runs):
         snapshot = _build_snapshot_once(report_date)
         _assert_snapshot_real(snapshot, label=label)
@@ -368,7 +277,6 @@ def _measure_scenario(
         contribution_counts.append(len(snapshot.final_contributions))
         session_counts.append(len(snapshot.final_sessions))
 
-    # Consistency: all runs must produce the same hash (deterministic build).
     unique_hashes = set(consistency_hashes)
     if len(unique_hashes) != 1:
         print(
@@ -384,31 +292,26 @@ def _measure_scenario(
         "min_seconds": round(min(samples), 6),
         "max_seconds": round(max(samples), 6),
         "mad_seconds": round(
-            statistics.median([abs(s - statistics.median(samples)) for s in samples])
+            statistics.median(
+                [abs(s - statistics.median(samples)) for s in samples]
+            )
             if len(samples) >= 2
             else 0.0,
             6,
         ),
-        "consistency_hash": consistency_hashes[0],
-        "entry_count": entry_counts[0],
-        "contribution_count": contribution_counts[0],
-        "session_count": session_counts[0],
+        "consistency_hash": consistency_hashes[0] if consistency_hashes else "",
+        "entry_count": entry_counts[0] if entry_counts else 0,
+        "contribution_count": contribution_counts[0] if contribution_counts else 0,
+        "session_count": session_counts[0] if session_counts else 0,
     }
 
 
-def _assert_snapshot_real(snapshot: Any, *, label: str) -> None:
-    """Assert the snapshot has real data (not empty)."""
-    entry_count = len(snapshot.final_entries)
-    if entry_count < 1:
-        print(
-            f"driver_error: {label} snapshot has {entry_count} entries; "
-            f"fixture build likely failed",
-            file=sys.stderr,
-        )
-        raise SystemExit(_EXIT_EXECUTION)
-
-
-def _measure_peak_memory(report_date: str, *, runs: int, label: str) -> dict[str, Any]:
+def _measure_peak_memory(
+    report_date: str,
+    *,
+    runs: int,
+    label: str,
+) -> dict[str, Any]:
     """Measure tracemalloc peak for building a single snapshot.
 
     Runs ``runs`` times and reports the median peak.  Each run starts
@@ -436,29 +339,181 @@ def _measure_peak_memory(report_date: str, *, runs: int, label: str) -> dict[str
 
 
 # ---------------------------------------------------------------------------
-# Fixture hash
+# Scenario subprocess
 # ---------------------------------------------------------------------------
 
-def _fixture_hash() -> str:
-    """Compute a deterministic hash of the fixture parameters.
+def _run_scenario_subprocess(
+    *,
+    scenario: str,
+    target_root: Path,
+    revision: str,
+    output: Path,
+    profile: str,
+) -> None:
+    """Spawn a subprocess that runs exactly one scenario and writes its result.
 
-    The fixture is fully deterministic (no RNG), so the hash is computed
-    from the fixed parameters.  Both baseline and HEAD must produce the
-    same fixture hash, which the comparison layer cross-checks.
+    The subprocess re-invokes this driver with ``--scenario`` so each
+    scenario gets a fresh Python process and a fresh isolated temp DB.
     """
-    payload = json.dumps(
-        {
-            "report_date": _REPORT_DATE,
-            "day_start_seconds": _DAY_START_SECONDS,
-            "span_seconds": _SPAN_SECONDS,
-            "scenarios": {
-                "20k_activities": {"activity_count": 20000},
-                "10k_contributions": {"contribution_count": 10000},
+    cmd: list[str] = [
+        sys.executable,
+        str(Path(__file__).resolve()),
+        "--target-root", str(target_root),
+        "--revision", revision,
+        "--output", str(output),
+        "--profile", profile,
+        "--scenario", scenario,
+    ]
+    print(f"spawning scenario subprocess: {scenario}")
+    result = subprocess.run(cmd)
+    if result.returncode != 0:
+        print(
+            f"driver_error: scenario {scenario} subprocess exited with "
+            f"code {result.returncode}",
+            file=sys.stderr,
+        )
+        raise SystemExit(_EXIT_EXECUTION)
+
+
+def _run_single_scenario(
+    *,
+    scenario: str,
+    target_root: Path,
+    revision: str,
+    profile: str,
+) -> dict[str, Any]:
+    """Run one scenario in this process and return its result dict.
+
+    Called by ``main()`` when ``--scenario`` is set.  Each scenario:
+      1. creates a fresh isolated temp database,
+      2. builds only the data it needs via the shared fixture builder,
+      3. asserts ``preexisting_activity_count == 0``,
+      4. asserts ``requested_count == inserted_count``,
+      5. runs warm-up + measured samples,
+      6. writes its result and exits.
+
+    The temp DB is removed in the ``finally`` block so baseline and HEAD
+    never share fixture data even if the scenario crashes.
+    """
+    profile_cfg = _PROFILES[profile]
+
+    _setup_target_path(target_root)
+    _verify_module_at_target(
+        "worktrace.services.report_projection_snapshot_service", target_root
+    )
+    actual_revision = _verify_revision_identity(revision, target_root)
+
+    import worktrace.db as db  # noqa: E402
+
+    db_tempdir = tempfile.mkdtemp(prefix=f"worktrace-bench-{scenario}-")
+    db_path = Path(db_tempdir) / "worktrace.db"
+    try:
+        db.initialize_database(db_path)
+        print(f"[{scenario}] database initialized at {db_path}")
+
+        started_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+        if scenario == "20k_activities":
+            spec = build_20k_activity_spec(
+                activity_count=profile_cfg["activity_count"]
+            )
+            fixture_result = build_activity_fixture(spec=spec)
+            report_date = fixture_result.report_date
+            metric = _measure_scenario(
+                report_date,
+                runs=profile_cfg["runs"],
+                warmup_runs=profile_cfg["warmup_runs"],
+                label=scenario,
+            )
+            metric_key = "projection_20k_total_seconds"
+        elif scenario == "10k_contributions":
+            spec = build_10k_contribution_spec(
+                contribution_count=profile_cfg["contribution_count"]
+            )
+            fixture_result = build_contribution_fixture(spec=spec)
+            report_date = fixture_result.report_date
+            metric = _measure_scenario(
+                report_date,
+                runs=profile_cfg["runs"],
+                warmup_runs=profile_cfg["warmup_runs"],
+                label=scenario,
+            )
+            metric_key = "projection_10k_contributions_seconds"
+        elif scenario == "peak_memory":
+            # peak_memory reuses the 20k fixture shape and measures
+            # tracemalloc peak for a single snapshot build.
+            spec = build_20k_activity_spec(
+                activity_count=profile_cfg["activity_count"]
+            )
+            fixture_result = build_activity_fixture(spec=spec)
+            report_date = fixture_result.report_date
+            metric = _measure_peak_memory(
+                report_date,
+                runs=profile_cfg["runs"],
+                label=scenario,
+            )
+            metric_key = "projection_peak_memory_bytes"
+        else:
+            print(
+                f"driver_error: unknown scenario {scenario!r}",
+                file=sys.stderr,
+            )
+            raise SystemExit(_EXIT_INPUT_SCHEMA)
+
+        # Scenario isolation contracts — fail-closed on any violation so
+        # the comparison layer never sees a polluted result.
+        if fixture_result.preexisting_activity_count != 0:
+            print(
+                f"driver_error: scenario {scenario} started with "
+                f"preexisting_activity_count="
+                f"{fixture_result.preexisting_activity_count} (expected 0) — "
+                f"scenario isolation violated",
+                file=sys.stderr,
+            )
+            raise SystemExit(_EXIT_EXECUTION)
+        if fixture_result.inserted_count != fixture_result.requested_count:
+            print(
+                f"driver_error: scenario {scenario} inserted "
+                f"{fixture_result.inserted_count} activities but requested "
+                f"{fixture_result.requested_count}",
+                file=sys.stderr,
+            )
+            raise SystemExit(_EXIT_EXECUTION)
+
+        print(
+            f"[{scenario}] inserted {fixture_result.inserted_count} activities "
+            f"in {fixture_result.fixture_build_seconds:.3f}s "
+            f"(connections={fixture_result.connection_count}, "
+            f"commits={fixture_result.commit_count}, "
+            f"chunk_size={fixture_result.chunk_size})"
+        )
+
+        finished_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+        return {
+            "scenario": scenario,
+            "schema_version": _SCHEMA_VERSION,
+            "driver_version": _DRIVER_VERSION,
+            "requested_revision": revision,
+            "actual_target_revision": actual_revision,
+            "github_workflow_sha": os.environ.get("GITHUB_SHA"),
+            "target_root": str(target_root),
+            "fixture_hash": fixture_hash(spec),
+            "fixture_audit": fixture_result.to_audit_dict(),
+            "python_version": sys.version,
+            "platform": platform.platform(),
+            "runner_metadata": _runner_metadata(),
+            "started_at": started_at,
+            "finished_at": finished_at,
+            "profile": profile,
+            "runs": profile_cfg["runs"],
+            "warmup_runs": profile_cfg["warmup_runs"],
+            "metrics": {
+                metric_key: metric,
             },
-        },
-        sort_keys=True,
-    ).encode("utf-8")
-    return hashlib.sha256(payload).hexdigest()
+        }
+    finally:
+        shutil.rmtree(db_tempdir, ignore_errors=True)
 
 
 # ---------------------------------------------------------------------------
@@ -489,6 +544,100 @@ def _runner_metadata() -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Controller (no --scenario): spawn one subprocess per scenario and aggregate
+# ---------------------------------------------------------------------------
+
+def _run_controller(
+    *,
+    target_root: Path,
+    revision: str,
+    output: Path,
+    profile: str,
+) -> int:
+    """Spawn one subprocess per scenario and aggregate into one artifact."""
+
+    actual_revision = _verify_revision_identity(revision, target_root)
+
+    profile_cfg = _PROFILES[profile]
+    scenarios = ("20k_activities", "10k_contributions", "peak_memory")
+
+    started_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    scenario_results: list[dict[str, Any]] = []
+    scenario_artifact_paths: list[Path] = []
+
+    tmp_dir = Path(tempfile.mkdtemp(prefix="worktrace-bench-controller-"))
+    try:
+        for scenario in scenarios:
+            scenario_output = (
+                tmp_dir / f"{scenario}.json"
+            )
+            scenario_artifact_paths.append(scenario_output)
+            _run_scenario_subprocess(
+                scenario=scenario,
+                target_root=target_root,
+                revision=revision,
+                output=scenario_output,
+                profile=profile,
+            )
+            if not scenario_output.is_file():
+                print(
+                    f"driver_error: scenario {scenario} did not write "
+                    f"artifact at {scenario_output}",
+                    file=sys.stderr,
+                )
+                raise SystemExit(_EXIT_EXECUTION)
+            payload = json.loads(
+                scenario_output.read_text(encoding="utf-8")
+            )
+            scenario_results.append(payload)
+
+        finished_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+        # Aggregate metrics from all scenarios into one flat metrics map.
+        metrics: dict[str, Any] = {}
+        for sr in scenario_results:
+            metrics.update(sr.get("metrics", {}))
+
+        # Aggregate fixture audit per scenario.
+        fixture_audit: dict[str, Any] = {
+            sr["scenario"]: sr.get("fixture_audit", {})
+            for sr in scenario_results
+            if "scenario" in sr
+        }
+
+        payload: dict[str, Any] = {
+            "schema_version": _SCHEMA_VERSION,
+            "driver_version": _DRIVER_VERSION,
+            "requested_revision": revision,
+            "actual_target_revision": actual_revision,
+            "github_workflow_sha": os.environ.get("GITHUB_SHA"),
+            "target_root": str(target_root),
+            "fixture_hash": _fixture_hash(
+                profile_cfg["activity_count"],
+                profile_cfg["contribution_count"],
+            ),
+            "python_version": sys.version,
+            "platform": platform.platform(),
+            "runner_metadata": _runner_metadata(),
+            "started_at": started_at,
+            "finished_at": finished_at,
+            "profile": profile,
+            "runs": profile_cfg["runs"],
+            "warmup_runs": profile_cfg["warmup_runs"],
+            "scenarios": sorted(scenarios),
+            "scenario_results": scenario_results,
+            "fixture_audit": fixture_audit,
+            "metrics": metrics,
+        }
+
+        _atomic_write_json(output, payload)
+        print(f"\nresult written to {output}")
+        return 0
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -505,7 +654,10 @@ def main() -> int:
     parser.add_argument(
         "--revision",
         required=True,
-        help="Git SHA of the target revision (recorded in output for audit)",
+        help=(
+            "Git SHA of the target revision (recorded in output for audit). "
+            "Must match the actual HEAD of --target-root."
+        ),
     )
     parser.add_argument(
         "--output",
@@ -514,16 +666,22 @@ def main() -> int:
         help="Path to write the JSON result artifact",
     )
     parser.add_argument(
-        "--runs",
-        type=int,
-        default=3,
-        help="Number of measured iterations per scenario (default 3)",
+        "--profile",
+        choices=("smoke", "full"),
+        default="full",
+        help=(
+            "smoke: small data sizes for infrastructure validation. "
+            "full: real data sizes for the performance gate (default)."
+        ),
     )
     parser.add_argument(
-        "--warmup-runs",
-        type=int,
-        default=1,
-        help="Number of warmup iterations per scenario (default 1)",
+        "--scenario",
+        default=None,
+        help=(
+            "Internal: run a single scenario in this process (used by the "
+            "controller subprocess spawning logic).  Leave unset for normal "
+            "controller invocation."
+        ),
     )
     args = parser.parse_args()
 
@@ -536,125 +694,24 @@ def main() -> int:
         )
         return _EXIT_INPUT_SCHEMA
 
-    # ---- Set up target-root isolation ----
-    _setup_target_path(target_root)
-
-    # ---- Verify product modules load from target root ----
-    module_path = _verify_module_at_target(
-        "worktrace.services.report_projection_snapshot_service", target_root
-    )
-    print(f"verified: report_projection_snapshot_service loaded from {module_path}")
-
-    # ---- Isolate the database ----
-    # Each revision gets a fresh temp database (never the shared user-level
-    # one) so baseline and HEAD don't pollute each other's fixtures.  Schema
-    # is loaded from the target revision's own schema.sql via importlib.resources.
-    import worktrace.db as db
-
-    db_tempdir = tempfile.mkdtemp(prefix="worktrace-bench-db-")
-    db_path = Path(db_tempdir) / "worktrace.db"
-    try:
-        db.initialize_database(db_path)
-        print(f"database initialized at {db_path}")
-
-        # ---- Run scenarios ----
-        started_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-
-        # Scenario 1: 20k activities
-        print("building 20k activities fixture...")
-        info_proj = build_20k_dataset(20000)
-        print(
-            f"  inserted {info_proj['activity_count']} activities "
-            f"on {info_proj['report_date']}"
+    if args.scenario:
+        # Single-scenario mode: write directly to args.output.
+        result = _run_single_scenario(
+            scenario=args.scenario,
+            target_root=target_root,
+            revision=args.revision,
+            profile=args.profile,
         )
-        metric_proj = _measure_scenario(
-            info_proj["report_date"],
-            runs=args.runs,
-            warmup_runs=args.warmup_runs,
-            label="20k_activities",
-        )
-        print(
-            f"  20k projection median: {metric_proj['median_seconds']:.3f}s "
-            f"(entries={metric_proj['entry_count']}, "
-            f"contributions={metric_proj['contribution_count']}, "
-            f"sessions={metric_proj['session_count']}, "
-            f"hash={metric_proj['consistency_hash']})"
-        )
-
-        # Scenario 2: 10k contributions.
-        # Close the paused activity left by the 20k scenario so the
-        # single-open invariant does not reject the first 10k insert.
-        from worktrace.db import get_connection
-        from worktrace.services import activity_fact_repository
-        with get_connection() as conn:
-            closed_ids = activity_fact_repository.close_all_open_activities(
-                conn, _format_time(_REPORT_DATE, _DAY_START_SECONDS)
-            )
-        if closed_ids:
-            print(f"  closed {len(closed_ids)} lingering open activity before 10k scenario")
-
-        print("building 10k contributions fixture...")
-        info_contrib = build_10k_contributions_dataset(10000)
-        print(
-            f"  inserted {info_contrib['contribution_count']} contributions "
-            f"on {info_contrib['report_date']}"
-        )
-        metric_contrib = _measure_scenario(
-            info_contrib["report_date"],
-            runs=args.runs,
-            warmup_runs=args.warmup_runs,
-            label="10k_contributions",
-        )
-        print(
-            f"  10k contributions median: {metric_contrib['median_seconds']:.3f}s "
-            f"(entries={metric_contrib['entry_count']}, "
-            f"contributions={metric_contrib['contribution_count']}, "
-            f"sessions={metric_contrib['session_count']}, "
-            f"hash={metric_contrib['consistency_hash']})"
-        )
-
-        # Scenario 3: peak memory (reuses 20k fixture, fresh measurement)
-        print("measuring peak memory...")
-        metric_peak = _measure_peak_memory(
-            info_proj["report_date"],
-            runs=args.runs,
-            label="peak_memory",
-        )
-        print(
-            f"  peak memory median: {metric_peak['median_bytes']} bytes "
-            f"({metric_peak['median_bytes'] / (1024 * 1024):.1f} MiB)"
-        )
-
-        finished_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-
-        # ---- Assemble output ----
-        payload: dict[str, Any] = {
-            "schema_version": _SCHEMA_VERSION,
-            "driver_version": _DRIVER_VERSION,
-            "revision": args.revision,
-            "target_root": str(target_root),
-            "fixture_hash": _fixture_hash(),
-            "python_version": sys.version,
-            "platform": platform.platform(),
-            "runner_metadata": _runner_metadata(),
-            "started_at": started_at,
-            "finished_at": finished_at,
-            "runs": args.runs,
-            "warmup_runs": args.warmup_runs,
-            "metrics": {
-                "projection_20k_total_seconds": metric_proj,
-                "projection_10k_contributions_seconds": metric_contrib,
-                "projection_peak_memory_bytes": metric_peak,
-            },
-        }
-
-        _atomic_write_json(args.output, payload)
-        print(f"\nresult written to {args.output}")
+        _atomic_write_json(args.output, result)
+        print(f"\nscenario {args.scenario} result written to {args.output}")
         return 0
-    finally:
-        # Clean up the isolated database so baseline and HEAD runs never
-        # share fixture data.  WAL/SHM sidecar files are removed by rmtree.
-        shutil.rmtree(db_tempdir, ignore_errors=True)
+
+    return _run_controller(
+        target_root=target_root,
+        revision=args.revision,
+        output=args.output,
+        profile=args.profile,
+    )
 
 
 if __name__ == "__main__":
