@@ -333,6 +333,7 @@ jobs:
           } else {
             "should_run=false" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
             Write-Host "scenario=${{ matrix.scenario }} runs_in=$runsIn mode=$mode -> SKIP"
+          }
 
       - name: Resolve revisions
         if: steps.guard.outputs.should_run == 'true'
