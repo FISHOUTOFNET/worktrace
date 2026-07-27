@@ -183,6 +183,15 @@ class SideResult:
             return int(self.payload.get("activity_count", 0))
         return 0
 
+    @property
+    def github_workflow_sha(self) -> str:
+        """The ``GITHUB_SHA`` recorded by the driver — diagnostics only,
+        never used for identity comparison (it can be a merge commit SHA
+        in ``pull_request`` workflows)."""
+        if self.payload is not None:
+            return str(self.payload.get("github_workflow_sha", "") or "")
+        return ""
+
 
 def _side_diagnostics(side: SideResult) -> dict[str, Any]:
     """Return a diagnostics dict for one side, suitable for the artifact."""
@@ -203,6 +212,7 @@ def _side_diagnostics(side: SideResult) -> dict[str, Any]:
         "python_version": side.python_version,
         "activity_count": side.activity_count,
         "fixture_audit": side.fixture_audit,
+        "github_workflow_sha": side.github_workflow_sha,
     }
 
 

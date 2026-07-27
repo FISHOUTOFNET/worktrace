@@ -301,7 +301,12 @@ class TestWebViewDriverVerifyRevisionIdentity:
 
 class TestProductComparisonValidateRevisionIdentity:
     """``benchmark_comparison._validate_revision_identity`` enforces
-    the revision identity contract on already-recorded artifacts."""
+    the revision identity contract on already-recorded artifacts.
+
+    The new SideResult-based API reads ``result.json`` from an output
+    directory, so these tests write synthetic payloads to a temp dir
+    and construct a SideResult to pass to ``_validate_revision_identity``.
+    """
 
     def _make_payload(
         self,
@@ -313,137 +318,132 @@ class TestProductComparisonValidateRevisionIdentity:
         if actual is None:
             actual = requested
         return {
-            "schema_version": 2,
+            "schema_version": 3,
             "requested_revision": requested,
             "actual_target_revision": actual,
             "github_workflow_sha": workflow_sha,
-            "driver_version": "2.0",
+            "driver_version": "3.0",
             "fixture_hash": "fixedhash",
             "python_version": "3.11.5",
             "fixture_audit": {
-                "20k_activities": {
-                    "scenario": "20k_activities",
-                    "requested_count": 20000,
-                    "inserted_count": 20000,
-                    "preexisting_activity_count": 0,
-                    "connection_count": 1,
-                    "commit_count": 41,
-                },
+                "scenario": "20k_activities",
+                "requested_count": 20000,
+                "inserted_count": 20000,
+                "preexisting_activity_count": 0,
+                "connection_count": 1,
+                "commit_count": 41,
             },
             "metrics": {
                 "projection_20k_total_seconds": {
                     "samples_seconds": [1.0],
                     "median_seconds": 1.0,
                 },
-                "projection_10k_contributions_seconds": {
-                    "samples_seconds": [0.5],
-                    "median_seconds": 0.5,
-                },
-                "projection_peak_memory_bytes": {
-                    "samples_bytes": [100000],
-                    "median_bytes": 100000,
-                },
             },
         }
 
-    def test_match_passes(self, product_comparison) -> None:
+    def _make_side(
+        self,
+        product_comparison,
+        tmp_path: Path,
+        *,
+        expected_sha: str = _BASELINE_SHA,
+        **kwargs,
+    ) -> Any:
+        """Write a synthetic result.json and return a SideResult."""
+        import json as _json
+        d = tmp_path / "side"
+        d.mkdir(parents=True, exist_ok=True)
+        payload = self._make_payload(**kwargs)
+        (d / "result.json").write_text(
+            _json.dumps(payload), encoding="utf-8"
+        )
+        return product_comparison.SideResult(
+            label="baseline",
+            output_dir=d,
+            expected_sha=expected_sha,
+            scenario="20k_activities",
+        )
+
+    def test_match_passes(self, product_comparison, tmp_path: Path) -> None:
         """When requested == actual == expected, validation passes."""
-        payload = self._make_payload(
-            requested=_BASELINE_SHA, actual=_BASELINE_SHA
+        side = self._make_side(
+            product_comparison, tmp_path,
+            requested=_BASELINE_SHA, actual=_BASELINE_SHA,
+            expected_sha=_BASELINE_SHA,
         )
-        # No exception raised.
-        product_comparison._validate_revision_identity(
-            payload, expected_sha=_BASELINE_SHA, label="baseline"
-        )
+        product_comparison._validate_revision_identity(side)
 
-    def test_missing_requested_raises(self, product_comparison) -> None:
-        payload = self._make_payload(requested="", actual=_BASELINE_SHA)
-        with pytest.raises(
-            product_comparison.ComparisonError, match="missing"
-        ):
-            product_comparison._validate_revision_identity(
-                payload, expected_sha=_BASELINE_SHA, label="baseline"
-            )
-
-    def test_missing_actual_raises(self, product_comparison) -> None:
-        payload = self._make_payload(
-            requested=_BASELINE_SHA, actual=""
+    def test_missing_requested_raises(self, product_comparison, tmp_path: Path) -> None:
+        side = self._make_side(
+            product_comparison, tmp_path,
+            requested="", actual=_BASELINE_SHA,
         )
         with pytest.raises(
             product_comparison.ComparisonError, match="missing"
         ):
-            product_comparison._validate_revision_identity(
-                payload, expected_sha=_BASELINE_SHA, label="baseline"
-            )
+            product_comparison._validate_revision_identity(side)
+
+    def test_missing_actual_raises(self, product_comparison, tmp_path: Path) -> None:
+        side = self._make_side(
+            product_comparison, tmp_path,
+            requested=_BASELINE_SHA, actual="",
+        )
+        with pytest.raises(
+            product_comparison.ComparisonError, match="missing"
+        ):
+            product_comparison._validate_revision_identity(side)
 
     def test_requested_actual_mismatch_raises(
-        self, product_comparison
+        self, product_comparison, tmp_path: Path
     ) -> None:
-        """requested_revision != actual_target_revision within an
-        artifact means the driver did not verify identity."""
-        payload = self._make_payload(
-            requested=_BASELINE_SHA, actual=_HEAD_SHA
+        side = self._make_side(
+            product_comparison, tmp_path,
+            requested=_BASELINE_SHA, actual=_HEAD_SHA,
         )
         with pytest.raises(
             product_comparison.ComparisonError,
             match="requested_revision",
         ):
-            product_comparison._validate_revision_identity(
-                payload, expected_sha=_BASELINE_SHA, label="baseline"
-            )
+            product_comparison._validate_revision_identity(side)
 
     def test_actual_does_not_match_expected_raises(
-        self, product_comparison
+        self, product_comparison, tmp_path: Path
     ) -> None:
-        """actual_target_revision != expected_sha (from CLI) means the
-        artifact was recorded against a different revision than the
-        comparison was asked to validate."""
-        payload = self._make_payload(
-            requested=_BASELINE_SHA, actual=_BASELINE_SHA
+        side = self._make_side(
+            product_comparison, tmp_path,
+            requested=_BASELINE_SHA, actual=_BASELINE_SHA,
+            expected_sha=_HEAD_SHA,
         )
         with pytest.raises(
             product_comparison.ComparisonError, match="expected"
         ):
-            product_comparison._validate_revision_identity(
-                payload, expected_sha=_HEAD_SHA, label="baseline"
-            )
+            product_comparison._validate_revision_identity(side)
 
     def test_github_workflow_sha_does_not_spoof_identity(
-        self, product_comparison
+        self, product_comparison, tmp_path: Path
     ) -> None:
-        """``github_workflow_sha`` may differ from
-        ``actual_target_revision`` (it can be a merge commit SHA in
-        pull_request workflows) and must NOT cause an identity
-        mismatch."""
-        payload = self._make_payload(
+        side = self._make_side(
+            product_comparison, tmp_path,
             requested=_BASELINE_SHA,
             actual=_BASELINE_SHA,
             workflow_sha=_MERGE_COMMIT_SHA,
         )
-        # Validation passes because github_workflow_sha is not used
-        # for identity comparison.
-        product_comparison._validate_revision_identity(
-            payload, expected_sha=_BASELINE_SHA, label="baseline"
-        )
+        product_comparison._validate_revision_identity(side)
 
     def test_merge_commit_cannot_spoof_baseline(
-        self, product_comparison
+        self, product_comparison, tmp_path: Path
     ) -> None:
-        """If the artifact's actual_target_revision is a merge commit
-        SHA (GITHUB_SHA), but the expected baseline SHA is the real PR
-        head, validation must fail — the merge commit cannot masquerade
-        as the baseline."""
-        payload = self._make_payload(
+        side = self._make_side(
+            product_comparison, tmp_path,
             requested=_MERGE_COMMIT_SHA,
             actual=_MERGE_COMMIT_SHA,
             workflow_sha=_MERGE_COMMIT_SHA,
+            expected_sha=_BASELINE_SHA,
         )
         with pytest.raises(
             product_comparison.ComparisonError, match="expected"
         ):
-            product_comparison._validate_revision_identity(
-                payload, expected_sha=_BASELINE_SHA, label="baseline"
-            )
+            product_comparison._validate_revision_identity(side)
 
 
 # ---------------------------------------------------------------------------
@@ -501,52 +501,70 @@ class TestWebViewComparisonValidateRevisionIdentity:
             },
         }
 
-    def test_match_passes(self, webview_comparison) -> None:
-        payload = self._make_payload(
-            requested=_BASELINE_SHA, actual=_BASELINE_SHA
-        )
-        webview_comparison._validate_revision_identity(
-            payload, expected_sha=_BASELINE_SHA, label="baseline"
+    def _make_side(
+        self,
+        webview_comparison,
+        tmp_path: Path,
+        *,
+        expected_sha: str = _BASELINE_SHA,
+        **kwargs,
+    ) -> Any:
+        """Write a synthetic webview-benchmark.json and return a SideResult."""
+        import json as _json
+        d = tmp_path / "wv_side"
+        d.mkdir(parents=True, exist_ok=True)
+        payload = self._make_payload(**kwargs)
+        artifact_path = d / "webview-benchmark.json"
+        artifact_path.write_text(_json.dumps(payload), encoding="utf-8")
+        return webview_comparison.SideResult(
+            label="baseline",
+            artifact_path=artifact_path,
+            expected_sha=expected_sha,
         )
 
+    def test_match_passes(self, webview_comparison, tmp_path: Path) -> None:
+        side = self._make_side(
+            webview_comparison, tmp_path,
+            requested=_BASELINE_SHA, actual=_BASELINE_SHA,
+        )
+        webview_comparison._validate_revision_identity(side)
+
     def test_requested_actual_mismatch_raises(
-        self, webview_comparison
+        self, webview_comparison, tmp_path: Path
     ) -> None:
-        payload = self._make_payload(
-            requested=_BASELINE_SHA, actual=_HEAD_SHA
+        side = self._make_side(
+            webview_comparison, tmp_path,
+            requested=_BASELINE_SHA, actual=_HEAD_SHA,
         )
         with pytest.raises(
             webview_comparison.ComparisonError,
             match="requested_revision",
         ):
-            webview_comparison._validate_revision_identity(
-                payload, expected_sha=_BASELINE_SHA, label="baseline"
-            )
+            webview_comparison._validate_revision_identity(side)
 
     def test_actual_does_not_match_expected_raises(
-        self, webview_comparison
+        self, webview_comparison, tmp_path: Path
     ) -> None:
-        payload = self._make_payload(
-            requested=_BASELINE_SHA, actual=_BASELINE_SHA
+        side = self._make_side(
+            webview_comparison, tmp_path,
+            requested=_BASELINE_SHA, actual=_BASELINE_SHA,
+            expected_sha=_HEAD_SHA,
         )
         with pytest.raises(
             webview_comparison.ComparisonError, match="expected"
         ):
-            webview_comparison._validate_revision_identity(
-                payload, expected_sha=_HEAD_SHA, label="baseline"
-            )
+            webview_comparison._validate_revision_identity(side)
 
     def test_github_workflow_sha_does_not_spoof_identity(
-        self, webview_comparison
+        self, webview_comparison, tmp_path: Path
     ) -> None:
-        payload = self._make_payload(
+        side = self._make_side(
+            webview_comparison, tmp_path,
             requested=_BASELINE_SHA,
             actual=_BASELINE_SHA,
             workflow_sha=_MERGE_COMMIT_SHA,
         )
-        webview_comparison._validate_revision_identity(
-            payload, expected_sha=_BASELINE_SHA, label="baseline"
-        )
+        webview_comparison._validate_revision_identity(side)
 
 
 # ---------------------------------------------------------------------------
@@ -579,20 +597,17 @@ class TestWorkflowShaPreservedAsDiagnostic:
     def test_product_comparison_preserves_workflow_sha_in_report(
         self, product_comparison
     ) -> None:
-        """The comparison report must include
-        ``baseline_github_workflow_sha`` and
-        ``head_github_workflow_sha`` so the workflow SHA is preserved
-        for diagnostics."""
+        """The comparison report must include ``github_workflow_sha``
+        in side diagnostics so the workflow SHA is preserved for
+        diagnostics."""
         source = PRODUCT_COMPARISON_PATH.read_text(encoding="utf-8")
-        assert "baseline_github_workflow_sha" in source
-        assert "head_github_workflow_sha" in source
+        assert "github_workflow_sha" in source
 
     def test_webview_comparison_preserves_workflow_sha_in_report(
         self, webview_comparison
     ) -> None:
         source = WEBVIEW_COMPARISON_PATH.read_text(encoding="utf-8")
-        assert "baseline_github_workflow_sha" in source
-        assert "head_github_workflow_sha" in source
+        assert "github_workflow_sha" in source
 
     def test_product_comparison_does_not_use_workflow_sha_for_identity(
         self, product_comparison
@@ -652,51 +667,26 @@ class TestComparisonRejectsMergeCommitBaseline:
         self, *, revision: str, workflow_sha: str | None = None
     ) -> dict[str, Any]:
         return {
-            "schema_version": 2,
+            "schema_version": 3,
             "requested_revision": revision,
             "actual_target_revision": revision,
             "github_workflow_sha": workflow_sha,
-            "driver_version": "2.0",
+            "driver_version": "3.0",
             "fixture_hash": "fixedhash",
             "python_version": "3.11.5",
             "fixture_audit": {
-                "20k_activities": {
-                    "scenario": "20k_activities",
-                    "requested_count": 20000,
-                    "inserted_count": 20000,
-                    "preexisting_activity_count": 0,
-                    "connection_count": 1,
-                    "commit_count": 41,
-                },
-                "10k_contributions": {
-                    "scenario": "10k_contributions",
-                    "requested_count": 10000,
-                    "inserted_count": 10000,
-                    "preexisting_activity_count": 0,
-                    "connection_count": 1,
-                    "commit_count": 21,
-                },
-                "peak_memory": {
-                    "scenario": "peak_memory",
-                    "requested_count": 20000,
-                    "inserted_count": 20000,
-                    "preexisting_activity_count": 0,
-                    "connection_count": 1,
-                    "commit_count": 41,
-                },
+                "scenario": "20k_activities",
+                "requested_count": 20000,
+                "inserted_count": 20000,
+                "preexisting_activity_count": 0,
+                "connection_count": 1,
+                "commit_count": 41,
             },
             "metrics": {
                 "projection_20k_total_seconds": {
                     "samples_seconds": [1.0, 1.05, 0.98],
                     "median_seconds": 1.0,
-                },
-                "projection_10k_contributions_seconds": {
-                    "samples_seconds": [0.5, 0.52, 0.48],
-                    "median_seconds": 0.5,
-                },
-                "projection_peak_memory_bytes": {
-                    "samples_bytes": [100000, 105000, 98000],
-                    "median_bytes": 100000,
+                    "consistency_hash": "hash_20k",
                 },
             },
         }
@@ -719,21 +709,25 @@ class TestComparisonRejectsMergeCommitBaseline:
         head_dir = tmp_path / "head"
         baseline_dir.mkdir()
         head_dir.mkdir()
-        (baseline_dir / "product-benchmark.json").write_text(
+        (baseline_dir / "result.json").write_text(
             json.dumps(baseline_payload), encoding="utf-8"
         )
-        (head_dir / "product-benchmark.json").write_text(
+        (head_dir / "result.json").write_text(
             json.dumps(head_payload), encoding="utf-8"
         )
 
-        with pytest.raises(product_comparison.ComparisonError):
-            product_comparison._build_comparison(
-                baseline_dir,
-                head_dir,
-                baseline_sha=_BASELINE_SHA,  # the REAL baseline
-                head_sha=_HEAD_SHA,
-                tolerance_pct=10.0,
-            )
+        # The new _build_comparison is keyword-only and scenario-scoped.
+        # It captures consistency errors into the artifact rather than
+        # raising, so we check the artifact's outcome instead.
+        report = product_comparison._build_comparison(
+            scenario="20k_activities",
+            baseline_dir=baseline_dir,
+            head_dir=head_dir,
+            baseline_sha=_BASELINE_SHA,  # the REAL baseline
+            head_sha=_HEAD_SHA,
+            tolerance_pct=10.0,
+        )
+        assert report["outcome"] != "comparison_passed"
 
     def test_baseline_with_correct_sha_accepted(
         self, product_comparison, tmp_path: Path
@@ -752,23 +746,23 @@ class TestComparisonRejectsMergeCommitBaseline:
         head_dir = tmp_path / "head"
         baseline_dir.mkdir()
         head_dir.mkdir()
-        (baseline_dir / "product-benchmark.json").write_text(
+        (baseline_dir / "result.json").write_text(
             json.dumps(baseline_payload), encoding="utf-8"
         )
-        (head_dir / "product-benchmark.json").write_text(
+        (head_dir / "result.json").write_text(
             json.dumps(head_payload), encoding="utf-8"
         )
 
-        # No exception raised — comparison proceeds.
         report = product_comparison._build_comparison(
-            baseline_dir,
-            head_dir,
+            scenario="20k_activities",
+            baseline_dir=baseline_dir,
+            head_dir=head_dir,
             baseline_sha=_BASELINE_SHA,
             head_sha=_HEAD_SHA,
             tolerance_pct=10.0,
         )
-        assert report["baseline_revision"] == _BASELINE_SHA
-        assert report["head_revision"] == _HEAD_SHA
-        # The workflow SHA is preserved as a diagnostic.
-        assert report["baseline_github_workflow_sha"] == _MERGE_COMMIT_SHA
-        assert report["head_github_workflow_sha"] == _MERGE_COMMIT_SHA
+        assert report["baseline_sha"] == _BASELINE_SHA
+        assert report["head_sha"] == _HEAD_SHA
+        # The workflow SHA is preserved in side diagnostics.
+        baseline_diag = report.get("baseline", {})
+        assert baseline_diag.get("github_workflow_sha") == _MERGE_COMMIT_SHA

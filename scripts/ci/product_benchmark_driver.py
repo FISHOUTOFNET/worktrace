@@ -736,9 +736,8 @@ def _run_single_scenario(
             failure_message = f"sample measurement failed: {exc}"
             raise
 
-        started_at = _utc_iso(progress.snapshot().get(
-            "phase_started_at", time.time()
-        ))
+        started_at = progress.snapshot().get(
+            "phase_started_at") or _utc_iso(time.time())
         finished_at = _utc_iso(time.time())
 
         try:

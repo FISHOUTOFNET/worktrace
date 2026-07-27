@@ -72,11 +72,11 @@ class TestCompletionGatesPresent:
     signals, not HEAD-private implementation details."""
 
     def test_payload_resolved_is_a_gate(self, measure_js: str) -> None:
-        """``payloadResolved`` must appear as part of the completion
+        """``payloadState.resolved`` must appear as part of the completion
         decision, not only as a diagnostic."""
-        assert "payloadResolved" in measure_js
-        assert "payloadResolved && domRows > 0" in measure_js, (
-            "completion contract must gate on payloadResolved AND domRows > 0"
+        assert "payloadState" in measure_js
+        assert "payloadState.resolved" in measure_js, (
+            "completion contract must gate on payloadState.resolved"
         )
 
     def test_dom_non_empty_is_a_gate(self, measure_js: str) -> None:
@@ -97,25 +97,26 @@ class TestCompletionGatesPresent:
         loop with a failure category — not be ignored."""
         assert "explicitError" in measure_js
         assert "detail_load_failed" in measure_js
-        assert "failureCategory: explicitError" in measure_js, (
+        assert 'failureCategory: "detail_explicit_error"' in measure_js, (
             "explicit error must produce a failureCategory, not a success"
         )
 
     def test_completion_helper_takes_payload_callback(
         self, measure_js: str
     ) -> None:
-        """``waitForDetailCompletion`` must accept an ``isPayloadResolved``
+        """``waitForDetailCompletion`` must accept a ``getPayloadState``
         callback so the helper is self-contained and testable, instead
         of reading an outer-scope variable that might not exist in
         baseline."""
-        assert "waitForDetailCompletion(deadline, isPayloadResolved)" in measure_js
-        assert "isPayloadResolved()" in measure_js
+        assert "waitForDetailCompletion" in measure_js
+        assert "payloadDeadline, domDeadline, getPayloadState" in measure_js
+        assert "getPayloadState()" in measure_js
 
     def test_payload_callback_invoked_at_call_site(self, measure_js: str) -> None:
-        """The call site must pass ``detailPayloadMarked`` as the
-        payload-resolved callback so the bridge wrap actually drives
+        """The call site must pass ``detailPayloadState`` as the
+        payload-state callback so the bridge wrap actually drives
         completion."""
-        assert "function () { return detailPayloadMarked; }" in measure_js
+        assert "function () { return detailPayloadState; }" in measure_js
 
 
 # ---------------------------------------------------------------------------
@@ -153,10 +154,12 @@ class TestHeadPrivateFieldsAreDiagnosticsOnly:
     ) -> None:
         """The completion-success branch must not reference the
         HEAD-private ViewModel field directly."""
-        success_branch_marker = "payloadResolved && domRows > 0"
-        assert success_branch_marker in measure_js
-        assert "payloadResolved && domRows > 0 && vm" not in measure_js
-        assert "vm && payloadResolved" not in measure_js
+        # The two-phase contract checks payloadState.resolved in phase 1
+        # and domRows > 0 + stableFrames >= 2 in phase 2.
+        assert "domRows > 0" in measure_js
+        assert "stableFrames >= 2" in measure_js
+        assert "payloadState.resolved && domRows > 0 && vm" not in measure_js
+        assert "vm && payloadState.resolved" not in measure_js
 
     def test_details_in_flight_not_in_completion_branch(
         self, measure_js: str
@@ -208,12 +211,14 @@ class TestExplicitErrorKeywords:
 # ---------------------------------------------------------------------------
 
 class TestTimeoutFailureCategory:
-    """When the deadline is reached without completion, the failure
-    category must be ``detail_timeout`` — not a masked success."""
+    """When the payload deadline is reached without completion, the
+    failure category must be ``detail_payload_timeout`` — not a masked
+    success.  The old unified ``detail_timeout`` is replaced by the
+    two-phase contract."""
 
-    def test_timeout_returns_detail_timeout(self, measure_js: str) -> None:
-        assert "failureCategory: \"detail_timeout\"" in measure_js or \
-               "failureCategory: 'detail_timeout'" in measure_js
+    def test_timeout_returns_detail_payload_timeout(self, measure_js: str) -> None:
+        assert 'failureCategory: "detail_payload_timeout"' in measure_js or \
+               "failureCategory: 'detail_payload_timeout'" in measure_js
 
     def test_timeout_returns_completed_false(self, measure_js: str) -> None:
         """The final return (after the while loop) must mark
@@ -488,12 +493,12 @@ class TestCrossRevisionAdapterContract:
     def test_payload_resolved_callback_is_external_observable(
         self, measure_js: str
     ) -> None:
-        """The ``isPayloadResolved`` callback reads
-        ``detailPayloadMarked``, which is set by the wrapped bridge's
+        """The ``getPayloadState`` callback reads
+        ``detailPayloadState``, which is set by the wrapped bridge's
         detail Promise resolving — an external observable signal that
         works on both baseline and HEAD."""
-        assert "detailPayloadMarked = false" in measure_js
-        assert "detailPayloadMarked = true" in measure_js
+        assert "detailPayloadState = { resolved: false, error: null }" in measure_js
+        assert "detailPayloadState.resolved = true" in measure_js
         assert ".then(function (result)" in measure_js
 
 

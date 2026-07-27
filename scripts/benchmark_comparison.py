@@ -262,6 +262,15 @@ class SideResult:
                 return source["runner_metadata"]
         return {}
 
+    @property
+    def github_workflow_sha(self) -> str:
+        """The ``GITHUB_SHA`` recorded by the driver — diagnostics only,
+        never used for identity comparison (it can be a merge commit SHA
+        in ``pull_request`` workflows)."""
+        if self.result is not None:
+            return str(self.result.get("github_workflow_sha", "") or "")
+        return ""
+
 
 # ---------------------------------------------------------------------------
 # Consistency validation (only when both sides valid)
@@ -413,6 +422,7 @@ def _side_diagnostics(side: SideResult) -> dict[str, Any]:
         "fixture_hash": side.fixture_hash,
         "python_version": side.python_version,
         "runner_metadata": side.runner_metadata,
+        "github_workflow_sha": side.github_workflow_sha,
         "output_dir": str(side.output_dir),
     }
 
@@ -460,12 +470,6 @@ def _build_comparison(
         failure_path=head_failure,
     )
 
-    # Validate revision identity on each side independently.  Even if a
-    # side has no result.json, its progress.json records the verified
-    # revision, so we can still detect a SHA mismatch.
-    _validate_revision_identity(baseline)
-    _validate_revision_identity(head)
-
     base_diag = _side_diagnostics(baseline)
     head_diag = _side_diagnostics(head)
 
@@ -483,6 +487,8 @@ def _build_comparison(
     else:
         # Both valid: run consistency checks and gate.
         try:
+            _validate_revision_identity(baseline)
+            _validate_revision_identity(head)
             _validate_cross_revision_consistency(baseline, head)
             _validate_scenario_isolation(baseline)
             _validate_scenario_isolation(head)
