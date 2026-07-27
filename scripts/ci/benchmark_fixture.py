@@ -585,10 +585,10 @@ def _generate_session_plan(
             length = rng.randint(40, 120)
         length = min(length, remaining)
 
-        # Gap between sessions: 30-600s, weighted toward shorter gaps.
-        gap = rng.randint(30, 600) if plan else 0
-        # Estimate time consumed: ~15s per activity + gap.
-        consumed_span += length * 15 + gap
+        # Gap between sessions: 10-120s, weighted toward shorter gaps.
+        gap = rng.randint(10, 120) if plan else 0
+        # Estimate time consumed: ~12s per activity + gap.
+        consumed_span += length * 12 + gap
         if consumed_span > span_seconds:
             # If we've exceeded the span, reduce remaining sessions to
             # short ones only so we stay within the day.
@@ -610,7 +610,7 @@ def build_realistic_heavy_day_fixture(
 
     Distribution:
       * ~300 sessions with varied lengths (most short, few long);
-      * ~2000 activities with 5-60s durations;
+      * ~2000 activities with 3-20s durations;
       * multiple app/resource identities (6 apps);
       * normal (~70%), idle (~15%), excluded (~10%), paused (~5%);
       * ~40% uncategorized, ~35% anchor project, ~25% other project;
@@ -679,8 +679,8 @@ def build_realistic_heavy_day_fixture(
                 if activity_global_index >= spec.activity_count:
                     break
 
-                # Activity duration: 5-60s, weighted toward shorter.
-                duration = rng.randint(5, 60)
+                # Activity duration: 3-20s, weighted toward shorter.
+                duration = rng.randint(3, 20)
 
                 start_offset = current_offset
                 end_offset = start_offset + duration
