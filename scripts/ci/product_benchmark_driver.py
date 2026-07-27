@@ -671,7 +671,8 @@ def _run_single_scenario(
                 "fixture_chunk_committed",
                 inserted_count=inserted_so_far,
                 requested_count=profile_cfg[
-                    "activity_count" if scenario == "20k_activities"
+                    "activity_count"
+                    if scenario in ("20k_activities", "realistic_heavy_day")
                     else "contribution_count"
                 ],
                 chunk_index=chunk_index,
@@ -733,7 +734,11 @@ def _run_single_scenario(
                 "github_workflow_sha": os.environ.get("GITHUB_SHA"),
                 "target_root": str(target_root),
                 "fixture_hash": fixture_hash(
-                    build_20k_activity_spec(
+                    build_realistic_heavy_day_spec(
+                        activity_count=profile_cfg["activity_count"]
+                    )
+                    if scenario == "realistic_heavy_day"
+                    else build_20k_activity_spec(
                         activity_count=profile_cfg["activity_count"]
                     )
                     if scenario == "20k_activities"
