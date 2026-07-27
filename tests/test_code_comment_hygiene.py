@@ -62,6 +62,8 @@ CURRENT_DOMAIN_IDENTIFIERS = (
     "runtimePhase",
     "runtime_phase",
     "phase_value",
+    "phase_started_at",
+    "phase_elapsed_seconds",
 )
 
 ALLOWED_FILE_NAMES = {

@@ -6,7 +6,7 @@ workflow's WebView job against regressions in their declared contracts.
 Asserts that the harness measures the real Detail DOM render path (not
 just the bridge API), splits Detail timing into payload/render/total,
 emits cold/warm summaries, reports honest runner metadata, uses profile-
-based timeout configuration with a computed outer timeout, two-phase
+based timeout configuration with a computed outer timeout, two-step
 detail completion failure categories, injects timeout config to JS, and
 that baseline driver failure does not block HEAD execution.
 """
@@ -256,10 +256,12 @@ class TestTimeoutProfiles:
     """Verify the per-profile timeout configuration."""
 
     def test_timeout_profiles_defined(self) -> None:
-        """``_TIMEOUT_PROFILES`` dict exists with ``smoke`` and ``full`` keys."""
+        """``_TIMEOUT_PROFILES`` dict exists with ``smoke``, ``realistic``,
+        and ``full`` keys."""
         source = WEBVIEW_HARNESS.read_text(encoding="utf-8")
         assert "_TIMEOUT_PROFILES" in source
         assert '"smoke"' in source
+        assert '"realistic"' in source
         assert '"full"' in source
 
     def test_full_profile_timeouts(self) -> None:
@@ -346,11 +348,11 @@ class TestComputeOuterTimeout:
 
 
 # ---------------------------------------------------------------------------
-# Two-phase detail completion tests
+# Two-step detail completion tests
 # ---------------------------------------------------------------------------
 
-class TestTwoPhaseDetailCompletion:
-    """Verify the two-phase detail completion failure categories."""
+class TestTwoStepDetailCompletion:
+    """Verify the two-step detail completion failure categories."""
 
     def test_detail_payload_timeout_category(self) -> None:
         """Source contains the ``detail_payload_timeout`` failure category."""

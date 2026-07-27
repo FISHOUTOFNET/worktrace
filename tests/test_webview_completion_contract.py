@@ -154,8 +154,8 @@ class TestHeadPrivateFieldsAreDiagnosticsOnly:
     ) -> None:
         """The completion-success branch must not reference the
         HEAD-private ViewModel field directly."""
-        # The two-phase contract checks payloadState.resolved in phase 1
-        # and domRows > 0 + stableFrames >= 2 in phase 2.
+        # The two-step contract checks payloadState.resolved in step 1
+        # and domRows > 0 + stableFrames >= 2 in step 2.
         assert "domRows > 0" in measure_js
         assert "stableFrames >= 2" in measure_js
         assert "payloadState.resolved && domRows > 0 && vm" not in measure_js
@@ -214,7 +214,7 @@ class TestTimeoutFailureCategory:
     """When the payload deadline is reached without completion, the
     failure category must be ``detail_payload_timeout`` — not a masked
     success.  The old unified ``detail_timeout`` is replaced by the
-    two-phase contract."""
+    two-step contract."""
 
     def test_timeout_returns_detail_payload_timeout(self, measure_js: str) -> None:
         assert 'failureCategory: "detail_payload_timeout"' in measure_js or \

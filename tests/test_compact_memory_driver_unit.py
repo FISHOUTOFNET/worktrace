@@ -205,11 +205,10 @@ class TestNoLargeScaleMemoryMetric:
         absolute values — the gate must care only about the relative
         ordering, not about any absolute MB cutoff.
         """
-        # Pass tiny absolute values (well under any plausible MB
-        # threshold).  If the gate used a fixed MB threshold, this run
-        # would either always fail or always pass regardless of the
-        # compact<expanded relationship.  The gate must instead pass
-        # purely because 10 < 20.
+        # Pass tiny absolute values (well under any plausible MB threshold).
+        # If the gate used a fixed MB cutoff, this run would always pass/fail
+        # regardless of the compact<expanded relationship.  The gate must
+        # pass purely because 10 < 20.
         compact_runs = [
             {
                 "mode": "compact", "size": 5000, "entry_count": 100,
@@ -628,15 +627,20 @@ class TestProgressRecorder:
         assert recorder.snapshot()["phase"] == "revision_verified"
 
     def test_phase_elapsed_seconds_resets_per_phase(
-        self, driver, tmp_path: Path
+        self, driver, tmp_path: Path, monkeypatch
     ) -> None:
         """Each checkpoint resets phase_started_at so phase_elapsed_seconds
         measures only the current phase."""
-        import time
+        current = [1000.0]
+
+        def fake_time() -> float:
+            current[0] += 0.05
+            return current[0]
+
+        monkeypatch.setattr(driver.time, "time", fake_time)
 
         recorder = self._make_recorder(driver, tmp_path)
         recorder.checkpoint("revision_verified")
-        time.sleep(0.05)
         recorder.checkpoint("compact_started")
         snapshot = recorder.snapshot()
         assert snapshot["phase_elapsed_seconds"] >= 0.0

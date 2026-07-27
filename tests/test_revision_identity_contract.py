@@ -686,7 +686,7 @@ class TestComparisonRejectsMergeCommitBaseline:
                 "projection_20k_total_seconds": {
                     "samples_seconds": [1.0, 1.05, 0.98],
                     "median_seconds": 1.0,
-                    "consistency_hash": "hash_20k",
+                    "consistency_hash": "hash_large",
                 },
             },
         }
