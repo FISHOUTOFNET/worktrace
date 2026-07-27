@@ -52,7 +52,7 @@ for path in (_REPO_ROOT, _CI_DIR):
 # Target-root isolation (for baseline-vs-HEAD comparison)
 # ---------------------------------------------------------------------------
 
-_DRIVER_VERSION = "2.0"
+_DRIVER_VERSION = "3.0"
 _WEBVIEW_SCHEMA_VERSION = 2
 _EXIT_INPUT_SCHEMA = 2
 _EXIT_EXECUTION = 3
@@ -71,6 +71,73 @@ _PROFILES: dict[str, dict[str, Any]] = {
         "runs": 3,
     },
 }
+
+# Timeout configuration per profile.  These are "can it complete" execution
+# guards, NOT performance gates.  The deadlines must be generous enough that
+# a correctly-functioning UI never hits them, but narrow enough that a hung
+# UI is detected and reported with a specific failure category.
+#
+# Payload timeout = how long to wait for the bridge Promise to settle
+#   (resolve, reject, or ok:false).
+# DOM timeout = how long to wait for DOM rows to appear and stabilize
+#   AFTER the payload has resolved.
+_TIMEOUT_PROFILES: dict[str, dict[str, int]] = {
+    "smoke": {
+        "overview_payload_timeout_ms": 15000,
+        "timeline_payload_timeout_ms": 30000,
+        "detail_payload_timeout_ms": 30000,
+        "detail_dom_timeout_ms": 10000,
+    },
+    "full": {
+        "overview_payload_timeout_ms": 30000,
+        "timeline_payload_timeout_ms": 60000,
+        "detail_payload_timeout_ms": 60000,
+        "detail_dom_timeout_ms": 10000,
+    },
+}
+
+# Startup allowance (ms) for WebView2 initialization, frontend app ready,
+# and pywebview bridge handshake.  Used to compute the Python outer timeout.
+_STARTUP_ALLOWANCE_SECONDS = 30.0
+# Cleanup margin (seconds) between the last run's budget expiry and the
+# Python outer timeout — covers window.destroy() and result polling overhead.
+_CLEANUP_MARGIN_SECONDS = 15.0
+
+
+def _compute_outer_timeout(
+    *,
+    runs: int,
+    profile_name: str,
+) -> float:
+    """Compute the Python outer timeout for waiting on ``window.__perfResults``.
+
+    The timeout is derived from:
+      * startup allowance (WebView2 init + frontend ready + bridge handshake),
+      * run count,
+      * per-run stage budgets (overview + timeline + detail payload + detail DOM),
+      * cleanup margin (window.destroy + polling overhead).
+
+    This replaces the historical fixed 180-second timeout which was unrelated
+    to the actual stage budgets and could either cut off a legitimate slow
+    run or hang forever on a dead UI.
+    """
+    timeouts = _TIMEOUT_PROFILES[profile_name]
+    per_run_budget_ms = (
+        timeouts["overview_payload_timeout_ms"]
+        + timeouts["timeline_payload_timeout_ms"]
+        + timeouts["detail_payload_timeout_ms"]
+        + timeouts["detail_dom_timeout_ms"]
+    )
+    # Add 5s per run for non-budget overhead (marks, measures, sleep between runs).
+    per_run_overhead_ms = 5000
+    total_run_budget_seconds = (
+        runs * (per_run_budget_ms + per_run_overhead_ms) / 1000.0
+    )
+    return (
+        _STARTUP_ALLOWANCE_SECONDS
+        + total_run_budget_seconds
+        + _CLEANUP_MARGIN_SECONDS
+    )
 
 
 def _setup_target_path(target_root: Path) -> None:
@@ -320,28 +387,177 @@ _MEASURE_JS = r"""
         return null;
     }
 
-    async function waitForDetailCompletion(deadline, isPayloadResolved) {
-        // Wait for external observable completion: payload resolved, DOM
-        // non-empty, DOM stable across two animation frames, no explicit
-        // error.  HEAD-private fields are recorded as diagnostics only.
-        // ``isPayloadResolved`` is a no-arg callback that returns true when
-        // the wrapped bridge's detail Promise has resolved — passing it in
-        // (instead of reading an outer-scope variable) keeps the helper
-        // self-contained and testable.
-        var firstRowCount = 0;
+    // Two-phase detail completion: payload first, then DOM stabilization.
+    // Phase 1 waits for the bridge Promise to settle (resolve, reject,
+    // ok:false, or timeout).  Phase 2 waits for DOM rows to appear and
+    // stabilize across two frames AFTER the payload has resolved.
+    //
+    // Failure categories (replaces the old unified ``detail_timeout``):
+    //   detail_payload_timeout  — payload deadline expired without settle
+    //   detail_payload_error    — Promise reject, ok:false, or bridge error
+    //   detail_dom_empty        — payload resolved but DOM never had rows
+    //   detail_dom_unstable     — rows appeared but never stabilized
+    //   detail_explicit_error   — page showed an explicit error state
+    async function waitForDetailCompletion(
+        payloadDeadline, domDeadline, getPayloadState
+    ) {
+        var payloadState = { resolved: false, error: null };
+        var payloadElapsed = 0;
+        var payloadSettled = false;
+        var domRowsEverNonEmpty = false;
         var stableFrames = 0;
+        var firstRowCount = 0;
         var lastDiag = {};
+        var domTransitions = [];
+        var headerTransitions = [];
+        var maxTransitions = 50;
 
-        while (Date.now() < deadline) {
+        // ---- Phase 1: wait for payload to settle ----
+        var payloadStart = Date.now();
+        while (Date.now() < payloadDeadline) {
+            try {
+                payloadState = getPayloadState();
+            } catch (e) {
+                payloadState = { resolved: false, error: "bridge_exception:" + String(e) };
+            }
+
+            // Check for explicit page error (short-circuit).
+            var headerText = readDetailHeader();
+            var explicitError = hasExplicitError(headerText);
+            if (explicitError) {
+                return {
+                    completed: false,
+                    failureCategory: "detail_explicit_error",
+                    explicitErrorKind: explicitError,
+                    diagnostics: {
+                        header_text: headerText,
+                        dom_rows: readDetailDomRows(),
+                        payload_resolved: false,
+                        payload_elapsed_ms: Date.now() - payloadStart
+                    },
+                    payload_elapsed_ms: Date.now() - payloadStart,
+                    dom_transitions: domTransitions,
+                    header_transitions: headerTransitions
+                };
+            }
+
+            if (payloadState.error) {
+                // Promise rejected, ok:false, or bridge exception.
+                return {
+                    completed: false,
+                    failureCategory: "detail_payload_error",
+                    payloadError: payloadState.error,
+                    diagnostics: {
+                        header_text: headerText,
+                        dom_rows: readDetailDomRows(),
+                        payload_resolved: false,
+                        payload_elapsed_ms: Date.now() - payloadStart
+                    },
+                    payload_elapsed_ms: Date.now() - payloadStart,
+                    dom_transitions: domTransitions,
+                    header_transitions: headerTransitions
+                };
+            }
+
+            if (payloadState.resolved) {
+                payloadSettled = true;
+                payloadElapsed = Date.now() - payloadStart;
+                break;
+            }
+
+            await sleep(10);
+        }
+
+        if (!payloadSettled) {
+            return {
+                completed: false,
+                failureCategory: "detail_payload_timeout",
+                diagnostics: {
+                    header_text: readDetailHeader(),
+                    dom_rows: readDetailDomRows(),
+                    payload_resolved: false,
+                    payload_elapsed_ms: Date.now() - payloadStart
+                },
+                payload_elapsed_ms: Date.now() - payloadStart,
+                dom_transitions: domTransitions,
+                header_transitions: headerTransitions
+            };
+        }
+
+        // ---- Phase 2: wait for DOM to be non-empty and stable ----
+        var domStart = Date.now();
+        var prevHeader = readDetailHeader();
+        while (Date.now() < domDeadline) {
             var headerText = readDetailHeader();
             var domRows = readDetailDomRows();
             var explicitError = hasExplicitError(headerText);
-            var payloadResolved = false;
-            try {
-                payloadResolved = !!isPayloadResolved();
-            } catch (e) { payloadResolved = false; }
 
-            // Diagnostic fields — recorded but never used as gates.
+            // Track header transitions (diagnostics only).
+            if (headerText !== prevHeader && headerTransitions.length < maxTransitions) {
+                headerTransitions.push({
+                    at_ms: Date.now() - domStart,
+                    text: headerText.substring(0, 100)
+                });
+                prevHeader = headerText;
+            }
+
+            // Track DOM row count transitions (diagnostics only).
+            if (domRows !== firstRowCount && domTransitions.length < maxTransitions) {
+                domTransitions.push({
+                    at_ms: Date.now() - domStart,
+                    count: domRows
+                });
+            }
+
+            if (explicitError) {
+                return {
+                    completed: false,
+                    failureCategory: "detail_explicit_error",
+                    explicitErrorKind: explicitError,
+                    diagnostics: {
+                        header_text: headerText,
+                        dom_rows: domRows,
+                        payload_resolved: true,
+                        payload_elapsed_ms: payloadElapsed
+                    },
+                    payload_elapsed_ms: payloadElapsed,
+                    dom_elapsed_ms: Date.now() - domStart,
+                    dom_transitions: domTransitions,
+                    header_transitions: headerTransitions,
+                    stable_frames: stableFrames
+                };
+            }
+
+            if (domRows > 0) {
+                domRowsEverNonEmpty = true;
+                if (domRows === firstRowCount) {
+                    stableFrames += 1;
+                    if (stableFrames >= 2) {
+                        return {
+                            completed: true,
+                            failureCategory: "",
+                            diagnostics: {
+                                header_text: headerText,
+                                dom_rows: domRows,
+                                payload_resolved: true,
+                                payload_elapsed_ms: payloadElapsed,
+                                details_in_flight: 0,
+                                view_model_present: false
+                            },
+                            payload_elapsed_ms: payloadElapsed,
+                            dom_elapsed_ms: Date.now() - domStart,
+                            dom_transitions: domTransitions,
+                            header_transitions: headerTransitions,
+                            stable_frames: stableFrames
+                        };
+                    }
+                } else {
+                    firstRowCount = domRows;
+                    stableFrames = 0;
+                }
+            }
+
+            // Record diagnostic fields (HEAD-private, never gates).
             var vm = null;
             try {
                 vm = window.WorkTraceApp.lastSessionActivitySummaryViewModel;
@@ -357,43 +573,27 @@ _MEASURE_JS = r"""
                 header_text: headerText,
                 dom_rows: domRows,
                 view_model_present: vm !== null && vm !== undefined,
-                details_in_flight: inFlight
+                details_in_flight: inFlight,
+                payload_resolved: true,
+                payload_elapsed_ms: payloadElapsed
             };
-
-            if (explicitError) {
-                return {
-                    completed: false,
-                    failureCategory: explicitError,
-                    diagnostics: lastDiag
-                };
-            }
-
-            if (payloadResolved && domRows > 0) {
-                if (domRows === firstRowCount) {
-                    stableFrames += 1;
-                    if (stableFrames >= 2) {
-                        return {
-                            completed: true,
-                            failureCategory: "",
-                            diagnostics: lastDiag
-                        };
-                    }
-                } else {
-                    firstRowCount = domRows;
-                    stableFrames = 0;
-                }
-            } else {
-                firstRowCount = domRows;
-                stableFrames = 0;
-            }
 
             await sleep(10);
         }
 
+        // DOM deadline expired — distinguish empty vs unstable.
+        var failureCat = domRowsEverNonEmpty
+            ? "detail_dom_unstable"
+            : "detail_dom_empty";
         return {
             completed: false,
-            failureCategory: "detail_timeout",
-            diagnostics: lastDiag
+            failureCategory: failureCat,
+            diagnostics: lastDiag,
+            payload_elapsed_ms: payloadElapsed,
+            dom_elapsed_ms: Date.now() - domStart,
+            dom_transitions: domTransitions,
+            header_transitions: headerTransitions,
+            stable_frames: stableFrames
         };
     }
 
@@ -504,27 +704,36 @@ _MEASURE_JS = r"""
         if (detailKey) {
             mark(label + "_detail_start");
 
-            // Instrument the bridge to capture the payload-arrival moment
-            // without modifying production business semantics.  The bridge
-            // object is frozen, but App.bridge is reassignable, so we swap
-            // in a shallow copy that wraps the detail method.
+            // Instrument the bridge to capture the payload state (resolved,
+            // rejected, or ok:false) without modifying production semantics.
+            // The bridge object is frozen, but App.bridge is reassignable,
+            // so we swap in a shallow copy that wraps the detail method.
             var originalBridge = App.bridge;
             var wrappedBridge = {};
             var bridgeKeys = Object.keys(originalBridge);
             for (var bi = 0; bi < bridgeKeys.length; bi++) {
                 wrappedBridge[bridgeKeys[bi]] = originalBridge[bridgeKeys[bi]];
             }
-            var detailPayloadMarked = false;
+            var detailPayloadState = { resolved: false, error: null };
             wrappedBridge.getTimelineSessionActivitySummary = function () {
                 var args = Array.prototype.slice.call(arguments);
                 return originalBridge.getTimelineSessionActivitySummary
                     .apply(originalBridge, args)
                     .then(function (result) {
-                        if (!detailPayloadMarked) {
+                        if (!detailPayloadState.resolved) {
                             mark(label + "_detail_payload");
-                            detailPayloadMarked = true;
+                        }
+                        if (result && result.ok === false) {
+                            detailPayloadState.error =
+                                "ok_false:" + (result.error || "unknown");
+                        } else {
+                            detailPayloadState.resolved = true;
                         }
                         return result;
+                    })
+                    .catch(function (err) {
+                        detailPayloadState.error = "rejected:" + String(err);
+                        throw err;
                     });
             };
             App.bridge = wrappedBridge;
@@ -538,23 +747,21 @@ _MEASURE_JS = r"""
             }
 
             if (!results.stages.detail_error) {
-                // External observable completion contract: payload resolved
-                // + DOM non-empty + DOM stable across two frames + no
-                // explicit error.  HEAD-private fields are diagnostics.
-                var detailDeadline = Date.now() + 15000;
-                var completionState = {
-                    completed: false,
-                    failureCategory: "detail_timeout",
-                    diagnostics: {}
-                };
+                // Two-phase completion: payload first, then DOM stabilization.
+                // Timeouts come from window.__perfTimeoutConfig (injected by
+                // Python based on the profile); they are execution guards,
+                // NOT performance gates.
+                var tcfg = window.__perfTimeoutConfig || {};
+                var payloadTimeoutMs = tcfg.detail_payload_timeout_ms || 60000;
+                var domTimeoutMs = tcfg.detail_dom_timeout_ms || 10000;
+                var now = Date.now();
+                var payloadDeadline = now + payloadTimeoutMs;
+                var domDeadline = payloadDeadline + domTimeoutMs;
 
-                // Poll loop with the shared helper.  Pass a no-arg callback
-                // that returns true once the wrapped bridge's detail Promise
-                // has resolved — this is the external observable payload
-                // completion signal that is compatible across revisions.
-                completionState = await waitForDetailCompletion(
-                    detailDeadline,
-                    function () { return detailPayloadMarked; }
+                var completionState = await waitForDetailCompletion(
+                    payloadDeadline,
+                    domDeadline,
+                    function () { return detailPayloadState; }
                 );
 
                 // Restore the original bridge before measuring.
@@ -580,11 +787,6 @@ _MEASURE_JS = r"""
                     );
 
                     // Diagnostic fields — recorded but never used as gates.
-                    // Per the cross-version completion contract, only
-                    // payloadResolved + DOM non-empty + DOM stable + no
-                    // explicit error may fail a run.  ViewModel-derived row
-                    // counts are diagnostic only because baseline may not
-                    // expose the same ViewModel field.
                     var dVm = null;
                     try {
                         dVm = window.WorkTraceApp.lastSessionActivitySummaryViewModel;
@@ -595,12 +797,16 @@ _MEASURE_JS = r"""
                     results.detail_header_text = completionState.diagnostics.header_text || "";
                     results.detail_view_model_present = completionState.diagnostics.view_model_present || false;
                     results.detail_in_flight = completionState.diagnostics.details_in_flight || 0;
-                    results.detail_payload_resolved = detailPayloadMarked;
+                    results.detail_payload_resolved = detailPayloadState.resolved;
+                    results.detail_payload_elapsed_ms = completionState.payload_elapsed_ms || 0;
+                    results.detail_dom_elapsed_ms = completionState.dom_elapsed_ms || 0;
+                    results.detail_dom_transitions = completionState.dom_transitions || [];
+                    results.detail_header_transitions = completionState.header_transitions || [];
+                    results.detail_stable_frames = completionState.stable_frames || 0;
+                    results.detail_configured_payload_deadline_ms = payloadTimeoutMs;
+                    results.detail_configured_dom_deadline_ms = domTimeoutMs;
 
-                    // ViewModel-row diagnostics (NOT gates).  Recorded so a
-                    // missing/mismatched ViewModel row count shows up in the
-                    // artifact without failing the run — the external
-                    // completion contract already gates on DOM rows.
+                    // ViewModel-row diagnostics (NOT gates).
                     results.detail_row_diagnostic = null;
                     if (results.detail_row_count === 0) {
                         results.detail_row_diagnostic = "detail_row_count_zero";
@@ -610,19 +816,30 @@ _MEASURE_JS = r"""
                     }
 
                     // Realism assertion: DOM must have at least one row.
-                    // (payloadResolved + DOM stable already verified by the
-                    // completion contract.)
                     if (results.detail_dom_row_count === 0) {
                         results.stages.detail_error = "detail_dom_row_count_zero";
                     }
                 } else {
                     results.stages.detail_error = completionState.failureCategory
-                        || "detail_timeout";
+                        || "detail_payload_timeout";
                     results.detail_header_text = completionState.diagnostics.header_text || "";
                     results.detail_dom_row_count = completionState.diagnostics.dom_rows || 0;
                     results.detail_view_model_present = completionState.diagnostics.view_model_present || false;
                     results.detail_in_flight = completionState.diagnostics.details_in_flight || 0;
-                    results.detail_payload_resolved = detailPayloadMarked;
+                    results.detail_payload_resolved = detailPayloadState.resolved;
+                    results.detail_payload_elapsed_ms = completionState.payload_elapsed_ms || 0;
+                    results.detail_dom_elapsed_ms = completionState.dom_elapsed_ms || 0;
+                    results.detail_dom_transitions = completionState.dom_transitions || [];
+                    results.detail_header_transitions = completionState.header_transitions || [];
+                    results.detail_stable_frames = completionState.stable_frames || 0;
+                    results.detail_configured_payload_deadline_ms = payloadTimeoutMs;
+                    results.detail_configured_dom_deadline_ms = domTimeoutMs;
+                    if (completionState.payloadError) {
+                        results.detail_payload_error = completionState.payloadError;
+                    }
+                    if (completionState.explicitErrorKind) {
+                        results.detail_explicit_error_kind = completionState.explicitErrorKind;
+                    }
                 }
             }
         } else {
@@ -699,6 +916,7 @@ def _run_harness(
     runs: int,
     *,
     target_root: Path | None = None,
+    profile_name: str = "full",
 ) -> dict[str, Any]:
     """Launch WebView2, inject measurement JS, collect results.
 
@@ -706,6 +924,12 @@ def _run_harness(
     self-contained fixture builder (no ``tests.support`` dependency) and
     loads the frontend from the target root, enabling baseline-vs-HEAD
     comparison.
+
+    ``profile_name`` selects the timeout profile (``smoke`` or ``full``)
+    used both for the JS-side per-stage deadlines and the Python-side
+    outer timeout.  The outer timeout is computed from the stage budgets
+    via :func:`_compute_outer_timeout` so it is always consistent with
+    the JS deadlines.
     """
     try:
         import webview
@@ -789,15 +1013,28 @@ def _run_harness(
                     # date to query (the benchmark dataset is inserted on a
                     # fixed date, not today).
                     report_date = str(dataset_info.get("report_date", ""))[:10]
+                    # Inject the timeout config so the JS-side per-stage
+                    # deadlines match the Python-side outer timeout budget.
+                    # The deadlines are "can it complete" execution guards,
+                    # NOT performance gates — they must be generous enough
+                    # that a correctly-functioning UI never hits them.
+                    timeout_cfg = _TIMEOUT_PROFILES[profile_name]
                     window.evaluate_js(
                         f"window.__perfRunCount = {int(runs)};"
                         f" window.__perfReportDate = {json.dumps(report_date)};"
+                        f" window.__perfTimeoutConfig = {json.dumps(timeout_cfg)};"
                     )
                     # Inject the measurement script.
                     window.evaluate_js(_MEASURE_JS)
 
-                    # Poll for results (the JS runs async).
-                    deadline = time.monotonic() + 180.0
+                    # Poll for results (the JS runs async).  The outer
+                    # timeout is computed from the per-stage budgets so it
+                    # is always consistent with the JS deadlines — never a
+                    # fixed value unrelated to the actual stage budgets.
+                    outer_timeout = _compute_outer_timeout(
+                        runs=runs, profile_name=profile_name
+                    )
+                    deadline = time.monotonic() + outer_timeout
                     while time.monotonic() < deadline:
                         raw = window.evaluate_js("window.__perfResults")
                         if raw is not None and raw != "null":
@@ -1225,7 +1462,12 @@ def main() -> int:
         print(f"verified: target root isolated to {target_root}")
         print(f"verified: actual target revision = {actual_revision}")
 
-    result = _run_harness(activity_count, runs, target_root=target_root)
+    result = _run_harness(
+        activity_count,
+        runs,
+        target_root=target_root,
+        profile_name=args.profile,
+    )
 
     runner_meta = _runner_metadata()
     runs_data = result.get("runs", []) if result["status"] == "ok" else result.get("runs", [])

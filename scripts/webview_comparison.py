@@ -15,8 +15,27 @@ is diagnostics-only.  Scenario isolation: ``fixture_audit`` must report
 Completion: artifact valid only when ``status == "ok"`` and every run has
 ``detail_payload_resolved == true`` and ``detail_dom_row_count > 0``.
 
-Exit codes: 0 ok; 2 input/schema (missing artifact/metric or mismatch); 3
-incomplete (sample count mismatch); 4 gate failure.
+Fail-closed artifact contract
+-----------------------------
+The comparison ALWAYS writes a JSON artifact to ``--output`` (the workflow
+uploads it via ``if: always()``).  When baseline or HEAD is missing,
+unparseable, or reports a driver failure, the artifact records:
+
+* ``outcome`` ∈ {``comparison_passed``, ``comparison_gate_failed``,
+  ``baseline_invalid``, ``head_invalid``, ``both_invalid``}
+* per-side diagnostics: ``result_present``, ``status``,
+  ``failure_category``, ``failure_reason``, ``last_phase``
+* the expected and actual revisions
+* the tolerance percentage
+
+This lets the workflow's ``if: always()`` finalization step surface the
+real reason instead of masking it with a "missing artifact" error.
+
+Exit codes
+----------
+0  comparison passed, or one/both sides invalid (artifact written)
+2  input/schema error (e.g. --output path unwritable)
+4  gate failure (both sides valid but HEAD regressed beyond tolerance)
 """
 
 from __future__ import annotations
@@ -28,191 +47,10 @@ import sys
 from pathlib import Path
 from typing import Any
 
-_SCHEME_VERSION = 2
+_SCHEMA_VERSION = 2
 _EXIT_OK = 0
 _EXIT_INPUT_SCHEMA = 2
-_EXIT_INCOMPLETE = 3
 _EXIT_GATE_FAILED = 4
-
-
-class ComparisonError(Exception):
-    """Input/schema error (exit code 2)."""
-
-
-class IncompleteError(Exception):
-    """Execution incomplete error (exit code 3)."""
-
-
-class GateFailure(Exception):
-    """Performance gate failure (exit code 4)."""
-
-
-def _load_driver_result(path: Path) -> dict[str, Any]:
-    """Load and validate a single WebView driver result JSON."""
-    if not path.is_file():
-        raise ComparisonError(f"required artifact missing: {path}")
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
-        raise ComparisonError(f"cannot parse {path}: {exc}") from exc
-    if not isinstance(payload, dict):
-        raise ComparisonError(f"{path}: root is not an object")
-    if payload.get("schema_version") != _SCHEME_VERSION:
-        raise ComparisonError(
-            f"{path}: schema_version {payload.get('schema_version')} "
-            f"!= expected {_SCHEME_VERSION}"
-        )
-    if payload.get("status") != "ok":
-        reason = payload.get("failure_reason", "(no reason)")
-        raise ComparisonError(
-            f"{path}: driver status is {payload.get('status')!r}, "
-            f"expected 'ok' — failure reason: {reason}"
-        )
-    metrics = payload.get("metrics")
-    if not isinstance(metrics, dict):
-        raise ComparisonError(
-            f"{path}: metrics missing or not an object "
-            f"(driver status was 'ok' but no metrics produced)"
-        )
-    return payload
-
-
-def _validate_revision_identity(
-    payload: dict[str, Any],
-    *,
-    expected_sha: str,
-    label: str,
-) -> None:
-    """Verify the artifact's revision identity contract.
-
-    The artifact must record both ``requested_revision`` (the value passed
-    to ``--revision``) and ``actual_target_revision`` (read from
-    ``git rev-parse HEAD`` on the target worktree).  The two must match
-    within the artifact, and ``actual_target_revision`` must equal the
-    expected SHA supplied on the CLI.  The workflow SHA is recorded
-    elsewhere for diagnostics only and is never used for identity
-    comparison — in pull_request workflows it can be a merge commit SHA.
-    """
-
-    requested = payload.get("requested_revision", "")
-    actual = payload.get("actual_target_revision", "")
-    if not requested or not actual:
-        raise ComparisonError(
-            f"{label}: missing requested_revision or actual_target_revision "
-            f"(requested={requested!r}, actual={actual!r})"
-        )
-    if requested != actual:
-        raise ComparisonError(
-            f"{label}: requested_revision {requested!r} != "
-            f"actual_target_revision {actual!r} — driver did not verify "
-            f"target worktree identity"
-        )
-    if actual != expected_sha:
-        raise ComparisonError(
-            f"{label}: actual_target_revision {actual!r} != "
-            f"expected {expected_sha!r}"
-        )
-
-
-def _validate_scenario_isolation(
-    payload: dict[str, Any],
-    *,
-    label: str,
-) -> None:
-    """Verify the WebView fixture's audit reports clean isolation.
-
-    The WebView driver runs a single scenario, so ``fixture_audit`` is a
-    single object (not keyed by scenario name like the product driver).
-    It must report:
-      * ``preexisting_activity_count == 0`` (no carryover),
-      * ``inserted_count == requested_count`` (every row inserted),
-      * ``connection_count >= 1`` (the O(1) connection contract held),
-      * ``commit_count >= 1`` (at least one commit happened).
-    """
-
-    audit = payload.get("fixture_audit")
-    if not isinstance(audit, dict):
-        raise ComparisonError(
-            f"{label}: fixture_audit missing or not an object"
-        )
-    if not audit:
-        raise ComparisonError(f"{label}: fixture_audit is empty")
-    preexisting = audit.get("preexisting_activity_count")
-    if preexisting != 0:
-        raise ComparisonError(
-            f"{label}: fixture_audit.preexisting_activity_count="
-            f"{preexisting} (expected 0) — scenario isolation violated"
-        )
-    requested = audit.get("requested_count", 0)
-    inserted = audit.get("inserted_count", 0)
-    if inserted != requested:
-        raise ComparisonError(
-            f"{label}: fixture_audit.inserted_count={inserted} "
-            f"!= requested_count={requested}"
-        )
-    if audit.get("connection_count", 0) < 1:
-        raise ComparisonError(
-            f"{label}: fixture_audit.connection_count < 1"
-        )
-    if audit.get("commit_count", 0) < 1:
-        raise ComparisonError(
-            f"{label}: fixture_audit.commit_count < 1"
-        )
-
-
-def _validate_consistency(
-    baseline: dict[str, Any],
-    head: dict[str, Any],
-    *,
-    expected_baseline_sha: str,
-    expected_head_sha: str,
-) -> None:
-    """Cross-check driver version, fixture hash, Python version, revision."""
-    b_driver = baseline.get("driver_version", "")
-    h_driver = head.get("driver_version", "")
-    if b_driver != h_driver:
-        raise ComparisonError(
-            f"driver_version mismatch: baseline={b_driver!r} head={h_driver!r}"
-        )
-
-    b_fixture = baseline.get("fixture_hash", "")
-    h_fixture = head.get("fixture_hash", "")
-    if b_fixture != h_fixture:
-        raise ComparisonError(
-            f"fixture_hash mismatch: baseline={b_fixture!r} head={h_fixture!r}"
-        )
-
-    b_py = baseline.get("python_version", "")
-    h_py = head.get("python_version", "")
-    b_py_mm = ".".join(b_py.split(".")[:2]) if b_py else ""
-    h_py_mm = ".".join(h_py.split(".")[:2]) if h_py else ""
-    if b_py_mm != h_py_mm:
-        raise ComparisonError(
-            f"python_version mismatch: baseline={b_py_mm!r} head={h_py_mm!r}"
-        )
-
-    # Revision identity: verify each artifact's requested/actual revisions
-    # match internally AND match the expected SHAs from the CLI.  This
-    # prevents a merge-commit SHA (GITHUB_SHA) from masquerading as the
-    # target revision.
-    _validate_revision_identity(
-        baseline, expected_sha=expected_baseline_sha, label="baseline"
-    )
-    _validate_revision_identity(
-        head, expected_sha=expected_head_sha, label="head"
-    )
-
-    # Scenario isolation: each artifact's fixture_audit must report clean
-    # isolation.
-    _validate_scenario_isolation(baseline, label="baseline")
-    _validate_scenario_isolation(head, label="head")
-
-    b_ac = baseline.get("activity_count", 0)
-    h_ac = head.get("activity_count", 0)
-    if b_ac != h_ac:
-        raise ComparisonError(
-            f"activity_count mismatch: baseline={b_ac} head={h_ac}"
-        )
 
 
 # (metric_key, human description)
@@ -224,34 +62,263 @@ GATED_METRICS: tuple[tuple[str, str], ...] = (
 )
 
 
+class ComparisonError(Exception):
+    """Input/schema error (exit code 2)."""
+
+
+# ---------------------------------------------------------------------------
+# Side loader: tolerant of missing/invalid artifacts
+# ---------------------------------------------------------------------------
+
+class SideResult:
+    """One side (baseline or HEAD) of a WebView comparison.
+
+    Encapsulates loading a side's artifact and exposing the relevant
+    fields whether the side succeeded (``status == "ok"`` with metrics)
+    or failed (missing file, parse error, driver failure, etc.).
+    """
+
+    def __init__(
+        self,
+        *,
+        label: str,
+        artifact_path: Path,
+        expected_sha: str,
+    ) -> None:
+        self.label = label
+        self.artifact_path = artifact_path
+        self.expected_sha = expected_sha
+
+        self.present = artifact_path.is_file()
+        self.payload: dict[str, Any] | None = None
+        self.invalid_reason: str = ""
+
+        if not self.present:
+            self.invalid_reason = f"artifact missing: {artifact_path}"
+            return
+
+        try:
+            self.payload = json.loads(
+                artifact_path.read_text(encoding="utf-8")
+            )
+        except (OSError, ValueError) as exc:
+            self.invalid_reason = f"cannot parse {artifact_path}: {exc}"
+            return
+
+        if not isinstance(self.payload, dict):
+            self.invalid_reason = f"{artifact_path}: root is not an object"
+            self.payload = None
+            return
+
+    # ----- accessors -----------------------------------------------------
+
+    @property
+    def valid(self) -> bool:
+        """A side is valid iff the file is present, parseable, and the
+        driver reported ``status == "ok"`` with a metrics object."""
+        return (
+            self.payload is not None
+            and self.payload.get("status") == "ok"
+            and isinstance(self.payload.get("metrics"), dict)
+        )
+
+    @property
+    def status(self) -> str:
+        if self.payload is not None:
+            return str(self.payload.get("status", "unknown"))
+        return "missing"
+
+    @property
+    def failure_category(self) -> str:
+        if self.payload is not None:
+            return str(self.payload.get("failure_category", ""))
+        return ""
+
+    @property
+    def failure_reason(self) -> str:
+        if self.payload is not None:
+            return str(self.payload.get("failure_reason", ""))
+        return self.invalid_reason
+
+    @property
+    def requested_revision(self) -> str:
+        if self.payload is not None:
+            return str(self.payload.get("requested_revision", ""))
+        return ""
+
+    @property
+    def actual_target_revision(self) -> str:
+        if self.payload is not None:
+            return str(self.payload.get("actual_target_revision", ""))
+        return ""
+
+    @property
+    def driver_version(self) -> str:
+        if self.payload is not None:
+            return str(self.payload.get("driver_version", ""))
+        return ""
+
+    @property
+    def fixture_hash(self) -> str:
+        if self.payload is not None:
+            return str(self.payload.get("fixture_hash", ""))
+        return ""
+
+    @property
+    def python_version(self) -> str:
+        if self.payload is not None:
+            return str(self.payload.get("python_version", ""))
+        return ""
+
+    @property
+    def fixture_audit(self) -> dict[str, Any]:
+        if self.payload is not None:
+            audit = self.payload.get("fixture_audit", {})
+            return audit if isinstance(audit, dict) else {}
+        return {}
+
+    @property
+    def activity_count(self) -> int:
+        if self.payload is not None:
+            return int(self.payload.get("activity_count", 0))
+        return 0
+
+
+def _side_diagnostics(side: SideResult) -> dict[str, Any]:
+    """Return a diagnostics dict for one side, suitable for the artifact."""
+    return {
+        "label": side.label,
+        "artifact_path": str(side.artifact_path),
+        "present": side.present,
+        "valid": side.valid,
+        "status": side.status,
+        "invalid_reason": side.invalid_reason if not side.valid else "",
+        "failure_category": side.failure_category,
+        "failure_reason": side.failure_reason,
+        "requested_revision": side.requested_revision,
+        "actual_target_revision": side.actual_target_revision,
+        "expected_revision": side.expected_sha,
+        "driver_version": side.driver_version,
+        "fixture_hash": side.fixture_hash,
+        "python_version": side.python_version,
+        "activity_count": side.activity_count,
+        "fixture_audit": side.fixture_audit,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Consistency validation (only when both sides valid)
+# ---------------------------------------------------------------------------
+
+def _validate_revision_identity(side: SideResult) -> None:
+    """Verify the artifact's revision identity contract."""
+    requested = side.requested_revision
+    actual = side.actual_target_revision
+    if not requested or not actual:
+        raise ComparisonError(
+            f"{side.label}: missing requested_revision or "
+            f"actual_target_revision (requested={requested!r}, "
+            f"actual={actual!r})"
+        )
+    if requested != actual:
+        raise ComparisonError(
+            f"{side.label}: requested_revision {requested!r} != "
+            f"actual_target_revision {actual!r}"
+        )
+    if actual != side.expected_sha:
+        raise ComparisonError(
+            f"{side.label}: actual_target_revision {actual!r} != "
+            f"expected {side.expected_sha!r}"
+        )
+
+
+def _validate_scenario_isolation(side: SideResult) -> None:
+    """Verify the WebView fixture's audit reports clean isolation."""
+    audit = side.fixture_audit
+    if not audit:
+        raise ComparisonError(f"{side.label}: fixture_audit is empty")
+    preexisting = audit.get("preexisting_activity_count")
+    if preexisting != 0:
+        raise ComparisonError(
+            f"{side.label}: preexisting_activity_count={preexisting} "
+            f"(expected 0)"
+        )
+    requested = audit.get("requested_count", 0)
+    inserted = audit.get("inserted_count", 0)
+    if inserted != requested:
+        raise ComparisonError(
+            f"{side.label}: inserted_count={inserted} != "
+            f"requested_count={requested}"
+        )
+    if audit.get("connection_count", 0) < 1:
+        raise ComparisonError(f"{side.label}: connection_count < 1")
+    if audit.get("commit_count", 0) < 1:
+        raise ComparisonError(f"{side.label}: commit_count < 1")
+
+
+def _validate_cross_revision_consistency(
+    baseline: SideResult,
+    head: SideResult,
+) -> None:
+    """Cross-check driver version, fixture hash, Python version."""
+    if baseline.driver_version != head.driver_version:
+        raise ComparisonError(
+            f"driver_version mismatch: baseline={baseline.driver_version!r} "
+            f"head={head.driver_version!r}"
+        )
+    if baseline.fixture_hash and head.fixture_hash and \
+            baseline.fixture_hash != head.fixture_hash:
+        raise ComparisonError(
+            f"fixture_hash mismatch: baseline={baseline.fixture_hash!r} "
+            f"head={head.fixture_hash!r}"
+        )
+    b_py_mm = ".".join(baseline.python_version.split(".")[:2]) \
+        if baseline.python_version else ""
+    h_py_mm = ".".join(head.python_version.split(".")[:2]) \
+        if head.python_version else ""
+    if b_py_mm and h_py_mm and b_py_mm != h_py_mm:
+        raise ComparisonError(
+            f"python_version mismatch: baseline={b_py_mm!r} "
+            f"head={h_py_mm!r}"
+        )
+    if baseline.activity_count != head.activity_count:
+        raise ComparisonError(
+            f"activity_count mismatch: baseline={baseline.activity_count} "
+            f"head={head.activity_count}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Metric extraction & gate
+# ---------------------------------------------------------------------------
+
 def _extract_metric(
-    payload: dict[str, Any],
+    side: SideResult,
     metric_key: str,
-    label: str,
 ) -> tuple[float, list[float]]:
-    """Extract (median, samples) for one metric from a driver result."""
-    metrics = payload.get("metrics", {})
+    """Extract (median, samples) for one metric from a valid side."""
+    metrics = side.payload.get("metrics", {}) if side.payload else {}
     entry = metrics.get(metric_key)
     if not isinstance(entry, dict):
         raise ComparisonError(
-            f"{label}: metric {metric_key!r} missing or not object"
+            f"{side.label}: metric {metric_key!r} missing or not object"
         )
     if "median_seconds" not in entry:
         raise ComparisonError(
-            f"{label}: metric {metric_key!r} missing 'median_seconds'"
+            f"{side.label}: metric {metric_key!r} missing 'median_seconds'"
         )
     if "samples_seconds" not in entry:
         raise ComparisonError(
-            f"{label}: metric {metric_key!r} missing 'samples_seconds'"
+            f"{side.label}: metric {metric_key!r} missing 'samples_seconds'"
         )
     samples = entry["samples_seconds"]
     if not isinstance(samples, list):
         raise ComparisonError(
-            f"{label}: metric {metric_key!r} 'samples_seconds' is not a list"
+            f"{side.label}: metric {metric_key!r} 'samples_seconds' not a list"
         )
     if not samples:
-        raise IncompleteError(
-            f"{label}: metric {metric_key!r} has zero samples"
+        raise ComparisonError(
+            f"{side.label}: metric {metric_key!r} has zero samples"
         )
     median = float(entry["median_seconds"])
     return median, [float(s) for s in samples]
@@ -263,84 +330,114 @@ def _percent_delta(baseline: float, head: float) -> float:
     return (head - baseline) / baseline * 100.0
 
 
+# ---------------------------------------------------------------------------
+# Comparison builder (always produces an artifact)
+# ---------------------------------------------------------------------------
+
 def _build_comparison(
+    *,
     baseline_dir: Path,
     head_dir: Path,
-    *,
     baseline_sha: str,
     head_sha: str,
     tolerance_pct: float,
 ) -> dict[str, Any]:
-    baseline = _load_driver_result(baseline_dir / "webview-benchmark.json")
-    head = _load_driver_result(head_dir / "webview-benchmark.json")
-
-    _validate_consistency(
-        baseline,
-        head,
-        expected_baseline_sha=baseline_sha,
-        expected_head_sha=head_sha,
+    """Build the comparison artifact.  Always returns a dict (never raises
+    on invalid sides); only raises on truly unrecoverable input/schema
+    errors like an unwritable output path.
+    """
+    baseline = SideResult(
+        label="baseline",
+        artifact_path=baseline_dir / "webview-benchmark.json",
+        expected_sha=baseline_sha,
+    )
+    head = SideResult(
+        label="head",
+        artifact_path=head_dir / "webview-benchmark.json",
+        expected_sha=head_sha,
     )
 
-    gated_results: list[dict[str, Any]] = []
-    all_gates_passed = True
+    base_diag = _side_diagnostics(baseline)
+    head_diag = _side_diagnostics(head)
 
-    for metric_key, description in GATED_METRICS:
-        b_median, b_samples = _extract_metric(baseline, metric_key, "baseline")
-        h_median, h_samples = _extract_metric(head, metric_key, "head")
+    gated_results: list[dict[str, Any]] | None = None
+    all_gates_passed: bool | None = None
+    consistency_error = ""
 
-        if len(b_samples) != len(h_samples):
-            raise IncompleteError(
-                f"{metric_key}: sample count mismatch "
-                f"baseline={len(b_samples)} head={len(h_samples)}"
+    # Determine outcome category.
+    if not baseline.valid and not head.valid:
+        outcome = "both_invalid"
+    elif not baseline.valid:
+        outcome = "baseline_invalid"
+    elif not head.valid:
+        outcome = "head_invalid"
+    else:
+        # Both sides have status="ok" with metrics.  Run consistency checks.
+        try:
+            _validate_revision_identity(baseline)
+            _validate_revision_identity(head)
+            _validate_cross_revision_consistency(baseline, head)
+            _validate_scenario_isolation(baseline)
+            _validate_scenario_isolation(head)
+        except ComparisonError as exc:
+            # Consistency violations make the gate un-runnable.  Record
+            # the error and fall through to artifact writing — do NOT
+            # re-raise, or the workflow's if: always() upload step
+            # would have no artifact to surface.
+            outcome = "both_invalid"
+            consistency_error = str(exc)
+        else:
+            # Gate: compute per-metric deltas and enforce no-regression.
+            gated_results = []
+            all_gates_passed = True
+
+            for metric_key, description in GATED_METRICS:
+                b_median, b_samples = _extract_metric(baseline, metric_key)
+                h_median, h_samples = _extract_metric(head, metric_key)
+
+                if len(b_samples) != len(h_samples):
+                    raise ComparisonError(
+                        f"{metric_key}: sample count mismatch "
+                        f"baseline={len(b_samples)} head={len(h_samples)}"
+                    )
+
+                delta_pct = _percent_delta(b_median, h_median)
+                passed = delta_pct <= tolerance_pct
+                if not passed:
+                    all_gates_passed = False
+
+                gated_results.append({
+                    "metric": metric_key,
+                    "description": description,
+                    "unit": "seconds",
+                    "baseline_median": round(b_median, 6),
+                    "head_median": round(h_median, 6),
+                    "delta": round(h_median - b_median, 6),
+                    "delta_pct": round(delta_pct, 1),
+                    "tolerance_pct": tolerance_pct,
+                    "baseline_samples": b_samples,
+                    "head_samples": h_samples,
+                    "baseline_min": round(min(b_samples), 6),
+                    "baseline_max": round(max(b_samples), 6),
+                    "head_min": round(min(h_samples), 6),
+                    "head_max": round(max(h_samples), 6),
+                    "gate_passed": passed,
+                })
+
+            outcome = (
+                "comparison_passed" if all_gates_passed
+                else "comparison_gate_failed"
             )
 
-        delta_pct = _percent_delta(b_median, h_median)
-        passed = delta_pct <= tolerance_pct
-        if not passed:
-            all_gates_passed = False
-
-        gated_results.append(
-            {
-                "metric": metric_key,
-                "description": description,
-                "unit": "seconds",
-                "baseline_median": round(b_median, 6),
-                "head_median": round(h_median, 6),
-                "delta": round(h_median - b_median, 6),
-                "delta_pct": round(delta_pct, 1),
-                "tolerance_pct": tolerance_pct,
-                "baseline_samples": b_samples,
-                "head_samples": h_samples,
-                "baseline_min": round(min(b_samples), 6),
-                "baseline_max": round(max(b_samples), 6),
-                "head_min": round(min(h_samples), 6),
-                "head_max": round(max(h_samples), 6),
-                "gate_passed": passed,
-            }
-        )
-
-    return {
-        "baseline_revision": baseline_sha,
-        "head_revision": head_sha,
-        "baseline_requested_revision": baseline.get("requested_revision", ""),
-        "head_requested_revision": head.get("requested_revision", ""),
-        "baseline_actual_target_revision": baseline.get(
-            "actual_target_revision", ""
-        ),
-        "head_actual_target_revision": head.get("actual_target_revision", ""),
-        "baseline_github_workflow_sha": baseline.get("github_workflow_sha"),
-        "head_github_workflow_sha": head.get("github_workflow_sha"),
-        "baseline_target_root": baseline.get("target_root", ""),
-        "head_target_root": head.get("target_root", ""),
-        "driver_version": baseline.get("driver_version", ""),
-        "fixture_hash": baseline.get("fixture_hash", ""),
-        "activity_count": baseline.get("activity_count", 0),
-        "baseline_python_version": baseline.get("python_version", ""),
-        "head_python_version": head.get("python_version", ""),
+    artifact: dict[str, Any] = {
+        "schema_version": _SCHEMA_VERSION,
+        "baseline_sha": baseline_sha,
+        "head_sha": head_sha,
         "tolerance_pct": tolerance_pct,
+        "outcome": outcome,
+        "baseline": base_diag,
+        "head": head_diag,
         "gated_metrics": gated_results,
-        "baseline_fixture_audit": baseline.get("fixture_audit", {}),
-        "head_fixture_audit": head.get("fixture_audit", {}),
         "all_gates_passed": all_gates_passed,
         "note": (
             "No formal absolute cold Timeline target exists in the repository. "
@@ -349,74 +446,78 @@ def _build_comparison(
             "performance issue is fully validated."
         ),
     }
+    if consistency_error:
+        artifact["consistency_error"] = consistency_error
 
+    return artifact
+
+
+# ---------------------------------------------------------------------------
+# Markdown summary
+# ---------------------------------------------------------------------------
 
 def _build_markdown(report: dict[str, Any]) -> str:
     lines: list[str] = []
     lines.append("## WebView render comparison (baseline vs HEAD)")
     lines.append("")
     lines.append(
-        f"- baseline: `{report['baseline_revision']}`  "
-        f"HEAD: `{report['head_revision']}`"
+        f"- baseline: `{report['baseline_sha']}`  "
+        f"HEAD: `{report['head_sha']}`"
     )
-    lines.append(f"- driver version: `{report['driver_version']}`")
-    lines.append(f"- fixture hash: `{report['fixture_hash'][:16]}…`")
-    lines.append(f"- activity count: {report['activity_count']}")
-    lines.append(f"- no-regression tolerance: {report['tolerance_pct']}%")
+    lines.append(f"- tolerance: {report['tolerance_pct']}%")
+    lines.append(f"- outcome: **{report['outcome']}**")
     lines.append("")
 
-    lines.append("### Gated metrics (no regression)")
-    lines.append("")
-    lines.append(
-        "| metric | baseline (s) | HEAD (s) | delta (s) | delta (%) | gate |"
-    )
-    lines.append("|---|---|---|---|---|---|")
-    for row in report["gated_metrics"]:
-        verdict = "PASS" if row["gate_passed"] else "FAIL"
-        lines.append(
-            f"| {row['description']} | {row['baseline_median']:.6f} | "
-            f"{row['head_median']:.6f} | {row['delta']:+.6f} | "
-            f"{row['delta_pct']:+.1f}% | {verdict} |"
-        )
-    lines.append("")
-
-    lines.append("### Raw samples")
-    lines.append("")
-    for row in report["gated_metrics"]:
-        lines.append(f"- **{row['description']}** (seconds):")
-        lines.append(
-            f"  - baseline: {row['baseline_samples']} "
-            f"(min={row['baseline_min']}, max={row['baseline_max']})"
-        )
-        lines.append(
-            f"  - HEAD: {row['head_samples']} "
-            f"(min={row['head_min']}, max={row['head_max']})"
-        )
-    lines.append("")
-
-    lines.append("### Note")
-    lines.append("")
-    lines.append(report["note"])
-    lines.append("")
-
-    lines.append("### Final verdict")
-    lines.append("")
-    verdict = "PASS" if report["all_gates_passed"] else "FAIL"
-    lines.append(
-        f"- **all gates passed: {report['all_gates_passed']}** ({verdict})"
-    )
-    if not report["all_gates_passed"]:
+    for side_label in ("baseline", "head"):
+        side = report[side_label]
+        lines.append(f"### {side_label}")
         lines.append("")
-        lines.append("Failed gates:")
+        lines.append(f"- present: {side['present']}")
+        lines.append(f"- valid: {side['valid']}")
+        lines.append(f"- status: `{side['status']}`")
+        if side["failure_category"]:
+            lines.append(f"- failure_category: `{side['failure_category']}`")
+        if side["failure_reason"]:
+            lines.append(f"- failure_reason: {side['failure_reason']}")
+        if side.get("driver_version"):
+            lines.append(f"- driver_version: `{side['driver_version']}`")
+        audit = side.get("fixture_audit") or {}
+        if audit:
+            lines.append(
+                f"- fixture_audit: inserted={audit.get('inserted_count')}, "
+                f"requested={audit.get('requested_count')}, "
+                f"preexisting={audit.get('preexisting_activity_count')}"
+            )
+        lines.append("")
+
+    if report.get("gated_metrics"):
+        lines.append("### Gated metrics (no regression)")
+        lines.append("")
+        lines.append(
+            "| metric | baseline (s) | HEAD (s) | delta (s) | delta (%) | gate |"
+        )
+        lines.append("|---|---|---|---|---|---|")
         for row in report["gated_metrics"]:
-            if not row["gate_passed"]:
-                lines.append(
-                    f"- {row['description']}: HEAD {row['head_median']:.6f} vs "
-                    f"baseline {row['baseline_median']:.6f} "
-                    f"({row['delta_pct']:+.1f}% > {row['tolerance_pct']}%)"
-                )
+            verdict = "PASS" if row["gate_passed"] else "FAIL"
+            lines.append(
+                f"| {row['description']} | {row['baseline_median']:.6f} | "
+                f"{row['head_median']:.6f} | {row['delta']:+.6f} | "
+                f"{row['delta_pct']:+.1f}% | {verdict} |"
+            )
+        lines.append("")
+
+    if report.get("consistency_error"):
+        lines.append("### Consistency error")
+        lines.append("")
+        lines.append(f"**{report['consistency_error']}**")
+        lines.append("")
+
     return "\n".join(lines) + "\n"
 
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -443,32 +544,55 @@ def main() -> int:
     parser.add_argument(
         "--output",
         type=Path,
-        default=None,
-        help="Write JSON report to this path (in addition to stdout summary)",
+        required=True,
+        help="Write JSON comparison artifact to this path (always written).",
     )
     args = parser.parse_args()
 
     try:
         report = _build_comparison(
-            args.baseline_dir,
-            args.head_dir,
+            baseline_dir=args.baseline_dir,
+            head_dir=args.head_dir,
             baseline_sha=args.baseline_sha,
             head_sha=args.head_sha,
             tolerance_pct=args.tolerance_pct,
         )
     except ComparisonError as exc:
-        print(f"comparison_error (input/schema): {exc}", file=sys.stderr)
+        # Truly unrecoverable input/schema error (e.g. sample count mismatch
+        # after both sides validated).  Still emit an artifact so the
+        # workflow's ``if: always()`` upload step has something to upload.
+        failure_payload = {
+            "schema_version": _SCHEMA_VERSION,
+            "baseline_sha": args.baseline_sha,
+            "head_sha": args.head_sha,
+            "tolerance_pct": args.tolerance_pct,
+            "outcome": "both_invalid",
+            "comparison_error": str(exc),
+        }
+        try:
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_text(
+                json.dumps(failure_payload, indent=2) + "\n",
+                encoding="utf-8",
+            )
+        except OSError as write_exc:
+            print(
+                f"comparison_error: cannot write failure artifact: {write_exc}",
+                file=sys.stderr,
+            )
+            return _EXIT_INPUT_SCHEMA
+        print(
+            f"comparison_error (input/schema): {exc}",
+            file=sys.stderr,
+        )
         return _EXIT_INPUT_SCHEMA
-    except IncompleteError as exc:
-        print(f"comparison_error (incomplete): {exc}", file=sys.stderr)
-        return _EXIT_INCOMPLETE
 
-    json_text = json.dumps(report, indent=2, sort_keys=False)
-    if args.output:
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(json_text + "\n", encoding="utf-8")
-    else:
-        print(json_text)
+    # Always write the artifact.
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(
+        json.dumps(report, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
 
     md_text = _build_markdown(report)
     step_summary = os.environ.get("GITHUB_STEP_SUMMARY")
@@ -478,7 +602,7 @@ def main() -> int:
 
     print(md_text)
 
-    if not report["all_gates_passed"]:
+    if report["outcome"] == "comparison_gate_failed":
         return _EXIT_GATE_FAILED
     return _EXIT_OK
 
