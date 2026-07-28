@@ -80,6 +80,46 @@ function loadJs(context, file) {
   );
 }
 
+function topLevelElements(markup) {
+  const elements = [];
+  const tagPattern = /<(\/)?([a-zA-Z][\w-]*)(?:\s[^>]*)?>/g;
+  let depth = 0;
+  let start = -1;
+  let openingEnd = -1;
+  let openingTag = "";
+  let match;
+  while ((match = tagPattern.exec(markup)) !== null) {
+    const isClosing = match[1] === "/";
+    const isSelfClosing = /\/>$/.test(match[0]);
+    if (!isClosing) {
+      if (depth === 0) {
+        start = match.index;
+        openingEnd = tagPattern.lastIndex;
+        openingTag = match[0];
+      }
+      if (!isSelfClosing) depth += 1;
+    } else {
+      depth -= 1;
+      if (depth === 0 && start !== -1) {
+        elements.push({
+          tagName: openingTag.match(/^<([a-zA-Z][\w-]*)/)[1],
+          attributes: openingTag,
+          innerHTML: markup.slice(openingEnd, match.index),
+          outerHTML: markup.slice(start, tagPattern.lastIndex),
+        });
+        start = -1;
+      }
+    }
+  }
+  assert.equal(depth, 0, "test HTML must be structurally balanced");
+  return elements;
+}
+
+function classTokens(element) {
+  const match = element.attributes.match(/\bclass="([^"]*)"/);
+  return match ? match[1].split(/\s+/).filter(Boolean) : [];
+}
+
 // ---------------------------------------------------------------------------
 // Categories 1-3: Privacy gate state machine
 // ---------------------------------------------------------------------------
@@ -1633,13 +1673,42 @@ test("13j. no active snapshot shows no-activity state, not stale content", () =>
   assert.equal(text.includes("should-not-appear.md"), false, "inactive state must not show stale resource name");
 });
 
-test("13k. recent records keep in-progress, automatic summaries, and uncategorized names without attention badges", () => {
+test("13k. recent records keep a stable three-child structure, live metadata, and Timeline intent", () => {
   const { App, element } = overviewHarness();
+  const recentList = element("recent-list");
+  let recentHtml = "";
+  let boundButtons = [];
+  Object.defineProperty(recentList, "innerHTML", {
+    configurable: true,
+    get() { return recentHtml; },
+    set(value) {
+      recentHtml = value;
+      boundButtons = topLevelElements(value).map((row) => {
+        const indexMatch = row.attributes.match(/\bdata-recent-index="([^"]+)"/);
+        const listeners = {};
+        return {
+          getAttribute(name) {
+            return name === "data-recent-index" && indexMatch ? indexMatch[1] : null;
+          },
+          addEventListener(name, handler) { listeners[name] = handler; },
+          click() { if (listeners.click) listeners.click(); },
+        };
+      });
+    },
+  });
+  recentList.querySelectorAll = (selector) => (
+    selector === "[data-recent-index]" ? boundButtons : []
+  );
+  App.computeClockDurationNow = (clock) => (
+    clock.aggregate_base_seconds + clock.elapsed_seconds_at_sample
+  );
+  let switchedPage = "";
+  App.switchPage = (page) => { switchedPage = page; };
   const bundle = {
     current_activity: { active: true, status: "normal", resource_name: "live.md", app_name: "Editor", project_name: "P", is_uncategorized: false, elapsed_seconds: 60 },
     current_session: { projection_instance_key: "live-key", start_time: "2026-07-22T10:00:00" },
     recent: [
-      { projection_instance_key: "live-key", start_time: "2026-07-22T10:00:00", project_name: "WorkTrace", display_description: "起草", duration_seconds: 1500, is_in_progress: true, needs_attention: false },
+      { projection_instance_key: "live-key", start_time: "2026-07-22T10:00:00", project_name: "WorkTrace", display_description: "起草", duration_seconds: 1500, is_in_progress: true, needs_attention: false, live_clock: { sampled_at_epoch_ms: 1000000, started_at_epoch_ms: 700000, elapsed_seconds_at_sample: 300, aggregate_base_seconds: 1200, duration_semantic: "aggregate_live", is_live: true, live_state: "persisted_open", display_span_id: "span:recent", stable_live_key_hash: "recent" } },
       { projection_instance_key: "uncategorized-1", start_time: "2026-07-22T09:00:00", project_name: "", display_description: "专利检索页面", duration_seconds: 1800, is_in_progress: false, needs_attention: true, description_source: "derived" },
       { projection_instance_key: "ok-1", start_time: "2026-07-22T08:00:00", project_name: "Project B", display_description: "已整理", duration_seconds: 600, is_in_progress: false, needs_attention: false },
     ],
@@ -1647,28 +1716,46 @@ test("13k. recent records keep in-progress, automatic summaries, and uncategoriz
     today_total_seconds: 3900,
   };
   App.showOverview(bundle);
-  // Precise assertions: each expected visual element must be present
-  // independently. OR-based assertions are too weak — a single shared
-  // substring (e.g. "10:00") would satisfy all three branches even if
-  // the actual record types are missing.
-    const recentHtml = element("recent-list").innerHTML;
-    assert.equal(recentHtml.includes("进行中"), true, "in-progress badge must appear in recent");
-    assert.equal(recentHtml.includes("待整理"), false, "attention badge must not appear in recent");
-    assert.equal(
-      recentHtml.includes('class="recent-description derived"'),
-      true,
-      "derived summary marker must remain in recent"
-    );
-    assert.equal(recentHtml.includes("WorkTrace"), true, "WorkTrace project name must appear in recent");
-    assert.equal(recentHtml.includes("未归类"), true, "uncategorized project label must remain in recent");
-    assert.equal(recentHtml.includes("Project B"), true, "ordinary closed record project must appear in recent");
+  const rows = topLevelElements(recentHtml);
+  assert.equal(rows.length, 3, "all three recent records must render");
+  const rowChildren = rows.map((row) => topLevelElements(row.innerHTML));
+  rowChildren.forEach((children, index) => {
+    assert.equal(children.length, 3, `row ${index} must have exactly three direct children`);
+    assert.deepEqual(classTokens(children[0]), ["recent-start-time", "numeric"]);
+    assert.deepEqual(classTokens(children[1]), ["recent-main"]);
+    assert.deepEqual(classTokens(children[2]), ["numeric", "recent-duration"]);
+  });
+
+  const titleLines = rowChildren.map((children) => topLevelElements(children[1].innerHTML)[0]);
+  assert.deepEqual(classTokens(titleLines[0]), ["recent-title-line"]);
+  assert.deepEqual(
+    topLevelElements(titleLines[0].innerHTML).map(classTokens),
+    [["recent-project"], ["recent-status", "badge-live"]],
+    "the live badge must be the second child of the project title line"
+  );
+  assert.equal(topLevelElements(titleLines[1].innerHTML).length, 1);
+  assert.equal(topLevelElements(titleLines[2].innerHTML).length, 1);
+  assert.equal((recentHtml.match(/recent-status badge-live/g) || []).length, 1);
+  assert.equal(recentHtml.includes("待整理"), false, "attention badge must not appear in recent");
+  assert.equal(recentHtml.includes('class="recent-description derived"'), true);
+  assert.equal(recentHtml.includes("自动摘要"), false, "derived label is supplied by CSS, not duplicated in markup");
+  assert.equal(recentHtml.includes("WorkTrace"), true);
+  assert.equal(recentHtml.includes("未归类"), true);
+  assert.equal(recentHtml.includes("Project B"), true);
+  assert.equal(recentHtml.includes('data-live-clock-target="1"'), true);
+  assert.equal(recentHtml.includes('data-clock-duration-semantic="aggregate_live"'), true);
+  assert.equal(recentHtml.includes('data-live-role="overview-recent"'), true);
+
+  boundButtons[1].click();
+  assert.equal(switchedPage, "timeline");
+  assert.equal(App.pendingTimelineSelectionIntent.date, "2026-07-22");
+  assert.equal(App.pendingTimelineSelectionIntent.projectionInstanceKey, "uncategorized-1");
 });
 
 test("13k2. empty project distribution clears and hides the bar", () => {
   const { App, element } = overviewHarness();
   const bar = element("overview-project-bar");
   bar.innerHTML = "stale";
-  bar.style.gridTemplateColumns = "stale";
   App.showOverview({
     current_activity: { active: false, status: "normal" },
     current_session: null,
@@ -1678,7 +1765,7 @@ test("13k2. empty project distribution clears and hides the bar", () => {
   });
   assert.equal(bar.hidden, true);
   assert.equal(bar.innerHTML, "");
-  assert.equal(bar.style.gridTemplateColumns, "");
+  assert.deepEqual(bar.style, {}, "empty rendering must not leave container sizing styles");
 });
 
 test("13k3. project distribution renders project, uncategorized, and other segments safely", () => {
@@ -1690,7 +1777,7 @@ test("13k3. project distribution renders project, uncategorized, and other segme
     project_distribution: {
       total_seconds: 17100,
       segments: [
-        { key: "project:1", project_id: 1, label: "<WorkTrace>", duration_seconds: 9000, is_uncategorized: false, is_other: false },
+        { key: "project:1", project_id: 1, label: "<WorkTrace>", duration_seconds: "9000", is_uncategorized: false, is_other: false },
         { key: "uncategorized", project_id: null, label: "未归类", duration_seconds: 4500, is_uncategorized: true, is_other: false },
         { key: "other", project_id: null, label: "其他", duration_seconds: 3600, category_count: 2, is_uncategorized: false, is_other: true },
       ],
@@ -1700,10 +1787,9 @@ test("13k3. project distribution renders project, uncategorized, and other segme
 
   const bar = element("overview-project-bar");
   assert.equal(bar.hidden, false);
-  assert.equal(
-    bar.style.gridTemplateColumns,
-    "minmax(var(--overview-bar-min-segment), 9000fr) minmax(var(--overview-bar-min-segment), 4500fr) minmax(var(--overview-bar-min-segment), 3600fr)"
-  );
+  assert.equal(bar.innerHTML.includes('style="flex-grow: 9000"'), true);
+  assert.equal(bar.innerHTML.includes('style="flex-grow: 4500"'), true);
+  assert.equal(bar.innerHTML.includes('style="flex-grow: 3600"'), true);
   assert.equal(bar.innerHTML.includes("&lt;WorkTrace&gt;"), true, "project label must be escaped");
   assert.equal(bar.innerHTML.includes("<WorkTrace>"), false, "raw project markup must not be injected");
   assert.equal(bar.innerHTML.includes("2.5 h"), true, "hours must use one decimal place");
@@ -1715,6 +1801,21 @@ test("13k3. project distribution renders project, uncategorized, and other segme
   assert.equal(bar.innerHTML.includes('title="&lt;WorkTrace&gt; · 02:30:00"'), true);
   assert.equal(bar.innerHTML.includes('aria-label="未归类，01:15:00"'), true);
   assert.equal(bar.innerHTML.includes("<button"), false, "distribution segments must not be interactive");
+
+  App.showOverview({
+    current_activity: { active: false, status: "normal" },
+    current_session: null,
+    recent: [],
+    project_distribution: {
+      total_seconds: 0,
+      segments: [
+        { key: "invalid", label: "Invalid", duration_seconds: "12; color: red", is_uncategorized: false, is_other: false },
+      ],
+    },
+    today_total_seconds: 0,
+  });
+  assert.equal(bar.innerHTML.includes('style="flex-grow: 1"'), true);
+  assert.equal(bar.innerHTML.includes("12; color: red"), false, "raw duration text must never enter style output");
 });
 
 test("13l. current activity 5 min and recent record 25 min can both display", () => {

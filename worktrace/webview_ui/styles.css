@@ -143,7 +143,12 @@ th.number, td.number { text-align: right; font-variant-numeric: tabular-nums; }
 .toast { position: absolute; right: 16px; bottom: 16px; z-index: 50; max-width: 330px; padding: 9px 11px; color: #fff; background: #24313a; border-radius: var(--radius-md); box-shadow: var(--shadow-flyout); }
 
 /* Overview */
-.overview-page { background: transparent; }
+.overview-page {
+    --overview-time-right-inset: 17px;
+    --overview-record-time-size: 14px;
+    background: transparent;
+}
+.overview-page .page-total { padding-right: var(--overview-time-right-inset); }
 .current-activity { position: relative; width: 100%; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 3px 18px; padding: 13px 16px 13px 18px; margin-bottom: 9px; overflow: hidden; text-align: left; }
 .current-activity::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 3px; background: var(--color-accent); }
 .current-activity:hover:not(:disabled) { border-color: var(--color-border-strong); background: var(--color-surface-raised); }
@@ -152,9 +157,20 @@ th.number, td.number { text-align: right; font-variant-numeric: tabular-nums; }
 .current-resource { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 16px; letter-spacing: -.01em; }
 .current-context { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-text-secondary); }
 .recent-description.derived::before { content: "自动摘要"; display: inline-block; margin-right: 6px; padding: 0 5px; border: 1px solid var(--color-border); border-radius: 9px; color: var(--color-text-secondary); font-size: var(--font-size-xs); }
-.current-duration { grid-column: 2; grid-row: 1 / span 3; align-self: center; font-size: var(--font-size-2xl); line-height: 1; }
-.overview-project-bar { display: grid; gap: 2px; width: 100%; height: 30px; margin-bottom: 9px; overflow: hidden; border-radius: var(--radius-md); }
-.overview-project-segment { min-width: 0; height: 30px; display: flex; align-items: center; gap: 5px; padding: 0 8px; overflow: hidden; color: #fff; white-space: nowrap; font-size: var(--font-size-xs); }
+.current-duration { grid-column: 2; grid-row: 1 / span 3; align-self: center; }
+.overview-page .page-total strong,
+.overview-page .current-duration {
+    min-width: 8ch;
+    color: var(--color-text);
+    font-size: var(--font-size-2xl);
+    font-weight: 700;
+    line-height: 1;
+    letter-spacing: -.02em;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+.overview-project-bar { display: flex; gap: 2px; width: 100%; height: 30px; margin-bottom: 9px; overflow: hidden; border-radius: var(--radius-md); }
+.overview-project-segment { min-width: 0; height: 30px; flex-basis: var(--overview-bar-min-segment); flex-shrink: 1; display: flex; align-items: center; gap: 5px; padding: 0 8px; overflow: hidden; color: #fff; white-space: nowrap; font-size: var(--font-size-xs); }
 .overview-project-segment.rank-1 { background: var(--color-overview-bar-1); }
 .overview-project-segment.rank-2 { background: var(--color-overview-bar-2); }
 .overview-project-segment.rank-3 { background: var(--color-overview-bar-3); }
@@ -165,17 +181,19 @@ th.number, td.number { text-align: right; font-variant-numeric: tabular-nums; }
 .overview-section { min-width: 0; height: fit-content; align-self: start; padding: 11px 13px; }
 .overview-section h2 { margin: 0 0 4px; font-size: var(--font-size-lg); }
 .data-list { display: grid; }
-.recent-row { width: 100%; display: grid; grid-template-columns: 45px minmax(0, 1fr) auto auto; gap: 9px; align-items: center; min-height: 46px; padding: 6px 0; border: 0; border-top: 1px solid var(--color-border); border-radius: 0; background: transparent; text-align: left; }
+.recent-row { width: 100%; display: grid; grid-template-columns: 52px minmax(0, 1fr) 84px; column-gap: 10px; align-items: center; min-height: 48px; padding: 7px 0; border: 0; border-top: 1px solid var(--color-border); border-radius: 0; background: transparent; text-align: left; }
 .recent-row:first-child { border-top: 0; }
 .recent-row:hover { background: transparent; }
 .recent-row:hover .recent-project { color: var(--color-accent); }
-.recent-main { min-width: 0; }
-.recent-project, .recent-description { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.recent-project { font-weight: 650; }
+.recent-start-time { grid-column: 1; align-self: center; color: var(--color-text-secondary); font-size: var(--overview-record-time-size); font-weight: 600; line-height: 1.2; font-variant-numeric: tabular-nums; }
+.recent-main { grid-column: 2; min-width: 0; }
+.recent-title-line { display: flex; min-width: 0; align-items: center; gap: 6px; }
+.recent-project { min-width: 0; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 650; }
+.recent-description { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .recent-description { color: var(--color-text-secondary); font-size: var(--font-size-xs); }
-.recent-status { font-size: var(--font-size-xs); padding: 0 6px; border-radius: 9px; border: 1px solid var(--color-border); white-space: nowrap; }
+.recent-status { flex: none; font-size: var(--font-size-xs); padding: 0 6px; border-radius: 9px; border: 1px solid var(--color-border); white-space: nowrap; }
 .recent-status.badge-live { color: var(--color-success); border-color: var(--color-success); }
-.recent-duration { align-self: center; font-size: var(--font-size-xs); }
+.recent-duration { grid-column: 3; align-self: center; justify-self: end; color: var(--color-text); font-size: var(--overview-record-time-size); font-weight: 700; line-height: 1.2; font-variant-numeric: tabular-nums; }
 
 /* Timeline */
 .timeline-page { overflow: hidden; }
@@ -342,8 +360,7 @@ th.number, td.number { text-align: right; font-variant-numeric: tabular-nums; }
     .page { padding: 12px 14px 16px; }
     .page-header { margin-bottom: 9px; }
     .page-header p { display: none; }
-    .current-activity { padding: 10px 12px 10px 15px; }
-    .current-duration { font-size: var(--font-size-xl); }
+    .current-activity { padding: 10px 16px 10px 15px; }
     .timeline-workspace { grid-template-columns: 1fr; height: calc(100% - 82px); }
     .timeline-inspector { position: absolute; inset: 0 0 0 auto; z-index: 21; display: none; width: min(430px, calc(100% - 8px)); height: 100%; border-radius: 0; box-shadow: var(--shadow-flyout); }
     .timeline-inspector.drawer-open { display: block; }

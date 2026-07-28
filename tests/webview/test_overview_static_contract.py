@@ -1,5 +1,6 @@
 from __future__ import annotations
 import os, sys
+import re
 import pytest
 
 pytestmark = [pytest.mark.contract, pytest.mark.webview_static]
@@ -7,6 +8,12 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 from static_helpers import func_body, read_js, read_resource  # noqa: E402
+
+
+def _css_rule(source: str, selector: str) -> str:
+    match = re.search(re.escape(selector) + r"\s*\{([^}]*)\}", source)
+    assert match, f"styles.css must define {selector}"
+    return match.group(1)
 
 
 def test_overview_renders_authoritative_groups_and_timeline_intents():
@@ -80,8 +87,18 @@ def test_overview_project_bar_is_unheaded_narrow_and_accessible():
     assert "height: 30px" in css
     assert "--overview-bar-min-segment: 88px" in css
     assert "--overview-bar-min-segment: 64px" in css
-    assert "gridTemplateColumns" in render
-    assert "minmax(var(--overview-bar-min-segment)" in render
+    bar_rule = _css_rule(css, ".overview-project-bar")
+    segment_rule = _css_rule(css, ".overview-project-segment")
+    assert "display: flex" in bar_rule
+    assert "flex-basis: var(--overview-bar-min-segment)" in segment_rule
+    assert "flex-shrink: 1" in segment_rule
+    assert "gridTemplateColumns" not in render
+    assert "minmax(var(--overview-bar-min-segment)" not in render
+    assert "Number(segment.duration_seconds)" in render
+    assert "Number.isFinite(rawSeconds)" in render
+    assert "Math.max(0, rawSeconds)" in render
+    assert "var grow = Math.max(1, Math.round(seconds))" in render
+    assert 'style="flex-grow: ' in render
     assert "ResizeObserver" not in source
     assert "addEventListener" not in render
 
@@ -101,6 +118,48 @@ def test_project_distribution_render_owns_text_safety_and_segment_semantics():
     assert "is-other" in render
     assert "bar.hidden = true" in render
     assert "bar.hidden = false" in render
+    assert 'bar.innerHTML = ""' in render
+
+
+def test_overview_time_axis_and_recent_columns_are_stable_and_local():
+    css = read_resource("styles.css")
+    source = read_js("overview.js")
+    render = func_body(source, "renderRecent")
+
+    overview_rule = _css_rule(css, ".overview-page")
+    total_rule = _css_rule(css, ".overview-page .page-total")
+    primary_time_rule = _css_rule(
+        css,
+        ".overview-page .page-total strong,\n.overview-page .current-duration",
+    )
+    recent_rule = _css_rule(css, ".recent-row")
+    start_rule = _css_rule(css, ".recent-start-time")
+    status_rule = _css_rule(css, ".recent-status")
+    duration_rule = _css_rule(css, ".recent-duration")
+
+    assert "--overview-time-right-inset: 17px" in overview_rule
+    assert "--overview-record-time-size: 14px" in overview_rule
+    assert "padding-right: var(--overview-time-right-inset)" in total_rule
+    assert "min-width: 8ch" in primary_time_rule
+    assert "font-size: var(--font-size-2xl)" in primary_time_rule
+    assert "font-variant-numeric: tabular-nums" in primary_time_rule
+    assert ".current-duration { font-size: var(--font-size-xl)" not in css
+
+    assert "grid-template-columns: 52px minmax(0, 1fr) 84px" in recent_rule
+    assert "column-gap: 10px" in recent_rule
+    assert "grid-column: 1" in start_rule
+    assert "font-size: var(--overview-record-time-size)" in start_rule
+    assert "grid-column" not in status_rule
+    assert "flex: none" in status_rule
+    assert "grid-column: 3" in duration_rule
+    assert "font-size: var(--overview-record-time-size)" in duration_rule
+    assert "font-variant-numeric: tabular-nums" in duration_rule
+
+    assert 'class="recent-start-time numeric"' in render
+    assert 'class="recent-main"><span class="recent-title-line">' in render
+    assert "item.is_in_progress === true" in render
+    assert "+ statusBadge + '</span>'" in render
+    assert "+ durationMarkup(item, \"overview-recent\") + '</button>'" in render
 
 
 def test_current_activity_card_uses_structured_dto_not_display_string():

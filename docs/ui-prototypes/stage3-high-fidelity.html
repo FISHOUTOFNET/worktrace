@@ -13,7 +13,7 @@
   --success:#237447;--success-bg:#eaf6ef;--warning:#8a5a00;--warning-bg:#fff6dd;
   --danger:#b42318;--danger-bg:#fff0ee;--focus:#0067c0;--scrim:rgba(22,29,37,.34);
   --overview-1:#3f6f96;--overview-2:#4f786d;--overview-3:#746d8b;
-  --overview-uncategorized:#746f67;--overview-other:#66737d;--overview-min:88px;
+  --overview-uncategorized:#746f67;--overview-other:#66737d;--overview-min:88px;--overview-time-inset:17px;--overview-record-time:14px;
   --s1:4px;--s2:8px;--s3:12px;--s4:16px;--s6:24px;--r:6px;--rl:8px;
   font-family:var(--font);color:var(--text);font-size:13px
 }
@@ -57,6 +57,8 @@ textarea{resize:vertical;line-height:1.45}
 .page-header h1{margin:0;font-size:20px;line-height:1.25;font-weight:650}
 .page-description{margin-top:3px;color:var(--secondary);font-size:12px}
 .page-total{text-align:right}.page-total strong{display:block;font-size:20px;font-variant-numeric:tabular-nums}
+.overview-page .page-total{padding-right:var(--overview-time-inset)}
+.overview-page .page-total strong,.overview-page .current-activity .duration{min-width:8ch;color:var(--text);font-size:24px;font-weight:700;line-height:1;letter-spacing:-.02em;text-align:right;font-variant-numeric:tabular-nums}
 .toolbar{display:flex;align-items:center;gap:8px;min-width:0;padding:8px 10px;margin-bottom:12px;background:var(--surface);border:1px solid var(--border);border-radius:var(--r)}
 .toolbar .spacer{flex:1}
 .primary{color:#fff;background:var(--accent);border-color:var(--accent);font-weight:600}
@@ -77,21 +79,23 @@ textarea{resize:vertical;line-height:1.45}
 .inline-alert{padding:9px 11px;margin-bottom:10px;border:1px solid #e4b85e;border-radius:var(--r);color:var(--warning);background:var(--warning-bg)}
 .empty-state{padding:22px;text-align:center;color:var(--secondary)}
 .empty-state strong{display:block;margin-bottom:4px;color:var(--text)}
-.current-activity{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:5px 18px;width:100%;padding:15px 17px;margin-bottom:12px;text-align:left}
+.current-activity{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:5px 18px;width:100%;padding:15px 16px 15px 17px;margin-bottom:12px;text-align:left}
 .current-activity .label{color:var(--secondary);font-size:12px}
 .current-activity .project{font-size:17px;font-weight:650}
-.current-activity .duration{grid-row:1/span 3;grid-column:2;align-self:center;font-size:25px;font-weight:650;font-variant-numeric:tabular-nums}
+.current-activity .duration{grid-row:1/span 3;grid-column:2;align-self:center}
 .current-activity .description{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.overview-bar{display:grid;grid-template-columns:minmax(var(--overview-min),2.4fr) minmax(var(--overview-min),1.3fr) minmax(var(--overview-min),.8fr) minmax(var(--overview-min),.4fr);gap:2px;width:100%;height:30px;margin-bottom:12px;overflow:hidden;border-radius:6px}
-.overview-bar-segment{min-width:0;height:30px;display:flex;align-items:center;gap:5px;padding:0 8px;overflow:hidden;color:#fff;white-space:nowrap;font-size:11px}
+.overview-bar{display:flex;gap:2px;width:100%;height:30px;margin-bottom:12px;overflow:hidden;border-radius:6px}
+.overview-bar-segment{min-width:0;height:30px;flex-basis:var(--overview-min);flex-shrink:1;display:flex;align-items:center;gap:5px;padding:0 8px;overflow:hidden;color:#fff;white-space:nowrap;font-size:11px}
 .overview-bar-segment:nth-child(1){background:var(--overview-1)}.overview-bar-segment:nth-child(2){background:var(--overview-2)}
 .overview-bar-segment.uncategorized{background:var(--overview-uncategorized)}.overview-bar-segment.other{background:var(--overview-other)}
 .overview-bar-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.overview-bar-hours{flex:none;font-weight:650;font-variant-numeric:tabular-nums}
 .overview-section{padding:14px 16px}
 .section-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:6px}
-.data-row{display:grid;grid-template-columns:52px minmax(0,1fr) auto;gap:10px;align-items:center;width:100%;padding:9px 0;border:0;border-top:1px solid var(--border);border-radius:0;background:transparent;text-align:left}
+.data-row{display:grid;grid-template-columns:52px minmax(0,1fr) 84px;column-gap:10px;align-items:center;width:100%;padding:9px 0;border:0;border-top:1px solid var(--border);border-radius:0;background:transparent;text-align:left}
 .data-row:first-of-type{border-top:0}
-.data-row .mainline{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.data-row>.time{font-size:var(--overview-record-time);font-weight:600}.data-row>.time:last-child{justify-self:end;font-weight:700}
+.data-main{min-width:0}.mainline-row{display:flex;min-width:0;align-items:center;gap:6px}
+.data-row .mainline{min-width:0;flex:0 1 auto;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .data-row .subline{margin-top:2px;color:var(--secondary);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .timeline-toolbar .project-filter{min-width:150px}
 .timeline-workspace{height:calc(100% - 101px);min-height:0;display:grid;grid-template-columns:minmax(340px,1fr) 380px;gap:12px}
@@ -158,7 +162,7 @@ th{background:var(--subtle);font-size:12px}td.number,th.number{text-align:right;
 .window.size-800 .nav-footer{padding:8px;text-align:center}.window.size-800 .nav-footer button{width:36px;padding:0}
 .window.size-800 .page{padding:14px 16px 18px}.window.size-800 .page-header{margin-bottom:10px}.window.size-800 .page-description{display:none}
 .window.size-800{--overview-min:64px}
-.window.size-800 .current-activity{padding:11px 13px}.window.size-800 .current-activity .duration{font-size:20px}
+.window.size-800 .current-activity{padding:11px 16px 11px 13px}
 .window.size-800 .timeline-workspace{grid-template-columns:1fr;height:calc(100% - 91px)}.window.size-800 .inspector{display:none}
 .window.size-800 .timeline-toolbar .project-filter{min-width:0;width:112px}.window.size-800 .summary-strip{grid-template-columns:repeat(2,minmax(0,1fr))}
 .window.size-800 .metric:nth-child(2){border-right:0}.window.size-800 .metric:nth-child(-n+2){border-bottom:1px solid var(--border)}
@@ -195,20 +199,20 @@ th{background:var(--subtle);font-size:12px}td.number,th.number{text-align:right;
     </div>
   </aside>
   <main class="main">
-    <section class="page active" data-page="overview">
+    <section class="page active overview-page" data-page="overview">
       <header class="page-header"><div><h1>今日概览</h1><div class="page-description">当前活动和最近记录</div></div><div class="page-total"><span class="muted">今日总时长</span><strong>06:18:20</strong></div></header>
       <button type="button" class="surface current-activity" data-open-segment="current"><span class="label">当前活动</span><span class="duration" aria-live="off">00:05:12</span><span class="project" title="Visual Studio Code · 项目：WorkTrace">许可协议草稿.docx · Visual Studio Code · 项目：WorkTrace</span><span class="description">当前原子活动快照；不显示项目时间段描述或自动摘要</span></button>
       <div class="overview-bar" role="list" aria-label="今日项目和未归类时间分布">
-        <div class="overview-bar-segment" role="listitem" title="WorkTrace · 02:24:00" aria-label="WorkTrace，02:24:00"><span class="overview-bar-name">WorkTrace</span><span class="overview-bar-hours">2.4 h</span></div>
-        <div class="overview-bar-segment" role="listitem" title="客户 A · 01:18:00" aria-label="客户 A，01:18:00"><span class="overview-bar-name">客户 A</span><span class="overview-bar-hours">1.3 h</span></div>
-        <div class="overview-bar-segment uncategorized" role="listitem" title="未归类 · 00:48:00" aria-label="未归类，00:48:00"><span class="overview-bar-name">未归类</span><span class="overview-bar-hours">0.8 h</span></div>
-        <div class="overview-bar-segment other" role="listitem" title="其他 · 00:24:00" aria-label="其他，00:24:00"><span class="overview-bar-name">其他</span><span class="overview-bar-hours">0.4 h</span></div>
+        <div class="overview-bar-segment" style="flex-grow:8640" role="listitem" title="WorkTrace · 02:24:00" aria-label="WorkTrace，02:24:00"><span class="overview-bar-name">WorkTrace</span><span class="overview-bar-hours">2.4 h</span></div>
+        <div class="overview-bar-segment" style="flex-grow:4680" role="listitem" title="客户 A · 01:18:00" aria-label="客户 A，01:18:00"><span class="overview-bar-name">客户 A</span><span class="overview-bar-hours">1.3 h</span></div>
+        <div class="overview-bar-segment uncategorized" style="flex-grow:2880" role="listitem" title="未归类 · 00:48:00" aria-label="未归类，00:48:00"><span class="overview-bar-name">未归类</span><span class="overview-bar-hours">0.8 h</span></div>
+        <div class="overview-bar-segment other" style="flex-grow:1440" role="listitem" title="其他 · 00:24:00" aria-label="其他，00:24:00"><span class="overview-bar-name">其他</span><span class="overview-bar-hours">0.4 h</span></div>
       </div>
       <section class="surface overview-section recent-panel"><div class="section-head"><span class="section-title">最近记录</span></div>
-        <button type="button" class="data-row" data-open-segment="current"><span class="time">10:14</span><span><span class="mainline">WorkTrace</span><span class="subline">起草许可协议并核对目标专利清单</span><span class="badge live">进行中</span></span><strong class="time">00:42:16</strong></button>
-        <button type="button" class="data-row" data-open-segment="unclassified"><span class="time">09:20</span><span><span class="mainline">未归类</span><span class="subline derived"><span class="badge">自动摘要</span>专利检索页面 · 客户邮件 · PDF 阅读器</span></span><strong class="time">00:18:03</strong></button>
-        <button type="button" class="data-row" data-open-segment="recent-b"><span class="time">08:43</span><span><span class="mainline">项目 B</span><span class="subline">准备客户会议材料</span></span><strong class="time">00:36:40</strong></button>
-        <button type="button" class="data-row" data-open-segment="recent-d"><span class="time">07:32</span><span><span class="mainline">项目 D</span><span class="subline">整理证据目录和庭审笔记</span></span><strong class="time">00:24:18</strong></button>
+        <button type="button" class="data-row" data-open-segment="current"><span class="time">10:14</span><span class="data-main"><span class="mainline-row"><span class="mainline">WorkTrace</span><span class="badge live">进行中</span></span><span class="subline">起草许可协议并核对目标专利清单</span></span><strong class="time">00:42:16</strong></button>
+        <button type="button" class="data-row" data-open-segment="unclassified"><span class="time">09:20</span><span class="data-main"><span class="mainline-row"><span class="mainline">未归类</span></span><span class="subline derived"><span class="badge">自动摘要</span>专利检索页面 · 客户邮件 · PDF 阅读器</span></span><strong class="time">00:18:03</strong></button>
+        <button type="button" class="data-row" data-open-segment="recent-b"><span class="time">08:43</span><span class="data-main"><span class="mainline-row"><span class="mainline">客户 A 知识产权许可与合规长期项目</span></span><span class="subline">准备客户会议材料</span></span><strong class="time">00:36:40</strong></button>
+        <button type="button" class="data-row" data-open-segment="recent-d"><span class="time">07:32</span><span class="data-main"><span class="mainline-row"><span class="mainline">项目 D</span></span><span class="subline">整理证据目录和庭审笔记</span></span><strong class="time">00:24:18</strong></button>
       </section>
     </section>
     <section class="page timeline-page" data-page="timeline">

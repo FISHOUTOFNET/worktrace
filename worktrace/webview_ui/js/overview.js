@@ -51,18 +51,15 @@
             : [];
         if (!segments.length) {
             bar.innerHTML = "";
-            bar.style.gridTemplateColumns = "";
             bar.hidden = true;
             return;
         }
 
         bar.hidden = false;
-        bar.style.gridTemplateColumns = segments.map(function (segment) {
-            return "minmax(var(--overview-bar-min-segment), "
-                + Math.max(1, Number(segment.duration_seconds) || 0) + "fr)";
-        }).join(" ");
         bar.innerHTML = segments.map(function (segment, index) {
-            var seconds = Math.max(0, Number(segment.duration_seconds) || 0);
+            var rawSeconds = Number(segment.duration_seconds);
+            var seconds = Number.isFinite(rawSeconds) ? Math.max(0, rawSeconds) : 0;
+            var grow = Math.max(1, Math.round(seconds));
             var label = String(segment.label || "");
             var hours = formatCompactHours(seconds);
             var exactDuration = App.formatDuration(seconds);
@@ -73,6 +70,7 @@
                     : "rank-" + String(index + 1);
             var accessibleText = label + "，" + exactDuration;
             return '<div class="overview-project-segment ' + className
+                + '" style="flex-grow: ' + String(grow)
                 + '" role="listitem" title="' + App.escapeHtml(label + " · " + exactDuration)
                 + '" aria-label="' + App.escapeHtml(accessibleText) + '">'
                 + '<span class="overview-project-name">' + App.escapeHtml(label) + '</span>'
@@ -128,17 +126,19 @@
         }
         list.innerHTML = items.map(function (item, index) {
             var statusBadge = "";
-            if (item.is_in_progress) {
+            if (item.is_in_progress === true) {
                 statusBadge = '<span class="recent-status badge-live">进行中</span>';
             }
             return '<button type="button" class="recent-row" data-recent-index="' + index + '">'
-                + '<span class="numeric">' + App.escapeHtml(App.formatStartTimeOnly(item.start_time)) + '</span>'
-                + '<span class="recent-main"><span class="recent-project" title="'
+                + '<span class="recent-start-time numeric">'
+                + App.escapeHtml(App.formatStartTimeOnly(item.start_time)) + '</span>'
+                + '<span class="recent-main"><span class="recent-title-line">'
+                + '<span class="recent-project" title="'
                 + App.escapeHtml(App.formatProjectLabel(item.project_name, item.project_description))
                 + '">' + App.escapeHtml(item.project_name || "未归类") + '</span>'
+                + statusBadge + '</span>'
                 + '<span class="' + descriptionClass(item, "recent-description") + '">'
                 + App.escapeHtml(item.display_description || "暂无描述") + '</span></span>'
-                + statusBadge
                 + durationMarkup(item, "overview-recent") + '</button>';
         }).join("");
         bindIntentButtons(list, items, "data-recent-index");
