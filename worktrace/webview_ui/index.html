@@ -94,16 +94,20 @@
             </section>
 
             <section id="page-timeline" class="page timeline-page">
-                <header class="page-header"><div><h1>时间详情</h1><p>查看和整理当日时间段</p></div></header>
+                <header class="page-header">
+                    <div><h1>时间详情</h1><p>查看和整理当日时间段</p></div>
+                    <div class="page-total">
+                        <span id="timeline-total-label">今日总时长</span>
+                        <strong id="timeline-total" class="numeric">00:00:00</strong>
+                    </div>
+                </header>
                 <div class="toolbar timeline-toolbar">
                     <button id="timeline-prev-btn" type="button" class="icon-button" aria-label="前一天" data-tooltip="前一天"><svg class="icon" aria-hidden="true"><use href="#icon-chevron-left"/></svg></button>
                     <input id="timeline-date-input" type="date" aria-label="日期">
                     <button id="timeline-next-btn" type="button" class="icon-button" aria-label="后一天" data-tooltip="后一天"><svg class="icon" aria-hidden="true"><use href="#icon-chevron-right"/></svg></button>
                     <button id="timeline-today-btn" type="button">今日</button>
-                    <label class="sr-only" for="timeline-project-filter">项目筛选</label>
-                    <select id="timeline-project-filter" aria-label="项目筛选"><option value="">项目：全部</option></select>
-                    <span class="toolbar-spacer"></span>
-                    <strong class="toolbar-total">总计 <span id="timeline-total" class="numeric">00:00:00</span></strong>
+                    <label for="timeline-project-filter">项目</label>
+                    <select id="timeline-project-filter"><option value="">全部项目</option><option value="unclassified">未归类</option></select>
                 </div>
                 <div id="timeline-error" class="inline-alert error" role="alert" hidden>加载失败，请稍后重试。</div>
                 <div id="timeline-loading" class="loading-state" hidden><span class="skeleton"></span><span class="skeleton"></span><span class="skeleton"></span></div>
@@ -115,24 +119,25 @@
                     <div id="timeline-drawer-backdrop" class="drawer-backdrop" hidden></div>
                     <aside id="timeline-details-pane" class="surface timeline-inspector" aria-label="时间段编辑与活动详情">
                         <button id="timeline-details-close" type="button" class="icon-button inspector-close" aria-label="关闭时间段详情" data-tooltip="关闭"><svg class="icon" aria-hidden="true"><use href="#icon-close"/></svg></button>
+                        <p id="timeline-readonly-notice" class="timeline-readonly-notice" hidden>进行中时段不可编辑，结束后可修改项目、描述和时长。</p>
                         <div id="timeline-edit-panel" class="timeline-edit-panel" hidden>
                             <div class="edit-inline">
                                 <label class="field"><span>项目</span><select id="edit-project-select" disabled><option value="">加载中…</option></select></label>
                                 <label class="field"><span>时长（分钟）</span><input id="edit-duration-input" type="number" min="0" step="1" disabled></label>
                             </div>
                             <span id="edit-duration-status" class="field-status"></span>
-                            <label class="field"><span>描述</span><textarea id="edit-note-text" rows="3" maxlength="2000" placeholder="暂无描述" disabled></textarea></label>
-                            <div class="edit-meta"><span id="edit-note-count">0 / 2000</span></div>
+                            <label class="field"><span>描述</span><textarea id="edit-note-text" rows="2" maxlength="200" placeholder="暂无描述" disabled></textarea></label>
+                            <div class="edit-meta"><span id="edit-note-count">0 / 200</span></div>
                             <div class="editor-actions">
                                 <span id="edit-status" class="inline-status" role="status" aria-live="polite" hidden></span>
                                 <span class="toolbar-spacer"></span>
                                 <button id="timeline-advanced-toggle" type="button" class="icon-button" aria-haspopup="menu" aria-expanded="false" aria-label="高级操作" data-tooltip="高级操作"><svg class="icon" aria-hidden="true"><use href="#icon-more"/></svg></button>
                                 <button id="timeline-hide-session" type="button" class="icon-button danger-icon-button" aria-label="删除时间段" data-tooltip="删除时间段"><svg class="icon" aria-hidden="true"><use href="#icon-trash"/></svg></button>
                                 <div id="timeline-session-actions" class="action-menu" role="menu" hidden>
-                                    <button id="timeline-split-session" type="button" role="menuitem">拆分时间段</button>
-                                    <button id="timeline-merge-previous" type="button" role="menuitem">合并到上一时间段</button>
-                                    <button id="timeline-merge-next" type="button" role="menuitem">合并到下一时间段</button>
                                     <button id="timeline-copy-session" type="button" role="menuitem">复制时间段</button>
+                                    <button id="timeline-split-session" type="button" role="menuitem">拆分时间段</button>
+                                    <button id="timeline-merge-previous" type="button" role="menuitem">合并到前一时间段</button>
+                                    <button id="timeline-merge-next" type="button" role="menuitem">合并到后一时间段</button>
                                 </div>
                             </div>
                         </div>

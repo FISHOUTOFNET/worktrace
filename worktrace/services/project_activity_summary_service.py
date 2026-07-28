@@ -203,7 +203,7 @@ def _finalize_group(
         group["edit_disabled"] = True
         group["editable"] = False
         group["exportable"] = False
-        group["disable_reason"] = "进行中记录暂不支持编辑"
+        group["disable_reason"] = "进行中时段不可编辑"
     group["activity_ids"] = sorted(
         int(aid) for aid in group.get("activity_ids") or []
     )

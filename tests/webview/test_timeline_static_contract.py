@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
 def _source(name: str) -> str:
     return (ROOT / "worktrace" / "webview_ui" / "js" / name).read_text(encoding="utf-8")
+
+
+def _resource(name: str) -> str:
+    return (ROOT / "worktrace" / "webview_ui" / name).read_text(encoding="utf-8")
 
 
 def test_timeline_consumes_canonical_entries_and_authoritative_mutation_result():
@@ -38,3 +43,94 @@ def test_timeline_empty_state_uses_shared_visual_language():
     assert 'class="empty-state timeline-empty"' in source
     assert "当日暂无时间记录" in source
     assert "选择其他日期，或开始记录新的工作活动。" in source
+
+
+def test_timeline_header_filter_editor_and_advanced_menu_contract():
+    html = _resource("index.html")
+    timeline_page = html[html.index('id="page-timeline"') : html.index('id="page-statistics"')]
+
+    header = timeline_page[: timeline_page.index("</header>") + len("</header>")]
+    assert 'class="page-total"' in header
+    assert 'id="timeline-total-label"' in header
+    assert 'id="timeline-total"' in header
+    assert "今日总时长" in header
+    assert "toolbar-total" not in timeline_page
+
+    toolbar = timeline_page[
+        timeline_page.index('class="toolbar timeline-toolbar"') :
+        timeline_page.index('id="timeline-error"')
+    ]
+    assert '<label for="timeline-project-filter">项目</label>' in toolbar
+    assert '<option value="">全部项目</option>' in toolbar
+    assert "项目：全部" not in toolbar
+
+    textarea = re.search(r'<textarea id="edit-note-text"[^>]*>', timeline_page)
+    assert textarea is not None
+    assert 'rows="2"' in textarea.group(0)
+    assert 'maxlength="200"' in textarea.group(0)
+    assert "0 / 200" in timeline_page
+    assert 'id="timeline-readonly-notice"' in timeline_page
+    assert "进行中时段不可编辑，结束后可修改项目、描述和时长。" in timeline_page
+
+    action_menu = timeline_page[
+        timeline_page.index('id="timeline-session-actions"') :
+        timeline_page.index("</div>", timeline_page.index('id="timeline-session-actions"'))
+    ]
+    expected = [
+        ('id="timeline-copy-session"', "复制时间段"),
+        ('id="timeline-split-session"', "拆分时间段"),
+        ('id="timeline-merge-previous"', "合并到前一时间段"),
+        ('id="timeline-merge-next"', "合并到后一时间段"),
+    ]
+    positions = []
+    for element_id, label in expected:
+        position = action_menu.index(element_id)
+        assert label in action_menu[position:]
+        positions.append(position)
+    assert positions == sorted(positions)
+
+
+def test_timeline_list_sort_duration_and_badge_contract():
+    source = _source("timeline.js")
+    core = _source("core.js")
+    overview = _source("overview.js")
+
+    assert "filteredTimelineSessions(allSessions)" in source
+    assert ".slice().sort(timelineSessionOrder)" in source
+    assert "left.is_in_progress ? -1 : 1" not in source
+    assert "projection_instance_key" in source[source.index("function timelineSessionOrder") :]
+    assert 'data-duration-format="compact-hours"' in source
+    assert "App.formatCompactHours(seconds)" in source
+    assert "进行中</span>" not in source
+    assert "function formatCompactHours" not in overview
+    assert "App.formatCompactHours" in overview
+    assert "data-duration-format" in core
+    assert "aria-label" in core
+    assert "title" in core
+
+
+def test_timeline_styles_keep_fixed_time_columns_and_two_line_editor():
+    css = _resource("styles.css")
+    item = re.search(r"\.timeline-item\s*\{([^}]*)\}", css)
+    start = re.search(r"\.timeline-item-time\s*\{([^}]*)\}", css)
+    side = re.search(r"\.timeline-item-side\s*\{([^}]*)\}", css)
+    duration = re.search(r"\.timeline-item-duration\s*\{([^}]*)\}", css)
+    editor = re.search(
+        r"\.timeline-edit-panel\s+#edit-note-text\s*\{([^}]*)\}",
+        css,
+    )
+    assert all(match is not None for match in (item, start, side, duration, editor))
+    assert "52px minmax(0, 1fr) 72px" in item.group(1)
+    assert "align-items: center" in item.group(1)
+    assert "align-self: center" in start.group(1)
+    assert "font-size: 13px" in start.group(1)
+    assert "font-variant-numeric: tabular-nums" in start.group(1)
+    assert "align-self: center" in side.group(1)
+    assert "justify-self: end" in side.group(1)
+    assert "font-size: 13px" in duration.group(1)
+    assert "font-variant-numeric: tabular-nums" in duration.group(1)
+    assert "height: 50px" in editor.group(1)
+    assert "max-height: 50px" in editor.group(1)
+    assert "resize: none" in editor.group(1)
+    assert ".toolbar-total" not in css
+    assert ".badge.live::before" not in css

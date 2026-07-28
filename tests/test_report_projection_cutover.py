@@ -5,13 +5,20 @@ import json
 import pytest
 
 from tests.support import activity_factory as activity_service
-from worktrace.db import get_connection
+from worktrace.db import get_connection, now_str
+from worktrace.domain_limits import (
+    NOTE_MAX_LENGTH,
+    TIMELINE_DESCRIPTION_EDIT_MAX_LENGTH,
+)
 from worktrace.services import project_service
 from worktrace.services import report_session_operation_service as mutations
 from worktrace.services.export_service import build_statistics_csv_rows
 from worktrace.services.project_activity_summary_service import get_projection_session_activity_summary
+from worktrace.services.report_projection_identity import member_identity_key
+from worktrace.services.report_projection_model import InvalidInputError
 from worktrace.services.report_projection_snapshot_service import build_visible_snapshot
 from worktrace.services.report_session_projection_service import public_session_dto
+from worktrace.services.report_session_operation_engine import OPERATION_PAYLOAD_VERSION
 from worktrace.services.statistics_projection import build_statistics_projection
 
 DATE = "2026-07-01"
@@ -143,6 +150,104 @@ def test_existing_exact_duration_override_is_preserved_by_unchanged_rounded_edit
     assert updated["adjusted_duration_seconds"] == 610
     assert updated["has_duration_override"] is True
     assert updated["session_note"] == "memo"
+
+
+def test_new_timeline_description_edit_over_200_is_rejected(temp_db):
+    project_id = project_service.create_project("P")
+    _closed("12:00:00", "12:10:00", project_id=project_id)
+    source = build_visible_snapshot(DATE, DATE).final_sessions[0]
+
+    with pytest.raises(InvalidInputError):
+        mutations.edit_session(
+            DATE,
+            source["projection_instance_key"],
+            source["projection_revision"],
+            "description-over-200",
+            project_id=None,
+            adjusted_duration_seconds=None,
+            note="新" * (TIMELINE_DESCRIPTION_EDIT_MAX_LENGTH + 1),
+        )
+
+    with get_connection() as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM report_session_operation"
+        ).fetchone()[0] == 0
+
+
+def test_unchanged_historical_long_description_allows_project_and_duration_edit(temp_db):
+    first_project = project_service.create_project("Historical A")
+    second_project = project_service.create_project("Historical B")
+    _closed("13:00:00", "13:10:00", project_id=first_project)
+    source = build_visible_snapshot(DATE, DATE).final_sessions[0]
+    historical_note = "旧" * 300
+    assert TIMELINE_DESCRIPTION_EDIT_MAX_LENGTH < len(historical_note) <= NOTE_MAX_LENGTH
+
+    with get_connection() as conn:
+        operation_id = 1
+        conn.execute(
+            """
+            INSERT INTO report_session_operation(
+                id, report_date, sequence, operation_type, source_instance_key,
+                source_expected_revision, target_instance_key,
+                target_expected_revision, direction, undo_of_operation_id,
+                payload_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?, ?)
+            """,
+            (
+                operation_id,
+                DATE,
+                1,
+                "edit_session",
+                source["projection_instance_key"],
+                source["projection_revision"],
+                json.dumps(
+                    {
+                        "payload_version": OPERATION_PAYLOAD_VERSION,
+                        "replay_binding": "members",
+                        "note": {"mode": "set", "value": historical_note},
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ),
+                now_str(),
+            ),
+        )
+        for order, member_slice in enumerate(source["member_slices"]):
+            report_date, activity_id, slice_start = member_identity_key(member_slice)
+            conn.execute(
+                """
+                INSERT INTO report_session_operation_member(
+                    operation_id, role, activity_id, report_date,
+                    slice_start_time, display_order
+                ) VALUES (?, 'source', ?, ?, ?, ?)
+                """,
+                (operation_id, activity_id, report_date, slice_start, order),
+            )
+        conn.commit()
+
+    historical = build_visible_snapshot(DATE, DATE).final_sessions[0]
+    assert historical["session_note"] == historical_note
+
+    result = mutations.edit_session(
+        DATE,
+        historical["projection_instance_key"],
+        historical["projection_revision"],
+        "historical-long-project-duration",
+        project_id=second_project,
+        adjusted_duration_seconds=660,
+        note=historical_note,
+    )
+
+    assert result.outcome_type == "operation_committed"
+    updated = build_visible_snapshot(DATE, DATE).final_sessions[0]
+    assert int(updated["project_id"]) == second_project
+    assert updated["adjusted_duration_seconds"] == 660
+    assert updated["session_note"] == historical_note
+
+
+def test_durable_note_limit_remains_2000():
+    assert NOTE_MAX_LENGTH == 2000
+    assert TIMELINE_DESCRIPTION_EDIT_MAX_LENGTH == 200
 
 
 def test_standalone_excluded_is_timeline_entry_but_open_entry_is_not_exported(temp_db):

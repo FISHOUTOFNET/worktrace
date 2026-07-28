@@ -26,6 +26,7 @@ function harness() {
         classList: { add() {}, remove() {}, contains() { return false; } },
         setAttribute() {}, removeAttribute() {}, getAttribute() { return ""; },
         querySelectorAll() { return []; },
+        addEventListener() {},
       });
     }
     return elements.get(id);
@@ -83,8 +84,18 @@ function harness() {
   App.isPagePayloadCompatibleWithRuntime = () => true;
   App.escapeHtml = (s) => String(s || "");
   App.formatDuration = (s) => String(s || "");
+  App.formatCompactHours = (s) => `${(Number(s || 0) / 3600).toFixed(1)} h`;
   App.formatStartTimeOnly = (s) => String(s || "");
   App.formatProjectLabel = () => "";
+  App.validateLiveClock = () => null;
+  App.recordLiveClockContractViolation = () => {};
+  App.renderDurationProjected = (target, seconds) => {
+    if (target) target.textContent = App.formatDuration(seconds);
+  };
+  App.renderCurrentActivityElement = () => {};
+  App.setLiveClockTarget = () => {};
+  App.clearLiveClockTarget = () => {};
+  App.acceptLiveRuntimePayload = () => true;
   return { App, element };
 }
 
@@ -222,6 +233,243 @@ test("an out-of-order Details response cannot write after selection changes", as
   oldRequest.resolve({ ok: true, summary_rows: [{ activity_name: "stale" }] });
   await pending;
   assert.equal(element("timeline-details-list").innerHTML, before);
+});
+
+test("in-progress selection resolves uniquely by first_activity_id after key changes", () => {
+  const { App } = harness();
+  App.selectedProjectionInstanceKey = "base:old";
+  App.selectedProjectionRevision = "rev-old";
+  App.selectedTimelineAnchorActivityId = 42;
+  App.selectedTimelineWasInProgress = true;
+  const replacement = {
+    projection_instance_key: "base:new",
+    projection_revision: "rev-new",
+    first_activity_id: 42,
+    is_in_progress: true,
+  };
+
+  const resolved = App.resolveTimelineSelection([replacement]);
+
+  assert.equal(resolved, replacement);
+  assert.equal(App.selectedProjectionInstanceKey, "base:new");
+  assert.equal(App.selectedProjectionRevision, "rev-new");
+  assert.equal(App.selectedTimelineAnchorActivityId, 42);
+  assert.equal(App.selectedTimelineWasInProgress, true);
+});
+
+test("replacement selection requests details with the new key and revision", async () => {
+  const { App } = harness();
+  App.currentPage = "timeline";
+  App.timelineRequestState.nextTimelineOwner("2026-07-12");
+  App.selectedProjectionInstanceKey = "base:old";
+  App.selectedProjectionRevision = "rev-old";
+  App.selectedTimelineAnchorActivityId = 42;
+  App.selectedTimelineWasInProgress = true;
+  const calls = [];
+  App.callBridge = (method, ...args) => {
+    if (method === "get_timeline_session_activity_summary") calls.push(args);
+    if (method === "list_projects_for_timeline") {
+      return Promise.resolve({ ok: true, projects: [], filter_projects: [] });
+    }
+    return Promise.resolve({ ok: true, summary_rows: [] });
+  };
+
+  App.showTimeline({
+    ok: true,
+    date: "2026-07-12",
+    today: "2026-07-12",
+    entries: [{
+      projection_instance_key: "base:new",
+      projection_revision: "rev-new",
+      first_activity_id: 42,
+      is_in_progress: true,
+      edit_disabled: true,
+      duration_seconds: 1800,
+      start_time: "2026-07-12T09:00:00",
+    }],
+    today_total_seconds: 1800,
+  });
+  await Promise.resolve();
+  await Promise.resolve();
+
+  assert.deepEqual(calls[0].slice(0, 3), ["base:new", "2026-07-12", "rev-new"]);
+});
+
+test("in-progress replacement keeps details open but hides the edit form", () => {
+  const { App, element } = harness();
+  App.callBridge = () => new Promise(() => {});
+  App.selectedProjectionInstanceKey = "base:old";
+  App.selectedProjectionRevision = "rev-old";
+  App.selectedTimelineAnchorActivityId = 42;
+  App.selectedTimelineWasInProgress = true;
+
+  App.showTimeline({
+    ok: true,
+    date: "2026-07-11",
+    today: "2026-07-12",
+    today_total_seconds: 600,
+    entries: [{
+      projection_instance_key: "base:new",
+      projection_revision: "rev-new",
+      first_activity_id: 42,
+      is_in_progress: true,
+      edit_disabled: true,
+      start_time: "2026-07-11T10:00:00",
+      duration_seconds: 600,
+    }],
+  });
+
+  assert.equal(element("timeline-edit-panel").hidden, true);
+  assert.equal(element("timeline-readonly-notice").hidden, false);
+  assert.equal(element("timeline-total-label").textContent, "当日总时长");
+});
+
+test("missing or ambiguous in-progress anchor clears the selection", () => {
+  for (const sessions of [
+    [],
+    [
+      { projection_instance_key: "base:b", projection_revision: "r2", first_activity_id: 42, is_in_progress: true },
+      { projection_instance_key: "base:c", projection_revision: "r3", first_activity_id: 42, is_in_progress: true },
+    ],
+  ]) {
+    const { App } = harness();
+    App.selectedProjectionInstanceKey = "base:old";
+    App.selectedProjectionRevision = "rev-old";
+    App.selectedTimelineAnchorActivityId = 42;
+    App.selectedTimelineWasInProgress = true;
+
+    assert.equal(App.resolveTimelineSelection(sessions), null);
+    assert.equal(App.selectedProjectionInstanceKey, null);
+    assert.equal(App.selectedProjectionRevision, null);
+    assert.equal(App.selectedTimelineAnchorActivityId, null);
+    assert.equal(App.selectedTimelineWasInProgress, false);
+  }
+});
+
+test("timeline selection reset clears the UI-only in-progress anchor", () => {
+  const { App } = harness();
+  App.selectedTimelineAnchorActivityId = 42;
+  App.selectedTimelineWasInProgress = true;
+
+  App.resetTimelineReportSelection();
+
+  assert.equal(App.selectedTimelineAnchorActivityId, null);
+  assert.equal(App.selectedTimelineWasInProgress, false);
+});
+
+test("date switch uses the existing reset path and clears the anchor", async () => {
+  const { App } = harness();
+  App.selectedTimelineAnchorActivityId = 42;
+  App.selectedTimelineWasInProgress = true;
+  App.setTimelineLoading = () => {};
+  App.clearTimelineError = () => {};
+  App.callBridge = () => new Promise(() => {});
+
+  await App.goToDate("2026-07-13");
+
+  assert.equal(App.selectedProjectionInstanceKey, null);
+  assert.equal(App.selectedProjectionRevision, null);
+  assert.equal(App.selectedTimelineAnchorActivityId, null);
+  assert.equal(App.selectedTimelineWasInProgress, false);
+});
+
+test("timeline presentation sorts newest first with deterministic ties and compact hours", () => {
+  const { App, element } = harness();
+  App.selectedProjectionInstanceKey = null;
+  App.selectedProjectionRevision = null;
+  App.callBridge = () => Promise.resolve({
+    ok: true,
+    projects: [],
+    filter_projects: [],
+  });
+
+  App.showTimeline({
+    ok: true,
+    date: "2026-07-12",
+    today: "2026-07-12",
+    today_total_seconds: 5400,
+    entries: [
+      {
+        projection_instance_key: "base:a",
+        projection_revision: "r1",
+        first_activity_id: 1,
+        start_time: "2026-07-12T09:00:00",
+        duration_seconds: 1800,
+        project_name: "A",
+      },
+      {
+        projection_instance_key: "base:b",
+        projection_revision: "r2",
+        first_activity_id: 2,
+        start_time: "2026-07-12T10:00:00",
+        duration_seconds: 3600,
+        project_name: "B",
+        is_in_progress: true,
+      },
+      {
+        projection_instance_key: "base:c",
+        projection_revision: "r3",
+        first_activity_id: 3,
+        start_time: "2026-07-12T10:00:00",
+        duration_seconds: 4200,
+        project_name: "C",
+      },
+    ],
+  });
+
+  const html = element("timeline-sessions-list").innerHTML;
+  const c = html.indexOf('data-projection-instance-key="base:c"');
+  const b = html.indexOf('data-projection-instance-key="base:b"');
+  const a = html.indexOf('data-projection-instance-key="base:a"');
+  assert.ok(c < b && b < a, "start_time desc, then key desc");
+  assert.match(html, /data-duration-format="compact-hours"/);
+  assert.match(html, />1\.2 h<\/div>/);
+  assert.doesNotMatch(html, />进行中<\/span>/);
+  assert.equal(element("timeline-total-label").textContent, "今日总时长");
+});
+
+test("timeline filter exclusion clears selection, while same-date page return can re-anchor", () => {
+  const { App, element } = harness();
+  App.callBridge = () => Promise.resolve({
+    ok: true,
+    projects: [],
+    filter_projects: [],
+  });
+  App.selectedProjectionInstanceKey = "base:old";
+  App.selectedProjectionRevision = "rev-old";
+  App.selectedTimelineAnchorActivityId = 42;
+  App.selectedTimelineWasInProgress = true;
+  const replacement = {
+    projection_instance_key: "base:new",
+    projection_revision: "rev-new",
+    first_activity_id: 42,
+    is_in_progress: true,
+    project_id: 7,
+    start_time: "2026-07-12T10:00:00",
+    duration_seconds: 600,
+    edit_disabled: true,
+  };
+
+  App.showTimeline({
+    ok: true,
+    date: "2026-07-12",
+    today: "2026-07-12",
+    today_total_seconds: 600,
+    entries: [replacement],
+  });
+  assert.equal(App.selectedProjectionInstanceKey, "base:new");
+  assert.equal(App.selectedProjectionRevision, "rev-new");
+
+  element("timeline-project-filter").value = "8";
+  App.showTimeline({
+    ok: true,
+    date: "2026-07-12",
+    today: "2026-07-12",
+    today_total_seconds: 600,
+    entries: [replacement],
+  });
+  assert.equal(App.selectedProjectionInstanceKey, null);
+  assert.equal(App.selectedTimelineAnchorActivityId, null);
 });
 
 test("stale_selection triggers one timeline refresh and retry", async () => {

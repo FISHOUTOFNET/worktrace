@@ -119,8 +119,10 @@ bounded reconciliation.
   other ranking as projects. The bar is display-only; current/recent rows hand
   off to Timeline and shared row attention facts remain in their DTOs.
 - Timeline: reverse chronological sessions, authoritative project filtering,
-  debounced autosave, always-visible activity details, direct two-step deletion,
-  and a compact-window focus-trapped Drawer.
+  composition-safe debounced autosave for completed sessions, always-visible
+  activity details, direct two-step deletion, and a compact-window focus-trapped
+  Drawer. In-progress sessions are selectable but read-only; their detail
+  selection is maintained in-memory by exact key or unique first-activity anchor.
 - Statistics/Export: this-month default with all-time/custom options, optional
   project scope, automatic latest-request acceptance, and display-safe CSV bound
   to the accepted export ticket.
@@ -130,9 +132,11 @@ bounded reconciliation.
   collapsed diagnostics, privacy status, clipboard control, backup/import and
   clear-all. Secret inputs remain local and are cleared after use.
 
-Open sessions allow project and note edits; duration and structural edits wait for
-closure. Rule batches are atomic, manual assignments are preserved, and
-statistics/export use persisted report facts rather than frontend time.
+Timeline edits on completed sessions allow project, description and duration
+changes. New description edits are limited to 200 characters while the durable
+2000-character read/replay boundary remains compatible with historical data.
+Rule batches are atomic, manual assignments are preserved, and statistics/export
+use persisted report facts rather than frontend time.
 
 ## Validation
 Affected validation: `python scripts/run_affected_tests.py`. Full validation:

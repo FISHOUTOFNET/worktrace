@@ -27,6 +27,12 @@
 
     function renderTimelineTotal(data) {
         var element = document.getElementById("timeline-total");
+        var label = document.getElementById("timeline-total-label");
+        if (label) {
+            label.textContent = String(data.date || "") === String(data.today || "")
+                ? "今日总时长"
+                : "当日总时长";
+        }
         var durable = Math.max(0, parseInt(data.today_total_seconds, 10) || 0);
         var clock = exactRowClock(
             { live_clock: data.total_live_clock },
@@ -50,21 +56,23 @@
         App.lastSessionActivitySummaryViewModel = null;
         document.getElementById("timeline-details-header").textContent = "选择左侧时段查看详情";
         document.getElementById("timeline-details-list").innerHTML = "";
-        App.selectedProjectionInstanceKey = null;
-        App.selectedProjectionRevision = null;
+        clearTimelineSelectionState();
         App.detailsOwner = null;
         clearEditPanel();
     }
 
     function timelineSessionOrder(left, right) {
-        if (!!left.is_in_progress !== !!right.is_in_progress) return left.is_in_progress ? -1 : 1;
-        return String(right.start_time || "").localeCompare(String(left.start_time || ""));
+        var byStart = String(right.start_time || "")
+            .localeCompare(String(left.start_time || ""));
+        if (byStart !== 0) return byStart;
+        return String(right.projection_instance_key || "")
+            .localeCompare(String(left.projection_instance_key || ""));
     }
 
     function filteredTimelineSessions(entries) {
         var filter = document.getElementById("timeline-project-filter");
         var value = filter ? String(filter.value || "") : "";
-        return (Array.isArray(entries) ? entries : []).filter(function (session) {
+        var filtered = (Array.isArray(entries) ? entries : []).filter(function (session) {
             if (!value) return true;
             if (value === "unclassified") {
                 // Use the backend authoritative field instead of
@@ -74,13 +82,14 @@
             }
             return String(session.project_id || "") === value;
         });
+        return filtered.slice().sort(timelineSessionOrder);
     }
 
     function renderTimelineProjectFilter(projects) {
         var select = document.getElementById("timeline-project-filter");
         if (!select) return;
         var previous = select.value;
-        var html = '<option value="">项目：全部</option><option value="unclassified">未归类</option>';
+        var html = '<option value="">全部项目</option><option value="unclassified">未归类</option>';
         (projects || []).forEach(function (project) {
             html += '<option value="' + App.escapeHtml(String(project.id || "")) + '">'
                 + App.escapeHtml(project.name || "未命名项目") + '</option>';
@@ -124,6 +133,50 @@
         }, "应用筛选");
     };
 
+    function rememberTimelineSelection(session) {
+        if (!session) return null;
+        App.selectedProjectionInstanceKey = String(
+            session.projection_instance_key || ""
+        ) || null;
+        App.selectedProjectionRevision = String(
+            session.projection_revision || ""
+        );
+        var firstActivityId = parseInt(session.first_activity_id, 10);
+        App.selectedTimelineAnchorActivityId = firstActivityId > 0
+            ? firstActivityId
+            : null;
+        App.selectedTimelineWasInProgress = session.is_in_progress === true;
+        return session;
+    }
+
+    function clearTimelineSelectionState() {
+        App.selectedProjectionInstanceKey = null;
+        App.selectedProjectionRevision = null;
+        App.selectedTimelineAnchorActivityId = null;
+        App.selectedTimelineWasInProgress = false;
+    }
+
+    function resolveTimelineSelection(sessions) {
+        var selectedKey = String(App.selectedProjectionInstanceKey || "");
+        if (!selectedKey) return null;
+        var candidates = Array.isArray(sessions) ? sessions : [];
+        var exact = candidates.filter(function (session) {
+            return String(session.projection_instance_key || "") === selectedKey;
+        });
+        if (exact.length === 1) return rememberTimelineSelection(exact[0]);
+        var anchor = parseInt(App.selectedTimelineAnchorActivityId, 10);
+        if (App.selectedTimelineWasInProgress === true && anchor > 0) {
+            var anchored = candidates.filter(function (session) {
+                return parseInt(session.first_activity_id, 10) === anchor;
+            });
+            if (anchored.length === 1) return rememberTimelineSelection(anchored[0]);
+        }
+        clearTimelineSelectionState();
+        App.detailsOwner = null;
+        return null;
+    }
+    App.resolveTimelineSelection = resolveTimelineSelection;
+
     function showTimeline(data) {
         if (!data) return;
         if (data.date) App.timelineDate = data.date;
@@ -151,6 +204,11 @@
             resetEmptyTimeline();
             return;
         }
+        var hadSelection = !!App.selectedProjectionInstanceKey;
+        if (hadSelection && !resolveTimelineSelection(sessions)) {
+            resetEmptyTimeline();
+            closeTimelineDrawer();
+        }
 
         var _renderStart = (typeof performance !== "undefined" && performance.now)
             ? performance.now() : 0;
@@ -165,7 +223,8 @@
             var canTick = !!(clock && clock.is_live === true);
             var durable = Math.max(0, parseInt(session.duration_seconds, 10) || 0);
             var seconds = clockedSeconds(clock, durable);
-            var durationText = App.formatDuration(seconds);
+            var durationText = App.formatCompactHours(seconds);
+            var exactDurationText = App.formatDuration(seconds);
             var startText = App.formatStartTimeOnly(session.start_time);
             var projectLabel = App.formatProjectLabel(
                 session.project_name,
@@ -189,7 +248,7 @@
                 + '" class="' + classes + '" data-projection-instance-key="'
                 + App.escapeHtml(session.projection_instance_key || "") + '" title="'
                 + App.escapeHtml(projectLabel) + '｜' + App.escapeHtml(startText) + '｜'
-                + App.escapeHtml(durationText) + '">'
+                + App.escapeHtml(exactDurationText) + '">'
                 + '<div class="timeline-item-main">'
                 + '<div class="timeline-item-project">' + App.escapeHtml(projectLabel) + '</div>'
                 + '<div class="timeline-item-time">' + App.escapeHtml(startText) + '</div>'
@@ -198,9 +257,11 @@
                 + App.escapeHtml(session.display_description || "暂无描述") + '</div>'
                 + '</div><div class="timeline-item-side">'
                 + '<div class="timeline-item-duration"' + clockAttributes
-                + ' data-duration-seconds="' + String(seconds) + '">'
+                + ' data-duration-format="compact-hours"'
+                + ' data-duration-seconds="' + String(seconds) + '" title="'
+                + App.escapeHtml(exactDurationText) + '" aria-label="时长 '
+                + App.escapeHtml(exactDurationText) + '">'
                 + App.escapeHtml(durationText) + '</div>'
-                + (session.is_in_progress ? '<span class="badge live">进行中</span>' : '')
                 + '</div></button>';
         }
         var _htmlBuildMs = _renderStart
@@ -247,22 +308,13 @@
             listEl._timelineDelegationBound = true;
         }
 
-        if (App.selectedProjectionInstanceKey && !sessions.some(function (session) {
-            return session.projection_instance_key === App.selectedProjectionInstanceKey;
-        })) {
-            resetEmptyTimeline();
-            closeTimelineDrawer();
-            return;
-        }
-
         if (!App.selectedProjectionInstanceKey) return;
         var found = findSessionByProjectionKey(App.selectedProjectionInstanceKey);
         if (!found) {
             resetEmptyTimeline();
             return;
         }
-        App.selectedProjectionInstanceKey = found.projection_instance_key || null;
-        App.selectedProjectionRevision = found.projection_revision || "";
+        rememberTimelineSelection(found);
         var owner = App.timelineRequestState.nextSelectionOwner(
             data.date,
             found.projection_instance_key,
@@ -285,6 +337,7 @@
         ) {
             populateEditPanel(found);
         }
+        setTimelineReadOnlyNotice(found);
         updateSessionActionButtons(found);
     }
     App.showTimeline = showTimeline;
@@ -359,7 +412,7 @@
             }
         }
         if (!found) return;
-        App.selectedProjectionRevision = found.projection_revision || "";
+        rememberTimelineSelection(found);
         var owner = App.timelineRequestState.nextSelectionOwner(
             App.timelineDate,
             found.projection_instance_key,
@@ -373,6 +426,7 @@
         );
         if (found.edit_disabled === true) clearEditPanel();
         else populateEditPanel(found);
+        setTimelineReadOnlyNotice(found);
         updateSessionActionButtons(found);
         openTimelineDrawer(document.getElementById("timeline-details-close"));
     }
@@ -682,6 +736,12 @@
             || canEditField(session, "can_edit_duration");
     }
 
+    function setTimelineReadOnlyNotice(session) {
+        var notice = document.getElementById("timeline-readonly-notice");
+        if (!notice) return;
+        notice.hidden = !(session && session.is_in_progress === true);
+    }
+
     function applyEditCapabilities(session) {
         var projectAllowed = canEditField(session, "can_edit_project");
         var noteAllowed = canEditField(session, "can_edit_note");
@@ -691,14 +751,24 @@
         var duration = document.getElementById("edit-duration-input");
         var save = document.getElementById("edit-save-btn");
         var cancel = document.getElementById("edit-cancel-btn");
-        if (select) select.disabled = App.editSaving || !projectAllowed || !App.projectsCache;
-        if (note) note.disabled = App.editSaving || !noteAllowed;
-        if (duration) duration.disabled = App.editSaving || !durationAllowed;
+        var noteChanged = !!(
+            noteAllowed
+            && note
+            && session
+            && note.value !== String(session.session_note || "")
+        );
+        if (select) select.disabled = !projectAllowed || !App.projectsCache;
+        if (note) note.disabled = !noteAllowed;
+        if (duration) duration.disabled = !durationAllowed;
         if (cancel) cancel.disabled = App.editSaving || !session;
         if (save) {
             save.disabled = App.editSaving
                 || !hasEditableFields(session)
-                || (noteAllowed && note && note.value.length > App.NOTE_MAX_LENGTH);
+                || (
+                    noteChanged
+                    && note.value.length
+                    > App.TIMELINE_DESCRIPTION_EDIT_MAX_LENGTH
+                );
         }
     }
     App.applyTimelineEditCapabilities = applyEditCapabilities;
@@ -709,6 +779,7 @@
             return;
         }
         App.editingSession = session;
+        setTimelineReadOnlyNotice(null);
         var panel = document.getElementById("timeline-edit-panel");
         if (panel) panel.hidden = false;
         var select = document.getElementById("edit-project-select");
@@ -753,11 +824,13 @@
         if (App.timelineAutosaveTimer) window.clearTimeout(App.timelineAutosaveTimer);
         App.timelineAutosaveTimer = null;
         App.timelineAutosaveQueued = false;
+        App.timelineCompositionActive = false;
         App.editingSession = null;
         App.editSaving = false;
         App.submittedDraft = null;
         var panel = document.getElementById("timeline-edit-panel");
         if (panel) panel.hidden = true;
+        setTimelineReadOnlyNotice(null);
         updateSessionActionButtons(null);
         var note = document.getElementById("edit-note-text");
         if (note) {
@@ -815,8 +888,15 @@
         var counter = document.getElementById("edit-note-count");
         if (!textarea || !counter) return;
         var length = textarea.value.length;
-        counter.textContent = length + " / " + App.NOTE_MAX_LENGTH;
-        counter.classList.toggle("over-limit", length > App.NOTE_MAX_LENGTH);
+        var noteChanged = !!(
+            App.editingSession
+            && textarea.value !== String(App.editingSession.session_note || "")
+        );
+        counter.textContent = length + " / " + App.TIMELINE_DESCRIPTION_EDIT_MAX_LENGTH;
+        counter.classList.toggle(
+            "over-limit",
+            noteChanged && length > App.TIMELINE_DESCRIPTION_EDIT_MAX_LENGTH
+        );
         applyEditCapabilities(App.editingSession);
     }
     App.updateNoteCount = updateNoteCount;
@@ -837,10 +917,52 @@
     }
     App.showEditStatus = showEditStatus;
 
+    function cancelTimelineAutosaveTimer() {
+        if (App.timelineAutosaveTimer) {
+            window.clearTimeout(App.timelineAutosaveTimer);
+        }
+        App.timelineAutosaveTimer = null;
+    }
+
+    function handleTimelineCompositionStart() {
+        App.timelineCompositionActive = true;
+        cancelTimelineAutosaveTimer();
+    }
+    App.handleTimelineCompositionStart = handleTimelineCompositionStart;
+
+    function handleTimelineNoteInput(event) {
+        updateNoteCount();
+        if (
+            (event && event.isComposing === true)
+            || App.timelineCompositionActive === true
+        ) {
+            return;
+        }
+        scheduleTimelineAutosave(650);
+    }
+    App.handleTimelineNoteInput = handleTimelineNoteInput;
+
+    function handleTimelineCompositionEnd() {
+        App.timelineCompositionActive = false;
+        updateNoteCount();
+        if (!App.editSaving) App.timelineAutosaveQueued = false;
+        scheduleTimelineAutosave(650);
+    }
+    App.handleTimelineCompositionEnd = handleTimelineCompositionEnd;
+
+    function handleTimelineNoteBlur() {
+        if (App.timelineCompositionActive === true) return;
+        scheduleTimelineAutosave(0);
+    }
+    App.handleTimelineNoteBlur = handleTimelineNoteBlur;
+
     function scheduleTimelineAutosave(delay) {
         if (!App.editingSession) return;
-        if (App.timelineAutosaveTimer) window.clearTimeout(App.timelineAutosaveTimer);
-        App.timelineAutosaveTimer = null;
+        cancelTimelineAutosaveTimer();
+        if (App.timelineCompositionActive === true) {
+            App.timelineAutosaveQueued = true;
+            return;
+        }
         if (App.editSaving) {
             App.timelineAutosaveQueued = true;
             showEditStatus("有新更改，等待保存", false);
@@ -869,6 +991,7 @@
     function setEditSaving(saving) {
         App.editSaving = saving;
         applyEditCapabilities(App.editingSession);
+        updateSessionActionButtons(App.editingSession);
     }
     App.setEditSaving = setEditSaving;
 
@@ -926,6 +1049,10 @@
 
     function saveEdit() {
         if (!App.editingSession) return;
+        if (App.timelineCompositionActive === true) {
+            App.timelineAutosaveQueued = true;
+            return;
+        }
         if (App.editSaving) {
             App.timelineAutosaveQueued = true;
             return;
@@ -956,12 +1083,15 @@
         }
         var originalNote = session.session_note || "";
         var note = canNote ? noteElement.value : originalNote;
-        if (note.length > App.NOTE_MAX_LENGTH) {
-            showEditStatus("备注不能超过 2000 个字符", true);
-            return;
-        }
         var projectChanged = canProject && projectIdText !== originalProjectId;
         var noteChanged = canNote && note !== originalNote;
+        if (
+            noteChanged
+            && note.length > App.TIMELINE_DESCRIPTION_EDIT_MAX_LENGTH
+        ) {
+            showEditStatus("描述不能超过 200 个字符", true);
+            return;
+        }
         var adjustedDurationSeconds = null;
         var durationChanged = false;
         var durationElement = document.getElementById("edit-duration-input");
@@ -1098,13 +1228,26 @@
             ["timeline-split-session", "can_split"],
             ["timeline-copy-session", "can_copy"]
         ];
+        var anyAdvancedAllowed = false;
         for (var i = 0; i < fields.length; i++) {
             var button = document.getElementById(fields[i][0]);
             if (!button) continue;
-            var allowed = !!(session && session[fields[i][1]]);
+            var allowed = !!(
+                session
+                && session[fields[i][1]]
+                && !App.editSaving
+            );
             button.hidden = !allowed;
             button.disabled = !allowed;
+            if (i > 0 && allowed) anyAdvancedAllowed = true;
         }
+        var toggle = document.getElementById("timeline-advanced-toggle");
+        if (toggle) {
+            toggle.hidden = !anyAdvancedAllowed;
+            toggle.disabled = !anyAdvancedAllowed;
+        }
+        var menu = document.getElementById("timeline-session-actions");
+        if (menu && !anyAdvancedAllowed) menu.hidden = true;
     }
     App.updateSessionActionButtons = updateSessionActionButtons;
 
@@ -1253,8 +1396,8 @@
     App.currentTimelineReportDate = currentTimelineReportDate;
 
     function resetTimelineReportSelection() {
-        App.selectedProjectionInstanceKey = null;
-        App.selectedProjectionRevision = null;
+        clearTimelineSelectionState();
+        App.timelineCompositionActive = false;
         App.detailsOwner = null;
         App.lastSessionDetailsViewModel = null;
         App.lastSessionActivitySummaryViewModel = null;

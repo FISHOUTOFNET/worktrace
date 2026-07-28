@@ -20,7 +20,6 @@ from .activity_row_overlay import (
     ROW_KIND_RECENT_PROJECT_SESSION_ROW,
     apply_live_span_to_row,
 )
-from .page_view_model_common import enable_safe_open_edit
 from .projection_performance import stage
 from .report_projection_identity import stable_json_hash
 from .report_revision_service import get_report_structure_revision
@@ -142,6 +141,7 @@ def _base_session_row(
     adjusted = int(adjusted) if adjusted is not None else None
     display_seconds = adjusted if adjusted is not None else base_seconds
     is_in_progress = bool(session.get("is_in_progress"))
+    editable = bool(session.get("editable", not is_in_progress)) and not is_in_progress
     is_report_project = bool(
         session.get("is_report_project", session.get("is_classified"))
     )
@@ -175,10 +175,13 @@ def _base_session_row(
             session.get("closed_duration_seconds") or 0
         ),
         "source": "db",
-        "editable": bool(session.get("editable", not is_in_progress)),
+        "editable": editable,
         "exportable": bool(session.get("exportable", not is_in_progress)),
         "edit_disabled": bool(is_in_progress),
-        "disable_reason": "进行中记录暂不支持编辑" if is_in_progress else "",
+        "can_edit_project": editable,
+        "can_edit_note": editable,
+        "can_edit_duration": editable,
+        "disable_reason": "进行中时段不可编辑" if is_in_progress else "",
         "status": str(session.get("status") or "normal"),
         "status_code": str(
             session.get("status_code") or session.get("status") or "normal"
@@ -211,12 +214,18 @@ def _base_session_row(
             session.get("origin_activity_member_hashes") or []
         ),
         "event_count": int(session.get("event_count") or 0),
-        "can_hide": bool(session.get("can_hide")),
-        "can_merge_previous": bool(session.get("can_merge_previous")),
-        "can_merge_next": bool(session.get("can_merge_next")),
-        "can_split": bool(session.get("can_split")),
-        "can_copy": bool(session.get("can_copy")),
-        "can_hide_activity": bool(session.get("can_hide_activity")),
+        "can_hide": False if is_in_progress else bool(session.get("can_hide")),
+        "can_merge_previous": False
+        if is_in_progress
+        else bool(session.get("can_merge_previous")),
+        "can_merge_next": False
+        if is_in_progress
+        else bool(session.get("can_merge_next")),
+        "can_split": False if is_in_progress else bool(session.get("can_split")),
+        "can_copy": False if is_in_progress else bool(session.get("can_copy")),
+        "can_hide_activity": False
+        if is_in_progress
+        else bool(session.get("can_hide_activity")),
         "display_project": session.get("display_project"),
     }
     row.update(_description_display_fields(session, contributions))
@@ -626,9 +635,6 @@ def get_timeline_view_model(report_date: str | None = None) -> dict[str, Any]:
             row_kind=ROW_KIND_PROJECT_SESSION_ROW,
         )
         _set_summary_activity_ids(sessions)
-        for row in sessions:
-            enable_safe_open_edit(row)
-
     display_total_seconds = sum(
         int(row.get("duration_seconds") or 0) for row in sessions
     )
@@ -707,7 +713,7 @@ def get_session_activity_summary_view_model(
         if row.get("is_in_progress") and not row.get("edit_disabled"):
             row["edit_disabled"] = True
             row["disable_reason"] = (
-                row.get("disable_reason") or "进行中记录暂不支持编辑"
+                row.get("disable_reason") or "进行中时段不可编辑"
             )
         row["duration"] = format_duration(int(row.get("duration_seconds") or 0))
     rows.sort(

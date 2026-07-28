@@ -40,10 +40,6 @@
         return base + (item && item.description_source === "derived" ? " derived" : "");
     }
 
-    function formatCompactHours(seconds) {
-        return (Math.max(0, Number(seconds) || 0) / 3600).toFixed(1) + " h";
-    }
-
     function renderProjectDistribution(distribution) {
         var bar = document.getElementById("overview-project-bar");
         var segments = distribution && Array.isArray(distribution.segments)
@@ -61,7 +57,7 @@
             var seconds = Number.isFinite(rawSeconds) ? Math.max(0, rawSeconds) : 0;
             var grow = Math.max(1, Math.round(seconds));
             var label = String(segment.label || "");
-            var hours = formatCompactHours(seconds);
+            var hours = App.formatCompactHours(seconds);
             var exactDuration = App.formatDuration(seconds);
             var className = segment.is_other
                 ? "is-other"

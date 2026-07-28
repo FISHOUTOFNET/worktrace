@@ -774,6 +774,8 @@ function timelineHarness() {
     mutationOwner: null,
     detailsInFlight: {},
     NOTE_MAX_LENGTH: 2000,
+    TIMELINE_DESCRIPTION_EDIT_MAX_LENGTH: 200,
+    timelineCompositionActive: false,
     detailsOwner: null,
   });
   const bridgeCall = (method) => (...args) => {
@@ -799,7 +801,7 @@ function timelineHarness() {
   App.refreshTimelineAfterEdit = () => Promise.resolve();
   App.loadTimelineReport = () => Promise.resolve();
   for (const file of ["timeline_request_state.js", "timeline.js"]) loadJs(context, file);
-  return { App, element };
+  return { App, element, context };
 }
 
 function session(key, revision, startTime, opts = {}) {
@@ -874,7 +876,7 @@ test("6. continuous autosave: S1 uses R1, S2 uses R2 after rebase", async () => 
   await flush();
   await flush();
 
-  assert.ok(saveCalls.length >= 2, "two saves must fire");
+  assert.equal(saveCalls.length, 2, "one in-flight save plus one latest-draft save");
   assert.equal(saveCalls[0].revision, "rev-1", "S1 must use R1");
   assert.equal(saveCalls[1].revision, "rev-2", "S2 must use the rebased R2");
   assert.equal(saveCalls[1].note, "B", "S2 must save the post-submit note B");
@@ -925,6 +927,130 @@ test("7. multi-field edits during save are not overwritten by stale response", a
   assert.equal(element("edit-note-text").value, "note-2");
   assert.equal(element("edit-project-select").value, "2");
   assert.equal(element("edit-duration-input").value, "20");
+});
+
+test("7b. composition input never submits intermediate text and saves only final Chinese", async () => {
+  const { App, element, context } = timelineHarness();
+  const source = session("base:a", "rev-1", "2026-07-12T09:00:00");
+  App.currentSessions = [source];
+  App.editingSession = source;
+  App.projectsCache = [{ id: 1, name: "P" }];
+  element("edit-project-select").value = "1";
+  element("edit-duration-input").value = "10";
+
+  let scheduled = null;
+  let timerId = 0;
+  context.window.setTimeout = (callback) => {
+    scheduled = callback;
+    timerId += 1;
+    return timerId;
+  };
+  context.window.clearTimeout = () => {};
+  const submitted = [];
+  App.callBridge = (method, ...args) => {
+    if (method === "save_timeline_session_edit") submitted.push(args[6]);
+    return Promise.resolve({
+      ok: true,
+      outcome_type: "operation_committed",
+      snapshot_revision: "snap-2",
+      selection_hint: {
+        projection_instance_key: "base:a",
+        projection_revision: "rev-2",
+      },
+    });
+  };
+  App.loadTimelineReport = () => {
+    App.currentSessions = [
+      session("base:a", "rev-2", "2026-07-12T09:00:00", {
+        session_note: "中文",
+      }),
+    ];
+    return Promise.resolve();
+  };
+
+  element("edit-note-text").value = "zhong";
+  App.handleTimelineCompositionStart();
+  App.handleTimelineNoteInput({ isComposing: true });
+  App.saveEdit();
+  assert.equal(submitted.length, 0, "composition must block direct/timer save");
+  assert.equal(App.timelineAutosaveQueued, true);
+
+  element("edit-note-text").value = "中文";
+  App.handleTimelineCompositionEnd();
+  assert.equal(element("edit-note-count").textContent, "2 / 200");
+  assert.equal(typeof scheduled, "function", "compositionend restarts debounce");
+  scheduled();
+  await flush();
+  await flush();
+  await flush();
+
+  assert.deepEqual(submitted, ["中文"]);
+});
+
+test("7c. editable fields stay enabled and focused while autosave is in flight", async () => {
+  const { App, element } = timelineHarness();
+  const source = session("base:a", "rev-1", "2026-07-12T09:00:00");
+  App.currentSessions = [source];
+  App.editingSession = source;
+  App.projectsCache = [{ id: 1, name: "P" }];
+  element("edit-project-select").value = "1";
+  element("edit-note-text").value = "first";
+  element("edit-duration-input").value = "10";
+  let focusCount = 0;
+  element("edit-note-text").focus = () => { focusCount += 1; };
+  const pending = deferred();
+  App.callBridge = () => pending.promise;
+
+  App.saveEdit();
+  assert.equal(App.editSaving, true);
+  assert.equal(element("edit-project-select").disabled, false);
+  assert.equal(element("edit-note-text").disabled, false);
+  assert.equal(element("edit-duration-input").disabled, false);
+  assert.equal(focusCount, 0);
+
+  element("edit-note-text").value = "second";
+  App.handleTimelineNoteInput({ isComposing: false });
+  assert.equal(element("edit-note-text").value, "second");
+  assert.equal(focusCount, 0);
+
+  pending.resolve({
+    ok: false,
+    error: "operation_failed",
+    message: "失败",
+  });
+  await flush();
+});
+
+test("7d. 200-character limit applies only when the description changed", async () => {
+  const { App, element } = timelineHarness();
+  const historical = "旧".repeat(250);
+  const source = session("base:a", "rev-1", "2026-07-12T09:00:00", {
+    project_id: 1,
+    session_note: historical,
+  });
+  App.currentSessions = [source];
+  App.editingSession = source;
+  App.projectsCache = [{ id: 1, name: "P1" }, { id: 2, name: "P2" }];
+  element("edit-project-select").value = "2";
+  element("edit-note-text").value = historical;
+  element("edit-duration-input").value = "10";
+  const submitted = [];
+  App.callBridge = (method, ...args) => {
+    submitted.push(args);
+    return Promise.resolve({ ok: false, error: "stop", message: "stop" });
+  };
+
+  App.saveEdit();
+  await flush();
+  assert.equal(submitted.length, 1, "unchanged historical long text must not block project edit");
+  assert.equal(submitted[0][6], historical);
+
+  App.editingSession = source;
+  App.editSaving = false;
+  element("edit-note-text").value = "新".repeat(201);
+  App.saveEdit();
+  assert.equal(submitted.length, 1, "changed description over 200 must be rejected");
+  assert.match(element("edit-status").textContent, /200/);
 });
 
 test("8. context switch preserves dirty draft (save first, then switch)", async () => {
@@ -1116,7 +1242,7 @@ test("10. filter catalog excludes system unclassified project (single 未归类 
   // Provide a mock renderer that mirrors timeline.js renderTimelineProjectFilter.
   App.renderTimelineProjectFilter = function (projects) {
     var select = element("timeline-project-filter");
-    var html = '<option value="">项目：全部</option><option value="unclassified">未归类</option>';
+    var html = '<option value="">全部项目</option><option value="unclassified">未归类</option>';
     (projects || []).forEach(function (project) {
       html += '<option value="' + project.id + '">' + project.name + '</option>';
     });

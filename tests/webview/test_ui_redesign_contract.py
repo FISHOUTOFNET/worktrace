@@ -40,9 +40,13 @@ def test_focus_drawer_dialog_and_toast_are_shared_accessible_primitives() -> Non
 
 def test_timeline_keeps_liveclock_attributes_and_uses_autosave_owner() -> None:
     source = read_js("timeline.js")
+    init_source = read_js("init.js")
     assert "App.liveClockDataAttributes" in source
     assert "App.timelineRequestState.nextMutationOwner" in source
-    assert "scheduleTimelineAutosave(650)" in read_js("init.js")
+    assert 'bind("edit-note-text", "compositionstart", App.handleTimelineCompositionStart)' in init_source
+    assert 'bind("edit-note-text", "compositionend", App.handleTimelineCompositionEnd)' in init_source
+    assert 'bind("edit-note-text", "input", App.handleTimelineNoteInput)' in init_source
+    assert "scheduleTimelineAutosave(650)" in source
     assert "timelineAutosaveQueued" in source
     assert "markMutationUnknown" in source
     assert "refreshAfterConfirmedMutation" in source

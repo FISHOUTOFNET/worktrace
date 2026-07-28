@@ -13,7 +13,7 @@
     };
 
     App.HEARTBEAT_INTERVAL_MS = 1000;
-    App.NOTE_MAX_LENGTH = 2000;
+    App.TIMELINE_DESCRIPTION_EDIT_MAX_LENGTH = 200;
     App.heartbeatTimer = null;
     App.lastOverviewSnapshot = null;
     App.lastRecentData = null;
@@ -40,7 +40,10 @@
     App.timelineEpoch = 0;
     App.selectionEpoch = 0;
     App.detailsOwner = null;
+    App.selectedProjectionInstanceKey = null;
     App.selectedProjectionRevision = null;
+    App.selectedTimelineAnchorActivityId = null;
+    App.selectedTimelineWasInProgress = false;
     App.timelineRequestToken = 0;
     App.detailsInFlight = {};
     App.overviewRequestToken = 0;
@@ -50,6 +53,7 @@
     App.currentSessions = [];
     App.editingSession = null;
     App.editSaving = false;
+    App.timelineCompositionActive = false;
     App.statisticsLoaded = false;
     App.statisticsLoading = false;
     App.statisticsRequestToken = 0;
@@ -285,6 +289,11 @@
     }
     App.formatDuration = formatDuration;
 
+    function formatCompactHours(seconds) {
+        return (Math.max(0, Number(seconds) || 0) / 3600).toFixed(1) + " h";
+    }
+    App.formatCompactHours = formatCompactHours;
+
     App.readDurationSecondsFromText = function (element) {
         if (!element) return 0;
         var attribute = element.getAttribute("data-duration-seconds");
@@ -301,10 +310,19 @@
     function renderDurationProjected(element, seconds, continuityKey, options) {
         if (!element) return;
         var next = Math.max(0, parseInt(seconds, 10) || 0);
-        element.textContent = formatDuration(next);
+        var exact = formatDuration(next);
+        var format = options && options.format
+            ? String(options.format)
+            : String(element.getAttribute("data-duration-format") || "");
+        if (format === "compact-hours") {
+            element.textContent = formatCompactHours(next);
+            element.setAttribute("title", exact);
+            element.setAttribute("aria-label", "时长 " + exact);
+        } else {
+            element.textContent = exact;
+        }
         element.setAttribute("data-duration-seconds", String(next));
         if (continuityKey) App._monotonicRenderState[String(continuityKey)] = { lastSeconds: next };
-        void options;
     }
     App.renderDurationProjected = renderDurationProjected;
     App.renderDurationMonotonic = function (element, seconds, key) {

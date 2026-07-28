@@ -6,12 +6,11 @@ import json
 import sqlite3
 from typing import Any, Mapping, Sequence
 
-from ..constants import STATUS_NORMAL
 from ..data_generation_repository import DataGenerationNamespace
 from ..db import get_connection, now_str
+from ..domain_limits import TIMELINE_DESCRIPTION_EDIT_MAX_LENGTH
 from ..domain_unit_of_work import DomainUnitOfWork
 from . import (
-    assignment_command_service,
     project_lifecycle_policy,
     report_operation_repository,
 )
@@ -240,6 +239,15 @@ def _run_uow(
                 )
 
             _require_capability(operation_type, source, direction)
+            if operation_type == "edit_session":
+                requested_note = str(values.get("note") or "")
+                current_note = str(source.get("session_note") or "")
+                if (
+                    requested_note != current_note
+                    and len(requested_note)
+                    > TIMELINE_DESCRIPTION_EDIT_MAX_LENGTH
+                ):
+                    raise InvalidInputError()
             payload, roles, undo_of = _operation_input(
                 conn,
                 operation_type,
@@ -247,9 +255,6 @@ def _run_uow(
                 target,
                 values,
             )
-            if bool(source.get("is_in_progress")) and "duration" in payload:
-                raise OperationNotAllowedError()
-
             sequence = _next_sequence(conn, report_date)
             operation_id = _next_operation_id(conn)
             candidate = _candidate_operation(
@@ -312,63 +317,8 @@ def _run_uow(
                 _insert_receipt(conn, request_id, input_signature, result)
                 return result
 
-            committed_candidate = candidate
-            committed_roles = roles
-            committed_source_key = source_instance_key
-            if bool(source.get("is_in_progress")):
-                open_activity_id = _persist_open_edit_assignment(
-                    conn,
-                    source,
-                    values.get("project_id"),
-                )
-                current_snapshot = build_visible_snapshot(
-                    report_date,
-                    report_date,
-                    conn=conn,
-                )
-                current_source = _find_open_activity_entry(
-                    current_snapshot.final_sessions,
-                    open_activity_id,
-                )
-                if current_source is None or not bool(
-                    current_source.get("is_in_progress")
-                ):
-                    raise OperationNotAllowedError()
-                current_payload, current_roles, current_undo = _operation_input(
-                    conn,
-                    operation_type,
-                    current_source,
-                    None,
-                    values,
-                )
-                if "duration" in current_payload:
-                    raise OperationNotAllowedError()
-                committed_source_key = str(
-                    current_source.get("projection_instance_key") or ""
-                )
-                current_revision = str(
-                    current_source.get("projection_revision") or ""
-                )
-                if not committed_source_key or not current_revision:
-                    raise StaleSelectionError()
-                committed_roles = current_roles
-                committed_candidate = _candidate_operation(
-                    operation_id=operation_id,
-                    report_date=report_date,
-                    sequence=sequence,
-                    operation_type=operation_type,
-                    source_instance_key=committed_source_key,
-                    source_expected_revision=current_revision,
-                    target_instance_key=None,
-                    target_expected_revision=None,
-                    direction=None,
-                    undo_of_operation_id=current_undo,
-                    payload=current_payload,
-                    roles=current_roles,
-                )
-
-            _insert_operation(conn, committed_candidate)
-            _insert_members(conn, operation_id, committed_roles)
+            _insert_operation(conn, candidate)
+            _insert_members(conn, operation_id, roles)
 
             after = build_visible_snapshot(report_date, report_date, conn=conn)
             applied = next(
@@ -392,7 +342,7 @@ def _run_uow(
                 selection_hint=_post_selection(
                     operation_type,
                     operation_id,
-                    committed_source_key,
+                    source_instance_key,
                     after.final_sessions,
                 ),
                 snapshot_revision=after.snapshot_revision,
@@ -600,42 +550,6 @@ def _insert_members(
             )
 
 
-def _persist_open_edit_assignment(
-    conn,
-    source: Mapping[str, Any],
-    project_id: Any,
-) -> int:
-    activity_id = _open_activity_id(source)
-    if activity_id <= 0:
-        raise OperationNotAllowedError()
-    if project_id is None:
-        return activity_id
-    if not assignment_command_service.upsert_assignment(
-        conn,
-        activity_id=activity_id,
-        project_id=int(project_id),
-        confidence=100,
-        source="manual",
-        is_manual=True,
-    ):
-        raise OperationNotAllowedError()
-    return activity_id
-
-
-def _find_open_activity_entry(
-    entries: Sequence[Mapping[str, Any]],
-    activity_id: int,
-) -> dict | None:
-    for entry in entries:
-        if int(entry.get("open_activity_id") or 0) == int(activity_id):
-            return dict(entry)
-        if int(activity_id) in {
-            int(value or 0) for value in entry.get("activity_ids") or []
-        }:
-            return dict(entry)
-    return None
-
-
 def _find_request(conn, request_id: str) -> dict[str, Any] | None:
     row = conn.execute(
         "SELECT * FROM report_mutation_request WHERE request_id = ?",
@@ -773,17 +687,7 @@ def _require_capability(
     direction: str | None,
 ) -> None:
     if bool(source.get("is_in_progress")):
-        safe_open_edit = (
-            operation_type == "edit_session"
-            and str(source.get("status_code") or source.get("status") or "")
-            == STATUS_NORMAL
-            and _open_activity_id(source) > 0
-            and str(source.get("row_kind") or "project_session")
-            == "project_session"
-        )
-        if not safe_open_edit:
-            raise OperationNotAllowedError()
-        return
+        raise OperationNotAllowedError()
     field = {
         "edit_session": "editable",
         "hide_session": "can_hide",
@@ -794,14 +698,6 @@ def _require_capability(
     }.get(operation_type)
     if not field or not bool(source.get(field)):
         raise OperationNotAllowedError()
-
-
-def _open_activity_id(source: Mapping[str, Any]) -> int:
-    value = int(source.get("open_activity_id") or 0)
-    if value > 0:
-        return value
-    activity_ids = [int(item or 0) for item in source.get("activity_ids") or []]
-    return activity_ids[-1] if activity_ids else 0
 
 
 def _producer_operation_id(key: str, expected_prefix: str) -> int | None:

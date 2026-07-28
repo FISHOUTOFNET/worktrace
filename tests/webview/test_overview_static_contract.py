@@ -105,10 +105,13 @@ def test_overview_project_bar_is_unheaded_narrow_and_accessible():
 
 def test_project_distribution_render_owns_text_safety_and_segment_semantics():
     source = read_js("overview.js")
-    compact = func_body(source, "formatCompactHours")
+    core = read_js("core.js")
     render = func_body(source, "renderProjectDistribution")
 
-    assert '.toFixed(1) + " h"' in compact
+    assert 'function formatCompactHours(seconds)' in core
+    assert '.toFixed(1) + " h"' in core
+    assert "App.formatCompactHours(seconds)" in render
+    assert "function formatCompactHours" not in source
     assert "App.escapeHtml(label)" in render
     assert "App.escapeHtml(hours)" in render
     assert 'title="' in render

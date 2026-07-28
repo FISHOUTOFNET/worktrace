@@ -237,6 +237,8 @@
         App.currentSessions = [];
         App.selectedProjectionInstanceKey = null;
         App.selectedProjectionRevision = null;
+        App.selectedTimelineAnchorActivityId = null;
+        App.selectedTimelineWasInProgress = false;
         App.editingSession = null;
         // Discard any in-flight draft snapshot and queued context change:
         // a generation reset (database replacement / clear) invalidates the
@@ -245,6 +247,7 @@
         App.submittedDraft = null;
         App.pendingContextChange = null;
         App.editSaving = false;
+        App.timelineCompositionActive = false;
         App.detailsOwner = null;
         App.timelineOwner = null;
         App.mutationOwner = null;
@@ -641,10 +644,10 @@
             App.confirmTimelineDeletion("hide", {}, event.currentTarget);
         });
         bind("edit-project-select", "change", function () { App.scheduleTimelineAutosave(0); });
-        bind("edit-note-text", "input", function () {
-            App.updateNoteCount();
-            App.scheduleTimelineAutosave(650);
-        });
+        bind("edit-note-text", "compositionstart", App.handleTimelineCompositionStart);
+        bind("edit-note-text", "compositionend", App.handleTimelineCompositionEnd);
+        bind("edit-note-text", "input", App.handleTimelineNoteInput);
+        bind("edit-note-text", "blur", App.handleTimelineNoteBlur);
         bind("edit-duration-input", "change", function () { App.scheduleTimelineAutosave(0); });
         bind("timeline-project-filter", "change", App.applyTimelineProjectFilter);
         bind("timeline-details-close", "click", App.closeTimelineDrawer);
