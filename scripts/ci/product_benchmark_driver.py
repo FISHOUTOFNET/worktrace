@@ -91,17 +91,20 @@ _PROFILES: dict[str, dict[str, Any]] = {
         "contribution_count": 200,
         "runs": 1,
         "warmup_runs": 0,
+        "heavy_session_activity_count": 12,
     },
     "realistic": {
         "activity_count": 2000,
         "runs": 3,
         "warmup_runs": 1,
+        "heavy_session_activity_count": 80,
     },
     "full": {
         "activity_count": 20000,
         "contribution_count": 10000,
         "runs": 3,
         "warmup_runs": 1,
+        "heavy_session_activity_count": 0,
     },
 }
 
@@ -473,6 +476,7 @@ def _measure_scenario(
     entry_counts: list[int] = []
     contribution_counts: list[int] = []
     session_counts: list[int] = []
+    max_session_contribution_counts: list[int] = []
 
     for index in range(runs):
         progress.checkpoint(
@@ -489,6 +493,16 @@ def _measure_scenario(
         entry_counts.append(len(snapshot.final_entries))
         contribution_counts.append(len(snapshot.final_contributions))
         session_counts.append(len(snapshot.final_sessions))
+        # Compute the max session contribution count (event_count) across
+        # all sessions.  This proves the heavy session actually formed in
+        # the projection — if the heavy session has 80 activities, the max
+        # event_count must be >= 80.
+        max_sess_count = 0
+        for sess in snapshot.final_sessions:
+            ec = int(sess.get("event_count") or 0)
+            if ec > max_sess_count:
+                max_sess_count = ec
+        max_session_contribution_counts.append(max_sess_count)
         progress.checkpoint(
             "sample_completed",
             current_sample_index=index,
@@ -500,6 +514,14 @@ def _measure_scenario(
         raise RuntimeError(
             f"{label} snapshot hash inconsistent across runs: "
             f"{unique_hashes}"
+        )
+
+    # Verify max session contribution count is consistent across runs.
+    unique_max_counts = set(max_session_contribution_counts)
+    if len(unique_max_counts) != 1:
+        raise RuntimeError(
+            f"{label} max session contribution count inconsistent across "
+            f"runs: {unique_max_counts}"
         )
 
     return {
@@ -519,6 +541,10 @@ def _measure_scenario(
         "entry_count": entry_counts[0] if entry_counts else 0,
         "contribution_count": contribution_counts[0] if contribution_counts else 0,
         "session_count": session_counts[0] if session_counts else 0,
+        "actual_max_session_contribution_count": (
+            max_session_contribution_counts[0]
+            if max_session_contribution_counts else 0
+        ),
     }
 
 
@@ -542,7 +568,10 @@ def _build_fixture_for_scenario(
 
     if scenario == "realistic_heavy_day":
         spec = build_realistic_heavy_day_spec(
-            activity_count=profile_cfg["activity_count"]
+            activity_count=profile_cfg["activity_count"],
+            heavy_session_activity_count=profile_cfg.get(
+                "heavy_session_activity_count", 80
+            ),
         )
         fixture_result = build_realistic_heavy_day_fixture(
             spec=spec, chunk_callback=chunk_callback,
@@ -720,11 +749,35 @@ def _run_single_scenario(
             failure_message = f"sample measurement failed: {exc}"
             raise
 
+        # Heavy session validation: for realistic, actual max session
+        # contribution count must be >= planned heavy count.  Fail-closed
+        # — if the heavy session did not form, the benchmark measures
+        # the wrong workload.
+        planned_heavy = fixture_result.planned_heavy_session_activity_count
+        actual_max_sess = metric.get("actual_max_session_contribution_count", 0)
+        if scenario == "realistic_heavy_day" and planned_heavy > 0:
+            if actual_max_sess < planned_heavy:
+                failure_category = ERROR_RESULT_VALIDATION
+                failure_message = (
+                    f"heavy session not formed: "
+                    f"actual_max_session_contribution_count="
+                    f"{actual_max_sess} < planned_heavy="
+                    f"{planned_heavy}"
+                )
+                raise RuntimeError(failure_message)
+
         started_at = progress.snapshot().get(
             "phase_started_at") or _utc_iso(time.time())
         finished_at = _utc_iso(time.time())
 
         try:
+            heavy_session_audit: dict[str, Any] = {
+                "planned_heavy_session_activity_count": planned_heavy,
+                "actual_max_session_contribution_count": actual_max_sess,
+                "actual_session_count": metric.get("session_count", 0),
+                "actual_entry_count": metric.get("entry_count", 0),
+                "actual_contribution_count": metric.get("contribution_count", 0),
+            }
             payload: dict[str, Any] = {
                 "scenario": scenario,
                 "schema_version": _SCHEMA_VERSION,
@@ -735,7 +788,10 @@ def _run_single_scenario(
                 "target_root": str(target_root),
                 "fixture_hash": fixture_hash(
                     build_realistic_heavy_day_spec(
-                        activity_count=profile_cfg["activity_count"]
+                        activity_count=profile_cfg["activity_count"],
+                        heavy_session_activity_count=profile_cfg.get(
+                            "heavy_session_activity_count", 80
+                        ),
                     )
                     if scenario == "realistic_heavy_day"
                     else build_20k_activity_spec(
@@ -747,6 +803,7 @@ def _run_single_scenario(
                     )
                 ),
                 "fixture_audit": fixture_result.to_audit_dict(),
+                "heavy_session_audit": heavy_session_audit,
                 "python_version": sys.version,
                 "platform": platform.platform(),
                 "runner_metadata": runner_meta,

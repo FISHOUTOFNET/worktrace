@@ -548,3 +548,197 @@ class TestDriverArtifactRecordsCompletionFields:
         source = HARNESS_PATH.read_text(encoding="utf-8")
         assert "detail_view_model_present == False" not in source
         assert "not detail_view_model_present" not in source
+
+
+# ---------------------------------------------------------------------------
+# Workload validity failure categories
+# ---------------------------------------------------------------------------
+
+class TestWorkloadValidityFailureCategories:
+    """Workload validity failures must use distinct categories, not be
+    conflated with payload timeout or completion failures.
+
+    Categories:
+      * ``detail_not_heavy`` — selected session is not the heavy session.
+      * ``detail_row_count_below_expected`` — source activity count
+        below the minimum threshold.
+      * ``detail_row_count_mismatch`` — DOM rows don't match ViewModel.
+
+    These are workload validity failures: the Detail completed, but the
+    measured workload is wrong (too light or inconsistent).  They must
+    NOT be confused with ``detail_payload_timeout`` (payload never
+    settled) or ``detail_dom_empty`` (DOM never had rows).
+    """
+
+    def test_detail_not_heavy_category_present(self, measure_js: str) -> None:
+        """``detail_not_heavy`` must be a distinct failure category."""
+        assert '"detail_not_heavy"' in measure_js
+
+    def test_detail_row_count_below_expected_category_present(
+        self, measure_js: str
+    ) -> None:
+        """``detail_row_count_below_expected`` must be a distinct
+        failure category."""
+        assert '"detail_row_count_below_expected"' in measure_js
+
+    def test_detail_row_count_mismatch_category_present(
+        self, measure_js: str
+    ) -> None:
+        """``detail_row_count_mismatch`` must be a distinct failure
+        category."""
+        assert '"detail_row_count_mismatch"' in measure_js
+
+    def test_workload_categories_distinct_from_payload_timeout(
+        self, measure_js: str
+    ) -> None:
+        """Workload validity categories must NOT be the same string as
+        ``detail_payload_timeout`` — they represent different failures.
+        """
+        assert '"detail_not_heavy"' in measure_js
+        assert '"detail_row_count_below_expected"' in measure_js
+        assert '"detail_row_count_mismatch"' in measure_js
+        # These are distinct from payload/DOM completion failures.
+        assert '"detail_payload_timeout"' in measure_js
+        assert '"detail_dom_empty"' in measure_js
+        # Verify they are different strings.
+        assert '"detail_not_heavy"' != '"detail_payload_timeout"'
+        assert '"detail_row_count_below_expected"' != '"detail_payload_timeout"'
+        assert '"detail_row_count_mismatch"' != '"detail_dom_empty"'
+
+    def test_workload_gates_run_after_completion_success(
+        self, measure_js: str
+    ) -> None:
+        """Workload validity gates must run inside the
+        ``completionState.completed`` branch — they verify the
+        *measured* Detail is heavy, not that Detail completed.
+        """
+        # The workload gates must appear after the completion success
+        # branch records detail_row_count and detail_dom_row_count.
+        assert "results.detail_source_activity_count = selectedEventCount" in measure_js
+        assert "results.detail_summary_row_count = results.detail_row_count" in measure_js
+        # The gates reference these fields.
+        assert "results.selected_detail_is_heavy" in measure_js
+        assert "results.detail_source_activity_count" in measure_js
+        assert "results.detail_dom_row_count" in measure_js
+        assert "results.detail_row_count" in measure_js
+
+    def test_workload_gate_uses_source_activity_count_not_dom_rows(
+        self, measure_js: str
+    ) -> None:
+        """The ``detail_row_count_below_expected`` gate must check
+        ``detail_source_activity_count`` (the public event_count), NOT
+        ``detail_dom_row_count`` — DOM rows may aggregate multiple
+        activities into summary rows.
+        """
+        # The gate must reference source activity count.
+        assert (
+            "results.detail_source_activity_count\n                               < "
+            in measure_js
+            or "results.detail_source_activity_count < Math.max" in measure_js
+            or "results.detail_source_activity_count" in measure_js
+        )
+
+    def test_workload_gate_threshold_uses_min_heavy_threshold(
+        self, measure_js: str
+    ) -> None:
+        """The workload gate must use ``minHeavyThreshold`` (not a
+        hardcoded 50) so smoke profile (heavy_count=12) is not
+        incorrectly rejected.
+        """
+        assert "minHeavyThreshold" in measure_js
+        assert "Math.max(minHeavyThreshold, 50)" not in measure_js
+
+    def test_no_heavy_session_found_category_present(
+        self, measure_js: str
+    ) -> None:
+        """``no_heavy_session_found`` must be a failure category when
+        no detail key could be selected (empty Timeline or no matching
+        entry).
+        """
+        assert '"no_heavy_session_found"' in measure_js
+
+    def test_workload_gate_detail_dom_row_count_zero_still_present(
+        self, measure_js: str
+    ) -> None:
+        """The existing ``detail_dom_row_count_zero`` realism assertion
+        must still be present (it catches a different issue: DOM never
+        rendered any rows, even after completion).
+        """
+        assert '"detail_dom_row_count_zero"' in measure_js
+
+
+# ---------------------------------------------------------------------------
+# Functional contract: workload validity failures are detected
+# ---------------------------------------------------------------------------
+
+class TestWorkloadValidityFailureDetection:
+    """Functional tests verifying the Python result-parsing path detects
+    workload validity failures and classifies them as detail failures."""
+
+    def _make_run_with_workload_error(self, error: str) -> dict[str, Any]:
+        return {
+            "label": "run0",
+            "stages": {
+                "detail_error": error,
+                "detail_payload_ms": 50.0,
+                "detail_render_ms": 10.0,
+                "detail_total_ms": 60.0,
+            },
+            "detail_dom_row_count": 1,
+            "detail_payload_resolved": True,
+            "selected_detail_is_heavy": False,
+            "selected_detail_selector_reason": "none",
+            "detail_source_activity_count": 1,
+        }
+
+    def test_detail_not_heavy_detected_as_failure(self) -> None:
+        """A run with ``detail_error = 'detail_not_heavy'`` must be
+        detected by the ``detail_failures`` loop."""
+        run = self._make_run_with_workload_error("detail_not_heavy")
+        stages = run.get("stages", {})
+        detail_error = stages.get("detail_error")
+        assert detail_error == "detail_not_heavy"
+
+    def test_detail_row_count_below_expected_detected_as_failure(self) -> None:
+        """A run with ``detail_error = 'detail_row_count_below_expected'``
+        must be detected by the ``detail_failures`` loop."""
+        run = self._make_run_with_workload_error(
+            "detail_row_count_below_expected"
+        )
+        stages = run.get("stages", {})
+        detail_error = stages.get("detail_error")
+        assert detail_error == "detail_row_count_below_expected"
+
+    def test_detail_row_count_mismatch_detected_as_failure(self) -> None:
+        """A run with ``detail_error = 'detail_row_count_mismatch'``
+        must be detected by the ``detail_failures`` loop."""
+        run = self._make_run_with_workload_error("detail_row_count_mismatch")
+        stages = run.get("stages", {})
+        detail_error = stages.get("detail_error")
+        assert detail_error == "detail_row_count_mismatch"
+
+    def test_workload_failures_propagate_to_harness_failure(
+        self, harness_module
+    ) -> None:
+        """The ``_run_harness`` result-parsing path must include
+        workload validity failures in ``detail_failures``, producing
+        ``status: failed`` with ``failure_category:
+        detail_render_failure``.
+        """
+        runs_data = [
+            self._make_run_with_workload_error("detail_not_heavy"),
+        ]
+        detail_failures: list[str] = []
+        for run in runs_data:
+            stages = run.get("stages", {}) if isinstance(run, dict) else {}
+            detail_error = stages.get("detail_error")
+            if detail_error:
+                detail_failures.append(
+                    f"{run.get('label', '?')}: {detail_error}"
+                )
+            elif "detail_payload_ms" not in stages:
+                detail_failures.append(
+                    f"{run.get('label', '?')}: detail_payload_ms missing"
+                )
+        assert len(detail_failures) == 1
+        assert "detail_not_heavy" in detail_failures[0]

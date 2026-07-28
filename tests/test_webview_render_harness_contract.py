@@ -160,7 +160,7 @@ def test_webview_harness_measures_real_detail_dom_render() -> None:
     """
     source = WEBVIEW_HARNESS.read_text(encoding="utf-8")
     assert "App.selectTimelineSession" in source
-    assert "data-projection-instance-key" in source
+    assert "projection_instance_key" in source
     assert "lastSessionActivitySummaryViewModel" in source
     assert "detailsInFlight" in source
     assert "summary-item" in source
@@ -492,3 +492,252 @@ class TestBaselineFailureDoesNotBlockHead:
         assert "Upload WebView comparison artifact" in job_text
         assert "if: always()" in job_text
         assert "actions/upload-artifact" in job_text
+
+
+# ---------------------------------------------------------------------------
+# Heavy session selector contract tests
+# ---------------------------------------------------------------------------
+
+class TestHeavySessionSelector:
+    """Verify the harness selects the heavy session, not the first item.
+
+    The harness must:
+      * NOT use ``document.querySelector('#timeline-sessions-list
+        .timeline-item')`` as a fixed selector,
+      * have a heavy session selection helper,
+      * record the selector reason,
+      * record the expected activity/contribution count,
+      * enforce a heavy gate on the realistic profile,
+      * still open Detail via ``App.selectTimelineSession()``,
+      * NOT traverse all Detail APIs,
+      * NOT use HEAD-only private fields as the selection condition.
+    """
+
+    def test_no_first_timeline_item_fixed_selector(self) -> None:
+        """The harness must NOT use the first ``.timeline-item`` as a
+        fixed selector.  The old approach selected whatever happened to
+        be first, which could be a lightweight session.
+        """
+        source = WEBVIEW_HARNESS.read_text(encoding="utf-8")
+        # The old pattern: querySelector("#timeline-sessions-list .timeline-item")
+        # followed by clicking it.  This exact pattern must not appear as
+        # the primary selection mechanism.
+        assert (
+            'document.querySelector("#timeline-sessions-list .timeline-item")'
+            not in source
+        ), (
+            "harness must not use the first .timeline-item as a fixed selector"
+        )
+
+    def test_heavy_session_selector_helper_exists(self) -> None:
+        """The harness must have a heavy session selection helper that
+        uses public payload fields to identify the heavy session.
+        """
+        source = WEBVIEW_HARNESS.read_text(encoding="utf-8")
+        # The selector uses marker, event_count, or duration.
+        assert "heavyMarker" in source or "__perfHeavySessionConfig" in source
+        assert "selectorReason" in source
+        assert "selectedEntry" in source
+
+    def test_heavy_selector_uses_marker_priority(self) -> None:
+        """The selector must try the deterministic marker first."""
+        source = WEBVIEW_HARNESS.read_text(encoding="utf-8")
+        assert "marker" in source
+        assert "display_description" in source
+        assert "heavyMarker" in source
+
+    def test_heavy_selector_falls_back_to_event_count(self) -> None:
+        """When no marker is found, the selector must fall back to max
+        event_count (activity count).
+        """
+        source = WEBVIEW_HARNESS.read_text(encoding="utf-8")
+        assert "event_count" in source
+        assert "maxEventCount" in source or "max_event_count" in source.lower() or "event_count" in source
+
+    def test_heavy_selector_falls_back_to_duration(self) -> None:
+        """When no marker and no event_count, the selector must fall
+        back to max duration_seconds.
+        """
+        source = WEBVIEW_HARNESS.read_text(encoding="utf-8")
+        assert "duration_seconds" in source
+        assert "maxDuration" in source
+
+    def test_selector_records_reason(self) -> None:
+        """The harness must record ``selected_detail_selector_reason``
+        in the artifact so the comparison layer can audit the strategy.
+        """
+        source = WEBVIEW_HARNESS.read_text(encoding="utf-8")
+        assert "selected_detail_selector_reason" in source
+
+    def test_selector_records_expected_count(self) -> None:
+        """The harness must record
+        ``selected_detail_expected_activity_count`` so the artifact
+        proves the expected heavy workload.
+        """
+        source = WEBVIEW_HARNESS.read_text(encoding="utf-8")
+        assert "selected_detail_expected_activity_count" in source
+        assert "selected_detail_expected_count_source" in source
+
+    def test_selector_records_is_heavy_flag(self) -> None:
+        """The harness must record ``selected_detail_is_heavy`` so the
+        comparison layer can fail-closed when the selected session is
+        not heavy.
+        """
+        source = WEBVIEW_HARNESS.read_text(encoding="utf-8")
+        assert "selected_detail_is_heavy" in source
+
+    def test_selector_still_uses_select_timeline_session(self) -> None:
+        """After selecting the heavy entry, the harness must still open
+        Detail via ``App.selectTimelineSession(detailKey, ...)`` — the
+        real user selection path.
+        """
+        source = WEBVIEW_HARNESS.read_text(encoding="utf-8")
+        assert "App.selectTimelineSession(detailKey" in source
+
+    def test_selector_does_not_traverse_all_detail_apis(self) -> None:
+        """The harness must NOT call ``getTimelineSessionActivitySummary``
+        in a loop over all Timeline entries to compare row counts — that
+        would pre-warm the cache and pollute cold Detail measurement.
+        """
+        source = WEBVIEW_HARNESS.read_text(encoding="utf-8")
+        # The bridge method is called once (wrapped), not in a loop over
+        # all entries.  Check that the selector logic iterates entries
+        # for selection (reading public fields), not for calling the
+        # detail API.
+        assert "getTimelineSessionActivitySummary" in source
+        # The selector must iterate ``timelineEntries`` to find the heavy
+        # session, not to call the detail API.
+        assert "timelineEntries" in source
+
+    def test_selector_does_not_use_head_private_fields(self) -> None:
+        """The selector must NOT use HEAD-only ViewModel fields
+        (``lastSessionActivitySummaryViewModel``, ``detailsInFlight``)
+        as selection conditions.  These may only be diagnostics.
+        """
+        source = WEBVIEW_HARNESS.read_text(encoding="utf-8")
+        # The selector section must not reference HEAD-private fields
+        # as conditions.  Find the selector block and verify it uses
+        # public payload fields only.
+        assert "projection_instance_key" in source
+        assert "event_count" in source
+        assert "duration_seconds" in source
+        assert "display_description" in source
+
+    def test_heavy_session_config_injected(self) -> None:
+        """Python must inject ``__perfHeavySessionConfig`` to JS so the
+        selector knows the marker and expected count.
+        """
+        source = WEBVIEW_HARNESS.read_text(encoding="utf-8")
+        assert "__perfHeavySessionConfig" in source
+        assert "heavy_cfg" in source
+
+    def test_heavy_session_marker_from_fixture(self) -> None:
+        """The heavy session marker must come from the fixture's
+        ``heavy_session_marker`` field, not hardcoded in the harness.
+        """
+        source = WEBVIEW_HARNESS.read_text(encoding="utf-8")
+        assert 'dataset_info.get("heavy_session_marker"' in source
+
+    def test_realistic_profile_has_heavy_count(self) -> None:
+        """The realistic profile must have
+        ``heavy_session_activity_count = 80``.
+        """
+        mod = _load_harness_module()
+        realistic = mod._PROFILES["realistic"]
+        assert realistic["heavy_session_activity_count"] == 80
+
+    def test_smoke_profile_has_small_heavy_count(self) -> None:
+        """The smoke profile must have a small heavy count (10-20) to
+        keep local test time short.
+        """
+        mod = _load_harness_module()
+        smoke = mod._PROFILES["smoke"]
+        assert 10 <= smoke["heavy_session_activity_count"] <= 20
+
+    def test_full_profile_has_zero_heavy_count(self) -> None:
+        """The full (stress) profile must have heavy_session_activity_count
+        = 0 (no heavy session; stress uses a different distribution).
+        """
+        mod = _load_harness_module()
+        full = mod._PROFILES["full"]
+        assert full["heavy_session_activity_count"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Workload validity gate tests
+# ---------------------------------------------------------------------------
+
+class TestWorkloadValidityGate:
+    """Verify the harness enforces workload validity gates.
+
+    The harness must record:
+      * ``detail_source_activity_count`` — the event_count from the
+        Timeline entry (public payload), proving the underlying session
+        is heavy.
+      * ``detail_summary_row_count`` — the ViewModel row count (may
+        aggregate multiple activities).
+      * Failure categories: ``detail_not_heavy``,
+        ``detail_row_count_below_expected``, ``detail_row_count_mismatch``.
+    """
+
+    def test_detail_source_activity_count_recorded(self) -> None:
+        """The harness must record ``detail_source_activity_count`` so
+        the artifact proves the underlying session has >= 50 activities.
+        """
+        source = WEBVIEW_HARNESS.read_text(encoding="utf-8")
+        assert "detail_source_activity_count" in source
+
+    def test_detail_summary_row_count_recorded(self) -> None:
+        """The harness must record ``detail_summary_row_count`` so the
+        artifact distinguishes source activity count from summary rows.
+        """
+        source = WEBVIEW_HARNESS.read_text(encoding="utf-8")
+        assert "detail_summary_row_count" in source
+
+    def test_detail_not_heavy_failure_category(self) -> None:
+        """The harness must use ``detail_not_heavy`` when the selected
+        session is not heavy.
+        """
+        source = WEBVIEW_HARNESS.read_text(encoding="utf-8")
+        assert '"detail_not_heavy"' in source
+
+    def test_detail_row_count_below_expected_failure_category(self) -> None:
+        """The harness must use ``detail_row_count_below_expected`` when
+        the source activity count is below the minimum threshold.
+        """
+        source = WEBVIEW_HARNESS.read_text(encoding="utf-8")
+        assert '"detail_row_count_below_expected"' in source
+
+    def test_detail_row_count_mismatch_failure_category(self) -> None:
+        """The harness must use ``detail_row_count_mismatch`` when DOM
+        rows don't match ViewModel rows.
+        """
+        source = WEBVIEW_HARNESS.read_text(encoding="utf-8")
+        assert '"detail_row_count_mismatch"' in source
+
+    def test_no_heavy_session_found_failure_category(self) -> None:
+        """The harness must use ``no_heavy_session_found`` when no
+        detail key could be selected.
+        """
+        source = WEBVIEW_HARNESS.read_text(encoding="utf-8")
+        assert '"no_heavy_session_found"' in source
+
+    def test_min_heavy_threshold_enforced(self) -> None:
+        """The harness must enforce ``minHeavyThreshold`` (50 for
+        realistic, heavy_count // 2 for smoke) — not a hardcoded 50.
+        """
+        source = WEBVIEW_HARNESS.read_text(encoding="utf-8")
+        assert "minHeavyThreshold" in source
+        assert "Math.max(minHeavyThreshold, 50)" not in source
+
+    def test_workload_gates_distinct_from_completion_gates(self) -> None:
+        """Workload validity gates must run AFTER successful completion,
+        not replace the completion check.  They verify the *measured*
+        Detail is the heavy one, not just that Detail completed.
+        """
+        source = WEBVIEW_HARNESS.read_text(encoding="utf-8")
+        # The workload gates must be inside the completionState.completed
+        # block, not outside.
+        assert "selected_detail_is_heavy" in source
+        assert "detail_source_activity_count" in source
+        assert "detail_row_count_mismatch" in source

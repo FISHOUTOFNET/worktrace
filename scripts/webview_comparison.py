@@ -80,6 +80,7 @@ class SideResult:
         self.present = artifact_path.is_file()
         self.payload: dict[str, Any] | None = None
         self.invalid_reason: str = ""
+        self._workload_invalid_reason: str = ""
 
         if not self.present:
             self.invalid_reason = f"artifact missing: {artifact_path}"
@@ -102,13 +103,19 @@ class SideResult:
 
     @property
     def valid(self) -> bool:
-        """A side is valid iff the file is present, parseable, and the
-        driver reported ``status == "ok"`` with a metrics object."""
-        return (
+        """A side is valid iff the file is present, parseable, the
+        driver reported ``status == "ok"`` with a metrics object, AND
+        the workload validity check passed (selected Detail is the
+        heavy session, not a lightweight one).  Workload validity
+        failure marks the side invalid so the comparison gate cannot
+        pass by measuring the wrong workload."""
+        if not (
             self.payload is not None
             and self.payload.get("status") == "ok"
             and isinstance(self.payload.get("metrics"), dict)
-        )
+        ):
+            return False
+        return self.workload_valid
 
     @property
     def status(self) -> str:
@@ -126,6 +133,8 @@ class SideResult:
     def failure_reason(self) -> str:
         if self.payload is not None:
             return str(self.payload.get("failure_reason", ""))
+        if not self.workload_valid:
+            return self.workload_invalid_reason
         return self.invalid_reason
 
     @property
@@ -172,6 +181,87 @@ class SideResult:
         return 0
 
     @property
+    def heavy_session_activity_count(self) -> int:
+        """Planned heavy session activity count from the fixture audit."""
+        if self.payload is not None:
+            return int(self.payload.get("heavy_session_activity_count", 0))
+        return 0
+
+    @property
+    def heavy_session_marker(self) -> str:
+        """Heavy session marker string from the fixture audit."""
+        if self.payload is not None:
+            return str(self.payload.get("heavy_session_marker", "") or "")
+        return ""
+
+    @property
+    def first_run(self) -> dict[str, Any]:
+        """The first run's results (cold run), used for workload checks."""
+        if self.payload is not None:
+            runs = self.payload.get("raw_runs") or []
+            if runs and isinstance(runs[0], dict):
+                return runs[0]
+        return {}
+
+    @property
+    def workload_valid(self) -> bool:
+        """Workload validity: the measured Detail is the heavy session.
+
+        Checks the first run's selector and detail fields:
+          * ``selected_detail_is_heavy == true``
+          * ``selected_detail_selector_reason`` is a recognized strategy
+            (``marker``, ``event_count``, ``duration``) — NOT ``none``.
+          * ``detail_source_activity_count`` >= a minimum threshold
+            (50 for realistic profile, lower for smoke).
+
+        When the fixture has no heavy session (``heavy_session_activity_count
+        == 0``, e.g. ``full`` stress profile), this check is skipped
+        (returns True) because there is no heavy workload to enforce.
+        """
+        if self.heavy_session_activity_count == 0:
+            return True
+        run = self.first_run
+        if not run:
+            return False
+        is_heavy = bool(run.get("selected_detail_is_heavy", False))
+        reason = str(run.get("selected_detail_selector_reason", "none"))
+        source_count = int(run.get("detail_source_activity_count", 0) or 0)
+        # Minimum threshold: 50 for realistic (heavy count >= 50), or
+        # heavy_count // 2 for smoke (where heavy count is small).
+        min_threshold = (
+            50 if self.heavy_session_activity_count >= 50
+            else max(1, self.heavy_session_activity_count // 2)
+        )
+        if not is_heavy:
+            self._workload_invalid_reason = (
+                f"selected_detail_is_heavy=false (reason={reason}) — "
+                f"harness did not select the heavy session"
+            )
+            return False
+        if reason == "none":
+            self._workload_invalid_reason = (
+                "selected_detail_selector_reason=none — "
+                "harness did not select any session"
+            )
+            return False
+        if source_count < min_threshold:
+            self._workload_invalid_reason = (
+                f"detail_source_activity_count={source_count} < "
+                f"min_threshold={min_threshold} — "
+                f"measured Detail is not the heavy workload"
+            )
+            return False
+        self._workload_invalid_reason = ""
+        return True
+
+    @property
+    def workload_invalid_reason(self) -> str:
+        """The workload validity failure reason, or empty if valid."""
+        # Trigger lazy evaluation.
+        _ = self.workload_valid
+        return getattr(self, "_workload_invalid_reason", "")
+
+    @property
     def github_workflow_sha(self) -> str:
         """The ``GITHUB_SHA`` recorded by the driver — diagnostics only,
         never used for identity comparison (it can be a merge commit SHA
@@ -183,6 +273,7 @@ class SideResult:
 
 def _side_diagnostics(side: SideResult) -> dict[str, Any]:
     """Return a diagnostics dict for one side, suitable for the artifact."""
+    run = side.first_run
     return {
         "label": side.label,
         "artifact_path": str(side.artifact_path),
@@ -200,6 +291,31 @@ def _side_diagnostics(side: SideResult) -> dict[str, Any]:
         "python_version": side.python_version,
         "activity_count": side.activity_count,
         "fixture_audit": side.fixture_audit,
+        "heavy_session_activity_count": side.heavy_session_activity_count,
+        "heavy_session_marker": side.heavy_session_marker,
+        "workload_valid": side.workload_valid,
+        "workload_invalid_reason": side.workload_invalid_reason,
+        "selected_detail_is_heavy": bool(
+            run.get("selected_detail_is_heavy", False)
+        ),
+        "selected_detail_selector_reason": str(
+            run.get("selected_detail_selector_reason", "")
+        ),
+        "selected_detail_source_event_count": int(
+            run.get("detail_source_activity_count", 0) or 0
+        ),
+        "selected_detail_expected_activity_count": int(
+            run.get("selected_detail_expected_activity_count", 0) or 0
+        ),
+        "detail_source_activity_count": int(
+            run.get("detail_source_activity_count", 0) or 0
+        ),
+        "detail_summary_row_count": int(
+            run.get("detail_summary_row_count", 0) or 0
+        ),
+        "detail_dom_row_count": int(
+            run.get("detail_dom_row_count", 0) or 0
+        ),
         "github_workflow_sha": side.github_workflow_sha,
     }
 
@@ -284,6 +400,70 @@ def _validate_cross_revision_consistency(
             f"activity_count mismatch: baseline={baseline.activity_count} "
             f"head={head.activity_count}"
         )
+    _validate_heavy_workload_consistency(baseline, head)
+
+
+def _validate_heavy_workload_consistency(
+    baseline: SideResult,
+    head: SideResult,
+) -> None:
+    """Verify both sides measured the same heavy workload.
+
+    For runs with a heavy session (``heavy_session_activity_count > 0``):
+      * Both sides must have the same ``heavy_session_activity_count``.
+      * Both sides must have the same ``heavy_session_marker``.
+      * Both sides must have selected a heavy Detail
+        (``selected_detail_is_heavy == true``).
+      * Both sides' selector reason must be a recognized strategy
+        (not ``none``).
+      * Both sides' ``detail_source_activity_count`` must be >= a
+        minimum threshold.
+
+    This prevents the gate from passing when baseline measured the
+    heavy session but HEAD measured a lightweight one.  Such a mismatch
+    would make the comparison apples-to-oranges and could mask a real
+    regression (or fake an improvement).
+    """
+    b_heavy = baseline.heavy_session_activity_count
+    h_heavy = head.heavy_session_activity_count
+    if b_heavy == 0 and h_heavy == 0:
+        # No heavy workload enforced (e.g. full stress profile).
+        return
+    if b_heavy != h_heavy:
+        raise ComparisonError(
+            f"heavy_session_activity_count mismatch: "
+            f"baseline={b_heavy} head={h_heavy}"
+        )
+    if baseline.heavy_session_marker != head.heavy_session_marker:
+        raise ComparisonError(
+            f"heavy_session_marker mismatch: "
+            f"baseline={baseline.heavy_session_marker!r} "
+            f"head={head.heavy_session_marker!r}"
+        )
+
+    # Both sides are workload-valid (caller checks ``SideResult.valid``
+    # first).  Still verify selector reason is present so a silent
+    # change in selection strategy between revisions is surfaced.
+    b_reason = str(baseline.first_run.get(
+        "selected_detail_selector_reason", "none"
+    ))
+    h_reason = str(head.first_run.get(
+        "selected_detail_selector_reason", "none"
+    ))
+    if b_reason == "none":
+        raise ComparisonError(
+            "baseline selected_detail_selector_reason=none — "
+            "harness did not select any session"
+        )
+    if h_reason == "none":
+        raise ComparisonError(
+            "head selected_detail_selector_reason=none — "
+            "harness did not select any session"
+        )
+    # Selector reasons differing across revisions is not necessarily a
+    # failure (marker present in both, but baseline may fall back to
+    # event_count while HEAD uses marker — still valid heavy selection).
+    # Recorded in the artifact for audit; not a comparison failure.
 
 
 # ---------------------------------------------------------------------------
@@ -485,6 +665,25 @@ def _build_markdown(report: dict[str, Any]) -> str:
                 f"- fixture_audit: inserted={audit.get('inserted_count')}, "
                 f"requested={audit.get('requested_count')}, "
                 f"preexisting={audit.get('preexisting_activity_count')}"
+            )
+        if side.get("heavy_session_activity_count"):
+            lines.append(
+                f"- heavy_session: count={side['heavy_session_activity_count']}, "
+                f"marker=`{side.get('heavy_session_marker', '')}`, "
+                f"workload_valid={side.get('workload_valid')}"
+            )
+            if side.get("workload_invalid_reason"):
+                lines.append(
+                    f"- workload_invalid_reason: "
+                    f"{side['workload_invalid_reason']}"
+                )
+            lines.append(
+                f"- selected_detail: is_heavy="
+                f"{side.get('selected_detail_is_heavy')}, "
+                f"reason=`{side.get('selected_detail_selector_reason', '')}`, "
+                f"source_count={side.get('detail_source_activity_count', 0)}, "
+                f"summary_rows={side.get('detail_summary_row_count', 0)}, "
+                f"dom_rows={side.get('detail_dom_row_count', 0)}"
             )
         lines.append("")
 

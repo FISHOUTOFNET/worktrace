@@ -59,20 +59,25 @@ _EXIT_EXECUTION = 3
 
 # Profile data sizes.  Smoke is for infrastructure validation; realistic is
 # the ordinary PR gate; full is the stress-level performance gate.
+# ``heavy_session_activity_count`` controls the explicit heavy session in the
+# realistic fixture; 0 means no heavy session (used by full/stress).
 _PROFILES: dict[str, dict[str, Any]] = {
     # Smoke uses 2 runs so cold/warm split yields at least one warm sample;
     # runs=1 would give zero warm samples and fail "incomplete" in comparison.
     "smoke": {
         "activity_count": 200,
         "runs": 2,
+        "heavy_session_activity_count": 12,
     },
     "realistic": {
         "activity_count": 2000,
         "runs": 3,
+        "heavy_session_activity_count": 80,
     },
     "full": {
         "activity_count": 20000,
         "runs": 3,
+        "heavy_session_activity_count": 0,
     },
 }
 
@@ -239,12 +244,20 @@ def _verify_revision_identity(
     return actual
 
 
-def _wv_fixture_hash(activity_count: int, *, profile: str = "full") -> str:
+def _wv_fixture_hash(
+    activity_count: int,
+    *,
+    profile: str = "full",
+    heavy_session_activity_count: int = 0,
+) -> str:
     """Compute a deterministic hash of the WebView benchmark fixture.
 
     The hash covers the same parameters as the product benchmark fixture
     (via ``benchmark_fixture.fixture_hash``) so cross-driver fixture
-    consistency can be audited.
+    consistency can be audited.  When ``heavy_session_activity_count > 0``
+    (smoke and realistic profiles), the realistic-heavy-day spec is used
+    so the hash matches the actual fixture built by
+    ``_populate_dataset_self_contained``.
     """
     from scripts.ci.benchmark_fixture import (
         DEFAULT_CHUNK_SIZE,
@@ -256,8 +269,11 @@ def _wv_fixture_hash(activity_count: int, *, profile: str = "full") -> str:
         fixture_hash as _fixture_hash,
     )
 
-    if profile == "realistic":
-        spec = build_realistic_heavy_day_spec(activity_count=activity_count)
+    if heavy_session_activity_count > 0:
+        spec = build_realistic_heavy_day_spec(
+            activity_count=activity_count,
+            heavy_session_activity_count=heavy_session_activity_count,
+        )
     else:
         spec = BenchmarkFixtureSpec(
             report_date=DEFAULT_REPORT_DATE,
@@ -267,6 +283,7 @@ def _wv_fixture_hash(activity_count: int, *, profile: str = "full") -> str:
             scenario="webview_render",
             seed=0,
             chunk_size=DEFAULT_CHUNK_SIZE,
+            heavy_session_activity_count=heavy_session_activity_count,
         )
     return _fixture_hash(spec)
 
@@ -275,13 +292,16 @@ def _populate_dataset_self_contained(
     activity_count: int,
     *,
     profile: str = "full",
+    heavy_session_activity_count: int = 0,
 ) -> dict[str, Any]:
     """Self-contained fixture builder using the shared benchmark_fixture module.
 
     Delegates to ``scripts.ci.benchmark_fixture`` so the WebView driver and
     the product benchmark driver share the exact same fixture construction
-    code.  When ``profile == "realistic"``, uses the realistic-heavy-day
-    fixture builder for a more product-like distribution.
+    code.  When ``heavy_session_activity_count > 0`` (smoke and realistic
+    profiles), uses the realistic-heavy-day fixture builder so a
+    deterministic heavy session is constructed and the marker is available
+    for Timeline-based selection.
     """
     from scripts.ci.benchmark_fixture import (
         DEFAULT_CHUNK_SIZE,
@@ -294,8 +314,11 @@ def _populate_dataset_self_contained(
         build_realistic_heavy_day_spec,
     )
 
-    if profile == "realistic":
-        spec = build_realistic_heavy_day_spec(activity_count=activity_count)
+    if heavy_session_activity_count > 0:
+        spec = build_realistic_heavy_day_spec(
+            activity_count=activity_count,
+            heavy_session_activity_count=heavy_session_activity_count,
+        )
         result = build_realistic_heavy_day_fixture(spec=spec)
     else:
         spec = BenchmarkFixtureSpec(
@@ -306,6 +329,7 @@ def _populate_dataset_self_contained(
             scenario="webview_render",
             seed=0,
             chunk_size=DEFAULT_CHUNK_SIZE,
+            heavy_session_activity_count=heavy_session_activity_count,
         )
         result = build_activity_fixture(spec=spec)
 
@@ -329,6 +353,10 @@ def _populate_dataset_self_contained(
         "other_project_id": result.other_project_id,
         "uncategorized_project_id": result.uncategorized_project_id,
         "fixture_audit": result.to_audit_dict(),
+        "heavy_session_activity_count": heavy_session_activity_count,
+        "heavy_session_marker": (
+            result.heavy_session_marker if heavy_session_activity_count > 0 else ""
+        ),
     }
 
 
@@ -711,16 +739,86 @@ _MEASURE_JS = r"""
         }
 
         // Detail open via real user selection path.
-        // After Timeline render, find the first .timeline-item in the DOM,
-        // read its projection_instance_key, and trigger selection through
-        // the public App.selectTimelineSession entry point.  This exercises
-        // the real detail load + DOM render path, not just the bridge API.
-        var firstItem = document.querySelector(
-            "#timeline-sessions-list .timeline-item"
-        );
-        var detailKey = firstItem
-            ? (firstItem.getAttribute("data-projection-instance-key") || "")
+        // Instead of selecting the first Timeline item, select the HEAVY
+        // session via public payload fields so the Detail measurement
+        // exercises the heavy-detail load path.  Selection priority:
+        //   1. Deterministic marker — entry whose display_description
+        //      contains the heavy session marker (e.g. "BenchHeavySession").
+        //   2. Max event_count — entry with the highest activity count.
+        //   3. Max duration_seconds — entry with the longest duration.
+        // The selector never uses HEAD-private ViewModel fields and never
+        // calls Detail APIs for all sessions (no pre-warm traversal).
+        var heavyCfg = window.__perfHeavySessionConfig || {};
+        var heavyMarker = heavyCfg.marker || "";
+        var expectedHeavyCount = heavyCfg.expected_activity_count || 0;
+        var minHeavyThreshold = heavyCfg.min_heavy_threshold || 0;
+
+        var timelineEntries = (timelineData && Array.isArray(timelineData.entries))
+            ? timelineData.entries : [];
+        var selectedEntry = null;
+        var selectorReason = "none";
+
+        // Priority 1: deterministic marker in display_description.
+        if (heavyMarker) {
+            for (var ei = 0; ei < timelineEntries.length; ei++) {
+                var desc = String(timelineEntries[ei].display_description || "");
+                if (desc.indexOf(heavyMarker) !== -1) {
+                    selectedEntry = timelineEntries[ei];
+                    selectorReason = "marker";
+                    break;
+                }
+            }
+        }
+
+        // Priority 2: max event_count.
+        if (!selectedEntry) {
+            var maxEventCount = -1;
+            for (var ei2 = 0; ei2 < timelineEntries.length; ei2++) {
+                var ec = parseInt(timelineEntries[ei2].event_count, 10) || 0;
+                if (ec > maxEventCount) {
+                    maxEventCount = ec;
+                    selectedEntry = timelineEntries[ei2];
+                    selectorReason = "event_count";
+                }
+            }
+        }
+
+        // Priority 3: max duration_seconds.
+        if (!selectedEntry) {
+            var maxDuration = -1;
+            for (var ei3 = 0; ei3 < timelineEntries.length; ei3++) {
+                var dur = parseInt(timelineEntries[ei3].duration_seconds, 10) || 0;
+                if (dur > maxDuration) {
+                    maxDuration = dur;
+                    selectedEntry = timelineEntries[ei3];
+                    selectorReason = "duration";
+                }
+            }
+        }
+
+        var detailKey = selectedEntry
+            ? String(selectedEntry.projection_instance_key || "")
             : "";
+        var selectedEventCount = selectedEntry
+            ? (parseInt(selectedEntry.event_count, 10) || 0) : 0;
+        var selectedDuration = selectedEntry
+            ? (parseInt(selectedEntry.duration_seconds, 10) || 0) : 0;
+
+        // Record selector metadata for artifact audit.
+        results.selected_detail_key = detailKey;
+        results.selected_detail_selector_reason = selectorReason;
+        results.selected_detail_expected_activity_count = expectedHeavyCount;
+        results.selected_detail_duration_seconds = selectedDuration;
+        results.selected_detail_marker = heavyMarker;
+        results.selected_detail_source_event_count = selectedEventCount;
+        results.selected_detail_expected_count_source = (
+            expectedHeavyCount > 0 ? "fixture_metadata" : "timeline_payload"
+        );
+        // Determine if the selected session qualifies as heavy.
+        results.selected_detail_is_heavy = (
+            selectedEventCount >= minHeavyThreshold
+        );
+
         if (detailKey) {
             mark(label + "_detail_start");
 
@@ -826,17 +924,37 @@ _MEASURE_JS = r"""
                     results.detail_configured_payload_deadline_ms = payloadTimeoutMs;
                     results.detail_configured_dom_deadline_ms = domTimeoutMs;
 
-                    // ViewModel-row diagnostics (NOT gates).
-                    results.detail_row_diagnostic = null;
-                    if (results.detail_row_count === 0) {
-                        results.detail_row_diagnostic = "detail_row_count_zero";
+                    // Workload validity fields.  ``detail_source_activity_count``
+                    // is the event_count from the Timeline entry (public
+                    // payload), proving the underlying session is heavy.
+                    // ``detail_summary_row_count`` is the ViewModel row count
+                    // (may aggregate multiple activities into one summary row).
+                    results.detail_source_activity_count = selectedEventCount;
+                    results.detail_summary_row_count = results.detail_row_count;
+
+                    // Workload validity gates (distinct from payload/DOM
+                    // completion gates).  These prove the measured Detail is
+                    // the heavy session, not a lightweight one.
+                    if (!results.selected_detail_is_heavy) {
+                        results.stages.detail_error = "detail_not_heavy";
+                    } else if (results.detail_source_activity_count
+                               < minHeavyThreshold) {
+                        results.stages.detail_error =
+                            "detail_row_count_below_expected";
                     } else if (results.detail_dom_row_count > 0
-                        && results.detail_row_count !== results.detail_dom_row_count) {
-                        results.detail_row_diagnostic = "detail_row_count_mismatch";
+                               && results.detail_row_count
+                               !== results.detail_dom_row_count) {
+                        results.stages.detail_error = "detail_row_count_mismatch";
                     }
 
-                    // Realism assertion: DOM must have at least one row.
-                    if (results.detail_dom_row_count === 0) {
+                    // Realism assertion: ViewModel and DOM must have at
+                    // least one row.
+                    if (results.detail_row_count === 0
+                        && !results.stages.detail_error) {
+                        results.stages.detail_error = "detail_row_count_zero";
+                    }
+                    if (results.detail_dom_row_count === 0
+                        && !results.stages.detail_error) {
                         results.stages.detail_error = "detail_dom_row_count_zero";
                     }
                 } else {
@@ -863,7 +981,7 @@ _MEASURE_JS = r"""
                 }
             }
         } else {
-            results.stages.detail_error = "no_timeline_item_key";
+            results.stages.detail_error = "no_heavy_session_found";
         }
 
         // Warm-cache overview re-render
@@ -937,6 +1055,7 @@ def _run_harness(
     *,
     target_root: Path | None = None,
     profile_name: str = "full",
+    heavy_session_activity_count: int = 0,
 ) -> dict[str, Any]:
     """Launch WebView2, inject measurement JS, collect results.
 
@@ -950,6 +1069,11 @@ def _run_harness(
     outer timeout.  The outer timeout is computed from the stage budgets
     via :func:`_compute_outer_timeout` so it is always consistent with
     the JS deadlines.
+
+    ``heavy_session_activity_count`` controls the explicit heavy session
+    in the realistic fixture.  When > 0, the harness injects a
+    ``__perfHeavySessionConfig`` object so the JS selector can identify
+    the heavy session via the public Timeline payload.
     """
     try:
         import webview
@@ -1008,6 +1132,7 @@ def _run_harness(
                 dataset_info = _populate_dataset_self_contained(
                     activity_count,
                     profile=profile_name,
+                    heavy_session_activity_count=heavy_session_activity_count,
                 )
             except Exception as exc:
                 return {
@@ -1039,10 +1164,25 @@ def _run_harness(
                     # execution guards, NOT performance gates — generous enough
                     # that a correctly-functioning UI never hits them.
                     timeout_cfg = _TIMEOUT_PROFILES[profile_name]
+                    # Inject the heavy session config so the JS selector can
+                    # identify the heavy session via the public Timeline
+                    # payload.  The marker and expected count are benchmark-
+                    # only metadata; they do not leak into production logic.
+                    heavy_cfg = {
+                        "expected_activity_count": heavy_session_activity_count,
+                        "marker": (
+                            dataset_info.get("heavy_session_marker") or ""
+                        ),
+                        "min_heavy_threshold": (
+                            50 if heavy_session_activity_count >= 50
+                            else max(1, heavy_session_activity_count // 2)
+                        ),
+                    }
                     window.evaluate_js(
                         f"window.__perfRunCount = {int(runs)};"
                         f" window.__perfReportDate = {json.dumps(report_date)};"
                         f" window.__perfTimeoutConfig = {json.dumps(timeout_cfg)};"
+                        f" window.__perfHeavySessionConfig = {json.dumps(heavy_cfg)};"
                     )
                     # Inject the measurement script.
                     window.evaluate_js(_MEASURE_JS)
@@ -1179,6 +1319,10 @@ def _run_harness(
             "activity_count": dataset_info.get("activity_count", activity_count),
             "report_date": dataset_info.get("report_date", ""),
             "fixture_audit": dataset_info.get("fixture_audit", {}),
+            "heavy_session_activity_count": dataset_info.get(
+                "heavy_session_activity_count", 0
+            ),
+            "heavy_session_marker": dataset_info.get("heavy_session_marker", ""),
         },
         "runs": runs_data,
     }
@@ -1237,6 +1381,13 @@ def _build_cold_warm_summary(runs: list[dict[str, Any]]) -> dict[str, Any]:
             "view_model_present": cold_run.get("detail_view_model_present", False),
             "in_flight": cold_run.get("detail_in_flight", 0),
             "payload_resolved": cold_run.get("detail_payload_resolved", False),
+            "selected_detail_key": cold_run.get("selected_detail_key", ""),
+            "selected_detail_selector_reason": cold_run.get("selected_detail_selector_reason", ""),
+            "selected_detail_is_heavy": cold_run.get("selected_detail_is_heavy", False),
+            "selected_detail_source_event_count": cold_run.get("selected_detail_source_event_count", 0),
+            "selected_detail_expected_activity_count": cold_run.get("selected_detail_expected_activity_count", 0),
+            "source_activity_count": cold_run.get("detail_source_activity_count", 0),
+            "summary_row_count": cold_run.get("detail_summary_row_count", 0),
         },
     }
 
@@ -1459,6 +1610,7 @@ def main() -> int:
         args.runs if args.runs is not None
         else profile_cfg["runs"]
     )
+    heavy_session_activity_count = profile_cfg.get("heavy_session_activity_count", 0)
 
     target_root: Path | None = None
     actual_revision: str | None = None
@@ -1488,6 +1640,7 @@ def main() -> int:
         runs,
         target_root=target_root,
         profile_name=args.profile,
+        heavy_session_activity_count=heavy_session_activity_count,
     )
 
     runner_meta = _runner_metadata()
@@ -1502,7 +1655,11 @@ def main() -> int:
             "actual_target_revision": actual_revision,
             "github_workflow_sha": os.environ.get("GITHUB_SHA"),
             "target_root": str(target_root) if target_root else "",
-            "fixture_hash": _wv_fixture_hash(activity_count, profile=args.profile),
+            "fixture_hash": _wv_fixture_hash(
+                activity_count,
+                profile=args.profile,
+                heavy_session_activity_count=heavy_session_activity_count,
+            ),
             "python_version": sys.version,
             "platform": platform.platform(),
             "runner_metadata": runner_meta,
@@ -1522,6 +1679,12 @@ def main() -> int:
                 dataset.get("fixture_audit", {}).get(
                     "preexisting_activity_count", 0
                 )
+            )
+            payload["heavy_session_activity_count"] = (
+                dataset.get("heavy_session_activity_count", 0)
+            )
+            payload["heavy_session_marker"] = (
+                dataset.get("heavy_session_marker", "")
             )
 
         if result["status"] == "ok" and runs_data:

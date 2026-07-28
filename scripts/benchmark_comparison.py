@@ -244,6 +244,22 @@ class SideResult:
         return {}
 
     @property
+    def heavy_session_audit(self) -> dict[str, Any]:
+        """Heavy session audit metadata from the result payload.
+
+        Populated by the product driver for the ``realistic_heavy_day``
+        scenario.  Contains ``planned_heavy_session_activity_count``,
+        ``actual_max_session_contribution_count``, ``actual_session_count``,
+        ``actual_entry_count``, ``actual_contribution_count``.  Used by
+        cross-revision consistency checks to verify the heavy session
+        formed identically in baseline and HEAD.
+        """
+        if self.result is not None:
+            audit = self.result.get("heavy_session_audit", {})
+            return audit if isinstance(audit, dict) else {}
+        return {}
+
+    @property
     def github_workflow_sha(self) -> str:
         """The ``GITHUB_SHA`` recorded by the driver — diagnostics only,
         never used for identity comparison (it can be a merge commit SHA
@@ -332,6 +348,77 @@ def _validate_cross_revision_consistency(
             f"python_version mismatch: baseline={b_py_mm!r} "
             f"head={h_py_mm!r}"
         )
+    _validate_heavy_session_consistency(baseline, head)
+
+
+def _validate_heavy_session_consistency(
+    baseline: SideResult,
+    head: SideResult,
+) -> None:
+    """Verify heavy session metadata is consistent across revisions.
+
+    For the ``realistic_heavy_day`` scenario (when ``heavy_session_audit``
+    is present), this enforces:
+      * ``planned_heavy_session_activity_count`` matches baseline↔HEAD,
+      * ``actual_max_session_contribution_count`` matches baseline↔HEAD,
+      * ``actual_max_session_contribution_count >= planned_heavy_session_activity_count``
+        on each side (the heavy session actually formed).
+
+    This is a fail-closed check: if baseline and HEAD measured different
+    heavy workloads, the comparison is not apples-to-apples and the gate
+    must not run.  A regression that splits the heavy session would
+    otherwise be masked by total projection hash comparison alone.
+    """
+    b_audit = baseline.heavy_session_audit
+    h_audit = head.heavy_session_audit
+    if not b_audit and not h_audit:
+        # Non-realistic scenarios or older artifacts without heavy audit.
+        return
+    if not b_audit:
+        raise ComparisonError(
+            "baseline heavy_session_audit missing but head has one — "
+            "cross-revision heavy workload comparison is not possible"
+        )
+    if not h_audit:
+        raise ComparisonError(
+            "head heavy_session_audit missing but baseline has one — "
+            "cross-revision heavy workload comparison is not possible"
+        )
+
+    b_planned = int(b_audit.get("planned_heavy_session_activity_count", 0))
+    h_planned = int(h_audit.get("planned_heavy_session_activity_count", 0))
+    if b_planned != h_planned:
+        raise ComparisonError(
+            f"planned_heavy_session_activity_count mismatch: "
+            f"baseline={b_planned} head={h_planned}"
+        )
+
+    b_actual_max = int(b_audit.get("actual_max_session_contribution_count", 0))
+    h_actual_max = int(h_audit.get("actual_max_session_contribution_count", 0))
+    if b_actual_max != h_actual_max:
+        raise ComparisonError(
+            f"actual_max_session_contribution_count mismatch: "
+            f"baseline={b_actual_max} head={h_actual_max} — "
+            f"heavy session did not form identically across revisions"
+        )
+
+    # Fail-closed: the heavy session must actually have formed.  If the
+    # planned count is > 0, the actual max must be >= planned.  A lower
+    # actual max means the heavy session was split or lost — the gate is
+    # measuring the wrong workload.
+    if b_planned > 0:
+        if b_actual_max < b_planned:
+            raise ComparisonError(
+                f"baseline heavy session not formed: "
+                f"actual_max_session_contribution_count="
+                f"{b_actual_max} < planned={b_planned}"
+            )
+        if h_actual_max < h_planned:
+            raise ComparisonError(
+                f"head heavy session not formed: "
+                f"actual_max_session_contribution_count="
+                f"{h_actual_max} < planned={h_planned}"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -396,6 +483,7 @@ def _side_diagnostics(side: SideResult) -> dict[str, Any]:
         "failure_message": side.failure_message,
         "completed_samples": side.completed_samples,
         "fixture_audit": side.fixture_audit,
+        "heavy_session_audit": side.heavy_session_audit,
         "requested_revision": side.requested_revision,
         "actual_target_revision": side.actual_target_revision,
         "expected_revision": side.expected_sha,
@@ -604,6 +692,26 @@ def _build_markdown(report: dict[str, Any]) -> str:
                 f"preexisting={audit.get('preexisting_activity_count')}, "
                 f"connections={audit.get('connection_count')}, "
                 f"commits={audit.get('commit_count')}"
+            )
+            planned_heavy = audit.get("planned_heavy_session_activity_count")
+            if planned_heavy is not None:
+                lines.append(
+                    f"- planned_heavy_session_activity_count: "
+                    f"{planned_heavy}"
+                )
+                lines.append(
+                    f"- heavy_session_marker: "
+                    f"`{audit.get('heavy_session_marker', '')}`"
+                )
+        heavy_audit = side.get("heavy_session_audit") or {}
+        if heavy_audit:
+            lines.append(
+                f"- heavy_session_audit: "
+                f"planned={heavy_audit.get('planned_heavy_session_activity_count')}, "
+                f"actual_max={heavy_audit.get('actual_max_session_contribution_count')}, "
+                f"sessions={heavy_audit.get('actual_session_count')}, "
+                f"entries={heavy_audit.get('actual_entry_count')}, "
+                f"contributions={heavy_audit.get('actual_contribution_count')}"
             )
         lines.append("")
 

@@ -811,6 +811,203 @@ class TestProductBenchmarkMatrix:
 
 
 # ---------------------------------------------------------------------------
+# Product benchmark realistic / stress mode gating
+# ---------------------------------------------------------------------------
+
+class TestProductBenchmarkModeGating:
+    """The ``product-benchmark`` matrix must classify each scenario with
+    a ``runs_in`` field (``realistic`` or ``stress``), and a guard step
+    must skip stress-only scenarios (20k_activities, 10k_contributions)
+    when the run is in realistic mode (the PR gate), while still running
+    them in stress mode (the scheduled full matrix).
+
+    Guard contract:
+      * ``realistic_heavy_day`` -> ``runs_in: realistic`` (runs in both)
+      * ``20k_activities`` / ``10k_contributions`` -> ``runs_in: stress``
+        (skipped in realistic, run in stress)
+      * PR ``pull_request`` forces ``mode = 'realistic'``; ``schedule``
+        forces ``mode = 'stress'``.
+      * Guard emits ``should_run=true`` only when
+        ``mode == 'stress' OR runs_in == 'realistic'``; all subsequent
+        steps gate on ``steps.guard.outputs.should_run == 'true'``.
+    """
+
+    def _product_section(self) -> str:
+        source = PERF_VALIDATION_YML.read_text(encoding="utf-8")
+        product_section = _extract_job_section(source, "product-benchmark")
+        assert product_section is not None, "product-benchmark job not found"
+        return product_section
+
+    def test_matrix_defines_runs_in_field(self) -> None:
+        """Each matrix include item must set ``runs_in`` so the guard
+        can decide whether the scenario belongs to the current mode."""
+        product_section = self._product_section()
+        assert "runs_in:" in product_section, (
+            "product-benchmark matrix must define runs_in per scenario"
+        )
+        runs_in_values = re.findall(r"runs_in:\s*(\S+)", product_section)
+        assert len(runs_in_values) >= 3, (
+            f"expected at least 3 runs_in entries (one per matrix item), "
+            f"found {len(runs_in_values)}"
+        )
+        for value in runs_in_values:
+            assert value in {"realistic", "stress"}, (
+                f"runs_in must be 'realistic' or 'stress', got {value!r}"
+            )
+
+    def test_realistic_heavy_day_runs_in_realistic(self) -> None:
+        """The PR-gate scenario must be tagged ``runs_in: realistic``
+        so it executes in both realistic and stress modes."""
+        product_section = self._product_section()
+        realistic_block = re.search(
+            r"scenario:\s*realistic_heavy_day\s*\n"
+            r"(?:\s+[a-z_]+:[^\n]*\n)*?"
+            r"\s+runs_in:\s*realistic",
+            product_section,
+        )
+        assert realistic_block is not None, (
+            "realistic_heavy_day matrix item must have runs_in: realistic"
+        )
+
+    def test_stress_scenarios_run_in_stress(self) -> None:
+        """The 20k/10k scenarios must be tagged ``runs_in: stress`` so
+        they are skipped in realistic mode and run only in stress mode."""
+        product_section = self._product_section()
+        for scenario in ("20k_activities", "10k_contributions"):
+            block = re.search(
+                r"scenario:\s*" + re.escape(scenario) + r"\s*\n"
+                r"(?:\s+[a-z_]+:[^\n]*\n)*?"
+                r"\s+runs_in:\s*stress",
+                product_section,
+            )
+            assert block is not None, (
+                f"{scenario} matrix item must have runs_in: stress"
+            )
+
+    def test_guard_step_exists_and_emits_should_run(self) -> None:
+        """A ``Check if scenario should run in this mode`` guard step
+        must exist and emit the ``should_run`` output."""
+        product_section = self._product_section()
+        assert "should_run" in product_section, (
+            "guard step must emit should_run output"
+        )
+        assert "Check if scenario should run in this mode" in product_section, (
+            "guard step 'Check if scenario should run in this mode' missing"
+        )
+
+    def test_guard_forces_realistic_on_pull_request(self) -> None:
+        """PR events must force ``mode = 'realistic'`` so the PR gate
+        never runs the 20k/10k stress scenarios."""
+        product_section = self._product_section()
+        assert (
+            "if ($env:GITHUB_EVENT_NAME -eq 'pull_request') { $mode = 'realistic' }"
+            in product_section
+        ), (
+            "guard must force mode='realistic' for pull_request events"
+        )
+
+    def test_guard_forces_stress_on_schedule(self) -> None:
+        """Schedule events must force ``mode = 'stress'`` so the
+        scheduled run still exercises the full 20k/10k matrix."""
+        product_section = self._product_section()
+        assert (
+            "if ($env:GITHUB_EVENT_NAME -eq 'schedule') { $mode = 'stress' }"
+            in product_section
+        ), (
+            "guard must force mode='stress' for schedule events"
+        )
+
+    def test_guard_uses_stress_or_realistic_runs_in_predicate(self) -> None:
+        """The guard predicate must be
+        ``mode -eq 'stress' -or runsIn -eq 'realistic'`` so:
+          * stress mode runs every scenario (20k/10k included);
+          * realistic mode runs only scenarios tagged
+            ``runs_in: realistic`` (i.e. realistic_heavy_day).
+        Any other predicate would either let 20k/10k leak into the PR
+        gate, or drop realistic_heavy_day from the stress matrix.
+        """
+        product_section = self._product_section()
+        assert (
+            "if ($mode -eq 'stress' -or $runsIn -eq 'realistic')"
+            in product_section
+        ), (
+            "guard must use the predicate "
+            "'$mode -eq 'stress' -or $runsIn -eq 'realistic''"
+        )
+
+    def test_subsequent_steps_gate_on_should_run(self) -> None:
+        """Every step after the guard must gate on
+        ``steps.guard.outputs.should_run == 'true'`` so skipped matrix
+        entries do not execute driver, comparison, or upload steps."""
+        product_section = self._product_section()
+        # Count step-level ``if:`` lines that reference should_run.
+        should_run_gates = re.findall(
+            r"if:\s*steps\.guard\.outputs\.should_run\s*==\s*'true'",
+            product_section,
+        )
+        # At minimum: resolve revisions, setup python, install deps,
+        # create worktrees, compile, baseline driver, head driver,
+        # comparison, upload artifact, cleanup worktrees.
+        assert len(should_run_gates) >= 6, (
+            f"expected at least 6 steps gating on "
+            f"steps.guard.outputs.should_run == 'true', found "
+            f"{len(should_run_gates)}"
+        )
+
+    def test_comparison_step_uses_if_always_with_should_run(self) -> None:
+        """The comparison step must use ``if: always() && ...should_run``
+        so the comparison still runs (and produces a fail-closed
+        artifact) when a driver step fails, but is skipped entirely for
+        stress-only matrix entries in realistic mode."""
+        product_section = self._product_section()
+        assert (
+            "if: always() && steps.guard.outputs.should_run == 'true'"
+            in product_section
+        ), (
+            "comparison step must use "
+            "'if: always() && steps.guard.outputs.should_run == 'true'"
+            "' so the artifact is always produced for running scenarios"
+        )
+
+    def test_upload_artifact_gates_on_should_run(self) -> None:
+        """The artifact upload step must gate on ``should_run`` so
+        skipped matrix entries do not produce empty artifacts that
+        could mask a real failure."""
+        product_section = self._product_section()
+        upload_block = re.search(
+            r"Upload product comparison artifact.*?uses:\s*actions/upload-artifact",
+            product_section,
+            re.DOTALL,
+        )
+        assert upload_block is not None, (
+            "product comparison artifact upload step not found"
+        )
+        upload_text = upload_block.group(0)
+        assert "should_run" in upload_text, (
+            "upload-artifact step must gate on should_run"
+        )
+
+    def test_no_matrix_addition_for_realistic_only_scenarios(self) -> None:
+        """No new matrix scenario may be added that runs only in
+        realistic mode and not in stress mode — the realistic PR gate
+        must remain a single ``realistic_heavy_day`` scenario to keep
+        the PR-gate cost bounded."""
+        product_section = self._product_section()
+        # Extract (scenario, runs_in) pairs.
+        pairs = re.findall(
+            r"scenario:\s*(\S+)\s*\n(?:\s+[a-z_]+:[^\n]*\n)*?\s+runs_in:\s*(\S+)",
+            product_section,
+        )
+        realistic_only = [
+            scenario for scenario, runs_in in pairs if runs_in == "realistic"
+        ]
+        assert realistic_only == ["realistic_heavy_day"], (
+            "only realistic_heavy_day may be tagged runs_in: realistic; "
+            f"found {realistic_only}"
+        )
+
+
+# ---------------------------------------------------------------------------
 # HEAD-only compact-storage memory gate job
 # ---------------------------------------------------------------------------
 

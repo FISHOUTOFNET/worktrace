@@ -618,3 +618,406 @@ class TestChunkStrategy:
             chunk_size=1000,
         )
         assert fixture_module.fixture_hash(spec_a) != fixture_module.fixture_hash(spec_b)
+
+
+# ---------------------------------------------------------------------------
+# Realistic heavy-day fixture tests
+# ---------------------------------------------------------------------------
+
+class TestRealisticHeavyDayFixture:
+    """Tests for the realistic heavy-day fixture's heavy session contract.
+
+    Verifies that the explicit heavy session:
+      * has the planned activity count (80 by default),
+      * fixes all grouping fields (app, process, resource, status, project)
+        so the session builder merges member activities into one session,
+      * has contiguous activity times with no session-merge-threshold gaps,
+      * is bounded by clear session boundaries (gap > threshold before/after),
+      * is recorded in the fixture hash and audit metadata,
+      * produces deterministic output for the same seed/spec.
+    """
+
+    def test_realistic_fixture_total_activity_count(
+        self, fixture_module, temp_db
+    ) -> None:
+        """The realistic fixture must insert exactly 2000 activities."""
+        spec = fixture_module.build_realistic_heavy_day_spec(
+            activity_count=2000,
+            heavy_session_activity_count=80,
+        )
+        result = fixture_module.build_realistic_heavy_day_fixture(spec=spec)
+        assert result.inserted_count == 2000, (
+            f"expected 2000 activities, got {result.inserted_count}"
+        )
+        assert result.requested_count == 2000
+
+    def test_realistic_fixture_heavy_session_planned_count(
+        self, fixture_module, temp_db
+    ) -> None:
+        """The audit must record the planned heavy session activity count."""
+        spec = fixture_module.build_realistic_heavy_day_spec(
+            activity_count=2000,
+            heavy_session_activity_count=80,
+        )
+        result = fixture_module.build_realistic_heavy_day_fixture(spec=spec)
+        assert result.planned_heavy_session_activity_count == 80
+        audit = result.to_audit_dict()
+        assert audit["planned_heavy_session_activity_count"] == 80
+
+    def test_realistic_fixture_heavy_session_marker_recorded(
+        self, fixture_module, temp_db
+    ) -> None:
+        """The audit must record the heavy session marker and app name."""
+        spec = fixture_module.build_realistic_heavy_day_spec(
+            activity_count=2000,
+            heavy_session_activity_count=80,
+        )
+        result = fixture_module.build_realistic_heavy_day_fixture(spec=spec)
+        assert result.heavy_session_marker == fixture_module.HEAVY_SESSION_MARKER
+        assert result.heavy_session_app_name == fixture_module.HEAVY_SESSION_MARKER
+        assert result.heavy_session_project_kind == "anchor"
+        audit = result.to_audit_dict()
+        assert audit["heavy_session_marker"] == fixture_module.HEAVY_SESSION_MARKER
+        assert audit["heavy_session_app_name"] == fixture_module.HEAVY_SESSION_MARKER
+
+    def test_realistic_fixture_planned_session_count_recorded(
+        self, fixture_module, temp_db
+    ) -> None:
+        """The audit must record the total planned session count."""
+        spec = fixture_module.build_realistic_heavy_day_spec(
+            activity_count=2000,
+            heavy_session_activity_count=80,
+        )
+        result = fixture_module.build_realistic_heavy_day_fixture(spec=spec)
+        assert result.planned_session_count > 0
+        audit = result.to_audit_dict()
+        assert audit["planned_session_count"] == result.planned_session_count
+
+    def test_heavy_session_hash_includes_heavy_count(
+        self, fixture_module
+    ) -> None:
+        """The fixture hash must change when heavy_session_activity_count
+        changes, so silent drift between revisions is impossible."""
+        spec_a = fixture_module.build_realistic_heavy_day_spec(
+            activity_count=2000,
+            heavy_session_activity_count=80,
+        )
+        spec_b = fixture_module.build_realistic_heavy_day_spec(
+            activity_count=2000,
+            heavy_session_activity_count=50,
+        )
+        assert fixture_module.fixture_hash(spec_a) != fixture_module.fixture_hash(
+            spec_b
+        ), (
+            "fixture hash must change when heavy_session_activity_count changes"
+        )
+
+    def test_realistic_fixture_deterministic_same_seed(
+        self, fixture_module, temp_db
+    ) -> None:
+        """The same spec must produce identical activity IDs across runs."""
+        spec = fixture_module.build_realistic_heavy_day_spec(
+            activity_count=500,  # smaller for test speed
+            heavy_session_activity_count=80,
+        )
+        result1 = fixture_module.build_realistic_heavy_day_fixture(spec=spec)
+        # Wipe and rebuild to verify determinism.  Child tables
+        # (activity_resource, activity_project_assignment) reference
+        # activity_log via FK, so they must be deleted first.  The
+        # sqlite_sequence must also be reset so autoincrement IDs match.
+        import worktrace.db as db_module
+        with db_module.get_connection() as conn:
+            conn.execute("DELETE FROM activity_resource")
+            conn.execute("DELETE FROM activity_project_assignment")
+            conn.execute("DELETE FROM activity_log")
+            conn.execute(
+                "DELETE FROM sqlite_sequence WHERE name IN "
+                "('activity_log', 'activity_resource', "
+                "'activity_project_assignment')"
+            )
+            conn.commit()
+        result2 = fixture_module.build_realistic_heavy_day_fixture(spec=spec)
+        assert result1.activity_ids == result2.activity_ids, (
+            "same spec must produce identical activity_ids (deterministic)"
+        )
+        assert result1.inserted_count == result2.inserted_count
+
+    def test_heavy_session_grouping_fields_fixed(
+        self, fixture_module, temp_db
+    ) -> None:
+        """All activities in the heavy session must share the same
+        app_name, process_name, resource identity_key, status, and
+        project_id so the session builder does not split them."""
+        spec = fixture_module.build_realistic_heavy_day_spec(
+            activity_count=500,
+            heavy_session_activity_count=80,
+        )
+        result = fixture_module.build_realistic_heavy_day_fixture(spec=spec)
+
+        import worktrace.db as db_module
+        with db_module.get_connection() as conn:
+            # The heavy session uses the marker window_title.  Resource
+            # and project data live in activity_resource and
+            # activity_project_assignment, not activity_log directly.
+            rows = conn.execute(
+                """
+                SELECT al.app_name, al.process_name, al.status,
+                       apa.project_id,
+                       ar.identity_key AS resource_identity_key,
+                       ar.display_name AS resource_display_name,
+                       ar.path_key AS resource_path_key,
+                       al.start_time, al.end_time
+                FROM activity_log al
+                LEFT JOIN activity_resource ar
+                    ON ar.activity_id = al.id
+                LEFT JOIN activity_project_assignment apa
+                    ON apa.activity_id = al.id
+                WHERE al.window_title = ?
+                ORDER BY al.start_time
+                """,
+                (fixture_module.HEAVY_SESSION_WINDOW_TITLE,),
+            ).fetchall()
+
+        assert len(rows) == 80, (
+            f"expected 80 heavy session activities, got {len(rows)}"
+        )
+
+        # All rows must share the same grouping fields.
+        first = rows[0]
+        for i, row in enumerate(rows):
+            assert row["app_name"] == first["app_name"], (
+                f"heavy session activity {i}: app_name mismatch "
+                f"({row['app_name']} != {first['app_name']})"
+            )
+            assert row["process_name"] == first["process_name"], (
+                f"heavy session activity {i}: process_name mismatch"
+            )
+            assert row["status"] == first["status"], (
+                f"heavy session activity {i}: status mismatch"
+            )
+            assert row["project_id"] == first["project_id"], (
+                f"heavy session activity {i}: project_id mismatch"
+            )
+            assert row["resource_identity_key"] == first["resource_identity_key"], (
+                f"heavy session activity {i}: resource_identity_key mismatch"
+            )
+            assert row["resource_display_name"] == first["resource_display_name"], (
+                f"heavy session activity {i}: resource_display_name mismatch"
+            )
+            assert row["resource_path_key"] == first["resource_path_key"], (
+                f"heavy session activity {i}: resource_path_key mismatch"
+            )
+
+        # The heavy session must use the marker identity key.
+        assert first["resource_identity_key"] == (
+            fixture_module.HEAVY_SESSION_RESOURCE_IDENTITY_KEY
+        )
+        assert first["resource_display_name"] == fixture_module.HEAVY_SESSION_MARKER
+        # Heavy session must use normal status.
+        assert first["status"] == "normal"
+
+    def test_heavy_session_times_contiguous(
+        self, fixture_module, temp_db
+    ) -> None:
+        """Heavy session activities must have contiguous times with no
+        gap exceeding the session merge threshold (60s).
+
+        Each activity's start_time must equal or follow the previous
+        activity's end_time, and the gap between end_time and the next
+        start_time must be <= 60 seconds (the merge threshold).
+        """
+        spec = fixture_module.build_realistic_heavy_day_spec(
+            activity_count=500,
+            heavy_session_activity_count=80,
+        )
+        result = fixture_module.build_realistic_heavy_day_fixture(spec=spec)
+
+        import worktrace.db as db_module
+        from datetime import datetime
+
+        with db_module.get_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT start_time, end_time
+                FROM activity_log
+                WHERE window_title = ?
+                ORDER BY start_time
+                """,
+                (fixture_module.HEAVY_SESSION_WINDOW_TITLE,),
+            ).fetchall()
+
+        assert len(rows) == 80
+        fmt = "%Y-%m-%d %H:%M:%S"
+        prev_end = datetime.strptime(rows[0]["end_time"], fmt)
+        for i in range(1, len(rows)):
+            start = datetime.strptime(rows[i]["start_time"], fmt)
+            end = datetime.strptime(rows[i]["end_time"], fmt)
+            # start must be >= prev_end (no overlap/stacking).
+            assert start >= prev_end, (
+                f"heavy session activity {i}: start_time {start} < "
+                f"prev end_time {prev_end} (stacked or out of order)"
+            )
+            # Gap between prev_end and start must be <= 60s (merge threshold).
+            gap = (start - prev_end).total_seconds()
+            assert gap <= 60, (
+                f"heavy session activity {i}: gap {gap}s > 60s merge threshold "
+                f"— session would split"
+            )
+            # start must be strictly after prev_start (no duplicate start
+            # timestamps).  Back-to-back (start == prev_end) is valid and
+            # does not constitute stacking.
+            prev_start = datetime.strptime(rows[i - 1]["start_time"], fmt)
+            assert start > prev_start, (
+                f"heavy session activity {i}: start_time {start} <= "
+                f"prev start_time {prev_start} (duplicate or reversed start)"
+            )
+            prev_end = end
+
+    def test_heavy_session_boundary_before(
+        self, fixture_module, temp_db
+    ) -> None:
+        """The gap between the heavy session and the previous session must
+        exceed the merge threshold (60s) so they don't accidentally merge."""
+        spec = fixture_module.build_realistic_heavy_day_spec(
+            activity_count=500,
+            heavy_session_activity_count=80,
+        )
+        result = fixture_module.build_realistic_heavy_day_fixture(spec=spec)
+
+        import worktrace.db as db_module
+        from datetime import datetime
+
+        with db_module.get_connection() as conn:
+            # Get the heavy session's first activity.
+            heavy_first = conn.execute(
+                """
+                SELECT start_time
+                FROM activity_log
+                WHERE window_title = ?
+                ORDER BY start_time
+                LIMIT 1
+                """,
+                (fixture_module.HEAVY_SESSION_WINDOW_TITLE,),
+            ).fetchone()
+            assert heavy_first is not None
+            heavy_start = datetime.strptime(heavy_first["start_time"], "%Y-%m-%d %H:%M:%S")
+
+            # Get the activity immediately before the heavy session.
+            prev = conn.execute(
+                """
+                SELECT end_time
+                FROM activity_log
+                WHERE window_title != ?
+                  AND end_time <= ?
+                ORDER BY end_time DESC
+                LIMIT 1
+                """,
+                (
+                    fixture_module.HEAVY_SESSION_WINDOW_TITLE,
+                    heavy_first["start_time"],
+                ),
+            ).fetchone()
+
+        if prev is not None:
+            prev_end = datetime.strptime(prev["end_time"], "%Y-%m-%d %H:%M:%S")
+            gap = (heavy_start - prev_end).total_seconds()
+            assert gap > 60, (
+                f"gap before heavy session = {gap}s <= 60s merge threshold "
+                f"— sessions would merge"
+            )
+
+    def test_heavy_session_no_time_crosses_day(
+        self, fixture_module, temp_db
+    ) -> None:
+        """All heavy session activities must be on the same report date
+        (no crossing midnight)."""
+        spec = fixture_module.build_realistic_heavy_day_spec(
+            activity_count=2000,
+            heavy_session_activity_count=80,
+        )
+        result = fixture_module.build_realistic_heavy_day_fixture(spec=spec)
+
+        import worktrace.db as db_module
+        with db_module.get_connection() as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT DATE(start_time) as d FROM activity_log "
+                "WHERE window_title = ?",
+                (fixture_module.HEAVY_SESSION_WINDOW_TITLE,),
+            ).fetchall()
+
+        assert len(rows) == 1, (
+            f"heavy session spans {len(rows)} dates; expected 1 "
+            f"(no crossing midnight)"
+        )
+        assert rows[0]["d"] == spec.report_date
+
+    def test_heavy_session_no_stacked_or_reversed_times(
+        self, fixture_module, temp_db
+    ) -> None:
+        """All activities in the fixture (not just heavy session) must
+        have monotonically non-decreasing start times — no stacking or
+        reversed timestamps."""
+        spec = fixture_module.build_realistic_heavy_day_spec(
+            activity_count=500,
+            heavy_session_activity_count=80,
+        )
+        result = fixture_module.build_realistic_heavy_day_fixture(spec=spec)
+
+        import worktrace.db as db_module
+        with db_module.get_connection() as conn:
+            rows = conn.execute(
+                "SELECT start_time FROM activity_log ORDER BY start_time"
+            ).fetchall()
+
+        # All start_times must be strictly increasing (no duplicates).
+        start_times = [r["start_time"] for r in rows]
+        for i in range(1, len(start_times)):
+            assert start_times[i] > start_times[i - 1], (
+                f"activity {i}: start_time {start_times[i]} <= "
+                f"prev {start_times[i-1]} (stacked or reversed)"
+            )
+
+    def test_audit_includes_planned_heavy_metadata(
+        self, fixture_module, temp_db
+    ) -> None:
+        """The audit dict must include all heavy session metadata fields."""
+        spec = fixture_module.build_realistic_heavy_day_spec(
+            activity_count=500,
+            heavy_session_activity_count=80,
+        )
+        result = fixture_module.build_realistic_heavy_day_fixture(spec=spec)
+        audit = result.to_audit_dict()
+        assert "planned_session_count" in audit
+        assert "planned_heavy_session_activity_count" in audit
+        assert "heavy_session_marker" in audit
+        assert "heavy_session_app_name" in audit
+        assert "heavy_session_project_kind" in audit
+        assert audit["planned_heavy_session_activity_count"] == 80
+        assert audit["heavy_session_marker"] == fixture_module.HEAVY_SESSION_MARKER
+
+    def test_no_heavy_session_when_count_zero(
+        self, fixture_module, temp_db
+    ) -> None:
+        """When heavy_session_activity_count is 0, no heavy session marker
+        activities should exist."""
+        spec = fixture_module.BenchmarkFixtureSpec(
+            report_date=fixture_module.DEFAULT_REPORT_DATE,
+            activity_count=200,
+            day_start_seconds=fixture_module.DEFAULT_DAY_START_SECONDS,
+            span_seconds=fixture_module.DEFAULT_SPAN_SECONDS,
+            scenario="realistic_heavy_day",
+            seed=42,
+            chunk_size=fixture_module.DEFAULT_CHUNK_SIZE,
+            heavy_session_activity_count=0,
+        )
+        result = fixture_module.build_realistic_heavy_day_fixture(spec=spec)
+        assert result.planned_heavy_session_activity_count == 0
+        assert result.heavy_session_marker == ""
+
+        import worktrace.db as db_module
+        with db_module.get_connection() as conn:
+            rows = conn.execute(
+                "SELECT COUNT(*) as c FROM activity_log WHERE window_title = ?",
+                (fixture_module.HEAVY_SESSION_WINDOW_TITLE,),
+            ).fetchone()
+        assert rows["c"] == 0
