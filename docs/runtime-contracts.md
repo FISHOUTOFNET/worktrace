@@ -207,12 +207,13 @@ The envelope may contain schema version, surface/date scope, verified snapshot
 metadata, current static metadata, Collector/runtime phase, worker mapping,
 generations, database replacement epoch, errors, consistency and full-refresh
 request. It contains one `clock`. It does not duplicate the clock's span
-identity, stable hash, sample timestamp or live flags through aliases. The retired `recent_first_row` alias is no longer transported; Overview reads recent
-records only from the Overview payload's `recent` field (current-only contract).
-The Overview payload also carries an `attention` field whose visible items must all
-be present in the visible `recent` list, even after both are truncated to their
-display limits (`recent` ≤ 20, `attention` ≤ 3); the ViewModel selects the visible
-recent window to preserve this subset guarantee.
+identity, stable hash, sample timestamp or live flags through aliases. The retired
+`recent_first_row` alias is no longer transported; Overview reads recent records
+only from the Overview payload's `recent` field (current-only contract). The
+Overview payload carries `project_distribution`, sampled from the same
+`DayProjection.final_sessions` read: raw seconds plus at most Top 3 categories
+and one `other` segment. It carries no attention subset; shared `needs_*` and
+`missing_fields` facts remain row-owned.
 
 Every production bridge caller supplies explicit runtime and Collector status.
 Missing required dependencies produce a contract error that the bridge logs and

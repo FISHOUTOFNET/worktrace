@@ -54,6 +54,11 @@ WorkTrace 是本地 Windows 时间记录生产力工具。界面应专业、克�
 --color-danger: #ba352f;
 --color-danger-hover: #9d2925;
 --color-danger-soft: #fff0ee;
+--color-overview-bar-1: #3f6f96;
+--color-overview-bar-2: #4f786d;
+--color-overview-bar-3: #746d8b;
+--color-overview-bar-uncategorized: #746f67;
+--color-overview-bar-other: #66737d;
 --color-scrim: rgba(21, 31, 38, .38);
 --color-focus: #1769aa;
 ```
@@ -92,7 +97,7 @@ WorkTrace 是本地 Windows 时间记录生产力工具。界面应专业、克�
 
 - `>= 960px`：188px 标准导航，Timeline 双栏。
 - `< 960px`：56–64px rail，Timeline Inspector 改为覆盖 Drawer。
-- `< 720px`：工具栏允许分两行，Overview 单栏，Statistics 摘要两列。
+- `< 720px`：工具栏允许分两行，Overview Bar 最小 segment 宽度降为 64px，Statistics 摘要两列。
 - 内容最大宽度 1440px；大屏不无限拉伸。
 - 页面本身不得横向滚动；宽表只允许在 `.table-scroll` 内横向滚动。
 
@@ -151,11 +156,21 @@ Windows 125% 和 150% 缩放通过相同响应式规则适配，不建立缩放�
 - 数字列右对齐并使用等宽数字；名称列允许截断且有 `title`。
 - 空状态替换表体，不保留空白大表格。
 
-### 4.5 Tabs
+### 4.5 Overview 项目分布 Bar
+
+- 位于当前活动和最近记录之间，无可见标题、独立卡片边框或图表工具栏。
+- 固定 30px 高、单行 Grid、2px segment 间隙；不换行且不出现横向滚动。
+- 默认 `--overview-bar-min-segment: 88px`，小于 720px 时为 64px；列宽以权威时长作为 `fr` 权重。
+- 最多显示 Top 3 类别和一个“其他”；未归类与正式项目使用相同排序规则。
+- 正式项目按可见顺序使用三个低饱和 token；未归类与其他使用各自中性色 token。
+- 名称允许 ellipsis，`X.X h` 不收缩；Tooltip 和 `aria-label` 保留完整名称与精确时长。
+- Bar 只承担轻量展示，不绑定点击、项目筛选、独立定时器或 ResizeObserver。
+
+### 4.6 Tabs
 
 用于 Statistics 的“按项目 / 按应用”和 Drawer 内有限的规则类型。当前 Tab 使用下边框、字重和 `aria-selected`，支持左右方向键。
 
-### 4.6 Badge
+### 4.7 Badge
 
 只表达短状态，例如“进行中”“自动摘要”。高度 20px，不能成为主要按钮，也不能只靠颜色表达含义。
 

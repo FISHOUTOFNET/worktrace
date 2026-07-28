@@ -29,6 +29,7 @@ function makeElement(id) {
     textContent: "",
     innerHTML: "",
     className: "",
+    style: {},
     dataset: {},
     classList: { add() {}, remove() {}, contains() { return false; }, toggle() {} },
     setAttribute() {}, removeAttribute() {}, getAttribute() { return null; },
@@ -1273,7 +1274,7 @@ test("12d. new project defaults to 中文 when no language specified", async () 
 });
 
 // ---------------------------------------------------------------------------
-// Category 13: Overview current activity, recent records, attention semantics
+// Category 13: Overview current activity, project distribution, recent records
 // ---------------------------------------------------------------------------
 
 function makeStructuredCurrentActivityElement(id) {
@@ -1422,11 +1423,7 @@ test("13d. current activity with no navigation target is truly disabled", () => 
     },
     current_session: null, // No navigable session.
     recent: [],
-    attention: [],
-    attention_remaining_count: 0,
-    project_count: 0,
-    classified_seconds: 0,
-    uncategorized_seconds: 0,
+    project_distribution: { total_seconds: 0, segments: [] },
     today_total_seconds: 0,
   };
   App.showOverview(bundle);
@@ -1452,11 +1449,7 @@ test("13e. current activity with navigation target is enabled and wired", () => 
       start_time: "2026-07-22T10:00:00",
     },
     recent: [],
-    attention: [],
-    attention_remaining_count: 0,
-    project_count: 0,
-    classified_seconds: 0,
-    uncategorized_seconds: 0,
+    project_distribution: { total_seconds: 0, segments: [] },
     today_total_seconds: 0,
   };
   App.showOverview(bundle);
@@ -1481,11 +1474,7 @@ test("13e2. paused state disables current button even with a current_session", (
       start_time: "2026-07-22T10:00:00",
     },
     recent: [],
-    attention: [],
-    attention_remaining_count: 0,
-    project_count: 0,
-    classified_seconds: 0,
-    uncategorized_seconds: 0,
+    project_distribution: { total_seconds: 0, segments: [] },
     today_total_seconds: 0,
   };
   App.showOverview(bundle);
@@ -1509,11 +1498,7 @@ test("13e3. idle state disables current button even with a current_session", () 
       start_time: "2026-07-22T10:00:00",
     },
     recent: [],
-    attention: [],
-    attention_remaining_count: 0,
-    project_count: 0,
-    classified_seconds: 0,
-    uncategorized_seconds: 0,
+    project_distribution: { total_seconds: 0, segments: [] },
     today_total_seconds: 0,
   };
   App.showOverview(bundle);
@@ -1538,11 +1523,7 @@ test("13e4. excluded state disables current button even with a current_session",
       start_time: "2026-07-22T10:00:00",
     },
     recent: [],
-    attention: [],
-    attention_remaining_count: 0,
-    project_count: 0,
-    classified_seconds: 0,
-    uncategorized_seconds: 0,
+    project_distribution: { total_seconds: 0, segments: [] },
     today_total_seconds: 0,
   };
   App.showOverview(bundle);
@@ -1566,11 +1547,7 @@ test("13e5. error state disables current button even with a current_session", ()
       start_time: "2026-07-22T10:00:00",
     },
     recent: [],
-    attention: [],
-    attention_remaining_count: 0,
-    project_count: 0,
-    classified_seconds: 0,
-    uncategorized_seconds: 0,
+    project_distribution: { total_seconds: 0, segments: [] },
     today_total_seconds: 0,
   };
   App.showOverview(bundle);
@@ -1656,23 +1633,17 @@ test("13j. no active snapshot shows no-activity state, not stale content", () =>
   assert.equal(text.includes("should-not-appear.md"), false, "inactive state must not show stale resource name");
 });
 
-test("13k. recent records include in-progress and attention items (subset, not disjoint)", () => {
+test("13k. recent records keep in-progress, automatic summaries, and uncategorized names without attention badges", () => {
   const { App, element } = overviewHarness();
   const bundle = {
     current_activity: { active: true, status: "normal", resource_name: "live.md", app_name: "Editor", project_name: "P", is_uncategorized: false, elapsed_seconds: 60 },
     current_session: { projection_instance_key: "live-key", start_time: "2026-07-22T10:00:00" },
     recent: [
       { projection_instance_key: "live-key", start_time: "2026-07-22T10:00:00", project_name: "WorkTrace", display_description: "起草", duration_seconds: 1500, is_in_progress: true, needs_attention: false },
-      { projection_instance_key: "att-1", start_time: "2026-07-22T09:00:00", project_name: "", display_description: "自动摘要", duration_seconds: 1800, is_in_progress: false, needs_attention: true, description_source: "derived" },
+      { projection_instance_key: "uncategorized-1", start_time: "2026-07-22T09:00:00", project_name: "", display_description: "专利检索页面", duration_seconds: 1800, is_in_progress: false, needs_attention: true, description_source: "derived" },
       { projection_instance_key: "ok-1", start_time: "2026-07-22T08:00:00", project_name: "Project B", display_description: "已整理", duration_seconds: 600, is_in_progress: false, needs_attention: false },
     ],
-    attention: [
-      { projection_instance_key: "att-1", start_time: "2026-07-22T09:00:00", project_name: "", display_description: "自动摘要", duration_seconds: 1800, needs_attention: true, needs_project: true, missing_fields: "project_and_description", description_source: "derived" },
-    ],
-    attention_remaining_count: 0,
-    project_count: 2,
-    classified_seconds: 2100,
-    uncategorized_seconds: 1800,
+    project_distribution: { total_seconds: 3900, segments: [] },
     today_total_seconds: 3900,
   };
   App.showOverview(bundle);
@@ -1680,12 +1651,70 @@ test("13k. recent records include in-progress and attention items (subset, not d
   // independently. OR-based assertions are too weak — a single shared
   // substring (e.g. "10:00") would satisfy all three branches even if
   // the actual record types are missing.
-  const recentHtml = element("recent-list").innerHTML;
-  assert.equal(recentHtml.includes("进行中"), true, "in-progress badge must appear in recent");
-  assert.equal(recentHtml.includes("待整理"), true, "attention badge must appear in recent");
-  assert.equal(recentHtml.includes("WorkTrace"), true, "WorkTrace project name must appear in recent");
-  assert.equal(recentHtml.includes("未归类"), true, "uncategorized project label must appear for attention row");
-  assert.equal(recentHtml.includes("Project B"), true, "ordinary closed record project must appear in recent");
+    const recentHtml = element("recent-list").innerHTML;
+    assert.equal(recentHtml.includes("进行中"), true, "in-progress badge must appear in recent");
+    assert.equal(recentHtml.includes("待整理"), false, "attention badge must not appear in recent");
+    assert.equal(
+      recentHtml.includes('class="recent-description derived"'),
+      true,
+      "derived summary marker must remain in recent"
+    );
+    assert.equal(recentHtml.includes("WorkTrace"), true, "WorkTrace project name must appear in recent");
+    assert.equal(recentHtml.includes("未归类"), true, "uncategorized project label must remain in recent");
+    assert.equal(recentHtml.includes("Project B"), true, "ordinary closed record project must appear in recent");
+});
+
+test("13k2. empty project distribution clears and hides the bar", () => {
+  const { App, element } = overviewHarness();
+  const bar = element("overview-project-bar");
+  bar.innerHTML = "stale";
+  bar.style.gridTemplateColumns = "stale";
+  App.showOverview({
+    current_activity: { active: false, status: "normal" },
+    current_session: null,
+    recent: [],
+    project_distribution: { total_seconds: 0, segments: [] },
+    today_total_seconds: 0,
+  });
+  assert.equal(bar.hidden, true);
+  assert.equal(bar.innerHTML, "");
+  assert.equal(bar.style.gridTemplateColumns, "");
+});
+
+test("13k3. project distribution renders project, uncategorized, and other segments safely", () => {
+  const { App, element } = overviewHarness();
+  App.showOverview({
+    current_activity: { active: false, status: "normal" },
+    current_session: null,
+    recent: [],
+    project_distribution: {
+      total_seconds: 17100,
+      segments: [
+        { key: "project:1", project_id: 1, label: "<WorkTrace>", duration_seconds: 9000, is_uncategorized: false, is_other: false },
+        { key: "uncategorized", project_id: null, label: "未归类", duration_seconds: 4500, is_uncategorized: true, is_other: false },
+        { key: "other", project_id: null, label: "其他", duration_seconds: 3600, category_count: 2, is_uncategorized: false, is_other: true },
+      ],
+    },
+    today_total_seconds: 17100,
+  });
+
+  const bar = element("overview-project-bar");
+  assert.equal(bar.hidden, false);
+  assert.equal(
+    bar.style.gridTemplateColumns,
+    "minmax(var(--overview-bar-min-segment), 9000fr) minmax(var(--overview-bar-min-segment), 4500fr) minmax(var(--overview-bar-min-segment), 3600fr)"
+  );
+  assert.equal(bar.innerHTML.includes("&lt;WorkTrace&gt;"), true, "project label must be escaped");
+  assert.equal(bar.innerHTML.includes("<WorkTrace>"), false, "raw project markup must not be injected");
+  assert.equal(bar.innerHTML.includes("2.5 h"), true, "hours must use one decimal place");
+  assert.equal(bar.innerHTML.includes("1.3 h"), true, "uncategorized hours must use one decimal place");
+  assert.equal(bar.innerHTML.includes("1.0 h"), true, "other hours must use one decimal place");
+  assert.equal(bar.innerHTML.includes("rank-1"), true);
+  assert.equal(bar.innerHTML.includes("is-uncategorized"), true);
+  assert.equal(bar.innerHTML.includes("is-other"), true);
+  assert.equal(bar.innerHTML.includes('title="&lt;WorkTrace&gt; · 02:30:00"'), true);
+  assert.equal(bar.innerHTML.includes('aria-label="未归类，01:15:00"'), true);
+  assert.equal(bar.innerHTML.includes("<button"), false, "distribution segments must not be interactive");
 });
 
 test("13l. current activity 5 min and recent record 25 min can both display", () => {
@@ -1719,11 +1748,7 @@ test("13l. current activity 5 min and recent record 25 min can both display", ()
       // 25 minutes = 1500s, aggregate_live.
       { projection_instance_key: "live-key", start_time: "2026-07-22T10:00:00", project_name: "WorkTrace", display_description: "起草", duration_seconds: 1500, is_in_progress: true, needs_attention: false, live_clock: { sampled_at_epoch_ms: 1000000, started_at_epoch_ms: 0, elapsed_seconds_at_sample: 1500, aggregate_base_seconds: 0, duration_semantic: "aggregate_live", is_live: true, live_state: "persisted_open", display_span_id: "span:agg", stable_live_key_hash: "agg" } },
     ],
-    attention: [],
-    attention_remaining_count: 0,
-    project_count: 1,
-    classified_seconds: 1500,
-    uncategorized_seconds: 0,
+    project_distribution: { total_seconds: 1500, segments: [] },
     today_total_seconds: 1500,
   };
   // This must render both durations independently on different DOM targets.
@@ -1744,8 +1769,9 @@ test("13m. page subtitle uses authoritative module names", () => {
     path.join(__dirname, "../../worktrace/webview_ui/index.html"),
     "utf8"
   );
-  assert.equal(html.includes("当前活动"), true, "index.html must include '当前活动'");
-  assert.equal(html.includes("最近记录"), true, "index.html must include '最近记录'");
-  assert.equal(html.includes("待整理"), true, "index.html must include '待整理'");
-  assert.equal(html.includes("最近活动"), false, "index.html must not use retired '最近活动' label");
+    assert.equal(html.includes("当前活动"), true, "index.html must include '当前活动'");
+    assert.equal(html.includes("最近记录"), true, "index.html must include '最近记录'");
+    assert.equal(html.includes("当前活动和最近记录"), true, "Overview subtitle must use the final two-module wording");
+    assert.equal(html.includes("待整理"), false, "Overview must not include a standalone attention section");
+    assert.equal(html.includes("最近活动"), false, "index.html must not use retired '最近活动' label");
 });

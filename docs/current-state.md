@@ -113,13 +113,11 @@ new identity. Invalid clocks stop ticking, retain durable seconds and request
 bounded reconciliation.
 
 ## Pages and writes
-- Overview: today total, current atomic activity snapshot, recent records
-  (merged report sessions including in-progress and needs-attention items),
-  and an attention subset of recent records (at most three); editing hands
-  off to Timeline. Attention is a subset of recent, not a disjoint partition.
-  The subset constraint holds at the payload level: every visible attention
-  item is also present in the visible recent list, even after both are
-  truncated to their display limits.
+- Overview: today total, current atomic activity snapshot, an unheaded
+  single-line project/uncategorized distribution bar, and full-width recent
+  merged report sessions. Uncategorized participates in the same Top 3 +
+  other ranking as projects. The bar is display-only; current/recent rows hand
+  off to Timeline and shared row attention facts remain in their DTOs.
 - Timeline: reverse chronological sessions, authoritative project filtering,
   debounced autosave, always-visible activity details, direct two-step deletion,
   and a compact-window focus-trapped Drawer.

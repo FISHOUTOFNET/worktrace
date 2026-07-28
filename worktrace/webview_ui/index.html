@@ -70,7 +70,7 @@
             </header>
             <section id="page-overview" class="page active overview-page">
                 <header class="page-header">
-                    <div><h1>今日概览</h1><p>当前活动、最近记录和待整理</p></div>
+                    <div><h1>今日概览</h1><p>当前活动和最近记录</p></div>
                     <div class="page-total"><span>今日总时长</span><strong id="kpi-total" data-testid="overview-total">00:00:00</strong></div>
                 </header>
                 <div id="overview-error" class="inline-alert error" role="alert" hidden>加载失败，请稍后重试。</div>
@@ -80,24 +80,17 @@
                     <span class="current-context">开始记录后，当前窗口、文件或网页会显示在这里。</span>
                     <strong class="current-duration numeric" aria-live="off">00:00:00</strong>
                 </button>
-                <section class="overview-summary" aria-label="今日记录摘要">
-                    <div><span>涉及项目</span><strong id="overview-project-count">0</strong></div>
-                    <div><span>已归类</span><strong id="overview-classified-duration" class="numeric">00:00:00</strong></div>
-                    <div><span>待归类</span><strong id="overview-uncategorized-duration" class="numeric">00:00:00</strong></div>
+                <div
+                    id="overview-project-bar"
+                    class="overview-project-bar"
+                    role="list"
+                    aria-label="今日项目和未归类时间分布"
+                    hidden
+                ></div>
+                <section class="surface overview-section recent-section">
+                    <h2>最近记录</h2>
+                    <div id="recent-list" class="data-list"><div class="empty-state"><strong>暂无最近记录</strong><span>形成可报告的时间段后会显示在这里。</span></div></div>
                 </section>
-                <div class="overview-grid">
-                    <section class="surface overview-section recent-section">
-                        <h2>最近记录</h2>
-                        <div id="recent-list" class="data-list"><div class="empty-state"><strong>暂无最近记录</strong><span>形成可报告的时间段后会显示在这里。</span></div></div>
-                    </section>
-                    <section class="surface overview-section attention-section">
-                        <div class="section-heading"><h2>待整理</h2><span class="badge">今日</span></div>
-                        <div id="overview-attention-list" class="attention-list" data-testid="overview-attention">
-                            <div class="empty-compact">今日记录已整理</div>
-                        </div>
-                        <div id="overview-attention-more" class="attention-more" hidden></div>
-                    </section>
-                </div>
             </section>
 
             <section id="page-timeline" class="page timeline-page">

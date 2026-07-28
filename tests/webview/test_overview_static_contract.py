@@ -14,7 +14,7 @@ def test_overview_renders_authoritative_groups_and_timeline_intents():
     show = func_body(source, "showOverview")
     assert "bundle.current_activity" in show
     assert "bundle.current_session" in show
-    assert "renderAttention(bundle.attention" in show
+    assert "renderProjectDistribution(bundle.project_distribution)" in show
     assert "renderRecent(bundle.recent)" in show
     intent = func_body(source, "timelineIntent")
     assert "projection_instance_key" in intent
@@ -28,43 +28,79 @@ def test_derived_description_has_explicit_non_color_label():
     assert 'content: "自动摘要"' in read_resource("styles.css")
 
 
-def test_overview_summary_reads_the_accepted_overview_payload_directly():
+def test_overview_distribution_reads_the_accepted_overview_payload_directly():
     show = func_body(read_js("overview.js"), "showOverview")
-    assert "bundle.project_count" in show
-    assert "bundle.classified_duration" in show
-    assert "bundle.uncategorized_duration" in show
+    assert "bundle.project_distribution" in show
+    assert "bundle.project_count" not in show
+    assert "bundle.classified_duration" not in show
+    assert "bundle.uncategorized_duration" not in show
     assert "bundle.overview" not in show
 
 
 def test_overview_shipping_ui_uses_authoritative_module_names():
     """Regression guard: the shipping UI must use the canonical module
-    names "当前活动 / 最近记录 / 待整理" and must not reintroduce the
-    retired "最近活动" label in user-visible markup or ARIA."""
+    names "当前活动 / 最近记录" and must not reintroduce the retired
+    attention section or "最近活动" label in user-visible markup or ARIA."""
     html = read_resource("index.html")
     assert "当前活动" in html
     assert "最近记录" in html
-    assert "待整理" in html
+    assert "待整理" not in html
+    assert "overview-attention-list" not in html
+    assert "overview-attention-more" not in html
     assert "最近活动" not in html, "shipping HTML must not use retired '最近活动' label"
     overview_js = read_js("overview.js")
     assert "暂无最近记录" in overview_js, "empty state must use '暂无最近记录'"
     assert "最近活动" not in overview_js, "overview.js must not use retired '最近活动' label"
 
 
-def test_overview_view_model_does_not_reintroduce_disjoint_filter():
-    """Regression guard: the Overview ViewModel must not rebuild the
-    disjoint `recent_visible` filter that excluded current and attention
-    rows from recent. Attention is a subset of recent, not a disjoint
-    partition."""
+def test_overview_view_model_does_not_reintroduce_attention_selection():
+    """Overview keeps shared row facts but has no page-level attention list."""
     import inspect
     from worktrace.services import view_model_service
 
     source = inspect.getsource(view_model_service)
-    assert "recent_visible" not in source, (
-        "view_model_service must not reintroduce the retired 'recent_visible' disjoint filter"
-    )
-    assert "attention_keys" not in source, (
-        "view_model_service must not rebuild the 'attention_keys' disjoint exclusion set"
-    )
+    assert "_ATTENTION_LIMIT" not in source
+    assert "_select_overview_recent_rows" not in source
+    assert '"attention":' not in source
+    assert '"attention_remaining_count":' not in source
+    assert '"needs_attention":' in source
+    assert '"missing_fields":' in source
+
+
+def test_overview_project_bar_is_unheaded_narrow_and_accessible():
+    html = read_resource("index.html")
+    css = read_resource("styles.css")
+    source = read_js("overview.js")
+    render = func_body(source, "renderProjectDistribution")
+
+    assert 'id="overview-project-bar"' in html
+    assert 'role="list"' in html
+    assert 'aria-label="今日项目和未归类时间分布"' in html
+    assert "项目分布</h" not in html
+    assert "height: 30px" in css
+    assert "--overview-bar-min-segment: 88px" in css
+    assert "--overview-bar-min-segment: 64px" in css
+    assert "gridTemplateColumns" in render
+    assert "minmax(var(--overview-bar-min-segment)" in render
+    assert "ResizeObserver" not in source
+    assert "addEventListener" not in render
+
+
+def test_project_distribution_render_owns_text_safety_and_segment_semantics():
+    source = read_js("overview.js")
+    compact = func_body(source, "formatCompactHours")
+    render = func_body(source, "renderProjectDistribution")
+
+    assert '.toFixed(1) + " h"' in compact
+    assert "App.escapeHtml(label)" in render
+    assert "App.escapeHtml(hours)" in render
+    assert 'title="' in render
+    assert 'aria-label="' in render
+    assert "rank-" in render
+    assert "is-uncategorized" in render
+    assert "is-other" in render
+    assert "bar.hidden = true" in render
+    assert "bar.hidden = false" in render
 
 
 def test_current_activity_card_uses_structured_dto_not_display_string():

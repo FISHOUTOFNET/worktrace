@@ -24,25 +24,22 @@ def _closed(project_id: int, start: str, end: str, title: str) -> int:
     return activity_id
 
 
-def test_overview_attention_is_subset_of_recent_and_derived_summary_is_not_user_description(temp_db):
+def test_overview_recent_keeps_derived_summary_and_shared_attention_facts(temp_db):
     project_id = project_service.create_project("Client")
     _closed(project_id, "2026-07-22 09:00:00", "2026-07-22 09:30:00", "brief.docx")
 
     model = get_overview_view_model("2026-07-22")
-    attention = model["attention"]
     recent = model["recent"]
-    assert len(attention) <= 3
-    assert attention and attention[0]["needs_user_description"] is True
-    assert attention[0]["description_source"] in {"derived", "none"}
-    assert attention[0]["user_description"] == ""
-    # 待整理 is an action subset of 最近记录, not a disjoint partition: every
-    # attention row must also appear in recent.
-    recent_keys = {row["projection_instance_key"] for row in recent}
-    attention_keys = {row["projection_instance_key"] for row in attention}
-    assert attention_keys <= recent_keys
+    assert recent and recent[0]["needs_user_description"] is True
+    assert recent[0]["description_source"] in {"derived", "none"}
+    assert recent[0]["user_description"] == ""
+    assert recent[0]["needs_attention"] is True
+    assert recent[0]["missing_fields"] == "description"
+    assert "attention" not in model
+    assert "attention_remaining_count" not in model
 
 
-def test_overview_in_progress_session_appears_first_in_recent_and_not_in_attention(temp_db):
+def test_overview_in_progress_session_appears_first_in_recent(temp_db):
     project_id = project_service.create_project("Live")
     activity_id = activity_service.create_activity(
         "Editor", "editor.exe", "live-doc.md", project_id=project_id,
@@ -55,9 +52,7 @@ def test_overview_in_progress_session_appears_first_in_recent_and_not_in_attenti
     assert recent[0]["is_in_progress"] is True
     assert model["current_session"] is not None
     assert model["current_session"]["projection_instance_key"] == recent[0]["projection_instance_key"]
-    # In-progress sessions never enter attention (attention requires ended).
-    attention_keys = {row["projection_instance_key"] for row in model["attention"]}
-    assert recent[0]["projection_instance_key"] not in attention_keys
+    assert recent[0]["needs_attention"] is False
     activity_service.close_activity(activity_id, "2026-07-22 10:30:00")
 
 
@@ -95,167 +90,6 @@ def test_overview_recent_truncation_does_not_affect_kpi_totals(temp_db):
     assert model["today_total_seconds"] == expected_total
     assert model["classified_seconds"] == expected_total
     assert model["overview"]["today_total_seconds"] == model["today_total_seconds"]
-
-
-def _organize_session(row, index, report_date):
-    """Set a user description on a session so it no longer needs attention."""
-    from worktrace.services import report_session_operation_service
-
-    report_session_operation_service.edit_session(
-        report_date=report_date,
-        projection_instance_key=row["projection_instance_key"],
-        expected_projection_revision=row["projection_revision"],
-        request_id=f"organize-{index}",
-        project_id=None,
-        adjusted_duration_seconds=None,
-        note=f"organized-{index}",
-    )
-
-
-def test_overview_attention_subset_preserved_across_recent_truncation(temp_db, monkeypatch):
-    """When recent is truncated to _RECENT_LIMIT, an older attention record
-    that falls beyond the truncation window must still appear in visible
-    recent. This verifies the selection function promotes required attention
-    rows into the visible recent window so visible attention ⊆ visible recent.
-
-    This is the integration wiring test for the invariant that
-    ``test_overview_recent_selection_unit.py`` covers at the pure-function
-    level.  ``_RECENT_LIMIT`` is monkeypatched to a small value so the
-    boundary scenario is exercised with 5 mutations instead of 20 — the
-    selection algorithm's behavior depends on the relationship between
-    ``num_sessions`` and ``_RECENT_LIMIT``, not on their absolute values.
-    """
-    from worktrace.services import view_model_service
-
-    # Use a small recent limit so we need fewer sessions and mutations to
-    # reach the boundary.  The pure-function unit tests cover the algorithm
-    # at the production limit; this test verifies the DB → projection →
-    # ViewModel → selection wiring.
-    small_recent_limit = 5
-    monkeypatch.setattr(view_model_service, "_RECENT_LIMIT", small_recent_limit)
-    recent_limit = small_recent_limit
-    attention_limit = view_model_service._ATTENTION_LIMIT
-    report_date = "2026-07-22"
-    project_a = project_service.create_project("Alpha")
-    project_b = project_service.create_project("Beta")
-    # Create recent_limit + 2 sessions, alternating projects to prevent
-    # merging. Each session is 10 minutes, back-to-back.
-    num_sessions = recent_limit + 2
-    for index in range(num_sessions):
-        start_minute = index * 10
-        start_hour = 8 + start_minute // 60
-        start_min = start_minute % 60
-        end_minute = start_minute + 10
-        end_hour = 8 + end_minute // 60
-        end_min = end_minute % 60
-        project_id = project_a if index % 2 == 0 else project_b
-        _closed(
-            project_id,
-            f"{report_date} {start_hour:02d}:{start_min:02d}:00",
-            f"{report_date} {end_hour:02d}:{end_min:02d}:00",
-            f"file{index}.txt",
-        )
-
-    # All sessions currently need attention (no user description). Set notes
-    # on the newest recent_limit sessions so only the 2 oldest need attention.
-    model = get_overview_view_model(report_date)
-    for index, row in enumerate(model["recent"][:recent_limit]):
-        _organize_session(row, index, report_date)
-
-    # Re-fetch: the 2 oldest sessions (beyond recent_limit) now need
-    # attention and must be promoted into visible recent.
-    model = get_overview_view_model(report_date)
-    attention_keys = {row["projection_instance_key"] for row in model["attention"]}
-    recent_keys = {row["projection_instance_key"] for row in model["recent"]}
-
-    assert attention_keys, "there must be attention rows"
-    assert len(model["attention"]) <= attention_limit
-    assert attention_keys <= recent_keys, (
-        "visible attention must be a subset of visible recent"
-    )
-    assert len(model["recent"]) == recent_limit
-
-
-def test_overview_attention_promotion_replaces_tail_ordinary_rows(temp_db, monkeypatch):
-    """Verify the replacement strategy: to accommodate older attention rows
-    that fell beyond the truncation boundary, the selection function replaces
-    tail-most ordinary (non-in-progress, non-attention) rows. The in-progress
-    session (if present) stays first and is never replaced, and the remaining
-    newer ordinary rows keep their relative order.
-
-    This is the integration wiring test for the replacement invariant that
-    ``test_overview_recent_selection_unit.py`` covers at the pure-function
-    level.  ``_RECENT_LIMIT`` is monkeypatched to a small value so the
-    boundary scenario is exercised with 4 mutations instead of 19.
-    """
-    from worktrace.services import view_model_service
-
-    small_recent_limit = 5
-    monkeypatch.setattr(view_model_service, "_RECENT_LIMIT", small_recent_limit)
-    recent_limit = small_recent_limit
-    report_date = "2026-07-22"
-    project_a = project_service.create_project("Promo-A")
-    project_b = project_service.create_project("Promo-B")
-    # 1 in-progress session (newest) + recent_limit closed organized sessions
-    # + 2 closed unorganized sessions (oldest, need attention).
-    # Total = recent_limit + 3 sessions.
-    num_organized_closed = recent_limit - 1  # reserve 1 slot for in-progress
-    num_unorganized = 2
-    total_closed = num_organized_closed + num_unorganized
-    for index in range(total_closed):
-        start_minute = index * 10
-        start_hour = 8 + start_minute // 60
-        start_min = start_minute % 60
-        end_minute = start_minute + 10
-        end_hour = 8 + end_minute // 60
-        end_min = end_minute % 60
-        project_id = project_a if index % 2 == 0 else project_b
-        _closed(
-            project_id,
-            f"{report_date} {start_hour:02d}:{start_min:02d}:00",
-            f"{report_date} {end_hour:02d}:{end_min:02d}:00",
-            f"file{index}.txt",
-        )
-
-    # Organize the newest num_organized_closed closed sessions (all except
-    # the 2 oldest). The 2 oldest remain unorganized → need attention.
-    model = get_overview_view_model(report_date)
-    closed_rows = [row for row in model["recent"] if not row.get("is_in_progress")]
-    rows_to_organize = closed_rows[:num_organized_closed]
-    for index, row in enumerate(rows_to_organize):
-        _organize_session(row, index, report_date)
-
-    live_activity_id = activity_service.create_activity(
-        "Editor", "editor.exe", "live-doc.md", project_id=project_a,
-        start_time=f"{report_date} 12:00:00",
-    )
-
-    model = get_overview_view_model(report_date)
-    attention_keys = {row["projection_instance_key"] for row in model["attention"]}
-    recent_keys = {row["projection_instance_key"] for row in model["recent"]}
-
-    assert model["recent"][0]["is_in_progress"] is True
-    assert attention_keys, "there must be attention rows"
-    assert attention_keys <= recent_keys, "attention must be subset of recent"
-    assert len(model["recent"]) == recent_limit
-    assert len(recent_keys) == len(model["recent"])
-    # The attention rows have earlier start times than the organized rows
-    # that remain — they were promoted from beyond the truncation boundary.
-    attention_start_times = {row["start_time"] for row in model["attention"]}
-    organized_recent = [
-        row for row in model["recent"]
-        if row["projection_instance_key"] not in attention_keys
-        and not row.get("is_in_progress")
-    ]
-    if organized_recent:
-        newest_attention_start = max(attention_start_times)
-        oldest_organized_start = min(
-            row["start_time"] for row in organized_recent
-        )
-        assert newest_attention_start < oldest_organized_start, (
-            "promoted attention rows must be older than remaining organized rows"
-        )
-    activity_service.close_activity(live_activity_id, f"{report_date} 12:30:00")
 
 
 def test_statistics_all_time_and_project_scope_use_one_authoritative_projection(temp_db):

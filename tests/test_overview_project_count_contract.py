@@ -33,14 +33,23 @@ def test_deleted_project_does_not_increase_overview_project_count(temp_db):
 
     before = view_model_service.get_overview_view_model(DATE)
     assert before["overview"]["project_count"] == 2
+    assert {
+        segment["label"]
+        for segment in before["project_distribution"]["segments"]
+    } == {"Retained Project", "Deleted Project"}
 
     project_service.soft_delete_project(deleted_project)
 
     after = view_model_service.get_overview_view_model(DATE)
     assert after["overview"]["project_count"] == 1
+    distribution = after["project_distribution"]
+    assert distribution["total_seconds"] == 30 * 60
+    assert [segment["label"] for segment in distribution["segments"]] == [
+        "Retained Project"
+    ]
     visible = [
-        *(after.get("attention") or []),
         *(after.get("recent") or []),
         *([after["current_session"]] if after.get("current_session") else []),
     ]
     assert "Deleted Project" not in repr(visible)
+    assert "Deleted Project" not in repr(distribution)

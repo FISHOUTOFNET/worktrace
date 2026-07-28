@@ -27,6 +27,10 @@ def test_overview_counts_standalone_excluded_without_showing_it_in_recent(temp_d
     payload = view_model_service.get_overview_view_model(DATE)
 
     assert payload["today_total_seconds"] == 300
+    assert payload["project_distribution"] == {
+        "total_seconds": 0,
+        "segments": [],
+    }
     assert all(
         str(row.get("row_kind") or "") != "standalone_status"
         for row in payload.get("activities") or []

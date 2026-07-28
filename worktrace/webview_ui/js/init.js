@@ -468,8 +468,10 @@
             overview.date = bundle.date || overview.date;
             overview.current_activity = runtime ? runtime.currentActivity : {};
             overview.current_session = bundle.current_session || null;
-            overview.attention = bundle.attention || [];
-            overview.attention_remaining_count = bundle.attention_remaining_count || 0;
+            overview.project_distribution = bundle.project_distribution || {
+                total_seconds: 0,
+                segments: []
+            };
             overview.recent = bundle.recent || [];
             overview.kpi_live_targets = bundle.kpi_live_targets || {};
             if (overview.today_total_seconds === undefined) overview.today_total_seconds = bundle.today_total_seconds || 0;

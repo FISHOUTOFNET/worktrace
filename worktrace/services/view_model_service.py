@@ -27,69 +27,6 @@ from .report_revision_service import get_report_structure_revision
 from .runtime_activity_state_service import sample_runtime_activity_state
 
 _RECENT_LIMIT = 20
-_ATTENTION_LIMIT = 3
-
-
-def _select_overview_recent_rows(
-    recent_rows: list[dict[str, Any]],
-    attention_rows: list[dict[str, Any]],
-    *,
-    limit: int,
-) -> list[dict[str, Any]]:
-    """Select the visible recent window so every displayed attention row is
-    also present in the displayed recent list.
-
-    The authoritative ``recent_rows`` is already filtered, merged, and sorted
-    (in-progress first, then start time descending). We take the first
-    ``limit`` rows as the base window, then promote any attention row that
-    fell beyond the truncation boundary by replacing the tail-most ordinary
-    (non-in-progress, non-attention) row. The result is re-sorted so
-    in-progress stays first and start-time descending order is preserved.
-    """
-    if limit <= 0:
-        return []
-
-    selected = list(recent_rows[:limit])
-    selected_keys = {
-        str(row.get("projection_instance_key") or "")
-        for row in selected
-    }
-
-    required_rows = [
-        row
-        for row in attention_rows
-        if str(row.get("projection_instance_key") or "") not in selected_keys
-    ]
-
-    for required in required_rows:
-        required_key = str(required.get("projection_instance_key") or "")
-        if not required_key:
-            continue
-
-        replace_index = next(
-            (
-                index
-                for index in range(len(selected) - 1, -1, -1)
-                if not bool(selected[index].get("is_in_progress"))
-                and not bool(selected[index].get("needs_attention"))
-            ),
-            None,
-        )
-
-        if replace_index is None:
-            break
-
-        selected[replace_index] = required
-        selected_keys.add(required_key)
-
-    selected.sort(
-        key=lambda row: (
-            bool(row.get("is_in_progress")),
-            str(row.get("start_time") or ""),
-        ),
-        reverse=True,
-    )
-    return selected
 
 
 def _get_current_activity_snapshot() -> ActivitySnapshotContract | None:
@@ -377,13 +314,89 @@ def _session_display_seconds(session: Mapping[str, Any]) -> int:
     return base
 
 
-def _session_needs_attention(session: Mapping[str, Any]) -> bool:
-    """Lightweight needs_attention matching _description_display_fields's logic."""
-    if bool(session.get("is_in_progress")):
-        return False
-    needs_project = not bool(session.get("is_report_project"))
-    needs_description = not str(session.get("session_note") or "").strip()
-    return needs_project or needs_description
+def _accumulate_overview_distribution_bucket(
+    buckets: dict[str, dict[str, Any]],
+    session: Mapping[str, Any],
+    display_seconds: int,
+) -> None:
+    """Accumulate one authoritative final session into its Overview category."""
+    if session.get("contributes_to_totals", True) is False or display_seconds <= 0:
+        return
+
+    project_id = int(
+        session.get("report_project_id") or session.get("project_id") or 0
+    )
+    if bool(session.get("is_report_project")) and project_id > 0:
+        key = f"project:{project_id}"
+        project_name = str(session.get("project_name") or "").strip()
+        bucket = buckets.setdefault(
+            key,
+            {
+                "key": key,
+                "project_id": project_id,
+                "label": project_name or UNCATEGORIZED_PROJECT,
+                "duration_seconds": 0,
+                "is_uncategorized": False,
+                "is_other": False,
+            },
+        )
+    elif bool(session.get("is_report_uncategorized")):
+        key = "uncategorized"
+        bucket = buckets.setdefault(
+            key,
+            {
+                "key": key,
+                "project_id": None,
+                "label": UNCATEGORIZED_PROJECT,
+                "duration_seconds": 0,
+                "is_uncategorized": True,
+                "is_other": False,
+            },
+        )
+    else:
+        return
+
+    bucket["duration_seconds"] = int(bucket["duration_seconds"]) + display_seconds
+
+
+def _finalize_overview_project_distribution(
+    buckets: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Sort categories and collapse categories after the top three."""
+    categories = [
+        dict(bucket)
+        for bucket in buckets.values()
+        if int(bucket.get("duration_seconds") or 0) > 0
+    ]
+    categories.sort(
+        key=lambda bucket: (
+            -int(bucket["duration_seconds"]),
+            str(bucket["key"]),
+        )
+    )
+    total_seconds = sum(int(bucket["duration_seconds"]) for bucket in categories)
+    if len(categories) <= 3:
+        segments = categories
+    else:
+        remainder = categories[3:]
+        segments = [
+            *categories[:3],
+            {
+                "key": "other",
+                "project_id": None,
+                "label": "其他",
+                "duration_seconds": sum(
+                    int(bucket["duration_seconds"]) for bucket in remainder
+                ),
+                "category_count": len(remainder),
+                "is_uncategorized": False,
+                "is_other": True,
+            },
+        ]
+    return {
+        "total_seconds": total_seconds,
+        "segments": segments,
+    }
 
 
 def _session_visible_in_recent(
@@ -434,10 +447,18 @@ def get_overview_view_model(today: str | None = None) -> dict[str, Any]:
         )
 
         # Select-then-transform: compute lightweight selection keys for all
-        # sessions, pick the visible 20 recent + 3 attention, then build full
-        # DTOs only for the surviving ~23 sessions.
+        # sessions, pick the visible 20 recent rows, then build full DTOs only
+        # for the surviving rows. Distribution aggregation shares this same
+        # authoritative final-session traversal.
         candidates: list[dict[str, Any]] = []
+        distribution_buckets: dict[str, dict[str, Any]] = {}
         for session in sessions:
+            display_seconds = _session_display_seconds(session)
+            _accumulate_overview_distribution_bucket(
+                distribution_buckets,
+                session,
+                display_seconds,
+            )
             session_key = str(session.get("projection_instance_key") or "")
             session_contributions = projection.contributions_by_key.get(
                 session_key, ()
@@ -446,7 +467,6 @@ def get_overview_view_model(today: str | None = None) -> dict[str, Any]:
                 session, decide_report_status, session_contributions
             ):
                 continue
-            display_seconds = _session_display_seconds(session)
             candidates.append(
                 {
                     "session": session,
@@ -469,9 +489,11 @@ def get_overview_view_model(today: str | None = None) -> dict[str, Any]:
                             and not bool(session.get("is_classified"))
                         )
                     ),
-                    "needs_attention": _session_needs_attention(session),
                 }
             )
+        project_distribution = _finalize_overview_project_distribution(
+            distribution_buckets
+        )
 
         # KPI must be computed from the full projection, not the truncated
         # visible set, so it is calculated from candidates (pre-truncation).
@@ -503,24 +525,8 @@ def get_overview_view_model(today: str | None = None) -> dict[str, Any]:
             key=lambda c: c["is_in_progress"], reverse=True
         )
 
-        attention_candidates = [
-            c for c in candidates if c["needs_attention"]
-        ]
-        attention_selection = {
-            str(c["session"].get("projection_instance_key") or "")
-            for c in attention_candidates[:_ATTENTION_LIMIT]
-        }
-
         # Build full DTOs only for the visible window.
         visible_candidates = list(candidates[:_RECENT_LIMIT])
-        # Ensure attention rows are in the visible window.
-        for c in attention_candidates[:_ATTENTION_LIMIT]:
-            key = str(c["session"].get("projection_instance_key") or "")
-            if key and not any(
-                str(cand["session"].get("projection_instance_key") or "") == key
-                for cand in visible_candidates
-            ):
-                visible_candidates.append(c)
 
         recent_rows = [
             _base_session_row(
@@ -552,17 +558,6 @@ def get_overview_view_model(today: str | None = None) -> dict[str, Any]:
         (row for row in recent_rows if bool(row.get("is_in_progress"))),
         None,
     )
-    attention_rows = [
-        row
-        for row in recent_rows
-        if bool(row.get("needs_attention"))
-        and str(row.get("projection_instance_key") or "") in attention_selection
-    ][:_ATTENTION_LIMIT]
-    visible_recent_rows = _select_overview_recent_rows(
-        recent_rows,
-        attention_rows,
-        limit=_RECENT_LIMIT,
-    )
     return {
         "ok": True,
         "date": scoped_today,
@@ -583,9 +578,8 @@ def get_overview_view_model(today: str | None = None) -> dict[str, Any]:
         },
         "current_activity": current_activity,
         "current_session": current_session,
-        "attention": attention_rows,
-        "attention_remaining_count": max(0, len(attention_candidates) - _ATTENTION_LIMIT),
-        "recent": visible_recent_rows,
+        "project_distribution": project_distribution,
+        "recent": recent_rows,
         "today_total_seconds": today_total_seconds,
         "classified_seconds": classified_seconds,
         "uncategorized_seconds": uncategorized_seconds,

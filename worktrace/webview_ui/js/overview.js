@@ -40,6 +40,47 @@
         return base + (item && item.description_source === "derived" ? " derived" : "");
     }
 
+    function formatCompactHours(seconds) {
+        return (Math.max(0, Number(seconds) || 0) / 3600).toFixed(1) + " h";
+    }
+
+    function renderProjectDistribution(distribution) {
+        var bar = document.getElementById("overview-project-bar");
+        var segments = distribution && Array.isArray(distribution.segments)
+            ? distribution.segments.slice(0, 4)
+            : [];
+        if (!segments.length) {
+            bar.innerHTML = "";
+            bar.style.gridTemplateColumns = "";
+            bar.hidden = true;
+            return;
+        }
+
+        bar.hidden = false;
+        bar.style.gridTemplateColumns = segments.map(function (segment) {
+            return "minmax(var(--overview-bar-min-segment), "
+                + Math.max(1, Number(segment.duration_seconds) || 0) + "fr)";
+        }).join(" ");
+        bar.innerHTML = segments.map(function (segment, index) {
+            var seconds = Math.max(0, Number(segment.duration_seconds) || 0);
+            var label = String(segment.label || "");
+            var hours = formatCompactHours(seconds);
+            var exactDuration = App.formatDuration(seconds);
+            var className = segment.is_other
+                ? "is-other"
+                : segment.is_uncategorized
+                    ? "is-uncategorized"
+                    : "rank-" + String(index + 1);
+            var accessibleText = label + "，" + exactDuration;
+            return '<div class="overview-project-segment ' + className
+                + '" role="listitem" title="' + App.escapeHtml(label + " · " + exactDuration)
+                + '" aria-label="' + App.escapeHtml(accessibleText) + '">'
+                + '<span class="overview-project-name">' + App.escapeHtml(label) + '</span>'
+                + '<span class="overview-project-hours">' + App.escapeHtml(hours) + '</span>'
+                + '</div>';
+        }).join("");
+    }
+
     function timelineIntent(item, focusTarget) {
         if (!item || !item.projection_instance_key) return;
         var date = String(item.start_time || item.report_date || App.timelineDate || "").slice(0, 10);
@@ -89,8 +130,6 @@
             var statusBadge = "";
             if (item.is_in_progress) {
                 statusBadge = '<span class="recent-status badge-live">进行中</span>';
-            } else if (item.needs_attention) {
-                statusBadge = '<span class="recent-status badge-attention">待整理</span>';
             }
             return '<button type="button" class="recent-row" data-recent-index="' + index + '">'
                 + '<span class="numeric">' + App.escapeHtml(App.formatStartTimeOnly(item.start_time)) + '</span>'
@@ -105,58 +144,9 @@
         bindIntentButtons(list, items, "data-recent-index");
     }
 
-    function attentionReason(item) {
-        if (item.missing_fields === "project_and_description") return "缺少项目和用户描述";
-        if (item.missing_fields === "project") return "缺少项目";
-        return "缺少用户描述";
-    }
-
-    function attentionFocus(item) {
-        return item && item.needs_project ? "project" : "description";
-    }
-
-    function renderAttention(items, remaining) {
-        var list = document.getElementById("overview-attention-list");
-        var more = document.getElementById("overview-attention-more");
-        items = Array.isArray(items) ? items : [];
-        if (!items.length) {
-            list.innerHTML = '<div class="empty-compact">今日记录已整理</div>';
-            more.hidden = true;
-            more.innerHTML = "";
-            return;
-        }
-        list.innerHTML = items.map(function (item, index) {
-            return '<div class="attention-item"><div><strong>'
-                + App.escapeHtml(App.formatStartTimeOnly(item.start_time) + " · "
-                    + (item.needs_project ? "未选择项目" : (item.project_name || "未归类")))
-                + '</strong><div class="' + descriptionClass(item, "attention-description") + '">'
-                + App.escapeHtml(item.display_description || "暂无描述") + '</div>'
-                + '<div class="attention-reason">' + App.escapeHtml(attentionReason(item)) + '</div></div>'
-                + '<button type="button" data-attention-index="' + index + '">整理</button></div>';
-        }).join("");
-        bindIntentButtons(list, items, "data-attention-index", attentionFocus);
-        remaining = Math.max(0, parseInt(remaining, 10) || 0);
-        more.hidden = remaining === 0;
-        more.innerHTML = remaining
-            ? '<span>还有 ' + remaining + ' 条待整理记录</span>'
-                + '<button type="button" data-attention-more>查看</button>'
-            : "";
-        var view = more.querySelector("[data-attention-more]");
-        if (view) view.addEventListener("click", function () {
-            timelineIntent(items[0], attentionFocus(items[0]));
-        });
-    }
-
     function showOverview(bundle) {
         if (!bundle) return;
         App.lastOverviewSnapshot = bundle;
-        document.getElementById("overview-project-count").textContent = String(
-            Math.max(0, parseInt(bundle.project_count, 10) || 0)
-        );
-        document.getElementById("overview-classified-duration").textContent =
-            bundle.classified_duration || App.formatDuration(bundle.classified_seconds || 0);
-        document.getElementById("overview-uncategorized-duration").textContent =
-            bundle.uncategorized_duration || App.formatDuration(bundle.uncategorized_seconds || 0);
         renderKpi(
             document.getElementById("kpi-total"),
             bundle.today_total_seconds,
@@ -185,7 +175,7 @@
         currentButton.onclick = canNavigate
             ? function () { timelineIntent(currentSession, ""); }
             : null;
-        renderAttention(bundle.attention, bundle.attention_remaining_count);
+        renderProjectDistribution(bundle.project_distribution);
         renderRecent(bundle.recent);
     }
     App.showOverview = showOverview;

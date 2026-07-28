@@ -208,7 +208,7 @@ def test_overview_surface_has_required_user_contracts() -> None:
     for dom_id in (
         "kpi-total",
         "current-activity",
-        "overview-attention-list",
+        "overview-project-bar",
         "recent-list",
         "overview-error",
         "toggle-pause-btn",
@@ -225,11 +225,11 @@ def test_overview_uses_exact_aggregate_clocks_and_safe_error_surface() -> None:
     assert "kpi_live_targets" in source
     assert 'duration_semantic === "aggregate_live"' in source
     assert "kpi_live_base" not in source
-    assert "attention_remaining_count" in source
+    assert "attention_remaining_count" not in source
 
     body = func_body(read_js("overview.js"), "showOverview")
     assert "bundle.current_session" in body
-    assert "renderAttention" in body
+    assert "renderProjectDistribution" in body
     assert "renderRecent" in body
 
 
