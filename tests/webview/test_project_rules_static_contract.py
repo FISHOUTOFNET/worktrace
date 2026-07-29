@@ -77,6 +77,73 @@ def test_project_rules_unified_panel_contains_project_and_rule_flows():
     assert re.search(r'id="rules-panel-folder-recursive"[^>]*checked', section)
 
 
+def test_project_rules_folder_path_uses_native_readonly_picker_contract():
+    section = _rules_section()
+    path_input = re.search(r'id="rules-panel-folder-path"[^>]*>', section)
+    assert path_input is not None
+    assert "readonly" in path_input.group(0)
+    assert "请选择要自动归类的文件夹" in path_input.group(0)
+    assert 'id="rules-panel-choose-folder"' in section
+    assert "选择文件夹" in section
+
+    source = read_js("rules_create_panel.js")
+    assert "App.bridge.chooseProjectRuleFolder()" in source
+    assert "App.rulesChoosingFolder" in source
+    assert "选择文件夹失败" in source
+
+
+def test_project_rules_folder_picker_and_drawer_stay_bounded_at_supported_sizes():
+    styles = read_resource("styles.css")
+    picker = re.search(r"\.folder-picker-control\s*\{([^}]*)\}", styles)
+    picker_input = re.search(r"\.folder-picker-control input\s*\{([^}]*)\}", styles)
+    drawer = re.search(r"\.drawer\s*\{([^}]*)\}", styles)
+    assert picker is not None
+    assert "grid-template-columns: minmax(0, 1fr) auto" in picker.group(1)
+    assert "min-width: 0" in picker.group(1)
+    assert picker_input is not None and "min-width: 0" in picker_input.group(1)
+    assert drawer is not None and "width: min(430px, calc(100% - 8px))" in drawer.group(1)
+    assert "@media (max-width: 959px)" in styles
+
+
+def test_project_rules_panel_presentation_context_and_tab_state_are_single_owner():
+    source = read_js("rules_create_panel.js")
+    presentation = func_body(source, "syncProjectPanelPresentation")
+    for expected in (
+        "新建项目",
+        "编辑项目",
+        "保存修改",
+        "正在新建…",
+        "正在保存…",
+        "aria-label",
+        "disabled",
+    ):
+        assert expected in presentation
+
+    context = func_body(source, "renderRulesPanelProjectContext")
+    assert "为项目“" in context
+    assert "项目已新增：“" in context
+    assert "请继续添加自动归类规则。" in context
+    assert "is-success" in context
+
+    rule_type = func_body(source, "setRuleType")
+    assert 'setAttribute("aria-selected"' in rule_type
+    assert ".tabIndex =" in rule_type
+    assert 'classList.toggle("is-active"' in rule_type
+    assert "folderRow.hidden" in rule_type
+    assert "keywordRow.hidden" in rule_type
+    assert "recursive.checked = true" in rule_type
+
+
+def test_project_rule_drawer_has_session_guard_and_shared_discard_reset():
+    source = read_js("rules_create_panel.js")
+    assert "App.rulesPanelSessionToken" in source
+    assert "function resetRulesTransientUi" in source
+    assert "App.resetRulesTransientUi = resetRulesTransientUi" in source
+    assert "requestClose: closeRulesPanel" in source
+    for name in ("chooseProjectRuleFolder", "savePanelProject", "savePanelRule"):
+        assert "sessionToken" in func_body(source, name)
+
+
 def test_project_rules_deletion_uses_shared_dialog_and_explicit_history_policy():
     section = _rules_section()
     index = read_resource("index.html")
@@ -112,6 +179,7 @@ def test_project_rules_home_render_only_exposes_edit_project_add_rule_and_delete
     assert "rules-count-grid" not in project_body
     assert "rules-project-toggle" in project_body
     assert "rules-project-archive-button" not in project_body
+    assert project_body.count("inline-icon-button") == 3
     assert "rules-" in row_body and "-delete-button" in row_body
     for forbidden in (
         "rules-toggle-btn",

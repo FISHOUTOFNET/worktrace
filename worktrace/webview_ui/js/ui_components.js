@@ -66,20 +66,25 @@
                 && typeof target.focus === "function") target.focus();
     }
 
-    App.openManagedDrawer = function (layer, trigger, initialFocus) {
+    App.openManagedDrawer = function (layer, trigger, initialFocus, options) {
         if (!layer) return;
+        options = typeof options === "function" ? { requestClose: options } : (options || {});
         layer._returnFocus = trigger || document.activeElement;
+        layer._requestClose = typeof options.requestClose === "function"
+            ? options.requestClose : null;
         layer.hidden = false;
         var target = initialFocus || focusable(layer)[0];
         if (target) target.focus();
     };
 
-    App.closeManagedDrawer = function (layer) {
-        if (!layer || layer.hidden) return;
+    App.closeManagedDrawer = function (layer, options) {
+        if (!layer) return;
+        options = options || {};
         var target = layer._returnFocus;
         layer.hidden = true;
         layer._returnFocus = null;
-        restoreFocus(target);
+        layer._requestClose = null;
+        if (options.restoreFocus !== false) restoreFocus(target);
     };
 
     function renderDialogStep() {
@@ -185,7 +190,8 @@
         if (!drawer) return;
         if (event.key === "Escape") {
             event.preventDefault();
-            App.closeManagedDrawer(drawer);
+            if (typeof drawer._requestClose === "function") drawer._requestClose();
+            else App.closeManagedDrawer(drawer);
             return;
         }
         trapFocus(event, drawer.querySelector(".drawer"));

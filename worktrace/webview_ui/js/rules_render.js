@@ -25,11 +25,11 @@
             + (project && project.description ? '<div class="rules-project-description">'
                 + text(project.description, "") + '</div>' : '')
             + '</div><div class="rules-project-actions"><div class="rules-project-button-row">'
-            + '<button class="rules-project-add-rule-button icon-button" type="button" data-project-id="' + count(id)
+            + '<button class="rules-project-add-rule-button icon-button inline-icon-button" type="button" data-project-id="' + count(id)
             + '" aria-label="新建规则" data-tooltip="新建规则">' + App.iconMarkup("plus") + '</button>'
-            + '<button class="rules-project-edit-button icon-button" type="button" data-project-id="' + count(id)
+            + '<button class="rules-project-edit-button icon-button inline-icon-button" type="button" data-project-id="' + count(id)
             + '" aria-label="编辑项目" data-tooltip="编辑项目">' + App.iconMarkup("pencil") + '</button>'
-            + '<button class="rules-project-delete-button icon-button danger-icon-button" type="button" data-project-id="' + count(id)
+            + '<button class="rules-project-delete-button icon-button inline-icon-button danger-icon-button" type="button" data-project-id="' + count(id)
             + '" aria-label="删除项目" data-tooltip="删除项目">' + App.iconMarkup("trash") + '</button>'
             + '</div><div class="rules-project-meta"><span>上次使用：'
             + text(project && project.last_used_at, "暂无使用记录")

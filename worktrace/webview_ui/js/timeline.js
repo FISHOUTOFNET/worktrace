@@ -113,14 +113,15 @@
     }
     App.openTimelineDrawer = openTimelineDrawer;
 
-    function closeTimelineDrawer() {
+    function closeTimelineDrawer(options) {
+        options = options || {};
         var pane = document.getElementById("timeline-details-pane");
         var backdrop = document.getElementById("timeline-drawer-backdrop");
         if (pane) pane.classList.remove("drawer-open");
         if (backdrop) { backdrop.classList.remove("open"); backdrop.hidden = true; }
         var restore = App.timelineDrawerRestoreFocus;
         App.timelineDrawerRestoreFocus = null;
-        if (restore && restore.focus) restore.focus();
+        if (options.restoreFocus !== false && restore && restore.focus) restore.focus();
     }
     App.closeTimelineDrawer = closeTimelineDrawer;
 
@@ -655,16 +656,28 @@
     }
     App.confirmTimelineDeletion = confirmTimelineDeletion;
 
+    function closeTimelineAdvancedMenu(options) {
+        options = options || {};
+        var menu = document.getElementById("timeline-session-actions");
+        var button = document.getElementById("timeline-advanced-toggle");
+        if (menu) menu.hidden = true;
+        if (button) button.setAttribute("aria-expanded", "false");
+        if (options.restoreFocus !== false && button && button.focus) button.focus();
+    }
+    App.closeTimelineAdvancedMenu = closeTimelineAdvancedMenu;
+
     App.toggleTimelineAdvancedMenu = function () {
         var menu = document.getElementById("timeline-session-actions");
         var button = document.getElementById("timeline-advanced-toggle");
         if (!menu || !button) return;
-        menu.hidden = !menu.hidden;
-        button.setAttribute("aria-expanded", menu.hidden ? "false" : "true");
         if (!menu.hidden) {
-            var first = menu.querySelector("button:not([hidden]):not([disabled])");
-            if (first) first.focus();
+            closeTimelineAdvancedMenu({ restoreFocus: true });
+            return;
         }
+        menu.hidden = false;
+        button.setAttribute("aria-expanded", "true");
+        var first = menu.querySelector("button:not([hidden]):not([disabled])");
+        if (first) first.focus();
     };
 
     App.initTimelineAccessibility = function () {
@@ -675,9 +688,7 @@
             var menu = document.getElementById("timeline-session-actions");
             if (event.key === "Escape" && menu && !menu.hidden) {
                 event.preventDefault();
-                menu.hidden = true;
-                var toggle = document.getElementById("timeline-advanced-toggle");
-                if (toggle) { toggle.setAttribute("aria-expanded", "false"); toggle.focus(); }
+                closeTimelineAdvancedMenu({ restoreFocus: true });
                 return;
             }
             if (!pane || !pane.classList.contains("drawer-open")) return;
@@ -1247,9 +1258,18 @@
             toggle.disabled = !anyAdvancedAllowed;
         }
         var menu = document.getElementById("timeline-session-actions");
-        if (menu && !anyAdvancedAllowed) menu.hidden = true;
+        if (menu && !anyAdvancedAllowed) {
+            closeTimelineAdvancedMenu({ restoreFocus: false });
+        }
     }
     App.updateSessionActionButtons = updateSessionActionButtons;
+
+    function resetTimelineTransientUi() {
+        closeTimelineAdvancedMenu({ restoreFocus: false });
+        closeTimelineDrawer({ restoreFocus: false });
+        if (!App.editSaving) showEditStatus("", false);
+    }
+    App.resetTimelineTransientUi = resetTimelineTransientUi;
 
     var TIMELINE_OPERATIONS = Object.freeze({
         hide: Object.freeze({

@@ -736,6 +736,28 @@
     }
     App.acceptFirstRunNotice = acceptFirstRunNotice;
 
+    function resetSettingsTransientUi() {
+        [
+            "settings-backup-passphrase",
+            "settings-backup-passphrase-confirm",
+            "settings-backup-import-passphrase",
+            "settings-backup-import-confirm",
+            "settings-clear-confirm"
+        ].forEach(function (id) {
+            var input = element(id);
+            if (input) input.value = "";
+        });
+        setStatusLine("settings-backup-status", "");
+        setStatusLine("settings-backup-import-status", "");
+        setStatusLine("settings-clear-status", "");
+        renderBackupManifest(null, "");
+        var diagnostics = document.querySelector("#settings-section-advanced details");
+        if (diagnostics) diagnostics.open = false;
+        if (App.firstRunNoticeViewingFromSettings === true) hideFirstRunNotice();
+        if (!App.recoveryInProgress) setStatusLine("settings-recovery-status", "");
+    }
+    App.resetSettingsTransientUi = resetSettingsTransientUi;
+
     function openPrivacyNoticeFromSettings() {
         App.bridge.getFirstRunNotice().then(function (result) {
             if (!result || result.ok === false) {

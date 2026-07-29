@@ -360,6 +360,13 @@
     }
     App.setStatisticsExportStatus = setStatisticsExportStatus;
 
+    function resetStatisticsTransientUi() {
+        if (App.statisticsQueryTimer) window.clearTimeout(App.statisticsQueryTimer);
+        App.statisticsQueryTimer = null;
+        setStatisticsExportStatus("", "");
+    }
+    App.resetStatisticsTransientUi = resetStatisticsTransientUi;
+
     function setStatisticsExportSaving(saving) {
         App.statisticsExportSaving = !!saving;
         setStatisticsLoading(App.statisticsLoading);

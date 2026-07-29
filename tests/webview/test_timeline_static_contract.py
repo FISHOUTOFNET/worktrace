@@ -88,6 +88,39 @@ def test_timeline_header_filter_editor_and_advanced_menu_contract():
         assert label in action_menu[position:]
         positions.append(position)
     assert positions == sorted(positions)
+    assert re.search(
+        r'id="timeline-advanced-toggle"[^>]*class="[^"]*inline-icon-button',
+        timeline_page,
+    )
+    assert re.search(
+        r'id="timeline-hide-session"[^>]*class="[^"]*inline-icon-button',
+        timeline_page,
+    )
+    for control_id in ("timeline-prev-btn", "timeline-next-btn", "timeline-today-btn"):
+        control = re.search(r'id="' + control_id + r'"[^>]*>', timeline_page)
+        assert control is not None
+        assert "inline-icon-button" not in control.group(0)
+
+
+def test_timeline_transient_reset_preserves_selection_and_autosave_owners():
+    source = _source("timeline.js")
+    close_menu = source[
+        source.index("function closeTimelineAdvancedMenu") :
+        source.index("App.closeTimelineAdvancedMenu")
+    ]
+    reset = source[
+        source.index("function resetTimelineTransientUi") :
+        source.index("App.resetTimelineTransientUi")
+    ]
+    assert 'menu.hidden = true' in close_menu
+    assert 'setAttribute("aria-expanded", "false")' in close_menu
+    assert "closeTimelineAdvancedMenu" in reset
+    assert "closeTimelineDrawer" in reset
+    assert "clearEditPanel" not in reset
+    assert "selectedProjectionInstanceKey" not in reset
+    assert "timelineAutosaveTimer" not in reset
+    assert "timelineAutosaveQueued" not in reset
+    assert "submittedDraft" not in reset
 
 
 def test_timeline_list_sort_duration_and_badge_contract():
@@ -134,3 +167,24 @@ def test_timeline_styles_keep_fixed_time_columns_and_two_line_editor():
     assert "resize: none" in editor.group(1)
     assert ".toolbar-total" not in css
     assert ".badge.live::before" not in css
+    inline = re.search(r"\.inline-icon-button\s*\{([^}]*)\}", css)
+    inline_hover = re.search(
+        r"\.inline-icon-button:hover:not\(:disabled\)\s*\{([^}]*)\}",
+        css,
+    )
+    expanded = re.search(
+        r"\.inline-icon-button\[aria-expanded=\"true\"\]\s*\{([^}]*)\}",
+        css,
+    )
+    danger_hover = re.search(
+        r"\.inline-icon-button\.danger-icon-button:hover:not\(:disabled\)\s*\{([^}]*)\}",
+        css,
+    )
+    assert inline is not None and "border" in inline.group(1) and "transparent" in inline.group(1)
+    assert inline_hover is not None and "background" in inline_hover.group(1)
+    assert "border" not in inline_hover.group(1) or "transparent" in inline_hover.group(1)
+    assert expanded is not None
+    assert "var(--color-accent)" in expanded.group(1)
+    assert danger_hover is not None
+    assert "border-color: transparent" in danger_hover.group(1)
+    assert "var(--color-danger-soft)" in danger_hover.group(1)

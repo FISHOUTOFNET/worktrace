@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -11,6 +13,120 @@ from worktrace.webview_ui import bridge as bridge_module
 from worktrace.webview_ui import project_rules_presenter as presenter_module
 
 pytestmark = [pytest.mark.db, pytest.mark.integration, pytest.mark.contract]
+
+
+class _FolderDialogWindow:
+    def __init__(self, return_value=None, side_effect=None):
+        self.return_value = return_value
+        self.side_effect = side_effect
+        self.calls = []
+
+    def create_file_dialog(self, *args, **kwargs):
+        self.calls.append((args, kwargs))
+        if self.side_effect is not None:
+            raise self.side_effect
+        return self.return_value
+
+
+def _install_webview(monkeypatch, *, folder=None, fallback=None):
+    file_dialog = SimpleNamespace()
+    if folder is not None:
+        file_dialog.FOLDER = folder
+    module = SimpleNamespace(FileDialog=file_dialog)
+    if fallback is not None:
+        module.FOLDER_DIALOG = fallback
+    monkeypatch.setitem(sys.modules, "webview", module)
+
+
+@pytest.mark.parametrize(
+    ("return_value", "expected"),
+    [
+        (r"D:\Client", r"D:\Client"),
+        ([r"D:\Client"], r"D:\Client"),
+        ((r"D:\Client",), r"D:\Client"),
+        (None, None),
+        ([], None),
+        ((), None),
+    ],
+)
+def test_choose_folder_path_normalizes_pywebview_result(
+    monkeypatch, return_value, expected
+):
+    _install_webview(monkeypatch, folder="folder-modern", fallback="folder-legacy")
+    bridge = build_test_bridge()
+    window = _FolderDialogWindow(return_value=return_value)
+    bridge.set_window(window)
+
+    assert bridge._choose_folder_path() == expected
+    assert window.calls == [(("folder-modern",), {})]
+
+
+def test_choose_folder_path_falls_back_to_legacy_constant(monkeypatch):
+    _install_webview(monkeypatch, fallback="folder-legacy")
+    bridge = build_test_bridge()
+    window = _FolderDialogWindow(return_value=[r"D:\Legacy"])
+    bridge.set_window(window)
+
+    assert bridge._choose_folder_path() == r"D:\Legacy"
+    assert window.calls == [(("folder-legacy",), {})]
+
+
+def test_choose_folder_path_requires_injected_window(monkeypatch):
+    _install_webview(monkeypatch, folder="folder-modern")
+    with pytest.raises(RuntimeError, match="webview window not injected"):
+        build_test_bridge()._choose_folder_path()
+
+
+def test_choose_folder_path_rejects_unavailable_api(monkeypatch):
+    monkeypatch.setitem(sys.modules, "webview", SimpleNamespace())
+    bridge = build_test_bridge()
+    bridge.set_window(_FolderDialogWindow(return_value=[r"D:\Unused"]))
+    with pytest.raises(RuntimeError, match="pywebview folder dialog unavailable"):
+        bridge._choose_folder_path()
+
+
+def test_choose_folder_path_collapses_dialog_exception(monkeypatch):
+    _install_webview(monkeypatch, folder="folder-modern")
+    bridge = build_test_bridge()
+    bridge.set_window(
+        _FolderDialogWindow(side_effect=OSError(r"sensitive D:\Secret\internal"))
+    )
+    with pytest.raises(RuntimeError, match="webview folder dialog failed"):
+        bridge._choose_folder_path()
+
+
+def test_choose_project_rule_folder_public_contract(monkeypatch):
+    _install_webview(monkeypatch, folder="folder-modern")
+    bridge = build_test_bridge()
+    bridge.set_window(_FolderDialogWindow(return_value=(r"D:\Client",)))
+    assert bridge.choose_project_rule_folder() == {
+        "ok": True,
+        "cancelled": False,
+        "folder_path": r"D:\Client",
+    }
+
+    bridge.set_window(_FolderDialogWindow(return_value=None))
+    assert bridge.choose_project_rule_folder() == {
+        "ok": True,
+        "cancelled": True,
+        "folder_path": "",
+    }
+
+
+def test_choose_project_rule_folder_failure_does_not_leak_internal_error(
+    monkeypatch, caplog
+):
+    _install_webview(monkeypatch, folder="folder-modern")
+    bridge = build_test_bridge()
+    bridge.set_window(
+        _FolderDialogWindow(side_effect=OSError(r"sensitive D:\Secret\internal"))
+    )
+
+    result = bridge.choose_project_rule_folder()
+
+    assert result == {"ok": False, "error": "选择文件夹失败"}
+    assert "sensitive" not in json.dumps(result, ensure_ascii=False)
+    assert "choose_project_rule_folder failed" in caplog.text
 
 
 def test_get_project_rules_success_payload():

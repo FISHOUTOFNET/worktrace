@@ -105,8 +105,12 @@ summary:focus-visible, [tabindex]:focus-visible {
 .button.danger, button.danger { color: var(--color-danger); border-color: #e1aaa6; background: var(--color-surface); }
 .button.danger:hover:not(:disabled), button.danger:hover:not(:disabled) { color: var(--color-danger-hover); background: var(--color-danger-soft); }
 .icon-button { width: var(--control-height); min-width: var(--control-height); padding: 0; display: inline-grid; place-items: center; }
+.inline-icon-button { border-color: transparent; background: transparent; }
+.inline-icon-button:hover:not(:disabled) { border-color: transparent; background: var(--color-surface-hover); }
+.inline-icon-button[aria-expanded="true"] { color: var(--color-accent); border-color: transparent; background: var(--color-accent-soft); }
 .danger-icon-button { color: var(--color-danger); border-color: transparent; background: transparent; }
 .danger-icon-button:hover:not(:disabled) { color: var(--color-danger-hover); border-color: #e7b7b3; background: var(--color-danger-soft); }
+.inline-icon-button.danger-icon-button:hover:not(:disabled) { border-color: transparent; background: var(--color-danger-soft); }
 .danger-icon-button .icon { width: 17px; height: 17px; }
 [data-tooltip] { position: relative; }
 [data-tooltip]::after { content: attr(data-tooltip); position: absolute; z-index: 90; left: 50%; top: calc(100% + 6px); display: none; transform: translateX(-50%); padding: 3px 6px; color: #fff; background: #24313a; border-radius: var(--radius-sm); box-shadow: var(--shadow-flyout); white-space: nowrap; font-size: var(--font-size-xs); font-weight: 400; pointer-events: none; }
@@ -318,6 +322,11 @@ th.number, td.number { text-align: right; font-variant-numeric: tabular-nums; }
 .drawer-header h2 { margin: 0; font-size: 17px; }
 .drawer-form { display: grid; gap: 10px; }
 .drawer-context { padding: 9px 10px; margin: 0; background: var(--color-surface-subtle); border: 1px solid var(--color-border); border-radius: var(--radius-md); font-weight: 600; }
+.drawer-context.is-success { color: var(--color-success); border-color: #b8d9c7; background: var(--color-success-soft); }
+#rules-panel-folder-row > label { color: var(--color-text-secondary); font-size: var(--font-size-sm); }
+.folder-picker-control { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px; }
+.folder-picker-control input { min-width: 0; }
+.folder-picker-control input[readonly] { color: var(--color-text); background: var(--color-surface-subtle); }
 .drawer-actions, .button-row { display: flex; justify-content: flex-end; gap: 7px; margin-top: 10px; }
 .modal-layer { z-index: 40; display: grid; place-items: center; padding: 18px; }
 .dialog { width: min(430px, 100%); max-height: calc(100vh - 36px); padding: 18px; overflow: auto; background: var(--color-surface); border: 1px solid var(--color-border-strong); border-radius: var(--radius-lg); box-shadow: var(--shadow-dialog); }

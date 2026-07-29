@@ -22,6 +22,7 @@ EXPECTED_SHIPPING_METHODS = frozenset(
         "backfill_project_rule",
         "backfill_project_rules_batch",
         "clear_all_local_data",
+        "choose_project_rule_folder",
         "copy_timeline_session",
         "create_excluded_folder_rule",
         "create_excluded_keyword_rule",
@@ -136,3 +137,21 @@ def test_shipping_bridge_public_methods_equal_allowlist() -> None:
     assert actual == set(SHIPPING_METHODS)
     assert not hasattr(shipping, "set_window")
     assert hasattr(bridge, "set_window")
+
+
+def test_project_folder_picker_is_fixed_and_does_not_expose_filesystem_browsing() -> None:
+    source = (
+        ROOT / "worktrace" / "webview_ui" / "js" / "init.js"
+    ).read_text(encoding="utf-8")
+    assert (
+        'chooseProjectRuleFolder: fixedBridgeMethod("choose_project_rule_folder")'
+        in source
+    )
+    for forbidden in (
+        "browse_file_system",
+        "list_directory",
+        "read_directory",
+        "read_folder",
+    ):
+        assert forbidden not in SHIPPING_METHODS
+        assert forbidden not in source

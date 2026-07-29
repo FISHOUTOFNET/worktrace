@@ -25,6 +25,7 @@
         backfillProjectRule: fixedBridgeMethod("backfill_project_rule"),
         backfillProjectRulesBatch: fixedBridgeMethod("backfill_project_rules_batch"),
         clearAllLocalData: fixedBridgeMethod("clear_all_local_data"),
+        chooseProjectRuleFolder: fixedBridgeMethod("choose_project_rule_folder"),
         copyTimelineSession: fixedBridgeMethod("copy_timeline_session"),
         createExcludedFolderRule: fixedBridgeMethod("create_excluded_folder_rule"),
         createExcludedKeywordRule: fixedBridgeMethod("create_excluded_keyword_rule"),
@@ -578,7 +579,23 @@
     }
     App.togglePause = togglePause;
 
+    var PAGE_LEAVE_RESETTERS = Object.freeze({
+        timeline: "resetTimelineTransientUi",
+        statistics: "resetStatisticsTransientUi",
+        rules: "resetRulesTransientUi",
+        settings: "resetSettingsTransientUi"
+    });
+
+    function resetPageTransientUi(pageId) {
+        var resetterName = PAGE_LEAVE_RESETTERS[pageId];
+        var resetter = resetterName && App[resetterName];
+        if (typeof resetter === "function") resetter({ restoreFocus: false });
+    }
+    App.resetPageTransientUi = resetPageTransientUi;
+
     function switchPage(pageId) {
+        var previousPage = App.currentPage;
+        if (previousPage && previousPage !== pageId) resetPageTransientUi(previousPage);
         var navItems = document.querySelectorAll(".nav-item");
         var pages = document.querySelectorAll(".page");
         for (var i = 0; i < navItems.length; i++) {

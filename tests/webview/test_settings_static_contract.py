@@ -223,6 +223,38 @@ def test_settings_status_and_manifest_render_through_safe_helpers() -> None:
         assert _app_function_is_exposed(source, name)
 
 
+def test_settings_exposes_transient_reset_without_clearing_authoritative_state() -> None:
+    source = _settings_source()
+    assert _app_function_is_exposed(source, "resetSettingsTransientUi")
+    reset = func_body(source, "resetSettingsTransientUi")
+    for dom_id in (
+        "settings-backup-passphrase",
+        "settings-backup-passphrase-confirm",
+        "settings-backup-import-passphrase",
+        "settings-backup-import-confirm",
+        "settings-clear-confirm",
+        "settings-backup-status",
+        "settings-backup-import-status",
+        "settings-clear-status",
+        "settings-recovery-status",
+    ):
+        assert dom_id in reset
+    assert "renderBackupManifest(null" in reset
+    assert "firstRunNoticeViewingFromSettings" in reset
+    assert "hideFirstRunNotice" in reset
+    for preserved in (
+        "settingsLoaded =",
+        "lastSettingsStatus =",
+        "settingsBackupExportInProgress =",
+        "settingsBackupImportInProgress =",
+        "settingsClearAllInProgress =",
+        "recoveryInProgress =",
+        "firstRunNoticeRequired =",
+        "privacyGateState =",
+    ):
+        assert preserved not in reset
+
+
 def test_backup_export_keeps_passphrases_local_and_clears_inputs() -> None:
     body = func_body(_settings_source(), "exportEncryptedBackup")
     assert "var passphrase" in body

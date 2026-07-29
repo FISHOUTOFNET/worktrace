@@ -12,8 +12,9 @@ Boundary rules (enforced by ``tests/test_ui_backend_boundary.py``):
   ``worktrace.security``, ``worktrace.runtime``, or ``worktrace.config``.
 - ``webview`` is imported lazily inside each method so the bridge module
   does not pull the WebView backend into unit tests at import time.
-- Full paths returned by the dialog are only used as API facade arguments;
-  they never enter JS payloads.
+- Save/open paths are only used as API facade arguments. A folder path that
+  the user explicitly chooses for a project rule may be returned to JS for
+  display and submission; the bridge never enumerates or reads that folder.
 - The mixin does not create a window; it only reads ``self._window`` which
   is injected by the host ``WebViewBridge`` via ``set_window()``.
 """
@@ -78,6 +79,40 @@ class BridgeDialogMixin:
             return None
         # pywebview returns a sequence of strings (or None on cancel). For a
         # save dialog exactly one path is expected; take the first.
+        if isinstance(result, (tuple, list)):
+            if not result:
+                return None
+            return str(result[0])
+        return str(result)
+
+    def _choose_folder_path(self) -> str | None:
+        """Open the native folder dialog and return the selected path.
+
+        The user-selected path is returned verbatim. This primitive does not
+        inspect the folder or access any path that the user did not choose.
+        """
+        window = self._window
+        if window is None:
+            raise RuntimeError("webview window not injected")
+        dialog_type = None
+        try:
+            import webview  # noqa: WPS433 (lazy import, UI-only dependency)
+
+            file_dialog = getattr(webview, "FileDialog", None)
+            if file_dialog is not None:
+                dialog_type = getattr(file_dialog, "FOLDER", None)
+            if dialog_type is None:
+                dialog_type = getattr(webview, "FOLDER_DIALOG", None)
+        except Exception:
+            dialog_type = None
+        if dialog_type is None:
+            raise RuntimeError("pywebview folder dialog unavailable")
+        try:
+            result = window.create_file_dialog(dialog_type)
+        except Exception:
+            raise RuntimeError("webview folder dialog failed")
+        if not result:
+            return None
         if isinstance(result, (tuple, list)):
             if not result:
                 return None

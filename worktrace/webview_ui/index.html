@@ -131,8 +131,8 @@
                             <div class="editor-actions">
                                 <span id="edit-status" class="inline-status" role="status" aria-live="polite" hidden></span>
                                 <span class="toolbar-spacer"></span>
-                                <button id="timeline-advanced-toggle" type="button" class="icon-button" aria-haspopup="menu" aria-expanded="false" aria-label="高级操作" data-tooltip="高级操作"><svg class="icon" aria-hidden="true"><use href="#icon-more"/></svg></button>
-                                <button id="timeline-hide-session" type="button" class="icon-button danger-icon-button" aria-label="删除时间段" data-tooltip="删除时间段"><svg class="icon" aria-hidden="true"><use href="#icon-trash"/></svg></button>
+                                <button id="timeline-advanced-toggle" type="button" class="icon-button inline-icon-button" aria-haspopup="menu" aria-expanded="false" aria-label="高级操作" data-tooltip="高级操作"><svg class="icon" aria-hidden="true"><use href="#icon-more"/></svg></button>
+                                <button id="timeline-hide-session" type="button" class="icon-button inline-icon-button danger-icon-button" aria-label="删除时间段" data-tooltip="删除时间段"><svg class="icon" aria-hidden="true"><use href="#icon-trash"/></svg></button>
                                 <div id="timeline-session-actions" class="action-menu" role="menu" hidden>
                                     <button id="timeline-copy-session" type="button" role="menuitem">复制时间段</button>
                                     <button id="timeline-split-session" type="button" role="menuitem">拆分时间段</button>
@@ -241,7 +241,7 @@
                             </div>
                             <label class="field" hidden>目标项目<select id="rules-panel-target-project"></select></label>
                             <button id="rules-panel-create-project-inline" type="button" hidden>新建项目</button>
-                            <label id="rules-panel-folder-row" class="field"><span>文件夹路径</span><input id="rules-panel-folder-path" type="text" maxlength="512" autocomplete="off"></label>
+                            <div id="rules-panel-folder-row" class="field"><label for="rules-panel-folder-path"><span>文件夹路径</span></label><div class="folder-picker-control"><input id="rules-panel-folder-path" type="text" maxlength="512" autocomplete="off" readonly placeholder="请选择要自动归类的文件夹"><button id="rules-panel-choose-folder" type="button">选择文件夹</button></div></div>
                             <label id="rules-panel-folder-recursive-row" hidden><input id="rules-panel-folder-recursive" type="checkbox" checked> 包含子文件夹</label>
                             <label id="rules-panel-keyword-row" class="field" hidden><span>关键词</span><input id="rules-panel-keyword" type="text" maxlength="200" autocomplete="off"></label>
                             <p class="field-hint">文件夹规则默认匹配该文件夹及全部子文件夹。</p>
