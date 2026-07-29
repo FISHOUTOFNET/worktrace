@@ -54,6 +54,7 @@ EXPECTED_SHIPPING_METHODS = frozenset(
         "recover_database_maintenance",
         "save_timeline_session_edit",
         "set_clipboard_capture_enabled",
+        "set_launch_at_login",
         "set_excluded_rules_enabled",
         "set_project_enabled_for_rules",
         "set_project_rule_enabled",

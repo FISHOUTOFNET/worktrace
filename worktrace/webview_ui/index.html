@@ -263,7 +263,6 @@
                 <div id="settings-status" class="settings-layout" hidden>
                     <nav class="surface settings-categories" aria-label="设置分类">
                         <button type="button" data-settings-section="general" aria-current="true">常规</button>
-                        <button type="button" data-settings-section="collection">采集</button>
                         <button type="button" data-settings-section="privacy">隐私</button>
                         <button type="button" data-settings-section="data">数据与备份</button>
                         <button type="button" data-settings-section="advanced">高级</button>
@@ -271,13 +270,12 @@
                     <div class="surface settings-content">
                         <section id="settings-section-general" class="settings-section active">
                             <h2>常规</h2>
+                            <label class="setting-row" for="settings-launch-at-login-toggle"><span><strong>登录 Windows 时自动启动 WorkTrace</strong><small>登录后在后台启动，避免遗漏记录。</small></span><span class="toggle-wrap"><input id="settings-launch-at-login-toggle" type="checkbox" disabled><span id="settings-launch-at-login-toggle-status">未加载</span></span></label>
+                            <label id="settings-privacy-card" class="setting-row" for="settings-clipboard-toggle"><span><strong id="settings-clipboard-toggle-label">记录剪贴板复制的文本</strong><small>仅在启用后记录复制事件；默认关闭并保持现有隐私规则。</small></span><span class="toggle-wrap"><input id="settings-clipboard-toggle" type="checkbox" disabled><span id="settings-clipboard-toggle-status">未加载</span></span></label>
+                            <p class="settings-help">关闭主窗口后 WorkTrace 会继续在通知区域后台运行。</p>
                             <div id="settings-health-summary" class="setting-row"><span><strong>系统状态</strong><small>正在检查记录服务</small></span><span class="badge">检查中</span></div>
                             <article id="settings-storage-card" class="setting-row"><span><strong>本地数据</strong><small data-settings-key="storage_model">所有数据仅存储在本机。</small></span><span>本机</span></article>
                             <div class="setting-row"><span><strong>导出目录</strong><small data-settings-key="export_path_configured">导出目录：未加载</small></span><span>本地目录</span></div>
-                        </section>
-                        <section id="settings-section-collection" class="settings-section" hidden>
-                            <h2>采集</h2>
-                            <label id="settings-privacy-card" class="setting-row" for="settings-clipboard-toggle"><span><strong id="settings-clipboard-toggle-label">剪贴板记录</strong><small>默认关闭；更改后立即生效</small></span><span class="toggle-wrap"><input id="settings-clipboard-toggle" type="checkbox" disabled><span id="settings-clipboard-toggle-status">未加载</span></span></label>
                         </section>
                         <section id="settings-section-privacy" class="settings-section" hidden>
                             <h2>隐私</h2>

@@ -299,6 +299,7 @@ def test_bridge_returns_narrow_success_payload(temp_db) -> None:
         "encrypted_backup",
         "destructive_actions",
         "first_run_notice",
+        "launch_at_login",
     }
 
 

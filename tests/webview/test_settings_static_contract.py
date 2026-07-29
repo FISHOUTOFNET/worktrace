@@ -36,6 +36,7 @@ SETTINGS_BRIDGE_METHODS = {
     "previewEncryptedBackupManifest",
     "recoverDatabaseMaintenance",
     "setClipboardCaptureEnabled",
+    "setLaunchAtLogin",
 }
 
 
@@ -62,8 +63,10 @@ def test_settings_page_resources_and_controls_are_complete() -> None:
     assert 'src="js/settings.js"' in index
     assert "设置与隐私" in section
     assert "管理本地数据、采集和备份" in section
-    for category in ("常规", "采集", "隐私", "数据与备份", "高级"):
+    for category in ("常规", "隐私", "数据与备份", "高级"):
         assert category in section
+    assert 'data-settings-section="collection"' not in section
+    assert 'id="settings-section-collection"' not in section
 
     required_ids = (
         "settings-error",
@@ -71,6 +74,8 @@ def test_settings_page_resources_and_controls_are_complete() -> None:
         "settings-status",
         "settings-clipboard-toggle",
         "settings-clipboard-toggle-status",
+        "settings-launch-at-login-toggle",
+        "settings-launch-at-login-toggle-status",
         "settings-backup-passphrase",
         "settings-backup-passphrase-confirm",
         "settings-backup-export-btn",
@@ -150,6 +155,7 @@ def test_settings_operation_state_has_one_cross_operation_guard() -> None:
     flags = (
         "settingsLoading",
         "settingsWriteInProgress",
+        "launchAtLoginWriteInProgress",
         "settingsBackupExportInProgress",
         "settingsBackupManifestInProgress",
         "settingsBackupImportInProgress",
@@ -198,6 +204,11 @@ def test_settings_loading_and_clipboard_controls_have_separate_semantics() -> No
     toggle = func_body(source, "setCaptureEnabled")
     assert "App.settingsWriteInProgress" in toggle
     assert "App.bridge.setClipboardCaptureEnabled" in toggle
+    assert "App.launchAtLoginWriteInProgress" not in toggle
+    launch_toggle = func_body(source, "setLaunchAtLoginEnabled")
+    assert "App.launchAtLoginWriteInProgress" in launch_toggle
+    assert "App.bridge.setLaunchAtLogin" in launch_toggle
+    assert "App.settingsWriteInProgress" not in launch_toggle
 
 
 def test_settings_status_and_manifest_render_through_safe_helpers() -> None:
@@ -408,6 +419,7 @@ def test_settings_buttons_are_bound_to_named_capabilities() -> None:
     body = func_body(read_js("init.js"), "initButtons")
     bindings = (
         ("settings-clipboard-toggle", "App.handleCaptureToggleChange"),
+        ("settings-launch-at-login-toggle", "App.handleLaunchAtLoginToggleChange"),
         ("settings-backup-export-btn", "App.exportEncryptedBackup"),
         ("settings-backup-manifest-btn", "App.previewEncryptedBackupManifest"),
         ("settings-backup-import-btn", "App.importEncryptedBackup"),

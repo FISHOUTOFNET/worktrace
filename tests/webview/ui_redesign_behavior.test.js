@@ -2172,3 +2172,63 @@ test("13m. page subtitle uses authoritative module names", () => {
     assert.equal(html.includes("待整理"), false, "Overview must not include a standalone attention section");
     assert.equal(html.includes("最近活动"), false, "index.html must not use retired '最近活动' label");
 });
+
+test("14. launch-at-login rollback is authoritative and switch mutations are independent", async () => {
+  const { context, element } = makeBaseContext();
+  const App = context.window.WorkTraceApp;
+  const launchGate = deferred();
+  let clipboardCalls = 0;
+  App.bridge = {
+    setLaunchAtLogin: () => launchGate.promise,
+    setClipboardCaptureEnabled: () => {
+      clipboardCalls += 1;
+      return Promise.resolve({
+        ok: true,
+        status: {
+          clipboard_capture_enabled: true,
+          launch_at_login: { supported: true, enabled: false },
+        },
+      });
+    },
+  };
+  App.handleResult = (result, onError) => {
+    if (!result || result.ok === false) {
+      onError((result && result.error) || "failed");
+      return null;
+    }
+    return result;
+  };
+  loadJs(context, "core.js");
+  loadJs(context, "settings.js");
+  App.settingsLoaded = true;
+  App.lastSettingsStatus = {
+    clipboard_capture_enabled: false,
+    launch_at_login: { supported: true, enabled: false },
+  };
+  element("settings-launch-at-login-toggle").checked = true;
+
+  const launchPromise = App.setLaunchAtLoginEnabled(true);
+  assert.equal(App.launchAtLoginWriteInProgress, true);
+  assert.equal(
+    element("settings-clipboard-toggle").disabled,
+    false,
+    "launch write must not lock clipboard toggle"
+  );
+  await App.setCaptureEnabled(true);
+  assert.equal(clipboardCalls, 1, "clipboard write can proceed independently");
+
+  launchGate.resolve({
+    ok: false,
+    error: "registry denied",
+    status: {
+      clipboard_capture_enabled: true,
+      launch_at_login: { supported: true, enabled: false },
+    },
+  });
+  await launchPromise;
+  await flush();
+
+  assert.equal(element("settings-launch-at-login-toggle").checked, false);
+  assert.equal(App.launchAtLoginWriteInProgress, false);
+  assert.equal(element("settings-error").hidden, false);
+});

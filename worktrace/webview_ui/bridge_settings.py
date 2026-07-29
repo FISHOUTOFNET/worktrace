@@ -55,6 +55,18 @@ class SettingsBridgeMixin:
             logger.exception("webview bridge set_clipboard_capture_enabled failed")
             return {"ok": False, "error": "设置剪贴板记录失败"}
 
+    def set_launch_at_login(self, enabled) -> dict[str, Any]:
+        try:
+            return self._services.settings.set_launch_at_login(enabled)
+        except Exception:
+            logger.exception("webview bridge set_launch_at_login failed")
+            status = self._services.settings.get_settings_privacy_status()
+            return {
+                "ok": False,
+                "error": "设置登录启动失败",
+                "status": status.get("status"),
+            }
+
     def export_encrypted_backup(
         self,
         passphrase,

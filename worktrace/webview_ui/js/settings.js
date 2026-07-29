@@ -5,6 +5,7 @@
 
     var ERROR_MESSAGE = "加载设置状态失败";
     var WRITE_ERROR_MESSAGE = "设置剪贴板记录失败";
+    var LAUNCH_AT_LOGIN_ERROR_MESSAGE = "设置登录启动失败";
     var BACKUP_EXPORT_ERROR_MESSAGE = "导出加密备份失败";
     var BACKUP_MANIFEST_ERROR_MESSAGE = "读取备份清单失败";
     var BACKUP_IMPORT_ERROR_MESSAGE = "导入加密备份失败";
@@ -29,6 +30,7 @@
         return !!(
             App.settingsLoading
             || App.settingsWriteInProgress
+            || App.launchAtLoginWriteInProgress
             || App.settingsBackupExportInProgress
             || App.settingsBackupManifestInProgress
             || App.settingsBackupImportInProgress
@@ -160,9 +162,34 @@
     }
     App.syncRecoveryButtonState = syncRecoveryButtonState;
 
+    function settingsToggleGenericBusy() {
+        return !!(
+            App.settingsLoading
+            || App.settingsBackupExportInProgress
+            || App.settingsBackupManifestInProgress
+            || App.settingsBackupImportInProgress
+            || App.settingsClearAllInProgress
+            || App.recoveryInProgress
+        );
+    }
+
     function setSettingsControlsDisabled(disabled) {
         var toggle = element("settings-clipboard-toggle");
-        if (toggle) toggle.disabled = !!disabled || !App.settingsLoaded;
+        var genericBusy = settingsToggleGenericBusy();
+        if (toggle) {
+            toggle.disabled = genericBusy
+                || App.settingsWriteInProgress
+                || !App.settingsLoaded;
+        }
+        var launchToggle = element("settings-launch-at-login-toggle");
+        var launchStatus = App.lastSettingsStatus
+            && App.lastSettingsStatus.launch_at_login;
+        if (launchToggle) {
+            launchToggle.disabled = genericBusy
+                || App.launchAtLoginWriteInProgress
+                || !App.settingsLoaded
+                || !(launchStatus && launchStatus.supported === true);
+        }
         setSettingsBackupControlsDisabled(disabled);
         setSettingsDangerControlsDisabled(disabled);
         // The recovery button participates in the unified control sync,
@@ -198,14 +225,39 @@
         if (!toggle) return;
         var enabled = !!(status && status.clipboard_capture_enabled);
         toggle.checked = enabled;
-        toggle.disabled = anySettingsOperationInProgress() || !App.settingsLoaded;
+        toggle.disabled = settingsToggleGenericBusy()
+            || App.settingsWriteInProgress
+            || !App.settingsLoaded;
         setCaptureToggleStatus(enabled ? "开启" : "关闭");
     }
     App.renderCaptureToggle = renderCaptureToggle;
 
+    function setLaunchAtLoginToggleStatus(text) {
+        var target = element("settings-launch-at-login-toggle-status");
+        if (target) target.textContent = text;
+    }
+    App.setLaunchAtLoginToggleStatus = setLaunchAtLoginToggleStatus;
+
+    function renderLaunchAtLoginToggle(status) {
+        var toggle = element("settings-launch-at-login-toggle");
+        if (!toggle) return;
+        var launch = status && status.launch_at_login || {};
+        var supported = launch.supported === true;
+        toggle.checked = supported && launch.enabled === true;
+        toggle.disabled = !supported
+            || settingsToggleGenericBusy()
+            || App.launchAtLoginWriteInProgress
+            || !App.settingsLoaded;
+        setLaunchAtLoginToggleStatus(
+            supported ? (toggle.checked ? "开启" : "关闭") : "不可用"
+        );
+    }
+    App.renderLaunchAtLoginToggle = renderLaunchAtLoginToggle;
+
     function renderSettingsStatus(status) {
         if (!status) return;
         renderCaptureToggle(status);
+        renderLaunchAtLoginToggle(status);
         setLineText(
             "export_path_configured",
             status.export_path_configured ? "导出目录：已配置" : "导出目录：未配置"
@@ -414,9 +466,9 @@
     App.loadSettingsPrivacyStatus = loadSettingsPrivacyStatus;
 
     function setCaptureEnabled(enabled) {
-        // Symmetric mutex: gate direct programmatic callers and tests so
-        // clipboard writes cannot bypass the unified Settings mutex.
-        if (anySettingsOperationInProgress()) return Promise.resolve();
+        if (settingsToggleGenericBusy() || App.settingsWriteInProgress) {
+            return Promise.resolve();
+        }
         App.settingsWriteInProgress = true;
         setSettingsControlsDisabled(true);
         var toggle = element("settings-clipboard-toggle");
@@ -448,6 +500,51 @@
         setCaptureEnabled(!!toggle.checked);
     }
     App.handleCaptureToggleChange = handleCaptureToggleChange;
+
+    function setLaunchAtLoginEnabled(enabled) {
+        if (settingsToggleGenericBusy() || App.launchAtLoginWriteInProgress) {
+            return Promise.resolve();
+        }
+        App.launchAtLoginWriteInProgress = true;
+        setSettingsControlsDisabled(anySettingsOperationInProgress());
+        var toggle = element("settings-launch-at-login-toggle");
+        return App.bridge.setLaunchAtLogin(enabled).then(function (result) {
+            if (result && result.status) {
+                App.lastSettingsStatus = result.status;
+                renderSettingsStatus(result.status);
+            }
+            var data = App.handleResult(result, function (message) {
+                showSettingsError(message || LAUNCH_AT_LOGIN_ERROR_MESSAGE);
+            });
+            if (!data) return;
+            App.lastSettingsStatus = data.status;
+            renderSettingsStatus(data.status);
+            App.clearSettingsError();
+        }).catch(function () {
+            showSettingsError(LAUNCH_AT_LOGIN_ERROR_MESSAGE);
+            if (App.lastSettingsStatus) {
+                renderLaunchAtLoginToggle(App.lastSettingsStatus);
+            } else if (toggle) {
+                toggle.checked = !enabled;
+            }
+        }).then(function () {
+            App.launchAtLoginWriteInProgress = false;
+            setSettingsControlsDisabled(anySettingsOperationInProgress());
+            if (App.lastSettingsStatus) {
+                renderLaunchAtLoginToggle(App.lastSettingsStatus);
+            }
+        });
+    }
+    App.setLaunchAtLoginEnabled = setLaunchAtLoginEnabled;
+
+    function handleLaunchAtLoginToggleChange(event) {
+        var toggle = event
+            ? event.target
+            : element("settings-launch-at-login-toggle");
+        if (!toggle || toggle.disabled || App.launchAtLoginWriteInProgress) return;
+        setLaunchAtLoginEnabled(!!toggle.checked);
+    }
+    App.handleLaunchAtLoginToggleChange = handleLaunchAtLoginToggleChange;
 
     function setStatusLine(id, text) {
         var target = element(id);

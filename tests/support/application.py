@@ -155,6 +155,9 @@ class FakeSettingsCapability:
         self.clear_all_local_data_for_webview_return: dict[str, Any] = {"ok": True}
         self.clear_all_local_data_for_webview_side_effect: BaseException | None = None
         self.clear_all_local_data_for_webview_calls: list[tuple] = []
+        self.set_launch_at_login_return: dict[str, Any] = {"ok": True}
+        self.set_launch_at_login_side_effect: BaseException | None = None
+        self.set_launch_at_login_calls: list[tuple] = []
 
     def get_first_run_notice_for_webview(self):
         self.get_first_run_notice_for_webview_calls.append(())
@@ -179,6 +182,12 @@ class FakeSettingsCapability:
         if self.clear_all_local_data_for_webview_side_effect is not None:
             raise self.clear_all_local_data_for_webview_side_effect
         return self.clear_all_local_data_for_webview_return
+
+    def set_launch_at_login(self, enabled):
+        self.set_launch_at_login_calls.append((enabled,))
+        if self.set_launch_at_login_side_effect is not None:
+            raise self.set_launch_at_login_side_effect
+        return self.set_launch_at_login_return
 
 
 class FakeBackupCapability:

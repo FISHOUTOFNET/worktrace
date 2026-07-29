@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from typing import Any, Protocol, runtime_checkable, TYPE_CHECKING
 
+from ..platforms.windows_startup import WindowsStartupRegistration
+
 from . import (
     export_api,
     project_api,
@@ -34,6 +36,7 @@ class SettingsCapability(Protocol):
     def get_settings_privacy_status(self) -> dict[str, Any]: ...
     def recover_database_maintenance_for_webview(self) -> dict[str, Any]: ...
     def clear_all_local_data_for_webview(self, confirm_text) -> dict[str, Any]: ...
+    def set_launch_at_login(self, enabled) -> dict[str, Any]: ...
 
 
 @runtime_checkable
@@ -110,17 +113,77 @@ class OverviewApplicationService:
 class SettingsApplicationService:
     """Concrete settings capability delegating to settings_api."""
 
+    def __init__(
+        self,
+        startup_registration: WindowsStartupRegistration | None = None,
+    ) -> None:
+        self._startup_registration = (
+            startup_registration
+            if startup_registration is not None
+            else WindowsStartupRegistration()
+        )
+
     def get_first_run_notice_for_webview(self):
         return settings_api.get_first_run_notice_for_webview()
 
     def get_settings_privacy_status(self):
-        return settings_api.get_settings_privacy_status()
+        result = settings_api.get_settings_privacy_status()
+        if result.get("ok") is not True:
+            return result
+        status = dict(result["status"])
+        status["launch_at_login"] = self._launch_at_login_status()
+        return {"ok": True, "status": status}
 
     def recover_database_maintenance_for_webview(self):
         return settings_api.recover_database_maintenance_for_webview()
 
     def clear_all_local_data_for_webview(self, confirm_text):
         return settings_api.clear_all_local_data_for_webview(confirm_text)
+
+    def set_launch_at_login(self, enabled):
+        if enabled is not True and enabled is not False:
+            return {
+                "ok": False,
+                "error": "请选择有效的登录启动状态",
+                "status": self.get_settings_privacy_status().get("status"),
+            }
+        if not self._startup_registration.supported:
+            return {
+                "ok": False,
+                "error": "当前平台不支持登录启动设置",
+                "status": self.get_settings_privacy_status().get("status"),
+            }
+        error = None
+        try:
+            if enabled:
+                self._startup_registration.enable()
+            else:
+                self._startup_registration.disable()
+        except Exception:
+            error = "设置登录启动失败"
+        status_result = self.get_settings_privacy_status()
+        status = status_result.get("status")
+        actual = bool(
+            isinstance(status, dict)
+            and isinstance(status.get("launch_at_login"), dict)
+            and status["launch_at_login"].get("enabled") is True
+        )
+        if error is not None or actual is not enabled:
+            return {
+                "ok": False,
+                "error": error or "登录启动状态未能保存",
+                "status": status,
+            }
+        return {"ok": True, "status": status}
+
+    def _launch_at_login_status(self) -> dict[str, bool]:
+        supported = self._startup_registration.supported
+        return {
+            "supported": supported,
+            "enabled": (
+                self._startup_registration.is_configured() if supported else False
+            ),
+        }
 
 
 class BackupApplicationService:
