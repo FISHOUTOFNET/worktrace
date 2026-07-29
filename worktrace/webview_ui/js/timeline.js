@@ -582,7 +582,7 @@
                 + '<div class="summary-item-project" title="' + App.escapeHtml(projectLabel) + '">'
                 + App.escapeHtml(projectLabel) + '</div>'
                 + (row.can_hide_activity || row.can_delete
-                    ? '<button type="button" class="summary-hide-activity" data-summary-id="'
+                    ? '<button type="button" class="summary-hide-activity compact-icon-button" data-summary-id="'
                         + App.escapeHtml(String(row.summary_id || ""))
                         + '" aria-label="删除活动" data-tooltip="删除活动">'
                         + App.iconMarkup("trash") + '</button>'

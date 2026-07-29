@@ -116,6 +116,30 @@ def test_statistics_styles_are_responsive_local_surfaces() -> None:
         assert selector in styles
 
 
+def test_statistics_dates_use_shared_width_without_fixed_range_math() -> None:
+    html = section()
+    styles = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
+    date_fields = re.findall(r'<span class="statistics-date-field date-control">', html)
+    date_range = re.search(r"\.statistics-date-range\s*\{([^}]*)\}", styles)
+    all_time = re.search(r"\.statistics-all-time-label\s*\{([^}]*)\}", styles)
+    assert len(date_fields) == 2
+    assert date_range is not None
+    assert "width: fit-content" in date_range.group(1)
+    assert "276px" not in date_range.group(1)
+    assert all_time is not None and "var(--date-control-width)" in all_time.group(1)
+    assert "132px" not in styles
+    assert "278px" not in styles
+    assert "@media (max-width: 767px)" in styles
+    assert "@media (max-width: 719px)" not in styles
+
+
+def test_metric_strip_is_open_and_not_a_surface_card() -> None:
+    html = section()
+    metric = re.search(r'<div class="([^"]*\bmetric-strip\b[^"]*)">', html)
+    assert metric is not None
+    assert metric.group(1).split() == ["metric-strip"]
+
+
 def test_statistics_table_adds_visual_comparison_without_changing_values() -> None:
     body = func_body(source(), "renderStatsTable")
     assert 'class="stats-share-bar"' in body

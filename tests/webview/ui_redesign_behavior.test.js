@@ -1856,12 +1856,13 @@ test("13k. recent records keep a stable three-child structure, live metadata, an
   assert.deepEqual(classTokens(titleLines[0]), ["recent-title-line"]);
   assert.deepEqual(
     topLevelElements(titleLines[0].innerHTML).map(classTokens),
-    [["recent-project"], ["recent-status", "badge-live"]],
-    "the live badge must be the second child of the project title line"
+    [["recent-project"]],
+    "in-progress state must not add a visible badge to the title line"
   );
   assert.equal(topLevelElements(titleLines[1].innerHTML).length, 1);
   assert.equal(topLevelElements(titleLines[2].innerHTML).length, 1);
-  assert.equal((recentHtml.match(/recent-status badge-live/g) || []).length, 1);
+  assert.equal(recentHtml.includes("recent-status"), false);
+  assert.equal(recentHtml.includes("进行中"), false);
   assert.equal(recentHtml.includes("待整理"), false, "attention badge must not appear in recent");
   assert.equal(recentHtml.includes('class="recent-description derived"'), true);
   assert.equal(recentHtml.includes("自动摘要"), false, "derived label is supplied by CSS, not duplicated in markup");

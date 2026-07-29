@@ -60,6 +60,19 @@ def test_timeline_header_filter_editor_and_advanced_menu_contract():
         timeline_page.index('class="toolbar timeline-toolbar"') :
         timeline_page.index('id="timeline-error"')
     ]
+    date_group = toolbar[
+        toolbar.index('class="control-group timeline-date-controls"') :
+        toolbar.index("</div>", toolbar.index('class="control-group timeline-date-controls"'))
+    ]
+    assert [
+        date_group.index(f'id="{control_id}"')
+        for control_id in ("timeline-prev-btn", "timeline-date-input", "timeline-next-btn")
+    ] == sorted(
+        date_group.index(f'id="{control_id}"')
+        for control_id in ("timeline-prev-btn", "timeline-date-input", "timeline-next-btn")
+    )
+    assert 'class="date-control"' in date_group
+    assert 'id="timeline-today-btn"' not in date_group
     assert '<label for="timeline-project-filter">项目</label>' in toolbar
     assert '<option value="">全部项目</option>' in toolbar
     assert "项目：全部" not in toolbar
@@ -153,7 +166,7 @@ def test_timeline_styles_keep_fixed_time_columns_and_two_line_editor():
         css,
     )
     assert all(match is not None for match in (item, start, side, duration, editor))
-    assert "52px minmax(0, 1fr) 72px" in item.group(1)
+    assert "52px minmax(0, 1fr) var(--record-duration-width)" in item.group(1)
     assert "align-items: center" in item.group(1)
     assert "align-self: center" in start.group(1)
     assert "font-size: 13px" in start.group(1)
@@ -188,3 +201,35 @@ def test_timeline_styles_keep_fixed_time_columns_and_two_line_editor():
     assert danger_hover is not None
     assert "border-color: transparent" in danger_hover.group(1)
     assert "var(--color-danger-soft)" in danger_hover.group(1)
+
+
+def test_activity_detail_rows_use_three_columns_with_spanning_side_controls():
+    css = _resource("styles.css")
+    source = _source("timeline.js")
+    item = re.search(r"\.summary-item\s*\{([^}]*)\}", css)
+    name = re.search(r"\.summary-item-name\s*\{([^}]*)\}", css)
+    project = re.search(r"\.summary-item-project\s*\{([^}]*)\}", css)
+    duration = re.search(r"\.summary-item-duration\s*\{([^}]*)\}", css)
+    delete = re.search(r"\.summary-hide-activity\s*\{([^}]*)\}", css)
+    assert all(match is not None for match in (item, name, project, duration, delete))
+    assert (
+        "grid-template-columns: minmax(0, 1fr) var(--record-duration-width) "
+        "var(--control-height-compact)" in item.group(1)
+    )
+    assert "grid-column: 1" in name.group(1) and "grid-row: 1" in name.group(1)
+    assert "grid-column: 1" in project.group(1) and "grid-row: 2" in project.group(1)
+    assert "grid-column: 2" in duration.group(1)
+    assert "grid-row: 1 / span 2" in duration.group(1)
+    assert "align-self: center" in duration.group(1)
+    assert "font-variant-numeric: tabular-nums" in duration.group(1)
+    assert "grid-column: 3" in delete.group(1)
+    assert "grid-row: 1 / span 2" in delete.group(1)
+    assert "align-self: center" in delete.group(1)
+    assert re.search(
+        r'class="summary-hide-activity compact-icon-button"[^>]*'
+        r'aria-label="删除活动"[^>]*data-tooltip="删除活动"',
+        source,
+    )
+    assert 'event.target.closest(".summary-hide-activity")' in source
+    assert 'confirmTimelineDeletion("hideActivity"' in source
+    assert ".summary-hide-activity[data-tooltip]::after" in css

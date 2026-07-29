@@ -137,7 +137,6 @@ def test_overview_time_axis_and_recent_columns_are_stable_and_local():
     )
     recent_rule = _css_rule(css, ".recent-row")
     start_rule = _css_rule(css, ".recent-start-time")
-    status_rule = _css_rule(css, ".recent-status")
     duration_rule = _css_rule(css, ".recent-duration")
 
     assert "--overview-time-right-inset: 17px" in overview_rule
@@ -148,20 +147,21 @@ def test_overview_time_axis_and_recent_columns_are_stable_and_local():
     assert "font-variant-numeric: tabular-nums" in primary_time_rule
     assert ".current-duration { font-size: var(--font-size-xl)" not in css
 
-    assert "grid-template-columns: 52px minmax(0, 1fr) 84px" in recent_rule
+    assert "grid-template-columns: 52px minmax(0, 1fr) var(--record-duration-width)" in recent_rule
     assert "column-gap: 10px" in recent_rule
     assert "grid-column: 1" in start_rule
     assert "font-size: var(--overview-record-time-size)" in start_rule
-    assert "grid-column" not in status_rule
-    assert "flex: none" in status_rule
     assert "grid-column: 3" in duration_rule
     assert "font-size: var(--overview-record-time-size)" in duration_rule
     assert "font-variant-numeric: tabular-nums" in duration_rule
 
     assert 'class="recent-start-time numeric"' in render
     assert 'class="recent-main"><span class="recent-title-line">' in render
-    assert "item.is_in_progress === true" in render
-    assert "+ statusBadge + '</span>'" in render
+    assert "recent-status" not in render
+    assert "badge-live" not in render
+    assert "进行中" not in render
+    assert ".recent-status" not in css
+    assert ".badge-live" not in css
     assert "+ durationMarkup(item, \"overview-recent\") + '</button>'" in render
 
 

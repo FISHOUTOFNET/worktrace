@@ -26,6 +26,22 @@ def test_navigation_has_accessible_current_state_and_compact_rail() -> None:
     assert ".app-nav" in styles and ".nav-label" in styles
 
 
+def test_topbar_is_static_and_does_not_duplicate_page_titles() -> None:
+    html = read_resource("index.html")
+    init = read_js("init.js")
+    topbar = html[
+        html.index('<header class="app-topbar">') :
+        html.index("</header>", html.index('<header class="app-topbar">'))
+    ]
+    assert "本地工作区" in topbar
+    assert "LOCAL WORKSPACE" not in topbar
+    assert "app-topbar-title" not in topbar
+    assert "<strong" not in topbar
+    assert "app-topbar-title" not in init
+    assert 'getAttribute("data-title")' not in init
+    assert html.count("<h1>") >= 5
+
+
 def test_focus_drawer_dialog_and_toast_are_shared_accessible_primitives() -> None:
     html = read_resource("index.html")
     styles = read_resource("styles.css")
@@ -88,8 +104,23 @@ def test_compact_desktop_tokens_and_single_icon_sprite_are_shared() -> None:
     html = read_resource("index.html")
     styles = read_resource("styles.css")
     assert '--control-height: 30px' in styles
+    assert '--control-height-compact: 24px' in styles
+    assert '--date-control-width: 116px' in styles
+    assert '--record-duration-width: 76px' in styles
     assert '--sidebar-width: 188px' in styles
     assert '--page-padding-x: 18px' in styles
+    compact = re.search(r"\.compact-icon-button\s*\{([^}]*)\}", styles)
+    control_group = re.search(r"\.control-group\s*\{([^}]*)\}", styles)
+    date_control = re.search(r"\.date-control\s*\{([^}]*)\}", styles)
+    page = re.search(r"\.page\s*\{([^}]*)\}", styles)
+    brand = re.search(r"\.brand-mark\s*\{([^}]*)\}", styles)
+    assert compact is not None
+    assert "var(--control-height-compact)" in compact.group(1)
+    assert control_group is not None and "gap: 0" in control_group.group(1)
+    assert date_control is not None and "var(--date-control-width)" in date_control.group(1)
+    assert page is not None and "margin-inline: auto" in page.group(1)
+    assert brand is not None and "background: var(--color-accent)" in brand.group(1)
+    assert "--topbar-height: 40px" in styles
     for icon in ("icon-plus", "icon-pencil", "icon-trash", "icon-download"):
         assert f'id="{icon}"' in html
     assert "https://" not in html and "http://" not in html

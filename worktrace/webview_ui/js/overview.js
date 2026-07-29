@@ -121,18 +121,13 @@
             return;
         }
         list.innerHTML = items.map(function (item, index) {
-            var statusBadge = "";
-            if (item.is_in_progress === true) {
-                statusBadge = '<span class="recent-status badge-live">进行中</span>';
-            }
             return '<button type="button" class="recent-row" data-recent-index="' + index + '">'
                 + '<span class="recent-start-time numeric">'
                 + App.escapeHtml(App.formatStartTimeOnly(item.start_time)) + '</span>'
                 + '<span class="recent-main"><span class="recent-title-line">'
                 + '<span class="recent-project" title="'
                 + App.escapeHtml(App.formatProjectLabel(item.project_name, item.project_description))
-                + '">' + App.escapeHtml(item.project_name || "未归类") + '</span>'
-                + statusBadge + '</span>'
+                + '">' + App.escapeHtml(item.project_name || "未归类") + '</span></span>'
                 + '<span class="' + descriptionClass(item, "recent-description") + '">'
                 + App.escapeHtml(item.display_description || "暂无描述") + '</span></span>'
                 + durationMarkup(item, "overview-recent") + '</button>';

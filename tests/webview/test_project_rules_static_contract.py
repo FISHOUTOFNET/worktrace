@@ -179,7 +179,8 @@ def test_project_rules_home_render_only_exposes_edit_project_add_rule_and_delete
     assert "rules-count-grid" not in project_body
     assert "rules-project-toggle" in project_body
     assert "rules-project-archive-button" not in project_body
-    assert project_body.count("inline-icon-button") == 3
+    assert project_body.count("compact-icon-button") == 3
+    assert row_body.count("compact-icon-button") == 1
     assert "rules-" in row_body and "-delete-button" in row_body
     for forbidden in (
         "rules-toggle-btn",
@@ -191,6 +192,37 @@ def test_project_rules_home_render_only_exposes_edit_project_add_rule_and_delete
         "rules-status",
     ):
         assert forbidden not in row_body
+
+
+def test_project_rules_header_gives_metadata_to_title_and_actions_only_buttons():
+    source = read_js("rules_render.js")
+    body = func_body(source, "renderProjectRuleProject")
+    css = read_resource("styles.css")
+    title_start = body.index('<div class="rules-project-title-group">')
+    meta = body.index('<div class="rules-project-meta">')
+    title_end = body.index('</div><div class="rules-project-actions">')
+    actions_end = body.index('</div></div><div class="rules-row-list"')
+    assert title_start < meta < title_end
+    actions = body[title_end:actions_end]
+    assert "rules-project-meta" not in actions
+    assert actions.count("<button") == 3
+    head = re.search(r"\.rules-project-head\s*\{([^}]*)\}", css)
+    assert head is not None
+    assert "grid-template-columns: 22px minmax(0, 1fr) auto" in head.group(1)
+    assert "minmax(250px, auto)" not in css
+    assert "minmax(220px, auto)" not in css
+    default = re.search(
+        r"(\.rules-project-delete-button,[^{]+)\{([^}]*)\}",
+        css,
+    )
+    assert default is not None
+    for class_name in (
+        "rules-project-delete-button",
+        "rules-keyword-delete-button",
+        "rules-folder-delete-button",
+    ):
+        assert f".{class_name}" in default.group(1)
+    assert "var(--color-text-secondary)" in default.group(2)
 
 
 def test_project_rules_collapsed_row_uses_accessible_icons_without_rule_count():
