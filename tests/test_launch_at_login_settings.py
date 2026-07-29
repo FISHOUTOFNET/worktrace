@@ -67,4 +67,3 @@ def test_launch_at_login_success_returns_full_updated_status(temp_db) -> None:
     assert result["ok"] is True
     assert result["status"]["launch_at_login"]["enabled"] is True
     assert "clipboard_capture_enabled" in result["status"]
-

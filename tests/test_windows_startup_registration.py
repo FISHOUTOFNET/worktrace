@@ -91,4 +91,3 @@ def test_write_failure_can_be_followed_by_authoritative_state_read() -> None:
         service.enable()
 
     assert service.is_configured() is False
-
