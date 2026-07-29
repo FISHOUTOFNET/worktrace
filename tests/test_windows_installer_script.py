@@ -92,3 +92,12 @@ def test_ci_prepares_one_pinned_verified_inno_setup_version() -> None:
         in workflow
     )
     assert "ISCC_PATH=" in workflow
+
+
+def test_ci_waits_for_inno_setup_bootstrap_before_using_iscc() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "_validation.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "Start-Process" in workflow
+    assert "-Wait" in workflow
+    assert "ExitCode" in workflow

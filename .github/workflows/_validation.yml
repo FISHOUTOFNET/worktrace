@@ -282,7 +282,22 @@ jobs:
             throw "Pinned Inno Setup installer hash mismatch"
           }
           $installDir = Join-Path $toolRoot "installed"
-          & $installer /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CURRENTUSER /SP- /DIR="$installDir"
+          $bootstrap = Start-Process `
+            -FilePath $installer `
+            -ArgumentList @(
+              "/VERYSILENT",
+              "/SUPPRESSMSGBOXES",
+              "/NORESTART",
+              "/CURRENTUSER",
+              "/SP-",
+              "/DIR=`"$installDir`""
+            ) `
+            -WindowStyle Hidden `
+            -Wait `
+            -PassThru
+          if ($bootstrap.ExitCode -ne 0) {
+            throw "Pinned Inno Setup installer exited with code $($bootstrap.ExitCode)"
+          }
           $iscc = Join-Path $installDir "ISCC.exe"
           if (-not (Test-Path -LiteralPath $iscc)) {
             throw "Pinned Inno Setup compiler was not installed"
