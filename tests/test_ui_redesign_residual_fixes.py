@@ -160,14 +160,17 @@ def test_custom_nonempty_date_range_passes_through():
     assert date_to == "2026-07-15"
 
 
-def test_statistics_html_defaults_to_month():
-    """Statistics range select defaults to ``本月``."""
+def test_statistics_html_uses_direct_dates_and_week_default():
+    """Statistics exposes one direct date range with the week shortcut default."""
 
     html = (ROOT / "worktrace/webview_ui/index.html").read_text(encoding="utf-8")
-    assert 'value="month"' in html
-    assert 'value="month" selected' in html
+    assert 'id="statistics-range-mode"' not in html
+    assert 'id="statistics-date-from"' in html
+    assert 'id="statistics-date-to"' in html
+    assert 'id="statistics-week-btn"' in html
+    assert "当前范围：本周" in html
     assert "全部时间" in html
-    assert "自定义范围" in html
+    assert "自定义范围" not in html
 
 
 def test_iter_export_records_yields_display_safe_rows(temp_db):

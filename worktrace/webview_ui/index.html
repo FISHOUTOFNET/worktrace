@@ -155,52 +155,54 @@
                     <button id="stats-export-action-btn" type="button" class="button primary" disabled><svg class="icon" aria-hidden="true"><use href="#icon-download"/></svg><span>导出 CSV</span></button>
                 </header>
                 <div class="toolbar statistics-toolbar">
-                    <label for="statistics-range-mode">时间</label>
-                    <select id="statistics-range-mode"><option value="month" selected>本月</option><option value="all">全部时间</option><option value="custom">自定义范围</option></select>
-                    <span id="statistics-custom-range" class="date-range" hidden>
-                        <label class="sr-only" for="statistics-date-from">开始日期</label><input id="statistics-date-from" type="date" aria-label="开始日期">
-                        <span>至</span>
-                        <label class="sr-only" for="statistics-date-to">结束日期</label><input id="statistics-date-to" type="date" aria-label="结束日期">
-                    </span>
+                    <div class="statistics-date-range" aria-label="统计日期范围">
+                        <div id="statistics-date-inputs" class="statistics-date-inputs">
+                            <label class="sr-only" for="statistics-date-from">开始日期</label>
+                            <span class="statistics-date-field">
+                                <input id="statistics-date-from" type="date" aria-label="开始日期">
+                                <span id="statistics-date-from-display" class="statistics-date-display" aria-hidden="true"></span>
+                            </span>
+                            <span aria-hidden="true">至</span>
+                            <label class="sr-only" for="statistics-date-to">结束日期</label>
+                            <span class="statistics-date-field">
+                                <input id="statistics-date-to" type="date" aria-label="结束日期">
+                                <span id="statistics-date-to-display" class="statistics-date-display" aria-hidden="true"></span>
+                            </span>
+                        </div>
+                        <span id="statistics-all-time-label" class="statistics-all-time-label" hidden>全部时间</span>
+                    </div>
                     <label for="statistics-project-filter">项目</label>
                     <select id="statistics-project-filter"><option value="">全部项目</option></select>
                     <span class="toolbar-spacer"></span>
                     <div class="quick-ranges" aria-label="快捷日期范围">
-                        <button id="statistics-today-btn" type="button">今天</button>
-                        <button id="statistics-week-btn" type="button">本周</button>
-                        <button id="statistics-month-btn" type="button">本月</button>
+                        <button id="statistics-today-btn" type="button" aria-pressed="false">今天</button>
+                        <button id="statistics-week-btn" type="button" aria-pressed="false">本周</button>
+                        <button id="statistics-month-btn" type="button" aria-pressed="false">本月</button>
+                        <button id="statistics-all-btn" type="button" aria-pressed="false">全部</button>
                     </div>
                 </div>
                 <div class="section-heading stats-scope-row">
-                    <span id="stats-scope" class="secondary-text">当前范围：本月 · 全部项目</span>
+                    <span id="stats-scope" class="secondary-text">当前范围：本周 · 全部项目</span>
                     <span id="statistics-update-status" class="inline-status" role="status" aria-live="polite"></span>
                 </div>
                 <div id="statistics-error" class="inline-alert error" role="alert" hidden>加载统计失败</div>
                 <div id="statistics-loading" class="inline-status" hidden>更新中…</div>
-                <div class="surface metric-strip">
-                    <div class="metric"><span>总时长</span><strong id="stats-total">00:00:00</strong></div>
-                    <div class="metric"><span>时间段</span><strong id="stats-activity-count">0</strong></div>
-                    <div class="metric"><span>项目</span><strong id="stats-project-count">0</strong></div>
-                    <div class="metric"><span>应用</span><strong id="stats-app-count">0</strong></div>
+                <div id="statistics-results" hidden>
+                    <div class="surface metric-strip">
+                        <div class="metric"><span>总时长</span><strong id="stats-total"></strong></div>
+                        <div class="metric"><span>时间段</span><strong id="stats-activity-count"></strong></div>
+                        <div class="metric"><span>项目</span><strong id="stats-project-count"></strong></div>
+                        <div class="metric"><span>应用</span><strong id="stats-app-count"></strong></div>
+                    </div>
+                    <section class="surface stats-result">
+                        <div class="tabs" role="tablist" aria-label="统计视角">
+                            <button id="stats-project-tab" type="button" role="tab" aria-selected="true" aria-controls="stats-project-panel">按项目</button>
+                            <button id="stats-app-tab" type="button" role="tab" aria-selected="false" aria-controls="stats-app-panel">按应用</button>
+                        </div>
+                        <div id="stats-project-panel" role="tabpanel"><div class="table-scroll"><table><thead><tr><th>名称</th><th class="number">时长</th><th class="number">时间段</th><th class="number">占比</th></tr></thead><tbody id="stats-by-project"></tbody></table></div><div id="stats-empty-project" class="empty-state" hidden>暂无统计数据</div></div>
+                        <div id="stats-app-panel" role="tabpanel" hidden><div class="table-scroll"><table><thead><tr><th>名称</th><th class="number">时长</th><th class="number">时间段</th><th class="number">占比</th></tr></thead><tbody id="stats-by-app"></tbody></table></div><div id="stats-empty-app" class="empty-state" hidden>暂无统计数据</div></div>
+                    </section>
                 </div>
-                <section class="surface stats-result">
-                    <div class="tabs" role="tablist" aria-label="统计视角">
-                        <button id="stats-project-tab" type="button" role="tab" aria-selected="true" aria-controls="stats-project-panel">按项目</button>
-                        <button id="stats-app-tab" type="button" role="tab" aria-selected="false" aria-controls="stats-app-panel">按应用</button>
-                    </div>
-                    <div id="stats-project-panel" role="tabpanel"><div class="table-scroll"><table><thead><tr><th>名称</th><th class="number">时长</th><th class="number">时间段</th><th class="number">占比</th></tr></thead><tbody id="stats-by-project"></tbody></table></div><div id="stats-empty-project" class="empty-state" hidden>暂无统计数据</div></div>
-                    <div id="stats-app-panel" role="tabpanel" hidden><div class="table-scroll"><table><thead><tr><th>名称</th><th class="number">时长</th><th class="number">时间段</th><th class="number">占比</th></tr></thead><tbody id="stats-by-app"></tbody></table></div><div id="stats-empty-app" class="empty-state" hidden>暂无统计数据</div></div>
-                </section>
-                <details id="statistics-export-preview" class="surface export-disclosure">
-                    <summary>导出范围与隐私说明</summary>
-                    <div class="export-facts">
-                        <span>当前范围 <strong id="stats-export-range">--</strong></span>
-                        <span>时间段 <strong id="stats-export-count">0</strong></span>
-                        <span>总时长 <strong id="stats-export-duration">00:00:00</strong></span>
-                        <span>格式 <strong id="stats-export-formats">CSV</strong></span>
-                    </div>
-                    <p>导出只包含当前已接受快照中的用户描述，不包含派生摘要、窗口标题或文件路径。</p>
-                </details>
                 <div id="stats-export-status" class="inline-status" role="status" aria-live="polite" hidden></div>
             </section>
 

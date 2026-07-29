@@ -233,6 +233,27 @@ def test_service_summary_project_stats_only_include_normal_status_rows(temp_db):
     assert by_status["error"]["duration_seconds"] == 300
 
 
+def test_service_summary_preserves_standalone_excluded_semantics(temp_db):
+    """Excluded facts remain visible as a non-concrete project group."""
+
+    _seed_closed_activity(
+        app="PrivateApp",
+        process="private.exe",
+        resource="private.txt",
+        start="09:00:00",
+        end="09:30:00",
+        day="2026-06-25",
+        status="excluded",
+    )
+
+    summary = statistics_service.get_statistics_export_summary("2026-06-25", "2026-06-25")
+    by_project = {group["display_name"]: group for group in summary["by_project"]}
+
+    assert by_project["已排除"]["duration_seconds"] == 1800
+    assert summary["excluded_duration_seconds"] == 1800
+    assert summary["project_count"] == 0
+
+
 def test_service_summary_empty_range_returns_zero(temp_db):
     summary = statistics_service.get_statistics_export_summary("2026-06-25", "2026-06-25")
     assert summary["total_duration_seconds"] == 0

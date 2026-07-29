@@ -238,12 +238,37 @@ th.number, td.number { text-align: right; font-variant-numeric: tabular-nums; }
 .drawer-backdrop { display: none; }
 
 /* Statistics */
-.statistics-toolbar { flex-wrap: wrap; }
+.statistics-toolbar { flex-wrap: nowrap; }
 .statistics-toolbar select, .statistics-toolbar input { min-width: 0; }
-.date-range { display: inline-flex; align-items: center; gap: 4px; }
+.statistics-date-range { width: 276px; min-width: 276px; }
+.statistics-date-inputs { display: flex; align-items: center; gap: 4px; }
+.statistics-date-field { position: relative; width: 132px; min-width: 0; }
+.statistics-date-field input { width: 100%; padding-right: 26px; font-variant-numeric: tabular-nums; }
+.statistics-date-field input:not(:focus)::-webkit-datetime-edit { color: transparent; }
+.statistics-date-display {
+    position: absolute; inset: 1px 26px 1px 8px; display: flex; align-items: center;
+    overflow: hidden; background: var(--color-surface); pointer-events: none;
+    font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.statistics-date-field input:focus + .statistics-date-display { visibility: hidden; }
+.statistics-all-time-label {
+    width: 100%; min-height: var(--control-height-sm); display: flex; align-items: center;
+    padding: 3px 8px; border: 1px solid var(--color-border-strong);
+    border-radius: var(--radius-md); background: var(--color-surface);
+}
+#statistics-project-filter { min-width: 112px; max-width: 180px; }
 .quick-ranges { display: flex; gap: 2px; }
 .quick-ranges button { padding-inline: 7px; }
+.quick-ranges button[aria-pressed="true"] {
+    color: var(--color-accent); border-color: #9bbfd9;
+    background: var(--color-accent-soft); font-weight: 650;
+}
 .stats-scope-row { min-height: 21px; margin-bottom: 5px; }
+#statistics-loading:not([hidden]) {
+    min-height: 154px; display: flex; align-items: flex-start; justify-content: center;
+    padding-top: 42px;
+}
+#statistics-results { min-height: 154px; }
 .metric-strip { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin-bottom: 9px; overflow: hidden; border-width: 1px 0; border-radius: 0; background: transparent; }
 .metric { padding: 8px 13px; border-right: 1px solid var(--color-border); }
 .metric:last-child { border-right: 0; }
@@ -256,11 +281,6 @@ th.number, td.number { text-align: right; font-variant-numeric: tabular-nums; }
 .stats-name > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .stats-share-bar { height: 4px; overflow: hidden; border-radius: 2px; background: #e4ebef; }
 .stats-share-bar i { display: block; height: 100%; background: #6695b8; }
-.export-disclosure { margin-top: 8px; padding: 8px 11px; color: var(--color-text-secondary); border-width: 1px 0 0; border-radius: 0; background: transparent; }
-.export-disclosure summary { width: fit-content; color: var(--color-text); cursor: pointer; font-weight: 600; }
-.export-facts { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 8px; }
-.export-disclosure p { margin-bottom: 0; }
-
 /* Project Rules */
 .rules-toolbar input { min-width: 230px; }
 .rules-list { display: grid; gap: 6px; }
@@ -378,9 +398,12 @@ th.number, td.number { text-align: right; font-variant-numeric: tabular-nums; }
     :root { --overview-bar-min-segment: 64px; }
     .toolbar { flex-wrap: wrap; }
     .toolbar-spacer { display: none; }
+    .statistics-toolbar { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(112px, 1fr); }
+    .statistics-date-range { width: auto; min-width: 0; }
+    .statistics-date-field { width: min(132px, calc((100vw - 278px) / 2)); min-width: 108px; }
     .statistics-toolbar label { flex: none; }
-    .statistics-toolbar #statistics-project-filter { min-width: 150px; flex: 1; }
-    .quick-ranges { width: 100%; }
+    .statistics-toolbar #statistics-project-filter { min-width: 112px; width: 100%; }
+    .quick-ranges { grid-column: 1 / -1; width: 100%; }
     .quick-ranges button { flex: 1; }
     .rules-project-head { grid-template-columns: 22px minmax(0, 1fr); }
     .rules-project-actions { grid-column: 2; justify-items: start; }

@@ -17,7 +17,8 @@
         App.statisticsLoading = !!loading;
         if (element("statistics-loading")) element("statistics-loading").hidden = !loading;
         if (element("statistics-update-status")) {
-            element("statistics-update-status").textContent = loading ? "更新中…" : "已自动更新";
+            element("statistics-update-status").textContent = loading
+                ? "更新中…" : (App.statisticsLoaded ? "已自动更新" : "");
         }
         var button = element("stats-export-action-btn");
         if (button) button.disabled = !!loading || !!App.statisticsExportSaving
@@ -35,71 +36,185 @@
     }
     App.validateStatisticsDateRange = validateStatisticsDateRange;
 
-    function selectedFilters() {
-        var mode = element("statistics-range-mode") ? element("statistics-range-mode").value : "month";
-        var all = mode === "all";
-        var dateFrom = "";
-        var dateTo = "";
-        if (all) {
-            dateFrom = "";
-            dateTo = "";
-        } else if (mode === "month") {
-            var today = new Date();
-            var start = new Date(today.getFullYear(), today.getMonth(), 1);
-            dateFrom = localDate(start);
-            dateTo = localDate(today);
-        } else {
-            dateFrom = element("statistics-date-from").value;
-            dateTo = element("statistics-date-to").value;
-        }
+    function localDate(value) {
+        var year = value.getFullYear();
+        var month = String(value.getMonth() + 1).padStart(2, "0");
+        var day = String(value.getDate()).padStart(2, "0");
+        return year + "-" + month + "-" + day;
+    }
+
+    function statisticsWeekRange(today) {
+        var start = new Date(
+            today.getFullYear(),
+            today.getMonth(),
+            today.getDate()
+        );
+        start.setDate(start.getDate() - ((start.getDay() + 6) % 7));
         return {
-            dateFrom: dateFrom,
-            dateTo: dateTo,
-            projectId: element("statistics-project-filter") ? element("statistics-project-filter").value : "",
-            allTime: all
+            dateFrom: localDate(start),
+            dateTo: localDate(today)
         };
+    }
+    App.statisticsWeekRange = statisticsWeekRange;
+
+    function shortcutRange(type, today) {
+        var todayValue = localDate(today);
+        if (type === "today") return { dateFrom: todayValue, dateTo: todayValue };
+        if (type === "week") return statisticsWeekRange(today);
+        if (type === "month") {
+            return {
+                dateFrom: localDate(new Date(today.getFullYear(), today.getMonth(), 1)),
+                dateTo: todayValue
+            };
+        }
+        if (type === "all") return { dateFrom: "", dateTo: "" };
+        return null;
+    }
+
+    function currentSelection() {
+        if (!App.statisticsSelectionInitialized || !App.statisticsSelection) {
+            var range = statisticsWeekRange(new Date());
+            App.statisticsSelection = {
+                allTime: false,
+                dateFrom: range.dateFrom,
+                dateTo: range.dateTo
+            };
+            App.statisticsSelectionInitialized = true;
+        }
+        return App.statisticsSelection;
+    }
+
+    function setStatisticsSelection(allTime, dateFrom, dateTo) {
+        App.statisticsSelection = {
+            allTime: !!allTime,
+            dateFrom: allTime ? "" : String(dateFrom || ""),
+            dateTo: allTime ? "" : String(dateTo || "")
+        };
+        App.statisticsSelectionInitialized = true;
+        syncStatisticsSelection();
+    }
+    App.setStatisticsSelection = setStatisticsSelection;
+
+    function displayDate(value) {
+        return String(value || "").replace(/-/g, "/");
     }
 
     function selectedProjectLabel() {
         var select = element("statistics-project-filter");
-        return select && select.selectedIndex >= 0 ? select.options[select.selectedIndex].text : "全部项目";
+        return select && select.selectedIndex >= 0 && select.options
+            ? select.options[select.selectedIndex].text
+            : "全部项目";
     }
+
+    function updateStatisticsScope(filters) {
+        filters = filters || selectedFilters();
+        var scope = filters.allTime
+            ? "全部时间"
+            : displayDate(filters.dateFrom) + " 至 " + displayDate(filters.dateTo);
+        if (element("stats-scope")) {
+            element("stats-scope").textContent = "当前范围：" + scope + " · " + selectedProjectLabel();
+        }
+    }
+
+    function syncStatisticsSelection() {
+        var selection = currentSelection();
+        var from = element("statistics-date-from");
+        var to = element("statistics-date-to");
+        if (from) from.value = selection.dateFrom;
+        if (to) to.value = selection.dateTo;
+        if (element("statistics-date-from-display")) {
+            element("statistics-date-from-display").textContent = displayDate(selection.dateFrom);
+        }
+        if (element("statistics-date-to-display")) {
+            element("statistics-date-to-display").textContent = displayDate(selection.dateTo);
+        }
+        if (element("statistics-date-inputs")) {
+            element("statistics-date-inputs").hidden = selection.allTime;
+        }
+        if (element("statistics-all-time-label")) {
+            element("statistics-all-time-label").hidden = !selection.allTime;
+        }
+
+        var today = new Date();
+        ["today", "week", "month", "all"].forEach(function (type) {
+            var range = shortcutRange(type, today);
+            var pressed = type === "all"
+                ? selection.allTime
+                : !selection.allTime
+                    && selection.dateFrom === range.dateFrom
+                    && selection.dateTo === range.dateTo;
+            var button = element("statistics-" + type + "-btn");
+            if (button) button.setAttribute("aria-pressed", pressed ? "true" : "false");
+        });
+        updateStatisticsScope({
+            allTime: selection.allTime,
+            dateFrom: selection.dateFrom,
+            dateTo: selection.dateTo,
+            projectId: element("statistics-project-filter")
+                ? element("statistics-project-filter").value : ""
+        });
+    }
+    App.syncStatisticsSelection = syncStatisticsSelection;
+
+    function selectedFilters() {
+        var selection = currentSelection();
+        return {
+            dateFrom: selection.allTime ? "" : selection.dateFrom,
+            dateTo: selection.allTime ? "" : selection.dateTo,
+            projectId: element("statistics-project-filter") ? element("statistics-project-filter").value : "",
+            allTime: selection.allTime
+        };
+    }
+    App.selectedStatisticsFilters = selectedFilters;
+
+    function clearStatisticsPresentation() {
+        var results = element("statistics-results");
+        if (results) results.hidden = true;
+        ["stats-total", "stats-activity-count", "stats-project-count", "stats-app-count"]
+            .forEach(function (id) {
+                if (element(id)) element(id).textContent = "";
+            });
+        ["stats-by-project", "stats-by-app"].forEach(function (id) {
+            if (element(id)) element(id).innerHTML = "";
+        });
+        ["stats-empty-project", "stats-empty-app"].forEach(function (id) {
+            if (element(id)) element(id).hidden = true;
+        });
+    }
+    App.clearStatisticsPresentation = clearStatisticsPresentation;
 
     function invalidateStatisticsSelection() {
         App.statisticsLoaded = false;
         App.statisticsAcceptedPayload = null;
         App.statisticsSnapshotRevision = "";
         setStatisticsExportStatus("", "");
+        clearStatisticsPresentation();
         setStatisticsLoading(false);
     }
     App.invalidateStatisticsSelection = invalidateStatisticsSelection;
 
-    function loadStatisticsExportSummary() {
-        var filters = selectedFilters();
-        if (!filters.allTime) {
-            var message = validateStatisticsDateRange(filters.dateFrom, filters.dateTo);
-            if (message) { showStatisticsError(message); return Promise.resolve(null); }
-        }
-        var key = JSON.stringify(filters);
-        var token = App.requestCoordinator.beginLatest("statistics", key);
-        setStatisticsLoading(true);
-        App.clearStatisticsError();
+    function executeStatisticsQuery(owner) {
+        var filters = owner.filters;
+        var token = owner.token;
         var request = App.bridge.getStatisticsExportSummary(
             filters.dateFrom, filters.dateTo, filters.projectId
         );
-        App.statisticsLoadPromise = request;
-        return request.then(function (result) {
+        var pending = request.then(function (result) {
             if (!App.requestCoordinator.isCurrent(token)) return null;
             var data = App.handleResult(result, showStatisticsError);
-            if (!data || !data.summary || !data.export_ticket) return null;
+            if (!data || !data.summary || !data.export_ticket) {
+                if (!data) return null;
+                showStatisticsError("加载统计失败");
+                return null;
+            }
             App.statisticsAcceptedPayload = {
                 summary: data.summary,
                 exportTicket: data.export_ticket,
                 filters: filters
             };
             App.statisticsSnapshotRevision = String(data.export_ticket.revision || "");
-            App.statisticsLoaded = true;
             showStatistics(data.summary, filters);
+            App.statisticsLoaded = true;
             return data;
         }).catch(function () {
             if (App.requestCoordinator.isCurrent(token)) showStatisticsError("加载统计失败");
@@ -107,6 +222,42 @@
         }).finally(function () {
             if (App.requestCoordinator.isCurrent(token)) setStatisticsLoading(false);
         });
+        App.statisticsLoadPromise = pending;
+        return pending;
+    }
+
+    function beginStatisticsQuery(delay) {
+        if (App.statisticsQueryTimer) window.clearTimeout(App.statisticsQueryTimer);
+        App.statisticsQueryTimer = null;
+        var filters = selectedFilters();
+        var key = JSON.stringify(filters);
+        var token = App.requestCoordinator.beginLatest("statistics", key);
+        invalidateStatisticsSelection();
+        App.clearStatisticsError();
+        updateStatisticsScope(filters);
+        setStatisticsLoading(true);
+        if (!filters.allTime) {
+            var message = validateStatisticsDateRange(filters.dateFrom, filters.dateTo);
+            if (message) {
+                showStatisticsError(message);
+                setStatisticsLoading(false);
+                return Promise.resolve(null);
+            }
+        }
+        var owner = { filters: filters, token: token };
+        if (delay > 0) {
+            App.statisticsQueryTimer = window.setTimeout(function () {
+                App.statisticsQueryTimer = null;
+                executeStatisticsQuery(owner);
+            }, delay);
+            return Promise.resolve(null);
+        }
+        return executeStatisticsQuery(owner);
+    }
+    App.beginStatisticsQuery = beginStatisticsQuery;
+
+    function loadStatisticsExportSummary() {
+        return beginStatisticsQuery(0);
     }
     App.loadStatisticsExportSummary = loadStatisticsExportSummary;
 
@@ -117,10 +268,8 @@
         element("stats-app-count").textContent = String(summary.app_count || 0);
         renderStatsTable("stats-by-project", "stats-empty-project", summary.by_project || []);
         renderStatsTable("stats-by-app", "stats-empty-app", summary.by_app || []);
-        var scope = (filters && filters.allTime)
-            ? "全部时间" : String(summary.date_from || "") + " 至 " + String(summary.date_to || "");
-        element("stats-scope").textContent = "当前范围：" + scope + " · " + selectedProjectLabel();
-        renderExportPreview(summary.export_preview || {}, scope);
+        updateStatisticsScope(filters);
+        if (element("statistics-results")) element("statistics-results").hidden = false;
     }
     App.showStatistics = showStatistics;
 
@@ -143,39 +292,17 @@
     }
     App.renderStatsTable = renderStatsTable;
 
-    function renderExportPreview(preview, scope) {
-        element("stats-export-range").textContent = scope || "--";
-        element("stats-export-count").textContent = String(preview.session_count || 0);
-        element("stats-export-duration").textContent = preview.included_duration || "00:00:00";
-        element("stats-export-formats").textContent = "CSV";
-    }
-    App.renderExportPreview = renderExportPreview;
-
-    function localDate(value) {
-        var year = value.getFullYear();
-        var month = String(value.getMonth() + 1).padStart(2, "0");
-        var day = String(value.getDate()).padStart(2, "0");
-        return year + "-" + month + "-" + day;
-    }
-
     function applyStatisticsQuickRange(type) {
         var today = new Date();
-        var start = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-        if (type === "week") start.setDate(start.getDate() - ((start.getDay() + 6) % 7));
-        if (type === "month") start = new Date(today.getFullYear(), today.getMonth(), 1);
-        element("statistics-range-mode").value = "custom";
-        element("statistics-custom-range").hidden = false;
-        element("statistics-date-from").value = localDate(start);
-        element("statistics-date-to").value = localDate(today);
-        invalidateStatisticsSelection();
-        return loadStatisticsExportSummary();
+        var range = shortcutRange(type, today);
+        if (!range) return Promise.resolve(null);
+        setStatisticsSelection(type === "all", range.dateFrom, range.dateTo);
+        return beginStatisticsQuery(0);
     }
     App.applyStatisticsQuickRange = applyStatisticsQuickRange;
 
     function scheduleStatisticsQuery(delay) {
-        invalidateStatisticsSelection();
-        if (App.statisticsQueryTimer) window.clearTimeout(App.statisticsQueryTimer);
-        App.statisticsQueryTimer = window.setTimeout(loadStatisticsExportSummary, delay || 0);
+        return beginStatisticsQuery(delay || 0);
     }
     App.scheduleStatisticsQuery = scheduleStatisticsQuery;
 
@@ -193,30 +320,34 @@
     App.populateStatisticsProjectFilter = populateProjectFilter;
 
     function initStatisticsDefaults() {
-        if (App.statisticsControlsBound) return;
-        App.statisticsControlsBound = true;
-        var today = new Date();
-        var monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
-        if (element("statistics-date-from")) element("statistics-date-from").value = localDate(monthStart);
-        if (element("statistics-date-to")) element("statistics-date-to").value = localDate(today);
-        element("statistics-range-mode").addEventListener("change", function () {
-            var custom = this.value === "custom";
-            element("statistics-custom-range").hidden = !custom;
-            scheduleStatisticsQuery(0);
-        });
-        ["statistics-date-from", "statistics-date-to"].forEach(function (id) {
-            element(id).addEventListener("change", function () { scheduleStatisticsQuery(500); });
-        });
-        element("statistics-project-filter").addEventListener("change", function () { scheduleStatisticsQuery(0); });
-        [["stats-project-tab", "stats-project-panel", "stats-app-tab", "stats-app-panel"],
-         ["stats-app-tab", "stats-app-panel", "stats-project-tab", "stats-project-panel"]]
-            .forEach(function (ids) {
-                element(ids[0]).addEventListener("click", function () {
-                    element(ids[0]).setAttribute("aria-selected", "true"); element(ids[1]).hidden = false;
-                    element(ids[2]).setAttribute("aria-selected", "false"); element(ids[3]).hidden = true;
+        currentSelection();
+        syncStatisticsSelection();
+        if (!App.statisticsControlsBound) {
+            App.statisticsControlsBound = true;
+            ["statistics-date-from", "statistics-date-to"].forEach(function (id) {
+                element(id).addEventListener("change", function () {
+                    setStatisticsSelection(
+                        false,
+                        element("statistics-date-from").value,
+                        element("statistics-date-to").value
+                    );
+                    scheduleStatisticsQuery(500);
                 });
             });
-        if (App.loadProjects) App.loadProjects().then(populateProjectFilter);
+            element("statistics-project-filter").addEventListener("change", function () {
+                syncStatisticsSelection();
+                scheduleStatisticsQuery(0);
+            });
+            [["stats-project-tab", "stats-project-panel", "stats-app-tab", "stats-app-panel"],
+             ["stats-app-tab", "stats-app-panel", "stats-project-tab", "stats-project-panel"]]
+                .forEach(function (ids) {
+                    element(ids[0]).addEventListener("click", function () {
+                        element(ids[0]).setAttribute("aria-selected", "true"); element(ids[1]).hidden = false;
+                        element(ids[2]).setAttribute("aria-selected", "false"); element(ids[3]).hidden = true;
+                    });
+                });
+            if (App.loadProjects) App.loadProjects().then(populateProjectFilter);
+        }
     }
     App.initStatisticsDefaults = initStatisticsDefaults;
 

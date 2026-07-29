@@ -262,6 +262,17 @@
         App.lastSessionActivitySummaryViewModel = null;
         App.lastRefreshState = null;
         App.statisticsAcceptedPayload = null;
+        App.statisticsSnapshotRevision = "";
+        App.statisticsSelection = null;
+        App.statisticsSelectionInitialized = false;
+        if (App.statisticsQueryTimer) window.clearTimeout(App.statisticsQueryTimer);
+        App.statisticsQueryTimer = null;
+        if (typeof App.clearStatisticsPresentation === "function") {
+            App.clearStatisticsPresentation();
+        }
+        if (typeof App.setStatisticsLoading === "function") {
+            App.setStatisticsLoading(false);
+        }
         App.rulesLoadPromise = null;
         App.activePageRefreshInFlight = false;
         App.activePageRefreshPromise = null;
@@ -656,6 +667,7 @@
         bind("statistics-today-btn", "click", function () { App.applyStatisticsQuickRange("today"); });
         bind("statistics-week-btn", "click", function () { App.applyStatisticsQuickRange("week"); });
         bind("statistics-month-btn", "click", function () { App.applyStatisticsQuickRange("month"); });
+        bind("statistics-all-btn", "click", function () { App.applyStatisticsQuickRange("all"); });
         bind("stats-export-action-btn", "click", App.exportStatisticsCsv);
         bind("settings-clipboard-toggle", "change", App.handleCaptureToggleChange);
         bind("settings-backup-export-btn", "click", App.exportEncryptedBackup);

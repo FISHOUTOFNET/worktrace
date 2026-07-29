@@ -26,16 +26,23 @@ def section() -> str:
 def test_statistics_surface_matches_current_information_architecture() -> None:
     html = section()
     for dom_id in (
-        "statistics-range-mode", "statistics-custom-range", "statistics-date-from",
-        "statistics-date-to", "statistics-project-filter", "statistics-today-btn",
-        "statistics-week-btn", "statistics-month-btn", "statistics-update-status",
+        "statistics-date-from", "statistics-date-to", "statistics-project-filter",
+        "statistics-today-btn", "statistics-week-btn", "statistics-month-btn",
+        "statistics-all-btn", "statistics-results", "statistics-update-status",
         "stats-total", "stats-activity-count", "stats-project-count", "stats-app-count",
         "stats-by-project", "stats-by-app", "stats-export-action-btn",
     ):
         assert f'id="{dom_id}"' in html
-    for forbidden in ("statistics-load-btn", "statistics-7d-btn", "status-filter", "stats-by-status", "最近七天"):
+    for forbidden in (
+        "statistics-range-mode", "statistics-custom-range", "statistics-load-btn",
+        "statistics-7d-btn", "status-filter", "stats-by-status", "最近七天",
+        "自定义范围", "导出范围与隐私说明",
+    ):
         assert forbidden not in html
-    assert "全部时间" in html and "自定义范围" in html
+    assert [html.index(f'id="statistics-{name}-btn"') for name in ("today", "week", "month", "all")] == sorted(
+        html.index(f'id="statistics-{name}-btn"') for name in ("today", "week", "month", "all")
+    )
+    assert html.count('aria-pressed="false"') >= 4
 
 
 def test_statistics_uses_only_fixed_local_capabilities() -> None:
@@ -48,13 +55,14 @@ def test_statistics_uses_only_fixed_local_capabilities() -> None:
 
 
 def test_latest_query_owns_acceptance_and_keeps_one_export_ticket() -> None:
-    body = func_body(source(), "loadStatisticsExportSummary")
+    body = func_body(source(), "beginStatisticsQuery")
+    execute = func_body(source(), "executeStatisticsQuery")
     assert 'App.requestCoordinator.beginLatest("statistics"' in body
-    assert "App.requestCoordinator.isCurrent(token)" in body
-    assert "App.statisticsAcceptedPayload =" in body
-    assert "exportTicket: data.export_ticket" in body
-    assert "filters.dateFrom, filters.dateTo, filters.projectId" in body
-    assert "showStatistics(data.summary, filters)" in body
+    assert "App.requestCoordinator.isCurrent(token)" in execute
+    assert "App.statisticsAcceptedPayload =" in execute
+    assert "exportTicket: data.export_ticket" in execute
+    assert "filters.dateFrom, filters.dateTo, filters.projectId" in execute
+    assert "showStatistics(data.summary, filters)" in execute
 
 
 def test_export_is_bound_to_accepted_snapshot_and_disabled_while_querying() -> None:
@@ -76,28 +84,35 @@ def test_custom_dates_validate_without_reviving_legacy_31_day_ui_limit() -> None
     assert "diffDays" not in body and "31" not in body
 
 
-def test_filters_auto_query_and_quick_ranges_are_today_week_month() -> None:
+def test_filters_auto_query_and_quick_ranges_are_today_week_month_all() -> None:
     init = func_body(source(), "initStatisticsDefaults")
     quick = func_body(source(), "applyStatisticsQuickRange")
-    assert 'statistics-range-mode' in init and 'statistics-project-filter' in init
+    week = func_body(source(), "statisticsWeekRange")
+    assert 'statistics-range-mode' not in source()
+    assert 'statistics-custom-range' not in source()
+    assert 'statistics-project-filter' in init
     assert "scheduleStatisticsQuery" in init
-    assert 'type === "week"' in quick and 'type === "month"' in quick
-    assert "loadStatisticsExportSummary()" in quick
+    assert "statisticsWeekRange(new Date())" in source()
+    assert "start.getDay() + 6" in week
+    assert 'type === "all"' in quick
+    assert "beginStatisticsQuery(0)" in quick
     buttons = func_body(read_js("init.js"), "initButtons")
-    assert 'App.applyStatisticsQuickRange("today")' in buttons
-    assert 'App.applyStatisticsQuickRange("week")' in buttons
-    assert 'App.applyStatisticsQuickRange("month")' in buttons
+    for name in ("today", "week", "month", "all"):
+        assert f'App.applyStatisticsQuickRange("{name}")' in buttons
 
 
-def test_dynamic_table_values_are_escaped_and_preview_uses_text_content() -> None:
+def test_dynamic_table_values_are_escaped_without_export_preview_ui() -> None:
     assert "App.escapeHtml" in func_body(source(), "renderStatsTable")
-    preview = func_body(source(), "renderExportPreview")
-    assert "textContent" in preview and "innerHTML" not in preview
+    assert "renderExportPreview" not in source()
+    assert "stats-export-range" not in section()
 
 
 def test_statistics_styles_are_responsive_local_surfaces() -> None:
     styles = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
-    for selector in (".statistics-toolbar", ".metric-strip", ".stats-result", ".table-scroll"):
+    for selector in (
+        ".statistics-toolbar", ".statistics-date-range", ".quick-ranges",
+        "#statistics-results", ".metric-strip", ".stats-result", ".table-scroll",
+    ):
         assert selector in styles
 
 
