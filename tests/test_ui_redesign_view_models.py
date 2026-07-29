@@ -11,7 +11,10 @@ from worktrace.services import (
     report_projection_snapshot_service,
     statistics_service,
 )
-from worktrace.services.view_model_service import get_overview_view_model
+from worktrace.services.view_model_service import (
+    get_overview_view_model,
+    get_timeline_view_model,
+)
 
 pytestmark = [pytest.mark.db, pytest.mark.contract, pytest.mark.webview_static]
 
@@ -105,6 +108,29 @@ def test_statistics_all_time_and_project_scope_use_one_authoritative_projection(
     assert only_a["project_count"] == 1
     assert {row["display_name"] for row in only_a["by_project"]} == {"A"}
     assert only_a["project_id"] == str(project_a)
+
+
+def test_timeline_standalone_status_is_not_report_uncategorized(temp_db):
+    activity_id = activity_service.create_activity(
+        "Private",
+        "private.exe",
+        "secret.txt",
+        status="excluded",
+        start_time="2026-07-22 11:00:00",
+    )
+    activity_service.finalize_created_activity(activity_id)
+    activity_service.close_activity(activity_id, "2026-07-22 11:10:00")
+
+    model = get_timeline_view_model("2026-07-22")
+    assert len(model["entries"]) == 1
+    entry = model["entries"][0]
+    assert entry["row_kind"] == "standalone_status"
+    assert entry["is_report_project"] is False
+    assert entry["is_report_classified"] is False
+    assert entry["is_report_uncategorized"] is False
+    assert entry["is_uncategorized"] is False
+    assert entry["project_name"] == "已排除"
+    assert entry["display_status"] == "已排除"
 
 
 def test_project_catalog_read_does_not_build_full_history_snapshot(temp_db, monkeypatch):

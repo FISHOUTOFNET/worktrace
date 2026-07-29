@@ -92,18 +92,20 @@
         var options = dialogState.options;
         var second = dialogState.step === 2;
         dialogTitle.textContent = second
-            ? (options.secondTitle || "再次确认删除")
-            : (options.title || "确认删除");
+            ? (options.secondTitle || "再次确认操作")
+            : (options.title || "确认操作");
         dialogBody.innerHTML = "";
         if (second) {
             var secondIntro = document.createElement("p");
-            secondIntro.textContent = options.secondIntro || "即将永久删除：";
+            secondIntro.textContent = options.secondIntro || "即将执行：";
             dialogBody.appendChild(secondIntro);
         }
-        var object = document.createElement("div");
-        object.className = "dialog-object";
-        object.textContent = options.objectLabel || "";
-        dialogBody.appendChild(object);
+        if (options.objectLabel) {
+            var object = document.createElement("div");
+            object.className = "dialog-object";
+            object.textContent = options.objectLabel;
+            dialogBody.appendChild(object);
+        }
         if (!second && options.warning) {
             var warning = document.createElement("p");
             warning.className = "dialog-warning";
@@ -112,9 +114,12 @@
         }
         dialogSecondary.textContent = second ? "返回" : "取消";
         dialogPrimary.textContent = second
-            ? (options.confirmLabel || "确认删除")
-            : (options.twoStep === false ? (options.confirmLabel || "确认删除") : "继续");
-        dialogPrimary.classList.toggle("danger", second || options.twoStep === false);
+            ? (options.confirmLabel || "确认")
+            : (options.twoStep === true ? "继续" : (options.confirmLabel || "确认"));
+        dialogPrimary.classList.toggle(
+            "danger",
+            second || (options.twoStep !== true && options.danger === true)
+        );
         dialogSecondary.focus();
     }
 
@@ -127,7 +132,7 @@
         state.resolve(!!confirmed);
     }
 
-    App.openDeleteDialog = function (options) {
+    App.openConfirmDialog = function (options) {
         options = options || {};
         if (dialogState) return Promise.resolve(false);
         return new Promise(function (resolve) {
@@ -142,9 +147,21 @@
         });
     };
 
+    App.openDeleteDialog = function (options) {
+        options = options || {};
+        return App.openConfirmDialog(Object.assign({
+            title: "确认删除",
+            secondTitle: "再次确认删除",
+            secondIntro: "即将永久删除：",
+            confirmLabel: "确认删除",
+            twoStep: true,
+            danger: true
+        }, options));
+    };
+
     if (dialogPrimary) dialogPrimary.addEventListener("click", function () {
         if (!dialogState) return;
-        if (dialogState.options.twoStep !== false && dialogState.step === 1) {
+        if (dialogState.options.twoStep === true && dialogState.step === 1) {
             dialogState.step = 2;
             renderDialogStep();
             return;

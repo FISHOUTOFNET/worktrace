@@ -502,7 +502,6 @@ test("4d. recovery in progress blocks backup export, manifest, import, clear, an
   // Every other operation must be rejected by the symmetric mutex.
   App.exportEncryptedBackup();
   App.previewEncryptedBackupManifest();
-  element("settings-backup-import-confirm").value = "导入并替换";
   App.importEncryptedBackup();
   element("settings-clear-confirm").value = "清空本地数据";
   App.clearAllLocalData();

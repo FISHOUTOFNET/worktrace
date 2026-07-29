@@ -5,7 +5,7 @@ from typing import Any, Mapping
 
 from ..constants import STATUS_NORMAL, UNCATEGORIZED_PROJECT
 from ..contracts.live_display_contracts import ActivitySnapshotContract, DisplaySpanContract
-from ..formatters import format_duration
+from ..formatters import format_duration, format_status_label
 from ..resources.title_parsing import extract_anchor_file_name
 from . import (
     page_revision_service,
@@ -136,20 +136,33 @@ def _base_session_row(
     row_kind: str,
     contributions: tuple[Mapping[str, Any], ...] = (),
 ) -> dict[str, Any]:
+    is_standalone_status = row_kind == "standalone_status"
     base_seconds = int(session.get("duration_seconds") or 0)
     adjusted = session.get("adjusted_duration_seconds")
     adjusted = int(adjusted) if adjusted is not None else None
     display_seconds = adjusted if adjusted is not None else base_seconds
     is_in_progress = bool(session.get("is_in_progress"))
     editable = bool(session.get("editable", not is_in_progress)) and not is_in_progress
-    is_report_project = bool(
+    is_report_project = False if is_standalone_status else bool(
         session.get("is_report_project", session.get("is_classified"))
     )
-    is_report_classified = bool(
+    is_report_classified = False if is_standalone_status else bool(
         session.get("is_report_classified", is_report_project)
     )
-    is_report_uncategorized = bool(
+    is_report_uncategorized = False if is_standalone_status else bool(
         session.get("is_report_uncategorized", not is_report_project)
+    )
+    status_code = str(
+        session.get("status_code") or session.get("status") or "normal"
+    )
+    display_status = str(
+        session.get("display_status")
+        or session.get("status_label")
+        or (
+            format_status_label(status_code)
+            if is_standalone_status
+            else session.get("status_summary") or ""
+        )
     )
     first_activity_id = int(session.get("first_activity_id") or 0) or None
     row = {
@@ -183,16 +196,11 @@ def _base_session_row(
         "can_edit_duration": editable,
         "disable_reason": "进行中时段不可编辑" if is_in_progress else "",
         "status": str(session.get("status") or "normal"),
-        "status_code": str(
-            session.get("status_code") or session.get("status") or "normal"
-        ),
-        "display_status": str(
-            session.get("display_status")
-            or session.get("status_label")
-            or session.get("status_summary")
-            or ""
-        ),
+        "status_code": status_code,
+        "display_status": display_status,
         "status_summary": str(session.get("status_summary") or ""),
+        "privacy_redacted": bool(session.get("privacy_redacted")),
+        "project_is_deleted": bool(session.get("project_is_deleted")),
         "is_uncategorized": is_report_uncategorized,
         "is_classified": is_report_classified,
         "is_report_project": is_report_project,

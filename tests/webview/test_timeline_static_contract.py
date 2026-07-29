@@ -272,6 +272,24 @@ def test_activity_detail_rows_use_three_columns_with_spanning_side_controls():
     assert ".summary-hide-activity[data-tooltip]::after" in css
 
 
+def test_activity_details_divider_only_appears_for_a_valid_selection():
+    css = _resource("styles.css")
+    source = _source("timeline.js")
+    base = re.search(r"\.activity-details\s*\{([^}]*)\}", css)
+    selected = re.search(
+        r"\.timeline-inspector\.has-selection \.activity-details\s*\{([^}]*)\}",
+        css,
+    )
+    assert base is not None
+    assert "padding-top: 0" in base.group(1)
+    assert "border-top: 0" in base.group(1)
+    assert selected is not None
+    assert "padding-top: 9px" in selected.group(1)
+    assert "border-top: 1px solid" in selected.group(1)
+    assert 'classList.add("has-selection")' in source
+    assert 'classList.remove("has-selection")' in source
+
+
 def test_timeline_duration_draft_preserves_exact_override_until_user_touches_field():
     source = _source("timeline.js")
     populate = func_body(source, "populateEditPanel")

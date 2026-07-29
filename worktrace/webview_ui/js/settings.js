@@ -43,16 +43,102 @@
         if (target) target.disabled = !!disabled;
     }
 
+    function preservePasswordSelection(input, action) {
+        if (!input) return;
+        var start = input.selectionStart;
+        var end = input.selectionEnd;
+        var direction = input.selectionDirection;
+        action();
+        if (
+            typeof input.setSelectionRange === "function"
+            && typeof start === "number"
+            && typeof end === "number"
+        ) {
+            try { input.setSelectionRange(start, end, direction || "none"); } catch (error) {}
+        }
+    }
+
+    function setPasswordFieldVisible(button, visible) {
+        if (!button) return false;
+        var input = element(button.dataset ? button.dataset.passwordInput : "");
+        var allowed = !!visible && !button.disabled && !!input && !input.disabled;
+        if (input) {
+            preservePasswordSelection(input, function () {
+                input.type = allowed ? "text" : "password";
+            });
+        }
+        button.setAttribute("aria-pressed", allowed ? "true" : "false");
+        return allowed;
+    }
+    App.setPasswordFieldVisible = setPasswordFieldVisible;
+
+    function hideAllPasswordFields() {
+        if (typeof document.querySelectorAll !== "function") return;
+        var buttons = document.querySelectorAll(".password-reveal-button");
+        for (var index = 0; index < buttons.length; index++) {
+            setPasswordFieldVisible(buttons[index], false);
+        }
+    }
+    App.hideAllPasswordFields = hideAllPasswordFields;
+
+    function initPasswordRevealControls() {
+        if (App.passwordRevealControlsBound) return;
+        App.passwordRevealControlsBound = true;
+        if (typeof document.querySelectorAll !== "function") return;
+        var buttons = document.querySelectorAll(".password-reveal-button");
+        Array.prototype.forEach.call(buttons, function (button) {
+            button.addEventListener("pointerdown", function (event) {
+                if (!setPasswordFieldVisible(button, true)) return;
+                event.preventDefault();
+                if (typeof button.setPointerCapture === "function") {
+                    try { button.setPointerCapture(event.pointerId); } catch (error) {}
+                }
+            });
+            ["pointerup", "pointercancel", "pointerleave", "lostpointercapture", "blur"]
+                .forEach(function (eventName) {
+                    button.addEventListener(eventName, function () {
+                        setPasswordFieldVisible(button, false);
+                    });
+                });
+            button.addEventListener("keydown", function (event) {
+                if (event.key === " " || event.key === "Enter") {
+                    event.preventDefault();
+                    setPasswordFieldVisible(button, true);
+                } else if (event.key === "Escape") {
+                    setPasswordFieldVisible(button, false);
+                }
+            });
+            button.addEventListener("keyup", function (event) {
+                if (event.key === " " || event.key === "Enter") {
+                    event.preventDefault();
+                    setPasswordFieldVisible(button, false);
+                }
+            });
+            button.addEventListener("click", function (event) {
+                event.preventDefault();
+                setPasswordFieldVisible(button, false);
+            });
+        });
+        if (typeof window.addEventListener === "function") {
+            window.addEventListener("blur", hideAllPasswordFields);
+            window.addEventListener("pagehide", hideAllPasswordFields);
+        }
+    }
+    App.initPasswordRevealControls = initPasswordRevealControls;
+
     function setSettingsBackupControlsDisabled(disabled) {
         [
             "settings-backup-export-btn",
             "settings-backup-manifest-btn",
             "settings-backup-passphrase",
+            "settings-backup-passphrase-reveal",
             "settings-backup-passphrase-confirm",
+            "settings-backup-passphrase-confirm-reveal",
             "settings-backup-import-passphrase",
-            "settings-backup-import-confirm",
+            "settings-backup-import-passphrase-reveal",
             "settings-backup-import-btn"
         ].forEach(function (id) { setDisabled(id, disabled); });
+        if (disabled) hideAllPasswordFields();
     }
     App.setSettingsBackupControlsDisabled = setSettingsBackupControlsDisabled;
 
@@ -468,40 +554,49 @@
     function importEncryptedBackup() {
         if (anySettingsOperationInProgress()) return;
         var passInput = element("settings-backup-import-passphrase");
-        var confirmInput = element("settings-backup-import-confirm");
         var passphrase = passInput ? String(passInput.value || "") : "";
-        var confirmation = confirmInput ? String(confirmInput.value || "") : "";
         if (!passphrase.trim()) return setSettingsImportStatus("请输入备份口令");
-        if (confirmation.trim() !== IMPORT_CONFIRM_LITERAL) {
-            return setSettingsImportStatus("请输入确认文字：" + IMPORT_CONFIRM_LITERAL);
-        }
-        App.settingsBackupImportInProgress = true;
-        setSettingsControlsDisabled(true);
-        setSettingsImportStatus("正在导入加密备份…");
-        App.bridge.importEncryptedBackup(passphrase, confirmation).then(function (result) {
-            var data = App.handleResult(result, function (message) {
-                setSettingsImportStatus(message || BACKUP_IMPORT_ERROR_MESSAGE);
+        if (typeof App.openConfirmDialog !== "function") return;
+        return App.openConfirmDialog({
+            trigger: element("settings-backup-import-btn"),
+            title: "导入并替换本地数据",
+            confirmLabel: "选择备份并替换",
+            objectLabel: "当前项目、规则、时间记录和设置",
+            warning: "这些本地数据将被备份文件替换，且操作不可撤销。建议先导出当前数据备份。",
+            twoStep: false,
+            danger: true
+        }).then(function (confirmed) {
+            if (!confirmed || anySettingsOperationInProgress()) return false;
+            App.settingsBackupImportInProgress = true;
+            setSettingsControlsDisabled(true);
+            setSettingsImportStatus("正在导入加密备份…");
+            return App.bridge.importEncryptedBackup(
+                passphrase,
+                IMPORT_CONFIRM_LITERAL
+            ).then(function (result) {
+                var data = App.handleResult(result, function (message) {
+                    setSettingsImportStatus(message || BACKUP_IMPORT_ERROR_MESSAGE);
+                });
+                if (!data) return;
+                var tableCount = Number(data.imported_table_count || 0);
+                var rowCount = Number(data.imported_row_count || 0);
+                var message = data.message || "加密备份已导入";
+                if (tableCount > 0 || rowCount > 0) {
+                    message += "（已导入：" + tableCount + " 个数据组 / " + rowCount + " 条记录）";
+                }
+                setSettingsImportStatus(message);
+                App.resetClientGeneration("database_replacement");
+                renderBackupManifest(null, "");
+                return loadSettingsPrivacyStatus().then(function () {
+                    if (typeof App.refreshAll === "function") App.refreshAll();
+                });
+            }).catch(function () {
+                setSettingsImportStatus(BACKUP_IMPORT_ERROR_MESSAGE);
+            }).then(function () {
+                if (passInput) passInput.value = "";
+                App.settingsBackupImportInProgress = false;
+                setSettingsControlsDisabled(anySettingsOperationInProgress());
             });
-            if (!data) return;
-            var tableCount = Number(data.imported_table_count || 0);
-            var rowCount = Number(data.imported_row_count || 0);
-            var message = data.message || "加密备份已导入";
-            if (tableCount > 0 || rowCount > 0) {
-                message += "（已导入：" + tableCount + " 个数据组 / " + rowCount + " 条记录）";
-            }
-            setSettingsImportStatus(message);
-            App.resetClientGeneration("database_replacement");
-            renderBackupManifest(null, "");
-            return loadSettingsPrivacyStatus().then(function () {
-                if (typeof App.refreshAll === "function") App.refreshAll();
-            });
-        }).catch(function () {
-            setSettingsImportStatus(BACKUP_IMPORT_ERROR_MESSAGE);
-        }).then(function () {
-            if (passInput) passInput.value = "";
-            if (confirmInput) confirmInput.value = "";
-            App.settingsBackupImportInProgress = false;
-            setSettingsControlsDisabled(anySettingsOperationInProgress());
         });
     }
     App.importEncryptedBackup = importEncryptedBackup;
@@ -741,12 +836,12 @@
             "settings-backup-passphrase",
             "settings-backup-passphrase-confirm",
             "settings-backup-import-passphrase",
-            "settings-backup-import-confirm",
             "settings-clear-confirm"
         ].forEach(function (id) {
             var input = element(id);
             if (input) input.value = "";
         });
+        hideAllPasswordFields();
         setStatusLine("settings-backup-status", "");
         setStatusLine("settings-backup-import-status", "");
         setStatusLine("settings-clear-status", "");

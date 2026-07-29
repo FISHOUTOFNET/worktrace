@@ -80,21 +80,69 @@
             .localeCompare(String(left.projection_instance_key || ""));
     }
 
+    function timelineProjectScope(session) {
+        session = session || {};
+        var rowKind = String(session.row_kind || "");
+        if (
+            session.privacy_redacted === true
+            || rowKind === "standalone_status"
+            || rowKind === "status_only"
+        ) return "status";
+        if (session.project_is_deleted === true) return "other";
+        if (rowKind && rowKind !== "project_session") return "other";
+        var projectId = parseInt(session.project_id, 10);
+        if (session.is_report_project === true && projectId > 0) return "project";
+        if (session.is_report_uncategorized === true) return "unclassified";
+        return "other";
+    }
+    App.timelineProjectScope = timelineProjectScope;
+
+    function timelineStatusLabel(session) {
+        var status = String(
+            session.display_status
+            || session.status_summary
+            || session.status_code
+            || session.status
+            || ""
+        ).trim();
+        var labels = {
+            excluded: "已排除",
+            idle: "空闲",
+            error: "异常",
+            paused: "已暂停"
+        };
+        return labels[status] || status || "状态记录";
+    }
+
+    function timelineProjectLabel(session) {
+        var scope = timelineProjectScope(session);
+        if (scope === "status") return timelineStatusLabel(session || {});
+        if (scope === "unclassified") return "未归类";
+        if (scope === "project") {
+            return App.formatProjectLabel(
+                session.project_name,
+                session.project_description
+            );
+        }
+        var name = String((session && session.project_name) || "").trim();
+        return name && name !== "未归类" ? name : "其他记录";
+    }
+    App.timelineProjectLabel = timelineProjectLabel;
+
     function filteredTimelineSessions(entries) {
         var filter = document.getElementById("timeline-project-filter");
         var value = filter ? String(filter.value || "") : "";
         var filtered = (Array.isArray(entries) ? entries : []).filter(function (session) {
             if (!value) return true;
             if (value === "unclassified") {
-                // Use the backend authoritative field instead of
-                // ``!project_id`` so standalone, privacy-redacted, and
-                // deleted-project rows are excluded.
-                return session.is_report_uncategorized === true;
+                return timelineProjectScope(session) === "unclassified";
             }
-            return String(session.project_id || "") === value;
+            return timelineProjectScope(session) === "project"
+                && String(session.project_id || "") === value;
         });
         return filtered.slice().sort(timelineSessionOrder);
     }
+    App.filteredTimelineSessions = filteredTimelineSessions;
 
     function renderTimelineProjectFilter(projects) {
         var select = document.getElementById("timeline-project-filter");
@@ -158,6 +206,8 @@
             ? firstActivityId
             : null;
         App.selectedTimelineWasInProgress = session.is_in_progress === true;
+        var pane = document.getElementById("timeline-details-pane");
+        if (pane) pane.classList.add("has-selection");
         return session;
     }
 
@@ -166,6 +216,8 @@
         App.selectedProjectionRevision = null;
         App.selectedTimelineAnchorActivityId = null;
         App.selectedTimelineWasInProgress = false;
+        var pane = document.getElementById("timeline-details-pane");
+        if (pane) pane.classList.remove("has-selection");
     }
 
     function resolveTimelineSelection(sessions) {
@@ -238,15 +290,13 @@
             var durationText = formatTimelineDuration(seconds);
             var exactDurationText = durationText;
             var startText = formatTimelineStartTime(session.start_time);
-            var projectLabel = App.formatProjectLabel(
-                session.project_name,
-                session.project_description
-            );
+            var scope = timelineProjectScope(session);
+            var projectLabel = timelineProjectLabel(session);
             var continuityKey = canTick
                 ? App.liveContinuityKey(session, "session")
                 : "";
             var classes = "timeline-item";
-            if (session.is_uncategorized) classes += " uncategorized";
+            if (scope === "unclassified") classes += " uncategorized";
             if (session.is_in_progress) classes += " in-progress";
             if (canTick) classes += " live-projected";
             if (session.projection_instance_key === App.selectedProjectionInstanceKey) {
@@ -422,7 +472,10 @@
                 items[i].setAttribute("aria-selected", "true");
             }
         }
-        if (!found) return;
+        if (!found) {
+            clearTimelineSelectionState();
+            return;
+        }
         rememberTimelineSelection(found);
         var owner = App.timelineRequestState.nextSelectionOwner(
             App.timelineDate,

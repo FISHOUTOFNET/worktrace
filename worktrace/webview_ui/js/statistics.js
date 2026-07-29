@@ -189,12 +189,6 @@
         var to = element("statistics-date-to");
         if (from) from.value = selection.dateFrom;
         if (to) to.value = selection.dateTo;
-        if (element("statistics-date-from-display")) {
-            element("statistics-date-from-display").textContent = displayDate(selection.dateFrom);
-        }
-        if (element("statistics-date-to-display")) {
-            element("statistics-date-to-display").textContent = displayDate(selection.dateTo);
-        }
         if (element("statistics-date-inputs")) {
             element("statistics-date-inputs").hidden = selection.allTime;
         }

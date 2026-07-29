@@ -124,23 +124,34 @@ def test_statistics_styles_are_responsive_local_surfaces() -> None:
         assert selector in styles
 
 
-def test_statistics_dates_use_local_compact_width_and_explicit_calendar_icons() -> None:
+def test_statistics_dates_reuse_timeline_native_date_control() -> None:
     html = section()
+    index = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     styles = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
-    date_fields = re.findall(r'<span class="statistics-date-field date-control">', html)
+    date_inputs = re.findall(
+        r'<input id="statistics-date-(?:from|to)" class="date-control" type="date"',
+        html,
+    )
     date_range = re.search(r"\.statistics-date-range\s*\{([^}]*)\}", styles)
     all_time = re.search(r"\.statistics-all-time-label\s*\{([^}]*)\}", styles)
-    assert len(date_fields) == 2
-    assert html.count('class="icon statistics-date-icon"') == 2
-    assert html.count('<use href="#icon-calendar"/>') == 2
-    assert 'id="icon-calendar"' in (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    assert len(date_inputs) == 2
+    assert '<span class="statistics-date-label">日期范围</span>' not in html
+    assert 'aria-label="统计日期范围"' in html
+    assert "statistics-date-field" not in html
+    assert "statistics-date-display" not in html
+    assert "statistics-date-icon" not in html
+    assert "statistics-date-from-display" not in html
+    assert "statistics-date-to-display" not in html
+    assert html.count('<use href="#icon-calendar"/>') == 0
+    assert 'id="timeline-date-input" class="date-control" type="date"' in index
     assert date_range is not None
     assert "width: fit-content" in date_range.group(1)
     assert "276px" not in date_range.group(1)
-    assert all_time is not None and "--statistics-date-width" in all_time.group(1)
-    assert "--statistics-date-width" in styles
-    assert "pointer-events: none" in styles
-    assert "::-webkit-calendar-picker-indicator" in styles
+    assert all_time is not None and "--date-control-width" in all_time.group(1)
+    assert "--statistics-date-width" not in styles
+    assert ".statistics-date-field" not in styles
+    assert ".statistics-date-display" not in styles
+    assert ".statistics-date-icon" not in styles
     assert "278px" not in styles
     assert "@media (max-width: 767px)" in styles
     assert "@media (max-width: 719px)" not in styles

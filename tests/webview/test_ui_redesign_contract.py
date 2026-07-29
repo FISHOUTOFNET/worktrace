@@ -124,3 +124,25 @@ def test_compact_desktop_tokens_and_single_icon_sprite_are_shared() -> None:
     for icon in ("icon-plus", "icon-pencil", "icon-trash", "icon-download"):
         assert f'id="{icon}"' in html
     assert "https://" not in html and "http://" not in html
+
+
+def test_timeline_and_statistics_share_one_project_filter_control() -> None:
+    html = read_resource("index.html")
+    styles = read_resource("styles.css")
+    for element_id in ("timeline-project-filter", "statistics-project-filter"):
+        control = re.search(rf'<select id="{element_id}" class="([^"]*)"', html)
+        assert control is not None
+        assert "project-filter-control" in control.group(1).split()
+    shared = re.search(r"\.project-filter-control\s*\{([^}]*)\}", styles)
+    assert shared is not None
+    for declaration in (
+        "width: var(--project-filter-width)",
+        "min-width: var(--project-filter-width)",
+        "max-width: var(--project-filter-width)",
+    ):
+        assert declaration in shared.group(1)
+    assert "--project-filter-width: 160px" in styles
+    assert "--project-filter-width: 132px" in styles
+    assert ".project-filter-control { min-width: 0; }" in styles
+    assert not re.search(r"#timeline-project-filter\s*\{", styles)
+    assert not re.search(r"#statistics-project-filter\s*\{", styles)

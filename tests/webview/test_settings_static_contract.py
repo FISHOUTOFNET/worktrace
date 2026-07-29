@@ -78,7 +78,9 @@ def test_settings_page_resources_and_controls_are_complete() -> None:
         "settings-backup-status",
         "settings-backup-manifest",
         "settings-backup-import-passphrase",
-        "settings-backup-import-confirm",
+        "settings-backup-passphrase-reveal",
+        "settings-backup-passphrase-confirm-reveal",
+        "settings-backup-import-passphrase-reveal",
         "settings-backup-import-btn",
         "settings-backup-import-status",
         "settings-clear-confirm",
@@ -95,6 +97,7 @@ def test_settings_page_resources_and_controls_are_complete() -> None:
         assert 'id="' + dom_id + '"' in index
 
     for forbidden_id in (
+        "settings-backup-import-confirm",
         "settings-save-btn",
         "settings-set-path-btn",
         "settings-import-btn",
@@ -231,7 +234,6 @@ def test_settings_exposes_transient_reset_without_clearing_authoritative_state()
         "settings-backup-passphrase",
         "settings-backup-passphrase-confirm",
         "settings-backup-import-passphrase",
-        "settings-backup-import-confirm",
         "settings-clear-confirm",
         "settings-backup-status",
         "settings-backup-import-status",
@@ -282,7 +284,9 @@ def test_import_and_clear_replace_data_through_one_generation_reset() -> None:
 
     import_body = func_body(source, "importEncryptedBackup")
     assert 'passInput.value = ""' in import_body
-    assert 'confirmInput.value = ""' in import_body
+    assert "App.openConfirmDialog" in import_body
+    assert "IMPORT_CONFIRM_LITERAL" in import_body
+    assert "confirmInput" not in import_body
     clear_body = func_body(source, "clearAllLocalData")
     assert 'confirmInput.value = ""' in clear_body
 
@@ -291,8 +295,69 @@ def test_destructive_operations_require_explicit_confirmation_literals() -> None
     source = _settings_source()
     assert 'IMPORT_CONFIRM_LITERAL = "导入并替换"' in source
     assert 'CLEAR_CONFIRM_LITERAL = "清空本地数据"' in source
-    assert "confirmation.trim() !== IMPORT_CONFIRM_LITERAL" in source
+    import_body = func_body(source, "importEncryptedBackup")
+    assert "App.bridge.importEncryptedBackup" in import_body
+    assert "IMPORT_CONFIRM_LITERAL" in import_body
+    assert "settings-backup-import-confirm" not in source
     assert "confirmation.trim() !== CLEAR_CONFIRM_LITERAL" in source
+
+
+def test_credentials_use_compact_rows_and_momentary_reveal_controls() -> None:
+    index = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    section = index[
+        index.index('id="settings-backup-card"') :
+        index.index('id="settings-recovery-card"')
+    ]
+    styles = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
+    source = _settings_source()
+    init = read_js("init.js")
+
+    assert section.count('class="credential-row"') == 3
+    assert section.count('class="password-reveal-button"') == 3
+    assert section.count('aria-label="按住查看口令"') == 3
+    assert section.count('aria-pressed="false"') >= 3
+    assert "form-grid" not in section
+    assert "settings-backup-import-confirm" not in section
+    assert "确认文字" not in section[
+        section.index('id="settings-backup-card"') :
+        section.index('id="settings-danger-card"')
+    ]
+    assert 'id="icon-eye"' in index and 'id="icon-eye-off"' in index
+    assert "grid-template-columns: 72px minmax(0, 22ch)" in styles
+    assert "max-width: 236px" in styles
+    for event_name in (
+        "pointerdown",
+        "pointerup",
+        "pointercancel",
+        "pointerleave",
+        "lostpointercapture",
+        "keydown",
+        "keyup",
+        "pagehide",
+    ):
+        assert event_name in source
+    assert 'event.key === "Escape"' in source
+    assert "hideAllPasswordFields" in func_body(source, "setSettingsBackupControlsDisabled")
+    assert "hideAllPasswordFields" in func_body(source, "resetSettingsTransientUi")
+    assert "App.initPasswordRevealControls" in init
+
+
+def test_danger_zone_removes_only_its_local_divider_and_status_gap() -> None:
+    styles = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
+    global_row = re.search(r"\.setting-row\s*\{([^}]*)\}", styles)
+    danger_row = re.search(r"\.danger-zone \.setting-row\s*\{([^}]*)\}", styles)
+    clear_status = re.search(r"#settings-clear-status\s*\{([^}]*)\}", styles)
+    danger = re.search(r"\.danger-zone\s*\{([^}]*)\}", styles)
+    assert global_row is not None and "border-bottom: 1px solid" in global_row.group(1)
+    assert danger_row is not None
+    assert "border-bottom: 0" in danger_row.group(1)
+    assert "padding-bottom: 4px" in danger_row.group(1)
+    assert clear_status is not None
+    assert "margin: 4px 0 0" in clear_status.group(1)
+    assert "min-height: 0" in clear_status.group(1)
+    assert danger is not None
+    assert "border: 1px solid #e4aaa5" in danger.group(1)
+    assert "background: #fffafa" in danger.group(1)
 
 
 def test_first_run_notice_is_fail_closed_and_mode_safe() -> None:

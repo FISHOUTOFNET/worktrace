@@ -694,6 +694,7 @@
         if (App.initRulesPanelEvents) App.initRulesPanelEvents();
         if (App.initTimelineAccessibility) App.initTimelineAccessibility();
         if (App.initSettingsCategories) App.initSettingsCategories();
+        if (App.initPasswordRevealControls) App.initPasswordRevealControls();
         bind("first-run-notice-accept-btn", "click", App.acceptFirstRunNotice);
         bind("first-run-notice-retry-btn", "click", App.retryFirstRunNotice);
         bind("first-run-notice-close-btn", "click", function () {
