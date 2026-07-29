@@ -40,7 +40,8 @@ def test_main_defaults_to_webview_without_instantiating_tkinter():
 
     called = {"count": 0}
 
-    def fake_webview_main():
+    def fake_webview_main(*, background=False):
+        assert background is False
         called["count"] += 1
         return 0
 
@@ -53,22 +54,37 @@ def test_main_defaults_to_webview_without_instantiating_tkinter():
     assert "WorkTraceApp" not in source
 
 
-def test_main_ignores_all_args_and_starts_webview():
-    """``main`` must ignore any args and always start the WebView UI."""
+def test_main_parses_background_once_and_forwards_to_webview():
+    """``main`` owns shipping argument parsing and forwards background intent."""
     import worktrace.main as main_mod
 
     calls = []
 
-    def fake_webview_main():
-        calls.append("webview")
+    def fake_webview_main(*, background=False):
+        calls.append(background)
         return 0
 
     with patch("worktrace.webview_main.main", fake_webview_main):
         main_mod.main([])
         main_mod.main(["--unknown"])
-        main_mod.main(["--other-flag"])
+        main_mod.main(["--background"])
 
-    assert calls == ["webview", "webview", "webview"]
+    assert calls == [False, False, True]
+
+
+def test_main_uses_process_argv_when_not_explicitly_injected(monkeypatch):
+    import worktrace.main as main_mod
+
+    calls = []
+
+    def fake_webview_main(*, background=False):
+        calls.append(background)
+        return 0
+
+    monkeypatch.setattr(sys, "argv", ["worktrace", "--background"])
+    with patch("worktrace.webview_main.main", fake_webview_main):
+        assert main_mod.main() == 0
+    assert calls == [True]
 
 
 def test_webview_main_returns_nonzero_when_runtime_missing(monkeypatch, capsys):
@@ -215,10 +231,12 @@ def _stub_webview_main_environment(monkeypatch, tmp_path):
 
     fake_window = object()
     start_calls = {"count": 0}
+    create_window_kwargs = {}
 
     class _FakeWebview:
         @staticmethod
-        def create_window(*_args, **_kwargs):
+        def create_window(*_args, **kwargs):
+            create_window_kwargs.update(kwargs)
             return fake_window
 
         @staticmethod
@@ -247,7 +265,31 @@ def _stub_webview_main_environment(monkeypatch, tmp_path):
             return {"ok": True}
 
     app_control = _FakeAppControl()
-    fake_services = type("Services", (), {"app_control": app_control})()
+    class _FakeSettings:
+        notice_accepted = True
+        recovery_blocked = False
+
+        def get_first_run_notice_for_webview(self):
+            return {
+                "ok": True,
+                "notice": {"accepted": self.notice_accepted},
+            }
+
+        def get_settings_privacy_status(self):
+            return {
+                "ok": True,
+                "status": {
+                    "recovery_blocked": self.recovery_blocked,
+                    "maintenance_restored": not self.recovery_blocked,
+                },
+            }
+
+    fake_settings = _FakeSettings()
+    fake_services = type(
+        "Services",
+        (),
+        {"app_control": app_control, "settings": fake_settings},
+    )()
     monkeypatch.setattr(
         webview_main,
         "build_application_services",
@@ -265,12 +307,30 @@ def _stub_webview_main_environment(monkeypatch, tmp_path):
 
     monkeypatch.setattr(webview_main, "WebViewBridge", _FakeBridge)
 
+    class _FakeTray:
+        def start(self):
+            return True
+
+        def stop(self):
+            return None
+
+        def show_background_notice(self):
+            return None
+
+    monkeypatch.setattr(
+        webview_main,
+        "WindowsTrayHost",
+        lambda **_kwargs: _FakeTray(),
+    )
+
     return {
         "gate_calls": gate_calls,
         "start_calls": start_calls,
         "shutdown_calls": shutdown_calls,
         "fake_runtime": fake_runtime,
         "app_control": app_control,
+        "settings": fake_settings,
+        "create_window_kwargs": create_window_kwargs,
     }
 
 
@@ -295,6 +355,54 @@ def test_webview_main_starts_webview_even_when_gate_fails_closed(monkeypatch, tm
     result = webview_main.main()
     assert result == 0
     assert mocks["start_calls"]["count"] == 1
+
+
+def test_background_start_hides_only_when_privacy_and_recovery_are_ready(
+    monkeypatch,
+    tmp_path,
+):
+    mocks = _stub_webview_main_environment(monkeypatch, tmp_path)
+    import worktrace.webview_main as webview_main
+
+    assert webview_main.main(background=True) == 0
+    assert mocks["create_window_kwargs"]["hidden"] is True
+    assert mocks["create_window_kwargs"]["focus"] is False
+
+
+def test_background_start_forces_visible_window_when_privacy_is_unaccepted(
+    monkeypatch,
+    tmp_path,
+):
+    mocks = _stub_webview_main_environment(monkeypatch, tmp_path)
+    mocks["settings"].notice_accepted = False
+    import worktrace.webview_main as webview_main
+
+    assert webview_main.main(background=True) == 0
+    assert mocks["create_window_kwargs"]["hidden"] is False
+    assert mocks["create_window_kwargs"]["focus"] is True
+
+
+def test_background_runtime_initialization_failure_shows_blocking_error(
+    monkeypatch,
+    tmp_path,
+):
+    mocks = _stub_webview_main_environment(monkeypatch, tmp_path)
+    import worktrace.webview_main as webview_main
+
+    def fail_initialize():
+        raise RuntimeError("database unavailable")
+
+    messages = []
+    mocks["fake_runtime"].initialize = fail_initialize
+    monkeypatch.setattr(
+        webview_main,
+        "_show_blocking_startup_message",
+        messages.append,
+    )
+
+    assert webview_main.main(background=True) == 2
+    assert messages and "初始化失败" in messages[0]
+    assert mocks["start_calls"]["count"] == 0
 
 
 def test_webview_main_runtime_shutdown_called_even_when_gate_fails(monkeypatch, tmp_path):

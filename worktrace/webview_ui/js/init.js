@@ -57,6 +57,7 @@
         recoverDatabaseMaintenance: fixedBridgeMethod("recover_database_maintenance"),
         saveTimelineSessionEdit: fixedBridgeMethod("save_timeline_session_edit"),
         setClipboardCaptureEnabled: fixedBridgeMethod("set_clipboard_capture_enabled"),
+        setLaunchAtLogin: fixedBridgeMethod("set_launch_at_login"),
         setExcludedRulesEnabled: fixedBridgeMethod("set_excluded_rules_enabled"),
         setProjectEnabledForRules: fixedBridgeMethod("set_project_enabled_for_rules"),
         setProjectRuleEnabled: fixedBridgeMethod("set_project_rule_enabled"),
@@ -686,6 +687,7 @@
         bind("statistics-apply-range-btn", "click", App.applyStatisticsDraftSelection);
         bind("stats-export-action-btn", "click", App.exportStatisticsCsv);
         bind("settings-clipboard-toggle", "change", App.handleCaptureToggleChange);
+        bind("settings-launch-at-login-toggle", "change", App.handleLaunchAtLoginToggleChange);
         bind("settings-backup-export-btn", "click", App.exportEncryptedBackup);
         bind("settings-backup-manifest-btn", "click", App.previewEncryptedBackupManifest);
         bind("settings-backup-import-btn", "click", App.importEncryptedBackup);
@@ -750,10 +752,12 @@
     };
 
     function runRevisionCheck() {
-        if (App.refreshCheckInFlight) return;
+        if (App.refreshCheckInFlight) {
+            return App.activePageRefreshPromise || Promise.resolve();
+        }
         App.refreshCheckInFlight = true;
         var token = App.requestCoordinator.beginLatest("heartbeat", App.currentPage + "|" + (App.timelineDate || ""));
-        App.bridge.getRefreshState(App.currentPage === "timeline" ? App.timelineDate : null).then(function (result) {
+        return App.bridge.getRefreshState(App.currentPage === "timeline" ? App.timelineDate : null).then(function (result) {
             if (!App.requestCoordinator.isCurrent(token)) return;
             var state = App.handleResult(result, function () { return null; });
             if (!state) return;
@@ -804,7 +808,7 @@
         // is the only path that creates the heartbeat interval. Repeated calls
         // are no-ops so concurrent or duplicate startup requests never spawn a
         // second timer. Use restartHeartbeat() for an explicit teardown+rebuild.
-        if (App.heartbeatTimer !== null) return;
+        if (App.shellVisible === false || App.heartbeatTimer !== null) return;
         App.heartbeatTimer = setInterval(function () {
             try { App.applyLocalTicker(); } catch (error) {}
             try { runRevisionCheck(); } catch (error) {}
@@ -812,9 +816,33 @@
     }
     App.startHeartbeat = startHeartbeat;
 
-    App.restartHeartbeat = function () {
+    function stopHeartbeat() {
         if (App.heartbeatTimer !== null) clearInterval(App.heartbeatTimer);
         App.heartbeatTimer = null;
+    }
+    App.stopHeartbeat = stopHeartbeat;
+
+    App.shellVisible = true;
+    function setShellVisibility(visible) {
+        visible = visible === true;
+        if (App.shellVisible === visible) return Promise.resolve();
+        App.shellVisible = visible;
+        if (!visible) {
+            stopHeartbeat();
+            return Promise.resolve();
+        }
+        return Promise.resolve(
+            typeof App.runRevisionCheck === "function"
+                ? App.runRevisionCheck()
+                : null
+        ).then(function () {
+            if (App.shellVisible === true) startHeartbeat();
+        });
+    }
+    App.setShellVisibility = setShellVisibility;
+
+    App.restartHeartbeat = function () {
+        stopHeartbeat();
         startHeartbeat();
     };
 

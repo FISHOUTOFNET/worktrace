@@ -21,4 +21,4 @@ if __name__ == "__main__":
         raise SystemExit(_run_windows_probe_helper())
     from worktrace.main import main
 
-    raise SystemExit(main())
+    raise SystemExit(main(sys.argv[1:]))
