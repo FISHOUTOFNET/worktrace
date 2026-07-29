@@ -84,7 +84,9 @@ python -m worktrace.main
 ```
 
 The first launch shows the privacy notice. The collector starts only after
-the notice is accepted. Closing the WebView window exits WorkTrace cleanly.
+the notice is accepted. Closing the WebView window hides it to the Windows
+notification area while collection continues. Use **退出 WorkTrace** from the
+tray menu for a complete graceful shutdown.
 
 ## Windows Packaging
 
@@ -103,8 +105,9 @@ Build the single-file executable:
 python -m PyInstaller --noconfirm --clean WorkTrace.spec
 ```
 
-Build the per-user installer (run after the single-file executable has been
-built, since the installer wraps `dist\WorkTrace.exe` as its payload):
+Install the fixed Inno Setup 6 toolchain, then build the per-user installer
+after the single-file executable. The build script locates `ISCC.exe` and
+fails clearly if it is unavailable:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_windows_installer.ps1
@@ -114,7 +117,9 @@ Build outputs: `dist\WorkTrace.exe` (single-file application) and
 `dist\WorkTrace-Setup.exe` (current-user installer). The installer copies
 WorkTrace to `%LOCALAPPDATA%\Programs\WorkTrace`, creates a current-user
 Start Menu shortcut, installs per-user only, and does not request
-administrator privileges. Build artifacts (`build/`, `dist/`, generated
+administrator privileges. Its default-selected task registers the current
+user's HKCU Run value; the task can be deselected during install or changed
+later in Settings → General. Build artifacts (`build/`, `dist/`, generated
 `.spec` files other than `WorkTrace.spec`) must not be committed to Git.
 
 ## Release Validation

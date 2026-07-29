@@ -181,10 +181,13 @@ viewport emulation.
 - [ ] Clicking a recent record locates the corresponding session.
 - [ ] Time Details column widths, selection, copy, notes, and project correction work.
 - [ ] Statistics/Export page statistics are reasonable.
-- [ ] Settings/Privacy can show the privacy notice, toggle clipboard recording, and clear data.
+- [ ] Settings/General can toggle HKCU login startup and clipboard recording;
+      the retired Collection category is absent.
 - [ ] UI refresh does not visibly clear and rebuild the whole page.
 - [ ] Minimize, restore, and resize do not crash the app.
-- [ ] Closing the WebView main window exits WorkTrace and shuts down runtime cleanly.
+- [ ] Closing the WebView main window hides it, keeps collection running, and
+      double-clicking the tray icon restores the same window.
+- [ ] Tray **Exit WorkTrace** shuts down Runtime cleanly.
 
 ### K. CSV Export
 
@@ -210,7 +213,8 @@ CSV export is the current public export capability.
 - [ ] First-run privacy notice works.
 - [ ] `schema.sql` is bundled correctly.
 - [ ] `open_files_helper` packaged path works.
-- [ ] Closing the WebView main window exits WorkTrace and shuts down runtime cleanly.
+- [ ] Closing the WebView main window hides it while tray Exit shuts Runtime down.
+- [ ] Starting the EXE again activates the existing hidden instance.
 - [ ] Administrator privileges are not required.
 
 ### M. Installer
@@ -218,6 +222,11 @@ CSV export is the current public export capability.
 - [ ] `dist\WorkTrace-Setup.exe` runs.
 - [ ] App installs to `%LOCALAPPDATA%\Programs\WorkTrace`.
 - [ ] Current-user Start Menu shortcut is created.
+- [ ] Setup requests no UAC and uses `PrivilegesRequired=lowest`.
+- [ ] Fresh install selects HKCU login startup by default; deselecting it
+      leaves no WorkTrace Run value.
+- [ ] Upgrade preserves the existing valid Run value choice and uninstall
+      removes the value.
 - [ ] Administrator privileges are not required.
 - [ ] App starts from the shortcut.
 - [ ] Installation directory and local data can be deleted for cleanup.
@@ -254,7 +263,8 @@ the packaged build behaves identically to the source-run build.
 - PyInstaller exe cannot start.
 - Installer cannot install under normal user permissions.
 - Database contains negative durations or duplicate open records.
-- Window close or app exit fails and leaves a collector running.
+- Tray Exit fails to stop Runtime, or window close hides without a recoverable
+  tray/activation path.
 
 ## Release Record Template
 

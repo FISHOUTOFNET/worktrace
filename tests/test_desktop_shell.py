@@ -82,7 +82,6 @@ def test_repeated_show_hide_and_exit_are_idempotent() -> None:
     assert window.calls.count("destroy") == 1
     assert tray.stop_calls == 1
 
-
 def test_tray_exit_only_requests_one_real_window_exit() -> None:
     window = FakeWindow()
     tray = FakeTray()
@@ -95,4 +94,3 @@ def test_tray_exit_only_requests_one_real_window_exit() -> None:
 
     assert window.calls.count("destroy") == 1
     assert tray.stop_calls == 1
-

@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [string]$ExePath,
-    [string]$OutputPath
+    [string]$OutputPath,
+    [string]$ISCCPath
 )
 
 $ErrorActionPreference = "Stop"
@@ -17,46 +18,59 @@ if (-not $OutputPath) {
 }
 
 $exe = Resolve-Path -LiteralPath $ExePath
-$installerScript = Resolve-Path -LiteralPath (Join-Path $scriptDir "windows_installer.py")
+$installerScript = Resolve-Path -LiteralPath (Join-Path $repoRoot "installer\WorkTrace.iss")
 $target = [System.IO.Path]::GetFullPath($OutputPath)
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $target) | Out-Null
 
 $name = [System.IO.Path]::GetFileNameWithoutExtension($target)
 $distPath = Split-Path -Parent $target
-$workPath = Join-Path $repoRoot "build\installer-pyinstaller"
-$specPath = Join-Path $repoRoot "build\installer-pyinstaller"
-$addData = "$exe;payload"
 
-$python = (Get-Command python -ErrorAction Stop).Source
-$pyinstallerArgs = @(
-    "-m", "PyInstaller",
-    "--noconfirm",
-    "--clean",
-    "--onefile",
-    "--console",
-    "--name", $name,
-    "--distpath", $distPath,
-    "--workpath", $workPath,
-    "--specpath", $specPath,
-    "--add-data", $addData,
+if (-not $ISCCPath) {
+    $ISCCPath = $env:ISCC_PATH
+}
+if (-not $ISCCPath) {
+    $isccCommand = Get-Command ISCC.exe -ErrorAction SilentlyContinue
+    if ($isccCommand) {
+        $ISCCPath = $isccCommand.Source
+    }
+}
+if (-not $ISCCPath) {
+    $candidates = @(
+        (Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"),
+        (Join-Path $env:ProgramFiles "Inno Setup 6\ISCC.exe")
+    )
+    foreach ($candidate in $candidates) {
+        if ($candidate -and (Test-Path -LiteralPath $candidate)) {
+            $ISCCPath = $candidate
+            break
+        }
+    }
+}
+if (-not $ISCCPath -or -not (Test-Path -LiteralPath $ISCCPath)) {
+    throw "Inno Setup compiler ISCC.exe was not found. Install the pinned Inno Setup 6 toolchain or pass -ISCCPath."
+}
+
+$iscc = Resolve-Path -LiteralPath $ISCCPath
+$isccArgs = @(
+    "/Qp",
+    "/DMyAppExe=$exe",
+    "/O$distPath",
+    "/F$name",
     $installerScript
 )
 
-# PyInstaller writes INFO/WARNING to stderr; under ErrorActionPreference "Stop"
-# PowerShell wraps native stderr as NativeCommandError and falsely terminates.
-# Relax the preference around the native call; $LASTEXITCODE is still checked.
 $oldErrorActionPreference = $ErrorActionPreference
-$pyinstallerExitCode = 0
+$isccExitCode = 0
 try {
     $ErrorActionPreference = "Continue"
-    & $python @pyinstallerArgs
-    $pyinstallerExitCode = $LASTEXITCODE
+    & $iscc @isccArgs
+    $isccExitCode = $LASTEXITCODE
 } finally {
     $ErrorActionPreference = $oldErrorActionPreference
 }
 
-if ($pyinstallerExitCode -ne 0) {
-    throw "PyInstaller failed with exit code $pyinstallerExitCode"
+if ($isccExitCode -ne 0) {
+    throw "Inno Setup compiler failed with exit code $isccExitCode"
 }
 
 Get-Item -LiteralPath $target

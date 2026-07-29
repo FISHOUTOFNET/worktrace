@@ -9,6 +9,7 @@ notes are subordinate to this document and to
 
 ```text
 worktrace.webview_main
+  -> DesktopShellController / WindowsTrayHost
   -> AppRuntime
   -> ApplicationServices
   -> WebViewBridge
@@ -30,6 +31,10 @@ state or database facts.
 
 | Responsibility | Sole owner |
 | --- | --- |
+| Window/tray visible-hidden-exiting state | `DesktopShellController` |
+| Notification-area icon lifetime | `WindowsTrayHost` |
+| Current-user login registration | `WindowsStartupRegistration` / HKCU Run |
+| Existing-instance activation Event | `ApplicationInstanceCoordinator` |
 | Process/thread lifecycle | `AppRuntime` |
 | Worker declarations and handles | `AppRuntime` worker registry |
 | Worker initialization readiness | worker-owned `WorkerStartupReporter` handshake |
@@ -57,6 +62,13 @@ background worker thread. Background workers are declared by `WorkerSpec` and
 tracked by name in `WorkerHandle` mappings. Production code must not reintroduce
 `_index_thread`, `_history_thread`, `_inference_thread` or similar parallel
 members.
+
+The desktop shell is outside `AppRuntime`. A close request may become a hide
+transition only while the tray icon is available. Tray Open and named-Event
+activation call the idempotent shell show command. Tray Exit sets EXITING,
+removes the icon and destroys the WebView window; the existing composition-root
+`finally` remains the only caller of `AppRuntime.shutdown()`. The tray thread
+never calls Runtime, database or Collector APIs.
 
 A worker is READY only after the worker itself has completed required
 initialization, schema/database access and recovery/validation and reports ready

@@ -7,7 +7,9 @@
 - Windows desktop application using Python, SQLite, pywebview and WebView2.
 - Local-only: no registration, cloud sync, administrator privilege, screenshots,
   screen recording, OCR or keyboard logging.
-- WebView is the only shipping UI. Window close runs `AppRuntime.shutdown()`.
+- WebView is the only shipping UI. With a healthy tray host, window close hides
+  the window while collection continues; only the tray Exit command ends the
+  WebView loop and reaches `AppRuntime.shutdown()`.
 - The privacy notice is fail-closed; sensitive workers and clipboard capture do
   not start before acceptance.
 - CSV export is the only current public export; Excel, PDF and timesheet-template
@@ -15,10 +17,14 @@
 
 ## Composition and lifecycle
 ```text
-webview_main -> AppRuntime -> ApplicationServices -> WebViewBridge
+webview_main -> DesktopShellController -> AppRuntime
+             -> ApplicationServices -> WebViewBridge
 ```
 - `AppRuntime` owns the single-instance lease, Collector and every background
   worker thread handle.
+- `DesktopShellController` owns visible/hidden/exiting window state. Its tray
+  host and instance-activation listener send shell commands only and never
+  manage the database, Collector or workers.
 - `ApplicationServices` is explicit frozen-dataclass composition with no service
   locator. `WebViewBridge` calls `self._services.<capability>.*` only.
 - `RuntimeMaintenanceCoordinator` solely owns snapshot/replacement ordering and
@@ -128,9 +134,10 @@ bounded reconciliation.
   to the accepted export ticket.
 - Project Rules: searchable/sortable project summaries with backend-owned last
   use, three direct project actions, and contextual Drawers.
-- Settings/Privacy: five user-facing categories, plain-language health summary,
-  collapsed diagnostics, privacy status, clipboard control, backup/import and
-  clear-all. Secret inputs remain local and are cleared after use.
+- Settings/Privacy: four user-facing categories. General contains authoritative
+  HKCU launch-at-login state and the existing clipboard control; Privacy, Data
+  and Backup, and Advanced retain their existing responsibilities. Secret inputs
+  remain local and are cleared after use.
 
 Timeline edits on completed sessions allow project, description and duration
 changes. New description edits are limited to 200 characters while the durable
