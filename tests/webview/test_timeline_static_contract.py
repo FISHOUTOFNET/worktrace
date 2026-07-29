@@ -14,6 +14,13 @@ def _resource(name: str) -> str:
     return (ROOT / "worktrace" / "webview_ui" / name).read_text(encoding="utf-8")
 
 
+def func_body(source: str, name: str) -> str:
+    start = source.find("function " + name)
+    assert start != -1
+    end = source.find("\n    function ", start + 1)
+    return source[start:end] if end != -1 else source[start:]
+
+
 def test_timeline_consumes_canonical_entries_and_authoritative_mutation_result():
     source = _source("timeline.js")
     assert "data.entries" in source
@@ -84,6 +91,18 @@ def test_timeline_header_filter_editor_and_advanced_menu_contract():
     assert "0 / 200" in timeline_page
     assert 'id="timeline-readonly-notice"' in timeline_page
     assert "进行中时段不可编辑，结束后可修改项目、描述和时长。" in timeline_page
+    duration = re.search(r'<input id="edit-duration-input"[^>]*>', timeline_page)
+    assert duration is not None
+    assert 'type="number"' in duration.group(0)
+    assert 'min="0"' in duration.group(0)
+    assert 'step="0.1"' in duration.group(0)
+    assert 'inputmode="decimal"' in duration.group(0)
+    assert 'aria-label="时长（小时）"' in duration.group(0)
+    assert re.search(
+        r'<span>时长</span>.*id="edit-duration-input".*<span[^>]*>小时</span>',
+        timeline_page,
+        re.DOTALL,
+    )
 
     action_menu = timeline_page[
         timeline_page.index('id="timeline-session-actions"') :
@@ -145,8 +164,12 @@ def test_timeline_list_sort_duration_and_badge_contract():
     assert ".slice().sort(timelineSessionOrder)" in source
     assert "left.is_in_progress ? -1 : 1" not in source
     assert "projection_instance_key" in source[source.index("function timelineSessionOrder") :]
-    assert 'data-duration-format="compact-hours"' in source
-    assert "App.formatCompactHours(seconds)" in source
+    assert 'data-duration-format="compact-hours"' not in source
+    assert "App.formatCompactHours(seconds)" not in source
+    assert "formatTimelineStartTime(session.start_time)" in source
+    assert "formatTimelineDuration(seconds)" in source
+    assert 'slice(11, 19)' in func_body(source, "formatTimelineStartTime")
+    assert "App.formatDuration(seconds)" in func_body(source, "formatTimelineDuration")
     assert "进行中</span>" not in source
     assert "function formatCompactHours" not in overview
     assert "App.formatCompactHours" in overview
@@ -166,7 +189,11 @@ def test_timeline_styles_keep_fixed_time_columns_and_two_line_editor():
         css,
     )
     assert all(match is not None for match in (item, start, side, duration, editor))
-    assert "52px minmax(0, 1fr) var(--record-duration-width)" in item.group(1)
+    assert "--timeline-clock-width: 72px" in css
+    assert (
+        "var(--timeline-clock-width) minmax(0, 1fr) "
+        "var(--timeline-clock-width)" in item.group(1)
+    )
     assert "align-items: center" in item.group(1)
     assert "align-self: center" in start.group(1)
     assert "font-size: 13px" in start.group(1)
@@ -175,6 +202,7 @@ def test_timeline_styles_keep_fixed_time_columns_and_two_line_editor():
     assert "justify-self: end" in side.group(1)
     assert "font-size: 13px" in duration.group(1)
     assert "font-variant-numeric: tabular-nums" in duration.group(1)
+    assert "--record-duration-width" not in item.group(1)
     assert "height: 50px" in editor.group(1)
     assert "max-height: 50px" in editor.group(1)
     assert "resize: none" in editor.group(1)
@@ -190,7 +218,12 @@ def test_timeline_styles_keep_fixed_time_columns_and_two_line_editor():
         css,
     )
     danger_hover = re.search(
-        r"\.inline-icon-button\.danger-icon-button:hover:not\(:disabled\)\s*\{([^}]*)\}",
+        r"\.danger-icon-button:hover:not\(:disabled\),\s*"
+        r"\.danger-icon-button:focus-visible\s*\{([^}]*)\}",
+        css,
+    )
+    danger_disabled = re.search(
+        r"\.danger-icon-button:disabled\s*\{([^}]*)\}",
         css,
     )
     assert inline is not None and "border" in inline.group(1) and "transparent" in inline.group(1)
@@ -201,6 +234,9 @@ def test_timeline_styles_keep_fixed_time_columns_and_two_line_editor():
     assert danger_hover is not None
     assert "border-color: transparent" in danger_hover.group(1)
     assert "var(--color-danger-soft)" in danger_hover.group(1)
+    assert danger_disabled is not None
+    assert "var(--color-danger)" in danger_disabled.group(1)
+    assert "opacity" in danger_disabled.group(1)
 
 
 def test_activity_detail_rows_use_three_columns_with_spanning_side_controls():
@@ -222,14 +258,37 @@ def test_activity_detail_rows_use_three_columns_with_spanning_side_controls():
     assert "grid-row: 1 / span 2" in duration.group(1)
     assert "align-self: center" in duration.group(1)
     assert "font-variant-numeric: tabular-nums" in duration.group(1)
+    assert "App.formatDuration(seconds)" in source
     assert "grid-column: 3" in delete.group(1)
     assert "grid-row: 1 / span 2" in delete.group(1)
     assert "align-self: center" in delete.group(1)
     assert re.search(
-        r'class="summary-hide-activity compact-icon-button"[^>]*'
+        r'class="summary-hide-activity compact-icon-button danger-icon-button"[^>]*'
         r'aria-label="删除活动"[^>]*data-tooltip="删除活动"',
         source,
     )
     assert 'event.target.closest(".summary-hide-activity")' in source
     assert 'confirmTimelineDeletion("hideActivity"' in source
     assert ".summary-hide-activity[data-tooltip]::after" in css
+
+
+def test_timeline_duration_draft_preserves_exact_override_until_user_touches_field():
+    source = _source("timeline.js")
+    populate = func_body(source, "populateEditPanel")
+    dirty = func_body(source, "isEditDirty")
+    save = func_body(source, "saveEdit")
+    handler = func_body(source, "handleTimelineDurationChange")
+    init = _source("init.js")
+
+    assert "App.timelineDurationDraftTouched = false" in populate
+    assert "toFixed(1)" in populate
+    assert "App.timelineDurationDraftTouched" in dirty
+    assert "App.timelineDurationDraftTouched" in save
+    assert "Math.round(hours * 3600)" in save
+    assert "session.adjusted_duration_seconds" in save
+    assert "App.timelineDurationDraftTouched = true" in handler
+    assert "scheduleTimelineAutosave(0)" in handler
+    assert (
+        'bind("edit-duration-input", "change", '
+        "App.handleTimelineDurationChange)" in init
+    )

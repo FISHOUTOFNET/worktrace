@@ -29,6 +29,7 @@ def test_statistics_surface_matches_current_information_architecture() -> None:
         "statistics-date-from", "statistics-date-to", "statistics-project-filter",
         "statistics-today-btn", "statistics-week-btn", "statistics-month-btn",
         "statistics-all-btn", "statistics-results", "statistics-update-status",
+        "statistics-apply-range-btn", "statistics-date-status",
         "stats-total", "stats-activity-count", "stats-project-count", "stats-app-count",
         "stats-by-project", "stats-by-app", "stats-export-action-btn",
     ):
@@ -84,14 +85,21 @@ def test_custom_dates_validate_without_reviving_legacy_31_day_ui_limit() -> None
     assert "diffDays" not in body and "31" not in body
 
 
-def test_filters_auto_query_and_quick_ranges_are_today_week_month_all() -> None:
+def test_draft_dates_apply_once_while_project_and_quick_ranges_query_immediately() -> None:
     init = func_body(source(), "initStatisticsDefaults")
     quick = func_body(source(), "applyStatisticsQuickRange")
+    draft = func_body(source(), "handleStatisticsDraftDateChange")
+    apply = func_body(source(), "applyStatisticsDraftSelection")
     week = func_body(source(), "statisticsWeekRange")
     assert 'statistics-range-mode' not in source()
     assert 'statistics-custom-range' not in source()
     assert 'statistics-project-filter' in init
-    assert "scheduleStatisticsQuery" in init
+    assert "handleStatisticsDraftDateChange" in init
+    assert "scheduleStatisticsQuery" not in draft
+    assert "beginStatisticsQuery" not in draft
+    assert "setStatisticsSelection" not in draft
+    assert "validateStatisticsDateRange" in apply
+    assert apply.count("beginStatisticsQuery(0)") == 1
     assert "statisticsWeekRange(new Date())" in source()
     assert "start.getDay() + 6" in week
     assert 'type === "all"' in quick
@@ -116,18 +124,23 @@ def test_statistics_styles_are_responsive_local_surfaces() -> None:
         assert selector in styles
 
 
-def test_statistics_dates_use_shared_width_without_fixed_range_math() -> None:
+def test_statistics_dates_use_local_compact_width_and_explicit_calendar_icons() -> None:
     html = section()
     styles = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
     date_fields = re.findall(r'<span class="statistics-date-field date-control">', html)
     date_range = re.search(r"\.statistics-date-range\s*\{([^}]*)\}", styles)
     all_time = re.search(r"\.statistics-all-time-label\s*\{([^}]*)\}", styles)
     assert len(date_fields) == 2
+    assert html.count('class="icon statistics-date-icon"') == 2
+    assert html.count('<use href="#icon-calendar"/>') == 2
+    assert 'id="icon-calendar"' in (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
     assert date_range is not None
     assert "width: fit-content" in date_range.group(1)
     assert "276px" not in date_range.group(1)
-    assert all_time is not None and "var(--date-control-width)" in all_time.group(1)
-    assert "132px" not in styles
+    assert all_time is not None and "--statistics-date-width" in all_time.group(1)
+    assert "--statistics-date-width" in styles
+    assert "pointer-events: none" in styles
+    assert "::-webkit-calendar-picker-indicator" in styles
     assert "278px" not in styles
     assert "@media (max-width: 767px)" in styles
     assert "@media (max-width: 719px)" not in styles
@@ -138,6 +151,18 @@ def test_metric_strip_is_open_and_not_a_surface_card() -> None:
     metric = re.search(r'<div class="([^"]*\bmetric-strip\b[^"]*)">', html)
     assert metric is not None
     assert metric.group(1).split() == ["metric-strip"]
+
+
+def test_metric_strip_remains_one_row_at_narrow_widths() -> None:
+    styles = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
+    metric = re.search(r"\.metric-strip\s*\{([^}]*)\}", styles)
+    narrow = styles[styles.index("@media (max-width: 959px)") :]
+    assert metric is not None
+    assert "repeat(4, minmax(0, 1fr))" in metric.group(1)
+    assert "white-space: nowrap" in metric.group(1)
+    assert "repeat(2, minmax(0, 1fr))" not in narrow
+    assert ".metric:nth-child(2)" not in narrow
+    assert ".metric:nth-child(-n+2)" not in narrow
 
 
 def test_statistics_table_adds_visual_comparison_without_changing_values() -> None:

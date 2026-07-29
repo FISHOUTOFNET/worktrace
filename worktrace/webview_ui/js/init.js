@@ -249,6 +249,7 @@
         App.pendingContextChange = null;
         App.editSaving = false;
         App.timelineCompositionActive = false;
+        App.timelineDurationDraftTouched = false;
         App.detailsOwner = null;
         App.timelineOwner = null;
         App.mutationOwner = null;
@@ -265,6 +266,8 @@
         App.statisticsAcceptedPayload = null;
         App.statisticsSnapshotRevision = "";
         App.statisticsSelection = null;
+        App.statisticsDraftSelection = null;
+        App.statisticsDraftDirty = false;
         App.statisticsSelectionInitialized = false;
         if (App.statisticsQueryTimer) window.clearTimeout(App.statisticsQueryTimer);
         App.statisticsQueryTimer = null;
@@ -671,7 +674,7 @@
         bind("edit-note-text", "compositionend", App.handleTimelineCompositionEnd);
         bind("edit-note-text", "input", App.handleTimelineNoteInput);
         bind("edit-note-text", "blur", App.handleTimelineNoteBlur);
-        bind("edit-duration-input", "change", function () { App.scheduleTimelineAutosave(0); });
+        bind("edit-duration-input", "change", App.handleTimelineDurationChange);
         bind("timeline-project-filter", "change", App.applyTimelineProjectFilter);
         bind("timeline-details-close", "click", App.closeTimelineDrawer);
         bind("timeline-drawer-backdrop", "click", App.closeTimelineDrawer);
@@ -680,6 +683,7 @@
         bind("statistics-week-btn", "click", function () { App.applyStatisticsQuickRange("week"); });
         bind("statistics-month-btn", "click", function () { App.applyStatisticsQuickRange("month"); });
         bind("statistics-all-btn", "click", function () { App.applyStatisticsQuickRange("all"); });
+        bind("statistics-apply-range-btn", "click", App.applyStatisticsDraftSelection);
         bind("stats-export-action-btn", "click", App.exportStatisticsCsv);
         bind("settings-clipboard-toggle", "change", App.handleCaptureToggleChange);
         bind("settings-backup-export-btn", "click", App.exportEncryptedBackup);

@@ -15,6 +15,7 @@
         <symbol id="icon-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
         <symbol id="icon-pencil" viewBox="0 0 24 24"><path d="m4 20 4.2-1 10.6-10.6a2 2 0 0 0-2.8-2.8L5.4 16.2 4 20Z"/><path d="m14.8 6.8 2.8 2.8"/></symbol>
         <symbol id="icon-trash" viewBox="0 0 24 24"><path d="M 4 7h16 M 9 7V4h6v3m3 0-1 13H7L6 7m4 4v5m4-5v5"/></symbol>
+        <symbol id="icon-calendar" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="15" rx="2"/><path d="M8 3v4m8-4v4M4 10h16"/></symbol>
         <symbol id="icon-download" viewBox="0 0 24 24"><path d="M12 4v11m0 0 4-4m-4 4-4-4M5 19h14"/></symbol>
         <symbol id="icon-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
         <symbol id="icon-play" viewBox="0 0 24 24"><path d="m9 6 9 6-9 6V6Z"/></symbol>
@@ -125,7 +126,7 @@
                         <div id="timeline-edit-panel" class="timeline-edit-panel" hidden>
                             <div class="edit-inline">
                                 <label class="field"><span>项目</span><select id="edit-project-select" disabled><option value="">加载中…</option></select></label>
-                                <label class="field"><span>时长（分钟）</span><input id="edit-duration-input" type="number" min="0" step="1" disabled></label>
+                                <label class="field timeline-duration-field"><span>时长</span><span class="input-with-unit"><input id="edit-duration-input" type="number" min="0" step="0.1" inputmode="decimal" aria-label="时长（小时）" disabled><span aria-hidden="true">小时</span></span></label>
                             </div>
                             <span id="edit-duration-status" class="field-status"></span>
                             <label class="field"><span>描述</span><textarea id="edit-note-text" rows="2" maxlength="200" placeholder="暂无描述" disabled></textarea></label>
@@ -158,20 +159,27 @@
                 </header>
                 <div class="toolbar statistics-toolbar">
                     <div class="statistics-date-range" aria-label="统计日期范围">
-                        <div id="statistics-date-inputs" class="statistics-date-inputs">
-                            <label class="sr-only" for="statistics-date-from">开始日期</label>
-                            <span class="statistics-date-field date-control">
-                                <input id="statistics-date-from" type="date" aria-label="开始日期">
-                                <span id="statistics-date-from-display" class="statistics-date-display" aria-hidden="true"></span>
-                            </span>
-                            <span aria-hidden="true">至</span>
-                            <label class="sr-only" for="statistics-date-to">结束日期</label>
-                            <span class="statistics-date-field date-control">
-                                <input id="statistics-date-to" type="date" aria-label="结束日期">
-                                <span id="statistics-date-to-display" class="statistics-date-display" aria-hidden="true"></span>
-                            </span>
+                        <div class="statistics-date-editor">
+                            <span class="statistics-date-label">日期范围</span>
+                            <div id="statistics-date-inputs" class="statistics-date-inputs">
+                                <label class="sr-only" for="statistics-date-from">开始日期</label>
+                                <span class="statistics-date-field date-control">
+                                    <input id="statistics-date-from" type="date" aria-label="开始日期">
+                                    <span id="statistics-date-from-display" class="statistics-date-display" aria-hidden="true"></span>
+                                    <svg class="icon statistics-date-icon" aria-hidden="true"><use href="#icon-calendar"/></svg>
+                                </span>
+                                <span aria-hidden="true">至</span>
+                                <label class="sr-only" for="statistics-date-to">结束日期</label>
+                                <span class="statistics-date-field date-control">
+                                    <input id="statistics-date-to" type="date" aria-label="结束日期">
+                                    <span id="statistics-date-to-display" class="statistics-date-display" aria-hidden="true"></span>
+                                    <svg class="icon statistics-date-icon" aria-hidden="true"><use href="#icon-calendar"/></svg>
+                                </span>
+                                <button id="statistics-apply-range-btn" type="button">应用</button>
+                            </div>
+                            <span id="statistics-all-time-label" class="statistics-all-time-label" hidden>全部时间</span>
                         </div>
-                        <span id="statistics-all-time-label" class="statistics-all-time-label" hidden>全部时间</span>
+                        <span id="statistics-date-status" class="statistics-date-status" role="status" aria-live="polite" hidden></span>
                     </div>
                     <label for="statistics-project-filter">项目</label>
                     <select id="statistics-project-filter"><option value="">全部项目</option></select>
@@ -230,7 +238,7 @@
                         <button id="rules-panel-rule-tab" type="button" hidden>规则</button><button id="rules-panel-project-tab" type="button" hidden>项目</button>
                         <section id="rules-panel-project-section" class="drawer-form">
                             <label class="field"><span>项目名称</span><input id="rules-panel-project-name" type="text" maxlength="100" autocomplete="off"></label>
-                            <label class="field"><span>描述</span><textarea id="rules-panel-project-description" maxlength="500" rows="4"></textarea></label>
+                            <label class="field"><span>描述</span><textarea id="rules-panel-project-description" maxlength="500" rows="2"></textarea></label>
                             <select id="rules-panel-project-language" hidden><option value="中文">中文</option></select>
                             <label id="rules-panel-project-language-other-row" hidden>其他语言<input id="rules-panel-project-language-other" type="text"></label>
                             <div class="drawer-actions"><button type="button" data-rules-panel-close="1">取消</button><button id="rules-panel-save-project" type="button" class="button primary">新建项目</button></div>
@@ -243,10 +251,11 @@
                             </div>
                             <label class="field" hidden>目标项目<select id="rules-panel-target-project"></select></label>
                             <button id="rules-panel-create-project-inline" type="button" hidden>新建项目</button>
-                            <div id="rules-panel-folder-row" class="field"><label for="rules-panel-folder-path"><span>文件夹路径</span></label><div class="folder-picker-control"><input id="rules-panel-folder-path" type="text" maxlength="512" autocomplete="off" readonly placeholder="请选择要自动归类的文件夹"><button id="rules-panel-choose-folder" type="button">选择文件夹</button></div></div>
-                            <label id="rules-panel-folder-recursive-row" hidden><input id="rules-panel-folder-recursive" type="checkbox" checked> 包含子文件夹</label>
+                            <div id="rules-panel-folder-group" class="rule-folder-group">
+                                <div id="rules-panel-folder-row" class="field"><label for="rules-panel-folder-path"><span>文件夹路径</span></label><div class="folder-picker-control"><input id="rules-panel-folder-path" type="text" maxlength="512" autocomplete="off" readonly placeholder="请选择要自动归类的文件夹"><button id="rules-panel-choose-folder" type="button">选择文件夹</button></div></div>
+                                <label class="rule-folder-recursive"><input id="rules-panel-folder-recursive" type="checkbox" checked><span><strong>包含子文件夹</strong><small>默认匹配该文件夹及全部子文件夹</small></span></label>
+                            </div>
                             <label id="rules-panel-keyword-row" class="field" hidden><span>关键词</span><input id="rules-panel-keyword" type="text" maxlength="200" autocomplete="off"></label>
-                            <p class="field-hint">文件夹规则默认匹配该文件夹及全部子文件夹。</p>
                             <label id="rules-panel-backfill-row" class="checkbox-row"><input id="rules-panel-backfill" type="checkbox" checked><span>同时应用到历史记录</span></label>
                             <div class="drawer-actions"><button type="button" data-rules-panel-close="1">取消</button><button id="rules-panel-save-rule" type="button" class="button primary">新建规则</button></div>
                         </section>

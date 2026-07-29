@@ -25,6 +25,17 @@
         return projected === null ? durableSeconds : projected;
     }
 
+    function formatTimelineStartTime(startTime) {
+        var value = String(startTime || "");
+        return value.length >= 19 ? value.slice(11, 19) : value.slice(0, 8);
+    }
+    App.formatTimelineStartTime = formatTimelineStartTime;
+
+    function formatTimelineDuration(seconds) {
+        return App.formatDuration(seconds);
+    }
+    App.formatTimelineDuration = formatTimelineDuration;
+
     function renderTimelineTotal(data) {
         var element = document.getElementById("timeline-total");
         var label = document.getElementById("timeline-total-label");
@@ -224,9 +235,9 @@
             var canTick = !!(clock && clock.is_live === true);
             var durable = Math.max(0, parseInt(session.duration_seconds, 10) || 0);
             var seconds = clockedSeconds(clock, durable);
-            var durationText = App.formatCompactHours(seconds);
-            var exactDurationText = App.formatDuration(seconds);
-            var startText = App.formatStartTimeOnly(session.start_time);
+            var durationText = formatTimelineDuration(seconds);
+            var exactDurationText = durationText;
+            var startText = formatTimelineStartTime(session.start_time);
             var projectLabel = App.formatProjectLabel(
                 session.project_name,
                 session.project_description
@@ -258,7 +269,6 @@
                 + App.escapeHtml(session.display_description || "暂无描述") + '</div>'
                 + '</div><div class="timeline-item-side">'
                 + '<div class="timeline-item-duration"' + clockAttributes
-                + ' data-duration-format="compact-hours"'
                 + ' data-duration-seconds="' + String(seconds) + '" title="'
                 + App.escapeHtml(exactDurationText) + '" aria-label="时长 '
                 + App.escapeHtml(exactDurationText) + '">'
@@ -582,7 +592,7 @@
                 + '<div class="summary-item-project" title="' + App.escapeHtml(projectLabel) + '">'
                 + App.escapeHtml(projectLabel) + '</div>'
                 + (row.can_hide_activity || row.can_delete
-                    ? '<button type="button" class="summary-hide-activity compact-icon-button" data-summary-id="'
+                    ? '<button type="button" class="summary-hide-activity compact-icon-button danger-icon-button" data-summary-id="'
                         + App.escapeHtml(String(row.summary_id || ""))
                         + '" aria-label="删除活动" data-tooltip="删除活动">'
                         + App.iconMarkup("trash") + '</button>'
@@ -814,9 +824,12 @@
                 && session.adjusted_duration_seconds !== undefined
                 ? session.adjusted_duration_seconds
                 : session.duration_seconds;
-            var minutes = Math.round((parseInt(source, 10) || 0) / 60);
-            duration.value = isNaN(minutes) ? "" : String(minutes);
+            var seconds = parseInt(source, 10);
+            duration.value = isNaN(seconds)
+                ? ""
+                : (Math.max(0, seconds) / 3600).toFixed(1);
         }
+        App.timelineDurationDraftTouched = false;
         var durationStatus = document.getElementById("edit-duration-status");
         if (durationStatus) {
             durationStatus.textContent = session.has_duration_override ? "已修正" : "";
@@ -839,6 +852,7 @@
         App.editingSession = null;
         App.editSaving = false;
         App.submittedDraft = null;
+        App.timelineDurationDraftTouched = false;
         var panel = document.getElementById("timeline-edit-panel");
         if (panel) panel.hidden = true;
         setTimelineReadOnlyNotice(null);
@@ -880,15 +894,20 @@
         if (canEditField(session, "can_edit_project") && select && select.value) {
             if (select.value !== String(session.project_id || "")) return true;
         }
-        if (canEditField(session, "can_edit_duration") && duration) {
-            var source = session.adjusted_duration_seconds !== null
-                && session.adjusted_duration_seconds !== undefined
-                ? session.adjusted_duration_seconds
-                : session.duration_seconds;
-            var minutes = Math.round((parseInt(source, 10) || 0) / 60);
-            if ((duration.value || "").trim() !== (isNaN(minutes) ? "" : String(minutes))) {
-                return true;
-            }
+        if (
+            canEditField(session, "can_edit_duration")
+            && duration
+            && App.timelineDurationDraftTouched === true
+        ) {
+            var durationText = (duration.value || "").trim();
+            var existingOverride = session.has_duration_override === true
+                ? parseInt(session.adjusted_duration_seconds, 10) : null;
+            if (isNaN(existingOverride)) existingOverride = null;
+            if (durationText === "") return existingOverride !== null;
+            var hours = Number(durationText);
+            if (!Number.isFinite(hours) || hours < 0) return true;
+            var adjustedSeconds = Math.round(hours * 3600);
+            if (existingOverride === null || adjustedSeconds !== existingOverride) return true;
         }
         return false;
     }
@@ -966,6 +985,12 @@
         scheduleTimelineAutosave(0);
     }
     App.handleTimelineNoteBlur = handleTimelineNoteBlur;
+
+    function handleTimelineDurationChange() {
+        App.timelineDurationDraftTouched = true;
+        scheduleTimelineAutosave(0);
+    }
+    App.handleTimelineDurationChange = handleTimelineDurationChange;
 
     function scheduleTimelineAutosave(delay) {
         if (!App.editingSession) return;
@@ -1106,25 +1131,28 @@
         var adjustedDurationSeconds = null;
         var durationChanged = false;
         var durationElement = document.getElementById("edit-duration-input");
+        var existingDurationOverride = session.has_duration_override === true
+            ? parseInt(session.adjusted_duration_seconds, 10) : null;
+        if (isNaN(existingDurationOverride)) existingDurationOverride = null;
         if (canDuration) {
             var durationText = durationElement ? (durationElement.value || "").trim() : "";
-            if (durationText !== "") {
-                var minutes = parseInt(durationText, 10);
-                if (isNaN(minutes) || minutes < 0) {
-                    showEditStatus("时长需为非负整数", true);
+            if (App.timelineDurationDraftTouched !== true) {
+                adjustedDurationSeconds = existingDurationOverride;
+            } else if (durationText === "") {
+                adjustedDurationSeconds = null;
+                durationChanged = existingDurationOverride !== null;
+            } else {
+                var hours = Number(durationText);
+                if (!Number.isFinite(hours) || hours < 0) {
+                    showEditStatus("时长需为非负数", true);
                     return;
                 }
-                adjustedDurationSeconds = minutes * 60;
+                adjustedDurationSeconds = Math.round(hours * 3600);
+                durationChanged = existingDurationOverride === null
+                    || adjustedDurationSeconds !== existingDurationOverride;
             }
-            var baseline = session.adjusted_duration_seconds !== null
-                && session.adjusted_duration_seconds !== undefined
-                ? session.adjusted_duration_seconds
-                : session.duration_seconds;
-            var baselineMinutes = Math.round((parseInt(baseline, 10) || 0) / 60);
-            durationChanged = durationText !== String(baselineMinutes);
-        } else if (session.has_duration_override === true) {
-            adjustedDurationSeconds = parseInt(session.adjusted_duration_seconds, 10);
-            if (isNaN(adjustedDurationSeconds)) adjustedDurationSeconds = null;
+        } else {
+            adjustedDurationSeconds = existingDurationOverride;
         }
         if (!projectChanged && !noteChanged && !durationChanged) {
             showEditStatus("已保存", false);

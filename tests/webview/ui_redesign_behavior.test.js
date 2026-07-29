@@ -776,6 +776,7 @@ function timelineHarness() {
     NOTE_MAX_LENGTH: 2000,
     TIMELINE_DESCRIPTION_EDIT_MAX_LENGTH: 200,
     timelineCompositionActive: false,
+    timelineDurationDraftTouched: false,
     detailsOwner: null,
   });
   const bridgeCall = (method) => (...args) => {
@@ -829,6 +830,174 @@ function session(key, revision, startTime, opts = {}) {
   }, opts);
 }
 
+function prepareTimelineEditor(App, element, source) {
+  App.currentSessions = [source];
+  App.projectsCache = [{ id: 1, name: "P1" }, { id: 2, name: "P2" }];
+  App.editingProjectsCache = App.projectsCache;
+  App.populateEditPanel(source);
+  element("edit-project-select").value = String(source.project_id || "");
+}
+
+function successfulTimelineEdit(revision = "rev-2") {
+  return {
+    ok: true,
+    outcome_type: "operation_committed",
+    snapshot_revision: `snapshot-${revision}`,
+    selection_hint: {
+      projection_instance_key: "base:a",
+      projection_revision: revision,
+    },
+  };
+}
+
+test("6a. 1.5 edited hours submits 5400 integer seconds", async () => {
+  const { App, element, context } = timelineHarness();
+  const source = session("base:a", "rev-1", "2026-07-12T09:00:00", {
+    adjusted_duration_seconds: null,
+    duration_seconds: 3600,
+    has_duration_override: false,
+  });
+  prepareTimelineEditor(App, element, source);
+  assert.equal(element("edit-duration-input").value, "1.0");
+  context.window.setTimeout = () => 1;
+  element("edit-duration-input").value = "1.5";
+  App.handleTimelineDurationChange();
+  const payloads = [];
+  App.callBridge = (method, ...args) => {
+    if (method === "save_timeline_session_edit") payloads.push(args);
+    return Promise.resolve(successfulTimelineEdit());
+  };
+
+  App.saveEdit();
+  await flush();
+  await flush();
+
+  assert.equal(payloads.length, 1);
+  assert.equal(payloads[0][5], 5400);
+});
+
+test("6b. project-only edit keeps a non-rounded no-override duration as null", async () => {
+  const { App, element } = timelineHarness();
+  const source = session("base:a", "rev-1", "2026-07-12T09:00:00", {
+    adjusted_duration_seconds: null,
+    duration_seconds: 5432,
+    has_duration_override: false,
+  });
+  prepareTimelineEditor(App, element, source);
+  assert.equal(element("edit-duration-input").value, "1.5");
+  element("edit-project-select").value = "2";
+  const payloads = [];
+  App.callBridge = (method, ...args) => {
+    if (method === "save_timeline_session_edit") payloads.push(args);
+    return Promise.resolve(successfulTimelineEdit());
+  };
+
+  App.saveEdit();
+  await flush();
+  await flush();
+
+  assert.equal(payloads[0][4], 2);
+  assert.equal(payloads[0][5], null);
+});
+
+test("6c. description-only edit preserves the exact existing override seconds", async () => {
+  const { App, element } = timelineHarness();
+  const source = session("base:a", "rev-1", "2026-07-12T09:00:00", {
+    adjusted_duration_seconds: 5432,
+    duration_seconds: 5400,
+    has_duration_override: true,
+  });
+  prepareTimelineEditor(App, element, source);
+  assert.equal(element("edit-duration-input").value, "1.5");
+  element("edit-note-text").value = "只修改描述";
+  const payloads = [];
+  App.callBridge = (method, ...args) => {
+    if (method === "save_timeline_session_edit") payloads.push(args);
+    return Promise.resolve(successfulTimelineEdit());
+  };
+
+  App.saveEdit();
+  await flush();
+  await flush();
+
+  assert.equal(payloads[0][5], 5432);
+  assert.equal(payloads[0][6], "只修改描述");
+});
+
+test("6c2. clearing duration cancels only an existing override", async () => {
+  const { App, element, context } = timelineHarness();
+  const source = session("base:a", "rev-1", "2026-07-12T09:00:00", {
+    adjusted_duration_seconds: 5432,
+    duration_seconds: 5400,
+    has_duration_override: true,
+  });
+  prepareTimelineEditor(App, element, source);
+  context.window.setTimeout = () => 1;
+  element("edit-duration-input").value = "";
+  App.handleTimelineDurationChange();
+  const payloads = [];
+  App.callBridge = (method, ...args) => {
+    if (method === "save_timeline_session_edit") payloads.push(args);
+    return Promise.resolve(successfulTimelineEdit());
+  };
+
+  App.saveEdit();
+  await flush();
+  await flush();
+
+  assert.equal(payloads.length, 1);
+  assert.equal(payloads[0][5], null);
+});
+
+test("6d. duration edit during an in-flight save queues against the rebased revision", async () => {
+  const { App, element } = timelineHarness();
+  const source = session("base:a", "rev-1", "2026-07-12T09:00:00", {
+    adjusted_duration_seconds: null,
+    duration_seconds: 3600,
+    has_duration_override: false,
+  });
+  prepareTimelineEditor(App, element, source);
+  element("edit-note-text").value = "first";
+  const first = deferred();
+  const payloads = [];
+  App.callBridge = (method, ...args) => {
+    if (method !== "save_timeline_session_edit") return Promise.resolve({ ok: true });
+    payloads.push(args);
+    return payloads.length === 1
+      ? first.promise
+      : Promise.resolve(successfulTimelineEdit("rev-3"));
+  };
+  let refreshCount = 0;
+  App.loadTimelineReport = () => {
+    refreshCount += 1;
+    App.currentSessions = [session(
+      "base:a",
+      refreshCount === 1 ? "rev-2" : "rev-3",
+      "2026-07-12T09:00:00",
+      {
+        session_note: "first",
+        adjusted_duration_seconds: refreshCount === 1 ? null : 5400,
+        duration_seconds: refreshCount === 1 ? 3600 : 5400,
+        has_duration_override: refreshCount !== 1,
+      }
+    )];
+    return Promise.resolve();
+  };
+
+  App.saveEdit();
+  element("edit-duration-input").value = "1.5";
+  App.handleTimelineDurationChange();
+  assert.equal(App.timelineAutosaveQueued, true);
+  first.resolve(successfulTimelineEdit("rev-2"));
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  await flush();
+
+  assert.equal(payloads.length, 2);
+  assert.equal(payloads[0][5], null);
+  assert.equal(payloads[1][2], "rev-2");
+  assert.equal(payloads[1][5], 5400);
+});
+
 test("6. continuous autosave: S1 uses R1, S2 uses R2 after rebase", async () => {
   const { App, element } = timelineHarness();
   const sessions = [
@@ -840,7 +1009,7 @@ test("6. continuous autosave: S1 uses R1, S2 uses R2 after rebase", async () => 
   App.editingProjectsCache = [{ id: 1, name: "P" }];
   element("edit-note-text").value = "A";
   element("edit-project-select").value = "1";
-  element("edit-duration-input").value = "10";
+  element("edit-duration-input").value = "0.2";
 
   const saveCalls = [];
   let refreshImpl = () => {
@@ -892,7 +1061,7 @@ test("7. multi-field edits during save are not overwritten by stale response", a
   App.editingProjectsCache = [{ id: 1, name: "P1" }, { id: 2, name: "P2" }];
   element("edit-project-select").value = "1";
   element("edit-note-text").value = "note-1";
-  element("edit-duration-input").value = "10";
+  element("edit-duration-input").value = "0.2";
 
   let refreshImpl = () => {
     App.currentSessions = [session("base:a", "rev-2", "2026-07-12T09:00:00", { session_note: "note-1", adjusted_duration_seconds: 600, has_duration_override: true })];
@@ -911,7 +1080,8 @@ test("7. multi-field edits during save are not overwritten by stale response", a
   // Change all three fields while in flight.
   element("edit-project-select").value = "2";
   element("edit-note-text").value = "note-2";
-  element("edit-duration-input").value = "20";
+  element("edit-duration-input").value = "0.3";
+  App.handleTimelineDurationChange();
 
   // Queue a second save.
   App.saveEdit();
@@ -926,7 +1096,7 @@ test("7. multi-field edits during save are not overwritten by stale response", a
   // input, not the stale baseline.
   assert.equal(element("edit-note-text").value, "note-2");
   assert.equal(element("edit-project-select").value, "2");
-  assert.equal(element("edit-duration-input").value, "20");
+  assert.equal(element("edit-duration-input").value, "0.3");
 });
 
 test("7b. composition input never submits intermediate text and saves only final Chinese", async () => {
@@ -936,7 +1106,7 @@ test("7b. composition input never submits intermediate text and saves only final
   App.editingSession = source;
   App.projectsCache = [{ id: 1, name: "P" }];
   element("edit-project-select").value = "1";
-  element("edit-duration-input").value = "10";
+  element("edit-duration-input").value = "0.2";
 
   let scheduled = null;
   let timerId = 0;
@@ -995,7 +1165,7 @@ test("7c. editable fields stay enabled and focused while autosave is in flight",
   App.projectsCache = [{ id: 1, name: "P" }];
   element("edit-project-select").value = "1";
   element("edit-note-text").value = "first";
-  element("edit-duration-input").value = "10";
+  element("edit-duration-input").value = "0.2";
   let focusCount = 0;
   element("edit-note-text").focus = () => { focusCount += 1; };
   const pending = deferred();
@@ -1033,7 +1203,7 @@ test("7d. 200-character limit applies only when the description changed", async 
   App.projectsCache = [{ id: 1, name: "P1" }, { id: 2, name: "P2" }];
   element("edit-project-select").value = "2";
   element("edit-note-text").value = historical;
-  element("edit-duration-input").value = "10";
+  element("edit-duration-input").value = "0.2";
   const submitted = [];
   App.callBridge = (method, ...args) => {
     submitted.push(args);

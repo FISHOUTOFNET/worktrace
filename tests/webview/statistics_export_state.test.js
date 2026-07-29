@@ -186,6 +186,11 @@ test("first initialization defaults to Monday through today without querying", (
     dateFrom: "2026-07-13",
     dateTo: "2026-07-17",
   });
+  assert.deepEqual(JSON.parse(JSON.stringify(App.statisticsDraftSelection)), {
+    allTime: false,
+    dateFrom: "2026-07-13",
+    dateTo: "2026-07-17",
+  });
   assert.equal(element("statistics-date-from").value, "2026-07-13");
   assert.equal(element("statistics-date-to").value, "2026-07-17");
   assert.equal(element("statistics-week-btn").getAttribute("aria-pressed"), "true");
@@ -199,6 +204,7 @@ test("today quick range queries today through today", async () => {
   await App.applyStatisticsQuickRange("today");
 
   assert.deepEqual(statisticsCalls.at(-1), ["2026-07-17", "2026-07-17", ""]);
+  assert.equal(statisticsCalls.length, 1);
   assert.equal(element("statistics-today-btn").getAttribute("aria-pressed"), "true");
 });
 
@@ -209,6 +215,7 @@ test("week quick range queries Monday through today", async () => {
   await App.applyStatisticsQuickRange("week");
 
   assert.deepEqual(statisticsCalls.at(-1), ["2026-07-13", "2026-07-17", ""]);
+  assert.equal(statisticsCalls.length, 1);
   assert.equal(element("statistics-week-btn").getAttribute("aria-pressed"), "true");
 });
 
@@ -219,6 +226,7 @@ test("month quick range queries month start through today", async () => {
   await App.applyStatisticsQuickRange("month");
 
   assert.deepEqual(statisticsCalls.at(-1), ["2026-07-01", "2026-07-17", ""]);
+  assert.equal(statisticsCalls.length, 1);
   assert.equal(element("statistics-month-btn").getAttribute("aria-pressed"), "true");
 });
 
@@ -229,44 +237,72 @@ test("all quick range sends empty dates and shows all-time label", async () => {
   await App.applyStatisticsQuickRange("all");
 
   assert.deepEqual(statisticsCalls.at(-1), ["", "", ""]);
+  assert.equal(statisticsCalls.length, 1);
   assert.equal(element("statistics-date-inputs").hidden, true);
   assert.equal(element("statistics-all-time-label").hidden, false);
   assert.equal(element("statistics-all-btn").getAttribute("aria-pressed"), "true");
   assert.equal(element("stats-scope").textContent, "当前范围：全部时间 · 全部项目");
 });
 
-test("manual date change immediately invalidates export and hides stale results before debounce", () => {
+test("manual start and end date changes only update draft and preserve accepted results", () => {
   const { App, element, seedAcceptedPresentation, statisticsCalls } = harness();
   App.initStatisticsDefaults();
   seedAcceptedPresentation();
   element("statistics-date-from").value = "2026-07-14";
-
   element("statistics-date-from").dispatch("change");
+  element("statistics-date-to").value = "2026-07-16";
+  element("statistics-date-to").dispatch("input");
 
   assert.equal(statisticsCalls.length, 0);
-  assert.equal(App.statisticsAcceptedPayload, null);
-  assert.equal(App.statisticsSnapshotRevision, "");
-  assert.equal(App.statisticsLoaded, false);
-  assert.equal(App.statisticsLoading, true);
-  assert.equal(element("statistics-results").hidden, true);
-  assert.equal(element("stats-total").textContent, "");
-  assert.equal(element("stats-by-project").innerHTML, "");
-  assert.equal(element("stats-export-action-btn").disabled, true);
+  assert.equal(App.statisticsAcceptedPayload.exportTicket.revision, "old-revision");
+  assert.equal(App.statisticsSnapshotRevision, "old-revision");
+  assert.equal(App.statisticsLoaded, true);
+  assert.equal(App.statisticsLoading, false);
+  assert.equal(element("statistics-results").hidden, false);
+  assert.equal(element("stats-total").textContent, "09:00:00");
+  assert.equal(element("stats-by-project").innerHTML, "<tr><td>旧结果</td></tr>");
+  assert.equal(element("stats-export-action-btn").disabled, false);
+  assert.deepEqual(JSON.parse(JSON.stringify(App.statisticsSelection)), {
+    allTime: false, dateFrom: "2026-07-13", dateTo: "2026-07-17",
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(App.statisticsDraftSelection)), {
+    allTime: false, dateFrom: "2026-07-14", dateTo: "2026-07-16",
+  });
+  assert.equal(element("statistics-date-status").textContent, "日期范围尚未应用");
 });
 
-test("manual date debounce eventually queries the captured new selection", async () => {
-  const { App, element, runTimers, statisticsCalls } = harness();
+test("apply commits the complete draft and starts exactly one query", async () => {
+  const { App, element, statisticsCalls } = harness();
   App.initStatisticsDefaults();
   element("statistics-date-from").value = "2026-07-14";
   element("statistics-date-from").dispatch("change");
+  element("statistics-date-to").value = "2026-07-16";
+  element("statistics-date-to").dispatch("change");
 
-  runTimers();
-  await flush();
-  await flush();
+  await App.applyStatisticsDraftSelection();
 
-  assert.deepEqual(statisticsCalls, [["2026-07-14", "2026-07-17", ""]]);
+  assert.deepEqual(statisticsCalls, [["2026-07-14", "2026-07-16", ""]]);
   assert.equal(App.statisticsLoaded, true);
   assert.equal(element("statistics-results").hidden, false);
+  assert.equal(App.statisticsDraftDirty, false);
+  assert.deepEqual(JSON.parse(JSON.stringify(App.statisticsSelection)), {
+    allTime: false, dateFrom: "2026-07-14", dateTo: "2026-07-16",
+  });
+});
+
+test("invalid or incomplete draft stays local and never queries", async () => {
+  const { App, element, statisticsCalls } = harness();
+  App.initStatisticsDefaults();
+  element("statistics-date-from").value = "2026-07-18";
+  element("statistics-date-to").value = "2026-07-17";
+  element("statistics-date-from").dispatch("input");
+  element("statistics-date-to").dispatch("change");
+
+  await App.applyStatisticsDraftSelection();
+
+  assert.equal(statisticsCalls.length, 0);
+  assert.equal(element("statistics-date-status").textContent, "请选择有效日期范围");
+  assert.equal(element("statistics-date-status").className.includes("error"), true);
 });
 
 test("project change immediately hides results and starts a scoped query", () => {
@@ -372,16 +408,18 @@ test("stale request cannot render or end loading owned by the latest request", a
   assert.equal(element("statistics-results").hidden, false);
 });
 
-test("manual dates derive shortcut highlighting without a custom mode", () => {
+test("applied manual dates derive shortcut highlighting without a custom mode", async () => {
   const { App, element } = harness();
   App.initStatisticsDefaults();
   element("statistics-date-from").value = "2026-07-01";
   element("statistics-date-to").value = "2026-07-17";
   element("statistics-date-from").dispatch("change");
+  await App.applyStatisticsDraftSelection();
   assert.equal(element("statistics-month-btn").getAttribute("aria-pressed"), "true");
 
   element("statistics-date-from").value = "2026-07-02";
   element("statistics-date-from").dispatch("change");
+  await App.applyStatisticsDraftSelection();
   for (const name of ["today", "week", "month", "all"]) {
     assert.equal(element(`statistics-${name}-btn`).getAttribute("aria-pressed"), "false");
   }

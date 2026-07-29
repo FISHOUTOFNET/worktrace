@@ -73,8 +73,12 @@ def test_project_rules_unified_panel_contains_project_and_rule_flows():
     assert 'id="rules-panel-project-language"' in section
     assert re.search(r'id="rules-panel-project-language"[^>]*hidden', section)
     assert re.search(r'id="rules-panel-backfill"[^>]*checked', section)
-    assert re.search(r'id="rules-panel-folder-recursive-row"[^>]*hidden', section)
+    assert 'id="rules-panel-folder-group"' in section
     assert re.search(r'id="rules-panel-folder-recursive"[^>]*checked', section)
+    textarea = re.search(r'id="rules-panel-project-description"[^>]*>', section)
+    assert textarea is not None
+    assert 'rows="2"' in textarea.group(0)
+    assert 'maxlength="500"' in textarea.group(0)
 
 
 def test_project_rules_folder_path_uses_native_readonly_picker_contract():
@@ -129,9 +133,11 @@ def test_project_rules_panel_presentation_context_and_tab_state_are_single_owner
     assert 'setAttribute("aria-selected"' in rule_type
     assert ".tabIndex =" in rule_type
     assert 'classList.toggle("is-active"' in rule_type
-    assert "folderRow.hidden" in rule_type
+    assert "folderGroup.hidden" in rule_type
     assert "keywordRow.hidden" in rule_type
     assert "recursive.checked = true" in rule_type
+    assert "folderRow" not in rule_type
+    assert "recursiveRow" not in rule_type
 
 
 def test_project_rule_drawer_has_session_guard_and_shared_discard_reset():
@@ -194,35 +200,77 @@ def test_project_rules_home_render_only_exposes_edit_project_add_rule_and_delete
         assert forbidden not in row_body
 
 
-def test_project_rules_header_gives_metadata_to_title_and_actions_only_buttons():
+def test_project_rules_header_places_description_left_and_actions_with_metadata_right():
     source = read_js("rules_render.js")
     body = func_body(source, "renderProjectRuleProject")
     css = read_resource("styles.css")
     title_start = body.index('<div class="rules-project-title-group">')
+    description = body.index("rules-project-description")
+    side = body.index('<div class="rules-project-side">')
+    actions = body.index('<div class="rules-project-actions">')
     meta = body.index('<div class="rules-project-meta">')
-    title_end = body.index('</div><div class="rules-project-actions">')
-    actions_end = body.index('</div></div><div class="rules-row-list"')
-    assert title_start < meta < title_end
-    actions = body[title_end:actions_end]
-    assert "rules-project-meta" not in actions
-    assert actions.count("<button") == 3
+    assert title_start < description < side < actions < meta
+    side_markup = body[side:body.index('</div></div><div class="rules-row-list"')]
+    assert side_markup.count("<button") == 3
+    assert "rules-project-meta" in side_markup
+    assert 'projectDescription ? "" : " is-empty"' in body
+    assert 'projectDescription || "无描述"' in body
     head = re.search(r"\.rules-project-head\s*\{([^}]*)\}", css)
     assert head is not None
     assert "grid-template-columns: 22px minmax(0, 1fr) auto" in head.group(1)
+    side_style = re.search(r"\.rules-project-side\s*\{([^}]*)\}", css)
+    meta_style = re.search(r"\.rules-project-meta\s*\{([^}]*)\}", css)
+    empty_style = re.search(r"\.rules-project-description\.is-empty\s*\{([^}]*)\}", css)
+    assert side_style is not None
+    assert meta_style is not None and "text-align: right" in meta_style.group(1)
+    assert empty_style is not None and "var(--color-text-tertiary)" in empty_style.group(1)
     assert "minmax(250px, auto)" not in css
     assert "minmax(220px, auto)" not in css
-    default = re.search(
-        r"(\.rules-project-delete-button,[^{]+)\{([^}]*)\}",
-        css,
+    assert (
+        ".rules-project-delete-button, .rules-keyword-delete-button, "
+        ".rules-folder-delete-button" not in css
     )
-    assert default is not None
-    for class_name in (
-        "rules-project-delete-button",
-        "rules-keyword-delete-button",
-        "rules-folder-delete-button",
+    danger = re.search(r"\.danger-icon-button\s*\{([^}]*)\}", css)
+    assert danger is not None and "var(--color-danger)" in danger.group(1)
+
+
+def test_project_rule_folder_fields_are_one_aligned_group():
+    section = _rules_section()
+    styles = read_resource("styles.css")
+    source = read_js("rules_create_panel.js")
+    folder_start = section.index('id="rules-panel-folder-group"')
+    keyword_start = section.index('id="rules-panel-keyword-row"')
+    folder = section[folder_start:keyword_start]
+    for control_id in (
+        "rules-panel-folder-path",
+        "rules-panel-choose-folder",
+        "rules-panel-folder-recursive",
     ):
-        assert f".{class_name}" in default.group(1)
-    assert "var(--color-text-secondary)" in default.group(2)
+        assert f'id="{control_id}"' in folder
+    assert "文件夹规则默认匹配该文件夹及全部子文件夹。" not in section
+    assert "默认匹配该文件夹及全部子文件夹" in folder
+    checkbox = re.search(r"\.rule-folder-recursive\s*\{([^}]*)\}", styles)
+    checkbox_input = re.search(r"\.rule-folder-recursive input\s*\{([^}]*)\}", styles)
+    assert checkbox is not None and "align-items: flex-start" in checkbox.group(1)
+    assert checkbox_input is not None
+    assert "width: 14px" in checkbox_input.group(1)
+    assert "height: 14px" in checkbox_input.group(1)
+    assert "min-height: 0" in checkbox_input.group(1)
+    rule_type = func_body(source, "setRuleType")
+    assert "folderGroup.hidden" in rule_type
+    assert "keywordRow.hidden" in rule_type
+
+
+def test_project_description_height_is_local_to_rules_drawer():
+    styles = read_resource("styles.css")
+    description = re.search(
+        r"#rules-panel-project-description\s*\{([^}]*)\}",
+        styles,
+    )
+    assert description is not None
+    assert "height: 50px" in description.group(1)
+    assert "min-height: 50px" in description.group(1)
+    assert "resize: vertical" in description.group(1)
 
 
 def test_project_rules_collapsed_row_uses_accessible_icons_without_rule_count():

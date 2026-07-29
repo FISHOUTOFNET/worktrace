@@ -54,10 +54,14 @@
     App.editingSession = null;
     App.editSaving = false;
     App.timelineCompositionActive = false;
+    App.timelineDurationDraftTouched = false;
     App.statisticsLoaded = false;
     App.statisticsLoading = false;
     App.statisticsRequestToken = 0;
     App.statisticsExportSaving = false;
+    App.statisticsSelection = null;
+    App.statisticsDraftSelection = null;
+    App.statisticsDraftDirty = false;
     App.settingsLoaded = false;
     App.settingsLoading = false;
     App.settingsRequestToken = 0;

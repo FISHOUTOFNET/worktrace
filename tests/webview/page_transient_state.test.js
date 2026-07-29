@@ -456,6 +456,10 @@ test("page resetters clear only transient page UI and preserve authoritative sta
   statistics.App.statisticsSelection = {
     allTime: false, dateFrom: "2026-07-01", dateTo: "2026-07-29",
   };
+  statistics.App.statisticsDraftSelection = {
+    allTime: false, dateFrom: "2026-07-12", dateTo: "2026-07-20",
+  };
+  statistics.App.statisticsDraftDirty = true;
   statistics.App.statisticsQueryTimer = setTimeout(() => { timerFired = true; }, 1000);
   statistics.element("stats-export-status").textContent = "temporary";
   statistics.load("statistics.js");
@@ -466,6 +470,12 @@ test("page resetters clear only transient page UI and preserve authoritative sta
   assert.deepEqual(statistics.App.statisticsSelection, {
     allTime: false, dateFrom: "2026-07-01", dateTo: "2026-07-29",
   });
+  assert.deepEqual(JSON.parse(JSON.stringify(statistics.App.statisticsDraftSelection)), {
+    allTime: false, dateFrom: "2026-07-01", dateTo: "2026-07-29",
+  });
+  assert.equal(statistics.App.statisticsDraftDirty, false);
+  assert.equal(statistics.element("statistics-date-from").value, "2026-07-01");
+  assert.equal(statistics.element("statistics-date-to").value, "2026-07-29");
   clearTimeout(statistics.App.statisticsQueryTimer);
   assert.equal(timerFired, false);
 });

@@ -72,16 +72,45 @@
     }
 
     function currentSelection() {
-        if (!App.statisticsSelectionInitialized || !App.statisticsSelection) {
+        if (!App.statisticsSelection) {
             var range = statisticsWeekRange(new Date());
             App.statisticsSelection = {
                 allTime: false,
                 dateFrom: range.dateFrom,
                 dateTo: range.dateTo
             };
-            App.statisticsSelectionInitialized = true;
+        }
+        App.statisticsSelectionInitialized = true;
+        if (!App.statisticsDraftSelection) {
+            App.statisticsDraftSelection = cloneStatisticsSelection(App.statisticsSelection);
+            App.statisticsDraftDirty = false;
         }
         return App.statisticsSelection;
+    }
+
+    function cloneStatisticsSelection(selection) {
+        selection = selection || {};
+        return {
+            allTime: !!selection.allTime,
+            dateFrom: selection.allTime ? "" : String(selection.dateFrom || ""),
+            dateTo: selection.allTime ? "" : String(selection.dateTo || "")
+        };
+    }
+
+    function statisticsSelectionsEqual(left, right) {
+        left = cloneStatisticsSelection(left);
+        right = cloneStatisticsSelection(right);
+        return left.allTime === right.allTime
+            && left.dateFrom === right.dateFrom
+            && left.dateTo === right.dateTo;
+    }
+
+    function currentDraftSelection() {
+        currentSelection();
+        if (!App.statisticsDraftSelection) {
+            App.statisticsDraftSelection = cloneStatisticsSelection(App.statisticsSelection);
+        }
+        return App.statisticsDraftSelection;
     }
 
     function setStatisticsSelection(allTime, dateFrom, dateTo) {
@@ -91,12 +120,27 @@
             dateTo: allTime ? "" : String(dateTo || "")
         };
         App.statisticsSelectionInitialized = true;
+        App.statisticsDraftSelection = cloneStatisticsSelection(App.statisticsSelection);
+        App.statisticsDraftDirty = false;
         syncStatisticsSelection();
+        syncStatisticsDraftSelection();
     }
     App.setStatisticsSelection = setStatisticsSelection;
 
     function displayDate(value) {
         return String(value || "").replace(/-/g, "/");
+    }
+
+    function setStatisticsDraftStatus(message, isError) {
+        var status = element("statistics-date-status");
+        if (!status) return;
+        status.hidden = !message;
+        status.textContent = message || "";
+        status.className = "statistics-date-status" + (isError ? " error" : "");
+        ["statistics-date-from", "statistics-date-to"].forEach(function (id) {
+            var input = element(id);
+            if (input) input.setAttribute("aria-invalid", isError ? "true" : "false");
+        });
     }
 
     function selectedProjectLabel() {
@@ -118,23 +162,6 @@
 
     function syncStatisticsSelection() {
         var selection = currentSelection();
-        var from = element("statistics-date-from");
-        var to = element("statistics-date-to");
-        if (from) from.value = selection.dateFrom;
-        if (to) to.value = selection.dateTo;
-        if (element("statistics-date-from-display")) {
-            element("statistics-date-from-display").textContent = displayDate(selection.dateFrom);
-        }
-        if (element("statistics-date-to-display")) {
-            element("statistics-date-to-display").textContent = displayDate(selection.dateTo);
-        }
-        if (element("statistics-date-inputs")) {
-            element("statistics-date-inputs").hidden = selection.allTime;
-        }
-        if (element("statistics-all-time-label")) {
-            element("statistics-all-time-label").hidden = !selection.allTime;
-        }
-
         var today = new Date();
         ["today", "week", "month", "all"].forEach(function (type) {
             var range = shortcutRange(type, today);
@@ -155,6 +182,31 @@
         });
     }
     App.syncStatisticsSelection = syncStatisticsSelection;
+
+    function syncStatisticsDraftSelection() {
+        var selection = currentDraftSelection();
+        var from = element("statistics-date-from");
+        var to = element("statistics-date-to");
+        if (from) from.value = selection.dateFrom;
+        if (to) to.value = selection.dateTo;
+        if (element("statistics-date-from-display")) {
+            element("statistics-date-from-display").textContent = displayDate(selection.dateFrom);
+        }
+        if (element("statistics-date-to-display")) {
+            element("statistics-date-to-display").textContent = displayDate(selection.dateTo);
+        }
+        if (element("statistics-date-inputs")) {
+            element("statistics-date-inputs").hidden = selection.allTime;
+        }
+        if (element("statistics-all-time-label")) {
+            element("statistics-all-time-label").hidden = !selection.allTime;
+        }
+        setStatisticsDraftStatus(
+            App.statisticsDraftDirty ? "日期范围尚未应用" : "",
+            false
+        );
+    }
+    App.syncStatisticsDraftSelection = syncStatisticsDraftSelection;
 
     function selectedFilters() {
         var selection = currentSelection();
@@ -301,6 +353,34 @@
     }
     App.applyStatisticsQuickRange = applyStatisticsQuickRange;
 
+    function handleStatisticsDraftDateChange() {
+        var from = element("statistics-date-from");
+        var to = element("statistics-date-to");
+        App.statisticsDraftSelection = {
+            allTime: false,
+            dateFrom: from ? String(from.value || "") : "",
+            dateTo: to ? String(to.value || "") : ""
+        };
+        App.statisticsDraftDirty = !statisticsSelectionsEqual(
+            App.statisticsDraftSelection,
+            currentSelection()
+        );
+        syncStatisticsDraftSelection();
+    }
+    App.handleStatisticsDraftDateChange = handleStatisticsDraftDateChange;
+
+    function applyStatisticsDraftSelection() {
+        var draft = currentDraftSelection();
+        var message = validateStatisticsDateRange(draft.dateFrom, draft.dateTo);
+        if (message) {
+            setStatisticsDraftStatus(message, true);
+            return Promise.resolve(null);
+        }
+        setStatisticsSelection(false, draft.dateFrom, draft.dateTo);
+        return beginStatisticsQuery(0);
+    }
+    App.applyStatisticsDraftSelection = applyStatisticsDraftSelection;
+
     function scheduleStatisticsQuery(delay) {
         return beginStatisticsQuery(delay || 0);
     }
@@ -322,17 +402,12 @@
     function initStatisticsDefaults() {
         currentSelection();
         syncStatisticsSelection();
+        syncStatisticsDraftSelection();
         if (!App.statisticsControlsBound) {
             App.statisticsControlsBound = true;
             ["statistics-date-from", "statistics-date-to"].forEach(function (id) {
-                element(id).addEventListener("change", function () {
-                    setStatisticsSelection(
-                        false,
-                        element("statistics-date-from").value,
-                        element("statistics-date-to").value
-                    );
-                    scheduleStatisticsQuery(500);
-                });
+                element(id).addEventListener("input", handleStatisticsDraftDateChange);
+                element(id).addEventListener("change", handleStatisticsDraftDateChange);
             });
             element("statistics-project-filter").addEventListener("change", function () {
                 syncStatisticsSelection();
@@ -364,6 +439,11 @@
         if (App.statisticsQueryTimer) window.clearTimeout(App.statisticsQueryTimer);
         App.statisticsQueryTimer = null;
         setStatisticsExportStatus("", "");
+        App.statisticsDraftSelection = cloneStatisticsSelection(
+            App.statisticsSelection || currentSelection()
+        );
+        App.statisticsDraftDirty = false;
+        syncStatisticsDraftSelection();
     }
     App.resetStatisticsTransientUi = resetStatisticsTransientUi;
 

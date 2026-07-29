@@ -83,7 +83,11 @@ function harness() {
   App.payloadReportDate = () => "";
   App.isPagePayloadCompatibleWithRuntime = () => true;
   App.escapeHtml = (s) => String(s || "");
-  App.formatDuration = (s) => String(s || "");
+  App.formatDuration = (s) => {
+    const value = Math.max(0, Number.parseInt(s, 10) || 0);
+    const pad = (part) => String(part).padStart(2, "0");
+    return `${pad(Math.floor(value / 3600))}:${pad(Math.floor((value % 3600) / 60))}:${pad(value % 60)}`;
+  };
   App.formatCompactHours = (s) => `${(Number(s || 0) / 3600).toFixed(1)} h`;
   App.formatStartTimeOnly = (s) => String(s || "");
   App.formatProjectLabel = () => "";
@@ -373,7 +377,7 @@ test("date switch uses the existing reset path and clears the anchor", async () 
   assert.equal(App.selectedTimelineWasInProgress, false);
 });
 
-test("timeline presentation sorts newest first with deterministic ties and compact hours", () => {
+test("timeline presentation sorts newest first with deterministic ties and exact clocks", () => {
   const { App, element } = harness();
   App.selectedProjectionInstanceKey = null;
   App.selectedProjectionRevision = null;
@@ -422,8 +426,9 @@ test("timeline presentation sorts newest first with deterministic ties and compa
   const b = html.indexOf('data-projection-instance-key="base:b"');
   const a = html.indexOf('data-projection-instance-key="base:a"');
   assert.ok(c < b && b < a, "start_time desc, then key desc");
-  assert.match(html, /data-duration-format="compact-hours"/);
-  assert.match(html, />1\.2 h<\/div>/);
+  assert.doesNotMatch(html, /data-duration-format="compact-hours"/);
+  assert.match(html, />10:00:00<\/div>/);
+  assert.match(html, />01:10:00<\/div>/);
   assert.doesNotMatch(html, />进行中<\/span>/);
   assert.equal(element("timeline-total-label").textContent, "今日总时长");
 });

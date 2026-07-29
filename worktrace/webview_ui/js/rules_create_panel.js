@@ -223,8 +223,7 @@
         App.rulesPanelRuleType = ruleType === "keyword" ? "keyword" : "folder";
         var folderBtn = document.getElementById("rules-panel-folder-type");
         var keywordBtn = document.getElementById("rules-panel-keyword-type");
-        var folderRow = document.getElementById("rules-panel-folder-row");
-        var recursiveRow = document.getElementById("rules-panel-folder-recursive-row");
+        var folderGroup = document.getElementById("rules-panel-folder-group");
         var keywordRow = document.getElementById("rules-panel-keyword-row");
         var isFolder = App.rulesPanelRuleType === "folder";
         if (folderBtn) {
@@ -237,8 +236,7 @@
             keywordBtn.setAttribute("aria-selected", isFolder ? "false" : "true");
             keywordBtn.tabIndex = isFolder ? -1 : 0;
         }
-        if (folderRow) folderRow.hidden = !isFolder;
-        if (recursiveRow) recursiveRow.hidden = !isFolder;
+        if (folderGroup) folderGroup.hidden = !isFolder;
         var recursive = document.getElementById("rules-panel-folder-recursive");
         if (recursive) recursive.checked = true;
         if (keywordRow) keywordRow.hidden = isFolder;
