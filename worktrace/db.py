@@ -231,6 +231,13 @@ def apply_current_schema(conn: sqlite3.Connection) -> None:
     if version != CURRENT_SCHEMA_VERSION:
         raise ValueError("database_schema_incompatible")
 
+    # Apply indexes added since first creation. CREATE INDEX IF NOT EXISTS is
+    # idempotent.  If the structure is wrong (missing tables), index creation
+    # fails and the fingerprint check below raises the proper error.
+    try:
+        ensure_current_indexes(conn)
+    except sqlite3.OperationalError:
+        pass
     _require_current_schema_fingerprint(conn)
     ensure_data_generation_state(conn)
     seed_defaults(conn)

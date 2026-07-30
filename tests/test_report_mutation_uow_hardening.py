@@ -15,8 +15,7 @@ from worktrace.services import (
     report_session_operation_service,
     timeline_service,
 )
-from worktrace.services.report_projection_snapshot_service import build_visible_snapshot
-from worktrace.services.report_session_operation_engine import APPLIED
+from worktrace.services.report_projection_model import OperationNotAllowedError
 
 pytestmark = [pytest.mark.db, pytest.mark.integration, pytest.mark.contract]
 DATE = "2026-07-16"
@@ -39,7 +38,7 @@ def _report_generation() -> int:
         )
 
 
-def test_open_edit_replays_after_activity_closes(temp_db):
+def test_open_edit_rejection_writes_no_operation_receipt_or_generation(temp_db):
     original_project = project_service.create_project("Open original")
     target_project = project_service.create_project("Open target")
     activity_id = activity_lifecycle_service.persist_open_activity(
@@ -59,45 +58,18 @@ def test_open_edit_replays_after_activity_closes(temp_db):
     activity_lifecycle_service.checkpoint_activity(activity_id, 60)
     session = _session_for(activity_id)
     before_generation = _report_generation()
-    result = report_session_operation_service.edit_session(
-        DATE,
-        session["projection_instance_key"],
-        session["projection_revision"],
-        "open-edit-survives-close",
-        project_id=target_project,
-        adjusted_duration_seconds=None,
-        note="open note",
-    )
-    assert result.outcome_type == "operation_committed"
-    assert _report_generation() == before_generation + 1
+    with pytest.raises(OperationNotAllowedError):
+        report_session_operation_service.edit_session(
+            DATE,
+            session["projection_instance_key"],
+            session["projection_revision"],
+            "open-edit-rejected",
+            project_id=target_project,
+            adjusted_duration_seconds=None,
+            note="open note",
+        )
 
-    duplicate = report_session_operation_service.edit_session(
-        DATE,
-        session["projection_instance_key"],
-        session["projection_revision"],
-        "open-edit-survives-close",
-        project_id=target_project,
-        adjusted_duration_seconds=None,
-        note="open note",
-    )
-    assert duplicate == result
-    assert _report_generation() == before_generation + 1
-
-    activity_lifecycle_service.close_activity(
-        activity_id,
-        f"{DATE} 09:10:00",
-    )
-
-    closed = _session_for(activity_id)
-    assert int(closed["project_id"]) == target_project
-    assert closed["session_note"] == "open note"
-    snapshot = build_visible_snapshot(DATE, DATE)
-    diagnostic = next(
-        item
-        for item in snapshot.operation_diagnostics
-        if item.operation_id == result.operation_id
-    )
-    assert diagnostic.state == APPLIED
+    assert _report_generation() == before_generation
     with get_connection() as conn:
         assignment = conn.execute(
             """
@@ -107,9 +79,17 @@ def test_open_edit_replays_after_activity_closes(temp_db):
             """,
             (activity_id,),
         ).fetchone()
-    assert int(assignment["project_id"]) == target_project
+        operation_count = conn.execute(
+            "SELECT COUNT(*) FROM report_session_operation"
+        ).fetchone()[0]
+        receipt_count = conn.execute(
+            "SELECT COUNT(*) FROM report_mutation_request"
+        ).fetchone()[0]
+    assert int(assignment["project_id"]) == original_project
     assert assignment["source"] == "manual"
     assert int(assignment["is_manual"]) == 1
+    assert operation_count == 0
+    assert receipt_count == 0
 
 
 def test_no_effect_edit_writes_receipt_without_structure_generation(temp_db):

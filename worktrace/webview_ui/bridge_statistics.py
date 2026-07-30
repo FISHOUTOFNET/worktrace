@@ -18,6 +18,7 @@ _STATISTICS_ERROR_MESSAGES = {
     "invalid_date": "请选择有效日期",
     "invalid_range": "请选择有效日期范围",
     "range_too_large": "日期范围过大",
+    "invalid_project": "请选择有效项目",
     "operation_failed": "加载统计失败",
 }
 
@@ -25,6 +26,7 @@ _STATISTICS_EXPORT_ERROR_MESSAGES = {
     "invalid_date": "请选择有效日期",
     "invalid_range": "请选择有效日期范围",
     "range_too_large": "日期范围过大",
+    "invalid_project": "请选择有效项目",
     "empty_data": "当前范围没有可导出的记录",
     "invalid_path": "请选择有效保存位置",
     "permission_denied": "导出失败，请检查保存位置和权限",
@@ -40,17 +42,24 @@ _STATISTICS_EXPORT_ERROR_MESSAGES = {
 class StatisticsBridgeMixin:
     """Statistics / Export bridge methods."""
 
-    def get_statistics_export_summary(self, date_from, date_to) -> dict[str, Any]:
+    def get_statistics_export_summary(self, date_from, date_to, project_id=None) -> dict[str, Any]:
         """Reject non-string transport values, including bool, before the API."""
         try:
             if not isinstance(date_from, str) or not isinstance(date_to, str):
                 return {"ok": False, "error": "请选择有效日期", "summary": None}
-            if not _DATE_SHAPE_RE.match(date_from) or not _DATE_SHAPE_RE.match(date_to):
+            all_time = date_from == "" and date_to == ""
+            if not all_time and (
+                not _DATE_SHAPE_RE.match(date_from) or not _DATE_SHAPE_RE.match(date_to)
+            ):
                 return {"ok": False, "error": "请选择有效日期", "summary": None}
-            envelope = self._services.statistics.get_statistics_export_view_model(
-                date_from,
-                date_to,
-            )
+            if project_id is not None and not isinstance(project_id, (str, int)):
+                return {"ok": False, "error": "请选择有效项目", "summary": None}
+            if project_id in (None, ""):
+                envelope = self._services.statistics.get_statistics_export_view_model(date_from, date_to)
+            else:
+                envelope = self._services.statistics.get_statistics_export_view_model(
+                    date_from, date_to, project_id
+                )
             return {
                 "ok": True,
                 "summary": envelope["summary"],
@@ -70,17 +79,23 @@ class StatisticsBridgeMixin:
         self,
         date_from,
         date_to,
-        expected_snapshot_revision=None,
+        expected_export_ticket_revision,
+        project_id=None,
     ) -> dict[str, Any]:
         try:
             if not isinstance(date_from, str) or not isinstance(date_to, str):
                 return {"ok": False, "error": "请选择有效日期", "cancelled": False}
-            if not _DATE_SHAPE_RE.match(date_from) or not _DATE_SHAPE_RE.match(date_to):
-                return {"ok": False, "error": "请选择有效日期", "cancelled": False}
-            if expected_snapshot_revision is not None and (
-                not isinstance(expected_snapshot_revision, str)
-                or not expected_snapshot_revision.strip()
+            all_time = date_from == "" and date_to == ""
+            if not all_time and (
+                not _DATE_SHAPE_RE.match(date_from) or not _DATE_SHAPE_RE.match(date_to)
             ):
+                return {"ok": False, "error": "请选择有效日期", "cancelled": False}
+            if project_id is not None and not isinstance(project_id, (str, int)):
+                return {"ok": False, "error": "请选择有效项目", "cancelled": False}
+            # The export ticket is a mandatory backend contract. Validate it
+            # before opening the save dialog so a stale or missing ticket never
+            # creates a target file or temp residue.
+            if not isinstance(expected_export_ticket_revision, str) or not expected_export_ticket_revision.strip():
                 return {
                     "ok": False,
                     "error": "统计数据已更新，请重新加载后导出",
@@ -89,14 +104,15 @@ class StatisticsBridgeMixin:
             output_path = self._choose_csv_save_path()
             if output_path is None:
                 return {"ok": False, "cancelled": True, "error": "已取消导出"}
-            result = self._services.statistics.export_statistics_csv(
-                date_from,
-                date_to,
-                output_path,
-                expected_snapshot_revision.strip()
-                if isinstance(expected_snapshot_revision, str)
-                else None,
-            )
+            revision = expected_export_ticket_revision.strip()
+            if project_id in (None, ""):
+                result = self._services.statistics.export_statistics_csv(
+                    date_from, date_to, output_path, revision
+                )
+            else:
+                result = self._services.statistics.export_statistics_csv(
+                    date_from, date_to, output_path, revision, project_id
+                )
             return {
                 "ok": True,
                 "filename": str(result.get("filename") or ""),

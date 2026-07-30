@@ -166,13 +166,6 @@ def _project_payload(current_activity: Mapping[str, Any]) -> dict[str, Any] | No
     }
 
 
-def _recent_first_row(payload: Mapping[str, Any]) -> dict[str, Any] | None:
-    activities = payload.get("activities")
-    if isinstance(activities, list) and activities:
-        return _static_metadata(activities[0])
-    return None
-
-
 def _runtime_workers(runtime: "AppRuntime") -> dict[str, dict[str, Any]]:
     snapshot = runtime.worker_registry_snapshot()
     return {
@@ -239,7 +232,6 @@ def build_live_runtime_envelope(
             "revision": str(payload.get("live_revision") or ""),
         },
         "current_activity": current_activity,
-        "recent_first_row": _recent_first_row(payload),
         "clock": clock,
         "current_project": _project_payload(current_activity_source),
         "collector": collector,

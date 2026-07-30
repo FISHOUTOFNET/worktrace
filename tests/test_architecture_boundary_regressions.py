@@ -27,6 +27,10 @@ def test_overview_counts_standalone_excluded_without_showing_it_in_recent(temp_d
     payload = view_model_service.get_overview_view_model(DATE)
 
     assert payload["today_total_seconds"] == 300
+    assert payload["project_distribution"] == {
+        "total_seconds": 0,
+        "segments": [],
+    }
     assert all(
         str(row.get("row_kind") or "") != "standalone_status"
         for row in payload.get("activities") or []
@@ -91,7 +95,8 @@ def test_frontend_generation_and_coalescing_contracts_are_shipping():
     assert "resetClientGeneration" in init
     assert "statisticsAcceptedPayload" in statistics
     assert "statisticsLoadPromise" in statistics
-    assert "exportRevision" in statistics
+    assert "exportTicket" in statistics
+    assert "ticket.revision" in statistics
     assert "projectsLoadPromise" in rules
     assert "data-project-load-gate" in rules
     assert "stopImmediatePropagation" in rules

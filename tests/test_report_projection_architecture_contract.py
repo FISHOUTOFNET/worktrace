@@ -146,7 +146,7 @@ def test_excel_and_csv_depend_on_canonical_snapshot_analytics():
     export = (REPO_ROOT / "worktrace/services/export_service.py").read_text(encoding="utf-8")
     assert "build_visible_snapshot" in excel and "build_statistics_projection" in excel
     assert "timeline_service" not in excel
-    assert "build_visible_snapshot" in export and "build_statistics_projection" in export
+    assert "build_visible_snapshot" in export and "build_statistics_summary_projection" in export
 
 
 def test_projection_engine_reuses_domain_freeze_thaw():

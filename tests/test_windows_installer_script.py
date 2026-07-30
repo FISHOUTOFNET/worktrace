@@ -1,145 +1,103 @@
-"""Static validation of ``scripts/build_windows_installer.ps1``.
-
-The installer build script hardens PyInstaller's stderr INFO logs so they
-no longer trigger false terminating errors under
-``$ErrorActionPreference = "Stop"``. These tests read the script as text and
-assert the hardening invariants remain in place. They never invoke
-PyInstaller, PowerShell, or the installer itself, so they run on any host.
-"""
-
+"""Static per-user Inno Setup installer contracts."""
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 import pytest
 
 pytestmark = [pytest.mark.packaging, pytest.mark.contract, pytest.mark.serial]
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-SCRIPT_PATH = REPO_ROOT / "scripts" / "build_windows_installer.ps1"
+ROOT = Path(__file__).resolve().parents[1]
+ISS_PATH = ROOT / "installer" / "WorkTrace.iss"
+BUILD_PATH = ROOT / "scripts" / "build_windows_installer.ps1"
 
 
-@pytest.fixture(scope="module")
-def script_text() -> str:
-    """Read the installer build script as text."""
-    assert SCRIPT_PATH.is_file(), (
-        f"expected installer build script at {SCRIPT_PATH}"
+def test_inno_setup_is_per_user_and_never_requests_elevation() -> None:
+    source = ISS_PATH.read_text(encoding="utf-8")
+    assert "PrivilegesRequired=lowest" in source
+    assert r"DefaultDirName={localappdata}\Programs\WorkTrace" in source
+    assert "DefaultGroupName=WorkTrace" in source
+    assert "Program Files" not in source
+    assert "HKLM" not in source
+    assert "[Service]" not in source
+
+
+def test_startup_task_writes_only_hkcu_and_is_uninstall_cleaned() -> None:
+    source = ISS_PATH.read_text(encoding="utf-8")
+    assert "Name: startup" in source
+    assert "登录 Windows 时自动启动 WorkTrace" in source
+    assert "Root: HKCU" in source
+    assert r"Software\Microsoft\Windows\CurrentVersion\Run" in source
+    assert 'ValueName: "WorkTrace"' in source
+    assert 'ValueData: """{app}\\WorkTrace.exe"" --background"' in source
+    assert "uninsdeletevalue" in source
+    assert "CurUninstallStepChanged" in source
+    assert "RegDeleteValue" in source
+    assert "Tasks: not startup" in source
+    assert "Flags: deletevalue" in source
+
+
+def test_upgrade_task_selection_preserves_actual_registry_choice() -> None:
+    source = ISS_PATH.read_text(encoding="utf-8")
+    assert "IsUpgradeInstall" in source
+    assert "ExistingStartupMatchesInstall" in source
+    assert "RegQueryStringValue" in source
+    assert "WizardSelectTasks('startup')" in source
+    assert "WizardSelectTasks('!startup')" in source
+    assert "CompareText" in source
+    assert "UsePreviousTasks=no" in source
+
+
+def test_first_postinstall_launch_is_visible_normal_mode() -> None:
+    source = ISS_PATH.read_text(encoding="utf-8")
+    run_section = source[source.index("[Run]") : source.index("[Code]")]
+    assert r'Filename: "{app}\{#MyAppExeName}"' in run_section
+    assert "--background" not in run_section
+
+
+def test_installer_and_shortcut_use_canonical_icon() -> None:
+    source = ISS_PATH.read_text(encoding="utf-8")
+    assert r"SetupIconFile=..\worktrace\assets\worktrace.ico" in source
+    assert "UninstallDisplayIcon={app}\\{#MyAppExeName}" in source
+    assert "IconFilename: \"{app}\\{#MyAppExeName}\"" in source
+
+
+def test_build_script_locates_iscc_and_keeps_output_contract() -> None:
+    source = BUILD_PATH.read_text(encoding="utf-8")
+    assert "ISCC.exe" in source
+    assert "Inno Setup 6" in source
+    assert "Inno Setup compiler ISCC.exe was not found" in source
+    assert "installer\\WorkTrace.iss" in source
+    assert "dist\\WorkTrace-Setup.exe" in source
+    assert "/DMyAppExe=" in source
+    assert "/O$distPath" in source
+    assert "/F$name" in source
+    assert "$LASTEXITCODE" in source
+    assert "windows_installer.py" not in source
+    assert "PyInstaller" not in source
+
+
+def test_retired_copy_installer_is_removed() -> None:
+    assert not (ROOT / "scripts" / "windows_installer.py").exists()
+
+
+def test_ci_prepares_one_pinned_verified_inno_setup_version() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "_validation.yml").read_text(
+        encoding="utf-8"
     )
-    return SCRIPT_PATH.read_text(encoding="utf-8")
-
-
-def test_installer_build_script_exists(script_text: str) -> None:
-    """The installer build script must exist and be non-empty."""
-    assert script_text.strip(), "build_windows_installer.ps1 is empty"
-
-
-def test_script_keeps_global_strict_error_action(script_text: str) -> None:
-    """The script must still set a global ``$ErrorActionPreference = "Stop"``.
-
-    The hardening does not weaken global error handling; it only carves out a
-    local relaxation around the native PyInstaller call. A global ``Stop`` must
-    still be present so non-PyInstaller failures (Resolve-Path, Get-Command,
-    New-Item, Get-Item) remain terminating.
-    """
-    assert re.search(r'\$ErrorActionPreference\s*=\s*"Stop"', script_text), (
-        "script must retain global $ErrorActionPreference = 'Stop'"
+    assert "innosetup-6.7.3.exe" in workflow
+    assert "is-6_7_3" in workflow
+    assert (
+        "9C73C3BAE7ED48D44112A0F48E66742C00090BDB5BEF71D9D3C056C66E97B732"
+        in workflow
     )
+    assert "ISCC_PATH=" in workflow
 
 
-def test_script_has_local_error_action_handling_around_pyinstaller(
-    script_text: str,
-) -> None:
-    """Around the native PyInstaller call there must be a local relaxation.
-
-    The expected pattern is: save the old preference, set it to ``Continue``
-    inside a try, run the native command, capture ``$LASTEXITCODE``, and
-    restore the preference in a ``finally`` block. This stops stderr INFO
-    logs from being wrapped as NativeCommandError while keeping real errors
-    visible.
-    """
-    assert "oldErrorActionPreference" in script_text, (
-        "script must save the previous $ErrorActionPreference before the "
-        "native PyInstaller call"
+def test_ci_waits_for_inno_setup_bootstrap_before_using_iscc() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "_validation.yml").read_text(
+        encoding="utf-8"
     )
-    assert re.search(
-        r'\$ErrorActionPreference\s*=\s*"Continue"', script_text
-    ), "script must locally set $ErrorActionPreference to 'Continue'"
-    assert "finally" in script_text, (
-        "script must restore $ErrorActionPreference in a finally block"
-    )
-    assert re.search(
-        r"\$ErrorActionPreference\s*=\s*\$oldErrorActionPreference", script_text
-    ), "script must restore the saved $ErrorActionPreference"
-
-
-def test_script_still_checks_last_exit_code(script_text: str) -> None:
-    """``$LASTEXITCODE`` must still be captured after the native call."""
-    assert "$LASTEXITCODE" in script_text, (
-        "script must read $LASTEXITCODE after invoking PyInstaller"
-    )
-
-
-def test_script_still_throws_on_nonzero_exit_code(script_text: str) -> None:
-    """A non-zero PyInstaller exit code must still raise a terminating error."""
-    assert re.search(
-        r"throw\s+[\"]PyInstaller failed with exit code", script_text
-    ), "script must throw when PyInstaller exits non-zero"
-
-
-def test_script_uses_resolve_path_for_exe_path(script_text: str) -> None:
-    """``$exe`` must come from ``Resolve-Path -LiteralPath`` so paths with
-    spaces (e.g. ``C:\\More Than Coding\\WorkTrace``) resolve absolutely."""
-    assert re.search(
-        r"\$exe\s*=\s*Resolve-Path\s+-LiteralPath", script_text
-    ), "script must resolve ExePath via Resolve-Path -LiteralPath"
-
-
-def test_script_uses_absolute_add_data_path(script_text: str) -> None:
-    """The ``--add-data`` payload must use the resolved absolute ``$exe``.
-
-    PyInstaller resolves relative ``--add-data`` sources against ``--specpath``,
-    not the repo root, so a relative ``dist\\WorkTrace.exe`` would break.
-    Using ``$exe`` (the resolved absolute path) avoids this.
-    """
-    assert re.search(
-        r"\$addData\s*=\s*\"\$exe;payload\"", script_text
-    ), "script must build --add-data from the resolved absolute $exe path"
-
-
-def test_script_does_not_silently_ignore_all_errors(script_text: str) -> None:
-    """The hardening must not turn the script into one that ignores errors.
-
-    Guards against an over-broad fix that sets the global preference to
-    ``SilentlyContinue`` everywhere or drops the post-call throw. We assert:
-
-    * no global ``$ErrorActionPreference = "SilentlyContinue"`` or
-      ``"Continue"`` at top level (only the local one inside try),
-    * the post-call throw is still present,
-    * ``Resolve-Path`` and ``Get-Command`` still use ``-ErrorAction Stop``.
-    """
-    # No global (top-of-script) SilentlyContinue/Continue preference.
-    assert not re.search(
-        r'^\s*\$ErrorActionPreference\s*=\s*"SilentlyContinue"',
-        script_text,
-        flags=re.MULTILINE,
-    ), "script must not globally set SilentlyContinue"
-
-    # Get-Command python must keep -ErrorAction Stop so a missing python fails.
-    assert re.search(
-        r"Get-Command\s+python\s+-ErrorAction\s+Stop", script_text
-    ), "script must keep -ErrorAction Stop on Get-Command python"
-
-
-def test_script_forwards_to_pyinstaller_module(script_text: str) -> None:
-    """Sanity: the script still invokes ``python -m PyInstaller``."""
-    assert '"-m"' in script_text and '"PyInstaller"' in script_text, (
-        "script must invoke python -m PyInstaller"
-    )
-
-
-def test_script_outputs_built_installer(script_text: str) -> None:
-    """Sanity: the script still returns the built installer via Get-Item."""
-    assert re.search(
-        r"Get-Item\s+-LiteralPath\s+\$target", script_text
-    ), "script must emit the built installer path via Get-Item -LiteralPath $target"
+    assert "Start-Process" in workflow
+    assert "-Wait" in workflow
+    assert "ExitCode" in workflow

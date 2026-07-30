@@ -25,6 +25,7 @@
         backfillProjectRule: fixedBridgeMethod("backfill_project_rule"),
         backfillProjectRulesBatch: fixedBridgeMethod("backfill_project_rules_batch"),
         clearAllLocalData: fixedBridgeMethod("clear_all_local_data"),
+        chooseProjectRuleFolder: fixedBridgeMethod("choose_project_rule_folder"),
         copyTimelineSession: fixedBridgeMethod("copy_timeline_session"),
         createExcludedFolderRule: fixedBridgeMethod("create_excluded_folder_rule"),
         createExcludedKeywordRule: fixedBridgeMethod("create_excluded_keyword_rule"),
@@ -53,8 +54,10 @@
         previewEncryptedBackupManifest: fixedBridgeMethod("preview_encrypted_backup_manifest"),
         previewProjectRuleImpact: fixedBridgeMethod("preview_project_rule_impact"),
         previewProjectRulesBatchImpact: fixedBridgeMethod("preview_project_rules_batch_impact"),
+        recoverDatabaseMaintenance: fixedBridgeMethod("recover_database_maintenance"),
         saveTimelineSessionEdit: fixedBridgeMethod("save_timeline_session_edit"),
         setClipboardCaptureEnabled: fixedBridgeMethod("set_clipboard_capture_enabled"),
+        setLaunchAtLogin: fixedBridgeMethod("set_launch_at_login"),
         setExcludedRulesEnabled: fixedBridgeMethod("set_excluded_rules_enabled"),
         setProjectEnabledForRules: fixedBridgeMethod("set_project_enabled_for_rules"),
         setProjectRuleEnabled: fixedBridgeMethod("set_project_rule_enabled"),
@@ -82,7 +85,7 @@
         if (!value || typeof value !== "object") return null;
         var copy = Object.assign({}, value);
         [
-            "liveClock", "currentActivity", "recentFirstRow", "currentProject",
+            "liveClock", "currentActivity", "currentProject",
             "collector", "workers", "generations", "revisions"
         ].forEach(function (field) {
             if (copy[field] && typeof copy[field] === "object") {
@@ -148,9 +151,6 @@
             pageRevision: String(revisions.page || ""),
             sampleId: String(snapshot.id || ""),
             currentActivity: objectValue(envelope.current_activity),
-            recentFirstRow: envelope.recent_first_row && typeof envelope.recent_first_row === "object"
-                ? envelope.recent_first_row
-                : null,
             currentProject: envelope.current_project && typeof envelope.current_project === "object"
                 ? envelope.current_project
                 : null,
@@ -228,6 +228,9 @@
     };
 
     function resetClientGeneration(reason) {
+        if (App.timelineAutosaveTimer) window.clearTimeout(App.timelineAutosaveTimer);
+        App.timelineAutosaveTimer = null;
+        App.timelineAutosaveQueued = false;
         if (App.requestCoordinator) App.requestCoordinator.bumpDataEpoch();
         App.timelineLoaded = false;
         App.statisticsLoaded = false;
@@ -236,7 +239,18 @@
         App.currentSessions = [];
         App.selectedProjectionInstanceKey = null;
         App.selectedProjectionRevision = null;
+        App.selectedTimelineAnchorActivityId = null;
+        App.selectedTimelineWasInProgress = false;
         App.editingSession = null;
+        // Discard any in-flight draft snapshot and queued context change:
+        // a generation reset (database replacement / clear) invalidates the
+        // old baseline, so the old draft must not be re-submitted against
+        // the new generation.
+        App.submittedDraft = null;
+        App.pendingContextChange = null;
+        App.editSaving = false;
+        App.timelineCompositionActive = false;
+        App.timelineDurationDraftTouched = false;
         App.detailsOwner = null;
         App.timelineOwner = null;
         App.mutationOwner = null;
@@ -251,6 +265,19 @@
         App.lastSessionActivitySummaryViewModel = null;
         App.lastRefreshState = null;
         App.statisticsAcceptedPayload = null;
+        App.statisticsSnapshotRevision = "";
+        App.statisticsSelection = null;
+        App.statisticsDraftSelection = null;
+        App.statisticsDraftDirty = false;
+        App.statisticsSelectionInitialized = false;
+        if (App.statisticsQueryTimer) window.clearTimeout(App.statisticsQueryTimer);
+        App.statisticsQueryTimer = null;
+        if (typeof App.clearStatisticsPresentation === "function") {
+            App.clearStatisticsPresentation();
+        }
+        if (typeof App.setStatisticsLoading === "function") {
+            App.setStatisticsLoading(false);
+        }
         App.rulesLoadPromise = null;
         App.activePageRefreshInFlight = false;
         App.activePageRefreshPromise = null;
@@ -459,12 +486,17 @@
             var overview = Object.assign({}, bundle.overview || {});
             overview.date = bundle.date || overview.date;
             overview.current_activity = runtime ? runtime.currentActivity : {};
+            overview.current_session = bundle.current_session || null;
+            overview.project_distribution = bundle.project_distribution || {
+                total_seconds: 0,
+                segments: []
+            };
+            overview.recent = bundle.recent || [];
             overview.kpi_live_targets = bundle.kpi_live_targets || {};
             if (overview.today_total_seconds === undefined) overview.today_total_seconds = bundle.today_total_seconds || 0;
             if (overview.classified_seconds === undefined) overview.classified_seconds = bundle.classified_seconds || 0;
             if (overview.uncategorized_seconds === undefined) overview.uncategorized_seconds = bundle.uncategorized_seconds || 0;
             App.showOverview(overview);
-            App.showRecent({ activities: bundle.activities || [] });
         }).catch(function () {
             if (App.requestCoordinator.isCurrent(token)) App.showError("刷新失败");
         });
@@ -539,22 +571,48 @@
 
     function togglePause() {
         App.bridge.togglePause().then(function (result) {
-            var status = App.handleResult(result, function (msg) { App.showError(msg); });
-            App.showStatus(status);
+            if (!result || result.ok === false) {
+                App.showGlobalAlert(App.extractBridgeError(result, "切换暂停状态失败，请稍后重试。"));
+                return;
+            }
+            App.clearGlobalAlert();
+            App.showStatus(result);
         }).catch(function () {
-            App.showError("切换暂停状态失败，请稍后重试。");
+            App.showGlobalAlert("切换暂停状态失败，请稍后重试。");
         });
     }
     App.togglePause = togglePause;
 
+    var PAGE_LEAVE_RESETTERS = Object.freeze({
+        timeline: "resetTimelineTransientUi",
+        statistics: "resetStatisticsTransientUi",
+        rules: "resetRulesTransientUi",
+        settings: "resetSettingsTransientUi"
+    });
+
+    function resetPageTransientUi(pageId) {
+        var resetterName = PAGE_LEAVE_RESETTERS[pageId];
+        var resetter = resetterName && App[resetterName];
+        if (typeof resetter === "function") resetter({ restoreFocus: false });
+    }
+    App.resetPageTransientUi = resetPageTransientUi;
+
     function switchPage(pageId) {
+        var previousPage = App.currentPage;
+        if (previousPage && previousPage !== pageId) resetPageTransientUi(previousPage);
         var navItems = document.querySelectorAll(".nav-item");
         var pages = document.querySelectorAll(".page");
-        for (var i = 0; i < navItems.length; i++) navItems[i].classList.remove("active");
+        for (var i = 0; i < navItems.length; i++) {
+            navItems[i].classList.remove("active");
+            navItems[i].removeAttribute("aria-current");
+        }
         for (var j = 0; j < pages.length; j++) pages[j].classList.remove("active");
         var navTarget = document.querySelector('.nav-item[data-page="' + pageId + '"]');
         var pageTarget = document.getElementById("page-" + pageId);
-        if (navTarget) navTarget.classList.add("active");
+        if (navTarget) {
+            navTarget.classList.add("active");
+            navTarget.setAttribute("aria-current", "page");
+        }
         if (pageTarget) pageTarget.classList.add("active");
         App.currentPage = pageId;
         liveRuntimeStore.setScope(pageId, pageId === "timeline" ? App.timelineDate : null);
@@ -597,12 +655,9 @@
         bind("timeline-next-btn", "click", App.goNextDay);
         bind("timeline-today-btn", "click", App.goToday);
         bind("timeline-date-input", "change", function (event) {
-            App.loadTimelineReport(event.target.value || null, { resetSelection: true, showLoading: true });
+            App.goToDate(event.target.value || null);
         });
-        bind("edit-save-btn", "click", App.saveEdit);
-        bind("edit-cancel-btn", "click", App.cancelEdit);
         [
-            ["timeline-hide-session", "hide"],
             ["timeline-merge-previous", "merge", "previous"],
             ["timeline-merge-next", "merge", "next"],
             ["timeline-split-session", "split"],
@@ -612,24 +667,43 @@
                 App.runTimelineSessionOperation(action[1], action[2] ? { direction: action[2] } : undefined);
             });
         });
-        bind("edit-note-text", "input", App.updateNoteCount);
-        bind("statistics-load-btn", "click", App.loadStatisticsExportSummary);
+        bind("timeline-hide-session", "click", function (event) {
+            App.confirmTimelineDeletion("hide", {}, event.currentTarget);
+        });
+        bind("edit-project-select", "change", function () { App.scheduleTimelineAutosave(0); });
+        bind("edit-note-text", "compositionstart", App.handleTimelineCompositionStart);
+        bind("edit-note-text", "compositionend", App.handleTimelineCompositionEnd);
+        bind("edit-note-text", "input", App.handleTimelineNoteInput);
+        bind("edit-note-text", "blur", App.handleTimelineNoteBlur);
+        bind("edit-duration-input", "change", App.handleTimelineDurationChange);
+        bind("timeline-project-filter", "change", App.applyTimelineProjectFilter);
+        bind("timeline-details-close", "click", App.closeTimelineDrawer);
+        bind("timeline-drawer-backdrop", "click", App.closeTimelineDrawer);
+        bind("timeline-advanced-toggle", "click", App.toggleTimelineAdvancedMenu);
         bind("statistics-today-btn", "click", function () { App.applyStatisticsQuickRange("today"); });
-        bind("statistics-7d-btn", "click", function () { App.applyStatisticsQuickRange("7d"); });
+        bind("statistics-week-btn", "click", function () { App.applyStatisticsQuickRange("week"); });
         bind("statistics-month-btn", "click", function () { App.applyStatisticsQuickRange("month"); });
+        bind("statistics-all-btn", "click", function () { App.applyStatisticsQuickRange("all"); });
+        bind("statistics-apply-range-btn", "click", App.applyStatisticsDraftSelection);
         bind("stats-export-action-btn", "click", App.exportStatisticsCsv);
         bind("settings-clipboard-toggle", "change", App.handleCaptureToggleChange);
+        bind("settings-launch-at-login-toggle", "change", App.handleLaunchAtLoginToggleChange);
         bind("settings-backup-export-btn", "click", App.exportEncryptedBackup);
         bind("settings-backup-manifest-btn", "click", App.previewEncryptedBackupManifest);
         bind("settings-backup-import-btn", "click", App.importEncryptedBackup);
         bind("settings-clear-local-data-btn", "click", App.clearAllLocalData);
         bind("settings-clear-all-btn", "click", App.clearAllLocalData);
         if (App.initRulesPanelEvents) App.initRulesPanelEvents();
+        if (App.initTimelineAccessibility) App.initTimelineAccessibility();
+        if (App.initSettingsCategories) App.initSettingsCategories();
+        if (App.initPasswordRevealControls) App.initPasswordRevealControls();
         bind("first-run-notice-accept-btn", "click", App.acceptFirstRunNotice);
+        bind("first-run-notice-retry-btn", "click", App.retryFirstRunNotice);
         bind("first-run-notice-close-btn", "click", function () {
             if (App.firstRunNoticeViewingFromSettings) App.hideFirstRunNotice();
         });
         bind("settings-privacy-notice-btn", "click", App.openPrivacyNoticeFromSettings);
+        bind("settings-recovery-btn", "click", App.recoverDatabaseMaintenance);
     }
     App.initButtons = initButtons;
 
@@ -678,10 +752,12 @@
     };
 
     function runRevisionCheck() {
-        if (App.refreshCheckInFlight) return;
+        if (App.refreshCheckInFlight) {
+            return App.activePageRefreshPromise || Promise.resolve();
+        }
         App.refreshCheckInFlight = true;
         var token = App.requestCoordinator.beginLatest("heartbeat", App.currentPage + "|" + (App.timelineDate || ""));
-        App.bridge.getRefreshState(App.currentPage === "timeline" ? App.timelineDate : null).then(function (result) {
+        return App.bridge.getRefreshState(App.currentPage === "timeline" ? App.timelineDate : null).then(function (result) {
             if (!App.requestCoordinator.isCurrent(token)) return;
             var state = App.handleResult(result, function () { return null; });
             if (!state) return;
@@ -728,7 +804,11 @@
     App.runRevisionCheck = runRevisionCheck;
 
     function startHeartbeat() {
-        if (App.heartbeatTimer !== null) clearInterval(App.heartbeatTimer);
+        // Idempotent: the single startup entry (continueStartupAfterPrivacyGate)
+        // is the only path that creates the heartbeat interval. Repeated calls
+        // are no-ops so concurrent or duplicate startup requests never spawn a
+        // second timer. Use restartHeartbeat() for an explicit teardown+rebuild.
+        if (App.shellVisible === false || App.heartbeatTimer !== null) return;
         App.heartbeatTimer = setInterval(function () {
             try { App.applyLocalTicker(); } catch (error) {}
             try { runRevisionCheck(); } catch (error) {}
@@ -736,24 +816,125 @@
     }
     App.startHeartbeat = startHeartbeat;
 
-    function init() {
-        initNav();
-        initButtons();
-        App.loadFirstRunNotice().then(function (noticeConfirmed) {
-            if (!noticeConfirmed) return;
-            var preload = typeof App.loadProjects === "function" ? App.loadProjects() : Promise.resolve();
-            return preload.then(function () {
+    function stopHeartbeat() {
+        if (App.heartbeatTimer !== null) clearInterval(App.heartbeatTimer);
+        App.heartbeatTimer = null;
+    }
+    App.stopHeartbeat = stopHeartbeat;
+
+    App.shellVisible = true;
+    function setShellVisibility(visible) {
+        visible = visible === true;
+        if (App.shellVisible === visible) return Promise.resolve();
+        App.shellVisible = visible;
+        if (!visible) {
+            stopHeartbeat();
+            return Promise.resolve();
+        }
+        return Promise.resolve(
+            typeof App.runRevisionCheck === "function"
+                ? App.runRevisionCheck()
+                : null
+        ).then(function () {
+            if (App.shellVisible === true) startHeartbeat();
+        });
+    }
+    App.setShellVisibility = setShellVisibility;
+
+    App.restartHeartbeat = function () {
+        stopHeartbeat();
+        startHeartbeat();
+    };
+
+    // Single idempotent post-privacy-gate startup entry: only this function
+    // may run catalog -> refresh state -> page refresh -> heartbeat.
+    App.startupAfterPrivacyState = "idle";
+    App.startupAfterPrivacyPromise = null;
+
+    function showPublicStartupError(error) {
+        var message = "应用启动失败，请稍后重试或重启应用。";
+        if (error && typeof error.message === "string" && error.message.trim()) {
+            message = error.message;
+        } else if (typeof error === "string" && error.trim()) {
+            message = error;
+        }
+        if (App.showGlobalAlert) App.showGlobalAlert(message);
+    }
+    App.showPublicStartupError = showPublicStartupError;
+
+    function continueStartupAfterPrivacyGate() {
+        if (App.startupAfterPrivacyState === "ready") {
+            return Promise.resolve(true);
+        }
+        if (App.startupAfterPrivacyPromise) {
+            return App.startupAfterPrivacyPromise;
+        }
+
+        App.startupAfterPrivacyState = "starting";
+
+        App.startupAfterPrivacyPromise = Promise.resolve()
+            .then(function () {
+                return typeof App.loadProjects === "function"
+                    ? App.loadProjects()
+                    : Promise.resolve();
+            })
+            .then(function () {
                 return App.bridge.getRefreshState(
                     App.currentPage === "timeline" ? App.timelineDate : null
                 );
-            }).then(function (result) {
+            })
+            .then(function (result) {
                 var state = App.handleResult(result, function () { return null; });
                 if (state) App.acceptRefreshStateRuntime(state);
                 return refreshCurrentPageData(state);
-            }).then(function () {
+            })
+            .then(function () {
                 App.lastReconcileAtEpochMs = Date.now();
                 startHeartbeat();
-            }, startHeartbeat);
+            })
+            .then(function () {
+                App.startupAfterPrivacyState = "ready";
+                return true;
+            })
+            .catch(function (error) {
+                App.startupAfterPrivacyState = "failed";
+                showPublicStartupError(error);
+                return false;
+            })
+            .then(function (result) {
+                App.startupAfterPrivacyPromise = null;
+                return result;
+            });
+
+        return App.startupAfterPrivacyPromise;
+    }
+    App.continueStartupAfterPrivacyGate = continueStartupAfterPrivacyGate;
+
+    // Retry for privacy notice load failure; cannot bypass authorization.
+    function retryFirstRunNotice() {
+        if (App.firstRunNoticeLoading) return Promise.resolve(false);
+        App.firstRunNoticeLoaded = false;
+        return App.loadFirstRunNotice({ force: true }).then(function () {
+            if (App.privacyGateState === "accepted_ready") {
+                return continueStartupAfterPrivacyGate();
+            }
+            // acceptance_required: the gate is shown again by loadFirstRunNotice.
+            // load_failed: the blocking error is shown again. Either way, do
+            // not continue startup.
+            return false;
+        });
+    }
+    App.retryFirstRunNotice = retryFirstRunNotice;
+
+    function init() {
+        initNav();
+        initButtons();
+        App.loadFirstRunNotice().then(function () {
+            // Only accepted_ready continues startup; other states stay fail-closed.
+            if (App.privacyGateState === "accepted_ready") {
+                return continueStartupAfterPrivacyGate();
+            }
+            return null;
         });
     }
     App.init = init;

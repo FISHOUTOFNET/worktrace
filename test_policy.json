@@ -62,6 +62,10 @@
       {
         "path": "tests/webview/test_timeline_static_contract.py",
         "reason": "Timeline WebView static owner matrix covering display labels, live display, privacy, and editing contracts."
+      },
+      {
+        "path": "tests/test_timing_comparison_unit.py",
+        "reason": "Owner matrix for Standard timing validation comparison layer: prepare/compare modes, common/head-only/baseline-only set computation, gate thresholds, fail-closed exit codes, and exact-node-ID attribution."
       }
     ]
   },
@@ -162,6 +166,16 @@
       "path": "tests/webview/",
       "signal": "collector_runtime",
       "reason": "WebView static contract tests read frontend/runtime source strings but do not start collector or runtime threads."
+    },
+    {
+      "path": "tests/test_webview_bridge_statistics_export.py",
+      "signal": "collector_runtime",
+      "reason": "Bridge export contract tests scan runtime import strings statically for boundary checks; they do not start collector or runtime threads."
+    },
+    {
+      "path": "tests/test_projection_single_flight_unit.py",
+      "signal": "collector_runtime",
+      "reason": "Pure state-machine unit test for single-flight concurrency correctness; uses threads as test fixtures, does not start collector or runtime."
     }
   ],
   "marker_requirements": [
@@ -266,6 +280,7 @@
         "tests/test_export_",
         "tests/test_project_activity_summary_contract.py",
         "tests/test_webview_bridge_statistics.py",
+        "tests/test_webview_bridge_statistics_export.py",
         "tests/webview/test_statistics_static_contract.py"
       ]
     },

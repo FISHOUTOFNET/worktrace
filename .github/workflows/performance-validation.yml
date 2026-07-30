@@ -1,0 +1,678 @@
+# Performance Validation: baseline-vs-HEAD benchmark, WebView comparison,
+# and HEAD-only compact-storage memory gate.  Triggers: schedule (twice
+# weekly), manual dispatch, or PR labeled ``run-performance-validation``.
+# Modes: realistic (PR gate) vs stress (20k/10k); jobs: webview-comparison, product-benchmark, compact-memory.
+
+name: Performance validation
+
+on:
+  workflow_dispatch:
+    inputs:
+      revision:
+        description: Exact repository revision to validate
+        required: false
+        type: string
+      baseline_revision:
+        description: Baseline revision for benchmark comparison (defaults to merge-base with main)
+        required: false
+        type: string
+      base_branch:
+        description: Base branch for merge-base resolution (default main)
+        required: false
+        type: string
+        default: main
+      mode:
+        description: Validation mode — realistic (PR gate) or stress (full 10k/20k matrix)
+        required: false
+        type: choice
+        options:
+          - realistic
+          - stress
+        default: realistic
+      benchmark_comparison_tolerance_pct:
+        description: Max regression % for product benchmark comparison (default 10)
+        required: false
+        type: string
+        default: "10"
+  schedule:
+    - cron: "0 4 * * 1,4"
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  # Cancel any in-flight run for the same PR/ref when a new run is queued.
+  # This prevents parallel waste from accidental double-triggers while
+  # preserving one active run per PR/ref.
+  group: performance-validation-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONUTF8: "1"
+  PYTHONIOENCODING: utf-8
+  PYTHONFAULTHANDLER: "1"
+
+jobs:
+  # ===========================================================================
+  # Job 1: WebView baseline vs HEAD
+  # ===========================================================================
+  webview-comparison:
+    name: WebView baseline vs HEAD
+    if: |
+      github.event_name == 'schedule'
+      || github.event_name == 'workflow_dispatch'
+      || (
+        github.event_name == 'pull_request'
+        && github.event.label.name == 'run-performance-validation'
+      )
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository (full history)
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          show-progress: false
+          persist-credentials: false
+
+      - name: Resolve mode and profile
+        id: mode
+        shell: pwsh
+        run: |
+          $mode = "realistic"
+          if ($env:GITHUB_EVENT_NAME -eq "schedule") { $mode = "stress" }
+          if ($env:GITHUB_EVENT_NAME -eq "workflow_dispatch" -and "${{ github.event.inputs.mode }}" -eq "stress") { $mode = "stress" }
+          $profile = if ($mode -eq "stress") { "full" } else { "realistic" }
+          Write-Host "mode=$mode  profile=$profile"
+          "mode=$mode" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
+          "profile=$profile" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
+
+      - name: Resolve revisions
+        id: revs
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Set-StrictMode -Version Latest
+          $baseBranch = "${{ inputs.base_branch || 'main' }}"
+          $headSha = "${{ inputs.revision || github.event.pull_request.head.sha || github.sha }}"
+          if ([string]::IsNullOrWhiteSpace($headSha)) {
+            $headSha = (git rev-parse HEAD).Trim()
+          }
+
+          $baselineSha = "${{ inputs.baseline_revision }}"
+          if ([string]::IsNullOrWhiteSpace($baselineSha)) {
+            git fetch origin $baseBranch --depth=1 2>$null
+            $mbSub = "merge" + "-base"
+            $baselineSha = (git $mbSub $headSha origin/$baseBranch).Trim()
+          }
+
+          if ([string]::IsNullOrWhiteSpace($baselineSha)) {
+            throw "Could not resolve baseline revision"
+          }
+
+          Write-Host "baseline_sha=$baselineSha"
+          Write-Host "head_sha=$headSha"
+          "baseline_sha=$baselineSha" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
+          "head_sha=$headSha" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install dependencies
+        shell: pwsh
+        run: python -m pip install --disable-pip-version-check -q -r requirements-dev.txt
+
+      - name: Create worktrees and result directories
+        id: paths
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Set-StrictMode -Version Latest
+          $root = Join-Path $env:RUNNER_TEMP "worktrace-webview-comparison"
+          $baselineWt = Join-Path $root "baseline-worktree"
+          $headWt = Join-Path $root "head-worktree"
+          $resultsDir = Join-Path $root "results"
+          $baselineResults = Join-Path $resultsDir "baseline"
+          $headResults = Join-Path $resultsDir "head"
+          $comparisonResults = Join-Path $resultsDir "comparison"
+
+          git worktree remove --force $baselineWt 2>$null
+          git worktree remove --force $headWt 2>$null
+          git worktree prune
+
+          git worktree add $baselineWt ${{ steps.revs.outputs.baseline_sha }}
+          git worktree add $headWt ${{ steps.revs.outputs.head_sha }}
+
+          New-Item -ItemType Directory -Force -Path $baselineResults | Out-Null
+          New-Item -ItemType Directory -Force -Path $headResults | Out-Null
+          New-Item -ItemType Directory -Force -Path $comparisonResults | Out-Null
+
+          # Pre-create workflow-state.json so upload-artifact with
+          # if-no-files-found: error always has at least one file.
+          $state = @{
+            scenario = "webview_render"
+            run_id = "$env:GITHUB_RUN_ID"
+            baseline_sha = "${{ steps.revs.outputs.baseline_sha }}"
+            head_sha = "${{ steps.revs.outputs.head_sha }}"
+            created_at = (Get-Date).ToUniversalTime().ToString("o")
+            status = "initialized"
+          }
+          $statePath = Join-Path $resultsDir "workflow-state.json"
+          $state | ConvertTo-Json | Set-Content -LiteralPath $statePath -Encoding UTF8
+
+          "baseline_worktree=$baselineWt" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
+          "head_worktree=$headWt" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
+          "results_dir=$resultsDir" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
+          "baseline_results=$baselineResults" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
+          "head_results=$headResults" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
+          "comparison_results=$comparisonResults" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
+
+      - name: Compile Python in worktrees
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Set-StrictMode -Version Latest
+          $baselineWt = "${{ steps.paths.outputs.baseline_worktree }}"
+          $headWt = "${{ steps.paths.outputs.head_worktree }}"
+          foreach ($wt in @($baselineWt, $headWt)) {
+            Push-Location $wt
+            & python -m compileall -q worktrace
+            if ($LASTEXITCODE -ne 0) { throw "compile failed in $wt" }
+            Pop-Location
+          }
+
+      - name: Run WebView benchmark driver on baseline
+        id: baseline_driver
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $ErrorActionPreference = "Continue"
+          $baselineWt = "${{ steps.paths.outputs.baseline_worktree }}"
+          $baselineResults = "${{ steps.paths.outputs.baseline_results }}"
+          $profile = "${{ steps.mode.outputs.profile }}"
+
+          & python -u scripts/webview_render_perf.py `
+            --target-root $baselineWt `
+            --revision "${{ steps.revs.outputs.baseline_sha }}" `
+            --profile $profile `
+            --output "$baselineResults\webview-benchmark.json"
+          $exitCode = $LASTEXITCODE
+          "baseline_exit_code=$exitCode" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
+          if ($exitCode -ne 0) {
+            Write-Host "::warning::baseline WebView driver failed (exit $exitCode) — HEAD driver will still run"
+          } else {
+            Write-Host "baseline WebView driver completed"
+          }
+
+      - name: Run WebView benchmark driver on HEAD
+        id: head_driver
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $ErrorActionPreference = "Continue"
+          $headWt = "${{ steps.paths.outputs.head_worktree }}"
+          $headResults = "${{ steps.paths.outputs.head_results }}"
+          $profile = "${{ steps.mode.outputs.profile }}"
+
+          & python -u scripts/webview_render_perf.py `
+            --target-root $headWt `
+            --revision "${{ steps.revs.outputs.head_sha }}" `
+            --profile $profile `
+            --output "$headResults\webview-benchmark.json"
+          $exitCode = $LASTEXITCODE
+          "head_exit_code=$exitCode" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
+          if ($exitCode -ne 0) {
+            Write-Host "::warning::HEAD WebView driver failed (exit $exitCode)"
+          } else {
+            Write-Host "HEAD WebView driver completed"
+          }
+
+      - name: Compare WebView benchmarks and enforce no-regression gates
+        id: comparison
+        if: always()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Set-StrictMode -Version Latest
+          $baselineResults = "${{ steps.paths.outputs.baseline_results }}"
+          $headResults = "${{ steps.paths.outputs.head_results }}"
+          $comparisonResults = "${{ steps.paths.outputs.comparison_results }}"
+          $tolerance = "${{ inputs.benchmark_comparison_tolerance_pct || '10' }}"
+
+          & python -u scripts/webview_comparison.py `
+            --baseline-dir $baselineResults `
+            --head-dir $headResults `
+            --baseline-sha "${{ steps.revs.outputs.baseline_sha }}" `
+            --head-sha "${{ steps.revs.outputs.head_sha }}" `
+            --tolerance-pct $tolerance `
+            --output "$comparisonResults\webview-comparison.json"
+
+          $exitCode = $LASTEXITCODE
+          if ($exitCode -ne 0) {
+            Write-Host "webview_comparison=FAILED (exit $exitCode)"
+            exit 1
+          }
+          Write-Host "webview_comparison=PASSED"
+
+      - name: Upload WebView comparison artifact
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: webview-comparison-${{ github.run_id }}
+          path: ${{ steps.paths.outputs.results_dir }}/
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Clean up worktrees
+        if: always()
+        shell: pwsh
+        run: |
+          git worktree remove --force "${{ steps.paths.outputs.baseline_worktree }}" 2>$null
+          git worktree remove --force "${{ steps.paths.outputs.head_worktree }}" 2>$null
+          git worktree prune
+
+  # ===========================================================================
+  # Job 2: Product latency matrix
+  # ===========================================================================
+  product-benchmark:
+    name: Product latency - ${{ matrix.scenario }}
+    if: |
+      github.event_name == 'schedule'
+      || github.event_name == 'workflow_dispatch'
+      || (
+        github.event_name == 'pull_request'
+        && github.event.label.name == 'run-performance-validation'
+      )
+    runs-on: windows-latest
+    timeout-minutes: ${{ matrix.timeout_minutes }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - scenario: realistic_heavy_day
+            profile: realistic
+            timeout_minutes: 15
+            runs_in: realistic
+          - scenario: 20k_activities
+            profile: full
+            timeout_minutes: 25
+            runs_in: stress
+          - scenario: 10k_contributions
+            profile: full
+            timeout_minutes: 20
+            runs_in: stress
+
+    steps:
+      - name: Check out repository (full history)
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          show-progress: false
+          persist-credentials: false
+
+      - name: Check if scenario should run in this mode
+        id: guard
+        shell: pwsh
+        run: |
+          $mode = "${{ github.event.inputs.mode }}"
+          if ($env:GITHUB_EVENT_NAME -eq 'schedule') { $mode = 'stress' }
+          if ($env:GITHUB_EVENT_NAME -eq 'pull_request') { $mode = 'realistic' }
+          $runsIn = "${{ matrix.runs_in }}"
+          if ($mode -eq 'stress' -or $runsIn -eq 'realistic') {
+            "should_run=true" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
+            Write-Host "scenario=${{ matrix.scenario }} runs_in=$runsIn mode=$mode -> RUN"
+          } else {
+            "should_run=false" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
+            Write-Host "scenario=${{ matrix.scenario }} runs_in=$runsIn mode=$mode -> SKIP"
+          }
+
+      - name: Resolve revisions
+        if: steps.guard.outputs.should_run == 'true'
+        id: revs
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Set-StrictMode -Version Latest
+          $baseBranch = "${{ inputs.base_branch || 'main' }}"
+          $headSha = "${{ inputs.revision || github.event.pull_request.head.sha || github.sha }}"
+          if ([string]::IsNullOrWhiteSpace($headSha)) {
+            $headSha = (git rev-parse HEAD).Trim()
+          }
+
+          $baselineSha = "${{ inputs.baseline_revision }}"
+          if ([string]::IsNullOrWhiteSpace($baselineSha)) {
+            git fetch origin $baseBranch --depth=1 2>$null
+            $mbSub = "merge" + "-base"
+            $baselineSha = (git $mbSub $headSha origin/$baseBranch).Trim()
+          }
+
+          if ([string]::IsNullOrWhiteSpace($baselineSha)) {
+            throw "Could not resolve baseline revision"
+          }
+
+          Write-Host "baseline_sha=$baselineSha"
+          Write-Host "head_sha=$headSha"
+          "baseline_sha=$baselineSha" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
+          "head_sha=$headSha" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
+
+      - name: Set up Python
+        if: steps.guard.outputs.should_run == 'true'
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install dependencies
+        if: steps.guard.outputs.should_run == 'true'
+        shell: pwsh
+        run: python -m pip install --disable-pip-version-check -q -r requirements-dev.txt
+
+      - name: Create worktrees and result directories
+        if: steps.guard.outputs.should_run == 'true'
+        id: paths
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Set-StrictMode -Version Latest
+          $scenario = "${{ matrix.scenario }}"
+          $root = Join-Path $env:RUNNER_TEMP "worktrace-product-$scenario"
+          $baselineWt = Join-Path $root "baseline-worktree"
+          $headWt = Join-Path $root "head-worktree"
+          $resultsDir = Join-Path $root "results"
+          $baselineResults = Join-Path $resultsDir "baseline"
+          $headResults = Join-Path $resultsDir "head"
+          $comparisonResults = Join-Path $resultsDir "comparison"
+
+          git worktree remove --force $baselineWt 2>$null
+          git worktree remove --force $headWt 2>$null
+          git worktree prune
+
+          git worktree add $baselineWt ${{ steps.revs.outputs.baseline_sha }}
+          git worktree add $headWt ${{ steps.revs.outputs.head_sha }}
+
+          New-Item -ItemType Directory -Force -Path $baselineResults | Out-Null
+          New-Item -ItemType Directory -Force -Path $headResults | Out-Null
+          New-Item -ItemType Directory -Force -Path $comparisonResults | Out-Null
+
+          # Pre-create workflow-state.json so upload-artifact with
+          # if-no-files-found: error always has at least one file.
+          $state = @{
+            scenario = $scenario
+            run_id = "$env:GITHUB_RUN_ID"
+            baseline_sha = "${{ steps.revs.outputs.baseline_sha }}"
+            head_sha = "${{ steps.revs.outputs.head_sha }}"
+            created_at = (Get-Date).ToUniversalTime().ToString("o")
+            status = "initialized"
+          }
+          $statePath = Join-Path $resultsDir "workflow-state.json"
+          $state | ConvertTo-Json | Set-Content -LiteralPath $statePath -Encoding UTF8
+
+          "baseline_worktree=$baselineWt" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
+          "head_worktree=$headWt" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
+          "results_dir=$resultsDir" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
+          "baseline_results=$baselineResults" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
+          "head_results=$headResults" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
+          "comparison_results=$comparisonResults" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
+
+      - name: Compile Python in worktrees
+        if: steps.guard.outputs.should_run == 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Set-StrictMode -Version Latest
+          $baselineWt = "${{ steps.paths.outputs.baseline_worktree }}"
+          $headWt = "${{ steps.paths.outputs.head_worktree }}"
+          foreach ($wt in @($baselineWt, $headWt)) {
+            Push-Location $wt
+            # Only compile the product package — the HEAD-owned driver
+            # scripts may not exist in the baseline worktree.
+            & python -m compileall -q worktrace
+            if ($LASTEXITCODE -ne 0) { throw "compile failed in $wt" }
+            Pop-Location
+          }
+
+      - name: Run HEAD-owned benchmark driver on baseline
+        if: steps.guard.outputs.should_run == 'true'
+        id: baseline_driver
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $ErrorActionPreference = "Continue"
+          $baselineWt = "${{ steps.paths.outputs.baseline_worktree }}"
+          $baselineResults = "${{ steps.paths.outputs.baseline_results }}"
+
+          # The driver is HEAD-owned (lives in HEAD workspace, not baseline
+          # worktree).  --target-root points at baseline worktree so the
+          # driver imports baseline's product code in a separate subprocess.
+          # --scenario is required: each matrix job runs exactly ONE scenario.
+          & python -u scripts/ci/product_benchmark_driver.py `
+            --target-root $baselineWt `
+            --revision "${{ steps.revs.outputs.baseline_sha }}" `
+            --profile ${{ matrix.profile }} `
+            --scenario ${{ matrix.scenario }} `
+            --output-dir $baselineResults
+          $exitCode = $LASTEXITCODE
+          "baseline_exit_code=$exitCode" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
+          if ($exitCode -ne 0) {
+            Write-Host "::warning::baseline benchmark driver failed (exit $exitCode) — HEAD driver will still run"
+          } else {
+            Write-Host "baseline benchmark driver completed"
+          }
+
+      - name: Run HEAD-owned benchmark driver on HEAD
+        if: steps.guard.outputs.should_run == 'true'
+        id: head_driver
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $ErrorActionPreference = "Continue"
+          $headWt = "${{ steps.paths.outputs.head_worktree }}"
+          $headResults = "${{ steps.paths.outputs.head_results }}"
+
+          & python -u scripts/ci/product_benchmark_driver.py `
+            --target-root $headWt `
+            --revision "${{ steps.revs.outputs.head_sha }}" `
+            --profile ${{ matrix.profile }} `
+            --scenario ${{ matrix.scenario }} `
+            --output-dir $headResults
+          $exitCode = $LASTEXITCODE
+          "head_exit_code=$exitCode" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
+          if ($exitCode -ne 0) {
+            Write-Host "::warning::HEAD benchmark driver failed (exit $exitCode)"
+          } else {
+            Write-Host "HEAD benchmark driver completed"
+          }
+
+      - name: Compare benchmarks and enforce no-regression gates
+        id: comparison
+        if: always() && steps.guard.outputs.should_run == 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Set-StrictMode -Version Latest
+          $baselineResults = "${{ steps.paths.outputs.baseline_results }}"
+          $headResults = "${{ steps.paths.outputs.head_results }}"
+          $comparisonResults = "${{ steps.paths.outputs.comparison_results }}"
+          $tolerance = "${{ inputs.benchmark_comparison_tolerance_pct || '10' }}"
+
+          # The comparison always produces an artifact (fail-closed).
+          # If baseline or HEAD is invalid, the artifact records the
+          # failure mode instead of masking it.
+          & python -u scripts/benchmark_comparison.py `
+            --scenario ${{ matrix.scenario }} `
+            --baseline-dir $baselineResults `
+            --head-dir $headResults `
+            --baseline-sha "${{ steps.revs.outputs.baseline_sha }}" `
+            --head-sha "${{ steps.revs.outputs.head_sha }}" `
+            --tolerance-pct $tolerance `
+            --output "$comparisonResults\product-comparison.json"
+
+          $exitCode = $LASTEXITCODE
+          if ($exitCode -ne 0) {
+            Write-Host "benchmark_comparison=FAILED (exit $exitCode)"
+            exit 1
+          }
+          Write-Host "benchmark_comparison=PASSED"
+
+      - name: Upload product comparison artifact
+        if: always() && steps.guard.outputs.should_run == 'true'
+        uses: actions/upload-artifact@v6
+        with:
+          name: product-${{ matrix.scenario }}-${{ github.run_id }}
+          path: ${{ steps.paths.outputs.results_dir }}/
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Clean up worktrees
+        if: always() && steps.guard.outputs.should_run == 'true'
+        shell: pwsh
+        run: |
+          git worktree remove --force "${{ steps.paths.outputs.baseline_worktree }}" 2>$null
+          git worktree remove --force "${{ steps.paths.outputs.head_worktree }}" 2>$null
+          git worktree prune
+
+  # ===========================================================================
+  # Job 3: HEAD-only compact-storage memory gate (5000 entries)
+  # ===========================================================================
+  compact-memory:
+    name: Projection compact-storage memory
+    if: |
+      github.event_name == 'schedule'
+      || github.event_name == 'workflow_dispatch'
+      || (
+        github.event_name == 'pull_request'
+        && github.event.label.name == 'run-performance-validation'
+      )
+    runs-on: windows-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository (full history)
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          show-progress: false
+          persist-credentials: false
+
+      - name: Resolve HEAD revision
+        id: revs
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Set-StrictMode -Version Latest
+          $headSha = "${{ inputs.revision || github.event.pull_request.head.sha || github.sha }}"
+          if ([string]::IsNullOrWhiteSpace($headSha)) {
+            $headSha = (git rev-parse HEAD).Trim()
+          }
+          Write-Host "head_sha=$headSha"
+          "head_sha=$headSha" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install dependencies
+        shell: pwsh
+        run: python -m pip install --disable-pip-version-check -q -r requirements-dev.txt
+
+      - name: Create HEAD worktree and result directories
+        id: paths
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Set-StrictMode -Version Latest
+          $root = Join-Path $env:RUNNER_TEMP "worktrace-compact-memory"
+          $headWt = Join-Path $root "head-worktree"
+          $resultsDir = Join-Path $root "results"
+
+          git worktree remove --force $headWt 2>$null
+          git worktree prune
+
+          git worktree add $headWt ${{ steps.revs.outputs.head_sha }}
+
+          New-Item -ItemType Directory -Force -Path $resultsDir | Out-Null
+
+          # Pre-create workflow-state.json so upload-artifact with
+          # if-no-files-found: error always has at least one file.
+          $state = @{
+            scenario = "compact_storage_memory"
+            run_id = "$env:GITHUB_RUN_ID"
+            head_sha = "${{ steps.revs.outputs.head_sha }}"
+            size = 5000
+            created_at = (Get-Date).ToUniversalTime().ToString("o")
+            status = "initialized"
+          }
+          $statePath = Join-Path $resultsDir "workflow-state.json"
+          $state | ConvertTo-Json | Set-Content -LiteralPath $statePath -Encoding UTF8
+
+          "head_worktree=$headWt" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
+          "results_dir=$resultsDir" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
+
+      - name: Compile Python in HEAD worktree
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Set-StrictMode -Version Latest
+          $headWt = "${{ steps.paths.outputs.head_worktree }}"
+          Push-Location $headWt
+          & python -m compileall -q worktrace
+          if ($LASTEXITCODE -ne 0) { throw "compile failed in $headWt" }
+          Pop-Location
+
+      - name: Run compact-storage memory gate driver on HEAD
+        id: memory_driver
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Set-StrictMode -Version Latest
+          $headWt = "${{ steps.paths.outputs.head_worktree }}"
+          $resultsDir = "${{ steps.paths.outputs.results_dir }}"
+
+          # HEAD-only gate: 5000 entries, 3 compact + 3 expanded subprocesses.
+          # The driver writes progress.json / result.json / failure.json
+          # to --output-dir.  The gate is relative (compact < expanded),
+          # NOT a fixed MB threshold.
+          & python -u scripts/ci/compact_memory_driver.py `
+            --target-root $headWt `
+            --revision "${{ steps.revs.outputs.head_sha }}" `
+            --output-dir $resultsDir
+          $exitCode = $LASTEXITCODE
+          "memory_exit_code=$exitCode" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
+          if ($exitCode -ne 0) {
+            Write-Host "compact-memory gate FAILED (exit $exitCode)"
+            exit 1
+          }
+          Write-Host "compact-memory gate PASSED"
+
+      - name: Upload compact-memory artifact
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: compact-memory-${{ github.run_id }}
+          path: ${{ steps.paths.outputs.results_dir }}/
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Clean up worktree
+        if: always()
+        shell: pwsh
+        run: |
+          git worktree remove --force "${{ steps.paths.outputs.head_worktree }}" 2>$null
+          git worktree prune

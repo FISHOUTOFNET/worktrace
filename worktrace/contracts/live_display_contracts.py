@@ -102,6 +102,7 @@ class CurrentActivityContract(TypedDict, total=False):
     status: str
     is_persisted: bool
     project_name: str
+    project_description: str
     project_id: int
     persisted_activity_id: int
     resource_name: str
@@ -116,7 +117,7 @@ class CurrentActivityContract(TypedDict, total=False):
     live_clock: LiveClockV2
 
 
-class RecentActivityRowContract(TypedDict, total=False):
+class RecentRecordRowContract(TypedDict, total=False):
     project_name: str
     project_description: str
     project_id: int
@@ -137,7 +138,7 @@ class RecentActivityRowContract(TypedDict, total=False):
     is_classified: bool
 
 
-class TimelineSessionRowContract(RecentActivityRowContract, total=False):
+class TimelineSessionRowContract(RecentRecordRowContract, total=False):
     projection_instance_key: str
     projection_revision: str
     adjusted_duration_seconds: int | None
@@ -234,7 +235,7 @@ __all__ = [
     "LiveClockV2",
     "LiveState",
     "ProjectActivitySummaryRowContract",
-    "RecentActivityRowContract",
+    "RecentRecordRowContract",
     "RefreshStateContract",
     "TimelineSessionRowContract",
 ]

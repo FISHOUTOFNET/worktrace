@@ -62,10 +62,29 @@ CURRENT_DOMAIN_IDENTIFIERS = (
     "runtimePhase",
     "runtime_phase",
     "phase_value",
+    "phase_started_at",
+    "phase_elapsed_seconds",
 )
 
 ALLOWED_FILE_NAMES = {
     "test_code_comment_hygiene.py",
+}
+
+TEXT_SUFFIXES = {
+    ".css",
+    ".html",
+    ".iss",
+    ".js",
+    ".json",
+    ".md",
+    ".ps1",
+    ".py",
+    ".spec",
+    ".sql",
+    ".svg",
+    ".txt",
+    ".yml",
+    ".yaml",
 }
 
 
@@ -81,6 +100,8 @@ def _iter_scan_files() -> list[Path]:
             if path.name in ALLOWED_FILE_NAMES:
                 continue
             if "__pycache__" in path.parts:
+                continue
+            if path.suffix.lower() not in TEXT_SUFFIXES:
                 continue
             files.append(path)
     return files

@@ -34,7 +34,9 @@ SETTINGS_BRIDGE_METHODS = {
     "getSettingsPrivacyStatus",
     "importEncryptedBackup",
     "previewEncryptedBackupManifest",
+    "recoverDatabaseMaintenance",
     "setClipboardCaptureEnabled",
+    "setLaunchAtLogin",
 }
 
 
@@ -60,7 +62,11 @@ def test_settings_page_resources_and_controls_are_complete() -> None:
     assert (WEBVIEW_UI_DIR / "js" / "settings.js").is_file()
     assert 'src="js/settings.js"' in index
     assert "设置与隐私" in section
-    assert "管理本地隐私设置" in section
+    assert "管理本地数据、采集和备份" in section
+    for category in ("常规", "隐私", "数据与备份", "高级"):
+        assert category in section
+    assert 'data-settings-section="collection"' not in section
+    assert 'id="settings-section-collection"' not in section
 
     required_ids = (
         "settings-error",
@@ -68,6 +74,8 @@ def test_settings_page_resources_and_controls_are_complete() -> None:
         "settings-status",
         "settings-clipboard-toggle",
         "settings-clipboard-toggle-status",
+        "settings-launch-at-login-toggle",
+        "settings-launch-at-login-toggle-status",
         "settings-backup-passphrase",
         "settings-backup-passphrase-confirm",
         "settings-backup-export-btn",
@@ -75,7 +83,9 @@ def test_settings_page_resources_and_controls_are_complete() -> None:
         "settings-backup-status",
         "settings-backup-manifest",
         "settings-backup-import-passphrase",
-        "settings-backup-import-confirm",
+        "settings-backup-passphrase-reveal",
+        "settings-backup-passphrase-confirm-reveal",
+        "settings-backup-import-passphrase-reveal",
         "settings-backup-import-btn",
         "settings-backup-import-status",
         "settings-clear-confirm",
@@ -86,11 +96,13 @@ def test_settings_page_resources_and_controls_are_complete() -> None:
         "first-run-notice-overlay",
         "first-run-notice-accept-btn",
         "first-run-notice-close-btn",
+        "first-run-notice-retry-btn",
     )
     for dom_id in required_ids:
         assert 'id="' + dom_id + '"' in index
 
     for forbidden_id in (
+        "settings-backup-import-confirm",
         "settings-save-btn",
         "settings-set-path-btn",
         "settings-import-btn",
@@ -101,6 +113,47 @@ def test_settings_page_resources_and_controls_are_complete() -> None:
         "settings-refresh-btn",
     ):
         assert forbidden_id not in section
+
+
+def test_settings_toggle_layout_and_copy_contract() -> None:
+    index = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    styles = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
+    source = _settings_source()
+
+    for status_id, checkbox_id in (
+        (
+            "settings-launch-at-login-toggle-status",
+            "settings-launch-at-login-toggle",
+        ),
+        ("settings-clipboard-toggle-status", "settings-clipboard-toggle"),
+    ):
+        row = re.search(
+            r'<label[^>]*for="' + re.escape(checkbox_id) + r'"[^>]*>(.*?)</label>',
+            index,
+            re.DOTALL,
+        )
+        assert row is not None
+        assert row.group(1).index(f'id="{status_id}"') < row.group(1).index(
+            f'id="{checkbox_id}"'
+        )
+        assert f'id="{status_id}" class="toggle-status"' in row.group(1)
+
+    assert "关闭主窗口后 WorkTrace 会继续在通知区域后台运行。" not in index
+    assert "settings-help" not in index
+    assert ".settings-help" not in styles
+
+    toggle_wrap = re.search(r"\.toggle-wrap\s*\{([^}]*)\}", styles)
+    assert toggle_wrap is not None
+    assert "justify-self: end" in toggle_wrap.group(1)
+    assert "justify-content: flex-end" in toggle_wrap.group(1)
+    assert "align-items: center" in toggle_wrap.group(1)
+
+    toggle_status = re.search(r"\.toggle-status\s*\{([^}]*)\}", styles)
+    assert toggle_status is not None
+    assert "text-align: right" in toggle_status.group(1)
+    assert "white-space: nowrap" in toggle_status.group(1)
+
+    assert '"仅安装版可用"' in func_body(source, "renderLaunchAtLoginToggle")
 
 
 def test_settings_resource_is_packaged() -> None:
@@ -143,13 +196,15 @@ def test_settings_operation_state_has_one_cross_operation_guard() -> None:
     flags = (
         "settingsLoading",
         "settingsWriteInProgress",
+        "launchAtLoginWriteInProgress",
         "settingsBackupExportInProgress",
         "settingsBackupManifestInProgress",
         "settingsBackupImportInProgress",
         "settingsClearAllInProgress",
+        "recoveryInProgress",
     )
     for flag in flags:
-        assert "App." + flag in core
+        assert "App." + flag in core or flag == "recoveryInProgress"
 
     guard = func_body(source, "anySettingsOperationInProgress")
     for flag in flags:
@@ -162,6 +217,12 @@ def test_settings_operation_state_has_one_cross_operation_guard() -> None:
         "clearAllLocalData",
     ):
         assert "anySettingsOperationInProgress()" in func_body(source, operation)
+
+    # Recovery must participate in the same unified mutex: it sets the flag
+    # at start and releases it through a single path on success/failure.
+    recovery = func_body(source, "recoverDatabaseMaintenance")
+    assert "App.recoveryInProgress = true" in recovery
+    assert "setSettingsControlsDisabled(anySettingsOperationInProgress())" in recovery
 
 
 def test_settings_loading_and_clipboard_controls_have_separate_semantics() -> None:
@@ -184,6 +245,11 @@ def test_settings_loading_and_clipboard_controls_have_separate_semantics() -> No
     toggle = func_body(source, "setCaptureEnabled")
     assert "App.settingsWriteInProgress" in toggle
     assert "App.bridge.setClipboardCaptureEnabled" in toggle
+    assert "App.launchAtLoginWriteInProgress" not in toggle
+    launch_toggle = func_body(source, "setLaunchAtLoginEnabled")
+    assert "App.launchAtLoginWriteInProgress" in launch_toggle
+    assert "App.bridge.setLaunchAtLogin" in launch_toggle
+    assert "App.settingsWriteInProgress" not in launch_toggle
 
 
 def test_settings_status_and_manifest_render_through_safe_helpers() -> None:
@@ -210,6 +276,37 @@ def test_settings_status_and_manifest_render_through_safe_helpers() -> None:
         "setSettingsDangerControlsDisabled",
     ):
         assert _app_function_is_exposed(source, name)
+
+
+def test_settings_exposes_transient_reset_without_clearing_authoritative_state() -> None:
+    source = _settings_source()
+    assert _app_function_is_exposed(source, "resetSettingsTransientUi")
+    reset = func_body(source, "resetSettingsTransientUi")
+    for dom_id in (
+        "settings-backup-passphrase",
+        "settings-backup-passphrase-confirm",
+        "settings-backup-import-passphrase",
+        "settings-clear-confirm",
+        "settings-backup-status",
+        "settings-backup-import-status",
+        "settings-clear-status",
+        "settings-recovery-status",
+    ):
+        assert dom_id in reset
+    assert "renderBackupManifest(null" in reset
+    assert "firstRunNoticeViewingFromSettings" in reset
+    assert "hideFirstRunNotice" in reset
+    for preserved in (
+        "settingsLoaded =",
+        "lastSettingsStatus =",
+        "settingsBackupExportInProgress =",
+        "settingsBackupImportInProgress =",
+        "settingsClearAllInProgress =",
+        "recoveryInProgress =",
+        "firstRunNoticeRequired =",
+        "privacyGateState =",
+    ):
+        assert preserved not in reset
 
 
 def test_backup_export_keeps_passphrases_local_and_clears_inputs() -> None:
@@ -239,7 +336,9 @@ def test_import_and_clear_replace_data_through_one_generation_reset() -> None:
 
     import_body = func_body(source, "importEncryptedBackup")
     assert 'passInput.value = ""' in import_body
-    assert 'confirmInput.value = ""' in import_body
+    assert "App.openConfirmDialog" in import_body
+    assert "IMPORT_CONFIRM_LITERAL" in import_body
+    assert "confirmInput" not in import_body
     clear_body = func_body(source, "clearAllLocalData")
     assert 'confirmInput.value = ""' in clear_body
 
@@ -248,8 +347,69 @@ def test_destructive_operations_require_explicit_confirmation_literals() -> None
     source = _settings_source()
     assert 'IMPORT_CONFIRM_LITERAL = "导入并替换"' in source
     assert 'CLEAR_CONFIRM_LITERAL = "清空本地数据"' in source
-    assert "confirmation.trim() !== IMPORT_CONFIRM_LITERAL" in source
+    import_body = func_body(source, "importEncryptedBackup")
+    assert "App.bridge.importEncryptedBackup" in import_body
+    assert "IMPORT_CONFIRM_LITERAL" in import_body
+    assert "settings-backup-import-confirm" not in source
     assert "confirmation.trim() !== CLEAR_CONFIRM_LITERAL" in source
+
+
+def test_credentials_use_compact_rows_and_momentary_reveal_controls() -> None:
+    index = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    section = index[
+        index.index('id="settings-backup-card"') :
+        index.index('id="settings-recovery-card"')
+    ]
+    styles = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
+    source = _settings_source()
+    init = read_js("init.js")
+
+    assert section.count('class="credential-row"') == 3
+    assert section.count('class="password-reveal-button"') == 3
+    assert section.count('aria-label="按住查看口令"') == 3
+    assert section.count('aria-pressed="false"') >= 3
+    assert "form-grid" not in section
+    assert "settings-backup-import-confirm" not in section
+    assert "确认文字" not in section[
+        section.index('id="settings-backup-card"') :
+        section.index('id="settings-danger-card"')
+    ]
+    assert 'id="icon-eye"' in index and 'id="icon-eye-off"' in index
+    assert "grid-template-columns: 72px minmax(0, 22ch)" in styles
+    assert "max-width: 236px" in styles
+    for event_name in (
+        "pointerdown",
+        "pointerup",
+        "pointercancel",
+        "pointerleave",
+        "lostpointercapture",
+        "keydown",
+        "keyup",
+        "pagehide",
+    ):
+        assert event_name in source
+    assert 'event.key === "Escape"' in source
+    assert "hideAllPasswordFields" in func_body(source, "setSettingsBackupControlsDisabled")
+    assert "hideAllPasswordFields" in func_body(source, "resetSettingsTransientUi")
+    assert "App.initPasswordRevealControls" in init
+
+
+def test_danger_zone_removes_only_its_local_divider_and_status_gap() -> None:
+    styles = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
+    global_row = re.search(r"\.setting-row\s*\{([^}]*)\}", styles)
+    danger_row = re.search(r"\.danger-zone \.setting-row\s*\{([^}]*)\}", styles)
+    clear_status = re.search(r"#settings-clear-status\s*\{([^}]*)\}", styles)
+    danger = re.search(r"\.danger-zone\s*\{([^}]*)\}", styles)
+    assert global_row is not None and "border-bottom: 1px solid" in global_row.group(1)
+    assert danger_row is not None
+    assert "border-bottom: 0" in danger_row.group(1)
+    assert "padding-bottom: 4px" in danger_row.group(1)
+    assert clear_status is not None
+    assert "margin: 4px 0 0" in clear_status.group(1)
+    assert "min-height: 0" in clear_status.group(1)
+    assert danger is not None
+    assert "border: 1px solid #e4aaa5" in danger.group(1)
+    assert "background: #fffafa" in danger.group(1)
 
 
 def test_first_run_notice_is_fail_closed_and_mode_safe() -> None:
@@ -259,16 +419,29 @@ def test_first_run_notice_is_fail_closed_and_mode_safe() -> None:
     assert 'mode !== "view"' in render
     assert ".hidden" in render
     assert "textContent" in render
+    # The retry button must be hidden in normal gate/view modes.
+    assert "first-run-notice-retry-btn" in render
 
     blocking = func_body(source, "showFirstRunNoticeBlockingError")
     assert 'textContent = ""' in blocking
     assert "disabled = true" in blocking
     assert "hidden = true" in blocking
+    # On load failure the retry button must be visible and enabled so the
+    # user can recover without restarting or reinstalling.
+    assert "first-run-notice-retry-btn" in blocking
 
     load = func_body(source, "loadFirstRunNotice")
     assert "App.bridge.getFirstRunNotice()" in load
     assert "showFirstRunNoticeBlockingError" in load
-    assert "App.firstRunNoticeRequired = true" in load
+    # The privacy gate is now driven by an explicit state machine. The
+    # ``acceptance_required`` state must set ``firstRunNoticeRequired`` via
+    # ``setPrivacyGateState`` so that fail-closed semantics remain while the
+    # notice is loaded but unaccepted.
+    assert 'setPrivacyGateState("acceptance_required")' in load
+
+    gate = func_body(source, "setPrivacyGateState")
+    assert "App.privacyGateState = state" in gate
+    assert 'App.firstRunNoticeRequired = state === "acceptance_required"' in gate
 
     hide = func_body(source, "hideFirstRunNotice")
     assert "App.bridge" not in hide
@@ -277,7 +450,9 @@ def test_first_run_notice_is_fail_closed_and_mode_safe() -> None:
     accept = func_body(source, "acceptFirstRunNotice")
     assert "App.bridge.acceptFirstRunNotice()" in accept
     assert "App.firstRunNoticeAcceptInProgress" in accept
-    assert "App.refreshAll" in accept
+    # The accept flow must continue through the single idempotent startup
+    # entry owned by init.js, not a second refreshAll path.
+    assert "App.continueStartupAfterPrivacyGate" in accept
     assert "loadSettingsPrivacyStatus()" in accept
 
 
@@ -285,11 +460,13 @@ def test_settings_buttons_are_bound_to_named_capabilities() -> None:
     body = func_body(read_js("init.js"), "initButtons")
     bindings = (
         ("settings-clipboard-toggle", "App.handleCaptureToggleChange"),
+        ("settings-launch-at-login-toggle", "App.handleLaunchAtLoginToggleChange"),
         ("settings-backup-export-btn", "App.exportEncryptedBackup"),
         ("settings-backup-manifest-btn", "App.previewEncryptedBackupManifest"),
         ("settings-backup-import-btn", "App.importEncryptedBackup"),
         ("settings-clear-local-data-btn", "App.clearAllLocalData"),
         ("first-run-notice-accept-btn", "App.acceptFirstRunNotice"),
+        ("first-run-notice-retry-btn", "App.retryFirstRunNotice"),
         ("settings-privacy-notice-btn", "App.openPrivacyNoticeFromSettings"),
     )
     for dom_id, capability in bindings:
@@ -303,17 +480,14 @@ def test_settings_buttons_are_bound_to_named_capabilities() -> None:
 def test_settings_styles_are_scoped() -> None:
     styles = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
     for selector in (
-        ".settings-header",
-        ".settings-loading",
-        ".settings-error",
-        ".settings-card",
-        ".settings-backup-row",
-        ".settings-backup-input",
-        ".settings-backup-status",
-        ".settings-backup-manifest",
-        ".first-run-notice-overlay",
-        ".first-run-notice-dialog",
-        ".first-run-notice-error",
-        ".settings-privacy-notice-btn",
+        ".settings-layout",
+        ".settings-categories",
+        ".settings-content",
+        ".settings-section",
+        ".setting-row",
+        ".settings-backup-card",
+        ".backup-manifest",
+        ".first-run-dialog",
+        ".danger-zone",
     ):
         assert selector in styles

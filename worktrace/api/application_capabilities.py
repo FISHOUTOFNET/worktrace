@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from typing import Any, Protocol, runtime_checkable, TYPE_CHECKING
 
+from ..platforms.windows_startup import WindowsStartupRegistration
+
 from . import (
     export_api,
     project_api,
@@ -34,6 +36,7 @@ class SettingsCapability(Protocol):
     def get_settings_privacy_status(self) -> dict[str, Any]: ...
     def recover_database_maintenance_for_webview(self) -> dict[str, Any]: ...
     def clear_all_local_data_for_webview(self, confirm_text) -> dict[str, Any]: ...
+    def set_launch_at_login(self, enabled) -> dict[str, Any]: ...
 
 
 @runtime_checkable
@@ -47,17 +50,18 @@ class BackupCapability(Protocol):
 class StatisticsCapability(Protocol):
     StatisticsSummaryError: type
     StatisticsExportError: type
-    def get_statistics_export_view_model(self, date_from, date_to) -> dict[str, Any]: ...
+    def get_statistics_export_view_model(self, date_from, date_to, project_id=None) -> dict[str, Any]: ...
     def format_export_duration(self, duration_seconds) -> str: ...
-    def export_statistics_csv(self, date_from, date_to, output_path, expected_snapshot_revision) -> dict[str, Any]: ...
+    def export_statistics_csv(self, date_from, date_to, output_path, expected_export_ticket_revision, project_id=None) -> dict[str, Any]: ...
 
 
 @runtime_checkable
 class TimelineCapability(Protocol):
     TIMELINE_NOTE_MAX_LENGTH: int
     def get_timeline_view_model(self, date, *, runtime, collector_status) -> dict[str, Any]: ...
-    def get_session_activity_summary_view_model(self, *, report_date, projection_instance_key, expected_projection_revision, runtime, collector_status) -> dict[str, Any]: ...
+    def get_session_activity_summary_view_model(self, *, report_date, projection_instance_key, expected_projection_revision, expected_source_version, runtime, collector_status) -> dict[str, Any]: ...
     def list_selectable_projects(self) -> list[dict[str, Any]]: ...
+    def list_filter_projects(self) -> list[dict[str, Any]]: ...
     def save_timeline_session_edit(self, report_date, projection_instance_key, projection_revision, request_id, project_id, adjusted_duration_seconds, note) -> dict[str, Any]: ...
     def hide_timeline_session(self, report_date, projection_instance_key, projection_revision, request_id) -> dict[str, Any]: ...
     def merge_timeline_session(self, report_date, projection_instance_key, direction, projection_revision, request_id, target_projection_instance_key, target_projection_revision) -> dict[str, Any]: ...
@@ -109,17 +113,77 @@ class OverviewApplicationService:
 class SettingsApplicationService:
     """Concrete settings capability delegating to settings_api."""
 
+    def __init__(
+        self,
+        startup_registration: WindowsStartupRegistration | None = None,
+    ) -> None:
+        self._startup_registration = (
+            startup_registration
+            if startup_registration is not None
+            else WindowsStartupRegistration()
+        )
+
     def get_first_run_notice_for_webview(self):
         return settings_api.get_first_run_notice_for_webview()
 
     def get_settings_privacy_status(self):
-        return settings_api.get_settings_privacy_status()
+        result = settings_api.get_settings_privacy_status()
+        if result.get("ok") is not True:
+            return result
+        status = dict(result["status"])
+        status["launch_at_login"] = self._launch_at_login_status()
+        return {"ok": True, "status": status}
 
     def recover_database_maintenance_for_webview(self):
         return settings_api.recover_database_maintenance_for_webview()
 
     def clear_all_local_data_for_webview(self, confirm_text):
         return settings_api.clear_all_local_data_for_webview(confirm_text)
+
+    def set_launch_at_login(self, enabled):
+        if enabled is not True and enabled is not False:
+            return {
+                "ok": False,
+                "error": "请选择有效的登录启动状态",
+                "status": self.get_settings_privacy_status().get("status"),
+            }
+        if not self._startup_registration.supported:
+            return {
+                "ok": False,
+                "error": "当前平台不支持登录启动设置",
+                "status": self.get_settings_privacy_status().get("status"),
+            }
+        error = None
+        try:
+            if enabled:
+                self._startup_registration.enable()
+            else:
+                self._startup_registration.disable()
+        except Exception:
+            error = "设置登录启动失败"
+        status_result = self.get_settings_privacy_status()
+        status = status_result.get("status")
+        actual = bool(
+            isinstance(status, dict)
+            and isinstance(status.get("launch_at_login"), dict)
+            and status["launch_at_login"].get("enabled") is True
+        )
+        if error is not None or actual is not enabled:
+            return {
+                "ok": False,
+                "error": error or "登录启动状态未能保存",
+                "status": status,
+            }
+        return {"ok": True, "status": status}
+
+    def _launch_at_login_status(self) -> dict[str, bool]:
+        supported = self._startup_registration.supported
+        return {
+            "supported": supported,
+            "enabled": (
+                self._startup_registration.is_configured() if supported else False
+            ),
+        }
 
 
 class BackupApplicationService:
@@ -145,15 +209,15 @@ class StatisticsApplicationService:
     StatisticsSummaryError = statistics_api.StatisticsSummaryError
     StatisticsExportError = export_api.StatisticsExportError
 
-    def get_statistics_export_view_model(self, date_from, date_to):
-        return statistics_api.get_statistics_export_view_model(date_from, date_to)
+    def get_statistics_export_view_model(self, date_from, date_to, project_id=None):
+        return statistics_api.get_statistics_export_view_model(date_from, date_to, project_id)
 
     def format_export_duration(self, duration_seconds):
         return statistics_api.format_export_duration(duration_seconds)
 
-    def export_statistics_csv(self, date_from, date_to, output_path, expected_snapshot_revision):
+    def export_statistics_csv(self, date_from, date_to, output_path, expected_export_ticket_revision, project_id=None):
         return export_api.export_statistics_csv(
-            date_from, date_to, output_path, expected_snapshot_revision
+            date_from, date_to, output_path, expected_export_ticket_revision, project_id
         )
 
 
@@ -173,6 +237,7 @@ class TimelineApplicationService:
         report_date,
         projection_instance_key,
         expected_projection_revision,
+        expected_source_version,
         runtime,
         collector_status,
     ):
@@ -180,12 +245,16 @@ class TimelineApplicationService:
             report_date=report_date,
             projection_instance_key=projection_instance_key,
             expected_projection_revision=expected_projection_revision,
+            expected_source_version=expected_source_version,
             runtime=runtime,
             collector_status=collector_status,
         )
 
     def list_selectable_projects(self):
         return project_api.list_selectable_projects()
+
+    def list_filter_projects(self):
+        return timeline_api.list_filter_projects()
 
     def save_timeline_session_edit(
         self,

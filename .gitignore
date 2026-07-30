@@ -29,11 +29,17 @@ worktrace.db
 logs/
 *.log
 
+# Test/CI artifacts (timing summaries, benchmark JSON, JUnit XML, etc.)
+test-results/
+tmp/
+.pytest_basetemp/
+
 # User exports
 /exports/
 *.xlsx
 *.csv
 *.md.tmp
+.tmp/
 
 # Environment / secrets
 .env

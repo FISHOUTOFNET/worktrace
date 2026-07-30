@@ -34,6 +34,7 @@ class TimelineBridgeMixin:
         projection_instance_key: str,
         report_date: str | None = None,
         expected_projection_revision: str | None = None,
+        expected_source_version: str | None = None,
     ) -> dict[str, Any]:
         try:
             if report_date is not None and (
@@ -56,6 +57,9 @@ class TimelineBridgeMixin:
                 expected_projection_revision=(
                     (expected_projection_revision or "").strip() or None
                 ),
+                expected_source_version=(
+                    (expected_source_version or "").strip() or None
+                ),
                 runtime=self._runtime(),
                 collector_status=self._collector_status(),
             )
@@ -67,17 +71,33 @@ class TimelineBridgeMixin:
 
     def list_projects_for_timeline(self) -> dict[str, Any]:
         try:
-            projects = self._services.timeline.list_selectable_projects()
+            editing_projects = self._services.timeline.list_selectable_projects()
+            filter_projects = self._services.timeline.list_filter_projects()
+            editing_dto = [
+                {
+                    "id": int(project.get("id") or 0),
+                    "name": str(project.get("name") or ""),
+                    "description": str(project.get("description") or ""),
+                }
+                for project in editing_projects
+            ]
+            filter_dto = [
+                {
+                    "id": int(project.get("id") or 0),
+                    "name": str(project.get("name") or ""),
+                    "description": str(project.get("description") or ""),
+                }
+                for project in filter_projects
+            ]
             return {
                 "ok": True,
-                "projects": [
-                    {
-                        "id": int(project.get("id") or 0),
-                        "name": str(project.get("name") or ""),
-                        "description": str(project.get("description") or ""),
-                    }
-                    for project in projects
-                ],
+                # ``projects`` is kept for backward compatibility. New
+                # consumers should use ``editing_projects`` (edit dropdown,
+                # includes the system ``未归类``) or ``filter_projects``
+                # (filter dropdowns, excludes the system project).
+                "projects": editing_dto,
+                "editing_projects": editing_dto,
+                "filter_projects": filter_dto,
             }
         except Exception:
             logger.exception("webview bridge list_projects_for_timeline failed")

@@ -1,5 +1,4 @@
-// WorkTrace WebView frontend — overview module.
-
+// WorkTrace WebView frontend — Overview projection and Timeline handoff.
 (function () {
     "use strict";
     var App = window.WorkTraceApp = window.WorkTraceApp || {};
@@ -16,97 +15,163 @@
         App.renderDurationProjected(element, seconds || 0, continuityKey);
     }
 
-    function showOverview(overview) {
-        if (!overview) return;
-        App.lastOverviewSnapshot = overview;
-        document.getElementById("kpi-date").textContent = overview.date || "--";
-        document.getElementById("kpi-projects").textContent = String(overview.project_count || 0);
-        var current = overview.current_activity || {};
-        renderKpi(
-            document.getElementById("kpi-total"),
-            overview.today_total_seconds,
-            kpiLiveTarget(overview, "today_total_seconds"),
-            "overview-total"
-        );
-        renderKpi(
-            document.getElementById("kpi-classified"),
-            overview.classified_seconds,
-            kpiLiveTarget(overview, "classified_seconds"),
-            "overview-classified"
-        );
-        renderKpi(
-            document.getElementById("kpi-uncategorized"),
-            overview.uncategorized_seconds,
-            kpiLiveTarget(overview, "uncategorized_seconds"),
-            "overview-uncategorized"
-        );
-        App.renderCurrentActivityElement(
-            document.getElementById("current-activity"),
-            current,
-            "overview"
-        );
-    }
-    App.showOverview = showOverview;
-
-    function kpiLiveTarget(overview, field) {
-        overview = overview || {};
-        var targets = overview.kpi_live_targets;
-        if (!targets || typeof targets !== "object") return null;
-        var target = targets[field];
+    function kpiLiveTarget(bundle, field) {
+        var targets = bundle && bundle.kpi_live_targets;
+        var target = targets && targets[field];
         return target && typeof target === "object" ? target : null;
     }
 
-    function showRecent(recentResult) {
-        App.lastRecentData = recentResult;
-        var listEl = document.getElementById("recent-list");
-        if (!recentResult || !recentResult.activities || recentResult.activities.length === 0) {
-            listEl.innerHTML = '<div class="recent-empty">暂无活动</div>';
+    function durationMarkup(item, role) {
+        var clock = App.validateLiveClock(item && item.live_clock);
+        var canTick = !!(clock && clock.is_live === true
+            && clock.duration_semantic === "aggregate_live");
+        var durable = Math.max(0, parseInt(item && item.duration_seconds, 10) || 0);
+        var seconds = canTick ? App.computeClockDurationNow(clock, Date.now()) : durable;
+        var continuity = canTick ? App.liveContinuityKey(item, role) : "";
+        var attributes = canTick
+            ? App.liveClockDataAttributes(clock, continuity, role)
+            : "";
+        return '<strong class="numeric recent-duration"' + attributes
+            + ' data-duration-seconds="' + String(seconds || 0) + '">'
+            + App.escapeHtml(App.formatDuration(seconds || 0)) + '</strong>';
+    }
+
+    function descriptionClass(item, base) {
+        return base + (item && item.description_source === "derived" ? " derived" : "");
+    }
+
+    function renderProjectDistribution(distribution) {
+        var bar = document.getElementById("overview-project-bar");
+        var segments = distribution && Array.isArray(distribution.segments)
+            ? distribution.segments.slice(0, 4)
+            : [];
+        if (!segments.length) {
+            bar.innerHTML = "";
+            bar.hidden = true;
             return;
         }
-        var html = "";
-        for (var i = 0; i < recentResult.activities.length; i++) {
-            var item = recentResult.activities[i];
-            var isStatusOnly = item.row_kind === "status_only";
-            var inProgress = item.is_in_progress === true || (!item.end_time && item.is_in_progress !== false);
-            var clock = App.validateLiveClock(item.live_clock);
-            var canTick = !!(!isStatusOnly
-                && clock
-                && clock.is_live === true
-                && clock.duration_semantic === "aggregate_live");
-            if (item.live_clock && !clock) {
-                App.recordLiveClockContractViolation("", "overview", "recent_invalid_live_clock", 2);
-            }
-            var timeRange = App.formatTimeRange(item.start_time, item.end_time, inProgress);
-            var durableSeconds = Math.max(0, parseInt(item.duration_seconds, 10) || 0);
-            var initialSeconds = canTick
-                ? App.computeClockDurationNow(clock, Date.now())
-                : durableSeconds;
-            var continuityKey = canTick ? App.liveContinuityKey(item, "recent") : "";
-            var cls = "recent-item";
-            if (inProgress) cls += " in-progress";
-            if (canTick) cls += " live-projected";
-            var durationText = App.formatDuration(initialSeconds || 0);
-            var statusText = App.displayStatusText(item);
-            var titleText = isStatusOnly
-                ? (item.display_status || item.status_label || statusText || "")
-                : App.formatProjectLabel(item.project_name, item.project_description);
-            var clockAttributes = canTick
-                ? App.liveClockDataAttributes(clock, continuityKey, "recent")
-                : "";
-            html += '<div class="' + cls + '" data-recent-index="' + i + '"'
-                + ' data-duration-seconds="' + durableSeconds + '">'
-                + '<div>'
-                + '<div class="recent-item-project">' + App.escapeHtml(titleText) + '</div>'
-                + '<div class="recent-item-time">' + App.escapeHtml(timeRange) + '</div>'
-                + '<div class="recent-item-status">' + App.escapeHtml(statusText) + '</div>'
-                + '</div>'
-                + '<div class="recent-item-duration"' + clockAttributes
-                + ' data-duration-seconds="' + String(initialSeconds || 0) + '">'
-                + App.escapeHtml(durationText) + '</div>'
-                + '</div>';
-        }
-        listEl.innerHTML = html;
-    }
-    App.showRecent = showRecent;
 
+        bar.hidden = false;
+        bar.innerHTML = segments.map(function (segment, index) {
+            var rawSeconds = Number(segment.duration_seconds);
+            var seconds = Number.isFinite(rawSeconds) ? Math.max(0, rawSeconds) : 0;
+            var grow = Math.max(1, Math.round(seconds));
+            var label = String(segment.label || "");
+            var hours = App.formatCompactHours(seconds);
+            var exactDuration = App.formatDuration(seconds);
+            var className = segment.is_other
+                ? "is-other"
+                : segment.is_uncategorized
+                    ? "is-uncategorized"
+                    : "rank-" + String(index + 1);
+            var accessibleText = label + "，" + exactDuration;
+            return '<div class="overview-project-segment ' + className
+                + '" style="flex-grow: ' + String(grow)
+                + '" role="listitem" title="' + App.escapeHtml(label + " · " + exactDuration)
+                + '" aria-label="' + App.escapeHtml(accessibleText) + '">'
+                + '<span class="overview-project-name">' + App.escapeHtml(label) + '</span>'
+                + '<span class="overview-project-hours">' + App.escapeHtml(hours) + '</span>'
+                + '</div>';
+        }).join("");
+    }
+
+    function timelineIntent(item, focusTarget) {
+        if (!item || !item.projection_instance_key) return;
+        var date = String(item.start_time || item.report_date || App.timelineDate || "").slice(0, 10);
+        if (!date) return;
+        App.pendingTimelineSelectionIntent = {
+            date: date,
+            projectionInstanceKey: item.projection_instance_key,
+            focusTarget: focusTarget || ""
+        };
+        App.timelineDate = date;
+        App.switchPage("timeline");
+        App.loadTimelineReport(date, {
+            showLoading: true,
+            resetSelection: false
+        }).then(function () {
+            var selected = App.findSessionByProjectionKey(item.projection_instance_key);
+            if (!selected) return;
+            App.selectTimelineSession(item.projection_instance_key, App.currentSessions || []);
+            if (typeof App.focusTimelineEditorField === "function") {
+                App.focusTimelineEditorField(focusTarget || "");
+            }
+        });
+    }
+    App.openOverviewTimelineIntent = timelineIntent;
+
+    function bindIntentButtons(container, items, attribute, focusResolver) {
+        var buttons = container.querySelectorAll("[" + attribute + "]");
+        for (var index = 0; index < buttons.length; index++) {
+            (function (button) {
+                button.addEventListener("click", function () {
+                    var item = items[parseInt(button.getAttribute(attribute), 10)];
+                    timelineIntent(item, focusResolver ? focusResolver(item) : "");
+                });
+            })(buttons[index]);
+        }
+    }
+
+    function renderRecent(items) {
+        var list = document.getElementById("recent-list");
+        items = Array.isArray(items) ? items : [];
+        if (!items.length) {
+            list.innerHTML = '<div class="empty-state"><strong>暂无最近记录</strong>'
+                + '<span>形成可报告的时间段后会显示在这里。</span></div>';
+            return;
+        }
+        list.innerHTML = items.map(function (item, index) {
+            return '<button type="button" class="recent-row" data-recent-index="' + index + '">'
+                + '<span class="recent-start-time numeric">'
+                + App.escapeHtml(App.formatStartTimeOnly(item.start_time)) + '</span>'
+                + '<span class="recent-main"><span class="recent-title-line">'
+                + '<span class="recent-project" title="'
+                + App.escapeHtml(App.formatProjectLabel(item.project_name, item.project_description))
+                + '">' + App.escapeHtml(item.project_name || "未归类") + '</span></span>'
+                + '<span class="' + descriptionClass(item, "recent-description") + '">'
+                + App.escapeHtml(item.display_description || "暂无描述") + '</span></span>'
+                + durationMarkup(item, "overview-recent") + '</button>';
+        }).join("");
+        bindIntentButtons(list, items, "data-recent-index");
+    }
+
+    function showOverview(bundle) {
+        if (!bundle) return;
+        App.lastOverviewSnapshot = bundle;
+        renderKpi(
+            document.getElementById("kpi-total"),
+            bundle.today_total_seconds,
+            kpiLiveTarget(bundle, "today_total_seconds"),
+            "overview-total"
+        );
+        App.renderCurrentActivityElement(
+            document.getElementById("current-activity"),
+            bundle.current_activity || {},
+            "overview"
+        );
+        // Navigation requires a normal active state plus a stable current_session;
+        // paused/idle/excluded/error must not show a clickable card even with a
+        // stale backend current_session.
+        var currentButton = document.getElementById("current-activity");
+        var currentActivity = bundle.current_activity || {};
+        var currentSession = bundle.current_session;
+        var statusAllowsNavigation =
+            currentActivity.active !== false
+            && String(currentActivity.status || "") === "normal";
+        var canNavigate = !!(statusAllowsNavigation
+            && currentSession
+            && currentSession.projection_instance_key
+            && currentSession.start_time);
+        currentButton.disabled = !canNavigate;
+        currentButton.onclick = canNavigate
+            ? function () { timelineIntent(currentSession, ""); }
+            : null;
+        renderProjectDistribution(bundle.project_distribution);
+        renderRecent(bundle.recent);
+    }
+    App.showOverview = showOverview;
+
+    App.showRecent = function (payload) {
+        renderRecent((payload && payload.recent) || []);
+    };
 })();

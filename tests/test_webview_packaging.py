@@ -100,6 +100,15 @@ def test_spec_retains_win32timezone():
     assert "win32timezone" in _read(SPEC_PATH)
 
 
+def test_spec_bundles_canonical_icon_and_tray_pywin32_imports():
+    spec = _read(SPEC_PATH)
+    assert "worktrace.ico" in spec
+    assert "icon=str(root / 'worktrace' / 'assets' / 'worktrace.ico')" in spec
+    for module in ("win32api", "win32con", "win32gui"):
+        assert module in spec
+    assert (REPO_ROOT / "worktrace" / "assets" / "worktrace.ico").is_file()
+
+
 def test_entry_script_routes_probe_or_forwards_to_worktrace_main():
     source = _read(ENTRY_PATH)
     assert "--windows-probe-helper" in source
@@ -122,7 +131,8 @@ def test_main_defaults_to_webview_without_flag():
 
     called = {"count": 0}
 
-    def fake_webview_main():
+    def fake_webview_main(*, background=False):
+        assert background is False
         called["count"] += 1
         return 0
 
@@ -137,7 +147,8 @@ def test_main_ignores_extra_args():
 
     called = {"count": 0}
 
-    def fake_webview_main():
+    def fake_webview_main(*, background=False):
+        assert background is False
         called["count"] += 1
         return 0
 
@@ -150,7 +161,8 @@ def test_main_ignores_extra_args():
 def test_main_does_not_instantiate_worktrace_app_on_default_path():
     import worktrace.main as main_mod
 
-    def fake_webview_main_returning_nonzero():
+    def fake_webview_main_returning_nonzero(*, background=False):
+        assert background is False
         return 2
 
     with patch("worktrace.webview_main.main", fake_webview_main_returning_nonzero):
@@ -161,7 +173,8 @@ def test_main_does_not_instantiate_worktrace_app_on_default_path():
 def test_main_propagates_webview_failure_without_tkinter_fallback(monkeypatch):
     import worktrace.main as main_mod
 
-    def boom():
+    def boom(*, background=False):
+        assert background is False
         raise RuntimeError("webview failed to start")
 
     monkeypatch.setattr("worktrace.webview_main.main", boom)

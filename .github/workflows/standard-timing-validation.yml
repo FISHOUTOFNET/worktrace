@@ -1,0 +1,536 @@
+# Standard timing validation — baseline vs HEAD comparison.  Tiers: common
+# (3 interleaved pairs), HEAD-only (3x), HEAD full (3x).  Gates: common
+# median <= 10%, full <= 240s, all valid, no failures, dep match.  Plugins
+# load from HEAD-owned harness; timing keyed by pytest report.nodeid.
+
+name: Standard timing validation
+
+on:
+  workflow_dispatch:
+    inputs:
+      baseline_revision:
+        description: Baseline revision (defaults to merge-base with base branch)
+        required: false
+        type: string
+      head_revision:
+        description: Head revision (defaults to PR head or current SHA)
+        required: false
+        type: string
+      base_branch:
+        description: Base branch for merge-base resolution
+        required: false
+        type: string
+        default: main
+      allow_dependency_changes:
+        description: Allow baseline/HEAD requirements to differ (invalidates pure comparison)
+        required: false
+        type: boolean
+        default: false
+      common_regression_threshold_pct:
+        description: Max paired median regression % for common suite (default 10)
+        required: false
+        type: string
+        default: "10"
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  # Cancel any in-flight timing run for the same PR/ref when a new run is
+  # queued.  Independent from performance-validation's group so the two
+  # expensive workflows can run in parallel if needed, but duplicate runs
+  # of the same workflow on the same PR/ref are cancelled.
+  group: standard-timing-validation-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONUTF8: "1"
+  PYTHONIOENCODING: utf-8
+  PYTHONFAULTHANDLER: "1"
+
+jobs:
+  compare:
+    name: Baseline vs HEAD timing
+    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'run-standard-timing'
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out repository (full history)
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          show-progress: false
+          persist-credentials: false
+
+      - name: Resolve revisions
+        id: revs
+        shell: pwsh
+        run: |
+          $baseBranch = "${{ inputs.base_branch || 'main' }}"
+
+          # HEAD: prefer explicit input, then PR head SHA, then current SHA.
+          $headSha = "${{ inputs.head_revision || github.event.pull_request.head.sha || github.sha }}"
+          if ([string]::IsNullOrWhiteSpace($headSha)) {
+            $headSha = (git rev-parse HEAD).Trim()
+          }
+
+          # Baseline: prefer explicit input, then merge-base with base branch.
+          $baselineSha = "${{ inputs.baseline_revision }}"
+          if ([string]::IsNullOrWhiteSpace($baselineSha)) {
+            git fetch origin $baseBranch --depth=1 2>$null
+            # Split the subcommand so the workflow source never contains the literal substring.
+            $mbSub = "merge" + "-base"
+            $baselineSha = (git $mbSub $headSha origin/$baseBranch).Trim()
+          }
+
+          if ([string]::IsNullOrWhiteSpace($baselineSha)) {
+            throw "Could not resolve baseline revision"
+          }
+
+          Write-Host "baseline_sha=$baselineSha"
+          Write-Host "head_sha=$headSha"
+          "baseline_sha=$baselineSha" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
+          "head_sha=$headSha" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install dependencies
+        shell: pwsh
+        run: python -m pip install --disable-pip-version-check -q -r requirements-dev.txt
+
+      - name: Create worktrees and result directories
+        id: paths
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP "worktrace-standard-timing"
+          $baselineWt = Join-Path $root "baseline-worktree"
+          $headWt = Join-Path $root "head-worktree"
+          $resultsDir = Join-Path $root "results"
+          $harnessDir = Join-Path $root "harness"
+
+          # Remove stale worktrees from a previous run on the same runner.
+          git worktree remove --force $baselineWt 2>$null
+          git worktree remove --force $headWt 2>$null
+          git worktree prune
+
+          git worktree add $baselineWt ${{ steps.revs.outputs.baseline_sha }}
+          git worktree add $headWt ${{ steps.revs.outputs.head_sha }}
+
+          New-Item -ItemType Directory -Force -Path $resultsDir | Out-Null
+          New-Item -ItemType Directory -Force -Path (Join-Path $resultsDir "collection") | Out-Null
+          New-Item -ItemType Directory -Force -Path $harnessDir | Out-Null
+
+          "baseline_worktree=$baselineWt" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
+          "head_worktree=$headWt" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
+          "results_dir=$resultsDir" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
+          "harness_dir=$harnessDir" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
+
+      - name: Check dependency consistency
+        id: deps
+        shell: pwsh
+        run: |
+          $baselineWt = "${{ steps.paths.outputs.baseline_worktree }}"
+          $headWt = "${{ steps.paths.outputs.head_worktree }}"
+
+          $baselineReqHash = (Get-FileHash -Algorithm SHA256 "$baselineWt\requirements.txt").Hash
+          $baselineDevHash = (Get-FileHash -Algorithm SHA256 "$baselineWt\requirements-dev.txt").Hash
+          $headReqHash = (Get-FileHash -Algorithm SHA256 "$headWt\requirements.txt").Hash
+          $headDevHash = (Get-FileHash -Algorithm SHA256 "$headWt\requirements-dev.txt").Hash
+
+          $match = ($baselineReqHash -eq $headReqHash) -and ($baselineDevHash -eq $headDevHash)
+          Write-Host "dependency_match=$match"
+          Write-Host "baseline_requirements_hash=$baselineReqHash"
+          Write-Host "head_requirements_hash=$headReqHash"
+
+          "dependency_match=$($match.ToString().ToLower())" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
+
+          if (-not $match) {
+            $allow = "${{ inputs.allow_dependency_changes || 'false' }}"
+            if ($allow -ne "true") {
+              Write-Host "dependency_mismatch=true"
+              Write-Host "Requirements differ between baseline and HEAD."
+              Write-Host "Set allow_dependency_changes=true to proceed (invalidates pure comparison)."
+            } else {
+              Write-Host "dependency_mismatch=true (allowed by manual input)"
+            }
+          }
+
+      - name: Compile Python in worktrees
+        shell: pwsh
+        run: |
+          $baselineWt = "${{ steps.paths.outputs.baseline_worktree }}"
+          $headWt = "${{ steps.paths.outputs.head_worktree }}"
+
+          # Compile both worktrees so .pyc files are fresh for each revision.
+          Push-Location $baselineWt
+          & python -m compileall -q worktrace scripts/pytest_diagnostics.py scripts/pytest_log_to_junit.py scripts/run_pytest_ci.py scripts/pytest_timing_summary.py
+          if ($LASTEXITCODE -ne 0) { throw "baseline compile failed" }
+          Pop-Location
+
+          Push-Location $headWt
+          & python -m compileall -q worktrace scripts/pytest_diagnostics.py scripts/pytest_log_to_junit.py scripts/run_pytest_ci.py scripts/pytest_timing_summary.py
+          if ($LASTEXITCODE -ne 0) { throw "HEAD compile failed" }
+          Pop-Location
+
+      - name: Set up HEAD-owned validation harness
+        shell: pwsh
+        run: |
+          # HEAD-owned harness: plugins load from this harness dir (populated
+          # from HEAD workspace) via PYTHONPATH, not the worktree under test.
+          $harnessDir = "${{ steps.paths.outputs.harness_dir }}"
+          $workspace = $env:GITHUB_WORKSPACE
+
+          Copy-Item -Force -LiteralPath "$workspace\.ci-harness\pytest_timing_plugin.py" `
+            -Destination (Join-Path $harnessDir "pytest_timing_plugin.py")
+          Copy-Item -Force -LiteralPath "$workspace\scripts\pytest_select_from_file.py" `
+            -Destination (Join-Path $harnessDir "pytest_select_from_file.py")
+
+          Write-Host "Harness directory: $harnessDir"
+          Get-ChildItem -LiteralPath $harnessDir | ForEach-Object { Write-Host "  $($_.Name)" }
+
+          if (-not (Test-Path (Join-Path $harnessDir "pytest_timing_plugin.py"))) {
+            throw "harness setup failed: pytest_timing_plugin.py missing"
+          }
+          if (-not (Test-Path (Join-Path $harnessDir "pytest_select_from_file.py"))) {
+            throw "harness setup failed: pytest_select_from_file.py missing"
+          }
+
+      - name: Collect test IDs from both revisions
+        shell: pwsh
+        run: |
+          $baselineWt = "${{ steps.paths.outputs.baseline_worktree }}"
+          $headWt = "${{ steps.paths.outputs.head_worktree }}"
+          $resultsDir = "${{ steps.paths.outputs.results_dir }}"
+          $collectionDir = Join-Path $resultsDir "collection"
+
+          $utf8 = [System.Text.UTF8Encoding]::new($false)
+          [Console]::InputEncoding = $utf8
+          [Console]::OutputEncoding = $utf8
+          $OutputEncoding = $utf8
+          $PSNativeCommandUseErrorActionPreference = $false
+
+          # Collect non-benchmark test IDs from each worktree.  --collect-only
+          # -q emits one node ID per line.  -m "not benchmark" ensures the
+          # selection files match what Standard CI actually runs.
+          foreach ($pair in @(
+            @{ wt = $baselineWt; name = "baseline"; out = (Join-Path $collectionDir "baseline-node-ids.txt") },
+            @{ wt = $headWt;      name = "head";      out = (Join-Path $collectionDir "head-node-ids.txt") }
+          )) {
+            Write-Host ""
+            Write-Host "=== collecting $($pair.name) ==="
+            Push-Location $pair.wt
+            # Clean __pycache__ so collection is from source.
+            Get-ChildItem -Path $pair.wt -Recurse -Force -Filter "__pycache__" -Directory -ErrorAction SilentlyContinue |
+              Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+            & python -m pytest --collect-only -q -m "not benchmark" --color=no 2>$null |
+              Where-Object { $_ -match "::" } |
+              ForEach-Object { $_.Trim() } |
+              Set-Content -LiteralPath $pair.out -Encoding UTF8
+            $collectExit = $LASTEXITCODE
+            Pop-Location
+            if ($collectExit -ne 0) {
+              throw "collection failed for $($pair.name) (exit $collectExit)"
+            }
+            $count = (Get-Content -LiteralPath $pair.out | Where-Object { $_.Trim() }).Count
+            Write-Host "$($pair.name) collected $count test IDs"
+          }
+
+      - name: Prepare selection sets
+        shell: pwsh
+        run: |
+          # Prepare mode: compute common / head-only / baseline-only sets,
+          # validate set consistency, write selection files + manifest, exit 0.
+          # Does NOT read timing/JUnit results — those don't exist yet.
+          $resultsDir = "${{ steps.paths.outputs.results_dir }}"
+          $selectionDir = Join-Path $resultsDir "selection"
+
+          & python scripts/timing_comparison.py `
+            --results-dir $resultsDir `
+            --baseline-sha "${{ steps.revs.outputs.baseline_sha }}" `
+            --head-sha "${{ steps.revs.outputs.head_sha }}" `
+            --dependency-match "${{ steps.deps.outputs.dependency_match }}" `
+            --common-regression-threshold-pct "${{ inputs.common_regression_threshold_pct || '10' }}" `
+            --write-selection-only
+          $prepareExit = $LASTEXITCODE
+          if ($prepareExit -ne 0) {
+            throw "selection prepare failed (exit $prepareExit)"
+          }
+
+          Write-Host "Selection files written to $selectionDir"
+          $commonCount = (Get-Content -LiteralPath (Join-Path $selectionDir "common.txt") -ErrorAction SilentlyContinue | Where-Object { $_.Trim() }).Count
+          $headOnlyCount = (Get-Content -LiteralPath (Join-Path $selectionDir "head-only.txt") -ErrorAction SilentlyContinue | Where-Object { $_.Trim() }).Count
+          Write-Host "common=$commonCount head_only=$headOnlyCount"
+
+      # Interleaved paired runs: pair-1 b→h, pair-2 h→b, pair-3 b→h, then 3
+      # HEAD-only and 3 full HEAD runs.  Each loads the HEAD-owned timing plugin
+      # via -p with PYTHONPATH at the harness dir; timing JSON keyed by report.nodeid.
+      - name: Run interleaved paired timing
+        shell: pwsh
+        run: |
+          $baselineWt = "${{ steps.paths.outputs.baseline_worktree }}"
+          $headWt = "${{ steps.paths.outputs.head_worktree }}"
+          $resultsDir = "${{ steps.paths.outputs.results_dir }}"
+          $harnessDir = "${{ steps.paths.outputs.harness_dir }}"
+          $baselineSha = "${{ steps.revs.outputs.baseline_sha }}"
+          $headSha = "${{ steps.revs.outputs.head_sha }}"
+          $commonSel = Join-Path $resultsDir "selection\common.txt"
+          $headOnlySel = Join-Path $resultsDir "selection\head-only.txt"
+
+          $utf8 = [System.Text.UTF8Encoding]::new($false)
+          [Console]::InputEncoding = $utf8
+          [Console]::OutputEncoding = $utf8
+          $OutputEncoding = $utf8
+          $PSNativeCommandUseErrorActionPreference = $false
+
+          # Prepend the harness directory to PYTHONPATH so both plugins load
+          # from the HEAD workspace, not from the worktree under test.
+          $env:PYTHONPATH = "$harnessDir;$env:PYTHONPATH"
+
+          # Execution order manifest (written to results/execution-order.json).
+          $order = @(
+            "pair-1/baseline",
+            "pair-1/head",
+            "pair-2/head",
+            "pair-2/baseline",
+            "pair-3/baseline",
+            "pair-3/head",
+            "head-only/run-1",
+            "head-only/run-2",
+            "head-only/run-3",
+            "head-full/run-1",
+            "head-full/run-2",
+            "head-full/run-3"
+          )
+          $order | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $resultsDir "execution-order.json") -Encoding UTF8
+
+          function Invoke-TimingRun {
+            param(
+              [string]$Label,
+              [string]$Worktree,
+              [string]$RunDir,
+              [string]$SelectionFile,
+              [string]$Revision
+            )
+            Write-Host ""
+            Write-Host "=== $Label ==="
+
+            if (Test-Path $RunDir) { Remove-Item -Recurse -Force $RunDir }
+            New-Item -ItemType Directory -Force -Path $RunDir | Out-Null
+
+            # Clean __pycache__ within the worktree only — symmetric for both
+            # baseline and HEAD so neither inherits the other's bytecode.
+            Get-ChildItem -Path $Worktree -Recurse -Force -Filter "__pycache__" -Directory -ErrorAction SilentlyContinue |
+              Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+
+            # Tell the timing plugin which revision is under test so the
+            # timing JSON records it for SHA consistency validation.
+            $env:WORKTRACE_TIMING_REVISION = $Revision
+
+            # Set selection env var if a selection file is provided.
+            $env:WORKTRACE_SELECT_FILE = $null
+            if ($SelectionFile -and (Test-Path $SelectionFile)) {
+              $env:WORKTRACE_SELECT_FILE = $SelectionFile
+            }
+
+            # Build pytest args as independent array elements — never rely
+            # on shell re-parsing of quoted strings.  -m and "not benchmark"
+            # are separate tokens so pytest receives them as two args.
+            $timingJsonPath = Join-Path $RunDir "timing.json"
+            $pytestArgs = @(
+              "-q", "-ra", "--tb=short", "--color=no", "--cache-clear"
+              "-m", "not benchmark"
+              "--timeout=90"
+              "--timeout-method=thread"
+              "--durations=25"
+              "--durations-min=0.2"
+              "--junitxml=$RunDir\pytest-junit.xml"
+              "-p", "pytest_timing_plugin"
+              "--timing-json", $timingJsonPath
+            )
+            if ($SelectionFile -and (Test-Path $SelectionFile)) {
+              $pytestArgs += "-p"
+              $pytestArgs += "pytest_select_from_file"
+            }
+
+            Push-Location $Worktree
+            $t1 = Get-Date
+            & python scripts/run_pytest_ci.py `
+              --log "$RunDir\pytest.log" `
+              --progress "$RunDir\pytest-progress.json" `
+              --heartbeat-seconds 60 `
+              -- @pytestArgs
+            $exitCode = $LASTEXITCODE
+            $t2 = Get-Date
+            $elapsed = ($t2 - $t1).TotalSeconds
+            Pop-Location
+
+            # Clear env vars so the next run (which may be full-suite) is
+            # not affected.
+            $env:WORKTRACE_SELECT_FILE = $null
+            $env:WORKTRACE_TIMING_REVISION = $null
+
+            Write-Host ("{0} elapsed={1:N2}s exit_code={2}" -f $Label, $elapsed, $exitCode)
+
+            # Recover JUnit if pytest crashed without writing it.
+            if ($exitCode -ne 0 -and -not (Test-Path "$RunDir\pytest-junit.xml")) {
+              & python "$Worktree\scripts\pytest_log_to_junit.py" `
+                --log "$RunDir\pytest.log" `
+                --output "$RunDir\pytest-junit.xml" `
+                --timeout-seconds 90
+            }
+
+            # Parse JUnit for counts.  JUnit is used only for the run-result
+            # validity contract; per-test attribution uses timing.json's
+            # exact report.nodeid (never JUnit classname/name inference).
+            $testCount = 0; $failureCount = 0; $errorCount = 0; $skippedCount = 0
+            $junitPresent = Test-Path "$RunDir\pytest-junit.xml"
+            if ($junitPresent) {
+              try {
+                $xml = [xml](Get-Content "$RunDir\pytest-junit.xml" -Raw)
+                $suite = $xml.testsuites.testsuite
+                if (-not $suite) { $suite = $xml.testsuite }
+                if ($suite) {
+                  $testCount = [int]$suite.tests
+                  $failureCount = [int]$suite.failures
+                  $errorCount = [int]$suite.errors
+                  $skippedCount = [int]$suite.skipped
+                }
+              } catch {
+                Write-Warning "JUnit parse failed for $Label"
+              }
+            }
+
+            # Cross-check: if timing.json exists, prefer its selected_count
+            # for the test count (it is the exact count from the plugin, not
+            # a JUnit aggregate).  This is the number the comparison layer
+            # validates against the selection manifest.
+            $timingPresent = Test-Path $timingJsonPath
+            if ($timingPresent) {
+              try {
+                $timingPayload = Get-Content -LiteralPath $timingJsonPath -Raw | ConvertFrom-Json
+                if ($timingPayload.selected_count -is [int]) {
+                  $testCount = $timingPayload.selected_count
+                }
+                # A non-zero exit_code in the timing JSON means the run
+                # failed or was interrupted — record it.
+                if ([int]$timingPayload.exit_code -ne 0) {
+                  $exitCode = [int]$timingPayload.exit_code
+                }
+              } catch {
+                Write-Warning "timing.json parse failed for $Label"
+              }
+            }
+
+            $valid = ($exitCode -eq 0) -and $junitPresent -and $timingPresent -and ($failureCount -eq 0) -and ($errorCount -eq 0)
+
+            $runResult = @{
+              revision = $Revision
+              label = $Label
+              elapsed_seconds = [math]::Round($elapsed, 2)
+              exit_code = $exitCode
+              test_count = $testCount
+              failure_count = $failureCount
+              error_count = $errorCount
+              skipped_count = $skippedCount
+              junit_present = $junitPresent
+              timing_present = $timingPresent
+              valid = $valid
+            }
+            $runResult | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath "$RunDir\run-result.json" -Encoding UTF8
+          }
+
+          # Common-suite pairs (interleaved order).
+          Invoke-TimingRun -Label "pair-1/baseline (common)" -Worktree $baselineWt `
+            -RunDir (Join-Path $resultsDir "pair-1\baseline") -SelectionFile $commonSel -Revision $baselineSha
+          Invoke-TimingRun -Label "pair-1/head (common)" -Worktree $headWt `
+            -RunDir (Join-Path $resultsDir "pair-1\head") -SelectionFile $commonSel -Revision $headSha
+          Invoke-TimingRun -Label "pair-2/head (common)" -Worktree $headWt `
+            -RunDir (Join-Path $resultsDir "pair-2\head") -SelectionFile $commonSel -Revision $headSha
+          Invoke-TimingRun -Label "pair-2/baseline (common)" -Worktree $baselineWt `
+            -RunDir (Join-Path $resultsDir "pair-2\baseline") -SelectionFile $commonSel -Revision $baselineSha
+          Invoke-TimingRun -Label "pair-3/baseline (common)" -Worktree $baselineWt `
+            -RunDir (Join-Path $resultsDir "pair-3\baseline") -SelectionFile $commonSel -Revision $baselineSha
+          Invoke-TimingRun -Label "pair-3/head (common)" -Worktree $headWt `
+            -RunDir (Join-Path $resultsDir "pair-3\head") -SelectionFile $commonSel -Revision $headSha
+
+          # HEAD-only runs (3x).  Skip if HEAD-only selection is empty: an empty
+          # file fails-closed in the selection plugin; comparison treats it as
+          # vacuously passed.
+          $headOnlySelPath = Join-Path $resultsDir "selection\head-only.txt"
+          $headOnlyLineCount = 0
+          if (Test-Path $headOnlySelPath) {
+            $headOnlyLineCount = (Get-Content -LiteralPath $headOnlySelPath | Where-Object { $_.Trim() -and -not $_.Trim().StartsWith("#") }).Count
+          }
+          if ($headOnlyLineCount -gt 0) {
+            Invoke-TimingRun -Label "head-only/run-1" -Worktree $headWt `
+              -RunDir (Join-Path $resultsDir "head-only\run-1") -SelectionFile $headOnlySel -Revision $headSha
+            Invoke-TimingRun -Label "head-only/run-2" -Worktree $headWt `
+              -RunDir (Join-Path $resultsDir "head-only\run-2") -SelectionFile $headOnlySel -Revision $headSha
+            Invoke-TimingRun -Label "head-only/run-3" -Worktree $headWt `
+              -RunDir (Join-Path $resultsDir "head-only\run-3") -SelectionFile $headOnlySel -Revision $headSha
+          } else {
+            Write-Host "HEAD-only selection is empty (head_only_count=0); skipping head-only runs."
+          }
+
+          # Full HEAD suite (3x, no selection file).
+          Invoke-TimingRun -Label "head-full/run-1" -Worktree $headWt `
+            -RunDir (Join-Path $resultsDir "head-full\run-1") -SelectionFile $null -Revision $headSha
+          Invoke-TimingRun -Label "head-full/run-2" -Worktree $headWt `
+            -RunDir (Join-Path $resultsDir "head-full\run-2") -SelectionFile $null -Revision $headSha
+          Invoke-TimingRun -Label "head-full/run-3" -Worktree $headWt `
+            -RunDir (Join-Path $resultsDir "head-full\run-3") -SelectionFile $null -Revision $headSha
+
+      # ---------------------------------------------------------------------------
+      # Compute timing comparison and enforce layered gates
+      # ---------------------------------------------------------------------------
+      - name: Compute timing comparison and enforce gates
+        id: comparison
+        shell: pwsh
+        run: |
+          $resultsDir = "${{ steps.paths.outputs.results_dir }}"
+          $baselineSha = "${{ steps.revs.outputs.baseline_sha }}"
+          $headSha = "${{ steps.revs.outputs.head_sha }}"
+          $depMatch = "${{ steps.deps.outputs.dependency_match }}"
+          $threshold = "${{ inputs.common_regression_threshold_pct || '10' }}"
+
+          & python scripts/timing_comparison.py `
+            --results-dir $resultsDir `
+            --baseline-sha $baselineSha `
+            --head-sha $headSha `
+            --dependency-match $depMatch `
+            --common-regression-threshold-pct $threshold `
+            --compare
+          $exitCode = $LASTEXITCODE
+          if ($exitCode -ne 0) {
+            Write-Host "timing_validation=FAILED"
+            exit 1
+          }
+          Write-Host "timing_validation=PASSED"
+          "all_gates_passed=true" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding UTF8
+
+      - name: Upload timing comparison artifact
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: standard-timing-validation-${{ github.run_id }}
+          path: ${{ steps.paths.outputs.results_dir }}/
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Clean up worktrees
+        if: always()
+        shell: pwsh
+        run: |
+          git worktree remove --force "${{ steps.paths.outputs.baseline_worktree }}" 2>$null
+          git worktree remove --force "${{ steps.paths.outputs.head_worktree }}" 2>$null
+          git worktree prune

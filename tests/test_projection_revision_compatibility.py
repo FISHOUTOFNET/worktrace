@@ -51,8 +51,7 @@ def test_contract_module_is_the_single_source_for_operation_type_role_and_field_
     assert "validate_payload_metadata" in repo_source
     assert "validate_payload_fields" in repo_source
     assert "validate_operation_type" in repo_source
-    # The repository must not redefine the operation-type set or the
-    # allowed-field set locally; it must delegate.
+    # Repository must not redefine operation-type or field sets locally.
     assert "def _allowed_payload_keys" not in repo_source
     assert '"edit_session"' not in repo_source
     assert '"hide_activity"' not in repo_source
@@ -61,15 +60,12 @@ def test_contract_module_is_the_single_source_for_operation_type_role_and_field_
         ROOT / "worktrace/services/report_session_operation_engine.py"
     ).read_text(encoding="utf-8")
     assert "from .report_operation_contract import" in engine_source
-    # The engine must delegate to the shared contract validators rather
-    # than re-deriving operation type, payload version, allowed fields or
-    # member graph semantics locally.
+    # Engine must delegate to contract validators, not re-derive locally.
     assert "validate_operation_type" in engine_source
     assert "validate_payload_metadata" in engine_source
     assert "validate_payload_fields" in engine_source
     assert "validate_member_graph" in engine_source
-    # The engine must not redefine the role-set or allowed-field lookup
-    # locally; it must go through the contract's validate_* surface.
+    # Engine must not redefine role-set or field lookup locally.
     assert "def _expected_roles" not in engine_source
     assert "def _allowed_payload_keys" not in engine_source
     assert "def _members_are_valid" not in engine_source
@@ -117,9 +113,7 @@ def test_projection_repository_rejects_missing_or_non_current_payload_metadata()
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     source = ast.unparse(tree)
 
-    # The repository delegates metadata/binding/field validation to the
-    # shared contract; legacy revision replay and old payload versions are
-    # rejected by the contract, not by duplicated local checks.
+    # Repository delegates validation to the shared contract.
     assert "from .report_operation_contract import" in source
     assert "validate_payload_metadata(payload)" in source
     assert "validate_operation_type(operation_type)" in source
@@ -159,3 +153,80 @@ def test_replay_binding_rejects_legacy_revision_value() -> None:
     """The ReplayBinding enum must reject the retired ``"revision"`` value."""
     with pytest.raises(ValueError):
         ReplayBinding("revision")
+
+
+# --- Projection architecture: builder is the single business owner ---
+
+
+def test_projection_provider_does_not_import_snapshot_private_symbols() -> None:
+    """Provider must NOT import any private symbols from Snapshot service.
+
+    The projection business computation lives in the public Builder module.
+    The Provider depends on the Builder, not on the Snapshot service's
+    private implementation details.
+    """
+    provider_source = (
+        ROOT / "worktrace/services/report_projection_provider.py"
+    ).read_text(encoding="utf-8")
+    # Must import from the public builder, not the snapshot service.
+    assert "from .report_projection_builder import" in provider_source
+    # Must NOT import private symbols from the snapshot service.
+    assert "from .report_projection_snapshot_service import _" not in provider_source
+    assert (
+        "report_projection_snapshot_service._compute_projection"
+        not in provider_source
+    )
+    assert (
+        "report_projection_snapshot_service._ProjectionComputation"
+        not in provider_source
+    )
+
+
+def test_snapshot_service_does_not_import_provider_private_symbols() -> None:
+    """Snapshot service must NOT import any private symbols from Provider.
+
+    The dependency direction is: Provider → Builder, Snapshot → Builder.
+    The Snapshot service must not depend on the Provider's internal state.
+    """
+    snapshot_source = (
+        ROOT / "worktrace/services/report_projection_snapshot_service.py"
+    ).read_text(encoding="utf-8")
+    # Must import from the public builder, not the provider.
+    assert "from .report_projection_builder import" in snapshot_source
+    # Must NOT import private symbols from the provider.
+    assert "from .report_projection_provider import _" not in snapshot_source
+    assert "report_projection_provider._" not in snapshot_source
+
+
+def test_builder_is_the_single_projection_business_owner() -> None:
+    """Both materializers must depend on the public Builder, not duplicate logic.
+
+    The Builder module (``report_projection_builder``) is the sole owner of
+    projection business computation: fact query, session build, operation
+    replay, standalone status, sorting, and content hash. Neither the
+    Provider nor the Snapshot service may duplicate these responsibilities.
+    """
+    builder_source = (
+        ROOT / "worktrace/services/report_projection_builder.py"
+    ).read_text(encoding="utf-8")
+    # Builder must own the computation function and dataclass.
+    assert "def compute_projection(" in builder_source
+    assert "class ProjectionComputation" in builder_source
+
+    provider_source = (
+        ROOT / "worktrace/services/report_projection_provider.py"
+    ).read_text(encoding="utf-8")
+    # Provider must call the builder's compute_projection.
+    assert "compute_projection" in provider_source
+    # Provider must NOT redefine the business computation.
+    assert "def _compute_projection(" not in provider_source
+    assert "class _ProjectionComputation" not in provider_source
+
+    snapshot_source = (
+        ROOT / "worktrace/services/report_projection_snapshot_service.py"
+    ).read_text(encoding="utf-8")
+    # Snapshot service must call the builder's compute_projection.
+    assert "compute_projection" in snapshot_source
+    # Snapshot service must NOT redefine the business computation.
+    assert "def _compute_projection(" not in snapshot_source
+    assert "class _ProjectionComputation" not in snapshot_source

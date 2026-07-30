@@ -17,9 +17,13 @@ from ..constants import (
     UNCATEGORIZED_PROJECT,
 )
 from ..formatters import format_status_label
+from .report_projection_identity import stable_json_hash
+from .statistics_scope_policy import normalize_statistics_project_scope
 
 STATISTICS_SUMMARY_MAX_RANGE_DAYS = 31
+STATISTICS_ALL_TIME_START_DATE = "1970-01-01"
 _UNKNOWN_APP_LABEL = "未知应用"
+_EXPORT_TICKET_SCHEMA_VERSION = 1
 
 
 def get_summary(start_date: str, end_date: str) -> dict:
@@ -59,21 +63,45 @@ def get_uncategorized_duration(start_date: str, end_date: str) -> int:
     )
 
 
-def _build_projection(start_date: str, end_date: str):
+def _build_projection(start_date: str, end_date: str, project_id=None):
     from .report_projection_snapshot_service import build_visible_snapshot
     from .statistics_projection import build_statistics_projection
 
-    return build_statistics_projection(build_visible_snapshot(start_date, end_date))
+    return build_statistics_projection(
+        build_visible_snapshot(start_date, end_date), project_id=project_id
+    )
 
 
-def get_statistics_export_summary(date_from: str, date_to: str) -> dict:
-    validate_statistics_date_range(date_from, date_to)
-    projection = _build_projection(date_from, date_to)
+def _build_summary_projection(start_date: str, end_date: str, project_id=None):
+    from .report_projection_snapshot_service import build_visible_snapshot
+    from .statistics_projection import build_statistics_summary_projection
+
+    return build_statistics_summary_projection(
+        build_visible_snapshot(start_date, end_date), project_id=project_id
+    )
+
+
+def get_statistics_export_summary(
+    date_from: str,
+    date_to: str,
+    project_id: str | int | None = None,
+) -> dict:
+    date_from, date_to = resolve_statistics_date_range(date_from, date_to)
+    validate_statistics_project_scope(project_id)
+    projection = _build_summary_projection(date_from, date_to, project_id)
+    normalized_scope = normalize_statistics_project_scope(project_id)
+    ticket_revision = compute_statistics_export_ticket_revision(
+        projection.snapshot_revision,
+        date_from,
+        date_to,
+        normalized_scope,
+    )
     return {
         "date_from": date_from,
         "date_to": date_to,
+        "project_id": str(project_id or ""),
         "snapshot_revision": projection.snapshot_revision,
-        "export_revision": projection.export_revision,
+        "ticket_revision": ticket_revision,
         "total_duration_seconds": projection.total_duration_seconds,
         "project_duration_seconds": projection.project_duration_seconds,
         "classified_duration_seconds": projection.classified_duration_seconds,
@@ -92,7 +120,6 @@ def get_statistics_export_summary(date_from: str, date_to: str) -> dict:
             "date_from": date_from,
             "date_to": date_to,
             "snapshot_revision": projection.snapshot_revision,
-            "export_revision": projection.export_revision,
             "included_activity_count": projection.activity_count,
             "included_report_slice_count": projection.report_slice_count,
             "session_count": projection.session_count,
@@ -102,6 +129,26 @@ def get_statistics_export_summary(date_from: str, date_to: str) -> dict:
             "export_actions_enabled": True,
         },
     }
+
+
+def compute_statistics_export_ticket_revision(
+    snapshot_revision: str,
+    date_from: str,
+    date_to: str,
+    normalized_scope: str,
+) -> str:
+    """Compute a ticket revision binding snapshot, date range, scope, format and schema."""
+
+    return stable_json_hash(
+        {
+            "snapshot_revision": str(snapshot_revision or ""),
+            "date_from": str(date_from or ""),
+            "date_to": str(date_to or ""),
+            "project_scope": str(normalized_scope or ""),
+            "format": "csv",
+            "schema_version": _EXPORT_TICKET_SCHEMA_VERSION,
+        }
+    )
 
 
 def validate_statistics_date_range(date_from: str, date_to: str) -> None:
@@ -114,8 +161,40 @@ def validate_statistics_date_range(date_from: str, date_to: str) -> None:
         raise ValueError("invalid_date")
     if start > end:
         raise ValueError("invalid_range")
-    if (end - start).days > STATISTICS_SUMMARY_MAX_RANGE_DAYS - 1:
-        raise ValueError("range_too_large")
+
+
+def resolve_statistics_date_range(date_from: str, date_to: str) -> tuple[str, str]:
+    """Resolve transport-level dates to a canonical date range.
+
+    Empty ``date_from`` and ``date_to`` together mean *all time* and resolve
+    to a canonical range from ``STATISTICS_ALL_TIME_START_DATE`` through today.
+    One empty and one non-empty is invalid. Both non-empty are validated and
+    returned as-is.
+    """
+
+    if date_from == "" and date_to == "":
+        return STATISTICS_ALL_TIME_START_DATE, date.today().isoformat()
+    if date_from == "" or date_to == "":
+        raise ValueError("invalid_date")
+    validate_statistics_date_range(date_from, date_to)
+    return date_from, date_to
+
+
+def validate_statistics_project_scope(project_id) -> None:
+    scope = normalize_statistics_project_scope(project_id)
+    if scope == "" or scope == "unclassified":
+        return
+    try:
+        pid = int(scope)
+    except (TypeError, ValueError):
+        raise ValueError("invalid_project")
+    if pid <= 0:
+        raise ValueError("invalid_project")
+    from .project_service import get_project
+
+    project = get_project(pid)
+    if project is None or bool(project.get("is_deleted")):
+        raise ValueError("invalid_project")
 
 
 _validate_summary_date_range = validate_statistics_date_range

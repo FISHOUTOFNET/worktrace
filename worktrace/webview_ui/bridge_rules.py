@@ -68,6 +68,25 @@ def _folder_summary(rule: dict[str, Any], fallback_id: int = 0) -> dict[str, Any
 class ProjectRulesBridgeMixin:
     """Display-safe Project Rules bridge with exact current-only inputs."""
 
+    def choose_project_rule_folder(self) -> dict[str, Any]:
+        """Return one folder explicitly selected through the native dialog."""
+        try:
+            folder_path = self._choose_folder_path()
+            if folder_path is None:
+                return {
+                    "ok": True,
+                    "cancelled": True,
+                    "folder_path": "",
+                }
+            return {
+                "ok": True,
+                "cancelled": False,
+                "folder_path": folder_path,
+            }
+        except Exception:
+            logger.exception("webview bridge choose_project_rule_folder failed")
+            return {"ok": False, "error": "选择文件夹失败"}
+
     def get_project_rules(self) -> dict[str, Any]:
         try:
             projected = [

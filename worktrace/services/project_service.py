@@ -269,8 +269,37 @@ def list_rule_target_projects() -> list[dict]:
     ]
 
 
-def list_project_bindings(include_system_special: bool = True) -> list[dict]:
+def list_filter_projects() -> list[dict]:
+    """Return the filter catalog: concrete user projects only.
+
+    Excludes the system ``未归类`` project so the filter dropdown does not
+    show a duplicate ``未归类`` entry (the UI adds its own ``unclassified``
+    pseudo-option backed by the ``is_report_uncategorized`` scope).
+    """
     with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM project
+            ORDER BY name COLLATE NOCASE
+            """,
+        ).fetchall()
+    return [
+        row
+        for row in dict_rows(rows)
+        if project_lifecycle_policy.project_selectable_for_filter(row)
+    ]
+
+
+def list_project_bindings(include_system_special: bool = True) -> list[dict]:
+    """Return the lightweight project/rule catalog without historical projection.
+
+    This read stays bounded to the current catalog state (projects, rules, last
+    used timestamps) and never rebuilds the all-time report projection.
+    """
+
+    with get_connection() as conn:
+        conn.execute("BEGIN")
         rows = conn.execute(
             """
             SELECT *
@@ -403,6 +432,7 @@ __all__ = [
     "get_project_by_name",
     "is_concrete_project_id",
     "list_active_projects",
+    "list_filter_projects",
     "list_project_bindings",
     "list_rule_target_projects",
     "list_selectable_projects",

@@ -85,6 +85,7 @@ function harness() {
       }
       return result;
     },
+    openConfirmDialog: () => Promise.resolve(true),
   });
 
   const generationResets = [];
@@ -108,7 +109,7 @@ function harness() {
     importEncryptedBackup: () => Promise.resolve({ ok: true, message: "已导入" }),
     clearAllLocalData: () => Promise.resolve({ ok: true, message: "已清空" }),
     getFirstRunNotice: () => Promise.resolve({ ok: true, accepted: true, highlights: [] }),
-    acceptFirstRunNotice: () => Promise.resolve({ ok: true }),
+    acceptFirstRunNotice: () => Promise.resolve({ ok: true, accepted: true, collector_started: true }),
   };
 
   vm.runInContext(
@@ -164,7 +165,6 @@ test("secure import resets replacement generation, reloads settings, refreshes, 
     });
   };
   element("settings-backup-import-passphrase").value = "secret";
-  element("settings-backup-import-confirm").value = "导入并替换";
 
   App.importEncryptedBackup();
   await flush();
@@ -174,7 +174,58 @@ test("secure import resets replacement generation, reloads settings, refreshes, 
   assert.equal(statusReads, 1);
   assert.equal(state.refreshCount, 1);
   assert.equal(element("settings-backup-import-passphrase").value, "");
-  assert.equal(element("settings-backup-import-confirm").value, "");
+  assert.equal(App.settingsBackupImportInProgress, false);
+});
+
+test("secure import cancellation preserves the passphrase and never enters bridge or busy", async () => {
+  const { App, element } = harness();
+  let bridgeCalls = 0;
+  App.openConfirmDialog = () => Promise.resolve(false);
+  App.bridge.importEncryptedBackup = () => {
+    bridgeCalls += 1;
+    return Promise.resolve({ ok: true });
+  };
+  element("settings-backup-import-passphrase").value = "secret";
+
+  App.importEncryptedBackup();
+  await flush();
+  await flush();
+
+  assert.equal(bridgeCalls, 0);
+  assert.equal(App.settingsBackupImportInProgress, false);
+  assert.equal(element("settings-backup-import-passphrase").value, "secret");
+});
+
+test("secure import confirmation calls bridge once with internal literal", async () => {
+  const { App, element } = harness();
+  const calls = [];
+  App.openConfirmDialog = () => Promise.resolve(true);
+  App.bridge.importEncryptedBackup = (...args) => {
+    calls.push(args);
+    return Promise.resolve({ ok: false, message: "cancelled" });
+  };
+  element("settings-backup-import-passphrase").value = "secret";
+
+  App.importEncryptedBackup();
+  await flush();
+  await flush();
+
+  assert.deepEqual(calls, [["secret", "导入并替换"]]);
+  assert.equal(element("settings-backup-import-passphrase").value, "");
+  assert.equal(App.settingsBackupImportInProgress, false);
+});
+
+test("secure import rejection clears the passphrase and releases busy", async () => {
+  const { App, element } = harness();
+  App.openConfirmDialog = () => Promise.resolve(true);
+  App.bridge.importEncryptedBackup = () => Promise.reject(new Error("bridge unavailable"));
+  element("settings-backup-import-passphrase").value = "secret";
+
+  App.importEncryptedBackup();
+  await flush();
+  await flush();
+
+  assert.equal(element("settings-backup-import-passphrase").value, "");
   assert.equal(App.settingsBackupImportInProgress, false);
 });
 
@@ -227,6 +278,12 @@ test("first-run acceptance refreshes status only after confirmed success", async
   const state = harness();
   const { App } = state;
   let statusReads = 0;
+  let startupContinued = 0;
+  // In the new architecture, acceptFirstRunNotice delegates page refresh to
+  // continueStartupAfterPrivacyGate (owned by init.js) instead of calling
+  // refreshAll directly. This harness only loads settings.js, so we stub the
+  // startup entry to verify it is invoked.
+  App.continueStartupAfterPrivacyGate = () => { startupContinued += 1; return Promise.resolve(true); };
   App.bridge.getSettingsPrivacyStatus = () => {
     statusReads += 1;
     return Promise.resolve({
@@ -246,6 +303,6 @@ test("first-run acceptance refreshes status only after confirmed success", async
 
   assert.equal(App.firstRunNoticeRequired, false);
   assert.equal(App.firstRunNoticeAcceptInProgress, false);
-  assert.equal(state.refreshCount, 1);
+  assert.equal(startupContinued, 1, "continueStartupAfterPrivacyGate called once");
   assert.equal(statusReads, 1);
 });

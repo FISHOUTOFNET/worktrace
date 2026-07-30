@@ -5,6 +5,19 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_activity_log_single_open
 ON activity_log((1))
 WHERE end_time IS NULL;
 
+-- Partial index for the closed-activity overlap branch in
+-- report_fact_query_service._load_fact_rows.  The UNION ALL split query
+-- searches end_time >= ? with start_time <= ? for closed activities; this
+-- index enables an index range scan instead of the full idx_activity_time
+-- scan the previous OR-based predicate forced.
+-- EXPLAIN QUERY PLAN (confirmed):
+--   SEARCH activity_log USING INDEX idx_activity_closed_overlap (end_time>?)
+CREATE INDEX IF NOT EXISTS idx_activity_closed_overlap
+ON activity_log(end_time, start_time)
+WHERE end_time IS NOT NULL
+  AND is_deleted = 0
+  AND is_hidden = 0;
+
 CREATE INDEX IF NOT EXISTS idx_session_boundary_time
 ON session_boundary(occurred_at);
 

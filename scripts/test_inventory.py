@@ -37,6 +37,7 @@ REQUIRED_MARKERS: dict[str, str] = {
     "slow": "High-runtime tests or tests that fit release/manual validation context.",
     "serial": "Future non-parallel tests. Marker only; parallel execution is not enabled.",
     "parallel_safe": "Future parallel candidates. Marker only; parallel execution is not enabled.",
+    "benchmark": "Wall-clock, throughput, scaling, or peak-memory performance benchmark. Excluded from Standard CI.",
 }
 
 BUILTIN_MARKS = {

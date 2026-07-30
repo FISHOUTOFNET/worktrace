@@ -35,11 +35,6 @@ function runtimePayload(overrides = {}) {
       persisted_activity_id: 41,
       is_in_progress: true,
     },
-    recent_first_row: {
-      activity_id: 41,
-      persisted_activity_id: 41,
-      is_in_progress: true,
-    },
     clock: liveClock(),
     current_project: { id: 7, name: "Matter" },
     collector: { status: "running", paused: false, display: "记录中" },
@@ -234,10 +229,35 @@ test("render continuity never changes duration", () => {
   assert.equal(target.textContent, "00:00:08");
 });
 
+test("compact-hours duration format is stable across initial render and ticker", () => {
+  const { App, element } = harness();
+  const target = element("timeline-session-duration");
+  target.setAttribute("data-duration-format", "compact-hours");
+  target.setAttribute("data-live-continuity-key", "timeline-session");
+
+  App.renderDurationProjected(target, 1800, "timeline-session");
+  assert.equal(target.textContent, "0.5 h");
+  assert.equal(target.getAttribute("data-duration-seconds"), "1800");
+  assert.equal(target.getAttribute("title"), "00:30:00");
+  assert.equal(target.getAttribute("aria-label"), "时长 00:30:00");
+
+  const clock = liveClock({
+    duration_semantic: "aggregate_live",
+    aggregate_base_seconds: 3600,
+    elapsed_seconds_at_sample: 600,
+  });
+  assert.equal(App.renderLiveDurationTarget(target, clock, 8000), true);
+  assert.equal(target.textContent, "1.2 h");
+  assert.equal(target.getAttribute("data-duration-seconds"), "4200");
+  assert.equal(target.getAttribute("title"), "01:10:00");
+});
+
 test("database replacement resets stale client state before accepting new epoch", () => {
   const { App } = harness();
   assert.equal(App.acceptRefreshStateRuntime(runtimePayload()), true);
   App.timelineLoaded = true;
+  App.selectedTimelineAnchorActivityId = 41;
+  App.selectedTimelineWasInProgress = true;
   const replacement = runtimePayload({
     generations: { database_replacement: 2 },
     database_replacement_epoch: 2,
@@ -245,6 +265,8 @@ test("database replacement resets stale client state before accepting new epoch"
   assert.equal(App.acceptRefreshStateRuntime(replacement), true);
   assert.equal(App.lastClientGenerationResetReason, "database_replacement_epoch_changed");
   assert.equal(App.timelineLoaded, false);
+  assert.equal(App.selectedTimelineAnchorActivityId, null);
+  assert.equal(App.selectedTimelineWasInProgress, false);
   assert.equal(App.liveRuntime.databaseReplacementEpoch, 2);
 });
 

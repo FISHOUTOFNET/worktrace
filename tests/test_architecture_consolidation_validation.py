@@ -19,7 +19,12 @@ from worktrace.services import (
 pytestmark = [pytest.mark.db, pytest.mark.integration, pytest.mark.serial]
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-WORKFLOW_ALLOWLIST = {"_validation.yml", "ci.yml"}
+WORKFLOW_ALLOWLIST = {
+    "_validation.yml",
+    "ci.yml",
+    "performance-validation.yml",
+    "standard-timing-validation.yml",
+}
 FORBIDDEN_WORKFLOW_COMMANDS = (
     "git push",
     "git merge",
@@ -78,12 +83,14 @@ def test_session_summary_api_calls_keyword_only_service(monkeypatch):
         report_date: str | None = None,
         projection_instance_key: str,
         expected_projection_revision: str | None = None,
+        expected_source_version: str | None = None,
     ) -> dict[str, object]:
         captured.update(
             {
                 "report_date": report_date,
                 "projection_instance_key": projection_instance_key,
                 "expected_projection_revision": expected_projection_revision,
+                "expected_source_version": expected_source_version,
             }
         )
         return {
@@ -128,6 +135,7 @@ def test_session_summary_api_calls_keyword_only_service(monkeypatch):
         "report_date": "2026-07-16",
         "projection_instance_key": "session:1",
         "expected_projection_revision": "a" * 40,
+        "expected_source_version": None,
     }
 
 
@@ -148,7 +156,6 @@ def test_overview_api_exposes_one_v2_runtime_transport(temp_db):
         "live_report_date",
         "snapshot",
         "current_activity",
-        "recent_first_row",
         "clock",
         "current_project",
         "collector",
@@ -174,15 +181,11 @@ def test_overview_api_exposes_one_v2_runtime_transport(temp_db):
         "stable_live_key_hash",
     }
     current = envelope["current_activity"] or {}
-    recent = envelope["recent_first_row"] or {}
-    if current.get("active") and current.get("is_in_progress"):
-        assert recent
+    if current.get("active") and current.get("is_persisted"):
         assert envelope["clock"]["display_span_id"]
         assert envelope["clock"]["stable_live_key_hash"]
         assert "display_span_id" not in current
         assert "stable_live_key_hash" not in current
-        assert "display_span_id" not in recent
-        assert "stable_live_key_hash" not in recent
 
 
 def test_schema_trigger_surface_is_constraint_only(temp_db):

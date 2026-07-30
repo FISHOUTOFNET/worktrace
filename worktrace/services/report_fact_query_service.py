@@ -4,11 +4,17 @@ from __future__ import annotations
 
 from datetime import date as date_type, datetime, time as datetime_time, timedelta
 
-from ..constants import DEFAULT_CONTEXT_CARRY_MINUTES, TIME_FORMAT, UNCATEGORIZED_PROJECT
+from ..constants import (
+    DEFAULT_CONTEXT_CARRY_MINUTES,
+    REPORT_CONTEXT_SHORT_MERGE_SECONDS,
+    TIME_FORMAT,
+    UNCATEGORIZED_PROJECT,
+)
 from ..db import get_connection
 from . import clipboard_fact_query_service, session_boundary_service
 from .context_service import ReportContextProjection
 from .project_attribution_policy import official_project_fields, report_project_fields
+from .projection_performance import stage
 from .settings_service import get_int_setting
 
 
@@ -44,13 +50,6 @@ def load_report_activity_rows(
             )
 
     uncategorized_id = get_uncategorized_project_id(conn)
-    rows = _load_fact_rows(conn, start_date, end_date)
-    boundaries = boundary_times_for_rows(rows, conn=conn)
-    activity_ids = [int(row["id"]) for row in rows if int(row.get("id") or 0)]
-    clipboard_times = clipboard_fact_query_service.clipboard_times_for_activity_ids(
-        conn,
-        activity_ids,
-    )
     carry_minutes = max(
         0,
         get_int_setting(
@@ -59,12 +58,26 @@ def load_report_activity_rows(
             conn=conn,
         ),
     )
-    attributed = ReportContextProjection.build(
-        rows,
-        carry_minutes=carry_minutes,
-        boundary_times=boundaries,
-        clipboard_times=clipboard_times,
-    ).rows
+    # Use the same effective carry that ReportContextProjection will use, so
+    # we load exactly the rows needed for context anchor lookups — no more.
+    carry_seconds = min(
+        carry_minutes * 60,
+        REPORT_CONTEXT_SHORT_MERGE_SECONDS,
+    )
+    rows = _load_fact_rows(conn, start_date, end_date, carry_seconds=carry_seconds)
+    boundaries = boundary_times_for_rows(rows, conn=conn)
+    activity_ids = [int(row["id"]) for row in rows if int(row.get("id") or 0)]
+    clipboard_times = clipboard_fact_query_service.clipboard_times_for_activity_ids(
+        conn,
+        activity_ids,
+    )
+    with stage("context_projection"):
+        attributed = ReportContextProjection.build(
+            rows,
+            carry_minutes=carry_minutes,
+            boundary_times=boundaries,
+            clipboard_times=clipboard_times,
+        ).rows
     result: list[dict] = []
     for row in attributed:
         result.extend(_split_calendar_rows(dict(row)))
@@ -105,13 +118,54 @@ def session_sort_key(session: dict) -> tuple[str, int]:
     )
 
 
-def _load_fact_rows(conn, start_date: str, end_date: str) -> list[dict]:
-    load_start_day = date_type.fromisoformat(start_date) - timedelta(days=1)
-    load_end_day = date_type.fromisoformat(end_date) + timedelta(days=2)
-    load_start = f"{load_start_day.isoformat()} 00:00:00"
-    load_end = f"{load_end_day.isoformat()} 00:00:00"
+def _load_fact_rows(
+    conn,
+    start_date: str,
+    end_date: str,
+    *,
+    carry_seconds: int = 0,
+) -> list[dict]:
+    """Load activity fact rows overlapping ``[day_start - carry, day_end + carry]``.
+
+    The carry margin only needs to cover context-anchor lookups (capped at
+    ``REPORT_CONTEXT_SHORT_MERGE_SECONDS``).  Cross-midnight activities are
+    captured by the overlap predicate itself; the previous fixed 1-day-before
+    / 2-days-after window loaded far more rows than context attribution needs.
+
+    The SQL is split into closed / open branches via ``UNION ALL`` so each
+    branch can use a dedicated index:
+      closed → ``idx_activity_closed_overlap`` (end_time, start_time) partial
+      open   → ``idx_activity_time`` (start_time, end_time)
+    ``EXPLAIN QUERY PLAN`` confirms both branches use index range scans
+    rather than the full index scan forced by the previous OR predicate.
+    """
+
+    day_start = datetime.combine(
+        date_type.fromisoformat(start_date),
+        datetime_time.min,
+    )
+    day_end = datetime.combine(
+        date_type.fromisoformat(end_date) + timedelta(days=1),
+        datetime_time.min,
+    )
+    load_start = (day_start - timedelta(seconds=carry_seconds)).strftime(TIME_FORMAT)
+    load_end = (day_end + timedelta(seconds=carry_seconds)).strftime(TIME_FORMAT)
     raw_rows = conn.execute(
         """
+        WITH relevant_activity AS (
+            SELECT id FROM activity_log
+            WHERE end_time IS NOT NULL
+              AND end_time >= ?
+              AND start_time <= ?
+              AND is_deleted = 0
+              AND is_hidden = 0
+            UNION ALL
+            SELECT id FROM activity_log
+            WHERE end_time IS NULL
+              AND start_time <= ?
+              AND is_deleted = 0
+              AND is_hidden = 0
+        )
         SELECT
             a.*,
             apa.suggested_project_name,
@@ -129,17 +183,14 @@ def _load_fact_rows(conn, start_date: str, end_date: str) -> list[dict]:
             ar.is_anchor AS joined_resource_is_anchor,
             ar.path_hint AS joined_resource_path_hint,
             ar.uri_host AS joined_resource_uri_host
-        FROM activity_log a
+        FROM relevant_activity r
+        JOIN activity_log a ON a.id = r.id
         LEFT JOIN activity_project_assignment apa ON apa.activity_id = a.id
         LEFT JOIN project p ON p.id = apa.project_id
         LEFT JOIN activity_resource ar ON ar.activity_id = a.id
-        WHERE a.is_deleted = 0
-          AND a.is_hidden = 0
-          AND (a.start_time >= ? OR a.end_time IS NULL OR a.end_time >= ?)
-          AND (a.end_time IS NULL OR a.start_time <= ?)
         ORDER BY a.start_time ASC, a.id ASC
         """,
-        (load_start, load_start, load_end),
+        (load_start, load_end, load_end),
     ).fetchall()
     uncategorized_id = get_uncategorized_project_id(conn)
     rows: list[dict] = []

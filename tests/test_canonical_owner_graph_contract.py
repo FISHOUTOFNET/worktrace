@@ -125,4 +125,5 @@ def test_view_model_api_calls_keyword_only_summary_contract():
         "report_date",
         "projection_instance_key",
         "expected_projection_revision",
+        "expected_source_version",
     }

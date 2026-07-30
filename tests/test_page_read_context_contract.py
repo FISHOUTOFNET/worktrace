@@ -6,7 +6,9 @@ import threading
 import pytest
 
 from tests.support.activity_factory import create_closed_activity
+from worktrace.data_generation_repository import DataGenerationNamespace
 from worktrace.db import get_connection, now_str
+from worktrace.domain_unit_of_work import DomainUnitOfWork
 from worktrace.services import settings_service
 from worktrace.services.page_read_context import (
     current_page_read_context,
@@ -70,11 +72,14 @@ def test_page_revision_and_projection_share_one_read_transaction(temp_db):
 
         def write_structure_change() -> None:
             try:
-                with get_connection() as conn:
-                    conn.execute(
+                with DomainUnitOfWork(
+                    (DataGenerationNamespace.REPORT_STRUCTURE,)
+                ) as uow:
+                    uow.connection.execute(
                         "UPDATE activity_log SET status = ?, updated_at = ? WHERE id = ?",
                         ("idle", now_str(), activity_id),
                     )
+                    uow.mark_changed(DataGenerationNamespace.REPORT_STRUCTURE)
             except BaseException as exc:  # pragma: no cover - assertion reports it
                 writer_errors.append(exc)
 
@@ -84,9 +89,12 @@ def test_page_revision_and_projection_share_one_read_transaction(temp_db):
 
         assert not writer.is_alive()
         assert writer_errors == []
+        # Inside the read scope, the source-version token is frozen from the
+        # scope's captured generations, so it does not see the committed bump.
         assert get_report_structure_revision(DATE) == revision_before
         assert build_visible_snapshot(DATE, DATE) is snapshot_before
 
+    # Outside the scope, a fresh read sees the bumped generation.
     assert get_report_structure_revision(DATE) != revision_before
 
 

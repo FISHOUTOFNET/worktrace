@@ -7,7 +7,9 @@
 - Windows desktop application using Python, SQLite, pywebview and WebView2.
 - Local-only: no registration, cloud sync, administrator privilege, screenshots,
   screen recording, OCR or keyboard logging.
-- WebView is the only shipping UI. Window close runs `AppRuntime.shutdown()`.
+- WebView is the only shipping UI. With a healthy tray host, window close hides
+  the window while collection continues; only the tray Exit command ends the
+  WebView loop and reaches `AppRuntime.shutdown()`.
 - The privacy notice is fail-closed; sensitive workers and clipboard capture do
   not start before acceptance.
 - CSV export is the only current public export; Excel, PDF and timesheet-template
@@ -15,10 +17,14 @@
 
 ## Composition and lifecycle
 ```text
-webview_main -> AppRuntime -> ApplicationServices -> WebViewBridge
+webview_main -> DesktopShellController -> AppRuntime
+             -> ApplicationServices -> WebViewBridge
 ```
 - `AppRuntime` owns the single-instance lease, Collector and every background
   worker thread handle.
+- `DesktopShellController` owns visible/hidden/exiting window state. Its tray
+  host and instance-activation listener send shell commands only and never
+  manage the database, Collector or workers.
 - `ApplicationServices` is explicit frozen-dataclass composition with no service
   locator. `WebViewBridge` calls `self._services.<capability>.*` only.
 - `RuntimeMaintenanceCoordinator` solely owns snapshot/replacement ordering and
@@ -113,15 +119,31 @@ new identity. Invalid clocks stop ticking, retain durable seconds and request
 bounded reconciliation.
 
 ## Pages and writes
-- Overview: KPIs, current activity, Recent and pause/resume.
-- Timeline: navigation, sessions, summaries and permitted edits.
-- Statistics/Export: canonical summaries and display-safe CSV.
-- Project Rules: transactional project/rule management.
-- Settings/Privacy: privacy status, clipboard control, backup/import and clear-all.
+- Overview: today total, current atomic activity snapshot, an unheaded
+  single-line project/uncategorized distribution bar, and full-width recent
+  merged report sessions. Uncategorized participates in the same Top 3 +
+  other ranking as projects. The bar is display-only; current/recent rows hand
+  off to Timeline and shared row attention facts remain in their DTOs.
+- Timeline: reverse chronological sessions, authoritative project filtering,
+  composition-safe debounced autosave for completed sessions, always-visible
+  activity details, direct two-step deletion, and a compact-window focus-trapped
+  Drawer. In-progress sessions are selectable but read-only; their detail
+  selection is maintained in-memory by exact key or unique first-activity anchor.
+- Statistics/Export: this-month default with all-time/custom options, optional
+  project scope, automatic latest-request acceptance, and display-safe CSV bound
+  to the accepted export ticket.
+- Project Rules: searchable/sortable project summaries with backend-owned last
+  use, three direct project actions, and contextual Drawers.
+- Settings/Privacy: four user-facing categories. General contains authoritative
+  HKCU launch-at-login state and the existing clipboard control; Privacy, Data
+  and Backup, and Advanced retain their existing responsibilities. Secret inputs
+  remain local and are cleared after use.
 
-Open sessions allow project and note edits; duration and structural edits wait for
-closure. Rule batches are atomic, manual assignments are preserved, and
-statistics/export use persisted report facts rather than frontend time.
+Timeline edits on completed sessions allow project, description and duration
+changes. New description edits are limited to 200 characters while the durable
+2000-character read/replay boundary remains compatible with historical data.
+Rule batches are atomic, manual assignments are preserved, and statistics/export
+use persisted report facts rather than frontend time.
 
 ## Validation
 Affected validation: `python scripts/run_affected_tests.py`. Full validation:

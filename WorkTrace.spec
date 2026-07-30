@@ -13,6 +13,7 @@ datas = [
     (str(root / 'worktrace' / 'webview_ui' / 'index.html'), 'worktrace/webview_ui'),
     (str(root / 'worktrace' / 'webview_ui' / 'styles.css'), 'worktrace/webview_ui'),
     (str(root / 'worktrace' / 'webview_ui' / 'js' / 'core.js'), 'worktrace/webview_ui/js'),
+    (str(root / 'worktrace' / 'webview_ui' / 'js' / 'ui_components.js'), 'worktrace/webview_ui/js'),
     (str(root / 'worktrace' / 'webview_ui' / 'js' / 'overview.js'), 'worktrace/webview_ui/js'),
     (str(root / 'worktrace' / 'webview_ui' / 'js' / 'timeline_request_state.js'), 'worktrace/webview_ui/js'),
     (str(root / 'worktrace' / 'webview_ui' / 'js' / 'timeline.js'), 'worktrace/webview_ui/js'),
@@ -25,9 +26,10 @@ datas = [
     (str(root / 'worktrace' / 'webview_ui' / 'js' / 'rules_keyword_actions.js'), 'worktrace/webview_ui/js'),
     (str(root / 'worktrace' / 'webview_ui' / 'js' / 'rules_folder_actions.js'), 'worktrace/webview_ui/js'),
     (str(root / 'worktrace' / 'webview_ui' / 'js' / 'init.js'), 'worktrace/webview_ui/js'),
+    (str(root / 'worktrace' / 'assets' / 'worktrace.ico'), 'worktrace/assets'),
 ]
 binaries = []
-hiddenimports = ['win32timezone']
+hiddenimports = ['win32api', 'win32con', 'win32gui', 'win32timezone']
 # pywebview is the WebView backend used by the default UI entry point.
 # collect_all('webview') is a no-op if pywebview is not installed;
 # pywebview>=5.0 is declared in requirements.txt and is required for WorkTrace
@@ -70,4 +72,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=str(root / 'worktrace' / 'assets' / 'worktrace.ico'),
 )

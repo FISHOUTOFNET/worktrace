@@ -1,10 +1,11 @@
-// WorkTrace WebView frontend — statistics module.
+// WorkTrace WebView frontend — authoritative Statistics / Export snapshot UI.
 (function () {
     "use strict";
     var App = window.WorkTraceApp = window.WorkTraceApp || {};
 
+    function element(id) { return document.getElementById(id); }
     function showStatisticsError(message) {
-        var banner = document.getElementById("statistics-error");
+        var banner = element("statistics-error");
         if (!banner) return;
         banner.hidden = !message;
         banner.textContent = message || "加载统计失败";
@@ -13,239 +14,455 @@
     App.clearStatisticsError = function () { showStatisticsError(""); };
 
     function setStatisticsLoading(loading) {
-        App.statisticsLoading = loading;
-        var el = document.getElementById("statistics-loading");
-        if (el) el.hidden = !loading;
-        var btn = document.getElementById("statistics-load-btn");
-        if (btn) btn.disabled = !!loading || !!App.statisticsExportSaving;
-        var exportBtn = document.getElementById("stats-export-action-btn");
-        if (exportBtn) exportBtn.disabled = !!loading || !!App.statisticsExportSaving || !App.statisticsAcceptedPayload;
+        App.statisticsLoading = !!loading;
+        if (element("statistics-loading")) element("statistics-loading").hidden = !loading;
+        if (element("statistics-update-status")) {
+            element("statistics-update-status").textContent = loading
+                ? "更新中…" : (App.statisticsLoaded ? "已自动更新" : "");
+        }
+        var button = element("stats-export-action-btn");
+        if (button) button.disabled = !!loading || !!App.statisticsExportSaving
+            || !App.statisticsAcceptedPayload;
     }
     App.setStatisticsLoading = setStatisticsLoading;
 
     function validateStatisticsDateRange(dateFrom, dateTo) {
-        if (!dateFrom || !dateTo) return "请选择有效日期";
-        var fromParts = dateFrom.split("-");
-        var toParts = dateTo.split("-");
-        if (fromParts.length !== 3 || toParts.length !== 3) return "请选择有效日期";
-        var from = new Date(+fromParts[0], +fromParts[1] - 1, +fromParts[2]);
-        var to = new Date(+toParts[0], +toParts[1] - 1, +toParts[2]);
-        if (isNaN(from.getTime()) || isNaN(to.getTime())) return "请选择有效日期";
-        if (from > to) return "请选择有效日期范围";
-        var diffDays = Math.round((to - from) / 86400000);
-        if (diffDays > 30) return "日期范围过大";
+        if (!dateFrom || !dateTo) return "请选择完整日期范围";
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(dateFrom) || !/^\d{4}-\d{2}-\d{2}$/.test(dateTo)) {
+            return "请选择有效日期";
+        }
+        if (dateFrom > dateTo) return "请选择有效日期范围";
         return null;
     }
     App.validateStatisticsDateRange = validateStatisticsDateRange;
 
-    function selectedRange() {
-        var fromEl = document.getElementById("statistics-date-from");
-        var toEl = document.getElementById("statistics-date-to");
+    function localDate(value) {
+        var year = value.getFullYear();
+        var month = String(value.getMonth() + 1).padStart(2, "0");
+        var day = String(value.getDate()).padStart(2, "0");
+        return year + "-" + month + "-" + day;
+    }
+
+    function statisticsWeekRange(today) {
+        var start = new Date(
+            today.getFullYear(),
+            today.getMonth(),
+            today.getDate()
+        );
+        start.setDate(start.getDate() - ((start.getDay() + 6) % 7));
         return {
-            dateFrom: fromEl ? fromEl.value : "",
-            dateTo: toEl ? toEl.value : ""
+            dateFrom: localDate(start),
+            dateTo: localDate(today)
         };
     }
+    App.statisticsWeekRange = statisticsWeekRange;
+
+    function shortcutRange(type, today) {
+        var todayValue = localDate(today);
+        if (type === "today") return { dateFrom: todayValue, dateTo: todayValue };
+        if (type === "week") return statisticsWeekRange(today);
+        if (type === "month") {
+            return {
+                dateFrom: localDate(new Date(today.getFullYear(), today.getMonth(), 1)),
+                dateTo: todayValue
+            };
+        }
+        if (type === "all") return { dateFrom: "", dateTo: "" };
+        return null;
+    }
+
+    function currentSelection() {
+        if (!App.statisticsSelection) {
+            var range = statisticsWeekRange(new Date());
+            App.statisticsSelection = {
+                allTime: false,
+                dateFrom: range.dateFrom,
+                dateTo: range.dateTo
+            };
+        }
+        App.statisticsSelectionInitialized = true;
+        if (!App.statisticsDraftSelection) {
+            App.statisticsDraftSelection = cloneStatisticsSelection(App.statisticsSelection);
+            App.statisticsDraftDirty = false;
+        }
+        return App.statisticsSelection;
+    }
+
+    function cloneStatisticsSelection(selection) {
+        selection = selection || {};
+        return {
+            allTime: !!selection.allTime,
+            dateFrom: selection.allTime ? "" : String(selection.dateFrom || ""),
+            dateTo: selection.allTime ? "" : String(selection.dateTo || "")
+        };
+    }
+
+    function statisticsSelectionsEqual(left, right) {
+        left = cloneStatisticsSelection(left);
+        right = cloneStatisticsSelection(right);
+        return left.allTime === right.allTime
+            && left.dateFrom === right.dateFrom
+            && left.dateTo === right.dateTo;
+    }
+
+    function currentDraftSelection() {
+        currentSelection();
+        if (!App.statisticsDraftSelection) {
+            App.statisticsDraftSelection = cloneStatisticsSelection(App.statisticsSelection);
+        }
+        return App.statisticsDraftSelection;
+    }
+
+    function setStatisticsSelection(allTime, dateFrom, dateTo) {
+        App.statisticsSelection = {
+            allTime: !!allTime,
+            dateFrom: allTime ? "" : String(dateFrom || ""),
+            dateTo: allTime ? "" : String(dateTo || "")
+        };
+        App.statisticsSelectionInitialized = true;
+        App.statisticsDraftSelection = cloneStatisticsSelection(App.statisticsSelection);
+        App.statisticsDraftDirty = false;
+        syncStatisticsSelection();
+        syncStatisticsDraftSelection();
+    }
+    App.setStatisticsSelection = setStatisticsSelection;
+
+    function displayDate(value) {
+        return String(value || "").replace(/-/g, "/");
+    }
+
+    function setStatisticsDraftStatus(message, isError) {
+        var status = element("statistics-date-status");
+        if (!status) return;
+        status.hidden = !message;
+        status.textContent = message || "";
+        status.className = "statistics-date-status" + (isError ? " error" : "");
+        ["statistics-date-from", "statistics-date-to"].forEach(function (id) {
+            var input = element(id);
+            if (input) input.setAttribute("aria-invalid", isError ? "true" : "false");
+        });
+    }
+
+    function selectedProjectLabel() {
+        var select = element("statistics-project-filter");
+        return select && select.selectedIndex >= 0 && select.options
+            ? select.options[select.selectedIndex].text
+            : "全部项目";
+    }
+
+    function updateStatisticsScope(filters) {
+        filters = filters || selectedFilters();
+        var scope = filters.allTime
+            ? "全部时间"
+            : displayDate(filters.dateFrom) + " 至 " + displayDate(filters.dateTo);
+        if (element("stats-scope")) {
+            element("stats-scope").textContent = "当前范围：" + scope + " · " + selectedProjectLabel();
+        }
+    }
+
+    function syncStatisticsSelection() {
+        var selection = currentSelection();
+        var today = new Date();
+        ["today", "week", "month", "all"].forEach(function (type) {
+            var range = shortcutRange(type, today);
+            var pressed = type === "all"
+                ? selection.allTime
+                : !selection.allTime
+                    && selection.dateFrom === range.dateFrom
+                    && selection.dateTo === range.dateTo;
+            var button = element("statistics-" + type + "-btn");
+            if (button) button.setAttribute("aria-pressed", pressed ? "true" : "false");
+        });
+        updateStatisticsScope({
+            allTime: selection.allTime,
+            dateFrom: selection.dateFrom,
+            dateTo: selection.dateTo,
+            projectId: element("statistics-project-filter")
+                ? element("statistics-project-filter").value : ""
+        });
+    }
+    App.syncStatisticsSelection = syncStatisticsSelection;
+
+    function syncStatisticsDraftSelection() {
+        var selection = currentDraftSelection();
+        var from = element("statistics-date-from");
+        var to = element("statistics-date-to");
+        if (from) from.value = selection.dateFrom;
+        if (to) to.value = selection.dateTo;
+        if (element("statistics-date-inputs")) {
+            element("statistics-date-inputs").hidden = selection.allTime;
+        }
+        if (element("statistics-all-time-label")) {
+            element("statistics-all-time-label").hidden = !selection.allTime;
+        }
+        setStatisticsDraftStatus(
+            App.statisticsDraftDirty ? "日期范围尚未应用" : "",
+            false
+        );
+    }
+    App.syncStatisticsDraftSelection = syncStatisticsDraftSelection;
+
+    function selectedFilters() {
+        var selection = currentSelection();
+        return {
+            dateFrom: selection.allTime ? "" : selection.dateFrom,
+            dateTo: selection.allTime ? "" : selection.dateTo,
+            projectId: element("statistics-project-filter") ? element("statistics-project-filter").value : "",
+            allTime: selection.allTime
+        };
+    }
+    App.selectedStatisticsFilters = selectedFilters;
+
+    function clearStatisticsPresentation() {
+        var results = element("statistics-results");
+        if (results) results.hidden = true;
+        ["stats-total", "stats-activity-count", "stats-project-count", "stats-app-count"]
+            .forEach(function (id) {
+                if (element(id)) element(id).textContent = "";
+            });
+        ["stats-by-project", "stats-by-app"].forEach(function (id) {
+            if (element(id)) element(id).innerHTML = "";
+        });
+        ["stats-empty-project", "stats-empty-app"].forEach(function (id) {
+            if (element(id)) element(id).hidden = true;
+        });
+    }
+    App.clearStatisticsPresentation = clearStatisticsPresentation;
 
     function invalidateStatisticsSelection() {
         App.statisticsLoaded = false;
         App.statisticsAcceptedPayload = null;
         App.statisticsSnapshotRevision = "";
-        var exportBtn = document.getElementById("stats-export-action-btn");
-        if (exportBtn) exportBtn.disabled = true;
         setStatisticsExportStatus("", "");
+        clearStatisticsPresentation();
+        setStatisticsLoading(false);
     }
     App.invalidateStatisticsSelection = invalidateStatisticsSelection;
 
-    function loadStatisticsExportSummary() {
-        if (App.statisticsLoading) return App.statisticsLoadPromise || Promise.resolve(null);
-        var range = selectedRange();
-        var rangeMsg = validateStatisticsDateRange(range.dateFrom, range.dateTo);
-        if (rangeMsg) {
-            showStatisticsError(rangeMsg);
-            return Promise.resolve(null);
-        }
-        var key = range.dateFrom + "|" + range.dateTo;
-        var token = App.requestCoordinator.beginLatest("statistics", key);
-        setStatisticsLoading(true);
-        App.clearStatisticsError();
-        App.statisticsLoadPromise = App.bridge.getStatisticsExportSummary(
-            range.dateFrom,
-            range.dateTo
-        ).then(function (result) {
+    function executeStatisticsQuery(owner) {
+        var filters = owner.filters;
+        var token = owner.token;
+        var request = App.bridge.getStatisticsExportSummary(
+            filters.dateFrom, filters.dateTo, filters.projectId
+        );
+        var pending = request.then(function (result) {
             if (!App.requestCoordinator.isCurrent(token)) return null;
-            var data = App.handleResult(result, function (msg) {
-                showStatisticsError(msg || "加载统计失败");
-            });
-            if (!data || !data.summary) return null;
-            var summary = data.summary;
-            var ticket = data.export_ticket || {};
-            var exportRevision = ticket.revision
-                || summary.export_revision
-                || (summary.export_preview && summary.export_preview.export_revision)
-                || "";
+            var data = App.handleResult(result, showStatisticsError);
+            if (!data || !data.summary || !data.export_ticket) {
+                if (!data) return null;
+                showStatisticsError("加载统计失败");
+                return null;
+            }
             App.statisticsAcceptedPayload = {
-                dateFrom: String(ticket.date_from || summary.date_from || range.dateFrom),
-                dateTo: String(ticket.date_to || summary.date_to || range.dateTo),
-                exportRevision: String(exportRevision)
+                summary: data.summary,
+                exportTicket: data.export_ticket,
+                filters: filters
             };
-            App.statisticsSnapshotRevision = String(exportRevision);
+            App.statisticsSnapshotRevision = String(data.export_ticket.revision || "");
+            showStatistics(data.summary, filters);
             App.statisticsLoaded = true;
-            showStatistics(summary);
-            App.clearStatisticsError();
-            return summary;
+            return data;
         }).catch(function () {
             if (App.requestCoordinator.isCurrent(token)) showStatisticsError("加载统计失败");
             return null;
         }).finally(function () {
             if (App.requestCoordinator.isCurrent(token)) setStatisticsLoading(false);
-            App.statisticsLoadPromise = null;
         });
-        return App.statisticsLoadPromise;
+        App.statisticsLoadPromise = pending;
+        return pending;
+    }
+
+    function beginStatisticsQuery(delay) {
+        if (App.statisticsQueryTimer) window.clearTimeout(App.statisticsQueryTimer);
+        App.statisticsQueryTimer = null;
+        var filters = selectedFilters();
+        var key = JSON.stringify(filters);
+        var token = App.requestCoordinator.beginLatest("statistics", key);
+        invalidateStatisticsSelection();
+        App.clearStatisticsError();
+        updateStatisticsScope(filters);
+        setStatisticsLoading(true);
+        if (!filters.allTime) {
+            var message = validateStatisticsDateRange(filters.dateFrom, filters.dateTo);
+            if (message) {
+                showStatisticsError(message);
+                setStatisticsLoading(false);
+                return Promise.resolve(null);
+            }
+        }
+        var owner = { filters: filters, token: token };
+        if (delay > 0) {
+            App.statisticsQueryTimer = window.setTimeout(function () {
+                App.statisticsQueryTimer = null;
+                executeStatisticsQuery(owner);
+            }, delay);
+            return Promise.resolve(null);
+        }
+        return executeStatisticsQuery(owner);
+    }
+    App.beginStatisticsQuery = beginStatisticsQuery;
+
+    function loadStatisticsExportSummary() {
+        return beginStatisticsQuery(0);
     }
     App.loadStatisticsExportSummary = loadStatisticsExportSummary;
 
-    function showStatistics(summary) {
-        if (!summary) return;
-        document.getElementById("stats-total").textContent = summary.total_duration || "00:00:00";
-        document.getElementById("stats-activity-count").textContent = String(summary.activity_count || 0);
-        document.getElementById("stats-project-count").textContent = String(summary.project_count || 0);
-        document.getElementById("stats-app-count").textContent = String(summary.app_count || 0);
+    function showStatistics(summary, filters) {
+        element("stats-total").textContent = summary.total_duration || "00:00:00";
+        element("stats-activity-count").textContent = String(summary.session_count || 0);
+        element("stats-project-count").textContent = String(summary.project_count || 0);
+        element("stats-app-count").textContent = String(summary.app_count || 0);
         renderStatsTable("stats-by-project", "stats-empty-project", summary.by_project || []);
         renderStatsTable("stats-by-app", "stats-empty-app", summary.by_app || []);
-        renderStatsTable("stats-by-status", "stats-empty-status", summary.by_status || []);
-        renderExportPreview(summary.export_preview || {}, summary.date_from, summary.date_to);
+        updateStatisticsScope(filters);
+        if (element("statistics-results")) element("statistics-results").hidden = false;
     }
     App.showStatistics = showStatistics;
 
     function renderStatsTable(tbodyId, emptyId, groups) {
-        var tbody = document.getElementById(tbodyId);
-        var empty = document.getElementById(emptyId);
-        if (!tbody) return;
-        if (!groups || !groups.length) {
-            tbody.innerHTML = "";
-            if (empty) empty.hidden = false;
-            return;
-        }
-        if (empty) empty.hidden = true;
-        var html = "";
-        for (var i = 0; i < groups.length; i++) {
-            var g = groups[i];
-            var name = App.safeText(g.display_name, "");
-            html += '<tr class="stats-table-row">'
-                + '<td class="stats-table-name" title="' + App.escapeHtml(name) + '">' + App.escapeHtml(name) + '</td>'
-                + '<td class="stats-table-duration">' + App.escapeHtml(App.safeText(g.duration, "00:00:00")) + '</td>'
-                + '<td class="stats-table-count">' + App.escapeHtml(String(g.activity_count || 0)) + '</td>'
-                + '<td class="stats-table-pct">' + App.escapeHtml(String(g.percentage || 0) + "%") + '</td>'
-                + '</tr>';
-        }
-        tbody.innerHTML = html;
+        var body = element(tbodyId);
+        var empty = element(emptyId);
+        groups = Array.isArray(groups) ? groups : [];
+        if (!groups.length) { body.innerHTML = ""; empty.hidden = false; return; }
+        empty.hidden = true;
+        body.innerHTML = groups.map(function (group) {
+            var percentage = Math.max(0, Math.min(100, parseFloat(group.percentage) || 0));
+            return '<tr><td title="' + App.escapeHtml(group.display_name || "未知") + '"><div class="stats-name">'
+                + '<span>' + App.escapeHtml(group.display_name || "未知") + '</span>'
+                + '<span class="stats-share-bar" aria-hidden="true"><i style="width:' + percentage + '%"></i></span>'
+                + '</div></td><td class="number">'
+                + App.escapeHtml(group.duration || App.formatDuration(group.duration_seconds || 0))
+                + '</td><td class="number">' + App.escapeHtml(String(group.activity_count || 0))
+                + '</td><td class="number">' + App.escapeHtml(String(group.percentage || 0)) + '%</td></tr>';
+        }).join("");
     }
     App.renderStatsTable = renderStatsTable;
 
-    function renderExportPreview(preview, dateFrom, dateTo) {
-        var rangeEl = document.getElementById("stats-export-range");
-        var countEl = document.getElementById("stats-export-count");
-        var durationEl = document.getElementById("stats-export-duration");
-        var formatsEl = document.getElementById("stats-export-formats");
-        if (rangeEl) rangeEl.textContent = App.safeText(dateFrom, "") + " 至 " + App.safeText(dateTo, "");
-        if (countEl) countEl.textContent = String(preview.included_activity_count || 0);
-        if (durationEl) durationEl.textContent = preview.included_duration || "00:00:00";
-        if (formatsEl) {
-            var formats = preview.available_formats || [];
-            formatsEl.textContent = formats.length ? formats.join("、") : "--";
-        }
-    }
-    App.renderExportPreview = renderExportPreview;
-
     function applyStatisticsQuickRange(type) {
-        var today = App.localTodayStr();
-        var from;
-        if (type === "today") from = today;
-        else if (type === "7d") from = App.shiftDate(today, -6);
-        else if (type === "month") {
-            var parts = today.split("-");
-            from = parts[0] + "-" + parts[1] + "-01";
-        } else return;
-        var fromEl = document.getElementById("statistics-date-from");
-        var toEl = document.getElementById("statistics-date-to");
-        if (fromEl) fromEl.value = from;
-        if (toEl) toEl.value = today;
-        invalidateStatisticsSelection();
-        return loadStatisticsExportSummary();
+        var today = new Date();
+        var range = shortcutRange(type, today);
+        if (!range) return Promise.resolve(null);
+        setStatisticsSelection(type === "all", range.dateFrom, range.dateTo);
+        return beginStatisticsQuery(0);
     }
     App.applyStatisticsQuickRange = applyStatisticsQuickRange;
 
+    function handleStatisticsDraftDateChange() {
+        var from = element("statistics-date-from");
+        var to = element("statistics-date-to");
+        App.statisticsDraftSelection = {
+            allTime: false,
+            dateFrom: from ? String(from.value || "") : "",
+            dateTo: to ? String(to.value || "") : ""
+        };
+        App.statisticsDraftDirty = !statisticsSelectionsEqual(
+            App.statisticsDraftSelection,
+            currentSelection()
+        );
+        syncStatisticsDraftSelection();
+    }
+    App.handleStatisticsDraftDateChange = handleStatisticsDraftDateChange;
+
+    function applyStatisticsDraftSelection() {
+        var draft = currentDraftSelection();
+        var message = validateStatisticsDateRange(draft.dateFrom, draft.dateTo);
+        if (message) {
+            setStatisticsDraftStatus(message, true);
+            return Promise.resolve(null);
+        }
+        setStatisticsSelection(false, draft.dateFrom, draft.dateTo);
+        return beginStatisticsQuery(0);
+    }
+    App.applyStatisticsDraftSelection = applyStatisticsDraftSelection;
+
+    function scheduleStatisticsQuery(delay) {
+        return beginStatisticsQuery(delay || 0);
+    }
+    App.scheduleStatisticsQuery = scheduleStatisticsQuery;
+
+    function populateProjectFilter(projects) {
+        var select = element("statistics-project-filter");
+        if (!select) return;
+        var current = select.value;
+        select.innerHTML = '<option value="">全部项目</option><option value="unclassified">未归类</option>'
+            + (projects || []).map(function (project) {
+                return '<option value="' + App.escapeHtml(String(project.id || "")) + '">'
+                    + App.escapeHtml(project.name || "未命名项目") + '</option>';
+            }).join("");
+        select.value = current;
+    }
+    App.populateStatisticsProjectFilter = populateProjectFilter;
+
     function initStatisticsDefaults() {
-        var today = App.localTodayStr();
-        var fromEl = document.getElementById("statistics-date-from");
-        var toEl = document.getElementById("statistics-date-to");
-        if (fromEl && !fromEl.value) fromEl.value = today;
-        if (toEl && !toEl.value) toEl.value = today;
-        [fromEl, toEl].forEach(function (element) {
-            if (!element || element.dataset.statisticsChangeBound === "1") return;
-            element.dataset.statisticsChangeBound = "1";
-            element.addEventListener("change", invalidateStatisticsSelection);
-        });
+        currentSelection();
+        syncStatisticsSelection();
+        syncStatisticsDraftSelection();
+        if (!App.statisticsControlsBound) {
+            App.statisticsControlsBound = true;
+            ["statistics-date-from", "statistics-date-to"].forEach(function (id) {
+                element(id).addEventListener("input", handleStatisticsDraftDateChange);
+                element(id).addEventListener("change", handleStatisticsDraftDateChange);
+            });
+            element("statistics-project-filter").addEventListener("change", function () {
+                syncStatisticsSelection();
+                scheduleStatisticsQuery(0);
+            });
+            [["stats-project-tab", "stats-project-panel", "stats-app-tab", "stats-app-panel"],
+             ["stats-app-tab", "stats-app-panel", "stats-project-tab", "stats-project-panel"]]
+                .forEach(function (ids) {
+                    element(ids[0]).addEventListener("click", function () {
+                        element(ids[0]).setAttribute("aria-selected", "true"); element(ids[1]).hidden = false;
+                        element(ids[2]).setAttribute("aria-selected", "false"); element(ids[3]).hidden = true;
+                    });
+                });
+            if (App.loadProjects) App.loadProjects().then(populateProjectFilter);
+        }
     }
     App.initStatisticsDefaults = initStatisticsDefaults;
 
     function setStatisticsExportStatus(message, kind) {
-        var el = document.getElementById("stats-export-status");
-        if (!el) return;
-        el.hidden = !message;
-        el.textContent = message || "";
-        el.className = "stats-export-status" + (kind ? " " + kind : "");
+        var status = element("stats-export-status");
+        if (!status) return;
+        status.hidden = !message;
+        status.textContent = message || "";
+        status.className = "inline-status" + (kind ? " " + kind : "");
     }
     App.setStatisticsExportStatus = setStatisticsExportStatus;
 
+    function resetStatisticsTransientUi() {
+        if (App.statisticsQueryTimer) window.clearTimeout(App.statisticsQueryTimer);
+        App.statisticsQueryTimer = null;
+        setStatisticsExportStatus("", "");
+        App.statisticsDraftSelection = cloneStatisticsSelection(
+            App.statisticsSelection || currentSelection()
+        );
+        App.statisticsDraftDirty = false;
+        syncStatisticsDraftSelection();
+    }
+    App.resetStatisticsTransientUi = resetStatisticsTransientUi;
+
     function setStatisticsExportSaving(saving) {
-        App.statisticsExportSaving = saving;
-        var btn = document.getElementById("stats-export-action-btn");
-        if (btn) btn.disabled = saving || App.statisticsLoading || !App.statisticsAcceptedPayload;
-        var loadBtn = document.getElementById("statistics-load-btn");
-        if (loadBtn) loadBtn.disabled = saving || App.statisticsLoading;
+        App.statisticsExportSaving = !!saving;
+        setStatisticsLoading(App.statisticsLoading);
     }
     App.setStatisticsExportSaving = setStatisticsExportSaving;
 
     function exportStatisticsCsv() {
-        if (App.statisticsExportSaving || App.statisticsLoading) return;
+        if (App.statisticsLoading || App.statisticsExportSaving) return;
         var accepted = App.statisticsAcceptedPayload;
-        if (!accepted || !accepted.exportRevision) {
-            setStatisticsExportStatus("请先加载统计数据", "error");
-            return;
-        }
-        var rangeMessage = validateStatisticsDateRange(accepted.dateFrom, accepted.dateTo);
-        if (rangeMessage) {
-            setStatisticsExportStatus(rangeMessage, "error");
-            return;
-        }
+        if (!accepted || !accepted.exportTicket) return;
         setStatisticsExportSaving(true);
-        setStatisticsExportStatus("正在导出…", "info");
-        App.bridge.exportStatisticsCsv(
-            accepted.dateFrom,
-            accepted.dateTo,
-            accepted.exportRevision
+        setStatisticsExportStatus("正在导出…", "");
+        var ticket = accepted.exportTicket;
+        return App.bridge.exportStatisticsCsv(
+            ticket.date_from, ticket.date_to, ticket.revision, ticket.project_id || ""
         ).then(function (result) {
-            if (!result) {
-                setStatisticsExportStatus("导出失败", "error");
-            } else if (result.cancelled) {
-                setStatisticsExportStatus("已取消导出", "info");
-            } else if (result.ok) {
-                setStatisticsExportStatus(
-                    "导出成功：" + App.safeText(result.filename, "")
-                    + "（" + String(result.activity_count || 0) + " 条，共 "
-                    + App.safeText(result.duration, "00:00:00") + "）",
-                    "success"
-                );
-            } else {
-                setStatisticsExportStatus(result.error || "导出失败", "error");
-            }
+            if (result && result.cancelled) setStatisticsExportStatus("已取消导出", "");
+            else if (!result || result.ok === false) setStatisticsExportStatus((result && result.error) || "导出失败", "error");
+            else setStatisticsExportStatus("已导出 " + (result.filename || "CSV 文件"), "success");
         }).catch(function () {
             setStatisticsExportStatus("导出失败", "error");
-        }).finally(function () {
-            setStatisticsExportSaving(false);
-        });
+        }).finally(function () { setStatisticsExportSaving(false); });
     }
     App.exportStatisticsCsv = exportStatisticsCsv;
 })();
