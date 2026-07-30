@@ -115,6 +115,47 @@ def test_settings_page_resources_and_controls_are_complete() -> None:
         assert forbidden_id not in section
 
 
+def test_settings_toggle_layout_and_copy_contract() -> None:
+    index = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    styles = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
+    source = _settings_source()
+
+    for status_id, checkbox_id in (
+        (
+            "settings-launch-at-login-toggle-status",
+            "settings-launch-at-login-toggle",
+        ),
+        ("settings-clipboard-toggle-status", "settings-clipboard-toggle"),
+    ):
+        row = re.search(
+            r'<label[^>]*for="' + re.escape(checkbox_id) + r'"[^>]*>(.*?)</label>',
+            index,
+            re.DOTALL,
+        )
+        assert row is not None
+        assert row.group(1).index(f'id="{status_id}"') < row.group(1).index(
+            f'id="{checkbox_id}"'
+        )
+        assert f'id="{status_id}" class="toggle-status"' in row.group(1)
+
+    assert "关闭主窗口后 WorkTrace 会继续在通知区域后台运行。" not in index
+    assert "settings-help" not in index
+    assert ".settings-help" not in styles
+
+    toggle_wrap = re.search(r"\.toggle-wrap\s*\{([^}]*)\}", styles)
+    assert toggle_wrap is not None
+    assert "justify-self: end" in toggle_wrap.group(1)
+    assert "justify-content: flex-end" in toggle_wrap.group(1)
+    assert "align-items: center" in toggle_wrap.group(1)
+
+    toggle_status = re.search(r"\.toggle-status\s*\{([^}]*)\}", styles)
+    assert toggle_status is not None
+    assert "text-align: right" in toggle_status.group(1)
+    assert "white-space: nowrap" in toggle_status.group(1)
+
+    assert '"仅安装版可用"' in func_body(source, "renderLaunchAtLoginToggle")
+
+
 def test_settings_resource_is_packaged() -> None:
     spec = (REPO_ROOT / "WorkTrace.spec").read_text(encoding="utf-8")
     assert "settings.js" in spec

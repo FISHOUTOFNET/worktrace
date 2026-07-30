@@ -5,7 +5,6 @@ import hashlib
 import logging
 import os
 import threading
-import time
 from pathlib import Path
 from typing import Callable, Protocol
 
@@ -158,6 +157,7 @@ def release_single_instance() -> None:
 
 class ActivationKernel(Protocol):
     def create_activation_event(self, name: str): ...
+    def signal_prepared_activation(self, event) -> bool: ...
     def signal_activation_event(self, name: str) -> bool: ...
     def wait_for_activation(self, event, timeout_seconds: float) -> bool: ...
     def wake_activation_waiter(self, event) -> None: ...
@@ -196,6 +196,9 @@ class WindowsActivationKernel:
         finally:
             kernel32.CloseHandle(handle)
 
+    def signal_prepared_activation(self, event) -> bool:
+        return bool(self._kernel32().SetEvent(event))
+
     def wait_for_activation(self, event, timeout_seconds: float) -> bool:
         result = self._kernel32().WaitForSingleObject(
             event,
@@ -211,7 +214,7 @@ class WindowsActivationKernel:
 
 
 class ApplicationInstanceCoordinator:
-    """Named activation Event listener layered on the existing Mutex API."""
+    """Own the named activation Event across the process startup lifecycle."""
 
     def __init__(self, kernel: ActivationKernel | None = None) -> None:
         self._kernel = kernel if kernel is not None else WindowsActivationKernel()
@@ -220,17 +223,46 @@ class ApplicationInstanceCoordinator:
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._callback: Callable[[], object] | None = None
+        self._pending_activation = False
+        self._generation = 0
+        self._active_callbacks = 0
+        self._callback_condition = threading.Condition(self._lock)
 
-    def start_activation_listener(self, callback: Callable[[], object]) -> None:
-        if os.name != "nt" and isinstance(self._kernel, WindowsActivationKernel):
+    def _supported(self) -> bool:
+        return not (
+            os.name != "nt" and isinstance(self._kernel, WindowsActivationKernel)
+        )
+
+    def prepare_activation_event(self) -> None:
+        if not self._supported():
             return
         with self._lock:
-            self._callback = callback
+            if self._event is not None:
+                return
+            try:
+                event = self._kernel.create_activation_event(
+                    _windows_activation_event_name()
+                )
+            except Exception:
+                logging.exception("activation event preparation failed")
+                raise
+            if event is None:
+                logging.error("activation event preparation returned no handle")
+                raise SingleInstanceError(
+                    "single_instance_activation_event_create_failed:no_handle"
+                )
+            self._event = event
+            self._stop_event.clear()
+            self._generation += 1
+
+    def start_activation_listener(self) -> None:
+        if not self._supported():
+            return
+        with self._lock:
             if self._thread is not None:
                 return
-            self._event = self._kernel.create_activation_event(
-                _windows_activation_event_name()
-            )
+            if self._event is None:
+                raise SingleInstanceError("activation_event_not_prepared")
             self._stop_event.clear()
             self._thread = threading.Thread(
                 target=self._wait_loop,
@@ -239,22 +271,50 @@ class ApplicationInstanceCoordinator:
             )
             self._thread.start()
 
-    def signal_existing_instance(
-        self,
-        *,
-        retries: int = 40,
-        retry_delay_seconds: float = 0.05,
-    ) -> bool:
-        if os.name != "nt" and isinstance(self._kernel, WindowsActivationKernel):
+    def bind_activation_handler(self, callback: Callable[[], object]) -> None:
+        if not callable(callback):
+            raise TypeError("activation callback must be callable")
+        with self._lock:
+            self._callback = callback
+            dispatch_pending = (
+                self._pending_activation
+                and self._event is not None
+                and not self._stop_event.is_set()
+            )
+            if dispatch_pending:
+                self._pending_activation = False
+                generation = self._generation
+            else:
+                generation = -1
+        if dispatch_pending:
+            self._dispatch_callback(callback, generation)
+
+    def signal_existing_instance(self) -> bool:
+        if not self._supported():
             return False
-        for attempt in range(max(1, retries)):
-            if self._kernel.signal_activation_event(
+        with self._lock:
+            event = self._event
+        if event is not None:
+            try:
+                if self._kernel.signal_prepared_activation(event):
+                    return True
+                logging.warning("prepared activation Event signal failed")
+            except Exception:
+                logging.warning(
+                    "prepared activation Event signal raised",
+                    exc_info=True,
+                )
+        try:
+            signaled = self._kernel.signal_activation_event(
                 _windows_activation_event_name()
-            ):
+            )
+            if signaled:
+                logging.warning("activation used named Event compatibility fallback")
                 return True
-            if attempt + 1 < retries:
-                time.sleep(max(0.0, retry_delay_seconds))
-        return False
+            return False
+        except Exception:
+            logging.warning("named activation Event fallback failed", exc_info=True)
+            return False
 
     def stop_activation_listener(self) -> None:
         with self._lock:
@@ -263,6 +323,8 @@ class ApplicationInstanceCoordinator:
             self._thread = None
             self._event = None
             self._callback = None
+            self._pending_activation = False
+            self._generation += 1
             self._stop_event.set()
         if event is not None:
             try:
@@ -271,17 +333,42 @@ class ApplicationInstanceCoordinator:
                 logging.warning("activation listener wake failed")
         if thread is not None and thread is not threading.current_thread():
             thread.join(timeout=2.0)
+        with self._lock:
+            while self._active_callbacks:
+                self._callback_condition.wait(timeout=0.1)
         if event is not None:
             try:
                 self._kernel.close_activation_event(event)
             except Exception:
                 logging.warning("activation event close failed")
 
+    def _dispatch_callback(
+        self,
+        callback: Callable[[], object],
+        generation: int,
+    ) -> None:
+        with self._lock:
+            if (
+                self._event is None
+                or self._stop_event.is_set()
+                or self._generation != generation
+                or self._callback is not callback
+            ):
+                return
+            self._active_callbacks += 1
+        try:
+            callback()
+        except Exception:
+            logging.exception("activation callback failed")
+        finally:
+            with self._lock:
+                self._active_callbacks -= 1
+                self._callback_condition.notify_all()
+
     def _wait_loop(self) -> None:
         while not self._stop_event.is_set():
             with self._lock:
                 event = self._event
-                callback = self._callback
             if event is None:
                 return
             try:
@@ -289,11 +376,21 @@ class ApplicationInstanceCoordinator:
             except Exception:
                 logging.exception("activation listener wait failed")
                 return
-            if signaled and not self._stop_event.is_set() and callback is not None:
-                try:
-                    callback()
-                except Exception:
-                    logging.exception("activation callback failed")
+            if not signaled:
+                continue
+            with self._lock:
+                if (
+                    self._stop_event.is_set()
+                    or self._event is not event
+                    or self._thread is not threading.current_thread()
+                ):
+                    continue
+                callback = self._callback
+                generation = self._generation
+                if callback is None:
+                    self._pending_activation = True
+                    continue
+            self._dispatch_callback(callback, generation)
 
 
 _application_instance_coordinator = ApplicationInstanceCoordinator()

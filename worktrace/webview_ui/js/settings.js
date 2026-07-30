@@ -249,7 +249,7 @@
             || App.launchAtLoginWriteInProgress
             || !App.settingsLoaded;
         setLaunchAtLoginToggleStatus(
-            supported ? (toggle.checked ? "开启" : "关闭") : "不可用"
+            supported ? (toggle.checked ? "开启" : "关闭") : "仅安装版可用"
         );
     }
     App.renderLaunchAtLoginToggle = renderLaunchAtLoginToggle;

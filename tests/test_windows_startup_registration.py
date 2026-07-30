@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -91,3 +92,17 @@ def test_write_failure_can_be_followed_by_authoritative_state_read() -> None:
         service.enable()
 
     assert service.is_configured() is False
+
+
+def test_source_run_never_registers_python_interpreter(monkeypatch) -> None:
+    registry = FakeRegistry()
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.delattr(sys, "frozen", raising=False)
+    monkeypatch.setattr(sys, "executable", r"C:\Python311\python.exe")
+
+    service = WindowsStartupRegistration(registry=registry)
+
+    assert service.supported is False
+    with pytest.raises(RuntimeError, match="launch_at_login_unsupported"):
+        service.enable()
+    assert registry.writes == []

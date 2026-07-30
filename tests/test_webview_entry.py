@@ -221,6 +221,7 @@ def _stub_webview_main_environment(monkeypatch, tmp_path):
     """Build the entry point from explicit runtime and application capabilities."""
     import worktrace.webview_main as webview_main
 
+    order = []
     monkeypatch.setattr(webview_main, "detect_webview2_runtime", lambda: "installed")
     monkeypatch.setattr(
         "worktrace.config.resolve_paths",
@@ -236,11 +237,13 @@ def _stub_webview_main_environment(monkeypatch, tmp_path):
     class _FakeWebview:
         @staticmethod
         def create_window(*_args, **kwargs):
+            order.append("create_window")
             create_window_kwargs.update(kwargs)
             return fake_window
 
         @staticmethod
         def start():
+            order.append("webview_start")
             start_calls["count"] += 1
 
     monkeypatch.setattr(webview_main, "_check_pywebview_available", lambda: _FakeWebview)
@@ -249,9 +252,11 @@ def _stub_webview_main_environment(monkeypatch, tmp_path):
 
     class _FakeRuntime:
         def initialize(self):
+            order.append("runtime_initialize")
             return True
 
         def shutdown(self):
+            order.append("runtime_shutdown")
             shutdown_calls["count"] += 1
 
     fake_runtime = _FakeRuntime()
@@ -293,7 +298,10 @@ def _stub_webview_main_environment(monkeypatch, tmp_path):
     monkeypatch.setattr(
         webview_main,
         "build_application_services",
-        lambda runtime: fake_services if runtime is fake_runtime else None,
+        lambda runtime: (
+            order.append("build_services")
+            or (fake_services if runtime is fake_runtime else None)
+        ),
     )
 
     class _FakeBridge:
@@ -323,7 +331,39 @@ def _stub_webview_main_environment(monkeypatch, tmp_path):
         lambda **_kwargs: _FakeTray(),
     )
 
+    class _FakeInstanceCoordinator:
+        def __init__(self):
+            self.signal_calls = 0
+            self.stop_calls = 0
+
+        def prepare_activation_event(self):
+            order.append("prepare_activation")
+
+        def start_activation_listener(self):
+            order.append("start_listener")
+
+        def bind_activation_handler(self, callback):
+            assert callable(callback)
+            order.append("bind_handler")
+
+        def signal_existing_instance(self):
+            self.signal_calls += 1
+            order.append("signal_existing")
+            return True
+
+        def stop_activation_listener(self):
+            self.stop_calls += 1
+            order.append("stop_listener")
+
+    instance_coordinator = _FakeInstanceCoordinator()
+    monkeypatch.setattr(
+        webview_main,
+        "get_application_instance_coordinator",
+        lambda: instance_coordinator,
+    )
+
     return {
+        "order": order,
         "gate_calls": gate_calls,
         "start_calls": start_calls,
         "shutdown_calls": shutdown_calls,
@@ -331,6 +371,7 @@ def _stub_webview_main_environment(monkeypatch, tmp_path):
         "app_control": app_control,
         "settings": fake_settings,
         "create_window_kwargs": create_window_kwargs,
+        "instance_coordinator": instance_coordinator,
     }
 
 
@@ -355,6 +396,61 @@ def test_webview_main_starts_webview_even_when_gate_fails_closed(monkeypatch, tm
     result = webview_main.main()
     assert result == 0
     assert mocks["start_calls"]["count"] == 1
+
+
+def test_webview_main_prepares_event_before_mutex_and_listens_before_composition(
+    monkeypatch,
+    tmp_path,
+):
+    mocks = _stub_webview_main_environment(monkeypatch, tmp_path)
+    import worktrace.webview_main as webview_main
+
+    assert webview_main.main() == 0
+
+    order = mocks["order"]
+    assert order.index("prepare_activation") < order.index("runtime_initialize")
+    assert order.index("runtime_initialize") < order.index("start_listener")
+    assert order.index("start_listener") < order.index("build_services")
+    assert order.index("create_window") < order.index("bind_handler")
+    assert mocks["instance_coordinator"].stop_calls == 1
+
+
+def test_second_instance_signals_prepared_event_and_cleans_up(
+    monkeypatch,
+    tmp_path,
+):
+    mocks = _stub_webview_main_environment(monkeypatch, tmp_path)
+    import worktrace.webview_main as webview_main
+
+    mocks["fake_runtime"].initialize = lambda: (
+        mocks["order"].append("runtime_initialize") or False
+    )
+
+    assert webview_main.main() == 0
+    assert mocks["instance_coordinator"].signal_calls == 1
+    assert mocks["instance_coordinator"].stop_calls == 1
+    assert mocks["shutdown_calls"]["count"] == 1
+    assert mocks["start_calls"]["count"] == 0
+    assert "build_services" not in mocks["order"]
+
+
+def test_activation_prepare_failure_cleans_runtime_without_initializing(
+    monkeypatch,
+    tmp_path,
+):
+    mocks = _stub_webview_main_environment(monkeypatch, tmp_path)
+    import worktrace.webview_main as webview_main
+
+    def fail_prepare():
+        mocks["order"].append("prepare_activation")
+        raise RuntimeError("event unavailable")
+
+    mocks["instance_coordinator"].prepare_activation_event = fail_prepare
+
+    assert webview_main.main() == 2
+    assert "runtime_initialize" not in mocks["order"]
+    assert mocks["instance_coordinator"].stop_calls == 1
+    assert mocks["shutdown_calls"]["count"] == 1
 
 
 def test_background_start_hides_only_when_privacy_and_recovery_are_ready(

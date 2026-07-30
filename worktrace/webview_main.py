@@ -7,10 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from . import config
-from .collector.single_instance import (
-    get_application_instance_coordinator,
-    signal_existing_instance,
-)
+from .collector.single_instance import get_application_instance_coordinator
 from .desktop.shell import DesktopShellController
 from .desktop.windows_tray import WindowsTrayHost
 from .runtime.app_runtime import AppRuntime
@@ -81,8 +78,8 @@ def _report_runtime_missing(*, background: bool = False) -> int:
     return 2
 
 
-def _report_already_running() -> int:
-    activated = signal_existing_instance()
+def _report_already_running(instance_coordinator) -> int:
+    activated = instance_coordinator.signal_existing_instance()
     logging.info(
         "webview startup skipped: existing instance activation=%s",
         activated,
@@ -142,20 +139,37 @@ def main(*, background: bool = False) -> int:
         return 2
 
     runtime = AppRuntime(paths)
-    try:
-        initialized = runtime.initialize()
-    except Exception:
-        logging.exception("runtime initialization failed")
-        return _report_startup_failure(
-            "WorkTrace 初始化失败，请打开应用处理后重试。",
-            background=background,
-        )
-    if initialized is False:
-        return _report_already_running()
     shell: DesktopShellController | None = None
     instance_coordinator = get_application_instance_coordinator()
 
     try:
+        try:
+            instance_coordinator.prepare_activation_event()
+        except Exception:
+            logging.exception("activation Event preparation failed")
+            return _report_startup_failure(
+                "WorkTrace 实例激活通道初始化失败，请重新打开应用。",
+                background=background,
+            )
+        try:
+            initialized = runtime.initialize()
+        except Exception:
+            logging.exception("runtime initialization failed")
+            return _report_startup_failure(
+                "WorkTrace 初始化失败，请打开应用处理后重试。",
+                background=background,
+            )
+        if initialized is False:
+            return _report_already_running(instance_coordinator)
+        try:
+            instance_coordinator.start_activation_listener()
+        except Exception:
+            logging.exception("activation listener startup failed")
+            return _report_startup_failure(
+                "WorkTrace 实例激活监听启动失败，请重新打开应用。",
+                background=background,
+            )
+
         services = build_application_services(runtime)
         app_control = services.app_control
         startup_result: dict[str, Any] = {"ok": False}
@@ -204,8 +218,8 @@ def main(*, background: bool = False) -> int:
             )
             shell_holder["shell"] = shell
             _bind_shell_events(window, shell)
+            instance_coordinator.bind_activation_handler(shell.show_window)
             shell.start()
-            instance_coordinator.start_activation_listener(shell.show_window)
             webview.start()
         except Exception:
             logging.exception("webview start failed")
