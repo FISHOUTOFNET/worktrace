@@ -638,6 +638,31 @@ class FakeRulesCapability:
         return self.automatic_rules_status_return
 
 
+class FakeFDWorkCapability:
+    """FD Work capability fake that records identity/version-only calls."""
+
+    def __init__(self) -> None:
+        self.open_entry_calls: list[tuple[str, str, str, str]] = []
+        self.open_entry_return: dict[str, object] = {"ok": True, "status": "opening"}
+
+    def open_entry(
+        self,
+        report_date,
+        projection_instance_key,
+        expected_projection_revision,
+        expected_source_version,
+    ):
+        self.open_entry_calls.append(
+            (
+                report_date,
+                projection_instance_key,
+                expected_projection_revision,
+                expected_source_version,
+            )
+        )
+        return self.open_entry_return
+
+
 def build_test_application_services(
     runtime: TestRuntime | None = None,
     maintenance: TestMaintenance | None = None,
@@ -647,6 +672,7 @@ def build_test_application_services(
     backup: FakeBackupCapability | None = None,
     statistics: FakeStatisticsCapability | None = None,
     timeline: FakeTimelineCapability | None = None,
+    fd_work: FakeFDWorkCapability | None = None,
     rules: FakeRulesCapability | None = None,
 ) -> ApplicationServices:
     runtime_capability = runtime if runtime is not None else TestRuntime()
@@ -662,6 +688,7 @@ def build_test_application_services(
         backup=backup if backup is not None else BackupApplicationService(),
         statistics=statistics if statistics is not None else StatisticsApplicationService(),
         timeline=timeline if timeline is not None else TimelineApplicationService(),
+        fd_work=fd_work if fd_work is not None else FakeFDWorkCapability(),
         rules=rules if rules is not None else RulesApplicationService(),
     )
 
@@ -675,6 +702,7 @@ def build_test_bridge(
     backup: FakeBackupCapability | None = None,
     statistics: FakeStatisticsCapability | None = None,
     timeline: FakeTimelineCapability | None = None,
+    fd_work: FakeFDWorkCapability | None = None,
     rules: FakeRulesCapability | None = None,
 ) -> WebViewBridge:
     return WebViewBridge(
@@ -686,6 +714,7 @@ def build_test_bridge(
             backup=backup,
             statistics=statistics,
             timeline=timeline,
+            fd_work=fd_work,
             rules=rules,
         )
     )
@@ -693,6 +722,7 @@ def build_test_bridge(
 
 __all__ = [
     "FakeBackupCapability",
+    "FakeFDWorkCapability",
     "FakeOverviewCapability",
     "FakeRulesCapability",
     "FakeSettingsCapability",

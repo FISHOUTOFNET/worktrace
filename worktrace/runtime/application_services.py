@@ -12,10 +12,15 @@ from ..api.application_capabilities import (
 )
 from ..api.application_services import ApplicationServices
 from ..services import database_maintenance_service
+from ..integrations.fd_work.entry_service import FDWorkEntryService
 from .app_runtime import AppRuntime
 
 
-def build_application_services(runtime: AppRuntime) -> ApplicationServices:
+def build_application_services(
+    runtime: AppRuntime,
+    *,
+    fd_work_window_controller=None,
+) -> ApplicationServices:
     maintenance = database_maintenance_service.MAINTENANCE_COORDINATOR
     return ApplicationServices(
         app_control=ApplicationControlService(runtime, maintenance),
@@ -25,6 +30,7 @@ def build_application_services(runtime: AppRuntime) -> ApplicationServices:
         backup=BackupApplicationService(),
         statistics=StatisticsApplicationService(),
         timeline=TimelineApplicationService(),
+        fd_work=FDWorkEntryService(window_controller=fd_work_window_controller),
         rules=RulesApplicationService(),
     )
 

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from .app_api import ApplicationControlService, ApplicationRuntimeCapability
 from .application_capabilities import (
     BackupCapability,
+    FDWorkCapability,
     OverviewCapability,
     RulesCapability,
     SettingsCapability,
@@ -25,6 +26,7 @@ class ApplicationServices:
     backup: BackupCapability
     statistics: StatisticsCapability
     timeline: TimelineCapability
+    fd_work: FDWorkCapability
     rules: RulesCapability
 
 

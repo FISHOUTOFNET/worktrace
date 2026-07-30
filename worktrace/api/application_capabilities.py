@@ -71,6 +71,17 @@ class TimelineCapability(Protocol):
 
 
 @runtime_checkable
+class FDWorkCapability(Protocol):
+    def open_entry(
+        self,
+        report_date,
+        projection_instance_key,
+        expected_projection_revision,
+        expected_source_version,
+    ) -> dict[str, Any]: ...
+
+
+@runtime_checkable
 class RulesCapability(Protocol):
     def list_project_bindings(self) -> list[dict[str, Any]]: ...
     def create_project_for_rules(self, name, description, language) -> dict[str, Any]: ...

@@ -28,6 +28,7 @@ SHIPPING_METHODS = frozenset(
         "get_timeline_session_activity_summary", "hide_timeline_session",
         "hide_timeline_session_activity", "import_encrypted_backup",
         "list_projects_for_timeline", "merge_timeline_session",
+        "open_fd_work_entry",
         "preview_encrypted_backup_manifest", "preview_project_rule_impact",
         "preview_project_rules_batch_impact", "recover_database_maintenance",
         "save_timeline_session_edit", "set_clipboard_capture_enabled",

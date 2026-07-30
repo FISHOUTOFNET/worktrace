@@ -51,6 +51,7 @@
         importEncryptedBackup: fixedBridgeMethod("import_encrypted_backup"),
         listProjectsForTimeline: fixedBridgeMethod("list_projects_for_timeline"),
         mergeTimelineSession: fixedBridgeMethod("merge_timeline_session"),
+        openFDWorkEntry: fixedBridgeMethod("open_fd_work_entry"),
         previewEncryptedBackupManifest: fixedBridgeMethod("preview_encrypted_backup_manifest"),
         previewProjectRuleImpact: fixedBridgeMethod("preview_project_rule_impact"),
         previewProjectRulesBatchImpact: fixedBridgeMethod("preview_project_rules_batch_impact"),
