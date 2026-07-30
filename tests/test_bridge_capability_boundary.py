@@ -48,6 +48,7 @@ EXPECTED_SHIPPING_METHODS = frozenset(
         "import_encrypted_backup",
         "list_projects_for_timeline",
         "merge_timeline_session",
+        "open_fd_work_entry",
         "preview_encrypted_backup_manifest",
         "preview_project_rule_impact",
         "preview_project_rules_batch_impact",
