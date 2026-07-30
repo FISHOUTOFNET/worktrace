@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import logging
+import json
 import sys
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +12,7 @@ from . import config
 from .collector.single_instance import get_application_instance_coordinator
 from .desktop.shell import DesktopShellController
 from .desktop.windows_tray import WindowsTrayHost
+from .integrations.fd_work.window_controller import FDWorkWindowController
 from .runtime.app_runtime import AppRuntime
 from .runtime.application_services import build_application_services
 from .webview_ui.bridge import WebViewBridge
@@ -122,6 +125,12 @@ def _bind_shell_events(window, shell: DesktopShellController) -> None:
     events.loaded += shell.handle_window_loaded
 
 
+def _defer_fd_work_callback(callback) -> None:
+    timer = threading.Timer(0.05, callback)
+    timer.daemon = True
+    timer.start()
+
+
 def main(*, background: bool = False) -> int:
     paths = config.resolve_paths()
     config.ensure_directories(paths)
@@ -140,6 +149,7 @@ def main(*, background: bool = False) -> int:
 
     runtime = AppRuntime(paths)
     shell: DesktopShellController | None = None
+    fd_work_controller: FDWorkWindowController | None = None
     instance_coordinator = get_application_instance_coordinator()
 
     try:
@@ -170,7 +180,28 @@ def main(*, background: bool = False) -> int:
                 background=background,
             )
 
+        main_window_holder: dict[str, Any] = {}
+
+        def report_fd_work_status(status: str) -> None:
+            window = main_window_holder.get("window")
+            if window is None:
+                return
+            payload = json.dumps(str(status), ensure_ascii=True)
+            try:
+                window.evaluate_js(
+                    "window.WorkTraceApp&&"
+                    f"window.WorkTraceApp.receiveFDWorkStatus({payload})"
+                )
+            except Exception:
+                logging.debug("FD Work status delivery skipped")
+
+        fd_work_controller = FDWorkWindowController(
+            webview,
+            schedule=_defer_fd_work_callback,
+            status_callback=report_fd_work_status,
+        )
         services = build_application_services(runtime)
+        services.fd_work.bind_window_controller(fd_work_controller)
         app_control = services.app_control
         startup_result: dict[str, Any] = {"ok": False}
         try:
@@ -205,11 +236,17 @@ def main(*, background: bool = False) -> int:
                 focus=not initial_hidden,
             )
             bridge.set_window(window)
+            main_window_holder["window"] = window
             shell_holder: dict[str, DesktopShellController] = {}
+
+            def exit_application() -> None:
+                fd_work_controller.shutdown()
+                shell_holder["shell"].exit_application()
+
             tray = WindowsTrayHost(
                 icon_path=desktop_resource_path("worktrace.ico"),
                 on_open=lambda: shell_holder["shell"].show_window(),
-                on_exit=lambda: shell_holder["shell"].exit_application(),
+                on_exit=exit_application,
             )
             shell = DesktopShellController(
                 window=window,
@@ -236,6 +273,8 @@ def main(*, background: bool = False) -> int:
         )
     finally:
         instance_coordinator.stop_activation_listener()
+        if fd_work_controller is not None:
+            fd_work_controller.shutdown()
         if shell is not None:
             shell.stop()
         runtime.shutdown()

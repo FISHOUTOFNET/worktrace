@@ -290,10 +290,18 @@ def _stub_webview_main_environment(monkeypatch, tmp_path):
             }
 
     fake_settings = _FakeSettings()
+    class _FakeFDWork:
+        def bind_window_controller(self, _controller):
+            order.append("bind_fd_work_controller")
+
     fake_services = type(
         "Services",
         (),
-        {"app_control": app_control, "settings": fake_settings},
+        {
+            "app_control": app_control,
+            "settings": fake_settings,
+            "fd_work": _FakeFDWork(),
+        },
     )()
     monkeypatch.setattr(
         webview_main,

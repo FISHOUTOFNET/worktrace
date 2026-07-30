@@ -41,6 +41,11 @@ class FDWorkEntryService:
         self._projection_reader = projection_reader
         self._window_controller = window_controller
 
+    def bind_window_controller(self, window_controller: _DraftWindow) -> None:
+        if self._window_controller is not None and self._window_controller is not window_controller:
+            raise RuntimeError("fd_work_window_already_bound")
+        self._window_controller = window_controller
+
     def build_draft(self, request: FDWorkEntryRequest) -> FDWorkEntryDraft:
         projection = self._projection_reader(request.report_date)
         if (
