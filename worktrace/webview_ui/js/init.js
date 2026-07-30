@@ -677,6 +677,7 @@
         bind("edit-note-text", "input", App.handleTimelineNoteInput);
         bind("edit-note-text", "blur", App.handleTimelineNoteBlur);
         bind("edit-duration-input", "change", App.handleTimelineDurationChange);
+        bind("fd-work-entry-btn", "click", App.openFDWorkEntryForSelection);
         bind("timeline-project-filter", "change", App.applyTimelineProjectFilter);
         bind("timeline-details-close", "click", App.closeTimelineDrawer);
         bind("timeline-drawer-backdrop", "click", App.closeTimelineDrawer);

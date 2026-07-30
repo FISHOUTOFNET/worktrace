@@ -8,6 +8,7 @@
     var TOOLBAR_ID = "worktrace-fdwork-toolbar";
     var lastPayload = null;
     var lastContract = null;
+    var compactObserver = null;
 
     function result(ok, error, extra) {
         return Object.assign({ ok: !!ok, error: error || "" }, extra || {});
@@ -165,6 +166,10 @@
     }
 
     function removeCompactMode() {
+        if (compactObserver) {
+            compactObserver.disconnect();
+            compactObserver = null;
+        }
         document.documentElement.removeAttribute(ROOT_ATTRIBUTE);
         Array.prototype.forEach.call(
             document.querySelectorAll("[" + HIDDEN_ATTRIBUTE + "]"),
@@ -218,6 +223,22 @@
         Array.prototype.forEach.call(form.querySelectorAll(".ant-form-item"), function (item) {
             if (keep.indexOf(item) < 0) item.setAttribute(HIDDEN_ATTRIBUTE, "true");
         });
+        var childOnPath = form;
+        var ancestor = form.parentElement;
+        while (ancestor && ancestor !== document.body) {
+            Array.prototype.forEach.call(ancestor.children, function (child) {
+                if (child !== childOnPath) child.setAttribute(HIDDEN_ATTRIBUTE, "true");
+            });
+            childOnPath = ancestor;
+            ancestor = ancestor.parentElement;
+        }
+        if (document.body) {
+            Array.prototype.forEach.call(document.body.children, function (child) {
+                if (child !== childOnPath && child.id !== TOOLBAR_ID) {
+                    child.setAttribute(HIDDEN_ATTRIBUTE, "true");
+                }
+            });
+        }
         if (!document.getElementById(STYLE_ID)) {
             var style = document.createElement("style");
             style.id = STYLE_ID;
@@ -230,6 +251,15 @@
         }
         document.documentElement.setAttribute(ROOT_ATTRIBUTE, "true");
         makeToolbar(contract);
+        compactObserver = new MutationObserver(function () {
+            if (
+                document.querySelector(".ant-form-item-has-error, [aria-invalid='true']")
+                || !ignoredRequiredFieldsReady(contract)
+            ) {
+                removeCompactMode();
+            }
+        });
+        compactObserver.observe(form, { childList: true, subtree: true, attributes: true });
         return result(true);
     }
 
@@ -276,6 +306,11 @@
         if (!narrativeResult.ok) return narrativeResult;
         var verified = verifyEntry(payload, contract);
         if (!verified.ok) return verified;
+        var ignoredReady = ignoredRequiredFieldsReady(contract)
+            || await waitFor(function () {
+                return ignoredRequiredFieldsReady(contract);
+            }, 3000);
+        if (!ignoredReady) return result(false, "ignored_required_field_missing");
         return installCompactMode(contract);
     }
 

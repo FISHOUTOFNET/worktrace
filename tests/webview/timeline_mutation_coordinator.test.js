@@ -61,6 +61,7 @@ function harness() {
     mergeTimelineSession: bridgeCall("merge_timeline_session"),
     splitTimelineSession: bridgeCall("split_timeline_session"),
     copyTimelineSession: bridgeCall("copy_timeline_session"),
+    openFDWorkEntry: bridgeCall("open_fd_work_entry"),
   };
   for (const file of ["timeline_request_state.js", "timeline.js"]) {
     vm.runInContext(
@@ -611,4 +612,138 @@ test("detail call passes source version from timeline payload", async () => {
   assert.ok(capturedArgs, "detail bridge call was made");
   assert.equal(capturedArgs[3], "sv-from-timeline",
     "4th argument should be structure_revision from timeline payload");
+});
+
+function configureFDWorkSession(App, element, overrides = {}) {
+  const session = Object.assign({
+    row_kind: "project_session",
+    projection_instance_key: "base:a",
+    projection_revision: "rev-a",
+    project_id: 17,
+    project_name: "CASE-001",
+    is_report_project: true,
+    is_report_uncategorized: false,
+    is_uncategorized: false,
+    project_is_deleted: false,
+    is_in_progress: false,
+    end_time: "2026-07-12 10:00:00",
+    session_note: "Saved narrative",
+    duration_seconds: 5040,
+    adjusted_duration_seconds: null,
+    has_duration_override: false,
+    can_edit_project: true,
+    can_edit_note: true,
+    can_edit_duration: true,
+  }, overrides);
+  App.editingSession = session;
+  App.selectedProjectionInstanceKey = session.projection_instance_key;
+  App.selectedProjectionRevision = session.projection_revision;
+  App.currentSessions = [session];
+  App.lastTimelineData = {
+    date: "2026-07-12",
+    structure_revision: "source-a",
+    entries: [session],
+  };
+  App.projectsCache = [{ id: 17, name: "CASE-001" }];
+  element("edit-project-select").value = "17";
+  element("edit-note-text").value = session.session_note;
+  element("edit-duration-input").value = "1.4";
+  return session;
+}
+
+test("FD Work bridge receives only current timeline identity and versions", async () => {
+  const { App, element } = harness();
+  configureFDWorkSession(App, element);
+  let captured = null;
+  App.callBridge = (method, ...args) => {
+    if (method === "open_fd_work_entry") captured = args;
+    return Promise.resolve({ ok: true, status: "opening" });
+  };
+
+  assert.equal(await App.openFDWorkEntryForSelection(), true);
+  assert.deepEqual(captured, ["2026-07-12", "base:a", "rev-a", "source-a"]);
+});
+
+test("dirty Timeline waits for accepted autosave and uses refreshed revision", async () => {
+  const { App, element } = harness();
+  const original = configureFDWorkSession(App, element);
+  element("edit-note-text").value = "New saved narrative";
+  const order = [];
+  let openArgs = null;
+  App.callBridge = (method, ...args) => {
+    if (method === "save_timeline_session_edit") {
+      order.push("save");
+      return Promise.resolve({
+        ok: true,
+        snapshot_revision: "snapshot-2",
+        selection_hint: {
+          projection_instance_key: "base:a",
+          projection_revision: "rev-b",
+        },
+      });
+    }
+    if (method === "open_fd_work_entry") {
+      order.push("open");
+      openArgs = args;
+    }
+    return Promise.resolve({ ok: true });
+  };
+  App.loadTimelineReport = () => {
+    const refreshed = Object.assign({}, original, {
+      projection_revision: "rev-b",
+      session_note: "New saved narrative",
+    });
+    App.currentSessions = [refreshed];
+    App.lastTimelineData = {
+      date: "2026-07-12",
+      structure_revision: "source-b",
+      entries: [refreshed],
+    };
+    return Promise.resolve();
+  };
+
+  assert.equal(await App.openFDWorkEntryForSelection(), true);
+  assert.deepEqual(order, ["save", "open"]);
+  assert.deepEqual(openArgs, ["2026-07-12", "base:a", "rev-b", "source-b"]);
+});
+
+test("confirmed autosave failure prevents FD Work opening", async () => {
+  const { App, element } = harness();
+  configureFDWorkSession(App, element);
+  element("edit-note-text").value = "Unsaved narrative";
+  let openCalls = 0;
+  App.callBridge = (method) => {
+    if (method === "save_timeline_session_edit") {
+      return Promise.resolve({ ok: false, error: "revision_conflict", message: "保存失败" });
+    }
+    if (method === "open_fd_work_entry") openCalls += 1;
+    return Promise.resolve({ ok: true });
+  };
+
+  assert.equal(await App.openFDWorkEntryForSelection(), false);
+  assert.equal(openCalls, 0);
+  assert.match(element("fd-work-status").textContent, /保存失败/);
+});
+
+test("concurrent FD Work clicks reuse one opening request", async () => {
+  const { App, element } = harness();
+  configureFDWorkSession(App, element);
+  const opening = deferred();
+  let openCalls = 0;
+  App.callBridge = (method) => {
+    if (method === "open_fd_work_entry") {
+      openCalls += 1;
+      return opening.promise;
+    }
+    return Promise.resolve({ ok: true });
+  };
+
+  const first = App.openFDWorkEntryForSelection();
+  const second = App.openFDWorkEntryForSelection();
+  assert.equal(first, second);
+  assert.equal(openCalls, 0);
+  await Promise.resolve();
+  assert.equal(openCalls, 1);
+  opening.resolve({ ok: true, status: "opening" });
+  assert.equal(await first, true);
 });
