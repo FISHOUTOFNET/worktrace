@@ -10,6 +10,7 @@ datas = [
     (str(root / 'worktrace' / 'schema_internal.sql'), 'worktrace'),
     (str(root / 'worktrace' / 'schema_indexes.sql'), 'worktrace'),
     (str(root / 'worktrace' / 'platforms' / 'windows_probe_helper.py'), 'worktrace/platforms'),
+    (str(root / 'worktrace' / 'integrations' / 'fd_work' / 'fd_work_adapter.js'), 'worktrace/integrations/fd_work'),
     (str(root / 'worktrace' / 'webview_ui' / 'index.html'), 'worktrace/webview_ui'),
     (str(root / 'worktrace' / 'webview_ui' / 'styles.css'), 'worktrace/webview_ui'),
     (str(root / 'worktrace' / 'webview_ui' / 'js' / 'core.js'), 'worktrace/webview_ui/js'),

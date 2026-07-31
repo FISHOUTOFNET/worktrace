@@ -5,6 +5,7 @@ from __future__ import annotations
 from enum import Enum
 import json
 from pathlib import Path
+import threading
 from typing import Any
 from urllib.parse import urlparse
 
@@ -111,7 +112,20 @@ class FDWorkPageAdapter:
     def fill_entry(self, window: Any, draft: FDWorkEntryDraft) -> dict[str, Any]:
         source = Path(self.adapter_asset_path).read_text(encoding="utf-8")
         window.evaluate_js(source)
-        result = window.evaluate_js(self.build_fill_script(draft))
+        completed = threading.Event()
+        callback_result: list[Any] = []
+
+        def accept_result(value: Any) -> None:
+            callback_result.append(value)
+            completed.set()
+
+        window.evaluate_js(
+            self.build_fill_script(draft),
+            callback=accept_result,
+        )
+        if not completed.wait(timeout=15):
+            return {"ok": False, "error": "page_operation_timeout"}
+        result = callback_result[0] if callback_result else None
         if not isinstance(result, dict):
             return {"ok": False, "error": "page_contract_changed"}
         return result

@@ -85,3 +85,23 @@ def test_adapter_owns_business_url_hosts_selectors_and_asset_version():
     }
     asset = Path(adapter.adapter_asset_path)
     assert asset.name == "fd_work_adapter.js"
+
+
+def test_async_javascript_result_is_received_through_pywebview_callback():
+    class Window:
+        def __init__(self):
+            self.calls = []
+
+        def evaluate_js(self, script, callback=None):
+            self.calls.append((script, callback))
+            if callback is not None:
+                callback({"ok": True, "status": "filled"})
+
+    window = Window()
+
+    result = FDWorkPageAdapter().fill_entry(window, _draft())
+
+    assert result == {"ok": True, "status": "filled"}
+    assert len(window.calls) == 2
+    assert window.calls[0][1] is None
+    assert callable(window.calls[1][1])

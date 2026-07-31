@@ -1459,6 +1459,7 @@
             case_not_found: ["未找到与项目名称完全一致的案号", true],
             case_ambiguous: ["找到多个同名案号，无法自动选择", true],
             case_search_timeout: ["FD Work 案件搜索超时", true],
+            page_operation_timeout: ["FD Work 页面操作超时", true],
             case_selection_mismatch: ["FD Work 案号选择验证失败", true],
             ignored_required_field_missing: ["FD Work 仍有其他必填字段，请在完整页面中处理", true],
             unauthorized: ["当前账号无权访问 FD Work 工时页面", true],

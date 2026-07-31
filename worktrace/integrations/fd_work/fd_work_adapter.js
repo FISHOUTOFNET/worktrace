@@ -112,10 +112,11 @@
         }, 5000);
         if (!listbox) return result(false, "case_search_timeout");
 
-        await waitFor(function () {
+        var loaded = await waitFor(function () {
             return listbox.querySelectorAll("[role='option']").length
                 || normalizeExactText(listbox.textContent) === "暂无数据";
         }, 5000);
+        if (!loaded) return result(false, "case_search_timeout");
         var options = Array.prototype.filter.call(
             listbox.querySelectorAll("[role='option']"),
             visible
