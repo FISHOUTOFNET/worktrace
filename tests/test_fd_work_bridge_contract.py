@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import inspect
-from types import SimpleNamespace
 
 import pytest
 
+from tests.support.application import build_test_bridge
 from worktrace.webview_ui.bridge import WebViewBridge
 
 
@@ -33,17 +33,6 @@ class _FDWorkCapability:
         return {"ok": True, "status": "opening"}
 
 
-def _bridge(capability: _FDWorkCapability) -> WebViewBridge:
-    services = SimpleNamespace(
-        fd_work=capability,
-        app_control=SimpleNamespace(
-            get_collection_status=lambda: {},
-        ),
-        runtime_view=object(),
-    )
-    return WebViewBridge(services)
-
-
 def test_shipping_method_accepts_identity_and_versions_only():
     parameters = list(inspect.signature(WebViewBridge.open_fd_work_entry).parameters)
     assert parameters == [
@@ -57,7 +46,7 @@ def test_shipping_method_accepts_identity_and_versions_only():
 
 def test_bridge_forwards_no_remote_field_values_or_adapter_knowledge():
     capability = _FDWorkCapability()
-    bridge = _bridge(capability)
+    bridge = build_test_bridge(fd_work=capability)
 
     result = bridge.open_fd_work_entry(
         "2026-07-31",
@@ -88,7 +77,7 @@ def test_bridge_forwards_no_remote_field_values_or_adapter_knowledge():
 )
 def test_invalid_transport_does_not_reach_application_capability(arguments):
     capability = _FDWorkCapability()
-    bridge = _bridge(capability)
+    bridge = build_test_bridge(fd_work=capability)
 
     result = bridge.open_fd_work_entry(*arguments)
 
