@@ -31,6 +31,7 @@
             App.settingsLoading
             || App.settingsWriteInProgress
             || App.launchAtLoginWriteInProgress
+            || App.fdWorkSettingsWriteInProgress
             || App.settingsBackupExportInProgress
             || App.settingsBackupManifestInProgress
             || App.settingsBackupImportInProgress
@@ -165,6 +166,7 @@
     function settingsToggleGenericBusy() {
         return !!(
             App.settingsLoading
+            || App.fdWorkSettingsWriteInProgress
             || App.settingsBackupExportInProgress
             || App.settingsBackupManifestInProgress
             || App.settingsBackupImportInProgress
@@ -189,6 +191,14 @@
                 || App.launchAtLoginWriteInProgress
                 || !App.settingsLoaded
                 || !(launchStatus && launchStatus.supported === true);
+        }
+        var fdWorkToggle = element("settings-fd-work-toggle");
+        var fdWorkStatus = App.lastSettingsStatus && App.lastSettingsStatus.fd_work;
+        if (fdWorkToggle) {
+            fdWorkToggle.disabled = genericBusy
+                || App.fdWorkSettingsWriteInProgress
+                || !App.settingsLoaded
+                || !(fdWorkStatus && fdWorkStatus.supported === true);
         }
         setSettingsBackupControlsDisabled(disabled);
         setSettingsDangerControlsDisabled(disabled);
@@ -254,10 +264,31 @@
     }
     App.renderLaunchAtLoginToggle = renderLaunchAtLoginToggle;
 
+    function renderFDWorkToggle(status) {
+        var toggle = element("settings-fd-work-toggle");
+        var target = element("settings-fd-work-toggle-status");
+        if (!toggle) return;
+        var fdWork = status && status.fd_work || {};
+        var supported = fdWork.supported === true;
+        toggle.checked = supported && fdWork.enabled === true;
+        toggle.disabled = !supported
+            || settingsToggleGenericBusy()
+            || App.fdWorkSettingsWriteInProgress
+            || !App.settingsLoaded;
+        if (target) target.textContent = supported
+            ? (toggle.checked ? "开启" : "关闭")
+            : "当前不可用";
+        if (typeof App.updateFDWorkEntryButton === "function") {
+            App.updateFDWorkEntryButton();
+        }
+    }
+    App.renderFDWorkToggle = renderFDWorkToggle;
+
     function renderSettingsStatus(status) {
         if (!status) return;
         renderCaptureToggle(status);
         renderLaunchAtLoginToggle(status);
+        renderFDWorkToggle(status);
         setLineText(
             "export_path_configured",
             status.export_path_configured ? "导出目录：已配置" : "导出目录：未配置"
@@ -545,6 +576,45 @@
         setLaunchAtLoginEnabled(!!toggle.checked);
     }
     App.handleLaunchAtLoginToggleChange = handleLaunchAtLoginToggleChange;
+
+    function setFDWorkEnabled(enabled) {
+        if (settingsToggleGenericBusy() || App.fdWorkSettingsWriteInProgress) {
+            return Promise.resolve(false);
+        }
+        App.fdWorkSettingsWriteInProgress = true;
+        setSettingsControlsDisabled(anySettingsOperationInProgress());
+        return App.bridge.setFDWorkEnabled(enabled).then(function (result) {
+            if (result && result.status) {
+                App.lastSettingsStatus = result.status;
+                renderSettingsStatus(result.status);
+            }
+            var data = App.handleResult(result, function (message) {
+                showSettingsError(message || "设置 FD Work 插件失败");
+            });
+            if (!data) return false;
+            App.lastSettingsStatus = data.status;
+            renderSettingsStatus(data.status);
+            App.clearSettingsError();
+            return true;
+        }).catch(function () {
+            showSettingsError("设置 FD Work 插件失败");
+            if (App.lastSettingsStatus) renderFDWorkToggle(App.lastSettingsStatus);
+            return false;
+        }).then(function (ok) {
+            App.fdWorkSettingsWriteInProgress = false;
+            setSettingsControlsDisabled(anySettingsOperationInProgress());
+            if (App.lastSettingsStatus) renderFDWorkToggle(App.lastSettingsStatus);
+            return ok;
+        });
+    }
+    App.setFDWorkEnabled = setFDWorkEnabled;
+
+    function handleFDWorkToggleChange(event) {
+        var toggle = event ? event.target : element("settings-fd-work-toggle");
+        if (!toggle || toggle.disabled || App.fdWorkSettingsWriteInProgress) return;
+        setFDWorkEnabled(!!toggle.checked);
+    }
+    App.handleFDWorkToggleChange = handleFDWorkToggleChange;
 
     function setStatusLine(id, text) {
         var target = element(id);

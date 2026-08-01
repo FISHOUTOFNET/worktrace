@@ -29,7 +29,7 @@ def test_projection_key_edit_api_returns_post_state(temp_db):
         source["projection_revision"],
         "edit-1",
         None,
-        60,
+        360,
         "note",
     )
     assert result["ok"] is True

@@ -22,15 +22,16 @@ def build_application_services(
     fd_work_window_controller=None,
 ) -> ApplicationServices:
     maintenance = database_maintenance_service.MAINTENANCE_COORDINATOR
+    fd_work = FDWorkEntryService(window_controller=fd_work_window_controller)
     return ApplicationServices(
         app_control=ApplicationControlService(runtime, maintenance),
         runtime_view=runtime,
         overview=OverviewApplicationService(),
-        settings=SettingsApplicationService(),
+        settings=SettingsApplicationService(fd_work=fd_work),
         backup=BackupApplicationService(),
         statistics=StatisticsApplicationService(),
         timeline=TimelineApplicationService(),
-        fd_work=FDWorkEntryService(window_controller=fd_work_window_controller),
+        fd_work=fd_work,
         rules=RulesApplicationService(),
     )
 

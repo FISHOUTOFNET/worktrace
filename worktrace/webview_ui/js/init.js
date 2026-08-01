@@ -58,6 +58,7 @@
         recoverDatabaseMaintenance: fixedBridgeMethod("recover_database_maintenance"),
         saveTimelineSessionEdit: fixedBridgeMethod("save_timeline_session_edit"),
         setClipboardCaptureEnabled: fixedBridgeMethod("set_clipboard_capture_enabled"),
+        setFDWorkEnabled: fixedBridgeMethod("set_fd_work_enabled"),
         setLaunchAtLogin: fixedBridgeMethod("set_launch_at_login"),
         setExcludedRulesEnabled: fixedBridgeMethod("set_excluded_rules_enabled"),
         setProjectEnabledForRules: fixedBridgeMethod("set_project_enabled_for_rules"),
@@ -671,7 +672,11 @@
         bind("timeline-hide-session", "click", function (event) {
             App.confirmTimelineDeletion("hide", {}, event.currentTarget);
         });
-        bind("edit-project-select", "change", function () { App.scheduleTimelineAutosave(0); });
+        bind("edit-project-select", "change", function () {
+            App.fdWorkStatusOverride = null;
+            App.updateFDWorkEntryButton();
+            App.scheduleTimelineAutosave(0);
+        });
         bind("edit-note-text", "compositionstart", App.handleTimelineCompositionStart);
         bind("edit-note-text", "compositionend", App.handleTimelineCompositionEnd);
         bind("edit-note-text", "input", App.handleTimelineNoteInput);
@@ -690,6 +695,7 @@
         bind("stats-export-action-btn", "click", App.exportStatisticsCsv);
         bind("settings-clipboard-toggle", "change", App.handleCaptureToggleChange);
         bind("settings-launch-at-login-toggle", "change", App.handleLaunchAtLoginToggleChange);
+        bind("settings-fd-work-toggle", "change", App.handleFDWorkToggleChange);
         bind("settings-backup-export-btn", "click", App.exportEncryptedBackup);
         bind("settings-backup-manifest-btn", "click", App.previewEncryptedBackupManifest);
         bind("settings-backup-import-btn", "click", App.importEncryptedBackup);

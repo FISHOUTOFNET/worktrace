@@ -67,6 +67,18 @@ class SettingsBridgeMixin:
                 "status": status.get("status"),
             }
 
+    def set_fd_work_enabled(self, enabled) -> dict[str, Any]:
+        try:
+            return self._services.settings.set_fd_work_enabled(enabled)
+        except Exception:
+            logger.exception("webview bridge set_fd_work_enabled failed")
+            status = self._services.settings.get_settings_privacy_status()
+            return {
+                "ok": False,
+                "error": "设置 FD Work 插件失败",
+                "status": status.get("status"),
+            }
+
     def export_encrypted_backup(
         self,
         passphrase,

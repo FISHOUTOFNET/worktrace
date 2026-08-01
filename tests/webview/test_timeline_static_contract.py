@@ -94,7 +94,7 @@ def test_timeline_header_filter_editor_and_advanced_menu_contract():
     duration = re.search(r'<input id="edit-duration-input"[^>]*>', timeline_page)
     assert duration is not None
     assert 'type="number"' in duration.group(0)
-    assert 'min="0"' in duration.group(0)
+    assert 'min="0.1"' in duration.group(0)
     assert 'step="0.1"' in duration.group(0)
     assert 'inputmode="decimal"' in duration.group(0)
     assert 'aria-label="时长（小时）"' in duration.group(0)
@@ -302,7 +302,8 @@ def test_timeline_duration_draft_preserves_exact_override_until_user_touches_fie
     assert "toFixed(1)" in populate
     assert "App.timelineDurationDraftTouched" in dirty
     assert "App.timelineDurationDraftTouched" in save
-    assert "Math.round(hours * 3600)" in save
+    assert "normalizeTimelineDurationInput" in save
+    assert "normalizedDuration.seconds" in save
     assert "session.adjusted_duration_seconds" in save
     assert "App.timelineDurationDraftTouched = true" in handler
     assert "scheduleTimelineAutosave(0)" in handler

@@ -74,12 +74,10 @@ class TimelineBridgeMixin:
         report_date: str,
         projection_instance_key: str,
         expected_projection_revision: str,
-        expected_source_version: str,
     ) -> dict[str, Any]:
         values = (
             projection_instance_key,
             expected_projection_revision,
-            expected_source_version,
         )
         if (
             not isinstance(report_date, str)
@@ -96,7 +94,6 @@ class TimelineBridgeMixin:
                 report_date,
                 projection_instance_key.strip(),
                 expected_projection_revision.strip(),
-                expected_source_version.strip(),
             )
         except Exception as exc:
             code = str(getattr(exc, "code", "") or "operation_failed")
@@ -110,6 +107,7 @@ class TimelineBridgeMixin:
                 "empty_narrative": "描述为空，无法填入",
                 "invalid_duration": "工时必须大于零",
                 "duration_exceeds_limit": "工时超过 FD Work 允许的范围",
+                "fd_work_disabled": "FD Work 插件已关闭，请在高级设置中开启",
             }
             if code not in messages:
                 logger.exception("webview bridge open_fd_work_entry failed")

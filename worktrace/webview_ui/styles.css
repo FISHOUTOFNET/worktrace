@@ -239,6 +239,9 @@ th.number, td.number { text-align: right; font-variant-numeric: tabular-nums; }
 .timeline-edit-panel #edit-note-text { min-height: 50px; height: 50px; max-height: 50px; resize: none; }
 .edit-meta { display: flex; justify-content: flex-end; margin-top: 0; }
 .editor-actions { position: relative; display: flex; align-items: center; gap: 4px; margin: 4px 0 7px; }
+.fd-work-entry-area { display: flex; flex: 1 1 100%; flex-direction: column; align-items: flex-start; gap: 3px; }
+.fd-work-entry-area[hidden] { display: none; }
+.fd-work-entry-area .inline-status { line-height: 1.3; }
 .timeline-readonly-notice { margin: 0 0 9px; padding: 8px 10px; border: 1px solid var(--color-border); border-radius: var(--radius-md); color: var(--color-text-secondary); background: var(--color-surface-subtle); font-size: var(--font-size-sm); }
 .action-menu { position: absolute; right: 34px; top: calc(100% + 4px); z-index: 8; width: 204px; display: grid; padding: 4px; border: 1px solid var(--color-border-strong); border-radius: var(--radius-md); background: var(--color-surface); box-shadow: var(--shadow-flyout); }
 .action-menu button { justify-content: flex-start; min-height: 29px; text-align: left; border: 0; background: transparent; }

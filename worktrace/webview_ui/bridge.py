@@ -32,6 +32,7 @@ SHIPPING_METHODS = frozenset(
         "preview_encrypted_backup_manifest", "preview_project_rule_impact",
         "preview_project_rules_batch_impact", "recover_database_maintenance",
         "save_timeline_session_edit", "set_clipboard_capture_enabled",
+        "set_fd_work_enabled",
         "set_launch_at_login",
         "set_excluded_rules_enabled", "set_project_enabled_for_rules",
         "set_project_rule_enabled", "set_project_rules_batch_enabled",

@@ -130,11 +130,15 @@ class ReportContribution:
     activity_identity_key: str = ""
     is_in_progress: bool = False
     privacy_redacted: bool = False
+    observed_duration_seconds: int = 0
+    report_duration_seconds: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "member_identity": self.member_identity.to_dict(),
             "duration_seconds": self.duration_seconds,
+            "observed_duration_seconds": self.observed_duration_seconds,
+            "report_duration_seconds": self.report_duration_seconds,
             "status": self.status,
             "project": self.project.to_dict() if self.project else None,
             "activity_identity_key": self.activity_identity_key,
@@ -339,6 +343,11 @@ ProjectNotSelectableError = _error_type("ProjectNotSelectableError", "project_no
 OperationNotAllowedError = _error_type("OperationNotAllowedError", "operation_not_allowed", "当前记录不允许此操作")
 OperationNoEffectError = _error_type("OperationNoEffectError", "operation_no_effect", "操作未产生变化")
 DatabaseBusyError = _error_type("DatabaseBusyError", "database_busy", "数据库正忙，请稍后重试")
+DayDurationExceedsLimitError = _error_type(
+    "DayDurationExceedsLimitError",
+    "day_duration_exceeds_limit",
+    "修改后当日总时长将超过 24 小时，本次修改未保存。",
+)
 
 
 def project_state_from_row(
@@ -381,7 +390,7 @@ def project_state_from_row(
 
 
 __all__ = [
-    "DatabaseBusyError", "FrozenDict", "InvalidInputError", "MutationResult", "OperationDiagnostic",
+    "DatabaseBusyError", "DayDurationExceedsLimitError", "FrozenDict", "InvalidInputError", "MutationResult", "OperationDiagnostic",
     "OperationNoEffectError", "OperationNotAllowedError", "OperationRecord", "ProjectNotSelectableError",
     "ProjectState", "ReportContribution", "ReportDomainError", "ReportMemberIdentity",
     "ReportProjectionSnapshot", "ReportSessionEntry", "RequestIdConflictError", "RevisionConflictError",

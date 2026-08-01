@@ -128,7 +128,7 @@
                         <div id="timeline-edit-panel" class="timeline-edit-panel" hidden>
                             <div class="edit-inline">
                                 <label class="field"><span>项目</span><select id="edit-project-select" disabled><option value="">加载中…</option></select></label>
-                                <label class="field timeline-duration-field"><span>时长</span><span class="input-with-unit"><input id="edit-duration-input" type="number" min="0" step="0.1" inputmode="decimal" aria-label="时长（小时）" disabled><span aria-hidden="true">小时</span></span></label>
+                                <label class="field timeline-duration-field"><span>时长</span><span class="input-with-unit"><input id="edit-duration-input" type="number" min="0.1" step="0.1" inputmode="decimal" aria-label="时长（小时）" disabled><span aria-hidden="true">小时</span></span></label>
                             </div>
                             <span id="edit-duration-status" class="field-status"></span>
                             <label class="field"><span>描述</span><textarea id="edit-note-text" rows="2" maxlength="200" placeholder="暂无描述" disabled></textarea></label>
@@ -136,7 +136,7 @@
                             <div class="editor-actions">
                                 <span id="edit-status" class="inline-status" role="status" aria-live="polite" hidden></span>
                                 <span class="toolbar-spacer"></span>
-                                <button id="fd-work-entry-btn" type="button" class="primary" disabled>填入 FD Work</button>
+                                <div id="fd-work-entry-area" class="fd-work-entry-area" hidden><button id="fd-work-entry-btn" type="button" class="primary" aria-describedby="fd-work-status" disabled>填入 FD Work</button><span id="fd-work-status" class="inline-status" role="status" aria-live="polite"></span></div>
                                 <button id="timeline-advanced-toggle" type="button" class="icon-button inline-icon-button" aria-haspopup="menu" aria-expanded="false" aria-label="高级操作" data-tooltip="高级操作"><svg class="icon" aria-hidden="true"><use href="#icon-more"/></svg></button>
                                 <button id="timeline-hide-session" type="button" class="icon-button inline-icon-button danger-icon-button" aria-label="删除时间段" data-tooltip="删除时间段"><svg class="icon" aria-hidden="true"><use href="#icon-trash"/></svg></button>
                                 <div id="timeline-session-actions" class="action-menu" role="menu" hidden>
@@ -146,7 +146,6 @@
                                     <button id="timeline-merge-next" type="button" role="menuitem">合并到后一时间段</button>
                                 </div>
                             </div>
-                            <span id="fd-work-status" class="inline-status" role="status" aria-live="polite" hidden></span>
                         </div>
                         <section class="activity-details">
                             <h2 id="timeline-details-header">活动详情</h2>
@@ -304,6 +303,7 @@
                         </section>
                         <section id="settings-section-advanced" class="settings-section" hidden>
                             <h2>高级</h2>
+                            <label class="setting-row" for="settings-fd-work-toggle"><span><strong>FD Work 插件</strong><small>启用后，可将时间详情中的项目、日期、时长和描述填入 FD Work。WorkTrace 不会自动保存或提交工时。</small></span><span class="toggle-wrap"><span id="settings-fd-work-toggle-status" class="toggle-status">未加载</span><input id="settings-fd-work-toggle" type="checkbox" disabled></span></label>
                             <article id="settings-recovery-card" class="setting-row" hidden>
                                 <span><strong>数据库维护未完成</strong><small id="settings-recovery-reason">阻断原因：未加载</small></span>
                                 <button id="settings-recovery-btn" type="button" class="button primary" disabled>尝试恢复</button>

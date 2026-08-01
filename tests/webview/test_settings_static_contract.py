@@ -36,6 +36,7 @@ SETTINGS_BRIDGE_METHODS = {
     "previewEncryptedBackupManifest",
     "recoverDatabaseMaintenance",
     "setClipboardCaptureEnabled",
+    "setFDWorkEnabled",
     "setLaunchAtLogin",
 }
 
@@ -76,6 +77,8 @@ def test_settings_page_resources_and_controls_are_complete() -> None:
         "settings-clipboard-toggle-status",
         "settings-launch-at-login-toggle",
         "settings-launch-at-login-toggle-status",
+        "settings-fd-work-toggle",
+        "settings-fd-work-toggle-status",
         "settings-backup-passphrase",
         "settings-backup-passphrase-confirm",
         "settings-backup-export-btn",
@@ -126,6 +129,7 @@ def test_settings_toggle_layout_and_copy_contract() -> None:
             "settings-launch-at-login-toggle",
         ),
         ("settings-clipboard-toggle-status", "settings-clipboard-toggle"),
+        ("settings-fd-work-toggle-status", "settings-fd-work-toggle"),
     ):
         row = re.search(
             r'<label[^>]*for="' + re.escape(checkbox_id) + r'"[^>]*>(.*?)</label>',

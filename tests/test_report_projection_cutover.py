@@ -20,6 +20,8 @@ from worktrace.services.report_projection_snapshot_service import build_visible_
 from worktrace.services.report_session_projection_service import public_session_dto
 from worktrace.services.report_session_operation_engine import OPERATION_PAYLOAD_VERSION
 from worktrace.services.statistics_projection import build_statistics_projection
+from worktrace.integrations.fd_work.contracts import FDWorkEntryRequest
+from worktrace.integrations.fd_work.entry_service import FDWorkEntryService
 
 DATE = "2026-07-01"
 
@@ -117,7 +119,7 @@ def test_minute_editor_baseline_does_not_create_duration_override_on_note_only_s
     assert "duration" not in payload
 
 
-def test_existing_exact_duration_override_is_preserved_by_unchanged_rounded_editor_value(temp_db):
+def test_existing_normalized_duration_override_is_preserved_by_equivalent_input(temp_db):
     project_id = project_service.create_project("P")
     _closed("11:00:00", "11:10:25", project_id=project_id)
     source = build_visible_snapshot(DATE, DATE).final_sessions[0]
@@ -127,13 +129,13 @@ def test_existing_exact_duration_override_is_preserved_by_unchanged_rounded_edit
         source["projection_revision"],
         "set-exact-duration",
         project_id=None,
-        adjusted_duration_seconds=610,
+        adjusted_duration_seconds=1_080,
         note="",
     )
     assert first.outcome_type == "operation_committed"
     overridden = build_visible_snapshot(DATE, DATE).final_sessions[0]
     assert overridden["has_duration_override"] is True
-    assert overridden["adjusted_duration_seconds"] == 610
+    assert overridden["adjusted_duration_seconds"] == 1_080
 
     second = mutations.edit_session(
         DATE,
@@ -141,13 +143,13 @@ def test_existing_exact_duration_override_is_preserved_by_unchanged_rounded_edit
         overridden["projection_revision"],
         "note-preserves-exact-duration",
         project_id=None,
-        adjusted_duration_seconds=600,
+        adjusted_duration_seconds=1_070,
         note="memo",
     )
     assert second.outcome_type == "operation_committed"
     updated = build_visible_snapshot(DATE, DATE).final_sessions[0]
-    assert updated["duration_seconds"] == 610
-    assert updated["adjusted_duration_seconds"] == 610
+    assert updated["duration_seconds"] == 1_080
+    assert updated["adjusted_duration_seconds"] == 1_080
     assert updated["has_duration_override"] is True
     assert updated["session_note"] == "memo"
 
@@ -234,14 +236,14 @@ def test_unchanged_historical_long_description_allows_project_and_duration_edit(
         historical["projection_revision"],
         "historical-long-project-duration",
         project_id=second_project,
-        adjusted_duration_seconds=660,
+        adjusted_duration_seconds=1_080,
         note=historical_note,
     )
 
     assert result.outcome_type == "operation_committed"
     updated = build_visible_snapshot(DATE, DATE).final_sessions[0]
     assert int(updated["project_id"]) == second_project
-    assert updated["adjusted_duration_seconds"] == 660
+    assert updated["adjusted_duration_seconds"] == 1_080
     assert updated["session_note"] == historical_note
 
 
@@ -333,3 +335,49 @@ def test_details_resolves_actual_revision_and_public_dto_is_allowlisted(temp_db)
             session["projection_instance_key"], DATE,
             expected_projection_revision="0" * 40,
         )
+
+
+def test_observed_activity_details_stay_raw_while_report_consumers_use_override(temp_db):
+    project_id = project_service.create_project("Observed versus reported")
+    _closed("14:00:00", "14:00:30", project_id=project_id, app="First")
+    _closed("14:00:30", "14:01:40", project_id=project_id, app="Second")
+    source = build_visible_snapshot(DATE, DATE).final_sessions[0]
+    assert source["duration_seconds"] == 100
+
+    mutations.edit_session(
+        DATE,
+        source["projection_instance_key"],
+        source["projection_revision"],
+        "observed-reported-override",
+        project_id=None,
+        adjusted_duration_seconds=720,
+        note="FD narrative",
+    )
+    snapshot = build_visible_snapshot(DATE, DATE)
+    session = snapshot.final_sessions[0]
+    contributions = list(snapshot.final_contributions)
+
+    assert session["duration_seconds"] == 720
+    assert [row["observed_duration_seconds"] for row in contributions] == [30, 70]
+    assert [row["report_duration_seconds"] for row in contributions] == [216, 504]
+    assert sum(row["duration_seconds"] for row in contributions) == 720
+
+    details = get_projection_session_activity_summary(
+        session["projection_instance_key"],
+        DATE,
+        expected_projection_revision=session["projection_revision"],
+    )
+    assert sorted(row["duration_seconds"] for row in details["summary_rows"]) == [30, 70]
+    assert sum(row["duration_seconds"] for row in details["summary_rows"]) == 100
+
+    analytics = build_statistics_projection(snapshot)
+    assert analytics.total_duration_seconds == 720
+    assert build_statistics_csv_rows(DATE, DATE)[0]["duration_seconds"] == 720
+    draft = FDWorkEntryService(enabled_reader=lambda: True).build_draft(
+        FDWorkEntryRequest(
+            report_date=DATE,
+            projection_instance_key=session["projection_instance_key"],
+            expected_projection_revision=session["projection_revision"],
+        )
+    )
+    assert draft.duration_hours == "0.2"

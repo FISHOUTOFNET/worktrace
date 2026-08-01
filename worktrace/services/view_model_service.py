@@ -643,9 +643,9 @@ def get_timeline_view_model(report_date: str | None = None) -> dict[str, Any]:
             row_kind=ROW_KIND_PROJECT_SESSION_ROW,
         )
         _set_summary_activity_ids(sessions)
-    display_total_seconds = sum(
-        int(row.get("duration_seconds") or 0) for row in sessions
-    )
+    from .reported_duration_policy import reported_day_total_seconds
+
+    display_total_seconds = reported_day_total_seconds(sessions)
     total_target = build_kpi_live_targets(
         sessions,
         report_model.get("live_clock") or {},

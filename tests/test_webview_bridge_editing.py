@@ -315,7 +315,7 @@ def test_save_timeline_session_override_note_only(bridge):
     assert after["adjusted_duration_seconds"] is None
 
 
-def test_save_timeline_session_override_duration_zero_accepted(bridge):
+def test_save_timeline_session_override_duration_zero_rejected_as_too_small(bridge):
     project = project_service.create_project("ZeroDur")
     ids = _seed_session()
     session = _session_for("2026-06-25", ids[0])
@@ -323,8 +323,9 @@ def test_save_timeline_session_override_duration_zero_accepted(bridge):
         bridge, session["activity_ids"], session["activity_member_hash"],
         project, 0, "note", "2026-06-25"
     )
-    assert result["ok"] is True
-    assert _session_for("2026-06-25", ids[0])["adjusted_duration_seconds"] == 0
+    assert result["ok"] is False
+    assert "至少为 0.1 小时" in result["error"]
+    assert _session_for("2026-06-25", ids[0])["adjusted_duration_seconds"] is None
 
 
 def test_save_timeline_session_override_null_duration_clears_override(bridge):

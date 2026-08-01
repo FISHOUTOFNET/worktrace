@@ -644,6 +644,8 @@ function configureFDWorkSession(App, element, overrides = {}) {
     structure_revision: "source-a",
     entries: [session],
   };
+  App.settingsLoaded = true;
+  App.lastSettingsStatus = { fd_work: { supported: true, enabled: true } };
   App.projectsCache = [{ id: 17, name: "CASE-001" }];
   element("edit-project-select").value = "17";
   element("edit-note-text").value = session.session_note;
@@ -661,7 +663,7 @@ test("FD Work bridge receives only current timeline identity and versions", asyn
   };
 
   assert.equal(await App.openFDWorkEntryForSelection(), true);
-  assert.deepEqual(captured, ["2026-07-12", "base:a", "rev-a", "source-a"]);
+  assert.deepEqual(captured, ["2026-07-12", "base:a", "rev-a"]);
 });
 
 test("dirty Timeline waits for accepted autosave and uses refreshed revision", async () => {
@@ -704,7 +706,7 @@ test("dirty Timeline waits for accepted autosave and uses refreshed revision", a
 
   assert.equal(await App.openFDWorkEntryForSelection(), true);
   assert.deepEqual(order, ["save", "open"]);
-  assert.deepEqual(openArgs, ["2026-07-12", "base:a", "rev-b", "source-b"]);
+  assert.deepEqual(openArgs, ["2026-07-12", "base:a", "rev-b"]);
 });
 
 test("confirmed autosave failure prevents FD Work opening", async () => {
@@ -746,4 +748,102 @@ test("concurrent FD Work clicks reuse one opening request", async () => {
   assert.equal(openCalls, 1);
   opening.resolve({ ok: true, status: "opening" });
   assert.equal(await first, true);
+});
+
+test("Timeline duration input uses deterministic one-decimal half-up normalization", () => {
+  const { App } = harness();
+  assert.deepEqual(JSON.parse(JSON.stringify(App.normalizeTimelineDurationInput(""))), {
+    valid: true, cleared: true, text: "", seconds: null, reason: "",
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(App.normalizeTimelineDurationInput("0.05"))), {
+    valid: true, cleared: false, text: "0.1", seconds: 360, reason: "",
+  });
+  assert.equal(App.normalizeTimelineDurationInput("0.001").valid, false);
+  assert.equal(App.normalizeTimelineDurationInput("0.001").text, "0.0");
+  assert.equal(App.normalizeTimelineDurationInput("1.234").seconds, 4320);
+  assert.equal(App.normalizeTimelineDurationInput("1.234").text, "1.2");
+  assert.equal(App.normalizeTimelineDurationInput("1.25").seconds, 4680);
+  assert.equal(App.normalizeTimelineDurationInput("1.25").text, "1.3");
+  for (const invalid of ["-1", "NaN", "Infinity"])
+    assert.equal(App.normalizeTimelineDurationInput(invalid).valid, false);
+});
+
+test("invalid tiny duration is displayed as 0.0 and never autosaved", () => {
+  const { App, element } = harness();
+  configureFDWorkSession(App, element);
+  let scheduled = 0;
+  App.scheduleTimelineAutosave = () => { scheduled += 1; };
+  element("edit-duration-input").value = "0.001";
+
+  App.handleTimelineDurationChange();
+
+  assert.equal(element("edit-duration-input").value, "0.0");
+  assert.equal(scheduled, 0);
+  assert.match(element("edit-status").textContent, /至少为 0.1/);
+});
+
+test("FD Work area is fail-closed and one availability model renders the reason", () => {
+  const { App, element } = harness();
+  configureFDWorkSession(App, element);
+  App.settingsLoaded = false;
+  App.updateFDWorkEntryButton();
+  assert.equal(element("fd-work-entry-area").hidden, true);
+
+  App.settingsLoaded = true;
+  App.lastSettingsStatus.fd_work.enabled = true;
+  element("edit-note-text").value = "";
+  const availability = App.getFDWorkAvailability(App.editingSession);
+  App.updateFDWorkEntryButton();
+  assert.equal(availability.state, "disabled");
+  assert.match(availability.reason, /请先填写描述/);
+  assert.equal(element("fd-work-entry-area").hidden, false);
+  assert.match(element("fd-work-status").textContent, /请先填写描述/);
+});
+
+test("FD Work stale response refreshes and retries exactly once with latest session", async () => {
+  const { App, element } = harness();
+  const original = configureFDWorkSession(App, element);
+  const calls = [];
+  let refreshes = 0;
+  App.callBridge = (method, ...args) => {
+    if (method !== "open_fd_work_entry") return Promise.resolve({ ok: true });
+    calls.push(args);
+    return Promise.resolve(calls.length === 1
+      ? { ok: false, error: "stale_selection", message: "stale" }
+      : { ok: true, status: "opening" });
+  };
+  App.loadTimelineReport = () => {
+    refreshes += 1;
+    const latest = Object.assign({}, original, { projection_revision: "rev-latest" });
+    App.currentSessions = [latest];
+    App.lastTimelineData = { date: "2026-07-12", entries: [latest] };
+    return Promise.resolve();
+  };
+
+  assert.equal(await App.openFDWorkEntryForSelection(), true);
+  assert.equal(refreshes, 1);
+  assert.deepEqual(calls, [
+    ["2026-07-12", "base:a", "rev-a"],
+    ["2026-07-12", "base:a", "rev-latest"],
+  ]);
+});
+
+test("FD Work second stale stops and refresh disappearance prevents retry", async () => {
+  for (const disappears of [false, true]) {
+    const { App, element } = harness();
+    configureFDWorkSession(App, element);
+    let opens = 0;
+    App.callBridge = (method) => {
+      if (method === "open_fd_work_entry") opens += 1;
+      return Promise.resolve({ ok: false, error: "stale_selection", message: "stale" });
+    };
+    App.loadTimelineReport = () => {
+      if (disappears) App.currentSessions = [];
+      else App.currentSessions[0].projection_revision = "rev-new";
+      return Promise.resolve();
+    };
+
+    assert.equal(await App.openFDWorkEntryForSelection(), false);
+    assert.equal(opens, disappears ? 1 : 2);
+  }
 });

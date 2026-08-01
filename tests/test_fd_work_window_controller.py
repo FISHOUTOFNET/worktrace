@@ -60,6 +60,8 @@ class _WebView:
 
     def create_window(self, *args, **kwargs):
         self.calls.append((args, kwargs))
+        if self.calls[:-1]:
+            self.window = _Window()
         return self.window
 
 
@@ -146,3 +148,36 @@ def test_close_hides_reusable_window_and_shutdown_destroys_idempotently():
     controller.shutdown()
     controller.shutdown()
     assert webview.window.destroyed == 1
+
+
+def test_disable_clears_pending_draft_destroys_window_and_allows_reopen():
+    webview = _WebView()
+    controller = FDWorkWindowController(webview, page_adapter=_PageAdapter())
+    controller.open_entry(_draft("CASE-OLD"))
+    old_window = webview.window
+
+    controller.disable()
+    controller.disable()
+
+    assert old_window.destroyed == 1
+    old_window.events.closed.fire()
+    controller.open_entry(_draft("CASE-NEW"))
+    assert len(webview.calls) == 2
+    assert webview.window is not old_window
+    webview.window.url = _PageAdapter().business_url
+    webview.window.events.loaded.fire()
+    assert webview.window.last_draft.case_number == "CASE-NEW"
+
+
+def test_shutdown_is_permanent_even_after_disable():
+    webview = _WebView()
+    controller = FDWorkWindowController(webview, page_adapter=_PageAdapter())
+    controller.open_entry(_draft())
+    controller.disable()
+    controller.shutdown()
+
+    assert controller.open_entry(_draft()) == {
+        "ok": False,
+        "error": "window_unavailable",
+    }
+    assert len(webview.calls) == 1

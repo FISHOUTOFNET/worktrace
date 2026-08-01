@@ -22,11 +22,7 @@ def build_activity_summary_rows(
             or row.get("project_id")
             or 0
         )
-        seconds = int(
-            row.get("report_duration_seconds")
-            or row.get("duration_seconds")
-            or 0
-        )
+        seconds = _observed_duration_seconds(row)
         if key not in groups:
             groups[key] = _new_group(
                 report_date,
@@ -68,6 +64,16 @@ def build_activity_summary_rows(
         )
     )
     return summaries
+
+
+def _observed_duration_seconds(row: dict) -> int:
+    if row.get("observed_duration_seconds") is not None:
+        return max(0, int(row.get("observed_duration_seconds") or 0))
+    if row.get("_basis_duration_seconds") is not None:
+        return max(0, int(row.get("_basis_duration_seconds") or 0))
+    if "report_duration_seconds" not in row:
+        return max(0, int(row.get("duration_seconds") or 0))
+    return 0
 
 
 def get_projection_session_activity_summary(

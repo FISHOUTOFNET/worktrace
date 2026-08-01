@@ -8,7 +8,11 @@ from typing import Any, Mapping, Sequence
 
 from ..data_generation_repository import DataGenerationNamespace
 from ..db import get_connection, now_str
-from ..domain_limits import TIMELINE_DESCRIPTION_EDIT_MAX_LENGTH
+from ..domain_limits import (
+    TIMELINE_DAY_MAX_SECONDS,
+    TIMELINE_DESCRIPTION_EDIT_MAX_LENGTH,
+    normalize_timeline_duration_override_seconds,
+)
 from ..domain_unit_of_work import DomainUnitOfWork
 from . import (
     project_lifecycle_policy,
@@ -19,6 +23,7 @@ from .report_fact_query_service import get_uncategorized_project_id
 from .report_projection_identity import member_identity_key, stable_json_hash
 from .report_projection_model import (
     DatabaseBusyError,
+    DayDurationExceedsLimitError,
     InvalidInputError,
     MutationResult,
     OperationNoEffectError,
@@ -177,6 +182,12 @@ def _run_uow(
     ):
         raise InvalidInputError()
     values = dict(payload_input or {})
+    if operation_type == "edit_session" and "adjusted_duration_seconds" in values:
+        values["adjusted_duration_seconds"] = (
+            normalize_timeline_duration_override_seconds(
+                values.get("adjusted_duration_seconds")
+            )
+        )
     intent = {
         "report_date": report_date,
         "operation_type": operation_type,
@@ -317,6 +328,16 @@ def _run_uow(
                 _insert_receipt(conn, request_id, input_signature, result)
                 return result
 
+            if _operation_requires_day_total_limit(operation_type, payload):
+                from .reported_duration_policy import reported_day_total_seconds
+
+                preview_total = reported_day_total_seconds(
+                    preview.final_entries,
+                    before.standalone_status_entries,
+                )
+                if preview_total > TIMELINE_DAY_MAX_SECONDS:
+                    raise DayDurationExceedsLimitError()
+
             _insert_operation(conn, candidate)
             _insert_members(conn, operation_id, roles)
 
@@ -442,7 +463,16 @@ def _duration_edit_payload(
 
 def _rounded_editor_seconds(seconds: int) -> int:
     value = max(0, int(seconds or 0))
-    return ((value + 30) // 60) * 60
+    return ((value + 180) // 360) * 360
+
+
+def _operation_requires_day_total_limit(
+    operation_type: str,
+    payload: Mapping[str, Any],
+) -> bool:
+    return operation_type == "copy_session" or (
+        operation_type == "edit_session" and "duration" in payload
+    )
 
 
 def _affected_members(source: dict, summary_id: str) -> list[dict]:

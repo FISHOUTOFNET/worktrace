@@ -42,6 +42,8 @@ from worktrace.services.secure_backup_service import (
     SecureBackupError,
 )
 from worktrace.services.settings_service import set_setting, set_settings
+from worktrace.api.application_capabilities import SettingsApplicationService
+from worktrace.integrations.fd_work.entry_service import FDWorkEntryService
 from worktrace.write_gate import DATABASE_RECOVERY_ERROR
 
 pytestmark = [pytest.mark.security_privacy, pytest.mark.integration, pytest.mark.db]
@@ -300,6 +302,11 @@ def test_bridge_returns_narrow_success_payload(temp_db) -> None:
         "destructive_actions",
         "first_run_notice",
         "launch_at_login",
+        "fd_work",
+    }
+    assert result["status"]["fd_work"] == {
+        "supported": True,
+        "enabled": False,
     }
 
 
@@ -337,3 +344,22 @@ def test_bridge_accept_first_run_notice_exception_fallback_keeps_six_field_dto(
     assert result["error_code"] == "privacy_accept_failed"
     assert isinstance(result["message"], str) and result["message"]
     json.loads(json.dumps(result))
+
+
+def test_settings_application_service_delegates_fd_work_enable_and_returns_authority(temp_db):
+    fd_work = FDWorkEntryService()
+    service = SettingsApplicationService(fd_work=fd_work)
+
+    enabled = service.set_fd_work_enabled(True)
+    persisted_enabled = FDWorkEntryService().get_settings_status()
+    disabled = service.set_fd_work_enabled(False)
+
+    assert enabled["ok"] is True
+    assert enabled["status"]["fd_work"] == {"supported": True, "enabled": True}
+    assert persisted_enabled == {"supported": True, "enabled": True}
+    assert disabled["ok"] is True
+    assert disabled["status"]["fd_work"] == {"supported": True, "enabled": False}
+    assert FDWorkEntryService().get_settings_status() == {
+        "supported": True,
+        "enabled": False,
+    }

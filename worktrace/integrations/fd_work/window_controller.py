@@ -49,9 +49,9 @@ class FDWorkWindowController:
                     js_api=None,
                 )
                 self._window = window
-                window.events.loaded += self._on_loaded
-                window.events.closing += self._on_closing
-                window.events.closed += self._on_closed
+                window.events.loaded += lambda *_args, _window=window: self._on_loaded(_window)
+                window.events.closing += lambda *_args, _window=window: self._on_closing(_window)
+                window.events.closed += lambda *_args, _window=window: self._on_closed(_window)
             else:
                 self._restore_window(window)
         self._emit("opening")
@@ -71,14 +71,24 @@ class FDWorkWindowController:
             except Exception:
                 pass
 
-    def _on_loaded(self, *_args) -> None:
-        self._schedule(self._process_loaded_page)
-
-    def _process_loaded_page(self) -> None:
+    def disable(self) -> None:
         with self._lock:
-            if self._shutdown or self._window is None:
-                return
+            self._pending_draft = None
             window = self._window
+            self._window = None
+        if window is not None:
+            try:
+                window.destroy()
+            except Exception:
+                pass
+
+    def _on_loaded(self, window: Any) -> None:
+        self._schedule(lambda: self._process_loaded_page(window))
+
+    def _process_loaded_page(self, window: Any) -> None:
+        with self._lock:
+            if self._shutdown or self._window is not window:
+                return
             draft = self._pending_draft
         try:
             url = window.get_current_url()
@@ -119,11 +129,12 @@ class FDWorkWindowController:
         else:
             self._emit(str(result.get("error") or "page_contract_changed"))
 
-    def _on_closing(self, *_args) -> bool:
+    def _on_closing(self, window: Any) -> bool:
         with self._lock:
             if self._shutdown:
                 return True
-            window = self._window
+            if self._window is not window:
+                return True
 
         def hide_after_state_check() -> None:
             with self._lock:
@@ -137,9 +148,9 @@ class FDWorkWindowController:
         self._schedule(hide_after_state_check)
         return False
 
-    def _on_closed(self, *_args) -> None:
+    def _on_closed(self, window: Any) -> None:
         with self._lock:
-            if not self._shutdown:
+            if not self._shutdown and self._window is window:
                 self._window = None
 
     @staticmethod

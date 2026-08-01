@@ -6,6 +6,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Callable, Mapping, Protocol
 
 from ...constants import UNCATEGORIZED_PROJECT
+from ...services.settings_service import get_bool_setting, set_setting
 from ...services.report_projection_provider import get_day_projection
 from .contracts import FDWorkEntryDraft, FDWorkEntryError, FDWorkEntryRequest
 
@@ -13,10 +14,13 @@ _SECONDS_PER_HOUR = Decimal(3600)
 _ONE_DECIMAL = Decimal("0.1")
 _MAX_DURATION_HOURS = Decimal("23.9")
 _MAX_DURATION_SECONDS = _MAX_DURATION_HOURS * _SECONDS_PER_HOUR
+FD_WORK_ENABLED_SETTING = "fd_work_enabled"
 
 
 class _DraftWindow(Protocol):
     def open_entry(self, draft: FDWorkEntryDraft) -> Mapping[str, Any]: ...
+    def disable(self) -> None: ...
+    def shutdown(self) -> None: ...
 
 
 def format_duration_hours(duration_seconds: int) -> str:
@@ -37,9 +41,22 @@ class FDWorkEntryService:
         *,
         projection_reader: Callable[[str], Any] = get_day_projection,
         window_controller: _DraftWindow | None = None,
+        enabled_reader: Callable[[], bool] | None = None,
+        enabled_writer: Callable[[bool], Any] | None = None,
+        supported: bool = True,
     ) -> None:
         self._projection_reader = projection_reader
         self._window_controller = window_controller
+        self._enabled_reader = enabled_reader or (
+            lambda: get_bool_setting(FD_WORK_ENABLED_SETTING, False)
+        )
+        self._enabled_writer = enabled_writer or (
+            lambda enabled: set_setting(
+                FD_WORK_ENABLED_SETTING,
+                "true" if enabled else "false",
+            )
+        )
+        self._supported = bool(supported)
 
     def bind_window_controller(self, window_controller: _DraftWindow) -> None:
         if self._window_controller is not None and self._window_controller is not window_controller:
@@ -48,12 +65,6 @@ class FDWorkEntryService:
 
     def build_draft(self, request: FDWorkEntryRequest) -> FDWorkEntryDraft:
         projection = self._projection_reader(request.report_date)
-        if (
-            str(projection.source_version_token)
-            != request.expected_source_version
-        ):
-            raise FDWorkEntryError("stale_selection")
-
         entry = projection.entry_by_key.get(request.projection_instance_key)
         if entry is None:
             raise FDWorkEntryError("stale_selection")
@@ -98,8 +109,9 @@ class FDWorkEntryService:
         report_date: str,
         projection_instance_key: str,
         expected_projection_revision: str,
-        expected_source_version: str,
     ) -> dict[str, Any]:
+        if not self.get_settings_status()["enabled"]:
+            raise FDWorkEntryError("fd_work_disabled")
         if self._window_controller is None:
             raise RuntimeError("fd_work_window_unavailable")
         draft = self.build_draft(
@@ -107,10 +119,30 @@ class FDWorkEntryService:
                 report_date=report_date,
                 projection_instance_key=projection_instance_key,
                 expected_projection_revision=expected_projection_revision,
-                expected_source_version=expected_source_version,
             )
         )
         return dict(self._window_controller.open_entry(draft))
+
+    def get_settings_status(self) -> dict[str, object]:
+        enabled = bool(self._supported and self._enabled_reader())
+        return {"supported": self._supported, "enabled": enabled}
+
+    def set_enabled(self, enabled: bool) -> dict[str, object]:
+        if enabled is not True and enabled is not False:
+            raise ValueError("invalid_fd_work_enabled")
+        if enabled and not self._supported:
+            raise RuntimeError("fd_work_unsupported")
+        self._enabled_writer(bool(enabled))
+        status = self.get_settings_status()
+        if bool(status["enabled"]) is not bool(enabled):
+            raise RuntimeError("fd_work_setting_not_persisted")
+        if not enabled and self._window_controller is not None:
+            self._window_controller.disable()
+        return status
+
+    def shutdown(self) -> None:
+        if self._window_controller is not None:
+            self._window_controller.shutdown()
 
     @staticmethod
     def _validate_project_session(entry: Mapping[str, Any]) -> None:
@@ -136,4 +168,4 @@ class FDWorkEntryService:
             raise FDWorkEntryError("project_unavailable")
 
 
-__all__ = ["FDWorkEntryService", "format_duration_hours"]
+__all__ = ["FDWorkEntryService", "FD_WORK_ENABLED_SETTING", "format_duration_hours"]

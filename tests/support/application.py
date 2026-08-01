@@ -158,6 +158,9 @@ class FakeSettingsCapability:
         self.set_launch_at_login_return: dict[str, Any] = {"ok": True}
         self.set_launch_at_login_side_effect: BaseException | None = None
         self.set_launch_at_login_calls: list[tuple] = []
+        self.set_fd_work_enabled_return: dict[str, Any] = {"ok": True}
+        self.set_fd_work_enabled_side_effect: BaseException | None = None
+        self.set_fd_work_enabled_calls: list[tuple] = []
 
     def get_first_run_notice_for_webview(self):
         self.get_first_run_notice_for_webview_calls.append(())
@@ -188,6 +191,12 @@ class FakeSettingsCapability:
         if self.set_launch_at_login_side_effect is not None:
             raise self.set_launch_at_login_side_effect
         return self.set_launch_at_login_return
+
+    def set_fd_work_enabled(self, enabled):
+        self.set_fd_work_enabled_calls.append((enabled,))
+        if self.set_fd_work_enabled_side_effect is not None:
+            raise self.set_fd_work_enabled_side_effect
+        return self.set_fd_work_enabled_return
 
 
 class FakeBackupCapability:
@@ -642,25 +651,35 @@ class FakeFDWorkCapability:
     """FD Work capability fake that records identity/version-only calls."""
 
     def __init__(self) -> None:
-        self.open_entry_calls: list[tuple[str, str, str, str]] = []
+        self.open_entry_calls: list[tuple[str, str, str]] = []
         self.open_entry_return: dict[str, object] = {"ok": True, "status": "opening"}
+        self.enabled = False
+        self.shutdown_calls = 0
+
+    def get_settings_status(self):
+        return {"supported": True, "enabled": self.enabled}
+
+    def set_enabled(self, enabled):
+        self.enabled = bool(enabled)
+        return self.get_settings_status()
 
     def open_entry(
         self,
         report_date,
         projection_instance_key,
         expected_projection_revision,
-        expected_source_version,
     ):
         self.open_entry_calls.append(
             (
                 report_date,
                 projection_instance_key,
                 expected_projection_revision,
-                expected_source_version,
             )
         )
         return self.open_entry_return
+
+    def shutdown(self):
+        self.shutdown_calls += 1
 
 
 def build_test_application_services(

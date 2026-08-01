@@ -55,6 +55,7 @@
     App.editSaving = false;
     App.timelineCompositionActive = false;
     App.timelineDurationDraftTouched = false;
+    App.timelineDurationDraftInvalid = false;
     App.statisticsLoaded = false;
     App.statisticsLoading = false;
     App.statisticsRequestToken = 0;
@@ -67,6 +68,7 @@
     App.settingsRequestToken = 0;
     App.settingsWriteInProgress = false;
     App.launchAtLoginWriteInProgress = false;
+    App.fdWorkSettingsWriteInProgress = false;
     App.settingsBackupExportInProgress = false;
     App.settingsBackupManifestInProgress = false;
     App.settingsBackupImportInProgress = false;

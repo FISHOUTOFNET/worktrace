@@ -6,6 +6,7 @@ import pytest
 
 from tests.support.application import build_test_bridge
 from worktrace.webview_ui.bridge import WebViewBridge
+from worktrace.integrations.fd_work.entry_service import FDWorkEntryService
 
 
 pytestmark = [pytest.mark.unit, pytest.mark.contract, pytest.mark.parallel_safe]
@@ -13,21 +14,19 @@ pytestmark = [pytest.mark.unit, pytest.mark.contract, pytest.mark.parallel_safe]
 
 class _FDWorkCapability:
     def __init__(self) -> None:
-        self.calls: list[tuple[str, str, str, str]] = []
+        self.calls: list[tuple[str, str, str]] = []
 
     def open_entry(
         self,
         report_date: str,
         projection_instance_key: str,
         expected_projection_revision: str,
-        expected_source_version: str,
     ):
         self.calls.append(
             (
                 report_date,
                 projection_instance_key,
                 expected_projection_revision,
-                expected_source_version,
             )
         )
         return {"ok": True, "status": "opening"}
@@ -40,7 +39,6 @@ def test_shipping_method_accepts_identity_and_versions_only():
         "report_date",
         "projection_instance_key",
         "expected_projection_revision",
-        "expected_source_version",
     ]
 
 
@@ -52,7 +50,6 @@ def test_bridge_forwards_no_remote_field_values_or_adapter_knowledge():
         "2026-07-31",
         "base:closed",
         "projection-revision",
-        "source-version",
     )
 
     assert result == {"ok": True, "status": "opening"}
@@ -61,7 +58,6 @@ def test_bridge_forwards_no_remote_field_values_or_adapter_knowledge():
             "2026-07-31",
             "base:closed",
             "projection-revision",
-            "source-version",
         )
     ]
 
@@ -69,10 +65,9 @@ def test_bridge_forwards_no_remote_field_values_or_adapter_knowledge():
 @pytest.mark.parametrize(
     "arguments",
     [
-        ("31/07/2026", "base:closed", "revision", "source"),
-        ("2026-07-31", "", "revision", "source"),
-        ("2026-07-31", "base:closed", "", "source"),
-        ("2026-07-31", "base:closed", "revision", ""),
+        ("31/07/2026", "base:closed", "revision"),
+        ("2026-07-31", "", "revision"),
+        ("2026-07-31", "base:closed", ""),
     ],
 )
 def test_invalid_transport_does_not_reach_application_capability(arguments):
@@ -107,3 +102,21 @@ def test_frontend_bridge_contract_has_no_remote_payload_arguments():
         assert forbidden not in inspect.signature(
             WebViewBridge.open_fd_work_entry
         ).parameters
+
+
+def test_direct_bridge_call_cannot_bypass_disabled_capability():
+    bridge = build_test_bridge(
+        fd_work=FDWorkEntryService(enabled_reader=lambda: False)
+    )
+
+    result = bridge.open_fd_work_entry(
+        "2026-07-31",
+        "base:closed",
+        "projection-revision",
+    )
+
+    assert result == {
+        "ok": False,
+        "error": "fd_work_disabled",
+        "message": "FD Work 插件已关闭，请在高级设置中开启",
+    }

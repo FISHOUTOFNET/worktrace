@@ -37,6 +37,7 @@ class SettingsCapability(Protocol):
     def recover_database_maintenance_for_webview(self) -> dict[str, Any]: ...
     def clear_all_local_data_for_webview(self, confirm_text) -> dict[str, Any]: ...
     def set_launch_at_login(self, enabled) -> dict[str, Any]: ...
+    def set_fd_work_enabled(self, enabled) -> dict[str, Any]: ...
 
 
 @runtime_checkable
@@ -72,13 +73,15 @@ class TimelineCapability(Protocol):
 
 @runtime_checkable
 class FDWorkCapability(Protocol):
+    def get_settings_status(self) -> dict[str, object]: ...
+    def set_enabled(self, enabled: bool) -> dict[str, object]: ...
     def open_entry(
         self,
         report_date,
         projection_instance_key,
         expected_projection_revision,
-        expected_source_version,
     ) -> dict[str, Any]: ...
+    def shutdown(self) -> None: ...
 
 
 @runtime_checkable
@@ -127,12 +130,18 @@ class SettingsApplicationService:
     def __init__(
         self,
         startup_registration: WindowsStartupRegistration | None = None,
+        fd_work: FDWorkCapability | None = None,
     ) -> None:
         self._startup_registration = (
             startup_registration
             if startup_registration is not None
             else WindowsStartupRegistration()
         )
+        if fd_work is None:
+            from ..integrations.fd_work.entry_service import FDWorkEntryService
+
+            fd_work = FDWorkEntryService()
+        self._fd_work = fd_work
 
     def get_first_run_notice_for_webview(self):
         return settings_api.get_first_run_notice_for_webview()
@@ -143,6 +152,7 @@ class SettingsApplicationService:
             return result
         status = dict(result["status"])
         status["launch_at_login"] = self._launch_at_login_status()
+        status["fd_work"] = self._fd_work.get_settings_status()
         return {"ok": True, "status": status}
 
     def recover_database_maintenance_for_webview(self):
@@ -185,6 +195,29 @@ class SettingsApplicationService:
                 "error": error or "登录启动状态未能保存",
                 "status": status,
             }
+        return {"ok": True, "status": status}
+
+    def set_fd_work_enabled(self, enabled):
+        if enabled is not True and enabled is not False:
+            return {
+                "ok": False,
+                "error": "请选择有效的 FD Work 插件状态",
+                "status": self.get_settings_privacy_status().get("status"),
+            }
+        error = None
+        try:
+            self._fd_work.set_enabled(enabled)
+        except Exception:
+            error = "设置 FD Work 插件失败"
+        status_result = self.get_settings_privacy_status()
+        status = status_result.get("status")
+        actual = bool(
+            isinstance(status, dict)
+            and isinstance(status.get("fd_work"), dict)
+            and status["fd_work"].get("enabled") is True
+        )
+        if error is not None or actual is not enabled:
+            return {"ok": False, "error": error or "FD Work 插件状态未能保存", "status": status}
         return {"ok": True, "status": status}
 
     def _launch_at_login_status(self) -> dict[str, bool]:
@@ -411,6 +444,7 @@ class RulesApplicationService:
 __all__ = [
     "BackupApplicationService",
     "BackupCapability",
+    "FDWorkCapability",
     "OverviewApplicationService",
     "OverviewCapability",
     "RulesApplicationService",

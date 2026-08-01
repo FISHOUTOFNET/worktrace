@@ -22,7 +22,6 @@ class FDWorkEntryRequest:
     report_date: str
     projection_instance_key: str
     expected_projection_revision: str
-    expected_source_version: str
 
 
 class FDWorkEntryError(ValueError):

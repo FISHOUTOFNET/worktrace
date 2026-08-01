@@ -150,6 +150,7 @@ def main(*, background: bool = False) -> int:
     runtime = AppRuntime(paths)
     shell: DesktopShellController | None = None
     fd_work_controller: FDWorkWindowController | None = None
+    services = None
     instance_coordinator = get_application_instance_coordinator()
 
     try:
@@ -200,8 +201,10 @@ def main(*, background: bool = False) -> int:
             schedule=_defer_fd_work_callback,
             status_callback=report_fd_work_status,
         )
-        services = build_application_services(runtime)
-        services.fd_work.bind_window_controller(fd_work_controller)
+        services = build_application_services(
+            runtime,
+            fd_work_window_controller=fd_work_controller,
+        )
         app_control = services.app_control
         startup_result: dict[str, Any] = {"ok": False}
         try:
@@ -240,7 +243,7 @@ def main(*, background: bool = False) -> int:
             shell_holder: dict[str, DesktopShellController] = {}
 
             def exit_application() -> None:
-                fd_work_controller.shutdown()
+                services.fd_work.shutdown()
                 shell_holder["shell"].exit_application()
 
             tray = WindowsTrayHost(
@@ -273,7 +276,9 @@ def main(*, background: bool = False) -> int:
         )
     finally:
         instance_coordinator.stop_activation_listener()
-        if fd_work_controller is not None:
+        if services is not None:
+            services.fd_work.shutdown()
+        elif fd_work_controller is not None:
             fd_work_controller.shutdown()
         if shell is not None:
             shell.stop()

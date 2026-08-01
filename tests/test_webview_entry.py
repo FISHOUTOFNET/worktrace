@@ -291,8 +291,8 @@ def _stub_webview_main_environment(monkeypatch, tmp_path):
 
     fake_settings = _FakeSettings()
     class _FakeFDWork:
-        def bind_window_controller(self, _controller):
-            order.append("bind_fd_work_controller")
+        def shutdown(self):
+            order.append("fd_work_shutdown")
 
     fake_services = type(
         "Services",
@@ -306,7 +306,7 @@ def _stub_webview_main_environment(monkeypatch, tmp_path):
     monkeypatch.setattr(
         webview_main,
         "build_application_services",
-        lambda runtime: (
+        lambda runtime, **_kwargs: (
             order.append("build_services")
             or (fake_services if runtime is fake_runtime else None)
         ),
@@ -389,6 +389,7 @@ def test_webview_main_calls_unified_privacy_gate_on_startup(monkeypatch, tmp_pat
 
     result = webview_main.main()
     assert result == 0
+    assert mocks["order"].count("fd_work_shutdown") == 1
     assert mocks["gate_calls"]["count"] == 1
     assert mocks["start_calls"]["count"] == 1
 
