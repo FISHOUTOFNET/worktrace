@@ -225,16 +225,25 @@ def _stub_webview_main_environment(monkeypatch, tmp_path):
     monkeypatch.setattr(webview_main, "detect_webview2_runtime", lambda: "installed")
     monkeypatch.setattr(
         "worktrace.config.resolve_paths",
-        lambda: type("P", (), {"log_path": str(tmp_path / "nul")})(),
+        lambda: type(
+            "P",
+            (),
+            {
+                "log_path": str(tmp_path / "nul"),
+                "base_dir": tmp_path / "WorkTrace",
+            },
+        )(),
     )
     monkeypatch.setattr("worktrace.config.ensure_directories", lambda _paths: None)
     monkeypatch.setattr(webview_main, "setup_logging", lambda _log_path: None)
 
     fake_window = object()
-    start_calls = {"count": 0}
+    start_calls = {"count": 0, "kwargs": {}}
     create_window_kwargs = {}
 
     class _FakeWebview:
+        renderer_on_start = "edgechromium"
+
         @staticmethod
         def create_window(*_args, **kwargs):
             order.append("create_window")
@@ -242,9 +251,14 @@ def _stub_webview_main_environment(monkeypatch, tmp_path):
             return fake_window
 
         @staticmethod
-        def start():
+        def start(*_args, **kwargs):
             order.append("webview_start")
             start_calls["count"] += 1
+            start_calls["kwargs"] = dict(kwargs)
+            callback = kwargs.get("func")
+            if callable(callback):
+                _FakeWebview.renderer = _FakeWebview.renderer_on_start
+                callback()
 
     monkeypatch.setattr(webview_main, "_check_pywebview_available", lambda: _FakeWebview)
 
@@ -380,6 +394,7 @@ def _stub_webview_main_environment(monkeypatch, tmp_path):
         "settings": fake_settings,
         "create_window_kwargs": create_window_kwargs,
         "instance_coordinator": instance_coordinator,
+        "webview": _FakeWebview,
     }
 
 
@@ -392,6 +407,38 @@ def test_webview_main_calls_unified_privacy_gate_on_startup(monkeypatch, tmp_pat
     assert mocks["order"].count("fd_work_shutdown") == 1
     assert mocks["gate_calls"]["count"] == 1
     assert mocks["start_calls"]["count"] == 1
+
+
+def test_shipping_webview_forces_edgechromium_and_persistent_worktrace_profile(
+    monkeypatch,
+    tmp_path,
+):
+    mocks = _stub_webview_main_environment(monkeypatch, tmp_path)
+    import worktrace.webview_main as webview_main
+
+    assert webview_main.main() == 0
+
+    kwargs = mocks["start_calls"]["kwargs"]
+    assert kwargs["gui"] == "edgechromium"
+    assert kwargs["private_mode"] is False
+    assert kwargs["storage_path"] == str(tmp_path / "WorkTrace" / "webview-profile")
+    assert callable(kwargs["func"])
+
+
+def test_initialized_renderer_mismatch_fails_closed_with_webview2_message(
+    monkeypatch,
+    tmp_path,
+):
+    mocks = _stub_webview_main_environment(monkeypatch, tmp_path)
+    import worktrace.webview_main as webview_main
+
+    messages = []
+    mocks["webview"].renderer_on_start = "mshtml"
+    monkeypatch.setattr(webview_main, "_show_blocking_startup_message", messages.append)
+
+    assert webview_main.main() == 0
+    assert messages == [webview_main._RENDERER_UNAVAILABLE_MESSAGE]
+    assert "WebView2" in messages[0]
 
 
 def test_webview_main_starts_webview_even_when_gate_fails_closed(monkeypatch, tmp_path):

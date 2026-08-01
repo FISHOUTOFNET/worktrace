@@ -90,11 +90,18 @@ class TimelineBridgeMixin:
                 "message": "当前时间段信息无效",
             }
         try:
-            return self._services.fd_work.open_entry(
+            result = self._services.fd_work.open_entry(
                 report_date,
                 projection_instance_key.strip(),
                 expected_projection_revision.strip(),
             )
+            if result.get("ok") is False and result.get("error") == "renderer_unavailable":
+                return {
+                    "ok": False,
+                    "error": "renderer_unavailable",
+                    "message": "无法使用 WebView2 打开 FD Work，请修复运行环境后重试",
+                }
+            return result
         except Exception as exc:
             code = str(getattr(exc, "code", "") or "operation_failed")
             messages = {
@@ -159,6 +166,7 @@ class TimelineBridgeMixin:
         projection_revision: str,
         request_id: str,
         project_id: int | None,
+        duration_touched: bool,
         adjusted_duration_seconds: int | None,
         note: str,
     ) -> dict[str, Any]:
@@ -191,11 +199,17 @@ class TimelineBridgeMixin:
                     }
                 pid = int(project_id)
 
+            if not isinstance(duration_touched, bool):
+                return {"ok": False, "error": "invalid_input", "message": "时长无效"}
+
             duration_value: int | None = None
             if adjusted_duration_seconds is not None:
-                if isinstance(adjusted_duration_seconds, bool):
+                if (
+                    isinstance(adjusted_duration_seconds, bool)
+                    or not isinstance(adjusted_duration_seconds, int)
+                ):
                     return {"ok": False, "error": "invalid_input", "message": "时长无效"}
-                duration_value = int(adjusted_duration_seconds)
+                duration_value = adjusted_duration_seconds
 
             return self._services.timeline.save_timeline_session_edit(
                 report_date,
@@ -203,6 +217,7 @@ class TimelineBridgeMixin:
                 projection_revision.strip(),
                 str(request_id or "").strip(),
                 pid,
+                duration_touched,
                 duration_value,
                 note,
             )

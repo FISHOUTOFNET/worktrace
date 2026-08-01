@@ -654,6 +654,7 @@ def test_write_csv_escapes_formula_injection(temp_db, tmp_path):
             session["projection_revision"],
             f"req-formula-{index}",
             None,
+            False,
             None,
             prefix + "SUM(A1:A2)",
         )

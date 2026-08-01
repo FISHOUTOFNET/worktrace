@@ -131,6 +131,12 @@ def _defer_fd_work_callback(callback) -> None:
     timer.start()
 
 
+_RENDERER_UNAVAILABLE_MESSAGE = (
+    "WorkTrace 无法使用 Microsoft Edge WebView2 renderer。"
+    "请安装或修复 WebView2 Runtime 后重新打开应用。"
+)
+
+
 def main(*, background: bool = False) -> int:
     paths = config.resolve_paths()
     config.ensure_directories(paths)
@@ -260,7 +266,28 @@ def main(*, background: bool = False) -> int:
             _bind_shell_events(window, shell)
             instance_coordinator.bind_activation_handler(shell.show_window)
             shell.start()
-            webview.start()
+            webview_profile_path = paths.base_dir / "webview-profile"
+            webview_profile_path.mkdir(parents=True, exist_ok=True)
+
+            def handle_webview_initialized() -> None:
+                renderer = str(getattr(webview, "renderer", "") or "").lower()
+                safe_renderer = (
+                    renderer
+                    if renderer in {"edgechromium", "cef", "qt", "gtk", "mshtml"}
+                    else "unknown"
+                )
+                logging.info("webview renderer initialized renderer=%s", safe_renderer)
+                if sys.platform.startswith("win") and renderer != "edgechromium":
+                    fd_work_controller.mark_renderer_unavailable()
+                    report_fd_work_status("renderer_unavailable")
+                    _show_blocking_startup_message(_RENDERER_UNAVAILABLE_MESSAGE)
+
+            webview.start(
+                func=handle_webview_initialized,
+                gui="edgechromium",
+                private_mode=False,
+                storage_path=str(webview_profile_path),
+            )
         except Exception:
             logging.exception("webview start failed")
             return _report_startup_failure(

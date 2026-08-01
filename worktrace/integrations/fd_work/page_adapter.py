@@ -6,8 +6,8 @@ from enum import Enum
 import json
 from pathlib import Path
 import threading
-from typing import Any
-from urllib.parse import urlparse
+from typing import Any, Callable
+from urllib.parse import urlencode, urlparse, urlsplit, urlunsplit
 
 from .contracts import FDWorkEntryDraft
 
@@ -51,6 +51,22 @@ class FDWorkPageAdapter:
         {"selector": "#basic_nickName", "label": "暂代昵称"},
         {"selector": "#basic_writtenLanguage", "label": "书写语言"},
     )
+
+    @property
+    def login_url(self) -> str:
+        business = urlsplit(self.business_url)
+        return_path = business.path + (
+            f"?{business.query}" if business.query else ""
+        )
+        return urlunsplit(
+            (
+                business.scheme,
+                business.netloc,
+                "/Login",
+                urlencode({"returnUrl": return_path}),
+                "",
+            )
+        )
 
     @property
     def adapter_asset_path(self) -> str:
@@ -108,6 +124,44 @@ class FDWorkPageAdapter:
             f"return a.fillEntry({payload},{contract});"
             "})()"
         )
+
+    @staticmethod
+    def check_login_page_ready(
+        window: Any,
+        callback: Callable[[Any], None],
+    ) -> None:
+        script = """
+(function(){
+  function visible(element) {
+    if (!element || element.disabled) return false;
+    var style = window.getComputedStyle(element);
+    if (style.display === "none" || style.visibility === "hidden") return false;
+    var rect = element.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  }
+  var account = Array.prototype.find.call(
+    document.querySelectorAll('input:not([type="password"]):not([type="hidden"]):not([type="checkbox"])'),
+    function(input) {
+      var hint = [input.placeholder, input.name, input.id, input.getAttribute("aria-label")]
+        .join(" ");
+      return visible(input) && (/(邮箱|手机号|用户名|账号)/.test(hint) || input.type === "text");
+    }
+  );
+  var password = Array.prototype.find.call(
+    document.querySelectorAll('input[type="password"]'),
+    visible
+  );
+  var login = Array.prototype.find.call(
+    document.querySelectorAll('button,input[type="submit"]'),
+    function(button) {
+      var label = String(button.textContent || button.value || "").trim();
+      return visible(button) && label === "登录";
+    }
+  );
+  return {ready: !!(account && password && login)};
+})()
+""".strip()
+        window.evaluate_js(script, callback=callback)
 
     def fill_entry(self, window: Any, draft: FDWorkEntryDraft) -> dict[str, Any]:
         source = Path(self.adapter_asset_path).read_text(encoding="utf-8")

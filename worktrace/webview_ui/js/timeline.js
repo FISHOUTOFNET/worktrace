@@ -1176,6 +1176,25 @@
     }
     App.rebaseEditingSessionAfterRefresh = rebaseEditingSessionAfterRefresh;
 
+    function settleSubmittedDurationIntent(submittedDraft) {
+        if (
+            !submittedDraft
+            || submittedDraft.durationTouched !== true
+            || App.timelineDurationDraftTouched !== true
+        ) return;
+        var durationElement = document.getElementById("edit-duration-input");
+        var normalized = normalizeTimelineDurationInput(
+            durationElement ? durationElement.value : ""
+        );
+        if (
+            normalized.valid
+            && normalized.seconds === submittedDraft.adjustedDurationSeconds
+        ) {
+            App.timelineDurationDraftTouched = false;
+            App.timelineDurationDraftInvalid = false;
+        }
+    }
+
     function saveEdit() {
         if (!App.editingSession) return Promise.resolve(false);
         if (App.timelineDurationDraftInvalid === true) {
@@ -1229,16 +1248,16 @@
             return Promise.resolve(false);
         }
         var adjustedDurationSeconds = null;
+        var durationTouched = canDuration
+            && App.timelineDurationDraftTouched === true;
         var durationChanged = false;
         var durationElement = document.getElementById("edit-duration-input");
         var existingDurationOverride = session.has_duration_override === true
             ? parseInt(session.adjusted_duration_seconds, 10) : null;
         if (isNaN(existingDurationOverride)) existingDurationOverride = null;
-        if (canDuration) {
+        if (durationTouched) {
             var durationText = durationElement ? (durationElement.value || "").trim() : "";
-            if (App.timelineDurationDraftTouched !== true) {
-                adjustedDurationSeconds = existingDurationOverride;
-            } else if (durationText === "") {
+            if (durationText === "") {
                 adjustedDurationSeconds = null;
                 durationChanged = existingDurationOverride !== null;
             } else {
@@ -1252,8 +1271,6 @@
                 durationChanged = existingDurationOverride === null
                     || adjustedDurationSeconds !== existingDurationOverride;
             }
-        } else {
-            adjustedDurationSeconds = existingDurationOverride;
         }
         if (!projectChanged && !noteChanged && !durationChanged) {
             showEditStatus("已保存", false);
@@ -1277,7 +1294,12 @@
             reportDate,
             key,
             revision,
-            JSON.stringify([overrideProjectId, adjustedDurationSeconds, note])
+            JSON.stringify([
+                overrideProjectId,
+                durationTouched,
+                adjustedDurationSeconds,
+                note
+            ])
         );
         if (!owner) {
             setEditSaving(false);
@@ -1294,14 +1316,17 @@
             requestId: owner.requestId,
             projectId: overrideProjectId,
             note: note,
+            durationTouched: durationTouched,
             adjustedDurationSeconds: adjustedDurationSeconds
         };
+        var submittedDraft = App.submittedDraft;
         owner.payload = [
             reportDate,
             key,
             revision,
             owner.requestId,
             overrideProjectId,
+            durationTouched,
             adjustedDurationSeconds,
             note
         ];
@@ -1328,6 +1353,7 @@
                 // projection_revision) BEFORE evaluating the queued
                 // autosave so the next save uses the new revision.
                 rebaseEditingSessionAfterRefresh();
+                settleSubmittedDurationIntent(submittedDraft);
                 return true;
             }).finally(function () {
                 setEditSaving(false);
@@ -1580,7 +1606,9 @@
     App.receiveFDWorkStatus = function (status) {
         var messages = {
             opening: ["正在打开 FD Work…", false],
-            login_required: ["请在 FD Work 窗口完成登录", false],
+            login_required: ["请在 FD Work 完整登录页输入账号和密码并完成登录", false],
+            login_page_load_failed: ["FD Work 登录页加载失败，请检查网络后关闭窗口并重试", true],
+            renderer_unavailable: ["无法使用 WebView2 打开 FD Work，请安装或修复 Microsoft Edge WebView2 Runtime", true],
             matching_case: ["正在匹配案号…", false],
             filling: ["正在填入工时…", false],
             filled: ["已填入，请核对后在 FD Work 中保存", false],
@@ -1591,8 +1619,8 @@
             case_selection_mismatch: ["FD Work 案号选择验证失败", true],
             ignored_required_field_missing: ["FD Work 仍有其他必填字段，请在完整页面中处理", true],
             unauthorized: ["当前账号无权访问 FD Work 工时页面", true],
-            navigation_blocked: ["FD Work 页面导航已被安全策略阻止", true],
-            page_contract_changed: ["FD Work 页面结构可能已更新", true]
+            navigation_blocked: ["FD Work 页面导航已被安全策略阻止，请关闭窗口后重试", true],
+            page_contract_changed: ["FD Work 页面结构可能已更新，请改为在完整页面中手工填写", true]
         };
         var entry = messages[String(status || "")] || messages.page_contract_changed;
         showFDWorkStatus(entry[0], entry[1]);

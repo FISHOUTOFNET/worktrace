@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+import threading
 
 import pytest
 
@@ -157,6 +158,129 @@ def test_fd_work_enable_state_is_persisted_and_disable_delegates_to_window():
     assert disabled == []
     assert service.set_enabled(False) == {"supported": True, "enabled": False}
     assert disabled == [True]
+
+
+def test_open_rechecks_enabled_after_projection_read_before_controller_call():
+    projection_entered = threading.Event()
+    release_projection = threading.Event()
+    state = {"enabled": True}
+    opened = []
+
+    def read_projection(_date):
+        projection_entered.set()
+        assert release_projection.wait(timeout=5)
+        return _projection(_entry())
+
+    controller = SimpleNamespace(
+        open_entry=lambda draft: opened.append(draft) or {"ok": True},
+        disable=lambda: None,
+        shutdown=lambda: None,
+    )
+    service = FDWorkEntryService(
+        projection_reader=read_projection,
+        window_controller=controller,
+        enabled_reader=lambda: state["enabled"],
+        enabled_writer=lambda enabled: state.__setitem__("enabled", enabled),
+    )
+    outcome = {}
+
+    def open_in_thread():
+        try:
+            outcome["result"] = service.open_entry(DATE, KEY, REVISION)
+        except Exception as exc:
+            outcome["error"] = exc
+
+    thread = threading.Thread(target=open_in_thread)
+    thread.start()
+    assert projection_entered.wait(timeout=5)
+    assert service.set_enabled(False) == {"supported": True, "enabled": False}
+    release_projection.set()
+    thread.join(timeout=5)
+
+    assert not thread.is_alive()
+    assert isinstance(outcome.get("error"), FDWorkEntryError)
+    assert outcome["error"].code == "fd_work_disabled"
+    assert opened == []
+
+
+def test_disable_waits_for_final_open_linearization_then_closes_window():
+    controller_entered = threading.Event()
+    release_controller = threading.Event()
+    disable_started = threading.Event()
+    disable_completed = threading.Event()
+    state = {"enabled": True, "has_window": False}
+
+    class Controller:
+        def open_entry(self, _draft):
+            controller_entered.set()
+            assert release_controller.wait(timeout=5)
+            state["has_window"] = True
+            return {"ok": True, "status": "opening"}
+
+        def disable(self):
+            state["has_window"] = False
+
+        def shutdown(self):
+            state["has_window"] = False
+
+    service = FDWorkEntryService(
+        projection_reader=lambda _date: _projection(_entry()),
+        window_controller=Controller(),
+        enabled_reader=lambda: state["enabled"],
+        enabled_writer=lambda enabled: state.__setitem__("enabled", enabled),
+    )
+    open_thread = threading.Thread(
+        target=lambda: service.open_entry(DATE, KEY, REVISION)
+    )
+
+    def disable_in_thread():
+        disable_started.set()
+        service.set_enabled(False)
+        disable_completed.set()
+
+    disable_thread = threading.Thread(target=disable_in_thread)
+    open_thread.start()
+    assert controller_entered.wait(timeout=5)
+    disable_thread.start()
+    assert disable_started.wait(timeout=5)
+    try:
+        assert not disable_completed.wait(timeout=0.1)
+    finally:
+        release_controller.set()
+        open_thread.join(timeout=5)
+        disable_thread.join(timeout=5)
+
+    assert not open_thread.is_alive()
+    assert not disable_thread.is_alive()
+    assert disable_completed.is_set()
+    assert state["enabled"] is False
+    assert state["has_window"] is False
+
+
+def test_shutdown_is_idempotent_permanent_and_prevents_rebinding_or_opening():
+    shutdown_calls = []
+    controller = SimpleNamespace(
+        open_entry=lambda _draft: {"ok": True},
+        disable=lambda: None,
+        shutdown=lambda: shutdown_calls.append(True),
+    )
+    service = FDWorkEntryService(
+        projection_reader=lambda _date: _projection(_entry()),
+        window_controller=controller,
+        enabled_reader=lambda: True,
+    )
+
+    service.shutdown()
+    service.shutdown()
+
+    assert shutdown_calls == [True]
+    assert service.get_settings_status() == {"supported": True, "enabled": False}
+    with pytest.raises(FDWorkEntryError, match="fd_work_disabled"):
+        service.open_entry(DATE, KEY, REVISION)
+    with pytest.raises(RuntimeError, match="fd_work_shutdown"):
+        service.bind_window_controller(controller)
+    with pytest.raises(RuntimeError, match="fd_work_shutdown"):
+        service.set_enabled(True)
 
 
 def test_shipping_composition_shares_one_fd_work_capability_owner():

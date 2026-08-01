@@ -75,6 +75,7 @@ def test_in_progress_edit_session_is_rejected_at_unified_mutation_boundary(
             source["projection_revision"],
             f"open-{case_id}-rejected",
             second_project if project_change else None,
+            duration is not None,
             duration,
             note,
         )

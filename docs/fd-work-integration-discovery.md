@@ -106,12 +106,27 @@ actual observed maximum `aria-valuemax="23.9"`.
 
 ## Session and window observations
 
+- The shipping controller opens the login URL directly. That URL is derived
+  from the single business URL, including a URL-encoded business-path
+  `returnUrl`; the business route is not duplicated as a second constant.
+- A login-page `loaded` event is accepted only after the visible account input,
+  password input and native login button are present. Readiness is rechecked at
+  most five times at fixed 0.5-second intervals. Disable, close, shutdown and a
+  later navigation generation invalidate older callbacks.
+- Windows shipping startup forces the `edgechromium` renderer and verifies the
+  initialized renderer. A different renderer is reported as
+  `renderer_unavailable` and FD Work fails closed.
+- pywebview uses a persistent WorkTrace-only profile at
+  `%LOCALAPPDATA%/WorkTrace/webview-profile` with `private_mode=False`, so the
+  FD Work session can survive a WorkTrace restart. WorkTrace never reads cookies
+  from that profile and the profile is outside database backup, encryption,
+  synchronization and export ownership.
 - The authenticated Work Hour List remained usable in the original browser tab
   while an isolated tab independently reached the login page. The shipping
   controller must nevertheless rely on one reused pywebview window and verify
   same-process hide/show session retention during Windows acceptance.
-- Closing the auxiliary window must hide it; only WorkTrace application exit
-  may destroy it.
+- A user close hides the auxiliary window. Disabling FD Work or exiting
+  WorkTrace destroys it.
 - No real test time entry was saved or submitted during discovery.
 
 ## Items reserved for Windows acceptance

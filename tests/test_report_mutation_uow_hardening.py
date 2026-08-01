@@ -15,7 +15,11 @@ from worktrace.services import (
     report_session_operation_service,
     timeline_service,
 )
-from worktrace.services.report_projection_model import OperationNotAllowedError
+from worktrace.services.report_projection_model import (
+    InvalidInputError,
+    OperationNotAllowedError,
+    RequestIdConflictError,
+)
 
 pytestmark = [pytest.mark.db, pytest.mark.integration, pytest.mark.contract]
 DATE = "2026-07-16"
@@ -65,6 +69,7 @@ def test_open_edit_rejection_writes_no_operation_receipt_or_generation(temp_db):
             session["projection_revision"],
             "open-edit-rejected",
             project_id=target_project,
+            duration_touched=False,
             adjusted_duration_seconds=None,
             note="open note",
         )
@@ -114,6 +119,7 @@ def test_no_effect_edit_writes_receipt_without_structure_generation(temp_db):
         session["projection_revision"],
         "empty-edit-receipt",
         project_id=None,
+        duration_touched=False,
         adjusted_duration_seconds=int(session["duration_seconds"]),
         note="",
     )
@@ -130,6 +136,7 @@ def test_no_effect_edit_writes_receipt_without_structure_generation(temp_db):
         session["projection_revision"],
         "empty-edit-receipt",
         project_id=None,
+        duration_touched=False,
         adjusted_duration_seconds=int(session["duration_seconds"]),
         note="",
     )
@@ -153,3 +160,53 @@ def test_no_effect_edit_writes_receipt_without_structure_generation(temp_db):
         ).fetchone()
     assert receipt["outcome_type"] == "no_op"
     assert receipt["operation_id"] is None
+
+
+def test_duration_intent_is_strict_and_part_of_the_request_signature(temp_db):
+    project_id = project_service.create_project("Intent signature")
+    activity_id = create_closed_activity(
+        day=DATE,
+        start="11:00:00",
+        end="11:10:00",
+        app_name="Word",
+        process_name="winword.exe",
+        window_title="Intent.docx",
+        project_id=project_id,
+    )
+    session = _session_for(activity_id)
+
+    with pytest.raises(InvalidInputError):
+        report_session_operation_service.edit_session(
+            DATE,
+            session["projection_instance_key"],
+            session["projection_revision"],
+            "invalid-intent-type",
+            project_id=None,
+            duration_touched=1,
+            adjusted_duration_seconds=None,
+            note="",
+        )
+
+    first = report_session_operation_service.edit_session(
+        DATE,
+        session["projection_instance_key"],
+        session["projection_revision"],
+        "intent-signature",
+        project_id=None,
+        duration_touched=False,
+        adjusted_duration_seconds=720,
+        note="",
+    )
+    assert first.outcome_type == "no_op"
+
+    with pytest.raises(RequestIdConflictError):
+        report_session_operation_service.edit_session(
+            DATE,
+            session["projection_instance_key"],
+            session["projection_revision"],
+            "intent-signature",
+            project_id=None,
+            duration_touched=True,
+            adjusted_duration_seconds=None,
+            note="",
+        )

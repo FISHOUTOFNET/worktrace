@@ -77,7 +77,7 @@ def test_edit_no_effect_writes_only_receipt(temp_db):
     source = build_visible_snapshot(DATE, DATE).final_sessions[0]
     result = mutations.edit_session(
         DATE, source["projection_instance_key"], source["projection_revision"], "noop",
-        project_id=None, adjusted_duration_seconds=None, note="",
+        project_id=None, duration_touched=False, adjusted_duration_seconds=None, note="",
     )
     assert result.outcome_type == "no_op"
     assert result.operation_id is None
@@ -100,6 +100,7 @@ def test_minute_editor_baseline_does_not_create_duration_override_on_note_only_s
         source["projection_revision"],
         "note-with-rounded-duration",
         project_id=None,
+        duration_touched=False,
         adjusted_duration_seconds=600,
         note="memo",
     )
@@ -119,6 +120,58 @@ def test_minute_editor_baseline_does_not_create_duration_override_on_note_only_s
     assert "duration" not in payload
 
 
+def test_explicit_duration_intent_sets_normalized_override_across_report_consumers(temp_db):
+    project_id = project_service.create_project("MATTER-4442")
+    _closed("15:00:00", "16:14:02", project_id=project_id, app="Observed")
+    source = build_visible_snapshot(DATE, DATE).final_sessions[0]
+    assert source["duration_seconds"] == 4_442
+    assert source["has_duration_override"] is False
+
+    result = mutations.edit_session(
+        DATE,
+        source["projection_instance_key"],
+        source["projection_revision"],
+        "explicit-normalized-duration",
+        project_id=None,
+        duration_touched=True,
+        adjusted_duration_seconds=4_320,
+        note="Synthetic FD narrative",
+    )
+    assert result.outcome_type == "operation_committed"
+
+    snapshot = build_visible_snapshot(DATE, DATE)
+    session = snapshot.final_sessions[0]
+    assert session["adjusted_duration_seconds"] == 4_320
+    assert session["has_duration_override"] is True
+    assert session["duration_seconds"] == 4_320
+
+    with get_connection() as conn:
+        payload = json.loads(
+            conn.execute(
+                "SELECT payload_json FROM report_session_operation WHERE id = ?",
+                (result.operation_id,),
+            ).fetchone()[0]
+        )
+    assert payload["duration"] == {"mode": "set", "value": 4_320}
+
+    details = get_projection_session_activity_summary(
+        session["projection_instance_key"],
+        DATE,
+        expected_projection_revision=session["projection_revision"],
+    )
+    assert sum(row["duration_seconds"] for row in details["summary_rows"]) == 4_442
+    assert build_statistics_projection(snapshot).total_duration_seconds == 4_320
+    assert build_statistics_csv_rows(DATE, DATE)[0]["duration_seconds"] == 4_320
+    draft = FDWorkEntryService(enabled_reader=lambda: True).build_draft(
+        FDWorkEntryRequest(
+            report_date=DATE,
+            projection_instance_key=session["projection_instance_key"],
+            expected_projection_revision=session["projection_revision"],
+        )
+    )
+    assert draft.duration_hours == "1.2"
+
+
 def test_existing_normalized_duration_override_is_preserved_by_equivalent_input(temp_db):
     project_id = project_service.create_project("P")
     _closed("11:00:00", "11:10:25", project_id=project_id)
@@ -129,6 +182,7 @@ def test_existing_normalized_duration_override_is_preserved_by_equivalent_input(
         source["projection_revision"],
         "set-exact-duration",
         project_id=None,
+        duration_touched=True,
         adjusted_duration_seconds=1_080,
         note="",
     )
@@ -143,6 +197,7 @@ def test_existing_normalized_duration_override_is_preserved_by_equivalent_input(
         overridden["projection_revision"],
         "note-preserves-exact-duration",
         project_id=None,
+        duration_touched=False,
         adjusted_duration_seconds=1_070,
         note="memo",
     )
@@ -166,6 +221,7 @@ def test_new_timeline_description_edit_over_200_is_rejected(temp_db):
             source["projection_revision"],
             "description-over-200",
             project_id=None,
+            duration_touched=False,
             adjusted_duration_seconds=None,
             note="新" * (TIMELINE_DESCRIPTION_EDIT_MAX_LENGTH + 1),
         )
@@ -236,6 +292,7 @@ def test_unchanged_historical_long_description_allows_project_and_duration_edit(
         historical["projection_revision"],
         "historical-long-project-duration",
         project_id=second_project,
+        duration_touched=True,
         adjusted_duration_seconds=1_080,
         note=historical_note,
     )
@@ -350,6 +407,7 @@ def test_observed_activity_details_stay_raw_while_report_consumers_use_override(
         source["projection_revision"],
         "observed-reported-override",
         project_id=None,
+        duration_touched=True,
         adjusted_duration_seconds=720,
         note="FD narrative",
     )

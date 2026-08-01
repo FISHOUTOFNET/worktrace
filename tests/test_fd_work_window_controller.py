@@ -68,6 +68,7 @@ class _WebView:
 @dataclass
 class _PageAdapter:
     business_url: str = "https://work.fangdalaw.com/Works/WorkHourList?picker=day"
+    login_url: str = "https://work.fangdalaw.com/Login?returnUrl=%2FWorks%2FWorkHourList%3Fpicker%3Dday"
 
     def detect_page(self, url):
         if "/login" in url.lower():
@@ -82,6 +83,9 @@ class _PageAdapter:
     def fill_entry(self, window, draft):
         window.last_draft = draft
         return {"ok": True, "status": "filled"}
+
+    def check_login_page_ready(self, _window, callback):
+        callback({"ready": True})
 
 
 def _draft(label="CASE-001"):
@@ -98,6 +102,99 @@ def test_window_is_lazy_singleton_and_has_no_js_api():
 
     assert len(webview.calls) == 1
     assert webview.calls[0][1]["js_api"] is None
+    assert webview.calls[0][0][1] == _PageAdapter().login_url
+
+
+def test_login_readiness_retries_are_bounded_and_end_in_stable_failure():
+    scheduled = []
+    statuses = []
+
+    class NeverReadyAdapter(_PageAdapter):
+        def __init__(self):
+            self.checks = 0
+
+        def check_login_page_ready(self, _window, callback):
+            self.checks += 1
+            callback({"ready": False})
+
+    adapter = NeverReadyAdapter()
+    webview = _WebView()
+    controller = FDWorkWindowController(
+        webview,
+        page_adapter=adapter,
+        schedule=lambda callback: callback(),
+        schedule_after=lambda delay, callback: scheduled.append((delay, callback)),
+        status_callback=statuses.append,
+        login_readiness_attempts=3,
+        login_readiness_interval_seconds=0.25,
+    )
+    controller.open_entry(_draft())
+    webview.window.events.loaded.fire()
+    while scheduled:
+        delay, callback = scheduled.pop(0)
+        assert delay == 0.25
+        callback()
+
+    assert adapter.checks == 3
+    assert statuses[-1] == "login_page_load_failed"
+
+
+def test_old_login_readiness_callback_cannot_overwrite_new_navigation_success():
+    callbacks = []
+    statuses = []
+
+    class DeferredAdapter(_PageAdapter):
+        def check_login_page_ready(self, _window, callback):
+            callbacks.append(callback)
+
+    webview = _WebView()
+    controller = FDWorkWindowController(
+        webview,
+        page_adapter=DeferredAdapter(),
+        schedule=lambda callback: callback(),
+        schedule_after=lambda _delay, callback: callback(),
+        status_callback=statuses.append,
+    )
+    controller.open_entry(_draft())
+    webview.window.events.loaded.fire()
+    assert len(callbacks) == 1
+
+    webview.window.url = _PageAdapter().business_url
+    webview.window.events.loaded.fire()
+    assert statuses[-1] == "filled"
+    callbacks[0]({"ready": False})
+
+    assert statuses[-1] == "filled"
+
+
+@pytest.mark.parametrize("invalidate", ["disable", "close", "shutdown"])
+def test_login_readiness_callback_is_invalidated_by_terminal_window_actions(invalidate):
+    callbacks = []
+    statuses = []
+
+    class DeferredAdapter(_PageAdapter):
+        def check_login_page_ready(self, _window, callback):
+            callbacks.append(callback)
+
+    webview = _WebView()
+    controller = FDWorkWindowController(
+        webview,
+        page_adapter=DeferredAdapter(),
+        schedule=lambda callback: callback(),
+        status_callback=statuses.append,
+    )
+    controller.open_entry(_draft())
+    webview.window.events.loaded.fire()
+    assert len(callbacks) == 1
+
+    if invalidate == "close":
+        webview.window.events.closing.fire()
+    else:
+        getattr(controller, invalidate)()
+    before = list(statuses)
+    callbacks[0]({"ready": False})
+
+    assert statuses == before
 
 
 def test_new_request_replaces_pending_draft_and_login_never_injects():
@@ -148,6 +245,44 @@ def test_close_hides_reusable_window_and_shutdown_destroys_idempotently():
     controller.shutdown()
     controller.shutdown()
     assert webview.window.destroyed == 1
+
+
+def test_reopen_reprocesses_current_page_without_waiting_for_new_loaded_event():
+    webview = _WebView()
+    controller = FDWorkWindowController(
+        webview,
+        page_adapter=_PageAdapter(),
+        schedule=lambda callback: callback(),
+    )
+    controller.open_entry(_draft("CASE-OLD"))
+    webview.window.url = _PageAdapter().business_url
+    webview.window.events.loaded.fire()
+    assert webview.window.last_draft.case_number == "CASE-OLD"
+
+    assert webview.window.events.closing.fire() == [False]
+    controller.open_entry(_draft("CASE-NEW"))
+
+    assert len(webview.calls) == 1
+    assert webview.window.last_draft.case_number == "CASE-NEW"
+
+
+def test_reopen_invalidates_a_queued_hide_from_the_previous_close():
+    queued = []
+    webview = _WebView()
+    controller = FDWorkWindowController(
+        webview,
+        page_adapter=_PageAdapter(),
+        schedule=queued.append,
+    )
+    controller.open_entry(_draft("CASE-OLD"))
+    assert webview.window.events.closing.fire() == [False]
+    assert len(queued) == 1
+
+    controller.open_entry(_draft("CASE-NEW"))
+    assert len(queued) == 2
+    queued[0]()
+
+    assert webview.window.hidden == 0
 
 
 def test_disable_clears_pending_draft_destroys_window_and_allows_reopen():

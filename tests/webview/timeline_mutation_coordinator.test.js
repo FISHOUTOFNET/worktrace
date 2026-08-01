@@ -800,6 +800,22 @@ test("FD Work area is fail-closed and one availability model renders the reason"
   assert.match(element("fd-work-status").textContent, /请先填写描述/);
 });
 
+test("FD Work lifecycle failures have distinct actionable Chinese messages", () => {
+  const { App, element } = harness();
+  const expected = {
+    login_required: /账号和密码/,
+    login_page_load_failed: /登录页加载失败/,
+    renderer_unavailable: /WebView2/,
+    page_contract_changed: /手工填写/,
+    navigation_blocked: /关闭窗口后重试/,
+  };
+
+  for (const [status, pattern] of Object.entries(expected)) {
+    App.receiveFDWorkStatus(status);
+    assert.match(App.fdWorkStatusOverride.reason, pattern);
+  }
+});
+
 test("FD Work stale response refreshes and retries exactly once with latest session", async () => {
   const { App, element } = harness();
   const original = configureFDWorkSession(App, element);

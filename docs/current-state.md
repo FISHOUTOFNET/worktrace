@@ -142,8 +142,18 @@ bounded reconciliation.
 Timeline edits on completed sessions allow project, description and duration
 changes. New description edits are limited to 200 characters while the durable
 2000-character read/replay boundary remains compatible with historical data.
+Duration edits carry a required `duration_touched` intent through the WebView,
+API and report operation owner: false ignores the submitted duration, true plus
+null clears an override, and true plus an integer sets the normalized override.
 Rule batches are atomic, manual assignments are preserved, and statistics/export
 use persisted report facts rather than frontend time.
+
+FD Work has one authoritative draft service and one auxiliary-window lifecycle
+controller. Open is linearized against disable/shutdown after the authoritative
+projection read. Windows forces Edge Chromium, opens the derived login URL,
+checks login-page readiness with bounded generation-scoped retries, and uses the
+persistent `%LOCALAPPDATA%/WorkTrace/webview-profile`; WorkTrace does not read or
+export cookies or include this profile in encrypted database backup.
 
 ## Validation
 Affected validation: `python scripts/run_affected_tests.py`. Full validation:

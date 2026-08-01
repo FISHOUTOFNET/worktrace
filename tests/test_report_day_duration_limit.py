@@ -69,7 +69,8 @@ def test_exactly_24_hours_allowed_but_24_point_1_rejected_without_writes(
 
     committed = mutations.edit_session(
         DATE, source["projection_instance_key"], source["projection_revision"],
-        "limit-exact", project_id=None, adjusted_duration_seconds=82_800, note="",
+        "limit-exact", project_id=None, duration_touched=True,
+        adjusted_duration_seconds=82_800, note="",
     )
     assert committed.outcome_type == "operation_committed"
     exact = build_visible_snapshot(DATE, DATE)
@@ -96,7 +97,8 @@ def test_exactly_24_hours_allowed_but_24_point_1_rejected_without_writes(
     with pytest.raises(DayDurationExceedsLimitError):
         mutations.edit_session(
             DATE, updated["projection_instance_key"], updated["projection_revision"],
-            "limit-over", project_id=None, adjusted_duration_seconds=83_160, note="",
+            "limit-over", project_id=None, duration_touched=True,
+            adjusted_duration_seconds=83_160, note="",
         )
     assert _counts_and_generation() == before
     assert len(build_calls) == 1, "rejected preview must not build an after snapshot"
@@ -110,14 +112,16 @@ def test_clear_override_and_copy_are_rejected_when_preview_exceeds_day_limit(tem
     source = next(row for row in _sessions() if row["project_id"] == first_project)
     mutations.edit_session(
         DATE, source["projection_instance_key"], source["projection_revision"],
-        "clear-setup", project_id=None, adjusted_duration_seconds=82_800, note="",
+        "clear-setup", project_id=None, duration_touched=True,
+        adjusted_duration_seconds=82_800, note="",
     )
     overridden = next(row for row in _sessions() if row["project_id"] == first_project)
     before_clear = _counts_and_generation()
     with pytest.raises(DayDurationExceedsLimitError):
         mutations.edit_session(
             DATE, overridden["projection_instance_key"], overridden["projection_revision"],
-            "clear-over", project_id=None, adjusted_duration_seconds=None, note="",
+            "clear-over", project_id=None, duration_touched=True,
+            adjusted_duration_seconds=None, note="",
         )
     assert _counts_and_generation() == before_clear
 
@@ -147,7 +151,8 @@ def test_note_and_hide_remain_available_for_historical_over_limit_day(temp_db):
 
     result = mutations.edit_session(
         DATE, source["projection_instance_key"], source["projection_revision"],
-        "historical-note", project_id=None, adjusted_duration_seconds=None, note="repair",
+        "historical-note", project_id=None, duration_touched=False,
+        adjusted_duration_seconds=None, note="repair",
     )
     assert result.outcome_type == "operation_committed"
     refreshed = next(row for row in _sessions() if row["project_id"] == first_project)
@@ -174,5 +179,6 @@ def test_standalone_status_is_counted_once_in_preview_limit(temp_db):
         mutations.edit_session(
             DATE, source["projection_instance_key"], source["projection_revision"],
             "standalone-over", project_id=None,
+            duration_touched=True,
             adjusted_duration_seconds=83_160, note="",
         )

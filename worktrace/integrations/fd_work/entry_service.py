@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from decimal import Decimal, ROUND_HALF_UP
+import threading
 from typing import Any, Callable, Mapping, Protocol
 
 from ...constants import UNCATEGORIZED_PROJECT
@@ -57,11 +58,19 @@ class FDWorkEntryService:
             )
         )
         self._supported = bool(supported)
+        self._state_lock = threading.RLock()
+        self._shutdown = False
 
     def bind_window_controller(self, window_controller: _DraftWindow) -> None:
-        if self._window_controller is not None and self._window_controller is not window_controller:
-            raise RuntimeError("fd_work_window_already_bound")
-        self._window_controller = window_controller
+        with self._state_lock:
+            if self._shutdown:
+                raise RuntimeError("fd_work_shutdown")
+            if (
+                self._window_controller is not None
+                and self._window_controller is not window_controller
+            ):
+                raise RuntimeError("fd_work_window_already_bound")
+            self._window_controller = window_controller
 
     def build_draft(self, request: FDWorkEntryRequest) -> FDWorkEntryDraft:
         projection = self._projection_reader(request.report_date)
@@ -110,10 +119,8 @@ class FDWorkEntryService:
         projection_instance_key: str,
         expected_projection_revision: str,
     ) -> dict[str, Any]:
-        if not self.get_settings_status()["enabled"]:
-            raise FDWorkEntryError("fd_work_disabled")
-        if self._window_controller is None:
-            raise RuntimeError("fd_work_window_unavailable")
+        with self._state_lock:
+            controller = self._require_open_capability_locked()
         draft = self.build_draft(
             FDWorkEntryRequest(
                 report_date=report_date,
@@ -121,28 +128,55 @@ class FDWorkEntryService:
                 expected_projection_revision=expected_projection_revision,
             )
         )
-        return dict(self._window_controller.open_entry(draft))
+        with self._state_lock:
+            current_controller = self._require_open_capability_locked()
+            if current_controller is not controller:
+                raise RuntimeError("fd_work_window_unavailable")
+            return dict(current_controller.open_entry(draft))
 
     def get_settings_status(self) -> dict[str, object]:
-        enabled = bool(self._supported and self._enabled_reader())
-        return {"supported": self._supported, "enabled": enabled}
+        with self._state_lock:
+            enabled = bool(
+                self._supported
+                and not self._shutdown
+                and self._enabled_reader()
+            )
+            return {"supported": self._supported, "enabled": enabled}
 
     def set_enabled(self, enabled: bool) -> dict[str, object]:
         if enabled is not True and enabled is not False:
             raise ValueError("invalid_fd_work_enabled")
-        if enabled and not self._supported:
-            raise RuntimeError("fd_work_unsupported")
-        self._enabled_writer(bool(enabled))
-        status = self.get_settings_status()
-        if bool(status["enabled"]) is not bool(enabled):
-            raise RuntimeError("fd_work_setting_not_persisted")
-        if not enabled and self._window_controller is not None:
-            self._window_controller.disable()
-        return status
+        with self._state_lock:
+            if self._shutdown:
+                raise RuntimeError("fd_work_shutdown")
+            if enabled and not self._supported:
+                raise RuntimeError("fd_work_unsupported")
+            self._enabled_writer(enabled)
+            persisted = bool(self._supported and self._enabled_reader())
+            if persisted is not enabled:
+                raise RuntimeError("fd_work_setting_not_persisted")
+            if not enabled and self._window_controller is not None:
+                self._window_controller.disable()
+            return {"supported": self._supported, "enabled": persisted}
 
     def shutdown(self) -> None:
-        if self._window_controller is not None:
-            self._window_controller.shutdown()
+        with self._state_lock:
+            if self._shutdown:
+                return
+            self._shutdown = True
+            if self._window_controller is not None:
+                self._window_controller.shutdown()
+
+    def _require_open_capability_locked(self) -> _DraftWindow:
+        if (
+            not self._supported
+            or self._shutdown
+            or not self._enabled_reader()
+        ):
+            raise FDWorkEntryError("fd_work_disabled")
+        if self._window_controller is None:
+            raise RuntimeError("fd_work_window_unavailable")
+        return self._window_controller
 
     @staticmethod
     def _validate_project_session(entry: Mapping[str, Any]) -> None:

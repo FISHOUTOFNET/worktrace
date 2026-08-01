@@ -54,6 +54,7 @@ def _edit_session_project(report_date: str, session: dict, project_id: int) -> N
         session["projection_revision"],
         f"test-project-delete-{count}",
         project_id=project_id,
+        duration_touched=False,
         adjusted_duration_seconds=None,
         note="",
     )

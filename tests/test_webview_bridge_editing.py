@@ -203,6 +203,7 @@ def _save_timeline_session_override(
             session["projection_revision"],
             f"test-bridge-edit-{count}",
             project_id,
+            adjusted_duration_seconds is not None,
             adjusted_duration_seconds,
             note,
         )
@@ -337,10 +338,19 @@ def test_save_timeline_session_override_null_duration_clears_override(bridge):
         project, 3600, "with override", "2026-06-25"
     )
     assert set_result["ok"] is True
-    assert _session_for("2026-06-25", ids[0])["adjusted_duration_seconds"] == 3600
-    result = _save_timeline_session_override(
-        bridge, session["activity_ids"], session["activity_member_hash"],
-        project, None, "with override", "2026-06-25"
+    overridden = _session_for("2026-06-25", ids[0])
+    assert overridden["adjusted_duration_seconds"] == 3600
+    result = _old_bridge_shape(
+        bridge.save_timeline_session_edit(
+            "2026-06-25",
+            overridden["projection_instance_key"],
+            overridden["projection_revision"],
+            "test-bridge-clear-duration",
+            project,
+            True,
+            None,
+            "with override",
+        )
     )
     assert result["ok"] is True
     after = _session_for("2026-06-25", ids[0])
@@ -406,6 +416,68 @@ def test_save_timeline_session_override_bool_duration_rejected(bridge):
             None, bad, "note", "2026-06-25"
         )
         assert result == {"ok": False, "error": "时长无效"}
+
+
+@pytest.mark.parametrize(
+    "bad_duration",
+    [720.9, "720", True, False, float("nan"), float("inf")],
+)
+def test_bridge_rejects_non_strict_duration_without_calling_capability_or_writing(
+    temp_db,
+    bad_duration,
+):
+    timeline = FakeTimelineCapability()
+    direct_bridge = build_test_bridge(timeline=timeline)
+    with get_connection() as conn:
+        before_generation = list(
+            conn.execute(
+                "SELECT namespace, generation FROM data_generation_state ORDER BY namespace"
+            ).fetchall()
+        )
+
+    result = direct_bridge.save_timeline_session_edit(
+        "2026-06-25",
+        "base:strict-duration",
+        "revision-1",
+        "strict-duration-request",
+        None,
+        True,
+        bad_duration,
+        "safe note",
+    )
+
+    assert result == {"ok": False, "error": "invalid_input", "message": "时长无效"}
+    assert timeline.save_timeline_session_edit_calls == []
+    assert "safe note" not in str(result)
+    with get_connection() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM report_session_operation").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM report_mutation_request").fetchone()[0] == 0
+        after_generation = list(
+            conn.execute(
+                "SELECT namespace, generation FROM data_generation_state ORDER BY namespace"
+            ).fetchall()
+        )
+    assert after_generation == before_generation
+
+
+@pytest.mark.parametrize("bad_touched", [None, 0, 1, "true", [], {}])
+def test_bridge_requires_strict_duration_touched_bool(bad_touched):
+    timeline = FakeTimelineCapability()
+    direct_bridge = build_test_bridge(timeline=timeline)
+
+    result = direct_bridge.save_timeline_session_edit(
+        "2026-06-25",
+        "base:strict-intent",
+        "revision-1",
+        "strict-intent-request",
+        None,
+        bad_touched,
+        None,
+        "safe note",
+    )
+
+    assert result == {"ok": False, "error": "invalid_input", "message": "时长无效"}
+    assert timeline.save_timeline_session_edit_calls == []
 
 
 def test_save_timeline_session_override_bool_project_id_rejected(bridge):

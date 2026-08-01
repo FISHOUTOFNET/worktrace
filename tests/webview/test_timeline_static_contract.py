@@ -305,6 +305,9 @@ def test_timeline_duration_draft_preserves_exact_override_until_user_touches_fie
     assert "normalizeTimelineDurationInput" in save
     assert "normalizedDuration.seconds" in save
     assert "session.adjusted_duration_seconds" in save
+    assert "durationTouched" in save
+    assert "durationTouched: durationTouched" in save
+    assert "durationTouched," in save
     assert "App.timelineDurationDraftTouched = true" in handler
     assert "scheduleTimelineAutosave(0)" in handler
     assert (

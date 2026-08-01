@@ -32,3 +32,22 @@ def test_fd_work_does_not_enter_projection_statistics_export_or_collector_hot_pa
     for path in protected:
         if path.exists():
             assert "integrations.fd_work" not in path.read_text(encoding="utf-8")
+
+
+def test_persistent_webview_profile_stays_outside_backup_and_cookie_apis():
+    webview_main = (ROOT / "worktrace" / "webview_main.py").read_text(
+        encoding="utf-8"
+    )
+    backup = (
+        ROOT / "worktrace" / "services" / "secure_backup_service.py"
+    ).read_text(encoding="utf-8")
+    fd_work_sources = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (ROOT / "worktrace" / "integrations" / "fd_work").glob("*.py")
+    )
+
+    assert '"webview-profile"' in webview_main
+    assert "private_mode=False" in webview_main
+    assert "webview-profile" not in backup
+    assert "get_cookies(" not in webview_main
+    assert "get_cookies(" not in fd_work_sources

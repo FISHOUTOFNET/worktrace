@@ -862,6 +862,37 @@ test("6a. 1.5 edited hours submits 5400 integer seconds", async () => {
   element("edit-duration-input").value = "1.5";
   App.handleTimelineDurationChange();
   const payloads = [];
+  let submittedDurationTouched = null;
+  App.callBridge = (method, ...args) => {
+    if (method === "save_timeline_session_edit") {
+      payloads.push(args);
+      submittedDurationTouched = App.submittedDraft.durationTouched;
+    }
+    return Promise.resolve(successfulTimelineEdit());
+  };
+
+  App.saveEdit();
+  await flush();
+  await flush();
+
+  assert.equal(payloads.length, 1);
+  assert.equal(payloads[0][5], true);
+  assert.equal(payloads[0][6], 5400);
+  assert.equal(submittedDurationTouched, true);
+});
+
+test("6a2. explicit 1.234 edit on observed 4442 seconds submits set intent for 4320", async () => {
+  const { App, element, context } = timelineHarness();
+  const source = session("base:a", "rev-1", "2026-07-12T09:00:00", {
+    adjusted_duration_seconds: null,
+    duration_seconds: 4442,
+    has_duration_override: false,
+  });
+  prepareTimelineEditor(App, element, source);
+  context.window.setTimeout = () => 1;
+  element("edit-duration-input").value = "1.234";
+  App.handleTimelineDurationChange();
+  const payloads = [];
   App.callBridge = (method, ...args) => {
     if (method === "save_timeline_session_edit") payloads.push(args);
     return Promise.resolve(successfulTimelineEdit());
@@ -871,8 +902,42 @@ test("6a. 1.5 edited hours submits 5400 integer seconds", async () => {
   await flush();
   await flush();
 
+  assert.equal(element("edit-duration-input").value, "1.2");
   assert.equal(payloads.length, 1);
-  assert.equal(payloads[0][5], 5400);
+  assert.equal(payloads[0][5], true);
+  assert.equal(payloads[0][6], 4320);
+});
+
+test("6a3. unknown duration save retry preserves exact intent and request id", async () => {
+  const { App, element, context } = timelineHarness();
+  const source = session("base:a", "rev-1", "2026-07-12T09:00:00", {
+    adjusted_duration_seconds: null,
+    duration_seconds: 4442,
+    has_duration_override: false,
+  });
+  prepareTimelineEditor(App, element, source);
+  context.window.setTimeout = () => 1;
+  element("edit-duration-input").value = "1.234";
+  App.handleTimelineDurationChange();
+  const payloads = [];
+  App.callBridge = (method, ...args) => {
+    if (method !== "save_timeline_session_edit") return Promise.resolve({ ok: true });
+    payloads.push(args);
+    return payloads.length === 1
+      ? Promise.reject(new Error("transport uncertain"))
+      : Promise.resolve(successfulTimelineEdit());
+  };
+
+  await App.saveEdit();
+  assert.equal(App.timelineDurationDraftTouched, true);
+  await App.saveEdit();
+  await flush();
+  await flush();
+
+  assert.equal(payloads.length, 2);
+  assert.equal(payloads[0][3], payloads[1][3]);
+  assert.deepEqual(payloads[0].slice(4), [null, true, 4320, ""]);
+  assert.deepEqual(payloads[1], payloads[0]);
 });
 
 test("6b. project-only edit keeps a non-rounded no-override duration as null", async () => {
@@ -896,7 +961,8 @@ test("6b. project-only edit keeps a non-rounded no-override duration as null", a
   await flush();
 
   assert.equal(payloads[0][4], 2);
-  assert.equal(payloads[0][5], null);
+  assert.equal(payloads[0][5], false);
+  assert.equal(payloads[0][6], null);
 });
 
 test("6c. description-only edit preserves the exact existing override seconds", async () => {
@@ -919,8 +985,9 @@ test("6c. description-only edit preserves the exact existing override seconds", 
   await flush();
   await flush();
 
-  assert.equal(payloads[0][5], 5432);
-  assert.equal(payloads[0][6], "只修改描述");
+  assert.equal(payloads[0][5], false);
+  assert.equal(payloads[0][6], null);
+  assert.equal(payloads[0][7], "只修改描述");
 });
 
 test("6c2. clearing duration cancels only an existing override", async () => {
@@ -945,7 +1012,8 @@ test("6c2. clearing duration cancels only an existing override", async () => {
   await flush();
 
   assert.equal(payloads.length, 1);
-  assert.equal(payloads[0][5], null);
+  assert.equal(payloads[0][5], true);
+  assert.equal(payloads[0][6], null);
 });
 
 test("6d. duration edit during an in-flight save queues against the rebased revision", async () => {
@@ -992,9 +1060,11 @@ test("6d. duration edit during an in-flight save queues against the rebased revi
   await flush();
 
   assert.equal(payloads.length, 2);
-  assert.equal(payloads[0][5], null);
+  assert.equal(payloads[0][5], false);
+  assert.equal(payloads[0][6], null);
   assert.equal(payloads[1][2], "rev-2");
-  assert.equal(payloads[1][5], 5400);
+  assert.equal(payloads[1][5], true);
+  assert.equal(payloads[1][6], 5400);
 });
 
 test("6. continuous autosave: S1 uses R1, S2 uses R2 after rebase", async () => {
@@ -1020,8 +1090,8 @@ test("6. continuous autosave: S1 uses R1, S2 uses R2 after rebase", async () => 
 
   App.callBridge = (method, ...args) => {
     if (method !== "save_timeline_session_edit") return Promise.resolve({ ok: true });
-    // payload: [date, key, revision, requestId, projectId, duration, note]
-    saveCalls.push({ revision: args[2], note: args[6], requestId: args[3] });
+    // payload: [date, key, revision, requestId, projectId, durationTouched, duration, note]
+    saveCalls.push({ revision: args[2], note: args[7], requestId: args[3] });
     return Promise.resolve({
       ok: true,
       outcome_type: "operation_committed",
@@ -1117,7 +1187,7 @@ test("7b. composition input never submits intermediate text and saves only final
   context.window.clearTimeout = () => {};
   const submitted = [];
   App.callBridge = (method, ...args) => {
-    if (method === "save_timeline_session_edit") submitted.push(args[6]);
+    if (method === "save_timeline_session_edit") submitted.push(args[7]);
     return Promise.resolve({
       ok: true,
       outcome_type: "operation_committed",
@@ -1212,7 +1282,7 @@ test("7d. 200-character limit applies only when the description changed", async 
   App.saveEdit();
   await flush();
   assert.equal(submitted.length, 1, "unchanged historical long text must not block project edit");
-  assert.equal(submitted[0][6], historical);
+  assert.equal(submitted[0][7], historical);
 
   App.editingSession = source;
   App.editSaving = false;

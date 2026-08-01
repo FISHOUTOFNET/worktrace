@@ -353,6 +353,7 @@ class FakeTimelineCapability:
         projection_revision,
         request_id,
         project_id,
+        duration_touched,
         adjusted_duration_seconds,
         note,
     ):
@@ -363,6 +364,7 @@ class FakeTimelineCapability:
                 projection_revision,
                 request_id,
                 project_id,
+                duration_touched,
                 adjusted_duration_seconds,
                 note,
             )

@@ -47,6 +47,7 @@ def edit_session(
     request_id: str,
     *,
     project_id: int | None,
+    duration_touched: bool,
     adjusted_duration_seconds: int | None,
     note: str,
 ) -> MutationResult:
@@ -58,6 +59,7 @@ def edit_session(
         expected_projection_revision,
         payload_input={
             "project_id": project_id,
+            "duration_touched": duration_touched,
             "adjusted_duration_seconds": adjusted_duration_seconds,
             "note": note,
         },
@@ -182,11 +184,16 @@ def _run_uow(
     ):
         raise InvalidInputError()
     values = dict(payload_input or {})
-    if operation_type == "edit_session" and "adjusted_duration_seconds" in values:
+    if operation_type == "edit_session":
+        duration_touched = values.get("duration_touched")
+        if not isinstance(duration_touched, bool):
+            raise InvalidInputError()
         values["adjusted_duration_seconds"] = (
             normalize_timeline_duration_override_seconds(
                 values.get("adjusted_duration_seconds")
             )
+            if duration_touched
+            else None
         )
     intent = {
         "report_date": report_date,
@@ -410,6 +417,7 @@ def _operation_input(
 
         duration = _duration_edit_payload(
             source,
+            values.get("duration_touched"),
             values.get("adjusted_duration_seconds"),
         )
         if duration is not None:
@@ -443,8 +451,11 @@ def _operation_input(
 
 def _duration_edit_payload(
     source: Mapping[str, Any],
+    duration_touched: Any,
     requested_value: Any,
 ) -> dict[str, Any] | None:
+    if duration_touched is not True:
+        return None
     has_override = bool(source.get("has_duration_override"))
     if requested_value is None:
         return {"mode": "inherit"} if has_override else None
@@ -456,14 +467,9 @@ def _duration_edit_payload(
         else source.get("duration_seconds")
         or 0
     )
-    if requested == current or requested == _rounded_editor_seconds(current):
+    if requested == current:
         return None
     return {"mode": "set", "value": requested}
-
-
-def _rounded_editor_seconds(seconds: int) -> int:
-    value = max(0, int(seconds or 0))
-    return ((value + 180) // 360) * 360
 
 
 def _operation_requires_day_total_limit(

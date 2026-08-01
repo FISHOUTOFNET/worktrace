@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
@@ -85,6 +86,39 @@ def test_adapter_owns_business_url_hosts_selectors_and_asset_version():
     }
     asset = Path(adapter.adapter_asset_path)
     assert asset.name == "fd_work_adapter.js"
+
+
+def test_login_url_is_derived_from_the_single_business_url_and_encodes_return_url():
+    adapter = FDWorkPageAdapter()
+    business = urlsplit(adapter.business_url)
+    login = urlsplit(adapter.login_url)
+
+    assert login.scheme == "https"
+    assert login.hostname == "work.fangdalaw.com"
+    assert login.path.lower() == "/login"
+    assert parse_qs(login.query) == {
+        "returnUrl": [business.path + "?" + business.query]
+    }
+    assert "%2FWorks%2FWorkHourList%3Fpicker%3Dday" in adapter.login_url
+
+
+def test_login_readiness_script_checks_all_three_visible_controls():
+    scripts = []
+
+    class Window:
+        def evaluate_js(self, script, callback=None):
+            scripts.append(script)
+            if callback is not None:
+                callback({"ready": True})
+
+    results = []
+    FDWorkPageAdapter().check_login_page_ready(Window(), results.append)
+
+    assert results == [{"ready": True}]
+    assert len(scripts) == 1
+    assert "password" in scripts[0]
+    assert "账号" in scripts[0]
+    assert "登录" in scripts[0]
 
 
 def test_async_javascript_result_is_received_through_pywebview_callback():

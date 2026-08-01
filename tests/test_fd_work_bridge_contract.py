@@ -120,3 +120,23 @@ def test_direct_bridge_call_cannot_bypass_disabled_capability():
         "error": "fd_work_disabled",
         "message": "FD Work 插件已关闭，请在高级设置中开启",
     }
+
+
+def test_renderer_unavailable_is_not_reported_as_a_form_error():
+    capability = _FDWorkCapability()
+    capability.open_entry = lambda *_args: {
+        "ok": False,
+        "error": "renderer_unavailable",
+    }
+    bridge = build_test_bridge(fd_work=capability)
+
+    result = bridge.open_fd_work_entry(
+        "2026-07-31",
+        "base:closed",
+        "projection-revision",
+    )
+
+    assert result["ok"] is False
+    assert result["error"] == "renderer_unavailable"
+    assert "WebView2" in result["message"]
+    assert "表单" not in result["message"]

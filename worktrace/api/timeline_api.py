@@ -39,17 +39,22 @@ def save_timeline_session_edit(
     expected_projection_revision: str,
     request_id: str,
     project_id: int | None,
+    duration_touched: bool,
     adjusted_duration_seconds: int | None,
     note: str,
 ) -> dict[str, Any]:
+    touched = _validate_duration_touched(duration_touched)
     result = report_session_operation_service.edit_session(
         _validate_report_date(report_date),
         _validate_projection_instance_key(projection_instance_key),
         _validate_projection_revision(expected_projection_revision),
         _validate_request_id(request_id),
         project_id=_validate_optional_project_id(project_id),
-        adjusted_duration_seconds=_validate_adjusted_duration(
-            adjusted_duration_seconds
+        duration_touched=touched,
+        adjusted_duration_seconds=(
+            _validate_adjusted_duration(adjusted_duration_seconds)
+            if touched
+            else None
         ),
         note=_validate_note(note),
     )
@@ -246,6 +251,12 @@ def _validate_adjusted_duration(
     return normalize_timeline_duration_override_seconds(
         adjusted_duration_seconds
     )
+
+
+def _validate_duration_touched(duration_touched: bool) -> bool:
+    if not isinstance(duration_touched, bool):
+        raise ValueError("invalid_duration")
+    return duration_touched
 
 
 def _project_editability_code(activity: dict | None) -> str:
