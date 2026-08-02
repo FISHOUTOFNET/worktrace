@@ -81,6 +81,20 @@ def test_project_rules_unified_panel_contains_project_and_rule_flows():
     assert 'maxlength="500"' in textarea.group(0)
 
 
+def test_fd_work_case_semantics_are_enabled_only_by_shared_capability_status():
+    section = _rules_section()
+    name_input = re.search(r'id="rules-panel-project-name"[^>]*>', section)
+    assert name_input is not None
+    assert 'maxlength="100"' in name_input.group(0)
+    assert 'role="combobox"' not in name_input.group(0)
+    assert 'aria-autocomplete="list"' not in name_input.group(0)
+    source = read_js("rules_create_panel.js")
+    presentation = func_body(source, "syncFDWorkCaseSearchStatus")
+    assert 'input.setAttribute("role", "combobox")' in presentation
+    assert 'input.setAttribute("aria-controls", "rules-panel-fd-work-options")' in presentation
+    assert 'input.removeAttribute("role")' in presentation
+
+
 def test_project_rules_folder_path_uses_native_readonly_picker_contract():
     section = _rules_section()
     path_input = re.search(r'id="rules-panel-folder-path"[^>]*>', section)

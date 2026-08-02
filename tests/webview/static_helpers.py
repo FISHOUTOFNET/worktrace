@@ -69,6 +69,7 @@ BRIDGE_FILES = [
     "bridge.py",
     "bridge_common.py",
     "bridge_dialogs.py",
+    "bridge_fd_work.py",
     "bridge_overview.py",
     "bridge_settings.py",
     "bridge_statistics.py",

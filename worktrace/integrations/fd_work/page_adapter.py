@@ -10,6 +10,10 @@ from typing import Any, Callable
 from urllib.parse import urlencode, urlparse, urlsplit, urlunsplit
 
 from .contracts import FDWorkEntryDraft
+from .limits import (
+    FD_WORK_CASE_LABEL_MAX_LENGTH,
+    FD_WORK_CASE_SEARCH_LIMIT,
+)
 
 
 class FDWorkPageType(Enum):
@@ -23,7 +27,7 @@ class FDWorkPageType(Enum):
 class FDWorkPageAdapter:
     """Versioned, fail-closed knowledge of the observed FD Work web UI."""
 
-    adapter_version = 1
+    adapter_version = 2
     business_url = "https://work.fangdalaw.com/Works/WorkHourList?picker=day"
     allowed_navigation_hosts = frozenset({"work.fangdalaw.com"})
     field_contract = {
@@ -125,6 +129,29 @@ class FDWorkPageAdapter:
             "})()"
         )
 
+    def build_search_script(self, query: str) -> str:
+        payload = json.dumps(str(query), ensure_ascii=True, separators=(",", ":"))
+        contract = json.dumps(
+            {
+                "version": self.adapter_version,
+                "page_type": FDWorkPageType.WORK_HOUR_LIST.value,
+                "field": self.field_contract["case_number"],
+                "empty_text": "暂无数据",
+                "max_options": FD_WORK_CASE_SEARCH_LIMIT,
+                "max_label_length": FD_WORK_CASE_LABEL_MAX_LENGTH,
+            },
+            ensure_ascii=True,
+            separators=(",", ":"),
+        )
+        return (
+            "(function(){"
+            "var a=window.WorkTraceFDWorkAdapter;"
+            f"if(!a||a.version!=={self.adapter_version})"
+            "return {ok:false,error:'adapter_version_mismatch'};"
+            f"return a.searchCases({payload},{contract});"
+            "})()"
+        )
+
     @staticmethod
     def check_login_page_ready(
         window: Any,
@@ -133,7 +160,7 @@ class FDWorkPageAdapter:
         script = """
 (function(){
   function visible(element) {
-    if (!element || element.disabled) return false;
+    if (!element) return false;
     var style = window.getComputedStyle(element);
     if (style.display === "none" || style.visibility === "hidden") return false;
     var rect = element.getBoundingClientRect();
@@ -142,9 +169,7 @@ class FDWorkPageAdapter:
   var account = Array.prototype.find.call(
     document.querySelectorAll('input:not([type="password"]):not([type="hidden"]):not([type="checkbox"])'),
     function(input) {
-      var hint = [input.placeholder, input.name, input.id, input.getAttribute("aria-label")]
-        .join(" ");
-      return visible(input) && (/(邮箱|手机号|用户名|账号)/.test(hint) || input.type === "text");
+      return visible(input);
     }
   );
   var password = Array.prototype.find.call(
@@ -154,7 +179,8 @@ class FDWorkPageAdapter:
   var login = Array.prototype.find.call(
     document.querySelectorAll('button,input[type="submit"]'),
     function(button) {
-      var label = String(button.textContent || button.value || "").trim();
+      var label = String(button.textContent || button.value || "")
+        .replace(/\\s+/g, "");
       return visible(button) && label === "登录";
     }
   );
@@ -163,7 +189,109 @@ class FDWorkPageAdapter:
 """.strip()
         window.evaluate_js(script, callback=callback)
 
+    @staticmethod
+    def check_work_hour_page_ready(
+        window: Any,
+        callback: Callable[[Any], None],
+    ) -> None:
+        script = """
+(function(){
+  var form = document.querySelector('form#basic');
+  var matter = document.querySelector('#basic_caseId[role="combobox"]');
+  var account = document.querySelector(
+    'input:not([type="password"]):not([type="hidden"]):not([type="checkbox"])'
+  );
+  var password = document.querySelector('input[type="password"]');
+  var login = Array.prototype.find.call(
+    document.querySelectorAll('button,input[type="submit"]'),
+    function(button) {
+      var label = String(button.textContent || button.value || "")
+        .replace(/\\s+/g, "");
+      return label === "登录";
+    }
+  );
+  var path = String(window.location.pathname || "").toLowerCase();
+  var loginNavigation = (
+    window.location.protocol === "https:" &&
+    window.location.hostname === "work.fangdalaw.com" &&
+    (path === "/login" || path === "/logintoken")
+  );
+  return {
+    ready: !!(form && matter),
+    login_ready: !!(account && password && login),
+    login_navigation: loginNavigation
+  };
+})()
+""".strip()
+        window.evaluate_js(script, callback=callback)
+
     def fill_entry(self, window: Any, draft: FDWorkEntryDraft) -> dict[str, Any]:
+        result = self._evaluate(window, self.build_fill_script(draft))
+        if not isinstance(result, dict):
+            return {"ok": False, "error": "page_contract_changed"}
+        if result.get("ok") is True and result.get("status") == "filled":
+            return {"ok": True, "status": "filled"}
+        error = result.get("error")
+        if result.get("ok") is False and error in {
+            "case_ambiguous",
+            "case_not_found",
+            "case_search_timeout",
+            "case_selection_mismatch",
+            "ignored_required_field_missing",
+            "page_contract_changed",
+        }:
+            return {"ok": False, "error": error}
+        return {"ok": False, "error": "page_contract_changed"}
+
+    def search_cases(self, window: Any, query: str) -> dict[str, Any]:
+        result = self._evaluate(
+            window,
+            self.build_search_script(query),
+            timeout_error="case_search_timeout",
+        )
+        if not isinstance(result, dict):
+            return {"ok": False, "error": "page_contract_changed"}
+        if result.get("ok") is False:
+            error = result.get("error")
+            if isinstance(error, str) and error in {
+                "adapter_version_mismatch",
+                "case_not_found",
+                "duplicate_case_label",
+                "page_contract_changed",
+            }:
+                return {"ok": False, "error": error}
+            return {"ok": False, "error": "page_contract_changed"}
+        labels = result.get("labels")
+        if result.get("ok") is not True or not isinstance(labels, list):
+            return {"ok": False, "error": "page_contract_changed"}
+        if len(labels) > FD_WORK_CASE_SEARCH_LIMIT:
+            return {"ok": False, "error": "page_contract_changed"}
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for label in labels:
+            if not isinstance(label, str):
+                return {"ok": False, "error": "page_contract_changed"}
+            canonical = self._normalize_label(label)
+            if not canonical or len(canonical) > FD_WORK_CASE_LABEL_MAX_LENGTH:
+                return {"ok": False, "error": "page_contract_changed"}
+            if canonical in seen:
+                return {"ok": False, "error": "duplicate_case_label"}
+            seen.add(canonical)
+            normalized.append(canonical)
+        return {"ok": True, "labels": normalized}
+
+    @staticmethod
+    def _normalize_label(label: str) -> str:
+        unicode_spaces = "\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u202f\u205f\u3000"
+        return label.translate(str.maketrans({char: " " for char in unicode_spaces})).strip()
+
+    def _evaluate(
+        self,
+        window: Any,
+        script: str,
+        *,
+        timeout_error: str = "page_operation_timeout",
+    ) -> Any:
         source = Path(self.adapter_asset_path).read_text(encoding="utf-8")
         window.evaluate_js(source)
         completed = threading.Event()
@@ -174,15 +302,12 @@ class FDWorkPageAdapter:
             completed.set()
 
         window.evaluate_js(
-            self.build_fill_script(draft),
+            script,
             callback=accept_result,
         )
         if not completed.wait(timeout=15):
-            return {"ok": False, "error": "page_operation_timeout"}
-        result = callback_result[0] if callback_result else None
-        if not isinstance(result, dict):
-            return {"ok": False, "error": "page_contract_changed"}
-        return result
+            return {"ok": False, "error": timeout_error}
+        return callback_result[0] if callback_result else None
 
 
 __all__ = ["FDWorkPageAdapter", "FDWorkPageType"]

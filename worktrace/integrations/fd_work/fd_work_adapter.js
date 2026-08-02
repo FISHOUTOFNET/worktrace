@@ -1,6 +1,6 @@
 (function () {
     "use strict";
-    if (window.WorkTraceFDWorkAdapter && window.WorkTraceFDWorkAdapter.version === 1) return;
+    if (window.WorkTraceFDWorkAdapter && window.WorkTraceFDWorkAdapter.version === 2) return;
 
     var ROOT_ATTRIBUTE = "data-worktrace-fdwork-compact";
     var HIDDEN_ATTRIBUTE = "data-worktrace-fdwork-hidden";
@@ -23,7 +23,11 @@
     function visible(element) {
         if (!element) return false;
         var style = window.getComputedStyle ? window.getComputedStyle(element) : null;
-        return !style || (style.display !== "none" && style.visibility !== "hidden");
+        if (style && (style.display === "none" || style.visibility === "hidden")) {
+            return false;
+        }
+        return typeof element.getClientRects !== "function"
+            || element.getClientRects().length > 0;
     }
 
     function nativeSet(element, value) {
@@ -39,6 +43,39 @@
             element.dispatchEvent(new Event(name, { bubbles: true }));
         });
         return result(true);
+    }
+
+    function setSearchValue(input, value) {
+        var descriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value");
+        if (!descriptor || typeof descriptor.set !== "function") {
+            return result(false, "page_contract_changed");
+        }
+        descriptor.set.call(input, String(value));
+        ["input", "change"].forEach(function (name) {
+            input.dispatchEvent(new Event(name, { bubbles: true }));
+        });
+        return result(true);
+    }
+
+    function normalizeCaseLabels(texts, maxOptions, maxLabelLength) {
+        if (!Array.isArray(texts) || Number(maxOptions) < 1 || Number(maxOptions) > 20) {
+            return result(false, "page_contract_changed");
+        }
+        var labels = [];
+        var seen = Object.create(null);
+        for (var index = 0; index < texts.length; index += 1) {
+            if (typeof texts[index] !== "string") {
+                return result(false, "page_contract_changed");
+            }
+            var label = normalizeExactText(texts[index]);
+            if (!label || label.length > Number(maxLabelLength)) {
+                return result(false, "page_contract_changed");
+            }
+            if (seen[label]) return result(false, "duplicate_case_label");
+            seen[label] = true;
+            if (labels.length < Number(maxOptions)) labels.push(label);
+        }
+        return result(true, "", { labels: labels });
     }
 
     function waitFor(predicate, timeoutMs) {
@@ -60,6 +97,12 @@
             observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true });
             var timer = setTimeout(function () { finish(null); }, timeoutMs || 5000);
             check();
+        });
+    }
+
+    function delay(milliseconds) {
+        return new Promise(function (resolve) {
+            setTimeout(resolve, milliseconds);
         });
     }
 
@@ -270,6 +313,75 @@
             : "UNKNOWN";
     }
 
+    async function searchCases(query, contract) {
+        if (detectPage() !== "WORK_HOUR_LIST") return result(false, "page_contract_changed");
+        if (!contract || !contract.field || contract.version !== 2) {
+            return result(false, "page_contract_changed");
+        }
+        var input = document.querySelector(contract.field.selector);
+        if (!input || !visible(input)) return result(false, "page_contract_changed");
+        var controlsId = normalizeExactText(input.getAttribute("aria-controls"));
+        if (!controlsId) return result(false, "page_contract_changed");
+        var popup = null;
+        try {
+            if (typeof input.focus === "function") input.focus();
+            var setResult = setSearchValue(input, query);
+            if (!setResult.ok) return setResult;
+            popup = await waitFor(function () {
+                var candidate = document.getElementById(controlsId);
+                return candidate && candidate.getAttribute("role") === "listbox" && visible(candidate)
+                    ? candidate
+                    : null;
+            }, 5000);
+            if (!popup) return result(false, "page_contract_changed");
+            var state = await waitFor(function () {
+                var options = Array.prototype.filter.call(
+                    popup.querySelectorAll("[role='option']"),
+                    visible
+                );
+                if (options.length) return { options: options };
+                var empty = Array.prototype.find.call(
+                    popup.querySelectorAll("div,span,p"),
+                    function (element) {
+                        return visible(element)
+                            && normalizeExactText(element.textContent) === contract.empty_text;
+                    }
+                );
+                return empty ? { empty: true } : null;
+            }, 5000);
+            if (!state) return result(false, "case_not_found");
+            if (state.empty) {
+                await delay(120);
+                var lateOptions = Array.prototype.filter.call(
+                    popup.querySelectorAll("[role='option']"),
+                    visible
+                );
+                if (lateOptions.length) state = { options: lateOptions };
+                else {
+                    var stableEmpty = Array.prototype.find.call(
+                        popup.querySelectorAll("div,span,p"),
+                        function (element) {
+                            return visible(element)
+                                && normalizeExactText(element.textContent) === contract.empty_text;
+                        }
+                    );
+                    if (!stableEmpty) return result(false, "page_contract_changed");
+                    return result(true, "", { labels: [] });
+                }
+            }
+            var texts = state.options.map(function (option) {
+                return String(option.innerText || option.textContent || "");
+            });
+            return normalizeCaseLabels(texts, contract.max_options, contract.max_label_length);
+        } finally {
+            setSearchValue(input, "");
+            if (typeof input.dispatchEvent === "function" && typeof KeyboardEvent === "function") {
+                input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+            }
+            if (typeof input.blur === "function") input.blur();
+        }
+    }
+
     function verifyEntry(payload, contract) {
         var expected = {
             work_date: payload.work_date,
@@ -316,7 +428,7 @@
     }
 
     window.WorkTraceFDWorkAdapter = Object.freeze({
-        version: 1,
+        version: 2,
         detectPage: detectPage,
         installCompactMode: installCompactMode,
         removeCompactMode: removeCompactMode,
@@ -326,9 +438,12 @@
         fillDuration: function (value, contract) { return fillAndVerify("duration_hours", value, contract); },
         fillNarrative: function (value, contract) { return fillAndVerify("narrative", value, contract); },
         verifyEntry: verifyEntry,
+        searchCases: searchCases,
         fillEntry: fillEntry,
         _test: Object.freeze({
             normalizeExactText: normalizeExactText,
+            normalizeCaseLabels: normalizeCaseLabels,
+            visible: visible,
             exactMatches: function (texts, expected) {
                 var normalized = normalizeExactText(expected);
                 return texts.filter(function (text) {

@@ -8,6 +8,7 @@ from __future__ import annotations
 from typing import Any, Protocol, runtime_checkable, TYPE_CHECKING
 
 from ..platforms.windows_startup import WindowsStartupRegistration
+from ..integrations.fd_work.contracts import FDWorkEntryError
 
 from . import (
     export_api,
@@ -73,8 +74,13 @@ class TimelineCapability(Protocol):
 
 @runtime_checkable
 class FDWorkCapability(Protocol):
+    def bind_status_callback(self, callback) -> None: ...
     def get_settings_status(self) -> dict[str, object]: ...
     def set_enabled(self, enabled: bool) -> dict[str, object]: ...
+    def prepare_session(self, show_login_if_required=True) -> dict[str, Any]: ...
+    def search_cases(self, query, request_id) -> dict[str, Any]: ...
+    def validate_case_selection(self, selection_token, expected_label) -> str: ...
+    def discard_case_selection(self, selection_token) -> None: ...
     def open_entry(
         self,
         report_date,
@@ -87,8 +93,8 @@ class FDWorkCapability(Protocol):
 @runtime_checkable
 class RulesCapability(Protocol):
     def list_project_bindings(self) -> list[dict[str, Any]]: ...
-    def create_project_for_rules(self, name, description, language) -> dict[str, Any]: ...
-    def update_project_for_rules(self, project_id, name, description, language) -> dict[str, Any]: ...
+    def create_project_for_rules(self, name, description, language, selection_token=None) -> dict[str, Any]: ...
+    def update_project_for_rules(self, project_id, name, description, language, selection_token=None) -> dict[str, Any]: ...
     def set_project_enabled_for_rules(self, project_id, enabled) -> dict[str, Any]: ...
     def set_excluded_rules_enabled(self, enabled) -> dict[str, Any]: ...
     def archive_project_for_rules(self, project_id) -> dict[str, Any]: ...
@@ -138,9 +144,9 @@ class SettingsApplicationService:
             else WindowsStartupRegistration()
         )
         if fd_work is None:
-            from ..integrations.fd_work.entry_service import FDWorkEntryService
+            from ..integrations.fd_work.integration_service import FDWorkIntegrationService
 
-            fd_work = FDWorkEntryService()
+            fd_work = FDWorkIntegrationService()
         self._fd_work = fd_work
 
     def get_first_run_notice_for_webview(self):
@@ -374,16 +380,51 @@ class TimelineApplicationService:
 class RulesApplicationService:
     """Concrete rules capability delegating to project_api, rule_api, rule_history_api."""
 
+    def __init__(self, fd_work: FDWorkCapability | None = None) -> None:
+        if fd_work is None:
+            from ..integrations.fd_work.integration_service import FDWorkIntegrationService
+
+            fd_work = FDWorkIntegrationService()
+        self._fd_work = fd_work
+
     def list_project_bindings(self):
         return project_api.list_project_bindings()
 
-    def create_project_for_rules(self, name, description, language):
-        return project_api.create_project_for_rules(name, description, language)
-
-    def update_project_for_rules(self, project_id, name, description, language):
-        return project_api.update_project_for_rules(
-            project_id, name, description, language
+    def create_project_for_rules(self, name, description, language, selection_token=None):
+        canonical_name = name
+        if self._fd_work.get_settings_status().get("enabled") is True:
+            try:
+                canonical_name = self._fd_work.validate_case_selection(
+                    selection_token, name
+                )
+            except FDWorkEntryError as exc:
+                return {"ok": False, "error": exc.code}
+        result = project_api.create_project_for_rules(
+            canonical_name, description, language
         )
+        if result.get("ok") is True:
+            self._fd_work.discard_case_selection(selection_token)
+        return result
+
+    def update_project_for_rules(
+        self, project_id, name, description, language, selection_token=None
+    ):
+        canonical_name = name
+        current = project_api.get_project(project_id)
+        name_changed = bool(current) and str(current.get("name") or "") != str(name).strip()
+        if name_changed and self._fd_work.get_settings_status().get("enabled") is True:
+            try:
+                canonical_name = self._fd_work.validate_case_selection(
+                    selection_token, name
+                )
+            except FDWorkEntryError as exc:
+                return {"ok": False, "error": exc.code}
+        result = project_api.update_project_for_rules(
+            project_id, canonical_name, description, language
+        )
+        if result.get("ok") is True:
+            self._fd_work.discard_case_selection(selection_token)
+        return result
 
     def set_project_enabled_for_rules(self, project_id, enabled):
         return project_api.set_project_enabled_for_rules(project_id, enabled)

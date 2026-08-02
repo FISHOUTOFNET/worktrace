@@ -5,6 +5,9 @@ from __future__ import annotations
 import logging
 from typing import Any, Callable
 
+from ..integrations.fd_work.limits import FD_WORK_SELECTION_TOKEN_MAX_LENGTH
+from .bridge_fd_work import fd_work_message
+
 from .project_rules_presenter import (
     _EXCLUDED_FOLDER_RULE_CREATE_MESSAGES,
     _EXCLUDED_KEYWORD_RULE_CREATE_MESSAGES,
@@ -40,8 +43,23 @@ def _valid_rule_type(value: object) -> bool:
     return isinstance(value, str) and value in {"folder", "keyword"}
 
 
+def _valid_selection_token(value: object) -> bool:
+    return value is None or (
+        type(value) is str and 0 < len(value) <= FD_WORK_SELECTION_TOKEN_MAX_LENGTH
+    )
+
+
 def _message(result: dict[str, Any], messages: dict[str, str], fallback: str) -> str:
     return messages.get(str(result.get("error") or "operation_failed"), fallback)
+
+
+def _project_write_message(
+    result: dict[str, Any], messages: dict[str, str], fallback: str
+) -> str:
+    code = str(result.get("error") or "operation_failed")
+    if code.startswith("case_selection_"):
+        return fd_work_message(code, fallback)
+    return messages.get(code, fallback)
 
 
 def _keyword_summary(rule: dict[str, Any], fallback_id: int = 0) -> dict[str, Any]:
@@ -376,12 +394,14 @@ class ProjectRulesBridgeMixin:
         name,
         description,
         language="中文",
+        selection_token=None,
     ) -> dict[str, Any]:
         if (
             type(name) is not str
             or not name.strip()
             or type(description) is not str
             or type(language) is not str
+            or not _valid_selection_token(selection_token)
         ):
             return {"ok": False, "error": "操作无效"}
         try:
@@ -389,6 +409,7 @@ class ProjectRulesBridgeMixin:
                 name.strip(),
                 description.strip(),
                 language.strip() or "中文",
+                selection_token,
             )
             if result.get("ok") is True:
                 return {
@@ -397,11 +418,7 @@ class ProjectRulesBridgeMixin:
                 }
             return {
                 "ok": False,
-                "error": _message(
-                    result,
-                    _PROJECT_LIFECYCLE_CREATE_MESSAGES,
-                    "新增项目失败",
-                ),
+                "error": _project_write_message(result, _PROJECT_LIFECYCLE_CREATE_MESSAGES, "新增项目失败"),
             }
         except Exception:
             logger.exception("webview bridge create_project_for_rules failed")
@@ -413,6 +430,7 @@ class ProjectRulesBridgeMixin:
         name,
         description,
         language="中文",
+        selection_token=None,
     ) -> dict[str, Any]:
         if (
             not _valid_id(project_id)
@@ -420,6 +438,7 @@ class ProjectRulesBridgeMixin:
             or not name.strip()
             or type(description) is not str
             or type(language) is not str
+            or not _valid_selection_token(selection_token)
         ):
             return {"ok": False, "error": "操作无效"}
         try:
@@ -428,6 +447,7 @@ class ProjectRulesBridgeMixin:
                 name.strip(),
                 description.strip(),
                 language.strip() or "中文",
+                selection_token,
             )
             if result.get("ok") is True:
                 return {
@@ -436,11 +456,7 @@ class ProjectRulesBridgeMixin:
                 }
             return {
                 "ok": False,
-                "error": _message(
-                    result,
-                    _PROJECT_LIFECYCLE_UPDATE_MESSAGES,
-                    "保存项目失败",
-                ),
+                "error": _project_write_message(result, _PROJECT_LIFECYCLE_UPDATE_MESSAGES, "保存项目失败"),
             }
         except Exception:
             logger.exception("webview bridge update_project_for_rules failed")

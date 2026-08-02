@@ -522,14 +522,20 @@ class FakeRulesCapability:
             raise self.list_project_bindings_side_effect
         return self.list_project_bindings_return
 
-    def create_project_for_rules(self, name, description, language):
-        self.create_project_for_rules_calls.append((name, description, language))
+    def create_project_for_rules(self, name, description, language, selection_token=None):
+        call = (name, description, language)
+        self.create_project_for_rules_calls.append(
+            call if selection_token is None else call + (selection_token,)
+        )
         if self.create_project_for_rules_side_effect is not None:
             raise self.create_project_for_rules_side_effect
         return self.create_project_for_rules_return
 
-    def update_project_for_rules(self, project_id, name, description, language):
-        self.update_project_for_rules_calls.append((project_id, name, description, language))
+    def update_project_for_rules(self, project_id, name, description, language, selection_token=None):
+        call = (project_id, name, description, language)
+        self.update_project_for_rules_calls.append(
+            call if selection_token is None else call + (selection_token,)
+        )
         if self.update_project_for_rules_side_effect is not None:
             raise self.update_project_for_rules_side_effect
         return self.update_project_for_rules_return

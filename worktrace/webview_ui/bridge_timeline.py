@@ -69,62 +69,6 @@ class TimelineBridgeMixin:
                 "webview bridge get_timeline_session_activity_summary failed",
             )
 
-    def open_fd_work_entry(
-        self,
-        report_date: str,
-        projection_instance_key: str,
-        expected_projection_revision: str,
-    ) -> dict[str, Any]:
-        values = (
-            projection_instance_key,
-            expected_projection_revision,
-        )
-        if (
-            not isinstance(report_date, str)
-            or not _DATE_SHAPE_RE.match(report_date)
-            or any(not isinstance(value, str) or not value.strip() for value in values)
-        ):
-            return {
-                "ok": False,
-                "error": "invalid_input",
-                "message": "当前时间段信息无效",
-            }
-        try:
-            result = self._services.fd_work.open_entry(
-                report_date,
-                projection_instance_key.strip(),
-                expected_projection_revision.strip(),
-            )
-            if result.get("ok") is False and result.get("error") == "renderer_unavailable":
-                return {
-                    "ok": False,
-                    "error": "renderer_unavailable",
-                    "message": "无法使用 WebView2 打开 FD Work，请修复运行环境后重试",
-                }
-            return result
-        except Exception as exc:
-            code = str(getattr(exc, "code", "") or "operation_failed")
-            messages = {
-                "stale_selection": "当前时间段已变化，请重新选择",
-                "in_progress_session": "进行中的时间段无法填入 FD Work",
-                "uncategorized_project": "当前时间段属于未归类项目",
-                "system_project": "当前时间段不属于具体用户项目",
-                "project_unavailable": "当前项目已不可用",
-                "empty_project_name": "项目名称为空，无法填入",
-                "empty_narrative": "描述为空，无法填入",
-                "invalid_duration": "工时必须大于零",
-                "duration_exceeds_limit": "工时超过 FD Work 允许的范围",
-                "fd_work_disabled": "FD Work 插件已关闭，请在高级设置中开启",
-            }
-            if code not in messages:
-                logger.exception("webview bridge open_fd_work_entry failed")
-                code = "operation_failed"
-            return {
-                "ok": False,
-                "error": code,
-                "message": messages.get(code, "打开 FD Work 失败"),
-            }
-
     def list_projects_for_timeline(self) -> dict[str, Any]:
         try:
             editing_projects = self._services.timeline.list_selectable_projects()

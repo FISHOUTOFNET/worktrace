@@ -1,7 +1,7 @@
 # FD Work integration discovery
 
 This document records the non-sensitive browser contract observed on
-2026-07-31 before implementation. It intentionally contains no credentials,
+2026-07-31 and conservatively rechecked through 2026-08-02. It intentionally contains no credentials,
 cookies, tokens, personal data, client names, matter names or matter numbers,
 or real time-entry content.
 
@@ -82,8 +82,14 @@ actual observed maximum `aria-valuemax="23.9"`.
 - A synthetic non-match settled to the stable empty text `暂无数据`.
 - Result matching must use the complete visible option text after only edge
   trimming and normalization of Unicode space variants. The integration must
-  require exactly one exact result, click that exact option through the DOM,
-  then read the selected display text and compare it again.
+  preserve page order. Project search reads at most 20 labels without clicking
+  an option; Timeline filling still requires exactly one exact result, clicks
+  that exact option through the DOM, then reads the selected display text and
+  compares it again.
+- No stable, non-sensitive option key was confirmed. Project selection therefore
+  uses the complete normalized visible label only. Two options with the same
+  complete normalized label fail closed as `duplicate_case_label`; they are not
+  treated as distinguishable and no inferred mapping is stored.
 - Browser control could observe the result DOM but timed out while attempting a
   non-destructive real-option selection. Therefore the customer auto-link after
   a real matter selection remains a mandatory Windows acceptance item and is
@@ -106,13 +112,34 @@ actual observed maximum `aria-valuemax="23.9"`.
 
 ## Session and window observations
 
-- The shipping controller opens the login URL directly. That URL is derived
-  from the single business URL, including a URL-encoded business-path
-  `returnUrl`; the business route is not duplicated as a second constant.
-- A login-page `loaded` event is accepted only after the visible account input,
-  password input and native login button are present. Readiness is rechecked at
-  most five times at fixed 0.5-second intervals. Disable, close, shutdown and a
-  later navigation generation invalidate older callbacks.
+- The 2026-08-01 recheck confirmed that the exact business URL remains valid and
+  that an unauthenticated visit redirects on the same host to a login route with
+  the business route as `returnUrl`.
+- An already-authenticated browser tab was present at the exact business URL,
+  but read-only dynamic DOM inspection timed out before the option-key and empty
+  result contracts could be re-observed. No fresh claim of a stable option key
+  is made; the 2026-07-31 non-sensitive selector/listbox/empty-state observation
+  remains the implementation baseline and live search remains a Windows
+  acceptance item.
+- The shipping controller starts with the business URL in one hidden,
+  unfocused window (`js_api=None`). A valid restored session stays hidden; a
+  same-host redirect to the login route changes status to `login_required` and
+  shows that same window immediately.
+- The 2026-08-02 isolated-profile source run observed that Edge WebView2 can
+  finish the hidden window's initial `loaded` event while pywebview still
+  reports the requested business URL and the remote React document is not yet
+  settled. The controller allows one generation-scoped reload of the same
+  business URL; it does not navigate directly to the login URL or retry in a
+  loop. That run then reached the exact same-host login route, changed status to
+  `login_required`, and displayed the single native FD Work window without
+  blocking the WorkTrace main window.
+- Login readiness checks the visible account input, password input and native
+  login button without requiring the empty form's disabled login action to be
+  enabled. Readiness is rechecked at most five times at fixed 0.5-second
+  intervals, and each WebView callback has a fixed three-second timeout. A
+  missing callback leaves the already verified login navigation in
+  `login_required`; an explicit negative contract result fails closed. Disable,
+  close, shutdown and a later navigation generation invalidate older callbacks.
 - Windows shipping startup forces the `edgechromium` renderer and verifies the
   initialized renderer. A different renderer is reported as
   `renderer_unavailable` and FD Work fails closed.
@@ -125,9 +152,19 @@ actual observed maximum `aria-valuemax="23.9"`.
   while an isolated tab independently reached the login page. The shipping
   controller must nevertheless rely on one reused pywebview window and verify
   same-process hide/show session retention during Windows acceptance.
-- A user close hides the auxiliary window. Disabling FD Work or exiting
-  WorkTrace destroys it.
+- A user close while login is required hides the auxiliary window without
+  pretending the session is ready. Disabling FD Work destroys it but permits a
+  later re-enable; process shutdown permanently terminates the capability.
+- Search and fill share one bounded serialized DOM-operation owner. Fill
+  invalidates stale searches, search is rejected while a filled entry is under
+  review, and every navigation/operation callback is generation-scoped.
+- Project-search selection proofs are random process-memory tokens with a
+  five-minute TTL and a 128-entry cap. They bind the complete label and current
+  navigation generation and never enter the DOM, database, browser storage,
+  backup, export, or logs.
 - No real test time entry was saved or submitted during discovery.
+- The isolated login-page observation did not enter credentials, read input
+  values, click the native login action, or inspect cookies or tokens.
 
 ## Items reserved for Windows acceptance
 

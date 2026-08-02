@@ -305,6 +305,24 @@ def _stub_webview_main_environment(monkeypatch, tmp_path):
 
     fake_settings = _FakeSettings()
     class _FakeFDWork:
+        def __init__(self):
+            self.status_callback = None
+            self.prepare_calls = []
+
+        def bind_status_callback(self, callback):
+            self.status_callback = callback
+
+        def get_settings_status(self):
+            return {
+                "supported": True, "enabled": False,
+                "session_state": "disabled", "operation": "none",
+                "ready": False, "login_required": False, "error_code": None,
+            }
+
+        def prepare_session(self, show_login_if_required=True):
+            self.prepare_calls.append(show_login_if_required)
+            return {"ok": True, "status": self.get_settings_status()}
+
         def shutdown(self):
             order.append("fd_work_shutdown")
 
@@ -392,6 +410,7 @@ def _stub_webview_main_environment(monkeypatch, tmp_path):
         "fake_runtime": fake_runtime,
         "app_control": app_control,
         "settings": fake_settings,
+        "fd_work": fake_services.fd_work,
         "create_window_kwargs": create_window_kwargs,
         "instance_coordinator": instance_coordinator,
         "webview": _FakeWebview,
@@ -407,6 +426,38 @@ def test_webview_main_calls_unified_privacy_gate_on_startup(monkeypatch, tmp_pat
     assert mocks["order"].count("fd_work_shutdown") == 1
     assert mocks["gate_calls"]["count"] == 1
     assert mocks["start_calls"]["count"] == 1
+
+
+def test_enabled_fd_work_session_prepare_is_dispatched_after_renderer_init(
+    monkeypatch, tmp_path
+):
+    mocks = _stub_webview_main_environment(monkeypatch, tmp_path)
+    import worktrace.webview_main as webview_main
+
+    mocks["fd_work"].get_settings_status = lambda: {
+        "supported": True, "enabled": True, "session_state": "idle",
+        "operation": "none", "ready": False, "login_required": False,
+        "error_code": None,
+    }
+    threads = []
+
+    class _ImmediateThread:
+        def __init__(self, *, target, name, daemon):
+            self.target = target
+            self.name = name
+            self.daemon = daemon
+            threads.append(self)
+
+        def start(self):
+            self.target()
+
+    monkeypatch.setattr(webview_main.threading, "Thread", _ImmediateThread)
+
+    assert webview_main.main() == 0
+    assert mocks["fd_work"].prepare_calls == [True]
+    assert [(thread.name, thread.daemon) for thread in threads] == [
+        ("fd-work-session-prepare", True)
+    ]
 
 
 def test_shipping_webview_forces_edgechromium_and_persistent_worktrace_profile(

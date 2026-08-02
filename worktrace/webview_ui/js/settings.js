@@ -268,7 +268,7 @@
         var toggle = element("settings-fd-work-toggle");
         var target = element("settings-fd-work-toggle-status");
         if (!toggle) return;
-        var fdWork = status && status.fd_work || {};
+        var fdWork = App.fdWorkStatus || status && status.fd_work || {};
         var supported = fdWork.supported === true;
         toggle.checked = supported && fdWork.enabled === true;
         toggle.disabled = !supported
@@ -276,7 +276,9 @@
             || App.fdWorkSettingsWriteInProgress
             || !App.settingsLoaded;
         if (target) target.textContent = supported
-            ? (toggle.checked ? "开启" : "关闭")
+            ? (typeof App.fdWorkStatusText === "function"
+                ? App.fdWorkStatusText(fdWork)
+                : (toggle.checked ? "开启" : "关闭"))
             : "当前不可用";
         if (typeof App.updateFDWorkEntryButton === "function") {
             App.updateFDWorkEntryButton();
@@ -286,6 +288,9 @@
 
     function renderSettingsStatus(status) {
         if (!status) return;
+        if (status.fd_work && App.receiveFDWorkStatus) {
+            App.receiveFDWorkStatus(status.fd_work);
+        }
         renderCaptureToggle(status);
         renderLaunchAtLoginToggle(status);
         renderFDWorkToggle(status);

@@ -123,3 +123,51 @@ test("ignored FD Work fields are never passed to nativeSet", () => {
     assert.doesNotMatch(source, new RegExp(`nativeSet\\([^\\n]*${id}`));
   }
 });
+
+test("search labels preserve order and only normalize Unicode edge spaces", () => {
+  const { adapter } = harness();
+  const normalized = adapter._test.normalizeCaseLabels([
+    "  CASE A  ",
+    "\u3000CASE B\u00a0",
+    "case a",
+  ], 20, 100);
+  assert.equal(normalized.ok, true, JSON.stringify(normalized));
+  assert.deepEqual(Array.from(normalized.labels), ["CASE A", "CASE B", "case a"]);
+});
+
+test("duplicate normalized case labels fail closed instead of becoming selectable", () => {
+  const { adapter } = harness();
+  const normalized = adapter._test.normalizeCaseLabels(
+    ["CASE A", "\u3000CASE A\u00a0"], 20, 100
+  );
+  assert.deepEqual(
+    { ok: normalized.ok, error: normalized.error },
+    { ok: false, error: "duplicate_case_label" }
+  );
+});
+
+test("case option visibility rejects nodes with no rendered client rectangle", () => {
+  const { adapter } = harness();
+  assert.equal(adapter._test.visible({ getClientRects() { return []; } }), false);
+  assert.equal(adapter._test.visible({ getClientRects() { return [{}]; } }), true);
+});
+
+test("case search does not click an option or invoke native save actions", () => {
+  assert.match(source, /async function searchCases/);
+  const body = source.slice(
+    source.indexOf("async function searchCases"),
+    source.indexOf("async function fillEntry")
+  );
+  assert.doesNotMatch(body, /\[role=['"]option['"]\][\s\S]*\.click\s*\(/);
+  assert.doesNotMatch(body, /保存|提交/);
+});
+
+test("case search confirms the empty result remains stable", () => {
+  const body = source.slice(
+    source.indexOf("async function searchCases"),
+    source.indexOf("async function fillEntry")
+  );
+  assert.match(body, /if \(state\.empty\) \{[\s\S]*await delay\(120\)/);
+  assert.match(body, /lateOptions\.length/);
+  assert.match(body, /if \(!stableEmpty\) return result\(false, "page_contract_changed"\)/);
+});

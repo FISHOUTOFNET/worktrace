@@ -5,6 +5,7 @@ from typing import Any
 
 from ..api.application_services import ApplicationServices
 from .bridge_dialogs import BridgeDialogMixin
+from .bridge_fd_work import FDWorkBridgeMixin
 from .bridge_overview import OverviewBridgeMixin
 from .bridge_rules import ProjectRulesBridgeMixin
 from .bridge_settings import SettingsBridgeMixin
@@ -22,13 +23,13 @@ SHIPPING_METHODS = frozenset(
         "create_project_for_rules", "create_project_keyword_rule",
         "delete_project_folder_rule", "delete_project_for_rules",
         "delete_project_keyword_rule", "export_encrypted_backup",
-        "export_statistics_csv", "get_first_run_notice", "get_overview",
+        "export_statistics_csv", "get_fd_work_status", "get_first_run_notice", "get_overview",
         "get_project_rules", "get_refresh_state", "get_settings_privacy_status",
         "get_statistics_export_summary", "get_status", "get_timeline",
         "get_timeline_session_activity_summary", "hide_timeline_session",
         "hide_timeline_session_activity", "import_encrypted_backup",
         "list_projects_for_timeline", "merge_timeline_session",
-        "open_fd_work_entry",
+        "open_fd_work_entry", "search_fd_work_cases", "show_fd_work_login",
         "preview_encrypted_backup_manifest", "preview_project_rule_impact",
         "preview_project_rules_batch_impact", "recover_database_maintenance",
         "save_timeline_session_edit", "set_clipboard_capture_enabled",
@@ -57,6 +58,7 @@ class _ShippingBridge:
 
 class WebViewBridge(
     BridgeDialogMixin,
+    FDWorkBridgeMixin,
     OverviewBridgeMixin,
     SettingsBridgeMixin,
     StatisticsBridgeMixin,

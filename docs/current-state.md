@@ -132,8 +132,8 @@ bounded reconciliation.
 - Statistics/Export: this-month default with all-time/custom options, optional
   project scope, automatic latest-request acceptance, and display-safe CSV bound
   to the accepted export ticket.
-- Project Rules: searchable/sortable project summaries with backend-owned last
-  use, three direct project actions, and contextual Drawers.
+- Project Rules: searchable/sortable summaries, direct actions and Drawers. With
+  FD Work enabled, create/rename requires a recent exact case selection.
 - Settings/Privacy: four user-facing categories. General contains authoritative
   HKCU launch-at-login state and the existing clipboard control; Privacy, Data
   and Backup, and Advanced retain their existing responsibilities. Secret inputs
@@ -148,12 +148,12 @@ null clears an override, and true plus an integer sets the normalized override.
 Rule batches are atomic, manual assignments are preserved, and statistics/export
 use persisted report facts rather than frontend time.
 
-FD Work has one authoritative draft service and one auxiliary-window lifecycle
-controller. Open is linearized against disable/shutdown after the authoritative
-projection read. Windows forces Edge Chromium, opens the derived login URL,
-checks login-page readiness with bounded generation-scoped retries, and uses the
-persistent `%LOCALAPPDATA%/WorkTrace/webview-profile`; WorkTrace does not read or
-export cookies or include this profile in encrypted database backup.
+FD Work separates pure authoritative draft construction from one integration
+shared by Settings, Timeline and Project Rules. It owns the setting, structured
+status, in-memory selection proofs and one generation-scoped auxiliary window.
+Startup opens the business URL hidden; valid sessions stay hidden, login redirects
+show the native page, and successful login hides it unless a fill is pending.
+Search/fill share the window; WorkTrace never reads or exports browser credentials.
 
 ## Validation
 Affected validation: `python scripts/run_affected_tests.py`. Full validation:

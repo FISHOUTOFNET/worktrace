@@ -69,6 +69,7 @@
     App.settingsWriteInProgress = false;
     App.launchAtLoginWriteInProgress = false;
     App.fdWorkSettingsWriteInProgress = false;
+    App.fdWorkStatus = null;
     App.settingsBackupExportInProgress = false;
     App.settingsBackupManifestInProgress = false;
     App.settingsBackupImportInProgress = false;

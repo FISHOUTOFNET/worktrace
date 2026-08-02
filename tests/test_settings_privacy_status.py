@@ -43,10 +43,22 @@ from worktrace.services.secure_backup_service import (
 )
 from worktrace.services.settings_service import set_setting, set_settings
 from worktrace.api.application_capabilities import SettingsApplicationService
-from worktrace.integrations.fd_work.entry_service import FDWorkEntryService
+from worktrace.integrations.fd_work.integration_service import FDWorkIntegrationService
 from worktrace.write_gate import DATABASE_RECOVERY_ERROR
 
 pytestmark = [pytest.mark.security_privacy, pytest.mark.integration, pytest.mark.db]
+
+
+def _fd_status(enabled: bool) -> dict[str, object]:
+    return {
+        "supported": True,
+        "enabled": enabled,
+        "session_state": "idle" if enabled else "disabled",
+        "operation": "none",
+        "ready": False,
+        "login_required": False,
+        "error_code": None,
+    }
 
 
 def _set_notice_accepted(accepted: bool) -> None:
@@ -304,10 +316,7 @@ def test_bridge_returns_narrow_success_payload(temp_db) -> None:
         "launch_at_login",
         "fd_work",
     }
-    assert result["status"]["fd_work"] == {
-        "supported": True,
-        "enabled": False,
-    }
+    assert result["status"]["fd_work"] == _fd_status(False)
 
 
 def test_bridge_accept_first_run_notice_exception_fallback_keeps_six_field_dto(
@@ -347,19 +356,16 @@ def test_bridge_accept_first_run_notice_exception_fallback_keeps_six_field_dto(
 
 
 def test_settings_application_service_delegates_fd_work_enable_and_returns_authority(temp_db):
-    fd_work = FDWorkEntryService()
+    fd_work = FDWorkIntegrationService()
     service = SettingsApplicationService(fd_work=fd_work)
 
     enabled = service.set_fd_work_enabled(True)
-    persisted_enabled = FDWorkEntryService().get_settings_status()
+    persisted_enabled = FDWorkIntegrationService().get_settings_status()
     disabled = service.set_fd_work_enabled(False)
 
     assert enabled["ok"] is True
-    assert enabled["status"]["fd_work"] == {"supported": True, "enabled": True}
-    assert persisted_enabled == {"supported": True, "enabled": True}
+    assert enabled["status"]["fd_work"] == _fd_status(True)
+    assert persisted_enabled == _fd_status(True)
     assert disabled["ok"] is True
-    assert disabled["status"]["fd_work"] == {"supported": True, "enabled": False}
-    assert FDWorkEntryService().get_settings_status() == {
-        "supported": True,
-        "enabled": False,
-    }
+    assert disabled["status"]["fd_work"] == _fd_status(False)
+    assert FDWorkIntegrationService().get_settings_status() == _fd_status(False)

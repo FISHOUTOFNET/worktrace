@@ -37,6 +37,7 @@
         deleteProjectKeywordRule: fixedBridgeMethod("delete_project_keyword_rule"),
         exportEncryptedBackup: fixedBridgeMethod("export_encrypted_backup"),
         exportStatisticsCsv: fixedBridgeMethod("export_statistics_csv"),
+        getFDWorkStatus: fixedBridgeMethod("get_fd_work_status"),
         getFirstRunNotice: fixedBridgeMethod("get_first_run_notice"),
         getOverview: fixedBridgeMethod("get_overview"),
         getProjectRules: fixedBridgeMethod("get_project_rules"),
@@ -52,6 +53,8 @@
         listProjectsForTimeline: fixedBridgeMethod("list_projects_for_timeline"),
         mergeTimelineSession: fixedBridgeMethod("merge_timeline_session"),
         openFDWorkEntry: fixedBridgeMethod("open_fd_work_entry"),
+        searchFDWorkCases: fixedBridgeMethod("search_fd_work_cases"),
+        showFDWorkLogin: fixedBridgeMethod("show_fd_work_login"),
         previewEncryptedBackupManifest: fixedBridgeMethod("preview_encrypted_backup_manifest"),
         previewProjectRuleImpact: fixedBridgeMethod("preview_project_rule_impact"),
         previewProjectRulesBatchImpact: fixedBridgeMethod("preview_project_rules_batch_impact"),
@@ -879,6 +882,14 @@
         }
 
         App.startupAfterPrivacyState = "starting";
+
+        Promise.resolve(App.bridge.getFDWorkStatus())
+            .then(function (result) {
+                if (result && result.ok === true && App.receiveFDWorkStatus) {
+                    App.receiveFDWorkStatus(result.status);
+                }
+            })
+            .catch(function () {});
 
         App.startupAfterPrivacyPromise = Promise.resolve()
             .then(function () {

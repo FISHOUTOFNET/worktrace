@@ -1385,9 +1385,8 @@
     App.saveEdit = saveEdit;
 
     function fdWorkEnabled() {
-        var status = App.lastSettingsStatus && App.lastSettingsStatus.fd_work;
-        return App.settingsLoaded === true
-            && !!status
+        var status = App.fdWorkStatus;
+        return !!status
             && status.supported === true
             && status.enabled === true;
     }
@@ -1396,6 +1395,22 @@
         options = options || {};
         if (!fdWorkEnabled()) {
             return { enabled: false, state: "hidden", reason: "" };
+        }
+        var capability = App.fdWorkStatus || {};
+        if (capability.login_required === true) {
+            return { enabled: true, state: "disabled", reason: "请先登录 FD Work" };
+        }
+        if (capability.session_state === "starting" || capability.session_state === "idle") {
+            return { enabled: true, state: "busy", reason: "正在连接 FD Work…" };
+        }
+        if (capability.session_state === "error") {
+            return { enabled: true, state: "error", reason: App.fdWorkStatusText(capability) };
+        }
+        if (capability.ready !== true) {
+            return { enabled: true, state: "disabled", reason: "FD Work 尚未准备完成" };
+        }
+        if (capability.operation === "filling") {
+            return { enabled: true, state: "busy", reason: "正在填入 FD Work…" };
         }
         if (!session) {
             return { enabled: true, state: "disabled", reason: "请选择一个已结束的时间段" };
@@ -1602,29 +1617,6 @@
             return false;
         });
     }
-
-    App.receiveFDWorkStatus = function (status) {
-        var messages = {
-            opening: ["正在打开 FD Work…", false],
-            login_required: ["请在 FD Work 完整登录页输入账号和密码并完成登录", false],
-            login_page_load_failed: ["FD Work 登录页加载失败，请检查网络后关闭窗口并重试", true],
-            renderer_unavailable: ["无法使用 WebView2 打开 FD Work，请安装或修复 Microsoft Edge WebView2 Runtime", true],
-            matching_case: ["正在匹配案号…", false],
-            filling: ["正在填入工时…", false],
-            filled: ["已填入，请核对后在 FD Work 中保存", false],
-            case_not_found: ["未找到与项目名称完全一致的案号", true],
-            case_ambiguous: ["找到多个同名案号，无法自动选择", true],
-            case_search_timeout: ["FD Work 案件搜索超时", true],
-            page_operation_timeout: ["FD Work 页面操作超时", true],
-            case_selection_mismatch: ["FD Work 案号选择验证失败", true],
-            ignored_required_field_missing: ["FD Work 仍有其他必填字段，请在完整页面中处理", true],
-            unauthorized: ["当前账号无权访问 FD Work 工时页面", true],
-            navigation_blocked: ["FD Work 页面导航已被安全策略阻止，请关闭窗口后重试", true],
-            page_contract_changed: ["FD Work 页面结构可能已更新，请改为在完整页面中手工填写", true]
-        };
-        var entry = messages[String(status || "")] || messages.page_contract_changed;
-        showFDWorkStatus(entry[0], entry[1]);
-    };
 
     App.refreshTimelineAfterEdit = function () {
         return App.loadTimelineReport(currentTimelineReportDate(), {

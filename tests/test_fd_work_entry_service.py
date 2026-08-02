@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-import threading
 
 import pytest
 
@@ -10,11 +9,10 @@ from worktrace.integrations.fd_work.contracts import (
     FDWorkEntryError,
     FDWorkEntryRequest,
 )
-from worktrace.integrations.fd_work.entry_service import (
-    FDWorkEntryService,
+from worktrace.integrations.fd_work.draft_builder import (
+    FDWorkEntryDraftBuilder,
     format_duration_hours,
 )
-from worktrace.runtime.application_services import build_application_services
 
 
 pytestmark = [
@@ -27,7 +25,6 @@ pytestmark = [
 DATE = "2026-07-31"
 KEY = "base:closed-session"
 REVISION = "projection-revision-1"
-SOURCE_VERSION = "source-version-1"
 
 
 def _entry(**overrides):
@@ -53,12 +50,8 @@ def _entry(**overrides):
     return entry
 
 
-def _projection(entry=None, *, source_version=SOURCE_VERSION):
-    values = {} if entry is None else {KEY: entry}
-    return SimpleNamespace(
-        source_version_token=source_version,
-        entry_by_key=values,
-    )
+def _projection(entry=None):
+    return SimpleNamespace(entry_by_key={} if entry is None else {KEY: entry})
 
 
 def _request(**overrides):
@@ -71,23 +64,20 @@ def _request(**overrides):
     return FDWorkEntryRequest(**values)
 
 
-def _service(projection):
+def _builder(projection):
     calls = []
 
     def read(report_date):
         calls.append(report_date)
         return projection
 
-    return FDWorkEntryService(
-        projection_reader=read,
-        enabled_reader=lambda: True,
-    ), calls
+    return FDWorkEntryDraftBuilder(projection_reader=read), calls
 
 
 def test_authoritative_projection_builds_only_the_four_field_draft():
-    service, calls = _service(_projection(_entry()))
+    builder, calls = _builder(_projection(_entry()))
 
-    draft = service.build_draft(_request())
+    draft = builder.build_draft(_request())
 
     assert calls == [DATE]
     assert draft == FDWorkEntryDraft(
@@ -107,212 +97,41 @@ def test_authoritative_projection_builds_only_the_four_field_draft():
 @pytest.mark.parametrize(
     ("request_overrides", "entry_overrides"),
     [
-        ({"expected_projection_revision": "stale"}, {}),
+        ({"projection_instance_key": "missing"}, {}),
         ({}, {"projection_revision": "new-revision"}),
     ],
 )
-def test_projection_revision_change_is_rejected(request_overrides, entry_overrides):
-    service, _ = _service(_projection(_entry(**entry_overrides)))
+def test_projection_identity_or_revision_change_is_rejected(
+    request_overrides,
+    entry_overrides,
+):
+    builder, _calls = _builder(_projection(_entry(**entry_overrides)))
 
-    with pytest.raises(FDWorkEntryError, match="stale_selection") as raised:
-        service.build_draft(_request(**request_overrides))
+    with pytest.raises(FDWorkEntryError) as raised:
+        builder.build_draft(_request(**request_overrides))
 
     assert raised.value.code == "stale_selection"
 
 
-def test_unrelated_day_source_version_change_does_not_reject_unchanged_session():
-    service, _ = _service(
-        _projection(_entry(), source_version="unrelated-day-change")
-    )
+def test_convenience_build_uses_identity_only_and_rebuilds_authoritatively():
+    builder, calls = _builder(_projection(_entry()))
 
-    assert service.build_draft(_request()).case_number == "MATTER-2026-001"
+    draft = builder.build(DATE, KEY, REVISION)
 
-
-def test_fd_work_is_disabled_by_default_and_direct_open_is_rejected():
-    opened = []
-    service = FDWorkEntryService(
-        projection_reader=lambda _date: _projection(_entry()),
-        window_controller=SimpleNamespace(open_entry=lambda draft: opened.append(draft)),
-        enabled_reader=lambda: False,
-    )
-
-    assert service.get_settings_status() == {"supported": True, "enabled": False}
-    with pytest.raises(FDWorkEntryError) as raised:
-        service.open_entry(DATE, KEY, REVISION)
-    assert raised.value.code == "fd_work_disabled"
-    assert opened == []
-
-
-def test_fd_work_enable_state_is_persisted_and_disable_delegates_to_window():
-    state = {"enabled": False}
-    disabled = []
-    controller = SimpleNamespace(disable=lambda: disabled.append(True))
-    service = FDWorkEntryService(
-        window_controller=controller,
-        enabled_reader=lambda: state["enabled"],
-        enabled_writer=lambda enabled: state.__setitem__("enabled", enabled),
-    )
-
-    assert service.set_enabled(True) == {"supported": True, "enabled": True}
-    assert state["enabled"] is True
-    assert disabled == []
-    assert service.set_enabled(False) == {"supported": True, "enabled": False}
-    assert disabled == [True]
-
-
-def test_open_rechecks_enabled_after_projection_read_before_controller_call():
-    projection_entered = threading.Event()
-    release_projection = threading.Event()
-    state = {"enabled": True}
-    opened = []
-
-    def read_projection(_date):
-        projection_entered.set()
-        assert release_projection.wait(timeout=5)
-        return _projection(_entry())
-
-    controller = SimpleNamespace(
-        open_entry=lambda draft: opened.append(draft) or {"ok": True},
-        disable=lambda: None,
-        shutdown=lambda: None,
-    )
-    service = FDWorkEntryService(
-        projection_reader=read_projection,
-        window_controller=controller,
-        enabled_reader=lambda: state["enabled"],
-        enabled_writer=lambda enabled: state.__setitem__("enabled", enabled),
-    )
-    outcome = {}
-
-    def open_in_thread():
-        try:
-            outcome["result"] = service.open_entry(DATE, KEY, REVISION)
-        except Exception as exc:
-            outcome["error"] = exc
-
-    thread = threading.Thread(target=open_in_thread)
-    thread.start()
-    assert projection_entered.wait(timeout=5)
-    assert service.set_enabled(False) == {"supported": True, "enabled": False}
-    release_projection.set()
-    thread.join(timeout=5)
-
-    assert not thread.is_alive()
-    assert isinstance(outcome.get("error"), FDWorkEntryError)
-    assert outcome["error"].code == "fd_work_disabled"
-    assert opened == []
-
-
-def test_disable_waits_for_final_open_linearization_then_closes_window():
-    controller_entered = threading.Event()
-    release_controller = threading.Event()
-    disable_started = threading.Event()
-    disable_completed = threading.Event()
-    state = {"enabled": True, "has_window": False}
-
-    class Controller:
-        def open_entry(self, _draft):
-            controller_entered.set()
-            assert release_controller.wait(timeout=5)
-            state["has_window"] = True
-            return {"ok": True, "status": "opening"}
-
-        def disable(self):
-            state["has_window"] = False
-
-        def shutdown(self):
-            state["has_window"] = False
-
-    service = FDWorkEntryService(
-        projection_reader=lambda _date: _projection(_entry()),
-        window_controller=Controller(),
-        enabled_reader=lambda: state["enabled"],
-        enabled_writer=lambda enabled: state.__setitem__("enabled", enabled),
-    )
-    open_thread = threading.Thread(
-        target=lambda: service.open_entry(DATE, KEY, REVISION)
-    )
-
-    def disable_in_thread():
-        disable_started.set()
-        service.set_enabled(False)
-        disable_completed.set()
-
-    disable_thread = threading.Thread(target=disable_in_thread)
-    open_thread.start()
-    assert controller_entered.wait(timeout=5)
-    disable_thread.start()
-    assert disable_started.wait(timeout=5)
-    try:
-        assert not disable_completed.wait(timeout=0.1)
-    finally:
-        release_controller.set()
-        open_thread.join(timeout=5)
-        disable_thread.join(timeout=5)
-
-    assert not open_thread.is_alive()
-    assert not disable_thread.is_alive()
-    assert disable_completed.is_set()
-    assert state["enabled"] is False
-    assert state["has_window"] is False
-
-
-def test_shutdown_is_idempotent_permanent_and_prevents_rebinding_or_opening():
-    shutdown_calls = []
-    controller = SimpleNamespace(
-        open_entry=lambda _draft: {"ok": True},
-        disable=lambda: None,
-        shutdown=lambda: shutdown_calls.append(True),
-    )
-    service = FDWorkEntryService(
-        projection_reader=lambda _date: _projection(_entry()),
-        window_controller=controller,
-        enabled_reader=lambda: True,
-    )
-
-    service.shutdown()
-    service.shutdown()
-
-    assert shutdown_calls == [True]
-    assert service.get_settings_status() == {"supported": True, "enabled": False}
-    with pytest.raises(FDWorkEntryError, match="fd_work_disabled"):
-        service.open_entry(DATE, KEY, REVISION)
-    with pytest.raises(RuntimeError, match="fd_work_shutdown"):
-        service.bind_window_controller(controller)
-    with pytest.raises(RuntimeError, match="fd_work_shutdown"):
-        service.set_enabled(True)
-
-
-def test_shipping_composition_shares_one_fd_work_capability_owner():
-    controller = SimpleNamespace(shutdown=lambda: None)
-    services = build_application_services(
-        SimpleNamespace(),
-        fd_work_window_controller=controller,
-    )
-
-    assert services.settings._fd_work is services.fd_work
-    assert services.fd_work._window_controller is controller
-
-
-def test_missing_projection_identity_is_rejected_as_stale():
-    service, _ = _service(_projection())
-
-    with pytest.raises(FDWorkEntryError) as raised:
-        service.build_draft(_request())
-
-    assert raised.value.code == "stale_selection"
+    assert calls == [DATE]
+    assert draft.case_number == "MATTER-2026-001"
 
 
 @pytest.mark.parametrize(
     ("overrides", "code"),
     [
         ({"is_in_progress": True}, "in_progress_session"),
-        ({"row_kind": "standalone_status"}, "system_project"),
-        ({"is_report_project": False, "is_report_uncategorized": True}, "uncategorized_project"),
+        ({"row_kind": "system_session"}, "system_project"),
+        ({"is_report_uncategorized": True}, "uncategorized_project"),
         ({"project_name": "未归类"}, "uncategorized_project"),
-        ({"project_name": "已排除"}, "system_project"),
         ({"project_is_system": True}, "system_project"),
         ({"project_is_special": True}, "system_project"),
+        ({"is_report_project": False}, "system_project"),
         ({"project_is_deleted": True}, "project_unavailable"),
         ({"project_is_archived": True}, "project_unavailable"),
         ({"project_is_enabled": False}, "project_unavailable"),
@@ -324,38 +143,28 @@ def test_missing_projection_identity_is_rejected_as_stale():
     ],
 )
 def test_invalid_or_non_user_session_fails_closed(overrides, code):
-    service, _ = _service(_projection(_entry(**overrides)))
+    builder, _calls = _builder(_projection(_entry(**overrides)))
 
     with pytest.raises(FDWorkEntryError) as raised:
-        service.build_draft(_request())
+        builder.build_draft(_request())
 
     assert raised.value.code == code
 
 
 def test_adjusted_duration_wins_over_actual_duration():
-    service, _ = _service(
+    builder, _calls = _builder(
         _projection(
-            _entry(
-                duration_seconds=3_600,
-                adjusted_duration_seconds=5_040,
-            )
+            _entry(duration_seconds=3_600, adjusted_duration_seconds=5_040)
         )
     )
-
-    assert service.build_draft(_request()).duration_hours == "1.4"
+    assert builder.build_draft(_request()).duration_hours == "1.4"
 
 
 def test_actual_duration_is_used_without_an_adjustment():
-    service, _ = _service(
-        _projection(
-            _entry(
-                duration_seconds=5_040,
-                adjusted_duration_seconds=None,
-            )
-        )
+    builder, _calls = _builder(
+        _projection(_entry(duration_seconds=5_040, adjusted_duration_seconds=None))
     )
-
-    assert service.build_draft(_request()).duration_hours == "1.4"
+    assert builder.build_draft(_request()).duration_hours == "1.4"
 
 
 @pytest.mark.parametrize(
@@ -369,30 +178,22 @@ def test_actual_duration_is_used_without_an_adjustment():
         (86_040, "23.9"),
     ],
 )
-def test_duration_conversion_matches_timeline_one_decimal_semantics(
-    seconds,
-    expected,
-):
+def test_duration_conversion_matches_timeline_one_decimal_semantics(seconds, expected):
     assert format_duration_hours(seconds) == expected
 
 
 def test_duration_that_rounds_to_zero_is_rejected_at_remote_boundary():
-    service, _ = _service(_projection(_entry(duration_seconds=179)))
-
+    builder, _calls = _builder(_projection(_entry(duration_seconds=179)))
     with pytest.raises(FDWorkEntryError) as raised:
-        service.build_draft(_request())
-
+        builder.build_draft(_request())
     assert raised.value.code == "invalid_duration"
 
 
 def test_narrative_only_strips_edge_whitespace_without_rewriting_body():
-    service, _ = _service(
-        _projection(
-            _entry(session_note=" \nLine one.\n\n  Line two with  spaces.\t ")
-        )
+    builder, _calls = _builder(
+        _projection(_entry(session_note=" \nLine one.\n\n  Line two with  spaces.\t "))
     )
-
     assert (
-        service.build_draft(_request()).narrative
+        builder.build_draft(_request()).narrative
         == "Line one.\n\n  Line two with  spaces."
     )

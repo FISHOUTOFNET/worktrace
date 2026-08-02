@@ -21,7 +21,7 @@ from worktrace.services.report_session_projection_service import public_session_
 from worktrace.services.report_session_operation_engine import OPERATION_PAYLOAD_VERSION
 from worktrace.services.statistics_projection import build_statistics_projection
 from worktrace.integrations.fd_work.contracts import FDWorkEntryRequest
-from worktrace.integrations.fd_work.entry_service import FDWorkEntryService
+from worktrace.integrations.fd_work.draft_builder import FDWorkEntryDraftBuilder
 
 DATE = "2026-07-01"
 
@@ -162,7 +162,7 @@ def test_explicit_duration_intent_sets_normalized_override_across_report_consume
     assert sum(row["duration_seconds"] for row in details["summary_rows"]) == 4_442
     assert build_statistics_projection(snapshot).total_duration_seconds == 4_320
     assert build_statistics_csv_rows(DATE, DATE)[0]["duration_seconds"] == 4_320
-    draft = FDWorkEntryService(enabled_reader=lambda: True).build_draft(
+    draft = FDWorkEntryDraftBuilder().build_draft(
         FDWorkEntryRequest(
             report_date=DATE,
             projection_instance_key=session["projection_instance_key"],
@@ -431,7 +431,7 @@ def test_observed_activity_details_stay_raw_while_report_consumers_use_override(
     analytics = build_statistics_projection(snapshot)
     assert analytics.total_duration_seconds == 720
     assert build_statistics_csv_rows(DATE, DATE)[0]["duration_seconds"] == 720
-    draft = FDWorkEntryService(enabled_reader=lambda: True).build_draft(
+    draft = FDWorkEntryDraftBuilder().build_draft(
         FDWorkEntryRequest(
             report_date=DATE,
             projection_instance_key=session["projection_instance_key"],

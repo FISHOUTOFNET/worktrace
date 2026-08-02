@@ -6,7 +6,7 @@ import json
 import sys
 import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from . import config
 from .collector.single_instance import get_application_instance_coordinator
@@ -189,11 +189,11 @@ def main(*, background: bool = False) -> int:
 
         main_window_holder: dict[str, Any] = {}
 
-        def report_fd_work_status(status: str) -> None:
+        def report_fd_work_status(status: Mapping[str, Any]) -> None:
             window = main_window_holder.get("window")
             if window is None:
                 return
-            payload = json.dumps(str(status), ensure_ascii=True)
+            payload = json.dumps(dict(status), ensure_ascii=True)
             try:
                 window.evaluate_js(
                     "window.WorkTraceApp&&"
@@ -205,12 +205,12 @@ def main(*, background: bool = False) -> int:
         fd_work_controller = FDWorkWindowController(
             webview,
             schedule=_defer_fd_work_callback,
-            status_callback=report_fd_work_status,
         )
         services = build_application_services(
             runtime,
             fd_work_window_controller=fd_work_controller,
         )
+        services.fd_work.bind_status_callback(report_fd_work_status)
         app_control = services.app_control
         startup_result: dict[str, Any] = {"ok": False}
         try:
@@ -279,8 +279,16 @@ def main(*, background: bool = False) -> int:
                 logging.info("webview renderer initialized renderer=%s", safe_renderer)
                 if sys.platform.startswith("win") and renderer != "edgechromium":
                     fd_work_controller.mark_renderer_unavailable()
-                    report_fd_work_status("renderer_unavailable")
                     _show_blocking_startup_message(_RENDERER_UNAVAILABLE_MESSAGE)
+                    return
+                if services.fd_work.get_settings_status().get("enabled") is True:
+                    threading.Thread(
+                        target=lambda: services.fd_work.prepare_session(
+                            show_login_if_required=True
+                        ),
+                        name="fd-work-session-prepare",
+                        daemon=True,
+                    ).start()
 
             webview.start(
                 func=handle_webview_initialized,

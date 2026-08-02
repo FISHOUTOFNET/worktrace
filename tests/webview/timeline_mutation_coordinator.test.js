@@ -63,7 +63,7 @@ function harness() {
     copyTimelineSession: bridgeCall("copy_timeline_session"),
     openFDWorkEntry: bridgeCall("open_fd_work_entry"),
   };
-  for (const file of ["timeline_request_state.js", "timeline.js"]) {
+  for (const file of ["fd_work.js", "timeline_request_state.js", "timeline.js"]) {
     vm.runInContext(
       fs.readFileSync(path.join(__dirname, "../../worktrace/webview_ui/js", file), "utf8"),
       context,
@@ -646,6 +646,10 @@ function configureFDWorkSession(App, element, overrides = {}) {
   };
   App.settingsLoaded = true;
   App.lastSettingsStatus = { fd_work: { supported: true, enabled: true } };
+  App.receiveFDWorkStatus({
+    supported: true, enabled: true, session_state: "ready", operation: "none",
+    ready: true, login_required: false, error_code: null,
+  });
   App.projectsCache = [{ id: 17, name: "CASE-001" }];
   element("edit-project-select").value = "17";
   element("edit-note-text").value = session.session_note;
@@ -785,12 +789,17 @@ test("invalid tiny duration is displayed as 0.0 and never autosaved", () => {
 test("FD Work area is fail-closed and one availability model renders the reason", () => {
   const { App, element } = harness();
   configureFDWorkSession(App, element);
-  App.settingsLoaded = false;
+  App.receiveFDWorkStatus({
+    supported: true, enabled: false, session_state: "disabled", operation: "none",
+    ready: false, login_required: false, error_code: null,
+  });
   App.updateFDWorkEntryButton();
   assert.equal(element("fd-work-entry-area").hidden, true);
 
-  App.settingsLoaded = true;
-  App.lastSettingsStatus.fd_work.enabled = true;
+  App.receiveFDWorkStatus({
+    supported: true, enabled: true, session_state: "ready", operation: "none",
+    ready: true, login_required: false, error_code: null,
+  });
   element("edit-note-text").value = "";
   const availability = App.getFDWorkAvailability(App.editingSession);
   App.updateFDWorkEntryButton();
@@ -802,17 +811,19 @@ test("FD Work area is fail-closed and one availability model renders the reason"
 
 test("FD Work lifecycle failures have distinct actionable Chinese messages", () => {
   const { App, element } = harness();
-  const expected = {
-    login_required: /账号和密码/,
-    login_page_load_failed: /登录页加载失败/,
-    renderer_unavailable: /WebView2/,
-    page_contract_changed: /手工填写/,
-    navigation_blocked: /关闭窗口后重试/,
-  };
-
-  for (const [status, pattern] of Object.entries(expected)) {
-    App.receiveFDWorkStatus(status);
-    assert.match(App.fdWorkStatusOverride.reason, pattern);
+  const cases = [
+    ["login_required", null, /请先登录/],
+    ["error", "renderer_unavailable", /renderer 不可用/],
+    ["error", "page_contract_changed", /页面不可用/],
+  ];
+  for (const [sessionState, errorCode, pattern] of cases) {
+    App.receiveFDWorkStatus({
+      supported: true, enabled: true, session_state: sessionState,
+      operation: "none", ready: false,
+      login_required: sessionState === "login_required", error_code: errorCode,
+    });
+    App.updateFDWorkEntryButton();
+    assert.match(element("fd-work-status").textContent, pattern);
   }
 });
 

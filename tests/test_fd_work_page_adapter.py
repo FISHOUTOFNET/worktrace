@@ -11,6 +11,9 @@ from worktrace.integrations.fd_work.page_adapter import (
     FDWorkPageAdapter,
     FDWorkPageType,
 )
+from worktrace.integrations.fd_work.integration_service import (
+    FD_WORK_CASE_LABEL_MAX_LENGTH,
+)
 
 
 pytestmark = [pytest.mark.unit, pytest.mark.contract, pytest.mark.parallel_safe]
@@ -77,7 +80,7 @@ def test_payload_is_json_serialized_not_interpolated_into_adapter_source():
 def test_adapter_owns_business_url_hosts_selectors_and_asset_version():
     adapter = FDWorkPageAdapter()
     assert adapter.business_url.startswith("https://work.fangdalaw.com/")
-    assert adapter.adapter_version == 1
+    assert adapter.adapter_version == 2
     assert set(adapter.field_contract) == {
         "case_number",
         "work_date",
@@ -117,8 +120,35 @@ def test_login_readiness_script_checks_all_three_visible_controls():
     assert results == [{"ready": True}]
     assert len(scripts) == 1
     assert "password" in scripts[0]
-    assert "账号" in scripts[0]
+    assert "return visible(input);" in scripts[0]
     assert "登录" in scripts[0]
+    assert 'replace(/\\s+/g, "")' in scripts[0]
+    assert "element.disabled" not in scripts[0]
+
+
+def test_work_page_readiness_also_recognizes_rendered_login_contract():
+    scripts = []
+
+    class Window:
+        def evaluate_js(self, script, callback=None):
+            scripts.append(script)
+            if callback is not None:
+                callback({"ready": True})
+
+    results = []
+    FDWorkPageAdapter().check_work_hour_page_ready(Window(), results.append)
+
+    assert results == [{"ready": True}]
+    assert len(scripts) == 1
+    assert "form#basic" in scripts[0]
+    assert '#basic_caseId[role="combobox"]' in scripts[0]
+    assert 'input[type="password"]' in scripts[0]
+    assert 'button,input[type="submit"]' in scripts[0]
+    assert "login_ready" in scripts[0]
+    assert 'window.location.protocol === "https:"' in scripts[0]
+    assert 'window.location.hostname === "work.fangdalaw.com"' in scripts[0]
+    assert 'path === "/login" || path === "/logintoken"' in scripts[0]
+    assert "login_navigation" in scripts[0]
 
 
 def test_async_javascript_result_is_received_through_pywebview_callback():
@@ -139,3 +169,64 @@ def test_async_javascript_result_is_received_through_pywebview_callback():
     assert len(window.calls) == 2
     assert window.calls[0][1] is None
     assert callable(window.calls[1][1])
+
+
+def test_search_script_serializes_query_and_calls_adapter_search_contract():
+    adapter = FDWorkPageAdapter()
+
+    script = adapter.build_search_script('CASE-"quoted"')
+
+    assert "searchCases" in script
+    assert json.dumps('CASE-"quoted"', ensure_ascii=True) in script
+    assert 'CASE-"quoted"' not in script
+    assert '"max_options":20' in script
+    assert f'"max_label_length":{FD_WORK_CASE_LABEL_MAX_LENGTH}' in script
+
+
+def test_search_cases_validates_and_normalizes_the_callback_shape():
+    class Window:
+        def __init__(self):
+            self.calls = []
+
+        def evaluate_js(self, script, callback=None):
+            self.calls.append((script, callback))
+            if callback is not None:
+                callback({"ok": True, "labels": [" CASE A ", "CASE B"]})
+
+    window = Window()
+
+    result = FDWorkPageAdapter().search_cases(window, "ca")
+
+    assert result == {"ok": True, "labels": ["CASE A", "CASE B"]}
+    assert len(window.calls) == 2
+    assert callable(window.calls[1][1])
+
+
+@pytest.mark.parametrize(
+    "remote_result",
+    [
+        None,
+        {"ok": True, "labels": "CASE A"},
+        {"ok": True, "labels": ["CASE"] * 21},
+        {"ok": True, "labels": [""]},
+        {"ok": True, "labels": ["X" * (FD_WORK_CASE_LABEL_MAX_LENGTH + 1)]},
+        {"ok": True, "labels": ["CASE A", "\u3000CASE A\u00a0"]},
+        {"ok": True, "labels": [1]},
+    ],
+)
+def test_search_cases_rejects_malformed_or_duplicate_remote_results(remote_result):
+    class Window:
+        def evaluate_js(self, _script, callback=None):
+            if callback is not None:
+                callback(remote_result)
+
+    result = FDWorkPageAdapter().search_cases(Window(), "ca")
+
+    expected = (
+        "duplicate_case_label"
+        if isinstance(remote_result, dict)
+        and isinstance(remote_result.get("labels"), list)
+        and len(remote_result["labels"]) == 2
+        else "page_contract_changed"
+    )
+    assert result == {"ok": False, "error": expected}
