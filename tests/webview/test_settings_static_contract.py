@@ -38,6 +38,7 @@ SETTINGS_BRIDGE_METHODS = {
     "setClipboardCaptureEnabled",
     "setFDWorkEnabled",
     "setLaunchAtLogin",
+    "showFDWorkLogin",
 }
 
 
@@ -79,6 +80,7 @@ def test_settings_page_resources_and_controls_are_complete() -> None:
         "settings-launch-at-login-toggle-status",
         "settings-fd-work-toggle",
         "settings-fd-work-toggle-status",
+        "settings-fd-work-reconnect",
         "settings-backup-passphrase",
         "settings-backup-passphrase-confirm",
         "settings-backup-export-btn",

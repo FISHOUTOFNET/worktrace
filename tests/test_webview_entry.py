@@ -237,7 +237,14 @@ def _stub_webview_main_environment(monkeypatch, tmp_path):
     monkeypatch.setattr("worktrace.config.ensure_directories", lambda _paths: None)
     monkeypatch.setattr(webview_main, "setup_logging", lambda _log_path: None)
 
-    fake_window = object()
+    evaluate_js_calls = []
+
+    class _FakeWindow:
+        def evaluate_js(self, script):
+            order.append("evaluate_js")
+            evaluate_js_calls.append(script)
+
+    fake_window = _FakeWindow()
     start_calls = {"count": 0, "kwargs": {}}
     create_window_kwargs = {}
 
@@ -261,6 +268,28 @@ def _stub_webview_main_environment(monkeypatch, tmp_path):
                 callback()
 
     monkeypatch.setattr(webview_main, "_check_pywebview_available", lambda: _FakeWebview)
+
+    class _FakeFDWorkController:
+        def __init__(self, *_args, **_kwargs):
+            self.renderer_calls = []
+            self.renderer_unavailable_calls = 0
+            self.shutdown_calls = 0
+
+        def on_renderer_initialized(self, renderer):
+            self.renderer_calls.append(renderer)
+
+        def mark_renderer_unavailable(self):
+            self.renderer_unavailable_calls += 1
+
+        def shutdown(self):
+            self.shutdown_calls += 1
+
+    fake_fd_work_controller = _FakeFDWorkController()
+    monkeypatch.setattr(
+        webview_main,
+        "FDWorkWindowController",
+        lambda *_args, **_kwargs: fake_fd_work_controller,
+    )
 
     shutdown_calls = {"count": 0}
 
@@ -308,6 +337,7 @@ def _stub_webview_main_environment(monkeypatch, tmp_path):
         def __init__(self):
             self.status_callback = None
             self.prepare_calls = []
+            self.startup_prepare_calls = []
 
         def bind_status_callback(self, callback):
             self.status_callback = callback
@@ -321,6 +351,13 @@ def _stub_webview_main_environment(monkeypatch, tmp_path):
 
         def prepare_session(self, show_login_if_required=True):
             self.prepare_calls.append(show_login_if_required)
+            return {"ok": True, "status": self.get_settings_status()}
+
+        def prepare_window_before_start(self, show_login_if_required=True):
+            order.append("fd_work_prepare_window")
+            self.startup_prepare_calls.append(show_login_if_required)
+            if self.status_callback is not None:
+                self.status_callback(self.get_settings_status())
             return {"ok": True, "status": self.get_settings_status()}
 
         def shutdown(self):
@@ -411,7 +448,9 @@ def _stub_webview_main_environment(monkeypatch, tmp_path):
         "app_control": app_control,
         "settings": fake_settings,
         "fd_work": fake_services.fd_work,
+        "fd_work_controller": fake_fd_work_controller,
         "create_window_kwargs": create_window_kwargs,
+        "evaluate_js_calls": evaluate_js_calls,
         "instance_coordinator": instance_coordinator,
         "webview": _FakeWebview,
     }
@@ -428,7 +467,7 @@ def test_webview_main_calls_unified_privacy_gate_on_startup(monkeypatch, tmp_pat
     assert mocks["start_calls"]["count"] == 1
 
 
-def test_enabled_fd_work_session_prepare_is_dispatched_after_renderer_init(
+def test_enabled_fd_work_window_is_prepared_before_start_without_extra_thread(
     monkeypatch, tmp_path
 ):
     mocks = _stub_webview_main_environment(monkeypatch, tmp_path)
@@ -439,25 +478,47 @@ def test_enabled_fd_work_session_prepare_is_dispatched_after_renderer_init(
         "operation": "none", "ready": False, "login_required": False,
         "error_code": None,
     }
-    threads = []
+    assert webview_main.main() == 0
+    assert mocks["fd_work"].startup_prepare_calls == [True]
+    assert mocks["fd_work"].prepare_calls == []
+    assert mocks["order"].index("fd_work_prepare_window") < mocks["order"].index(
+        "webview_start"
+    )
+    assert mocks["fd_work_controller"].renderer_calls == ["edgechromium"]
+    source = (REPO_ROOT / "worktrace" / "webview_main.py").read_text(
+        encoding="utf-8"
+    )
+    assert "fd-work-session-prepare" not in source
 
-    class _ImmediateThread:
-        def __init__(self, *, target, name, daemon):
-            self.target = target
-            self.name = name
-            self.daemon = daemon
-            threads.append(self)
 
-        def start(self):
-            self.target()
+def test_prestart_fd_work_status_does_not_evaluate_main_window_js(
+    monkeypatch, tmp_path
+):
+    mocks = _stub_webview_main_environment(monkeypatch, tmp_path)
+    import worktrace.webview_main as webview_main
 
-    monkeypatch.setattr(webview_main.threading, "Thread", _ImmediateThread)
+    mocks["fd_work"].get_settings_status = lambda: {
+        "supported": True, "enabled": True, "session_state": "starting",
+        "operation": "none", "ready": False, "login_required": False,
+        "error_code": None,
+    }
+    assert webview_main.main() == 0
+
+    assert mocks["evaluate_js_calls"]
+    assert mocks["order"].index("webview_start") < mocks["order"].index(
+        "evaluate_js"
+    )
+
+
+def test_disabled_fd_work_does_not_prepare_auxiliary_window_before_start(
+    monkeypatch, tmp_path
+):
+    mocks = _stub_webview_main_environment(monkeypatch, tmp_path)
+    import worktrace.webview_main as webview_main
 
     assert webview_main.main() == 0
-    assert mocks["fd_work"].prepare_calls == [True]
-    assert [(thread.name, thread.daemon) for thread in threads] == [
-        ("fd-work-session-prepare", True)
-    ]
+    assert mocks["fd_work"].startup_prepare_calls == []
+    assert mocks["fd_work_controller"].renderer_calls == ["edgechromium"]
 
 
 def test_shipping_webview_forces_edgechromium_and_persistent_worktrace_profile(

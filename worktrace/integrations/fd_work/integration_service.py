@@ -37,6 +37,11 @@ class _WindowController(Protocol):
     def bind_status_callback(self, callback: Callable[[Mapping[str, Any]], None]) -> None: ...
     def get_status(self) -> Mapping[str, Any]: ...
     def prepare_session(self, show_login_if_required: bool = True) -> Mapping[str, Any]: ...
+    def prepare_window_before_start(
+        self,
+        show_login_if_required: bool = True,
+    ) -> Mapping[str, Any]: ...
+    def on_renderer_initialized(self, renderer: str) -> None: ...
     def search_cases(self, query: str) -> Mapping[str, Any]: ...
     def open_entry(self, draft: FDWorkEntryDraft) -> Mapping[str, Any]: ...
     def disable(self) -> None: ...
@@ -131,6 +136,37 @@ class FDWorkIntegrationService:
             result = {"ok": False, "error": "session_start_failed"}
         result["status"] = self.get_settings_status()
         return result
+
+    def prepare_window_before_start(
+        self,
+        show_login_if_required: bool = True,
+    ) -> dict[str, Any]:
+        with self._lock:
+            controller = self._require_enabled_controller_locked()
+            if controller is None:
+                return {
+                    "ok": False,
+                    "error": "fd_work_disabled",
+                    "status": self._status_locked(),
+                }
+        try:
+            result = dict(
+                controller.prepare_window_before_start(
+                    show_login_if_required=show_login_if_required
+                )
+            )
+        except Exception:
+            result = {"ok": False, "error": "session_start_failed"}
+        result["status"] = self.get_settings_status()
+        return result
+
+    def on_renderer_initialized(self, renderer: str) -> None:
+        with self._lock:
+            if self._shutdown:
+                return
+            controller = self._window_controller
+        if controller is not None:
+            controller.on_renderer_initialized(renderer)
 
     def search_cases(self, query: str, request_id: str) -> dict[str, Any]:
         if not isinstance(query, str):
@@ -318,6 +354,7 @@ class FDWorkIntegrationService:
                 "ready": False,
                 "login_required": False,
                 "error_code": None,
+                "navigation_generation": self._navigation_generation_locked(),
             }
         if not self._enabled_locked():
             return {
@@ -328,6 +365,7 @@ class FDWorkIntegrationService:
                 "ready": False,
                 "login_required": False,
                 "error_code": None,
+                "navigation_generation": self._navigation_generation_locked(),
             }
         status = self._controller_status
         return {
@@ -342,6 +380,7 @@ class FDWorkIntegrationService:
                 if status.get("error_code")
                 else None
             ),
+            "navigation_generation": self._navigation_generation_locked(),
         }
 
     def _enabled_locked(self) -> bool:

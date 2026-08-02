@@ -111,8 +111,8 @@ def test_login_readiness_script_checks_all_three_visible_controls():
     class Window:
         def evaluate_js(self, script, callback=None):
             scripts.append(script)
-            if callback is not None:
-                callback({"ready": True})
+            assert callback is None
+            return {"ready": True}
 
     results = []
     FDWorkPageAdapter().check_login_page_ready(Window(), results.append)
@@ -132,8 +132,8 @@ def test_work_page_readiness_also_recognizes_rendered_login_contract():
     class Window:
         def evaluate_js(self, script, callback=None):
             scripts.append(script)
-            if callback is not None:
-                callback({"ready": True})
+            assert callback is None
+            return {"ready": True}
 
     results = []
     FDWorkPageAdapter().check_work_hour_page_ready(Window(), results.append)

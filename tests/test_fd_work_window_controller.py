@@ -40,7 +40,12 @@ class _Window:
         self.events = type(
             "Events",
             (),
-            {"loaded": _Event(), "closing": _Event(), "closed": _Event()},
+            {
+                "before_load": _Event(),
+                "loaded": _Event(),
+                "closing": _Event(),
+                "closed": _Event(),
+            },
         )()
         self.url = url
         self.shown = 0
@@ -130,6 +135,7 @@ def _controller(
     delayed=None,
     statuses=None,
     adapter=None,
+    renderer_initialized=True,
     **controller_kwargs,
 ):
     adapter = adapter or _PageAdapter()
@@ -145,7 +151,320 @@ def _controller(
         status_callback=(statuses.append if statuses is not None else None),
         **controller_kwargs,
     )
+    if renderer_initialized:
+        controller.on_renderer_initialized("edgechromium")
     return controller, webview, adapter
+
+
+def _run_delayed(delayed, expected_delay):
+    for index, (delay, callback) in enumerate(delayed):
+        if delay == expected_delay:
+            delayed.pop(index)
+            callback()
+            return
+    raise AssertionError(f"no callback scheduled for {expected_delay}")
+
+
+def test_startup_prepare_creates_hidden_singleton_and_binds_before_gui_start():
+    delayed = []
+    controller, webview, _adapter = _controller(
+        delayed=delayed,
+        renderer_initialized=False,
+    )
+
+    first = controller.prepare_window_before_start(show_login_if_required=True)
+    second = controller.prepare_window_before_start(show_login_if_required=True)
+
+    assert first["ok"] is True
+    assert second["ok"] is True
+    assert len(webview.calls) == 1
+    assert webview.calls[0][1]["hidden"] is True
+    assert webview.calls[0][1]["focus"] is False
+    assert len(webview.window.events.before_load.handlers) == 1
+    assert len(webview.window.events.loaded.handlers) == 1
+    assert len(webview.window.events.closing.handlers) == 1
+    assert len(webview.window.events.closed.handlers) == 1
+    assert delayed == []
+
+
+def test_renderer_initialization_arms_initial_load_watchdog_only_after_start():
+    delayed = []
+    controller, _webview, _adapter = _controller(
+        delayed=delayed,
+        renderer_initialized=False,
+        start_probe_delay_seconds=5.0,
+        start_timeout_seconds=30.0,
+    )
+    controller.prepare_window_before_start()
+    assert delayed == []
+
+    controller.on_renderer_initialized("edgechromium")
+
+    assert sorted(delay for delay, _callback in delayed) == [5.0, 30.0]
+
+
+def test_missing_loaded_watchdog_shows_and_probes_login_page():
+    delayed = []
+    controller, webview, _adapter = _controller(
+        delayed=delayed,
+        renderer_initialized=False,
+        start_probe_delay_seconds=5.0,
+        start_timeout_seconds=30.0,
+    )
+    controller.prepare_window_before_start()
+    webview.window.url = "https://work.fangdalaw.com/login"
+    controller.on_renderer_initialized("edgechromium")
+
+    _run_delayed(delayed, 5.0)
+
+    assert controller.get_status()["session_state"] == "login_required"
+    assert webview.window.shown >= 1
+    assert webview.window.restored >= 1
+    assert webview.window.focused >= 1
+    assert len(webview.calls) == 1
+
+
+def test_missing_loaded_watchdog_probes_ready_page_and_hides_without_fill():
+    delayed = []
+    controller, webview, _adapter = _controller(
+        delayed=delayed,
+        renderer_initialized=False,
+        start_probe_delay_seconds=5.0,
+        start_timeout_seconds=30.0,
+    )
+    controller.prepare_window_before_start()
+    controller.on_renderer_initialized("edgechromium")
+
+    _run_delayed(delayed, 5.0)
+
+    assert controller.get_status()["session_state"] == "ready"
+    assert webview.window.shown == 1
+    assert webview.window.hidden == 1
+    assert len(webview.calls) == 1
+
+
+def test_unrecognized_initial_probe_has_hard_timeout_instead_of_permanent_starting():
+    delayed = []
+    controller, webview, _adapter = _controller(
+        delayed=delayed,
+        renderer_initialized=False,
+        start_probe_delay_seconds=5.0,
+        start_timeout_seconds=30.0,
+    )
+    controller.prepare_window_before_start()
+    webview.window.url = "https://work.fangdalaw.com/loading"
+    controller.on_renderer_initialized("edgechromium")
+
+    _run_delayed(delayed, 5.0)
+    assert controller.get_status()["session_state"] == "starting"
+    _run_delayed(delayed, 30.0)
+
+    assert controller.get_status()["session_state"] == "error"
+    assert controller.get_status()["error_code"] == "session_start_timeout"
+    assert controller.get_status()["operation"] == "none"
+    assert webview.window.shown >= 1
+
+
+def test_prepare_while_starting_shows_same_window_probes_and_reuses_watchdog():
+    delayed = []
+
+    class UnknownAdapter(_PageAdapter):
+        def detect_page(self, _url):
+            return FDWorkPageType.UNKNOWN
+
+    controller, webview, _adapter = _controller(
+        delayed=delayed,
+        adapter=UnknownAdapter(),
+        renderer_initialized=False,
+        start_probe_delay_seconds=5.0,
+        start_timeout_seconds=30.0,
+    )
+    controller.prepare_window_before_start()
+    controller.on_renderer_initialized("edgechromium")
+
+    result = controller.prepare_session(show_login_if_required=True)
+
+    assert result["ok"] is True
+    assert webview.window.shown == 1
+    assert webview.window.restored == 1
+    assert webview.window.focused == 1
+    assert len(webview.calls) == 1
+    assert sorted(delay for delay, _callback in delayed) == [5.0, 30.0]
+
+
+def test_prepare_reports_session_starting_while_create_window_has_not_returned():
+    create_entered = threading.Event()
+    release_create = threading.Event()
+    adapter = _PageAdapter()
+
+    class BlockingWebView(_WebView):
+        def create_window(self, *args, **kwargs):
+            create_entered.set()
+            assert release_create.wait(timeout=2)
+            return super().create_window(*args, **kwargs)
+
+    webview = BlockingWebView(adapter.business_url)
+    controller = FDWorkWindowController(webview, page_adapter=adapter)
+    thread = threading.Thread(target=controller.prepare_session)
+    thread.start()
+    assert create_entered.wait(timeout=2)
+
+    result = controller.prepare_session(show_login_if_required=True)
+    release_create.set()
+    thread.join(timeout=2)
+
+    assert result["ok"] is False
+    assert result["error"] == "session_starting"
+    assert not thread.is_alive()
+
+
+def test_late_loaded_recovers_from_start_timeout_on_same_window():
+    delayed = []
+    queued = []
+    controller, webview, adapter = _controller(
+        delayed=delayed,
+        queued=queued,
+        renderer_initialized=False,
+        start_probe_delay_seconds=5.0,
+        start_timeout_seconds=30.0,
+    )
+    controller.prepare_window_before_start()
+    webview.window.url = "https://work.fangdalaw.com/loading"
+    controller.on_renderer_initialized("edgechromium")
+    _run_delayed(delayed, 30.0)
+    assert controller.get_status()["error_code"] == "session_start_timeout"
+
+    webview.window.url = adapter.business_url
+    webview.window.events.loaded.fire()
+    queued.pop(0)()
+    delayed[:] = [
+        (delay, callback)
+        for delay, callback in delayed
+        if delay not in {5.0, 30.0}
+    ]
+
+    assert controller.get_status()["session_state"] == "ready"
+    assert controller.get_status()["error_code"] is None
+
+
+def test_disable_and_shutdown_invalidate_old_start_watchdogs():
+    delayed = []
+    controller, webview, _adapter = _controller(
+        delayed=delayed,
+        renderer_initialized=False,
+        start_probe_delay_seconds=5.0,
+        start_timeout_seconds=30.0,
+    )
+    controller.prepare_window_before_start()
+    first = webview.window
+    controller.on_renderer_initialized("edgechromium")
+    callbacks = [callback for _delay, callback in delayed]
+    controller.disable()
+    for callback in callbacks:
+        callback()
+    assert controller.get_status()["session_state"] == "idle"
+    assert first.shown == 0
+
+    delayed.clear()
+    controller.prepare_session()
+    second = webview.window
+    callbacks = [callback for _delay, callback in delayed]
+    controller.shutdown()
+    for callback in callbacks:
+        callback()
+    assert controller.get_status()["session_state"] == "shutdown"
+    assert second.shown == 0
+
+
+def test_reenabled_window_is_not_changed_by_old_generation_watchdog():
+    delayed = []
+    controller, webview, _adapter = _controller(
+        delayed=delayed,
+        renderer_initialized=False,
+        start_probe_delay_seconds=5.0,
+        start_timeout_seconds=30.0,
+    )
+    controller.prepare_window_before_start()
+    controller.on_renderer_initialized("edgechromium")
+    stale_callbacks = [callback for _delay, callback in delayed]
+    controller.disable()
+    delayed.clear()
+    controller.prepare_session()
+    second = webview.window
+    for callback in stale_callbacks:
+        callback()
+
+    assert controller.get_status()["session_state"] == "starting"
+    assert second.shown == 0
+
+
+def test_dynamic_window_created_after_renderer_initialization_gets_watchdog():
+    delayed = []
+    controller, webview, _adapter = _controller(
+        delayed=delayed,
+        renderer_initialized=False,
+        start_probe_delay_seconds=5.0,
+        start_timeout_seconds=30.0,
+    )
+    controller.on_renderer_initialized("edgechromium")
+
+    controller.prepare_session(show_login_if_required=True)
+
+    assert len(webview.calls) == 1
+    assert sorted(delay for delay, _callback in delayed) == [5.0, 30.0]
+
+
+def test_diagnostics_emit_only_whitelisted_lifecycle_metadata(caplog):
+    delayed = []
+    controller, webview, _adapter = _controller(
+        delayed=delayed,
+        renderer_initialized=False,
+        start_probe_delay_seconds=5.0,
+        start_timeout_seconds=30.0,
+    )
+    with caplog.at_level("INFO"):
+        controller.prepare_window_before_start()
+        webview.window.events.before_load.fire()
+        webview.window.url = "https://work.fangdalaw.com/login"
+        controller.on_renderer_initialized("edgechromium")
+        _run_delayed(delayed, 5.0)
+        _run_delayed(delayed, 1.0)
+        controller.disable()
+
+    messages = [record.getMessage() for record in caplog.records]
+    joined = "\n".join(messages)
+    for event in (
+        "fd_work_prepare_requested",
+        "fd_work_create_reserved",
+        "fd_work_create_begin",
+        "fd_work_create_returned",
+        "fd_work_handlers_bound",
+        "fd_work_before_load",
+        "fd_work_renderer_initialized",
+        "fd_work_start_watchdog_armed",
+        "fd_work_start_watchdog_probe",
+        "fd_work_start_watchdog_visible",
+        "fd_work_page_detected",
+        "fd_work_login_required",
+        "fd_work_login_watch_armed",
+        "fd_work_login_watch_probe",
+        "fd_work_ready",
+        "fd_work_window_show",
+        "fd_work_window_hide",
+        "fd_work_window_destroy",
+    ):
+        assert event in joined
+    assert "session_state=" in joined
+    assert "operation=" in joined
+    assert "navigation_generation=" in joined
+    assert "operation_generation=" in joined
+    assert "window_exists=" in joined
+    assert "renderer=edgechromium" in joined
+    assert "page_type=login" in joined
+    assert "elapsed_ms=" in joined
+    assert "https://" not in joined
+    assert "password" not in joined.lower()
+    assert "query" not in joined.lower()
 
 
 def test_prepare_is_lazy_singleton_and_creates_hidden_business_window_without_api():
@@ -183,6 +502,7 @@ def test_create_recovers_when_loaded_completed_before_handler_binding():
     )
 
     controller.prepare_session()
+    controller.on_renderer_initialized("edgechromium")
     assert len(queued) == 1
     while queued:
         queued.pop(0)()
@@ -226,6 +546,35 @@ def test_business_url_waits_for_form_readiness_before_claiming_ready():
     assert webview.window.hidden == 0
 
 
+def test_slow_work_page_can_become_ready_after_thirty_seconds_without_reload():
+    delayed = []
+
+    class SlowWorkPageAdapter(_PageAdapter):
+        attempts = 0
+
+        def check_work_hour_page_ready(self, _window, callback):
+            self.attempts += 1
+            callback({"ready": self.attempts >= 31})
+
+    adapter = SlowWorkPageAdapter()
+    controller, webview, _adapter = _controller(
+        delayed=delayed,
+        adapter=adapter,
+        work_readiness_attempts=35,
+        work_readiness_interval_seconds=1.0,
+    )
+    controller.prepare_session()
+    webview.window.events.loaded.fire()
+
+    for _attempt in range(30):
+        _run_delayed(delayed, 1.0)
+
+    assert adapter.attempts == 31
+    assert webview.window.loaded_urls == []
+    assert controller.get_status()["session_state"] == "ready"
+    assert webview.window.hidden == 1
+
+
 def test_business_url_with_rendered_login_contract_becomes_login_required():
     class RenderedLoginPageAdapter(_PageAdapter):
         def check_work_hour_page_ready(self, _window, callback):
@@ -264,7 +613,7 @@ def test_business_url_with_in_document_login_navigation_becomes_login_required()
     assert webview.window.shown == 1
 
 
-def test_unready_business_page_gets_one_hidden_generation_safe_reload():
+def test_unready_business_page_gets_one_hidden_generation_safe_login_fallback():
     class UnreadyPageAdapter(_PageAdapter):
         def check_work_hour_page_ready(self, _window, callback):
             callback({"ready": False})
@@ -273,20 +622,20 @@ def test_unready_business_page_gets_one_hidden_generation_safe_reload():
     controller, webview, adapter = _controller(
         queued=queued,
         adapter=UnreadyPageAdapter(),
-        login_readiness_attempts=1,
+        work_readiness_attempts=1,
     )
     controller.prepare_session()
     webview.window.events.loaded.fire()
     queued.pop(0)()
 
-    assert webview.window.loaded_urls == [adapter.business_url]
+    assert webview.window.loaded_urls == [adapter.login_url]
     assert controller.get_status()["session_state"] == "starting"
     assert controller.get_status()["error_code"] is None
     assert webview.window.shown == 0
 
     webview.window.events.loaded.fire()
     queued.pop(0)()
-    assert webview.window.loaded_urls == [adapter.business_url]
+    assert webview.window.loaded_urls == [adapter.login_url]
     assert controller.get_status()["error_code"] == "page_contract_changed"
 
 
@@ -324,6 +673,115 @@ def test_login_success_without_pending_fill_hides_same_window():
 
     assert controller.get_status()["session_state"] == "ready"
     assert webview.window.hidden == 1
+
+
+def test_login_success_without_loaded_is_detected_by_login_transition_probe():
+    queued = []
+    delayed = []
+
+    class LoginTransitionAdapter(_PageAdapter):
+        work_page_ready = False
+
+        def check_work_hour_page_ready(self, _window, callback):
+            callback({"ready": self.work_page_ready})
+
+    adapter = LoginTransitionAdapter()
+    controller, webview, _adapter = _controller(
+        queued=queued,
+        delayed=delayed,
+        adapter=adapter,
+        login_transition_interval_seconds=1.0,
+    )
+    controller.prepare_session()
+    webview.window.url = adapter.login_url
+    webview.window.events.loaded.fire()
+    queued.pop(0)()
+    assert controller.get_status()["session_state"] == "login_required"
+
+    adapter.work_page_ready = True
+    _run_delayed(delayed, 1.0)
+
+    assert controller.get_status()["session_state"] == "ready"
+    assert webview.window.hidden == 1
+
+
+def test_stale_login_transition_probe_cannot_change_a_new_navigation():
+    queued = []
+    delayed = []
+
+    class LoginTransitionAdapter(_PageAdapter):
+        def check_work_hour_page_ready(self, _window, callback):
+            callback({"ready": True})
+
+    adapter = LoginTransitionAdapter()
+    controller, webview, _adapter = _controller(
+        queued=queued,
+        delayed=delayed,
+        adapter=adapter,
+        login_transition_interval_seconds=1.0,
+    )
+    controller.prepare_session()
+    webview.window.url = adapter.login_url
+    webview.window.events.loaded.fire()
+    queued.pop(0)()
+    old_generation = controller.get_status()["navigation_generation"]
+
+    webview.window.events.loaded.fire()
+    queued.pop(0)()
+    assert controller.get_status()["navigation_generation"] > old_generation
+    _run_delayed(delayed, 1.0)
+
+    assert controller.get_status()["session_state"] == "login_required"
+    assert webview.window.hidden == 0
+
+
+def test_login_transition_probe_keeps_waiting_without_reload_or_error():
+    queued = []
+    delayed = []
+
+    class WaitingAdapter(_PageAdapter):
+        def check_work_hour_page_ready(self, _window, callback):
+            callback({"ready": False, "login_ready": True})
+
+    adapter = WaitingAdapter()
+    controller, webview, _adapter = _controller(
+        queued=queued,
+        delayed=delayed,
+        adapter=adapter,
+        login_transition_interval_seconds=1.0,
+    )
+    controller.prepare_session()
+    webview.window.url = adapter.login_url
+    webview.window.events.loaded.fire()
+    queued.pop(0)()
+
+    _run_delayed(delayed, 1.0)
+
+    assert controller.get_status()["session_state"] == "login_required"
+    assert webview.window.loaded_urls == []
+    assert [delay for delay, _callback in delayed].count(1.0) == 1
+
+
+def test_disable_invalidates_login_transition_probe():
+    queued = []
+    delayed = []
+    adapter = _PageAdapter()
+    controller, webview, _adapter = _controller(
+        queued=queued,
+        delayed=delayed,
+        adapter=adapter,
+        login_transition_interval_seconds=1.0,
+    )
+    controller.prepare_session()
+    webview.window.url = adapter.login_url
+    webview.window.events.loaded.fire()
+    queued.pop(0)()
+
+    controller.disable()
+    _run_delayed(delayed, 1.0)
+
+    assert controller.get_status()["session_state"] == "idle"
+    assert webview.window.hidden == 0
 
 
 def test_pending_fill_continues_after_login_and_shows_review():
@@ -427,28 +885,42 @@ def test_login_readiness_callback_has_a_fixed_timeout_and_bounded_attempts():
         queued=queued,
         delayed=delayed,
         adapter=SilentAdapter(),
+        login_readiness_attempts=5,
+        login_readiness_interval_seconds=0.5,
+        login_transition_interval_seconds=17.0,
     )
     controller.prepare_session()
     webview.window.url = "https://work.fangdalaw.com/login"
     webview.window.events.loaded.fire()
     queued.pop(0)()
+    delayed[:] = [
+        (delay, callback)
+        for delay, callback in delayed
+        if delay not in {5.0, 30.0}
+    ]
 
     scheduled_delays = []
-    while delayed:
-        assert len(delayed) == 1
-        _delay, callback = delayed.pop(0)
+    while any(delay != 17.0 for delay, _callback in delayed):
+        active = [
+            (index, delay, callback)
+            for index, (delay, callback) in enumerate(delayed)
+            if delay != 17.0
+        ]
+        assert len(active) == 1
+        index, _delay, callback = active[0]
+        delayed.pop(index)
         assert _delay > 0
         scheduled_delays.append(_delay)
         callback()
 
     assert len(callbacks) == 5
     assert len(scheduled_delays) == 9
-    assert delayed == []
+    assert [delay for delay, _callback in delayed] == [17.0]
     assert controller.get_status()["session_state"] == "login_required"
     assert controller.get_status()["error_code"] == "login_required"
 
 
-def test_explicitly_unready_login_contract_fails_closed_after_bounded_attempts():
+def test_explicitly_unready_login_contract_remains_login_required_after_bound():
     class UnreadyAdapter(_PageAdapter):
         def check_login_page_ready(self, _window, callback):
             callback({"ready": False})
@@ -460,18 +932,52 @@ def test_explicitly_unready_login_contract_fails_closed_after_bounded_attempts()
         delayed=delayed,
         adapter=UnreadyAdapter(),
         login_readiness_attempts=2,
+        login_transition_interval_seconds=17.0,
     )
     controller.prepare_session()
     webview.window.url = "https://work.fangdalaw.com/login"
     webview.window.events.loaded.fire()
     queued.pop(0)()
 
-    while delayed:
-        _delay, callback = delayed.pop(0)
+    while any(delay != 17.0 for delay, _callback in delayed):
+        index = next(
+            index
+            for index, (delay, _callback) in enumerate(delayed)
+            if delay != 17.0
+        )
+        _delay, callback = delayed.pop(index)
         callback()
 
-    assert controller.get_status()["session_state"] == "error"
-    assert controller.get_status()["error_code"] == "session_start_failed"
+    assert controller.get_status()["session_state"] == "login_required"
+    assert controller.get_status()["error_code"] == "login_required"
+
+
+def test_slow_login_dom_can_settle_after_thirty_seconds():
+    delayed = []
+
+    class SlowLoginAdapter(_PageAdapter):
+        attempts = 0
+
+        def check_login_page_ready(self, _window, callback):
+            self.attempts += 1
+            callback({"ready": self.attempts >= 31})
+
+    adapter = SlowLoginAdapter()
+    controller, webview, _adapter = _controller(
+        delayed=delayed,
+        adapter=adapter,
+        login_transition_interval_seconds=17.0,
+    )
+    controller.prepare_session()
+    webview.window.url = adapter.login_url
+    webview.window.events.loaded.fire()
+
+    for _attempt in range(30):
+        _run_delayed(delayed, 1.0)
+
+    assert adapter.attempts == 31
+    assert controller.get_status()["session_state"] == "login_required"
+    assert [delay for delay, _callback in delayed].count(17.0) == 1
 
 
 def test_disable_destroys_window_allows_reenable_and_shutdown_is_permanent():

@@ -17,6 +17,8 @@ _DATE_SHAPE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 FD_WORK_MESSAGES = {
     "fd_work_disabled": "FD Work 插件已关闭，请在高级设置中开启",
     "renderer_unavailable": "无法使用 WebView2 打开 FD Work，请修复运行环境后重试",
+    "session_starting": "FD Work 窗口正在创建，请稍后重试",
+    "session_start_timeout": "连接 FD Work 超时，请检查网络或重新连接",
     "session_start_failed": "连接 FD Work 失败",
     "login_required": "请先登录 FD Work",
     "fd_work_not_ready": "FD Work 尚未准备完成",

@@ -813,7 +813,8 @@ test("FD Work lifecycle failures have distinct actionable Chinese messages", () 
   const { App, element } = harness();
   const cases = [
     ["login_required", null, /请先登录/],
-    ["error", "renderer_unavailable", /renderer 不可用/],
+    ["error", "renderer_unavailable", /WebView2 不可用/],
+    ["error", "session_start_timeout", /连接超时/],
     ["error", "page_contract_changed", /页面不可用/],
   ];
   for (const [sessionState, errorCode, pattern] of cases) {

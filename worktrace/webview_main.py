@@ -188,8 +188,11 @@ def main(*, background: bool = False) -> int:
             )
 
         main_window_holder: dict[str, Any] = {}
+        fd_work_status_delivery_ready = threading.Event()
 
         def report_fd_work_status(status: Mapping[str, Any]) -> None:
+            if not fd_work_status_delivery_ready.is_set():
+                return
             window = main_window_holder.get("window")
             if window is None:
                 return
@@ -268,6 +271,10 @@ def main(*, background: bool = False) -> int:
             shell.start()
             webview_profile_path = paths.base_dir / "webview-profile"
             webview_profile_path.mkdir(parents=True, exist_ok=True)
+            if services.fd_work.get_settings_status().get("enabled") is True:
+                services.fd_work.prepare_window_before_start(
+                    show_login_if_required=True
+                )
 
             def handle_webview_initialized() -> None:
                 renderer = str(getattr(webview, "renderer", "") or "").lower()
@@ -281,14 +288,9 @@ def main(*, background: bool = False) -> int:
                     fd_work_controller.mark_renderer_unavailable()
                     _show_blocking_startup_message(_RENDERER_UNAVAILABLE_MESSAGE)
                     return
-                if services.fd_work.get_settings_status().get("enabled") is True:
-                    threading.Thread(
-                        target=lambda: services.fd_work.prepare_session(
-                            show_login_if_required=True
-                        ),
-                        name="fd-work-session-prepare",
-                        daemon=True,
-                    ).start()
+                fd_work_status_delivery_ready.set()
+                fd_work_controller.on_renderer_initialized(safe_renderer)
+                report_fd_work_status(services.fd_work.get_settings_status())
 
             webview.start(
                 func=handle_webview_initialized,

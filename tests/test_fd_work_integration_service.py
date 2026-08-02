@@ -38,6 +38,8 @@ class _DraftBuilder:
 class _Controller:
     def __init__(self) -> None:
         self.prepare_calls: list[bool] = []
+        self.startup_prepare_calls: list[bool] = []
+        self.renderer_calls: list[str] = []
         self.search_calls: list[str] = []
         self.open_calls: list[FDWorkEntryDraft] = []
         self.disable_calls = 0
@@ -62,6 +64,13 @@ class _Controller:
     def prepare_session(self, show_login_if_required=True):
         self.prepare_calls.append(show_login_if_required)
         return {"ok": True, "status": self.get_status()}
+
+    def prepare_window_before_start(self, show_login_if_required=True):
+        self.startup_prepare_calls.append(show_login_if_required)
+        return {"ok": True, "status": self.get_status()}
+
+    def on_renderer_initialized(self, renderer):
+        self.renderer_calls.append(renderer)
 
     def search_cases(self, query):
         self.search_calls.append(query)
@@ -121,9 +130,22 @@ def test_disabled_capability_has_structured_status_and_never_prepares_window():
             "ready": False,
             "login_required": False,
             "error_code": None,
+            "navigation_generation": controller.generation,
         },
     }
     assert controller.prepare_calls == []
+    assert service.prepare_window_before_start()["error"] == "fd_work_disabled"
+    assert controller.startup_prepare_calls == []
+
+
+def test_enabled_startup_prepare_and_renderer_init_use_injected_controller():
+    service, controller, _builder, _state = _service()
+
+    assert service.prepare_window_before_start(True)["ok"] is True
+    service.on_renderer_initialized("edgechromium")
+
+    assert controller.startup_prepare_calls == [True]
+    assert controller.renderer_calls == ["edgechromium"]
 
 
 def test_enabled_prepare_and_open_use_one_injected_controller_and_pure_builder():

@@ -699,6 +699,7 @@
         bind("settings-clipboard-toggle", "change", App.handleCaptureToggleChange);
         bind("settings-launch-at-login-toggle", "change", App.handleLaunchAtLoginToggleChange);
         bind("settings-fd-work-toggle", "change", App.handleFDWorkToggleChange);
+        bind("settings-fd-work-reconnect", "click", App.reconnectFDWork);
         bind("settings-backup-export-btn", "click", App.exportEncryptedBackup);
         bind("settings-backup-manifest-btn", "click", App.previewEncryptedBackupManifest);
         bind("settings-backup-import-btn", "click", App.importEncryptedBackup);

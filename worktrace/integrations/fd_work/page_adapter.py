@@ -187,7 +187,7 @@ class FDWorkPageAdapter:
   return {ready: !!(account && password && login)};
 })()
 """.strip()
-        window.evaluate_js(script, callback=callback)
+        callback(window.evaluate_js(script))
 
     @staticmethod
     def check_work_hour_page_ready(
@@ -223,7 +223,7 @@ class FDWorkPageAdapter:
   };
 })()
 """.strip()
-        window.evaluate_js(script, callback=callback)
+        callback(window.evaluate_js(script))
 
     def fill_entry(self, window: Any, draft: FDWorkEntryDraft) -> dict[str, Any]:
         result = self._evaluate(window, self.build_fill_script(draft))

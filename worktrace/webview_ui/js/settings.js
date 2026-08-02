@@ -267,6 +267,7 @@
     function renderFDWorkToggle(status) {
         var toggle = element("settings-fd-work-toggle");
         var target = element("settings-fd-work-toggle-status");
+        var reconnect = element("settings-fd-work-reconnect");
         if (!toggle) return;
         var fdWork = App.fdWorkStatus || status && status.fd_work || {};
         var supported = fdWork.supported === true;
@@ -280,11 +281,42 @@
                 ? App.fdWorkStatusText(fdWork)
                 : (toggle.checked ? "开启" : "关闭"))
             : "当前不可用";
+        if (reconnect) {
+            var recoverable = supported && fdWork.enabled === true
+                && (fdWork.session_state === "starting"
+                    || fdWork.session_state === "login_required"
+                    || fdWork.session_state === "error");
+            reconnect.hidden = !recoverable;
+            reconnect.disabled = !recoverable || settingsToggleGenericBusy();
+            reconnect.textContent = fdWork.session_state === "error"
+                ? "重新连接" : "登录 FD Work";
+        }
         if (typeof App.updateFDWorkEntryButton === "function") {
             App.updateFDWorkEntryButton();
         }
     }
     App.renderFDWorkToggle = renderFDWorkToggle;
+
+    function reconnectFDWork() {
+        if (!App.bridge || typeof App.bridge.showFDWorkLogin !== "function") {
+            return Promise.resolve(false);
+        }
+        return App.bridge.showFDWorkLogin().then(function (result) {
+            if (result && result.status && App.receiveFDWorkStatus) {
+                App.receiveFDWorkStatus(result.status);
+            }
+            if (!result || result.ok !== true) {
+                showSettingsError(result && result.message || "打开 FD Work 失败");
+                return false;
+            }
+            App.clearSettingsError();
+            return true;
+        }).catch(function () {
+            showSettingsError("打开 FD Work 失败");
+            return false;
+        });
+    }
+    App.reconnectFDWork = reconnectFDWork;
 
     function renderSettingsStatus(status) {
         if (!status) return;

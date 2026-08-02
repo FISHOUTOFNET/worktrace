@@ -58,6 +58,7 @@ def _fd_status(enabled: bool) -> dict[str, object]:
         "ready": False,
         "login_required": False,
         "error_code": None,
+        "navigation_generation": 0,
     }
 
 
