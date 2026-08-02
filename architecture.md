@@ -23,6 +23,10 @@ framework. Production code must not add a global container, module-level runtime
 locator, `get_runtime()`/`set_runtime()`, string service lookup or dynamic
 registry.
 
+`PostPrivacyStartupCoordinator` is the single post-consent startup entry for the
+Collector and optional FD Work runtime. Before authoritative consent, enabling
+the plugin persists preference only and creates or navigates no helper window.
+
 Bridge code performs transport validation, stable error translation and explicit
 service calls only. It does not own business invariants, transactions, runtime
 state or database facts.
@@ -215,6 +219,12 @@ and remains owned by installation metadata.
 
 Collector does not depend on backup service to learn maintenance state. Backup
 service depends on the maintenance coordinator, never the reverse.
+
+Optional plugin state is outside the main database and backup manifest. FD Work
+project bindings use a lazily-created, independently versioned SQLite sidecar at
+`plugins/fd_work/state.db`, injected by the composition root. Replacement and
+clear-local-data operations invalidate or remove these bindings fail-closed;
+ordinary backup export never includes them.
 
 ## Frontend and page boundaries
 

@@ -132,12 +132,12 @@ bounded reconciliation.
 - Statistics/Export: this-month default with all-time/custom options, optional
   project scope, automatic latest-request acceptance, and display-safe CSV bound
   to the accepted export ticket.
-- Project Rules: searchable/sortable summaries, direct actions and Drawers. With
-  FD Work enabled, create/rename requires a recent exact case selection.
-- Settings/Privacy: four user-facing categories. General contains authoritative
-  HKCU launch-at-login state and the existing clipboard control; Privacy, Data
-  and Backup, and Advanced retain their existing responsibilities. Secret inputs
-  remain local and are cleared after use.
+- Project Rules: searchable/sortable summaries, direct actions and Drawers. FD Work
+  selection is optional: selected cases create a durable plugin binding; free-text
+  names remain ordinary local projects.
+- Settings/Privacy: four categories. General owns authoritative HKCU launch state
+  and clipboard control; Privacy, Data and Backup, and Advanced retain their
+  responsibilities. Secret inputs remain local and are cleared after use.
 
 Timeline edits on completed sessions allow project, description and duration
 changes. New description edits are limited to 200 characters while the durable
@@ -148,18 +148,18 @@ null clears an override, and true plus an integer sets the normalized override.
 Rule batches are atomic, manual assignments are preserved, and statistics/export
 use persisted report facts rather than frontend time.
 
-FD Work separates pure authoritative draft construction from one integration
-shared by Settings, Timeline and Project Rules. It owns the setting, structured
-status, in-memory selection proofs and one generation-scoped auxiliary window.
-Startup opens the business URL hidden; valid sessions stay hidden, login redirects
-show the native page, and successful login hides it unless a fill is pending.
-Search/fill share the window; WorkTrace never reads or exports browser credentials.
+FD Work separates authoritative draft construction from one integration shared by
+Settings, Timeline and Project Rules. It owns settings, status, selection proofs,
+a versioned plugin sidecar for explicit project bindings and one generation-scoped
+auxiliary window. The lazily created sidecar is outside the main schema and backup;
+only a valid durable binding authorizes Timeline fill. Startup waits for privacy
+consent; authorized startup may open the business URL hidden. Valid sessions stay
+hidden, login redirects show the native page, and successful login hides it unless
+a fill is pending. User close destroys the helper; the next operation recreates it
+through the same session path. WorkTrace never reads or exports browser credentials.
 
 ## Validation
-Affected validation: `python scripts/run_affected_tests.py`. Full validation:
-- `python -m pytest`
-- `node --test tests/webview/*.test.js`
-- Windows executable and installer smoke in Standard CI
+Affected validation: `python scripts/run_affected_tests.py`; full validation uses `python -m pytest`, `node --test tests/webview/*.test.js`, and Windows executable/installer smoke in Standard CI.
 
 Standard CI validates one exact revision. Python business-test diagnostics are
 artifact-only (`diagnostics.json` and JUnit XML); logs do not replay failures,
