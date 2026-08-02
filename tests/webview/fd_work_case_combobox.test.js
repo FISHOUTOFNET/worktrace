@@ -161,3 +161,57 @@ test("keyboard selection works and login readiness retries the current query onc
   await Promise.resolve();
   assert.equal(searches, afterReady);
 });
+
+test("focus and click on empty input request native recent cases", async () => {
+  const { App, element } = harness();
+  const calls = [];
+  App.bridge.searchFDWorkCases = (query) => {
+    calls.push(query);
+    return Promise.resolve({ ok: true, options: [] });
+  };
+  const input = element("rules-panel-project-name");
+  input.value = "";
+
+  input.fire("focus");
+  await Promise.resolve(); await Promise.resolve();
+  input.fire("click");
+  await Promise.resolve(); await Promise.resolve();
+
+  assert.deepEqual(calls, ["", ""]);
+});
+
+test("one character searches and an ordinary project remains saveable", async () => {
+  const { App, element } = harness();
+  const calls = [];
+  App.bridge.searchFDWorkCases = (query) => {
+    calls.push(query);
+    return Promise.resolve({ ok: true, options: [] });
+  };
+  const input = element("rules-panel-project-name");
+  const save = element("rules-panel-save-project");
+  input.value = "A";
+  input.fire("input");
+  await new Promise((resolve) => setTimeout(resolve, 330));
+  await Promise.resolve(); await Promise.resolve();
+
+  assert.deepEqual(calls, ["A"]);
+  assert.equal(save.disabled, false);
+  assert.doesNotMatch(element("rules-panel-fd-work-status").textContent, /至少输入 2 个字符/);
+});
+
+test("existing binding survives description-only edit and manual rename warns clearing", () => {
+  const { App, element } = harness();
+  App.lastProjectRulesData = { projects: [{
+    id: 7, name: "CASE A", description: "old", language: "中文", fd_work_bound: true,
+  }] };
+  App.openRulesPanel("project", { project: App.lastProjectRulesData.projects[0] });
+  assert.match(element("rules-panel-fd-work-status").textContent, /已关联 FD Work/);
+
+  element("rules-panel-project-description").value = "new";
+  assert.match(element("rules-panel-fd-work-status").textContent, /已关联 FD Work/);
+
+  const input = element("rules-panel-project-name");
+  input.value = "Manual";
+  input.fire("input");
+  assert.match(element("rules-panel-fd-work-status").textContent, /解除关联/);
+});

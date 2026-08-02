@@ -34,6 +34,18 @@ def test_fd_work_does_not_enter_projection_statistics_export_or_collector_hot_pa
             assert "integrations.fd_work" not in path.read_text(encoding="utf-8")
 
 
+def test_timeline_eligibility_uses_binding_only_and_never_case_search():
+    draft_builder = (
+        ROOT / "worktrace" / "integrations" / "fd_work" / "draft_builder.py"
+    ).read_text(encoding="utf-8")
+    timeline = (
+        ROOT / "worktrace" / "webview_ui" / "js" / "timeline.js"
+    ).read_text(encoding="utf-8")
+    assert "require_project_binding" in draft_builder
+    assert "search_cases" not in draft_builder
+    assert "searchFDWorkCases" not in timeline
+
+
 def test_persistent_webview_profile_stays_outside_backup_and_cookie_apis():
     webview_main = (ROOT / "worktrace" / "webview_main.py").read_text(
         encoding="utf-8"
@@ -49,5 +61,7 @@ def test_persistent_webview_profile_stays_outside_backup_and_cookie_apis():
     assert '"webview-profile"' in webview_main
     assert "private_mode=False" in webview_main
     assert "webview-profile" not in backup
+    assert "plugins/fd_work" not in backup.replace("\\\\", "/")
+    assert "state.db" not in backup
     assert "get_cookies(" not in webview_main
     assert "get_cookies(" not in fd_work_sources

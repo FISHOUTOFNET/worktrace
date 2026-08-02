@@ -7,6 +7,7 @@ import pytest
 from tests.support.application import build_test_bridge
 from worktrace.webview_ui.bridge import WebViewBridge
 from worktrace.integrations.fd_work.integration_service import FDWorkIntegrationService
+from worktrace.webview_ui.bridge_fd_work import fd_work_message
 
 
 pytestmark = [pytest.mark.unit, pytest.mark.contract, pytest.mark.parallel_safe]
@@ -172,6 +173,27 @@ def test_independent_fd_work_bridge_exposes_status_search_and_existing_login_win
     assert capability.search_calls == [("CA", "request-1")]
     assert login["ok"] is True
     assert capability.prepare_calls == [True]
+
+
+def test_fd_work_bridge_allows_recent_and_one_character_case_queries():
+    capability = _FDWorkCapability()
+    bridge = build_test_bridge(fd_work=capability)
+
+    recent = bridge.search_fd_work_cases("", "recent")
+    one = bridge.search_fd_work_cases("A", "one")
+
+    assert recent["ok"] is True
+    assert one["ok"] is True
+    assert capability.search_calls == [("", "recent"), ("A", "one")]
+
+
+def test_persistent_binding_and_removed_remote_case_have_actionable_messages():
+    assert fd_work_message("project_not_fd_work_bound") == (
+        "当前项目未关联 FD Work 案件，请在“项目规则”中编辑项目并从 FD Work 案件列表中选择。"
+    )
+    assert fd_work_message("case_not_found") == (
+        "已关联的 FD Work 案件当前不可用，请在项目规则中重新关联。"
+    )
 
 
 @pytest.mark.parametrize("token", ["", "x" * 257, 7])

@@ -28,6 +28,13 @@ DATE = "2026-07-01"
 pytestmark = [pytest.mark.db, pytest.mark.integration]
 
 
+class _AllowFDWorkBinding:
+    @staticmethod
+    def require_project_binding(project_id: int, project_name: str) -> None:
+        assert project_id > 0
+        assert project_name
+
+
 def _closed(start: str, end: str, *, project_id: int | None = None, status: str = "normal", app: str = "App") -> int:
     activity_id = activity_service.create_activity(
         app, app.lower() + ".exe", app,
@@ -162,7 +169,7 @@ def test_explicit_duration_intent_sets_normalized_override_across_report_consume
     assert sum(row["duration_seconds"] for row in details["summary_rows"]) == 4_442
     assert build_statistics_projection(snapshot).total_duration_seconds == 4_320
     assert build_statistics_csv_rows(DATE, DATE)[0]["duration_seconds"] == 4_320
-    draft = FDWorkEntryDraftBuilder().build_draft(
+    draft = FDWorkEntryDraftBuilder(binding_verifier=_AllowFDWorkBinding()).build_draft(
         FDWorkEntryRequest(
             report_date=DATE,
             projection_instance_key=session["projection_instance_key"],
@@ -431,7 +438,7 @@ def test_observed_activity_details_stay_raw_while_report_consumers_use_override(
     analytics = build_statistics_projection(snapshot)
     assert analytics.total_duration_seconds == 720
     assert build_statistics_csv_rows(DATE, DATE)[0]["duration_seconds"] == 720
-    draft = FDWorkEntryDraftBuilder().build_draft(
+    draft = FDWorkEntryDraftBuilder(binding_verifier=_AllowFDWorkBinding()).build_draft(
         FDWorkEntryRequest(
             report_date=DATE,
             projection_instance_key=session["projection_instance_key"],

@@ -639,7 +639,7 @@ def test_unready_business_page_gets_one_hidden_generation_safe_login_fallback():
     assert controller.get_status()["error_code"] == "page_contract_changed"
 
 
-def test_login_page_is_shown_and_close_only_hides_while_login_remains_required():
+def test_login_page_is_shown_and_user_close_allows_native_destroy():
     queued = []
     controller, webview, _adapter = _controller(queued=queued)
     controller.prepare_session(show_login_if_required=True)
@@ -652,10 +652,87 @@ def test_login_page_is_shown_and_close_only_hides_while_login_remains_required()
     assert webview.window.shown == 1
     assert webview.window.focused == 1
 
-    assert webview.window.events.closing.fire() == [False]
-    queued.pop(0)()
-    assert webview.window.hidden == 1
-    assert controller.get_status()["session_state"] == "login_required"
+    assert webview.window.events.closing.fire() == [True]
+    assert queued == []
+    assert webview.window.hidden == 0
+    webview.window.events.closed.fire()
+    assert controller.get_status()["session_state"] == "idle"
+
+
+def test_user_close_calls_no_window_api_and_prepare_recreates_one_window():
+    controller, webview, _adapter = _controller()
+    controller.prepare_session()
+    first = webview.window
+    before = (first.shown, first.hidden, first.restored, first.focused, first.destroyed)
+
+    assert first.events.closing.fire() == [True]
+    after = (first.shown, first.hidden, first.restored, first.focused, first.destroyed)
+    assert after == before
+    first.events.closed.fire()
+    assert controller.prepare_session()["ok"] is True
+    assert len(webview.calls) == 2
+    assert webview.window is not first
+
+
+def test_stale_closed_callback_cannot_clear_recreated_window():
+    controller, webview, _adapter = _controller()
+    controller.prepare_session()
+    first = webview.window
+    first.events.closing.fire()
+    first.events.closed.fire()
+    controller.prepare_session()
+    second = webview.window
+
+    first.events.closed.fire()
+
+    assert controller.get_status()["session_state"] == "starting"
+    assert len(webview.calls) == 2
+    assert webview.window is second
+
+
+def test_fifty_user_close_recreate_cycles_keep_one_handler_per_window():
+    controller, webview, _adapter = _controller()
+
+    for _index in range(50):
+        assert controller.prepare_session()["ok"] is True
+        window = webview.window
+        assert len(window.events.closing.handlers) == 1
+        assert len(window.events.closed.handlers) == 1
+        assert window.events.closing.fire() == [True]
+        window.events.closed.fire()
+        assert controller.get_status()["session_state"] == "idle"
+
+    assert len(webview.calls) == 50
+
+
+def test_user_close_invalidates_late_search_callback_without_waiting_for_it():
+    started = threading.Event()
+    release = threading.Event()
+
+    class BlockingAdapter(_PageAdapter):
+        def search_cases(self, window, query):
+            started.set()
+            assert release.wait(timeout=2)
+            return {"ok": True, "labels": ["STALE"]}
+
+    controller, webview, _adapter = _controller(adapter=BlockingAdapter())
+    controller.prepare_session()
+    webview.window.events.loaded.fire()
+    outcome = {}
+    worker = threading.Thread(
+        target=lambda: outcome.setdefault("result", controller.search_cases("A"))
+    )
+    worker.start()
+    assert started.wait(timeout=2)
+
+    assert webview.window.events.closing.fire() == [True]
+    webview.window.events.closed.fire()
+    release.set()
+    worker.join(timeout=2)
+
+    assert not worker.is_alive()
+    assert outcome["result"] == {"ok": False, "error": "lookup_superseded"}
+    assert controller.get_status()["session_state"] == "idle"
 
 
 def test_login_success_without_pending_fill_hides_same_window():
@@ -830,7 +907,7 @@ def test_search_and_fill_share_one_operation_and_fill_invalidates_search_result(
     release_search.set()
     thread.join(timeout=2)
     assert not thread.is_alive()
-    assert outcome["result"] == {"ok": False, "error": "fd_work_busy"}
+    assert outcome["result"] == {"ok": False, "error": "lookup_superseded"}
 
     while queued:
         queued.pop(0)()

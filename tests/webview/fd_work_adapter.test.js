@@ -65,6 +65,133 @@ function harness() {
   return { context, fields, Input, Textarea, adapter: context.window.WorkTraceFDWorkAdapter };
 }
 
+function lookupHarness(initialLabels = ["RECENT A", "RECENT B"]) {
+  const observers = [];
+  function visibleNode(text, popup) {
+    return {
+      textContent: text,
+      innerText: text,
+      _popup: popup,
+      getAttribute(name) { return name === "title" ? text : null; },
+      getClientRects() { return [{}]; },
+    };
+  }
+  const popup = {
+    labels: initialLabels.slice(), empty: false, loading: false,
+    getAttribute(name) { return name === "role" ? "listbox" : null; },
+    getClientRects() { return [{}]; },
+    contains(target) { return !!target && target._popup === popup; },
+    querySelectorAll(selector) {
+      if (selector === "[role='option']") {
+        return this.labels.map((label) => visibleNode(label, popup));
+      }
+      if (selector === "div,span,p") {
+        return this.empty ? [visibleNode("暂无数据", popup)] : [];
+      }
+      if (selector.includes("aria-busy")) {
+        return this.loading ? [visibleNode("loading", popup)] : [];
+      }
+      return [];
+    },
+  };
+  class Input {
+    constructor() { this._value = ""; this.onInput = null; }
+    get value() { return this._value; }
+    set value(value) { this._value = String(value); }
+    getAttribute(name) { return name === "aria-controls" ? "case-list" : null; }
+    getClientRects() { return [{}]; }
+    focus() {}
+    click() {}
+    blur() {}
+    dispatchEvent(event) {
+      if (event.type === "input" && this._value && this.onInput) this.onInput(this._value);
+    }
+  }
+  class Textarea extends Input {}
+  const input = new Input();
+  function emit(type = "childList", target = popup) {
+    observers.filter((observer) => observer.active).forEach((observer) => {
+      observer.callback([{ type, target }]);
+    });
+  }
+  function setResults(labels, options = {}) {
+    popup.labels = labels.slice();
+    popup.empty = options.empty === true;
+    popup.loading = options.loading === true;
+    const target = typeTarget(options.mutationType);
+    emit(options.mutationType || "childList", target);
+  }
+  function typeTarget(type) {
+    return type === "characterData" && popup.labels.length
+      ? visibleNode(popup.labels[0], popup) : popup;
+  }
+  const document = {
+    documentElement: {},
+    querySelector(selector) { return selector === "#case" ? input : null; },
+    querySelectorAll() { return []; },
+    getElementById(id) { return id === "case-list" ? popup : null; },
+  };
+  const context = {
+    Promise, Object, String, Array,
+    Event: class Event { constructor(type) { this.type = type; } },
+    KeyboardEvent: class KeyboardEvent { constructor(type) { this.type = type; } },
+    HTMLInputElement: Input,
+    HTMLTextAreaElement: Textarea,
+    MutationObserver: class {
+      constructor(callback) { this.callback = callback; this.active = true; observers.push(this); }
+      observe() {}
+      disconnect() { this.active = false; }
+    },
+    clearTimeout, setTimeout, navigator: {}, document,
+    window: {
+      location: { href: "https://work.fangdalaw.com/Works/WorkHourList?picker=day" },
+      getComputedStyle() { return { display: "block", visibility: "visible" }; },
+      close() {},
+    },
+  };
+  vm.createContext(context);
+  vm.runInContext(source, context, { filename: "fd_work_adapter.js" });
+  return {
+    adapter: context.window.WorkTraceFDWorkAdapter,
+    input, popup, setResults,
+    contract: {
+      version: 3,
+      field: { selector: "#case" },
+      empty_text: "暂无数据",
+      max_options: 20,
+      max_label_length: 100,
+    },
+  };
+}
+
+test("adapter contract is version 3 and observes text-only lookup changes", () => {
+  const { adapter } = harness();
+  assert.equal(adapter.version, 3);
+  const body = source.slice(source.indexOf("function waitForLookupResult"), source.indexOf("async function fillEntry"));
+  assert.match(body, /characterData\s*:\s*true/);
+  assert.match(body, /childList\s*:\s*true/);
+  assert.match(body, /subtree\s*:\s*true/);
+  assert.match(body, /attributes\s*:\s*true/);
+});
+
+test("keyword search snapshots old options before observer and requires post-input evidence", () => {
+  const body = source.slice(source.indexOf("function waitForLookupResult"), source.indexOf("async function fillEntry"));
+  assert.match(body, /beforeSignature/);
+  assert.match(body, /beforeCount/);
+  assert.match(body, /beforeEmpty/);
+  assert.match(body, /lookupGeneration/);
+  assert.match(body, /lookup_superseded/);
+  assert.ok(body.indexOf("new MutationObserver") < body.indexOf("setSearchValue(input, query)"));
+  assert.match(body, /await delay\((?:150|180|200|220|250)\)/);
+});
+
+test("empty lookup opens native recent cases without writing query text", () => {
+  const body = source.slice(source.indexOf("function waitForLookupResult"), source.indexOf("async function fillEntry"));
+  assert.match(body, /query === ""/);
+  assert.match(body, /input\.click\(\)/);
+  assert.match(body, /recent/);
+});
+
 test("case matching is unique exact matching after edge Unicode whitespace only", () => {
   const { adapter } = harness();
   assert.deepEqual(
@@ -163,11 +290,53 @@ test("case search does not click an option or invoke native save actions", () =>
 });
 
 test("case search confirms the empty result remains stable", () => {
-  const body = source.slice(
-    source.indexOf("async function searchCases"),
-    source.indexOf("async function fillEntry")
+  const body = source.slice(source.indexOf("function waitForLookupResult"), source.indexOf("async function fillEntry"));
+  assert.match(body, /stableEmpty/);
+  assert.match(body, /await delay\((?:150|180|200|220|250)\)/);
+});
+
+test("native recent lookup preserves the popup order", async () => {
+  const h = lookupHarness(["RECENT B", "RECENT A"]);
+  const found = await h.adapter.searchCases("", h.contract);
+  assert.equal(found.ok, true, JSON.stringify(found));
+  assert.deepEqual(Array.from(found.labels), ["RECENT B", "RECENT A"]);
+});
+
+test("keyword lookup cannot immediately return the two pre-focus recent options", async () => {
+  const h = lookupHarness(["RECENT A", "RECENT B"]);
+  h.input.onInput = (query) => h.setResults(
+    [`${query} RESULT`], { mutationType: "characterData" }
   );
-  assert.match(body, /if \(state\.empty\) \{[\s\S]*await delay\(120\)/);
-  assert.match(body, /lateOptions\.length/);
-  assert.match(body, /if \(!stableEmpty\) return result\(false, "page_contract_changed"\)/);
+  const found = await h.adapter.searchCases("ALPHA", h.contract);
+  assert.equal(found.ok, true, JSON.stringify(found));
+  assert.deepEqual(Array.from(found.labels), ["ALPHA RESULT"]);
+});
+
+test("loading cycle and stable empty result are accepted only after mutation", async () => {
+  const loading = lookupHarness(["RECENT A", "RECENT B"]);
+  loading.input.onInput = () => {
+    loading.setResults([], { loading: true, mutationType: "attributes" });
+    setTimeout(() => loading.setResults(["LOADED"], { mutationType: "childList" }), 10);
+  };
+  const loaded = await loading.adapter.searchCases("L", loading.contract);
+  assert.deepEqual(Array.from(loaded.labels), ["LOADED"]);
+
+  const empty = lookupHarness(["RECENT A", "RECENT B"]);
+  empty.input.onInput = () => empty.setResults([], { empty: true, mutationType: "childList" });
+  const none = await empty.adapter.searchCases("NONE", empty.contract);
+  assert.equal(none.ok, true, JSON.stringify(none));
+  assert.deepEqual(Array.from(none.labels), []);
+});
+
+test("late lookup A is superseded by lookup B without clearing B", async () => {
+  const h = lookupHarness(["RECENT A", "RECENT B"]);
+  h.input.onInput = (query) => {
+    if (query === "B") h.setResults(["B RESULT"], { mutationType: "characterData" });
+  };
+  const first = h.adapter.searchCases("A", h.contract);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  const second = h.adapter.searchCases("B", h.contract);
+  const [a, b] = await Promise.all([first, second]);
+  assert.equal(a.error, "lookup_superseded");
+  assert.deepEqual(Array.from(b.labels), ["B RESULT"]);
 });

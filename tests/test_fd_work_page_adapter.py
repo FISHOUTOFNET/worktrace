@@ -80,7 +80,7 @@ def test_payload_is_json_serialized_not_interpolated_into_adapter_source():
 def test_adapter_owns_business_url_hosts_selectors_and_asset_version():
     adapter = FDWorkPageAdapter()
     assert adapter.business_url.startswith("https://work.fangdalaw.com/")
-    assert adapter.adapter_version == 2
+    assert adapter.adapter_version == 3
     assert set(adapter.field_contract) == {
         "case_number",
         "work_date",
@@ -181,6 +181,13 @@ def test_search_script_serializes_query_and_calls_adapter_search_contract():
     assert 'CASE-"quoted"' not in script
     assert '"max_options":20' in script
     assert f'"max_label_length":{FD_WORK_CASE_LABEL_MAX_LENGTH}' in script
+    assert '"version":3' in script
+
+
+def test_search_script_accepts_empty_recent_query_and_one_character_query():
+    adapter = FDWorkPageAdapter()
+    assert "searchCases" in adapter.build_search_script("")
+    assert json.dumps("A") in adapter.build_search_script("A")
 
 
 def test_search_cases_validates_and_normalizes_the_callback_shape():

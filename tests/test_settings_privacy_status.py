@@ -53,7 +53,7 @@ def _fd_status(enabled: bool) -> dict[str, object]:
     return {
         "supported": True,
         "enabled": enabled,
-        "session_state": "idle" if enabled else "disabled",
+        "session_state": "deferred_by_privacy" if enabled else "disabled",
         "operation": "none",
         "ready": False,
         "login_required": False,

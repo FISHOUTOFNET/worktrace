@@ -64,22 +64,38 @@ def _request(**overrides):
     return FDWorkEntryRequest(**values)
 
 
-def _builder(projection):
+class _BindingVerifier:
+    def __init__(self, bound=True):
+        self.bound = bound
+        self.calls = []
+
+    def require_project_binding(self, project_id, project_name):
+        self.calls.append((project_id, project_name))
+        if not self.bound:
+            raise FDWorkEntryError("project_not_fd_work_bound")
+
+
+def _builder(projection, *, bound=True):
     calls = []
 
     def read(report_date):
         calls.append(report_date)
         return projection
 
-    return FDWorkEntryDraftBuilder(projection_reader=read), calls
+    verifier = _BindingVerifier(bound=bound)
+    return FDWorkEntryDraftBuilder(
+        projection_reader=read,
+        binding_verifier=verifier,
+    ), calls, verifier
 
 
 def test_authoritative_projection_builds_only_the_four_field_draft():
-    builder, calls = _builder(_projection(_entry()))
+    builder, calls, verifier = _builder(_projection(_entry()))
 
     draft = builder.build_draft(_request())
 
     assert calls == [DATE]
+    assert verifier.calls == [(17, "MATTER-2026-001")]
     assert draft == FDWorkEntryDraft(
         work_date=DATE,
         case_number="MATTER-2026-001",
@@ -105,7 +121,7 @@ def test_projection_identity_or_revision_change_is_rejected(
     request_overrides,
     entry_overrides,
 ):
-    builder, _calls = _builder(_projection(_entry(**entry_overrides)))
+    builder, _calls, _verifier = _builder(_projection(_entry(**entry_overrides)))
 
     with pytest.raises(FDWorkEntryError) as raised:
         builder.build_draft(_request(**request_overrides))
@@ -114,7 +130,7 @@ def test_projection_identity_or_revision_change_is_rejected(
 
 
 def test_convenience_build_uses_identity_only_and_rebuilds_authoritatively():
-    builder, calls = _builder(_projection(_entry()))
+    builder, calls, _verifier = _builder(_projection(_entry()))
 
     draft = builder.build(DATE, KEY, REVISION)
 
@@ -143,7 +159,7 @@ def test_convenience_build_uses_identity_only_and_rebuilds_authoritatively():
     ],
 )
 def test_invalid_or_non_user_session_fails_closed(overrides, code):
-    builder, _calls = _builder(_projection(_entry(**overrides)))
+    builder, _calls, _verifier = _builder(_projection(_entry(**overrides)))
 
     with pytest.raises(FDWorkEntryError) as raised:
         builder.build_draft(_request())
@@ -152,7 +168,7 @@ def test_invalid_or_non_user_session_fails_closed(overrides, code):
 
 
 def test_adjusted_duration_wins_over_actual_duration():
-    builder, _calls = _builder(
+    builder, _calls, _verifier = _builder(
         _projection(
             _entry(duration_seconds=3_600, adjusted_duration_seconds=5_040)
         )
@@ -161,7 +177,7 @@ def test_adjusted_duration_wins_over_actual_duration():
 
 
 def test_actual_duration_is_used_without_an_adjustment():
-    builder, _calls = _builder(
+    builder, _calls, _verifier = _builder(
         _projection(_entry(duration_seconds=5_040, adjusted_duration_seconds=None))
     )
     assert builder.build_draft(_request()).duration_hours == "1.4"
@@ -183,17 +199,27 @@ def test_duration_conversion_matches_timeline_one_decimal_semantics(seconds, exp
 
 
 def test_duration_that_rounds_to_zero_is_rejected_at_remote_boundary():
-    builder, _calls = _builder(_projection(_entry(duration_seconds=179)))
+    builder, _calls, _verifier = _builder(_projection(_entry(duration_seconds=179)))
     with pytest.raises(FDWorkEntryError) as raised:
         builder.build_draft(_request())
     assert raised.value.code == "invalid_duration"
 
 
 def test_narrative_only_strips_edge_whitespace_without_rewriting_body():
-    builder, _calls = _builder(
+    builder, _calls, _verifier = _builder(
         _projection(_entry(session_note=" \nLine one.\n\n  Line two with  spaces.\t "))
     )
     assert (
         builder.build_draft(_request()).narrative
         == "Line one.\n\n  Line two with  spaces."
     )
+
+
+def test_unbound_project_is_rejected_without_searching_remote_cases():
+    builder, _calls, verifier = _builder(_projection(_entry()), bound=False)
+
+    with pytest.raises(FDWorkEntryError) as raised:
+        builder.build_draft(_request())
+
+    assert raised.value.code == "project_not_fd_work_bound"
+    assert verifier.calls == [(17, "MATTER-2026-001")]

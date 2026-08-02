@@ -98,7 +98,7 @@ class _Controller:
             self._status_callback(dict(self.status))
 
 
-def _service(*, enabled=True, clock=None, token_factory=None, capacity=128):
+def _service(*, enabled=True, authorized=True, clock=None, token_factory=None, capacity=128):
     state = {"enabled": enabled}
     controller = _Controller()
     builder = _DraftBuilder()
@@ -111,7 +111,42 @@ def _service(*, enabled=True, clock=None, token_factory=None, capacity=128):
         token_factory=token_factory,
         selection_capacity=capacity,
     )
+    if authorized:
+        service.set_privacy_authorized(True)
     return service, controller, builder, state
+
+
+def test_privacy_gate_defers_all_window_and_entry_operations():
+    service, controller, builder, state = _service(enabled=True, authorized=False)
+
+    assert service.prepare_session()["error"] == "deferred_by_privacy"
+    assert service.prepare_window_before_start()["error"] == "deferred_by_privacy"
+    assert service.search_cases("A", "request")["error"] == "deferred_by_privacy"
+    with pytest.raises(FDWorkEntryError) as raised:
+        service.open_entry("2026-08-01", "base:1", "revision-1")
+    assert raised.value.code == "deferred_by_privacy"
+    assert controller.prepare_calls == []
+    assert controller.startup_prepare_calls == []
+    assert controller.search_calls == []
+    assert builder.calls == []
+
+    status = service.set_enabled(True)
+    assert state["enabled"] is True
+    assert status["session_state"] == "deferred_by_privacy"
+    assert controller.prepare_calls == []
+
+
+def test_authorized_empty_and_one_character_queries_reach_controller():
+    service, controller, _builder, _state = _service(enabled=True)
+    service.set_privacy_authorized(True)
+    controller.search_cases = lambda query: {
+        "ok": True,
+        "labels": ["RECENT"] if query == "" else [query],
+        "navigation_generation": controller.generation,
+    }
+
+    assert service.search_cases("", "recent")["ok"] is True
+    assert service.search_cases("A", "one")["ok"] is True
 
 
 def test_disabled_capability_has_structured_status_and_never_prepares_window():
@@ -190,7 +225,7 @@ def test_search_returns_opaque_selection_tokens_bound_to_label_and_generation():
 
 def test_selection_registry_expires_discards_and_enforces_capacity():
     now = [10.0]
-    token_values = iter(["token-1", "token-2", "token-3"])
+    token_values = iter(["token-1", "token-2", "token-3", "token-4"])
     service, controller, _builder, _state = _service(
         clock=lambda: now[0],
         token_factory=lambda: next(token_values),
@@ -209,6 +244,9 @@ def test_selection_registry_expires_discards_and_enforces_capacity():
     with pytest.raises(FDWorkEntryError) as evicted:
         service.validate_case_selection("token-1", "AA")
     assert evicted.value.code == "case_selection_expired"
+    with pytest.raises(FDWorkEntryError) as superseded:
+        service.validate_case_selection("token-2", "BB")
+    assert superseded.value.code == "case_selection_expired"
     assert service.validate_case_selection("token-3", "CC") == "CC"
 
     service.discard_case_selection("token-3")
@@ -216,9 +254,10 @@ def test_selection_registry_expires_discards_and_enforces_capacity():
         service.validate_case_selection("token-3", "CC")
     assert discarded.value.code == "case_selection_expired"
 
+    service.search_cases("DD", "4")
     now[0] += 301
     with pytest.raises(FDWorkEntryError) as timed_out:
-        service.validate_case_selection("token-2", "BB")
+        service.validate_case_selection("token-4", "DD")
     assert timed_out.value.code == "case_selection_expired"
 
 

@@ -308,9 +308,23 @@ def _stub_webview_main_environment(monkeypatch, tmp_path):
     gate_calls = {"count": 0}
 
     class _FakeAppControl:
+        start_result = {"ok": True}
+
         def start_collection_after_privacy_gate(self):
             gate_calls["count"] += 1
-            return {"ok": True}
+            return dict(self.start_result)
+
+        def start_if_authorized(self, *, pre_start=False):
+            result = self.start_collection_after_privacy_gate()
+            if (
+                result.get("ok") is True
+                and fake_services.fd_work.get_settings_status().get("enabled") is True
+            ):
+                if pre_start:
+                    fake_services.fd_work.prepare_window_before_start(True)
+                else:
+                    fake_services.fd_work.prepare_session(True)
+            return result
 
     app_control = _FakeAppControl()
     class _FakeSettings:
@@ -519,6 +533,28 @@ def test_disabled_fd_work_does_not_prepare_auxiliary_window_before_start(
     assert webview_main.main() == 0
     assert mocks["fd_work"].startup_prepare_calls == []
     assert mocks["fd_work_controller"].renderer_calls == ["edgechromium"]
+
+
+def test_unaccepted_privacy_creates_only_main_window_and_never_prepares_fd_work(
+    monkeypatch, tmp_path
+):
+    mocks = _stub_webview_main_environment(monkeypatch, tmp_path)
+    import worktrace.webview_main as webview_main
+
+    mocks["app_control"].start_result = {
+        "ok": False,
+        "error": "请先确认隐私说明",
+    }
+    mocks["settings"].notice_accepted = False
+    mocks["fd_work"].get_settings_status = lambda: {
+        "supported": True, "enabled": True, "session_state": "deferred_by_privacy",
+        "operation": "none", "ready": False, "login_required": False,
+        "error_code": None,
+    }
+
+    assert webview_main.main() == 0
+    assert mocks["fd_work"].startup_prepare_calls == []
+    assert mocks["fd_work"].prepare_calls == []
 
 
 def test_shipping_webview_forces_edgechromium_and_persistent_worktrace_profile(
