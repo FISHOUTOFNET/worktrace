@@ -239,6 +239,21 @@ def list_user_projects() -> list[dict]:
     ]
 
 
+def list_user_project_identities() -> list[dict]:
+    """Return active or archived user identities for external binding reconciliation."""
+
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, name, created_at, is_deleted, is_archived
+            FROM project
+            WHERE created_by = 'user'
+            ORDER BY id
+            """
+        ).fetchall()
+    return [row for row in dict_rows(rows) if not bool(row.get("is_deleted"))]
+
+
 def list_selectable_projects() -> list[dict]:
     with get_connection() as conn:
         rows = conn.execute(
@@ -437,6 +452,7 @@ __all__ = [
     "list_rule_target_projects",
     "list_selectable_projects",
     "list_user_projects",
+    "list_user_project_identities",
     "require_mutable_user_project",
     "set_excluded_project_enabled",
     "set_project_enabled",

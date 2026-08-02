@@ -412,10 +412,13 @@ class ProjectRulesBridgeMixin:
                 selection_token,
             )
             if result.get("ok") is True:
-                return {
+                response = {
                     "ok": True,
                     "project": _project_lifecycle_summary(result.get("project") or {}),
                 }
+                if isinstance(result.get("fd_work_binding"), dict):
+                    response["fd_work_binding"] = dict(result["fd_work_binding"])
+                return response
             return {
                 "ok": False,
                 "error": _project_write_message(result, _PROJECT_LIFECYCLE_CREATE_MESSAGES, "新增项目失败"),
@@ -450,10 +453,13 @@ class ProjectRulesBridgeMixin:
                 selection_token,
             )
             if result.get("ok") is True:
-                return {
+                response = {
                     "ok": True,
                     "project": _project_lifecycle_summary(result.get("project") or {}),
                 }
+                if isinstance(result.get("fd_work_binding"), dict):
+                    response["fd_work_binding"] = dict(result["fd_work_binding"])
+                return response
             return {
                 "ok": False,
                 "error": _project_write_message(result, _PROJECT_LIFECYCLE_UPDATE_MESSAGES, "保存项目失败"),

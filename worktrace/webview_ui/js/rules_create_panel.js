@@ -15,6 +15,7 @@
     App.rulesFDWorkSelectionToken = null;
     App.rulesFDWorkSelectedLabel = "";
     App.rulesFDWorkOriginalName = "";
+    App.rulesFDWorkOriginalBound = false;
     App.rulesFDWorkRequestToken = 0;
     App.rulesFDWorkSearchOptions = [];
     App.rulesFDWorkActiveOption = -1;
@@ -274,20 +275,14 @@
     }
     App.renderRulesPanelProjectContext = renderRulesPanelProjectContext;
 
-    function fdWorkCaseSelectionRequired() {
-        var status = App.fdWorkStatus || {};
-        if (status.enabled !== true) return false;
-        var input = document.getElementById("rules-panel-project-name");
-        var value = String(input && input.value || "").trim();
-        return !App.rulesPanelEditingProjectId || value !== App.rulesFDWorkOriginalName;
-    }
-
     function initFDWorkCaseEvents() {
         var input = document.getElementById("rules-panel-project-name");
         var listbox = document.getElementById("rules-panel-fd-work-options");
         var login = document.getElementById("rules-panel-fd-work-login");
         if (input && input.getAttribute("data-fd-work-bound") !== "1") {
             input.setAttribute("data-fd-work-bound", "1");
+            input.addEventListener("focus", handleFDWorkCaseFocus);
+            input.addEventListener("click", handleFDWorkCaseClick);
             input.addEventListener("input", handleFDWorkCaseInput);
             input.addEventListener("keydown", handleFDWorkCaseKeydown);
             input.addEventListener("blur", closeFDWorkCaseOptions);
@@ -323,6 +318,23 @@
         }
     }
 
+    function fdWorkDropdownClosed() {
+        var listbox = document.getElementById("rules-panel-fd-work-options");
+        return !listbox || listbox.hidden === true || App.rulesFDWorkSearchOptions.length === 0;
+    }
+
+    function requestRecentFDWorkCases() {
+        var input = document.getElementById("rules-panel-project-name");
+        var status = App.fdWorkStatus || {};
+        if (!input || String(input.value || "").trim() !== "") return;
+        if (status.enabled !== true || status.ready !== true || !fdWorkDropdownClosed()) return;
+        App.rulesFDWorkLastQuery = "";
+        searchFDWorkCases("", App.rulesPanelSessionToken);
+    }
+
+    function handleFDWorkCaseFocus() { requestRecentFDWorkCases(); }
+    function handleFDWorkCaseClick() { requestRecentFDWorkCases(); }
+
     function handleFDWorkCaseInput() {
         App.rulesFDWorkSelectionToken = null;
         App.rulesFDWorkSelectedLabel = "";
@@ -338,8 +350,17 @@
         }
         var query = String(this.value || "").trim();
         App.rulesFDWorkLastQuery = query;
-        if (query.length < App.FD_WORK_QUERY_MIN_LENGTH) {
-            showFDWorkCaseStatus("至少输入 2 个字符后搜索", false);
+        if (App.rulesFDWorkOriginalBound && query === App.rulesFDWorkOriginalName) {
+            showFDWorkCaseStatus("已关联 FD Work", false);
+        } else if (App.rulesFDWorkOriginalBound && query !== App.rulesFDWorkOriginalName) {
+            showFDWorkCaseStatus("手工修改名称将解除关联", false);
+        } else if (!query) {
+            showFDWorkCaseStatus("最近使用", false);
+        } else {
+            showFDWorkCaseStatus("普通项目，不可填入 FD Work", false);
+        }
+        if (query === "") {
+            searchFDWorkCases("", App.rulesPanelSessionToken);
             return;
         }
         if (query.length > App.FD_WORK_QUERY_MAX_LENGTH) {
@@ -364,7 +385,7 @@
         }
         var requestToken = ++App.rulesFDWorkRequestToken;
         var requestId = "rules-" + sessionToken + "-" + requestToken;
-        showFDWorkCaseStatus("正在搜索…", false);
+        showFDWorkCaseStatus("正在搜索……", false);
         App.bridge.searchFDWorkCases(query, requestId).then(function (result) {
             if (!isCurrentRulesPanelSession(sessionToken)
                 || requestToken !== App.rulesFDWorkRequestToken
@@ -383,7 +404,9 @@
             App.rulesFDWorkActiveOption = App.rulesFDWorkSearchOptions.length ? 0 : -1;
             renderFDWorkCaseOptions();
             showFDWorkCaseStatus(
-                App.rulesFDWorkSearchOptions.length ? "请选择一个 FD Work 案件" : "暂无结果",
+                App.rulesFDWorkSearchOptions.length
+                    ? (query === "" ? "最近使用" : "搜索结果")
+                    : "暂无结果",
                 false
             );
         }).catch(function () {
@@ -421,7 +444,7 @@
         App.rulesFDWorkSelectedLabel = item.label;
         App.rulesFDWorkLastQuery = item.label;
         closeFDWorkCaseOptions();
-        showFDWorkCaseStatus("已匹配 FD Work 案件", false);
+        showFDWorkCaseStatus("已关联 FD Work", false);
         refreshPanelWriteState();
     }
 
@@ -505,9 +528,7 @@
         if (enabled && status.ready === true && App.rulesFDWorkLoginRetryPending) {
             App.rulesFDWorkLoginRetryPending = false;
             var query = App.rulesFDWorkLastQuery;
-            if (query.length >= App.FD_WORK_QUERY_MIN_LENGTH) {
-                searchFDWorkCases(query, App.rulesPanelSessionToken);
-            }
+            searchFDWorkCases(query, App.rulesPanelSessionToken);
         }
         refreshPanelWriteState();
     }
@@ -573,10 +594,6 @@
             showPanelStatus("请输入项目名称", true);
             return;
         }
-        if (fdWorkCaseSelectionRequired() && !App.rulesFDWorkSelectionToken) {
-            showPanelStatus("请从 FD Work 案件列表中选择", true);
-            return;
-        }
         var description = descInput ? (descInput.value || "").trim() : "";
         // When editing an existing project, pass back the original language
         // verbatim instead of reading from the hidden select (which only
@@ -604,11 +621,16 @@
                 return null;
             }
             var project = (result && result.project) || {};
+            var binding = (result && result.fd_work_binding) || { bound: false };
+            var bindingWarning = String(binding.warning || "");
+            if (binding.warning && isCurrentRulesPanelSession(sessionToken)) {
+                showPanelStatus(bindingWarning, true);
+            }
             return App.loadProjectRules().then(function () {
                 if (!isCurrentRulesPanelSession(sessionToken)) return;
                 if (wasEditing) {
                     resetRulesTransientUi({ restoreFocus: true });
-                    if (App.showToast) App.showToast("项目已保存");
+                    if (App.showToast) App.showToast(bindingWarning || "项目已保存");
                     return;
                 }
                 App.rulesPanelLastCreatedProjectId = parsePositiveInt(project.id);
@@ -619,6 +641,7 @@
                     App.rulesPanelLastCreatedProjectId,
                     { isSuccess: true, project: project }
                 );
+                if (bindingWarning) showPanelStatus(bindingWarning, true);
             });
         }).catch(function () {
             if (isCurrentRulesPanelSession(sessionToken)) {
@@ -699,6 +722,12 @@
         setValue("rules-panel-project-description", project ? App.safeText(project.description, "") : "");
         resetFDWorkCaseSearch();
         App.rulesFDWorkOriginalName = project ? App.safeText(project.name, "") : "";
+        App.rulesFDWorkOriginalBound = !!(project && project.fd_work_bound === true);
+        if (project && App.rulesFDWorkOriginalBound) {
+            showFDWorkCaseStatus("已关联 FD Work", false);
+        } else if (project) {
+            showFDWorkCaseStatus("普通项目，不可填入 FD Work", false);
+        }
         // Preserve the original language when editing. The hidden select
         // only offers ``中文``; reading from it on save would overwrite
         // non-中文 projects. We store the original language and pass it
@@ -747,8 +776,9 @@
         setDisabled("rules-panel-save-rule", ruleBusy);
         setDisabled("rules-panel-project-name", projectBusy);
         var saveProject = document.getElementById("rules-panel-save-project");
-        if (saveProject && fdWorkCaseSelectionRequired()) {
-            saveProject.disabled = projectBusy || !App.rulesFDWorkSelectionToken;
+        if (saveProject) {
+            var nameInput = document.getElementById("rules-panel-project-name");
+            saveProject.disabled = projectBusy || !String(nameInput && nameInput.value || "").trim();
         }
         setDisabled("rules-panel-project-description", projectBusy);
         setDisabled("rules-panel-project-language", projectBusy);

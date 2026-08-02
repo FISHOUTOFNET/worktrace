@@ -32,8 +32,10 @@ class FDWorkEntryDraftBuilder:
         self,
         *,
         projection_reader: Callable[[str], Any] = get_day_projection,
+        binding_verifier: Any = None,
     ) -> None:
         self._projection_reader = projection_reader
+        self._binding_verifier = binding_verifier
 
     def build(
         self,
@@ -64,6 +66,10 @@ class FDWorkEntryDraftBuilder:
         case_number = str(entry.get("project_name") or "").strip()
         if not case_number:
             raise FDWorkEntryError("empty_project_name")
+        project_id = int(entry.get("project_id") or 0)
+        if project_id <= 0 or self._binding_verifier is None:
+            raise FDWorkEntryError("project_not_fd_work_bound")
+        self._binding_verifier.require_project_binding(project_id, case_number)
 
         narrative = str(entry.get("session_note") or "").strip()
         if not narrative:

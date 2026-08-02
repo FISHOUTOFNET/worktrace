@@ -87,6 +87,10 @@ class FDWorkCapability(Protocol):
     def search_cases(self, query, request_id) -> dict[str, Any]: ...
     def validate_case_selection(self, selection_token, expected_label) -> str: ...
     def discard_case_selection(self, selection_token) -> None: ...
+    def bind_project(self, project_id: int, project_name: str) -> None: ...
+    def clear_project_binding(self, project_id: int) -> None: ...
+    def list_bound_project_ids(self) -> set[int]: ...
+    def clear_all_bindings(self, *, delete_database: bool = False) -> None: ...
     def open_entry(
         self,
         report_date,
@@ -171,7 +175,13 @@ class SettingsApplicationService:
         return settings_api.recover_database_maintenance_for_webview()
 
     def clear_all_local_data_for_webview(self, confirm_text):
-        return settings_api.clear_all_local_data_for_webview(confirm_text)
+        result = settings_api.clear_all_local_data_for_webview(confirm_text)
+        if result.get("ok") is True:
+            try:
+                self._fd_work.clear_all_bindings(delete_database=True)
+            except Exception:
+                result["fd_work_binding_warning"] = "FD Work 关联清理失败，当前会话已停止使用旧关联"
+        return result
 
     def set_launch_at_login(self, enabled):
         if enabled is not True and enabled is not False:
@@ -245,6 +255,9 @@ class SettingsApplicationService:
 class BackupApplicationService:
     """Concrete backup capability delegating to settings_api backup functions."""
 
+    def __init__(self, fd_work: FDWorkCapability | None = None) -> None:
+        self._fd_work = fd_work
+
     def export_encrypted_backup_for_webview(self, output_path, passphrase, confirm_passphrase):
         return settings_api.export_encrypted_backup_for_webview(
             output_path, passphrase, confirm_passphrase
@@ -254,9 +267,15 @@ class BackupApplicationService:
         return settings_api.preview_encrypted_backup_manifest_for_webview(input_path)
 
     def import_encrypted_backup_for_webview(self, input_path, passphrase, confirm_text):
-        return settings_api.import_encrypted_backup_for_webview(
+        result = settings_api.import_encrypted_backup_for_webview(
             input_path, passphrase, confirm_text
         )
+        if result.get("ok") is True and self._fd_work is not None:
+            try:
+                self._fd_work.clear_all_bindings(delete_database=False)
+            except Exception:
+                result["fd_work_binding_warning"] = "数据库已替换，但 FD Work 关联清理失败，当前会话已停止使用旧关联"
+        return result
 
 
 class StatisticsApplicationService:
@@ -394,11 +413,24 @@ class RulesApplicationService:
         self._fd_work = fd_work
 
     def list_project_bindings(self):
-        return project_api.list_project_bindings()
+        projects = [dict(project) for project in project_api.list_project_bindings()]
+        try:
+            status = self._fd_work.get_settings_status()
+        except Exception:
+            status = {}
+        if status.get("enabled") is not True:
+            return projects
+        try:
+            bound_ids = self._fd_work.list_bound_project_ids()
+        except Exception:
+            bound_ids = set()
+        for project in projects:
+            project["fd_work_bound"] = int(project.get("id") or 0) in bound_ids
+        return projects
 
     def create_project_for_rules(self, name, description, language, selection_token=None):
         canonical_name = name
-        if self._fd_work.get_settings_status().get("enabled") is True:
+        if selection_token is not None:
             try:
                 canonical_name = self._fd_work.validate_case_selection(
                     selection_token, name
@@ -409,6 +441,13 @@ class RulesApplicationService:
             canonical_name, description, language
         )
         if result.get("ok") is True:
+            if selection_token is None:
+                result["fd_work_binding"] = {"bound": False}
+            else:
+                result["fd_work_binding"] = self._bind_saved_project(
+                    result,
+                    canonical_name,
+                )
             self._fd_work.discard_case_selection(selection_token)
         return result
 
@@ -418,7 +457,7 @@ class RulesApplicationService:
         canonical_name = name
         current = project_api.get_project(project_id)
         name_changed = bool(current) and str(current.get("name") or "") != str(name).strip()
-        if name_changed and self._fd_work.get_settings_status().get("enabled") is True:
+        if selection_token is not None:
             try:
                 canonical_name = self._fd_work.validate_case_selection(
                     selection_token, name
@@ -429,8 +468,49 @@ class RulesApplicationService:
             project_id, canonical_name, description, language
         )
         if result.get("ok") is True:
+            if selection_token is not None:
+                result["fd_work_binding"] = self._bind_saved_project(
+                    result,
+                    canonical_name,
+                )
+            elif name_changed:
+                result["fd_work_binding"] = self._clear_saved_project_binding(
+                    project_id
+                )
+            else:
+                try:
+                    bound = int(project_id) in self._fd_work.list_bound_project_ids()
+                except Exception:
+                    bound = False
+                result["fd_work_binding"] = {"bound": bound}
             self._fd_work.discard_case_selection(selection_token)
         return result
+
+    def _bind_saved_project(self, result, canonical_name):
+        project = result.get("project") if isinstance(result, dict) else None
+        project_id = int(project.get("id") or 0) if isinstance(project, dict) else 0
+        try:
+            self._fd_work.bind_project(project_id, canonical_name)
+            return {"bound": True}
+        except Exception:
+            try:
+                self._fd_work.clear_project_binding(project_id)
+            except Exception:
+                pass
+            return {
+                "bound": False,
+                "warning": "项目已保存，但关联 FD Work 失败，请重新关联",
+            }
+
+    def _clear_saved_project_binding(self, project_id):
+        try:
+            self._fd_work.clear_project_binding(int(project_id))
+            return {"bound": False}
+        except Exception:
+            return {
+                "bound": False,
+                "warning": "项目已保存，但关联 FD Work 失败，请重新关联",
+            }
 
     def set_project_enabled_for_rules(self, project_id, enabled):
         return project_api.set_project_enabled_for_rules(project_id, enabled)
@@ -442,7 +522,10 @@ class RulesApplicationService:
         return project_api.archive_project_for_rules(project_id)
 
     def delete_project_for_rules(self, project_id):
-        return project_api.delete_project_for_rules(project_id)
+        result = project_api.delete_project_for_rules(project_id)
+        if result.get("ok") is True:
+            result["fd_work_binding"] = self._clear_saved_project_binding(project_id)
+        return result
 
     def set_project_rule_enabled(self, rule_type, rule_id, enabled):
         return rule_api.set_project_rule_enabled(rule_type, rule_id, enabled)
