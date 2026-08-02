@@ -279,7 +279,7 @@ class FDWorkWindowController:
             if (
                 self._review_visible
                 or self._pending_draft is not None
-                or self._operation != "none"
+                or self._operation not in {"none", "searching"}
             ):
                 return self._failure_locked("fd_work_busy")
             self._operation_generation += 1
@@ -327,7 +327,7 @@ class FDWorkWindowController:
                     )
                 status = self._status_locked()
         if stale:
-            return {"ok": False, "error": "fd_work_busy"}
+            return {"ok": False, "error": "lookup_superseded"}
         self._emit(status)
         result["navigation_generation"] = navigation_generation
         return result
@@ -1130,15 +1130,17 @@ class FDWorkWindowController:
                 return True
             self._navigation_generation += 1
             self._operation_generation += 1
+            self._pending_draft = None
             self._review_visible = False
+            self._operation = "none"
+            self._error_code = None
+            self._initial_load_observed = False
+            self._initial_probe_started = False
+            self._start_watch_generation = None
+            self._start_monotonic = None
+            self._start_visible_probe_used = False
             self._login_watch_generation = None
-            if self._session_state != "login_required":
-                self._operation = "none"
-            generation = self._navigation_generation
-            status = self._status_locked()
-        self._emit(status)
-        self._schedule(lambda: self._hide_window_if_current(window, generation))
-        return False
+        return True
 
     def _on_closed(self, window: Any) -> None:
         with self._lock:
@@ -1147,6 +1149,7 @@ class FDWorkWindowController:
             self._navigation_generation += 1
             self._operation_generation += 1
             self._window = None
+            self._creating_window = False
             self._pending_draft = None
             self._review_visible = False
             self._session_state = "idle"

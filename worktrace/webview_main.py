@@ -212,12 +212,13 @@ def main(*, background: bool = False) -> int:
         services = build_application_services(
             runtime,
             fd_work_window_controller=fd_work_controller,
+            paths=paths,
         )
         services.fd_work.bind_status_callback(report_fd_work_status)
         app_control = services.app_control
         startup_result: dict[str, Any] = {"ok": False}
         try:
-            startup_result = app_control.start_collection_after_privacy_gate()
+            startup_result = app_control.start_if_authorized(pre_start=True)
             if not startup_result.get("ok"):
                 logging.error(
                     "collector startup rejected error=%s",
@@ -271,11 +272,6 @@ def main(*, background: bool = False) -> int:
             shell.start()
             webview_profile_path = paths.base_dir / "webview-profile"
             webview_profile_path.mkdir(parents=True, exist_ok=True)
-            if services.fd_work.get_settings_status().get("enabled") is True:
-                services.fd_work.prepare_window_before_start(
-                    show_login_if_required=True
-                )
-
             def handle_webview_initialized() -> None:
                 renderer = str(getattr(webview, "renderer", "") or "").lower()
                 safe_renderer = (
