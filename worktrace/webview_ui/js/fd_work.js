@@ -5,10 +5,10 @@
 
     App.fdWorkStatus = null;
     App.FD_WORK_CASE_LABEL_MAX_LENGTH = 100;
-    App.FD_WORK_QUERY_MIN_LENGTH = 2;
+    App.FD_WORK_QUERY_MIN_LENGTH = 0;
     App.FD_WORK_QUERY_MAX_LENGTH = 100;
 
-    var sessionStates = ["disabled", "idle", "starting", "login_required", "ready", "error", "shutdown"];
+    var sessionStates = ["disabled", "deferred_by_privacy", "idle", "starting", "login_required", "ready", "error", "shutdown"];
     var operations = ["none", "searching", "filling"];
 
     function validStatus(status) {
@@ -62,6 +62,7 @@
     App.fdWorkStatusText = function (status) {
         status = status || App.fdWorkStatus || {};
         if (!status.enabled) return "插件关闭";
+        if (status.session_state === "deferred_by_privacy") return "等待隐私授权";
         if (status.operation === "searching") return "正在搜索";
         if (status.operation === "filling") return "正在填入";
         if (status.session_state === "starting") return "正在连接";

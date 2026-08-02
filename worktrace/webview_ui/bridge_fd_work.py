@@ -16,6 +16,7 @@ _DATE_SHAPE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 FD_WORK_MESSAGES = {
     "fd_work_disabled": "FD Work 插件已关闭，请在高级设置中开启",
+    "deferred_by_privacy": "请先确认隐私说明",
     "renderer_unavailable": "无法使用 WebView2 打开 FD Work，请修复运行环境后重试",
     "session_starting": "FD Work 窗口正在创建，请稍后重试",
     "session_start_timeout": "连接 FD Work 超时，请检查网络或重新连接",
@@ -23,8 +24,9 @@ FD_WORK_MESSAGES = {
     "login_required": "请先登录 FD Work",
     "fd_work_not_ready": "FD Work 尚未准备完成",
     "fd_work_busy": "FD Work 正在处理另一项操作",
+    "lookup_superseded": "案件搜索已被更新的查询替代",
     "case_search_timeout": "搜索 FD Work 案件超时",
-    "case_not_found": "未找到匹配的 FD Work 案件",
+    "case_not_found": "已关联的 FD Work 案件当前不可用，请在项目规则中重新关联。",
     "case_ambiguous": "找到多个同名 FD Work 案件，无法安全选择",
     "duplicate_case_label": "FD Work 返回了无法区分的同名案件",
     "page_contract_changed": "FD Work 页面暂时不可用",
@@ -39,6 +41,7 @@ FD_WORK_MESSAGES = {
     "uncategorized_project": "当前时间段属于未归类项目",
     "system_project": "当前时间段不属于具体用户项目",
     "project_unavailable": "当前项目已不可用",
+    "project_not_fd_work_bound": "当前项目未关联 FD Work 案件，请在“项目规则”中编辑项目并从 FD Work 案件列表中选择。",
     "empty_project_name": "项目名称为空，无法填入",
     "empty_narrative": "描述为空，无法填入",
     "invalid_duration": "工时必须大于零",

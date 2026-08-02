@@ -11,9 +11,11 @@ from urllib.parse import urlencode, urlparse, urlsplit, urlunsplit
 
 from .contracts import FDWorkEntryDraft
 from .limits import (
+    FD_WORK_ADAPTER_CONTRACT_VERSION,
     FD_WORK_CASE_LABEL_MAX_LENGTH,
     FD_WORK_CASE_SEARCH_LIMIT,
 )
+from .case_identity import normalize_case_label
 
 
 class FDWorkPageType(Enum):
@@ -27,7 +29,7 @@ class FDWorkPageType(Enum):
 class FDWorkPageAdapter:
     """Versioned, fail-closed knowledge of the observed FD Work web UI."""
 
-    adapter_version = 2
+    adapter_version = FD_WORK_ADAPTER_CONTRACT_VERSION
     business_url = "https://work.fangdalaw.com/Works/WorkHourList?picker=day"
     allowed_navigation_hosts = frozenset({"work.fangdalaw.com"})
     field_contract = {
@@ -256,6 +258,8 @@ class FDWorkPageAdapter:
             if isinstance(error, str) and error in {
                 "adapter_version_mismatch",
                 "case_not_found",
+                "case_search_timeout",
+                "lookup_superseded",
                 "duplicate_case_label",
                 "page_contract_changed",
             }:
@@ -282,8 +286,7 @@ class FDWorkPageAdapter:
 
     @staticmethod
     def _normalize_label(label: str) -> str:
-        unicode_spaces = "\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u202f\u205f\u3000"
-        return label.translate(str.maketrans({char: " " for char in unicode_spaces})).strip()
+        return normalize_case_label(label)
 
     def _evaluate(
         self,

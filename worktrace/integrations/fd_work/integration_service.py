@@ -11,8 +11,11 @@ from typing import Any, Callable, Mapping, Protocol
 
 from ...services.settings_service import get_bool_setting, set_setting
 from .contracts import FDWorkEntryDraft, FDWorkEntryError
+from .binding_service import FDWorkBindingService
+from .case_identity import normalize_case_label
 from .draft_builder import FDWorkEntryDraftBuilder
 from .limits import (
+    FD_WORK_ADAPTER_CONTRACT_VERSION,
     FD_WORK_CASE_LABEL_MAX_LENGTH,
     FD_WORK_QUERY_MAX_LENGTH,
     FD_WORK_QUERY_MIN_LENGTH,
@@ -55,13 +58,6 @@ class _Selection:
     expires_at: float
 
 
-def normalize_case_label(value: object) -> str:
-    text = str(value or "")
-    for character in "\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u202f\u205f\u3000":
-        text = text.replace(character, " ")
-    return text.strip()
-
-
 class FDWorkIntegrationService:
     """Own plugin settings, session operations, and ephemeral case proofs."""
 
@@ -69,6 +65,7 @@ class FDWorkIntegrationService:
         self,
         *,
         draft_builder: _DraftBuilder | None = None,
+        binding_service: FDWorkBindingService | None = None,
         window_controller: _WindowController | None = None,
         enabled_reader: Callable[[], bool] | None = None,
         enabled_writer: Callable[[bool], Any] | None = None,
@@ -80,6 +77,7 @@ class FDWorkIntegrationService:
         status_callback: Callable[[dict[str, object]], None] | None = None,
     ) -> None:
         self._draft_builder = draft_builder or FDWorkEntryDraftBuilder()
+        self._binding_service = binding_service
         self._window_controller = window_controller
         self._enabled_reader = enabled_reader or (
             lambda: get_bool_setting(FD_WORK_ENABLED_SETTING, False)
@@ -100,6 +98,7 @@ class FDWorkIntegrationService:
         self._selections: OrderedDict[str, _Selection] = OrderedDict()
         self._controller_status = self._initial_controller_status()
         self._shutdown = False
+        self._privacy_authorized = False
         if window_controller is not None:
             window_controller.bind_status_callback(self._accept_controller_status)
 
@@ -119,6 +118,14 @@ class FDWorkIntegrationService:
         show_login_if_required: bool = True,
     ) -> dict[str, Any]:
         with self._lock:
+            if not self._enabled_locked():
+                return {
+                    "ok": False,
+                    "error": "fd_work_disabled",
+                    "status": self._status_locked(),
+                }
+            if not self._privacy_authorized:
+                return self._privacy_failure_locked()
             controller = self._require_enabled_controller_locked()
             if controller is None:
                 return {
@@ -142,6 +149,14 @@ class FDWorkIntegrationService:
         show_login_if_required: bool = True,
     ) -> dict[str, Any]:
         with self._lock:
+            if not self._enabled_locked():
+                return {
+                    "ok": False,
+                    "error": "fd_work_disabled",
+                    "status": self._status_locked(),
+                }
+            if not self._privacy_authorized:
+                return self._privacy_failure_locked()
             controller = self._require_enabled_controller_locked()
             if controller is None:
                 return {
@@ -179,9 +194,14 @@ class FDWorkIntegrationService:
         ):
             return self._failure("invalid_input", request_id)
         with self._lock:
+            if not self._enabled_locked():
+                return self._failure_locked("fd_work_disabled", request_id)
+            if not self._privacy_authorized:
+                return self._failure_locked("deferred_by_privacy", request_id)
             controller = self._require_enabled_controller_locked()
             if controller is None:
                 return self._failure_locked("fd_work_disabled", request_id)
+            self._selections.clear()
         try:
             result = dict(controller.search_cases(normalized_query))
         except Exception:
@@ -273,6 +293,10 @@ class FDWorkIntegrationService:
         expected_projection_revision: str,
     ) -> dict[str, Any]:
         with self._lock:
+            if not self._enabled_locked():
+                raise FDWorkEntryError("fd_work_disabled")
+            if not self._privacy_authorized:
+                raise FDWorkEntryError("deferred_by_privacy")
             controller = self._require_enabled_controller_locked()
             if controller is None:
                 raise FDWorkEntryError("fd_work_disabled")
@@ -285,6 +309,37 @@ class FDWorkIntegrationService:
             if controller is not self._require_enabled_controller_locked():
                 raise FDWorkEntryError("window_unavailable")
         return dict(controller.open_entry(draft))
+
+    def set_privacy_authorized(self, authorized: bool) -> None:
+        if authorized is not True and authorized is not False:
+            raise ValueError("invalid_privacy_authorization")
+        with self._lock:
+            if self._shutdown:
+                return
+            self._privacy_authorized = authorized
+            if not authorized:
+                self._selections.clear()
+            status = self._status_locked()
+        self._emit_status(status)
+
+    def bind_project(self, project_id: int, project_name: str) -> None:
+        service = self._require_binding_service()
+        service.bind_project(
+            project_id,
+            project_name,
+            adapter_contract_version=FD_WORK_ADAPTER_CONTRACT_VERSION,
+        )
+
+    def clear_project_binding(self, project_id: int) -> None:
+        self._require_binding_service().clear_binding(project_id)
+
+    def list_bound_project_ids(self) -> set[int]:
+        return self._require_binding_service().list_bound_project_ids()
+
+    def clear_all_bindings(self, *, delete_database: bool = False) -> None:
+        self._require_binding_service().clear_all_bindings(
+            delete_database=delete_database
+        )
 
     def set_enabled(self, enabled: bool) -> dict[str, object]:
         if enabled is not True and enabled is not False:
@@ -303,7 +358,7 @@ class FDWorkIntegrationService:
                 self._selections.clear()
         if controller is not None and not enabled:
             controller.disable()
-        elif controller is not None:
+        elif controller is not None and self._privacy_authorized:
             try:
                 controller.prepare_session(show_login_if_required=True)
             except Exception:
@@ -361,6 +416,17 @@ class FDWorkIntegrationService:
                 "supported": self._supported,
                 "enabled": False,
                 "session_state": "disabled",
+                "operation": "none",
+                "ready": False,
+                "login_required": False,
+                "error_code": None,
+                "navigation_generation": self._navigation_generation_locked(),
+            }
+        if not self._privacy_authorized:
+            return {
+                "supported": self._supported,
+                "enabled": True,
+                "session_state": "deferred_by_privacy",
                 "operation": "none",
                 "ready": False,
                 "login_required": False,
@@ -429,6 +495,18 @@ class FDWorkIntegrationService:
             "error": error,
             "status": self._status_locked(),
         }
+
+    def _privacy_failure_locked(self) -> dict[str, Any]:
+        return {
+            "ok": False,
+            "error": "deferred_by_privacy",
+            "status": self._status_locked(),
+        }
+
+    def _require_binding_service(self) -> FDWorkBindingService:
+        if self._binding_service is None:
+            raise FDWorkEntryError("binding_store_unavailable")
+        return self._binding_service
 
     def _emit_status(self, status: dict[str, object]) -> None:
         try:
