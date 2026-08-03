@@ -8,8 +8,9 @@
     App.FD_WORK_QUERY_MIN_LENGTH = 0;
     App.FD_WORK_QUERY_MAX_LENGTH = 100;
 
-    var sessionStates = ["disabled", "deferred_by_privacy", "idle", "starting", "login_required", "ready", "error", "shutdown"];
+    var sessionStates = ["disabled", "deferred_by_privacy", "idle", "probing", "starting", "login_required", "ready", "error", "shutdown"];
     var operations = ["none", "searching", "filling"];
+    var pagePhases = ["none", "login_credentials", "login_confirmation", "work_shell", "work_interactive", "unauthorized", "error", "unknown"];
 
     function validStatus(status) {
         return !!status
@@ -21,6 +22,7 @@
             && typeof status.ready === "boolean"
             && typeof status.login_required === "boolean"
             && (status.error_code === null || typeof status.error_code === "string")
+            && (status.page_phase === undefined || pagePhases.indexOf(status.page_phase) >= 0)
             && (status.navigation_generation === undefined
                 || (Number.isInteger(status.navigation_generation)
                     && status.navigation_generation >= 0));
@@ -50,6 +52,7 @@
             ready: status.ready === true,
             login_required: status.login_required === true,
             error_code: status.error_code || null,
+            page_phase: status.page_phase || "none",
             navigation_generation: incomingGeneration
         });
         if (App.lastSettingsStatus) App.lastSettingsStatus.fd_work = App.fdWorkStatus;
@@ -63,10 +66,14 @@
         status = status || App.fdWorkStatus || {};
         if (!status.enabled) return "插件关闭";
         if (status.session_state === "deferred_by_privacy") return "等待隐私授权";
-        if (status.operation === "searching") return "正在搜索";
+        if (status.operation === "searching") {
+            return status.page_phase === "work_interactive" ? "正在搜索" : "正在准备案件搜索";
+        }
         if (status.operation === "filling") return "正在填入";
+        if (status.session_state === "probing") return "正在检查登录状态";
         if (status.session_state === "starting") return "正在连接";
         if (status.session_state === "ready") return "已连接";
+        if (status.page_phase === "login_confirmation") return "请确认登录";
         if (status.session_state === "login_required") return "需要登录";
         if (status.error_code === "session_start_timeout") return "连接超时";
         if (status.error_code === "renderer_unavailable") return "WebView2 不可用";

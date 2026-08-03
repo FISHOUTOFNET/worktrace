@@ -327,7 +327,7 @@
         var input = document.getElementById("rules-panel-project-name");
         var status = App.fdWorkStatus || {};
         if (!input || String(input.value || "").trim() !== "") return;
-        if (status.enabled !== true || status.ready !== true || !fdWorkDropdownClosed()) return;
+        if (status.enabled !== true || !fdWorkDropdownClosed()) return;
         App.rulesFDWorkLastQuery = "";
         searchFDWorkCases("", App.rulesPanelSessionToken);
     }
@@ -377,6 +377,25 @@
     function searchFDWorkCases(query, sessionToken) {
         if (!isCurrentRulesPanelSession(sessionToken)) return;
         var status = App.fdWorkStatus || {};
+        if (status.ready !== true) {
+            if (!App.rulesFDWorkLoginRetryPending) {
+                App.rulesFDWorkLoginRetryPending = true;
+                App.bridge.showFDWorkLogin().catch(function () {
+                    if (isCurrentRulesPanelSession(sessionToken)) {
+                        showFDWorkCaseStatus("打开 FD Work 登录页失败", true);
+                    }
+                });
+            }
+            if (status.page_phase === "login_confirmation") {
+                showFDWorkCaseStatus("请在 FD Work 窗口确认登录", false);
+            } else if (status.login_required === true) {
+                showFDWorkCaseStatus("请先登录 FD Work", true);
+            } else {
+                showFDWorkCaseStatus("正在准备案件搜索……", false);
+            }
+            syncFDWorkCaseSearchStatus();
+            return;
+        }
         if (status.login_required === true) {
             App.rulesFDWorkLoginRetryPending = true;
             showFDWorkCaseStatus("请先登录 FD Work", true);
