@@ -53,6 +53,11 @@ state or database facts.
 | Row runtime overlay | `ActivityRowOverlay` |
 | Exact live-time DTO | `activity_live_clock` |
 | Application composition | `ApplicationServices` |
+| FD Work plugin/privacy/token/binding policy | `FDWorkIntegrationService` |
+| FD Work interaction owner and operation lifetime | `FDWorkInteractionCoordinator` |
+| FD Work helper lifetime/page phase/window mutations | `FDWorkWindowController` |
+| FD Work URL/selectors/picker/fill DOM contract | `FDWorkPageAdapter` / adapter v5 |
+| FD Work helper callback surface | `FDWorkHelperBridge` |
 | Frontend exact clock validation/ticking | shared clock functions in `core.js` |
 | Accepted runtime-envelope state and refresh coordination | single store in `init.js` |
 
@@ -225,6 +230,32 @@ project bindings use a lazily-created, independently versioned SQLite sidecar at
 `plugins/fd_work/state.db`, injected by the composition root. Replacement and
 clear-local-data operations invalidate or remove these bindings fail-closed;
 ordinary backup export never includes them.
+
+FD Work case selection has one interaction owner. With the plugin disabled,
+Project Rules keeps the ordinary editable local project-name field and does not
+create or show the helper. With the plugin enabled, new projects use the FD Work
+native Ant Design Select through an explicit helper-window picker; WorkTrace
+renders only the read-only confirmed label and picker controls. It does not run
+cross-window autocomplete from focus, click or input events. A process-memory,
+one-use selection token is required before a new bound project can be saved.
+
+Session state (`disabled`, `deferred_by_privacy`, `idle`, `probing`,
+`login_required`, `ready`, `error`, `shutdown`) is separate from interaction
+ownership (`none`, `user_auth`, `user_picker`, `automation_fill`, `user_review`).
+Only one non-`none` owner exists. Picker and authentication are user-owned;
+Timeline fill is automation-owned until verified readback, then becomes
+user-review-owned and performs no further writes. Helper close, navigation,
+disable and shutdown invalidate the current nonce/generation. The helper exposes
+only `confirm_case_picker` and `cancel_case_picker`; it has no application service
+access and never creates bindings.
+
+Every helper `show`, `hide`, `restore`, `focus` and `destroy` mutation goes through
+the GUI dispatcher with window, navigation and operation guards before and after
+the mutation. No pywebview mutation occurs while the controller lock is held.
+Passive probes are hidden and side-effect free. Adapter v5's stable-shell check
+observes visibility, viewport, overlays and stable geometry only; it never focuses,
+clicks, types, blurs or sends Escape. Durable sidecar binding validity is
+independent of adapter version, so v4-created bindings remain valid under v5.
 
 ## Frontend and page boundaries
 

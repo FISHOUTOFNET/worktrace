@@ -1,7 +1,7 @@
 # FD Work integration discovery
 
 This document records the non-sensitive browser contract observed on
-2026-07-31 and conservatively rechecked through 2026-08-02. It intentionally contains no credentials,
+2026-07-31 and conservatively rechecked through 2026-08-03. It intentionally contains no credentials,
 cookies, tokens, personal data, client names, matter names or matter numbers,
 or real time-entry content.
 
@@ -73,23 +73,23 @@ or real time-entry content.
 The duration control advertises `step="0.1"`, `aria-valuemin="0"` and the
 actual observed maximum `aria-valuemax="23.9"`.
 
-### Matter search
+### Native matter picker and exact fill
 
 - The matter input owns a popup through `aria-controls`.
 - The popup has `role="listbox"`.
 - Selectable results are plain descendants with `role="option"` and
   `aria-selected`.
 - A synthetic non-match settled to the stable empty text `暂无数据`.
-- Result matching must use the complete visible option text after only edge
-  trimming and normalization of Unicode space variants. The integration must
-  preserve page order. Project search reads at most 20 labels without clicking
-  an option; Timeline filling still requires exactly one exact result, clicks
-  that exact option through the DOM, then reads the selected display text and
-  compares it again.
+- Project creation does not query or render these options in WorkTrace. The
+  explicit picker leaves the native input and popup under user control. Its
+  confirmation button stays disabled until a committed Ant Select selection
+  item is present; search-input text alone is not a selection.
+- Timeline filling uses the complete visible option text after only edge
+  trimming and Unicode-space normalization. It requires exactly one exact
+  result, clicks that option once, then reads the committed selection item back.
 - No stable, non-sensitive option key was confirmed. Project selection therefore
-  uses the complete normalized visible label only. Two options with the same
-  complete normalized label fail closed as `duplicate_case_label`; they are not
-  treated as distinguishable and no inferred mapping is stored.
+  uses the complete normalized visible label only. A result that cannot be
+  proven as a committed native option fails closed; no inferred mapping is stored.
 - Browser control could observe the result DOM but timed out while attempting a
   non-destructive real-option selection. Therefore the customer auto-link after
   a real matter selection remains a mandatory Windows acceptance item and is
@@ -119,21 +119,23 @@ actual observed maximum `aria-valuemax="23.9"`.
   but read-only dynamic DOM inspection timed out before the option-key and empty
   result contracts could be re-observed. No fresh claim of a stable option key
   is made; the 2026-07-31 non-sensitive selector/listbox/empty-state observation
-  remains the implementation baseline and live search remains a Windows
-  acceptance item.
-- The shipping controller owns one hidden, unfocused window (`js_api=None`).
-  Authorized startup uses a short passive session probe. An explicit login request
-  shows or restores the current window immediately without waiting for page-DOM
-  readiness and without forcing operating-system focus.
+  remains the implementation baseline and native picker behavior remains a
+  Windows acceptance item.
+- The shipping controller owns one hidden, unfocused window with a narrow
+  `FDWorkHelperBridge`. The bridge exposes only picker confirm/cancel and has no
+  application-service or binding access. Authorized startup uses a bounded passive
+  session probe. Explicit auth, picker and fill operations may show, restore and
+  focus the helper; passive probes and Project Rules field events may not.
 - URL is only the first page-state hint. DOM probes distinguish credential login,
-  login confirmation, work shell and work-interactive states. `/LoginToken` does
+  login confirmation and work shell states. `/LoginToken` does
   not require account or password inputs. A loaded/navigation signal is primary;
   a short, deadline-bound fallback handles a missing signal. There is no 35-cycle
   one-second readiness loop and no automatic reload loop.
-- A recognized work shell installs adapter contract v4 once for that navigation
-  generation. The adapter source is cached by the Python adapter instance; searches
-  and fills send only small action scripts. Navigation, disable, close and shutdown
-  invalidate stale probes, leases and operation callbacks.
+- A recognized work shell installs adapter contract v5 once for that navigation
+  generation. The adapter source is cached by the Python adapter instance; picker
+  and fill send only small action scripts. Navigation, disable, close and shutdown
+  invalidate stale probes and operation callbacks. Durable bindings created under
+  v4 remain valid because binding identity does not include adapter version.
 - Windows shipping startup forces the `edgechromium` renderer and verifies the
   initialized renderer. A different renderer is reported as
   `renderer_unavailable` and FD Work fails closed.
@@ -150,20 +152,27 @@ actual observed maximum `aria-valuemax="23.9"`.
   closing callback. A later operation recreates one window. Disabling FD Work
   destroys it but permits a later re-enable; process shutdown permanently
   terminates the capability.
-- Search and fill share one bounded serialized DOM-operation owner and one
-  authoritative combobox engine. Each operation obtains a short visible-window
-  lease, validates viewport, layout, input and popup interactivity, and shares one
-  monotonic deadline across Python and JavaScript stages. Search hides the helper
-  on completion; successful fill keeps the complete page visible for human review.
-  Fill waits for query-specific refresh evidence before unique exact selection, so
-  pre-existing recent options cannot cause an early `case_not_found`.
+- Session state and interaction ownership are distinct. The only owners are
+  `none`, `user_auth`, `user_picker`, `automation_fill` and `user_review`; picker
+  and fill cannot overlap. Picker mode removes fill compact mode, keeps only the
+  native matter form item plus a WorkTrace confirm/cancel toolbar, and never types,
+  focuses, clicks, blurs, sends Escape, opens or closes the popup. Confirm and cancel
+  hide the helper and restore WorkTrace only while their nonce/generations remain
+  current.
+- Adapter v5 `awaitStableWorkShell` is observational: it requires a visible
+  document, non-zero viewport, interactive matter input, no blocking overlay and
+  stable geometry across two animation frames under one operation deadline. It has
+  no input or popup side effects. Timeline fill then prepares the matter combobox
+  once, performs unique exact selection, fills and verifies the remaining fields,
+  removes its blocking layer on every outcome, and leaves success visible in
+  `user_review`. It never submits or saves real time.
 - Durable project-binding validity depends on project identity, creation time and
   normalized-name hash, not the adapter contract version. Adapter upgrades do not
   require users to rebind unchanged projects.
-- Project-search selection proofs are random process-memory tokens with a
-  five-minute TTL and a 128-entry cap. They bind the complete label and current
-  navigation generation and never enter the DOM, database, browser storage,
-  backup, export, or logs.
+- Picker selection proofs are random, one-use process-memory tokens with a
+  five-minute TTL and a 128-entry cap. They bind the complete label, picker request,
+  operation nonce and navigation generation and never enter the database, browser
+  storage, backup, export, or logs.
 - No real test time entry was saved or submitted during discovery.
 - The isolated login-page observation did not enter credentials, read input
   values, click the native login action, or inspect cookies or tokens.
@@ -178,3 +187,8 @@ actual observed maximum `aria-valuemax="23.9"`.
 - Ignored-field native validation after matter selection.
 - Source and installed EXE hide/show session retention, compact-mode visual
   fidelity, native validation presentation, and full process shutdown.
+- Opening a new-project Drawer ten times without helper appearance; focus retention
+  while editing; exactly-once picker foreground; three user-controlled native search
+  queries; confirm/cancel/window-close/login-close recovery; twenty helper
+  close/recreate cycles; and privacy-before-login behavior remain mandatory source
+  and installed-build Windows acceptance until recorded against the exact build SHA.

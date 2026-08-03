@@ -56,6 +56,7 @@ def _fd_status(enabled: bool) -> dict[str, object]:
         "session_state": "deferred_by_privacy" if enabled else "disabled",
         "page_phase": "none",
         "operation": "none",
+        "interaction_owner": "none",
         "ready": False,
         "login_required": False,
         "error_code": None,

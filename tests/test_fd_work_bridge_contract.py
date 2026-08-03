@@ -5,7 +5,7 @@ import inspect
 import pytest
 
 from tests.support.application import build_test_bridge
-from worktrace.webview_ui.bridge import WebViewBridge
+from worktrace.webview_ui.bridge import SHIPPING_METHODS, WebViewBridge
 from worktrace.integrations.fd_work.integration_service import FDWorkIntegrationService
 from worktrace.webview_ui.bridge_fd_work import fd_work_message
 
@@ -16,7 +16,7 @@ pytestmark = [pytest.mark.unit, pytest.mark.contract, pytest.mark.parallel_safe]
 class _FDWorkCapability:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str, str]] = []
-        self.search_calls = []
+        self.picker_calls = []
         self.prepare_calls = []
 
     def get_settings_status(self):
@@ -26,9 +26,9 @@ class _FDWorkCapability:
             "error_code": None,
         }
 
-    def search_cases(self, query, request_id):
-        self.search_calls.append((query, request_id))
-        return {"ok": True, "request_id": request_id, "options": [], "status": self.get_settings_status()}
+    def open_case_picker(self, request_id):
+        self.picker_calls.append(request_id)
+        return {"ok": True, "request_id": request_id, "status": "opening"}
 
     def prepare_session(self, show_login_if_required=True):
         self.prepare_calls.append(show_login_if_required)
@@ -160,31 +160,24 @@ def test_renderer_unavailable_is_not_reported_as_a_form_error():
     assert "表单" not in result["message"]
 
 
-def test_independent_fd_work_bridge_exposes_status_search_and_existing_login_window():
+def test_main_bridge_exposes_explicit_picker_and_existing_login_window_only():
     capability = _FDWorkCapability()
     bridge = build_test_bridge(fd_work=capability)
 
     status = bridge.get_fd_work_status()
-    searched = bridge.search_fd_work_cases("CA", "request-1")
+    opened = bridge.open_fd_work_case_picker("request-1")
     login = bridge.show_fd_work_login()
 
     assert status["status"]["session_state"] == "ready"
-    assert searched["request_id"] == "request-1"
-    assert capability.search_calls == [("CA", "request-1")]
+    assert opened["request_id"] == "request-1"
+    assert capability.picker_calls == ["request-1"]
     assert login["ok"] is True
     assert capability.prepare_calls == [True]
 
 
-def test_fd_work_bridge_allows_recent_and_one_character_case_queries():
-    capability = _FDWorkCapability()
-    bridge = build_test_bridge(fd_work=capability)
-
-    recent = bridge.search_fd_work_cases("", "recent")
-    one = bridge.search_fd_work_cases("A", "one")
-
-    assert recent["ok"] is True
-    assert one["ok"] is True
-    assert capability.search_calls == [("", "recent"), ("A", "one")]
+def test_shipping_bridge_has_no_inline_fd_work_search_method():
+    assert not hasattr(WebViewBridge, "search_fd_work_cases")
+    assert "search_fd_work_cases" not in SHIPPING_METHODS
 
 
 def test_persistent_binding_and_removed_remote_case_have_actionable_messages():

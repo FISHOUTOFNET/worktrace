@@ -25,6 +25,7 @@ from .post_privacy_startup import PostPrivacyStartupCoordinator
 def build_application_services(
     runtime: AppRuntime,
     *,
+    fd_work_interaction_coordinator=None,
     fd_work_window_controller=None,
     paths=None,
 ) -> ApplicationServices:
@@ -41,7 +42,9 @@ def build_application_services(
     fd_work = FDWorkIntegrationService(
         draft_builder=FDWorkEntryDraftBuilder(binding_verifier=binding_service),
         binding_service=binding_service,
-        window_controller=fd_work_window_controller,
+        interaction_coordinator=(
+            fd_work_interaction_coordinator or fd_work_window_controller
+        ),
     )
     base_app_control = ApplicationControlService(runtime, maintenance)
     app_control = PostPrivacyStartupCoordinator(base_app_control, fd_work)

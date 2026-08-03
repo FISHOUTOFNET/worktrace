@@ -53,7 +53,7 @@ def _project_result(project_id, name):
     return {"ok": True, "project": {"id": project_id, "name": name}}
 
 
-def test_enabled_create_allows_free_text_and_selected_case_binds(monkeypatch):
+def test_enabled_create_requires_picker_token_and_selected_case_binds(monkeypatch):
     writes = []
     monkeypatch.setattr(
         application_capabilities.project_api,
@@ -66,17 +66,16 @@ def test_enabled_create_allows_free_text_and_selected_case_binds(monkeypatch):
     plain = service.create_project_for_rules("Ordinary", "", "中文")
     selected = service.create_project_for_rules("typed fragment", "", "中文", "token-a")
 
-    assert plain["ok"] is True
-    assert plain["fd_work_binding"]["bound"] is False
+    assert plain == {"ok": False, "error": "case_selection_required"}
     assert selected["ok"] is True
     assert selected["project"]["name"] == "CASE A"
     assert selected["fd_work_binding"]["bound"] is True
-    assert writes == [("Ordinary", "", "中文"), ("CASE A", "", "中文")]
-    assert fd_work.bound == [(2, "CASE A")]
+    assert writes == [("CASE A", "", "中文")]
+    assert fd_work.bound == [(1, "CASE A")]
     assert fd_work.discarded == ["token-a"]
 
 
-def test_update_preserves_rebinds_or_clears_from_explicit_facts(monkeypatch):
+def test_bound_update_preserves_name_or_requires_reselection_for_rename(monkeypatch):
     current = {"id": 7, "name": "CASE A"}
     writes = []
     monkeypatch.setattr(application_capabilities.project_api, "get_project", lambda _id: dict(current))
@@ -95,11 +94,56 @@ def test_update_preserves_rebinds_or_clears_from_explicit_facts(monkeypatch):
     rebound = service.update_project_for_rules(7, "ignored", "new description", "中文", "token-b")
 
     assert unchanged["fd_work_binding"]["bound"] is True
-    assert fd_work.cleared == [7]
-    assert renamed["fd_work_binding"]["bound"] is False
+    assert renamed == {"ok": False, "error": "case_selection_required"}
+    assert fd_work.cleared == []
     assert rebound["project"]["name"] == "CASE B"
     assert rebound["fd_work_binding"]["bound"] is True
     assert fd_work.bound == [(7, "CASE B")]
+
+
+def test_disabled_plugin_keeps_local_free_text_creation(monkeypatch):
+    writes = []
+    monkeypatch.setattr(
+        application_capabilities.project_api,
+        "create_project_for_rules",
+        lambda *args: writes.append(args) or _project_result(1, args[0]),
+    )
+    service = RulesApplicationService(fd_work=_FDWork(enabled=False))
+
+    result = service.create_project_for_rules("Ordinary", "", "中文")
+
+    assert result["ok"] is True
+    assert result["fd_work_binding"] == {"bound": False}
+    assert writes == [("Ordinary", "", "中文")]
+
+
+def test_historical_unbound_project_can_edit_non_name_fields_when_plugin_enabled(monkeypatch):
+    current = {"id": 8, "name": "Legacy local"}
+    writes = []
+    monkeypatch.setattr(
+        application_capabilities.project_api,
+        "get_project",
+        lambda _id: dict(current),
+    )
+    monkeypatch.setattr(
+        application_capabilities.project_api,
+        "update_project_for_rules",
+        lambda *args: writes.append(args) or _project_result(args[0], args[1]),
+    )
+    fd_work = _FDWork(enabled=True)
+    fd_work.bound_ids.clear()
+    service = RulesApplicationService(fd_work=fd_work)
+
+    unchanged = service.update_project_for_rules(
+        8, "Legacy local", "new description", "English"
+    )
+    renamed = service.update_project_for_rules(
+        8, "Renamed", "new description", "English"
+    )
+
+    assert unchanged["ok"] is True
+    assert writes == [(8, "Legacy local", "new description", "English")]
+    assert renamed == {"ok": False, "error": "case_selection_required"}
 
 
 @pytest.mark.parametrize("token", ["expired", "mismatch"])

@@ -17,8 +17,6 @@ from .draft_builder import FDWorkEntryDraftBuilder
 from .limits import (
     FD_WORK_ADAPTER_CONTRACT_VERSION,
     FD_WORK_CASE_LABEL_MAX_LENGTH,
-    FD_WORK_QUERY_MAX_LENGTH,
-    FD_WORK_QUERY_MIN_LENGTH,
     FD_WORK_SELECTION_TOKEN_MAX_LENGTH,
 )
 
@@ -36,8 +34,9 @@ class _DraftBuilder(Protocol):
     ) -> FDWorkEntryDraft: ...
 
 
-class _WindowController(Protocol):
+class _InteractionCoordinator(Protocol):
     def bind_status_callback(self, callback: Callable[[Mapping[str, Any]], None]) -> None: ...
+    def bind_picker_result_callback(self, callback: Callable[[Mapping[str, Any]], None]) -> None: ...
     def get_status(self) -> Mapping[str, Any]: ...
     def prepare_session(self, show_login_if_required: bool = True) -> Mapping[str, Any]: ...
     def prepare_window_before_start(
@@ -45,8 +44,9 @@ class _WindowController(Protocol):
         show_login_if_required: bool = True,
     ) -> Mapping[str, Any]: ...
     def on_renderer_initialized(self, renderer: str) -> None: ...
-    def search_cases(self, query: str) -> Mapping[str, Any]: ...
+    def open_case_picker(self, request_id: str) -> Mapping[str, Any]: ...
     def open_entry(self, draft: FDWorkEntryDraft) -> Mapping[str, Any]: ...
+    def enable(self) -> None: ...
     def disable(self) -> None: ...
     def shutdown(self) -> None: ...
 
@@ -55,6 +55,8 @@ class _WindowController(Protocol):
 class _Selection:
     label: str
     navigation_generation: int
+    request_id: str
+    operation_nonce: str
     expires_at: float
 
 
@@ -66,7 +68,8 @@ class FDWorkIntegrationService:
         *,
         draft_builder: _DraftBuilder | None = None,
         binding_service: FDWorkBindingService | None = None,
-        window_controller: _WindowController | None = None,
+        interaction_coordinator: _InteractionCoordinator | None = None,
+        window_controller: _InteractionCoordinator | None = None,
         enabled_reader: Callable[[], bool] | None = None,
         enabled_writer: Callable[[bool], Any] | None = None,
         supported: bool = True,
@@ -75,10 +78,11 @@ class FDWorkIntegrationService:
         selection_ttl_seconds: float = FD_WORK_SELECTION_TTL_SECONDS,
         selection_capacity: int = FD_WORK_SELECTION_CAPACITY,
         status_callback: Callable[[dict[str, object]], None] | None = None,
+        picker_result_callback: Callable[[dict[str, object]], None] | None = None,
     ) -> None:
         self._draft_builder = draft_builder or FDWorkEntryDraftBuilder()
         self._binding_service = binding_service
-        self._window_controller = window_controller
+        self._interaction_coordinator = interaction_coordinator or window_controller
         self._enabled_reader = enabled_reader or (
             lambda: get_bool_setting(FD_WORK_ENABLED_SETTING, False)
         )
@@ -94,13 +98,22 @@ class FDWorkIntegrationService:
         self._selection_ttl_seconds = max(1.0, float(selection_ttl_seconds))
         self._selection_capacity = max(1, int(selection_capacity))
         self._status_callback = status_callback or (lambda _status: None)
+        self._picker_result_callback = picker_result_callback or (lambda _result: None)
         self._lock = threading.RLock()
         self._selections: OrderedDict[str, _Selection] = OrderedDict()
         self._controller_status = self._initial_controller_status()
         self._shutdown = False
         self._privacy_authorized = False
-        if window_controller is not None:
-            window_controller.bind_status_callback(self._accept_controller_status)
+        self._active_picker_request_id: str | None = None
+        if self._interaction_coordinator is not None:
+            self._interaction_coordinator.bind_status_callback(self._accept_controller_status)
+            binder = getattr(
+                self._interaction_coordinator,
+                "bind_picker_result_callback",
+                None,
+            )
+            if callable(binder):
+                binder(self._accept_picker_result)
 
     def bind_status_callback(
         self,
@@ -108,6 +121,13 @@ class FDWorkIntegrationService:
     ) -> None:
         with self._lock:
             self._status_callback = callback
+
+    def bind_picker_result_callback(
+        self,
+        callback: Callable[[dict[str, object]], None],
+    ) -> None:
+        with self._lock:
+            self._picker_result_callback = callback
 
     def get_settings_status(self) -> dict[str, object]:
         with self._lock:
@@ -179,20 +199,13 @@ class FDWorkIntegrationService:
         with self._lock:
             if self._shutdown:
                 return
-            controller = self._window_controller
+            controller = self._interaction_coordinator
         if controller is not None:
             controller.on_renderer_initialized(renderer)
 
-    def search_cases(self, query: str, request_id: str) -> dict[str, Any]:
-        if not isinstance(query, str):
-            return self._failure("invalid_input", request_id)
-        normalized_query = normalize_case_label(query)
-        if not (
-            FD_WORK_QUERY_MIN_LENGTH
-            <= len(normalized_query)
-            <= FD_WORK_QUERY_MAX_LENGTH
-        ):
-            return self._failure("invalid_input", request_id)
+    def open_case_picker(self, request_id: str) -> dict[str, Any]:
+        if type(request_id) is not str or not request_id or len(request_id) > 128:
+            return self._failure("invalid_input", str(request_id or ""))
         with self._lock:
             if not self._enabled_locked():
                 return self._failure_locked("fd_work_disabled", request_id)
@@ -201,58 +214,21 @@ class FDWorkIntegrationService:
             controller = self._require_enabled_controller_locked()
             if controller is None:
                 return self._failure_locked("fd_work_disabled", request_id)
-            self._selections.clear()
+            self._active_picker_request_id = request_id
         try:
-            result = dict(controller.search_cases(normalized_query))
+            result = dict(controller.open_case_picker(request_id))
         except Exception:
-            return self._failure("page_contract_changed", request_id)
+            result = {"ok": False, "error": "window_unavailable"}
         if result.get("ok") is not True:
+            with self._lock:
+                if self._active_picker_request_id == request_id:
+                    self._active_picker_request_id = None
             return self._failure(
-                str(result.get("error") or "page_contract_changed"),
-                request_id,
+                str(result.get("error") or "window_unavailable"), request_id
             )
-        labels = result.get("labels")
-        generation = result.get("navigation_generation")
-        if (
-            not isinstance(labels, list)
-            or len(labels) > 20
-            or type(generation) is not int
-        ):
-            return self._failure("page_contract_changed", request_id)
-        normalized_labels: list[str] = []
-        for label in labels:
-            if not isinstance(label, str):
-                return self._failure("page_contract_changed", request_id)
-            normalized = normalize_case_label(label)
-            if not normalized or len(normalized) > FD_WORK_CASE_LABEL_MAX_LENGTH:
-                return self._failure("page_contract_changed", request_id)
-            normalized_labels.append(normalized)
-        if len(set(normalized_labels)) != len(normalized_labels):
-            return self._failure("duplicate_case_label", request_id)
-
-        options: list[dict[str, str]] = []
-        with self._lock:
-            if self._shutdown or not self._enabled_locked():
-                return self._failure_locked("fd_work_disabled", request_id)
-            if generation != self._navigation_generation_locked():
-                return self._failure_locked("case_selection_expired", request_id)
-            self._cleanup_selections_locked()
-            for label in normalized_labels:
-                token = self._new_unique_token_locked()
-                self._selections[token] = _Selection(
-                    label=label,
-                    navigation_generation=generation,
-                    expires_at=self._clock() + self._selection_ttl_seconds,
-                )
-                options.append({"label": label, "selection_token": token})
-            while len(self._selections) > self._selection_capacity:
-                self._selections.popitem(last=False)
-            return {
-                "ok": True,
-                "request_id": str(request_id),
-                "options": options,
-                "status": self._status_locked(),
-            }
+        result["request_id"] = request_id
+        result["status"] = self.get_settings_status()
+        return result
 
     def validate_case_selection(
         self,
@@ -277,6 +253,7 @@ class FDWorkIntegrationService:
                 raise FDWorkEntryError("case_selection_expired")
             if selection.label != normalized_expected:
                 raise FDWorkEntryError("case_selection_mismatch")
+            self._selections.pop(selection_token, None)
             return selection.label
 
     def discard_case_selection(self, selection_token: str | None) -> None:
@@ -319,7 +296,13 @@ class FDWorkIntegrationService:
             self._privacy_authorized = authorized
             if not authorized:
                 self._selections.clear()
+                self._active_picker_request_id = None
+            coordinator = self._interaction_coordinator
             status = self._status_locked()
+        if coordinator is not None:
+            action = getattr(coordinator, "enable" if authorized else "disable", None)
+            if callable(action):
+                action()
         self._emit_status(status)
 
     def bind_project(self, project_id: int, project_name: str) -> None:
@@ -353,13 +336,17 @@ class FDWorkIntegrationService:
             persisted = self._enabled_locked()
             if persisted is not enabled:
                 raise RuntimeError("fd_work_setting_not_persisted")
-            controller = self._window_controller
+            controller = self._interaction_coordinator
             if not enabled:
                 self._selections.clear()
+                self._active_picker_request_id = None
         if controller is not None and not enabled:
             controller.disable()
         elif controller is not None and self._privacy_authorized:
             try:
+                enable_action = getattr(controller, "enable", None)
+                if callable(enable_action):
+                    enable_action()
                 controller.prepare_session(show_login_if_required=True)
             except Exception:
                 pass
@@ -373,23 +360,24 @@ class FDWorkIntegrationService:
                 return
             self._shutdown = True
             self._selections.clear()
-            controller = self._window_controller
+            controller = self._interaction_coordinator
         if controller is not None:
             controller.shutdown()
         self._emit_status(self.get_settings_status())
 
     def _initial_controller_status(self) -> dict[str, object]:
-        if self._window_controller is None:
+        if self._interaction_coordinator is None:
             return {
                 "session_state": "idle",
                 "page_phase": "none",
                 "operation": "none",
+                "interaction_owner": "none",
                 "ready": False,
                 "login_required": False,
                 "error_code": None,
                 "navigation_generation": 0,
             }
-        return dict(self._window_controller.get_status())
+        return dict(self._interaction_coordinator.get_status())
 
     def _accept_controller_status(self, status: Mapping[str, Any]) -> None:
         with self._lock:
@@ -400,6 +388,62 @@ class FDWorkIntegrationService:
             public_status = self._status_locked()
         self._emit_status(public_status)
 
+    def _accept_picker_result(self, result: Mapping[str, Any]) -> None:
+        request_id = result.get("request_id")
+        operation_nonce = result.get("operation_nonce")
+        with self._lock:
+            if (
+                self._shutdown
+                or not self._enabled_locked()
+                or not self._privacy_authorized
+                or type(request_id) is not str
+                or request_id != self._active_picker_request_id
+                or type(operation_nonce) is not str
+                or not operation_nonce
+            ):
+                return
+            self._active_picker_request_id = None
+            if result.get("ok") is not True:
+                payload = {
+                    "ok": False,
+                    "request_id": request_id,
+                    "error": str(result.get("error") or "picker_canceled"),
+                }
+            else:
+                label = result.get("label")
+                generation = result.get("navigation_generation")
+                canonical = normalize_case_label(label)
+                if (
+                    type(label) is not str
+                    or not canonical
+                    or len(canonical) > FD_WORK_CASE_LABEL_MAX_LENGTH
+                    or type(generation) is not int
+                ):
+                    payload = {
+                        "ok": False,
+                        "request_id": request_id,
+                        "error": "page_contract_changed",
+                    }
+                else:
+                    self._cleanup_selections_locked()
+                    token = self._new_unique_token_locked()
+                    self._selections[token] = _Selection(
+                        label=canonical,
+                        navigation_generation=generation,
+                        request_id=request_id,
+                        operation_nonce=operation_nonce,
+                        expires_at=self._clock() + self._selection_ttl_seconds,
+                    )
+                    while len(self._selections) > self._selection_capacity:
+                        self._selections.popitem(last=False)
+                    payload = {
+                        "ok": True,
+                        "request_id": request_id,
+                        "selected_label": canonical,
+                        "selection_token": token,
+                    }
+        self._emit_picker_result(payload)
+
     def _status_locked(self) -> dict[str, object]:
         if self._shutdown:
             return {
@@ -408,6 +452,7 @@ class FDWorkIntegrationService:
                 "session_state": "shutdown",
                 "page_phase": "none",
                 "operation": "none",
+                "interaction_owner": "none",
                 "ready": False,
                 "login_required": False,
                 "error_code": None,
@@ -420,6 +465,7 @@ class FDWorkIntegrationService:
                 "session_state": "disabled",
                 "page_phase": "none",
                 "operation": "none",
+                "interaction_owner": "none",
                 "ready": False,
                 "login_required": False,
                 "error_code": None,
@@ -432,6 +478,7 @@ class FDWorkIntegrationService:
                 "session_state": "deferred_by_privacy",
                 "page_phase": "none",
                 "operation": "none",
+                "interaction_owner": "none",
                 "ready": False,
                 "login_required": False,
                 "error_code": None,
@@ -444,6 +491,7 @@ class FDWorkIntegrationService:
             "session_state": str(status.get("session_state") or "idle"),
             "page_phase": str(status.get("page_phase") or "none"),
             "operation": str(status.get("operation") or "none"),
+            "interaction_owner": str(status.get("interaction_owner") or "none"),
             "ready": status.get("ready") is True,
             "login_required": status.get("login_required") is True,
             "error_code": (
@@ -457,12 +505,12 @@ class FDWorkIntegrationService:
     def _enabled_locked(self) -> bool:
         return bool(self._supported and not self._shutdown and self._enabled_reader())
 
-    def _require_enabled_controller_locked(self) -> _WindowController | None:
+    def _require_enabled_controller_locked(self) -> _InteractionCoordinator | None:
         if not self._enabled_locked():
             return None
-        if self._window_controller is None:
+        if self._interaction_coordinator is None:
             raise FDWorkEntryError("window_unavailable")
-        return self._window_controller
+        return self._interaction_coordinator
 
     def _navigation_generation_locked(self) -> int:
         value = self._controller_status.get("navigation_generation")
@@ -519,13 +567,17 @@ class FDWorkIntegrationService:
         except Exception:
             pass
 
+    def _emit_picker_result(self, result: dict[str, object]) -> None:
+        try:
+            self._picker_result_callback(result)
+        except Exception:
+            pass
+
 
 __all__ = [
     "FDWorkIntegrationService",
     "FD_WORK_CASE_LABEL_MAX_LENGTH",
     "FD_WORK_ENABLED_SETTING",
-    "FD_WORK_QUERY_MAX_LENGTH",
-    "FD_WORK_QUERY_MIN_LENGTH",
     "FD_WORK_SELECTION_CAPACITY",
     "FD_WORK_SELECTION_TOKEN_MAX_LENGTH",
     "FD_WORK_SELECTION_TTL_SECONDS",

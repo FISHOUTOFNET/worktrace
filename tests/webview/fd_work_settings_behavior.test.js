@@ -95,7 +95,7 @@ test("FD Work startup timeout has a stable settings message and reconnect action
   assert.equal(element("settings-fd-work-reconnect").textContent, "重新连接");
 });
 
-test("starting recovery calls the shared login operation without local shadow state", async () => {
+test("probing recovery calls the explicit user-auth operation without local shadow state", async () => {
   const { App } = harness();
   let calls = 0;
   App.bridge = {
@@ -105,14 +105,14 @@ test("starting recovery calls the shared login operation without local shadow st
     },
   };
   App.receiveFDWorkStatus({
-    supported: true, enabled: true, session_state: "starting", operation: "none",
+    supported: true, enabled: true, session_state: "probing", operation: "none",
     ready: false, login_required: false, error_code: null,
     navigation_generation: 3,
   });
 
   assert.equal(await App.reconnectFDWork(), true);
   assert.equal(calls, 1);
-  assert.equal(App.fdWorkStatus.session_state, "starting");
+  assert.equal(App.fdWorkStatus.session_state, "probing");
 });
 
 test("late status from an older navigation generation cannot overwrite recovery", () => {
@@ -124,12 +124,12 @@ test("late status from an older navigation generation cannot overwrite recovery"
   }), true);
 
   assert.equal(App.receiveFDWorkStatus({
-    supported: true, enabled: true, session_state: "starting", operation: "none",
+    supported: true, enabled: true, session_state: "probing", operation: "none",
     ready: false, login_required: false, error_code: null,
     navigation_generation: 8,
   }), false);
   assert.equal(App.receiveFDWorkStatus({
-    supported: true, enabled: true, session_state: "starting", operation: "none",
+    supported: true, enabled: true, session_state: "probing", operation: "none",
     ready: false, login_required: false, error_code: null,
     navigation_generation: 9,
   }), false);

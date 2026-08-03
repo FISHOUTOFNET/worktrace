@@ -1400,7 +1400,7 @@
         if (capability.login_required === true) {
             return { enabled: true, state: "disabled", reason: "请先登录 FD Work" };
         }
-        if (capability.session_state === "starting" || capability.session_state === "idle") {
+        if (capability.session_state === "probing" || capability.session_state === "idle") {
             return { enabled: true, state: "busy", reason: "正在连接 FD Work…" };
         }
         if (capability.session_state === "error") {
@@ -1409,8 +1409,8 @@
         if (capability.ready !== true) {
             return { enabled: true, state: "disabled", reason: "FD Work 尚未准备完成" };
         }
-        if (capability.operation === "filling") {
-            return { enabled: true, state: "busy", reason: "正在填入 FD Work…" };
+        if (capability.interaction_owner && capability.interaction_owner !== "none") {
+            return { enabled: true, state: "busy", reason: App.fdWorkStatusText(capability) };
         }
         if (!session) {
             return { enabled: true, state: "disabled", reason: "请选择一个已结束的时间段" };

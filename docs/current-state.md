@@ -132,9 +132,10 @@ bounded reconciliation.
 - Statistics/Export: this-month default with all-time/custom options, optional
   project scope, automatic latest-request acceptance, and display-safe CSV bound
   to the accepted export ticket.
-- Project Rules: searchable/sortable summaries, direct actions and Drawers. FD Work
-  selection is optional: selected cases create a durable plugin binding; free-text
-  names remain ordinary local projects.
+- Project Rules: searchable/sortable summaries, direct actions and Drawers. With
+  FD Work disabled, project names remain ordinary editable local text. With it
+  enabled, new projects use an explicit native FD Work picker and require its
+  one-use selection proof; WorkTrace provides no cross-window autocomplete.
 - Settings/Privacy: four categories. General owns authoritative HKCU launch state
   and clipboard control; Privacy, Data and Backup, and Advanced retain their
   responsibilities. Secret inputs remain local and are cleared after use.
@@ -148,15 +149,14 @@ null clears an override, and true plus an integer sets the normalized override.
 Rule batches are atomic, manual assignments are preserved, and statistics/export
 use persisted report facts rather than frontend time.
 
-FD Work has one integration shared by Settings, Timeline and Project Rules. Its
-versioned sidecar holds explicit project bindings outside the main schema and backup;
-only durable bindings authorize Timeline fill. Privacy consent gates startup; passive
-probes stay hidden, while explicit login shows the native window immediately. Login,
-confirmation, work-shell and interactive states are distinct, and matter operations
-require a bounded visible-window lease. Search and exact fill share adapter v4's
-query-refresh handshake; its source is cached and installed once per navigation.
-User close destroys the helper for safe recreation. Bindings validate project
-identity, not adapter version. WorkTrace never reads or exports browser credentials.
+FD Work is shared by Settings, Timeline and Project Rules. Its sidecar keeps explicit
+bindings outside the main schema/backup; only bindings authorize Timeline fill.
+Privacy gates startup and passive probes stay hidden. Session state is separate from
+the exclusive interaction owner: auth/picker are user-owned, fill is automation-owned,
+and verified fill becomes user review without auto-submit. Selection occurs only in
+FD Work's native Ant Select after “选择案件”; Drawer/focus/input events never show it.
+Adapter v5 provides side-effect-free stable-shell observation plus picker/fill modes.
+GUI-dispatched mutations are generation-guarded; close permits safe recreation; v4 bindings remain valid under v5. WorkTrace never reads or exports credentials.
 
 ## Validation
 Affected validation: `python scripts/run_affected_tests.py`; full validation uses `python -m pytest`, `node --test tests/webview/*.test.js`, and Windows executable/installer smoke in Standard CI.

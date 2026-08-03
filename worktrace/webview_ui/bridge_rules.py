@@ -427,6 +427,25 @@ class ProjectRulesBridgeMixin:
             logger.exception("webview bridge create_project_for_rules failed")
             return {"ok": False, "error": "新增项目失败"}
 
+    def clear_fd_work_binding_for_rules(self, project_id) -> dict[str, Any]:
+        if not _valid_id(project_id):
+            return {"ok": False, "error": "操作无效"}
+        try:
+            result = dict(
+                self._services.rules.clear_fd_work_binding_for_rules(project_id)
+            )
+            if result.get("ok") is True:
+                return result
+            return {
+                "ok": False,
+                "error": fd_work_message(
+                    result.get("error"), "取消 FD Work 关联失败"
+                ),
+            }
+        except Exception:
+            logger.exception("webview bridge clear_fd_work_binding_for_rules failed")
+            return {"ok": False, "error": "取消 FD Work 关联失败"}
+
     def update_project_for_rules(
         self,
         project_id,

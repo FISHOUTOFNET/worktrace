@@ -1,4 +1,4 @@
-"""Lifecycle, page phase, and serialized operations for one FD Work window."""
+"""Lifecycle, page phases, and dispatched mutations for one FD Work helper."""
 
 from __future__ import annotations
 
@@ -7,7 +7,6 @@ import threading
 import time
 from typing import Any, Callable, Mapping
 
-from .contracts import FDWorkEntryDraft
 from .page_adapter import FDWorkPageAdapter, FDWorkPagePhase
 
 
@@ -40,11 +39,6 @@ _DIAGNOSTIC_EVENTS = frozenset(
         "fd_work_window_hide",
         "fd_work_window_destroy",
         "fd_work_adapter_installed",
-        "fd_work_interactive_lease_begin",
-        "fd_work_interactive_lease_ready",
-        "fd_work_interactive_lease_failed",
-        "fd_work_case_lookup_stage",
-        "fd_work_case_lookup_completed",
     }
 )
 _SAFE_RENDERERS = frozenset({"edgechromium", "cef", "qt", "gtk", "mshtml"})
@@ -72,23 +66,23 @@ class FDWorkWindowController:
         webview: Any,
         *,
         page_adapter: FDWorkPageAdapter | None = None,
+        helper_bridge: Any | None = None,
         schedule: Callable[[Callable[[], None]], None] = _run_now,
+        gui_dispatcher: Callable[[Callable[[], None]], None] | None = None,
         schedule_after: Callable[[float, Callable[[], None]], None] = _run_after,
         status_callback: Callable[[Mapping[str, Any]], None] | None = None,
         passive_probe_timeout_seconds: float = 4.0,
         work_shell_timeout_seconds: float = 12.0,
         probe_interval_seconds: float = 0.5,
-        interactive_timeout_seconds: float = 3.0,
-        search_timeout_seconds: float = 8.0,
-        fill_timeout_seconds: float = 15.0,
-        operation_timeout_seconds: float | None = None,
         login_transition_interval_seconds: float = 0.5,
         clock: Callable[[], float] = time.monotonic,
         **_retired_polling_options: Any,
     ) -> None:
         self._webview = webview
         self._page_adapter = page_adapter or FDWorkPageAdapter()
+        self._helper_bridge = helper_bridge
         self._schedule = schedule
+        self._gui_dispatcher = gui_dispatcher or schedule
         self._schedule_after = schedule_after
         self._status_callback = status_callback or (lambda _status: None)
         self._passive_probe_timeout_seconds = max(
@@ -98,26 +92,14 @@ class FDWorkWindowController:
             0.1, float(work_shell_timeout_seconds)
         )
         self._probe_interval_seconds = max(0.05, float(probe_interval_seconds))
-        self._interactive_timeout_seconds = max(
-            0.1, float(interactive_timeout_seconds)
-        )
-        self._search_timeout_seconds = max(0.1, float(search_timeout_seconds))
-        self._fill_timeout_seconds = max(0.1, float(fill_timeout_seconds))
-        if operation_timeout_seconds is not None:
-            legacy = max(0.1, float(operation_timeout_seconds))
-            self._search_timeout_seconds = min(self._search_timeout_seconds, legacy)
-            self._fill_timeout_seconds = min(self._fill_timeout_seconds, legacy)
         self._login_transition_interval_seconds = max(
             0.1, float(login_transition_interval_seconds)
         )
         self._clock = clock
         self._lock = threading.RLock()
-        self._operation_lock = threading.Lock()
         self._window: Any | None = None
         self._window_visible = False
         self._creating_window = False
-        self._pending_draft: FDWorkEntryDraft | None = None
-        self._review_visible = False
         self._shutdown = False
         self._renderer_available = True
         self._renderer_initialized = False
@@ -134,12 +116,22 @@ class FDWorkWindowController:
         self._probe_deadline: float | None = None
         self._login_watch_generation: int | None = None
         self._login_watch_deadline: float | None = None
+        self._close_callback: Callable[[int], None] = lambda _generation: None
+        self._main_focus_callback: Callable[[], None] = lambda: None
 
     def bind_status_callback(
         self, callback: Callable[[Mapping[str, Any]], None]
     ) -> None:
         with self._lock:
             self._status_callback = callback
+
+    def bind_close_callback(self, callback: Callable[[int], None]) -> None:
+        with self._lock:
+            self._close_callback = callback
+
+    def bind_main_focus_callback(self, callback: Callable[[], None]) -> None:
+        with self._lock:
+            self._main_focus_callback = callback
 
     def get_status(self) -> dict[str, Any]:
         with self._lock:
@@ -183,7 +175,7 @@ class FDWorkWindowController:
             return self._create_window(explicit=explicit)
         self._emit(status)
         if explicit:
-            self._show_window_if_current(window, generation, focus=False)
+            self._show_window_if_current(window, generation, focus=True, restore=True)
         self._arm_probe_if_needed(window, generation)
         return {"ok": True, "status": self.get_status()}
 
@@ -219,103 +211,6 @@ class FDWorkWindowController:
         if window is not None:
             self._arm_probe_if_needed(window, generation)
 
-    def search_cases(self, query: str) -> Mapping[str, Any]:
-        started = self._clock()
-        deadline = started + self._search_timeout_seconds
-        with self._lock:
-            window = self._window
-            if self._shutdown or window is None:
-                return self._failure_locked("window_unavailable")
-            if not self._renderer_available:
-                return self._failure_locked("renderer_unavailable")
-            if self._session_state == "login_required":
-                return self._failure_locked("login_required")
-            if self._session_state != "ready":
-                return self._failure_locked("fd_work_not_ready")
-            if (
-                self._review_visible
-                or self._pending_draft is not None
-                or self._operation not in {"none", "searching"}
-            ):
-                return self._failure_locked("fd_work_busy")
-            self._operation_generation += 1
-            operation_generation = self._operation_generation
-            navigation_generation = self._navigation_generation
-            self._operation = "searching"
-            self._error_code = None
-            status = self._status_locked()
-        self._emit(status)
-        self._log_event("fd_work_case_lookup_stage", elapsed_ms=0)
-
-        remaining = self._remaining(deadline)
-        if remaining <= 0 or not self._operation_lock.acquire(timeout=remaining):
-            return self._finish_search(
-                window,
-                navigation_generation,
-                operation_generation,
-                {"ok": False, "error": "case_results_timeout"},
-                started,
-            )
-        try:
-            lease = self._begin_interactive_lease(
-                window,
-                navigation_generation,
-                operation_generation,
-                "searching",
-                deadline,
-            )
-            if lease.get("ok") is not True:
-                result = lease
-            else:
-                remaining = self._remaining(deadline)
-                if remaining <= 0:
-                    result = {"ok": False, "error": "case_results_timeout"}
-                else:
-                    try:
-                        result = dict(
-                            self._page_adapter.search_cases(
-                                window,
-                                query,
-                                timeout_seconds=remaining,
-                            )
-                        )
-                    except Exception:
-                        result = {"ok": False, "error": "page_contract_changed"}
-        finally:
-            self._operation_lock.release()
-        return self._finish_search(
-            window,
-            navigation_generation,
-            operation_generation,
-            result,
-            started,
-        )
-
-    def open_entry(self, draft: FDWorkEntryDraft) -> Mapping[str, Any]:
-        with self._lock:
-            if self._shutdown:
-                return self._failure_locked("window_unavailable")
-            if not self._renderer_available:
-                return self._failure_locked("renderer_unavailable")
-            self._pending_draft = draft
-            self._review_visible = False
-            self._operation_generation += 1
-            window = self._window
-            generation = self._navigation_generation
-            ready = self._session_state == "ready"
-            status = self._status_locked()
-        self._emit(status)
-        if window is None:
-            prepared = self.prepare_session(show_login_if_required=True)
-            if prepared.get("ok") is not True:
-                return prepared
-        elif ready:
-            self._schedule(lambda: self._start_fill_if_ready(window, generation))
-        else:
-            self._show_window_if_current(window, generation, focus=False)
-            self._arm_probe_if_needed(window, generation)
-        return {"ok": True, "status": "opening"}
-
     def disable(self) -> None:
         self._stop("idle", shutdown=False)
 
@@ -331,8 +226,6 @@ class FDWorkWindowController:
             self._navigation_generation += 1
             self._operation_generation += 1
             self._adapter_installed_generation = None
-            self._pending_draft = None
-            self._review_visible = False
             self._explicit_activation = False
             self._creating_window = False
             self._session_state = state
@@ -358,8 +251,6 @@ class FDWorkWindowController:
             self._navigation_generation += 1
             self._operation_generation += 1
             self._adapter_installed_generation = None
-            self._pending_draft = None
-            self._review_visible = False
             self._creating_window = False
             self._session_state = "error"
             self._page_phase = "none"
@@ -386,7 +277,7 @@ class FDWorkWindowController:
                 width=980,
                 height=760,
                 resizable=True,
-                js_api=None,
+                js_api=self._helper_bridge,
                 hidden=True,
                 focus=False,
             )
@@ -437,7 +328,7 @@ class FDWorkWindowController:
             return {"ok": False, "error": "window_unavailable", "status": status}
         self._emit(status)
         if explicit:
-            self._show_window_if_current(window, generation, focus=False)
+            self._show_window_if_current(window, generation, focus=True, restore=True)
         loaded_event = getattr(getattr(window, "events", None), "loaded", None)
         is_loaded = getattr(loaded_event, "is_set", None)
         if callable(is_loaded) and is_loaded():
@@ -462,7 +353,6 @@ class FDWorkWindowController:
             self._session_state = "probing"
             self._page_phase = "none"
             self._operation = "none"
-            self._review_visible = False
             self._error_code = None
             generation = self._navigation_generation
             self._probe_generation = None
@@ -498,7 +388,7 @@ class FDWorkWindowController:
             if not self._navigation_is_current_locked(window, generation):
                 return
             deadline = self._probe_deadline or self._clock()
-            explicit = self._explicit_activation or self._pending_draft is not None
+            explicit = self._explicit_activation
         try:
             url = window.get_current_url()
         except Exception:
@@ -528,7 +418,6 @@ class FDWorkWindowController:
                 return
             if phase in {
                 FDWorkPagePhase.WORK_SHELL.value,
-                FDWorkPagePhase.WORK_INTERACTIVE.value,
             }:
                 self._accept_work_shell(window, generation, login_transition=False)
                 return
@@ -575,14 +464,14 @@ class FDWorkWindowController:
             self._operation = "none"
             self._error_code = "login_required"
             self._probe_generation = None
-            show = self._explicit_activation or self._pending_draft is not None
+            show = self._explicit_activation and not self._window_visible
             self._explicit_activation = False
             status = self._status_locked()
         self._emit(status)
         self._log_event("fd_work_page_phase_changed")
         self._log_event("fd_work_login_required")
         if show:
-            self._show_window_if_current(window, generation, focus=False)
+            self._show_window_if_current(window, generation, focus=True, restore=True)
         self._arm_login_transition_watch(window, generation)
 
     def _arm_login_transition_watch(self, window: Any, generation: int) -> None:
@@ -626,7 +515,6 @@ class FDWorkWindowController:
             phase = str(value.get("phase") if isinstance(value, Mapping) else "unknown")
             if phase in {
                 FDWorkPagePhase.WORK_SHELL.value,
-                FDWorkPagePhase.WORK_INTERACTIVE.value,
             }:
                 self._accept_work_shell(window, generation, login_transition=True)
                 return
@@ -664,17 +552,13 @@ class FDWorkWindowController:
             self._login_watch_generation = None
             self._login_watch_deadline = None
             self._explicit_activation = False
-            draft = self._pending_draft
             status = self._status_locked()
+        self._hide_window_if_current(window, generation)
         self._emit(status)
         self._log_event("fd_work_page_phase_changed")
         self._log_event("fd_work_ready")
         if login_transition:
             self._log_event("fd_work_login_transition_completed")
-        if draft is not None:
-            self._start_fill_if_ready(window, generation)
-        else:
-            self._hide_window_if_current(window, generation)
 
     def _ensure_adapter_installed(
         self, window: Any, generation: int
@@ -697,202 +581,6 @@ class FDWorkWindowController:
             self._log_event("fd_work_adapter_installed")
         return result
 
-    def _begin_interactive_lease(
-        self,
-        window: Any,
-        navigation_generation: int,
-        operation_generation: int,
-        operation: str,
-        deadline: float,
-    ) -> Mapping[str, Any]:
-        self._log_event("fd_work_interactive_lease_begin")
-        self._show_window_if_current(window, navigation_generation, focus=False)
-        with self._lock:
-            if not self._operation_is_current_locked(
-                window,
-                navigation_generation,
-                operation_generation,
-                operation,
-            ):
-                return {"ok": False, "error": "lookup_superseded"}
-        installed = self._ensure_adapter_installed(window, navigation_generation)
-        if installed.get("ok") is not True:
-            return installed
-        remaining = min(
-            self._interactive_timeout_seconds,
-            self._remaining(deadline),
-        )
-        if remaining <= 0:
-            return {"ok": False, "error": "case_input_not_interactive"}
-        try:
-            result = dict(
-                self._page_adapter.check_work_interactive(window, remaining)
-            )
-        except Exception:
-            result = {"ok": False, "error": "case_input_not_interactive"}
-        with self._lock:
-            if not self._operation_is_current_locked(
-                window,
-                navigation_generation,
-                operation_generation,
-                operation,
-            ):
-                return {"ok": False, "error": "lookup_superseded"}
-            if result.get("ok") is True:
-                self._page_phase = FDWorkPagePhase.WORK_INTERACTIVE.value
-                status = self._status_locked()
-            else:
-                status = None
-        if status is not None:
-            self._emit(status)
-            self._log_event("fd_work_interactive_lease_ready", **result)
-        else:
-            self._log_event("fd_work_interactive_lease_failed", **result)
-        return result
-
-    def _finish_search(
-        self,
-        window: Any,
-        navigation_generation: int,
-        operation_generation: int,
-        result: Mapping[str, Any],
-        started: float,
-    ) -> Mapping[str, Any]:
-        with self._lock:
-            if not self._operation_is_current_locked(
-                window,
-                navigation_generation,
-                operation_generation,
-                "searching",
-            ):
-                return {"ok": False, "error": "lookup_superseded"}
-            self._operation = "none"
-            self._page_phase = FDWorkPagePhase.WORK_SHELL.value
-            self._error_code = (
-                None
-                if result.get("ok") is True
-                else str(result.get("error") or "page_contract_changed")
-            )
-            status = self._status_locked()
-        self._emit(status)
-        self._hide_window_if_current(window, navigation_generation)
-        safe_result = dict(result)
-        safe_result["navigation_generation"] = navigation_generation
-        self._log_event(
-            "fd_work_case_lookup_completed",
-            elapsed_ms=max(0, int((self._clock() - started) * 1000)),
-            error_code=self._error_code,
-            result_count=(
-                len(safe_result.get("labels", []))
-                if isinstance(safe_result.get("labels"), list)
-                else 0
-            ),
-        )
-        return safe_result
-
-    def _start_fill_if_ready(self, window: Any, generation: int) -> None:
-        with self._lock:
-            if (
-                not self._navigation_is_current_locked(window, generation)
-                or self._session_state != "ready"
-                or self._operation != "none"
-                or self._pending_draft is None
-            ):
-                return
-            draft = self._pending_draft
-            self._operation_generation += 1
-            operation_generation = self._operation_generation
-            self._operation = "filling"
-            self._error_code = None
-            status = self._status_locked()
-        self._emit(status)
-        self._run_fill(window, generation, operation_generation, draft)
-
-    def _run_fill(
-        self,
-        window: Any,
-        navigation_generation: int,
-        operation_generation: int,
-        draft: FDWorkEntryDraft,
-    ) -> None:
-        deadline = self._clock() + self._fill_timeout_seconds
-        remaining = self._remaining(deadline)
-        if remaining <= 0 or not self._operation_lock.acquire(timeout=remaining):
-            self._finish_fill(
-                window,
-                navigation_generation,
-                operation_generation,
-                draft,
-                {"ok": False, "error": "page_operation_timeout"},
-            )
-            return
-        try:
-            lease = self._begin_interactive_lease(
-                window,
-                navigation_generation,
-                operation_generation,
-                "filling",
-                deadline,
-            )
-            if lease.get("ok") is not True:
-                result = lease
-            else:
-                remaining = self._remaining(deadline)
-                if remaining <= 0:
-                    result = {"ok": False, "error": "page_operation_timeout"}
-                else:
-                    try:
-                        result = dict(
-                            self._page_adapter.fill_entry(
-                                window,
-                                draft,
-                                timeout_seconds=remaining,
-                            )
-                        )
-                    except Exception:
-                        result = {"ok": False, "error": "page_contract_changed"}
-        finally:
-            self._operation_lock.release()
-        self._finish_fill(
-            window,
-            navigation_generation,
-            operation_generation,
-            draft,
-            result,
-        )
-
-    def _finish_fill(
-        self,
-        window: Any,
-        navigation_generation: int,
-        operation_generation: int,
-        draft: FDWorkEntryDraft,
-        result: Mapping[str, Any],
-    ) -> None:
-        with self._lock:
-            if not self._operation_is_current_locked(
-                window,
-                navigation_generation,
-                operation_generation,
-                "filling",
-            ):
-                return
-            self._operation = "none"
-            self._page_phase = FDWorkPagePhase.WORK_SHELL.value
-            if result.get("ok") is True:
-                if self._pending_draft is draft:
-                    self._pending_draft = None
-                self._review_visible = True
-                self._error_code = None
-            else:
-                self._error_code = str(
-                    result.get("error") or "page_contract_changed"
-                )
-            self._session_state = "ready"
-            status = self._status_locked()
-        self._emit(status)
-        self._show_window_if_current(window, navigation_generation, focus=True)
-
     def _on_closing(self, window: Any) -> bool:
         with self._lock:
             if self._shutdown or self._window is not window:
@@ -900,8 +588,6 @@ class FDWorkWindowController:
             self._navigation_generation += 1
             self._operation_generation += 1
             self._adapter_installed_generation = None
-            self._pending_draft = None
-            self._review_visible = False
             self._explicit_activation = False
             self._window_visible = False
             self._session_state = "idle"
@@ -912,6 +598,12 @@ class FDWorkWindowController:
             self._probe_deadline = None
             self._login_watch_generation = None
             self._login_watch_deadline = None
+            generation = self._navigation_generation
+            close_callback = self._close_callback
+        try:
+            close_callback(generation)
+        except Exception:
+            pass
         return True
 
     def _on_closed(self, window: Any) -> None:
@@ -924,8 +616,6 @@ class FDWorkWindowController:
             self._window_visible = False
             self._creating_window = False
             self._adapter_installed_generation = None
-            self._pending_draft = None
-            self._review_visible = False
             self._explicit_activation = False
             self._session_state = "idle"
             self._page_phase = "none"
@@ -956,64 +646,175 @@ class FDWorkWindowController:
         self._emit(status)
         self._log_event("fd_work_page_phase_changed", error_code=error)
 
-    def _hide_window_if_current(self, window: Any, generation: int) -> None:
+    def foreground(
+        self,
+        owner: str,
+        operation_generation: int,
+        guard: Callable[[], bool],
+    ) -> dict[str, Any]:
+        if owner not in {"user_auth", "user_picker", "automation_fill"}:
+            return {"ok": False, "error": "invalid_interaction_owner"}
+        with self._lock:
+            window = self._window
+            navigation_generation = self._navigation_generation
+            if self._shutdown or window is None:
+                return self._failure_locked("window_unavailable")
+            if owner in {"user_picker", "automation_fill"} and self._session_state != "ready":
+                return self._failure_locked("fd_work_not_ready")
+
+        def current() -> bool:
+            return bool(
+                self._navigation_is_current(window, navigation_generation)
+                and guard()
+            )
+
+        if not self._show_window_if_current(
+            window,
+            navigation_generation,
+            focus=True,
+            restore=True,
+            external_guard=current,
+        ):
+            return {"ok": False, "error": "lookup_superseded"}
+        return {
+            "ok": True,
+            "window": window,
+            "navigation_generation": navigation_generation,
+            "operation_generation": operation_generation,
+        }
+
+    def hide_and_restore_main(
+        self,
+        navigation_generation: int,
+        operation_generation: int,
+        guard: Callable[[], bool],
+    ) -> None:
+        del operation_generation
+        with self._lock:
+            window = self._window
+            main_focus = self._main_focus_callback
+        if window is None:
+            return
+
+        def current() -> bool:
+            return bool(
+                self._navigation_is_current(window, navigation_generation)
+                and guard()
+            )
+
+        def mutate() -> None:
+            callback = getattr(window, "hide", None)
+            if callable(callback):
+                callback()
+            main_focus()
+
+        if self._dispatch_window_mutation(mutate, current):
+            with self._lock:
+                if self._window is window:
+                    self._window_visible = False
+            self._log_event("fd_work_window_hide")
+
+    def _hide_window_if_current(self, window: Any, generation: int) -> bool:
         with self._lock:
             if not self._navigation_is_current_locked(window, generation):
-                return
+                return False
             if self._page_phase in {
                 FDWorkPagePhase.LOGIN_CREDENTIALS.value,
                 FDWorkPagePhase.LOGIN_CONFIRMATION.value,
             }:
-                return
-        try:
-            window.hide()
-        except Exception:
-            return
+                return False
+        callback = getattr(window, "hide", None)
+        guard = lambda: self._navigation_is_current(window, generation)
+        if not callable(callback) or not self._dispatch_window_mutation(callback, guard):
+            return False
         with self._lock:
             if self._window is window:
                 self._window_visible = False
         self._log_event("fd_work_window_hide")
+        return True
 
     def _show_window_if_current(
-        self, window: Any, generation: int, *, focus: bool
-    ) -> None:
+        self,
+        window: Any,
+        generation: int,
+        *,
+        focus: bool,
+        restore: bool,
+        external_guard: Callable[[], bool] | None = None,
+    ) -> bool:
         with self._lock:
             if not self._navigation_is_current_locked(window, generation):
-                return
-            already_visible = self._window_visible
-        for action in (() if already_visible else ("show", "restore")):
-            with self._lock:
-                if not self._navigation_is_current_locked(window, generation):
-                    return
-            callback = getattr(window, action, None)
-            if callable(callback):
-                try:
-                    callback()
-                except Exception:
-                    pass
+                return False
+
+        def guard() -> bool:
+            return bool(
+                self._navigation_is_current(window, generation)
+                and (external_guard is None or external_guard())
+            )
+
+        def mutate() -> None:
+            for action in (
+                "show",
+                "restore" if restore else None,
+                "focus" if focus else None,
+            ):
+                if action:
+                    callback = getattr(window, action, None)
+                    if callable(callback):
+                        callback()
+
+        if not self._dispatch_window_mutation(mutate, guard):
+            return False
         with self._lock:
             if self._navigation_is_current_locked(window, generation):
                 self._window_visible = True
-        if focus:
-            with self._lock:
-                if not self._navigation_is_current_locked(window, generation):
-                    return
-            callback = getattr(window, "focus", None)
-            if callable(callback):
-                try:
-                    callback()
-                except Exception:
-                    pass
         self._log_event("fd_work_window_show")
+        return True
 
     def _destroy_window(self, window: Any | None) -> None:
         if window is None:
             return
+        callback = getattr(window, "destroy", None)
+        if not callable(callback):
+            return
+
+        def guard() -> bool:
+            with self._lock:
+                return self._window is not window
+
+        if self._dispatch_window_mutation(callback, guard):
+            self._log_event("fd_work_window_destroy")
+
+    def _dispatch_window_mutation(
+        self,
+        mutation: Callable[[], None],
+        guard: Callable[[], bool],
+    ) -> bool:
+        completed = threading.Event()
+        outcome = {"ok": False}
+
+        def dispatched() -> None:
+            if not guard():
+                completed.set()
+                return
+            try:
+                mutation()
+            except Exception:
+                completed.set()
+                return
+            outcome["ok"] = bool(guard())
+            completed.set()
+
         try:
-            window.destroy()
+            self._gui_dispatcher(dispatched)
         except Exception:
-            pass
-        self._log_event("fd_work_window_destroy")
+            return False
+        completed.wait(timeout=2.0)
+        return bool(completed.is_set() and outcome["ok"])
+
+    def _navigation_is_current(self, window: Any, generation: int) -> bool:
+        with self._lock:
+            return self._navigation_is_current_locked(window, generation)
 
     def _navigation_is_current_locked(
         self, window: Any, generation: int
@@ -1023,19 +824,6 @@ class FDWorkWindowController:
             and self._renderer_available
             and self._window is window
             and self._navigation_generation == generation
-        )
-
-    def _operation_is_current_locked(
-        self,
-        window: Any,
-        navigation_generation: int,
-        operation_generation: int,
-        operation: str,
-    ) -> bool:
-        return bool(
-            self._navigation_is_current_locked(window, navigation_generation)
-            and self._operation_generation == operation_generation
-            and self._operation == operation
         )
 
     def _status_locked(self) -> dict[str, Any]:

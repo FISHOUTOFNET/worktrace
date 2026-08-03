@@ -231,10 +231,13 @@
                         <div id="rules-panel-status" class="inline-alert" role="status" aria-live="polite" hidden></div>
                         <button id="rules-panel-rule-tab" type="button" hidden>规则</button><button id="rules-panel-project-tab" type="button" hidden>项目</button>
                         <section id="rules-panel-project-section" class="drawer-form">
-                            <label class="field"><span id="rules-panel-project-name-label">项目名称</span><span class="fd-work-case-control"><input id="rules-panel-project-name" type="text" maxlength="100" autocomplete="off"><span id="rules-panel-fd-work-options" class="fd-work-case-listbox" role="listbox" hidden></span></span></label>
-                            <p id="rules-panel-fd-work-help" class="field-help" hidden>从 FD Work 案件列表中选择；选中的完整案件名称将作为项目名称。</p>
+                            <label class="field"><span id="rules-panel-project-name-label">项目名称</span><input id="rules-panel-project-name" type="text" maxlength="100" autocomplete="off"></label>
+                            <div id="rules-panel-fd-work-picker" class="fd-work-picker-control" hidden>
+                                <label class="field" for="rules-panel-fd-work-selected-label"><span>已选案件</span><input id="rules-panel-fd-work-selected-label" type="text" maxlength="100" readonly placeholder="尚未选择"></label>
+                                <div class="fd-work-picker-actions"><button id="rules-panel-fd-work-pick" type="button">选择案件</button><button id="rules-panel-fd-work-clear" type="button">取消关联</button></div>
+                            </div>
+                            <p id="rules-panel-fd-work-help" class="field-help" hidden>案件选择只在 FD Work 原生窗口中完成；WorkTrace 不提供跨窗口实时搜索。</p>
                             <div id="rules-panel-fd-work-status" class="inline-status" role="status" aria-live="polite" hidden></div>
-                            <button id="rules-panel-fd-work-login" type="button" hidden>登录 FD Work</button>
                             <label class="field"><span>描述</span><textarea id="rules-panel-project-description" maxlength="500" rows="2"></textarea></label>
                             <select id="rules-panel-project-language" hidden><option value="中文">中文</option></select>
                             <label id="rules-panel-project-language-other-row" hidden>其他语言<input id="rules-panel-project-language-other" type="text"></label>

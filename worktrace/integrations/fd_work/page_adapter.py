@@ -1,4 +1,4 @@
-"""Sole owner of FD Work URLs, page knowledge, selectors and JS injection."""
+"""Sole owner of FD Work URLs, page phases, selectors, and adapter actions."""
 
 from __future__ import annotations
 
@@ -6,16 +6,13 @@ from enum import Enum
 import json
 from pathlib import Path
 import threading
+import time
 from typing import Any, Callable, Mapping
 from urllib.parse import urlencode, urlparse, urlsplit, urlunsplit
 
 from .case_identity import normalize_case_label
 from .contracts import FDWorkEntryDraft
-from .limits import (
-    FD_WORK_ADAPTER_CONTRACT_VERSION,
-    FD_WORK_CASE_LABEL_MAX_LENGTH,
-    FD_WORK_CASE_SEARCH_LIMIT,
-)
+from .limits import FD_WORK_ADAPTER_CONTRACT_VERSION, FD_WORK_CASE_LABEL_MAX_LENGTH
 
 
 class FDWorkPageType(Enum):
@@ -30,7 +27,6 @@ class FDWorkPagePhase(Enum):
     LOGIN_CREDENTIALS = "login_credentials"
     LOGIN_CONFIRMATION = "login_confirmation"
     WORK_SHELL = "work_shell"
-    WORK_INTERACTIVE = "work_interactive"
     UNAUTHORIZED = "unauthorized"
     ERROR = "error"
     UNKNOWN = "unknown"
@@ -44,17 +40,13 @@ _ACTION_ERRORS = frozenset(
         "case_input_missing",
         "case_input_not_interactive",
         "case_input_not_rendered",
-        "case_aria_controls_missing",
         "case_popup_not_created",
-        "case_popup_not_interactive",
-        "case_query_not_applied",
-        "case_results_stale",
-        "case_results_timeout",
         "case_not_found",
         "case_ambiguous",
+        "case_selection_required",
         "case_selection_mismatch",
-        "duplicate_case_label",
         "ignored_required_field_missing",
+        "fd_work_busy",
         "lookup_superseded",
         "page_contract_changed",
         "page_operation_timeout",
@@ -106,9 +98,7 @@ class FDWorkPageAdapter:
     @property
     def login_url(self) -> str:
         business = urlsplit(self.business_url)
-        return_path = business.path + (
-            f"?{business.query}" if business.query else ""
-        )
+        return_path = business.path + (f"?{business.query}" if business.query else "")
         return urlunsplit(
             (
                 business.scheme,
@@ -127,17 +117,12 @@ class FDWorkPageAdapter:
     def adapter_source(self) -> str:
         with self._source_lock:
             if self._adapter_source is None:
-                self._adapter_source = self._adapter_asset_path.read_text(
-                    encoding="utf-8"
-                )
+                self._adapter_source = self._adapter_asset_path.read_text(encoding="utf-8")
             return self._adapter_source
 
     def reload_adapter_source(self) -> str:
-        """Explicit development helper; production keeps one instance cache."""
         with self._source_lock:
-            self._adapter_source = self._adapter_asset_path.read_text(
-                encoding="utf-8"
-            )
+            self._adapter_source = self._adapter_asset_path.read_text(encoding="utf-8")
             return self._adapter_source
 
     def detect_page(self, url: str | None) -> FDWorkPageType:
@@ -154,10 +139,7 @@ class FDWorkPageAdapter:
 
     def detect_page_hint(self, url: str | None) -> str:
         parsed = urlparse(str(url or ""))
-        if (
-            parsed.scheme != "https"
-            or parsed.hostname not in self.allowed_navigation_hosts
-        ):
+        if parsed.scheme != "https" or parsed.hostname not in self.allowed_navigation_hosts:
             return FDWorkPagePhase.UNKNOWN.value
         path = parsed.path.rstrip("/").lower() or "/"
         if path == "/login":
@@ -174,16 +156,10 @@ class FDWorkPageAdapter:
 
     def navigation_allowed(self, url: str | None) -> bool:
         parsed = urlparse(str(url or ""))
-        return (
-            parsed.scheme == "https"
-            and parsed.hostname in self.allowed_navigation_hosts
-        )
+        return parsed.scheme == "https" and parsed.hostname in self.allowed_navigation_hosts
 
     @staticmethod
-    def probe_page_phase(
-        window: Any,
-        callback: Callable[[Any], None],
-    ) -> None:
+    def probe_page_phase(window: Any, callback: Callable[[Any], None]) -> None:
         script = r"""
 (function(){
   function visible(element) {
@@ -204,19 +180,12 @@ class FDWorkPageAdapter:
       visible
     );
     var password = Array.prototype.find.call(document.querySelectorAll('input[type="password"]'), visible);
-    var login = Array.prototype.find.call(document.querySelectorAll('button,input[type="submit"]'), visible);
-    if (bodyReady || account || password || login) {
+    if (bodyReady || account || password) {
       return {phase:"login_credentials", body_exists:bodyReady, input_exists:!!(account && password)};
     }
   }
   if (path === "/logintoken") {
-    var confirmationControl = Array.prototype.find.call(
-      document.querySelectorAll('button,a[href],input[type="button"],input[type="submit"]'),
-      visible
-    );
-    if (bodyReady || confirmationControl) {
-      return {phase:"login_confirmation", body_exists:bodyReady, input_exists:false};
-    }
+    if (bodyReady) return {phase:"login_confirmation", body_exists:true, input_exists:false};
   }
   if (["/permission","/unauthorized","/forbidden"].indexOf(path) >= 0) {
     return {phase:"unauthorized", body_exists:bodyReady};
@@ -244,174 +213,184 @@ class FDWorkPageAdapter:
             return {"ok": False, "error": "adapter_injection_failed"}
         return {"ok": True, "version": self.adapter_version}
 
-    def build_interactive_script(self, timeout_seconds: float) -> str:
-        contract = self._case_contract(timeout_seconds)
-        return (
-            "(function(){var a=window.WorkTraceFDWorkAdapter;"
-            f"if(!a)return {{ok:false,error:'adapter_missing'}};"
-            f"if(a.version!=={self.adapter_version})"
-            "return {ok:false,error:'adapter_version_mismatch'};"
-            f"return a.interactiveHandshake({contract});}})()"
-        )
-
-    def build_fill_script(
-        self,
-        draft: FDWorkEntryDraft,
-        timeout_seconds: float = 15.0,
-    ) -> str:
-        payload = json.dumps(
-            {
-                "work_date": draft.work_date,
-                "case_number": draft.case_number,
-                "duration_hours": draft.duration_hours,
-                "narrative": draft.narrative,
-            },
-            ensure_ascii=True,
-            separators=(",", ":"),
-        )
-        contract = self._entry_contract(timeout_seconds)
-        return (
-            "(function(){var a=window.WorkTraceFDWorkAdapter;"
-            "if(!a)return {ok:false,error:'adapter_missing'};"
-            f"if(a.version!=={self.adapter_version})"
-            "return {ok:false,error:'adapter_version_mismatch'};"
-            f"return a.fillEntry({payload},{contract});}})()"
-        )
-
-    def build_search_script(
-        self,
-        query: str,
-        timeout_seconds: float = 8.0,
-    ) -> str:
-        payload = json.dumps(str(query), ensure_ascii=True, separators=(",", ":"))
-        contract = self._case_contract(timeout_seconds)
-        return (
-            "(function(){var a=window.WorkTraceFDWorkAdapter;"
-            "if(!a)return {ok:false,error:'adapter_missing'};"
-            f"if(a.version!=={self.adapter_version})"
-            "return {ok:false,error:'adapter_version_mismatch'};"
-            f"return a.searchCases({payload},{contract});}})()"
-        )
-
-    def check_work_interactive(
+    def await_stable_work_shell(
         self,
         window: Any,
-        timeout_seconds: float,
+        contract: Mapping[str, Any],
     ) -> dict[str, Any]:
-        result = self._evaluate_action(
+        return self._run_action(
             window,
-            self.build_interactive_script(timeout_seconds),
-            timeout_seconds=timeout_seconds,
+            "awaitStableWorkShell",
+            self._picker_contract(contract),
             timeout_error="case_input_not_interactive",
+            respect_operation_deadline=True,
         )
-        return self._validated_action_result(result)
+
+    def enter_case_picker(
+        self,
+        window: Any,
+        contract: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        return self._run_action(
+            window,
+            "enterCasePicker",
+            self._picker_contract(contract),
+            timeout_error="page_operation_timeout",
+        )
+
+    def read_selected_case(
+        self,
+        window: Any,
+        contract: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        result_value = self._run_action(
+            window,
+            "readSelectedCase",
+            self._picker_contract(contract),
+            timeout_error="page_operation_timeout",
+        )
+        if result_value.get("ok") is not True:
+            return result_value
+        label = result_value.get("label")
+        if not isinstance(label, str):
+            return {"ok": False, "error": "page_contract_changed"}
+        canonical = normalize_case_label(label)
+        if not canonical or len(canonical) > FD_WORK_CASE_LABEL_MAX_LENGTH:
+            return {"ok": False, "error": "page_contract_changed"}
+        return {"ok": True, "label": canonical}
+
+    def leave_case_picker(
+        self,
+        window: Any,
+        contract: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        return self._run_action(
+            window,
+            "leaveCasePicker",
+            self._picker_contract(contract),
+            timeout_error="page_operation_timeout",
+            takes_contract=False,
+        )
 
     def fill_entry(
         self,
         window: Any,
         draft: FDWorkEntryDraft,
         *,
-        timeout_seconds: float = 15.0,
+        contract: Mapping[str, Any],
     ) -> dict[str, Any]:
-        result = self._evaluate_action(
-            window,
-            self.build_fill_script(draft, timeout_seconds),
-            timeout_seconds=timeout_seconds,
-            timeout_error="page_operation_timeout",
-        )
-        if not isinstance(result, Mapping):
-            return {"ok": False, "error": "page_contract_changed"}
-        if result.get("ok") is True and result.get("status") == "filled":
-            return {"ok": True, "status": "filled"}
-        return self._validated_action_result(result)
-
-    def search_cases(
-        self,
-        window: Any,
-        query: str,
-        *,
-        timeout_seconds: float = 8.0,
-    ) -> dict[str, Any]:
-        result = self._evaluate_action(
-            window,
-            self.build_search_script(query, timeout_seconds),
-            timeout_seconds=timeout_seconds,
-            timeout_error="case_results_timeout",
-        )
-        if not isinstance(result, Mapping):
-            return {"ok": False, "error": "page_contract_changed"}
-        if result.get("ok") is False:
-            return self._validated_action_result(result)
-        labels = result.get("labels")
-        if result.get("ok") is not True or not isinstance(labels, list):
-            return {"ok": False, "error": "page_contract_changed"}
-        if len(labels) > FD_WORK_CASE_SEARCH_LIMIT:
-            return {"ok": False, "error": "page_contract_changed"}
-        normalized: list[str] = []
-        seen: set[str] = set()
-        for label in labels:
-            if not isinstance(label, str):
-                return {"ok": False, "error": "page_contract_changed"}
-            canonical = normalize_case_label(label)
-            if not canonical or len(canonical) > FD_WORK_CASE_LABEL_MAX_LENGTH:
-                return {"ok": False, "error": "page_contract_changed"}
-            if canonical in seen:
-                return {"ok": False, "error": "duplicate_case_label"}
-            seen.add(canonical)
-            normalized.append(canonical)
-        return {"ok": True, "labels": normalized}
-
-    def _case_contract(self, timeout_seconds: float) -> str:
-        timeout_ms = max(1, int(float(timeout_seconds) * 1000))
-        popup_ms = min(3000, timeout_ms)
         payload = {
+            "work_date": draft.work_date,
+            "case_number": draft.case_number,
+            "duration_hours": draft.duration_hours,
+            "narrative": draft.narrative,
+        }
+        result_value = self._run_action(
+            window,
+            "fillEntry",
+            self._entry_contract(contract),
+            payload=payload,
+            timeout_error="page_operation_timeout",
+            respect_operation_deadline=True,
+        )
+        if result_value.get("ok") is True and result_value.get("status") == "filled":
+            return {"ok": True, "status": "filled"}
+        return result_value
+
+    def _picker_contract(self, operation: Mapping[str, Any]) -> dict[str, Any]:
+        timeout_seconds = max(0.01, float(operation.get("timeout_seconds") or 5.0))
+        operation_deadline_ms = int(
+            operation.get("operation_deadline_ms")
+            or (time.time() * 1000 + timeout_seconds * 1000)
+        )
+        return {
             "version": self.adapter_version,
             "page_type": FDWorkPageType.WORK_HOUR_LIST.value,
+            "operation_nonce": str(operation.get("operation_nonce") or ""),
+            "operation_generation": int(operation.get("operation_generation") or 0),
+            "navigation_generation": int(operation.get("navigation_generation") or 0),
+            "deadline_ms": max(1, int(timeout_seconds * 1000)),
+            "operation_deadline_ms": operation_deadline_ms,
+            "form_selector": "form#basic",
             "field": self.field_contract["case_number"],
             "fields": {"case_number": self.field_contract["case_number"]},
-            "empty_text": "暂无数据",
-            "max_options": FD_WORK_CASE_SEARCH_LIMIT,
             "max_label_length": FD_WORK_CASE_LABEL_MAX_LENGTH,
-            "popup_timeout_ms": popup_ms,
-            "lookup_timeout_ms": timeout_ms,
-            "stability_ms": 200,
         }
-        return json.dumps(payload, ensure_ascii=True, separators=(",", ":"))
 
-    def _entry_contract(self, timeout_seconds: float) -> str:
-        payload = json.loads(self._case_contract(timeout_seconds))
+    def _entry_contract(self, operation: Mapping[str, Any]) -> dict[str, Any]:
+        payload = self._picker_contract(operation)
         payload.update(
             {
-                "form_selector": "form#basic",
                 "fields": self.field_contract,
                 "ignored_fields": self.ignored_field_contract,
                 "native_actions": ("提交", "保存", "关闭"),
             }
         )
-        return json.dumps(payload, ensure_ascii=True, separators=(",", ":"))
+        return payload
+
+    def _run_action(
+        self,
+        window: Any,
+        action: str,
+        contract: Mapping[str, Any],
+        *,
+        payload: Mapping[str, Any] | None = None,
+        timeout_error: str,
+        takes_contract: bool = True,
+        respect_operation_deadline: bool = False,
+    ) -> dict[str, Any]:
+        contract_json = json.dumps(dict(contract), ensure_ascii=True, separators=(",", ":"))
+        if payload is not None:
+            payload_json = json.dumps(dict(payload), ensure_ascii=True, separators=(",", ":"))
+            arguments = f"{payload_json},{contract_json}"
+        elif takes_contract:
+            arguments = contract_json
+        else:
+            arguments = ""
+        script = (
+            "(function(){var a=window.WorkTraceFDWorkAdapter;"
+            "if(!a)return {ok:false,error:'adapter_missing'};"
+            f"if(a.version!=={self.adapter_version})"
+            "return {ok:false,error:'adapter_version_mismatch'};"
+            f"if(typeof a.{action}!==\"function\")"
+            "return {ok:false,error:'adapter_version_mismatch'};"
+            f"return a.{action}({arguments});}})()"
+        )
+        remaining_ms = float(contract.get("deadline_ms") or 5000)
+        absolute_deadline = contract.get("operation_deadline_ms")
+        if respect_operation_deadline and isinstance(absolute_deadline, (int, float)):
+            remaining_ms = min(
+                remaining_ms,
+                max(10.0, float(absolute_deadline) - time.time() * 1000),
+            )
+        timeout_seconds = max(0.01, remaining_ms / 1000)
+        value = self._evaluate_action(
+            window,
+            script,
+            timeout_seconds=timeout_seconds,
+            timeout_error=timeout_error,
+        )
+        return self._validated_action_result(value)
 
     @staticmethod
-    def _validated_action_result(result: Any) -> dict[str, Any]:
-        if not isinstance(result, Mapping):
+    def _validated_action_result(value: Any) -> dict[str, Any]:
+        if not isinstance(value, Mapping):
             return {"ok": False, "error": "page_contract_changed"}
-        if result.get("ok") is True:
-            return dict(result)
-        error = result.get("error")
+        if value.get("ok") is True:
+            return dict(value)
+        error = value.get("error")
         if isinstance(error, str) and error in _ACTION_ERRORS:
-            safe = {"ok": False, "error": error}
+            safe: dict[str, Any] = {"ok": False, "error": error}
             for key in (
-                "phase",
+                "status",
+                "label",
                 "document_visibility",
                 "viewport_available",
                 "input_exists",
                 "input_interactive",
-                "popup_exists",
-                "popup_interactive",
-                "loading_observed",
-                "result_count",
             ):
-                if key in result:
-                    safe[key] = result[key]
+                if key in value:
+                    safe[key] = value[key]
             return safe
         return {"ok": False, "error": "page_contract_changed"}
 
@@ -434,6 +413,11 @@ class FDWorkPageAdapter:
 
         try:
             window.evaluate_js(script, callback=accept_result)
+        except TypeError:
+            try:
+                return window.evaluate_js(script)
+            except Exception:
+                return {"ok": False, "error": "page_contract_changed"}
         except Exception:
             return {"ok": False, "error": "page_contract_changed"}
         if not completed.wait(timeout=max(0.01, float(timeout_seconds))):

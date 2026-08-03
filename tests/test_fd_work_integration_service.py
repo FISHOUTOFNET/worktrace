@@ -4,13 +4,8 @@ from dataclasses import dataclass
 
 import pytest
 
-from worktrace.integrations.fd_work.contracts import (
-    FDWorkEntryDraft,
-    FDWorkEntryError,
-)
-from worktrace.integrations.fd_work.integration_service import (
-    FDWorkIntegrationService,
-)
+from worktrace.integrations.fd_work.contracts import FDWorkEntryDraft, FDWorkEntryError
+from worktrace.integrations.fd_work.integration_service import FDWorkIntegrationService
 
 
 pytestmark = [pytest.mark.unit, pytest.mark.contract, pytest.mark.parallel_safe]
@@ -19,14 +14,11 @@ pytestmark = [pytest.mark.unit, pytest.mark.contract, pytest.mark.parallel_safe]
 @dataclass
 class _DraftBuilder:
     draft: FDWorkEntryDraft = FDWorkEntryDraft(
-        "2026-08-01",
-        "CASE LABEL",
-        "1.0",
-        "Narrative",
+        "2026-08-03", "CASE LABEL", "1.0", "Narrative"
     )
 
-    def __post_init__(self) -> None:
-        self.calls: list[tuple[str, str, str]] = []
+    def __post_init__(self):
+        self.calls = []
 
     def build(self, report_date, projection_instance_key, expected_projection_revision):
         self.calls.append(
@@ -35,21 +27,25 @@ class _DraftBuilder:
         return self.draft
 
 
-class _Controller:
+class _Coordinator:
     def __init__(self) -> None:
-        self.prepare_calls: list[bool] = []
-        self.startup_prepare_calls: list[bool] = []
-        self.renderer_calls: list[str] = []
-        self.search_calls: list[str] = []
-        self.open_calls: list[FDWorkEntryDraft] = []
+        self.prepare_calls = []
+        self.startup_prepare_calls = []
+        self.renderer_calls = []
+        self.picker_calls = []
+        self.open_calls = []
         self.disable_calls = 0
+        self.enable_calls = 0
         self.shutdown_calls = 0
         self.generation = 3
         self._status_callback = None
+        self._picker_result_callback = None
         self.status = {
-            "session_state": "idle",
+            "session_state": "ready",
+            "page_phase": "work_shell",
             "operation": "none",
-            "ready": False,
+            "interaction_owner": "none",
+            "ready": True,
             "login_required": False,
             "error_code": None,
             "navigation_generation": self.generation,
@@ -58,6 +54,9 @@ class _Controller:
     def bind_status_callback(self, callback):
         self._status_callback = callback
 
+    def bind_picker_result_callback(self, callback):
+        self._picker_result_callback = callback
+
     def get_status(self):
         return dict(self.status)
 
@@ -65,220 +64,227 @@ class _Controller:
         self.prepare_calls.append(show_login_if_required)
         return {"ok": True, "status": self.get_status()}
 
-    def prepare_window_before_start(self, show_login_if_required=True):
+    def prepare_window_before_start(self, show_login_if_required=False):
         self.startup_prepare_calls.append(show_login_if_required)
         return {"ok": True, "status": self.get_status()}
 
     def on_renderer_initialized(self, renderer):
         self.renderer_calls.append(renderer)
 
-    def search_cases(self, query):
-        self.search_calls.append(query)
-        return {
-            "ok": True,
-            "labels": [" CASE A ", "CASE B"],
-            "navigation_generation": self.generation,
-        }
+    def open_case_picker(self, request_id):
+        self.picker_calls.append(request_id)
+        return {"ok": True, "request_id": request_id, "operation_nonce": "nonce"}
 
     def open_entry(self, draft):
         self.open_calls.append(draft)
-        return {"ok": True, "status": "opening"}
+        return {"ok": True, "status": "review"}
+
+    def enable(self):
+        self.enable_calls += 1
 
     def disable(self):
         self.disable_calls += 1
-        self.generation += 1
 
     def shutdown(self):
         self.shutdown_calls += 1
 
-    def publish_generation(self, generation):
-        self.generation = generation
-        self.status["navigation_generation"] = generation
+    def publish_status(self, **changes):
+        self.status.update(changes)
+        if "navigation_generation" in changes:
+            self.generation = changes["navigation_generation"]
         if self._status_callback:
             self._status_callback(dict(self.status))
 
+    def publish_picker(self, result):
+        assert self._picker_result_callback
+        self._picker_result_callback(dict(result))
 
-def _service(*, enabled=True, authorized=True, clock=None, token_factory=None, capacity=128):
+
+def _service(
+    *, enabled=True, authorized=True, clock=None, token_factory=None, capacity=128
+):
     state = {"enabled": enabled}
-    controller = _Controller()
+    coordinator = _Coordinator()
     builder = _DraftBuilder()
+    delivered = []
     service = FDWorkIntegrationService(
         draft_builder=builder,
-        window_controller=controller,
+        interaction_coordinator=coordinator,
         enabled_reader=lambda: state["enabled"],
         enabled_writer=lambda value: state.__setitem__("enabled", value),
         clock=clock,
         token_factory=token_factory,
         selection_capacity=capacity,
+        picker_result_callback=delivered.append,
     )
     if authorized:
         service.set_privacy_authorized(True)
-    return service, controller, builder, state
+    return service, coordinator, builder, state, delivered
 
 
-def test_privacy_gate_defers_all_window_and_entry_operations():
-    service, controller, builder, state = _service(enabled=True, authorized=False)
+def _publish_success(coordinator, request_id, label="CASE A", generation=None, nonce="nonce"):
+    coordinator.publish_picker(
+        {
+            "ok": True,
+            "request_id": request_id,
+            "operation_nonce": nonce,
+            "navigation_generation": coordinator.generation if generation is None else generation,
+            "label": label,
+        }
+    )
+
+
+def test_privacy_gate_defers_probe_picker_and_entry_without_touching_helper():
+    service, coordinator, builder, _state, _delivered = _service(
+        enabled=True, authorized=False
+    )
 
     assert service.prepare_session()["error"] == "deferred_by_privacy"
     assert service.prepare_window_before_start()["error"] == "deferred_by_privacy"
-    assert service.search_cases("A", "request")["error"] == "deferred_by_privacy"
+    assert service.open_case_picker("drawer")["error"] == "deferred_by_privacy"
     with pytest.raises(FDWorkEntryError) as raised:
-        service.open_entry("2026-08-01", "base:1", "revision-1")
+        service.open_entry("2026-08-03", "base:1", "revision")
     assert raised.value.code == "deferred_by_privacy"
-    assert controller.prepare_calls == []
-    assert controller.startup_prepare_calls == []
-    assert controller.search_calls == []
+    assert coordinator.prepare_calls == []
+    assert coordinator.startup_prepare_calls == []
+    assert coordinator.picker_calls == []
     assert builder.calls == []
 
-    status = service.set_enabled(True)
-    assert state["enabled"] is True
-    assert status["session_state"] == "deferred_by_privacy"
-    assert controller.prepare_calls == []
+
+def test_disabled_capability_has_explicit_session_and_owner_state():
+    service, coordinator, _builder, _state, _delivered = _service(enabled=False)
+
+    result = service.prepare_session(True)
+
+    assert result["error"] == "fd_work_disabled"
+    assert result["status"]["session_state"] == "disabled"
+    assert result["status"]["interaction_owner"] == "none"
+    assert coordinator.prepare_calls == []
 
 
-def test_authorized_empty_and_one_character_queries_reach_controller():
-    service, controller, _builder, _state = _service(enabled=True)
-    service.set_privacy_authorized(True)
-    controller.search_cases = lambda query: {
-        "ok": True,
-        "labels": ["RECENT"] if query == "" else [query],
-        "navigation_generation": controller.generation,
-    }
+def test_authorized_startup_probe_renderer_and_explicit_auth_delegate_once():
+    service, coordinator, _builder, _state, _delivered = _service()
 
-    assert service.search_cases("", "recent")["ok"] is True
-    assert service.search_cases("A", "one")["ok"] is True
-
-
-def test_disabled_capability_has_structured_status_and_never_prepares_window():
-    service, controller, _builder, _state = _service(enabled=False)
-
-    result = service.prepare_session(show_login_if_required=True)
-
-    assert result == {
-        "ok": False,
-        "error": "fd_work_disabled",
-        "status": {
-            "supported": True,
-            "enabled": False,
-                "session_state": "disabled",
-                "page_phase": "none",
-            "operation": "none",
-            "ready": False,
-            "login_required": False,
-            "error_code": None,
-            "navigation_generation": controller.generation,
-        },
-    }
-    assert controller.prepare_calls == []
-    assert service.prepare_window_before_start()["error"] == "fd_work_disabled"
-    assert controller.startup_prepare_calls == []
-
-
-def test_enabled_startup_prepare_and_renderer_init_use_injected_controller():
-    service, controller, _builder, _state = _service()
-
-    assert service.prepare_window_before_start(True)["ok"] is True
+    assert service.prepare_window_before_start(False)["ok"] is True
+    assert service.prepare_session(True)["ok"] is True
     service.on_renderer_initialized("edgechromium")
 
-    assert controller.startup_prepare_calls == [True]
-    assert controller.renderer_calls == ["edgechromium"]
+    assert coordinator.startup_prepare_calls == [False]
+    assert coordinator.prepare_calls == [True]
+    assert coordinator.renderer_calls == ["edgechromium"]
 
 
-def test_enabled_prepare_and_open_use_one_injected_controller_and_pure_builder():
-    service, controller, builder, _state = _service()
-
-    assert service.prepare_session(show_login_if_required=True)["ok"] is True
-    result = service.open_entry("2026-08-01", "base:1", "revision-1")
-
-    assert controller.prepare_calls == [True]
-    assert builder.calls == [("2026-08-01", "base:1", "revision-1")]
-    assert controller.open_calls == [builder.draft]
-    assert result["ok"] is True
-
-
-def test_search_returns_opaque_selection_tokens_bound_to_label_and_generation():
-    tokens = iter(["opaque-token-a", "opaque-token-b"])
-    service, controller, _builder, _state = _service(
-        token_factory=lambda: next(tokens)
+def test_picker_success_delivers_canonical_one_time_selection_token():
+    service, coordinator, _builder, _state, delivered = _service(
+        token_factory=lambda: "selection-token"
     )
 
-    result = service.search_cases("ca", "request-7")
+    opened = service.open_case_picker("drawer-7")
+    _publish_success(coordinator, "drawer-7", "\u3000CASE A\u00a0")
 
-    assert result["ok"] is True
-    assert result["request_id"] == "request-7"
-    assert result["options"] == [
-        {"label": "CASE A", "selection_token": "opaque-token-a"},
-        {"label": "CASE B", "selection_token": "opaque-token-b"},
-    ]
-    assert controller.search_calls == ["ca"]
-    assert "CASE" not in result["options"][0]["selection_token"]
-    assert service.validate_case_selection("opaque-token-a", "CASE A") == "CASE A"
+    assert opened["ok"] is True
+    assert coordinator.picker_calls == ["drawer-7"]
+    assert delivered == [{
+        "ok": True,
+        "request_id": "drawer-7",
+        "selected_label": "CASE A",
+        "selection_token": "selection-token",
+    }]
+    assert service.validate_case_selection("selection-token", "CASE A") == "CASE A"
+    with pytest.raises(FDWorkEntryError) as consumed:
+        service.validate_case_selection("selection-token", "CASE A")
+    assert consumed.value.code == "case_selection_expired"
 
+
+def test_free_text_label_mismatch_and_wrong_generation_fail_closed():
+    tokens = iter(["token-a", "token-b"])
+    service, coordinator, _builder, _state, _delivered = _service(
+        token_factory=lambda: next(tokens)
+    )
+    service.open_case_picker("drawer-a")
+    _publish_success(coordinator, "drawer-a", "CASE A")
     with pytest.raises(FDWorkEntryError) as mismatch:
-        service.validate_case_selection("opaque-token-a", "CASE B")
+        service.validate_case_selection("token-a", "typed text")
     assert mismatch.value.code == "case_selection_mismatch"
 
-    controller.publish_generation(4)
-    with pytest.raises(FDWorkEntryError) as expired:
-        service.validate_case_selection("opaque-token-a", "CASE A")
-    assert expired.value.code == "case_selection_expired"
+    service.open_case_picker("drawer-b")
+    _publish_success(coordinator, "drawer-b", "CASE B")
+    coordinator.publish_status(navigation_generation=4)
+    with pytest.raises(FDWorkEntryError) as stale:
+        service.validate_case_selection("token-b", "CASE B")
+    assert stale.value.code == "case_selection_expired"
 
 
-def test_selection_registry_expires_discards_and_enforces_capacity():
+def test_picker_cancel_is_forwarded_only_to_matching_drawer_request():
+    service, coordinator, _builder, _state, delivered = _service()
+    service.open_case_picker("drawer-current")
+
+    coordinator.publish_picker({
+        "ok": False,
+        "request_id": "drawer-old",
+        "operation_nonce": "nonce",
+        "error": "picker_canceled",
+    })
+    coordinator.publish_picker({
+        "ok": False,
+        "request_id": "drawer-current",
+        "operation_nonce": "nonce",
+        "error": "picker_canceled",
+    })
+
+    assert delivered == [{
+        "ok": False,
+        "request_id": "drawer-current",
+        "error": "picker_canceled",
+    }]
+
+
+def test_selection_expiry_capacity_and_discard_are_memory_only():
     now = [10.0]
-    token_values = iter(["token-1", "token-2", "token-3", "token-4"])
-    service, controller, _builder, _state = _service(
-        clock=lambda: now[0],
-        token_factory=lambda: next(token_values),
-        capacity=2,
+    tokens = iter(["token-1", "token-2", "token-3"])
+    service, coordinator, _builder, _state, _delivered = _service(
+        clock=lambda: now[0], token_factory=lambda: next(tokens), capacity=2
     )
-    controller.search_cases = lambda query: {
-        "ok": True,
-        "labels": [query],
-        "navigation_generation": controller.generation,
-    }
+    for index in range(1, 4):
+        request_id = f"drawer-{index}"
+        service.open_case_picker(request_id)
+        _publish_success(coordinator, request_id, f"CASE {index}")
 
-    service.search_cases("AA", "1")
-    service.search_cases("BB", "2")
-    service.search_cases("CC", "3")
-
-    with pytest.raises(FDWorkEntryError) as evicted:
-        service.validate_case_selection("token-1", "AA")
-    assert evicted.value.code == "case_selection_expired"
-    with pytest.raises(FDWorkEntryError) as superseded:
-        service.validate_case_selection("token-2", "BB")
-    assert superseded.value.code == "case_selection_expired"
-    assert service.validate_case_selection("token-3", "CC") == "CC"
-
-    service.discard_case_selection("token-3")
-    with pytest.raises(FDWorkEntryError) as discarded:
-        service.validate_case_selection("token-3", "CC")
-    assert discarded.value.code == "case_selection_expired"
-
-    service.search_cases("DD", "4")
+    with pytest.raises(FDWorkEntryError):
+        service.validate_case_selection("token-1", "CASE 1")
+    service.discard_case_selection("token-2")
+    with pytest.raises(FDWorkEntryError):
+        service.validate_case_selection("token-2", "CASE 2")
     now[0] += 301
-    with pytest.raises(FDWorkEntryError) as timed_out:
-        service.validate_case_selection("token-4", "DD")
-    assert timed_out.value.code == "case_selection_expired"
+    with pytest.raises(FDWorkEntryError):
+        service.validate_case_selection("token-3", "CASE 3")
 
 
-def test_disable_clears_registry_and_shutdown_is_permanent():
-    tokens = iter(["opaque-token-a", "opaque-token-b"])
-    service, controller, _builder, state = _service(
-        token_factory=lambda: next(tokens)
+def test_entry_uses_pure_builder_then_interaction_coordinator():
+    service, coordinator, builder, _state, _delivered = _service()
+
+    result = service.open_entry("2026-08-03", "base:1", "revision")
+
+    assert result["ok"] is True
+    assert builder.calls == [("2026-08-03", "base:1", "revision")]
+    assert coordinator.open_calls == [builder.draft]
+
+
+def test_disable_clears_tokens_and_shutdown_is_permanent():
+    service, coordinator, _builder, state, _delivered = _service(
+        token_factory=lambda: "token"
     )
-    service.search_cases("ca", "request")
+    service.open_case_picker("drawer")
+    _publish_success(coordinator, "drawer")
 
     status = service.set_enabled(False)
 
     assert state["enabled"] is False
-    assert controller.disable_calls == 1
+    assert coordinator.disable_calls >= 1
     assert status["session_state"] == "disabled"
-    with pytest.raises(FDWorkEntryError) as cleared:
-        service.validate_case_selection("opaque-token-a", "CASE A")
-    assert cleared.value.code == "case_selection_expired"
-
+    with pytest.raises(FDWorkEntryError):
+        service.validate_case_selection("token", "CASE A")
     service.shutdown()
     service.shutdown()
-    assert controller.shutdown_calls == 1
+    assert coordinator.shutdown_calls == 1
     assert service.get_settings_status()["session_state"] == "shutdown"

@@ -5,12 +5,10 @@
 
     App.fdWorkStatus = null;
     App.FD_WORK_CASE_LABEL_MAX_LENGTH = 100;
-    App.FD_WORK_QUERY_MIN_LENGTH = 0;
-    App.FD_WORK_QUERY_MAX_LENGTH = 100;
 
-    var sessionStates = ["disabled", "deferred_by_privacy", "idle", "probing", "starting", "login_required", "ready", "error", "shutdown"];
-    var operations = ["none", "searching", "filling"];
-    var pagePhases = ["none", "login_credentials", "login_confirmation", "work_shell", "work_interactive", "unauthorized", "error", "unknown"];
+    var sessionStates = ["disabled", "deferred_by_privacy", "idle", "probing", "login_required", "ready", "error", "shutdown"];
+    var operations = ["none", "user_auth", "user_picker", "automation_fill", "user_review"];
+    var pagePhases = ["none", "login_credentials", "login_confirmation", "work_shell", "unauthorized", "error", "unknown"];
 
     function validStatus(status) {
         return !!status
@@ -43,12 +41,13 @@
             && incomingGeneration === currentGeneration
             && App.fdWorkStatus
             && terminalStates.indexOf(App.fdWorkStatus.session_state) >= 0
-            && status.session_state === "starting") return false;
+            && status.session_state === "probing") return false;
         App.fdWorkStatus = Object.freeze({
             supported: status.supported === true,
             enabled: status.enabled === true,
             session_state: status.session_state,
             operation: status.operation,
+            interaction_owner: status.interaction_owner || status.operation,
             ready: status.ready === true,
             login_required: status.login_required === true,
             error_code: status.error_code || null,
@@ -58,7 +57,7 @@
         if (App.lastSettingsStatus) App.lastSettingsStatus.fd_work = App.fdWorkStatus;
         if (typeof App.renderFDWorkToggle === "function") App.renderFDWorkToggle(App.lastSettingsStatus);
         if (typeof App.updateFDWorkEntryButton === "function") App.updateFDWorkEntryButton();
-        if (typeof App.syncFDWorkCaseSearchStatus === "function") App.syncFDWorkCaseSearchStatus();
+        if (typeof App.syncFDWorkCasePickerStatus === "function") App.syncFDWorkCasePickerStatus();
         return true;
     };
 
@@ -66,12 +65,11 @@
         status = status || App.fdWorkStatus || {};
         if (!status.enabled) return "插件关闭";
         if (status.session_state === "deferred_by_privacy") return "等待隐私授权";
-        if (status.operation === "searching") {
-            return status.page_phase === "work_interactive" ? "正在搜索" : "正在准备案件搜索";
-        }
-        if (status.operation === "filling") return "正在填入";
+        if (status.operation === "user_auth") return "等待用户登录";
+        if (status.operation === "user_picker") return "用户正在选择案件";
+        if (status.operation === "automation_fill") return "正在填入";
+        if (status.operation === "user_review") return "等待用户检查并保存";
         if (status.session_state === "probing") return "正在检查登录状态";
-        if (status.session_state === "starting") return "正在连接";
         if (status.session_state === "ready") return "已连接";
         if (status.page_phase === "login_confirmation") return "请确认登录";
         if (status.session_state === "login_required") return "需要登录";

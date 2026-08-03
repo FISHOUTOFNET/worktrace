@@ -88,14 +88,18 @@ def test_fd_work_case_semantics_are_enabled_only_by_shared_capability_status():
     assert 'maxlength="100"' in name_input.group(0)
     assert 'role="combobox"' not in name_input.group(0)
     assert 'aria-autocomplete="list"' not in name_input.group(0)
+    selected = re.search(r'id="rules-panel-fd-work-selected-label"[^>]*>', section)
+    assert selected is not None
+    assert "readonly" in selected.group(0)
+    assert 'id="rules-panel-fd-work-pick"' in section
     source = read_js("rules_create_panel.js")
-    presentation = func_body(source, "syncFDWorkCaseSearchStatus")
-    assert 'input.setAttribute("role", "combobox")' in presentation
-    assert 'input.setAttribute("aria-controls", "rules-panel-fd-work-options")' in presentation
-    assert 'input.removeAttribute("role")' in presentation
-    assert "至少输入 2 个字符" not in source
-    assert 'input.addEventListener("focus"' in source
-    assert 'input.addEventListener("click"' in source
+    presentation = func_body(source, "syncFDWorkCasePickerStatus")
+    assert "input.hidden = enabled" in presentation
+    assert "picker.hidden = !enabled" in presentation
+    assert 'nameInput.addEventListener("focus"' not in source
+    assert 'nameInput.addEventListener("click"' not in source
+    assert 'nameInput.addEventListener("input"' not in source
+    assert "searchFDWorkCases" not in source
 
 
 def test_project_rules_folder_path_uses_native_readonly_picker_contract():

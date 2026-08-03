@@ -16,12 +16,10 @@
     App.rulesFDWorkSelectedLabel = "";
     App.rulesFDWorkOriginalName = "";
     App.rulesFDWorkOriginalBound = false;
-    App.rulesFDWorkRequestToken = 0;
-    App.rulesFDWorkSearchOptions = [];
-    App.rulesFDWorkActiveOption = -1;
-    App.rulesFDWorkLastQuery = "";
-    App.rulesFDWorkLoginRetryPending = false;
-    var rulesFDWorkDebounceTimer = null;
+    App.rulesFDWorkPickerRequestId = null;
+    App.rulesFDWorkPickerDrawerSession = null;
+    App.rulesFDWorkPickerPending = false;
+    App.rulesFDWorkPickerCounter = 0;
 
     function initRulesPanelEvents() {
         bindClick("rules-open-create-rule", function () { openRulesPanel("rule", { ruleType: "folder" }); });
@@ -45,7 +43,7 @@
         var languageSelect = document.getElementById("rules-panel-project-language");
         if (languageSelect) languageSelect.addEventListener("change", refreshLanguageOther);
         initFDWorkCaseEvents();
-        syncFDWorkCaseSearchStatus();
+        syncFDWorkCasePickerStatus();
         var sortSelect = document.getElementById("rules-sort-select");
         if (sortSelect && sortSelect.getAttribute("data-rules-sort-bound") !== "1") {
             sortSelect.setAttribute("data-rules-sort-bound", "1");
@@ -148,15 +146,17 @@
         var backfill = document.getElementById("rules-panel-backfill");
         if (backfill) backfill.checked = true;
         fillProjectFields(options.project || null);
-        syncFDWorkCaseSearchStatus();
+        syncFDWorkCasePickerStatus();
         setRuleType(options.ruleType || "folder");
         setPanelMode(mode === "project" ? "project" : "rule");
         refreshRulesPanelTargets(options.projectId || App.rulesPanelLastCreatedProjectId || null);
         renderRulesPanelProjectContext(options.projectId || 0, {});
         clearPanelStatus();
         if (panel && App.openManagedDrawer) {
+            var fdWorkEnabled = (App.fdWorkStatus || {}).enabled === true;
             var focus = document.getElementById(mode === "project"
-                ? "rules-panel-project-name" : "rules-panel-choose-folder");
+                ? (fdWorkEnabled ? "rules-panel-fd-work-pick" : "rules-panel-project-name")
+                : "rules-panel-choose-folder");
             App.openManagedDrawer(
                 panel,
                 options.trigger || document.activeElement,
@@ -195,7 +195,7 @@
     App.resetRulesTransientUi = resetRulesTransientUi;
 
     function closeRulesPanel() {
-        resetFDWorkCaseSearch();
+        resetFDWorkCasePicker();
         resetRulesTransientUi({ restoreFocus: true });
     }
     App.closeRulesPanel = closeRulesPanel;
@@ -276,223 +276,85 @@
     App.renderRulesPanelProjectContext = renderRulesPanelProjectContext;
 
     function initFDWorkCaseEvents() {
-        var input = document.getElementById("rules-panel-project-name");
-        var listbox = document.getElementById("rules-panel-fd-work-options");
-        var login = document.getElementById("rules-panel-fd-work-login");
-        if (input && input.getAttribute("data-fd-work-bound") !== "1") {
-            input.setAttribute("data-fd-work-bound", "1");
-            input.addEventListener("focus", handleFDWorkCaseFocus);
-            input.addEventListener("click", handleFDWorkCaseClick);
-            input.addEventListener("input", handleFDWorkCaseInput);
-            input.addEventListener("keydown", handleFDWorkCaseKeydown);
-            input.addEventListener("blur", closeFDWorkCaseOptions);
-        }
-        if (listbox && listbox.getAttribute("data-fd-work-bound") !== "1") {
-            listbox.setAttribute("data-fd-work-bound", "1");
-            listbox.addEventListener("mousedown", function (event) { event.preventDefault(); });
-            listbox.addEventListener("click", function (event) {
-                var option = event.target && event.target.closest
-                    ? event.target.closest("[role='option']") : null;
-                var index = option ? parseInt(option.getAttribute("data-option-index"), 10) : -1;
-                if (index >= 0) selectFDWorkCaseOption(index);
-            });
-        }
-        if (login && login.getAttribute("data-fd-work-bound") !== "1") {
-            login.setAttribute("data-fd-work-bound", "1");
-            login.addEventListener("click", function () {
-                App.rulesFDWorkLoginRetryPending = true;
-                App.bridge.showFDWorkLogin().catch(function () {
-                    showFDWorkCaseStatus("打开 FD Work 登录页失败", true);
-                });
-            });
-        }
-        if (!App.rulesFDWorkOutsideBound) {
-            App.rulesFDWorkOutsideBound = true;
-            document.addEventListener("mousedown", function (event) {
-                var inputNode = document.getElementById("rules-panel-project-name");
-                var popup = document.getElementById("rules-panel-fd-work-options");
-                if (event.target !== inputNode && !(popup && popup.contains(event.target))) {
-                    closeFDWorkCaseOptions();
-                }
-            });
-        }
+        bindClick("rules-panel-fd-work-pick", openFDWorkCasePicker);
+        bindClick("rules-panel-fd-work-clear", clearFDWorkCaseSelection);
     }
 
-    function fdWorkDropdownClosed() {
-        var listbox = document.getElementById("rules-panel-fd-work-options");
-        return !listbox || listbox.hidden === true || App.rulesFDWorkSearchOptions.length === 0;
-    }
-
-    function requestRecentFDWorkCases() {
-        var input = document.getElementById("rules-panel-project-name");
+    function openFDWorkCasePicker() {
+        if (App.rulesFDWorkPickerPending || App.rulesCreatingPanelProject) return;
         var status = App.fdWorkStatus || {};
-        if (!input || String(input.value || "").trim() !== "") return;
-        if (status.enabled !== true || !fdWorkDropdownClosed()) return;
-        App.rulesFDWorkLastQuery = "";
-        searchFDWorkCases("", App.rulesPanelSessionToken);
-    }
-
-    function handleFDWorkCaseFocus() { requestRecentFDWorkCases(); }
-    function handleFDWorkCaseClick() { requestRecentFDWorkCases(); }
-
-    function handleFDWorkCaseInput() {
-        App.rulesFDWorkSelectionToken = null;
-        App.rulesFDWorkSelectedLabel = "";
-        App.rulesFDWorkLoginRetryPending = false;
-        closeFDWorkCaseOptions();
-        if (rulesFDWorkDebounceTimer) clearTimeout(rulesFDWorkDebounceTimer);
-        rulesFDWorkDebounceTimer = null;
+        if (status.enabled !== true) return;
+        var drawerSession = App.rulesPanelSessionToken;
+        var requestId = "rules-picker-" + drawerSession + "-" + (++App.rulesFDWorkPickerCounter);
+        App.rulesFDWorkPickerPending = true;
+        App.rulesFDWorkPickerRequestId = requestId;
+        App.rulesFDWorkPickerDrawerSession = drawerSession;
+        showFDWorkCaseStatus("正在打开 FD Work 案件选择器……", false);
         refreshPanelWriteState();
-        var status = App.fdWorkStatus || {};
-        if (status.enabled !== true) {
-            showFDWorkCaseStatus("", false);
-            return;
-        }
-        var query = String(this.value || "").trim();
-        App.rulesFDWorkLastQuery = query;
-        if (App.rulesFDWorkOriginalBound && query === App.rulesFDWorkOriginalName) {
-            showFDWorkCaseStatus("已关联 FD Work", false);
-        } else if (App.rulesFDWorkOriginalBound && query !== App.rulesFDWorkOriginalName) {
-            showFDWorkCaseStatus("手工修改名称将解除关联", false);
-        } else if (!query) {
-            showFDWorkCaseStatus("最近使用", false);
-        } else {
-            showFDWorkCaseStatus("普通项目，不可填入 FD Work", false);
-        }
-        if (query === "") {
-            searchFDWorkCases("", App.rulesPanelSessionToken);
-            return;
-        }
-        if (query.length > App.FD_WORK_QUERY_MAX_LENGTH) {
-            showFDWorkCaseStatus("案件关键词过长", true);
-            return;
-        }
-        var session = App.rulesPanelSessionToken;
-        rulesFDWorkDebounceTimer = setTimeout(function () {
-            rulesFDWorkDebounceTimer = null;
-            searchFDWorkCases(query, session);
-        }, 300);
-    }
-
-    function searchFDWorkCases(query, sessionToken) {
-        if (!isCurrentRulesPanelSession(sessionToken)) return;
-        var status = App.fdWorkStatus || {};
-        if (status.ready !== true) {
-            if (!App.rulesFDWorkLoginRetryPending) {
-                App.rulesFDWorkLoginRetryPending = true;
-                App.bridge.showFDWorkLogin().catch(function () {
-                    if (isCurrentRulesPanelSession(sessionToken)) {
-                        showFDWorkCaseStatus("打开 FD Work 登录页失败", true);
-                    }
-                });
-            }
-            if (status.page_phase === "login_confirmation") {
-                showFDWorkCaseStatus("请在 FD Work 窗口确认登录", false);
-            } else if (status.login_required === true) {
-                showFDWorkCaseStatus("请先登录 FD Work", true);
-            } else {
-                showFDWorkCaseStatus("正在准备案件搜索……", false);
-            }
-            syncFDWorkCaseSearchStatus();
-            return;
-        }
-        if (status.login_required === true) {
-            App.rulesFDWorkLoginRetryPending = true;
-            showFDWorkCaseStatus("请先登录 FD Work", true);
-            syncFDWorkCaseSearchStatus();
-            return;
-        }
-        var requestToken = ++App.rulesFDWorkRequestToken;
-        var requestId = "rules-" + sessionToken + "-" + requestToken;
-        showFDWorkCaseStatus("正在搜索……", false);
-        App.bridge.searchFDWorkCases(query, requestId).then(function (result) {
-            if (!isCurrentRulesPanelSession(sessionToken)
-                || requestToken !== App.rulesFDWorkRequestToken
-                || query !== App.rulesFDWorkLastQuery) return;
+        App.bridge.openFDWorkCasePicker(requestId).then(function (result) {
+            if (!isCurrentPickerRequest(requestId, drawerSession)) return;
             if (!result || result.ok === false) {
-                showFDWorkCaseStatus(result && result.message || "搜索 FD Work 案件失败", true);
+                App.rulesFDWorkPickerPending = false;
+                App.rulesFDWorkPickerRequestId = null;
+                showFDWorkCaseStatus(result && result.message || "打开案件选择器失败", true);
+                refreshPanelWriteState();
                 return;
             }
-            App.rulesFDWorkSearchOptions = Array.isArray(result.options)
-                ? result.options.filter(function (item) {
-                    return item && typeof item.label === "string"
-                        && item.label.length <= App.FD_WORK_CASE_LABEL_MAX_LENGTH
-                        && typeof item.selection_token === "string";
-                }).slice(0, 20)
-                : [];
-            App.rulesFDWorkActiveOption = App.rulesFDWorkSearchOptions.length ? 0 : -1;
-            renderFDWorkCaseOptions();
             showFDWorkCaseStatus(
-                App.rulesFDWorkSearchOptions.length
-                    ? (query === "" ? "最近使用" : "搜索结果")
-                    : "暂无结果",
+                result.status === "authentication_required"
+                    ? "请在 FD Work 窗口完成登录并选择案件"
+                    : "请在 FD Work 原生案件框中选择并确认",
                 false
             );
         }).catch(function () {
-            if (isCurrentRulesPanelSession(sessionToken)
-                && requestToken === App.rulesFDWorkRequestToken) {
-                showFDWorkCaseStatus("搜索 FD Work 案件失败", true);
-            }
+            if (!isCurrentPickerRequest(requestId, drawerSession)) return;
+            App.rulesFDWorkPickerPending = false;
+            App.rulesFDWorkPickerRequestId = null;
+            showFDWorkCaseStatus("打开案件选择器失败", true);
+            refreshPanelWriteState();
         });
     }
 
-    function renderFDWorkCaseOptions() {
-        var listbox = document.getElementById("rules-panel-fd-work-options");
-        var input = document.getElementById("rules-panel-project-name");
-        if (!listbox || !input) return;
-        listbox.innerHTML = "";
-        App.rulesFDWorkSearchOptions.forEach(function (item, index) {
-            var option = document.createElement("button");
-            option.type = "button";
-            option.setAttribute("role", "option");
-            option.setAttribute("data-option-index", String(index));
-            option.setAttribute("aria-selected", index === App.rulesFDWorkActiveOption ? "true" : "false");
-            option.textContent = item.label;
-            listbox.appendChild(option);
-        });
-        listbox.hidden = !App.rulesFDWorkSearchOptions.length;
-        input.setAttribute("aria-expanded", listbox.hidden ? "false" : "true");
+    function isCurrentPickerRequest(requestId, drawerSession) {
+        return requestId === App.rulesFDWorkPickerRequestId
+            && drawerSession === App.rulesFDWorkPickerDrawerSession
+            && drawerSession === App.rulesPanelSessionToken;
     }
 
-    function selectFDWorkCaseOption(index) {
-        var item = App.rulesFDWorkSearchOptions[index];
-        var input = document.getElementById("rules-panel-project-name");
-        if (!item || !input) return;
-        input.value = item.label;
-        App.rulesFDWorkSelectionToken = item.selection_token;
-        App.rulesFDWorkSelectedLabel = item.label;
-        App.rulesFDWorkLastQuery = item.label;
-        closeFDWorkCaseOptions();
-        showFDWorkCaseStatus("已关联 FD Work", false);
+    function clearFDWorkCaseSelection() {
+        if (App.rulesFDWorkPickerPending) return;
+        if (App.rulesFDWorkOriginalBound && App.rulesPanelEditingProjectId) {
+            var drawerSession = App.rulesPanelSessionToken;
+            App.rulesFDWorkPickerPending = true;
+            refreshPanelWriteState();
+            App.bridge.clearFDWorkBindingForRules(
+                App.rulesPanelEditingProjectId
+            ).then(function (result) {
+                if (!isCurrentRulesPanelSession(drawerSession)) return;
+                App.rulesFDWorkPickerPending = false;
+                if (!result || result.ok === false) {
+                    showFDWorkCaseStatus(result && result.error || "取消关联失败", true);
+                    refreshPanelWriteState();
+                    return;
+                }
+                App.rulesFDWorkOriginalBound = false;
+                showFDWorkCaseStatus("已取消 FD Work 关联", false);
+                if (App.loadProjectRules) App.loadProjectRules();
+                refreshPanelWriteState();
+            }).catch(function () {
+                if (!isCurrentRulesPanelSession(drawerSession)) return;
+                App.rulesFDWorkPickerPending = false;
+                showFDWorkCaseStatus("取消关联失败", true);
+                refreshPanelWriteState();
+            });
+            return;
+        }
+        App.rulesFDWorkSelectionToken = null;
+        App.rulesFDWorkSelectedLabel = "";
+        var selected = document.getElementById("rules-panel-fd-work-selected-label");
+        if (selected) selected.value = "";
+        showFDWorkCaseStatus("尚未选择 FD Work 案件", false);
         refreshPanelWriteState();
-    }
-
-    function handleFDWorkCaseKeydown(event) {
-        var count = App.rulesFDWorkSearchOptions.length;
-        if (event.key === "Escape") {
-            closeFDWorkCaseOptions();
-            return;
-        }
-        if (event.key === "Tab") {
-            closeFDWorkCaseOptions();
-            return;
-        }
-        if (!count) return;
-        if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-            event.preventDefault();
-            var delta = event.key === "ArrowDown" ? 1 : -1;
-            App.rulesFDWorkActiveOption = (App.rulesFDWorkActiveOption + delta + count) % count;
-            renderFDWorkCaseOptions();
-        } else if (event.key === "Enter" && App.rulesFDWorkActiveOption >= 0) {
-            event.preventDefault();
-            selectFDWorkCaseOption(App.rulesFDWorkActiveOption);
-        }
-    }
-
-    function closeFDWorkCaseOptions() {
-        App.rulesFDWorkSearchOptions = [];
-        App.rulesFDWorkActiveOption = -1;
-        renderFDWorkCaseOptions();
     }
 
     function showFDWorkCaseStatus(message, isError) {
@@ -503,55 +365,69 @@
         target.className = "inline-status" + (isError ? " edit-status-error" : "");
     }
 
-    function resetFDWorkCaseSearch() {
-        if (rulesFDWorkDebounceTimer) clearTimeout(rulesFDWorkDebounceTimer);
-        rulesFDWorkDebounceTimer = null;
-        App.rulesFDWorkRequestToken += 1;
+    function resetFDWorkCasePicker() {
         App.rulesFDWorkSelectionToken = null;
         App.rulesFDWorkSelectedLabel = "";
-        App.rulesFDWorkLastQuery = "";
-        App.rulesFDWorkLoginRetryPending = false;
-        closeFDWorkCaseOptions();
+        App.rulesFDWorkPickerRequestId = null;
+        App.rulesFDWorkPickerDrawerSession = null;
+        App.rulesFDWorkPickerPending = false;
+        var selected = document.getElementById("rules-panel-fd-work-selected-label");
+        if (selected) selected.value = "";
         showFDWorkCaseStatus("", false);
     }
-    App.resetFDWorkCaseSearch = resetFDWorkCaseSearch;
+    App.resetFDWorkCasePicker = resetFDWorkCasePicker;
 
-    function syncFDWorkCaseSearchStatus() {
+    function syncFDWorkCasePickerStatus() {
         var status = App.fdWorkStatus || {};
         var enabled = status.enabled === true;
         var label = document.getElementById("rules-panel-project-name-label");
         var help = document.getElementById("rules-panel-fd-work-help");
-        var login = document.getElementById("rules-panel-fd-work-login");
         var input = document.getElementById("rules-panel-project-name");
         if (label) label.textContent = enabled ? "FD Work 案件" : "项目名称";
         if (help) help.hidden = !enabled;
-        if (login) login.hidden = !(enabled && status.login_required === true);
         if (input) {
-            if (enabled) {
-                input.setAttribute("role", "combobox");
-                input.setAttribute("aria-autocomplete", "list");
-                input.setAttribute("aria-controls", "rules-panel-fd-work-options");
-            } else {
-                input.removeAttribute("role");
-                input.removeAttribute("aria-autocomplete");
-                input.removeAttribute("aria-controls");
-                input.removeAttribute("aria-expanded");
-            }
+            input.hidden = enabled;
+            input.readOnly = enabled;
         }
-        if (!enabled) resetFDWorkCaseSearch();
-        if (enabled && status.ready !== true) {
-            App.rulesFDWorkSelectionToken = null;
-            App.rulesFDWorkSelectedLabel = "";
-            closeFDWorkCaseOptions();
-        }
-        if (enabled && status.ready === true && App.rulesFDWorkLoginRetryPending) {
-            App.rulesFDWorkLoginRetryPending = false;
-            var query = App.rulesFDWorkLastQuery;
-            searchFDWorkCases(query, App.rulesPanelSessionToken);
-        }
+        var picker = document.getElementById("rules-panel-fd-work-picker");
+        if (picker) picker.hidden = !enabled;
+        if (!enabled) resetFDWorkCasePicker();
         refreshPanelWriteState();
     }
-    App.syncFDWorkCaseSearchStatus = syncFDWorkCaseSearchStatus;
+    App.syncFDWorkCasePickerStatus = syncFDWorkCasePickerStatus;
+
+    function receiveFDWorkCasePickerResult(result) {
+        if (!result || typeof result !== "object") return false;
+        var requestId = result.request_id;
+        var drawerSession = App.rulesFDWorkPickerDrawerSession;
+        if (!isCurrentPickerRequest(requestId, drawerSession)) return false;
+        App.rulesFDWorkPickerPending = false;
+        App.rulesFDWorkPickerRequestId = null;
+        if (result.ok !== true) {
+            showFDWorkCaseStatus(
+                result.error === "picker_canceled" ? "案件选择已取消" : "案件选择已失效",
+                result.error !== "picker_canceled"
+            );
+            refreshPanelWriteState();
+            return true;
+        }
+        if (typeof result.selected_label !== "string"
+            || !result.selected_label
+            || typeof result.selection_token !== "string"
+            || !result.selection_token) {
+            showFDWorkCaseStatus("案件选择结果无效", true);
+            refreshPanelWriteState();
+            return false;
+        }
+        App.rulesFDWorkSelectedLabel = result.selected_label;
+        App.rulesFDWorkSelectionToken = result.selection_token;
+        var selected = document.getElementById("rules-panel-fd-work-selected-label");
+        if (selected) selected.value = result.selected_label;
+        showFDWorkCaseStatus("已选择 FD Work 案件", false);
+        refreshPanelWriteState();
+        return true;
+    }
+    App.receiveFDWorkCasePickerResult = receiveFDWorkCasePickerResult;
 
     function isCurrentRulesPanelSession(sessionToken) {
         return sessionToken === App.rulesPanelSessionToken;
@@ -606,11 +482,25 @@
         var editingProjectId = App.rulesPanelEditingProjectId;
         var wasEditing = !!editingProjectId;
         var nameInput = document.getElementById("rules-panel-project-name");
+        var selectedInput = document.getElementById("rules-panel-fd-work-selected-label");
         var descInput = document.getElementById("rules-panel-project-description");
         if (!nameInput) return;
-        var name = (nameInput.value || "").trim();
+        var fdWorkEnabled = (App.fdWorkStatus || {}).enabled === true;
+        var selectedLabel = String(App.rulesFDWorkSelectedLabel || "").trim();
+        var displayedLabel = String(selectedInput && selectedInput.value || "").trim();
+        if (fdWorkEnabled && App.rulesFDWorkSelectionToken && displayedLabel !== selectedLabel) {
+            showPanelStatus("案件选择结果已被修改，请重新选择", true);
+            return;
+        }
+        if (fdWorkEnabled && !wasEditing && !App.rulesFDWorkSelectionToken) {
+            showPanelStatus("请先选择 FD Work 案件", true);
+            return;
+        }
+        var name = fdWorkEnabled
+            ? (App.rulesFDWorkSelectionToken ? selectedLabel : App.rulesFDWorkOriginalName)
+            : (nameInput.value || "").trim();
         if (!name) {
-            showPanelStatus("请输入项目名称", true);
+            showPanelStatus(fdWorkEnabled ? "请先选择 FD Work 案件" : "请输入项目名称", true);
             return;
         }
         var description = descInput ? (descInput.value || "").trim() : "";
@@ -739,14 +629,20 @@
     function fillProjectFields(project) {
         setValue("rules-panel-project-name", project ? App.safeText(project.name, "") : "");
         setValue("rules-panel-project-description", project ? App.safeText(project.description, "") : "");
-        resetFDWorkCaseSearch();
+        resetFDWorkCasePicker();
         App.rulesFDWorkOriginalName = project ? App.safeText(project.name, "") : "";
         App.rulesFDWorkOriginalBound = !!(project && project.fd_work_bound === true);
+        setValue(
+            "rules-panel-fd-work-selected-label",
+            project ? App.rulesFDWorkOriginalName : ""
+        );
         if (project && App.rulesFDWorkOriginalBound) {
             showFDWorkCaseStatus("已关联 FD Work", false);
         } else if (project) {
-            showFDWorkCaseStatus("普通项目，不可填入 FD Work", false);
+            showFDWorkCaseStatus("历史本地项目：名称不变时可继续维护其他信息", false);
         }
+        var pick = document.getElementById("rules-panel-fd-work-pick");
+        if (pick) pick.textContent = project ? "更换案件" : "选择案件";
         // Preserve the original language when editing. The hidden select
         // only offers ``中文``; reading from it on save would overwrite
         // non-中文 projects. We store the original language and pass it
@@ -791,13 +687,40 @@
     function refreshPanelWriteState() {
         var projectBusy = !!App.rulesCreatingPanelProject;
         var ruleBusy = !!App.rulesCreatingPanelRule;
+        var fdWorkEnabled = (App.fdWorkStatus || {}).enabled === true;
         syncProjectPanelPresentation();
         setDisabled("rules-panel-save-rule", ruleBusy);
         setDisabled("rules-panel-project-name", projectBusy);
+        setDisabled(
+            "rules-panel-fd-work-pick",
+            projectBusy || App.rulesFDWorkPickerPending
+        );
+        setDisabled(
+            "rules-panel-fd-work-clear",
+            projectBusy || App.rulesFDWorkPickerPending
+        );
+        var pick = document.getElementById("rules-panel-fd-work-pick");
+        if (pick) {
+            pick.textContent = App.rulesFDWorkPickerPending
+                ? "正在打开……"
+                : (App.rulesFDWorkOriginalName || App.rulesFDWorkSelectedLabel ? "更换案件" : "选择案件");
+        }
+        var clear = document.getElementById("rules-panel-fd-work-clear");
+        if (clear) {
+            clear.hidden = !(
+                App.rulesFDWorkSelectionToken || App.rulesFDWorkOriginalBound
+            );
+        }
         var saveProject = document.getElementById("rules-panel-save-project");
         if (saveProject) {
             var nameInput = document.getElementById("rules-panel-project-name");
-            saveProject.disabled = projectBusy || !String(nameInput && nameInput.value || "").trim();
+            var hasName = fdWorkEnabled
+                ? !!(
+                    App.rulesFDWorkSelectionToken
+                    || (App.rulesPanelEditingProjectId && App.rulesFDWorkOriginalName)
+                )
+                : !!String(nameInput && nameInput.value || "").trim();
+            saveProject.disabled = projectBusy || App.rulesFDWorkPickerPending || !hasName;
         }
         setDisabled("rules-panel-project-description", projectBusy);
         setDisabled("rules-panel-project-language", projectBusy);

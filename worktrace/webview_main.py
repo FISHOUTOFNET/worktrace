@@ -12,6 +12,9 @@ from . import config
 from .collector.single_instance import get_application_instance_coordinator
 from .desktop.shell import DesktopShellController
 from .desktop.windows_tray import WindowsTrayHost
+from .integrations.fd_work.helper_bridge import FDWorkHelperBridge
+from .integrations.fd_work.interaction_coordinator import FDWorkInteractionCoordinator
+from .integrations.fd_work.page_adapter import FDWorkPageAdapter
 from .integrations.fd_work.window_controller import FDWorkWindowController
 from .runtime.app_runtime import AppRuntime
 from .runtime.application_services import build_application_services
@@ -205,16 +208,40 @@ def main(*, background: bool = False) -> int:
             except Exception:
                 logging.debug("FD Work status delivery skipped")
 
+        def report_fd_work_picker_result(result: Mapping[str, Any]) -> None:
+            window = main_window_holder.get("window")
+            if window is None:
+                return
+            payload = json.dumps(dict(result), ensure_ascii=True)
+            try:
+                window.evaluate_js(
+                    "window.WorkTraceApp&&"
+                    f"window.WorkTraceApp.receiveFDWorkCasePickerResult({payload})"
+                )
+            except Exception:
+                logging.debug("FD Work picker result delivery skipped")
+
+        fd_work_page_adapter = FDWorkPageAdapter()
+        fd_work_helper_bridge = FDWorkHelperBridge()
         fd_work_controller = FDWorkWindowController(
             webview,
+            page_adapter=fd_work_page_adapter,
+            helper_bridge=fd_work_helper_bridge,
             schedule=_defer_fd_work_callback,
+            gui_dispatcher=_defer_fd_work_callback,
         )
+        fd_work_coordinator = FDWorkInteractionCoordinator(
+            window_controller=fd_work_controller,
+            page_adapter=fd_work_page_adapter,
+        )
+        fd_work_helper_bridge.bind_coordinator(fd_work_coordinator)
         services = build_application_services(
             runtime,
-            fd_work_window_controller=fd_work_controller,
+            fd_work_interaction_coordinator=fd_work_coordinator,
             paths=paths,
         )
         services.fd_work.bind_status_callback(report_fd_work_status)
+        services.fd_work.bind_picker_result_callback(report_fd_work_picker_result)
         app_control = services.app_control
         startup_result: dict[str, Any] = {"ok": False}
         try:
@@ -250,6 +277,14 @@ def main(*, background: bool = False) -> int:
             )
             bridge.set_window(window)
             main_window_holder["window"] = window
+
+            def focus_main_window() -> None:
+                for action in ("show", "restore", "focus"):
+                    callback = getattr(window, action, None)
+                    if callable(callback):
+                        callback()
+
+            fd_work_controller.bind_main_focus_callback(focus_main_window)
             shell_holder: dict[str, DesktopShellController] = {}
 
             def exit_application() -> None:

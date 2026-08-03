@@ -57,7 +57,9 @@ def test_real_project_writes_follow_binding_lifecycle_and_survive_service_restar
     integration = _Integration(_binding_service(state_path))
     rules = RulesApplicationService(fd_work=integration)
 
+    integration.enabled = False
     ordinary = rules.create_project_for_rules("Ordinary", "", "中文")
+    integration.enabled = True
     selected = rules.create_project_for_rules("typed", "", "中文", "token-a")
     ordinary_id = ordinary["project"]["id"]
     selected_id = selected["project"]["id"]
@@ -74,12 +76,20 @@ def test_real_project_writes_follow_binding_lifecycle_and_survive_service_restar
     )
     assert description["fd_work_binding"] == {"bound": True}
 
+    rejected_rename = rules.update_project_for_rules(
+        selected_id, "Manual", "description only", "中文"
+    )
+    assert rejected_rename == {"ok": False, "error": "case_selection_required"}
+    assert restarted.list_bound_project_ids() == {selected_id}
+
+    integration.enabled = False
     renamed = rules.update_project_for_rules(
         selected_id, "Manual", "description only", "中文"
     )
     assert renamed["fd_work_binding"] == {"bound": False}
     assert restarted.list_bound_project_ids() == set()
 
+    integration.enabled = True
     rebound = rules.update_project_for_rules(
         selected_id, "typed", "description only", "中文", "token-b"
     )

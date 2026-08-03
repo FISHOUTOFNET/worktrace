@@ -283,7 +283,7 @@
             : "当前不可用";
         if (reconnect) {
             var recoverable = supported && fdWork.enabled === true
-                && (fdWork.session_state === "starting"
+                && (fdWork.session_state === "probing"
                     || fdWork.session_state === "login_required"
                     || fdWork.session_state === "error");
             reconnect.hidden = !recoverable;

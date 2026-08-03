@@ -6,10 +6,6 @@ import logging
 import re
 from typing import Any
 
-from ..integrations.fd_work.limits import (
-    FD_WORK_QUERY_MAX_LENGTH,
-    FD_WORK_QUERY_MIN_LENGTH,
-)
 
 logger = logging.getLogger(__name__)
 _DATE_SHAPE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -48,6 +44,8 @@ FD_WORK_MESSAGES = {
     "case_selection_required": "请从 FD Work 案件列表中选择",
     "case_selection_expired": "案件选择已过期，请重新搜索",
     "case_selection_mismatch": "案件名称与所选结果不一致，请重新选择",
+    "picker_canceled": "案件选择已取消",
+    "picker_superseded": "案件选择已失效，请重新打开",
     "window_unavailable": "FD Work 窗口不可用",
     "ignored_required_field_missing": "FD Work 仍有其他必填字段，请在完整页面中处理",
     "stale_selection": "当前时间段已变化，请重新选择",
@@ -77,23 +75,17 @@ class FDWorkBridgeMixin:
             logger.exception("webview bridge get_fd_work_status failed")
             return {"ok": False, "error": "window_unavailable", "message": fd_work_message("window_unavailable")}
 
-    def search_fd_work_cases(self, query, request_id) -> dict[str, Any]:
-        if (
-            type(query) is not str
-            or not FD_WORK_QUERY_MIN_LENGTH <= len(query.strip()) <= FD_WORK_QUERY_MAX_LENGTH
-            or type(request_id) is not str
-            or not request_id
-            or len(request_id) > 128
-        ):
-            return {"ok": False, "error": "invalid_input", "message": "案件搜索信息无效"}
+    def open_fd_work_case_picker(self, request_id) -> dict[str, Any]:
+        if type(request_id) is not str or not request_id or len(request_id) > 128:
+            return {"ok": False, "error": "invalid_input", "message": "案件选择请求无效"}
         try:
-            result = dict(self._services.fd_work.search_cases(query, request_id))
+            result = dict(self._services.fd_work.open_case_picker(request_id))
             if result.get("ok") is not True:
                 result["message"] = fd_work_message(result.get("error"))
             return result
         except Exception:
-            logger.exception("webview bridge search_fd_work_cases failed")
-            return {"ok": False, "error": "page_contract_changed", "message": fd_work_message("page_contract_changed")}
+            logger.exception("webview bridge open_fd_work_case_picker failed")
+            return {"ok": False, "error": "window_unavailable", "message": fd_work_message("window_unavailable")}
 
     def show_fd_work_login(self) -> dict[str, Any]:
         try:

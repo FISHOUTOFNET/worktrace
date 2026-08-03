@@ -274,6 +274,26 @@ def _stub_webview_main_environment(monkeypatch, tmp_path):
             self.renderer_calls = []
             self.renderer_unavailable_calls = 0
             self.shutdown_calls = 0
+            self.status_callback = None
+            self.close_callback = None
+            self.main_focus_callback = None
+
+        def get_status(self):
+            return {
+                "session_state": "idle", "page_phase": "none",
+                "operation": "none", "ready": False,
+                "login_required": False, "error_code": None,
+                "navigation_generation": 0,
+            }
+
+        def bind_status_callback(self, callback):
+            self.status_callback = callback
+
+        def bind_close_callback(self, callback):
+            self.close_callback = callback
+
+        def bind_main_focus_callback(self, callback):
+            self.main_focus_callback = callback
 
         def on_renderer_initialized(self, renderer):
             self.renderer_calls.append(renderer)
@@ -350,11 +370,15 @@ def _stub_webview_main_environment(monkeypatch, tmp_path):
     class _FakeFDWork:
         def __init__(self):
             self.status_callback = None
+            self.picker_result_callback = None
             self.prepare_calls = []
             self.startup_prepare_calls = []
 
         def bind_status_callback(self, callback):
             self.status_callback = callback
+
+        def bind_picker_result_callback(self, callback):
+            self.picker_result_callback = callback
 
         def get_settings_status(self):
             return {
@@ -512,7 +536,7 @@ def test_prestart_fd_work_status_does_not_evaluate_main_window_js(
     import worktrace.webview_main as webview_main
 
     mocks["fd_work"].get_settings_status = lambda: {
-        "supported": True, "enabled": True, "session_state": "starting",
+        "supported": True, "enabled": True, "session_state": "probing",
         "operation": "none", "ready": False, "login_required": False,
         "error_code": None,
     }

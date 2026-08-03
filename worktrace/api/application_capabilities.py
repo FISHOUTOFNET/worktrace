@@ -84,7 +84,7 @@ class FDWorkCapability(Protocol):
     ) -> dict[str, Any]: ...
 
     def on_renderer_initialized(self, renderer: str) -> None: ...
-    def search_cases(self, query, request_id) -> dict[str, Any]: ...
+    def open_case_picker(self, request_id) -> dict[str, Any]: ...
     def validate_case_selection(self, selection_token, expected_label) -> str: ...
     def discard_case_selection(self, selection_token) -> None: ...
     def bind_project(self, project_id: int, project_name: str) -> None: ...
@@ -105,6 +105,7 @@ class RulesCapability(Protocol):
     def list_project_bindings(self) -> list[dict[str, Any]]: ...
     def create_project_for_rules(self, name, description, language, selection_token=None) -> dict[str, Any]: ...
     def update_project_for_rules(self, project_id, name, description, language, selection_token=None) -> dict[str, Any]: ...
+    def clear_fd_work_binding_for_rules(self, project_id) -> dict[str, Any]: ...
     def set_project_enabled_for_rules(self, project_id, enabled) -> dict[str, Any]: ...
     def set_excluded_rules_enabled(self, enabled) -> dict[str, Any]: ...
     def archive_project_for_rules(self, project_id) -> dict[str, Any]: ...
@@ -430,6 +431,9 @@ class RulesApplicationService:
 
     def create_project_for_rules(self, name, description, language, selection_token=None):
         canonical_name = name
+        enabled = self._fd_work_enabled()
+        if enabled and selection_token is None:
+            return {"ok": False, "error": "case_selection_required"}
         if selection_token is not None:
             try:
                 canonical_name = self._fd_work.validate_case_selection(
@@ -457,6 +461,9 @@ class RulesApplicationService:
         canonical_name = name
         current = project_api.get_project(project_id)
         name_changed = bool(current) and str(current.get("name") or "") != str(name).strip()
+        enabled = self._fd_work_enabled()
+        if enabled and name_changed and selection_token is None:
+            return {"ok": False, "error": "case_selection_required"}
         if selection_token is not None:
             try:
                 canonical_name = self._fd_work.validate_case_selection(
@@ -473,7 +480,7 @@ class RulesApplicationService:
                     result,
                     canonical_name,
                 )
-            elif name_changed:
+            elif name_changed and not enabled:
                 result["fd_work_binding"] = self._clear_saved_project_binding(
                     project_id
                 )
@@ -485,6 +492,21 @@ class RulesApplicationService:
                 result["fd_work_binding"] = {"bound": bound}
             self._fd_work.discard_case_selection(selection_token)
         return result
+
+    def _fd_work_enabled(self) -> bool:
+        try:
+            return self._fd_work.get_settings_status().get("enabled") is True
+        except Exception:
+            return False
+
+    def clear_fd_work_binding_for_rules(self, project_id):
+        try:
+            self._fd_work.clear_project_binding(int(project_id))
+            return {"ok": True, "fd_work_binding": {"bound": False}}
+        except FDWorkEntryError as exc:
+            return {"ok": False, "error": exc.code}
+        except Exception:
+            return {"ok": False, "error": "binding_store_unavailable"}
 
     def _bind_saved_project(self, result, canonical_name):
         project = result.get("project") if isinstance(result, dict) else None
