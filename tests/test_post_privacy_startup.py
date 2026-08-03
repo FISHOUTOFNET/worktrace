@@ -83,7 +83,7 @@ def test_authorized_start_is_idempotent_and_selects_prestart_or_runtime_path():
     assert first["ok"] is True and second["ok"] is True
     assert app_control.calls == 1
     assert fd_work.authorizations == [True]
-    assert fd_work.prepare_calls == [("prestart", True)]
+    assert fd_work.prepare_calls == [("prestart", False)]
 
 
 def test_accepted_privacy_authorizes_fd_work_even_if_collector_start_fails():
@@ -100,4 +100,4 @@ def test_accepted_privacy_authorizes_fd_work_even_if_collector_start_fails():
     assert repeated == result
     assert app_control.calls == 1
     assert fd_work.authorizations == [True]
-    assert fd_work.prepare_calls == [("runtime", True)]
+    assert fd_work.prepare_calls == [("runtime", False)]

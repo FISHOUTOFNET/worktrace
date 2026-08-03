@@ -89,6 +89,19 @@ test("shared status rejects malformed updates and synchronizes settings authorit
   assert.equal(App.lastSettingsStatus.fd_work, App.fdWorkStatus);
 });
 
+test("login confirmation phase has distinct user-facing status", () => {
+  const { App } = harness();
+  const status = {
+    supported: true, enabled: true, session_state: "login_required", operation: "none",
+    ready: false, login_required: true, error_code: "login_required",
+    page_phase: "login_confirmation", navigation_generation: 4,
+  };
+
+  assert.equal(App.receiveFDWorkStatus(status), true);
+  assert.equal(App.fdWorkStatusText(App.fdWorkStatus), "请确认登录");
+  assert.equal(App.fdWorkStatus.page_phase, "login_confirmation");
+});
+
 test("debounce uses latest response and editing invalidates the in-memory proof", async () => {
   const { App, element } = harness();
   const first = deferred();
@@ -180,6 +193,44 @@ test("focus and click on empty input request native recent cases", async () => {
   assert.deepEqual(calls, ["", ""]);
 });
 
+test("probing input foregrounds FD Work and retries the current query once when ready", async () => {
+  const { App, element } = harness();
+  let loginCalls = 0;
+  let searchCalls = 0;
+  App.bridge.showFDWorkLogin = () => { loginCalls += 1; return Promise.resolve({ ok: true }); };
+  App.bridge.searchFDWorkCases = () => {
+    searchCalls += 1;
+    return Promise.resolve({ ok: true, options: [] });
+  };
+  App.receiveFDWorkStatus({
+    supported: true, enabled: true, session_state: "probing", operation: "none",
+    ready: false, login_required: false, error_code: null,
+    page_phase: "unknown", navigation_generation: 4,
+  });
+  const input = element("rules-panel-project-name");
+  input.value = "A";
+  input.fire("input");
+  await new Promise((resolve) => setTimeout(resolve, 330));
+  await Promise.resolve(); await Promise.resolve();
+
+  assert.equal(loginCalls, 1);
+  assert.equal(searchCalls, 0);
+  App.receiveFDWorkStatus({
+    supported: true, enabled: true, session_state: "ready", operation: "none",
+    ready: true, login_required: false, error_code: null,
+    page_phase: "work_shell", navigation_generation: 4,
+  });
+  await Promise.resolve(); await Promise.resolve();
+  assert.equal(searchCalls, 1);
+  App.receiveFDWorkStatus({
+    supported: true, enabled: true, session_state: "ready", operation: "none",
+    ready: true, login_required: false, error_code: null,
+    page_phase: "work_shell", navigation_generation: 4,
+  });
+  await Promise.resolve();
+  assert.equal(searchCalls, 1);
+});
+
 test("one character searches and an ordinary project remains saveable", async () => {
   const { App, element } = harness();
   const calls = [];
@@ -197,6 +248,34 @@ test("one character searches and an ordinary project remains saveable", async ()
   assert.deepEqual(calls, ["A"]);
   assert.equal(save.disabled, false);
   assert.doesNotMatch(element("rules-panel-fd-work-status").textContent, /至少输入 2 个字符/);
+});
+
+test("specific interactive lookup errors keep actionable messages and retry at most once", async () => {
+  const { App, element } = harness();
+  let searches = 0;
+  App.bridge.searchFDWorkCases = () => {
+    searches += 1;
+    return Promise.resolve({
+      ok: false,
+      error: "case_popup_not_created",
+      message: "FD Work 案件下拉框未能打开",
+    });
+  };
+  const input = element("rules-panel-project-name");
+  input.value = "A";
+  input.fire("input");
+  await new Promise((resolve) => setTimeout(resolve, 330));
+  await Promise.resolve(); await Promise.resolve();
+
+  assert.equal(searches, 1);
+  assert.equal(element("rules-panel-fd-work-status").textContent, "FD Work 案件下拉框未能打开");
+  App.receiveFDWorkStatus({
+    supported: true, enabled: true, session_state: "ready", operation: "none",
+    ready: true, login_required: false, error_code: null,
+    page_phase: "work_shell", navigation_generation: 5,
+  });
+  await Promise.resolve(); await Promise.resolve();
+  assert.equal(searches, 1);
 });
 
 test("existing binding survives description-only edit and manual rename warns clearing", () => {

@@ -160,7 +160,8 @@ def test_disabled_capability_has_structured_status_and_never_prepares_window():
         "status": {
             "supported": True,
             "enabled": False,
-            "session_state": "disabled",
+                "session_state": "disabled",
+                "page_phase": "none",
             "operation": "none",
             "ready": False,
             "login_required": False,

@@ -91,6 +91,22 @@ def test_binding_service_validates_hash_created_at_and_reconciles_orphans(tmp_pa
     assert repository.get_binding(99) is None
 
 
+def test_adapter_upgrade_does_not_invalidate_persistent_project_binding(tmp_path):
+    project = _project()
+    repository = FDWorkBindingRepository(tmp_path / "state.db")
+    repository.bind_project(7, project["created_at"], case_label_hash("CASE A"), 3)
+    upgraded = FDWorkBindingService(
+        repository,
+        project_reader=lambda _project_id: project,
+        project_list_reader=lambda: [project],
+        adapter_contract_version=4,
+    )
+
+    assert upgraded.is_project_bound(7, "CASE A", project["created_at"]) is True
+    assert upgraded.reconcile_bindings() == {7}
+    assert repository.get_binding(7).adapter_contract_version == 3
+
+
 def test_corrupt_sidecar_and_write_failure_fail_closed(tmp_path, monkeypatch):
     path = tmp_path / "state.db"
     path.write_bytes(b"not sqlite")

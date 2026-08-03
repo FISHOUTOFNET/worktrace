@@ -196,6 +196,24 @@ def test_persistent_binding_and_removed_remote_case_have_actionable_messages():
     )
 
 
+@pytest.mark.parametrize(
+    ("code", "message_part"),
+    [
+        ("case_input_missing", "案件输入框"),
+        ("case_input_not_interactive", "尚未准备"),
+        ("case_input_not_rendered", "尚未显示"),
+        ("case_aria_controls_missing", "页面结构"),
+        ("case_popup_not_created", "下拉框"),
+        ("case_popup_not_interactive", "下拉框"),
+        ("case_query_not_applied", "搜索内容"),
+        ("case_results_stale", "结果尚未刷新"),
+        ("case_results_timeout", "搜索超时"),
+    ],
+)
+def test_lookup_stage_errors_have_actionable_messages(code, message_part):
+    assert message_part in fd_work_message(code)
+
+
 @pytest.mark.parametrize("token", ["", "x" * 257, 7])
 def test_rules_bridge_rejects_invalid_selection_token_before_capability(token):
     bridge = build_test_bridge()

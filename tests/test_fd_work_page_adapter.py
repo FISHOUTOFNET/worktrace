@@ -51,6 +51,13 @@ def test_page_type_is_fail_closed(url, expected):
     assert FDWorkPageAdapter().detect_page(url) is expected
 
 
+def test_login_credentials_and_confirmation_are_distinct_url_hints():
+    adapter = FDWorkPageAdapter()
+
+    assert adapter.detect_page_hint("https://work.fangdalaw.com/Login") == "login_credentials"
+    assert adapter.detect_page_hint("https://work.fangdalaw.com/LoginToken") == "login_confirmation"
+
+
 def test_navigation_allowlist_contains_only_discovered_exact_host():
     adapter = FDWorkPageAdapter()
     assert adapter.allowed_navigation_hosts == frozenset({"work.fangdalaw.com"})
@@ -80,7 +87,7 @@ def test_payload_is_json_serialized_not_interpolated_into_adapter_source():
 def test_adapter_owns_business_url_hosts_selectors_and_asset_version():
     adapter = FDWorkPageAdapter()
     assert adapter.business_url.startswith("https://work.fangdalaw.com/")
-    assert adapter.adapter_version == 3
+    assert adapter.adapter_version == 4
     assert set(adapter.field_contract) == {
         "case_number",
         "work_date",
@@ -105,7 +112,7 @@ def test_login_url_is_derived_from_the_single_business_url_and_encodes_return_ur
     assert "%2FWorks%2FWorkHourList%3Fpicker%3Dday" in adapter.login_url
 
 
-def test_login_readiness_script_checks_all_three_visible_controls():
+def test_page_phase_probe_models_login_confirmation_without_credentials():
     scripts = []
 
     class Window:
@@ -115,18 +122,18 @@ def test_login_readiness_script_checks_all_three_visible_controls():
             return {"ready": True}
 
     results = []
-    FDWorkPageAdapter().check_login_page_ready(Window(), results.append)
+    FDWorkPageAdapter().probe_page_phase(Window(), results.append)
 
     assert results == [{"ready": True}]
     assert len(scripts) == 1
-    assert "password" in scripts[0]
-    assert "return visible(input);" in scripts[0]
-    assert "登录" in scripts[0]
-    assert 'replace(/\\s+/g, "")' in scripts[0]
-    assert "element.disabled" not in scripts[0]
+    assert 'path === "/login"' in scripts[0]
+    assert 'path === "/logintoken"' in scripts[0]
+    confirmation = scripts[0].split('path === "/logintoken"', 1)[1]
+    assert 'input[type="password"]' not in confirmation
+    assert "login_confirmation" in confirmation
 
 
-def test_work_page_readiness_also_recognizes_rendered_login_contract():
+def test_page_phase_probe_distinguishes_work_shell_from_interactive_handshake():
     scripts = []
 
     class Window:
@@ -136,19 +143,14 @@ def test_work_page_readiness_also_recognizes_rendered_login_contract():
             return {"ready": True}
 
     results = []
-    FDWorkPageAdapter().check_work_hour_page_ready(Window(), results.append)
+    FDWorkPageAdapter().probe_page_phase(Window(), results.append)
 
     assert results == [{"ready": True}]
     assert len(scripts) == 1
     assert "form#basic" in scripts[0]
     assert '#basic_caseId[role="combobox"]' in scripts[0]
-    assert 'input[type="password"]' in scripts[0]
-    assert 'button,input[type="submit"]' in scripts[0]
-    assert "login_ready" in scripts[0]
-    assert 'window.location.protocol === "https:"' in scripts[0]
-    assert 'window.location.hostname === "work.fangdalaw.com"' in scripts[0]
-    assert 'path === "/login" || path === "/logintoken"' in scripts[0]
-    assert "login_navigation" in scripts[0]
+    assert "work_shell" in scripts[0]
+    assert "work_interactive" not in scripts[0]
 
 
 def test_async_javascript_result_is_received_through_pywebview_callback():
@@ -163,12 +165,14 @@ def test_async_javascript_result_is_received_through_pywebview_callback():
 
     window = Window()
 
-    result = FDWorkPageAdapter().fill_entry(window, _draft())
+    adapter = FDWorkPageAdapter()
+    assert adapter.install_adapter(window)["ok"] is True
+    result = adapter.fill_entry(window, _draft(), timeout_seconds=1.0)
 
     assert result == {"ok": True, "status": "filled"}
     assert len(window.calls) == 2
     assert window.calls[0][1] is None
-    assert callable(window.calls[1][1])
+    assert callable(window.calls[-1][1])
 
 
 def test_search_script_serializes_query_and_calls_adapter_search_contract():
@@ -181,7 +185,7 @@ def test_search_script_serializes_query_and_calls_adapter_search_contract():
     assert 'CASE-"quoted"' not in script
     assert '"max_options":20' in script
     assert f'"max_label_length":{FD_WORK_CASE_LABEL_MAX_LENGTH}' in script
-    assert '"version":3' in script
+    assert '"version":4' in script
 
 
 def test_search_script_accepts_empty_recent_query_and_one_character_query():
@@ -202,11 +206,72 @@ def test_search_cases_validates_and_normalizes_the_callback_shape():
 
     window = Window()
 
-    result = FDWorkPageAdapter().search_cases(window, "ca")
+    result = FDWorkPageAdapter().search_cases(window, "ca", timeout_seconds=1.0)
 
     assert result == {"ok": True, "labels": ["CASE A", "CASE B"]}
-    assert len(window.calls) == 2
-    assert callable(window.calls[1][1])
+    assert len(window.calls) == 1
+    assert callable(window.calls[0][1])
+
+
+def test_adapter_source_is_cached_and_actions_do_not_reinject(monkeypatch):
+    reads = []
+    original = Path.read_text
+
+    def tracked_read(path, *args, **kwargs):
+        reads.append(path)
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", tracked_read)
+
+    class Window:
+        def __init__(self):
+            self.calls = []
+
+        def evaluate_js(self, script, callback=None):
+            self.calls.append((script, callback))
+            if callback is not None:
+                callback({"ok": True, "labels": []})
+
+    adapter = FDWorkPageAdapter()
+    window = Window()
+    assert adapter.install_adapter(window)["ok"] is True
+    assert adapter.install_adapter(window)["ok"] is True
+    assert adapter.search_cases(window, "A", timeout_seconds=1.0)["ok"] is True
+    assert adapter.search_cases(window, "B", timeout_seconds=1.0)["ok"] is True
+
+    assert len(reads) == 1
+    large_scripts = [
+        script
+        for script, callback in window.calls
+        if callback is None and len(script) > 10_000
+    ]
+    assert len(large_scripts) == 2
+    assert sum(callable(callback) for _script, callback in window.calls) == 2
+
+
+def test_adapter_mismatch_is_replaced_and_injection_failure_is_explicit():
+    class Window:
+        def __init__(self, result):
+            self.result = result
+            self.scripts = []
+
+        def evaluate_js(self, script, callback=None):
+            assert callback is None
+            self.scripts.append(script)
+            return self.result
+
+    repaired = Window({"ok": True, "version": 4})
+    assert FDWorkPageAdapter().install_adapter(repaired) == {
+        "ok": True,
+        "version": 4,
+    }
+    assert "version === 4" in repaired.scripts[0]
+
+    failed = Window({"ok": False, "error": "adapter_injection_failed"})
+    assert FDWorkPageAdapter().install_adapter(failed) == {
+        "ok": False,
+        "error": "adapter_injection_failed",
+    }
 
 
 @pytest.mark.parametrize(
