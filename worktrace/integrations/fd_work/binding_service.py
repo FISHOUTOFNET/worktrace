@@ -158,8 +158,6 @@ class FDWorkBindingService:
         project_name: str,
         project_created_at: str | None,
     ) -> bool:
-        if binding.adapter_contract_version != self._adapter_contract_version:
-            return False
         if binding.bound_name_hash != case_label_hash(project_name):
             return False
         if binding.project_created_at is not None:
