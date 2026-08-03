@@ -1,6 +1,6 @@
 (function () {
     "use strict";
-    if (window.WorkTraceFDWorkAdapter && window.WorkTraceFDWorkAdapter.version === 3) return;
+    if (window.WorkTraceFDWorkAdapter && window.WorkTraceFDWorkAdapter.version === 4) return;
 
     var ROOT_ATTRIBUTE = "data-worktrace-fdwork-compact";
     var HIDDEN_ATTRIBUTE = "data-worktrace-fdwork-hidden";
@@ -107,6 +107,23 @@
         });
     }
 
+    function startOperationDeadline(contract) {
+        var copy = Object.assign({}, contract || {});
+        copy.operation_deadline_ms = Date.now() + Math.max(
+            1,
+            Number(copy.lookup_timeout_ms) || 5000
+        );
+        return copy;
+    }
+
+    function remainingMilliseconds(contract, cap) {
+        var remaining = Math.max(
+            0,
+            Number(contract && contract.operation_deadline_ms) - Date.now()
+        );
+        return cap == null ? remaining : Math.min(remaining, Number(cap));
+    }
+
     function field(contract, name) {
         var item = contract && contract.fields && contract.fields[name];
         return item ? document.querySelector(item.selector) : null;
@@ -136,51 +153,10 @@
         var form = selector ? document.querySelector(selector) : null;
         if (!form) form = await waitFor(function () {
             return selector ? document.querySelector(selector) : null;
-        }, 5000);
+        }, Math.max(1, remainingMilliseconds(contract, 5000)));
         return form && visible(form)
             ? result(true)
             : result(false, "page_contract_changed");
-    }
-
-    async function fillCaseNumber(caseNumber, contract) {
-        var input = field(contract, "case_number");
-        if (!input || !visible(input)) return result(false, "page_contract_changed");
-        input.focus();
-        if (typeof input.click === "function") input.click();
-        var set = nativeSet(input, caseNumber);
-        if (!set.ok) return set;
-
-        var listSelector = contract.fields.case_number.listbox;
-        var listbox = await waitFor(function () {
-            return document.querySelector(listSelector) || document.querySelector("[role='listbox']");
-        }, 5000);
-        if (!listbox) return result(false, "case_search_timeout");
-
-        var loaded = await waitFor(function () {
-            return listbox.querySelectorAll("[role='option']").length
-                || normalizeExactText(listbox.textContent) === "暂无数据";
-        }, 5000);
-        if (!loaded) return result(false, "case_search_timeout");
-        var options = Array.prototype.filter.call(
-            listbox.querySelectorAll("[role='option']"),
-            visible
-        );
-        var expected = normalizeExactText(caseNumber);
-        var exact = options.filter(function (option) {
-            return normalizeExactText(
-                option.getAttribute("title") || option.textContent
-            ) === expected;
-        });
-        if (exact.length === 0) return result(false, "case_not_found");
-        if (exact.length !== 1) return result(false, "case_ambiguous");
-        exact[0].click();
-        var accepted = await waitFor(function () {
-            return selectedCaseText(input) === expected;
-        }, 3000);
-        if (!accepted || selectedCaseText(input) !== expected) {
-            return result(false, "case_selection_mismatch");
-        }
-        return result(true);
     }
 
     function fillAndVerify(name, value, contract) {
@@ -342,20 +318,124 @@
         };
     }
 
-    function mutationTouchesPopup(mutation, popup) {
-        var target = mutation && mutation.target;
-        return !!(target && (target === popup || (popup.contains && popup.contains(target))));
+    function caseFieldContract(contract) {
+        return contract && (contract.field || (contract.fields && contract.fields.case_number));
     }
 
-    function waitForLookupResult(input, popup, query, contract, generation, before) {
+    function caseDiagnostics(input, popup, extra) {
+        return Object.assign({
+            document_visibility: String(document.visibilityState || "unknown"),
+            viewport_available: Number(window.innerWidth || 0) > 0 && Number(window.innerHeight || 0) > 0,
+            input_exists: !!input,
+            input_interactive: !!(input && !input.disabled && !input.readOnly),
+            popup_exists: !!popup,
+            popup_interactive: !!(popup && visible(popup))
+        }, extra || {});
+    }
+
+    function caseFailure(error, input, popup, extra) {
+        return result(false, error, caseDiagnostics(input, popup, extra));
+    }
+
+    function requestFrame() {
+        return new Promise(function (resolve) {
+            var raf = window.requestAnimationFrame || (typeof requestAnimationFrame === "function" && requestAnimationFrame);
+            if (raf) raf.call(window, function () { resolve(); });
+            else setTimeout(resolve, 16);
+        });
+    }
+
+    function blockingOverlayVisible() {
+        return Array.prototype.some.call(
+            document.querySelectorAll(
+                ".ant-spin-spinning,.ant-modal-mask,.ant-drawer-mask,[data-loading='true']"
+            ),
+            visible
+        );
+    }
+
+    function popupForInput(input) {
+        var controlsId = normalizeExactText(input && input.getAttribute("aria-controls"));
+        return controlsId && document.getElementById
+            ? document.getElementById(controlsId)
+            : null;
+    }
+
+    async function prepareCaseCombobox(contract, generation) {
+        if (generation !== lookupGeneration) return result(false, "lookup_superseded");
+        if (detectPage() !== "WORK_HOUR_LIST") return result(false, "page_contract_changed");
+        if (!contract || contract.version !== 4 || !caseFieldContract(contract)) {
+            return result(false, "page_contract_changed");
+        }
+        var input = document.querySelector(caseFieldContract(contract).selector);
+        if (!input) return caseFailure("case_input_missing", null, null);
+        if (input.disabled || input.readOnly) {
+            return caseFailure("case_input_not_interactive", input, null);
+        }
+        if (
+            String(document.visibilityState || "visible") !== "visible"
+            || Number(window.innerWidth || 0) <= 0
+            || Number(window.innerHeight || 0) <= 0
+            || !visible(input)
+        ) return caseFailure("case_input_not_rendered", input, null);
+        if (blockingOverlayVisible()) {
+            return caseFailure("case_input_not_interactive", input, null);
+        }
+        var controlsId = normalizeExactText(input.getAttribute("aria-controls"));
+        if (!controlsId) return caseFailure("case_aria_controls_missing", input, null);
+        if (typeof input.focus === "function") input.focus();
+        if (typeof input.click === "function") input.click();
+        var popupWait = remainingMilliseconds(
+            contract,
+            Math.max(1, Number(contract.popup_timeout_ms) || 3000)
+        );
+        if (popupWait <= 0) return caseFailure("case_popup_not_created", input, null);
+        var popup = await waitFor(function () {
+            if (generation !== lookupGeneration) return null;
+            var candidate = popupForInput(input);
+            return candidate && candidate.getAttribute("role") === "listbox" && visible(candidate)
+                ? candidate : null;
+        }, Math.max(1, popupWait));
+        if (generation !== lookupGeneration) return result(false, "lookup_superseded");
+        if (!popup) {
+            var candidate = popupForInput(input);
+            return candidate
+                ? caseFailure("case_popup_not_interactive", input, candidate)
+                : caseFailure("case_popup_not_created", input, null);
+        }
+        return result(true, "", { input: input, popup: popup });
+    }
+
+    async function interactiveHandshake(contract) {
+        contract = startOperationDeadline(contract);
+        var generation = ++lookupGeneration;
+        var prepared = await prepareCaseCombobox(contract, generation);
+        if (!prepared.ok) return prepared;
+        await requestFrame();
+        await requestFrame();
+        if (generation !== lookupGeneration) return result(false, "lookup_superseded");
+        var input = prepared.input;
+        var popup = popupForInput(input);
+        if (
+            !input || input.disabled || input.readOnly || !visible(input)
+            || !popup || !visible(popup) || blockingOverlayVisible()
+        ) return caseFailure("case_input_not_interactive", input, popup);
+        return result(true, "", caseDiagnostics(input, popup, { phase: "work_interactive" }));
+    }
+
+    async function lookupCaseOptions(input, query, contract, generation, initialPopup) {
         return new Promise(function (resolve) {
             var settled = false;
+            var popup = initialPopup;
+            var before = lookupState(popup, contract);
             var evidence = query === "";
-            var loadingObserved = false;
+            var loadingObserved = before.loading;
             var loadingFinished = false;
+            var clearedObserved = before.count > 0 && before.count === 0;
             var stabilityTimer = null;
             var observer = null;
             var timeoutTimer = null;
+            var stabilityMs = Math.max(150, Math.min(250, Number(contract.stability_ms) || 200));
 
             function finish(value) {
                 if (settled) return;
@@ -366,111 +446,162 @@
                 resolve(value);
             }
 
-            function scheduleStable(state) {
+            function currentSnapshot() {
+                var currentPopup = popupForInput(input);
+                if (!currentPopup || !visible(currentPopup)) return null;
+                var identityChanged = currentPopup !== popup;
+                if (identityChanged) popup = currentPopup;
+                return { popup: currentPopup, identityChanged: identityChanged, state: lookupState(currentPopup, contract) };
+            }
+
+            function scheduleStable(snapshot) {
                 clearTimeout(stabilityTimer);
                 stabilityTimer = setTimeout(async function () {
-                    await delay(200);
+                    await delay(stabilityMs);
                     if (generation !== lookupGeneration) {
                         finish(result(false, "lookup_superseded"));
                         return;
                     }
-                    var stable = lookupState(popup, contract);
+                    var stable = currentSnapshot();
+                    if (!stable || stable.popup !== snapshot.popup) return;
                     if (
-                        stable.signature !== state.signature
-                        || stable.count !== state.count
-                        || stable.empty !== state.empty
-                        || stable.loading
+                        stable.state.signature !== snapshot.state.signature
+                        || stable.state.count !== snapshot.state.count
+                        || stable.state.empty !== snapshot.state.empty
+                        || stable.state.loading
                     ) return;
                     if (query !== "" && (!evidence || String(input.value) !== query)) return;
-                    if (!stable.count && !stable.empty) return;
-                    finish({ state: stable, recent: query === "" });
+                    if (!stable.state.count && !stable.state.empty) return;
+                    finish({
+                        ok: true,
+                        state: stable.state,
+                        popup: stable.popup,
+                        recent: query === "",
+                        loading_observed: loadingObserved
+                    });
                 }, 0);
             }
 
-            function inspect(mutations) {
+            function inspect() {
                 if (generation !== lookupGeneration) {
                     finish(result(false, "lookup_superseded"));
                     return;
                 }
-                var state = lookupState(popup, contract);
+                var snapshot = currentSnapshot();
+                if (!snapshot) return;
+                var state = snapshot.state;
                 if (state.loading) loadingObserved = true;
                 if (loadingObserved && !state.loading) loadingFinished = true;
-                var relevantMutation = Array.isArray(mutations) && mutations.some(function (mutation) {
-                    return mutationTouchesPopup(mutation, popup);
-                });
+                if (!state.count && !state.empty && before.count) clearedObserved = true;
                 if (
-                    state.signature !== before.beforeSignature
-                    || state.count !== before.beforeCount
-                    || state.empty !== before.beforeEmpty
+                    snapshot.identityChanged
+                    || state.signature !== before.signature
+                    || state.count !== before.count
+                    || state.empty !== before.empty
                     || loadingFinished
-                    || relevantMutation
+                    || (clearedObserved && (state.count || state.empty))
                 ) evidence = true;
                 if (!state.loading && (state.count || state.empty) && (query === "" || evidence)) {
-                    scheduleStable(state);
+                    scheduleStable(snapshot);
                 }
             }
 
-            observer = new MutationObserver(function (mutations) { inspect(mutations); });
+            observer = new MutationObserver(function () { inspect(); });
             observer.observe(document.documentElement, {
                 childList: true,
                 subtree: true,
                 attributes: true,
                 characterData: true
             });
+            var lookupWait = remainingMilliseconds(contract);
+            if (lookupWait <= 0) {
+                finish(caseFailure("case_results_timeout", input, popup));
+                return;
+            }
             timeoutTimer = setTimeout(function () {
-                finish(result(false, "case_search_timeout"));
-            }, 5000);
+                finish(caseFailure(
+                    query !== "" && !evidence && before.count
+                        ? "case_results_stale" : "case_results_timeout",
+                    input,
+                    popup,
+                    { loading_observed: loadingObserved, result_count: before.count }
+                ));
+            }, Math.max(1, lookupWait));
 
             if (query !== "") {
                 var setResult = setSearchValue(input, query);
                 if (!setResult.ok || String(input.value) !== query) {
-                    finish(result(false, "page_contract_changed"));
+                    finish(caseFailure("case_query_not_applied", input, popup));
                     return;
                 }
             }
-            inspect([]);
+            inspect();
         });
     }
 
-    async function searchCases(query, contract) {
-        if (detectPage() !== "WORK_HOUR_LIST") return result(false, "page_contract_changed");
-        if (!contract || !contract.field || contract.version !== 3) {
-            return result(false, "page_contract_changed");
+    async function selectExactCase(input, expected, contract, generation, preparedPopup) {
+        var lookup = await lookupCaseOptions(
+            input,
+            String(expected),
+            contract,
+            generation,
+            preparedPopup
+        );
+        if (!lookup || lookup.ok === false) return lookup || result(false, "case_results_timeout");
+        var normalized = normalizeExactText(expected);
+        var exact = lookup.state.options.filter(function (option) {
+            return normalizeExactText(option.getAttribute("title") || option.textContent) === normalized;
+        });
+        if (exact.length === 0) return result(false, "case_not_found");
+        if (exact.length !== 1) return result(false, "case_ambiguous");
+        exact[0].click();
+        var selectionWait = remainingMilliseconds(contract, 3000);
+        if (selectionWait <= 0) return result(false, "case_results_timeout");
+        var accepted = await waitFor(function () {
+            return selectedCaseText(input) === normalized;
+        }, Math.max(1, selectionWait));
+        if (!accepted || selectedCaseText(input) !== normalized) {
+            return result(false, "case_selection_mismatch");
         }
+        return result(true);
+    }
+
+    async function fillCaseNumber(caseNumber, contract, generation) {
+        contract = contract && contract.operation_deadline_ms
+            ? contract : startOperationDeadline(contract);
+        generation = Number.isInteger(generation) ? generation : ++lookupGeneration;
+        var prepared = await prepareCaseCombobox(contract, generation);
+        if (!prepared.ok) return prepared;
+        var selected = await selectExactCase(
+            prepared.input,
+            normalizeExactText(caseNumber),
+            contract,
+            generation,
+            prepared.popup
+        );
+        if (selected.ok) selected.generation = generation;
+        return selected;
+    }
+
+    async function searchCases(query, contract) {
+        contract = startOperationDeadline(contract);
         query = String(query == null ? "" : query);
         var generation = ++lookupGeneration;
-        var input = document.querySelector(contract.field.selector);
-        if (!input || !visible(input)) return result(false, "page_contract_changed");
-        var controlsId = normalizeExactText(input.getAttribute("aria-controls"));
-        if (!controlsId) return result(false, "page_contract_changed");
-        var popup = null;
+        var prepared = await prepareCaseCombobox(contract, generation);
+        if (!prepared.ok) return prepared;
+        var input = prepared.input;
         try {
-            if (typeof input.focus === "function") input.focus();
-            if (typeof input.click === "function") input.click();
-            popup = await waitFor(function () {
-                var candidate = document.getElementById(controlsId);
-                return candidate && candidate.getAttribute("role") === "listbox" && visible(candidate)
-                    ? candidate
-                    : null;
-            }, 5000);
-            if (!popup) return result(false, "page_contract_changed");
-            var initial = lookupState(popup, contract);
-            var before = {
-                beforeSignature: initial.signature,
-                beforeCount: initial.count,
-                beforeEmpty: initial.empty
-            };
-            var lookup = await waitForLookupResult(
-                input, popup, query, contract, generation, before
-            );
-            if (!lookup || lookup.ok === false) return lookup || result(false, "case_search_timeout");
+            var lookup = await lookupCaseOptions(input, query, contract, generation, prepared.popup);
+            if (!lookup || lookup.ok === false) return lookup || result(false, "case_results_timeout");
             var state = lookup.state;
             var stableEmpty = state.empty && state.count === 0;
-            if (stableEmpty) return result(true, "", { labels: [] });
+            if (stableEmpty) return result(true, "", { labels: [], loading_observed: lookup.loading_observed });
             var texts = state.options.map(function (option) {
                 return String(option.innerText || option.textContent || "");
             });
-            return normalizeCaseLabels(texts, contract.max_options, contract.max_label_length);
+            var normalized = normalizeCaseLabels(texts, contract.max_options, contract.max_label_length);
+            if (normalized.ok) normalized.loading_observed = lookup.loading_observed;
+            return normalized;
         } finally {
             if (generation === lookupGeneration) {
                 setSearchValue(input, "");
@@ -503,18 +634,25 @@
     }
 
     async function fillEntry(payload, contract) {
+        contract = startOperationDeadline(contract);
+        var generation = ++lookupGeneration;
         removeCompactMode();
         if (detectPage() !== "WORK_HOUR_LIST") return result(false, "page_contract_changed");
         lastPayload = Object.freeze(Object.assign({}, payload));
         lastContract = contract;
         var opened = await openEntryForm(contract);
         if (!opened.ok) return opened;
-        var caseResult = await fillCaseNumber(payload.case_number, contract);
+        if (generation !== lookupGeneration) return result(false, "lookup_superseded");
+        var caseResult = await fillCaseNumber(payload.case_number, contract, generation);
         if (!caseResult.ok) return caseResult;
+        if (generation !== lookupGeneration) return result(false, "lookup_superseded");
+        if (remainingMilliseconds(contract) <= 0) return result(false, "page_operation_timeout");
         var dateResult = fillAndVerify("work_date", payload.work_date, contract);
         if (!dateResult.ok) return dateResult;
+        if (generation !== lookupGeneration) return result(false, "lookup_superseded");
         var durationResult = fillAndVerify("duration_hours", payload.duration_hours, contract);
         if (!durationResult.ok) return durationResult;
+        if (generation !== lookupGeneration) return result(false, "lookup_superseded");
         var narrativeResult = fillAndVerify("narrative", payload.narrative, contract);
         if (!narrativeResult.ok) return narrativeResult;
         var verified = verifyEntry(payload, contract);
@@ -522,17 +660,21 @@
         var ignoredReady = ignoredRequiredFieldsReady(contract)
             || await waitFor(function () {
                 return ignoredRequiredFieldsReady(contract);
-            }, 3000);
+            }, Math.max(1, remainingMilliseconds(contract, 3000)));
         if (!ignoredReady) return result(false, "ignored_required_field_missing");
         return installCompactMode(contract);
     }
 
     window.WorkTraceFDWorkAdapter = Object.freeze({
-        version: 3,
+        version: 4,
         detectPage: detectPage,
         installCompactMode: installCompactMode,
         removeCompactMode: removeCompactMode,
         openEntryForm: openEntryForm,
+        interactiveHandshake: interactiveHandshake,
+        prepareCaseCombobox: prepareCaseCombobox,
+        lookupCaseOptions: lookupCaseOptions,
+        selectExactCase: selectExactCase,
         fillCaseNumber: fillCaseNumber,
         fillWorkDate: function (value, contract) { return fillAndVerify("work_date", value, contract); },
         fillDuration: function (value, contract) { return fillAndVerify("duration_hours", value, contract); },
@@ -552,4 +694,7 @@
             }
         })
     });
+    if (typeof window.addEventListener === "function") {
+        window.addEventListener("pagehide", function () { lookupGeneration += 1; });
+    }
 })();
