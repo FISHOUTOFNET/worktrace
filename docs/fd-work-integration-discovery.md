@@ -121,25 +121,19 @@ actual observed maximum `aria-valuemax="23.9"`.
   is made; the 2026-07-31 non-sensitive selector/listbox/empty-state observation
   remains the implementation baseline and live search remains a Windows
   acceptance item.
-- The shipping controller starts with the business URL in one hidden,
-  unfocused window (`js_api=None`). A valid restored session stays hidden; a
-  same-host redirect to the login route changes status to `login_required` and
-  shows that same window immediately.
-- The 2026-08-02 isolated-profile source run observed that Edge WebView2 can
-  finish the hidden window's initial `loaded` event while pywebview still
-  reports the requested business URL and the remote React document is not yet
-  settled. The controller allows one generation-scoped reload of the same
-  business URL; it does not navigate directly to the login URL or retry in a
-  loop. That run then reached the exact same-host login route, changed status to
-  `login_required`, and displayed the single native FD Work window without
-  blocking the WorkTrace main window.
-- Login readiness checks the visible account input, password input and native
-  login button without requiring the empty form's disabled login action to be
-  enabled. Readiness is rechecked at most five times at fixed 0.5-second
-  intervals, and each WebView callback has a fixed three-second timeout. A
-  missing callback leaves the already verified login navigation in
-  `login_required`; an explicit negative contract result fails closed. Disable,
-  close, shutdown and a later navigation generation invalidate older callbacks.
+- The shipping controller owns one hidden, unfocused window (`js_api=None`).
+  Authorized startup uses a short passive session probe. An explicit login request
+  shows or restores the current window immediately without waiting for page-DOM
+  readiness and without forcing operating-system focus.
+- URL is only the first page-state hint. DOM probes distinguish credential login,
+  login confirmation, work shell and work-interactive states. `/LoginToken` does
+  not require account or password inputs. A loaded/navigation signal is primary;
+  a short, deadline-bound fallback handles a missing signal. There is no 35-cycle
+  one-second readiness loop and no automatic reload loop.
+- A recognized work shell installs adapter contract v4 once for that navigation
+  generation. The adapter source is cached by the Python adapter instance; searches
+  and fills send only small action scripts. Navigation, disable, close and shutdown
+  invalidate stale probes, leases and operation callbacks.
 - Windows shipping startup forces the `edgechromium` renderer and verifies the
   initialized renderer. A different renderer is reported as
   `renderer_unavailable` and FD Work fails closed.
@@ -152,12 +146,20 @@ actual observed maximum `aria-valuemax="23.9"`.
   while an isolated tab independently reached the login page. The shipping
   controller must nevertheless rely on one reused pywebview window and verify
   same-process hide/show session retention during Windows acceptance.
-- A user close while login is required hides the auxiliary window without
-  pretending the session is ready. Disabling FD Work destroys it but permits a
-  later re-enable; process shutdown permanently terminates the capability.
-- Search and fill share one bounded serialized DOM-operation owner. Fill
-  invalidates stale searches, search is rejected while a filled entry is under
-  review, and every navigation/operation callback is generation-scoped.
+- A user close destroys the auxiliary window without calling window APIs from the
+  closing callback. A later operation recreates one window. Disabling FD Work
+  destroys it but permits a later re-enable; process shutdown permanently
+  terminates the capability.
+- Search and fill share one bounded serialized DOM-operation owner and one
+  authoritative combobox engine. Each operation obtains a short visible-window
+  lease, validates viewport, layout, input and popup interactivity, and shares one
+  monotonic deadline across Python and JavaScript stages. Search hides the helper
+  on completion; successful fill keeps the complete page visible for human review.
+  Fill waits for query-specific refresh evidence before unique exact selection, so
+  pre-existing recent options cannot cause an early `case_not_found`.
+- Durable project-binding validity depends on project identity, creation time and
+  normalized-name hash, not the adapter contract version. Adapter upgrades do not
+  require users to rebind unchanged projects.
 - Project-search selection proofs are random process-memory tokens with a
   five-minute TTL and a 128-entry cap. They bind the complete label and current
   navigation generation and never enter the DOM, database, browser storage,

@@ -148,15 +148,15 @@ null clears an override, and true plus an integer sets the normalized override.
 Rule batches are atomic, manual assignments are preserved, and statistics/export
 use persisted report facts rather than frontend time.
 
-FD Work separates authoritative draft construction from one integration shared by
-Settings, Timeline and Project Rules. It owns settings, status, selection proofs,
-a versioned plugin sidecar for explicit project bindings and one generation-scoped
-auxiliary window. The lazily created sidecar is outside the main schema and backup;
-only a valid durable binding authorizes Timeline fill. Startup waits for privacy
-consent; authorized startup may open the business URL hidden. Valid sessions stay
-hidden, login redirects show the native page, and successful login hides it unless
-a fill is pending. User close destroys the helper; the next operation recreates it
-through the same session path. WorkTrace never reads or exports browser credentials.
+FD Work has one integration shared by Settings, Timeline and Project Rules. Its
+versioned sidecar holds explicit project bindings outside the main schema and backup;
+only durable bindings authorize Timeline fill. Privacy consent gates startup; passive
+probes stay hidden, while explicit login shows the native window immediately. Login,
+confirmation, work-shell and interactive states are distinct, and matter operations
+require a bounded visible-window lease. Search and exact fill share adapter v4's
+query-refresh handshake; its source is cached and installed once per navigation.
+User close destroys the helper for safe recreation. Bindings validate project
+identity, not adapter version. WorkTrace never reads or exports browser credentials.
 
 ## Validation
 Affected validation: `python scripts/run_affected_tests.py`; full validation uses `python -m pytest`, `node --test tests/webview/*.test.js`, and Windows executable/installer smoke in Standard CI.
