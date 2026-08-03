@@ -65,9 +65,9 @@ class PostPrivacyStartupCoordinator:
         if self._fd_work.get_settings_status().get("enabled") is not True:
             return
         if pre_start:
-            self._fd_work.prepare_window_before_start(show_login_if_required=True)
+            self._fd_work.prepare_window_before_start(show_login_if_required=False)
         else:
-            self._fd_work.prepare_session(show_login_if_required=True)
+            self._fd_work.prepare_session(show_login_if_required=False)
 
     def _safe_prepare_fd_work(self, *, pre_start: bool) -> None:
         try:
