@@ -67,6 +67,21 @@ test("adapter contract v5 exposes picker and fill modes without inline search ha
   assert.equal(adapter.interactiveHandshake, undefined);
 });
 
+test("picker entry is a synchronous DOM installation result", () => {
+  const { adapter } = fieldHarness();
+  const returned = adapter.enterCasePicker({
+    version: 5,
+    operation_nonce: "nonce",
+    operation_generation: 2,
+    fields: { case_number: { selector: "#missing" } },
+  });
+
+  assert.equal(typeof returned, "object");
+  assert.equal(typeof returned?.then, "undefined");
+  assert.equal(returned.ok, true);
+  assert.equal(returned.status, "picker_ready");
+});
+
 test("frame-hosted adapter uses the top-level pywebview bridge", () => {
   assert.match(source, /window\.top[\s\S]*pywebview[\s\S]*\.api/);
 });
@@ -115,7 +130,7 @@ test("fill owns one case preparation and always removes its blocking layer", () 
 
 test("picker does not focus click write clear escape or blur the native case input", () => {
   const body = source.slice(
-    source.indexOf("async function enterCasePicker"),
+    source.indexOf("function enterCasePicker"),
     source.indexOf("function nativeSet")
   );
   assert.doesNotMatch(body, /\.focus\s*\(|\.click\s*\(|setSearchValue|nativeSet/);

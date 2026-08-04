@@ -452,7 +452,7 @@
         return toolbar;
     }
 
-    async function enterCasePicker(contract) {
+    function enterCasePicker(contract) {
         if (!contract || Number(contract.version) !== VERSION || !normalizeExactText(contract.operation_nonce)) {
             return result(false, "dom_contract_changed");
         }

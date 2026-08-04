@@ -320,6 +320,7 @@ class FDWorkPageAdapter:
             window,
             "awaitStableWorkShell",
             self._picker_contract(contract),
+            asynchronous=True,
             respect_operation_deadline=True,
         )
 
@@ -384,6 +385,7 @@ class FDWorkPageAdapter:
             "fillEntry",
             self._entry_contract(contract),
             payload=payload,
+            asynchronous=True,
             respect_operation_deadline=True,
         )
         if result_value.get("ok") is True and result_value.get("status") == "filled":
@@ -428,6 +430,7 @@ class FDWorkPageAdapter:
         *,
         payload: Mapping[str, Any] | None = None,
         takes_contract: bool = True,
+        asynchronous: bool = False,
         respect_operation_deadline: bool = False,
     ) -> dict[str, Any]:
         contract_json = json.dumps(dict(contract), ensure_ascii=True, separators=(",", ":"))
@@ -438,7 +441,7 @@ class FDWorkPageAdapter:
             arguments = contract_json
         else:
             arguments = ""
-        script = (
+        script_head = (
             "(function(){"
             f"{_WORK_SHELL_WINDOW_RESOLVER}"
             "var target=workTraceWorkShellWindow();"
@@ -448,14 +451,25 @@ class FDWorkPageAdapter:
             "return {ok:false,error:'adapter_version_mismatch'};"
             f"if(typeof a.{action}!==\"function\")"
             "return {ok:false,error:'adapter_version_mismatch'};"
-            "return new Promise(function(resolve){"
-            f"try{{var value=a.{action}({arguments});"
-            "target.Promise.resolve(value).then("
-            "function(result){resolve(result);},"
-            "function(){resolve({ok:false,error:'javascript_exception'});});"
-            "}catch(_error){resolve({ok:false,error:'javascript_exception'});}});"
-            "})()"
         )
+        if asynchronous:
+            script = (
+                script_head
+                + "return new Promise(function(resolve){"
+                f"try{{var value=a.{action}({arguments});"
+                "target.Promise.resolve(value).then("
+                "function(result){resolve(result);},"
+                "function(){resolve({ok:false,error:'javascript_exception'});});"
+                "}catch(_error){resolve({ok:false,error:'javascript_exception'});}});"
+                "})()"
+            )
+        else:
+            script = (
+                script_head
+                + f"try{{return a.{action}({arguments});}}"
+                "catch(_error){return {ok:false,error:'javascript_exception'};}"
+                "})()"
+            )
         remaining_ms = float(contract.get("deadline_ms") or 5000)
         absolute_deadline = contract.get("operation_deadline_ms")
         if respect_operation_deadline and isinstance(absolute_deadline, (int, float)):
