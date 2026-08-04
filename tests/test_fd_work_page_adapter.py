@@ -113,9 +113,9 @@ def test_picker_actions_use_small_v5_scripts_and_validate_selected_label():
     assert adapter.read_selected_case(window, _operation()) == {"ok": True, "label": "CASE A"}
     script = window.calls[-1][0]
     assert "readSelectedCase" in script
-    assert '"version":5' in script
-    assert '"operation_nonce":"nonce"' in script
-    assert '"operation_deadline_ms":1893456000000' in script
+    assert '\\"version\\":5' in script
+    assert '\\"operation_nonce\\":\\"nonce\\"' in script
+    assert '\\"operation_deadline_ms\\":1893456000000' in script
     assert len(script) < 3000
 
 
@@ -191,7 +191,11 @@ def test_adapter_install_and_actions_resolve_bounded_same_origin_work_shell_fram
     assert "#basic_caseId" in action_script
     assert "return new Promise(function(resolve)" not in action_script
     assert "target.Promise.resolve(value)" not in action_script
-    assert "return a.enterCasePicker" in action_script
+    assert "return a.enterCasePicker" not in action_script
+    assert "target.eval" in action_script
+    assert "JSON.stringify" in action_script
+    assert "JSON.parse" in action_script
+    assert "WorkTraceFDWorkAdapter.enterCasePicker" in action_script
 
     adapter.await_stable_work_shell(window, _operation())
     asynchronous_script = window.calls[-1][0]

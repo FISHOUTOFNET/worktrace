@@ -441,6 +441,13 @@ class FDWorkPageAdapter:
             arguments = contract_json
         else:
             arguments = ""
+        frame_action_source = (
+            "JSON.stringify((function(){"
+            f"try{{return WorkTraceFDWorkAdapter.{action}({arguments});}}"
+            "catch(_error){return {ok:false,error:'javascript_exception'};}"
+            "})())"
+        )
+        frame_action_json = json.dumps(frame_action_source, ensure_ascii=True)
         script_head = (
             "(function(){"
             f"{_WORK_SHELL_WINDOW_RESOLVER}"
@@ -466,7 +473,10 @@ class FDWorkPageAdapter:
         else:
             script = (
                 script_head
-                + f"try{{return a.{action}({arguments});}}"
+                + f"try{{var serialized=target.eval({frame_action_json});"
+                "if(typeof serialized!=='string')"
+                "return {ok:false,error:'non_mapping_result'};"
+                "return JSON.parse(serialized);}}"
                 "catch(_error){return {ok:false,error:'javascript_exception'};}"
                 "})()"
             )
