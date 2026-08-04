@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from enum import Enum
 import json
+import logging
 from pathlib import Path
 import threading
 import time
@@ -86,7 +87,13 @@ class FDWorkPageAdapter:
         {"selector": "#basic_writtenLanguage", "label": "书写语言"},
     )
 
-    def __init__(self, *, adapter_asset_path: str | Path | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        adapter_asset_path: str | Path | None = None,
+        diagnostic_callback: Callable[[Mapping[str, Any]], None] | None = None,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
         self._adapter_asset_path = (
             Path(adapter_asset_path)
             if adapter_asset_path is not None
@@ -94,6 +101,8 @@ class FDWorkPageAdapter:
         )
         self._adapter_source: str | None = None
         self._source_lock = threading.Lock()
+        self._diagnostic_callback = diagnostic_callback or self._log_action_diagnostic
+        self._clock = clock
 
     @property
     def login_url(self) -> str:
@@ -364,11 +373,31 @@ class FDWorkPageAdapter:
                 max(10.0, float(absolute_deadline) - time.time() * 1000),
             )
         timeout_seconds = max(0.01, remaining_ms / 1000)
-        value = self._evaluate_action(
+        started_at = self._clock()
+        value, internal_error_kind, callback_executed, result_type = self._evaluate_action(
             window,
             script,
             timeout_seconds=timeout_seconds,
             timeout_error=timeout_error,
+        )
+        if internal_error_kind is None:
+            if not isinstance(value, Mapping):
+                internal_error_kind = "non_mapping_result"
+            elif value.get("ok") is not True:
+                returned_error = value.get("error")
+                internal_error_kind = (
+                    returned_error
+                    if isinstance(returned_error, str) and returned_error in _ACTION_ERRORS
+                    else "dom_contract_changed"
+                )
+        self._emit_action_diagnostic(
+            action=action,
+            contract=contract,
+            value=value,
+            internal_error_kind=internal_error_kind,
+            callback_executed=callback_executed,
+            result_type=result_type,
+            elapsed_ms=max(0, int((self._clock() - started_at) * 1000)),
         )
         return self._validated_action_result(value)
 
@@ -401,13 +430,16 @@ class FDWorkPageAdapter:
         *,
         timeout_seconds: float,
         timeout_error: str,
-    ) -> Any:
+    ) -> tuple[Any, str | None, bool, str]:
         completed = threading.Event()
         callback_result: list[Any] = []
+        callback_executed = False
 
         def accept_result(value: Any) -> None:
+            nonlocal callback_executed
             if completed.is_set():
                 return
+            callback_executed = True
             callback_result.append(value)
             completed.set()
 
@@ -415,15 +447,81 @@ class FDWorkPageAdapter:
             window.evaluate_js(script, callback=accept_result)
         except TypeError:
             try:
-                return window.evaluate_js(script)
+                value = window.evaluate_js(script)
+                return value, None, False, type(value).__name__ if value is not None else "none"
             except Exception:
-                return {"ok": False, "error": "page_contract_changed"}
+                return (
+                    {"ok": False, "error": "page_contract_changed"},
+                    "javascript_exception",
+                    False,
+                    "none",
+                )
         except Exception:
-            return {"ok": False, "error": "page_contract_changed"}
+            return (
+                {"ok": False, "error": "page_contract_changed"},
+                "javascript_exception",
+                False,
+                "none",
+            )
         if not completed.wait(timeout=max(0.01, float(timeout_seconds))):
             completed.set()
-            return {"ok": False, "error": timeout_error}
-        return callback_result[0] if callback_result else None
+            return (
+                {"ok": False, "error": timeout_error},
+                "callback_timeout",
+                False,
+                "none",
+            )
+        value = callback_result[0] if callback_result else None
+        return (
+            value,
+            None,
+            callback_executed,
+            type(value).__name__ if value is not None else "none",
+        )
+
+    def _emit_action_diagnostic(
+        self,
+        *,
+        action: str,
+        contract: Mapping[str, Any],
+        value: Any,
+        internal_error_kind: str | None,
+        callback_executed: bool,
+        result_type: str,
+        elapsed_ms: int,
+    ) -> None:
+        diagnostic: dict[str, Any] = {
+            "action": action,
+            "internal_error_kind": internal_error_kind or "none",
+            "elapsed_ms": elapsed_ms,
+            "adapter_version": self.adapter_version,
+            "operation_generation": int(contract.get("operation_generation") or 0),
+            "navigation_generation": int(contract.get("navigation_generation") or 0),
+            "callback_executed": callback_executed,
+            "result_type": result_type,
+        }
+        if isinstance(value, Mapping):
+            for key in (
+                "document_visibility",
+                "viewport_available",
+                "input_exists",
+                "input_interactive",
+                "form_exists",
+                "wrapper_exists",
+            ):
+                if key in value and isinstance(value[key], (bool, str)):
+                    diagnostic[key] = value[key]
+        try:
+            self._diagnostic_callback(diagnostic)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _log_action_diagnostic(diagnostic: Mapping[str, Any]) -> None:
+        logging.info(
+            "fd_work_window_action %s",
+            " ".join(f"{key}={value}" for key, value in diagnostic.items()),
+        )
 
 
 __all__ = ["FDWorkPageAdapter", "FDWorkPagePhase", "FDWorkPageType"]

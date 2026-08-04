@@ -157,3 +157,68 @@ def test_adapter_source_is_cached_and_actions_do_not_reinject(monkeypatch):
     assert len(reads) == 1
     assert sum(len(script) > 10_000 for script, callback in window.calls if callback is None) == 2
     assert sum(callable(callback) for _script, callback in window.calls) == 2
+
+
+def test_action_diagnostics_distinguish_javascript_exception_without_page_data():
+    diagnostics = []
+
+    class Window:
+        def evaluate_js(self, _script, callback=None):
+            del callback
+            raise RuntimeError("page value and markup must not be logged")
+
+    adapter = FDWorkPageAdapter(diagnostic_callback=diagnostics.append)
+
+    result = adapter.enter_case_picker(Window(), _operation())
+
+    assert result == {"ok": False, "error": "page_contract_changed"}
+    assert diagnostics == [
+        {
+            "action": "enterCasePicker",
+            "internal_error_kind": "javascript_exception",
+            "elapsed_ms": pytest.approx(0, abs=100),
+            "adapter_version": 5,
+            "operation_generation": 2,
+            "navigation_generation": 3,
+            "callback_executed": False,
+            "result_type": "none",
+        }
+    ]
+    serialized = repr(diagnostics)
+    assert "page value" not in serialized
+    assert "markup" not in serialized
+
+
+def test_action_diagnostics_distinguish_callback_timeout_and_ignore_stale_callback():
+    diagnostics = []
+    callbacks = []
+
+    class Window:
+        def evaluate_js(self, _script, callback=None):
+            callbacks.append(callback)
+
+    adapter = FDWorkPageAdapter(diagnostic_callback=diagnostics.append)
+    operation = _operation(timeout_seconds=0.01, operation_deadline_ms=1)
+
+    result = adapter.enter_case_picker(Window(), operation)
+    callbacks[0]({"ok": True, "status": "picker_ready", "label": "PRIVATE"})
+
+    assert result == {"ok": False, "error": "page_operation_timeout"}
+    assert len(diagnostics) == 1
+    assert diagnostics[0]["internal_error_kind"] == "callback_timeout"
+    assert diagnostics[0]["callback_executed"] is False
+    assert diagnostics[0]["result_type"] == "none"
+    assert "PRIVATE" not in repr(diagnostics)
+
+
+def test_action_diagnostics_distinguish_non_mapping_callback_result():
+    diagnostics = []
+    adapter = FDWorkPageAdapter(diagnostic_callback=diagnostics.append)
+    window = _Window("not-a-mapping")
+
+    result = adapter.enter_case_picker(window, _operation())
+
+    assert result == {"ok": False, "error": "page_contract_changed"}
+    assert diagnostics[0]["internal_error_kind"] == "non_mapping_result"
+    assert diagnostics[0]["callback_executed"] is True
+    assert diagnostics[0]["result_type"] == "str"

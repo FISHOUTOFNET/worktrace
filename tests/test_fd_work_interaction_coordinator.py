@@ -9,6 +9,8 @@ from worktrace.integrations.fd_work.contracts import FDWorkEntryDraft
 from worktrace.integrations.fd_work.interaction_coordinator import (
     FDWorkInteractionCoordinator,
 )
+from worktrace.integrations.fd_work.helper_bridge import FDWorkHelperBridge
+from worktrace.integrations.fd_work.page_adapter import FDWorkPageAdapter
 
 
 pytestmark = [
@@ -205,6 +207,36 @@ def test_confirm_requires_current_nonce_and_adapter_proven_selection():
     assert controller.hide_calls == [(4, 1)]
     assert controller.main_focus_calls == 1
     assert coordinator.get_status()["interaction_owner"] == "none"
+
+
+def test_reproduces_confirm_bridge_same_window_javascript_exception():
+    diagnostics = []
+
+    class ReentrantWindow:
+        bridge_active = False
+
+        def evaluate_js(self, _script, callback=None):
+            if self.bridge_active:
+                raise RuntimeError("same helper bridge stack re-entry")
+            callback({"ok": True, "status": "picker_ready"})
+
+    controller = _Controller()
+    controller.window = ReentrantWindow()
+    adapter = FDWorkPageAdapter(diagnostic_callback=diagnostics.append)
+    coordinator, _controller, _adapter = _coordinator(
+        controller=controller,
+        adapter=adapter,
+    )
+    bridge = FDWorkHelperBridge(coordinator)
+    assert coordinator.open_case_picker("drawer-1")["ok"] is True
+
+    controller.window.bridge_active = True
+    result = bridge.confirm_case_picker("picker-nonce", "CASE A")
+
+    assert result == {"ok": False, "error": "page_contract_changed"}
+    assert diagnostics[-1]["action"] == "readSelectedCase"
+    assert diagnostics[-1]["internal_error_kind"] == "javascript_exception"
+    assert diagnostics[-1]["callback_executed"] is False
 
 
 def test_cancel_and_helper_close_complete_pending_picker_without_deadlock():
