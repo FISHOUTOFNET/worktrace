@@ -40,6 +40,8 @@ class _Controller:
         self.disable_calls = 0
         self.shutdown_calls = 0
         self.scheduled = []
+        self.visible = False
+        self.window_actions = []
         self.status = {
             "session_state": "ready",
             "page_phase": "work_shell",
@@ -67,11 +69,20 @@ class _Controller:
 
     def prepare_session(self, show_login_if_required=True):
         self.prepare_calls.append(show_login_if_required)
+        if show_login_if_required and not self.visible:
+            self.visible = True
+            self.window_actions.extend(["show", "restore", "focus"])
         return {"ok": True, "status": self.get_status()}
+
+    def prepare_window_before_start(self, show_login_if_required=False):
+        return self.prepare_session(show_login_if_required)
 
     def foreground(self, owner, operation_generation, guard):
         assert guard()
         self.foreground_calls.append((owner, operation_generation))
+        if not self.visible:
+            self.visible = True
+            self.window_actions.extend(["show", "restore", "focus"])
         assert guard()
         return {
             "ok": True,
@@ -83,6 +94,8 @@ class _Controller:
         assert guard()
         self.hide_calls.append((navigation_generation, operation_generation))
         self.main_focus_calls += 1
+        self.visible = False
+        self.window_actions.extend(["hide", "main"])
         assert guard()
 
     def close_helper(self):
@@ -340,6 +353,79 @@ def test_login_completion_resumes_pending_picker_with_fresh_operation_nonce():
     assert coordinator.get_status()["interaction_owner"] == "user_picker"
     assert coordinator.get_status()["operation_nonce"] == "picker-nonce"
     assert len(adapter.enter_picker_calls) == 1
+
+
+def test_visibility_sequence_passive_probe_stays_hidden():
+    controller = _Controller()
+    controller.status.update({"session_state": "probing", "ready": False})
+    coordinator, _controller, _adapter = _coordinator(controller=controller)
+
+    coordinator.prepare_window_before_start(False)
+    controller.publish(session_state="ready", page_phase="work_shell", ready=True)
+
+    assert controller.window_actions == []
+
+
+def test_visibility_sequence_standalone_login_hides_once_and_restores_main():
+    controller = _Controller()
+    controller.status.update({
+        "session_state": "login_required",
+        "page_phase": "login_credentials",
+        "ready": False,
+    })
+    coordinator, _controller, _adapter = _coordinator(controller=controller)
+
+    coordinator.prepare_session(True)
+    controller.publish(session_state="ready", page_phase="work_shell", ready=True)
+
+    assert controller.window_actions == [
+        "show", "restore", "focus", "hide", "main"
+    ]
+
+
+def test_visibility_sequence_login_to_picker_has_no_hide_show_round_trip():
+    controller = _Controller()
+    controller.status.update({
+        "session_state": "login_required",
+        "page_phase": "login_credentials",
+        "ready": False,
+    })
+    coordinator, _controller, _adapter = _coordinator(
+        controller=controller,
+        nonces=["auth", "picker"],
+    )
+
+    coordinator.open_case_picker("drawer-1")
+    controller.publish(session_state="ready", page_phase="work_shell", ready=True)
+
+    assert controller.window_actions == ["show", "restore", "focus"]
+    assert coordinator.get_status()["interaction_owner"] == "user_picker"
+
+
+def test_visibility_sequence_ready_picker_foregrounds_and_hides_once_on_confirm():
+    coordinator, controller, _adapter = _coordinator()
+    coordinator.open_case_picker("drawer-1")
+
+    accepted = coordinator.submit_case_picker_confirmation(
+        "picker-nonce", "CASE A", 1
+    )
+    assert accepted == {"ok": True, "accepted": True}
+    assert controller.window_actions == ["show", "restore", "focus"]
+    controller.run_scheduled()
+
+    assert controller.window_actions == [
+        "show", "restore", "focus", "hide", "main"
+    ]
+
+
+def test_visibility_sequence_fill_foregrounds_once_and_stays_for_review():
+    coordinator, controller, _adapter = _coordinator()
+
+    result = coordinator.open_entry(_draft())
+
+    assert result == {"ok": True, "status": "review"}
+    assert controller.window_actions == ["show", "restore", "focus"]
+    assert coordinator.get_status()["interaction_owner"] == "user_review"
 
 
 def test_explicit_standalone_auth_owns_helper_until_ready_then_restores_main():

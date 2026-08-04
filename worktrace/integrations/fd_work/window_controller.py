@@ -572,6 +572,11 @@ class FDWorkWindowController:
         with self._lock:
             if not self._navigation_is_current_locked(window, generation):
                 return
+            if (
+                self._session_state == "ready"
+                and self._page_phase == FDWorkPagePhase.WORK_SHELL.value
+            ):
+                return
             self._session_state = "ready"
             self._page_phase = FDWorkPagePhase.WORK_SHELL.value
             self._operation = "none"
@@ -581,7 +586,6 @@ class FDWorkWindowController:
             self._login_watch_deadline = None
             self._explicit_activation = False
             status = self._status_locked()
-        self._hide_window_if_current(window, generation)
         self._emit(status)
         self._log_event("fd_work_page_phase_changed")
         self._log_event("fd_work_ready")
@@ -692,6 +696,7 @@ class FDWorkWindowController:
             window = self._window
             navigation_generation = self._navigation_generation
             controller_operation_generation = self._operation_generation
+            already_visible = self._window_visible
             if self._shutdown or window is None:
                 return self._failure_locked("window_unavailable")
             if owner in {"user_picker", "automation_fill"} and self._session_state != "ready":
@@ -703,14 +708,15 @@ class FDWorkWindowController:
                 and guard()
             )
 
-        if not self._show_window_if_current(
-            window,
-            navigation_generation,
-            focus=True,
-            restore=True,
-            external_guard=current,
-        ):
-            return {"ok": False, "error": "lookup_superseded"}
+        if not already_visible:
+            if not self._show_window_if_current(
+                window,
+                navigation_generation,
+                focus=True,
+                restore=True,
+                external_guard=current,
+            ):
+                return {"ok": False, "error": "lookup_superseded"}
         guarded_window = self._executor_window(
             window,
             navigation_generation,
@@ -754,25 +760,6 @@ class FDWorkWindowController:
                 if self._window is window:
                     self._window_visible = False
             self._log_event("fd_work_window_hide")
-
-    def _hide_window_if_current(self, window: Any, generation: int) -> bool:
-        with self._lock:
-            if not self._navigation_is_current_locked(window, generation):
-                return False
-            if self._page_phase in {
-                FDWorkPagePhase.LOGIN_CREDENTIALS.value,
-                FDWorkPagePhase.LOGIN_CONFIRMATION.value,
-            }:
-                return False
-        callback = getattr(window, "hide", None)
-        guard = lambda: self._navigation_is_current(window, generation)
-        if not callable(callback) or not self._dispatch_window_mutation(callback, guard):
-            return False
-        with self._lock:
-            if self._window is window:
-                self._window_visible = False
-        self._log_event("fd_work_window_hide")
-        return True
 
     def _show_window_if_current(
         self,

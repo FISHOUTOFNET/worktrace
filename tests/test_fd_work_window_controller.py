@@ -52,24 +52,30 @@ class _Window:
         self.restored = 0
         self.focused = 0
         self.destroyed = 0
+        self.actions = []
 
     def get_current_url(self):
         return self.url
 
     def show(self):
         self.shown += 1
+        self.actions.append("show")
 
     def hide(self):
         self.hidden += 1
+        self.actions.append("hide")
 
     def restore(self):
         self.restored += 1
+        self.actions.append("restore")
 
     def focus(self):
         self.focused += 1
+        self.actions.append("focus")
 
     def destroy(self):
         self.destroyed += 1
+        self.actions.append("destroy")
 
 
 class _WebView:
@@ -212,7 +218,7 @@ def test_login_phases_do_not_repeat_foreground_mutation(path, phase):
     assert (webview.window.shown, webview.window.restored, webview.window.focused) == (1, 1, 1)
 
 
-def test_passive_probe_never_show_restore_or_focus_and_hides_ready_page():
+def test_passive_probe_never_mutates_window_visibility_or_focus():
     delayed = []
     controller, webview, _adapter = _controller(renderer_initialized=False, delayed=delayed)
     controller.prepare_window_before_start(False)
@@ -221,7 +227,7 @@ def test_passive_probe_never_show_restore_or_focus_and_hides_ready_page():
 
     assert (webview.window.shown, webview.window.restored, webview.window.focused) == (0, 0, 0)
     assert controller.get_status()["session_state"] == "ready"
-    assert webview.window.hidden == 1
+    assert webview.window.hidden == 0
 
 
 def test_passive_unknown_probe_uses_one_bounded_deadline():
@@ -247,7 +253,7 @@ def test_passive_unknown_probe_uses_one_bounded_deadline():
     assert webview.window.shown == 0
 
 
-def test_login_completion_hides_before_publishing_ready_status():
+def test_controller_ready_status_does_not_claim_login_visibility_ownership():
     observed = []
     controller, webview, adapter = _controller(delayed=[])
     controller.bind_status_callback(
@@ -261,7 +267,24 @@ def test_login_completion_hides_before_publishing_ready_status():
     webview.window.events.loaded.fire()
 
     ready = [item for item in observed if item[0]["session_state"] == "ready"]
-    assert ready and ready[-1][1] >= 1
+    assert ready and ready[-1][1] == 0
+
+
+def test_ready_work_shell_keeps_visible_helper_for_login_to_picker_handoff():
+    controller, webview, adapter = _controller(delayed=[])
+    controller.prepare_session(True)
+    webview.window.url = adapter.login_url
+    webview.window.events.loaded.fire()
+    webview.window.url = adapter.business_url
+
+    webview.window.events.loaded.fire()
+    shown_before = webview.window.shown
+    context = controller.foreground("user_picker", 7, lambda: True)
+
+    assert context["ok"] is True
+    assert webview.window.actions == ["show", "restore", "focus"]
+    assert webview.window.hidden == 0
+    assert webview.window.shown == shown_before
 
 
 def test_adapter_installs_once_per_navigation_and_v5_mismatch_fails_closed():
