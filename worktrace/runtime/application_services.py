@@ -39,6 +39,7 @@ def build_application_services(
         project_reader=project_api.get_project,
         project_list_reader=project_service.list_user_project_identities,
     )
+    binding_service.start_pending_reconciliation()
     fd_work = FDWorkIntegrationService(
         draft_builder=FDWorkEntryDraftBuilder(binding_verifier=binding_service),
         binding_service=binding_service,

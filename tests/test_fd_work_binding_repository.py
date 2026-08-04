@@ -52,6 +52,115 @@ def test_sidecar_is_lazy_versioned_and_keeps_main_schema_unchanged(tmp_path):
     assert CURRENT_SCHEMA_VERSION == 13
 
 
+def test_v1_to_v2_migration_preserves_existing_binding_and_adds_pending_table(tmp_path):
+    path = tmp_path / "state.db"
+    existing_hash = case_label_hash("TEST MATTER A")
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE project_binding (
+                project_id INTEGER PRIMARY KEY,
+                project_created_at TEXT NULL,
+                bound_name_hash TEXT NOT NULL,
+                adapter_contract_version INTEGER NOT NULL,
+                bound_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            "INSERT INTO project_binding VALUES (?, ?, ?, ?, ?, ?)",
+            (7, "created", existing_hash, 5, "bound", "updated"),
+        )
+        connection.execute("PRAGMA user_version = 1")
+
+    repository = FDWorkBindingRepository(path)
+    bindings = repository.list_bindings()
+
+    assert len(bindings) == 1
+    assert bindings[0].project_id == 7
+    assert bindings[0].bound_name_hash == existing_hash
+    with sqlite3.connect(path) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 2
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+        pending_columns = [
+            row[1]
+            for row in connection.execute(
+                "PRAGMA table_info(pending_binding_operation)"
+            )
+        ]
+    assert {"project_binding", "pending_binding_operation"} <= tables
+    assert pending_columns == [
+        "operation_id",
+        "operation_kind",
+        "intended_name_hash",
+        "started_at",
+        "project_id",
+        "project_created_at",
+        "previous_name_hash",
+        "stage",
+        "updated_at",
+    ]
+    assert FD_WORK_STATE_SCHEMA_VERSION == 2
+
+
+def test_pending_operation_stores_only_hashes_and_supports_atomic_completion(tmp_path):
+    path = tmp_path / "state.db"
+    repository = FDWorkBindingRepository(path)
+    intended_hash = case_label_hash("TEST MATTER A")
+
+    repository.assert_writable()
+    repository.begin_pending_operation(
+        "operation-1",
+        "create",
+        intended_hash,
+        previous_name_hash=None,
+    )
+    repository.record_pending_project(
+        "operation-1",
+        project_id=9,
+        project_created_at="2026-08-04 10:00:00",
+        stage="project_created",
+    )
+    pending = repository.get_pending_operation("operation-1")
+
+    assert pending is not None
+    assert pending.intended_name_hash == intended_hash
+    assert not hasattr(pending, "project_name")
+    repository.complete_pending_with_binding(
+        "operation-1",
+        project_id=9,
+        project_created_at="2026-08-04 10:00:00",
+        bound_name_hash=intended_hash,
+        adapter_contract_version=5,
+    )
+
+    assert repository.get_pending_operation("operation-1") is None
+    binding = repository.get_binding(9)
+    assert binding is not None and binding.bound_name_hash == intended_hash
+    assert "TEST MATTER A" not in path.read_bytes().decode("latin1")
+
+
+def test_clear_project_state_removes_binding_and_related_pending_operation(tmp_path):
+    repository = FDWorkBindingRepository(tmp_path / "state.db")
+    name_hash = case_label_hash("TEST MATTER A")
+    repository.bind_project(9, "2026-08-04 10:00:00", name_hash, 5)
+    repository.begin_pending_operation("delete-cleanup", "rebind", name_hash)
+    repository.record_pending_project(
+        "delete-cleanup", 9, "2026-08-04 10:00:00", "project_updated"
+    )
+
+    repository.clear_project_state(9)
+
+    assert repository.get_binding(9) is None
+    assert repository.get_pending_operation("delete-cleanup") is None
+
+
 def test_bind_get_rebind_and_clear_use_short_lived_connections(tmp_path):
     path = tmp_path / "state.db"
     repository = FDWorkBindingRepository(path)

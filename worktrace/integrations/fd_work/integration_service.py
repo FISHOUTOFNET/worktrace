@@ -366,6 +366,10 @@ class FDWorkIntegrationService:
             controller = self._interaction_coordinator
         if controller is not None:
             controller.shutdown()
+        if self._binding_service is not None:
+            self._binding_service.cancel_pending_reconciliation(
+                timeout_seconds=0.25
+            )
         self._emit_status(self.get_settings_status())
 
     def _initial_controller_status(self) -> dict[str, object]:
