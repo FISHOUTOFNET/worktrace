@@ -177,7 +177,7 @@
             pickerInput.removeEventListener("change", pickerInputListener);
         }
         if (pickerDocumentClickListener && typeof document.removeEventListener === "function") {
-            document.removeEventListener("click", pickerDocumentClickListener, false);
+            document.removeEventListener("click", pickerDocumentClickListener, true);
         }
         if (pickerInput) pickerInput.disabled = pickerInputInitiallyDisabled;
         pickerInput = null;
@@ -494,7 +494,7 @@
             input.addEventListener("change", pickerInputListener);
         }
         if (typeof document.addEventListener === "function") {
-            document.addEventListener("click", pickerDocumentClickListener, false);
+            document.addEventListener("click", pickerDocumentClickListener, true);
         }
         updatePickerToolbar();
         return result(true, "", { status: "picker_ready" });

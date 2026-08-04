@@ -124,7 +124,12 @@ function runEdge(edge, args, profile) {
       if (stderr.length > 1024 * 1024) stderr = stderr.slice(-1024 * 1024);
     });
     child.on("error", (error) => finish({ error, stdout, stderr }));
-    child.on("close", (status) => finish({ status, stdout, stderr, timedOut }));
+    child.on("close", (status) => finish({
+      status: resultCaptured ? 0 : status,
+      stdout,
+      stderr,
+      timedOut,
+    }));
   });
 }
 

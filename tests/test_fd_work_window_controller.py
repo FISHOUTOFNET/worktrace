@@ -355,7 +355,7 @@ def test_stale_queued_foreground_mutation_cannot_touch_recreated_window():
     prepare.start()
     assert executor.wait_for_pending_count(1, timeout=1)
     first = webview.window
-    assert first.events.closing.fire() == [True]
+    assert first.events.closing.fire() == [False]
     first.events.closed.fire()
     command_release.set()
     blocker.join(timeout=1)
@@ -369,7 +369,12 @@ def test_stale_queued_foreground_mutation_cannot_touch_recreated_window():
 
 def test_close_callback_is_nonblocking_and_recreate_does_not_accumulate_handlers():
     close_results = []
-    controller, webview, _adapter = _controller(close_results=close_results)
+    delayed = []
+    controller, webview, _adapter = _controller(
+        close_results=close_results,
+        delayed=delayed,
+        renderer_initialized=False,
+    )
 
     for _index in range(20):
         controller.prepare_session(True)
@@ -378,10 +383,46 @@ def test_close_callback_is_nonblocking_and_recreate_does_not_accumulate_handlers
         worker.start()
         worker.join(timeout=1)
         assert not worker.is_alive()
+        assert len(close_results) == _index
         window.events.closed.fire()
+        assert len(delayed) == 1
+        _delay, callback = delayed.pop(0)
+        callback()
+        assert len(close_results) == _index + 1
 
     assert len(close_results) == 20
     assert len(webview.calls) == 20
+
+
+def test_closing_allows_native_close_and_never_runs_business_callback_inline():
+    delayed = []
+    callback_entered = threading.Event()
+    callback_release = threading.Event()
+    controller, webview, _adapter = _controller(
+        delayed=delayed,
+        renderer_initialized=False,
+    )
+
+    def close_callback(_generation):
+        callback_entered.set()
+        callback_release.wait(timeout=1)
+
+    controller.bind_close_callback(close_callback)
+    controller.prepare_session(True)
+    window = webview.window
+
+    assert window.events.closing.fire() == [False]
+    assert not callback_entered.is_set()
+    assert delayed == []
+
+    window.events.closed.fire()
+    assert len(delayed) == 1
+    worker = threading.Thread(target=delayed.pop(0)[1])
+    worker.start()
+    assert callback_entered.wait(timeout=1)
+    callback_release.set()
+    worker.join(timeout=1)
+    assert not worker.is_alive()
 
 
 def test_disable_and_shutdown_destroy_via_executor_and_reject_future_open():

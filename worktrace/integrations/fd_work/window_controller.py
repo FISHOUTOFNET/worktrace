@@ -123,6 +123,7 @@ class FDWorkWindowController:
         self._probe_deadline: float | None = None
         self._login_watch_generation: int | None = None
         self._login_watch_deadline: float | None = None
+        self._pending_close_generation: int | None = None
         self._close_callback: Callable[[int], None] = lambda _generation: None
         self._main_focus_callback: Callable[[], None] = lambda: None
 
@@ -622,7 +623,7 @@ class FDWorkWindowController:
     def _on_closing(self, window: Any) -> bool:
         with self._lock:
             if self._shutdown or self._window is not window:
-                return True
+                return False
             self._navigation_generation += 1
             self._operation_generation += 1
             self._adapter_installed_generation = None
@@ -636,20 +637,18 @@ class FDWorkWindowController:
             self._probe_deadline = None
             self._login_watch_generation = None
             self._login_watch_deadline = None
-            generation = self._navigation_generation
-            close_callback = self._close_callback
-        try:
-            close_callback(generation)
-        except Exception:
-            pass
-        return True
+            self._pending_close_generation = self._navigation_generation
+        return False
 
     def _on_closed(self, window: Any) -> None:
         with self._lock:
             if self._shutdown or self._window is not window:
                 return
-            self._navigation_generation += 1
-            self._operation_generation += 1
+            generation = self._pending_close_generation
+            if generation is None:
+                self._navigation_generation += 1
+                self._operation_generation += 1
+                generation = self._navigation_generation
             self._window = None
             self._window_visible = False
             self._creating_window = False
@@ -659,8 +658,11 @@ class FDWorkWindowController:
             self._page_phase = "none"
             self._operation = "none"
             self._error_code = None
+            self._pending_close_generation = None
+            close_callback = self._close_callback
             status = self._status_locked()
         self._emit(status)
+        self.schedule_callback(lambda: close_callback(generation))
 
     def _set_page_phase_error(
         self, window: Any, generation: int, phase: str, error: str

@@ -48,13 +48,16 @@
       var selection = document.querySelector(".ant-select-selection-item");
       var options = Array.from(document.querySelectorAll("[role='option']"));
       options.forEach(function (option) {
-        option.addEventListener("click", function () {
+        option.addEventListener("click", function (event) {
           options.forEach(function (candidate) {
             candidate.setAttribute("aria-selected", "false");
           });
           option.setAttribute("aria-selected", "true");
           selection.textContent = option.textContent;
           selection.setAttribute("title", option.getAttribute("title"));
+          // React/Ant portals may stop native bubbling after committing the option.
+          // The adapter must observe the trusted option click in capture phase.
+          event.stopPropagation();
         });
       });
     })();

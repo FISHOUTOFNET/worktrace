@@ -156,4 +156,9 @@ test("picker snapshots the old selection before observing new commit evidence", 
   assert.doesNotMatch(source, /pickerSelectionRevision\s*=\s*selected\.ok/);
   assert.match(source, /pickerSelectionRevision\s*>\s*0\s*&&\s*selected\.ok/);
   assert.match(source, /attributeName\s*!==\s*["']aria-selected["']/);
+  assert.match(
+    source,
+    /document\.addEventListener\("click",\s*pickerDocumentClickListener,\s*true\)/,
+    "Ant may stop option-click bubbling, so proof capture must run in capture phase"
+  );
 });
