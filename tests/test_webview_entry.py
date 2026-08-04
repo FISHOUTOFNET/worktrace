@@ -129,6 +129,14 @@ def test_webview_main_returns_nonzero_when_pywebview_missing(monkeypatch, capsys
     assert "未安装" in captured.err
 
 
+def test_pywebview_runtime_version_is_safe_and_exact(monkeypatch):
+    import worktrace.webview_main as webview_main
+
+    monkeypatch.setattr(webview_main, "package_version", lambda _name: "6.2.1")
+
+    assert webview_main._pywebview_runtime_version() == "6.2.1"
+
+
 def test_webview_main_does_not_swallow_nonzero_exit_from_pre_flight(monkeypatch):
     import worktrace.main as main_mod
     import worktrace.webview_main as webview_main

@@ -5,6 +5,7 @@ import logging
 import json
 import sys
 import threading
+from importlib.metadata import PackageNotFoundError, version as package_version
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -55,8 +56,15 @@ def _check_pywebview_available() -> Any:
     except ImportError as exc:
         raise RuntimeError(
             "pywebview 未安装，无法启动 WebView UI。"
-            "请运行 pip install pywebview>=5.0 后重试。"
+            "请运行 pip install pywebview==6.2.1 后重试。"
         ) from exc
+
+
+def _pywebview_runtime_version() -> str:
+    try:
+        return str(package_version("pywebview"))
+    except PackageNotFoundError:
+        return "unknown"
 
 
 def _show_blocking_startup_message(message: str) -> None:
@@ -155,6 +163,7 @@ def main(*, background: bool = False) -> int:
         if background:
             _show_blocking_startup_message(str(exc))
         return 2
+    logging.info("pywebview_runtime version=%s", _pywebview_runtime_version())
 
     runtime = AppRuntime(paths)
     shell: DesktopShellController | None = None

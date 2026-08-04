@@ -34,6 +34,8 @@ SPEC_PATH = REPO_ROOT / "WorkTrace.spec"
 INDEX_HTML_PATH = REPO_ROOT / "worktrace" / "webview_ui" / "index.html"
 ENTRY_PATH = REPO_ROOT / "scripts" / "pyinstaller_entry.py"
 MAIN_PATH = REPO_ROOT / "worktrace" / "main.py"
+REQUIREMENTS_PATH = REPO_ROOT / "requirements.txt"
+VALIDATION_WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "_validation.yml"
 
 
 def _read(path: Path) -> str:
@@ -82,6 +84,17 @@ def test_spec_bundles_webview_resources_under_webview_ui_dir():
 def test_spec_collects_pywebview():
     spec = _read(SPEC_PATH)
     assert "collect_all('webview')" in spec or 'collect_all("webview")' in spec
+
+
+def test_pywebview_runtime_is_pinned_and_recorded_by_windows_ci():
+    requirements = _read(REQUIREMENTS_PATH)
+    workflow = _read(VALIDATION_WORKFLOW_PATH)
+
+    assert "pywebview==6.2.1" in requirements.splitlines()
+    assert "pywebview>=" not in requirements
+    assert 'version("pywebview")' in workflow
+    assert "pywebview_version=" in workflow
+    assert workflow.count("pywebview_version=") >= 2
 
 
 def test_spec_retains_schema_sql():
