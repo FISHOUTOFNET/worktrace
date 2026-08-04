@@ -13,6 +13,13 @@
     var activePickerContract = null;
     var pickerObserver = null;
     var pickerSelectionRevision = 0;
+    var pickerInitialSelection = null;
+    var pickerInput = null;
+    var pickerInputInitiallyDisabled = false;
+    var pickerInputListener = null;
+    var pickerDocumentClickListener = null;
+    var pickerOptionClickSequence = 0;
+    var pickerAcceptedClickSequence = 0;
     var lastPayload = null;
     var lastContract = null;
 
@@ -164,6 +171,24 @@
         }
     }
 
+    function clearPickerListeners() {
+        if (pickerInput && pickerInputListener && typeof pickerInput.removeEventListener === "function") {
+            pickerInput.removeEventListener("input", pickerInputListener);
+            pickerInput.removeEventListener("change", pickerInputListener);
+        }
+        if (pickerDocumentClickListener && typeof document.removeEventListener === "function") {
+            document.removeEventListener("click", pickerDocumentClickListener, false);
+        }
+        if (pickerInput) pickerInput.disabled = pickerInputInitiallyDisabled;
+        pickerInput = null;
+        pickerInputInitiallyDisabled = false;
+        pickerInputListener = null;
+        pickerDocumentClickListener = null;
+        pickerOptionClickSequence = 0;
+        pickerAcceptedClickSequence = 0;
+        pickerInitialSelection = null;
+    }
+
     function removeFillToolbar() {
         var toolbar = document.getElementById && document.getElementById(FILL_TOOLBAR_ID);
         if (toolbar && toolbar.remove) toolbar.remove();
@@ -207,6 +232,78 @@
             }
         }
         return result(true, "", { label: selected.label });
+    }
+
+    function optionNodeForTarget(target) {
+        if (!target) return null;
+        if (target.getAttribute && target.getAttribute("role") === "option") return target;
+        if (typeof target.closest === "function") return target.closest("[role='option']");
+        return null;
+    }
+
+    function optionLabel(option) {
+        return normalizeExactText(
+            option && option.getAttribute && option.getAttribute("title")
+            || option && (option.innerText || option.textContent)
+        );
+    }
+
+    function optionBelongsToCasePopup(option, contract) {
+        var input = caseInput(contract);
+        var controls = normalizeExactText(input && input.getAttribute && input.getAttribute("aria-controls"));
+        var listbox = option && typeof option.closest === "function"
+            ? option.closest("[role='listbox']") : null;
+        if (listbox && controls && String(listbox.id || "") === controls) return true;
+        var popup = popupForInput(input, contract);
+        return !!(popup && typeof popup.contains === "function" && popup.contains(option));
+    }
+
+    function acceptPickerCommit(clickSequence, expectedLabel) {
+        if (activeMode !== "picker" || !activePickerContract) return false;
+        if (clickSequence > 0 && clickSequence <= pickerAcceptedClickSequence) return false;
+        var selected = readSelectedCase(activePickerContract);
+        if (!selected.ok || (expectedLabel && selected.label !== expectedLabel)) {
+            updatePickerToolbar();
+            return false;
+        }
+        var selectedItem = selectedCaseItem(pickerInput);
+        if (
+            clickSequence <= 0
+            && pickerInitialSelection
+            && selectedItem
+            && selectedItem.node === pickerInitialSelection.node
+            && selectedItem.label === pickerInitialSelection.label
+        ) {
+            updatePickerToolbar();
+            return false;
+        }
+        pickerSelectionRevision += 1;
+        if (clickSequence > 0) pickerAcceptedClickSequence = clickSequence;
+        updatePickerToolbar();
+        return true;
+    }
+
+    function mutationContainsOptionCommit(records) {
+        return Array.prototype.some.call(records || [], function (record) {
+            if (!record || record.type !== "attributes" || record.attributeName !== "aria-selected") {
+                return false;
+            }
+            var option = optionNodeForTarget(record.target);
+            return !!(option && option.getAttribute
+                && optionBelongsToCasePopup(option, activePickerContract)
+                && option.getAttribute("aria-selected") === "true"
+                && record.oldValue !== "true");
+        });
+    }
+
+    function handlePickerMutations(records) {
+        if (mutationContainsOptionCommit(records)) {
+            var pendingClick = pickerOptionClickSequence > pickerAcceptedClickSequence
+                ? pickerOptionClickSequence : 0;
+            acceptPickerCommit(pendingClick, "");
+            return;
+        }
+        updatePickerToolbar();
     }
 
     function rectanglesOverlap(left, right) {
@@ -258,11 +355,11 @@
         var status = toolbar._worktraceStatus;
         var confirm = toolbar._worktraceConfirm;
         var selected = readSelectedCase(activePickerContract);
-        if (status) status.textContent = selected.ok
+        var proven = pickerSelectionRevision > 0 && selected.ok;
+        if (status) status.textContent = proven
             ? "已选择案件，可以确认"
-            : "请在 FD Work 原生案件框中选择一个联想结果";
-        if (confirm) confirm.disabled = selected.ok !== true;
-        pickerSelectionRevision = selected.ok ? 1 : 0;
+            : "请在本轮从 FD Work 原生案件列表中选择一个结果";
+        if (confirm) confirm.disabled = !proven;
         positionPickerToolbar(toolbar, activePickerContract);
     }
 
@@ -295,7 +392,7 @@
         confirm.addEventListener("click", function () {
             if (activeMode !== "picker" || activePickerContract !== contract) return;
             var selected = readSelectedCase(contract);
-            if (!selected.ok) {
+            if (pickerSelectionRevision <= 0 || !selected.ok) {
                 updatePickerToolbar();
                 return;
             }
@@ -313,11 +410,11 @@
                 if (response && response.ok === true && response.accepted === true) return;
                 confirm.disabled = false;
                 cancel.disabled = false;
-                if (input) input.disabled = false;
+                if (input) input.disabled = pickerInputInitiallyDisabled;
             }, function () {
                 confirm.disabled = false;
                 cancel.disabled = false;
-                if (input) input.disabled = false;
+                if (input) input.disabled = pickerInputInitiallyDisabled;
             });
         });
         cancel.addEventListener("click", function () {
@@ -334,11 +431,11 @@
                 if (response && response.ok === true && response.accepted === true) return;
                 updatePickerToolbar();
                 cancel.disabled = false;
-                if (input) input.disabled = false;
+                if (input) input.disabled = pickerInputInitiallyDisabled;
             }, function () {
                 updatePickerToolbar();
                 cancel.disabled = false;
-                if (input) input.disabled = false;
+                if (input) input.disabled = pickerInputInitiallyDisabled;
             });
         });
         if (document.body && typeof document.body.insertBefore === "function") {
@@ -366,20 +463,38 @@
         }
         var input = caseInput(contract);
         makePickerToolbar(contract);
+        pickerInput = input;
+        pickerInputInitiallyDisabled = !!(input && input.disabled);
+        pickerInitialSelection = selectedCaseItem(input);
+        pickerInputListener = updatePickerToolbar;
+        pickerDocumentClickListener = function (event) {
+            var option = optionNodeForTarget(event && event.target);
+            if (!option || !visible(option) || !optionBelongsToCasePopup(option, contract)) return;
+            var label = optionLabel(option);
+            if (!label) return;
+            var clickSequence = ++pickerOptionClickSequence;
+            Promise.resolve().then(function () {
+                acceptPickerCommit(clickSequence, label);
+            });
+        };
         clearPickerObserver();
-        pickerObserver = new MutationObserver(updatePickerToolbar);
+        pickerObserver = new MutationObserver(handlePickerMutations);
         var observeRoot = document.body || document.documentElement;
         if (observeRoot) {
             pickerObserver.observe(observeRoot, {
                 childList: true,
                 subtree: true,
                 attributes: true,
+                attributeOldValue: true,
                 characterData: true
             });
         }
         if (input && typeof input.addEventListener === "function") {
-            input.addEventListener("input", updatePickerToolbar);
-            input.addEventListener("change", updatePickerToolbar);
+            input.addEventListener("input", pickerInputListener);
+            input.addEventListener("change", pickerInputListener);
+        }
+        if (typeof document.addEventListener === "function") {
+            document.addEventListener("click", pickerDocumentClickListener, false);
         }
         updatePickerToolbar();
         return result(true, "", { status: "picker_ready" });
@@ -387,6 +502,7 @@
 
     function leaveCasePicker() {
         clearPickerObserver();
+        clearPickerListeners();
         var toolbar = document.getElementById && document.getElementById(PICKER_TOOLBAR_ID);
         if (toolbar && toolbar.remove) toolbar.remove();
         if (document.documentElement && document.documentElement.removeAttribute) {
@@ -581,6 +697,7 @@
     window.addEventListener("pagehide", function () {
         activeGeneration += 1;
         clearPickerObserver();
+        clearPickerListeners();
         removeFillBlockingLayer();
         activePickerContract = null;
         pickerSelectionRevision = 0;

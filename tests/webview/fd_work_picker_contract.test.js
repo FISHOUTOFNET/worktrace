@@ -13,6 +13,9 @@ function harness({ selectedLabel = "", inputValue = "", bridgeResponse = { ok: t
   const mutations = { focus: 0, click: 0, input: 0, change: 0, escape: 0, blur: 0 };
   const bridgeCalls = [];
   const listeners = new Map();
+  const documentListeners = new Map();
+  const inputListeners = new Map();
+  let activeObservers = 0;
   const attrs = new Map([["aria-controls", "case-list"]]);
   const selectionItem = {
     textContent: selectedLabel,
@@ -39,22 +42,40 @@ function harness({ selectedLabel = "", inputValue = "", bridgeResponse = { ok: t
     focus() { mutations.focus += 1; },
     click() { mutations.click += 1; },
     blur() { mutations.blur += 1; },
+    addEventListener(name, handler) { inputListeners.set(name, handler); },
+    removeEventListener(name, handler) {
+      if (inputListeners.get(name) === handler) inputListeners.delete(name);
+    },
     dispatchEvent(event) {
       if (event.type === "input") mutations.input += 1;
       if (event.type === "change") mutations.change += 1;
+      if (inputListeners.has(event.type)) inputListeners.get(event.type)(event);
     },
   };
+  const option = {
+    textContent: selectedLabel,
+    innerText: selectedLabel,
+    getAttribute(name) {
+      if (name === "role") return "option";
+      if (name === "title") return selectedLabel;
+      if (name === "aria-selected") return "true";
+      return null;
+    },
+    closest(selector) {
+      if (selector.includes("role='option'")) return this;
+      if (selector.includes("role='listbox'")) return popup;
+      return null;
+    },
+    getClientRects() { return selectedLabel ? [{}] : []; },
+  };
   const popup = {
+    id: "case-list",
+    contains(node) { return node === option; },
     getClientRects() { return [{}]; },
     getBoundingClientRect() { return { width: 300, height: 200 }; },
     querySelectorAll(selector) {
       if (selector.includes("aria-selected='true'") && selectedLabel) {
-        return [{
-          textContent: selectedLabel,
-          innerText: selectedLabel,
-          getAttribute() { return selectedLabel; },
-          getClientRects() { return [{}]; },
-        }];
+        return [option];
       }
       return [];
     },
@@ -93,6 +114,10 @@ function harness({ selectedLabel = "", inputValue = "", bridgeResponse = { ok: t
     querySelectorAll() { return []; },
     getElementById(id) { return nodesById.get(id) || null; },
     createElement: createNode,
+    addEventListener(name, handler) { documentListeners.set(name, handler); },
+    removeEventListener(name, handler) {
+      if (documentListeners.get(name) === handler) documentListeners.delete(name);
+    },
   };
   const context = {
     Promise, Object, String, Array,
@@ -104,7 +129,11 @@ function harness({ selectedLabel = "", inputValue = "", bridgeResponse = { ok: t
       }
     },
     HTMLInputElement: class {}, HTMLTextAreaElement: class {},
-    MutationObserver: class { observe() {} disconnect() {} },
+    MutationObserver: class {
+      constructor(callback) { this.callback = callback; this.active = false; }
+      observe() { if (!this.active) activeObservers += 1; this.active = true; }
+      disconnect() { if (this.active) activeObservers -= 1; this.active = false; }
+    },
     clearTimeout, setTimeout, document,
     requestAnimationFrame(callback) { return setTimeout(callback, 0); },
     window: {
@@ -132,6 +161,35 @@ function harness({ selectedLabel = "", inputValue = "", bridgeResponse = { ok: t
     popup,
     mutations,
     bridgeCalls,
+    async commitOption() {
+      const handler = documentListeners.get("click");
+      if (handler) handler({ target: option });
+      await Promise.resolve();
+    },
+    async clickOtherFormOption() {
+      const otherListbox = { id: "other-list" };
+      const otherOption = {
+        textContent: selectedLabel,
+        getAttribute(name) {
+          if (name === "role") return "option";
+          if (name === "title") return selectedLabel;
+          return null;
+        },
+        closest(selector) {
+          if (selector.includes("role='option'")) return this;
+          if (selector.includes("role='listbox'")) return otherListbox;
+          return null;
+        },
+        getClientRects() { return [{}]; },
+      };
+      const handler = documentListeners.get("click");
+      if (handler) handler({ target: otherOption });
+      await Promise.resolve();
+    },
+    typeSearch() { input.dispatchEvent({ type: "input" }); },
+    listenerCounts() {
+      return { document: documentListeners.size, input: inputListeners.size, observers: activeObservers };
+    },
     toolbar() { return nodesById.get("worktrace-fdwork-picker-toolbar"); },
     pagehide() { if (listeners.has("pagehide")) listeners.get("pagehide")(); },
     contract: {
@@ -189,9 +247,40 @@ test("committed Ant selection is canonical and confirmable", () => {
   );
 });
 
+test("initial committed selection is not proof for the current picker operation", async () => {
+  const h = harness({ selectedLabel: "CASE A", inputValue: "CASE A" });
+
+  await h.adapter.enterCasePicker(h.contract);
+
+  assert.equal(h.toolbar().children[1].disabled, true);
+  assert.equal(h.bridgeCalls.length, 0);
+});
+
+test("search input alone never creates a selection revision proof", async () => {
+  const h = harness({ inputValue: "CASE SEARCH" });
+  await h.adapter.enterCasePicker(h.contract);
+
+  h.typeSearch();
+  h.toolbar().children[1].click();
+  await Promise.resolve();
+
+  assert.equal(h.toolbar().children[1].disabled, true);
+  assert.equal(h.bridgeCalls.length, 0);
+});
+
+test("option commits from other native form fields do not prove the case selection", async () => {
+  const h = harness({ selectedLabel: "CASE A", inputValue: "CASE A" });
+  await h.adapter.enterCasePicker(h.contract);
+
+  await h.clickOtherFormOption();
+
+  assert.equal(h.toolbar().children[1].disabled, true);
+});
+
 test("confirm submits proof asynchronously without a same-window read and stays disabled", async () => {
   const h = harness({ selectedLabel: "CASE A", inputValue: "CASE A" });
   await h.adapter.enterCasePicker(h.contract);
+  await h.commitOption();
   const toolbar = h.toolbar();
   toolbar.children[1].click();
   await Promise.resolve();
@@ -202,6 +291,18 @@ test("confirm submits proof asynchronously without a same-window read and stays 
   assert.equal(h.input.disabled, true);
 });
 
+test("same-label option recommit creates a new revision proof", async () => {
+  const h = harness({ selectedLabel: "CASE A", inputValue: "CASE A" });
+  await h.adapter.enterCasePicker(h.contract);
+
+  await h.commitOption();
+  await h.commitOption();
+  h.toolbar().children[1].click();
+  await Promise.resolve();
+
+  assert.deepEqual(h.bridgeCalls, [["confirm", "picker-nonce", "CASE A", 2]]);
+});
+
 test("explicit bridge rejection restores picker interaction", async () => {
   const h = harness({
     selectedLabel: "CASE A",
@@ -209,6 +310,7 @@ test("explicit bridge rejection restores picker interaction", async () => {
     bridgeResponse: { ok: false, error: "picker_superseded" },
   });
   await h.adapter.enterCasePicker(h.contract);
+  await h.commitOption();
   const toolbar = h.toolbar();
   toolbar.children[1].click();
   await Promise.resolve();
@@ -224,7 +326,18 @@ test("leaving or canceling picker does not clear query or close popup", async ()
   const left = h.adapter.leaveCasePicker();
   assert.equal(left.ok, true, JSON.stringify(left));
   assert.equal(h.input.value, "three keywords remain");
+  assert.deepEqual(h.listenerCounts(), { document: 0, input: 0, observers: 0 });
   assert.deepEqual(h.mutations, { focus: 0, click: 0, input: 0, change: 0, escape: 0, blur: 0 });
+});
+
+test("twenty picker enter leave cycles keep listeners and observers symmetric", async () => {
+  const h = harness();
+  for (let index = 0; index < 20; index += 1) {
+    assert.equal((await h.adapter.enterCasePicker(h.contract)).ok, true);
+    assert.deepEqual(h.listenerCounts(), { document: 1, input: 2, observers: 1 });
+    assert.equal(h.adapter.leaveCasePicker().ok, true);
+    assert.deepEqual(h.listenerCounts(), { document: 0, input: 0, observers: 0 });
+  }
 });
 
 test("fill code prepares the case combobox once and has no unconditional cleanup escape or blur", () => {

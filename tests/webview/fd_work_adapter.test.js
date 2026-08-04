@@ -148,3 +148,12 @@ test("picker keeps the native form intact and owns one idempotent style node", (
   assert.match(source, /rectanglesOverlap/);
   assert.match(source, /#worktrace-fdwork-fill-blocker\{position:fixed;inset:0;/);
 });
+
+test("picker snapshots the old selection before observing new commit evidence", () => {
+  const snapshot = source.indexOf("pickerInitialSelection = selectedCaseItem(input)");
+  const observer = source.indexOf("new MutationObserver(handlePickerMutations)");
+  assert.ok(snapshot >= 0 && observer > snapshot);
+  assert.doesNotMatch(source, /pickerSelectionRevision\s*=\s*selected\.ok/);
+  assert.match(source, /pickerSelectionRevision\s*>\s*0\s*&&\s*selected\.ok/);
+  assert.match(source, /attributeName\s*!==\s*["']aria-selected["']/);
+});
