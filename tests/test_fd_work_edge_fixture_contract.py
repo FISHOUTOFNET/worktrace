@@ -37,6 +37,7 @@ def test_anonymous_fixture_preserves_minimum_real_ant_contract() -> None:
         assert fragment in source
     assert "../../../worktrace/integrations/fd_work/fd_work_adapter.js" in source
     assert "data-worktrace-fdwork-hidden" in source
+    assert 'check("unrelated_dom_churn_not_observed"' in source
     assert "worktrace-result" in source
 
 
@@ -50,5 +51,6 @@ def test_edge_runner_is_hard_failure_and_windows_node_scope_runs_it() -> None:
     assert "--allow-file-access-from-files" in runner
     assert "--dump-dom" in runner
     assert "status: resultCaptured ? 0 : status" in runner
+    assert "existsSync(resolvedProfile)" in runner
     assert "skip" not in runner.casefold()
     assert "node scripts/run_fd_work_edge_fixture.mjs" in workflow

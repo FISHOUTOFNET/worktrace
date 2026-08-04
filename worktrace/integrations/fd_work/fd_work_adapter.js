@@ -298,14 +298,60 @@
         });
     }
 
+    function nodeContainsSelectionItem(node) {
+        if (!node || node.nodeType !== 1) return false;
+        if (typeof node.matches === "function" && node.matches(
+            ".ant-select-selection-item, [data-selected-value]"
+        )) return true;
+        return !!(typeof node.querySelector === "function" && node.querySelector(
+            ".ant-select-selection-item, [data-selected-value]"
+        ));
+    }
+
+    function mutationContainsSelectionCommit(records) {
+        var wrapper = selectWrapperFor(pickerInput);
+        if (!wrapper) return false;
+        return Array.prototype.some.call(records || [], function (record) {
+            if (!record || !record.target) return false;
+            var targetInsideWrapper = record.target === wrapper
+                || (typeof wrapper.contains === "function" && wrapper.contains(record.target));
+            if (!targetInsideWrapper) return false;
+            if (nodeContainsSelectionItem(record.target)) return true;
+            return Array.prototype.some.call(record.addedNodes || [], nodeContainsSelectionItem)
+                || Array.prototype.some.call(record.removedNodes || [], nodeContainsSelectionItem);
+        });
+    }
+
     function handlePickerMutations(records) {
-        if (mutationContainsOptionCommit(records)) {
-            var pendingClick = pickerOptionClickSequence > pickerAcceptedClickSequence
-                ? pickerOptionClickSequence : 0;
-            acceptPickerCommit(pendingClick, "");
-            return;
+        if (!mutationContainsOptionCommit(records) && !mutationContainsSelectionCommit(records)) return;
+        var pendingClick = pickerOptionClickSequence > pickerAcceptedClickSequence
+            ? pickerOptionClickSequence : 0;
+        acceptPickerCommit(pendingClick, "");
+    }
+
+    function observePickerSelectionDom(contract) {
+        clearPickerObserver();
+        pickerObserver = new MutationObserver(handlePickerMutations);
+        var wrapper = selectWrapperFor(pickerInput);
+        if (wrapper) {
+            pickerObserver.observe(wrapper, {
+                childList: true,
+                subtree: true,
+                attributes: true,
+                attributeOldValue: true,
+                attributeFilter: ["title", "data-selected-value", "aria-label"],
+                characterData: true
+            });
         }
-        updatePickerToolbar();
+        var popup = popupForInput(pickerInput, contract);
+        if (popup && popup !== wrapper) {
+            pickerObserver.observe(popup, {
+                subtree: true,
+                attributes: true,
+                attributeOldValue: true,
+                attributeFilter: ["aria-selected"]
+            });
+        }
     }
 
     function rectanglesOverlap(left, right) {
@@ -345,10 +391,12 @@
                 && blockers.every(function (blocker) { return !rectanglesOverlap(rect, blocker); });
         });
         if (!selected) return;
-        toolbar.style.left = selected.left + "px";
-        toolbar.style.top = selected.top + "px";
-        toolbar.style.right = "auto";
-        toolbar.style.bottom = "auto";
+        var nextLeft = selected.left + "px";
+        var nextTop = selected.top + "px";
+        if (toolbar.style.left !== nextLeft) toolbar.style.left = nextLeft;
+        if (toolbar.style.top !== nextTop) toolbar.style.top = nextTop;
+        if (toolbar.style.right !== "auto") toolbar.style.right = "auto";
+        if (toolbar.style.bottom !== "auto") toolbar.style.bottom = "auto";
     }
 
     function updatePickerToolbar() {
@@ -358,10 +406,11 @@
         var confirm = toolbar._worktraceConfirm;
         var selected = readSelectedCase(activePickerContract);
         var proven = pickerSelectionRevision > 0 && selected.ok;
-        if (status) status.textContent = proven
+        var nextStatus = proven
             ? "已选择案件，可以确认"
             : "请在本轮从 FD Work 原生案件列表中选择一个结果";
-        if (confirm) confirm.disabled = !proven;
+        if (status && status.textContent !== nextStatus) status.textContent = nextStatus;
+        if (confirm && confirm.disabled !== !proven) confirm.disabled = !proven;
         positionPickerToolbar(toolbar, activePickerContract);
     }
 
@@ -484,18 +533,7 @@
                 acceptPickerCommit(clickSequence, label);
             });
         };
-        clearPickerObserver();
-        pickerObserver = new MutationObserver(handlePickerMutations);
-        var observeRoot = document.body || document.documentElement;
-        if (observeRoot) {
-            pickerObserver.observe(observeRoot, {
-                childList: true,
-                subtree: true,
-                attributes: true,
-                attributeOldValue: true,
-                characterData: true
-            });
-        }
+        observePickerSelectionDom(contract);
         if (input && typeof input.addEventListener === "function") {
             input.addEventListener("input", pickerInputListener);
             input.addEventListener("change", pickerInputListener);

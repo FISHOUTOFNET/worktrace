@@ -202,7 +202,9 @@ if (!existsSync(fixturePath)) {
             retryDelay: 100,
           });
         } catch (_error) {
-          if (!process.exitCode) fail("edge_cleanup_failed");
+          if (existsSync(resolvedProfile) && !process.exitCode) {
+            fail("edge_cleanup_failed", String(_error && _error.code || ""));
+          }
         }
       }
     }

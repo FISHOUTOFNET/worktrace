@@ -70,6 +70,7 @@
       var activeListeners = 0;
       var activeObservers = 0;
       var observerPeak = 0;
+      var observerCallbacks = 0;
 
       function trackedTarget(target, type) {
         return (target === document && type === "click")
@@ -85,7 +86,10 @@
       };
 
       function TrackingMutationObserver(callback) {
-        this._observer = new NativeMutationObserver(callback);
+        this._observer = new NativeMutationObserver(function (records, observer) {
+          observerCallbacks += 1;
+          callback(records, observer);
+        });
         this._active = false;
       }
       TrackingMutationObserver.prototype.observe = function (target, options) {
@@ -112,7 +116,8 @@
         NativeMutationObserver: NativeMutationObserver,
         activeListeners: function () { return activeListeners; },
         activeObservers: function () { return activeObservers; },
-        observerPeak: function () { return observerPeak; }
+        observerPeak: function () { return observerPeak; },
+        observerCallbacks: function () { return observerCallbacks; }
       };
     })();
 
@@ -182,6 +187,19 @@
           && toolbar.getClientRects().length > 0
           && document.querySelectorAll("#worktrace-fdwork-picker-toolbar").length === 1);
         check("initial_old_selection_not_confirmable", !!confirm && confirm.disabled === true);
+        await Promise.resolve();
+        var callbacksBeforeUnrelatedChurn = window.__fdWorkFixture.observerCallbacks();
+        var unrelatedRegion = document.createElement("div");
+        document.body.appendChild(unrelatedRegion);
+        for (var churnIndex = 0; churnIndex < 20; churnIndex += 1) {
+          unrelatedRegion.setAttribute("data-fixture-churn", String(churnIndex));
+          unrelatedRegion.textContent = String(churnIndex);
+        }
+        await Promise.resolve();
+        await Promise.resolve();
+        check("unrelated_dom_churn_not_observed",
+          window.__fdWorkFixture.observerCallbacks() === callbacksBeforeUnrelatedChurn);
+        unrelatedRegion.remove();
         input.value = "TEST MATTER A";
         input.dispatchEvent(new Event("input", { bubbles: true }));
         await Promise.resolve();

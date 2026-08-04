@@ -106,6 +106,21 @@ test("picker entry is a synchronous DOM installation result", () => {
   assert.equal(returned.status, "picker_ready");
 });
 
+test("picker observer is scoped to native selection DOM and toolbar writes are idempotent", () => {
+  const enterStart = source.indexOf("function enterCasePicker");
+  const leaveStart = source.indexOf("function leaveCasePicker", enterStart);
+  const enterBody = source.slice(enterStart, leaveStart);
+  const updateStart = source.indexOf("function updatePickerToolbar");
+  const helperStart = source.indexOf("function helperApi", updateStart);
+  const updateBody = source.slice(updateStart, helperStart);
+
+  assert.match(source, /function observePickerSelectionDom/);
+  assert.doesNotMatch(enterBody, /document\.body\s*\|\|\s*document\.documentElement/);
+  assert.doesNotMatch(enterBody, /characterData:\s*true[\s\S]*document\.body/);
+  assert.match(updateBody, /status\.textContent\s*!==\s*nextStatus/);
+  assert.match(updateBody, /confirm\.disabled\s*!==\s*!proven/);
+});
+
 test("frame-hosted adapter uses the top-level pywebview bridge", () => {
   assert.match(source, /window\.top[\s\S]*pywebview[\s\S]*\.api/);
 });
@@ -244,7 +259,7 @@ test("picker keeps the native form intact and owns one idempotent style node", (
 
 test("picker snapshots the old selection before observing new commit evidence", () => {
   const snapshot = source.indexOf("pickerInitialSelection = selectedCaseItem(input)");
-  const observer = source.indexOf("new MutationObserver(handlePickerMutations)");
+  const observer = source.indexOf("observePickerSelectionDom(contract)", snapshot);
   assert.ok(snapshot >= 0 && observer > snapshot);
   assert.doesNotMatch(source, /pickerSelectionRevision\s*=\s*selected\.ok/);
   assert.match(source, /pickerSelectionRevision\s*>\s*0\s*&&\s*selected\.ok/);
