@@ -189,6 +189,9 @@ def test_adapter_install_and_actions_resolve_bounded_same_origin_work_shell_fram
     assert "windows.length < 16" in action_script
     assert "form#basic" in action_script
     assert "#basic_caseId" in action_script
+    assert "return new Promise(function(resolve)" in action_script
+    assert "target.Promise.resolve(value)" in action_script
+    assert "resolve({ok:false,error:'javascript_exception'})" in action_script
 
 
 def test_action_diagnostics_distinguish_javascript_exception_without_page_data():

@@ -448,7 +448,13 @@ class FDWorkPageAdapter:
             "return {ok:false,error:'adapter_version_mismatch'};"
             f"if(typeof a.{action}!==\"function\")"
             "return {ok:false,error:'adapter_version_mismatch'};"
-            f"return a.{action}({arguments});}})()"
+            "return new Promise(function(resolve){"
+            f"try{{var value=a.{action}({arguments});"
+            "target.Promise.resolve(value).then("
+            "function(result){resolve(result);},"
+            "function(){resolve({ok:false,error:'javascript_exception'});});"
+            "}catch(_error){resolve({ok:false,error:'javascript_exception'});}});"
+            "})()"
         )
         remaining_ms = float(contract.get("deadline_ms") or 5000)
         absolute_deadline = contract.get("operation_deadline_ms")
