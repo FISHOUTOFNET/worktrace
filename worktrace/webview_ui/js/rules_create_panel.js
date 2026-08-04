@@ -301,7 +301,7 @@
                 return;
             }
             showFDWorkCaseStatus(
-                result.status === "authentication_required"
+                result.operation_status === "authentication_required"
                     ? "请在 FD Work 窗口完成登录并选择案件"
                     : "请在 FD Work 原生案件框中选择并确认",
                 false

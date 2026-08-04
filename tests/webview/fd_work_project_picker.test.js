@@ -30,6 +30,11 @@ test("main bridge exports picker open and removes inline case search", () => {
   assert.match(rulesSource, /openFDWorkCasePicker/);
 });
 
+test("picker UI consumes operation status and never the ambiguous status field", () => {
+  assert.match(rulesSource, /result\.operation_status\s*===\s*["']authentication_required["']/);
+  assert.doesNotMatch(rulesSource, /result\.status\s*===\s*["']authentication_required["']/);
+});
+
 test("project name focus click input never invoke FD Work helper operations", () => {
   for (const retired of [
     "requestRecentFDWorkCases",
@@ -74,4 +79,3 @@ test("picker pending disables the explicit button and cancel restores local UI s
   assert.match(rulesSource, /picker_canceled/);
   assert.match(rulesSource, /取消关联/);
 });
-

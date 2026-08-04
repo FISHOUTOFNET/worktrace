@@ -190,7 +190,7 @@
         var selected = selectedCaseItem(input);
         if (!selected) return result(false, "case_selection_required");
         var maxLength = Math.max(1, Number(contract && contract.max_label_length) || 100);
-        if (selected.label.length > maxLength) return result(false, "page_contract_changed");
+        if (selected.label.length > maxLength) return result(false, "dom_contract_changed");
         var popup = popupForInput(input, contract);
         if (popup && typeof popup.querySelectorAll === "function") {
             var committedOptions = Array.prototype.filter.call(
@@ -352,7 +352,7 @@
 
     async function enterCasePicker(contract) {
         if (!contract || Number(contract.version) !== VERSION || !normalizeExactText(contract.operation_nonce)) {
-            return result(false, "page_contract_changed");
+            return result(false, "dom_contract_changed");
         }
         if (activeMode === "fill") return result(false, "fd_work_busy");
         removeFillToolbar();
@@ -399,24 +399,24 @@
     }
 
     function nativeSet(element, value) {
-        if (!element) return result(false, "page_contract_changed");
+        if (!element) return result(false, "dom_contract_changed");
         var prototype = element instanceof HTMLTextAreaElement
             ? HTMLTextAreaElement.prototype
             : HTMLInputElement.prototype;
         var descriptor = Object.getOwnPropertyDescriptor(prototype, "value");
-        if (!descriptor || typeof descriptor.set !== "function") return result(false, "page_contract_changed");
+        if (!descriptor || typeof descriptor.set !== "function") return result(false, "dom_contract_changed");
         descriptor.set.call(element, String(value));
         ["input", "change", "blur"].forEach(function (name) {
             element.dispatchEvent(new Event(name, { bubbles: true }));
         });
         return String(element.value) === String(value)
             ? result(true)
-            : result(false, "page_contract_changed");
+            : result(false, "dom_contract_changed");
     }
 
     function setSearchValue(input, value) {
         var descriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value");
-        if (!descriptor || typeof descriptor.set !== "function") return result(false, "page_contract_changed");
+        if (!descriptor || typeof descriptor.set !== "function") return result(false, "dom_contract_changed");
         descriptor.set.call(input, String(value));
         ["input", "change"].forEach(function (name) {
             input.dispatchEvent(new Event(name, { bubbles: true }));
@@ -483,7 +483,7 @@
 
     function fillAndVerify(name, value, contract) {
         var input = field(contract, name);
-        if (!input || !visible(input)) return result(false, "page_contract_changed");
+        if (!input || !visible(input)) return result(false, "dom_contract_changed");
         return nativeSet(input, value);
     }
 
@@ -537,7 +537,7 @@
 
     async function fillEntry(payload, contract) {
         if (!payload || !contract || Number(contract.version) !== VERSION) {
-            return result(false, "page_contract_changed");
+            return result(false, "dom_contract_changed");
         }
         if (activeMode === "picker") return result(false, "fd_work_busy");
         leaveCasePicker();
@@ -571,7 +571,7 @@
             activeMode = "review";
             return result(true, "", { status: "filled" });
         } catch (_error) {
-            return result(false, canceled(generation) ? "lookup_superseded" : "page_contract_changed");
+            return result(false, canceled(generation) ? "lookup_superseded" : "dom_contract_changed");
         } finally {
             removeFillBlockingLayer();
             if (activeMode === "fill") activeMode = "none";

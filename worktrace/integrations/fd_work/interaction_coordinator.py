@@ -174,7 +174,7 @@ class FDWorkInteractionCoordinator:
                 "ok": True,
                 "request_id": request_id,
                 "operation_nonce": operation_nonce,
-                "status": "authentication_required",
+                "operation_status": "authentication_required",
             }
         return self._activate_picker()
 
@@ -312,10 +312,10 @@ class FDWorkInteractionCoordinator:
                 return {"ok": False, "error": "lookup_superseded"}
             filled = dict(self._page_adapter.fill_entry(window, draft, contract=contract))
         except Exception:
-            filled = {"ok": False, "error": "page_contract_changed"}
+            filled = {"ok": False, "error": "javascript_exception"}
         if filled.get("ok") is not True:
             return self._finish_fill_failure(
-                str(filled.get("error") or "page_contract_changed"),
+                str(filled.get("error") or "dom_contract_changed"),
                 operation_nonce,
                 operation_generation,
             )
@@ -328,7 +328,7 @@ class FDWorkInteractionCoordinator:
             self._operation_nonce = None
             public_status = self._status_locked()
         self._emit_status(public_status)
-        return {"ok": True, "status": "review"}
+        return {"ok": True, "operation_status": "review"}
 
     def disable(self) -> None:
         with self._lock:
@@ -395,12 +395,12 @@ class FDWorkInteractionCoordinator:
         try:
             left = dict(self._page_adapter.leave_case_picker(window, contract))
         except Exception:
-            left = {"ok": False, "error": "page_contract_changed"}
+            left = {"ok": False, "error": "javascript_exception"}
         if left.get("ok") is not True:
             self._finish_submitted_picker_failure(
                 nonce,
                 operation_generation,
-                str(left.get("error") or "page_contract_changed"),
+                str(left.get("error") or "dom_contract_changed"),
             )
             return
         self._controller.hide_and_restore_main(
@@ -532,10 +532,10 @@ class FDWorkInteractionCoordinator:
                 return {"ok": False, "error": "picker_superseded"}
             entered = dict(self._page_adapter.enter_case_picker(window, contract))
         except Exception:
-            entered = {"ok": False, "error": "page_contract_changed"}
+            entered = {"ok": False, "error": "javascript_exception"}
         if entered.get("ok") is not True:
             self._cancel_current_picker(
-                str(entered.get("error") or "page_contract_changed"),
+                str(entered.get("error") or "dom_contract_changed"),
                 restore_main=True,
             )
             return entered
@@ -548,7 +548,7 @@ class FDWorkInteractionCoordinator:
             "ok": True,
             "request_id": request_id,
             "operation_nonce": nonce,
-            "status": "picker_ready",
+            "operation_status": "picker_ready",
         }
 
     def _accept_controller_status(self, status: Mapping[str, Any]) -> None:

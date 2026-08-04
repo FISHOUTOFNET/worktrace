@@ -338,7 +338,7 @@ def test_login_completion_resumes_pending_picker_with_fresh_operation_nonce():
     )
 
     opening = coordinator.open_case_picker("drawer-1")
-    assert opening["status"] == "authentication_required"
+    assert opening["operation_status"] == "authentication_required"
     assert coordinator.get_status()["interaction_owner"] == "user_auth"
     assert adapter.enter_picker_calls == []
 
@@ -423,7 +423,7 @@ def test_visibility_sequence_fill_foregrounds_once_and_stays_for_review():
 
     result = coordinator.open_entry(_draft())
 
-    assert result == {"ok": True, "status": "review"}
+    assert result == {"ok": True, "operation_status": "review"}
     assert controller.window_actions == ["show", "restore", "focus"]
     assert coordinator.get_status()["interaction_owner"] == "user_review"
 

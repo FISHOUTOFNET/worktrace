@@ -6,6 +6,8 @@ import logging
 import re
 from typing import Any
 
+from worktrace.integrations.fd_work.error_codes import public_fd_work_error
+
 
 logger = logging.getLogger(__name__)
 _DATE_SHAPE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -58,6 +60,9 @@ FD_WORK_MESSAGES = {
     "empty_narrative": "描述为空，无法填入",
     "invalid_duration": "工时必须大于零",
     "duration_exceeds_limit": "工时超过 FD Work 允许的范围",
+    "fd_work_page_unavailable": "FD Work 页面暂时不可用",
+    "fd_work_operation_timeout": "FD Work 操作超时，请重试",
+    "fd_work_window_unavailable": "FD Work 窗口不可用，请检查 WebView2 运行环境",
 }
 
 
@@ -72,8 +77,11 @@ class FDWorkBridgeMixin:
         try:
             return {"ok": True, "status": self._services.fd_work.get_settings_status()}
         except Exception:
-            logger.exception("webview bridge get_fd_work_status failed")
-            return {"ok": False, "error": "window_unavailable", "message": fd_work_message("window_unavailable")}
+            logger.error(
+                "fd_work_bridge_failed action=get_status internal_error_kind=python_exception"
+            )
+            code = "fd_work_window_unavailable"
+            return {"ok": False, "error": code, "message": fd_work_message(code)}
 
     def open_fd_work_case_picker(self, request_id) -> dict[str, Any]:
         if type(request_id) is not str or not request_id or len(request_id) > 128:
@@ -81,20 +89,27 @@ class FDWorkBridgeMixin:
         try:
             result = dict(self._services.fd_work.open_case_picker(request_id))
             if result.get("ok") is not True:
-                result["message"] = fd_work_message(result.get("error"))
+                result["error"] = public_fd_work_error(result.get("error"))
+                result["message"] = fd_work_message(result["error"])
             return result
         except Exception:
-            logger.exception("webview bridge open_fd_work_case_picker failed")
-            return {"ok": False, "error": "window_unavailable", "message": fd_work_message("window_unavailable")}
+            logger.error(
+                "fd_work_bridge_failed action=open_picker internal_error_kind=python_exception"
+            )
+            code = "fd_work_window_unavailable"
+            return {"ok": False, "error": code, "message": fd_work_message(code)}
 
     def show_fd_work_login(self) -> dict[str, Any]:
         try:
             result = dict(self._services.fd_work.prepare_session(show_login_if_required=True))
             if result.get("ok") is not True:
-                result["message"] = fd_work_message(result.get("error"))
+                result["error"] = public_fd_work_error(result.get("error"))
+                result["message"] = fd_work_message(result["error"])
             return result
         except Exception:
-            logger.exception("webview bridge show_fd_work_login failed")
+            logger.error(
+                "fd_work_bridge_failed action=show_login internal_error_kind=python_exception"
+            )
             return {"ok": False, "error": "session_start_failed", "message": fd_work_message("session_start_failed")}
 
     def open_fd_work_entry(self, report_date, projection_instance_key, expected_projection_revision) -> dict[str, Any]:
@@ -112,12 +127,17 @@ class FDWorkBridgeMixin:
                 expected_projection_revision.strip(),
             ))
             if result.get("ok") is not True:
-                result["message"] = fd_work_message(result.get("error"), "打开 FD Work 失败")
+                result["error"] = public_fd_work_error(result.get("error"))
+                result["message"] = fd_work_message(result["error"], "打开 FD Work 失败")
             return result
         except Exception as exc:
-            code = str(getattr(exc, "code", "") or "operation_failed")
+            code = public_fd_work_error(
+                getattr(exc, "code", "") or "operation_failed"
+            )
             if code not in FD_WORK_MESSAGES:
-                logger.exception("webview bridge open_fd_work_entry failed")
+                logger.error(
+                    "fd_work_bridge_failed action=open_entry internal_error_kind=python_exception"
+                )
                 code = "operation_failed"
             return {"ok": False, "error": code, "message": fd_work_message(code, "打开 FD Work 失败")}
 

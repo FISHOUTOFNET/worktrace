@@ -37,6 +37,7 @@ class _Coordinator:
         self.disable_calls = 0
         self.enable_calls = 0
         self.shutdown_calls = 0
+        self.picker_results = {}
         self.generation = 3
         self._status_callback = None
         self._picker_result_callback = None
@@ -73,7 +74,12 @@ class _Coordinator:
 
     def open_case_picker(self, request_id):
         self.picker_calls.append(request_id)
-        return {"ok": True, "request_id": request_id, "operation_nonce": "nonce"}
+        return dict(self.picker_results.get(request_id, {
+            "ok": True,
+            "request_id": request_id,
+            "operation_nonce": "nonce",
+            "status": "picker_ready",
+        }))
 
     def open_entry(self, draft):
         self.open_calls.append(draft)
@@ -157,8 +163,9 @@ def test_disabled_capability_has_explicit_session_and_owner_state():
     result = service.prepare_session(True)
 
     assert result["error"] == "fd_work_disabled"
-    assert result["status"]["session_state"] == "disabled"
-    assert result["status"]["interaction_owner"] == "none"
+    assert result["capability_status"]["session_state"] == "disabled"
+    assert result["capability_status"]["interaction_owner"] == "none"
+    assert "status" not in result
     assert coordinator.prepare_calls == []
 
 
@@ -172,6 +179,90 @@ def test_authorized_startup_probe_renderer_and_explicit_auth_delegate_once():
     assert coordinator.startup_prepare_calls == [False]
     assert coordinator.prepare_calls == [True]
     assert coordinator.renderer_calls == ["edgechromium"]
+
+
+def test_picker_operation_status_is_not_overwritten_by_capability_status():
+    service, coordinator, _builder, _state, _delivered = _service()
+    coordinator.picker_results["drawer-auth"] = {
+        "ok": True,
+        "request_id": "drawer-auth",
+        "operation_nonce": "nonce",
+        "status": "authentication_required",
+    }
+
+    result = service.open_case_picker("drawer-auth")
+
+    assert result["operation_status"] == "authentication_required"
+    assert result["capability_status"]["session_state"] == "ready"
+    assert "status" not in result
+
+
+def test_busy_second_picker_does_not_replace_or_clear_first_active_request():
+    service, coordinator, _builder, _state, delivered = _service(
+        token_factory=lambda: "first-token"
+    )
+    assert service.open_case_picker("drawer-first")["ok"] is True
+    coordinator.picker_results["drawer-second"] = {
+        "ok": False,
+        "error": "fd_work_busy",
+    }
+
+    second = service.open_case_picker("drawer-second")
+    _publish_success(coordinator, "drawer-first")
+
+    assert second["error"] == "fd_work_busy"
+    assert delivered == [{
+        "ok": True,
+        "request_id": "drawer-first",
+        "selected_label": "CASE A",
+        "selection_token": "first-token",
+    }]
+
+
+@pytest.mark.parametrize(
+    ("internal_error", "public_error"),
+    [
+        ("javascript_exception", "fd_work_page_unavailable"),
+        ("non_mapping_result", "fd_work_page_unavailable"),
+        ("page_contract_changed", "fd_work_page_unavailable"),
+        ("callback_timeout", "fd_work_operation_timeout"),
+        ("executor_rejected", "fd_work_window_unavailable"),
+        ("fd_work_busy", "fd_work_busy"),
+        ("case_selection_required", "case_selection_required"),
+        ("case_selection_mismatch", "case_selection_mismatch"),
+    ],
+)
+def test_picker_maps_internal_failures_to_small_stable_public_errors(
+    internal_error, public_error
+):
+    service, coordinator, _builder, _state, _delivered = _service()
+    coordinator.picker_results["drawer"] = {
+        "ok": False,
+        "error": internal_error,
+    }
+
+    result = service.open_case_picker("drawer")
+
+    assert result["error"] == public_error
+    assert result["capability_status"]["session_state"] == "ready"
+
+
+def test_async_picker_failure_delivery_never_exposes_internal_error_kind():
+    service, coordinator, _builder, _state, delivered = _service()
+    assert service.open_case_picker("drawer")["ok"] is True
+
+    coordinator.publish_picker({
+        "ok": False,
+        "request_id": "drawer",
+        "operation_nonce": "nonce",
+        "error": "javascript_exception",
+    })
+
+    assert delivered == [{
+        "ok": False,
+        "request_id": "drawer",
+        "error": "fd_work_page_unavailable",
+    }]
 
 
 def test_picker_success_delivers_canonical_one_time_selection_token():
@@ -266,6 +357,9 @@ def test_entry_uses_pure_builder_then_interaction_coordinator():
     result = service.open_entry("2026-08-03", "base:1", "revision")
 
     assert result["ok"] is True
+    assert result["operation_status"] == "review"
+    assert result["capability_status"]["session_state"] == "ready"
+    assert "status" not in result
     assert builder.calls == [("2026-08-03", "base:1", "revision")]
     assert coordinator.open_calls == [builder.draft]
 

@@ -52,6 +52,14 @@ _ACTION_ERRORS = frozenset(
         "lookup_superseded",
         "page_contract_changed",
         "page_operation_timeout",
+        "callback_timeout",
+        "dom_contract_changed",
+        "executor_rejected",
+        "guard_rejected",
+        "javascript_exception",
+        "navigation_changed",
+        "non_mapping_result",
+        "window_closed",
     }
 )
 
@@ -225,7 +233,6 @@ class FDWorkPageAdapter:
             window,
             "awaitStableWorkShell",
             self._picker_contract(contract),
-            timeout_error="case_input_not_interactive",
             respect_operation_deadline=True,
         )
 
@@ -238,7 +245,6 @@ class FDWorkPageAdapter:
             window,
             "enterCasePicker",
             self._picker_contract(contract),
-            timeout_error="page_operation_timeout",
         )
 
     def read_selected_case(
@@ -250,16 +256,15 @@ class FDWorkPageAdapter:
             window,
             "readSelectedCase",
             self._picker_contract(contract),
-            timeout_error="page_operation_timeout",
         )
         if result_value.get("ok") is not True:
             return result_value
         label = result_value.get("label")
         if not isinstance(label, str):
-            return {"ok": False, "error": "page_contract_changed"}
+            return {"ok": False, "error": "dom_contract_changed"}
         canonical = normalize_case_label(label)
         if not canonical or len(canonical) > FD_WORK_CASE_LABEL_MAX_LENGTH:
-            return {"ok": False, "error": "page_contract_changed"}
+            return {"ok": False, "error": "dom_contract_changed"}
         return {"ok": True, "label": canonical}
 
     def leave_case_picker(
@@ -271,7 +276,6 @@ class FDWorkPageAdapter:
             window,
             "leaveCasePicker",
             self._picker_contract(contract),
-            timeout_error="page_operation_timeout",
             takes_contract=False,
         )
 
@@ -293,7 +297,6 @@ class FDWorkPageAdapter:
             "fillEntry",
             self._entry_contract(contract),
             payload=payload,
-            timeout_error="page_operation_timeout",
             respect_operation_deadline=True,
         )
         if result_value.get("ok") is True and result_value.get("status") == "filled":
@@ -337,7 +340,6 @@ class FDWorkPageAdapter:
         contract: Mapping[str, Any],
         *,
         payload: Mapping[str, Any] | None = None,
-        timeout_error: str,
         takes_contract: bool = True,
         respect_operation_deadline: bool = False,
     ) -> dict[str, Any]:
@@ -371,7 +373,6 @@ class FDWorkPageAdapter:
             window,
             script,
             timeout_seconds=timeout_seconds,
-            timeout_error=timeout_error,
         )
         if internal_error_kind is None:
             if not isinstance(value, Mapping):
@@ -392,12 +393,15 @@ class FDWorkPageAdapter:
             result_type=result_type,
             elapsed_ms=max(0, int((self._clock() - started_at) * 1000)),
         )
-        return self._validated_action_result(value)
+        return self._validated_action_result(value, internal_error_kind)
 
     @staticmethod
-    def _validated_action_result(value: Any) -> dict[str, Any]:
+    def _validated_action_result(
+        value: Any,
+        internal_error_kind: str | None = None,
+    ) -> dict[str, Any]:
         if not isinstance(value, Mapping):
-            return {"ok": False, "error": "page_contract_changed"}
+            return {"ok": False, "error": internal_error_kind or "non_mapping_result"}
         if value.get("ok") is True:
             return dict(value)
         error = value.get("error")
@@ -414,7 +418,7 @@ class FDWorkPageAdapter:
                 if key in value:
                     safe[key] = value[key]
             return safe
-        return {"ok": False, "error": "page_contract_changed"}
+        return {"ok": False, "error": internal_error_kind or "dom_contract_changed"}
 
     @staticmethod
     def _evaluate_action(
@@ -422,7 +426,6 @@ class FDWorkPageAdapter:
         script: str,
         *,
         timeout_seconds: float,
-        timeout_error: str,
     ) -> tuple[Any, str | None, bool, str]:
         completed = threading.Event()
         callback_result: list[Any] = []
@@ -437,12 +440,8 @@ class FDWorkPageAdapter:
                 error_kind = execution.error_kind or "executor_rejected"
                 if error_kind == "command_exception":
                     error_kind = "javascript_exception"
-                public_error = (
-                    timeout_error if error_kind == "callback_timeout"
-                    else "page_contract_changed"
-                )
                 return (
-                    {"ok": False, "error": public_error},
+                    {"ok": False, "error": error_kind},
                     error_kind,
                     execution.callback_executed,
                     "none",
@@ -471,14 +470,14 @@ class FDWorkPageAdapter:
                 return value, None, False, type(value).__name__ if value is not None else "none"
             except Exception:
                 return (
-                    {"ok": False, "error": "page_contract_changed"},
+                    {"ok": False, "error": "javascript_exception"},
                     "javascript_exception",
                     False,
                     "none",
                 )
         except Exception:
             return (
-                {"ok": False, "error": "page_contract_changed"},
+                {"ok": False, "error": "javascript_exception"},
                 "javascript_exception",
                 False,
                 "none",
@@ -486,7 +485,7 @@ class FDWorkPageAdapter:
         if not completed.wait(timeout=max(0.01, float(timeout_seconds))):
             completed.set()
             return (
-                {"ok": False, "error": timeout_error},
+                {"ok": False, "error": "callback_timeout"},
                 "callback_timeout",
                 False,
                 "none",

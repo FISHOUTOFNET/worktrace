@@ -115,7 +115,7 @@ def test_picker_actions_use_small_v5_scripts_and_validate_selected_label():
     ("method", "remote_result", "expected_error"),
     [
         ("read_selected_case", {"ok": False, "error": "case_selection_required"}, "case_selection_required"),
-        ("read_selected_case", {"ok": True, "label": ""}, "page_contract_changed"),
+        ("read_selected_case", {"ok": True, "label": ""}, "dom_contract_changed"),
         ("enter_case_picker", {"ok": False, "error": "fd_work_busy"}, "fd_work_busy"),
         ("await_stable_work_shell", {"ok": False, "error": "lookup_superseded"}, "lookup_superseded"),
     ],
@@ -175,7 +175,7 @@ def test_action_diagnostics_distinguish_javascript_exception_without_page_data()
 
     result = adapter.enter_case_picker(Window(), _operation())
 
-    assert result == {"ok": False, "error": "page_contract_changed"}
+    assert result == {"ok": False, "error": "javascript_exception"}
     assert diagnostics == [
         {
             "action": "enterCasePicker",
@@ -207,7 +207,7 @@ def test_action_diagnostics_distinguish_callback_timeout_and_ignore_stale_callba
     result = adapter.enter_case_picker(Window(), operation)
     callbacks[0]({"ok": True, "status": "picker_ready", "label": "PRIVATE"})
 
-    assert result == {"ok": False, "error": "page_operation_timeout"}
+    assert result == {"ok": False, "error": "callback_timeout"}
     assert len(diagnostics) == 1
     assert diagnostics[0]["internal_error_kind"] == "callback_timeout"
     assert diagnostics[0]["callback_executed"] is False
@@ -222,7 +222,7 @@ def test_action_diagnostics_distinguish_non_mapping_callback_result():
 
     result = adapter.enter_case_picker(window, _operation())
 
-    assert result == {"ok": False, "error": "page_contract_changed"}
+    assert result == {"ok": False, "error": "non_mapping_result"}
     assert diagnostics[0]["internal_error_kind"] == "non_mapping_result"
     assert diagnostics[0]["callback_executed"] is True
     assert diagnostics[0]["result_type"] == "str"
@@ -242,7 +242,7 @@ def test_executor_javascript_exception_keeps_specific_internal_diagnostic():
         diagnostic_callback=diagnostics.append
     ).enter_case_picker(guarded, _operation())
 
-    assert result == {"ok": False, "error": "page_contract_changed"}
+    assert result == {"ok": False, "error": "javascript_exception"}
     assert diagnostics[0]["internal_error_kind"] == "javascript_exception"
     assert "unsafe page exception text" not in repr(diagnostics)
     executor.shutdown(timeout=1)

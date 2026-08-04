@@ -28,11 +28,16 @@ class _FDWorkCapability:
 
     def open_case_picker(self, request_id):
         self.picker_calls.append(request_id)
-        return {"ok": True, "request_id": request_id, "status": "opening"}
+        return {
+            "ok": True,
+            "request_id": request_id,
+            "operation_status": "picker_ready",
+            "capability_status": self.get_settings_status(),
+        }
 
     def prepare_session(self, show_login_if_required=True):
         self.prepare_calls.append(show_login_if_required)
-        return {"ok": True, "status": self.get_settings_status()}
+        return {"ok": True, "capability_status": self.get_settings_status()}
 
     def open_entry(
         self,
@@ -47,7 +52,11 @@ class _FDWorkCapability:
                 expected_projection_revision,
             )
         )
-        return {"ok": True, "status": "opening"}
+        return {
+            "ok": True,
+            "operation_status": "review",
+            "capability_status": self.get_settings_status(),
+        }
 
 
 def test_shipping_method_accepts_identity_and_versions_only():
@@ -70,7 +79,10 @@ def test_bridge_forwards_no_remote_field_values_or_adapter_knowledge():
         "projection-revision",
     )
 
-    assert result == {"ok": True, "status": "opening"}
+    assert result["ok"] is True
+    assert result["operation_status"] == "review"
+    assert result["capability_status"]["session_state"] == "ready"
+    assert "status" not in result
     assert capability.calls == [
         (
             "2026-07-31",
@@ -155,7 +167,7 @@ def test_renderer_unavailable_is_not_reported_as_a_form_error():
     )
 
     assert result["ok"] is False
-    assert result["error"] == "renderer_unavailable"
+    assert result["error"] == "fd_work_window_unavailable"
     assert "WebView2" in result["message"]
     assert "表单" not in result["message"]
 

@@ -11,6 +11,7 @@ from typing import Any, Callable, Mapping, Protocol
 
 from ...services.settings_service import get_bool_setting, set_setting
 from .contracts import FDWorkEntryDraft, FDWorkEntryError
+from .error_codes import public_fd_work_error
 from .binding_service import FDWorkBindingService
 from .case_identity import normalize_case_label
 from .draft_builder import FDWorkEntryDraftBuilder
@@ -142,7 +143,7 @@ class FDWorkIntegrationService:
                 return {
                     "ok": False,
                     "error": "fd_work_disabled",
-                    "status": self._status_locked(),
+                    "capability_status": self._status_locked(),
                 }
             if not self._privacy_authorized:
                 return self._privacy_failure_locked()
@@ -151,7 +152,7 @@ class FDWorkIntegrationService:
                 return {
                     "ok": False,
                     "error": "fd_work_disabled",
-                    "status": self._status_locked(),
+                    "capability_status": self._status_locked(),
                 }
         try:
             result = dict(
@@ -161,8 +162,7 @@ class FDWorkIntegrationService:
             )
         except Exception:
             result = {"ok": False, "error": "session_start_failed"}
-        result["status"] = self.get_settings_status()
-        return result
+        return self._with_capability_status(result)
 
     def prepare_window_before_start(
         self,
@@ -173,7 +173,7 @@ class FDWorkIntegrationService:
                 return {
                     "ok": False,
                     "error": "fd_work_disabled",
-                    "status": self._status_locked(),
+                    "capability_status": self._status_locked(),
                 }
             if not self._privacy_authorized:
                 return self._privacy_failure_locked()
@@ -182,7 +182,7 @@ class FDWorkIntegrationService:
                 return {
                     "ok": False,
                     "error": "fd_work_disabled",
-                    "status": self._status_locked(),
+                    "capability_status": self._status_locked(),
                 }
         try:
             result = dict(
@@ -192,8 +192,7 @@ class FDWorkIntegrationService:
             )
         except Exception:
             result = {"ok": False, "error": "session_start_failed"}
-        result["status"] = self.get_settings_status()
-        return result
+        return self._with_capability_status(result)
 
     def on_renderer_initialized(self, renderer: str) -> None:
         with self._lock:
@@ -214,21 +213,19 @@ class FDWorkIntegrationService:
             controller = self._require_enabled_controller_locked()
             if controller is None:
                 return self._failure_locked("fd_work_disabled", request_id)
-            self._active_picker_request_id = request_id
         try:
             result = dict(controller.open_case_picker(request_id))
         except Exception:
             result = {"ok": False, "error": "window_unavailable"}
         if result.get("ok") is not True:
-            with self._lock:
-                if self._active_picker_request_id == request_id:
-                    self._active_picker_request_id = None
             return self._failure(
-                str(result.get("error") or "window_unavailable"), request_id
+                public_fd_work_error(result.get("error") or "window_unavailable"),
+                request_id,
             )
+        with self._lock:
+            self._active_picker_request_id = request_id
         result["request_id"] = request_id
-        result["status"] = self.get_settings_status()
-        return result
+        return self._with_capability_status(result)
 
     def validate_case_selection(
         self,
@@ -285,7 +282,13 @@ class FDWorkIntegrationService:
         with self._lock:
             if controller is not self._require_enabled_controller_locked():
                 raise FDWorkEntryError("window_unavailable")
-        return dict(controller.open_entry(draft))
+        try:
+            result = dict(controller.open_entry(draft))
+        except FDWorkEntryError:
+            raise
+        except Exception:
+            result = {"ok": False, "error": "window_unavailable"}
+        return self._with_capability_status(result)
 
     def set_privacy_authorized(self, authorized: bool) -> None:
         if authorized is not True and authorized is not False:
@@ -407,7 +410,9 @@ class FDWorkIntegrationService:
                 payload = {
                     "ok": False,
                     "request_id": request_id,
-                    "error": str(result.get("error") or "picker_canceled"),
+                    "error": public_fd_work_error(
+                        result.get("error") or "picker_canceled"
+                    ),
                 }
             else:
                 label = result.get("label")
@@ -422,7 +427,7 @@ class FDWorkIntegrationService:
                     payload = {
                         "ok": False,
                         "request_id": request_id,
-                        "error": "page_contract_changed",
+                        "error": "fd_work_page_unavailable",
                     }
                 else:
                     self._cleanup_selections_locked()
@@ -546,15 +551,25 @@ class FDWorkIntegrationService:
             "ok": False,
             "request_id": str(request_id),
             "error": error,
-            "status": self._status_locked(),
+            "capability_status": self._status_locked(),
         }
 
     def _privacy_failure_locked(self) -> dict[str, Any]:
         return {
             "ok": False,
             "error": "deferred_by_privacy",
-            "status": self._status_locked(),
+            "capability_status": self._status_locked(),
         }
+
+    def _with_capability_status(self, result: Mapping[str, Any]) -> dict[str, Any]:
+        payload = dict(result)
+        ambiguous_status = payload.pop("status", None)
+        if isinstance(ambiguous_status, str):
+            payload["operation_status"] = ambiguous_status
+        if payload.get("ok") is not True:
+            payload["error"] = public_fd_work_error(payload.get("error"))
+        payload["capability_status"] = self.get_settings_status()
+        return payload
 
     def _require_binding_service(self) -> FDWorkBindingService:
         if self._binding_service is None:

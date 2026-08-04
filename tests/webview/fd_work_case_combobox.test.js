@@ -70,7 +70,7 @@ function harness({ enabled = true } = {}) {
   App.bridge = {
     openFDWorkCasePicker(requestId) {
       calls.picker.push(requestId);
-      return Promise.resolve({ ok: true, request_id: requestId, status: "picker_ready" });
+      return Promise.resolve({ ok: true, request_id: requestId, operation_status: "picker_ready", capability_status: {} });
     },
     createProjectForRules(...args) {
       calls.create.push(args);

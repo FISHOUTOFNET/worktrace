@@ -302,8 +302,8 @@
             return Promise.resolve(false);
         }
         return App.bridge.showFDWorkLogin().then(function (result) {
-            if (result && result.status && App.receiveFDWorkStatus) {
-                App.receiveFDWorkStatus(result.status);
+            if (result && result.capability_status && App.receiveFDWorkStatus) {
+                App.receiveFDWorkStatus(result.capability_status);
             }
             if (!result || result.ok !== true) {
                 showSettingsError(result && result.message || "打开 FD Work 失败");
