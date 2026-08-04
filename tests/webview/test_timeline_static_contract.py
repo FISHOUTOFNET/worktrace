@@ -53,7 +53,7 @@ def test_timeline_empty_state_uses_shared_visual_language():
 
 
 def test_timeline_header_filter_editor_and_advanced_menu_contract():
-    html = _resource("index.html")
+    html = _resource("index_fd_work_v5.html")
     timeline_page = html[html.index('id="page-timeline"') : html.index('id="page-statistics"')]
 
     header = timeline_page[: timeline_page.index("</header>") + len("</header>")]
@@ -296,7 +296,7 @@ def test_timeline_duration_draft_preserves_exact_override_until_user_touches_fie
     dirty = func_body(source, "isEditDirty")
     save = func_body(source, "saveEdit")
     handler = func_body(source, "handleTimelineDurationChange")
-    init = _source("init.js")
+    init = _source("init_fd_work_v5.js")
 
     assert "App.timelineDurationDraftTouched = false" in populate
     assert "toFixed(1)" in populate

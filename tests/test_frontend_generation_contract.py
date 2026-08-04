@@ -24,7 +24,7 @@ def test_shipping_js_has_no_retired_replacement_reset_reason():
 
 
 def test_client_generation_reset_clears_all_runtime_owners():
-    source = (JS / "init.js").read_text(encoding="utf-8")
+    source = (JS / "init_fd_work_v5.js").read_text(encoding="utf-8")
     start = source.index("function resetClientGeneration(reason)")
     end = source.index("App.resetClientGeneration = resetClientGeneration", start)
     body = source[start:end]

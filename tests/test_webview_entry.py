@@ -11,7 +11,7 @@ These tests cover the default entry contracts:
   does not start any Tkinter UI;
 - when pywebview is missing, ``webview_main.main`` returns a non-zero exit
   code with a clear install prompt;
-- the static resource path helper resolves ``index.html`` in both source-run
+- the static resource path helper resolves ``index_fd_work_v5.html`` in both source-run
   and PyInstaller-frozen layouts;
 - the bridge only imports ``worktrace.api`` (covered in detail by
   ``test_ui_backend_boundary.py``);
@@ -155,30 +155,30 @@ def test_webview_main_does_not_swallow_nonzero_exit_from_pre_flight(monkeypatch)
     assert result_from_main == result_from_webview
 
 
-def test_resource_path_resolves_index_html_in_source_run():
+def test_resource_path_resolves_versioned_index_in_source_run():
     import worktrace.webview_main as mod
 
     with patch.dict(sys.modules, {}, clear=False):
-        path = mod.resource_path("index.html")
-    assert path.name == "index.html"
-    assert path.is_file(), f"expected index.html to exist at {path}"
+        path = mod.resource_path("index_fd_work_v5.html")
+    assert path.name == "index_fd_work_v5.html"
+    assert path.is_file(), f"expected versioned index to exist at {path}"
 
 
-def test_resource_path_resolves_index_html_in_frozen_run(monkeypatch, tmp_path):
+def test_resource_path_resolves_versioned_index_in_frozen_run(monkeypatch, tmp_path):
     import worktrace.webview_main as mod
 
     fake_meipass = tmp_path / "fake_meipass"
     (fake_meipass / "worktrace" / "webview_ui").mkdir(parents=True, exist_ok=True)
-    fake_index = fake_meipass / "worktrace" / "webview_ui" / "index.html"
+    fake_index = fake_meipass / "worktrace" / "webview_ui" / "index_fd_work_v5.html"
     fake_index.write_text("<html>placeholder</html>", encoding="utf-8")
 
     monkeypatch.setattr(sys, "_MEIPASS", str(fake_meipass), raising=False)
     try:
-        path = mod.resource_path("index.html")
+        path = mod.resource_path("index_fd_work_v5.html")
     finally:
         monkeypatch.delattr(sys, "_MEIPASS", raising=False)
 
-    assert path.name == "index.html"
+    assert path.name == "index_fd_work_v5.html"
     assert str(fake_meipass) in str(path)
     assert "webview_ui" in path.parts
 

@@ -1,6 +1,6 @@
 // WorkTrace WebView frontend core module.
 // Owns UI state and rendering helpers only. Runtime transport acceptance and
-// the application clock are owned exclusively by init.js.
+// the application clock are owned exclusively by init_fd_work_v5.js.
 
 (function () {
     "use strict";

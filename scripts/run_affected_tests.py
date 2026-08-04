@@ -84,10 +84,10 @@ RULES: list[dict] = [
     {
         "id": "A. WebView frontend resources",
         # Directory-level trigger so a new/renamed JS module never escapes the
-        # WebView contract test set. The JS file list is parsed from index.html
+        # WebView contract test set. The JS file list is parsed from index_fd_work_v5.html
         # at test time by tests/webview/static_helpers.py.
         "triggers": [
-            "worktrace/webview_ui/index.html",
+            "worktrace/webview_ui/index_fd_work_v5.html",
             "worktrace/webview_ui/styles.css",
             "worktrace/webview_ui/js/",
         ],
@@ -541,7 +541,7 @@ RULES: list[dict] = [
             "worktrace/webview_ui/bridge.py",
             "worktrace/webview_ui/bridge_settings.py",
             "worktrace/webview_ui/bridge_dialogs.py",
-            "worktrace/webview_ui/index.html",
+            "worktrace/webview_ui/index_fd_work_v5.html",
             "worktrace/webview_ui/js/",
             "worktrace/webview_ui/styles.css",
             "WorkTrace.spec",

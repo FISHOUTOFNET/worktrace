@@ -153,7 +153,7 @@ def test_frontend_has_one_live_delta_and_no_legacy_identity_inputs():
         _text(relative)
         for relative in (
             "worktrace/webview_ui/js/core.js",
-            "worktrace/webview_ui/js/init.js",
+            "worktrace/webview_ui/js/init_fd_work_v5.js",
             "worktrace/webview_ui/js/overview.js",
             "worktrace/webview_ui/js/timeline.js",
         )

@@ -4,8 +4,8 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 
-// Behavior tests for the privacy-gated startup orchestration in init.js.
-// Loads the REAL core.js, settings.js, and init.js; stubs only Bridge, DOM, timers.
+// Behavior tests for the privacy-gated startup orchestration in init_fd_work_v5.js.
+// Loads the REAL core.js, settings.js, and init_fd_work_v5.js; stubs only Bridge, DOM, timers.
 
 function flush() {
   return new Promise((resolve) => setImmediate(resolve));
@@ -48,7 +48,7 @@ function makeBaseContext() {
       addEventListener() {}, removeEventListener() {},
     },
     document: {
-      // "loading" prevents init.js from auto-calling init() during eval.
+      // "loading" prevents init_fd_work_v5.js from auto-calling init() during eval.
       readyState: "loading",
       getElementById: element,
       querySelector() { return null; },
@@ -69,7 +69,7 @@ function loadJs(context, file) {
   );
 }
 
-// Full startup harness: loads core.js, settings.js, AND init.js with a
+// Full startup harness: loads core.js, settings.js, AND init_fd_work_v5.js with a
 // stubbed pywebview.api bridge and DOM. The only stubs are the bridge API
 // methods and timers (setInterval is captured so we can assert heartbeat
 // creation without real timers running).
@@ -98,7 +98,7 @@ function startupHarness() {
     listProjectsForTimeline: 0,
   };
 
-  // Configurable bridge responses (snake_case keys match what init.js's
+  // Configurable bridge responses (snake_case keys match what init_fd_work_v5.js's
   // invokeBridge calls: window.pywebview.api[method]).
   let firstRunNoticeResponse = { ok: true, notice: { accepted: false, title: "T", text: "x", highlights: [] } };
   let acceptResponse = { ok: true, accepted: true, collector_started: true, collector_status: { status: "running" } };
@@ -122,7 +122,7 @@ function startupHarness() {
   // loadProjects is defined in rules.js; stub it since we only load core/settings/init.
   App.loadProjects = () => { return Promise.resolve(); };
   // requestCoordinator is defined in a separate module; stub its interface
-  // so init.js refresh helpers (refreshOverview, refreshStatus) work.
+  // so init_fd_work_v5.js refresh helpers (refreshOverview, refreshStatus) work.
   App.requestCoordinator = {
     beginLatest() { return {}; },
     isCurrent() { return true; },
@@ -131,7 +131,7 @@ function startupHarness() {
 
   loadJs(context, "core.js");
   loadJs(context, "settings.js");
-  loadJs(context, "init.js");
+  loadJs(context, "init_fd_work_v5.js");
 
   // Set the default page after loading so continueStartupAfterPrivacyGate
   // routes through refreshOverview for the "overview" page.

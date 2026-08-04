@@ -57,8 +57,8 @@ def test_frontend_live_identity_excludes_candidate_metadata_and_retired_states()
         )
 
     declared_owners = {
-        "runtimeIdentityFromPayload": read_js("init.js"),
-        "runtimeVisualContinuityKey": read_js("init.js"),
+        "runtimeIdentityFromPayload": read_js("init_fd_work_v5.js"),
+        "runtimeVisualContinuityKey": read_js("init_fd_work_v5.js"),
     }
     assigned_owners = {
         "liveContinuityKey": read_js("core.js"),
@@ -104,7 +104,7 @@ def test_frontend_uses_only_single_live_delta_clock_fields():
 
 def test_apply_local_ticker_never_reads_structural_caches_or_bridge():
     core = read_js("core.js")
-    init = read_js("init.js")
+    init = read_js("init_fd_work_v5.js")
     assert "applyLocalTicker" not in core
     body = _assigned_app_function(init, "applyLocalTicker")
     forbidden = (
@@ -166,7 +166,7 @@ def test_frontend_resources_have_no_storage_network_cdn_or_module_pipeline():
 def test_live_duration_targets_use_exact_clock_and_accepted_runtime():
     source = read_all_js()
     core = read_js("core.js")
-    init = read_js("init.js")
+    init = read_js("init_fd_work_v5.js")
     ticker = _assigned_app_function(init, "applyLocalTicker")
     assert "liveRuntimeStore.get()" in ticker
     assert "App.readLiveClockTarget(target)" in ticker
@@ -188,7 +188,7 @@ def test_live_duration_targets_use_exact_clock_and_accepted_runtime():
 def test_runtime_transport_and_clock_have_one_frontend_owner():
     source = read_all_js()
     core = read_js("core.js")
-    init = read_js("init.js")
+    init = read_js("init_fd_work_v5.js")
     for retired in (
         "runtimeIdentityFromPayload",
         "acceptLiveRuntimePayload",

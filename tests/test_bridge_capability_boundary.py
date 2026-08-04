@@ -148,7 +148,7 @@ def test_shipping_bridge_public_methods_equal_allowlist() -> None:
 
 def test_project_folder_picker_is_fixed_and_does_not_expose_filesystem_browsing() -> None:
     source = (
-        ROOT / "worktrace" / "webview_ui" / "js" / "init.js"
+        ROOT / "worktrace" / "webview_ui" / "js" / "init_fd_work_v5.js"
     ).read_text(encoding="utf-8")
     assert (
         'chooseProjectRuleFolder: fixedBridgeMethod("choose_project_rule_folder")'

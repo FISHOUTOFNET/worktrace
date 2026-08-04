@@ -83,7 +83,7 @@ def test_frontend_generation_and_coalescing_contracts_are_shipping():
     request_state = (
         root / "worktrace/webview_ui/js/timeline_request_state.js"
     ).read_text(encoding="utf-8")
-    init = (root / "worktrace/webview_ui/js/init.js").read_text(encoding="utf-8")
+    init = (root / "worktrace/webview_ui/js/init_fd_work_v5.js").read_text(encoding="utf-8")
     statistics = (root / "worktrace/webview_ui/js/statistics.js").read_text(
         encoding="utf-8"
     )

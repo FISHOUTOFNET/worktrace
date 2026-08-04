@@ -199,7 +199,7 @@ test("page switch resets only the page actually being left", () => {
     resetStatisticsTransientUi: () => calls.push("statistics"),
     resetSettingsTransientUi: () => calls.push("settings"),
   });
-  h.load("init.js");
+  h.load("init_fd_work_v5.js");
   h.element("app-toast").textContent = "keep toast";
   h.element("global-alert").textContent = "keep alert";
   h.App.switchPage("rules");
@@ -232,7 +232,7 @@ test("rules panel presentation, rule tabs, folder picker, and Escape share one l
     createProjectKeywordRule: () => Promise.resolve({ ok: true, rule: { id: 2 } }),
   };
   h.load("ui_components.js");
-  h.load("rules_create_panel.js");
+  h.load("rules_create_panel_v5.js");
   App.initRulesPanelEvents();
 
   App.openRulesPanel("project", {});
@@ -282,7 +282,7 @@ test("stale project completion refreshes data but cannot overwrite a newer rules
     updateProjectForRules: () => pending.promise,
   };
   h.load("ui_components.js");
-  h.load("rules_create_panel.js");
+  h.load("rules_create_panel_v5.js");
 
   App.openRulesPanel("project", {});
   h.element("rules-panel-project-name").value = "Old request";
@@ -311,7 +311,7 @@ test("project create and edit keep distinct busy and success outcomes", async ()
   edit.App.loadProjectRules = () => Promise.resolve();
   edit.App.bridge = { updateProjectForRules: () => editPending.promise };
   edit.load("ui_components.js");
-  edit.load("rules_create_panel.js");
+  edit.load("rules_create_panel_v5.js");
   edit.App.showToast = (message) => editToasts.push(message);
   edit.App.openRulesPanel("project", {
     project: { id: 7, name: "Alpha", description: "", language: "中文" },
@@ -338,7 +338,7 @@ test("project create and edit keep distinct busy and success outcomes", async ()
   };
   create.App.bridge = { createProjectForRules: () => createPending.promise };
   create.load("ui_components.js");
-  create.load("rules_create_panel.js");
+  create.load("rules_create_panel_v5.js");
   create.App.openRulesPanel("project", {});
   create.element("rules-panel-project-name").value = "New project";
   create.App.savePanelProject();
@@ -367,7 +367,7 @@ test("folder picker cancellation preserves the path and failure uses the panel e
   ];
   h.App.bridge = { chooseProjectRuleFolder: () => Promise.resolve(results.shift()) };
   h.load("ui_components.js");
-  h.load("rules_create_panel.js");
+  h.load("rules_create_panel_v5.js");
   h.App.openRulesPanel("rule", { projectId: 7 });
   h.element("rules-panel-folder-path").value = "D:\\Keep";
 

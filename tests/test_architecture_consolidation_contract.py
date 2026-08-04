@@ -205,7 +205,7 @@ def test_shipping_windows_adapter_has_one_canonical_module():
 
 def test_frontend_does_not_replace_bridge_or_patch_edit_dom_after_render():
     root = Path(__file__).resolve().parents[1]
-    source = (root / "worktrace/webview_ui/js/init.js").read_text(
+    source = (root / "worktrace/webview_ui/js/init_fd_work_v5.js").read_text(
         encoding="utf-8"
     )
     assert "App.callBridge =" not in source

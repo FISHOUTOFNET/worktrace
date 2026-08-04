@@ -1146,9 +1146,9 @@ def _run_harness(
             bridge = WebViewBridge(services)
 
             if target_root is not None:
-                index_path = target_root / "worktrace" / "webview_ui" / "index.html"
+                index_path = target_root / "worktrace" / "webview_ui" / "index_fd_work_v5.html"
             else:
-                index_path = _REPO_ROOT / "worktrace" / "webview_ui" / "index.html"
+                index_path = _REPO_ROOT / "worktrace" / "webview_ui" / "index_fd_work_v5.html"
 
             results_holder: dict[str, Any] = {"results": None, "error": None}
 

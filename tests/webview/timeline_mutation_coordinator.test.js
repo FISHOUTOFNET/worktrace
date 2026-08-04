@@ -63,7 +63,7 @@ function harness() {
     copyTimelineSession: bridgeCall("copy_timeline_session"),
     openFDWorkEntry: bridgeCall("open_fd_work_entry"),
   };
-  for (const file of ["fd_work.js", "timeline_request_state.js", "timeline.js"]) {
+  for (const file of ["fd_work_v5.js", "timeline_request_state.js", "timeline.js"]) {
     vm.runInContext(
       fs.readFileSync(path.join(__dirname, "../../worktrace/webview_ui/js", file), "utf8"),
       context,

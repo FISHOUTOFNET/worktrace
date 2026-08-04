@@ -4,15 +4,15 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const rulesSource = fs.readFileSync(
-  path.join(__dirname, "../../worktrace/webview_ui/js/rules_create_panel.js"),
+  path.join(__dirname, "../../worktrace/webview_ui/js/rules_create_panel_v5.js"),
   "utf8"
 );
 const initSource = fs.readFileSync(
-  path.join(__dirname, "../../worktrace/webview_ui/js/init.js"),
+  path.join(__dirname, "../../worktrace/webview_ui/js/init_fd_work_v5.js"),
   "utf8"
 );
 const html = fs.readFileSync(
-  path.join(__dirname, "../../worktrace/webview_ui/index.html"),
+  path.join(__dirname, "../../worktrace/webview_ui/index_fd_work_v5.html"),
   "utf8"
 );
 

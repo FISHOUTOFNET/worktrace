@@ -280,7 +280,7 @@ test("first-run acceptance refreshes status only after confirmed success", async
   let statusReads = 0;
   let startupContinued = 0;
   // In the new architecture, acceptFirstRunNotice delegates page refresh to
-  // continueStartupAfterPrivacyGate (owned by init.js) instead of calling
+  // continueStartupAfterPrivacyGate (owned by init_fd_work_v5.js) instead of calling
   // refreshAll directly. This harness only loads settings.js, so we stub the
   // startup entry to verify it is invoked.
   App.continueStartupAfterPrivacyGate = () => { startupContinued += 1; return Promise.resolve(true); };

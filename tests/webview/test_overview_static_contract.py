@@ -48,7 +48,7 @@ def test_overview_shipping_ui_uses_authoritative_module_names():
     """Regression guard: the shipping UI must use the canonical module
     names "当前活动 / 最近记录" and must not reintroduce the retired
     attention section or "最近活动" label in user-visible markup or ARIA."""
-    html = read_resource("index.html")
+    html = read_resource("index_fd_work_v5.html")
     assert "当前活动" in html
     assert "最近记录" in html
     assert "待整理" not in html
@@ -75,7 +75,7 @@ def test_overview_view_model_does_not_reintroduce_attention_selection():
 
 
 def test_overview_project_bar_is_unheaded_narrow_and_accessible():
-    html = read_resource("index.html")
+    html = read_resource("index_fd_work_v5.html")
     css = read_resource("styles.css")
     source = read_js("overview.js")
     render = func_body(source, "renderProjectDistribution")

@@ -39,14 +39,14 @@ def _is_defined(source: str, name: str) -> bool:
 def _assigned_app_function(source: str, name: str) -> str:
     marker = f"App.{name} = function ("
     start = source.find(marker)
-    assert start != -1, f"init.js must assign App.{name}"
+    assert start != -1, f"init_fd_work_v5.js must assign App.{name}"
     end = source.find("\n    };", start)
     assert end != -1, f"App.{name} assignment must close"
     return source[start:end]
 
 
 def test_frontend_resource_set_is_complete_and_ordered() -> None:
-    assert (WEBVIEW_UI_DIR / "index.html").is_file()
+    assert (WEBVIEW_UI_DIR / "index_fd_work_v5.html").is_file()
     assert (WEBVIEW_UI_DIR / "styles.css").is_file()
     assert (WEBVIEW_UI_DIR / "bridge.py").is_file()
     assert JS_DIR.is_dir()
@@ -56,7 +56,7 @@ def test_frontend_resource_set_is_complete_and_ordered() -> None:
     on_disk = {path.name for path in JS_DIR.glob("*.js")}
     assert referenced == on_disk
 
-    index = read_resource("index.html")
+    index = read_resource("index_fd_work_v5.html")
     positions = []
     for name in ALL_JS_FILES:
         assert "/" not in name and "\\" not in name and name.endswith(".js")
@@ -108,14 +108,14 @@ def test_frontend_modules_share_one_namespace_and_iife_boundary() -> None:
 def test_only_init_module_owns_pywebview_and_startup_wiring() -> None:
     for name in ALL_JS_FILES:
         source = read_js(name)
-        if name == "init.js":
+        if name == "init_fd_work_v5.js":
             assert "window.pywebview.api" in source
             assert "DOMContentLoaded" in source
         else:
             assert "window.pywebview.api" not in source
             assert "DOMContentLoaded" not in source
 
-    init = read_js("init.js")
+    init = read_js("init_fd_work_v5.js")
     assert "App.callBridge" not in init
     assert "App.bridge = Object.freeze" in init
     assert "function invokeBridge" in init
@@ -124,9 +124,9 @@ def test_only_init_module_owns_pywebview_and_startup_wiring() -> None:
 def test_fixed_bridge_surface_is_not_dynamically_addressable() -> None:
     source = read_all_js()
     assert "App.callBridge" not in source
-    assert "window.pywebview.api[method]" in read_js("init.js")
+    assert "window.pywebview.api[method]" in read_js("init_fd_work_v5.js")
     for name in ALL_JS_FILES:
-        if name != "init.js":
+        if name != "init_fd_work_v5.js":
             assert "invokeBridge(" not in read_js(name)
             assert "fixedBridgeMethod(" not in read_js(name)
 
@@ -202,7 +202,7 @@ def test_frontend_state_is_namespaced() -> None:
 
 
 def test_overview_surface_has_required_user_contracts() -> None:
-    index = read_resource("index.html")
+    index = read_resource("index_fd_work_v5.html")
     for label in ("概览", "时间详情", "统计与导出", "项目规则", "设置与隐私"):
         assert label in index
     for dom_id in (
@@ -234,12 +234,12 @@ def test_overview_uses_exact_aggregate_clocks_and_safe_error_surface() -> None:
 
 
 def test_startup_waits_for_privacy_notice_before_refresh_and_heartbeat() -> None:
-    init_body = func_body(read_js("init.js"), "init()")
+    init_body = func_body(read_js("init_fd_work_v5.js"), "init()")
     notice = init_body.index("App.loadFirstRunNotice()")
     continue_entry = init_body.index("continueStartupAfterPrivacyGate()")
     assert notice < continue_entry
     assert ".then(function" in init_body[notice:continue_entry]
-    startup_body = func_body(read_js("init.js"), "continueStartupAfterPrivacyGate")
+    startup_body = func_body(read_js("init_fd_work_v5.js"), "continueStartupAfterPrivacyGate")
     refresh = startup_body.index("refreshCurrentPageData(")
     heartbeat = startup_body.index("startHeartbeat()")
     assert refresh < heartbeat
@@ -247,7 +247,7 @@ def test_startup_waits_for_privacy_notice_before_refresh_and_heartbeat() -> None
 
 def test_local_ticker_never_calls_backend() -> None:
     core = read_js("core.js")
-    init = read_js("init.js")
+    init = read_js("init_fd_work_v5.js")
     body = _assigned_app_function(init, "applyLocalTicker")
     assert "applyLocalTicker" not in core
     assert "callBridge" not in body
@@ -259,7 +259,7 @@ def test_local_ticker_never_calls_backend() -> None:
 
 def test_packaging_includes_current_frontend_resources() -> None:
     spec = (REPO_ROOT / "WorkTrace.spec").read_text(encoding="utf-8")
-    assert "styles.css" in spec and "index.html" in spec
+    assert "styles.css" in spec and "index_fd_work_v5.html" in spec
     for name in ALL_JS_FILES:
         assert name in spec
     assert "app.js" not in spec
@@ -269,7 +269,7 @@ def test_webview_entry_is_import_safe_and_resolves_resources(monkeypatch) -> Non
     import worktrace.webview_main as webview_main
 
     assert callable(webview_main.main)
-    assert webview_main.resource_path("index.html").is_file()
+    assert webview_main.resource_path("index_fd_work_v5.html").is_file()
 
     monkeypatch.setitem(sys.modules, "webview", None)
     with pytest.raises(RuntimeError) as exc_info:

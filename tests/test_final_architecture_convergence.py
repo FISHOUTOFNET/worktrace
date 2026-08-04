@@ -208,7 +208,7 @@ def test_shipping_frontend_contains_only_liveclock_v2_names():
     root = Path(__file__).resolve().parents[1] / "worktrace/webview_ui/js"
     source = "\n".join(
         (root / name).read_text(encoding="utf-8")
-        for name in ("core.js", "init.js", "overview.js", "timeline.js")
+        for name in ("core.js", "init_fd_work_v5.js", "overview.js", "timeline.js")
     )
     forbidden = {
         "duration_seconds_at_sample",

@@ -117,7 +117,7 @@ def test_app_runtime_is_the_only_worker_started_stopped_owner():
 def test_shipping_js_contains_no_retired_liveclock_alias_substrings():
     source = "\n".join(
         _source(f"worktrace/webview_ui/js/{name}")
-        for name in ("core.js", "init.js", "overview.js", "timeline.js")
+        for name in ("core.js", "init_fd_work_v5.js", "overview.js", "timeline.js")
     )
     forbidden = (
         "duration_seconds_at_sample",

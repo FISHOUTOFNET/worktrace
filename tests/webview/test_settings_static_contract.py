@@ -59,7 +59,7 @@ def _app_function_is_exposed(source: str, name: str) -> bool:
 
 
 def test_settings_page_resources_and_controls_are_complete() -> None:
-    index = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    index = (WEBVIEW_UI_DIR / "index_fd_work_v5.html").read_text(encoding="utf-8")
     section = html_section_by_id(index, "page-settings")
     assert (WEBVIEW_UI_DIR / "js" / "settings.js").is_file()
     assert 'src="js/settings.js"' in index
@@ -121,7 +121,7 @@ def test_settings_page_resources_and_controls_are_complete() -> None:
 
 
 def test_settings_toggle_layout_and_copy_contract() -> None:
-    index = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    index = (WEBVIEW_UI_DIR / "index_fd_work_v5.html").read_text(encoding="utf-8")
     styles = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
     source = _settings_source()
 
@@ -361,14 +361,14 @@ def test_destructive_operations_require_explicit_confirmation_literals() -> None
 
 
 def test_credentials_use_compact_rows_and_momentary_reveal_controls() -> None:
-    index = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    index = (WEBVIEW_UI_DIR / "index_fd_work_v5.html").read_text(encoding="utf-8")
     section = index[
         index.index('id="settings-backup-card"') :
         index.index('id="settings-recovery-card"')
     ]
     styles = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
     source = _settings_source()
-    init = read_js("init.js")
+    init = read_js("init_fd_work_v5.js")
 
     assert section.count('class="credential-row"') == 3
     assert section.count('class="password-reveal-button"') == 3
@@ -457,13 +457,13 @@ def test_first_run_notice_is_fail_closed_and_mode_safe() -> None:
     assert "App.bridge.acceptFirstRunNotice()" in accept
     assert "App.firstRunNoticeAcceptInProgress" in accept
     # The accept flow must continue through the single idempotent startup
-    # entry owned by init.js, not a second refreshAll path.
+    # entry owned by init_fd_work_v5.js, not a second refreshAll path.
     assert "App.continueStartupAfterPrivacyGate" in accept
     assert "loadSettingsPrivacyStatus()" in accept
 
 
 def test_settings_buttons_are_bound_to_named_capabilities() -> None:
-    body = func_body(read_js("init.js"), "initButtons")
+    body = func_body(read_js("init_fd_work_v5.js"), "initButtons")
     bindings = (
         ("settings-clipboard-toggle", "App.handleCaptureToggleChange"),
         ("settings-launch-at-login-toggle", "App.handleLaunchAtLoginToggleChange"),

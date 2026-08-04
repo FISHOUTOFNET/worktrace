@@ -43,9 +43,9 @@ function harness() {
     updateFDWorkEntryButton() {},
   });
   vm.runInContext(
-    fs.readFileSync(path.join(__dirname, "../../worktrace/webview_ui/js/fd_work.js"), "utf8"),
+    fs.readFileSync(path.join(__dirname, "../../worktrace/webview_ui/js/fd_work_v5.js"), "utf8"),
     context,
-    { filename: "fd_work.js" },
+    { filename: "fd_work_v5.js" },
   );
   vm.runInContext(
     fs.readFileSync(path.join(__dirname, "../../worktrace/webview_ui/js/settings.js"), "utf8"),

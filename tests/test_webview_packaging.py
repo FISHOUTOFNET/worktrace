@@ -31,7 +31,7 @@ from tests.webview.static_helpers import ALL_JS_FILES
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SPEC_PATH = REPO_ROOT / "WorkTrace.spec"
-INDEX_HTML_PATH = REPO_ROOT / "worktrace" / "webview_ui" / "index.html"
+INDEX_HTML_PATH = REPO_ROOT / "worktrace" / "webview_ui" / "index_fd_work_v5.html"
 ENTRY_PATH = REPO_ROOT / "scripts" / "pyinstaller_entry.py"
 MAIN_PATH = REPO_ROOT / "worktrace" / "main.py"
 REQUIREMENTS_PATH = REPO_ROOT / "requirements.txt"
@@ -47,7 +47,7 @@ def test_spec_bundles_webview_ui_static_resources():
     """The spec bundles every static module from the shared file manifest."""
 
     spec = _read(SPEC_PATH)
-    for name in ("index.html", "styles.css"):
+    for name in ("index_fd_work_v5.html", "styles.css"):
         assert name in spec, f"WorkTrace.spec must bundle webview_ui/{name}"
     for name in ALL_JS_FILES:
         assert name in spec, f"WorkTrace.spec must bundle webview_ui/js/{name}"
@@ -57,15 +57,15 @@ def test_spec_bundles_webview_ui_static_resources():
 
 
 def test_index_html_loads_all_js_in_order():
-    """index.html loads every current JavaScript module in manifest order."""
+    """index_fd_work_v5.html loads every current JavaScript module in manifest order."""
 
     html = _read(INDEX_HTML_PATH)
     import re
 
     scripts = re.findall(r'<script\s+src="js/([^"]+)"\s*>\s*</script>', html)
-    assert scripts, "expected at least one <script src=js/...> tag in index.html"
+    assert scripts, "expected at least one <script src=js/...> tag in index_fd_work_v5.html"
     assert scripts == ALL_JS_FILES, (
-        "index.html script order must match ALL_JS_FILES exactly; "
+        "index_fd_work_v5.html script order must match ALL_JS_FILES exactly; "
         f"got {scripts}"
     )
 

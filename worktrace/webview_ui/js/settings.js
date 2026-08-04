@@ -964,7 +964,7 @@
                 setPrivacyGateState("accepted_ready");
                 // Close any residual blocking overlay from a prior load
                 // failure and clear retry/error UI. The post-privacy startup
-                // entry (init.js) continues startup based on this state.
+                // entry (init_fd_work_v5.js) continues startup based on this state.
                 settleFirstRunNoticeAcceptedUi();
                 return true;
             }
@@ -993,7 +993,7 @@
                 // Full success: authorization persisted and collector started.
                 // Continue through the single idempotent startup entry so that
                 // project catalog, refresh state, page refresh, and heartbeat
-                // are owned by init.js — no second startup path here.
+                // are owned by init_fd_work_v5.js — no second startup path here.
                 setPrivacyGateState("accepted_ready");
                 App.firstRunNoticeRequired = false;
                 settleFirstRunNoticeAcceptedUi();

@@ -205,7 +205,7 @@ def test_schema_trigger_surface_is_constraint_only(temp_db):
 
 
 def test_frontend_uses_explicit_bridge_and_settings_bindings():
-    init_source = (REPO_ROOT / "worktrace/webview_ui/js/init.js").read_text(
+    init_source = (REPO_ROOT / "worktrace/webview_ui/js/init_fd_work_v5.js").read_text(
         encoding="utf-8"
     )
     assert "App.callBridge =" not in init_source

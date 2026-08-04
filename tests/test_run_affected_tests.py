@@ -897,11 +897,11 @@ def test_core_js_selects_settings_tests_and_smoke(runner):
 
 
 def test_settings_html_css_init_select_settings_tests(runner):
-    """index.html / styles.css / init.js share the K1 settings target set."""
+    """index_fd_work_v5.html / styles.css / init_fd_work_v5.js share the K1 settings target set."""
     for changed in (
-        "worktrace/webview_ui/index.html",
+        "worktrace/webview_ui/index_fd_work_v5.html",
         "worktrace/webview_ui/styles.css",
-        "worktrace/webview_ui/js/init.js",
+        "worktrace/webview_ui/js/init_fd_work_v5.js",
     ):
         sel = runner.select_targets([changed])
         assert "tests/webview/test_settings_static_contract.py" in sel.pytest_targets, (

@@ -27,7 +27,7 @@ from static_helpers import (  # noqa: E402
 
 
 def _rules_section() -> str:
-    source = read_resource("index.html")
+    source = read_resource("index_fd_work_v5.html")
     start = source.find('id="page-rules"')
     assert start != -1
     end = source.find('<section id="page-settings"', start)
@@ -92,7 +92,7 @@ def test_fd_work_case_semantics_are_enabled_only_by_shared_capability_status():
     assert selected is not None
     assert "readonly" in selected.group(0)
     assert 'id="rules-panel-fd-work-pick"' in section
-    source = read_js("rules_create_panel.js")
+    source = read_js("rules_create_panel_v5.js")
     presentation = func_body(source, "syncFDWorkCasePickerStatus")
     assert "input.hidden = enabled" in presentation
     assert "picker.hidden = !enabled" in presentation
@@ -100,6 +100,14 @@ def test_fd_work_case_semantics_are_enabled_only_by_shared_capability_status():
     assert 'nameInput.addEventListener("click"' not in source
     assert 'nameInput.addEventListener("input"' not in source
     assert "searchFDWorkCases" not in source
+
+
+def test_fd_work_frontend_contract_scripts_are_cache_versioned_together():
+    index = read_resource("index_fd_work_v5.html")
+
+    assert 'src="js/fd_work_v5.js"' in index
+    assert 'src="js/rules_create_panel_v5.js"' in index
+    assert 'src="js/init_fd_work_v5.js"' in index
 
 
 def test_project_rules_folder_path_uses_native_readonly_picker_contract():
@@ -111,7 +119,7 @@ def test_project_rules_folder_path_uses_native_readonly_picker_contract():
     assert 'id="rules-panel-choose-folder"' in section
     assert "选择文件夹" in section
 
-    source = read_js("rules_create_panel.js")
+    source = read_js("rules_create_panel_v5.js")
     assert "App.bridge.chooseProjectRuleFolder()" in source
     assert "App.rulesChoosingFolder" in source
     assert "选择文件夹失败" in source
@@ -131,7 +139,7 @@ def test_project_rules_folder_picker_and_drawer_stay_bounded_at_supported_sizes(
 
 
 def test_project_rules_panel_presentation_context_and_tab_state_are_single_owner():
-    source = read_js("rules_create_panel.js")
+    source = read_js("rules_create_panel_v5.js")
     presentation = func_body(source, "syncProjectPanelPresentation")
     for expected in (
         "新建项目",
@@ -162,7 +170,7 @@ def test_project_rules_panel_presentation_context_and_tab_state_are_single_owner
 
 
 def test_project_rule_drawer_has_session_guard_and_shared_discard_reset():
-    source = read_js("rules_create_panel.js")
+    source = read_js("rules_create_panel_v5.js")
     assert "App.rulesPanelSessionToken" in source
     assert "function resetRulesTransientUi" in source
     assert "App.resetRulesTransientUi = resetRulesTransientUi" in source
@@ -173,7 +181,7 @@ def test_project_rule_drawer_has_session_guard_and_shared_discard_reset():
 
 def test_project_rules_deletion_uses_shared_dialog_and_explicit_history_policy():
     section = _rules_section()
-    index = read_resource("index.html")
+    index = read_resource("index_fd_work_v5.html")
     assert 'id="rules-delete-modal"' not in section
     assert 'id="confirm-dialog"' in index
     delete = func_body(read_js("rules_keyword_actions.js"), "deleteRule")
@@ -184,9 +192,9 @@ def test_project_rules_deletion_uses_shared_dialog_and_explicit_history_policy()
 
 def test_project_rules_script_order_includes_create_panel_before_actions():
     assert ALL_JS_FILES.index("rules.js") < ALL_JS_FILES.index("rules_render.js")
-    assert ALL_JS_FILES.index("rules_create_panel.js") == ALL_JS_FILES.index("rules_render.js") + 1
-    assert ALL_JS_FILES.index("rules_rule_actions.js") == ALL_JS_FILES.index("rules_create_panel.js") + 1
-    assert ALL_JS_FILES.index("rules_folder_actions.js") < ALL_JS_FILES.index("init.js")
+    assert ALL_JS_FILES.index("rules_create_panel_v5.js") == ALL_JS_FILES.index("rules_render.js") + 1
+    assert ALL_JS_FILES.index("rules_rule_actions.js") == ALL_JS_FILES.index("rules_create_panel_v5.js") + 1
+    assert ALL_JS_FILES.index("rules_folder_actions.js") < ALL_JS_FILES.index("init_fd_work_v5.js")
 
 
 def test_project_rules_static_helper_reads_create_panel_module():
@@ -258,7 +266,7 @@ def test_project_rules_header_places_description_left_and_actions_with_metadata_
 def test_project_rule_folder_fields_are_one_aligned_group():
     section = _rules_section()
     styles = read_resource("styles.css")
-    source = read_js("rules_create_panel.js")
+    source = read_js("rules_create_panel_v5.js")
     folder_start = section.index('id="rules-panel-folder-group"')
     keyword_start = section.index('id="rules-panel-keyword-row"')
     folder = section[folder_start:keyword_start]

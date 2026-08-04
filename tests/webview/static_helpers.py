@@ -1,15 +1,15 @@
 """Shared helpers for the WebView static-contract test suite.
 
-These tests read the bundled frontend resources (``index.html`` /
+These tests read the bundled frontend resources (``index_fd_work_v5.html`` /
 ``js/*.js`` / ``styles.css``) directly without starting the GUI. The
 constants and helpers here are intentionally lightweight so every themed
 test module under ``tests/webview/`` can import the same paths without
 re-declaring them.
 
-The JS load list is parsed from ``index.html``'s ``<script src="js/...">``
+The JS load list is parsed from ``index_fd_work_v5.html``'s ``<script src="js/...">``
 tags so the tests always reflect the real resource set the browser
 executes. A new JS file added under ``js/`` MUST be referenced by
-``index.html`` or the orphan/missing contract tests fail.
+``index_fd_work_v5.html`` or the orphan/missing contract tests fail.
 """
 
 from __future__ import annotations
@@ -26,23 +26,23 @@ RELEASE_VALIDATION_PATH = REPO_ROOT / "docs" / "release-validation.md"
 README_PATH = REPO_ROOT / "README.md"
 
 # Regex matching ``<script src="js/<name>.js"></script>`` tags so the JS
-# load list is parsed from the real ``index.html`` instead of being
+# load list is parsed from the real versioned index instead of being
 # hand-maintained. The capture group extracts the filename without the
 # ``js/`` prefix.
 _SCRIPT_SRC_RE = re.compile(r'<script\s+src="js/([^"]+\.js)"\s*>\s*</script>')
 
 
 def _parse_js_load_order_from_index() -> list[str]:
-    """Return the JS filenames in the order ``index.html`` loads them.
+    """Return the JS filenames in the order the versioned index loads them.
 
     Parses every ``<script src="js/<name>.js">`` tag from
-    ``worktrace/webview_ui/index.html``. The returned list is the single
+    ``worktrace/webview_ui/index_fd_work_v5.html``. The returned list is the single
     source of truth for the JS resource set and load order; tests that
     need the JS list must use this function (or the ``ALL_JS_FILES``
     constant derived from it) so an orphan / missing JS file fails the
     contract tests instead of being silently skipped.
     """
-    index_path = WEBVIEW_UI_DIR / "index.html"
+    index_path = WEBVIEW_UI_DIR / "index_fd_work_v5.html"
     source = index_path.read_text(encoding="utf-8")
     return _SCRIPT_SRC_RE.findall(source)
 
@@ -55,11 +55,11 @@ ALL_JS_FILES: list[str] = _parse_js_load_order_from_index()
 # traceback text). JS modules are listed with their js/ prefix so
 # read_resource() resolves them via WEBVIEW_UI_DIR.
 FRONTEND_RESOURCE_FILES = (
-    ["index.html", "styles.css"]
+    ["index_fd_work_v5.html", "styles.css"]
     + ["js/" + name for name in ALL_JS_FILES]
 )
 NO_STORAGE_FILES = (
-    ["index.html"]
+    ["index_fd_work_v5.html"]
     + ["js/" + name for name in ALL_JS_FILES]
 )
 
@@ -81,7 +81,7 @@ BRIDGE_FILES = [
 def read_resource(filename: str) -> str:
     """Return the UTF-8 text of a bundled ``webview_ui`` resource.
 
-    Accepts top-level files (``index.html``, ``styles.css``) and js/
+    Accepts top-level files (``index_fd_work_v5.html``, ``styles.css``) and js/
     module paths (``js/core.js``).
     """
     return (WEBVIEW_UI_DIR / filename).read_text(encoding="utf-8")
@@ -96,7 +96,7 @@ def read_all_js() -> str:
     """Return the concatenated UTF-8 text of every ``js/`` module in load order.
 
     Concatenation preserves the IIFE-per-module structure and load order
-    parsed from ``index.html`` so function-body and substring contracts
+    parsed from the versioned index so function-body and substring contracts
     see the same logical source the browser would execute.
     """
     return "\n".join(read_js(name) for name in ALL_JS_FILES)
@@ -108,7 +108,7 @@ def read_rules_module_js() -> str:
     Project Rules logic spans six IIFE modules loaded in order:
       rules.js                (core load / refresh / wiring)
       rules_render.js         (render helpers)
-      rules_create_panel.js   (unified create/edit panel + advanced
+      rules_create_panel_v5.js (unified create/edit panel + advanced
                                 excluded-rules panel)
       rules_rule_actions.js   (created-rule backfill helper)
       rules_keyword_actions.js (keyword rule delete)
@@ -120,7 +120,7 @@ def read_rules_module_js() -> str:
     names = [
         "rules.js",
         "rules_render.js",
-        "rules_create_panel.js",
+        "rules_create_panel_v5.js",
         "rules_rule_actions.js",
         "rules_keyword_actions.js",
         "rules_folder_actions.js",

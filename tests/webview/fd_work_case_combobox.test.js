@@ -49,7 +49,7 @@ function harness({ enabled = true } = {}) {
     },
   };
   vm.createContext(context);
-  for (const file of ["fd_work.js", "rules_create_panel.js"]) {
+  for (const file of ["fd_work_v5.js", "rules_create_panel_v5.js"]) {
     vm.runInContext(
       fs.readFileSync(path.join(__dirname, "../../worktrace/webview_ui/js", file), "utf8"),
       context,

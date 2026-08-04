@@ -153,7 +153,7 @@ function privacyHarness() {
   App.stopHeartbeat = () => { App.heartbeatTimer = null; };
   let refreshCount = 0;
   App.refreshAll = () => { refreshCount += 1; return Promise.resolve(); };
-  // Stub the single idempotent startup entry owned by init.js. The privacy
+  // Stub the single idempotent startup entry owned by init_fd_work_v5.js. The privacy
   // gate (settings.js) delegates to this entry instead of calling refreshAll
   // directly, so the harness tracks it to verify the gate hands off to the
   // unique startup path rather than a second refresh path.
@@ -240,7 +240,7 @@ test("2. privacy confirmation success closes gate, continues via single startup 
   // The gate must hand off to the single idempotent startup entry, not a
   // second refreshAll path.
   assert.equal(startupContinues(), 1);
-  // The gate itself must NOT start a heartbeat; that is owned by init.js.
+  // The gate itself must NOT start a heartbeat; that is owned by init_fd_work_v5.js.
   assert.equal(heartbeatStarts(), 0, "gate must not start heartbeat directly");
 });
 
@@ -1609,7 +1609,7 @@ function rulesPanelHarness() {
       return Promise.resolve({ ok: true, project: { id: projectId, name, description, language } });
     },
   };
-  loadJs(context, "rules_create_panel.js");
+  loadJs(context, "rules_create_panel_v5.js");
   return { App, element, bridgeCalls };
 }
 
@@ -2233,14 +2233,14 @@ test("13m. page subtitle uses authoritative module names", () => {
   const fs = require("node:fs");
   const path = require("node:path");
   const html = fs.readFileSync(
-    path.join(__dirname, "../../worktrace/webview_ui/index.html"),
+    path.join(__dirname, "../../worktrace/webview_ui/index_fd_work_v5.html"),
     "utf8"
   );
-    assert.equal(html.includes("当前活动"), true, "index.html must include '当前活动'");
-    assert.equal(html.includes("最近记录"), true, "index.html must include '最近记录'");
+    assert.equal(html.includes("当前活动"), true, "index_fd_work_v5.html must include '当前活动'");
+    assert.equal(html.includes("最近记录"), true, "index_fd_work_v5.html must include '最近记录'");
     assert.equal(html.includes("当前活动和最近记录"), true, "Overview subtitle must use the final two-module wording");
     assert.equal(html.includes("待整理"), false, "Overview must not include a standalone attention section");
-    assert.equal(html.includes("最近活动"), false, "index.html must not use retired '最近活动' label");
+    assert.equal(html.includes("最近活动"), false, "index_fd_work_v5.html must not use retired '最近活动' label");
 });
 
 test("14. launch-at-login rollback is authoritative and switch mutations are independent", async () => {

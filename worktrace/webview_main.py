@@ -260,7 +260,7 @@ def main(*, background: bool = False) -> int:
             )
 
         bridge = WebViewBridge(services)
-        index_path = resource_path("index.html")
+        index_path = resource_path("index_fd_work_v5.html")
         initial_hidden = background and _background_start_allowed(
             services,
             startup_result,

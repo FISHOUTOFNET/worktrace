@@ -78,7 +78,7 @@ def test_rules_application_service_routes_to_lightweight_catalog(temp_db):
 def test_project_rules_source_has_no_total_duration():
     """Frontend source must not contain cumulative-duration artifacts."""
 
-    html = (ROOT / "worktrace/webview_ui/index.html").read_text(encoding="utf-8")
+    html = (ROOT / "worktrace/webview_ui/index_fd_work_v5.html").read_text(encoding="utf-8")
     rules_js = (ROOT / "worktrace/webview_ui/js/rules.js").read_text(encoding="utf-8")
     rules_render = (ROOT / "worktrace/webview_ui/js/rules_render.js").read_text(
         encoding="utf-8"
@@ -163,7 +163,7 @@ def test_custom_nonempty_date_range_passes_through():
 def test_statistics_html_uses_direct_dates_and_week_default():
     """Statistics exposes one direct date range with the week shortcut default."""
 
-    html = (ROOT / "worktrace/webview_ui/index.html").read_text(encoding="utf-8")
+    html = (ROOT / "worktrace/webview_ui/index_fd_work_v5.html").read_text(encoding="utf-8")
     assert 'id="statistics-range-mode"' not in html
     assert 'id="statistics-date-from"' in html
     assert 'id="statistics-date-to"' in html

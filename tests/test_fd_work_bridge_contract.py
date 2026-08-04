@@ -117,7 +117,7 @@ def test_frontend_bridge_contract_has_no_remote_payload_arguments():
         / "worktrace"
         / "webview_ui"
         / "js"
-        / "init.js"
+        / "init_fd_work_v5.js"
     ).read_text(encoding="utf-8")
     assert 'openFDWorkEntry: fixedBridgeMethod("open_fd_work_entry")' in source
     for forbidden in (

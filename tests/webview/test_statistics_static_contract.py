@@ -19,7 +19,7 @@ def source() -> str:
 
 
 def section() -> str:
-    index = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    index = (WEBVIEW_UI_DIR / "index_fd_work_v5.html").read_text(encoding="utf-8")
     return html_section_by_id(index, "page-statistics")
 
 
@@ -104,7 +104,7 @@ def test_draft_dates_apply_once_while_project_and_quick_ranges_query_immediately
     assert "start.getDay() + 6" in week
     assert 'type === "all"' in quick
     assert "beginStatisticsQuery(0)" in quick
-    buttons = func_body(read_js("init.js"), "initButtons")
+    buttons = func_body(read_js("init_fd_work_v5.js"), "initButtons")
     for name in ("today", "week", "month", "all"):
         assert f'App.applyStatisticsQuickRange("{name}")' in buttons
 
@@ -126,7 +126,7 @@ def test_statistics_styles_are_responsive_local_surfaces() -> None:
 
 def test_statistics_dates_reuse_timeline_native_date_control() -> None:
     html = section()
-    index = (WEBVIEW_UI_DIR / "index.html").read_text(encoding="utf-8")
+    index = (WEBVIEW_UI_DIR / "index_fd_work_v5.html").read_text(encoding="utf-8")
     styles = (WEBVIEW_UI_DIR / "styles.css").read_text(encoding="utf-8")
     date_inputs = re.findall(
         r'<input id="statistics-date-(?:from|to)" class="date-control" type="date"',

@@ -117,7 +117,7 @@ function harness() {
     },
   };
   vm.createContext(context);
-  for (const file of ["core.js", "init.js"]) {
+  for (const file of ["core.js", "init_fd_work_v5.js"]) {
     vm.runInContext(
       fs.readFileSync(path.join(__dirname, "../../worktrace/webview_ui/js", file), "utf8"),
       context,
@@ -281,7 +281,7 @@ test("page switches keep one application timer", () => {
 
 test("shipping JavaScript has one clock contract and no retired aliases", () => {
   const directory = path.join(__dirname, "../../worktrace/webview_ui/js");
-  const files = ["core.js", "init.js", "overview.js", "timeline.js"];
+  const files = ["core.js", "init_fd_work_v5.js", "overview.js", "timeline.js"];
   const source = files.map((file) => fs.readFileSync(path.join(directory, file), "utf8")).join("\n");
   const forbidden = [
     "duration_seconds_at_sample",
@@ -304,6 +304,6 @@ test("shipping JavaScript has one clock contract and no retired aliases", () => 
   for (const alias of forbidden) {
     assert.equal(source.includes(alias), false, `retired alias remains: ${alias}`);
   }
-  const initSource = fs.readFileSync(path.join(directory, "init.js"), "utf8");
+  const initSource = fs.readFileSync(path.join(directory, "init_fd_work_v5.js"), "utf8");
   assert.equal((initSource.match(/setInterval\s*\(/g) || []).length, 1);
 });
