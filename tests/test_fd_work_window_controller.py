@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import threading
 
 import pytest
+from webview.event import Event as PyWebViewEvent
 
 from worktrace.integrations.fd_work.window_controller import FDWorkWindowController
 from worktrace.integrations.fd_work.window_executor import FDWorkWindowExecutor
@@ -393,7 +394,7 @@ def test_stale_queued_foreground_mutation_cannot_touch_recreated_window():
     prepare.start()
     assert executor.wait_for_pending_count(1, timeout=1)
     first = webview.window
-    assert first.events.closing.fire() == [False]
+    assert first.events.closing.fire() == [True]
     first.events.closed.fire()
     command_release.set()
     blocker.join(timeout=1)
@@ -449,7 +450,9 @@ def test_closing_allows_native_close_and_never_runs_business_callback_inline():
     controller.prepare_session(True)
     window = webview.window
 
-    assert window.events.closing.fire() == [False]
+    native_closing = PyWebViewEvent(window, should_lock=True)
+    native_closing += window.events.closing.handlers[0]
+    assert native_closing.set() is False
     assert not callback_entered.is_set()
     assert delayed == []
 

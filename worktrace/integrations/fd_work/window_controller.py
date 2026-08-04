@@ -640,7 +640,7 @@ class FDWorkWindowController:
     def _on_closing(self, window: Any) -> bool:
         with self._lock:
             if self._shutdown or self._window is not window:
-                return False
+                return True
             self._navigation_generation += 1
             self._operation_generation += 1
             self._adapter_installed_generation = None
@@ -655,7 +655,7 @@ class FDWorkWindowController:
             self._login_watch_generation = None
             self._login_watch_deadline = None
             self._pending_close_generation = self._navigation_generation
-        return False
+        return True
 
     def _on_closed(self, window: Any) -> None:
         with self._lock:
