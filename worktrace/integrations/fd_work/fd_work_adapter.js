@@ -13,6 +13,7 @@
     var activeGeneration = 0;
     var activePickerContract = null;
     var pickerObserver = null;
+    var pickerSelectionRevision = 0;
     var lastPayload = null;
     var lastContract = null;
 
@@ -224,6 +225,7 @@
             ? "已选择案件，可以确认"
             : "请在 FD Work 原生案件框中选择一个联想结果";
         if (confirm) confirm.disabled = selected.ok !== true;
+        pickerSelectionRevision = selected.ok ? 1 : 0;
     }
 
     function helperApi() {
@@ -247,6 +249,7 @@
         cancel.textContent = "取消";
         toolbar._worktraceStatus = status;
         toolbar._worktraceConfirm = confirm;
+        toolbar._worktraceCancel = cancel;
         toolbar.appendChild(status);
         toolbar.appendChild(confirm);
         toolbar.appendChild(cancel);
@@ -258,16 +261,46 @@
                 return;
             }
             var api = helperApi();
-            if (api && typeof api.confirm_case_picker === "function") {
-                api.confirm_case_picker(String(contract.operation_nonce || ""), selected.label);
-            }
+            if (!api || typeof api.submit_case_picker_confirmation !== "function") return;
+            var input = caseInput(contract);
+            confirm.disabled = true;
+            cancel.disabled = true;
+            if (input) input.disabled = true;
+            Promise.resolve(api.submit_case_picker_confirmation(
+                String(contract.operation_nonce || ""),
+                selected.label,
+                pickerSelectionRevision
+            )).then(function (response) {
+                if (response && response.ok === true && response.accepted === true) return;
+                confirm.disabled = false;
+                cancel.disabled = false;
+                if (input) input.disabled = false;
+            }, function () {
+                confirm.disabled = false;
+                cancel.disabled = false;
+                if (input) input.disabled = false;
+            });
         });
         cancel.addEventListener("click", function () {
             if (activeMode !== "picker" || activePickerContract !== contract) return;
             var api = helperApi();
-            if (api && typeof api.cancel_case_picker === "function") {
-                api.cancel_case_picker(String(contract.operation_nonce || ""));
-            }
+            if (!api || typeof api.submit_case_picker_cancellation !== "function") return;
+            var input = caseInput(contract);
+            confirm.disabled = true;
+            cancel.disabled = true;
+            if (input) input.disabled = true;
+            Promise.resolve(api.submit_case_picker_cancellation(
+                String(contract.operation_nonce || "")
+            )).then(function (response) {
+                if (response && response.ok === true && response.accepted === true) return;
+                updatePickerToolbar();
+                cancel.disabled = false;
+                if (input) input.disabled = false;
+            }, function () {
+                updatePickerToolbar();
+                cancel.disabled = false;
+                if (input) input.disabled = false;
+            });
         });
         if (document.body && typeof document.body.insertBefore === "function") {
             document.body.insertBefore(toolbar, document.body.firstChild || null);
@@ -287,6 +320,7 @@
         activeMode = "picker";
         activeGeneration = Number(contract.operation_generation) || (activeGeneration + 1);
         activePickerContract = contract;
+        pickerSelectionRevision = 0;
         if (document.documentElement && document.documentElement.setAttribute) {
             document.documentElement.setAttribute(PICKER_ROOT_ATTRIBUTE, "true");
         }
@@ -327,6 +361,7 @@
         }
         removeNodesWithAttribute(HIDDEN_ATTRIBUTE);
         activePickerContract = null;
+        pickerSelectionRevision = 0;
         if (activeMode === "picker") activeMode = "none";
         return result(true);
     }
@@ -544,6 +579,7 @@
         clearPickerObserver();
         removeFillBlockingLayer();
         activePickerContract = null;
+        pickerSelectionRevision = 0;
         activeMode = "none";
     });
 

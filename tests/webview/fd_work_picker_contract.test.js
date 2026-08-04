@@ -9,8 +9,9 @@ const source = fs.readFileSync(
   "utf8"
 );
 
-function harness({ selectedLabel = "", inputValue = "" } = {}) {
+function harness({ selectedLabel = "", inputValue = "", bridgeResponse = { ok: true, accepted: true } } = {}) {
   const mutations = { focus: 0, click: 0, input: 0, change: 0, escape: 0, blur: 0 };
+  const bridgeCalls = [];
   const listeners = new Map();
   const attrs = new Map([["aria-controls", "case-list"]]);
   const selectionItem = {
@@ -110,7 +111,16 @@ function harness({ selectedLabel = "", inputValue = "" } = {}) {
       location: { href: "https://work.fangdalaw.com/Works/WorkHourList?picker=day" },
       getComputedStyle() { return { display: "block", visibility: "visible" }; },
       addEventListener(name, handler) { listeners.set(name, handler); },
-      pywebview: { api: { confirm_case_picker() {}, cancel_case_picker() {} } },
+      pywebview: { api: {
+        submit_case_picker_confirmation(...args) {
+          bridgeCalls.push(["confirm", ...args]);
+          return Promise.resolve(bridgeResponse);
+        },
+        submit_case_picker_cancellation(...args) {
+          bridgeCalls.push(["cancel", ...args]);
+          return Promise.resolve(bridgeResponse);
+        },
+      } },
     },
   };
   vm.createContext(context);
@@ -120,6 +130,8 @@ function harness({ selectedLabel = "", inputValue = "" } = {}) {
     input,
     popup,
     mutations,
+    bridgeCalls,
+    toolbar() { return nodesById.get("worktrace-fdwork-picker-toolbar"); },
     pagehide() { if (listeners.has("pagehide")) listeners.get("pagehide")(); },
     contract: {
       version: 5,
@@ -174,6 +186,35 @@ test("committed Ant selection is canonical and confirmable", () => {
     { ok: selected.ok, label: selected.label },
     { ok: true, label: "CASE A" }
   );
+});
+
+test("confirm submits proof asynchronously without a same-window read and stays disabled", async () => {
+  const h = harness({ selectedLabel: "CASE A", inputValue: "CASE A" });
+  await h.adapter.enterCasePicker(h.contract);
+  const toolbar = h.toolbar();
+  toolbar.children[1].click();
+  await Promise.resolve();
+
+  assert.deepEqual(h.bridgeCalls, [["confirm", "picker-nonce", "CASE A", 1]]);
+  assert.equal(toolbar.children[1].disabled, true);
+  assert.equal(toolbar.children[2].disabled, true);
+  assert.equal(h.input.disabled, true);
+});
+
+test("explicit bridge rejection restores picker interaction", async () => {
+  const h = harness({
+    selectedLabel: "CASE A",
+    inputValue: "CASE A",
+    bridgeResponse: { ok: false, error: "picker_superseded" },
+  });
+  await h.adapter.enterCasePicker(h.contract);
+  const toolbar = h.toolbar();
+  toolbar.children[1].click();
+  await Promise.resolve();
+
+  assert.equal(toolbar.children[1].disabled, false);
+  assert.equal(toolbar.children[2].disabled, false);
+  assert.equal(h.input.disabled, false);
 });
 
 test("leaving or canceling picker does not clear query or close popup", async () => {

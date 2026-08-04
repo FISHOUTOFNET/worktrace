@@ -15,13 +15,13 @@ class _Coordinator:
         self.confirm_calls = []
         self.cancel_calls = []
 
-    def confirm_case_picker(self, nonce, label):
-        self.confirm_calls.append((nonce, label))
-        return {"ok": True}
+    def submit_case_picker_confirmation(self, nonce, label, revision):
+        self.confirm_calls.append((nonce, label, revision))
+        return {"ok": True, "accepted": True}
 
-    def cancel_case_picker(self, nonce):
+    def submit_case_picker_cancellation(self, nonce):
         self.cancel_calls.append(nonce)
-        return {"ok": True}
+        return {"ok": True, "accepted": True}
 
 
 def test_helper_bridge_is_narrow_and_exposes_no_application_services():
@@ -30,35 +30,47 @@ def test_helper_bridge_is_narrow_and_exposes_no_application_services():
         for name, member in inspect.getmembers(FDWorkHelperBridge, inspect.isfunction)
         if not name.startswith("_")
     }
-    assert public == {"bind_coordinator", "confirm_case_picker", "cancel_case_picker"}
+    assert public == {
+        "bind_coordinator",
+        "submit_case_picker_confirmation",
+        "submit_case_picker_cancellation",
+    }
 
 
 def test_helper_bridge_normalizes_only_valid_label_and_forwards_no_page_data():
     coordinator = _Coordinator()
     bridge = FDWorkHelperBridge(coordinator)
 
-    assert bridge.confirm_case_picker("nonce-1", "\u3000CASE A\u00a0") == {"ok": True}
-    assert coordinator.confirm_calls == [("nonce-1", "CASE A")]
-    assert bridge.cancel_case_picker("nonce-1") == {"ok": True}
+    assert bridge.submit_case_picker_confirmation(
+        "nonce-1", "\u3000CASE A\u00a0", 3
+    ) == {"ok": True, "accepted": True}
+    assert coordinator.confirm_calls == [("nonce-1", "CASE A", 3)]
+    assert bridge.submit_case_picker_cancellation("nonce-1") == {
+        "ok": True,
+        "accepted": True,
+    }
     assert coordinator.cancel_calls == ["nonce-1"]
 
 
 @pytest.mark.parametrize(
-    ("nonce", "label"),
+    ("nonce", "label", "revision"),
     [
-        (None, "CASE A"),
-        ("", "CASE A"),
-        ("n" * 257, "CASE A"),
-        ("nonce", None),
-        ("nonce", ""),
-        ("nonce", "x" * 101),
+        (None, "CASE A", 1),
+        ("", "CASE A", 1),
+        ("n" * 257, "CASE A", 1),
+        ("nonce", None, 1),
+        ("nonce", "", 1),
+        ("nonce", "x" * 101, 1),
+        ("nonce", "CASE A", True),
+        ("nonce", "CASE A", 0),
+        ("nonce", "CASE A", 1_000_001),
     ],
 )
-def test_helper_bridge_rejects_invalid_nonce_or_label(nonce, label):
+def test_helper_bridge_rejects_invalid_nonce_label_or_revision(nonce, label, revision):
     coordinator = _Coordinator()
     bridge = FDWorkHelperBridge(coordinator)
 
-    assert bridge.confirm_case_picker(nonce, label) == {
+    assert bridge.submit_case_picker_confirmation(nonce, label, revision) == {
         "ok": False,
         "error": "invalid_picker_callback",
     }
@@ -67,6 +79,9 @@ def test_helper_bridge_rejects_invalid_nonce_or_label(nonce, label):
 
 def test_unbound_helper_bridge_fails_closed():
     bridge = FDWorkHelperBridge()
-    assert bridge.confirm_case_picker("nonce", "CASE A")["error"] == "picker_superseded"
-    assert bridge.cancel_case_picker("nonce")["error"] == "picker_superseded"
-
+    assert bridge.submit_case_picker_confirmation(
+        "nonce", "CASE A", 1
+    )["error"] == "picker_superseded"
+    assert bridge.submit_case_picker_cancellation(
+        "nonce"
+    )["error"] == "picker_superseded"

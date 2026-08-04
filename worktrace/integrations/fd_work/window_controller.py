@@ -140,6 +140,12 @@ class FDWorkWindowController:
         with self._lock:
             self._main_focus_callback = callback
 
+    def schedule_callback(self, callback: Callable[[], None]) -> bool:
+        try:
+            return self._schedule_after(0.0, callback) is not False
+        except Exception:
+            return False
+
     def get_status(self) -> dict[str, Any]:
         with self._lock:
             return self._status_locked()

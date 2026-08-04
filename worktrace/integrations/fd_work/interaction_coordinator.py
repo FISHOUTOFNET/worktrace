@@ -15,6 +15,7 @@ from .page_adapter import FDWorkPageAdapter
 class _WindowController(Protocol):
     def bind_status_callback(self, callback: Callable[[Mapping[str, Any]], None]) -> None: ...
     def bind_close_callback(self, callback: Callable[[int], None]) -> None: ...
+    def schedule_callback(self, callback: Callable[[], None]) -> bool: ...
     def get_status(self) -> Mapping[str, Any]: ...
     def prepare_session(self, show_login_if_required: bool = True) -> Mapping[str, Any]: ...
     def prepare_window_before_start(self, show_login_if_required: bool = False) -> Mapping[str, Any]: ...
@@ -71,6 +72,7 @@ class FDWorkInteractionCoordinator:
         self._active_request_id: str | None = None
         self._pending_picker_request_id: str | None = None
         self._current_window: Any | None = None
+        self._pending_picker_command: tuple[str, str, str, int, int] | None = None
         self._shutdown = False
         self._disabled = False
         window_controller.bind_status_callback(self._accept_controller_status)
@@ -176,69 +178,74 @@ class FDWorkInteractionCoordinator:
             }
         return self._activate_picker()
 
-    def confirm_case_picker(
+    def submit_case_picker_confirmation(
         self,
         operation_nonce: str,
         selected_label: str,
+        selection_revision: int,
+    ) -> dict[str, Any]:
+        canonical = normalize_case_label(selected_label)
+        if (
+            type(operation_nonce) is not str
+            or type(selected_label) is not str
+            or not canonical
+            or type(selection_revision) is not int
+            or selection_revision <= 0
+        ):
+            return {"ok": False, "error": "invalid_picker_callback"}
+        with self._lock:
+            if not self._picker_is_current_locked(operation_nonce):
+                return {"ok": False, "error": "picker_superseded"}
+            command = (
+                "confirm",
+                operation_nonce,
+                canonical,
+                selection_revision,
+                self._operation_generation,
+            )
+            if self._pending_picker_command is not None:
+                if self._pending_picker_command == command:
+                    return {"ok": True, "accepted": True}
+                return {"ok": False, "error": "picker_superseded"}
+            self._pending_picker_command = command
+        scheduled = self._controller.schedule_callback(
+            lambda: self._complete_submitted_picker_command(command)
+        )
+        if not scheduled:
+            with self._lock:
+                if self._pending_picker_command == command:
+                    self._pending_picker_command = None
+            return {"ok": False, "error": "executor_rejected"}
+        return {"ok": True, "accepted": True}
+
+    def submit_case_picker_cancellation(
+        self,
+        operation_nonce: str,
     ) -> dict[str, Any]:
         with self._lock:
             if not self._picker_is_current_locked(operation_nonce):
                 return {"ok": False, "error": "picker_superseded"}
-            window = self._current_window
-            contract = self._operation_contract_locked(self._picker_timeout_seconds)
-            request_id = self._active_request_id
-            navigation_generation = self._operation_navigation_generation
-        if window is None or request_id is None or navigation_generation is None:
-            return {"ok": False, "error": "picker_superseded"}
-        try:
-            selected = dict(self._page_adapter.read_selected_case(window, contract))
-        except Exception:
-            selected = {"ok": False, "error": "page_contract_changed"}
-        if selected.get("ok") is not True:
-            return {
-                "ok": False,
-                "error": str(selected.get("error") or "case_selection_required"),
-            }
-        canonical_selected = normalize_case_label(selected.get("label"))
-        canonical_callback = normalize_case_label(selected_label)
-        if not canonical_selected or canonical_selected != canonical_callback:
-            return {"ok": False, "error": "case_selection_mismatch"}
-        with self._lock:
-            if not self._picker_is_current_locked(operation_nonce):
+            command = (
+                "cancel",
+                operation_nonce,
+                "",
+                0,
+                self._operation_generation,
+            )
+            if self._pending_picker_command is not None:
+                if self._pending_picker_command == command:
+                    return {"ok": True, "accepted": True}
                 return {"ok": False, "error": "picker_superseded"}
-        try:
-            left = dict(self._page_adapter.leave_case_picker(window, contract))
-        except Exception:
-            left = {"ok": False, "error": "page_contract_changed"}
-        if left.get("ok") is not True:
-            return {"ok": False, "error": str(left.get("error") or "page_contract_changed")}
-        self._controller.hide_and_restore_main(
-            navigation_generation,
-            contract["operation_generation"],
-            lambda: self._picker_is_current(operation_nonce),
+            self._pending_picker_command = command
+        scheduled = self._controller.schedule_callback(
+            lambda: self._complete_submitted_picker_command(command)
         )
-        picker_result = {
-            "ok": True,
-            "request_id": request_id,
-            "operation_nonce": operation_nonce,
-            "navigation_generation": navigation_generation,
-            "label": canonical_selected,
-        }
-        with self._lock:
-            if not self._picker_is_current_locked(operation_nonce):
-                return {"ok": False, "error": "picker_superseded"}
-            self._clear_operation_locked()
-            public_status = self._status_locked()
-        self._emit_picker_result(picker_result)
-        self._emit_status(public_status)
-        return {"ok": True}
-
-    def cancel_case_picker(self, operation_nonce: str) -> dict[str, Any]:
-        with self._lock:
-            if not self._picker_is_current_locked(operation_nonce):
-                return {"ok": False, "error": "picker_superseded"}
-        self._cancel_current_picker("picker_canceled", restore_main=True)
-        return {"ok": True}
+        if not scheduled:
+            with self._lock:
+                if self._pending_picker_command == command:
+                    self._pending_picker_command = None
+            return {"ok": False, "error": "executor_rejected"}
+        return {"ok": True, "accepted": True}
 
     def open_entry(self, draft: FDWorkEntryDraft) -> dict[str, Any]:
         if not isinstance(draft, FDWorkEntryDraft):
@@ -352,6 +359,122 @@ class FDWorkInteractionCoordinator:
         if picker_result:
             self._emit_picker_result(picker_result)
         self._controller.shutdown()
+        self._emit_status(public_status)
+
+    def _complete_submitted_picker_command(
+        self,
+        command: tuple[str, str, str, int, int],
+    ) -> None:
+        kind, nonce, selected_label, selection_revision, operation_generation = command
+        with self._lock:
+            if (
+                self._pending_picker_command != command
+                or not self._operation_is_current_locked(
+                    "user_picker",
+                    nonce,
+                    operation_generation,
+                )
+            ):
+                return
+            self._pending_picker_command = None
+        if kind == "cancel":
+            self._cancel_current_picker("picker_canceled", restore_main=True)
+            return
+        with self._lock:
+            window = self._current_window
+            request_id = self._active_request_id
+            navigation_generation = self._operation_navigation_generation
+            contract = self._operation_contract_locked(self._picker_timeout_seconds)
+        if window is None or request_id is None or navigation_generation is None:
+            self._finish_submitted_picker_failure(
+                nonce,
+                operation_generation,
+                "picker_superseded",
+            )
+            return
+        try:
+            left = dict(self._page_adapter.leave_case_picker(window, contract))
+        except Exception:
+            left = {"ok": False, "error": "page_contract_changed"}
+        if left.get("ok") is not True:
+            self._finish_submitted_picker_failure(
+                nonce,
+                operation_generation,
+                str(left.get("error") or "page_contract_changed"),
+            )
+            return
+        self._controller.hide_and_restore_main(
+            navigation_generation,
+            operation_generation,
+            lambda: self._operation_is_current(
+                "user_picker",
+                nonce,
+                operation_generation,
+            ),
+        )
+        picker_result = {
+            "ok": True,
+            "request_id": request_id,
+            "operation_nonce": nonce,
+            "navigation_generation": navigation_generation,
+            "selection_revision": selection_revision,
+            "label": selected_label,
+        }
+        with self._lock:
+            if not self._operation_is_current_locked(
+                "user_picker",
+                nonce,
+                operation_generation,
+            ):
+                return
+            self._clear_operation_locked()
+            public_status = self._status_locked()
+        self._emit_picker_result(picker_result)
+        self._emit_status(public_status)
+
+    def _finish_submitted_picker_failure(
+        self,
+        nonce: str,
+        operation_generation: int,
+        error: str,
+    ) -> None:
+        with self._lock:
+            if not self._operation_is_current_locked(
+                "user_picker",
+                nonce,
+                operation_generation,
+            ):
+                return
+            request_id = self._active_request_id
+            navigation_generation = self._operation_navigation_generation
+        if navigation_generation is not None:
+            self._controller.hide_and_restore_main(
+                navigation_generation,
+                operation_generation,
+                lambda: self._operation_is_current(
+                    "user_picker",
+                    nonce,
+                    operation_generation,
+                ),
+            )
+        with self._lock:
+            if not self._operation_is_current_locked(
+                "user_picker",
+                nonce,
+                operation_generation,
+            ):
+                return
+            self._clear_operation_locked()
+            public_status = self._status_locked(error_code=error)
+        if request_id is not None:
+            self._emit_picker_result(
+                {
+                    "ok": False,
+                    "request_id": request_id,
+                    "operation_nonce": nonce,
+                    "error": error,
+                }
+            )
         self._emit_status(public_status)
 
     def _activate_picker(self) -> dict[str, Any]:
@@ -558,6 +681,7 @@ class FDWorkInteractionCoordinator:
         self._operation_deadline_ms = None
         self._active_request_id = request_id
         self._current_window = None
+        self._pending_picker_command = None
 
     def _clear_operation_locked(self) -> None:
         self._operation_generation += 1
@@ -568,6 +692,7 @@ class FDWorkInteractionCoordinator:
         self._active_request_id = None
         self._pending_picker_request_id = None
         self._current_window = None
+        self._pending_picker_command = None
 
     def _operation_contract_locked(self, timeout_seconds: float) -> dict[str, Any]:
         if self._operation_deadline_ms is None:

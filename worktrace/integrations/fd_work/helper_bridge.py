@@ -10,8 +10,16 @@ from .limits import FD_WORK_CASE_LABEL_MAX_LENGTH, FD_WORK_SELECTION_TOKEN_MAX_L
 
 
 class _Coordinator(Protocol):
-    def confirm_case_picker(self, operation_nonce: str, selected_label: str) -> dict[str, Any]: ...
-    def cancel_case_picker(self, operation_nonce: str) -> dict[str, Any]: ...
+    def submit_case_picker_confirmation(
+        self,
+        operation_nonce: str,
+        selected_label: str,
+        selection_revision: int,
+    ) -> dict[str, Any]: ...
+    def submit_case_picker_cancellation(
+        self,
+        operation_nonce: str,
+    ) -> dict[str, Any]: ...
 
 
 class FDWorkHelperBridge:
@@ -25,16 +33,20 @@ class FDWorkHelperBridge:
         with self._lock:
             self._coordinator = coordinator
 
-    def confirm_case_picker(
+    def submit_case_picker_confirmation(
         self,
         operation_nonce: object,
         selected_label: object,
+        selection_revision: object,
     ) -> dict[str, Any]:
         if (
             type(operation_nonce) is not str
             or not operation_nonce
             or len(operation_nonce) > FD_WORK_SELECTION_TOKEN_MAX_LENGTH
             or type(selected_label) is not str
+            or type(selection_revision) is not int
+            or selection_revision <= 0
+            or selection_revision > 1_000_000
         ):
             return {"ok": False, "error": "invalid_picker_callback"}
         canonical = normalize_case_label(selected_label)
@@ -44,9 +56,18 @@ class FDWorkHelperBridge:
             coordinator = self._coordinator
         if coordinator is None:
             return {"ok": False, "error": "picker_superseded"}
-        return dict(coordinator.confirm_case_picker(operation_nonce, canonical))
+        return dict(
+            coordinator.submit_case_picker_confirmation(
+                operation_nonce,
+                canonical,
+                selection_revision,
+            )
+        )
 
-    def cancel_case_picker(self, operation_nonce: object) -> dict[str, Any]:
+    def submit_case_picker_cancellation(
+        self,
+        operation_nonce: object,
+    ) -> dict[str, Any]:
         if (
             type(operation_nonce) is not str
             or not operation_nonce
@@ -57,7 +78,7 @@ class FDWorkHelperBridge:
             coordinator = self._coordinator
         if coordinator is None:
             return {"ok": False, "error": "picker_superseded"}
-        return dict(coordinator.cancel_case_picker(operation_nonce))
+        return dict(coordinator.submit_case_picker_cancellation(operation_nonce))
 
 
 __all__ = ["FDWorkHelperBridge"]

@@ -39,6 +39,7 @@ class _Controller:
         self._close_callback = None
         self.disable_calls = 0
         self.shutdown_calls = 0
+        self.scheduled = []
         self.status = {
             "session_state": "ready",
             "page_phase": "work_shell",
@@ -53,6 +54,13 @@ class _Controller:
 
     def bind_close_callback(self, callback):
         self._close_callback = callback
+
+    def schedule_callback(self, callback):
+        self.scheduled.append(callback)
+        return True
+
+    def run_scheduled(self):
+        self.scheduled.pop(0)()
 
     def get_status(self):
         return dict(self.status)
@@ -162,12 +170,13 @@ def test_explicit_picker_foregrounds_once_and_enters_user_owned_mode():
 
 
 def test_picker_and_fill_are_mutually_exclusive():
-    coordinator, _controller, adapter = _coordinator()
+    coordinator, controller, adapter = _coordinator()
     coordinator.open_case_picker("drawer-1")
 
     assert coordinator.open_entry(_draft())["error"] == "fd_work_busy"
 
-    coordinator.cancel_case_picker("picker-nonce")
+    coordinator.submit_case_picker_cancellation("picker-nonce")
+    controller.run_scheduled()
     adapter.block_fill = True
     outcome = {}
     worker = threading.Thread(
@@ -183,33 +192,42 @@ def test_picker_and_fill_are_mutually_exclusive():
     assert coordinator.get_status()["interaction_owner"] == "user_review"
 
 
-def test_confirm_requires_current_nonce_and_adapter_proven_selection():
+def test_confirmation_submission_is_async_and_uses_adapter_proof_without_reread():
     results = []
     coordinator, controller, adapter = _coordinator(results=results)
     coordinator.open_case_picker("drawer-1")
 
-    assert coordinator.confirm_case_picker("wrong", "CASE A")["error"] == "picker_superseded"
-    adapter.read_result = {"ok": False, "error": "case_selection_required"}
-    assert coordinator.confirm_case_picker("picker-nonce", "typed text")["error"] == "case_selection_required"
+    assert coordinator.submit_case_picker_confirmation(
+        "wrong", "CASE A", 1
+    )["error"] == "picker_superseded"
+    confirmed = coordinator.submit_case_picker_confirmation(
+        "picker-nonce", "CASE A", 2
+    )
+
+    assert confirmed == {"ok": True, "accepted": True}
     assert results == []
+    assert adapter.read_calls == []
+    assert adapter.leave_calls == []
+    assert controller.hide_calls == []
 
-    adapter.read_result = {"ok": True, "label": " CASE A "}
-    confirmed = coordinator.confirm_case_picker("picker-nonce", "CASE A")
+    controller.run_scheduled()
 
-    assert confirmed["ok"] is True
     assert results == [{
         "ok": True,
         "request_id": "drawer-1",
         "operation_nonce": "picker-nonce",
         "navigation_generation": 4,
+        "selection_revision": 2,
         "label": "CASE A",
     }]
+    assert adapter.read_calls == []
+    assert len(adapter.leave_calls) == 1
     assert controller.hide_calls == [(4, 1)]
     assert controller.main_focus_calls == 1
     assert coordinator.get_status()["interaction_owner"] == "none"
 
 
-def test_reproduces_confirm_bridge_same_window_javascript_exception():
+def test_helper_bridge_return_path_has_no_same_window_javascript_reentry():
     diagnostics = []
 
     class ReentrantWindow:
@@ -229,14 +247,17 @@ def test_reproduces_confirm_bridge_same_window_javascript_exception():
     )
     bridge = FDWorkHelperBridge(coordinator)
     assert coordinator.open_case_picker("drawer-1")["ok"] is True
+    before_submit = list(diagnostics)
 
     controller.window.bridge_active = True
-    result = bridge.confirm_case_picker("picker-nonce", "CASE A")
+    result = bridge.submit_case_picker_confirmation("picker-nonce", "CASE A", 1)
 
-    assert result == {"ok": False, "error": "page_contract_changed"}
-    assert diagnostics[-1]["action"] == "readSelectedCase"
-    assert diagnostics[-1]["internal_error_kind"] == "javascript_exception"
-    assert diagnostics[-1]["callback_executed"] is False
+    assert result == {"ok": True, "accepted": True}
+    assert diagnostics == before_submit
+    assert len(controller.scheduled) == 1
+    controller.window.bridge_active = False
+    controller.run_scheduled()
+    assert diagnostics[-1]["action"] == "leaveCasePicker"
 
 
 def test_cancel_and_helper_close_complete_pending_picker_without_deadlock():
@@ -246,7 +267,12 @@ def test_cancel_and_helper_close_complete_pending_picker_without_deadlock():
         nonces=["first", "second"],
     )
     coordinator.open_case_picker("drawer-1")
-    assert coordinator.cancel_case_picker("first")["ok"] is True
+    assert coordinator.submit_case_picker_cancellation("first") == {
+        "ok": True,
+        "accepted": True,
+    }
+    assert results == []
+    controller.run_scheduled()
     assert results[-1]["error"] == "picker_canceled"
     assert controller.main_focus_calls == 1
 
@@ -267,16 +293,22 @@ def test_navigation_disable_and_shutdown_supersede_stale_callbacks():
     )
     coordinator.open_case_picker("drawer-1")
     controller.publish(navigation_generation=5, session_state="probing", ready=False)
-    assert coordinator.confirm_case_picker("first", "CASE A")["error"] == "picker_superseded"
+    assert coordinator.submit_case_picker_confirmation(
+        "first", "CASE A", 1
+    )["error"] == "picker_superseded"
 
     controller.publish(session_state="ready", ready=True, page_phase="work_shell")
     coordinator.open_case_picker("drawer-2")
     coordinator.disable()
-    assert coordinator.confirm_case_picker("second", "CASE A")["error"] == "picker_superseded"
+    assert coordinator.submit_case_picker_confirmation(
+        "second", "CASE A", 1
+    )["error"] == "picker_superseded"
 
     coordinator.open_case_picker("drawer-3")
     coordinator.shutdown()
-    assert coordinator.confirm_case_picker("third", "CASE A")["error"] == "picker_superseded"
+    assert coordinator.submit_case_picker_confirmation(
+        "third", "CASE A", 1
+    )["error"] == "picker_superseded"
 
 
 def test_login_completion_resumes_pending_picker_with_fresh_operation_nonce():
