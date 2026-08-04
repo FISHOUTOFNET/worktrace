@@ -196,6 +196,9 @@ def test_adapter_install_and_actions_resolve_bounded_same_origin_work_shell_fram
     assert "JSON.stringify" in action_script
     assert "JSON.parse" in action_script
     assert "WorkTraceFDWorkAdapter.enterCasePicker" in action_script
+    assert "window.__worktrace_fdwork_action_result_v5=" in action_script
+    assert "target.__worktrace_fdwork_action_result_v5" in action_script
+    assert "delete target.__worktrace_fdwork_action_result_v5" in action_script
 
     adapter.await_stable_work_shell(window, _operation())
     asynchronous_script = window.calls[-1][0]

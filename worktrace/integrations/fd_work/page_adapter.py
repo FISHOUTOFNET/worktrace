@@ -95,6 +95,8 @@ function workTraceWorkShellWindow() {
 }
 """.strip()
 
+_FRAME_ACTION_RESULT_PROPERTY = "__worktrace_fdwork_action_result_v5"
+
 
 class FDWorkPageAdapter:
     """Versioned, fail-closed knowledge of the observed FD Work web UI."""
@@ -442,7 +444,7 @@ class FDWorkPageAdapter:
         else:
             arguments = ""
         frame_action_source = (
-            "JSON.stringify((function(){"
+            f"window.{_FRAME_ACTION_RESULT_PROPERTY}=JSON.stringify((function(){{"
             f"try{{return WorkTraceFDWorkAdapter.{action}({arguments});}}"
             "catch(_error){return {ok:false,error:'javascript_exception'};}"
             "})())"
@@ -473,11 +475,15 @@ class FDWorkPageAdapter:
         else:
             script = (
                 script_head
-                + f"try{{var serialized=target.eval({frame_action_json});"
+                + "var serialized;"
+                f"try{{target.eval({frame_action_json});"
+                f"serialized=target.{_FRAME_ACTION_RESULT_PROPERTY};}}"
+                "catch(_error){return {ok:false,error:'javascript_exception'};}"
+                f"finally{{try{{delete target.{_FRAME_ACTION_RESULT_PROPERTY};}}catch(_error){{}}}}"
                 "if(typeof serialized!=='string')"
                 "return {ok:false,error:'non_mapping_result'};"
-                "return JSON.parse(serialized);}}"
-                "catch(_error){return {ok:false,error:'javascript_exception'};}"
+                "try{return JSON.parse(serialized);}"
+                "catch(_error){return {ok:false,error:'non_mapping_result'};}"
                 "})()"
             )
         remaining_ms = float(contract.get("deadline_ms") or 5000)
