@@ -80,10 +80,12 @@ def test_page_phase_probe_has_no_interactive_handshake_or_dom_mutation():
     FDWorkPageAdapter().probe_page_phase(Window(), values.append)
     assert values == [{"phase": "work_shell"}]
     assert "work_shell" in scripts[0]
-    assert "document.querySelector('#basic_caseId')" in scripts[0]
+    assert "owner.querySelector('#basic_caseId')" in scripts[0]
     assert '#basic_caseId[role="combobox"]' not in scripts[0]
     assert '.ant-select[name="workhours/matter/selector"]' in scripts[0]
     assert "form.contains(matter)" in scripts[0]
+    assert "owner.querySelectorAll(\"iframe\")" in scripts[0]
+    assert "frame.contentDocument" in scripts[0]
     for safe_field in ("form_exists", "wrapper_exists", "role_matches"):
         assert safe_field in scripts[0]
     assert "work_interactive" not in scripts[0]
@@ -167,6 +169,26 @@ def test_adapter_source_is_cached_and_actions_do_not_reinject(monkeypatch):
     assert len(reads) == 1
     assert sum(len(script) > 10_000 for script, callback in window.calls if callback is None) == 2
     assert sum(callable(callback) for _script, callback in window.calls) == 2
+
+
+def test_adapter_install_and_actions_resolve_bounded_same_origin_work_shell_frame():
+    adapter = FDWorkPageAdapter()
+    window = _Window({"ok": True, "status": "picker_ready"})
+
+    assert adapter.install_adapter(window) == {"ok": True, "version": 5}
+    install_script = window.calls[-1][0]
+    assert "frame.contentWindow" in install_script
+    assert "target.eval" in install_script
+    assert "windows.length < 16" in install_script
+    assert "form#basic" in install_script
+    assert "#basic_caseId" in install_script
+
+    adapter.enter_case_picker(window, _operation())
+    action_script = window.calls[-1][0]
+    assert "target&&target.WorkTraceFDWorkAdapter" in action_script
+    assert "windows.length < 16" in action_script
+    assert "form#basic" in action_script
+    assert "#basic_caseId" in action_script
 
 
 def test_action_diagnostics_distinguish_javascript_exception_without_page_data():

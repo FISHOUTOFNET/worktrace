@@ -67,6 +67,10 @@ test("adapter contract v5 exposes picker and fill modes without inline search ha
   assert.equal(adapter.interactiveHandshake, undefined);
 });
 
+test("frame-hosted adapter uses the top-level pywebview bridge", () => {
+  assert.match(source, /window\.top[\s\S]*pywebview[\s\S]*\.api/);
+});
+
 test("date duration and narrative use native setters and verify readback", () => {
   const { adapter, fields, Input, Textarea } = fieldHarness();
   const date = new Input();

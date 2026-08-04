@@ -364,7 +364,12 @@
     }
 
     function helperApi() {
-        return window.pywebview && window.pywebview.api ? window.pywebview.api : null;
+        var bridgeWindow = window;
+        try {
+            if (window.top && window.top.pywebview) bridgeWindow = window.top;
+        } catch (_error) {}
+        return bridgeWindow.pywebview && bridgeWindow.pywebview.api
+            ? bridgeWindow.pywebview.api : null;
     }
 
     function makePickerToolbar(contract) {

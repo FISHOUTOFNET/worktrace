@@ -64,6 +64,38 @@ _ACTION_ERRORS = frozenset(
 )
 
 
+_WORK_SHELL_WINDOW_RESOLVER = r"""
+function workTraceWorkShellWindow() {
+  var windows = [window];
+  var cursor = 0;
+  while (cursor < windows.length && windows.length < 16) {
+    var owner = windows[cursor++];
+    try {
+      var frames = owner.document.querySelectorAll("iframe");
+      Array.prototype.forEach.call(frames, function(frame) {
+        if (windows.length >= 16) return;
+        try {
+          var child = frame.contentWindow;
+          if (child && windows.indexOf(child) < 0) windows.push(child);
+        } catch (_error) {}
+      });
+    } catch (_error) {}
+  }
+  for (var index = 0; index < windows.length; index += 1) {
+    try {
+      var candidate = windows[index];
+      var form = candidate.document.querySelector("form#basic");
+      var matter = candidate.document.querySelector("#basic_caseId");
+      var wrapper = matter && typeof matter.closest === "function"
+        ? matter.closest('.ant-select[name="workhours/matter/selector"]') : null;
+      if (form && matter && wrapper && form.contains(matter)) return candidate;
+    } catch (_error) {}
+  }
+  return null;
+}
+""".strip()
+
+
 class FDWorkPageAdapter:
     """Versioned, fail-closed knowledge of the observed FD Work web UI."""
 
@@ -180,13 +212,48 @@ class FDWorkPageAdapter:
     var rect = element.getBoundingClientRect ? element.getBoundingClientRect() : null;
     return !rect || (rect.width > 0 && rect.height > 0);
   }
+  function candidateDocuments() {
+    var documents = [document];
+    var cursor = 0;
+    while (cursor < documents.length && documents.length < 16) {
+      var owner = documents[cursor++];
+      var frames = owner.querySelectorAll("iframe");
+      Array.prototype.forEach.call(frames, function(frame) {
+        if (documents.length >= 16) return;
+        try {
+          var child = frame.contentDocument;
+          if (child && documents.indexOf(child) < 0) documents.push(child);
+        } catch (_error) {}
+      });
+    }
+    return documents;
+  }
+  function locateWorkShell(owner) {
+    var form = owner.querySelector('form#basic');
+    var matter = owner.querySelector('#basic_caseId');
+    var wrapper = matter && typeof matter.closest === "function"
+      ? matter.closest('.ant-select[name="workhours/matter/selector"]') : null;
+    return {
+      form: form,
+      matter: matter,
+      wrapper: wrapper,
+      owns_matter: !!(form && matter && form.contains(matter))
+    };
+  }
   var path = String(window.location.pathname || "").replace(/\/$/, "").toLowerCase() || "/";
   var bodyReady = !!(document.body && document.body.firstElementChild);
-  var form = document.querySelector('form#basic');
-  var matter = document.querySelector('#basic_caseId');
-  var wrapper = matter && typeof matter.closest === "function"
-    ? matter.closest('.ant-select[name="workhours/matter/selector"]') : null;
-  var formOwnsMatter = !!(form && matter && form.contains(matter));
+  var documents = candidateDocuments();
+  var shell = locateWorkShell(document);
+  documents.some(function(owner) {
+    var candidate = locateWorkShell(owner);
+    if (!candidate.owns_matter || !candidate.wrapper) return false;
+    shell = candidate;
+    return true;
+  });
+  var form = shell.form;
+  var matter = shell.matter;
+  var wrapper = shell.wrapper;
+  var formOwnsMatter = shell.owns_matter;
   var roleMatches = !!(matter && String(matter.getAttribute("role") || "").toLowerCase() === "combobox");
   var shellFacts = {
     body_exists: bodyReady,
@@ -222,13 +289,22 @@ class FDWorkPageAdapter:
 
     def install_adapter(self, window: Any) -> dict[str, Any]:
         try:
-            check = (
-                "\n;(function(){var a=window.WorkTraceFDWorkAdapter;"
+            source_json = json.dumps(self.adapter_source, ensure_ascii=True)
+            script = (
+                "(function(){"
+                f"{_WORK_SHELL_WINDOW_RESOLVER}"
+                "var target=workTraceWorkShellWindow();"
+                "if(!target)return {ok:false,error:'adapter_injection_failed'};"
+                "var a=target.WorkTraceFDWorkAdapter;"
+                f"if(!a||a.version!=={self.adapter_version}){{"
+                f"try{{target.eval({source_json});}}catch(_error){{"
+                "return {ok:false,error:'adapter_injection_failed'};}"
+                "a=target.WorkTraceFDWorkAdapter;}"
                 f"return a&&a.version==={self.adapter_version}"
                 f"?{{ok:true,version:{self.adapter_version}}}"
                 ":{ok:false,error:'adapter_injection_failed'};})()"
             )
-            value = window.evaluate_js(self.adapter_source + check)
+            value = window.evaluate_js(script)
         except Exception:
             return {"ok": False, "error": "adapter_injection_failed"}
         if isinstance(value, Mapping) and value.get("ok") is False:
@@ -363,7 +439,10 @@ class FDWorkPageAdapter:
         else:
             arguments = ""
         script = (
-            "(function(){var a=window.WorkTraceFDWorkAdapter;"
+            "(function(){"
+            f"{_WORK_SHELL_WINDOW_RESOLVER}"
+            "var target=workTraceWorkShellWindow();"
+            "var a=target&&target.WorkTraceFDWorkAdapter;"
             "if(!a)return {ok:false,error:'adapter_missing'};"
             f"if(a.version!=={self.adapter_version})"
             "return {ok:false,error:'adapter_version_mismatch'};"
