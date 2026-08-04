@@ -81,13 +81,6 @@ class FDWorkPageAdapter:
             "label": "工时描述",
         },
     }
-    ignored_field_contract = (
-        {"selector": "#basic_clientId", "label": "客户"},
-        {"selector": "#basic_employeeId", "label": "计时人员"},
-        {"selector": "#basic_nickName", "label": "暂代昵称"},
-        {"selector": "#basic_writtenLanguage", "label": "书写语言"},
-    )
-
     def __init__(
         self,
         *,
@@ -332,7 +325,6 @@ class FDWorkPageAdapter:
         payload.update(
             {
                 "fields": self.field_contract,
-                "ignored_fields": self.ignored_field_contract,
                 "native_actions": ("提交", "保存", "关闭"),
             }
         )

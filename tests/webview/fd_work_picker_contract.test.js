@@ -82,7 +82,8 @@ function harness({ selectedLabel = "", inputValue = "", bridgeResponse = { ok: t
   const document = {
     visibilityState: "visible",
     body: { firstElementChild: {}, appendChild(node) { if (node.id) nodesById.set(node.id, node); } },
-    documentElement: { setAttribute() {}, removeAttribute() {} },
+    head: { appendChild(node) { if (node.id) nodesById.set(node.id, node); return node; } },
+    documentElement: { setAttribute() {}, removeAttribute() {}, appendChild() {} },
     querySelector(selector) {
       if (selector === "#case") return input;
       if (selector === "#case-list") return popup;

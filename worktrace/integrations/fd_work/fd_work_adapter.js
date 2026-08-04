@@ -4,8 +4,7 @@
 
     var VERSION = 5;
     var PICKER_ROOT_ATTRIBUTE = "data-worktrace-fdwork-picker";
-    var COMPACT_ROOT_ATTRIBUTE = "data-worktrace-fdwork-compact";
-    var HIDDEN_ATTRIBUTE = "data-worktrace-fdwork-hidden";
+    var STYLE_ID = "worktrace-fdwork-style";
     var PICKER_TOOLBAR_ID = "worktrace-fdwork-picker-toolbar";
     var FILL_TOOLBAR_ID = "worktrace-fdwork-fill-toolbar";
     var FILL_BLOCKER_ID = "worktrace-fdwork-fill-blocker";
@@ -44,21 +43,27 @@
         return item && item.selector ? document.querySelector(item.selector) : null;
     }
 
-    function formItemFor(element) {
-        if (!element) return null;
-        if (typeof element.closest === "function") {
-            return element.closest(".ant-form-item, [role='group'], .form-group, .ant-select")
-                || element.parentElement;
-        }
-        return element.parentElement;
-    }
-
     function selectWrapperFor(input) {
         if (!input) return null;
         if (typeof input.closest === "function") {
-            return input.closest(".ant-select") || formItemFor(input) || input.parentElement;
+            return input.closest(".ant-select") || input.parentElement;
         }
-        return formItemFor(input) || input.parentElement;
+        return input.parentElement;
+    }
+
+    function ensureStyle() {
+        var existing = document.getElementById && document.getElementById(STYLE_ID);
+        if (existing) return existing;
+        var style = document.createElement("style");
+        style.id = STYLE_ID;
+        style.textContent = [
+            "#worktrace-fdwork-picker-toolbar,#worktrace-fdwork-fill-toolbar{position:fixed;right:24px;bottom:24px;z-index:1000;display:flex;align-items:center;gap:12px;max-width:calc(100vw - 48px);padding:12px 16px;border:1px solid #d9d9d9;border-radius:8px;background:#fff;box-shadow:0 6px 20px rgba(0,0,0,.18);font:14px/1.5 sans-serif}",
+            "#worktrace-fdwork-picker-toolbar button{min-width:72px;padding:4px 12px}",
+            "#worktrace-fdwork-fill-blocker{position:fixed;inset:0;z-index:2147483646;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,.82);font:16px/1.5 sans-serif}"
+        ].join("");
+        var owner = document.head || document.documentElement;
+        if (owner && typeof owner.appendChild === "function") owner.appendChild(style);
+        return style;
     }
 
     function popupForInput(input, contract) {
@@ -159,18 +164,7 @@
         }
     }
 
-    function removeNodesWithAttribute(attribute) {
-        Array.prototype.forEach.call(
-            document.querySelectorAll ? document.querySelectorAll("[" + attribute + "]") : [],
-            function (node) { if (node.removeAttribute) node.removeAttribute(attribute); }
-        );
-    }
-
-    function removeCompactMode() {
-        if (document.documentElement && document.documentElement.removeAttribute) {
-            document.documentElement.removeAttribute(COMPACT_ROOT_ATTRIBUTE);
-        }
-        removeNodesWithAttribute(HIDDEN_ATTRIBUTE);
+    function removeFillToolbar() {
         var toolbar = document.getElementById && document.getElementById(FILL_TOOLBAR_ID);
         if (toolbar && toolbar.remove) toolbar.remove();
         return result(true);
@@ -215,6 +209,49 @@
         return result(true, "", { label: selected.label });
     }
 
+    function rectanglesOverlap(left, right) {
+        return !!(left && right
+            && left.left < right.right && left.right > right.left
+            && left.top < right.bottom && left.bottom > right.top);
+    }
+
+    function positionPickerToolbar(toolbar, contract) {
+        if (!toolbar || typeof toolbar.getBoundingClientRect !== "function") return;
+        var toolbarRect = toolbar.getBoundingClientRect();
+        var width = Number(toolbarRect.width) || Number(toolbar.offsetWidth) || 360;
+        var height = Number(toolbarRect.height) || Number(toolbar.offsetHeight) || 64;
+        var gap = 16;
+        var blockers = [];
+        var input = caseInput(contract);
+        var popup = popupForInput(input, contract);
+        [input, popup].forEach(function (node) {
+            if (node && visible(node) && typeof node.getBoundingClientRect === "function") {
+                blockers.push(node.getBoundingClientRect());
+            }
+        });
+        var candidates = [
+            { left: Number(window.innerWidth) - width - gap, top: gap },
+            { left: Number(window.innerWidth) - width - gap, top: Number(window.innerHeight) - height - gap },
+            { left: gap, top: gap },
+            { left: gap, top: Number(window.innerHeight) - height - gap }
+        ];
+        var selected = candidates.find(function (candidate) {
+            var rect = {
+                left: candidate.left,
+                right: candidate.left + width,
+                top: candidate.top,
+                bottom: candidate.top + height
+            };
+            return candidate.left >= gap && candidate.top >= gap
+                && blockers.every(function (blocker) { return !rectanglesOverlap(rect, blocker); });
+        });
+        if (!selected) return;
+        toolbar.style.left = selected.left + "px";
+        toolbar.style.top = selected.top + "px";
+        toolbar.style.right = "auto";
+        toolbar.style.bottom = "auto";
+    }
+
     function updatePickerToolbar() {
         var toolbar = document.getElementById && document.getElementById(PICKER_TOOLBAR_ID);
         if (!toolbar || !activePickerContract) return;
@@ -226,6 +263,7 @@
             : "请在 FD Work 原生案件框中选择一个联想结果";
         if (confirm) confirm.disabled = selected.ok !== true;
         pickerSelectionRevision = selected.ok ? 1 : 0;
+        positionPickerToolbar(toolbar, activePickerContract);
     }
 
     function helperApi() {
@@ -233,6 +271,7 @@
     }
 
     function makePickerToolbar(contract) {
+        ensureStyle();
         var existing = document.getElementById && document.getElementById(PICKER_TOOLBAR_ID);
         if (existing) return existing;
         var toolbar = document.createElement("div");
@@ -307,6 +346,7 @@
         } else if (document.body && typeof document.body.appendChild === "function") {
             document.body.appendChild(toolbar);
         }
+        positionPickerToolbar(toolbar, contract);
         return toolbar;
     }
 
@@ -315,7 +355,7 @@
             return result(false, "page_contract_changed");
         }
         if (activeMode === "fill") return result(false, "fd_work_busy");
-        removeCompactMode();
+        removeFillToolbar();
         leaveCasePicker();
         activeMode = "picker";
         activeGeneration = Number(contract.operation_generation) || (activeGeneration + 1);
@@ -324,18 +364,11 @@
         if (document.documentElement && document.documentElement.setAttribute) {
             document.documentElement.setAttribute(PICKER_ROOT_ATTRIBUTE, "true");
         }
-        var form = contract.form_selector ? document.querySelector(contract.form_selector) : null;
         var input = caseInput(contract);
-        var keep = formItemFor(input);
-        if (form && typeof form.querySelectorAll === "function") {
-            Array.prototype.forEach.call(form.querySelectorAll(".ant-form-item"), function (item) {
-                if (item !== keep && item.setAttribute) item.setAttribute(HIDDEN_ATTRIBUTE, "true");
-            });
-        }
         makePickerToolbar(contract);
         clearPickerObserver();
         pickerObserver = new MutationObserver(updatePickerToolbar);
-        var observeRoot = form || (document.body || document.documentElement);
+        var observeRoot = document.body || document.documentElement;
         if (observeRoot) {
             pickerObserver.observe(observeRoot, {
                 childList: true,
@@ -359,7 +392,6 @@
         if (document.documentElement && document.documentElement.removeAttribute) {
             document.documentElement.removeAttribute(PICKER_ROOT_ATTRIBUTE);
         }
-        removeNodesWithAttribute(HIDDEN_ATTRIBUTE);
         activePickerContract = null;
         pickerSelectionRevision = 0;
         if (activeMode === "picker") activeMode = "none";
@@ -455,35 +487,8 @@
         return nativeSet(input, value);
     }
 
-    function ignoredRequiredFieldsReady(contract) {
-        return (contract.ignored_fields || []).every(function (definition) {
-            var input = document.querySelector(definition.selector);
-            if (!input) return true;
-            var item = formItemFor(input);
-            var required = input.getAttribute && input.getAttribute("aria-required") === "true";
-            if (!required && item && typeof item.querySelector === "function") {
-                required = !!item.querySelector(".ant-form-item-required, [aria-required='true']");
-            }
-            if (!required) return true;
-            var selected = item && typeof item.querySelector === "function"
-                ? item.querySelector(".ant-select-selection-item, [data-selected-value]")
-                : null;
-            return !!normalizeExactText(selected ? selected.textContent : input.value);
-        });
-    }
-
-    function installCompactMode(contract) {
-        if (!ignoredRequiredFieldsReady(contract)) {
-            removeCompactMode();
-            return result(false, "ignored_required_field_missing");
-        }
-        if (document.documentElement && document.documentElement.setAttribute) {
-            document.documentElement.setAttribute(COMPACT_ROOT_ATTRIBUTE, "true");
-        }
-        return result(true);
-    }
-
     function installFillBlockingLayer() {
+        ensureStyle();
         var existing = document.getElementById && document.getElementById(FILL_BLOCKER_ID);
         if (existing) return existing;
         var blocker = document.createElement("div");
@@ -501,6 +506,7 @@
     }
 
     function makeFillToolbar() {
+        ensureStyle();
         var existing = document.getElementById && document.getElementById(FILL_TOOLBAR_ID);
         if (existing) return existing;
         var toolbar = document.createElement("div");
@@ -535,7 +541,7 @@
         }
         if (activeMode === "picker") return result(false, "fd_work_busy");
         leaveCasePicker();
-        removeCompactMode();
+        removeFillToolbar();
         activeMode = "fill";
         activeGeneration = Number(contract.operation_generation) || (activeGeneration + 1);
         var generation = activeGeneration;
@@ -561,8 +567,6 @@
             }
             var verified = verifyEntry(payload, contract);
             if (!verified.ok) return verified;
-            var compact = installCompactMode(contract);
-            if (!compact.ok) return compact;
             makeFillToolbar();
             activeMode = "review";
             return result(true, "", { status: "filled" });

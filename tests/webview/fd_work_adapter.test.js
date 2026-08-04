@@ -137,3 +137,14 @@ test("pagehide invalidates generations and removes transient picker/fill state",
   assert.match(body, /removeFillBlockingLayer/);
   assert.match(body, /activeMode = "none"/);
 });
+
+test("picker keeps the native form intact and owns one idempotent style node", () => {
+  assert.doesNotMatch(source, /data-worktrace-fdwork-hidden|data-worktrace-fdwork-compact/);
+  assert.doesNotMatch(source, /querySelectorAll\(["']\.ant-form-item/);
+  assert.doesNotMatch(source, /ignoredRequiredFieldsReady|installCompactMode/);
+  assert.match(source, /worktrace-fdwork-style/);
+  assert.match(source, /getElementById\(STYLE_ID\)/);
+  assert.match(source, /positionPickerToolbar/);
+  assert.match(source, /rectanglesOverlap/);
+  assert.match(source, /#worktrace-fdwork-fill-blocker\{position:fixed;inset:0;/);
+});
