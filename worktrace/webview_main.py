@@ -136,12 +136,6 @@ def _bind_shell_events(window, shell: DesktopShellController) -> None:
     events.loaded += shell.handle_window_loaded
 
 
-def _defer_fd_work_callback(callback) -> None:
-    timer = threading.Timer(0.05, callback)
-    timer.daemon = True
-    timer.start()
-
-
 _RENDERER_UNAVAILABLE_MESSAGE = (
     "WorkTrace 无法使用 Microsoft Edge WebView2 renderer。"
     "请安装或修复 WebView2 Runtime 后重新打开应用。"
@@ -236,8 +230,6 @@ def main(*, background: bool = False) -> int:
             webview,
             page_adapter=fd_work_page_adapter,
             helper_bridge=fd_work_helper_bridge,
-            schedule=_defer_fd_work_callback,
-            gui_dispatcher=_defer_fd_work_callback,
         )
         fd_work_coordinator = FDWorkInteractionCoordinator(
             window_controller=fd_work_controller,

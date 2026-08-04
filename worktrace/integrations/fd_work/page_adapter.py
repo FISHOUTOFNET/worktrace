@@ -14,6 +14,7 @@ from urllib.parse import urlencode, urlparse, urlsplit, urlunsplit
 from .case_identity import normalize_case_label
 from .contracts import FDWorkEntryDraft
 from .limits import FD_WORK_ADAPTER_CONTRACT_VERSION, FD_WORK_CASE_LABEL_MAX_LENGTH
+from .window_executor import FDWorkWindowCommandResult
 
 
 class FDWorkPageType(Enum):
@@ -434,6 +435,33 @@ class FDWorkPageAdapter:
         completed = threading.Event()
         callback_result: list[Any] = []
         callback_executed = False
+
+        execute_window_js = getattr(window, "execute_window_js", None)
+        if callable(execute_window_js):
+            execution = execute_window_js(script, timeout=timeout_seconds)
+            if not isinstance(execution, FDWorkWindowCommandResult):
+                return None, "non_mapping_result", False, "none"
+            if execution.ok is not True:
+                error_kind = execution.error_kind or "executor_rejected"
+                if error_kind == "command_exception":
+                    error_kind = "javascript_exception"
+                public_error = (
+                    timeout_error if error_kind == "callback_timeout"
+                    else "page_contract_changed"
+                )
+                return (
+                    {"ok": False, "error": public_error},
+                    error_kind,
+                    execution.callback_executed,
+                    "none",
+                )
+            value = execution.value
+            return (
+                value,
+                None,
+                execution.callback_executed,
+                type(value).__name__ if value is not None else "none",
+            )
 
         def accept_result(value: Any) -> None:
             nonlocal callback_executed

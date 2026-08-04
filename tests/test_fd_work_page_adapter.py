@@ -7,6 +7,10 @@ import pytest
 
 from worktrace.integrations.fd_work.contracts import FDWorkEntryDraft
 from worktrace.integrations.fd_work.page_adapter import FDWorkPageAdapter, FDWorkPageType
+from worktrace.integrations.fd_work.window_executor import (
+    FDWorkExecutorWindow,
+    FDWorkWindowExecutor,
+)
 
 
 pytestmark = [pytest.mark.unit, pytest.mark.contract, pytest.mark.parallel_safe]
@@ -222,3 +226,23 @@ def test_action_diagnostics_distinguish_non_mapping_callback_result():
     assert diagnostics[0]["internal_error_kind"] == "non_mapping_result"
     assert diagnostics[0]["callback_executed"] is True
     assert diagnostics[0]["result_type"] == "str"
+
+
+def test_executor_javascript_exception_keeps_specific_internal_diagnostic():
+    diagnostics = []
+    executor = FDWorkWindowExecutor(name="fd-work-page-adapter-test")
+
+    class Window:
+        def evaluate_js(self, _script, callback=None):
+            del callback
+            raise RuntimeError("unsafe page exception text")
+
+    guarded = FDWorkExecutorWindow(Window(), executor, lambda: True)
+    result = FDWorkPageAdapter(
+        diagnostic_callback=diagnostics.append
+    ).enter_case_picker(guarded, _operation())
+
+    assert result == {"ok": False, "error": "page_contract_changed"}
+    assert diagnostics[0]["internal_error_kind"] == "javascript_exception"
+    assert "unsafe page exception text" not in repr(diagnostics)
+    executor.shutdown(timeout=1)

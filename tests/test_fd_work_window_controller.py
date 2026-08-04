@@ -6,13 +6,14 @@ import threading
 import pytest
 
 from worktrace.integrations.fd_work.window_controller import FDWorkWindowController
+from worktrace.integrations.fd_work.window_executor import FDWorkWindowExecutor
 
 
 pytestmark = [
-    pytest.mark.unit,
     pytest.mark.integration,
+    pytest.mark.collector_runtime,
     pytest.mark.contract,
-    pytest.mark.parallel_safe,
+    pytest.mark.serial,
 ]
 
 
@@ -126,7 +127,6 @@ def _controller(
     *,
     adapter=None,
     delayed=None,
-    dispatched=None,
     renderer_initialized=True,
     helper_bridge=None,
     close_results=None,
@@ -145,11 +145,6 @@ def _controller(
             (lambda delay, callback: delayed.append((delay, callback)))
             if delayed is not None
             else lambda _delay, _callback: None
-        ),
-        gui_dispatcher=(
-            (lambda callback: dispatched.append(callback))
-            if dispatched is not None
-            else lambda callback: callback()
         ),
         clock=clock or __import__("time").monotonic,
         **kwargs,
@@ -191,16 +186,12 @@ def test_passive_prestart_creates_one_hidden_window_with_narrow_helper_bridge():
     assert len(webview.window.events.closing.handlers) == 1
 
 
-def test_explicit_auth_show_restore_focus_runs_once_through_dispatcher():
-    dispatched = []
-    controller, webview, _adapter = _controller(dispatched=dispatched)
+def test_explicit_auth_show_restore_focus_runs_once_through_executor():
+    controller, webview, _adapter = _controller()
 
     result = controller.prepare_session(True)
 
     assert result["ok"] is True
-    assert webview.window.shown == 0
-    assert len(dispatched) == 1
-    dispatched.pop(0)()
     assert (webview.window.shown, webview.window.restored, webview.window.focused) == (1, 1, 1)
 
 
@@ -316,17 +307,41 @@ def test_picker_finish_hides_helper_then_restores_main_in_same_dispatch():
     assert actions == ["hide", "main"]
 
 
-def test_stale_dispatched_foreground_mutation_cannot_touch_recreated_window():
-    dispatched = []
-    controller, webview, _adapter = _controller(dispatched=dispatched)
-    controller.prepare_session(True)
+def test_stale_queued_foreground_mutation_cannot_touch_recreated_window():
+    executor = FDWorkWindowExecutor(name="fd-work-controller-stale-test")
+    command_started = threading.Event()
+    command_release = threading.Event()
+    blocker = threading.Thread(
+        target=lambda: executor.submit(
+            lambda done: (
+                command_started.set(),
+                command_release.wait(timeout=1),
+                done(True),
+            ),
+            lambda: True,
+            1,
+        )
+    )
+    blocker.start()
+    assert command_started.wait(timeout=1)
+    controller, webview, _adapter = _controller(window_executor=executor)
+    outcome = {}
+    prepare = threading.Thread(
+        target=lambda: outcome.setdefault("result", controller.prepare_session(True))
+    )
+    prepare.start()
+    assert executor.wait_for_pending_count(1, timeout=1)
     first = webview.window
     assert first.events.closing.fire() == [True]
     first.events.closed.fire()
-
-    dispatched.pop(0)()
+    command_release.set()
+    blocker.join(timeout=1)
+    prepare.join(timeout=1)
 
     assert (first.shown, first.restored, first.focused) == (0, 0, 0)
+    assert not blocker.is_alive()
+    assert not prepare.is_alive()
+    controller.shutdown()
 
 
 def test_close_callback_is_nonblocking_and_recreate_does_not_accumulate_handlers():
@@ -346,14 +361,11 @@ def test_close_callback_is_nonblocking_and_recreate_does_not_accumulate_handlers
     assert len(webview.calls) == 20
 
 
-def test_disable_and_shutdown_destroy_via_dispatcher_and_reject_future_open():
-    dispatched = []
-    controller, webview, _adapter = _controller(dispatched=dispatched)
+def test_disable_and_shutdown_destroy_via_executor_and_reject_future_open():
+    controller, webview, _adapter = _controller()
     controller.prepare_window_before_start(False)
     window = webview.window
     controller.disable()
-    assert window.destroyed == 0
-    dispatched.pop(0)()
     assert window.destroyed == 1
 
     controller.shutdown()

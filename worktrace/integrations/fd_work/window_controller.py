@@ -8,16 +8,16 @@ import time
 from typing import Any, Callable, Mapping
 
 from .page_adapter import FDWorkPageAdapter, FDWorkPagePhase
+from .window_executor import (
+    FDWorkCallbackScheduler,
+    FDWorkExecutorWindow,
+    FDWorkWindowCommandError,
+    FDWorkWindowExecutor,
+)
 
 
 def _run_now(callback: Callable[[], None]) -> None:
     callback()
-
-
-def _run_after(delay_seconds: float, callback: Callable[[], None]) -> None:
-    timer = threading.Timer(delay_seconds, callback)
-    timer.daemon = True
-    timer.start()
 
 
 _PHASE_VALUES = frozenset({"none", *(phase.value for phase in FDWorkPagePhase)})
@@ -68,8 +68,8 @@ class FDWorkWindowController:
         page_adapter: FDWorkPageAdapter | None = None,
         helper_bridge: Any | None = None,
         schedule: Callable[[Callable[[], None]], None] = _run_now,
-        gui_dispatcher: Callable[[Callable[[], None]], None] | None = None,
-        schedule_after: Callable[[float, Callable[[], None]], None] = _run_after,
+        schedule_after: Callable[[float, Callable[[], None]], None] | None = None,
+        window_executor: FDWorkWindowExecutor | None = None,
         status_callback: Callable[[Mapping[str, Any]], None] | None = None,
         passive_probe_timeout_seconds: float = 4.0,
         work_shell_timeout_seconds: float = 12.0,
@@ -82,8 +82,15 @@ class FDWorkWindowController:
         self._page_adapter = page_adapter or FDWorkPageAdapter()
         self._helper_bridge = helper_bridge
         self._schedule = schedule
-        self._gui_dispatcher = gui_dispatcher or schedule
-        self._schedule_after = schedule_after
+        self._callback_scheduler = (
+            FDWorkCallbackScheduler() if schedule_after is None else None
+        )
+        self._schedule_after = (
+            self._callback_scheduler.schedule
+            if self._callback_scheduler is not None
+            else schedule_after
+        )
+        self._window_executor = window_executor or FDWorkWindowExecutor()
         self._status_callback = status_callback or (lambda _status: None)
         self._passive_probe_timeout_seconds = max(
             0.1, float(passive_probe_timeout_seconds)
@@ -216,6 +223,9 @@ class FDWorkWindowController:
 
     def shutdown(self) -> None:
         self._stop("shutdown", shutdown=True)
+        if self._callback_scheduler is not None:
+            self._callback_scheduler.shutdown(timeout=2.0)
+        self._window_executor.shutdown(timeout=2.0)
 
     def _stop(self, state: str, *, shutdown: bool) -> None:
         with self._lock:
@@ -389,9 +399,15 @@ class FDWorkWindowController:
                 return
             deadline = self._probe_deadline or self._clock()
             explicit = self._explicit_activation
+            operation_generation = self._operation_generation
+        guarded_window = self._executor_window(
+            window,
+            generation,
+            operation_generation,
+        )
         try:
-            url = window.get_current_url()
-        except Exception:
+            url = guarded_window.get_current_url()
+        except FDWorkWindowCommandError:
             url = None
         if not self._page_adapter.navigation_allowed(url):
             self._set_page_error_if_current(window, generation, "navigation_blocked")
@@ -449,7 +465,7 @@ class FDWorkWindowController:
             self._log_event("fd_work_page_phase_changed", error_code=error)
 
         try:
-            self._page_adapter.probe_page_phase(window, accept_probe)
+            self._page_adapter.probe_page_phase(guarded_window, accept_probe)
         except Exception:
             accept_probe({"phase": "unknown"})
 
@@ -498,6 +514,12 @@ class FDWorkWindowController:
             ):
                 return
             deadline = self._login_watch_deadline or self._clock()
+            operation_generation = self._operation_generation
+        guarded_window = self._executor_window(
+            window,
+            generation,
+            operation_generation,
+        )
         if self._remaining(deadline) <= 0:
             with self._lock:
                 if self._navigation_is_current_locked(window, generation):
@@ -526,7 +548,7 @@ class FDWorkWindowController:
                 )
 
         try:
-            self._page_adapter.probe_page_phase(window, accept)
+            self._page_adapter.probe_page_phase(guarded_window, accept)
         except Exception:
             accept({"phase": "unknown"})
 
@@ -568,8 +590,14 @@ class FDWorkWindowController:
                 return {"ok": False, "error": "lookup_superseded"}
             if self._adapter_installed_generation == generation:
                 return {"ok": True}
+            operation_generation = self._operation_generation
+        guarded_window = self._executor_window(
+            window,
+            generation,
+            operation_generation,
+        )
         try:
-            result = dict(self._page_adapter.install_adapter(window))
+            result = dict(self._page_adapter.install_adapter(guarded_window))
         except Exception:
             result = {"ok": False, "error": "adapter_injection_failed"}
         with self._lock:
@@ -657,6 +685,7 @@ class FDWorkWindowController:
         with self._lock:
             window = self._window
             navigation_generation = self._navigation_generation
+            controller_operation_generation = self._operation_generation
             if self._shutdown or window is None:
                 return self._failure_locked("window_unavailable")
             if owner in {"user_picker", "automation_fill"} and self._session_state != "ready":
@@ -676,9 +705,15 @@ class FDWorkWindowController:
             external_guard=current,
         ):
             return {"ok": False, "error": "lookup_superseded"}
+        guarded_window = self._executor_window(
+            window,
+            navigation_generation,
+            controller_operation_generation,
+            external_guard=current,
+        )
         return {
             "ok": True,
-            "window": window,
+            "window": guarded_window,
             "navigation_generation": navigation_generation,
             "operation_generation": operation_generation,
         }
@@ -790,27 +825,40 @@ class FDWorkWindowController:
         mutation: Callable[[], None],
         guard: Callable[[], bool],
     ) -> bool:
-        completed = threading.Event()
-        outcome = {"ok": False}
+        def command(done: Callable[[Any], None]) -> None:
+            mutation()
+            done(True)
 
-        def dispatched() -> None:
-            if not guard():
-                completed.set()
-                return
-            try:
-                mutation()
-            except Exception:
-                completed.set()
-                return
-            outcome["ok"] = bool(guard())
-            completed.set()
+        result = self._window_executor.submit(command, guard, 2.0)
+        return bool(result.ok is True and result.value is True)
 
-        try:
-            self._gui_dispatcher(dispatched)
-        except Exception:
-            return False
-        completed.wait(timeout=2.0)
-        return bool(completed.is_set() and outcome["ok"])
+    def _executor_window(
+        self,
+        window: Any,
+        navigation_generation: int,
+        operation_generation: int,
+        *,
+        external_guard: Callable[[], bool] | None = None,
+    ) -> FDWorkExecutorWindow:
+        def guard() -> bool:
+            with self._lock:
+                current = bool(
+                    self._navigation_is_current_locked(
+                        window,
+                        navigation_generation,
+                    )
+                    and self._operation_generation == operation_generation
+                )
+            return bool(
+                current
+                and (external_guard is None or external_guard())
+            )
+
+        return FDWorkExecutorWindow(
+            window,
+            self._window_executor,
+            guard,
+        )
 
     def _navigation_is_current(self, window: Any, generation: int) -> bool:
         with self._lock:
