@@ -8,6 +8,7 @@
     var PICKER_TOOLBAR_ID = "worktrace-fdwork-picker-toolbar";
     var FILL_TOOLBAR_ID = "worktrace-fdwork-fill-toolbar";
     var FILL_BLOCKER_ID = "worktrace-fdwork-fill-blocker";
+    var ACTION_MESSAGE_CHANNEL = "worktrace-fdwork-action-v5";
     var activeMode = "none";
     var activeGeneration = 0;
     var activePickerContract = null;
@@ -22,6 +23,7 @@
     var pickerAcceptedClickSequence = 0;
     var lastPayload = null;
     var lastContract = null;
+    var actionQueue = Promise.resolve();
 
     function result(ok, error, extra) {
         return Object.assign({ ok: !!ok, error: error || "" }, extra || {});
@@ -699,7 +701,63 @@
         }
     }
 
+    function actionHandler(action) {
+        var handlers = {
+            awaitStableWorkShell: function (args) { return awaitStableWorkShell(args[0]); },
+            enterCasePicker: function (args) { return enterCasePicker(args[0]); },
+            leaveCasePicker: function () { return leaveCasePicker(); },
+            readSelectedCase: function (args) { return readSelectedCase(args[0]); },
+            fillEntry: function (args) { return fillEntry(args[0], args[1]); }
+        };
+        return Object.prototype.hasOwnProperty.call(handlers, action) ? handlers[action] : null;
+    }
+
+    function safeActionResult(value) {
+        if (!value || typeof value !== "object" || typeof value.ok !== "boolean") {
+            return { ok: false, error: "non_mapping_result" };
+        }
+        var safe = { ok: value.ok };
+        ["error", "status", "label", "document_visibility"].forEach(function (key) {
+            if (typeof value[key] === "string") safe[key] = value[key];
+        });
+        ["viewport_available", "input_exists", "input_interactive"].forEach(function (key) {
+            if (typeof value[key] === "boolean") safe[key] = value[key];
+        });
+        return safe;
+    }
+
+    function reportActionResult(command, value) {
+        var api = helperApi();
+        if (!api || typeof api.submit_adapter_action_result !== "function") return;
+        Promise.resolve(api.submit_adapter_action_result(
+            command.action_nonce,
+            command.action,
+            safeActionResult(value)
+        )).catch(function () {});
+    }
+
+    function handleActionMessage(event) {
+        if (!event || event.source !== window.top) return;
+        if (event.origin !== window.location.origin) return;
+        var command = event.data;
+        if (!command || command.channel !== ACTION_MESSAGE_CHANNEL || Number(command.version) !== VERSION) return;
+        if (typeof command.action_nonce !== "string" || !command.action_nonce || command.action_nonce.length > 256) return;
+        if (!Array.isArray(command.arguments) || command.arguments.length > 2) return;
+        var handler = actionHandler(command.action);
+        if (!handler) return;
+        actionQueue = actionQueue.then(function () {
+            return handler(command.arguments);
+        }).then(function (value) {
+            reportActionResult(command, value);
+        }, function () {
+            reportActionResult(command, { ok: false, error: "javascript_exception" });
+        });
+    }
+
+    window.addEventListener("message", handleActionMessage);
+
     window.addEventListener("pagehide", function () {
+        window.removeEventListener("message", handleActionMessage);
         activeGeneration += 1;
         clearPickerObserver();
         clearPickerListeners();
@@ -707,6 +765,7 @@
         activePickerContract = null;
         pickerSelectionRevision = 0;
         activeMode = "none";
+        try { delete window.WorkTraceFDWorkAdapter; } catch (_error) {}
     });
 
     window.WorkTraceFDWorkAdapter = Object.freeze({

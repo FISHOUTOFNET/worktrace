@@ -99,6 +99,7 @@ class _PageAdapter:
     def __post_init__(self):
         self.install_calls = []
         self.install_result = {"ok": True, "version": 5}
+        self.cancel_pending_calls = []
 
     def navigation_allowed(self, url):
         return str(url or "").startswith("https://work.fangdalaw.com/")
@@ -117,6 +118,9 @@ class _PageAdapter:
     def install_adapter(self, window):
         self.install_calls.append(window)
         return dict(self.install_result)
+
+    def cancel_pending_actions(self, error_kind):
+        self.cancel_pending_calls.append(error_kind)
 
 
 class _Clock:
@@ -191,6 +195,17 @@ def test_passive_prestart_creates_one_hidden_window_with_narrow_helper_bridge():
     assert kwargs["js_api"] is helper_bridge
     assert webview.window.shown == 0
     assert len(webview.window.events.closing.handlers) == 1
+
+
+def test_navigation_and_close_cancel_pending_adapter_message_results():
+    controller, webview, adapter = _controller(renderer_initialized=False)
+    controller.prepare_window_before_start(False)
+    window = webview.window
+
+    window.events.before_load.fire()
+    window.events.closing.fire()
+
+    assert adapter.cancel_pending_calls == ["navigation_changed", "window_closed"]
 
 
 def test_explicit_auth_show_restore_focus_runs_once_through_executor():

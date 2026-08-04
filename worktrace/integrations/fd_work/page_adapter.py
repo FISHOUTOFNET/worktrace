@@ -6,6 +6,7 @@ from enum import Enum
 import json
 import logging
 from pathlib import Path
+import secrets
 import threading
 import time
 from typing import Any, Callable, Mapping
@@ -95,7 +96,15 @@ function workTraceWorkShellWindow() {
 }
 """.strip()
 
-_FRAME_ACTION_RESULT_PROPERTY = "__worktrace_fdwork_action_result_v5"
+_ACTION_MESSAGE_CHANNEL = "worktrace-fdwork-action-v5"
+
+
+class _PendingAdapterAction:
+    def __init__(self, action: str) -> None:
+        self.action = action
+        self.event = threading.Event()
+        self.result: dict[str, Any] | None = None
+        self.received = False
 
 
 class FDWorkPageAdapter:
@@ -129,6 +138,7 @@ class FDWorkPageAdapter:
         adapter_asset_path: str | Path | None = None,
         diagnostic_callback: Callable[[Mapping[str, Any]], None] | None = None,
         clock: Callable[[], float] = time.monotonic,
+        nonce_factory: Callable[[], str] | None = None,
     ) -> None:
         self._adapter_asset_path = (
             Path(adapter_asset_path)
@@ -139,6 +149,9 @@ class FDWorkPageAdapter:
         self._source_lock = threading.Lock()
         self._diagnostic_callback = diagnostic_callback or self._log_action_diagnostic
         self._clock = clock
+        self._nonce_factory = nonce_factory or (lambda: secrets.token_urlsafe(24))
+        self._pending_action_lock = threading.Lock()
+        self._pending_actions: dict[str, _PendingAdapterAction] = {}
 
     @property
     def login_url(self) -> str:
@@ -322,7 +335,6 @@ class FDWorkPageAdapter:
             window,
             "awaitStableWorkShell",
             self._picker_contract(contract),
-            asynchronous=True,
             respect_operation_deadline=True,
         )
 
@@ -387,7 +399,6 @@ class FDWorkPageAdapter:
             "fillEntry",
             self._entry_contract(contract),
             payload=payload,
-            asynchronous=True,
             respect_operation_deadline=True,
         )
         if result_value.get("ok") is True and result_value.get("status") == "filled":
@@ -432,25 +443,33 @@ class FDWorkPageAdapter:
         *,
         payload: Mapping[str, Any] | None = None,
         takes_contract: bool = True,
-        asynchronous: bool = False,
         respect_operation_deadline: bool = False,
     ) -> dict[str, Any]:
-        contract_json = json.dumps(dict(contract), ensure_ascii=True, separators=(",", ":"))
+        arguments: list[dict[str, Any]] = []
         if payload is not None:
-            payload_json = json.dumps(dict(payload), ensure_ascii=True, separators=(",", ":"))
-            arguments = f"{payload_json},{contract_json}"
+            arguments.extend((dict(payload), dict(contract)))
         elif takes_contract:
-            arguments = contract_json
-        else:
-            arguments = ""
-        frame_action_source = (
-            f"window.{_FRAME_ACTION_RESULT_PROPERTY}=JSON.stringify((function(){{"
-            f"try{{return WorkTraceFDWorkAdapter.{action}({arguments});}}"
-            "catch(_error){return {ok:false,error:'javascript_exception'};}"
-            "})())"
+            arguments.append(dict(contract))
+        action_nonce = self._nonce_factory()
+        if not isinstance(action_nonce, str) or not action_nonce or len(action_nonce) > 256:
+            return {"ok": False, "error": "executor_rejected"}
+        pending = _PendingAdapterAction(action)
+        with self._pending_action_lock:
+            if action_nonce in self._pending_actions or len(self._pending_actions) >= 32:
+                return {"ok": False, "error": "executor_rejected"}
+            self._pending_actions[action_nonce] = pending
+        command_json = json.dumps(
+            {
+                "channel": _ACTION_MESSAGE_CHANNEL,
+                "version": self.adapter_version,
+                "action_nonce": action_nonce,
+                "action": action,
+                "arguments": arguments,
+            },
+            ensure_ascii=True,
+            separators=(",", ":"),
         )
-        frame_action_json = json.dumps(frame_action_source, ensure_ascii=True)
-        script_head = (
+        script = (
             "(function(){"
             f"{_WORK_SHELL_WINDOW_RESOLVER}"
             "var target=workTraceWorkShellWindow();"
@@ -460,32 +479,11 @@ class FDWorkPageAdapter:
             "return {ok:false,error:'adapter_version_mismatch'};"
             f"if(typeof a.{action}!==\"function\")"
             "return {ok:false,error:'adapter_version_mismatch'};"
+            f"try{{target.postMessage({command_json},target.location.origin);"
+            "return {ok:true,status:'dispatched'};}"
+            "catch(_error){return {ok:false,error:'javascript_exception'};}"
+            "})()"
         )
-        if asynchronous:
-            script = (
-                script_head
-                + "return new Promise(function(resolve){"
-                f"try{{var value=a.{action}({arguments});"
-                "target.Promise.resolve(value).then("
-                "function(result){resolve(result);},"
-                "function(){resolve({ok:false,error:'javascript_exception'});});"
-                "}catch(_error){resolve({ok:false,error:'javascript_exception'});}});"
-                "})()"
-            )
-        else:
-            script = (
-                script_head
-                + "var serialized;"
-                f"try{{target.eval({frame_action_json});"
-                f"serialized=target.{_FRAME_ACTION_RESULT_PROPERTY};}}"
-                "catch(_error){return {ok:false,error:'javascript_exception'};}"
-                f"finally{{try{{delete target.{_FRAME_ACTION_RESULT_PROPERTY};}}catch(_error){{}}}}"
-                "if(typeof serialized!=='string')"
-                "return {ok:false,error:'non_mapping_result'};"
-                "try{return JSON.parse(serialized);}"
-                "catch(_error){return {ok:false,error:'non_mapping_result'};}"
-                "})()"
-            )
         remaining_ms = float(contract.get("deadline_ms") or 5000)
         absolute_deadline = contract.get("operation_deadline_ms")
         if respect_operation_deadline and isinstance(absolute_deadline, (int, float)):
@@ -495,11 +493,42 @@ class FDWorkPageAdapter:
             )
         timeout_seconds = max(0.01, remaining_ms / 1000)
         started_at = self._clock()
-        value, internal_error_kind, callback_executed, result_type = self._evaluate_action(
-            window,
-            script,
-            timeout_seconds=timeout_seconds,
-        )
+        value: Any = None
+        internal_error_kind: str | None = None
+        callback_executed = False
+        result_type = "none"
+        try:
+            dispatch, dispatch_error, _dispatch_callback, _dispatch_type = self._evaluate_action(
+                window,
+                script,
+                timeout_seconds=timeout_seconds,
+            )
+            if dispatch_error is not None:
+                internal_error_kind = dispatch_error
+            elif not isinstance(dispatch, Mapping):
+                internal_error_kind = "non_mapping_result"
+            elif dispatch.get("ok") is not True or dispatch.get("status") != "dispatched":
+                returned_error = dispatch.get("error")
+                internal_error_kind = (
+                    returned_error
+                    if isinstance(returned_error, str) and returned_error in _ACTION_ERRORS
+                    else "dom_contract_changed"
+                )
+            else:
+                wait_timeout = max(
+                    0.0,
+                    timeout_seconds - max(0.0, self._clock() - started_at),
+                )
+                if wait_timeout <= 0 or not pending.event.wait(timeout=wait_timeout):
+                    internal_error_kind = "callback_timeout"
+                else:
+                    with self._pending_action_lock:
+                        value = pending.result
+                        callback_executed = pending.received
+                    result_type = type(value).__name__ if value is not None else "none"
+        finally:
+            with self._pending_action_lock:
+                self._pending_actions.pop(action_nonce, None)
         if internal_error_kind is None:
             if not isinstance(value, Mapping):
                 internal_error_kind = "non_mapping_result"
@@ -520,6 +549,32 @@ class FDWorkPageAdapter:
             elapsed_ms=max(0, int((self._clock() - started_at) * 1000)),
         )
         return self._validated_action_result(value, internal_error_kind)
+
+    def submit_adapter_action_result(
+        self,
+        action_nonce: str,
+        action: str,
+        result: Mapping[str, Any],
+    ) -> bool:
+        with self._pending_action_lock:
+            pending = self._pending_actions.get(action_nonce)
+            if pending is None or pending.action != action or pending.received:
+                return False
+            pending.result = dict(result)
+            pending.received = True
+            pending.event.set()
+            return True
+
+    def cancel_pending_actions(self, error_kind: str = "navigation_changed") -> None:
+        safe_error = error_kind if error_kind in _ACTION_ERRORS else "navigation_changed"
+        with self._pending_action_lock:
+            pending_actions = tuple(self._pending_actions.values())
+            for pending in pending_actions:
+                if pending.received:
+                    continue
+                pending.result = {"ok": False, "error": safe_error}
+                pending.received = True
+                pending.event.set()
 
     @staticmethod
     def _validated_action_result(
@@ -589,7 +644,9 @@ class FDWorkPageAdapter:
             completed.set()
 
         try:
-            window.evaluate_js(script, callback=accept_result)
+            returned = window.evaluate_js(script, callback=accept_result)
+            if returned is not True and returned is not None:
+                accept_result(returned)
         except TypeError:
             try:
                 value = window.evaluate_js(script)

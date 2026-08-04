@@ -225,7 +225,9 @@ def main(*, background: bool = False) -> int:
                 logging.debug("FD Work picker result delivery skipped")
 
         fd_work_page_adapter = FDWorkPageAdapter()
-        fd_work_helper_bridge = FDWorkHelperBridge()
+        fd_work_helper_bridge = FDWorkHelperBridge(
+            action_result_sink=fd_work_page_adapter
+        )
         fd_work_controller = FDWorkWindowController(
             webview,
             page_adapter=fd_work_page_adapter,

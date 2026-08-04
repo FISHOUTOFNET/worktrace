@@ -65,3 +65,11 @@ def test_persistent_webview_profile_stays_outside_backup_and_cookie_apis():
     assert "state.db" not in backup
     assert "get_cookies(" not in webview_main
     assert "get_cookies(" not in fd_work_sources
+
+
+def test_helper_bridge_binds_only_the_page_adapter_action_result_sink():
+    webview_main = (ROOT / "worktrace" / "webview_main.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "action_result_sink=fd_work_page_adapter" in webview_main

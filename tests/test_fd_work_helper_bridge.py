@@ -24,6 +24,15 @@ class _Coordinator:
         return {"ok": True, "accepted": True}
 
 
+class _ActionResultSink:
+    def __init__(self) -> None:
+        self.calls = []
+
+    def submit_adapter_action_result(self, nonce, action, result):
+        self.calls.append((nonce, action, result))
+        return True
+
+
 def test_helper_bridge_is_narrow_and_exposes_no_application_services():
     public = {
         name
@@ -32,9 +41,57 @@ def test_helper_bridge_is_narrow_and_exposes_no_application_services():
     }
     assert public == {
         "bind_coordinator",
+        "submit_adapter_action_result",
         "submit_case_picker_confirmation",
         "submit_case_picker_cancellation",
     }
+
+
+def test_adapter_action_result_bridge_only_validates_and_signals_bound_sink():
+    coordinator = _Coordinator()
+    sink = _ActionResultSink()
+    bridge = FDWorkHelperBridge(coordinator, action_result_sink=sink)
+
+    response = bridge.submit_adapter_action_result(
+        "action-nonce",
+        "enterCasePicker",
+        {"ok": True, "status": "picker_ready"},
+    )
+
+    assert response == {"ok": True, "accepted": True}
+    assert sink.calls == [
+        (
+            "action-nonce",
+            "enterCasePicker",
+            {"ok": True, "status": "picker_ready"},
+        )
+    ]
+    assert coordinator.confirm_calls == []
+    assert coordinator.cancel_calls == []
+
+
+@pytest.mark.parametrize(
+    ("nonce", "action", "result"),
+    [
+        (None, "enterCasePicker", {"ok": True}),
+        ("", "enterCasePicker", {"ok": True}),
+        ("n" * 257, "enterCasePicker", {"ok": True}),
+        ("nonce", "unknownAction", {"ok": True}),
+        ("nonce", "enterCasePicker", None),
+        ("nonce", "enterCasePicker", {"ok": "yes"}),
+        ("nonce", "enterCasePicker", {"ok": True, "status": "x" * 65}),
+        ("nonce", "readSelectedCase", {"ok": True, "label": "x" * 101}),
+    ],
+)
+def test_adapter_action_result_bridge_rejects_invalid_transport(nonce, action, result):
+    sink = _ActionResultSink()
+    bridge = FDWorkHelperBridge(action_result_sink=sink)
+
+    assert bridge.submit_adapter_action_result(nonce, action, result) == {
+        "ok": False,
+        "error": "invalid_adapter_callback",
+    }
+    assert sink.calls == []
 
 
 def test_helper_bridge_normalizes_only_valid_label_and_forwards_no_page_data():

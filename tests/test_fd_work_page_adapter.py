@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
+import threading
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
@@ -94,28 +96,38 @@ def test_page_phase_probe_has_no_interactive_handshake_or_dom_mutation():
 
 
 class _Window:
-    def __init__(self, action_result):
+    def __init__(self, adapter, action_result, *, dispatch_result=None):
+        self.adapter = adapter
         self.action_result = action_result
+        self.dispatch_result = dispatch_result or {"ok": True, "status": "dispatched"}
         self.calls = []
 
     def evaluate_js(self, script, callback=None):
         self.calls.append((script, callback))
         if callback is not None:
-            callback(self.action_result)
+            callback(self.dispatch_result)
+            nonce = re.search(r'"action_nonce":"([^"]+)"', script).group(1)
+            action = re.search(r'"action":"([^"]+)"', script).group(1)
+            if isinstance(self.action_result, dict):
+                self.adapter.submit_adapter_action_result(
+                    nonce,
+                    action,
+                    self.action_result,
+                )
             return None
         return {"ok": True, "version": 5}
 
 
 def test_picker_actions_use_small_v5_scripts_and_validate_selected_label():
     adapter = FDWorkPageAdapter()
-    window = _Window({"ok": True, "label": "\u3000CASE A\u00a0"})
+    window = _Window(adapter, {"ok": True, "label": "\u3000CASE A\u00a0"})
     assert adapter.install_adapter(window) == {"ok": True, "version": 5}
     assert adapter.read_selected_case(window, _operation()) == {"ok": True, "label": "CASE A"}
     script = window.calls[-1][0]
     assert "readSelectedCase" in script
-    assert '\\"version\\":5' in script
-    assert '\\"operation_nonce\\":\\"nonce\\"' in script
-    assert '\\"operation_deadline_ms\\":1893456000000' in script
+    assert '"version":5' in script
+    assert '"operation_nonce":"nonce"' in script
+    assert '"operation_deadline_ms":1893456000000' in script
     assert len(script) < 3000
 
 
@@ -130,14 +142,14 @@ def test_picker_actions_use_small_v5_scripts_and_validate_selected_label():
 )
 def test_picker_and_stable_actions_fail_closed(method, remote_result, expected_error):
     adapter = FDWorkPageAdapter()
-    value = getattr(adapter, method)(_Window(remote_result), _operation())
+    value = getattr(adapter, method)(_Window(adapter, remote_result), _operation())
     assert value["ok"] is False
     assert value["error"] == expected_error
 
 
 def test_fill_serializes_only_four_allowed_values_and_uses_v5_contract():
-    window = _Window({"ok": True, "status": "filled"})
     adapter = FDWorkPageAdapter()
+    window = _Window(adapter, {"ok": True, "status": "filled"})
 
     result = adapter.fill_entry(window, _draft(), contract=_operation())
 
@@ -161,7 +173,7 @@ def test_adapter_source_is_cached_and_actions_do_not_reinject(monkeypatch):
 
     monkeypatch.setattr(Path, "read_text", tracked)
     adapter = FDWorkPageAdapter()
-    window = _Window({"ok": True, "status": "stable"})
+    window = _Window(adapter, {"ok": True, "status": "stable"})
     adapter.install_adapter(window)
     adapter.install_adapter(window)
     adapter.await_stable_work_shell(window, _operation())
@@ -173,7 +185,7 @@ def test_adapter_source_is_cached_and_actions_do_not_reinject(monkeypatch):
 
 def test_adapter_install_and_actions_resolve_bounded_same_origin_work_shell_frame():
     adapter = FDWorkPageAdapter()
-    window = _Window({"ok": True, "status": "picker_ready"})
+    window = _Window(adapter, {"ok": True, "status": "picker_ready"})
 
     assert adapter.install_adapter(window) == {"ok": True, "version": 5}
     install_script = window.calls[-1][0]
@@ -189,22 +201,87 @@ def test_adapter_install_and_actions_resolve_bounded_same_origin_work_shell_fram
     assert "windows.length < 16" in action_script
     assert "form#basic" in action_script
     assert "#basic_caseId" in action_script
-    assert "return new Promise(function(resolve)" not in action_script
-    assert "target.Promise.resolve(value)" not in action_script
-    assert "return a.enterCasePicker" not in action_script
-    assert "target.eval" in action_script
-    assert "JSON.stringify" in action_script
-    assert "JSON.parse" in action_script
-    assert "WorkTraceFDWorkAdapter.enterCasePicker" in action_script
-    assert "window.__worktrace_fdwork_action_result_v5=" in action_script
-    assert "target.__worktrace_fdwork_action_result_v5" in action_script
-    assert "delete target.__worktrace_fdwork_action_result_v5" in action_script
+    assert "target.postMessage" in action_script
+    assert "worktrace-fdwork-action-v5" in action_script
+    assert "action_nonce" in action_script
+    assert '"action":"enterCasePicker"' in action_script
+    for forbidden in (
+        "return new Promise(function(resolve)",
+        "target.Promise.resolve(value)",
+        "return a.enterCasePicker",
+        "target.eval",
+        "__worktrace_fdwork_action_result_v5",
+    ):
+        assert forbidden not in action_script
 
     adapter.await_stable_work_shell(window, _operation())
     asynchronous_script = window.calls[-1][0]
-    assert "return new Promise(function(resolve)" in asynchronous_script
-    assert "target.Promise.resolve(value)" in asynchronous_script
-    assert "resolve({ok:false,error:'javascript_exception'})" in asynchronous_script
+    assert "target.postMessage" in asynchronous_script
+    assert '"action":"awaitStableWorkShell"' in asynchronous_script
+    assert "return new Promise(function(resolve)" not in asynchronous_script
+
+
+def test_post_message_action_waits_for_bridge_result_without_window_reentry():
+    dispatched = threading.Event()
+    result = {}
+    scripts = []
+    adapter = FDWorkPageAdapter(nonce_factory=lambda: "action-nonce")
+
+    class Window:
+        def evaluate_js(self, script, callback=None):
+            scripts.append(script)
+            callback({"ok": True, "status": "dispatched"})
+            dispatched.set()
+
+    worker = threading.Thread(
+        target=lambda: result.setdefault(
+            "value",
+            adapter.enter_case_picker(Window(), _operation()),
+        )
+    )
+    worker.start()
+    assert dispatched.wait(timeout=1)
+
+    assert adapter.submit_adapter_action_result(
+        "action-nonce",
+        "enterCasePicker",
+        {"ok": True, "status": "picker_ready"},
+    ) is True
+    worker.join(timeout=1)
+
+    assert not worker.is_alive()
+    assert result["value"] == {"ok": True, "status": "picker_ready"}
+    assert len(scripts) == 1
+
+
+def test_navigation_cancels_pending_action_and_late_bridge_result_is_discarded():
+    dispatched = threading.Event()
+    result = {}
+    adapter = FDWorkPageAdapter(nonce_factory=lambda: "action-nonce")
+
+    class Window:
+        def evaluate_js(self, _script, callback=None):
+            callback({"ok": True, "status": "dispatched"})
+            dispatched.set()
+
+    worker = threading.Thread(
+        target=lambda: result.setdefault(
+            "value",
+            adapter.enter_case_picker(Window(), _operation(timeout_seconds=1)),
+        )
+    )
+    worker.start()
+    assert dispatched.wait(timeout=1)
+    adapter.cancel_pending_actions("navigation_changed")
+    worker.join(timeout=1)
+
+    assert not worker.is_alive()
+    assert result["value"] == {"ok": False, "error": "navigation_changed"}
+    assert adapter.submit_adapter_action_result(
+        "action-nonce",
+        "enterCasePicker",
+        {"ok": True, "status": "picker_ready"},
+    ) is False
 
 
 def test_action_diagnostics_distinguish_javascript_exception_without_page_data():
@@ -239,19 +316,26 @@ def test_action_diagnostics_distinguish_javascript_exception_without_page_data()
 
 def test_action_diagnostics_distinguish_callback_timeout_and_ignore_stale_callback():
     diagnostics = []
-    callbacks = []
+    scripts = []
 
     class Window:
-        def evaluate_js(self, _script, callback=None):
-            callbacks.append(callback)
+        def evaluate_js(self, script, callback=None):
+            scripts.append(script)
+            callback({"ok": True, "status": "dispatched"})
 
     adapter = FDWorkPageAdapter(diagnostic_callback=diagnostics.append)
     operation = _operation(timeout_seconds=0.01, operation_deadline_ms=1)
 
     result = adapter.enter_case_picker(Window(), operation)
-    callbacks[0]({"ok": True, "status": "picker_ready", "label": "PRIVATE"})
+    nonce = re.search(r'"action_nonce":"([^"]+)"', scripts[0]).group(1)
+    accepted = adapter.submit_adapter_action_result(
+        nonce,
+        "enterCasePicker",
+        {"ok": True, "status": "picker_ready", "label": "PRIVATE"},
+    )
 
     assert result == {"ok": False, "error": "callback_timeout"}
+    assert accepted is False
     assert len(diagnostics) == 1
     assert diagnostics[0]["internal_error_kind"] == "callback_timeout"
     assert diagnostics[0]["callback_executed"] is False
@@ -259,17 +343,17 @@ def test_action_diagnostics_distinguish_callback_timeout_and_ignore_stale_callba
     assert "PRIVATE" not in repr(diagnostics)
 
 
-def test_action_diagnostics_distinguish_non_mapping_callback_result():
+def test_action_diagnostics_distinguish_non_mapping_dispatch_result():
     diagnostics = []
     adapter = FDWorkPageAdapter(diagnostic_callback=diagnostics.append)
-    window = _Window("not-a-mapping")
+    window = _Window(adapter, None, dispatch_result="not-a-mapping")
 
     result = adapter.enter_case_picker(window, _operation())
 
     assert result == {"ok": False, "error": "non_mapping_result"}
     assert diagnostics[0]["internal_error_kind"] == "non_mapping_result"
-    assert diagnostics[0]["callback_executed"] is True
-    assert diagnostics[0]["result_type"] == "str"
+    assert diagnostics[0]["callback_executed"] is False
+    assert diagnostics[0]["result_type"] == "none"
 
 
 def test_executor_javascript_exception_keeps_specific_internal_diagnostic():

@@ -22,6 +22,8 @@ function fieldHarness() {
     set value(value) { this._value = String(value); }
   }
   const fields = new Map();
+  const windowListeners = new Map();
+  const actionResults = [];
   const context = {
     Promise, Object, String, Array,
     Event: class Event { constructor(type) { this.type = type; } },
@@ -47,14 +49,36 @@ function fieldHarness() {
     },
     window: {
       innerWidth: 980, innerHeight: 760,
-      location: { href: "https://work.fangdalaw.com/Works/WorkHourList?picker=day" },
+      location: {
+        href: "https://work.fangdalaw.com/Works/WorkHourList?picker=day",
+        origin: "https://work.fangdalaw.com",
+      },
       getComputedStyle() { return { display: "block", visibility: "visible" }; },
-      addEventListener() {},
+      addEventListener(name, callback) { windowListeners.set(name, callback); },
+      removeEventListener(name, callback) {
+        if (windowListeners.get(name) === callback) windowListeners.delete(name);
+      },
+      pywebview: { api: {
+        submit_adapter_action_result(nonce, action, result) {
+          actionResults.push({ nonce, action, result });
+          return Promise.resolve({ ok: true, accepted: true });
+        },
+      } },
     },
   };
+  context.window.top = context.window;
   vm.createContext(context);
   vm.runInContext(source, context, { filename: "fd_work_adapter.js" });
-  return { adapter: context.window.WorkTraceFDWorkAdapter, fields, Input, Textarea };
+  return {
+    adapter: context.window.WorkTraceFDWorkAdapter,
+    fields,
+    Input,
+    Textarea,
+    window: context.window,
+    windowListeners,
+    actionResults,
+    context,
+  };
 }
 
 test("adapter contract v5 exposes picker and fill modes without inline search handshake", () => {
@@ -84,6 +108,56 @@ test("picker entry is a synchronous DOM installation result", () => {
 
 test("frame-hosted adapter uses the top-level pywebview bridge", () => {
   assert.match(source, /window\.top[\s\S]*pywebview[\s\S]*\.api/);
+});
+
+test("frame action messages execute a whitelist locally and report through the bridge", () => {
+  assert.match(source, /worktrace-fdwork-action-v5/);
+  assert.match(source, /window\.addEventListener\("message"/);
+  assert.match(source, /event\.source\s*!==\s*window\.top/);
+  assert.match(source, /event\.origin\s*!==\s*window\.location\.origin/);
+  assert.match(source, /submit_adapter_action_result/);
+  assert.match(source, /awaitStableWorkShell[\s\S]*enterCasePicker[\s\S]*leaveCasePicker[\s\S]*readSelectedCase[\s\S]*fillEntry/);
+});
+
+test("frame message dispatch returns picker readiness without cross-frame evaluation", async () => {
+  const { window, windowListeners, actionResults } = fieldHarness();
+  const listener = windowListeners.get("message");
+  assert.equal(typeof listener, "function");
+
+  listener({
+    source: window,
+    origin: window.location.origin,
+    data: {
+      channel: "worktrace-fdwork-action-v5",
+      version: 5,
+      action_nonce: "action-nonce",
+      action: "enterCasePicker",
+      arguments: [{
+        version: 5,
+        operation_nonce: "operation-nonce",
+        operation_generation: 2,
+        fields: { case_number: { selector: "#missing" } },
+      }],
+    },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(actionResults.length, 1);
+  assert.equal(actionResults[0].nonce, "action-nonce");
+  assert.equal(actionResults[0].action, "enterCasePicker");
+  assert.equal(actionResults[0].result.ok, true);
+  assert.equal(actionResults[0].result.status, "picker_ready");
+});
+
+test("adapter message listener is idempotent and removed on pagehide", () => {
+  const { context, windowListeners } = fieldHarness();
+  const originalMessageListener = windowListeners.get("message");
+  vm.runInContext(source, context, { filename: "fd_work_adapter.js" });
+  assert.equal(windowListeners.get("message"), originalMessageListener);
+
+  const pagehide = windowListeners.get("pagehide");
+  pagehide();
+  assert.equal(windowListeners.has("message"), false);
 });
 
 test("date duration and narrative use native setters and verify readback", () => {

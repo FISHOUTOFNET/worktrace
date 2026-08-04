@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 import threading
 
 import pytest
@@ -245,11 +246,20 @@ def test_helper_bridge_return_path_has_no_same_window_javascript_reentry():
 
     class ReentrantWindow:
         bridge_active = False
+        bridge = None
 
-        def evaluate_js(self, _script, callback=None):
+        def evaluate_js(self, script, callback=None):
             if self.bridge_active:
                 raise RuntimeError("same helper bridge stack re-entry")
-            callback({"ok": True, "status": "picker_ready"})
+            callback({"ok": True, "status": "dispatched"})
+            nonce = re.search(r'"action_nonce":"([^"]+)"', script).group(1)
+            action = re.search(r'"action":"([^"]+)"', script).group(1)
+            status = "picker_ready" if action == "enterCasePicker" else "left"
+            self.bridge.submit_adapter_action_result(
+                nonce,
+                action,
+                {"ok": True, "status": status},
+            )
 
     controller = _Controller()
     controller.window = ReentrantWindow()
@@ -258,7 +268,8 @@ def test_helper_bridge_return_path_has_no_same_window_javascript_reentry():
         controller=controller,
         adapter=adapter,
     )
-    bridge = FDWorkHelperBridge(coordinator)
+    bridge = FDWorkHelperBridge(coordinator, action_result_sink=adapter)
+    controller.window.bridge = bridge
     assert coordinator.open_case_picker("drawer-1")["ok"] is True
     before_submit = list(diagnostics)
 

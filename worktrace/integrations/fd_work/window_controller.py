@@ -260,6 +260,7 @@ class FDWorkWindowController:
             self._window = None
             self._window_visible = False
             status = self._status_locked()
+        self._cancel_pending_page_actions("window_closed" if shutdown else "navigation_changed")
         self._destroy_window(window)
         self._emit(status)
 
@@ -361,6 +362,7 @@ class FDWorkWindowController:
         with self._lock:
             if self._shutdown or self._window is not window:
                 return
+        self._cancel_pending_page_actions("navigation_changed")
         self._log_event("fd_work_before_load")
 
     def _on_loaded(self, window: Any) -> None:
@@ -655,6 +657,7 @@ class FDWorkWindowController:
             self._login_watch_generation = None
             self._login_watch_deadline = None
             self._pending_close_generation = self._navigation_generation
+        self._cancel_pending_page_actions("window_closed")
         return True
 
     def _on_closed(self, window: Any) -> None:
@@ -680,6 +683,11 @@ class FDWorkWindowController:
             status = self._status_locked()
         self._emit(status)
         self.schedule_callback(lambda: close_callback(generation))
+
+    def _cancel_pending_page_actions(self, error_kind: str) -> None:
+        callback = getattr(self._page_adapter, "cancel_pending_actions", None)
+        if callable(callback):
+            callback(error_kind)
 
     def _set_page_phase_error(
         self, window: Any, generation: int, phase: str, error: str

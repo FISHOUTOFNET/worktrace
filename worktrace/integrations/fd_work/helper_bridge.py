@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import threading
-from typing import Any, Protocol
+from typing import Any, Mapping, Protocol
 
 from .case_identity import normalize_case_label
 from .limits import FD_WORK_CASE_LABEL_MAX_LENGTH, FD_WORK_SELECTION_TOKEN_MAX_LENGTH
@@ -22,16 +22,126 @@ class _Coordinator(Protocol):
     ) -> dict[str, Any]: ...
 
 
-class FDWorkHelperBridge:
-    """Accept only picker completion/cancel; expose no application capability."""
+class _ActionResultSink(Protocol):
+    def submit_adapter_action_result(
+        self,
+        action_nonce: str,
+        action: str,
+        result: Mapping[str, Any],
+    ) -> bool: ...
 
-    def __init__(self, coordinator: _Coordinator | None = None) -> None:
+
+_ADAPTER_ACTIONS = frozenset(
+    {
+        "awaitStableWorkShell",
+        "enterCasePicker",
+        "leaveCasePicker",
+        "readSelectedCase",
+        "fillEntry",
+    }
+)
+_ADAPTER_RESULT_KEYS = frozenset(
+    {
+        "ok",
+        "error",
+        "status",
+        "label",
+        "document_visibility",
+        "viewport_available",
+        "input_exists",
+        "input_interactive",
+    }
+)
+
+
+class FDWorkHelperBridge:
+    """Validate helper callbacks and signal their narrow in-process owners."""
+
+    def __init__(
+        self,
+        coordinator: _Coordinator | None = None,
+        *,
+        action_result_sink: _ActionResultSink | None = None,
+    ) -> None:
         self._lock = threading.Lock()
         self._coordinator = coordinator
+        self._action_result_sink = action_result_sink
 
     def bind_coordinator(self, coordinator: _Coordinator | None) -> None:
         with self._lock:
             self._coordinator = coordinator
+
+    def submit_adapter_action_result(
+        self,
+        action_nonce: object,
+        action: object,
+        result: object,
+    ) -> dict[str, Any]:
+        normalized = self._validated_adapter_result(action_nonce, action, result)
+        if normalized is None:
+            return {"ok": False, "error": "invalid_adapter_callback"}
+        with self._lock:
+            sink = self._action_result_sink
+        if sink is None:
+            return {"ok": True, "accepted": False}
+        try:
+            accepted = sink.submit_adapter_action_result(
+                action_nonce,
+                action,
+                normalized,
+            )
+        except Exception:
+            accepted = False
+        return {"ok": True, "accepted": accepted is True}
+
+    @staticmethod
+    def _validated_adapter_result(
+        action_nonce: object,
+        action: object,
+        result: object,
+    ) -> dict[str, Any] | None:
+        if (
+            type(action_nonce) is not str
+            or not action_nonce
+            or len(action_nonce) > FD_WORK_SELECTION_TOKEN_MAX_LENGTH
+            or type(action) is not str
+            or action not in _ADAPTER_ACTIONS
+            or not isinstance(result, Mapping)
+            or set(result) - _ADAPTER_RESULT_KEYS
+            or type(result.get("ok")) is not bool
+        ):
+            return None
+        normalized = {"ok": result["ok"]}
+        error = result.get("error")
+        if error is not None:
+            if type(error) is not str or len(error) > 64:
+                return None
+            normalized["error"] = error
+        status = result.get("status")
+        if status is not None:
+            if type(status) is not str or len(status) > 64:
+                return None
+            normalized["status"] = status
+        label = result.get("label")
+        if label is not None:
+            if type(label) is not str:
+                return None
+            canonical = normalize_case_label(label)
+            if not canonical or len(canonical) > FD_WORK_CASE_LABEL_MAX_LENGTH:
+                return None
+            normalized["label"] = canonical
+        visibility = result.get("document_visibility")
+        if visibility is not None:
+            if type(visibility) is not str or len(visibility) > 16:
+                return None
+            normalized["document_visibility"] = visibility
+        for key in ("viewport_available", "input_exists", "input_interactive"):
+            value = result.get(key)
+            if value is not None:
+                if type(value) is not bool:
+                    return None
+                normalized[key] = value
+        return normalized
 
     def submit_case_picker_confirmation(
         self,
