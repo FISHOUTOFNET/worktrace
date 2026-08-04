@@ -180,3 +180,51 @@ def test_executor_window_routes_mutation_url_and_javascript_to_same_worker():
     assert evaluated.value == {"ok": True}
     assert threads == ["fd-work-test-window-proxy"] * 3
     executor.shutdown(timeout=1)
+
+
+def test_executor_window_accepts_pywebview_synchronous_javascript_result():
+    executor = FDWorkWindowExecutor(name="fd-work-test-sync-js")
+
+    class Window:
+        def evaluate_js(self, _script, callback=None):
+            assert callable(callback)
+            return {"phase": "work_shell", "input_exists": True}
+
+    guarded = FDWorkExecutorWindow(Window(), executor, lambda: True)
+    result = guarded.execute_window_js("probe", timeout=0.05)
+
+    assert result.ok is True
+    assert result.value == {"phase": "work_shell", "input_exists": True}
+    assert result.callback_executed is True
+    executor.shutdown(timeout=1)
+
+
+def test_executor_window_waits_for_callback_after_pywebview_promise_sentinel():
+    executor = FDWorkWindowExecutor(name="fd-work-test-promise-js")
+    evaluation_started = threading.Event()
+    callbacks = []
+    outcome = {}
+
+    class Window:
+        def evaluate_js(self, _script, callback=None):
+            callbacks.append(callback)
+            evaluation_started.set()
+            return True
+
+    guarded = FDWorkExecutorWindow(Window(), executor, lambda: True)
+    worker = threading.Thread(
+        target=lambda: outcome.setdefault(
+            "result", guarded.execute_window_js("promise", timeout=1)
+        )
+    )
+    worker.start()
+    assert evaluation_started.wait(timeout=1)
+    assert worker.is_alive()
+
+    callbacks[0]({"ok": True, "status": "picker_ready"})
+    worker.join(timeout=1)
+
+    assert not worker.is_alive()
+    assert outcome["result"].ok is True
+    assert outcome["result"].value == {"ok": True, "status": "picker_ready"}
+    executor.shutdown(timeout=1)

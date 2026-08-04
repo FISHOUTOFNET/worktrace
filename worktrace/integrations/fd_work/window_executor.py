@@ -258,10 +258,27 @@ class FDWorkExecutorWindow:
         timeout: float,
     ) -> FDWorkWindowCommandResult:
         def command(done: WindowCommandCallback) -> None:
+            completion_lock = threading.Lock()
+            completion_seen = False
+
+            def accept(value: Any) -> None:
+                nonlocal completion_seen
+                with completion_lock:
+                    if completion_seen:
+                        return
+                    completion_seen = True
+                done(value)
+
             try:
-                self._window.evaluate_js(script, callback=done)
+                returned = self._window.evaluate_js(script, callback=accept)
             except TypeError:
-                done(self._window.evaluate_js(script))
+                accept(self._window.evaluate_js(script))
+                return
+            # pywebview returns synchronous JavaScript values directly. For
+            # Promises it returns the boolean ``True`` sentinel and resolves
+            # the real value through ``callback`` later.
+            if returned is not True:
+                accept(returned)
 
         return self._executor.submit(command, self._guard, timeout)
 
