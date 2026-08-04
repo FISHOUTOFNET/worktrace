@@ -253,6 +253,44 @@ def test_passive_unknown_probe_uses_one_bounded_deadline():
     assert webview.window.shown == 0
 
 
+def test_probe_timeout_logs_only_safe_dom_contract_booleans(caplog):
+    delayed = []
+    clock = _Clock()
+    adapter = _PageAdapter()
+
+    def probe_page_phase(_window, callback):
+        callback({
+            "phase": "unknown",
+            "input_exists": True,
+            "form_exists": True,
+            "wrapper_exists": False,
+            "role_matches": False,
+        })
+
+    adapter.probe_page_phase = probe_page_phase
+    controller, _webview, _adapter = _controller(
+        adapter=adapter,
+        delayed=delayed,
+        renderer_initialized=False,
+        passive_probe_timeout_seconds=0.2,
+        probe_interval_seconds=0.1,
+        clock=clock,
+    )
+    caplog.set_level("INFO")
+    controller.prepare_window_before_start(False)
+    controller.on_renderer_initialized("edgechromium")
+
+    while delayed:
+        _run_next(delayed, clock)
+
+    messages = [record.getMessage() for record in caplog.records]
+    timeout = next(message for message in messages if "session_probe_inconclusive" in message)
+    assert "input_exists=True" in timeout
+    assert "form_exists=True" in timeout
+    assert "wrapper_exists=False" in timeout
+    assert "role_matches=False" in timeout
+
+
 def test_controller_ready_status_does_not_claim_login_visibility_ownership():
     observed = []
     controller, webview, adapter = _controller(delayed=[])

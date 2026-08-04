@@ -183,8 +183,19 @@ class FDWorkPageAdapter:
   var path = String(window.location.pathname || "").replace(/\/$/, "").toLowerCase() || "/";
   var bodyReady = !!(document.body && document.body.firstElementChild);
   var form = document.querySelector('form#basic');
-  var matter = document.querySelector('#basic_caseId[role="combobox"]');
-  if (form && matter) return {phase:"work_shell", body_exists:bodyReady, input_exists:true};
+  var matter = document.querySelector('#basic_caseId');
+  var wrapper = matter && typeof matter.closest === "function"
+    ? matter.closest('.ant-select[name="workhours/matter/selector"]') : null;
+  var formOwnsMatter = !!(form && matter && form.contains(matter));
+  var roleMatches = !!(matter && String(matter.getAttribute("role") || "").toLowerCase() === "combobox");
+  var shellFacts = {
+    body_exists: bodyReady,
+    input_exists: !!matter,
+    form_exists: !!form,
+    wrapper_exists: !!wrapper,
+    role_matches: roleMatches
+  };
+  if (formOwnsMatter && wrapper) return Object.assign({phase:"work_shell"}, shellFacts);
   if (path === "/login") {
     var account = Array.prototype.find.call(
       document.querySelectorAll('input:not([type="password"]):not([type="hidden"]):not([type="checkbox"])'),
@@ -204,7 +215,7 @@ class FDWorkPageAdapter:
   if (["/404","/error","/500"].indexOf(path) >= 0) {
     return {phase:"error", body_exists:bodyReady};
   }
-  return {phase:"unknown", body_exists:bodyReady, input_exists:!!matter};
+  return Object.assign({phase:"unknown"}, shellFacts);
 })()
 """.strip()
         callback(window.evaluate_js(script))

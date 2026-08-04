@@ -48,6 +48,9 @@ _SAFE_DIAGNOSTIC_FIELDS = frozenset(
         "viewport_available",
         "input_exists",
         "input_interactive",
+        "form_exists",
+        "wrapper_exists",
+        "role_matches",
         "popup_exists",
         "popup_interactive",
         "loading_observed",
@@ -433,6 +436,16 @@ class FDWorkWindowController:
                 if not self._navigation_is_current_locked(window, generation):
                     return
             phase = str(value.get("phase") if isinstance(value, Mapping) else "unknown")
+            safe_probe_fields = {
+                key: value[key]
+                for key in (
+                    "input_exists",
+                    "form_exists",
+                    "wrapper_exists",
+                    "role_matches",
+                )
+                if isinstance(value, Mapping) and type(value.get(key)) is bool
+            }
             if phase in {
                 FDWorkPagePhase.LOGIN_CREDENTIALS.value,
                 FDWorkPagePhase.LOGIN_CONFIRMATION.value,
@@ -469,7 +482,11 @@ class FDWorkWindowController:
                 self._probe_generation = None
                 status = self._status_locked()
             self._emit(status)
-            self._log_event("fd_work_page_phase_changed", error_code=error)
+            self._log_event(
+                "fd_work_page_phase_changed",
+                error_code=error,
+                **safe_probe_fields,
+            )
 
         try:
             self._page_adapter.probe_page_phase(guarded_window, accept_probe)

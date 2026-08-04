@@ -80,6 +80,12 @@ def test_page_phase_probe_has_no_interactive_handshake_or_dom_mutation():
     FDWorkPageAdapter().probe_page_phase(Window(), values.append)
     assert values == [{"phase": "work_shell"}]
     assert "work_shell" in scripts[0]
+    assert "document.querySelector('#basic_caseId')" in scripts[0]
+    assert '#basic_caseId[role="combobox"]' not in scripts[0]
+    assert '.ant-select[name="workhours/matter/selector"]' in scripts[0]
+    assert "form.contains(matter)" in scripts[0]
+    for safe_field in ("form_exists", "wrapper_exists", "role_matches"):
+        assert safe_field in scripts[0]
     assert "work_interactive" not in scripts[0]
     for forbidden in (".focus(", ".click(", "KeyboardEvent", ".blur("):
         assert forbidden not in scripts[0]
