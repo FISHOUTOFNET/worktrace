@@ -62,7 +62,12 @@ function harness({ enabled = true } = {}) {
     rerenderProjectRulesList() {},
     openManagedDrawer(panel) { panel.hidden = false; },
     closeManagedDrawer(panel) { panel.hidden = true; },
-    loadProjectRules: () => Promise.resolve(),
+    loadProjectRules: () => Promise.resolve({
+      projects: [
+        { id: 9, name: "CASE A", fd_work_bound: true },
+        { id: 7, name: "CASE A", fd_work_bound: true },
+      ],
+    }),
     showToast() {},
     lastProjectRulesData: { projects: [] },
   });
@@ -74,11 +79,11 @@ function harness({ enabled = true } = {}) {
     },
     createProjectForRules(...args) {
       calls.create.push(args);
-      return Promise.resolve({ ok: true, project: { id: 9, name: args[0] }, fd_work_binding: { bound: !!args[3] } });
+      return Promise.resolve({ ok: true, project: { id: 9, name: args[0] }, fd_work_binding: { bound: !!args[3], verified: !!args[3] } });
     },
     updateProjectForRules(...args) {
       calls.update.push(args);
-      return Promise.resolve({ ok: true, project: { id: args[0], name: args[1] }, fd_work_binding: { bound: true } });
+      return Promise.resolve({ ok: true, project: { id: args[0], name: args[1] }, fd_work_binding: { bound: true, verified: !!args[4] } });
     },
     clearFDWorkBindingForRules(projectId) {
       calls.clear.push(projectId);
@@ -180,6 +185,33 @@ test("manual display-label tampering cannot be saved", async () => {
 
   assert.deepEqual(calls.create, []);
   assert.match(element("rules-panel-status").textContent, /重新选择/);
+});
+
+test("FD Work create success waits for verified binding and project-list readback", async () => {
+  const { App, element } = harness();
+  App.openRulesPanel("project", {});
+  element("rules-panel-fd-work-pick").fire("click");
+  await tick();
+  App.receiveFDWorkCasePickerResult({
+    ok: true,
+    request_id: App.rulesFDWorkPickerRequestId,
+    selected_label: "CASE A",
+    selection_token: "token-a",
+  });
+  App.bridge.createProjectForRules = () => Promise.resolve({
+    ok: true,
+    project: { id: 9, name: "CASE A" },
+    fd_work_binding: { bound: true, verified: false },
+  });
+
+  App.savePanelProject();
+  await tick();
+
+  assert.match(
+    element("rules-panel-status").textContent,
+    /项目写入结果无法确认，请刷新后检查/
+  );
+  assert.equal(App.rulesPanelLastCreatedProjectId, null);
 });
 
 test("bound unchanged edit preserves binding without a transient token", async () => {

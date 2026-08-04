@@ -57,7 +57,7 @@ def _project_write_message(
     result: dict[str, Any], messages: dict[str, str], fallback: str
 ) -> str:
     code = str(result.get("error") or "operation_failed")
-    if code.startswith("case_selection_"):
+    if code.startswith("case_selection_") or code.startswith("fd_work_"):
         return fd_work_message(code, fallback)
     return messages.get(code, fallback)
 

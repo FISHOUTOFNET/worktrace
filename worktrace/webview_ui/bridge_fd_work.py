@@ -63,6 +63,8 @@ FD_WORK_MESSAGES = {
     "fd_work_page_unavailable": "FD Work 页面暂时不可用",
     "fd_work_operation_timeout": "FD Work 操作超时，请重试",
     "fd_work_window_unavailable": "FD Work 窗口不可用，请检查 WebView2 运行环境",
+    "fd_work_persistence_unconfirmed": "项目写入结果无法确认，请刷新后检查",
+    "fd_work_inconsistent_state": "项目与 FD Work 关联状态不一致，请刷新后检查",
 }
 
 

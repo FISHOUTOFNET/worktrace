@@ -522,6 +522,7 @@
             : App.bridge.createProjectForRules(
                 name, description, language, App.rulesFDWorkSelectionToken
             );
+        var requiresVerifiedBinding = !!App.rulesFDWorkSelectionToken;
         request.then(function (result) {
             if (result && result.ok === false) {
                 if (isCurrentRulesPanelSession(sessionToken)) {
@@ -531,18 +532,36 @@
             }
             var project = (result && result.project) || {};
             var binding = (result && result.fd_work_binding) || { bound: false };
-            var bindingWarning = String(binding.warning || "");
-            if (binding.warning && isCurrentRulesPanelSession(sessionToken)) {
-                showPanelStatus(bindingWarning, true);
+            var projectId = parsePositiveInt(project.id);
+            if (!projectId || (requiresVerifiedBinding && !(
+                binding.bound === true && binding.verified === true
+            ))) {
+                if (isCurrentRulesPanelSession(sessionToken)) {
+                    showPanelStatus("项目写入结果无法确认，请刷新后检查", true);
+                }
+                return null;
             }
-            return App.loadProjectRules().then(function () {
+            return App.loadProjectRules().then(function (readback) {
                 if (!isCurrentRulesPanelSession(sessionToken)) return;
-                if (wasEditing) {
-                    resetRulesTransientUi({ restoreFocus: true });
-                    if (App.showToast) App.showToast(bindingWarning || "项目已保存");
+                var projects = (readback && readback.projects) || [];
+                var saved = projects.find(function (candidate) {
+                    return parsePositiveInt(candidate && candidate.id) === projectId;
+                });
+                var readbackVerified = !requiresVerifiedBinding || (
+                    !!saved
+                    && String(saved.name || "") === String(project.name || "")
+                    && saved.fd_work_bound === true
+                );
+                if (!readbackVerified) {
+                    showPanelStatus("项目写入结果无法确认，请刷新后检查", true);
                     return;
                 }
-                App.rulesPanelLastCreatedProjectId = parsePositiveInt(project.id);
+                if (wasEditing) {
+                    resetRulesTransientUi({ restoreFocus: true });
+                    if (App.showToast) App.showToast("项目已保存");
+                    return;
+                }
+                App.rulesPanelLastCreatedProjectId = projectId;
                 fillProjectFields(null);
                 setPanelMode("rule");
                 refreshRulesPanelTargets(App.rulesPanelLastCreatedProjectId);
@@ -550,7 +569,6 @@
                     App.rulesPanelLastCreatedProjectId,
                     { isSuccess: true, project: project }
                 );
-                if (bindingWarning) showPanelStatus(bindingWarning, true);
             });
         }).catch(function () {
             if (isCurrentRulesPanelSession(sessionToken)) {

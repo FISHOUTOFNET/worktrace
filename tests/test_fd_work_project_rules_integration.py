@@ -48,6 +48,34 @@ class _FDWork:
     def list_bound_project_ids(self):
         return set(self.bound_ids)
 
+    def create_bound_project(self, name, description, language, selection_token):
+        canonical = self.validate_case_selection(selection_token, name)
+        result = application_capabilities.project_api.create_project_for_rules(
+            canonical, description, language
+        )
+        if result.get("ok") is not True:
+            return result
+        if self.fail_bind:
+            return {"ok": False, "error": "fd_work_persistence_unconfirmed"}
+        self.bind_project(result["project"]["id"], canonical)
+        self.discard_case_selection(selection_token)
+        result["fd_work_binding"] = {"bound": True, "verified": True}
+        return result
+
+    def rebind_project(
+        self, project_id, name, description, language, selection_token
+    ):
+        canonical = self.validate_case_selection(selection_token, name)
+        result = application_capabilities.project_api.update_project_for_rules(
+            project_id, canonical, description, language
+        )
+        if result.get("ok") is not True:
+            return result
+        self.bind_project(project_id, canonical)
+        self.discard_case_selection(selection_token)
+        result["fd_work_binding"] = {"bound": True, "verified": True}
+        return result
+
 
 def _project_result(project_id, name):
     return {"ok": True, "project": {"id": project_id, "name": name}}
@@ -69,7 +97,7 @@ def test_enabled_create_requires_picker_token_and_selected_case_binds(monkeypatc
     assert plain == {"ok": False, "error": "case_selection_required"}
     assert selected["ok"] is True
     assert selected["project"]["name"] == "CASE A"
-    assert selected["fd_work_binding"]["bound"] is True
+    assert selected["fd_work_binding"] == {"bound": True, "verified": True}
     assert writes == [("CASE A", "", "中文")]
     assert fd_work.bound == [(1, "CASE A")]
     assert fd_work.discarded == ["token-a"]
@@ -97,7 +125,7 @@ def test_bound_update_preserves_name_or_requires_reselection_for_rename(monkeypa
     assert renamed == {"ok": False, "error": "case_selection_required"}
     assert fd_work.cleared == []
     assert rebound["project"]["name"] == "CASE B"
-    assert rebound["fd_work_binding"]["bound"] is True
+    assert rebound["fd_work_binding"] == {"bound": True, "verified": True}
     assert fd_work.bound == [(7, "CASE B")]
 
 
@@ -165,7 +193,7 @@ def test_invalid_selection_never_writes_or_binds(monkeypatch, token):
     assert fd_work.bound == []
 
 
-def test_sidecar_failure_is_partial_success_and_fail_closed(monkeypatch):
+def test_sidecar_failure_never_reports_partial_success(monkeypatch):
     monkeypatch.setattr(
         application_capabilities.project_api,
         "create_project_for_rules",
@@ -177,14 +205,9 @@ def test_sidecar_failure_is_partial_success_and_fail_closed(monkeypatch):
         "typed", "", "中文", "token-a"
     )
 
-    assert result["ok"] is True
-    assert result["project"]["name"] == "CASE A"
-    assert result["fd_work_binding"] == {
-        "bound": False,
-        "warning": "项目已保存，但关联 FD Work 失败，请重新关联",
-    }
-    assert fd_work.cleared == [9]
-    assert fd_work.discarded == ["token-a"]
+    assert result == {"ok": False, "error": "fd_work_persistence_unconfirmed"}
+    assert fd_work.cleared == []
+    assert fd_work.discarded == []
 
 
 def test_delete_clears_binding_only_after_project_delete_succeeds(monkeypatch):

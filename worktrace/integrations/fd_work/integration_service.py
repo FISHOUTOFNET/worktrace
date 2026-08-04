@@ -53,12 +53,20 @@ class _InteractionCoordinator(Protocol):
 
 
 @dataclass(frozen=True)
+class SelectionClaim:
+    token: str
+    label: str
+    claim_id: str
+
+
+@dataclass(frozen=True)
 class _Selection:
     label: str
     navigation_generation: int
     request_id: str
     operation_nonce: str
     expires_at: float
+    claim_id: str | None = None
 
 
 class FDWorkIntegrationService:
@@ -232,6 +240,15 @@ class FDWorkIntegrationService:
         selection_token: str | None,
         expected_label: str,
     ) -> str:
+        claim = self.claim_case_selection(selection_token, expected_label)
+        self.complete_case_selection_claim(claim)
+        return claim.label
+
+    def claim_case_selection(
+        self,
+        selection_token: str | None,
+        expected_label: str,
+    ) -> SelectionClaim:
         if not isinstance(selection_token, str) or not selection_token:
             raise FDWorkEntryError("case_selection_required")
         if len(selection_token) > FD_WORK_SELECTION_TOKEN_MAX_LENGTH:
@@ -250,8 +267,44 @@ class FDWorkIntegrationService:
                 raise FDWorkEntryError("case_selection_expired")
             if selection.label != normalized_expected:
                 raise FDWorkEntryError("case_selection_mismatch")
-            self._selections.pop(selection_token, None)
-            return selection.label
+            if selection.claim_id is not None:
+                raise FDWorkEntryError("fd_work_busy")
+            claim_id = secrets.token_urlsafe(24)
+            self._selections[selection_token] = _Selection(
+                label=selection.label,
+                navigation_generation=selection.navigation_generation,
+                request_id=selection.request_id,
+                operation_nonce=selection.operation_nonce,
+                expires_at=selection.expires_at,
+                claim_id=claim_id,
+            )
+            return SelectionClaim(
+                token=selection_token,
+                label=selection.label,
+                claim_id=claim_id,
+            )
+
+    def complete_case_selection_claim(self, claim: SelectionClaim) -> None:
+        with self._lock:
+            selection = self._selections.get(claim.token)
+            if selection is None:
+                return
+            if selection.claim_id != claim.claim_id:
+                raise FDWorkEntryError("case_selection_expired")
+            self._selections.pop(claim.token, None)
+
+    def release_case_selection_claim(self, claim: SelectionClaim) -> None:
+        with self._lock:
+            selection = self._selections.get(claim.token)
+            if selection is None or selection.claim_id != claim.claim_id:
+                return
+            self._selections[claim.token] = _Selection(
+                label=selection.label,
+                navigation_generation=selection.navigation_generation,
+                request_id=selection.request_id,
+                operation_nonce=selection.operation_nonce,
+                expires_at=selection.expires_at,
+            )
 
     def discard_case_selection(self, selection_token: str | None) -> None:
         if not isinstance(selection_token, str):
@@ -315,6 +368,41 @@ class FDWorkIntegrationService:
             project_name,
             adapter_contract_version=FD_WORK_ADAPTER_CONTRACT_VERSION,
         )
+
+    def create_bound_project(
+        self,
+        name: str,
+        description: str,
+        language: str,
+        selection_token: str | None,
+    ) -> dict[str, Any]:
+        from ...api import project_api
+        from .project_use_cases import CreateFDWorkBoundProject
+
+        return CreateFDWorkBoundProject(
+            selection_service=self,
+            binding_service=self._require_binding_service(),
+            create_project=project_api.create_project_for_rules,
+            project_reader=project_api.get_project,
+        ).execute(name, description, language, selection_token)
+
+    def rebind_project(
+        self,
+        project_id: int,
+        name: str,
+        description: str,
+        language: str,
+        selection_token: str | None,
+    ) -> dict[str, Any]:
+        from ...api import project_api
+        from .project_use_cases import RebindFDWorkProject
+
+        return RebindFDWorkProject(
+            selection_service=self,
+            binding_service=self._require_binding_service(),
+            update_project=project_api.update_project_for_rules,
+            project_reader=project_api.get_project,
+        ).execute(project_id, name, description, language, selection_token)
 
     def clear_project_binding(self, project_id: int) -> None:
         self._require_binding_service().clear_binding(project_id)
@@ -595,6 +683,7 @@ class FDWorkIntegrationService:
 
 __all__ = [
     "FDWorkIntegrationService",
+    "SelectionClaim",
     "FD_WORK_CASE_LABEL_MAX_LENGTH",
     "FD_WORK_ENABLED_SETTING",
     "FD_WORK_SELECTION_CAPACITY",

@@ -287,6 +287,40 @@ def test_picker_success_delivers_canonical_one_time_selection_token():
     assert consumed.value.code == "case_selection_expired"
 
 
+def test_selection_claim_is_exclusive_and_complete_consumes_token():
+    service, coordinator, _builder, _state, _delivered = _service(
+        token_factory=lambda: "selection-token"
+    )
+    service.open_case_picker("drawer-claim")
+    _publish_success(coordinator, "drawer-claim", "CASE A")
+
+    claim = service.claim_case_selection("selection-token", "CASE A")
+    assert claim.label == "CASE A"
+    with pytest.raises(FDWorkEntryError) as concurrent:
+        service.claim_case_selection("selection-token", "CASE A")
+    assert concurrent.value.code == "fd_work_busy"
+
+    service.complete_case_selection_claim(claim)
+    with pytest.raises(FDWorkEntryError) as consumed:
+        service.claim_case_selection("selection-token", "CASE A")
+    assert consumed.value.code == "case_selection_expired"
+
+
+def test_selection_claim_release_makes_unpersisted_selection_available_again():
+    service, coordinator, _builder, _state, _delivered = _service(
+        token_factory=lambda: "selection-token"
+    )
+    service.open_case_picker("drawer-release")
+    _publish_success(coordinator, "drawer-release", "CASE A")
+
+    first = service.claim_case_selection("selection-token", "CASE A")
+    service.release_case_selection_claim(first)
+    second = service.claim_case_selection("selection-token", "CASE A")
+
+    assert second.label == "CASE A"
+    assert second.claim_id != first.claim_id
+
+
 def test_free_text_label_mismatch_and_wrong_generation_fail_closed():
     tokens = iter(["token-a", "token-b"])
     service, coordinator, _builder, _state, _delivered = _service(

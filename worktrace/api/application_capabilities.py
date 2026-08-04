@@ -85,6 +85,12 @@ class FDWorkCapability(Protocol):
 
     def on_renderer_initialized(self, renderer: str) -> None: ...
     def open_case_picker(self, request_id) -> dict[str, Any]: ...
+    def create_bound_project(
+        self, name, description, language, selection_token
+    ) -> dict[str, Any]: ...
+    def rebind_project(
+        self, project_id, name, description, language, selection_token
+    ) -> dict[str, Any]: ...
     def validate_case_selection(self, selection_token, expected_label) -> str: ...
     def discard_case_selection(self, selection_token) -> None: ...
     def bind_project(self, project_id: int, project_name: str) -> None: ...
@@ -430,29 +436,21 @@ class RulesApplicationService:
         return projects
 
     def create_project_for_rules(self, name, description, language, selection_token=None):
-        canonical_name = name
         enabled = self._fd_work_enabled()
         if enabled and selection_token is None:
             return {"ok": False, "error": "case_selection_required"}
         if selection_token is not None:
             try:
-                canonical_name = self._fd_work.validate_case_selection(
-                    selection_token, name
+                return self._fd_work.create_bound_project(
+                    name, description, language, selection_token
                 )
             except FDWorkEntryError as exc:
                 return {"ok": False, "error": exc.code}
-        result = project_api.create_project_for_rules(
-            canonical_name, description, language
-        )
+            except Exception:
+                return {"ok": False, "error": "fd_work_persistence_unconfirmed"}
+        result = project_api.create_project_for_rules(name, description, language)
         if result.get("ok") is True:
-            if selection_token is None:
-                result["fd_work_binding"] = {"bound": False}
-            else:
-                result["fd_work_binding"] = self._bind_saved_project(
-                    result,
-                    canonical_name,
-                )
-            self._fd_work.discard_case_selection(selection_token)
+            result["fd_work_binding"] = {"bound": False}
         return result
 
     def update_project_for_rules(
@@ -466,21 +464,18 @@ class RulesApplicationService:
             return {"ok": False, "error": "case_selection_required"}
         if selection_token is not None:
             try:
-                canonical_name = self._fd_work.validate_case_selection(
-                    selection_token, name
+                return self._fd_work.rebind_project(
+                    int(project_id), name, description, language, selection_token
                 )
             except FDWorkEntryError as exc:
                 return {"ok": False, "error": exc.code}
+            except Exception:
+                return {"ok": False, "error": "fd_work_persistence_unconfirmed"}
         result = project_api.update_project_for_rules(
             project_id, canonical_name, description, language
         )
         if result.get("ok") is True:
-            if selection_token is not None:
-                result["fd_work_binding"] = self._bind_saved_project(
-                    result,
-                    canonical_name,
-                )
-            elif name_changed and not enabled:
+            if name_changed and not enabled:
                 result["fd_work_binding"] = self._clear_saved_project_binding(
                     project_id
                 )
@@ -490,7 +485,6 @@ class RulesApplicationService:
                 except Exception:
                     bound = False
                 result["fd_work_binding"] = {"bound": bound}
-            self._fd_work.discard_case_selection(selection_token)
         return result
 
     def _fd_work_enabled(self) -> bool:
@@ -507,22 +501,6 @@ class RulesApplicationService:
             return {"ok": False, "error": exc.code}
         except Exception:
             return {"ok": False, "error": "binding_store_unavailable"}
-
-    def _bind_saved_project(self, result, canonical_name):
-        project = result.get("project") if isinstance(result, dict) else None
-        project_id = int(project.get("id") or 0) if isinstance(project, dict) else 0
-        try:
-            self._fd_work.bind_project(project_id, canonical_name)
-            return {"bound": True}
-        except Exception:
-            try:
-                self._fd_work.clear_project_binding(project_id)
-            except Exception:
-                pass
-            return {
-                "bound": False,
-                "warning": "项目已保存，但关联 FD Work 失败，请重新关联",
-            }
 
     def _clear_saved_project_binding(self, project_id):
         try:

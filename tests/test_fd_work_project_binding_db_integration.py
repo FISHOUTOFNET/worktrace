@@ -7,6 +7,11 @@ from worktrace.api.application_capabilities import RulesApplicationService
 from worktrace.integrations.fd_work.binding_repository import FDWorkBindingRepository
 from worktrace.integrations.fd_work.binding_service import FDWorkBindingService
 from worktrace.integrations.fd_work.contracts import FDWorkEntryError
+from worktrace.integrations.fd_work.integration_service import SelectionClaim
+from worktrace.integrations.fd_work.project_use_cases import (
+    CreateFDWorkBoundProject,
+    RebindFDWorkProject,
+)
 from worktrace.services import project_service
 
 
@@ -17,6 +22,7 @@ class _Integration:
     def __init__(self, binding_service):
         self.binding_service = binding_service
         self.enabled = True
+        self.claimed = set()
 
     def validate_case_selection(self, token, expected):
         labels = {"token-a": "CASE A", "token-b": "CASE B"}
@@ -28,6 +34,37 @@ class _Integration:
 
     def discard_case_selection(self, _token):
         return None
+
+    def claim_case_selection(self, token, expected):
+        label = self.validate_case_selection(token, expected)
+        if token in self.claimed:
+            raise FDWorkEntryError("fd_work_busy")
+        self.claimed.add(token)
+        return SelectionClaim(token, label, f"claim-{token}")
+
+    def complete_case_selection_claim(self, claim):
+        self.claimed.discard(claim.token)
+
+    def release_case_selection_claim(self, claim):
+        self.claimed.discard(claim.token)
+
+    def create_bound_project(self, name, description, language, selection_token):
+        return CreateFDWorkBoundProject(
+            selection_service=self,
+            binding_service=self.binding_service,
+            create_project=project_api.create_project_for_rules,
+            project_reader=project_api.get_project,
+        ).execute(name, description, language, selection_token)
+
+    def rebind_project(
+        self, project_id, name, description, language, selection_token
+    ):
+        return RebindFDWorkProject(
+            selection_service=self,
+            binding_service=self.binding_service,
+            update_project=project_api.update_project_for_rules,
+            project_reader=project_api.get_project,
+        ).execute(project_id, name, description, language, selection_token)
 
     def bind_project(self, project_id, label):
         self.binding_service.bind_project(project_id, label)
@@ -66,7 +103,7 @@ def test_real_project_writes_follow_binding_lifecycle_and_survive_service_restar
 
     assert ordinary["fd_work_binding"] == {"bound": False}
     assert selected["project"]["name"] == "CASE A"
-    assert selected["fd_work_binding"] == {"bound": True}
+    assert selected["fd_work_binding"] == {"bound": True, "verified": True}
     restarted = _binding_service(state_path)
     assert restarted.list_bound_project_ids() == {selected_id}
 
@@ -94,7 +131,7 @@ def test_real_project_writes_follow_binding_lifecycle_and_survive_service_restar
         selected_id, "typed", "description only", "中文", "token-b"
     )
     assert rebound["project"]["name"] == "CASE B"
-    assert rebound["fd_work_binding"] == {"bound": True}
+    assert rebound["fd_work_binding"] == {"bound": True, "verified": True}
 
     integration.enabled = False
     integration.enabled = True
