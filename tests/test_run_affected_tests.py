@@ -619,6 +619,15 @@ def test_changed_webview_test_file_also_runs_webview_suite(runner):
     assert "tests/webview/" in sel.pytest_targets
 
 
+def test_fd_work_html_fixture_maps_to_contract_test_not_pytest_html(runner):
+    fixture = "tests/fixtures/fd_work/anonymous_work_shell.html"
+
+    sel = runner.select_targets([fixture])
+
+    assert fixture not in sel.pytest_targets
+    assert "tests/test_fd_work_edge_fixture_contract.py" in sel.pytest_targets
+
+
 def test_changed_conftest_selects_broad_suite(runner):
     sel = runner.select_targets(["tests/conftest.py"])
     for expected in [

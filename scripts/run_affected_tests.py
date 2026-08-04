@@ -794,6 +794,8 @@ def select_targets(changed_files: Iterable[str]) -> Selection:
             for t in CONFTEST_BROAD_SUITE:
                 add_target(t)
             add_warning("tests/conftest.py changed; running broad suite.")
+        elif c == "tests/fixtures/fd_work/anonymous_work_shell.html":
+            add_target("tests/test_fd_work_edge_fixture_contract.py")
         elif c.startswith("tests/webview/"):
             add_target(c)
             add_target("tests/webview/")
