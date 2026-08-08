@@ -185,9 +185,6 @@
     App.closeTimelineDrawer = closeTimelineDrawer;
 
     App.applyTimelineProjectFilter = function () {
-        // Changing the filter can hide the currently-edited session, which
-        // would orphan the draft. Gate the re-render through the context
-        // change flow so a dirty draft is saved first.
         requestTimelineContextChange(function () {
             if (App.lastTimelineData) showTimeline(App.lastTimelineData);
         }, "应用筛选");
@@ -331,8 +328,6 @@
         listEl.innerHTML = html;
         var _commitMs = _commitStart
             ? (performance.now() - _commitStart) : 0;
-        // frontend_render_ms: HTML string generation + DOM commit.
-        // Exposed for diagnostics; no user content is recorded.
         App.lastTimelineRenderMs = {
             html_build_ms: Math.round(_htmlBuildMs * 100) / 100,
             dom_commit_ms: Math.round(_commitMs * 100) / 100,
@@ -342,9 +337,6 @@
         if (App.lastTimelineRenderMs.total_ms >= 50 && window.console && console.debug) {
             console.debug("timeline_render_ms", App.lastTimelineRenderMs);
         }
-        // Event delegation: a single click + keydown listener on the
-        // container handles all timeline items, avoiding per-item listener
-        // churn on every re-render.
         if (!listEl._timelineDelegationBound) {
             listEl.addEventListener("click", function (event) {
                 var itemEl = event.target.closest(".timeline-item");
@@ -445,10 +437,6 @@
     function selectTimelineSession(projectionInstanceKey, sessions) {
         if (projectionInstanceKey !== App.selectedProjectionInstanceKey
                 && (App.editSaving || isEditDirty() || App.mutationState === "unknown")) {
-            // Gate the session switch through the context change flow so a
-            // dirty draft is saved first and the switch is queued if a save
-            // is in flight. On failure or unknown mutation the draft is
-            // preserved and the switch is blocked.
             requestTimelineContextChange(function () {
                 App.selectedProjectionInstanceKey = projectionInstanceKey;
                 showTimeline(App.lastTimelineData);
@@ -653,8 +641,6 @@
                 + '</div>';
         }
         list.innerHTML = html;
-        // Event delegation: a single click listener on the details container
-        // handles all delete buttons, avoiding per-render listener churn.
         if (!list._detailsDelegationBound) {
             list.addEventListener("click", function (event) {
                 var btn = event.target.closest(".summary-hide-activity");
@@ -671,14 +657,9 @@
     App.renderSessionActivitySummary = renderSessionDetails;
 
     function loadProjects() {
-        // Delegate to the unified catalog coordinator (installed by
-        // rules.js). The coordinator stores both editing and filter
-        // catalogs and renders every consumer from a single bridge call.
         if (typeof App.loadProjects === "function" && App.loadProjects !== loadProjects) {
             return App.loadProjects();
         }
-        // Fallback: direct load (only used if the coordinator has not been
-        // installed yet, e.g. during early init).
         if (App.projectsCache) {
             renderTimelineProjectFilter(App.filterProjectsCache || App.projectsCache);
             return Promise.resolve(App.projectsCache);
@@ -1158,10 +1139,6 @@
         });
     }
 
-    // Rebase the editing session to the refreshed authoritative baseline.
-    // After a save + refresh the projection revision advances (R1 -> R2).
-    // If the user typed during the in-flight request, populateEditPanel is
-    // skipped, leaving App.editingSession at the OLD baseline.
     function rebaseEditingSessionAfterRefresh() {
         if (!App.editingSession || !App.selectedProjectionInstanceKey) return;
         var refreshed = findSessionByProjectionKey(App.selectedProjectionInstanceKey);
@@ -1169,9 +1146,6 @@
         if (refreshed.projection_instance_key !== App.editingSession.projection_instance_key) return;
         App.editingSession = refreshed;
         App.selectedProjectionRevision = refreshed.projection_revision || "";
-        // Re-apply capability flags (e.g. can_edit_note) in case the
-        // mutation changed the session's editability, but never overwrite
-        // the user's current DOM input.
         applyEditCapabilities(refreshed);
     }
     App.rebaseEditingSessionAfterRefresh = rebaseEditingSessionAfterRefresh;
@@ -1306,10 +1280,6 @@
             blockDifferentMutationIntent();
             return Promise.resolve(false);
         }
-        // Snapshot the submitted draft + authoritative revision. This
-        // decouples the in-flight request from the live DOM so post-submit
-        // input is never overwritten by a stale response, and the queued
-        // autosave can rebase onto the post-success revision.
         App.submittedDraft = {
             projectionInstanceKey: key,
             projectionRevision: revision,
@@ -1349,9 +1319,6 @@
                 App.timelineLastSaveFailed = true;
                 throw new Error("timeline_refresh_failed");
             }).then(function () {
-                // Rebase to the refreshed baseline (with the new
-                // projection_revision) BEFORE evaluating the queued
-                // autosave so the next save uses the new revision.
                 rebaseEditingSessionAfterRefresh();
                 settleSubmittedDurationIntent(submittedDraft);
                 return true;
@@ -1364,10 +1331,6 @@
                     App.timelineAutosaveQueued = false;
                     if (!isEditDirty()) App.submittedDraft = null;
                 }
-                // Drain any queued context change now that the save has
-                // resolved. The draft is either persisted (success) or
-                // preserved (the success path above ran), so switching is
-                // safe.
                 drainPendingContextChange(true);
             });
         }).catch(function () {
@@ -1383,6 +1346,74 @@
         return App.timelineSavePromise;
     }
     App.saveEdit = saveEdit;
+
+    var fdWorkFillTransactionSequence = 0;
+    var activeFDWorkFillTransaction = null;
+
+    function fdWorkOperationGeneration() {
+        var value = App.fdWorkStatus && App.fdWorkStatus.operation_generation;
+        return Number.isInteger(value) ? value : null;
+    }
+
+    function beginFDWorkFillTransaction() {
+        var transaction = {
+            id: ++fdWorkFillTransactionSequence,
+            state: "pending",
+            terminalKind: null,
+            baselineOperationGeneration: fdWorkOperationGeneration()
+        };
+        activeFDWorkFillTransaction = transaction;
+        return transaction;
+    }
+
+    function currentFDWorkTerminalKind(transaction) {
+        if (!transaction || activeFDWorkFillTransaction !== transaction) return null;
+        var status = App.fdWorkStatus || {};
+        if (
+            status.operation !== "none"
+            || status.operation_result_owner !== "automation_fill"
+            || ["save_completed", "operation_canceled", "failed"]
+                .indexOf(status.operation_status) < 0
+        ) return null;
+        var generation = Number.isInteger(status.operation_generation)
+            ? status.operation_generation : null;
+        if (
+            generation !== null
+            && transaction.baselineOperationGeneration !== null
+            && generation <= transaction.baselineOperationGeneration
+        ) return null;
+        return status.operation_status;
+    }
+
+    function settleFDWorkFillTransaction(transaction, terminalKind) {
+        if (
+            !transaction
+            || activeFDWorkFillTransaction !== transaction
+            || transaction.state !== "pending"
+        ) return false;
+        transaction.state = "terminal";
+        transaction.terminalKind = terminalKind;
+        return true;
+    }
+
+    function syncFDWorkFillTransactionFromStatus(transaction) {
+        var terminalKind = currentFDWorkTerminalKind(transaction);
+        if (!terminalKind) return null;
+        if (transaction.state === "pending") {
+            settleFDWorkFillTransaction(transaction, terminalKind);
+        }
+        return terminalKind;
+    }
+
+    function canFDWorkFillTransactionWrite(transaction) {
+        if (!transaction || activeFDWorkFillTransaction !== transaction) return false;
+        syncFDWorkFillTransactionFromStatus(transaction);
+        return transaction.state === "pending";
+    }
+
+    function fdWorkTerminalResult(transaction) {
+        return !!(transaction && transaction.terminalKind === "save_completed");
+    }
 
     function fdWorkEnabled() {
         var status = App.fdWorkStatus;
@@ -1483,6 +1514,7 @@
     App.getFDWorkAvailability = getFDWorkAvailability;
 
     function showFDWorkStatus(message, isError) {
+        syncFDWorkFillTransactionFromStatus(activeFDWorkFillTransaction);
         App.fdWorkStatusOverride = message ? {
             enabled: true,
             state: isError ? "error" : "ready",
@@ -1545,17 +1577,22 @@
             updateFDWorkEntryButton();
             return Promise.resolve(false);
         }
+        var transaction = beginFDWorkFillTransaction();
         showFDWorkStatus(
             isEditDirty() || App.editSaving ? "正在保存时间段…" : "正在填入 FD Work…",
             false
         );
         var operation = flushTimelineEditsForFDWork().then(function (saved) {
+            if (!canFDWorkFillTransactionWrite(transaction)) {
+                return fdWorkTerminalResult(transaction);
+            }
             if (!saved) {
+                settleFDWorkFillTransaction(transaction, "failed");
                 showFDWorkStatus("保存失败，未打开 FD Work", true);
                 return false;
             }
             var selectionKey = String(App.selectedProjectionInstanceKey || "");
-            return openResolvedFDWorkSelection(selectionKey, true);
+            return openResolvedFDWorkSelection(selectionKey, true, transaction);
         }).finally(function () {
             if (App.fdWorkOpenPromise === operation) App.fdWorkOpenPromise = null;
             updateFDWorkEntryButton();
@@ -1584,22 +1621,33 @@
     }
     App.resolveSelectedFDWorkSession = resolveSelectedFDWorkSession;
 
-    function openResolvedFDWorkSelection(selectionKey, allowStaleRecovery) {
+    function openResolvedFDWorkSelection(selectionKey, allowStaleRecovery, transaction) {
+        if (!canFDWorkFillTransactionWrite(transaction)) {
+            return Promise.resolve(fdWorkTerminalResult(transaction));
+        }
         var session = resolveSelectedFDWorkSession(selectionKey);
         var reportDate = currentTimelineReportDate();
         var revision = String(session ? session.projection_revision || "" : "");
         if (!session || !reportDate || !selectionKey || !revision) {
-            showFDWorkStatus("当前时间段已变化，请重新选择", true);
+            if (canFDWorkFillTransactionWrite(transaction)) {
+                settleFDWorkFillTransaction(transaction, "failed");
+                showFDWorkStatus("当前时间段已变化，请重新选择", true);
+            }
             return Promise.resolve(false);
         }
         showFDWorkStatus("正在填入 FD Work…", false);
         return App.bridge.openFDWorkEntry(reportDate, selectionKey, revision).then(function (result) {
+            if (!canFDWorkFillTransactionWrite(transaction)) {
+                return fdWorkTerminalResult(transaction);
+            }
             if (result && result.ok === true) {
                 if (result.operation_status === "save_completed") {
+                    settleFDWorkFillTransaction(transaction, "save_completed");
                     showFDWorkStatus("已保存到 FD Work", false);
                 } else if (result.operation_status === "session_starting") {
                     showFDWorkStatus("正在填入 FD Work…", false);
                 } else {
+                    settleFDWorkFillTransaction(transaction, "failed");
                     showFDWorkStatus("FD Work 操作结果未确认，请重试", true);
                     return false;
                 }
@@ -1613,18 +1661,30 @@
                     rejectOnError: true,
                     errorMessage: "刷新失败，未打开 FD Work"
                 }).then(function () {
-                    return openResolvedFDWorkSelection(selectionKey, false);
+                    if (!canFDWorkFillTransactionWrite(transaction)) {
+                        return fdWorkTerminalResult(transaction);
+                    }
+                    return openResolvedFDWorkSelection(selectionKey, false, transaction);
                 }).catch(function () {
+                    if (!canFDWorkFillTransactionWrite(transaction)) {
+                        return fdWorkTerminalResult(transaction);
+                    }
+                    settleFDWorkFillTransaction(transaction, "failed");
                     showFDWorkStatus("刷新失败，未打开 FD Work", true);
                     return false;
                 });
             }
+            settleFDWorkFillTransaction(transaction, "failed");
             showFDWorkStatus(
                 result && result.message ? result.message : "打开 FD Work 失败",
                 true
             );
             return false;
         }).catch(function () {
+            if (!canFDWorkFillTransactionWrite(transaction)) {
+                return fdWorkTerminalResult(transaction);
+            }
+            settleFDWorkFillTransaction(transaction, "failed");
             showFDWorkStatus("打开 FD Work 失败", true);
             return false;
         });
@@ -1789,8 +1849,6 @@
     }
     App.findSessionByProjectionKey = findSessionByProjectionKey;
 
-    // Find the chronological merge target. The UI renders newest-first but
-    // the backend defines previous = time-earlier, next = time-later.
     function findChronologicalMergeTarget(sessions, sourceKey, direction) {
         if (!sessions || !sourceKey) return null;
         var sorted = sessions.slice().sort(function (left, right) {
@@ -1904,8 +1962,6 @@
     };
     App.loadTimelineReport = timelineReportRequest;
 
-    // Single entry point for context changes that could destroy the current
-    // edit context (date switch, filter change, session switch).
     function requestTimelineContextChange(actionFn, label) {
         var reason = label || "切换";
         if (App.mutationState === "unknown") {
@@ -1917,21 +1973,16 @@
             showEditStatus("正在保存当前更改，保存完成后自动" + reason + "。", false);
             return Promise.resolve(false);
         }
-        // Dirty draft with no save in flight: save first, then switch.
         if (isEditDirty()) {
             showEditStatus("正在保存当前更改，保存完成后自动" + reason + "。", false);
             App.pendingContextChange = { action: actionFn, reason: reason };
             saveEdit();
             return Promise.resolve(false);
         }
-        // No dirty draft: switch immediately.
         return Promise.resolve().then(actionFn);
     }
     App.requestTimelineContextChange = requestTimelineContextChange;
 
-    // Drains a pending context change after a save completes. Called from
-    // the saveEdit finally block. On confirmed failure or unknown result
-    // the pending change is cancelled (draft preserved).
     function drainPendingContextChange(saveSucceeded) {
         var pending = App.pendingContextChange;
         if (!pending) return;
@@ -1940,11 +1991,9 @@
             showEditStatus("保存失败，未" + pending.reason + "，请重试或刷新核对。", true);
             return;
         }
-        // Save succeeded — execute the queued context change.
         try {
             pending.action();
         } catch (error) {
-            // Swallow; the action is best-effort and the user can retry.
         }
     }
     App.drainPendingContextChange = drainPendingContextChange;
@@ -2026,6 +2075,9 @@
         App.lastSessionDetailsViewModel = null;
         App.lastSessionActivitySummaryViewModel = null;
         App.timelineRequestToken = (App.timelineRequestToken || 0) + 1;
+        activeFDWorkFillTransaction = null;
+        App.fdWorkOpenPromise = null;
+        App.fdWorkStatusOverride = null;
         resetTimelineTransientUi();
     }
     App.timeline = Object.freeze({ resetGeneration: resetTimelineGeneration });
