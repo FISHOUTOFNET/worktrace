@@ -65,6 +65,7 @@ FD_WORK_MESSAGES = {
     "empty_narrative": "描述为空，无法填入",
     "invalid_duration": "工时必须大于零",
     "duration_exceeds_limit": "工时超过 FD Work 允许的范围",
+    "save_outcome_unknown": "FD Work 已执行保存，但结果未确认，请先在 FD Work 页面确认是否已保存，确认前不要重复填入",
     "fd_work_page_unavailable": "FD Work 页面暂时不可用",
     "fd_work_operation_timeout": "FD Work 操作超时，请重试",
     "fd_work_window_unavailable": "FD Work 窗口不可用，请检查 WebView2 运行环境",
