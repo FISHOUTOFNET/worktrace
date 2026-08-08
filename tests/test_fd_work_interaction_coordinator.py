@@ -515,18 +515,20 @@ def test_explicit_standalone_auth_owns_helper_until_ready_then_restores_main():
     assert coordinator.get_status()["interaction_owner"] == "none"
 
 
-def test_fill_awaits_stable_shell_and_has_no_interactive_handshake():
+def test_fill_uses_read_only_preflight_and_adapter_owned_dom_transaction():
     coordinator, controller, adapter = _coordinator(nonces=["fill-nonce"])
 
     result = coordinator.open_entry(_draft())
 
     assert result["ok"] is True
     assert controller.foreground_calls == [("automation_fill", 1)]
-    assert len(adapter.stable_calls) == 1
+    assert len(adapter.work_page_calls) == 1
+    assert adapter.ensure_editor_calls == []
+    assert adapter.stable_calls == []
     assert len(adapter.fill_calls) == 1
     assert (
-        adapter.stable_calls[0][1]["operation_deadline_ms"]
-        == adapter.fill_calls[0][2]["operation_deadline_ms"]
+        adapter.fill_calls[0][2]["operation_deadline_ms"]
+        >= adapter.work_page_calls[0][1]["operation_deadline_ms"]
     )
     assert not hasattr(adapter, "check_work_interactive")
     assert coordinator.get_status()["interaction_owner"] == "none"
@@ -546,7 +548,7 @@ def test_five_fill_save_transactions_reuse_ready_helper_without_busy_state():
     assert coordinator.get_status()["ready"] is True
 
 
-def test_picker_and_fill_share_work_page_to_entry_editor_transition():
+def test_picker_owns_editor_preparation_while_fill_delegates_dom_transaction():
     picker, picker_controller, picker_adapter = _coordinator(
         nonces=["picker-nonce"]
     )
@@ -569,7 +571,7 @@ def test_picker_and_fill_share_work_page_to_entry_editor_transition():
         len(fill_adapter.ensure_editor_calls),
         len(fill_adapter.stable_calls),
         len(fill_adapter.fill_calls),
-    ] == [1, 1, 1, 1]
+    ] == [1, 0, 0, 1]
     assert picker_controller.hide_calls == []
     assert fill_controller.hide_calls == [(4, 1)]
 
