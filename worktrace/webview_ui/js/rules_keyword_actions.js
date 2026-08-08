@@ -26,11 +26,30 @@
             trigger: trigger,
             title: "删除规则",
             objectLabel: kind === "folder" ? "当前文件夹规则" : "当前关键词规则",
-            warning: "规则删除后不再参与后续自动归类；既有历史归属保持不变。",
+            warning: "删除后，该规则将不再用于新的自动归类。",
+            choices: [
+                {
+                    value: "preserve",
+                    label: "保留已有归类",
+                    description: "当前已由此规则归类的时间保持不变。"
+                },
+                {
+                    value: "recompute",
+                    label: "重新计算已有归类",
+                    description: "当前仍由此规则归类的时间会按照其他现有规则重新判断；没有其他规则匹配时变为“未归类”。手动修改过的归属不受影响。"
+                }
+            ],
+            defaultChoice: "preserve",
             twoStep: false,
+            danger: true,
             confirmLabel: "删除规则"
-        }).then(function (confirmed) {
-            if (confirmed) deleteRule(kind, ruleId, false);
+        }).then(function (historyMode) {
+            if (!historyMode) return;
+            if (historyMode === "recompute") {
+                deleteRule(kind, ruleId, true);
+                return;
+            }
+            deleteRule(kind, ruleId, false);
         });
     }
     App.openProjectRuleDeleteModal = openProjectRuleDeleteModal;
@@ -46,7 +65,9 @@
             if (result && result.ok === false) { App.showRulesError(result.error || "删除规则失败"); return; }
             return App.loadProjectRules().then(function () {
                 App.clearRulesError();
-                if (App.showToast) App.showToast("规则已删除，历史记录保持不变");
+                if (App.showToast) App.showToast(applyToHistory
+                    ? "规则删除已提交，已有归类将按其他现有规则重新计算"
+                    : "规则已删除，已有归类保持不变");
             });
         }).catch(function () { App.showRulesError("删除规则失败"); }).finally(function () {
             App.setRuleDeleting(null);

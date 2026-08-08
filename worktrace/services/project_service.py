@@ -6,9 +6,16 @@ from ..constants import EXCLUDED_PROJECT, UNCATEGORIZED_PROJECT
 from ..data_generation_repository import DataGenerationNamespace
 from ..db import dict_rows, get_connection, now_str
 from ..domain_unit_of_work import DomainUnitOfWork
-from . import project_lifecycle_policy
+from . import (
+    assignment_command_service,
+    project_lifecycle_policy,
+    rule_catalog_command_service,
+)
 from .project_command_policy import ProjectLifecycleError
-from .system_project_service import require_excluded_project_id
+from .system_project_service import (
+    require_excluded_project_id,
+    require_uncategorized_project_id,
+)
 
 
 def _catalog_uow(
@@ -37,7 +44,7 @@ def _normalize_project_language(language: str | None = None) -> str:
 
 
 def require_mutable_user_project(conn, project_id: int) -> dict:
-    """Load and validate one mutable, active user project in this transaction."""
+    """Load and validate one mutable user project in this transaction."""
 
     row = conn.execute(
         "SELECT * FROM project WHERE id = ?",
@@ -240,7 +247,7 @@ def list_user_projects() -> list[dict]:
 
 
 def list_user_project_identities() -> list[dict]:
-    """Return active or archived user identities for external binding reconciliation."""
+    """Return current user project identities for external reconciliation."""
 
     with get_connection() as conn:
         rows = conn.execute(
@@ -307,11 +314,7 @@ def list_filter_projects() -> list[dict]:
 
 
 def list_project_bindings(include_system_special: bool = True) -> list[dict]:
-    """Return the lightweight project/rule catalog without historical projection.
-
-    This read stays bounded to the current catalog state (projects, rules, last
-    used timestamps) and never rebuilds the all-time report projection.
-    """
+    """Return the lightweight project/rule catalog without historical projection."""
 
     with get_connection() as conn:
         conn.execute("BEGIN")
@@ -411,12 +414,100 @@ def archive_project(project_id: int) -> None:
         )
 
 
-def delete_project(project_id: int) -> None:
-    soft_delete_project(project_id)
+def _project_has_active_rule_history_job(conn, project_id: int) -> bool:
+    row = conn.execute(
+        """
+        SELECT 1
+        FROM history_mutation_job job
+        JOIN history_mutation_job_rule ref ON ref.job_id = job.id
+        WHERE job.status IN ('pending', 'running')
+          AND (
+              (ref.rule_type = 'keyword' AND EXISTS (
+                  SELECT 1 FROM project_rule rule
+                  WHERE rule.id = ref.rule_id AND rule.project_id = ?
+              ))
+              OR
+              (ref.rule_type = 'folder' AND EXISTS (
+                  SELECT 1 FROM folder_project_rule rule
+                  WHERE rule.id = ref.rule_id AND rule.project_id = ?
+              ))
+          )
+        LIMIT 1
+        """,
+        (int(project_id), int(project_id)),
+    ).fetchone()
+    return row is not None
+
+
+def _project_rule_refs(conn, project_id: int) -> list[tuple[str, int]]:
+    refs = [
+        ("keyword", int(row["id"]))
+        for row in conn.execute(
+            "SELECT id FROM project_rule WHERE project_id = ? ORDER BY id",
+            (int(project_id),),
+        ).fetchall()
+    ]
+    refs.extend(
+        ("folder", int(row["id"]))
+        for row in conn.execute(
+            "SELECT id FROM folder_project_rule WHERE project_id = ? ORDER BY id",
+            (int(project_id),),
+        ).fetchall()
+    )
+    return refs
+
+
+def delete_project(project_id: int) -> dict[str, int]:
+    """Permanently delete a user project while preserving activity facts.
+
+    All current attributions to the project are released to ``未归类`` and all
+    rules owned by the project are removed in the same transaction. Report
+    operations remain immutable; projection maps stale project references to
+    the canonical uncategorized project.
+    """
+
+    with _catalog_uow() as uow:
+        conn = uow.connection
+        require_mutable_user_project(conn, project_id)
+        if _project_has_active_rule_history_job(conn, project_id):
+            raise ProjectLifecycleError("project_busy")
+
+        uncategorized_id = require_uncategorized_project_id(conn)
+        released = assignment_command_service.release_project_assignments_in_transaction(
+            uow,
+            conn,
+            project_id=int(project_id),
+            uncategorized_project_id=uncategorized_id,
+        )
+        rule_refs = _project_rule_refs(conn, project_id)
+        for rule_type, rule_id in rule_refs:
+            if not rule_catalog_command_service.delete_rule_in_transaction(
+                uow,
+                conn,
+                rule_type,
+                rule_id,
+            ):
+                raise ProjectLifecycleError("operation_failed")
+
+        cursor = conn.execute(
+            "DELETE FROM project WHERE id = ?",
+            (int(project_id),),
+        )
+        if cursor.rowcount != 1:
+            raise ProjectLifecycleError("not_found")
+        uow.mark_changed(
+            DataGenerationNamespace.CLASSIFICATION_CATALOG,
+            DataGenerationNamespace.REPORT_STRUCTURE,
+        )
+        return {
+            "project_id": int(project_id),
+            "released_assignment_count": int(released),
+            "deleted_rule_count": len(rule_refs),
+        }
 
 
 def soft_delete_project(project_id: int) -> None:
-    """Tombstone a mutable user project without deleting facts or rules."""
+    """Internal legacy helper retained outside the public project-delete path."""
 
     with _catalog_uow() as uow:
         conn = uow.connection

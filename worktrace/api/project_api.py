@@ -183,12 +183,13 @@ def delete_project_for_rules(project_id: Any) -> dict[str, Any]:
     if not valid_int(project_id):
         return fail_payload(ERROR_INVALID_INPUT)
     try:
-        project_service.soft_delete_project(project_id)
-        payload = _project_lifecycle_payload(project_id)
-        if not payload:
-            return fail_payload(ERROR_OPERATION_FAILED)
-        payload["deleted"] = True
-        return ok_payload(project=payload)
+        result = project_service.delete_project(project_id)
+        return ok_payload(
+            project={
+                "id": int(result.get("project_id") or project_id),
+                "deleted": True,
+            }
+        )
     except ProjectLifecycleError as exc:
         return _map_project_error(exc)
     except Exception:

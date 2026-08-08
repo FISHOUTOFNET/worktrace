@@ -87,6 +87,52 @@
         if (options.restoreFocus !== false) restoreFocus(target);
     };
 
+    function normalizedDialogChoices(options) {
+        if (!Array.isArray(options.choices)) return [];
+        return options.choices.filter(function (choice) {
+            return choice && typeof choice.value === "string" && choice.value
+                && typeof choice.label === "string" && choice.label;
+        });
+    }
+
+    function renderDialogChoices(options) {
+        var choices = normalizedDialogChoices(options);
+        if (!choices.length) return;
+        var group = document.createElement("div");
+        group.className = "field";
+        group.setAttribute("role", "radiogroup");
+        choices.forEach(function (choice, index) {
+            var row = document.createElement("label");
+            row.className = "checkbox-row";
+            var input = document.createElement("input");
+            input.type = "radio";
+            input.name = "confirm-dialog-choice";
+            input.value = choice.value;
+            var selected = dialogState.choice || options.defaultChoice || choices[0].value;
+            input.checked = choice.value === selected;
+            if (input.checked) dialogState.choice = choice.value;
+            input.addEventListener("change", function () {
+                if (input.checked && dialogState) dialogState.choice = choice.value;
+            });
+            var copy = document.createElement("span");
+            copy.className = "field";
+            var title = document.createElement("strong");
+            title.textContent = choice.label;
+            copy.appendChild(title);
+            if (choice.description) {
+                var description = document.createElement("span");
+                description.className = "field-hint";
+                description.textContent = String(choice.description);
+                copy.appendChild(description);
+            }
+            row.appendChild(input);
+            row.appendChild(copy);
+            group.appendChild(row);
+            if (index === 0 && !dialogState.choice) dialogState.choice = choice.value;
+        });
+        dialogBody.appendChild(group);
+    }
+
     function renderDialogStep() {
         if (!dialogState) return;
         var options = dialogState.options;
@@ -112,6 +158,7 @@
             warning.textContent = options.warning;
             dialogBody.appendChild(warning);
         }
+        if (!second) renderDialogChoices(options);
         dialogSecondary.textContent = second ? "返回" : "取消";
         dialogPrimary.textContent = second
             ? (options.confirmLabel || "确认")
@@ -129,7 +176,12 @@
         dialogState = null;
         dialogLayer.hidden = true;
         restoreFocus(state.returnFocus);
-        state.resolve(!!confirmed);
+        if (!confirmed) {
+            state.resolve(false);
+            return;
+        }
+        var choices = normalizedDialogChoices(state.options);
+        state.resolve(choices.length ? (state.choice || choices[0].value) : true);
     }
 
     App.openConfirmDialog = function (options) {
@@ -139,6 +191,7 @@
             dialogState = {
                 options: options,
                 step: 1,
+                choice: options.defaultChoice || null,
                 returnFocus: options.trigger || document.activeElement,
                 resolve: resolve
             };

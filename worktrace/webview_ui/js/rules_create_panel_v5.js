@@ -108,10 +108,12 @@
         App.openDeleteDialog({
             trigger: button,
             title: "删除项目",
+            secondTitle: "确认永久删除项目",
+            secondIntro: "此操作不可撤销，即将永久删除：",
             objectLabel: App.safeText(project && project.name, "当前项目"),
-            warning: "项目会从项目规则中移除，既有活动事实不会被删除。",
-            twoStep: false,
-            confirmLabel: "删除项目"
+            warning: "此操作不可撤销。项目的全部自动归类规则将永久删除；当前归属于该项目的时间将释放为“未归类”；FD Work 项目关联也会清除。活动事实、时长、描述及其他时间编辑不会被删除。",
+            twoStep: true,
+            confirmLabel: "永久删除项目"
         }).then(function (confirmed) {
             if (!confirmed) return null;
             return App.bridge.deleteProjectForRules(projectId);
@@ -123,7 +125,7 @@
             }
             return App.loadProjectRules().then(function () {
                 App.clearRulesError();
-                if (App.showToast) App.showToast("项目已删除");
+                if (App.showToast) App.showToast("项目已永久删除，原归属时间已释放为未归类");
             });
         }).catch(function () { App.showRulesError("删除项目失败"); });
     }
@@ -300,7 +302,7 @@
         var select = document.getElementById("rules-panel-target-project");
         if (!select) return;
         var projects = ((App.lastProjectRulesData && App.lastProjectRulesData.projects) || []).filter(function (p) {
-            return p && p.enabled && !p.is_system && !p.is_excluded && parsePositiveInt(p.id) > 0;
+            return p && !p.is_system && !p.is_excluded && parsePositiveInt(p.id) > 0;
         });
         select.innerHTML = "";
         for (var i = 0; i < projects.length; i++) {

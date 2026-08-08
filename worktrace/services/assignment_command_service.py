@@ -108,6 +108,39 @@ def upsert_assignment(
     return True
 
 
+def release_project_assignments_in_transaction(
+    uow: DomainUnitOfWork,
+    conn,
+    *,
+    project_id: int,
+    uncategorized_project_id: int,
+) -> int:
+    """Release every current attribution to one project as uncategorized.
+
+    Project deletion is stronger than rule-history recomputation: manual,
+    rule-derived, and contextual attributions all lose the deleted project
+    identity. Activity facts themselves remain untouched.
+    """
+
+    if uow.connection is not conn:
+        raise ValueError("assignment_transaction_connection_mismatch")
+    cursor = conn.execute(
+        """
+        UPDATE activity_project_assignment
+        SET project_id = ?, confidence = 0, source = 'uncategorized',
+            is_manual = 0, suggested_project_name = NULL,
+            source_rule_type = NULL, source_rule_id = NULL, updated_at = ?
+        WHERE project_id = ?
+        """,
+        (int(uncategorized_project_id), now_str(), int(project_id)),
+    )
+    changed = max(0, int(cursor.rowcount or 0))
+    if changed:
+        uow.add_effects(DataGenerationNamespace.REPORT_STRUCTURE)
+        uow.mark_changed(DataGenerationNamespace.REPORT_STRUCTURE)
+    return changed
+
+
 def assign_with_uow(
     *,
     activity_id: int,
@@ -139,5 +172,6 @@ def assign_with_uow(
 
 __all__ = [
     "assign_with_uow",
+    "release_project_assignments_in_transaction",
     "upsert_assignment",
 ]
