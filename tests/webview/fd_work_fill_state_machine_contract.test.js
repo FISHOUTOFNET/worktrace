@@ -40,12 +40,21 @@ test("exact case freshness accelerates commit but is not the only valid path", (
   assert.match(body, /freshEvidence\s*\|\|\s*stableExactFrames\s*>=\s*settleFrames/);
 });
 
-test("save completion rejects loading-only and form-identity-only evidence", () => {
-  const reinit = bodyBetween("function formReinitializedAfterSave", "async function verifySaveCompletion");
+test("save completion accepts post-click loading settle but rejects form identity alone", () => {
+  const reinit = bodyBetween("function formReinitializedAfterSave", "function entryClosedAfterSave");
   const verify = bodyBetween("async function verifySaveCompletion", "function clickSave");
   assert.doesNotMatch(reinit, /currentForm\s*!==\s*baseline\.form/);
-  assert.doesNotMatch(verify, /loadingObserved\s*&&\s*!busy/);
-  assert.match(verify, /successMessage\s*\|\|\s*reinitialized/);
+  assert.match(verify, /var loadingObserved = false/);
+  assert.match(verify, /loadingObserved\s*=\s*loadingObserved\s*\|\|\s*busy/);
+  assert.match(verify, /loadingSettled\s*=\s*loadingObserved\s*&&\s*!busy/);
+  assert.match(verify, /successMessage\s*\|\|\s*reinitialized\s*\|\|\s*entryClosed\s*\|\|\s*loadingSettled/);
+});
+
+test("save readiness waits for a transiently disabled React action", () => {
+  const body = bodyBetween("async function awaitInteractiveSaveAction", "function visibleSaveSuccessNodes");
+  assert.match(body, /while \(Date\.now\(\) <= deadline\)/);
+  assert.match(body, /saveActionBusy/);
+  assert.match(body, /await requestFrame\(\)/);
 });
 
 test("controlled fields wait for interactive mounts instead of snapshot-failing", () => {
